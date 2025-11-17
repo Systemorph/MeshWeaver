@@ -2,10 +2,11 @@
 using System.Reactive.Linq;
 using MeshWeaver.Charting.Pivot;
 using MeshWeaver.DataCubes;
+using MeshWeaver.Domain;
 using MeshWeaver.Layout;
+using MeshWeaver.Layout.Chart;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Pivot.Builder;
-using MeshWeaver.Domain;
 
 namespace MeshWeaver.Northwind.Application;
 
@@ -42,16 +43,20 @@ public static class RevenueSummaryArea
         return layoutArea.Toolbar(new RevenueToolbar(), (tb, area, _) =>
             area.GetNorthwindDataCubeData()
                 .Select(data => data.Where(x => (tb.Year == 0 || x.OrderDate.Year == tb.Year)))
-                .SelectMany(data =>
-                    area.Workspace
-                        .Pivot(data.ToDataCube())
-                        .SliceColumnsBy(nameof(NorthwindDataCube.OrderMonth))
-                        .SliceRowsBy(nameof(NorthwindDataCube.OrderYear))
-                        .ToLineChart(builder => builder)
-                        .Select(chart => (UiControl)Controls.Stack
-                            .WithView(Controls.H2("Revenue Summary by Year"))
-                            .WithView(chart.ToControl()))
-                ));
+                .Select(data =>
+                {
+                    var chart = data.ToLineChart(
+                        rowKeySelector: x => x.OrderYear,
+                        colKeySelector: x => x.OrderMonth ?? "Unknown",
+                        valueSelector: g => g.Sum(x => x.Amount),
+                        rowLabelSelector: year => year.ToString(),
+                        colLabelSelector: month => month
+                    ).WithTitle("Revenue Summary by Year");
+
+                    return (UiControl)Controls.Stack
+                        .WithView(Controls.H2("Revenue Summary by Year"))
+                        .WithView(chart);
+                }));
     }
 
     private static IObservable<IEnumerable<NorthwindDataCube>> GetDataCube(this LayoutAreaHost area)

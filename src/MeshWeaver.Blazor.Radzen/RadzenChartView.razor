@@ -1,0 +1,264 @@
+@inherits RadzenViewBase<ChartControl, RadzenChartView>
+@using MeshWeaver.Layout.Chart
+@using global::Radzen.Blazor
+
+<HeadContent>
+    <link rel="stylesheet" href="_content/Radzen.Blazor/css/@(GetRadzenTheme()).css" />
+</HeadContent>
+
+<CascadingValue Value="@themeService">
+    @if (SeriesList != null && SeriesList.Any())
+    {
+        <div style="@GetContainerStyle()">
+            @if (Title != null && !string.IsNullOrEmpty(Title.ToString()))
+            {
+                <h3 style="margin-bottom: 1rem;">@Title</h3>
+            }
+            @if (Subtitle != null && !string.IsNullOrEmpty(Subtitle.ToString()))
+            {
+                <h4 style="margin-bottom: 1rem; font-weight: normal; color: #666;">@Subtitle</h4>
+            }
+            <RadzenChart style="@GetChartStyle()">
+                @foreach (var series in SeriesList)
+                {
+                    @RenderSeries(series)
+                }
+
+                @if (ShowCategoryAxis())
+                {
+                    <RadzenCategoryAxis Padding="20" />
+                }
+
+                <RadzenValueAxis>
+                    <RadzenGridLines Visible="true" />
+                </RadzenValueAxis>
+
+                <RadzenLegend Visible="@ShouldShowLegend()" Position="@GetLegendPosition()" />
+            </RadzenChart>
+        </div>
+    }
+    else
+    {
+        <div style="@GetChartStyle()">
+            <p><em>No chart data available</em></p>
+        </div>
+    }
+</CascadingValue>
+
+@code {
+    private List<ChartSeries>? SeriesList => Series as List<ChartSeries>
+        ?? (Series as IEnumerable<ChartSeries>)?.ToList();
+
+    private List<string>? LabelsList => Labels as List<string>
+        ?? (Labels as IEnumerable<string>)?.ToList();
+
+    private RenderFragment RenderSeries(ChartSeries series)
+    {
+        return builder =>
+        {
+            var data = PrepareSeriesData(series);
+            if (data == null || !data.Any())
+                return;
+
+            var seriesType = series.GetType();
+            var title = series.Label?.ToString();
+            var hasTitle = !string.IsNullOrEmpty(title);
+
+            if (seriesType == typeof(BarSeries))
+            {
+                builder.OpenComponent<RadzenBarSeries<ChartDataPoint>>(0);
+                builder.AddAttribute(1, "Data", data);
+                builder.AddAttribute(2, "CategoryProperty", "Category");
+                builder.AddAttribute(3, "ValueProperty", "Value");
+                if (hasTitle)
+                    builder.AddAttribute(4, "Title", title);
+                builder.CloseComponent();
+            }
+            else if (seriesType == typeof(LineSeries))
+            {
+                var lineSeries = (LineSeries)series;
+                builder.OpenComponent<RadzenLineSeries<ChartDataPoint>>(0);
+                builder.AddAttribute(1, "Data", data);
+                builder.AddAttribute(2, "CategoryProperty", "Category");
+                builder.AddAttribute(3, "ValueProperty", "Value");
+                if (hasTitle)
+                    builder.AddAttribute(4, "Title", title);
+
+                // Handle line-specific properties
+                if (lineSeries.Tension != null)
+                {
+                    var smooth = Convert.ToDouble(lineSeries.Tension) > 0;
+                    builder.AddAttribute(5, "Smooth", smooth);
+                }
+
+                builder.CloseComponent();
+            }
+            else if (seriesType == typeof(PieSeries) || seriesType == typeof(DoughnutSeries))
+            {
+                builder.OpenComponent<RadzenPieSeries<ChartDataPoint>>(0);
+                builder.AddAttribute(1, "Data", data);
+                builder.AddAttribute(2, "CategoryProperty", "Category");
+                builder.AddAttribute(3, "ValueProperty", "Value");
+                if (hasTitle)
+                    builder.AddAttribute(4, "Title", title);
+                builder.CloseComponent();
+            }
+            else if (seriesType == typeof(RadarSeries))
+            {
+                // Radzen doesn't have RadarSeries in the same way - would need custom implementation
+                // For now, render as line
+                builder.OpenComponent<RadzenLineSeries<ChartDataPoint>>(0);
+                builder.AddAttribute(1, "Data", data);
+                builder.AddAttribute(2, "CategoryProperty", "Category");
+                builder.AddAttribute(3, "ValueProperty", "Value");
+                if (hasTitle)
+                    builder.AddAttribute(4, "Title", title);
+                builder.CloseComponent();
+            }
+            else if (seriesType == typeof(ScatterSeries))
+            {
+                // Scatter would need different data structure with X/Y
+                // For now, render as line
+                builder.OpenComponent<RadzenLineSeries<ChartDataPoint>>(0);
+                builder.AddAttribute(1, "Data", data);
+                builder.AddAttribute(2, "CategoryProperty", "Category");
+                builder.AddAttribute(3, "ValueProperty", "Value");
+                if (hasTitle)
+                    builder.AddAttribute(4, "Title", title);
+                builder.CloseComponent();
+            }
+        };
+    }
+
+    private List<ChartDataPoint>? PrepareSeriesData(ChartSeries series)
+    {
+        if (series.Data == null)
+            return null;
+
+        var dataList = new List<ChartDataPoint>();
+
+        // Deserialize data if it's a JsonElement
+        object? deserializedData = series.Data;
+        if (series.Data is System.Text.Json.JsonElement jsonElement)
+        {
+            try
+            {
+                var json = jsonElement.GetRawText();
+                var options = new System.Text.Json.JsonSerializerOptions
+                {
+                    PropertyNameCaseInsensitive = true,
+                    PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase
+                };
+                deserializedData = System.Text.Json.JsonSerializer.Deserialize<List<object>>(json, options);
+            }
+            catch
+            {
+                // If deserialization fails, try to use it as-is
+            }
+        }
+
+        // Extract data values
+        var values = new List<double>();
+        if (deserializedData is IEnumerable<object> dataObjects)
+        {
+            foreach (var item in dataObjects)
+            {
+                if (item is double d)
+                    values.Add(d);
+                else if (item is int i)
+                    values.Add(i);
+                else if (item is decimal dec)
+                    values.Add((double)dec);
+                else if (item is System.Text.Json.JsonElement je)
+                {
+                    // Handle JsonElement items
+                    if (je.ValueKind == System.Text.Json.JsonValueKind.Number && je.TryGetDouble(out var num))
+                        values.Add(num);
+                }
+                else
+                {
+                    // Try to convert to double
+                    if (double.TryParse(item?.ToString(), out var parsed))
+                        values.Add(parsed);
+                }
+            }
+        }
+
+        // Combine with labels or generate indices
+        var labels = LabelsList ?? Enumerable.Range(0, values.Count).Select(i => i.ToString()).ToList();
+
+        for (int i = 0; i < values.Count && i < labels.Count; i++)
+        {
+            dataList.Add(new ChartDataPoint
+            {
+                Category = labels[i],
+                Value = values[i]
+            });
+        }
+
+        return dataList;
+    }
+
+    private bool ShowCategoryAxis()
+    {
+        // Don't show category axis for pie/doughnut charts
+        return SeriesList?.Any(s => s is not PieSeries and not DoughnutSeries) ?? false;
+    }
+
+    private bool ShouldShowLegend()
+    {
+        if (ShowLegend is bool show)
+            return show;
+
+        // Auto-show legend only if we have meaningful labels (not default ones like "Series 1", "Series 2")
+        if (SeriesList == null || SeriesList.Count <= 1)
+            return false;
+
+        return SeriesList.Any(s =>
+        {
+            var label = s.Label?.ToString();
+            if (string.IsNullOrEmpty(label))
+                return false;
+
+            // Check if label looks like a default pattern (e.g., "Series 1", "Series 2", etc.)
+            if (label.StartsWith("Series ", StringComparison.OrdinalIgnoreCase))
+                return false;
+
+            // Has a meaningful label
+            return true;
+        });
+    }
+
+    private global::Radzen.Blazor.LegendPosition GetLegendPosition()
+    {
+        // Map legend position if provided
+        return LegendPosition switch
+        {
+            _ => global::Radzen.Blazor.LegendPosition.Right
+        };
+    }
+
+    private string GetContainerStyle()
+    {
+        var style = "";
+        if (Width != null)
+            style += $"width: {Width}; ";
+        return style;
+    }
+
+    private string GetChartStyle()
+    {
+        var style = "";
+        if (Height != null)
+            style += $"height: {Height};";
+        else
+            style += "height: 400px;";
+        return style;
+    }
+
+    public class ChartDataPoint
+    {
+        public string Category { get; set; } = string.Empty;
+        public double Value { get; set; }
+    }
+}

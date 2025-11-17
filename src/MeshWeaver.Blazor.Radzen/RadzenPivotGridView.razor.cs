@@ -1,30 +1,24 @@
 ﻿using System.Text.Json;
 using MeshWeaver.GridModel;
 using Microsoft.AspNetCore.Components;
-using Radzen;
 
 namespace MeshWeaver.Blazor.Radzen;
 
-public partial class RadzenPivotGridView : BlazorView<PivotGridControl, RadzenPivotGridView>
+public partial class RadzenPivotGridView : RadzenViewBase<PivotGridControl, RadzenPivotGridView>
 {
-    [Inject] private ThemeService themeService { get; set; } = null!;
-
     private PivotConfiguration? Configuration { get; set; }
     private object? RawData { get; set; }
     private Type? DataItemType { get; set; }
     private bool ShowPager { get; set; }
     private int PageSize { get; set; }
-    private bool isDarkMode;
 
     protected override async Task OnInitializedAsync()
     {
-        await base.OnInitializedAsync();
         var oldTheme = themeService.Theme;
-        isDarkMode = await IsDarkModeAsync();
+        await base.OnInitializedAsync();
         var newTheme = GetRadzenTheme();
         if (oldTheme != newTheme)
         {
-            themeService.SetTheme(GetRadzenTheme());
             StateHasChanged();
         }
     }
@@ -125,25 +119,5 @@ public partial class RadzenPivotGridView : BlazorView<PivotGridControl, RadzenPi
             GridModel.SortOrder.Descending => global::Radzen.SortOrder.Descending,
             _ => global::Radzen.SortOrder.Descending
         };
-    }
-
-    private string GetRadzenTheme()
-    {
-        return isDarkMode ? "standard-dark" : "standard";
-        //var baseTheme = themeService.Theme ?? "material";
-
-        //// Use cached dark mode value from IsDarkModeAsync
-        //if (isDarkMode && !baseTheme.EndsWith("-dark"))
-        //{
-        //    return baseTheme + "-dark";
-        //}
-
-        //// If not in dark mode and theme ends with "-dark", remove it
-        //if (!isDarkMode && baseTheme.EndsWith("-dark"))
-        //{
-        //    return baseTheme.Substring(0, baseTheme.Length - 5);
-        //}
-
-        //return baseTheme;
     }
 }

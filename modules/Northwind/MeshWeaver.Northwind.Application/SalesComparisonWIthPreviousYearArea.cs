@@ -4,6 +4,7 @@ using MeshWeaver.Charting.Models.Options;
 using MeshWeaver.Charting.Pivot;
 using MeshWeaver.DataCubes;
 using MeshWeaver.Layout;
+using MeshWeaver.Layout.Chart;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Northwind.Domain;
 using MeshWeaver.Pivot.Builder;
@@ -36,25 +37,19 @@ public static class SalesComparisonWIthPreviousYearArea
     public static IObservable<UiControl> SalesByCategoryWithPrevYear(this LayoutAreaHost layoutArea, RenderingContext context)
     {
         return layoutArea.WithPrevYearNorthwindData()
-            .SelectMany(data =>
+            .Select(data =>
             {
-                var currentYear = data.Max(d => d.OrderYear).ToString();
-                return layoutArea.Workspace
-                    .Pivot(data.ToDataCube())
-                    .SliceColumnsBy(nameof(Category))
-                    .SliceRowsBy(nameof(NorthwindDataCube.OrderYear))
-                    .ToBarChart(
-                        builder => builder
-                            .WithOptions(o => o.OrderByValueDescending(r => r.Descriptor.Id.ToString()?.Equals(currentYear) == true))
-                            .WithChartBuilder(o =>
-                                o.WithDataLabels(d =>
-                                    d.WithAnchor(DataLabelsAnchor.End)
-                                        .WithAlign(DataLabelsAlign.End))
-                                )
-                    ).Select(chart => (UiControl)Controls.Stack
-                        .WithView(Controls.H2("Sales by Category with Previous Year"))
-                        .WithView(chart.ToControl()));
+                var chart = data.ToStackedBarChart(
+                    rowKeySelector: x => x.OrderYear,
+                    colKeySelector: x => x.CategoryName ?? "Unknown",
+                    valueSelector: g => g.Sum(x => x.Amount),
+                    rowLabelSelector: year => year.ToString(),
+                    colLabelSelector: category => category
+                ).WithTitle("Sales by Category with Previous Year");
 
+                return (UiControl)Controls.Stack
+                    .WithView(Controls.H2("Sales by Category with Previous Year"))
+                    .WithView(chart);
             });
     }
 }

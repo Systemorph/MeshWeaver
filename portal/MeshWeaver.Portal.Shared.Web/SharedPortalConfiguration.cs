@@ -133,6 +133,7 @@ public static class SharedPortalConfiguration
                     .WithType(typeof(PricingAddress), PricingAddress.TypeName)
                     .AddContentCollections()
                     .AddRadzenDataGrid()
+                    .AddRadzenCharts()
                     .AddChartJs()
                     .AddGoogleMaps()
                 )

@@ -1,7 +1,8 @@
-using System.ComponentModel.DataAnnotations;
+﻿using System.ComponentModel.DataAnnotations;
 using System.Reactive.Linq;
 using System.Text;
 using MeshWeaver.Layout;
+using MeshWeaver.Layout.Chart;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Northwind.Domain;
 
@@ -20,7 +21,9 @@ public static class TopClientsArea
     /// <param name="layout">The layout definition to which the top clients views will be added.</param>
     /// <returns>The updated layout definition with top clients views.</returns>
     public static LayoutDefinition AddTopClients(this LayoutDefinition layout)
-        => layout.WithView(nameof(TopClientsTable), TopClientsTable)
+        => layout
+            .WithView(nameof(TopClientsTable), TopClientsTable)
+            .WithView(nameof(TopClients), TopClients)
             .WithView(nameof(TopClientsRewardSuggestions), TopClientsRewardSuggestions);
 
     /// <summary>
@@ -128,4 +131,45 @@ public static class TopClientsArea
 
                 return (UiControl)Controls.Markdown(markdown.ToString());
             });
+
+
+    /// <summary>
+    /// Displays a vertical bar chart showing the top 5 clients ranked by total revenue.
+    /// Features customer identifiers as x-axis labels with vertical bars representing their sales amounts.
+    /// Data labels are positioned at the start of each bar with end alignment for clear visibility.
+    /// Automatically sorts clients from highest to lowest revenue to highlight top performers.
+    /// </summary>
+    /// <param name="layoutArea">The layout area host.</param>
+    /// <param name="context">The rendering context.</param>
+    /// <returns>A vertical bar chart control displaying top 5 client revenues with positioned data labels.</returns>
+    public static IObservable<UiControl> TopClients(this LayoutAreaHost layoutArea, RenderingContext context)
+        => layoutArea.GetDataCube()
+            .Select(data =>
+            {
+                // Get top 5 clients by revenue
+                var topClients = data.GroupBy(x => x.Customer)
+                    .Select(g => new { Customer = g.Key, Revenue = g.Sum(x => x.Amount) })
+                    .OrderByDescending(x => x.Revenue)
+                    .Take(5)
+                    .Select(x => x.Customer)
+                    .ToHashSet();
+
+                var filteredData = data.Where(x => topClients.Contains(x.Customer));
+
+                return (UiControl)filteredData.ToBarChart(
+                    keySelector: x => x.CustomerName ?? x.Customer ?? "Unknown",
+                    valueSelector: g => g.Sum(x => x.Amount),
+                    orderByValueDescending: true
+                ).WithTitle("Top 5 Clients");
+            });
+
+    /// <summary>
+    /// Retrieves the data cube for the specified layout area host.
+    /// </summary>
+    /// <param name="area">The layout area host.</param>
+    /// <returns>An observable sequence of Northwind data cubes.</returns>
+    private static IObservable<IEnumerable<NorthwindDataCube>> GetDataCube(this LayoutAreaHost area)
+        => area.GetNorthwindDataCubeData()
+            .Select(dc => dc.Where(x => x.OrderDate >= new DateTime(1997, 12, 1) && x.OrderDate < new DateTime(2025, 1, 1)));
+
 }

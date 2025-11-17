@@ -5,6 +5,7 @@ using MeshWeaver.Charting.Models;
 using MeshWeaver.Charting.Pivot;
 using MeshWeaver.DataCubes;
 using MeshWeaver.Layout;
+using MeshWeaver.Layout.Chart;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Northwind.Domain;
 using MeshWeaver.Pivot.Builder;
@@ -41,18 +42,23 @@ namespace MeshWeaver.Northwind.Application
         /// <returns>A horizontal bar chart control with top 5 products and revenue amounts.</returns>
         public static IObservable<UiControl> TopProducts(this LayoutAreaHost layoutArea, RenderingContext context)
             => layoutArea.YearlyNorthwindData()
-                .SelectMany(d =>
-                    layoutArea.Workspace
-                        .Pivot(d.ToDataCube())
-                        .SliceColumnsBy(nameof(Product))
-                        .ToBarChart(builder => builder
-                            .WithOptions(o => o.OrderByValueDescending().TopValues(5))
-                        )
-                        .Select(c => new ChartControl(c
-                            .AsHorizontal()
-                            .WithDataLabels()
-                        ))
+                .Select(data =>
+                {
+                    // Get top 5 products by revenue
+                    var topProducts = data.GroupBy(x => x.Product)
+                        .Select(g => new { Product = g.Key, Revenue = g.Sum(x => x.Amount) })
+                        .OrderByDescending(x => x.Revenue)
+                        .Take(5)
+                        .Select(x => x.Product)
+                        .ToHashSet();
 
-                );
+                    var filteredData = data.Where(x => topProducts.Contains(x.Product));
+
+                    return (UiControl)filteredData.ToBarChart(
+                        keySelector: x => x.ProductName ?? x.Product.ToString(),
+                        valueSelector: g => g.Sum(x => x.Amount),
+                        orderByValueDescending: true
+                    ).WithTitle("Top 5 Products");
+                });
     }
 }

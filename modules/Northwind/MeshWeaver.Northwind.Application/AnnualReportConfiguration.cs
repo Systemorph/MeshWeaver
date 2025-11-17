@@ -27,7 +27,6 @@ public static class AnnualReportConfiguration
         .AddDiscountVsRevenue()
         .AddDiscountPercentage()
         .AddEmployeesOverview()
-        .AddClientsOverview()
         .AddOrdersOverview()
         .AddSalesOverview()
     ;

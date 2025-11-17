@@ -6,6 +6,7 @@ using MeshWeaver.Charting.Models.Options;
 using MeshWeaver.Charting.Pivot;
 using MeshWeaver.DataCubes;
 using MeshWeaver.Layout;
+using MeshWeaver.Layout.Chart;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Northwind.Domain;
 using MeshWeaver.Pivot.Builder;
@@ -42,24 +43,18 @@ public static class SalesOverviewArea
     public static IObservable<UiControl> SalesByCategory(this LayoutAreaHost layoutArea, RenderingContext context)
     {
         return layoutArea.YearlyNorthwindData()
-            .SelectMany(data =>
-                layoutArea.Workspace
-                    .Pivot(data.ToDataCube())
-                    .SliceColumnsBy(nameof(Category))
-                    .ToBarChart(
-                        builder => builder
-                            .WithOptions(o => o.OrderByValueDescending())
-                            .WithChartBuilder(o => 
-                                o.WithDataLabels(d => 
-                                    d.WithAnchor(DataLabelsAnchor.End)
-                                        .WithAlign(DataLabelsAlign.End))
-                                )
-                    )
-                    .Select(chart => (UiControl)Controls.Stack
-                        .WithView(Controls.H2("Sales by Category"))
-                        .WithView(new ChartControl(chart).WithClass("chart sales-by-category-chart")))
-                    
-            );
+            .Select(data =>
+            {
+                var chart = data.ToBarChart(
+                    keySelector: x => x.CategoryName ?? "Unknown",
+                    valueSelector: g => g.Sum(x => x.Amount),
+                    orderByValueDescending: true
+                ).WithTitle("Sales by Category");
+
+                return (UiControl)Controls.Stack
+                    .WithView(Controls.H2("Sales by Category"))
+                    .WithView(chart.WithClass("chart sales-by-category-chart"));
+            });
     }
 
 }

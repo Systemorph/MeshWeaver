@@ -2,12 +2,13 @@ using System.ComponentModel.DataAnnotations;
 using System.Reactive.Linq;
 using MeshWeaver.Charting.Pivot;
 using MeshWeaver.DataCubes;
+using MeshWeaver.Domain;
 using MeshWeaver.Layout;
+using MeshWeaver.Layout.Chart;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Layout.DataGrid;
 using MeshWeaver.Pivot.Aggregations;
 using MeshWeaver.Pivot.Builder;
-using MeshWeaver.Domain;
 
 namespace MeshWeaver.Northwind.Application;
 
@@ -38,17 +39,20 @@ public static class TimeSeriesAnalysisArea
         return layoutArea.Toolbar(new TimeSeriesToolbar(), (tb, area, _) =>
             area.GetNorthwindDataCubeData()
                 .Select(data => data.Where(x => (tb.Year == 0 || x.OrderDate.Year == tb.Year)))
-                .SelectMany(data =>
-                    area.Workspace
-                        .Pivot(data.ToDataCube())
-                        .WithAggregation(a => a.Sum(x => x.Amount))
-                        .SliceColumnsBy(nameof(NorthwindDataCube.OrderMonth))
-                        .SliceRowsBy(nameof(NorthwindDataCube.OrderYear))
-                        .ToLineChart(builder => builder)
-                        .Select(chart => (UiControl)Controls.Stack
-                            .WithView(Controls.H2("Monthly Sales Trend"))
-                            .WithView(chart.ToControl()))
-                ));
+                .Select(data =>
+                {
+                    var chart = data.ToLineChart(
+                        rowKeySelector: x => x.OrderYear,
+                        colKeySelector: x => x.OrderMonth ?? "Unknown",
+                        valueSelector: g => g.Sum(x => x.Amount),
+                        rowLabelSelector: year => year.ToString(),
+                        colLabelSelector: month => month
+                    ).WithTitle("Monthly Sales Trend");
+
+                    return (UiControl)Controls.Stack
+                        .WithView(Controls.H2("Monthly Sales Trend"))
+                        .WithView(chart);
+                }));
     }
 
     /// <summary>
