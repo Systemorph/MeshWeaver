@@ -81,15 +81,13 @@ public static class SupplierSummaryArea
             layoutArea.GetDataCube()
                 .Select(collection =>
                 {
-                    var cube = collection.ToDataCube();
-
-                    // Filter by year if specified
-                    var filteredCube = toolbar.Year == 0
-                        ? cube
-                        : cube.Filter((nameof(NorthwindDataCube.OrderYear), toolbar.Year));
+                    // Filter by year if specified using LINQ Where
+                    var filteredData = toolbar.Year == 0
+                        ? collection
+                        : collection.Where(x => x.OrderYear == toolbar.Year);
 
                     // Use the full NorthwindDataCube with the pivot extension
-                    return (UiControl)filteredCube.ToPivotGrid(pivot => pivot
+                    return (UiControl)filteredData.ToPivotGrid(pivot => pivot
                         .WithRowDimension(nameof(NorthwindDataCube.SupplierName), "Supplier", "200px")
                         .WithColumnDimension(nameof(NorthwindDataCube.OrderMonth), "Month")
                         .WithAggregate(
@@ -114,13 +112,12 @@ public static class SupplierSummaryArea
             layoutArea.GetDataCube()
                 .Select(collection =>
                 {
-                    var cube = collection.ToDataCube();
+                    // Filter by year if specified using LINQ Where
+                    var filteredData = toolbar.Year == 0
+                        ? collection
+                        : collection.Where(x => x.OrderYear == toolbar.Year);
 
-                    var filteredCube = toolbar.Year == 0
-                        ? cube
-                        : cube.Filter((nameof(NorthwindDataCube.OrderYear), toolbar.Year));
-
-                    return layoutArea.Workspace.Pivot(filteredCube)
+                    return layoutArea.Workspace.Pivot(filteredData.ToDataCube())
                         .SliceRowsBy(nameof(NorthwindDataCube.SupplierName))
                         .SliceColumnsBy(nameof(NorthwindDataCube.OrderMonth));
                 })
