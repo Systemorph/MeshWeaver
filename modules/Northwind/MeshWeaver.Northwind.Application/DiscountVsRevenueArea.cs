@@ -4,6 +4,7 @@ using System.Reactive.Linq;
 using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using MeshWeaver.Layout;
+using MeshWeaver.Layout.Chart;
 using MeshWeaver.Layout.Composition;
 
 namespace MeshWeaver.Northwind.Application;
@@ -54,18 +55,16 @@ public static class DiscountVsRevenueArea
                     .ToArray();
 
                 // Create revenue chart
-                var revenueChart = (UiControl)Charting.Chart.Bar(monthlyData.Select(m => m.Revenue), "Revenue ($)")
-                    .WithLabels(monthlyData.Select(m => m.Month));
+                var revenueChart = (UiControl)Charts.Bar(monthlyData.Select(m => m.Revenue), monthlyData.Select(m => m.Month))
+                    .WithTitle("Monthly Revenue");
 
-                // Create discount chart  
-                var discountChart = (UiControl)Charting.Chart.Bar(monthlyData.Select(m => m.Discount), "Discounts ($)")
-                    .WithLabels(monthlyData.Select(m => m.Month));
+                // Create discount chart
+                var discountChart = (UiControl)Charts.Bar(monthlyData.Select(m => m.Discount), monthlyData.Select(m => m.Month))
+                    .WithTitle("Monthly Discounts");
 
                 return Controls.Stack
                     .WithView(Controls.H2("Revenue vs Discount Analysis"))
-                    .WithView(Controls.H3("Monthly Revenue"))
                     .WithView(revenueChart)
-                    .WithView(Controls.H3("Monthly Discounts"))
                     .WithView(discountChart);
             });
 

@@ -1,7 +1,5 @@
 using System.ComponentModel.DataAnnotations;
 using System.Reactive.Linq;
-using MeshWeaver.Charting.Pivot;
-using MeshWeaver.DataCubes;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Layout.DataGrid;

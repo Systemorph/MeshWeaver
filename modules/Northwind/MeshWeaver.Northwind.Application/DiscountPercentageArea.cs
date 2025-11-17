@@ -1,6 +1,7 @@
 ﻿using System.ComponentModel.DataAnnotations;
 using System.Reactive.Linq;
 using MeshWeaver.Layout;
+using MeshWeaver.Layout.Chart;
 using MeshWeaver.Layout.Composition;
 
 namespace MeshWeaver.Northwind.Application;
@@ -44,12 +45,8 @@ public static class DiscountPercentageArea
                     .OrderBy(x => x.DiscountLevel)
                     .ToArray();
 
-                var chart = (UiControl)Charting.Chart.Pie(discountData.Select(d => d.Revenue), "Revenue")
-                    .WithLabels(discountData.Select(d => d.DiscountLevel));
-
-                return Controls.Stack
-                    .WithView(Controls.H2("Sales by Discount Percentage"))
-                    .WithView(chart);
+                return (UiControl)Charts.Pie(discountData.Select(d => d.Revenue), discountData.Select(d => d.DiscountLevel))
+                    .WithTitle("Sales by Discount Percentage");
             });
 
     private static IObservable<IEnumerable<NorthwindDataCube>> GetCombinedDiscountsDataCube(this LayoutAreaHost area)

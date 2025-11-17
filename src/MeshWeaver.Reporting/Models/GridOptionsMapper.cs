@@ -94,7 +94,7 @@ namespace MeshWeaver.Reporting.Models
             return objects ?? Array.Empty<object>();
         }
 
-        private static PivotConfiguration BuildPivotConfigurationFromBuilder(IPivotBuilder pivotBuilder, PivotModel pivotModel)
+        private static PivotConfiguration BuildPivotConfigurationFromBuilder(IPivotBuilder _, PivotModel pivotModel)
         {
             // Extract row and column slice information from the pivot model
             var rowGrouper = pivotModel.Rows.FirstOrDefault()?.RowGroup?.GrouperName;

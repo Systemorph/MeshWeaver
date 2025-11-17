@@ -1,9 +1,6 @@
 ﻿using System.ComponentModel;
 using System.ComponentModel.DataAnnotations;
 using System.Reactive.Linq;
-using MeshWeaver.Charting.Models.Options;
-using MeshWeaver.Charting.Pivot;
-using MeshWeaver.DataCubes;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Chart;
 using MeshWeaver.Layout.Composition;
@@ -45,15 +42,11 @@ public static class DiscountSummaryArea
         => layoutArea.GetDataCube()
             .Select(data =>
             {
-                var chart = data.ToBarChart(
+                return (UiControl)data.ToBarChart(
                     keySelector: x => x.OrderMonth ?? "Unknown",
                     valueSelector: g => g.Sum(x => x.UnitPrice * x.Quantity * x.Discount),
                     orderByValueDescending: false
                 ).WithTitle("Monthly Discount Summary");
-
-                return (UiControl)Controls.Stack
-                    .WithView(Controls.H2("Monthly Discount Summary"))
-                    .WithView(chart);
             });
 
     private static IObservable<IEnumerable<NorthwindDataCube>> GetDataCube(this LayoutAreaHost area)

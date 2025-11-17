@@ -199,7 +199,7 @@ public abstract record UiControl<TControl>(string ModuleName, string ApiVersion)
         {
             Style = styleBuilder(new StyleBuilder()).ToString()
         };
-    public new TControl WithStyle(string style) =>
+    public TControl WithStyle(string style) =>
         This with
         {
             Style = style

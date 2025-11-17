@@ -190,7 +190,7 @@ public record LineSeries : ChartSeries
     /// <summary>
     /// Enables area fill under the line.
     /// </summary>
-    public LineSeries WithFill(object fill = null) => this with { Fill = fill ?? true };
+    public LineSeries WithFill(object? fill = null) => this with { Fill = fill ?? true };
 
     /// <summary>
     /// Sets the point radius.
@@ -326,7 +326,7 @@ public record RadarSeries : ChartSeries
     /// <summary>
     /// Enables area fill.
     /// </summary>
-    public RadarSeries WithFill(object fill = null) => this with { Fill = fill ?? true };
+    public RadarSeries WithFill(object? fill = null) => this with { Fill = fill ?? true };
 }
 
 /// <summary>
