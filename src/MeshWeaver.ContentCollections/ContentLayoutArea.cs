@@ -1,4 +1,5 @@
-﻿using System.Reactive.Linq;
+﻿using System.ComponentModel;
+using System.Reactive.Linq;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Messaging;
@@ -41,7 +42,7 @@ public static class ContentLayoutArea
 
         return new MarkdownControl($"Unknown content type {content.GetType().Name}");
     }
-
+    [Browsable(false)]
     public static async Task<IObservable<UiControl?>> Content(LayoutAreaHost host, RenderingContext context, CancellationToken ct)
     {
         // First split by ? to separate path from query parameters, then split path by /
