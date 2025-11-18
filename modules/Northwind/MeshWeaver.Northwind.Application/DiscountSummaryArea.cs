@@ -42,10 +42,15 @@ public static class DiscountSummaryArea
         => layoutArea.GetDataCube()
             .Select(data =>
             {
-                return (UiControl)data.ToBarChart(
-                    keySelector: x => x.OrderMonth ?? "Unknown",
-                    valueSelector: g => g.Sum(x => x.UnitPrice * x.Quantity * x.Discount),
-                    orderByValueDescending: false
+                var monthlyDiscounts = data
+                    .GroupBy(x => x.OrderMonth ?? "Unknown")
+                    .Select(g => new { Month = g.Key, Discount = g.Sum(x => x.UnitPrice * x.Quantity * x.Discount) })
+                    .OrderBy(x => x.Month)
+                    .ToArray();
+
+                return (UiControl)Charts.Column(
+                    monthlyDiscounts.Select(x => x.Discount),
+                    monthlyDiscounts.Select(x => x.Month)
                 ).WithTitle("Monthly Discount Summary");
             });
 

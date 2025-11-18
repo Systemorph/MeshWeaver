@@ -1,8 +1,6 @@
 ﻿using System.Reactive.Linq;
-using MeshWeaver.Data;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
-using MeshWeaver.Northwind.Domain;
 
 namespace MeshWeaver.Northwind.Application;
 
@@ -15,33 +13,14 @@ public static class NorthwindDataCubeLayoutAreaExtensions
 
     /// <summary>
     /// Retrieves Northwind data cube data for the specified layout area.
+    /// Uses the virtual data source which includes enriched dimension names.
     /// </summary>
     /// <param name="area">The layout area host.</param>
     /// <returns>An observable sequence of Northwind data cubes.</returns>
     public static IObservable<IEnumerable<NorthwindDataCube>> GetNorthwindDataCubeData(
         this LayoutAreaHost area)
         => area
-            .GetOrAddVariable(NorthwindDataCube,
-                () => area
-                    .Workspace.GetStream(typeof(Order), typeof(OrderDetails), typeof(Product))
-                    .DistinctUntilChanged()
-                    .Select(x =>
-                        x.Value!.GetData<Order>()
-                            .Join(
-                                x.Value!.GetData<OrderDetails>(),
-                                o => o.OrderId,
-                                d => d.OrderId,
-                                (order, detail) => (order, detail)
-                            )
-                            .Join(
-                                x.Value!.GetData<Product>(),
-                                od => od.detail.ProductId,
-                                p => p.ProductId,
-                                (od, product) => (od.order, od.detail, product)
-                            )
-                            .Select(data => new NorthwindDataCube(data.order, data.detail, data.product))
-                    )
-            )!;
+            .Workspace.GetStream<NorthwindDataCube>()!;
 
     /// <summary>
     /// Retrieves Northwind data cubes filtered by the specified year.

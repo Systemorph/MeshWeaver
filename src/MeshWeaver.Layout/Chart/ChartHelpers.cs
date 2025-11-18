@@ -45,6 +45,40 @@ public static class Charts
         new ChartControl().WithSeries(series);
 
     /// <summary>
+    /// Creates a column chart (vertical bars) with data and labels.
+    /// </summary>
+    public static ChartControl Column(IEnumerable<double> data, IEnumerable<string> labels, string? seriesLabel = null) =>
+        new ChartControl()
+            .WithSeries(new ColumnSeries(data, seriesLabel))
+            .WithLabels(labels);
+
+    /// <summary>
+    /// Creates a column chart (vertical bars) with data and labels.
+    /// </summary>
+    public static ChartControl Column(IEnumerable<int> data, IEnumerable<string> labels, string? seriesLabel = null) =>
+        new ChartControl()
+            .WithSeries(new ColumnSeries(data, seriesLabel))
+            .WithLabels(labels);
+
+    /// <summary>
+    /// Creates a column chart (vertical bars) with a single series (without labels).
+    /// </summary>
+    public static ChartControl Column(IEnumerable<double> data, string? label = null) =>
+        new ChartControl().WithSeries(new ColumnSeries(data, label));
+
+    /// <summary>
+    /// Creates a column chart (vertical bars) with a single series (without labels).
+    /// </summary>
+    public static ChartControl Column(IEnumerable<int> data, string? label = null) =>
+        new ChartControl().WithSeries(new ColumnSeries(data, label));
+
+    /// <summary>
+    /// Creates a column chart (vertical bars) with multiple series.
+    /// </summary>
+    public static ChartControl Column(params ColumnSeries[] series) =>
+        new ChartControl().WithSeries(series);
+
+    /// <summary>
     /// Creates a line chart with data and labels.
     /// </summary>
     public static ChartControl Line(IEnumerable<double> data, IEnumerable<string> labels, string? seriesLabel = null) =>

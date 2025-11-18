@@ -146,20 +146,16 @@ public static class TopClientsArea
         => layoutArea.GetDataCube()
             .Select(data =>
             {
-                // Get top 5 clients by revenue
-                var topClients = data.GroupBy(x => x.Customer)
-                    .Select(g => new { Customer = g.Key, Revenue = g.Sum(x => x.Amount) })
+                var topClients = data
+                    .GroupBy(x => x.CustomerName ?? x.Customer ?? "Unknown")
+                    .Select(g => new { CustomerName = g.Key, Revenue = g.Sum(x => x.Amount) })
                     .OrderByDescending(x => x.Revenue)
                     .Take(5)
-                    .Select(x => x.Customer)
-                    .ToHashSet();
+                    .ToArray();
 
-                var filteredData = data.Where(x => topClients.Contains(x.Customer));
-
-                return (UiControl)filteredData.ToBarChart(
-                    keySelector: x => x.CustomerName ?? x.Customer ?? "Unknown",
-                    valueSelector: g => g.Sum(x => x.Amount),
-                    orderByValueDescending: true
+                return (UiControl)Charts.Column(
+                    topClients.Select(x => x.Revenue),
+                    topClients.Select(x => x.CustomerName)
                 ).WithTitle("Top 5 Clients");
             });
 

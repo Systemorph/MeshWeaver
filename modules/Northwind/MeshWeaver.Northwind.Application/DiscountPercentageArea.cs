@@ -37,16 +37,26 @@ public static class DiscountPercentageArea
         => layoutArea.GetCombinedDiscountsDataCube()
             .Select(data =>
             {
-                var discountData = data.GroupBy(x => (x.Discount * 100).ToString("0") + "%")
-                    .Select(g => new { 
-                        DiscountLevel = g.Key, 
-                        Revenue = Math.Round(g.Sum(x => x.Amount), 2) 
+                // Group discounts into 5% brackets for clearer visualization
+                var discountData = data
+                    .GroupBy(x => Math.Round(x.Discount * 100 / 5) * 5) // Round to nearest 5%
+                    .Select(g => new {
+                        DiscountNumeric = g.Key,
+                        DiscountLevel = g.Key == 0 ? "No Discount" : $"{g.Key:0}%",
+                        Revenue = Math.Round(g.Sum(x => x.Amount), 2)
                     })
-                    .OrderBy(x => x.DiscountLevel)
+                    .OrderBy(x => x.DiscountNumeric)
                     .ToArray();
 
-                return (UiControl)Charts.Pie(discountData.Select(d => d.Revenue), discountData.Select(d => d.DiscountLevel))
-                    .WithTitle("Sales by Discount Percentage");
+                return (UiControl)Charts.Pie(
+                    discountData.Select(d => d.Revenue),
+                    discountData.Select(d => d.DiscountLevel)
+                )
+                    .WithTitle("Sales by Discount Percentage")
+                    .WithLegend(true)
+                    .WithLegendPosition(LegendPosition.Right)
+                    .WithWidth("800px")
+                    .WithHeight("500px");
             });
 
     private static IObservable<IEnumerable<NorthwindDataCube>> GetCombinedDiscountsDataCube(this LayoutAreaHost area)

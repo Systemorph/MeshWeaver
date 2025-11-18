@@ -47,25 +47,24 @@ public static class DiscountVsRevenueArea
                 var monthlyData = filteredData.GroupBy(x => new { x.OrderDate.Year, x.OrderDate.Month })
                     .Select(g => new
                     {
+                        MonthNumeric = g.Key.Month,
                         Month = new DateTime(g.Key.Year, g.Key.Month, 1).ToString("MMM"),
                         Revenue = Math.Round(g.Sum(x => x.Amount), 2),
                         Discount = Math.Round(g.Sum(x => x.UnitPrice * x.Quantity * x.Discount), 2)
                     })
-                    .OrderBy(x => x.Month)
+                    .OrderBy(x => x.MonthNumeric)
                     .ToArray();
 
-                // Create revenue chart
-                var revenueChart = (UiControl)Charts.Bar(monthlyData.Select(m => m.Revenue), monthlyData.Select(m => m.Month))
-                    .WithTitle("Monthly Revenue");
+                var months = monthlyData.Select(m => m.Month).ToArray();
+                var chart = Charts.Create()
+                    .WithSeries(new ColumnSeries(monthlyData.Select(m => m.Revenue).ToArray(), "Revenue"))
+                    .WithSeries(new ColumnSeries(monthlyData.Select(m => m.Discount).ToArray(), "Discounts"))
+                    .Stacked()
+                    .WithLabels(months)
+                    .WithTitle("Revenue vs Discount Analysis")
+                    .WithLegend(true);
 
-                // Create discount chart
-                var discountChart = (UiControl)Charts.Bar(monthlyData.Select(m => m.Discount), monthlyData.Select(m => m.Month))
-                    .WithTitle("Monthly Discounts");
-
-                return Controls.Stack
-                    .WithView(Controls.H2("Revenue vs Discount Analysis"))
-                    .WithView(revenueChart)
-                    .WithView(discountChart);
+                return (UiControl)chart;
             });
 
     /// <summary>

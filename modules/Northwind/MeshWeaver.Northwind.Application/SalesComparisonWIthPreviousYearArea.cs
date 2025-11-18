@@ -3,8 +3,6 @@ using System.Reactive.Linq;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Chart;
 using MeshWeaver.Layout.Composition;
-using MeshWeaver.Northwind.Domain;
-using MeshWeaver.Pivot.Builder;
 
 namespace MeshWeaver.Northwind.Application;
 
@@ -36,17 +34,12 @@ public static class SalesComparisonWIthPreviousYearArea
         return layoutArea.WithPrevYearNorthwindData()
             .Select(data =>
             {
-                var chart = data.ToStackedBarChart(
-                    rowKeySelector: x => x.OrderYear,
-                    colKeySelector: x => x.CategoryName ?? "Unknown",
-                    valueSelector: g => g.Sum(x => x.Amount),
-                    rowLabelSelector: year => year.ToString(),
-                    colLabelSelector: category => category
-                ).WithTitle("Sales by Category with Previous Year");
-
-                return (UiControl)Controls.Stack
-                    .WithView(Controls.H2("Sales by Category with Previous Year"))
-                    .WithView(chart);
+                return (UiControl)data
+                    .SliceBy(x => x.CategoryName ?? "Unknown")
+                    .SliceBy(x => x.OrderYear, year => year.ToString())
+                    .ToColumnChart(g => g.Sum(x => x.Amount))
+                    .WithLegendPosition(LegendPosition.Bottom)
+                    .WithTitle("Sales by Category with Previous Year");
             });
     }
 }
