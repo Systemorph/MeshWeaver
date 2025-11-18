@@ -38,20 +38,16 @@ public static class EmployeesOverviewArea
         => layoutArea.GetDataCube()
             .Select(data =>
             {
-                // Get top 5 employees by revenue
-                var topEmployees = data.GroupBy(x => x.Employee)
-                    .Select(g => new { Employee = g.Key, Revenue = g.Sum(x => x.Amount) })
+                var topEmployees = data
+                    .GroupBy(x => x.EmployeeName ?? x.Employee.ToString())
+                    .Select(g => new { EmployeeName = g.Key, Revenue = g.Sum(x => x.Amount) })
                     .OrderByDescending(x => x.Revenue)
                     .Take(5)
-                    .Select(x => x.Employee)
-                    .ToHashSet();
+                    .ToArray();
 
-                var filteredData = data.Where(x => topEmployees.Contains(x.Employee));
-
-                return (UiControl)filteredData.ToBarChart(
-                    keySelector: x => x.EmployeeName ?? x.Employee.ToString(),
-                    valueSelector: g => g.Sum(x => x.Amount),
-                    orderByValueDescending: true
+                return (UiControl)Charts.Column(
+                    topEmployees.Select(x => x.Revenue),
+                    topEmployees.Select(x => x.EmployeeName)
                 ).WithTitle("Top 5 Employees");
             });
 

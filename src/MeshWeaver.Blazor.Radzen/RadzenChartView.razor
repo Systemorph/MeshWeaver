@@ -74,6 +74,16 @@
                     builder.AddAttribute(4, "Title", title);
                 builder.CloseComponent();
             }
+            else if (seriesType == typeof(ColumnSeries))
+            {
+                builder.OpenComponent<RadzenColumnSeries<ChartDataPoint>>(0);
+                builder.AddAttribute(1, "Data", data);
+                builder.AddAttribute(2, "CategoryProperty", "Category");
+                builder.AddAttribute(3, "ValueProperty", "Value");
+                if (hasTitle)
+                    builder.AddAttribute(4, "Title", title);
+                builder.CloseComponent();
+            }
             else if (seriesType == typeof(LineSeries))
             {
                 var lineSeries = (LineSeries)series;

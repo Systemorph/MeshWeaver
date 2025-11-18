@@ -40,20 +40,16 @@ namespace MeshWeaver.Northwind.Application
             => layoutArea.YearlyNorthwindData()
                 .Select(data =>
                 {
-                    // Get top 5 products by revenue
-                    var topProducts = data.GroupBy(x => x.Product)
-                        .Select(g => new { Product = g.Key, Revenue = g.Sum(x => x.Amount) })
+                    var topProducts = data
+                        .GroupBy(x => x.ProductName ?? x.Product.ToString())
+                        .Select(g => new { ProductName = g.Key, Revenue = g.Sum(x => x.Amount) })
                         .OrderByDescending(x => x.Revenue)
                         .Take(5)
-                        .Select(x => x.Product)
-                        .ToHashSet();
+                        .ToArray();
 
-                    var filteredData = data.Where(x => topProducts.Contains(x.Product));
-
-                    return (UiControl)filteredData.ToBarChart(
-                        keySelector: x => x.ProductName ?? x.Product.ToString(),
-                        valueSelector: g => g.Sum(x => x.Amount),
-                        orderByValueDescending: true
+                    return (UiControl)Charts.Column(
+                        topProducts.Select(x => x.Revenue),
+                        topProducts.Select(x => x.ProductName)
                     ).WithTitle("Top 5 Products");
                 });
     }

@@ -7,6 +7,7 @@ namespace MeshWeaver.Layout.Chart;
 /// Base class for all chart series types.
 /// </summary>
 [JsonDerivedType(typeof(BarSeries), typeDiscriminator: "bar")]
+[JsonDerivedType(typeof(ColumnSeries), typeDiscriminator: "column")]
 [JsonDerivedType(typeof(LineSeries), typeDiscriminator: "line")]
 [JsonDerivedType(typeof(PieSeries), typeDiscriminator: "pie")]
 [JsonDerivedType(typeof(DoughnutSeries), typeDiscriminator: "doughnut")]
@@ -128,6 +129,65 @@ public record BarSeries : ChartSeries
     /// Sets the category percentage.
     /// </summary>
     public BarSeries WithCategoryPercentage(object percentage) =>
+        this with { CategoryPercentage = percentage };
+}
+
+/// <summary>
+/// Represents a column chart series (vertical bars).
+/// </summary>
+public record ColumnSeries : ChartSeries
+{
+    /// <summary>
+    /// Parameterless constructor for JSON deserialization.
+    /// </summary>
+    [JsonConstructor]
+    public ColumnSeries() { }
+
+    /// <summary>
+    /// Creates a column series with the specified data.
+    /// </summary>
+    public ColumnSeries(IEnumerable<object> data, object? label = null)
+    {
+        Data = data.ToImmutableList();
+        Label = label;
+    }
+
+    /// <summary>
+    /// Creates a column series with the specified data.
+    /// </summary>
+    public ColumnSeries(IEnumerable<double> data, object? label = null)
+        : this(data.Cast<object>(), label)
+    {
+    }
+
+    /// <summary>
+    /// Creates a column series with the specified data.
+    /// </summary>
+    public ColumnSeries(IEnumerable<int> data, object? label = null)
+        : this(data.Cast<object>(), label)
+    {
+    }
+
+    /// <summary>
+    /// Gets the bar percentage (0-1) for relative bar thickness.
+    /// </summary>
+    public object? BarPercentage { get; init; }
+
+    /// <summary>
+    /// Gets the category percentage (0-1) for spacing.
+    /// </summary>
+    public object? CategoryPercentage { get; init; }
+
+    /// <summary>
+    /// Sets the bar percentage.
+    /// </summary>
+    public ColumnSeries WithBarPercentage(object percentage) =>
+        this with { BarPercentage = percentage };
+
+    /// <summary>
+    /// Sets the category percentage.
+    /// </summary>
+    public ColumnSeries WithCategoryPercentage(object percentage) =>
         this with { CategoryPercentage = percentage };
 }
 

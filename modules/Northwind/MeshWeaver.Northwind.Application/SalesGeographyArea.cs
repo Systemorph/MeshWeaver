@@ -58,13 +58,11 @@ public static class SalesGeographyArea
                         var yearData = countries.Select(country =>
                             countryYearGroups.GetValueOrDefault((country, year), 0.0))
                             .ToArray();
-                        chart = chart.WithSeries(new BarSeries(yearData, year.ToString()));
+                        chart = chart.WithSeries(new ColumnSeries(yearData, year.ToString()));
                     }
-                    chart = chart.Stacked().WithLabels(countries);
-                    
-                    return Observable.Return((UiControl)Controls.Stack
-                        .WithView(Controls.H2("Sales by Country (Stacked by Year)"))
-                        .WithView(chart));
+                    chart = chart.Stacked().WithLabels(countries).WithTitle("Sales by Country (Stacked by Year)");
+
+                    return Observable.Return((UiControl)chart);
                 }));
     }
 
