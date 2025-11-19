@@ -38,31 +38,15 @@ public static class SalesGeographyArea
         return layoutArea.Toolbar(new SalesGeographyToolbar(), (tb, area, _) =>
             area.GetNorthwindDataCubeData()
                 .Select(data => data.Where(x => (tb.Year == 0 || x.OrderDate.Year == tb.Year)))
-                .SelectMany(data =>
+                .Select(data =>
                 {
                     var filteredData = data.Where(x => !string.IsNullOrEmpty(x.ShipCountry));
-                    
-                    // Group by country and year to create chart datasets
-                    var countryYearGroups = filteredData
-                        .GroupBy(x => (x.ShipCountry, x.OrderYear))
-                        .ToDictionary(g => g.Key, g => g.Sum(x => x.Amount));
-                    
-                    // Get unique years and countries
-                    var years = countryYearGroups.Keys.Select(k => k.OrderYear).Distinct().OrderBy(y => y).ToArray();
-                    var countries = countryYearGroups.Keys.Select(k => k.ShipCountry ?? string.Empty).Distinct().OrderBy(c => c).ToArray();
 
-                    // Create chart with series for each year
-                    var chart = Charts.Create();
-                    foreach (var year in years)
-                    {
-                        var yearData = countries.Select(country =>
-                            countryYearGroups.GetValueOrDefault((country, year), 0.0))
-                            .ToArray();
-                        chart = chart.WithSeries(new ColumnSeries(yearData, year.ToString()));
-                    }
-                    chart = chart.Stacked().WithLabels(countries).WithTitle("Sales by Country (Stacked by Year)");
-
-                    return Observable.Return((UiControl)chart);
+                    return (UiControl)filteredData
+                        .SliceBy(x => x.ShipCountry!)
+                        .SliceBy(x => x.OrderYear, year => year.ToString())
+                        .ToStackedColumnChart(g => g.Sum(x => x.Amount))
+                        .WithTitle("Sales by Country (Stacked by Year)");
                 }));
     }
 

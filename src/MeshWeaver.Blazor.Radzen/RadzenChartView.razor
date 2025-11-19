@@ -26,7 +26,14 @@
 
                 @if (ShowCategoryAxis())
                 {
-                    <RadzenCategoryAxis Padding="20" />
+                    <RadzenCategoryAxis Padding="20">
+                        <RadzenAxisTitle Text="" />
+                        <RadzenCategoryAxisLabels>
+                            <Template Context="value">
+                                @GetAbbreviatedLabel(value?.ToString())
+                            </Template>
+                        </RadzenCategoryAxisLabels>
+                    </RadzenCategoryAxis>
                 }
 
                 <RadzenValueAxis>
@@ -302,6 +309,30 @@
         if (Height != null)
             style += $"height: {Height};";
         return style;
+    }
+
+    private string GetAbbreviatedLabel(string? label)
+    {
+        if (string.IsNullOrEmpty(label))
+            return "";
+
+        // If label is longer than 15 characters, abbreviate it
+        const int maxLength = 15;
+        if (label.Length <= maxLength)
+            return label;
+
+        // Try to abbreviate at word boundaries
+        var words = label.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        if (words.Length > 1)
+        {
+            // Use first letters of each word + ellipsis if still too long
+            var abbreviated = string.Join("", words.Select(w => w[0]));
+            if (abbreviated.Length <= maxLength)
+                return abbreviated;
+        }
+
+        // Otherwise just truncate with ellipsis
+        return label.Substring(0, maxLength - 1) + "…";
     }
 
     public class ChartDataPoint

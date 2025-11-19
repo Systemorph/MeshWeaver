@@ -41,12 +41,11 @@ public static class SalesOverviewArea
         return layoutArea.YearlyNorthwindData()
             .Select(data =>
             {
-                return (UiControl)data.ToBarChart(
-                    keySelector: x => x.CategoryName ?? "Unknown",
-                    valueSelector: g => g.Sum(x => x.Amount),
-                    orderByValueDescending: true
-                ).WithTitle("Sales by Category")
-                .WithClass("chart sales-by-category-chart");
+                return (UiControl)data
+                    .SliceBy(x => x.CategoryName ?? "Unknown")
+                    .ToColumnChart(g => g.Sum(x => x.Amount))
+                    .WithTitle("Sales by Category")
+                    .WithClass("chart sales-by-category-chart");
             });
     }
 
