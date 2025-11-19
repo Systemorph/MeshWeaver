@@ -1,6 +1,6 @@
 ﻿using System.ComponentModel.DataAnnotations;
 using MeshWeaver.Domain;
-using MeshWeaver.GridModel;
+using MeshWeaver.Layout.Pivot;
 using MeshWeaver.Northwind.Domain;
 
 namespace MeshWeaver.Northwind.Application
