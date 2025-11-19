@@ -1,10 +1,10 @@
-﻿using System.ComponentModel;
+using System.ComponentModel;
 using System.ComponentModel.DataAnnotations;
 using System.Linq.Expressions;
 using System.Reflection;
 using MeshWeaver.Domain;
 
-namespace MeshWeaver.GridModel;
+namespace MeshWeaver.Layout.Pivot;
 
 /// <summary>
 /// Extension methods for creating PivotConfiguration from type metadata

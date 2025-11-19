@@ -26,13 +26,8 @@
 
                 @if (ShowCategoryAxis())
                 {
-                    <RadzenCategoryAxis Padding="20">
+                    <RadzenCategoryAxis Padding="20" LabelRotation="@GetCategoryAxisLabelAngle()">
                         <RadzenAxisTitle Text="" />
-                        <RadzenCategoryAxisLabels>
-                            <Template Context="value">
-                                @GetAbbreviatedLabel(value?.ToString())
-                            </Template>
-                        </RadzenCategoryAxisLabels>
                     </RadzenCategoryAxis>
                 }
 
@@ -311,28 +306,18 @@
         return style;
     }
 
-    private string GetAbbreviatedLabel(string? label)
+    private int GetCategoryAxisLabelAngle()
     {
-        if (string.IsNullOrEmpty(label))
-            return "";
+        if (CategoryAxisLabelAngle == null)
+            return -45; // Default angle to prevent overlap
 
-        // If label is longer than 15 characters, abbreviate it
-        const int maxLength = 15;
-        if (label.Length <= maxLength)
-            return label;
+        if (CategoryAxisLabelAngle is int angle)
+            return angle;
 
-        // Try to abbreviate at word boundaries
-        var words = label.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-        if (words.Length > 1)
-        {
-            // Use first letters of each word + ellipsis if still too long
-            var abbreviated = string.Join("", words.Select(w => w[0]));
-            if (abbreviated.Length <= maxLength)
-                return abbreviated;
-        }
+        if (int.TryParse(CategoryAxisLabelAngle.ToString(), out var parsedAngle))
+            return parsedAngle;
 
-        // Otherwise just truncate with ellipsis
-        return label.Substring(0, maxLength - 1) + "…";
+        return -45; // Fallback to default
     }
 
     public class ChartDataPoint

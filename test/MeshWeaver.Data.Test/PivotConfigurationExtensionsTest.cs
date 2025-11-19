@@ -5,7 +5,7 @@ using System.ComponentModel.DataAnnotations;
 using System.Linq;
 using FluentAssertions;
 using MeshWeaver.Domain;
-using MeshWeaver.GridModel;
+using MeshWeaver.Layout.Pivot;
 using Xunit;
 
 namespace MeshWeaver.Data.Test;

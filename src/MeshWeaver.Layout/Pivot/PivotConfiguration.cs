@@ -1,4 +1,4 @@
-namespace MeshWeaver.GridModel;
+namespace MeshWeaver.Layout.Pivot;
 
 public record PivotConfiguration
 {

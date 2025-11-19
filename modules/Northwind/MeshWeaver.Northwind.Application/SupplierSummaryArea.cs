@@ -3,10 +3,10 @@ using System.Reactive.Linq;
 using MeshWeaver.Data;
 using MeshWeaver.DataCubes;
 using MeshWeaver.Domain;
-using MeshWeaver.GridModel;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Chart;
 using MeshWeaver.Layout.Composition;
+using MeshWeaver.Layout.Pivot;
 using MeshWeaver.Pivot.Builder;
 using MeshWeaver.Reporting.DataCubes;
 

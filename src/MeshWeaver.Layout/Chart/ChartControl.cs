@@ -59,6 +59,11 @@ public record ChartControl()
     public object? Height { get; init; }
 
     /// <summary>
+    /// Gets or initializes the angle for category axis labels (in degrees). Default is -45 to prevent overlap.
+    /// </summary>
+    public object? CategoryAxisLabelAngle { get; init; }
+
+    /// <summary>
     /// Adds a series to the chart.
     /// </summary>
     public ChartControl WithSeries(ChartSeries series)
@@ -155,4 +160,9 @@ public record ChartControl()
     /// Sets the height of the chart.
     /// </summary>
     public ChartControl WithHeight(object height) => this with { Height = height };
+
+    /// <summary>
+    /// Sets the angle for category axis labels (in degrees). Use negative values for counter-clockwise rotation.
+    /// </summary>
+    public ChartControl WithCategoryAxisLabelAngle(int angle) => this with { CategoryAxisLabelAngle = angle };
 }

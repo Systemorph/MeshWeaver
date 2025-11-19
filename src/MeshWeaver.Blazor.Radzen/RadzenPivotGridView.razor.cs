@@ -1,5 +1,5 @@
 ﻿using System.Text.Json;
-using MeshWeaver.GridModel;
+using MeshWeaver.Layout.Pivot;
 using Microsoft.AspNetCore.Components;
 
 namespace MeshWeaver.Blazor.Radzen;
@@ -86,37 +86,37 @@ public partial class RadzenPivotGridView : RadzenViewBase<PivotGridControl, Radz
         return properties.DistinctBy(p => p.Name).ToList();
     }
 
-    private global::Radzen.AggregateFunction GetAggregateFunction(GridModel.AggregateFunction function)
+    private global::Radzen.AggregateFunction GetAggregateFunction(AggregateFunction function)
     {
         return function switch
         {
-            GridModel.AggregateFunction.Sum => global::Radzen.AggregateFunction.Sum,
-            GridModel.AggregateFunction.Average => global::Radzen.AggregateFunction.Average,
-            GridModel.AggregateFunction.Count => global::Radzen.AggregateFunction.Count,
-            GridModel.AggregateFunction.Min => global::Radzen.AggregateFunction.Min,
-            GridModel.AggregateFunction.Max => global::Radzen.AggregateFunction.Max,
+            AggregateFunction.Sum => global::Radzen.AggregateFunction.Sum,
+            AggregateFunction.Average => global::Radzen.AggregateFunction.Average,
+            AggregateFunction.Count => global::Radzen.AggregateFunction.Count,
+            AggregateFunction.Min => global::Radzen.AggregateFunction.Min,
+            AggregateFunction.Max => global::Radzen.AggregateFunction.Max,
             _ => global::Radzen.AggregateFunction.Sum
         };
     }
 
-    private global::Radzen.TextAlign MapTextAlign(GridModel.TextAlign textAlign)
+    private global::Radzen.TextAlign MapTextAlign(TextAlign textAlign)
     {
         return textAlign switch
         {
-            GridModel.TextAlign.Left => global::Radzen.TextAlign.Left,
-            GridModel.TextAlign.Center => global::Radzen.TextAlign.Center,
-            GridModel.TextAlign.Right => global::Radzen.TextAlign.Right,
-            GridModel.TextAlign.Justify => global::Radzen.TextAlign.Justify,
+            TextAlign.Left => global::Radzen.TextAlign.Left,
+            TextAlign.Center => global::Radzen.TextAlign.Center,
+            TextAlign.Right => global::Radzen.TextAlign.Right,
+            TextAlign.Justify => global::Radzen.TextAlign.Justify,
             _ => global::Radzen.TextAlign.Right
         };
     }
 
-    private global::Radzen.SortOrder MapSortOrder(GridModel.SortOrder sortOrder)
+    private global::Radzen.SortOrder MapSortOrder(SortOrder sortOrder)
     {
         return sortOrder switch
         {
-            GridModel.SortOrder.Ascending => global::Radzen.SortOrder.Ascending,
-            GridModel.SortOrder.Descending => global::Radzen.SortOrder.Descending,
+            SortOrder.Ascending => global::Radzen.SortOrder.Ascending,
+            SortOrder.Descending => global::Radzen.SortOrder.Descending,
             _ => global::Radzen.SortOrder.Descending
         };
     }

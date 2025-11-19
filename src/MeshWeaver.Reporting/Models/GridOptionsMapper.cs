@@ -4,6 +4,7 @@ using System.Text.Json.Nodes;
 using MeshWeaver.GridModel;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.DataGrid;
+using MeshWeaver.Layout.Pivot;
 using MeshWeaver.Pivot;
 using MeshWeaver.Pivot.Builder.Interfaces;
 using MeshWeaver.Pivot.Grouping;
@@ -137,7 +138,7 @@ namespace MeshWeaver.Reporting.Models
                 TypeName = "System.Double",
                 Function = AggregateFunction.Sum,
                 Format = "{0:C}",
-                TextAlign = GridModel.TextAlign.Right
+                TextAlign = TextAlign.Right
             });
 
             return new PivotConfiguration

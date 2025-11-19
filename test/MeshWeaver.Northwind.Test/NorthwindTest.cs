@@ -10,6 +10,7 @@ using MeshWeaver.Data;
 using MeshWeaver.Fixture;
 using MeshWeaver.GridModel;
 using MeshWeaver.Layout;
+using MeshWeaver.Layout.Pivot;
 using MeshWeaver.Messaging;
 using MeshWeaver.Northwind.Application;
 using MeshWeaver.Northwind.Domain;

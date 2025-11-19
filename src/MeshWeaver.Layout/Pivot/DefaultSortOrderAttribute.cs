@@ -1,4 +1,4 @@
-﻿namespace MeshWeaver.GridModel;
+namespace MeshWeaver.Layout.Pivot;
 
 /// <summary>
 /// Specifies the default sort order for a dimension when it's used in a pivot grid
