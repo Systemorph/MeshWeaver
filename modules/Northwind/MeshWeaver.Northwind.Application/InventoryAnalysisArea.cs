@@ -3,8 +3,6 @@ using System.Reactive.Linq;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Layout.DataGrid;
-using MeshWeaver.Pivot.Aggregations;
-using MeshWeaver.Pivot.Builder;
 using MeshWeaver.Northwind.Domain;
 
 namespace MeshWeaver.Northwind.Application;

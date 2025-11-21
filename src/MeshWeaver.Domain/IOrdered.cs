@@ -1,4 +1,4 @@
-﻿namespace MeshWeaver.DataCubes
+namespace MeshWeaver.Domain
 {
     public interface IOrdered
     {

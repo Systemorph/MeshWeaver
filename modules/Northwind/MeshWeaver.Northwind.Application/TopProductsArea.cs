@@ -4,7 +4,6 @@ using MeshWeaver.Layout;
 using MeshWeaver.Layout.Chart;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Northwind.Domain;
-using MeshWeaver.Pivot.Builder;
 
 namespace MeshWeaver.Northwind.Application
 {

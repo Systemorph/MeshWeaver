@@ -4,8 +4,6 @@ using System.Reactive.Linq;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Chart;
 using MeshWeaver.Layout.Composition;
-using MeshWeaver.Pivot.Aggregations;
-using MeshWeaver.Pivot.Builder;
 
 namespace MeshWeaver.Northwind.Application;
 

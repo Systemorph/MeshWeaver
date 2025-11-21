@@ -1,5 +1,4 @@
 ﻿using System.ComponentModel.DataAnnotations;
-using MeshWeaver.Arithmetics;
 using MeshWeaver.Domain;
 
 namespace MeshWeaver.TestDomain.SimpleData;
@@ -121,7 +120,6 @@ public record ValueWithAggregateByHierarchicalDimension
 {
     [NotVisible]
     [Dimension(typeof(TestHierarchicalDimensionA), nameof(DimA))]
-    [AggregateBy]
     public string DimA { get; init; } = null!;
 
     public double Value { get; init; }
@@ -221,12 +219,10 @@ public record ValueWithTwoAggregateByHierarchicalDimensions
 {
     [NotVisible]
     [Dimension(typeof(TestHierarchicalDimensionA), nameof(DimA))]
-    [AggregateBy]
     public string DimA { get; init; } = null!;
 
     [NotVisible]
     [Dimension(typeof(TestHierarchicalDimensionB), nameof(DimB))]
-    [AggregateBy]
     public string DimB { get; init; } = null!;
 
     public double Value { get; init; }
