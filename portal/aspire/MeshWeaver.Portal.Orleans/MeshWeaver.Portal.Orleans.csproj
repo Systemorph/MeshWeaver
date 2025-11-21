@@ -17,7 +17,6 @@
     <ProjectReference Include="..\..\..\src\MeshWeaver.Connection.Orleans\MeshWeaver.Connection.Orleans.csproj" />
     <ProjectReference Include="..\..\..\src\MeshWeaver.Hosting.AzureBlob\MeshWeaver.Hosting.AzureBlob.csproj" />
     <ProjectReference Include="..\..\..\src\MeshWeaver.Hosting.Blazor\MeshWeaver.Hosting.Blazor.csproj" />
-    <ProjectReference Include="..\..\..\src\MeshWeaver.Blazor.ChartJs\MeshWeaver.Blazor.ChartJs.csproj" />
     <ProjectReference Include="..\..\..\src\MeshWeaver.Hosting.Orleans\MeshWeaver.Hosting.Orleans.csproj" />
     <ProjectReference Include="..\..\..\src\MeshWeaver.Hosting.PostgreSql\MeshWeaver.Hosting.PostgreSql.csproj" />
     <ProjectReference Include="..\..\..\src\MeshWeaver.ServiceProvider\MeshWeaver.ServiceProvider.csproj" />

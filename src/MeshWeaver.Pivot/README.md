@@ -111,10 +111,7 @@ var pivotChart = new ChartControl(chartModel);
 - Works seamlessly with MeshWeaver.Data and data cube components
 
 ## Related Projects
-- [MeshWeaver.GridModel](../MeshWeaver.GridModel/README.md) - For displaying pivot data in grids
-- [MeshWeaver.Charting](../MeshWeaver.Charting/README.md) - For visualizing pivot data in charts
-- [MeshWeaver.Blazor.AgGrid](../MeshWeaver.Blazor.AgGrid/README.md) - Blazor implementation of pivot grids
-- [MeshWeaver.Blazor.ChartJs](../MeshWeaver.Blazor.ChartJs/README.md) - Blazor implementation of pivot charts
+- [MeshWeaver.Blazor.Radzen](../MeshWeaver.Blazor.Radzen/README.md) - Radzen Blazor components for pivot grids and charts
 
 ## See Also
 Refer to the [main MeshWeaver documentation](../../Readme.md) for more information about the overall project.

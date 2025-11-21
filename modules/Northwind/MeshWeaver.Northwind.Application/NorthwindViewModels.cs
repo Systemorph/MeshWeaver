@@ -1,5 +1,4 @@
-﻿using MeshWeaver.GridModel;
-using MeshWeaver.Layout;
+﻿using MeshWeaver.Layout;
 using MeshWeaver.Layout.Domain;
 using MeshWeaver.Layout.Pivot;
 using MeshWeaver.Messaging;
@@ -25,7 +24,6 @@ namespace MeshWeaver.Northwind.Application
         {
             return configuration
                     .AddNorthwindDocumentation()
-                    .AddGridModel()
                     .AddLayout(layout =>
                         layout
                             .AddDomainViews()

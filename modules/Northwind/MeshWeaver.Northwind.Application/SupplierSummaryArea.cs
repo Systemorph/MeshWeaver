@@ -8,7 +8,6 @@ using MeshWeaver.Layout.Chart;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Layout.Pivot;
 using MeshWeaver.Pivot.Builder;
-using MeshWeaver.Reporting.DataCubes;
 
 namespace MeshWeaver.Northwind.Application;
 
@@ -127,57 +126,6 @@ public static class SupplierSummaryArea
                 .Select(x => x.Value!.GetData<NorthwindDataCube>())
         )!;
 
-        private IObservable<IDataCube<NorthwindDataCube>> FilteredDataCube() => layoutArea.GetDataCube()
-            .CombineLatest(
-                layoutArea.GetDataStream<DataCubeFilter>(DataCubeLayoutExtensions.DataCubeFilterId),
-                (collection, filter) =>
-                {
-                    var dataCube = collection.ToDataCube();
-                    return dataCube.Filter(BuildFilterTuples(filter!, dataCube)); // todo apply DataCubeFilter from stream
-                }
-            );
-    }
-
-
-    // high level idea of how to do filtered data-cube (12.07.2024, Alexander Kravets)
-
-    private static (string filter, object value)[] BuildFilterTuples(DataCubeFilter filter, IDataCube dataCube)
-    {
-        var overallFilter = new List<(string filter, object value)>();
-        foreach (var filterDimension in filter.FilterItems)
-        {
-            var hasAllSelected = filterDimension.Value.All(x => x.Selected);
-            if (hasAllSelected)
-                continue;
-
-            // HACK V10: we might get rid of this sliceTemplate with trying to apply proper deserialization  which will respect int values as objects instead of converting them to strings (2024/07/16, Dmitry Kalabin)
-            var sliceTemplateValue = dataCube.GetSlices(filterDimension.Key)
-                .SelectMany(x => x.Tuple.Select(t => t.Value))
-                .First();
-            var dimensionType = sliceTemplateValue!.GetType();
-
-            var filterValues = filterDimension.Value.Where(f => f.Selected)
-                .Select(fi => ConvertValue(fi.Id!, dimensionType)).ToArray();
-
-            if (filterValues.Length == 0)
-                continue;
-
-            overallFilter.Add((filterDimension.Key, filterValues));
-        }
-        return overallFilter.ToArray();
-    }
-
-    private static object ConvertValue(object value, Type dimensionType)
-    {
-        if (value is not string strValue)
-            throw new NotSupportedException("Only the string types of filter codes are currently supported");
-
-        if (dimensionType == typeof(string))
-            return strValue;
-        if (dimensionType == typeof(int))
-            return Convert.ToInt32(value);
-
-        throw new NotSupportedException($"The type {dimensionType} is not currently supported for DataCube filtering");
     }
 
 

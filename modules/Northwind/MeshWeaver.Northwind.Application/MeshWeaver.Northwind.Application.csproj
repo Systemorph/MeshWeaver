@@ -14,7 +14,6 @@
         <ProjectReference Include="..\..\..\src\MeshWeaver.Import\MeshWeaver.Import.csproj" />
         <ProjectReference Include="..\..\..\src\MeshWeaver.Layout\MeshWeaver.Layout.csproj" />
         <ProjectReference Include="..\..\..\src\MeshWeaver.Pivot\MeshWeaver.Pivot.csproj" />
-        <ProjectReference Include="..\..\..\src\MeshWeaver.Reporting\MeshWeaver.Reporting.csproj" />
         <ProjectReference Include="..\..\..\src\MeshWeaver.GoogleMaps\MeshWeaver.GoogleMaps.csproj" />
         <ProjectReference Include="..\MeshWeaver.Northwind.Model\MeshWeaver.Northwind.Model.csproj" />
     </ItemGroup>
