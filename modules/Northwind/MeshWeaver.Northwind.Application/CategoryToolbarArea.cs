@@ -1,6 +1,5 @@
 ﻿using System.Reactive.Linq;
 using MeshWeaver.Data;
-using MeshWeaver.DataCubes;
 using MeshWeaver.Domain;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
@@ -50,11 +49,7 @@ public static class CategoryToolbarArea
         => layoutArea.Workspace.GetStream(typeof(Category))
             .DistinctUntilChanged()
             .CombineLatest(layoutArea.YearlyNorthwindData()
-                    .Select(data => data.ToDataCube().GetSlices(nameof(Category))
-                        .SelectMany(d => d.Tuple)
-                        .Select(tuple => tuple.Value)
-                        .Distinct()
-                    ),
+                    .Select(data => data.Select(d => d.Category).Distinct()),
                 (changeItem, values) => (changeItem, values))
             .Select(tp => tp.changeItem.Value!.GetData<Category>()
                 .Where(c => tp.values.Contains(c.CategoryId))

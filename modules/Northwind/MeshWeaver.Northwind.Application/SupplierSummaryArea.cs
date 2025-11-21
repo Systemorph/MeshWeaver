@@ -1,13 +1,11 @@
 ﻿using System.ComponentModel.DataAnnotations;
 using System.Reactive.Linq;
 using MeshWeaver.Data;
-using MeshWeaver.DataCubes;
 using MeshWeaver.Domain;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Chart;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Layout.Pivot;
-using MeshWeaver.Pivot.Builder;
 
 namespace MeshWeaver.Northwind.Application;
 

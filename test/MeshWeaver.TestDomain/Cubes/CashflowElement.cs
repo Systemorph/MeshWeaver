@@ -1,6 +1,4 @@
-﻿using MeshWeaver.Arithmetics;
-using MeshWeaver.Domain;
-using static MeshWeaver.Arithmetics.ArithmeticOperations;
+﻿using MeshWeaver.Domain;
 
 namespace MeshWeaver.TestDomain.Cubes;
 
@@ -43,27 +41,7 @@ public record CashflowElement : IHasValue
     [NotVisible]
     [Dimension(typeof(Currency))]
     [IdentityProperty]
-    [AggregateBy]
     public string? Currency { get; init; }
 
     public double Value { get; init; }
-
-    public static CashflowElement operator +(CashflowElement a, CashflowElement b) => Sum(a, b);
-
-    public static CashflowElement operator +(CashflowElement a, double b) => Sum(a, b);
-
-    public static CashflowElement operator +(double a, CashflowElement b) => Sum(a, b);
-
-    public static CashflowElement operator -(CashflowElement a, CashflowElement b) =>
-        Subtract(a, b);
-
-    public static CashflowElement operator -(CashflowElement a, double b) => Subtract(a, b);
-
-    public static CashflowElement operator *(double a, CashflowElement b) => Multiply(a, b);
-
-    public static CashflowElement operator *(CashflowElement a, double b) => Multiply(a, b);
-
-    public static CashflowElement operator /(CashflowElement a, double b) => Divide(a, b);
-
-    public static CashflowElement operator ^(CashflowElement a, double b) => Power(a, b);
 }
