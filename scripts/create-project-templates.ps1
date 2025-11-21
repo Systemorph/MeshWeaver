@@ -127,7 +127,6 @@ $meshWeaverPackages = @(
     "MeshWeaver.AI.AzureOpenAI",
     "MeshWeaver.Blazor",
     "MeshWeaver.Blazor.AgGrid",
-    "MeshWeaver.Blazor.ChartJs", 
     "MeshWeaver.Blazor.Chat",
     "MeshWeaver.ContentCollections",
     "MeshWeaver.Data",

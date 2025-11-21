@@ -15,17 +15,20 @@
 @code {
     private RenderFragment RenderPivotGrid() => builder =>
     {
+        // Configuration is guaranteed non-null here due to the null check in the template
+        var config = Configuration!;
+
         var componentType = typeof(RadzenPivotDataGrid<>).MakeGenericType(DataItemType!);
         builder.OpenComponent(0, componentType);
         builder.AddAttribute(1, "Data", RawData);
         builder.AddAttribute(2, "AllowPaging", ShowPager);
         builder.AddAttribute(3, "PageSize", PageSize);
-        builder.AddAttribute(4, "ShowColumnsTotals", Configuration.ShowColumnTotals);
-        builder.AddAttribute(5, "ShowRowsTotals", Configuration.ShowRowTotals);
-        builder.AddAttribute(6, "AllowDrillDown", Configuration.AllowDrillDown);
-        builder.AddAttribute(7, "AllowSorting", Configuration.AllowSorting);
-        builder.AddAttribute(8, "AllowFiltering", Configuration.AllowFiltering);
-        builder.AddAttribute(9, "AllowFieldsPicking", Configuration.AllowFieldsPicking);
+        builder.AddAttribute(4, "ShowColumnsTotals", config.ShowColumnTotals);
+        builder.AddAttribute(5, "ShowRowsTotals", config.ShowRowTotals);
+        builder.AddAttribute(6, "AllowDrillDown", config.AllowDrillDown);
+        builder.AddAttribute(7, "AllowSorting", config.AllowSorting);
+        builder.AddAttribute(8, "AllowFiltering", config.AllowFiltering);
+        builder.AddAttribute(9, "AllowFieldsPicking", config.AllowFieldsPicking);
         builder.AddAttribute(10, "Style", Style);
 
         // Add Columns - only dimensions selected for columns
@@ -33,9 +36,9 @@
         {
             var index = 0;
 
-            foreach (var dim in Configuration.ColumnDimensions)
+            foreach (var dim in config.ColumnDimensions)
             {
-                var availableDim = Configuration.AvailableDimensions.FirstOrDefault(d => d.Field == dim.Field);
+                var availableDim = config.AvailableDimensions.FirstOrDefault(d => d.Field == dim.Field);
                 if (availableDim == null) continue;
 
                 columnsBuilder.OpenComponent(index++, typeof(RadzenPivotColumn<>).MakeGenericType(DataItemType!));
@@ -60,7 +63,7 @@
         {
             var index = 0;
 
-            foreach (var dim in Configuration.RowDimensions)
+            foreach (var dim in config.RowDimensions)
             {
                 rowsBuilder.OpenComponent(index++, typeof(RadzenPivotRow<>).MakeGenericType(DataItemType!));
                 rowsBuilder.AddAttribute(index++, "Title", dim.DisplayName);
@@ -82,14 +85,14 @@
         builder.AddAttribute(14, "Aggregates", (RenderFragment)(aggregatesBuilder =>
         {
             var index = 0;
-            foreach (var agg in Configuration.AvailableAggregates)
+            foreach (var agg in config.AvailableAggregates)
             {
                 aggregatesBuilder.OpenComponent(index++, typeof(RadzenPivotAggregate<>).MakeGenericType(DataItemType!));
                 aggregatesBuilder.AddAttribute(index++, "Title", agg.DisplayName);
                 aggregatesBuilder.AddAttribute(index++, "Property", agg.Field);
 
                 // Get configuration from selected aggregates if it exists
-                var selectedAgg = Configuration.Aggregates.FirstOrDefault(a => a.Field == agg.Field);
+                var selectedAgg = config.Aggregates.FirstOrDefault(a => a.Field == agg.Field);
                 var function = selectedAgg?.Function ?? agg.Function;
                 var format = selectedAgg?.Format ?? agg.Format;
                 var textAlign = selectedAgg?.TextAlign ?? agg.TextAlign;

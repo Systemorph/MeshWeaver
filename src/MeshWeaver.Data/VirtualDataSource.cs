@@ -66,6 +66,10 @@ public record VirtualTypeSource<T>(
 {
     private IObservable<IEnumerable<T>>? cachedStream;
 
+    // Override TypeDefinition to use custom CollectionName if provided
+    public new ITypeDefinition TypeDefinition { get; init; } =
+        Workspace.Hub.TypeRegistry.GetTypeDefinition(typeof(T), typeName: CollectionName ?? typeof(T).Name)!;
+
     public IObservable<IEnumerable<T>> StreamUpdates()
     {
         return cachedStream ??= StreamProvider(Workspace)

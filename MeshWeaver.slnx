@@ -65,7 +65,6 @@
     <Project Path="src/MeshWeaver.Application.Styles/MeshWeaver.Application.Styles.csproj" />
     <Project Path="src/MeshWeaver.Arithmetics.Abstractions/MeshWeaver.Arithmetics.Abstractions.csproj" />
     <Project Path="src/MeshWeaver.Arithmetics/MeshWeaver.Arithmetics.csproj" />
-    <Project Path="src/MeshWeaver.Blazor.ChartJs/MeshWeaver.Blazor.ChartJs.csproj" />
     <Project Path="src/MeshWeaver.Blazor.Radzen/MeshWeaver.Blazor.Radzen.csproj" />
     <Project Path="src/MeshWeaver.Blazor.Chat/MeshWeaver.Blazor.Chat.csproj" />
     <Project Path="src/MeshWeaver.Blazor.GoogleMaps/MeshWeaver.Blazor.GoogleMaps.csproj" />
@@ -111,7 +110,6 @@
     <Project Path="src/MeshWeaver.Messaging.Hub/MeshWeaver.Messaging.Hub.csproj" />
     <Project Path="src/MeshWeaver.Pivot/MeshWeaver.Pivot.csproj" />
     <Project Path="src/MeshWeaver.Reflection/MeshWeaver.Reflection.csproj" />
-    <Project Path="src/MeshWeaver.Reporting/MeshWeaver.Reporting.csproj" />
     <Project Path="src/MeshWeaver.ServiceProvider/MeshWeaver.ServiceProvider.csproj" />
     <Project Path="src/MeshWeaver.ShortGuid/MeshWeaver.ShortGuid.csproj" />
     <Project Path="src/MeshWeaver.Utils/MeshWeaver.Utils.csproj" />
@@ -143,7 +141,6 @@
     <Project Path="test/MeshWeaver.Messaging.Hub.Test/MeshWeaver.Messaging.Hub.Test.csproj" />
     <Project Path="test/MeshWeaver.Northwind.Test/MeshWeaver.Northwind.Test.csproj" />
     <Project Path="test/MeshWeaver.Pivot.Test/MeshWeaver.Pivot.Test.csproj" />
-    <Project Path="test/MeshWeaver.Reporting.Test/MeshWeaver.Reporting.Test.csproj" />
     <Project Path="test/MeshWeaver.Search.Test/MeshWeaver.Search.Test.csproj" />
     <Project Path="test/MeshWeaver.Serialization.Test/MeshWeaver.Serialization.Test.csproj" />
     <Project Path="test/MeshWeaver.TestDomain/MeshWeaver.TestDomain.csproj" />

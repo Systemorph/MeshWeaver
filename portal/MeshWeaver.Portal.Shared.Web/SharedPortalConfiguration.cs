@@ -2,7 +2,6 @@
 using System.Security.Claims;
 using MeshWeaver.AI.AzureFoundry;
 using MeshWeaver.AI.Persistence;
-using MeshWeaver.Blazor.ChartJs;
 using MeshWeaver.Blazor.GoogleMaps;
 using MeshWeaver.Blazor.Radzen;
 using MeshWeaver.Blazor.Infrastructure;
@@ -134,7 +133,6 @@ public static class SharedPortalConfiguration
                     .AddContentCollections()
                     .AddRadzenDataGrid()
                     .AddRadzenCharts()
-                    .AddChartJs()
                     .AddGoogleMaps()
                 )
                 .AddBlazor(layoutClient => layoutClient

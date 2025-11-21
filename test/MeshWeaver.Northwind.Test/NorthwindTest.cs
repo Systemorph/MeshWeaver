@@ -8,14 +8,12 @@ using FluentAssertions.Extensions;
 using MeshWeaver.Layout.Chart;
 using MeshWeaver.Data;
 using MeshWeaver.Fixture;
-using MeshWeaver.GridModel;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Pivot;
 using MeshWeaver.Messaging;
 using MeshWeaver.Northwind.Application;
 using MeshWeaver.Northwind.Domain;
 using MeshWeaver.Northwind.Model;
-using MeshWeaver.Reporting.Models;
 using Xunit;
 
 namespace MeshWeaver.Northwind.Test;
@@ -53,16 +51,19 @@ public class NorthwindTest(ITestOutputHelper output) : HubTestBase(output)
                     .AddHubSource(new EmployeeAddress(), c => c.WithType<Employee>())
                     .AddHubSource(new OrderAddress(), c => c.WithType<Order>().WithType<OrderDetails>())
                     .AddHubSource(new SupplierAddress(), c => c.WithType<Supplier>())
-            );
+            )
+            .AddNorthwindDataCube();
     }
 
     protected override MessageHubConfiguration ConfigureClient(
         MessageHubConfiguration configuration
     ) =>
         base.ConfigureClient(configuration)
-            .WithTypes(typeof(ChartControl), typeof(GridControl))
+            .WithTypes(typeof(ChartControl), typeof(PivotGridControl))
             .AddData(data =>
-                data.AddHubSource(new HostAddress(), dataSource => dataSource.AddNorthwindDomain())
+                data.AddHubSource(new HostAddress(), dataSource => dataSource
+                    .AddNorthwindDomain()
+                    .WithType<NorthwindDataCube>())
             ).AddLayoutClient(x => x);
 
     private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(10);
@@ -129,7 +130,7 @@ public class NorthwindTest(ITestOutputHelper output) : HubTestBase(output)
         var workspace = GetHost().GetWorkspace();
 
         const string ViewName = nameof(SupplierSummaryArea.SupplierSummary);
-        var controlName = $"{ViewName}"; 
+        var controlName = $"{ViewName}";
         var stream = workspace.GetStream(new LayoutAreaReference(ViewName));
 
         var control = await stream.GetControlStream(controlName)
@@ -141,18 +142,9 @@ public class NorthwindTest(ITestOutputHelper output) : HubTestBase(output)
         control = await stream.GetControlStream(gridArea.ToString()!)
             .Timeout(10.Seconds())
             .FirstAsync(x => x != null);
-        var grid = control.Should().BeOfType<GridControl>().Subject;
-        grid.Data.Should()
-            .BeOfType<GridOptions>()
-            .Which.RowData.Should()
-            .BeOfType<List<object>>()
-            .Which.Should()
-            .HaveCountGreaterThan(2)
-            .And.Subject.First()
-            .Should()
-            .BeOfType<GridRow>()
-            .Which.RowGroup!.DisplayName.Should()
-            .MatchRegex(@"[^0-9]+"); // should contain at least one non-numeric character, i.e. dimsnsion is matched.
+        var pivotGrid = control.Should().BeOfType<PivotGridControl>().Subject;
+        pivotGrid.Configuration.Should().NotBeNull();
+        pivotGrid.Configuration.RowDimensions.Should().HaveCountGreaterThan(0);
     }
 
 
@@ -162,7 +154,7 @@ public class NorthwindTest(ITestOutputHelper output) : HubTestBase(output)
         var workspace = GetHost().GetWorkspace();
 
         const string ViewName = nameof(SupplierSummaryArea.SupplierSummary);
-        var controlName = $"{ViewName}"; 
+        var controlName = $"{ViewName}";
         var stream = workspace.GetStream(new LayoutAreaReference(ViewName));
 
         var control = await stream
@@ -174,18 +166,9 @@ public class NorthwindTest(ITestOutputHelper output) : HubTestBase(output)
         control = await stream.GetControlStream(gridArea.ToString()!)
             .Timeout(10.Seconds())
             .FirstAsync(x => x != null);
-        var grid = control.Should().BeOfType<GridControl>().Subject;
-        grid.Data.Should()
-            .BeOfType<GridOptions>()
-            .Which.RowData.Should()
-            .BeOfType<List<object>>()
-            .Which.Should()
-            .HaveCountGreaterThan(2)
-            .And.Subject.First()
-            .Should()
-            .BeOfType<GridRow>()
-            .Which.RowGroup!.DisplayName.Should()
-            .MatchRegex(@"[^0-9]+"); // should contain at least one non-numeric character, i.e. dimsnsion is matched.
+        var pivotGrid = control.Should().BeOfType<PivotGridControl>().Subject;
+        pivotGrid.Configuration.Should().NotBeNull();
+        pivotGrid.Configuration.RowDimensions.Should().HaveCountGreaterThan(0);
     }
 
 }
