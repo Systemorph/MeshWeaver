@@ -63,12 +63,12 @@ public class ChatPlugin
     /// <param name="targetAgentDescription">Description of when to use this agent</param>
     /// <param name="logger">Optional logger for delegation events</param>
     /// <returns>An AITool that can be used to delegate to the target agent</returns>
-    public static AITool CreateDelegationTool(
+    public static AITool CreateHandoffTool(
         string targetAgentName,
         string targetAgentDescription,
         ILogger? logger = null)
     {
-        string DelegateToAgent([Description("The message/instructions to send to the specialized agent. " +
+        string HandoffToAgent([Description("The message/instructions to send to the specialized agent. " +
             "CRITICAL: After calling this function, DO NOT output any additional text. " +
             "The specialized agent will handle the request and provide all necessary output to the user. " +
             "Your job is complete once you call this delegation function.")] string message)
@@ -77,8 +77,8 @@ public class ChatPlugin
                 targetAgentName, message);
 
             // Return a special marker that AgentChatClient will detect
-            // Format: __DELEGATE__|{targetAgentName}|{message}
-            return $"__DELEGATE__|{targetAgentName}|{message}";
+            // Format: __HANDOFF__|{targetAgentName}|{message}
+            return $"__HANDOFF__|{targetAgentName}|{message}";
         }
 
         // Create the tool with a custom name and description
@@ -88,7 +88,7 @@ public class ChatPlugin
             "The specialist agent will handle everything and communicate directly with the user.";
 
         return AIFunctionFactory.Create(
-            DelegateToAgent,
+            HandoffToAgent,
             name: targetAgentName,
             description: enhancedDescription);
     }

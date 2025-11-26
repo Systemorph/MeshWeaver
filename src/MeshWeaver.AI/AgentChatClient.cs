@@ -221,9 +221,9 @@ public class AgentChatClient(
 
                         // Check if this is a delegation marker
                         var resultText = functionResult.Result?.ToString() ?? string.Empty;
-                        if (resultText.StartsWith("__DELEGATE__|"))
+                        if (resultText.StartsWith("__HANDOFF__|"))
                         {
-                            // Parse the delegation marker: __DELEGATE__|{targetAgentName}|{message}
+                            // Parse the delegation marker: __HANDOFF__|{targetAgentName}|{message}
                             var parts = resultText.Split('|');
                             if (parts.Length >= 3)
                             {

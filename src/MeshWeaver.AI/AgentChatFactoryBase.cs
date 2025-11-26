@@ -247,13 +247,15 @@ public abstract class AgentChatFactoryBase : IAgentChatFactory
             if (!allAgents.ContainsKey(delegation.AgentName))
                 continue;
 
-            yield return ChatPlugin.CreateDelegationTool(
+            var tool = ChatPlugin.CreateHandoffTool(
                 delegation.AgentName,
                 delegation.Instructions,
                 Logger);
 
-            Logger.LogDebug("Created delegation tool {ToolName} for agent {AgentName}",
-                delegation.AgentName, agentDefinition.Name);
+            Logger.LogInformation("Created delegation tool - ExpectedName='{ExpectedName}', ActualName='{ActualName}' for agent {AgentName}",
+                delegation.AgentName, tool.Name, agentDefinition.Name);
+
+            yield return tool;
         }
     }
 
