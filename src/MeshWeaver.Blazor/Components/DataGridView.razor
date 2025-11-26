@@ -46,7 +46,7 @@
 </div>
 
 <div class="paginator">
-    @if (Pagination.TotalItemCount.HasValue && (Pagination.TotalItemCount > Pagination.ItemsPerPage || showPageSizeSelector))
+    @if (Pagination.TotalItemCount.HasValue && Pagination.TotalItemCount > Pagination.ItemsPerPage)
     {
         <div style="display: flex; align-items: center; justify-content: space-between; gap: 1rem;">   
 			@if (showPageSizeSelector)
