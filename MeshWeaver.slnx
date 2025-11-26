@@ -57,7 +57,6 @@
     <File Path="README.md" />
   </Folder>
   <Folder Name="/src/">
-    <File Path="src/MeshWeaver.ContentCollections/MeshWeaver.ContentCollections.csproj" />
     <Project Path="src/MeshWeaver.AI.Application/MeshWeaver.AI.Application.csproj" />
     <Project Path="src/MeshWeaver.AI.AzureFoundry/MeshWeaver.AI.AzureFoundry.csproj" />
     <Project Path="src/MeshWeaver.AI.AzureOpenAI/MeshWeaver.AI.AzureOpenAI.csproj" />

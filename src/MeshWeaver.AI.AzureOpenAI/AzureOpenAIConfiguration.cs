@@ -8,7 +8,7 @@ public class AzureOpenAIConfiguration
     /// <summary>
     /// The Azure OpenAI endpoint URL
     /// </summary>
-    public string? Url { get; set; }
+    public string? Endpoint { get; set; }
 
     /// <summary>
     /// The API key for authentication
