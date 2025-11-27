@@ -43,14 +43,14 @@ public class InsuranceAgent(IMessageHub hub) : IInitializableAgent, IAgentWithTo
 
             yield return new DelegationDescription(
                 nameof(SlipImportAgent),
-                "Delegate to SlipImportAgent when the user wants to import insurance slips from PDF/Word documents. " +
+                "Delegate to SlipImportAgent when the user wants to import insurance slips from PDF, Word, or Markdown documents. " +
                 "When delegating, provide a clear message that includes: " +
-                "(1) the exact file path with '/' prefix (e.g., '/slip.pdf'), " +
+                "(1) the exact file path with '/' prefix (e.g., '/slip.pdf' or '/Slip.md'), " +
                 "(2) mention it's for the 'current pricing context', " +
                 "(3) any observed document structure from the preview. " +
                 "Example: 'Import slip data from the file \\'/submission.pdf\\' for the current pricing context'. " +
                 "Handles files with content about Insured, Coverage, Premium, Reinsurance Layers, Limits, Rates, etc. " +
-                "Common file names: slip.pdf, submission.pdf, placement.pdf, quote.pdf."
+                "Common file names: slip.pdf, slip.md, submission.pdf, placement.pdf, quote.pdf, slip.docx."
             );
         }
     }
@@ -96,8 +96,8 @@ public class InsuranceAgent(IMessageHub hub) : IInitializableAgent, IAgentWithTo
         - Determine which agent to delegate to based on the file name and extension:
           - **Excel files (.xlsx, .xls, .csv)**: Files with names like "risks", "exposure", "property", "schedule", "Microsoft", etc.
             → Delegate to RiskImportAgent
-          - **PDF/Word files (.pdf, .doc, .docx)**: Files with names like "slip", "submission", "placement", "quote", etc.
-            → Delegate to SlipImportAgent
+          - **Document files (.pdf, .doc, .docx, .md)**: Files with names like "slip", "submission", "placement", "quote", etc.
+            → Delegate to SlipImportAgent (supports PDF, Word, and Markdown formats)
         - If the file type is unclear from the name, ask the user to clarify
         - CRITICAL: Pass the exact file path (with "/" prefix) and mention the current pricing context
         - Examples:
