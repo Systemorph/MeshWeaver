@@ -1,5 +1,4 @@
-﻿using System.Collections;
-using System.ComponentModel.DataAnnotations;
+﻿using System.ComponentModel.DataAnnotations;
 using System.Reactive.Linq;
 using MeshWeaver.Domain;
 using MeshWeaver.Layout;
@@ -41,7 +40,7 @@ public static class ProductAnalysisArea
         /// </summary>
         /// <param name="_">The rendering context.</param>
         /// <returns>A horizontal bar chart with product names and revenue amounts, plus year filter controls.</returns>
-        public UiControl? TopProductsByRevenue(RenderingContext _)
+        public UiControl TopProductsByRevenue(RenderingContext _)
         {
             layoutArea.SubscribeToDataStream(ProductToolbar.Years, layoutArea.GetAllYearsOfOrders());
             return layoutArea.Toolbar(new ProductToolbar(), (tb, area, _) =>
@@ -59,7 +58,8 @@ public static class ProductAnalysisArea
 
                         return Controls.Stack
                             .WithView(Controls.H2("Top 10 Products by Revenue"))
-                            .WithView(chart);
+                            .WithView(chart)
+                            .WithStyle(style => style.WithWidth("100%"));
                     }));
         }
 
