@@ -20,6 +20,16 @@ public class ChatPlugin
     }
 
     /// <summary>
+    /// Gets the current date and time information.
+    /// </summary>
+    [Description("Gets the current date and time. Use this to determine today's date for scheduling, due dates, or any date-related calculations.")]
+    public string GetCurrentDateTime()
+    {
+        var now = DateTime.UtcNow;
+        return $"Current date: {now:dddd, MMMM d, yyyy}. Current time (UTC): {now:HH:mm}";
+    }
+
+    /// <summary>
     /// Sets the chat context to a particular address, layout area or layout area id.
     /// </summary>
     /// <param name="address"></param>
@@ -50,6 +60,7 @@ public class ChatPlugin
     {
         return
         [
+            AIFunctionFactory.Create(GetCurrentDateTime),
             AIFunctionFactory.Create(SetContext)
         ];
     }
