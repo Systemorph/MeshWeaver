@@ -11,7 +11,6 @@
     <PackAsTool>true</PackAsTool>
     <ToolCommandName>meshweaver-thumbnails</ToolCommandName>
     <PackageId>MeshWeaver.ThumbnailGenerator</PackageId>
-    <Version>1.0.0</Version>
     <Authors>MeshWeaver</Authors>
     <Description>A tool for generating thumbnails of MeshWeaver Layout Areas</Description>
     <PackageProjectUrl>https://github.com/meshweaver/meshweaver</PackageProjectUrl>
@@ -21,6 +20,7 @@
   </PropertyGroup>
   <ItemGroup>
       <PackageReference Include="Microsoft.Playwright" />
+      <PackageReference Include="SixLabors.ImageSharp" />
       <PackageReference Include="System.CommandLine" />
   </ItemGroup>
 </Project>
