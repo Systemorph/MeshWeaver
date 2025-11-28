@@ -2,6 +2,7 @@
 using System.Collections.Generic;
 using System.Linq;
 using System.Reactive.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
 using FluentAssertions.Extensions;
@@ -20,6 +21,8 @@ namespace MeshWeaver.Northwind.Test;
 
 public class NorthwindTest(ITestOutputHelper output) : HubTestBase(output)
 {
+    private const string TestCategoryNameSuffix = " (Updated)";
+
     protected override MessageHubConfiguration ConfigureRouter(
         MessageHubConfiguration configuration)
     {
@@ -169,6 +172,123 @@ public class NorthwindTest(ITestOutputHelper output) : HubTestBase(output)
         var pivotGrid = control.Should().BeOfType<PivotGridControl>().Subject;
         pivotGrid.Configuration.Should().NotBeNull();
         pivotGrid.Configuration.RowDimensions.Should().HaveCountGreaterThan(0);
+    }
+
+    /// <summary>
+    /// Tests that updating a Category propagates to the NorthwindDataCube virtual data source.
+    /// This verifies that the virtual data source correctly reacts to changes in source data.
+    /// </summary>
+    [Fact]
+    public async Task CategoryUpdate_ShouldPropagateToDataCube()
+    {
+        var client = GetClient();
+        var workspace = client.GetWorkspace();
+
+        // Step 1: Get initial NorthwindDataCube data
+        var initialCubeData = await workspace
+            .GetObservable<NorthwindDataCube>()
+            .Timeout(Timeout)
+            .FirstAsync(x => x.Any());
+
+        initialCubeData.Should().HaveCountGreaterThan(0, "Should have data cube entries");
+
+        // Step 2: Get a category to update
+        var categories = await workspace
+            .GetObservable<Category>()
+            .Timeout(Timeout)
+            .FirstAsync();
+
+        var categoryToUpdate = categories.First();
+        var originalCategoryName = categoryToUpdate.CategoryName;
+
+        output.WriteLine($"Original category: Id={categoryToUpdate.CategoryId}, Name='{originalCategoryName}'");
+
+        // Verify initial data cube has entries with this category
+        var initialCubeEntriesWithCategory = initialCubeData
+            .Where(c => c.CategoryName == originalCategoryName)
+            .ToList();
+        initialCubeEntriesWithCategory.Should().HaveCountGreaterThan(0,
+            $"Should have data cube entries with category '{originalCategoryName}'");
+        output.WriteLine($"Found {initialCubeEntriesWithCategory.Count} data cube entries with category '{originalCategoryName}'");
+
+        // Step 3: Update the category name
+        var newCategoryName = originalCategoryName + TestCategoryNameSuffix;
+        var updatedCategory = categoryToUpdate with { CategoryName = newCategoryName };
+
+        var changeRequest = new DataChangeRequest().WithUpdates(updatedCategory);
+
+        output.WriteLine($"Sending update: CategoryName '{originalCategoryName}' -> '{newCategoryName}'");
+        client.Post(changeRequest, o => o.WithTarget(new ReferenceDataAddress()));
+
+        // Step 4: Wait for the NorthwindDataCube to update with the new category name
+        output.WriteLine("Waiting for NorthwindDataCube to reflect the category name change...");
+
+        var updatedCubeData = await workspace
+            .GetObservable<NorthwindDataCube>()
+            .Timeout(TimeSpan.FromSeconds(30))
+            .FirstAsync(cubeEntries =>
+                cubeEntries.Any(c => c.CategoryName == newCategoryName));
+
+        // Step 5: Verify the data cube updated correctly
+        var updatedCubeEntriesWithNewCategory = updatedCubeData
+            .Where(c => c.CategoryName == newCategoryName)
+            .ToList();
+
+        updatedCubeEntriesWithNewCategory.Should().HaveCountGreaterThan(0,
+            $"Should have data cube entries with updated category name '{newCategoryName}'");
+
+        // Verify the count matches (same number of entries should now have the new name)
+        updatedCubeEntriesWithNewCategory.Count.Should().Be(initialCubeEntriesWithCategory.Count,
+            "Number of entries with updated category should match original count");
+
+        output.WriteLine($"SUCCESS: {updatedCubeEntriesWithNewCategory.Count} data cube entries now have category name '{newCategoryName}'");
+
+        // Verify no entries remain with the old category name
+        var entriesWithOldName = updatedCubeData
+            .Where(c => c.CategoryName == originalCategoryName)
+            .ToList();
+        entriesWithOldName.Should().BeEmpty(
+            $"No data cube entries should still have old category name '{originalCategoryName}'");
+
+        output.WriteLine("SUCCESS: Virtual data source correctly propagated category update to NorthwindDataCube");
+    }
+
+    [Fact]
+    public async Task GetLayoutAreas_ShouldReturnNorthwindAreas()
+    {
+        var client = GetClient();
+
+        var response = await client.AwaitResponse(
+            new GetLayoutAreasRequest(),
+            o => o.WithTarget(new HostAddress()),
+            new CancellationTokenSource(Timeout).Token
+        );
+
+        var areas = response.Message.Areas.ToList();
+        areas.Should().NotBeEmpty("Northwind should have layout areas defined");
+        output.WriteLine($"Found {areas.Count} layout areas");
+        foreach (var area in areas)
+        {
+            output.WriteLine($"  - {area.Area}: {area.Description}");
+        }
+    }
+
+    [Fact]
+    public async Task GetLayoutAreaStream_ShouldReturnLayoutAreasCatalog()
+    {
+        var host = GetHost();
+        var workspace = host.GetWorkspace();
+
+        output.WriteLine("Getting stream for LayoutAreas...");
+        var stream = workspace.GetStream(new LayoutAreaReference("LayoutAreas"));
+
+        output.WriteLine("Waiting for first emission...");
+        var result = await stream
+            .Timeout(TimeSpan.FromSeconds(10))
+            .FirstAsync();
+
+        result.Should().NotBeNull();
+        output.WriteLine($"Got result: {result.Value}");
     }
 
 }
