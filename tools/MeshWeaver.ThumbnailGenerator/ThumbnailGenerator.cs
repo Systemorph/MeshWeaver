@@ -1,4 +1,6 @@
 ﻿using Microsoft.Playwright;
+using SixLabors.ImageSharp;
+using SixLabors.ImageSharp.Processing;
 
 namespace MeshWeaver.ThumbnailGenerator;
 
@@ -39,10 +41,10 @@ public static class ThumbnailGenerator
     private static async Task<(int successCount, int failureCount)> GenerateThumbnailsForMode(IBrowser browser, List<string> areaUrls, string outputDir, string baseUrl, bool isDarkMode, int thumbnailWidth, int thumbnailHeight)
     {
         // Create a persistent context to maintain localStorage across pages
-        // Use smaller viewport to ensure readable text size in thumbnails
+        // Use large viewport to let content render at natural size before detection
         await using var context = await browser.NewContextAsync(new BrowserNewContextOptions
         {
-            ViewportSize = new ViewportSize { Width = 800, Height = 600 },
+            ViewportSize = new ViewportSize { Width = 1920, Height = 1080 },
             ColorScheme = isDarkMode ? ColorScheme.Dark : ColorScheme.Light,
             DeviceScaleFactor = 1.0f // Ensure consistent scaling
         });
@@ -57,7 +59,7 @@ public static class ThumbnailGenerator
         const int maxConcurrency = 4; // Adjust based on server capacity
         var semaphore = new SemaphoreSlim(maxConcurrency, maxConcurrency);
         var tasks = areaUrls.Select(url => ProcessUrlAsync(context, url, outputDir, isDarkMode, semaphore, thumbnailWidth, thumbnailHeight)).ToArray();
-        
+
         var results = await Task.WhenAll(tasks);
         var successCount = results.Count(r => r);
         var failureCount = results.Count(r => !r);
@@ -66,7 +68,7 @@ public static class ThumbnailGenerator
         Console.WriteLine($"\n{modeText.ToUpper()} mode generation complete:");
         Console.WriteLine($"  Success: {successCount}");
         Console.WriteLine($"  Failed: {failureCount}");
-        
+
         return (successCount, failureCount);
     }
 
@@ -102,66 +104,48 @@ public static class ThumbnailGenerator
                 // Additional wait for content to stabilize
                 await page.WaitForTimeoutAsync(2000);
 
-                // Try to capture the full content by measuring the page size and applying a zoom
-                // so that the full content fits into the requested thumbnail dimensions. This
-                // avoids fixed clipping that would miss content on pages that are larger/smaller.
-                try
+                // Detect actual content dimensions at current viewport
+                var contentDimensions = await DetectContentDimensions(page);
+                Console.WriteLine($"  Detected content size: {contentDimensions.Width}×{contentDimensions.Height}");
+
+                // Calculate final thumbnail dimensions that maintain aspect ratio
+                var (thumbnailFinalWidth, thumbnailFinalHeight) = CalculateScaledDimensions(
+                    contentDimensions.Width,
+                    contentDimensions.Height,
+                    thumbnailWidth,
+                    thumbnailHeight
+                );
+
+                // Calculate intermediate viewport size (2x thumbnail for better quality)
+                var intermediateWidth = thumbnailFinalWidth * 2;
+                var intermediateHeight = thumbnailFinalHeight * 2;
+
+                Console.WriteLine($"  Setting viewport to: {intermediateWidth}×{intermediateHeight} (2x for quality)");
+
+                // Set viewport to intermediate size for better rendering quality
+                await page.SetViewportSizeAsync(intermediateWidth, intermediateHeight);
+
+                // Wait for page to re-render at new size
+                await page.WaitForTimeoutAsync(1000);
+
+                // Take screenshot at intermediate size to a temp file
+                var tempFilePath = Path.Combine(outputDir, $"temp_{Guid.NewGuid()}.png");
+                await page.ScreenshotAsync(new PageScreenshotOptions
                 {
-                    var size = await page.EvaluateAsync<int[]>("() => [document.documentElement.scrollWidth || document.body.scrollWidth, document.documentElement.scrollHeight || document.body.scrollHeight]");
-                    var contentWidth = Math.Max(1, size[0]);
-                    var contentHeight = Math.Max(1, size[1]);
+                    Path = tempFilePath,
+                    Type = ScreenshotType.Png,
+                    FullPage = false
+                });
 
-                    // Compute scale to fit content into thumbnail while preserving aspect ratio.
-                    var widthScale = (double)thumbnailWidth / contentWidth;
-                    var heightScale = (double)thumbnailHeight / contentHeight;
-                    // Choose the smaller scale so the whole content fits, but allow >1 to zoom up smaller content.
-                    var scale = Math.Min(widthScale, heightScale);
-                    if (double.IsInfinity(scale) || double.IsNaN(scale) || scale <= 0)
-                        scale = 1.0;
-
-                    // Apply CSS zoom to scale the page rendering (simple, broadly supported).
-                    await page.EvaluateAsync("(s) => { document.documentElement.style.transformOrigin = '0 0'; document.documentElement.style.transform = 'scale(' + s + ')'; }", scale);
-
-                    // Set viewport large enough to contain the scaled content (avoid cropping by the browser viewport).
-                    var scaledWidth = (int)Math.Ceiling(contentWidth * scale);
-                    var scaledHeight = (int)Math.Ceiling(contentHeight * scale);
-                    var viewportWidth = Math.Max(thumbnailWidth, Math.Min(scaledWidth, 16384));
-                    var viewportHeight = Math.Max(thumbnailHeight, Math.Min(scaledHeight, 16384));
-                    await page.SetViewportSizeAsync(new ViewportSize { Width = viewportWidth, Height = viewportHeight });
-
-                    // Take screenshot of the top-left area sized to the thumbnail; because we've scaled the page
-                    // the thumbnail will approximately represent the full content. This keeps the output size stable.
-                    await page.ScreenshotAsync(new PageScreenshotOptions
-                    {
-                        Path = filePath,
-                        Type = ScreenshotType.Png,
-                        FullPage = false,
-                        Clip = new Clip
-                        {
-                            X = 0,
-                            Y = 0,
-                            Width = thumbnailWidth,
-                            Height = thumbnailHeight
-                        }
-                    });
-                }
-                catch (Exception)
+                // Resize to final thumbnail size with high quality
+                using (var image = await SixLabors.ImageSharp.Image.LoadAsync(tempFilePath))
                 {
-                    // Fallback to a fixed clip screenshot if content measurement or scaling fails
-                    await page.ScreenshotAsync(new PageScreenshotOptions
-                    {
-                        Path = filePath,
-                        Type = ScreenshotType.Png,
-                        FullPage = false,
-                        Clip = new Clip
-                        {
-                            X = 0,
-                            Y = 0,
-                            Width = thumbnailWidth,
-                            Height = thumbnailHeight
-                        }
-                    });
+                    image.Mutate(x => x.Resize(thumbnailFinalWidth, thumbnailFinalHeight));
+                    await image.SaveAsPngAsync(filePath);
                 }
+
+                // Clean up temp file
+                File.Delete(tempFilePath);
 
                 Console.WriteLine($"  Saved {currentModeText} thumbnail: {fileName}");
                 return true;
@@ -234,5 +218,60 @@ public static class ThumbnailGenerator
         {
             // Ignore timeout - this is expected behavior for optional selectors
         }
+    }
+
+    private static async Task<(int Width, int Height)> DetectContentDimensions(IPage page)
+    {
+        // Get the actual rendered page dimensions
+        var result = await page.EvaluateAsync<int[]>(@"() => {
+            const body = document.body;
+            const html = document.documentElement;
+
+            // Get the maximum width and height from various sources
+            const width = Math.max(
+                body.scrollWidth || 0,
+                body.offsetWidth || 0,
+                html.clientWidth || 0,
+                html.scrollWidth || 0,
+                html.offsetWidth || 0
+            );
+
+            const height = Math.max(
+                body.scrollHeight || 0,
+                body.offsetHeight || 0,
+                html.clientHeight || 0,
+                html.scrollHeight || 0,
+                html.offsetHeight || 0
+            );
+
+            return [width, height];
+        }");
+
+        return (result[0], result[1]);
+    }
+
+    private static (int Width, int Height) CalculateScaledDimensions(int contentWidth, int contentHeight, int maxWidth, int maxHeight)
+    {
+        // Calculate aspect ratio
+        double contentAspectRatio = (double)contentWidth / contentHeight;
+        double targetAspectRatio = (double)maxWidth / maxHeight;
+
+        int scaledWidth, scaledHeight;
+
+        // Scale to fit within max dimensions while preserving aspect ratio
+        if (contentAspectRatio > targetAspectRatio)
+        {
+            // Content is wider - fit to width
+            scaledWidth = maxWidth;
+            scaledHeight = (int)(maxWidth / contentAspectRatio);
+        }
+        else
+        {
+            // Content is taller - fit to height
+            scaledHeight = maxHeight;
+            scaledWidth = (int)(maxHeight * contentAspectRatio);
+        }
+
+        return (scaledWidth, scaledHeight);
     }
 }

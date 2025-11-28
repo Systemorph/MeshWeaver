@@ -1,14 +1,18 @@
 using System.CommandLine;
+using System.Text;
 using MeshWeaver.ThumbnailGenerator;
 
-var catalogUrlOption = new Option<string?>("--catalogUrl")
+// Set console encoding to UTF-8 for proper character display
+Console.OutputEncoding = Encoding.UTF8;
+
+var catalogUrlOption = new Option<string?>("--catalog")
 {
     Description = "Full URL to the LayoutArea catalog page"
 };
 
 var singleAreaOption = new Option<string?>("--area")
 {
-    Description = "URL of a single area to screenshot (alternative to --catalogUrl)"
+    Description = "URL of a single area to screenshot (alternative to --catalog)"
 };
 
 var outDirOption = new Option<string>("--output")
@@ -57,13 +61,13 @@ root.SetAction(async (parseResult, cancellationToken) =>
     // Validate input - either catalogUrl or area must be provided
     if (string.IsNullOrWhiteSpace(catalogUrl) && string.IsNullOrWhiteSpace(area))
     {
-        Console.WriteLine("Error: Either --catalogUrl or --area is required.");
+        Console.WriteLine("Error: Either --catalog or --area is required.");
         return 1;
     }
 
     if (!string.IsNullOrWhiteSpace(catalogUrl) && !string.IsNullOrWhiteSpace(area))
     {
-        Console.WriteLine("Error: Cannot specify both --catalogUrl and --area. Use one or the other.");
+        Console.WriteLine("Error: Cannot specify both --catalog and --area. Use one or the other.");
         return 1;
     }
 
