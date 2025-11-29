@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk.Razor">
+    <PropertyGroup>
+        <Nullable>enable</Nullable>
+        <StaticWebAssetBasePath>_content/MeshWeaver.Blazor.Monaco</StaticWebAssetBasePath>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <SupportedPlatform Include="browser" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <PackageReference Include="BlazorMonaco" />
+        <PackageReference Include="Microsoft.AspNetCore.Components.Web" />
+        <PackageReference Include="Microsoft.FluentUI.AspNetCore.Components" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <ProjectReference Include="..\MeshWeaver.Layout\MeshWeaver.Layout.csproj" />
+    </ItemGroup>
+</Project>

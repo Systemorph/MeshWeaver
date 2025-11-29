@@ -47,7 +47,8 @@
       "Bash(Select-Object -Last 20)",
       "Bash(git mv:*)",
       "WebFetch(domain:blazor.radzen.com)",
-      "Bash(dir:*)"
+      "Bash(dir:*)",
+      "WebFetch(domain:microsoft.github.io)"
     ],
     "deny": []
   }
