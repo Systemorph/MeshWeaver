@@ -48,9 +48,6 @@ public static class SubmissionLayoutArea
                 return Controls.Stack
                     .WithView(PricingLayoutShared.BuildToolbar(pricingId, "Submission"))
                     .WithView(Controls.Markdown($"# Submission\n\n*Pricing '{pricingId}' not found.*"));
-            })
-            .StartWith(Controls.Stack
-                .WithView(PricingLayoutShared.BuildToolbar(pricingId, "Submission"))
-                .WithView(Controls.Markdown("# Submission\n\n*Loading...*")));
+            });
     }
 }

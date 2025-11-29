@@ -1,4 +1,4 @@
-using System.Reactive.Linq;
+﻿using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using MeshWeaver.Data;
 using MeshWeaver.GoogleMaps;
@@ -67,10 +67,7 @@ public static class RiskMapLayoutArea
                         );
                     }
                 );
-            })
-            .StartWith(Controls.Stack
-                .WithView(PricingLayoutShared.BuildToolbar(pricingId, "RiskMap"))
-                .WithView(Controls.Markdown("# Risk Map\n\n*Loading...*")));
+            });
     }
 
     private static IObservable<UiControl> GeocodingArea(LayoutAreaHost host, RenderingContext ctx)
