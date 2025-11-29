@@ -825,8 +825,7 @@ public class ContentPlugin
         [Description("The target address for the import (optional if default address is configured). Format: '{AddressType}/{AddressId}'.")] string? address = null,
         [Description("The import format to use (optional, defaults to 'Default')")] string? format = null,
         [Description("Optional import configuration as JSON string. When provided, this will be used instead of the format parameter.")] string? configuration = null,
-        [Description("Whether to override any other instances as snapshot import. Default is false.")] bool snapshot = false,
-        CancellationToken cancellationToken = default)
+        [Description("Whether to override any other instances as snapshot import. Default is false.")] bool snapshot = false)
     {
         logger.LogInformation("Import called with path={Path}, collection={Collection}, address={Address}, format={Format}",
             path, collection, address, format);
@@ -835,11 +834,12 @@ public class ContentPlugin
         if (string.IsNullOrEmpty(resolvedCollectionName))
             return "No collection specified and no default collection configured.";
 
+        if (address == null)
+            return "Target address is required.";
+
         try
         {
-
-            if (address == null)
-                return "Target address is required.";
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(60));
 
             // Parse the address - handle both string and Address types
             var targetAddress = hub.GetAddress(address);
@@ -881,7 +881,7 @@ public class ContentPlugin
             var responseMessage = await hub.AwaitResponse(
                 importRequestObj,
                 o => o.WithTarget(targetAddress),
-                cancellationToken
+                cts.Token
             );
 
             // Auto-save configuration if it was provided and the import succeeded
@@ -915,11 +915,16 @@ public class ContentPlugin
                         await hub.AwaitResponse(
                             updateRequestObj,
                             o => o.WithTarget(targetAddress),
-                            cancellationToken
+                            cts.Token
                         );
 
                         logger.LogInformation("Auto-saved ExcelImportConfiguration: {ConfigName}", configName);
                     }
+                }
+                catch (OperationCanceledException)
+                {
+                    // Configuration save was cancelled, but import succeeded
+                    logger.LogWarning("Configuration save was cancelled, but import succeeded");
                 }
                 catch (Exception ex)
                 {
@@ -952,6 +957,10 @@ public class ContentPlugin
             }
 
             return result;
+        }
+        catch (OperationCanceledException)
+        {
+            return "Operation was cancelled and could not be completed.";
         }
         catch (Exception ex)
         {

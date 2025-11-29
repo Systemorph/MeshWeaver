@@ -4,7 +4,6 @@ using System.Text.Json;
 using Humanizer;
 using MeshWeaver.Data;
 using MeshWeaver.Messaging;
-using MeshWeaver.Reflection;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -35,12 +34,20 @@ public class DataPlugin(
         if (address == null)
             return $"No address defined for type: {type}";
 
-        WorkspaceReference reference = !string.IsNullOrWhiteSpace(entityId) 
+        WorkspaceReference reference = !string.IsNullOrWhiteSpace(entityId)
             ? new EntityReference(type, entityId)
             : new CollectionReference(type);
 
-        var response = await hub.AwaitResponse(new GetDataRequest(reference), o => o.WithTarget(address));
-        return JsonSerializer.Serialize(response.Message.Data, hub.JsonSerializerOptions);
+        try
+        {
+            using var cts = new CancellationTokenSource(10.Seconds());
+            var response = await hub.AwaitResponse(new GetDataRequest(reference), o => o.WithTarget(address), cts.Token);
+            return JsonSerializer.Serialize(response.Message.Data, hub.JsonSerializerOptions);
+        }
+        catch (OperationCanceledException)
+        {
+            return "Operation was cancelled and could not be completed.";
+        }
     }
 
     [Description($"List all data types and their descriptions available in the {nameof(GetData)} function as a json structure. The name property should be used in the GetData tool.")]
@@ -55,9 +62,17 @@ public class DataPlugin(
         if (chat.Context?.Address is null)
             return "Please navigate to a context for which you want to know the data types.";
 
-        // Return types that match the specified address
-        var ret = await hub.AwaitResponse(new GetDomainTypesRequest(), o => o.WithTarget(chat.Context.Address));
-        return JsonSerializer.Serialize(ret.Message.Types, hub.JsonSerializerOptions);
+        try
+        {
+            using var cts = new CancellationTokenSource(10.Seconds());
+            // Return types that match the specified address
+            var ret = await hub.AwaitResponse(new GetDomainTypesRequest(), o => o.WithTarget(chat.Context.Address), cts.Token);
+            return JsonSerializer.Serialize(ret.Message.Types, hub.JsonSerializerOptions);
+        }
+        catch (OperationCanceledException)
+        {
+            return "Operation was cancelled and could not be completed.";
+        }
     }
 
     [Description(
@@ -74,11 +89,20 @@ public class DataPlugin(
         if (address == null)
             return $"No address defined for type: {type}";
 
-        var response = await hub.AwaitResponse(new DataChangeRequest() { Updates = [JsonDocument.Parse(json).RootElement] }, o => o.WithTarget(address));
+        try
+        {
+            using var cts = new CancellationTokenSource(10.Seconds());
+            var response = await hub
+                .AwaitResponse(new DataChangeRequest() { Updates = [JsonDocument.Parse(json).RootElement] }, o => o.WithTarget(address), cts.Token);
 
-        if (response.Message.Log.Status == ActivityStatus.Succeeded)
-            return $"Data of type '{type}' updated successfully.";
-        return $"Failed to update data of type '{type}': {response.Message}";
+            if (response.Message.Log.Status == ActivityStatus.Succeeded)
+                return $"Data of type '{type}' updated successfully.";
+            return $"Failed to update data of type '{type}': {response.Message}";
+        }
+        catch (OperationCanceledException)
+        {
+            return "Operation was cancelled and could not be completed.";
+        }
     }
     [Description(
          $"Deletes the data submitted in {nameof(json)} of type {nameof(type)}. The JSON schema as provided in GetSchema with this type has to be fulfilled.")]
@@ -94,11 +118,19 @@ public class DataPlugin(
         if (address == null)
             return $"No address defined for type: {type}";
 
-        var response = await hub.AwaitResponse(new DataChangeRequest() { Deletions = [JsonDocument.Parse(json).RootElement] }, o => o.WithTarget(address));
+        try
+        {
+            using var cts = new CancellationTokenSource(10.Seconds());
+            var response = await hub.AwaitResponse(new DataChangeRequest() { Deletions = [JsonDocument.Parse(json).RootElement] }, o => o.WithTarget(address), cts.Token);
 
-        if (response.Message.Log.Status == ActivityStatus.Succeeded)
-            return $"Data of type '{type}' updated successfully.";
-        return $"Failed to update data of type '{type}': {response.Message}";
+            if (response.Message.Log.Status == ActivityStatus.Succeeded)
+                return $"Data of type '{type}' deleted successfully.";
+            return $"Failed to delete data of type '{type}': {response.Message}";
+        }
+        catch (OperationCanceledException)
+        {
+            return "Operation was cancelled and could not be completed.";
+        }
     }
 
     public static string GetTools() =>
@@ -108,7 +140,8 @@ public class DataPlugin(
         );
 
     [Description($"Gets the JSON schema for a particular type. Use these schemas to map data to JSON or to validate edited JSON data.")]
-    public async Task<string> GetSchema([Description($"Type of the schema to be generated. Use the {nameof(GetDataTypes)} function to get a list of available schemas")] string type)
+    public async Task<string> GetSchema(
+        [Description($"Type of the schema to be generated. Use the {nameof(GetDataTypes)} function to get a list of available schemas")] string type)
     {
         logger.LogInformation("GetSchema called with type={Type}", type);
 
@@ -117,11 +150,15 @@ public class DataPlugin(
             return $"Unknown type: {type}." + (typeDefinitions is not null ? $" Valid types are: {string.Join(", ", typeDefinitions.Keys)}" : string.Empty);
         try
         {
-            var response = await hub.AwaitResponse(new GetSchemaRequest(type), o => o.WithTarget(address),
-                new CancellationTokenSource(10.Seconds()).Token);
+            using var cts = new CancellationTokenSource(10.Seconds());
+            var response = await hub.AwaitResponse(new GetSchemaRequest(type), o => o.WithTarget(address), cts.Token);
             return response.Message.Schema;
         }
-        catch 
+        catch (OperationCanceledException)
+        {
+            return "Operation was cancelled and could not be completed.";
+        }
+        catch
         {
             return $"Type {type} was not found in Address {address}";
         }

@@ -1,6 +1,7 @@
 ﻿using System.ComponentModel;
 using System.Reflection;
 using System.Text.Json;
+using Humanizer;
 using MeshWeaver.AI;
 using MeshWeaver.Data;
 using MeshWeaver.Layout;
@@ -93,9 +94,17 @@ public class LayoutAreaPlugin(
         if (chat.Context?.Address is null)
             return "Please navigate to a context for which you want to know the layout areas.";
 
-        // Return areas that match the specified address
-        var ret = await hub.AwaitResponse(new GetLayoutAreasRequest(), o => o.WithTarget(chat.Context.Address));
-        return JsonSerializer.Serialize(ret.Message.Areas, hub.JsonSerializerOptions);
+        try
+        {
+            using var cts = new CancellationTokenSource(10.Seconds());
+            // Return areas that match the specified address
+            var ret = await hub.AwaitResponse(new GetLayoutAreasRequest(), o => o.WithTarget(chat.Context.Address), cts.Token);
+            return JsonSerializer.Serialize(ret.Message.Areas, hub.JsonSerializerOptions);
+        }
+        catch (OperationCanceledException)
+        {
+            return "Operation was cancelled and could not be completed.";
+        }
     }
 
     public static string GetTools() =>
