@@ -128,13 +128,25 @@ public static class ThumbnailGenerator
                 // Wait for page to re-render at new size
                 await page.WaitForTimeoutAsync(1000);
 
-                // Take screenshot at intermediate size to a temp file
+                // Re-detect content dimensions after viewport resize to get actual rendered size
+                var renderedDimensions = await DetectContentDimensions(page);
+                var clipWidth = Math.Min(renderedDimensions.Width, intermediateWidth);
+                var clipHeight = Math.Min(renderedDimensions.Height, intermediateHeight);
+
+                // Take screenshot clipped to actual content size (avoids halo from empty viewport space)
                 var tempFilePath = Path.Combine(outputDir, $"temp_{Guid.NewGuid()}.png");
                 await page.ScreenshotAsync(new PageScreenshotOptions
                 {
                     Path = tempFilePath,
                     Type = ScreenshotType.Png,
-                    FullPage = false
+                    FullPage = false,
+                    Clip = new Clip
+                    {
+                        X = 0,
+                        Y = 0,
+                        Width = clipWidth,
+                        Height = clipHeight
+                    }
                 });
 
                 // Resize to final thumbnail size with high quality
