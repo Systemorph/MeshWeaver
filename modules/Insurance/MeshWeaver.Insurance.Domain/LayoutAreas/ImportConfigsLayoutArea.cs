@@ -48,9 +48,6 @@ public static class ImportConfigsLayoutArea
             return Controls.Stack
                 .WithView(PricingLayoutShared.BuildToolbar(pricingId, "ImportConfigs"))
                 .WithView(Controls.Markdown(md));
-        })
-        .StartWith(Controls.Stack
-            .WithView(PricingLayoutShared.BuildToolbar(pricingId, "ImportConfigs"))
-            .WithView(Controls.Markdown("# Import Configurations\n\n*Loading...*")));
+        });
     }
 }

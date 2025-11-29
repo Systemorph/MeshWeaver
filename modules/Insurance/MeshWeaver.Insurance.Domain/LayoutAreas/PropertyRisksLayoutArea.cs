@@ -1,4 +1,4 @@
-using System.Reactive.Linq;
+﻿using System.Reactive.Linq;
 using MeshWeaver.Data;
 using MeshWeaver.Insurance.Domain.LayoutAreas.Shared;
 using MeshWeaver.Insurance.Domain.Services;
@@ -41,10 +41,7 @@ public static class PropertyRisksLayoutArea
                 .WithView(PricingLayoutShared.BuildToolbar(pricingId, "PropertyRisks"))
                 .WithView(dataGrid)
                 .WithView(GeocodingArea);
-        })
-        .StartWith(Controls.Stack
-            .WithView(PricingLayoutShared.BuildToolbar(pricingId, "PropertyRisks"))
-            .WithView(Controls.Markdown("# Property Risks\n\n*Loading...*")));
+        });
     }
 
     private static UiControl RenderRisksDataGrid(LayoutAreaHost host, IReadOnlyCollection<PropertyRisk> risks)
