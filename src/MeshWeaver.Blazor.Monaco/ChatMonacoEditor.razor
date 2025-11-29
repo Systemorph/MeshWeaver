@@ -1,0 +1,260 @@
+@using BlazorMonaco
+@using BlazorMonaco.Editor
+@using Microsoft.FluentUI.AspNetCore.Components
+@inject IJSRuntime JSRuntime
+
+<div class="monaco-chat-editor-container @(isDarkMode ? "dark-mode" : "")" style="@ContainerStyle">
+    <StandaloneCodeEditor @ref="editor"
+                          Id="@EditorId"
+                          ConstructionOptions="GetEditorOptions"
+                          OnDidInit="OnEditorInit"
+                          OnKeyDown="OnKeyDownHandler"
+                          OnDidChangeModelContent="OnContentChanged"
+                          CssClass="monaco-chat-editor" />
+</div>
+
+@code {
+    private StandaloneCodeEditor? editor;
+    private string EditorId = $"chat-editor-{Guid.NewGuid():N}";
+    private bool isInitialized = false;
+    private IJSObjectReference? jsModule;
+    private DotNetObjectReference<ChatMonacoEditor>? dotNetRef;
+    private bool isDarkMode = false;
+
+    [CascadingParameter(Name = "ThemeMode")]
+    public DesignThemeModes Mode { get; set; }
+
+    [Parameter]
+    public string? Value { get; set; }
+
+    [Parameter]
+    public EventCallback<string> ValueChanged { get; set; }
+
+    [Parameter]
+    public EventCallback OnSubmit { get; set; }
+
+    [Parameter]
+    public bool IsDisabled { get; set; }
+
+    [Parameter]
+    public string Placeholder { get; set; } = "Type your message...";
+
+    [Parameter]
+    public string Height { get; set; } = "80px";
+
+    [Parameter]
+    public string MaxHeight { get; set; } = "200px";
+
+    [Parameter]
+    public List<AgentCompletionItem>? AvailableAgents { get; set; }
+
+    private string ContainerStyle => $"height: {Height}; max-height: {MaxHeight}; min-height: 40px;";
+
+    private string GetMonacoTheme() => isDarkMode ? "vs-dark" : "vs";
+
+    private StandaloneEditorConstructionOptions GetEditorOptions(StandaloneCodeEditor ed)
+    {
+        return new StandaloneEditorConstructionOptions
+        {
+            Value = Value ?? "",
+            Language = "plaintext",
+            Theme = GetMonacoTheme(),
+            AutomaticLayout = true,
+            LineNumbers = "off",
+            Minimap = new EditorMinimapOptions { Enabled = false },
+            ScrollBeyondLastLine = false,
+            WordWrap = "on",
+            WrappingIndent = "none",
+            FontSize = 14,
+            LineHeight = 20,
+            Padding = new EditorPaddingOptions { Top = 8, Bottom = 8 },
+            RenderLineHighlight = "none",
+            OverviewRulerLanes = 0,
+            HideCursorInOverviewRuler = true,
+            Scrollbar = new EditorScrollbarOptions
+            {
+                Vertical = "hidden",
+                Horizontal = "hidden",
+                HandleMouseWheel = true
+            },
+            QuickSuggestions = new QuickSuggestionsOptions { Other = "on", Comments = "off", Strings = "on" },
+            SuggestOnTriggerCharacters = true,
+            AcceptSuggestionOnEnter = "on",
+            TabCompletion = "on",
+            ReadOnly = IsDisabled,
+            // Hide various UI elements
+            Folding = false,
+            GlyphMargin = false,
+            LineDecorationsWidth = 0,
+            LineNumbersMinChars = 0,
+            RenderWhitespace = "none",
+            Contextmenu = false
+        };
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        await base.OnInitializedAsync();
+        isDarkMode = await IsDarkModeAsync();
+    }
+
+    private async Task<bool> IsDarkModeAsync()
+    {
+        return Mode switch
+        {
+            DesignThemeModes.Dark => true,
+            DesignThemeModes.Light => false,
+            _ => await JSRuntime.InvokeAsync<bool>("themeHandler.isDarkMode")
+        };
+    }
+
+    private async Task OnEditorInit()
+    {
+        isInitialized = true;
+        dotNetRef = DotNetObjectReference.Create(this);
+
+        // Load custom JS module for placeholder and agent completion
+        jsModule = await JSRuntime.InvokeAsync<IJSObjectReference>("import",
+            "./_content/MeshWeaver.Blazor.Monaco/ChatMonacoEditor.razor.js");
+
+        if (jsModule != null)
+        {
+            await jsModule.InvokeVoidAsync("initChatEditor", EditorId, Placeholder, dotNetRef);
+
+            // Register completion provider if agents are available
+            if (AvailableAgents?.Any() == true)
+            {
+                await RegisterAgentCompletionProvider();
+            }
+        }
+
+    }
+
+    private async Task RegisterAgentCompletionProvider()
+    {
+        if (jsModule != null && AvailableAgents != null)
+        {
+            var agents = AvailableAgents.Select(a => new { name = a.Name, description = a.Description }).ToArray();
+            await jsModule.InvokeVoidAsync("registerAgentCompletionProvider", EditorId, agents);
+        }
+    }
+
+    private async Task OnContentChanged(ModelContentChangedEvent e)
+    {
+        if (editor != null)
+        {
+            var value = await editor.GetValue();
+            if (value != Value)
+            {
+                Value = value;
+                await ValueChanged.InvokeAsync(value);
+            }
+        }
+    }
+
+    private async Task OnKeyDownHandler(KeyboardEvent e)
+    {
+        // Handle Enter without Shift to submit
+        if (e.Code == "Enter" && !e.ShiftKey && !e.CtrlKey && !e.AltKey)
+        {
+            // Check if autocomplete widget is visible
+            var isWidgetVisible = false;
+            if (jsModule != null)
+            {
+                isWidgetVisible = await jsModule.InvokeAsync<bool>("isAutocompleteVisible", EditorId);
+            }
+
+            if (!isWidgetVisible)
+            {
+                // Prevent default Enter behavior and submit
+                await OnSubmit.InvokeAsync();
+            }
+        }
+    }
+
+    [JSInvokable]
+    public async Task HandleSubmit()
+    {
+        await OnSubmit.InvokeAsync();
+    }
+
+    public async ValueTask<string> GetValueAsync()
+    {
+        if (editor != null)
+        {
+            return await editor.GetValue();
+        }
+        return string.Empty;
+    }
+
+    public async Task SetValueAsync(string value)
+    {
+        if (editor != null)
+        {
+            await editor.SetValue(value);
+            Value = value;
+        }
+    }
+
+    public async Task ClearAsync()
+    {
+        await SetValueAsync(string.Empty);
+    }
+
+    public async Task FocusAsync()
+    {
+        if (editor != null)
+        {
+            await editor.Focus();
+        }
+    }
+
+    public async Task SetReadOnlyAsync(bool readOnly)
+    {
+        if (editor != null)
+        {
+            await editor.UpdateOptions(new EditorUpdateOptions { ReadOnly = readOnly });
+        }
+    }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        // Check if dark mode changed
+        var newDarkMode = await IsDarkModeAsync();
+        var themeChanged = newDarkMode != isDarkMode;
+        isDarkMode = newDarkMode;
+
+        if (editor != null && isInitialized)
+        {
+            // Update read-only state and theme
+            await editor.UpdateOptions(new EditorUpdateOptions
+            {
+                ReadOnly = IsDisabled,
+                Theme = themeChanged ? GetMonacoTheme() : null
+            });
+
+            // Update agents if changed
+            if (AvailableAgents?.Any() == true && jsModule != null)
+            {
+                await RegisterAgentCompletionProvider();
+            }
+        }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (jsModule != null)
+        {
+            try
+            {
+                await jsModule.InvokeVoidAsync("dispose", EditorId);
+            }
+            catch
+            {
+                // Ignore errors during disposal
+            }
+            await jsModule.DisposeAsync();
+        }
+        dotNetRef?.Dispose();
+    }
+}

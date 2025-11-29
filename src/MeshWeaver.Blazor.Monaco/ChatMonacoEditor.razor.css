@@ -1,0 +1,111 @@
+.monaco-chat-editor-container {
+    width: 100%;
+    border: 1px solid var(--neutral-stroke-rest, #e0e0e0);
+    border-radius: calc(var(--control-corner-radius, 4px) * 1px);
+    overflow: hidden;
+    background: var(--neutral-layer-1, #ffffff);
+    position: relative;
+}
+
+.monaco-chat-editor-container:focus-within {
+    border-color: var(--accent-fill-rest, #0078d4);
+    outline: none;
+}
+
+/* Dark mode */
+.monaco-chat-editor-container.dark-mode {
+    border-color: var(--neutral-stroke-rest, #444);
+    background: var(--neutral-layer-1, #1e1e1e);
+}
+
+.monaco-chat-editor-container.dark-mode:focus-within {
+    border-color: var(--accent-fill-rest, #0078d4);
+}
+
+/* Ensure the editor fills its container */
+::deep .monaco-chat-editor {
+    width: 100% !important;
+    height: 100% !important;
+    min-height: 60px;
+}
+
+::deep .monaco-chat-editor .monaco-editor {
+    width: 100% !important;
+    height: 100% !important;
+}
+
+::deep .monaco-chat-editor .overflow-guard {
+    width: 100% !important;
+    height: 100% !important;
+}
+
+/* Monaco editor background should match Fluent UI */
+::deep .monaco-chat-editor .monaco-editor,
+::deep .monaco-chat-editor .monaco-editor-background,
+::deep .monaco-chat-editor .monaco-editor .margin {
+    background-color: var(--neutral-layer-1, #ffffff) !important;
+}
+
+.dark-mode ::deep .monaco-chat-editor .monaco-editor,
+.dark-mode ::deep .monaco-chat-editor .monaco-editor-background,
+.dark-mode ::deep .monaco-chat-editor .monaco-editor .margin {
+    background-color: var(--neutral-layer-1, #1e1e1e) !important;
+}
+
+/* Hide scrollbars but allow scrolling */
+::deep .monaco-chat-editor .monaco-scrollable-element > .scrollbar {
+    display: none !important;
+}
+
+/* Style the suggest widget to match Fluent UI */
+::deep .monaco-editor .suggest-widget {
+    border-radius: calc(var(--layer-corner-radius, 8px) * 1px);
+    border: 1px solid var(--neutral-stroke-rest, #e0e0e0);
+    box-shadow: var(--elevation-shadow-flyout, 0 8px 16px rgba(0, 0, 0, 0.14));
+    background: var(--neutral-layer-floating, #ffffff);
+}
+
+.dark-mode ::deep .monaco-editor .suggest-widget {
+    border-color: var(--neutral-stroke-rest, #444);
+    background: var(--neutral-layer-floating, #2d2d2d);
+}
+
+::deep .monaco-editor .suggest-widget .monaco-list-row {
+    padding: 4px 8px;
+}
+
+::deep .monaco-editor .suggest-widget .monaco-list-row.focused {
+    background-color: var(--neutral-fill-stealth-hover, #f5f5f5);
+}
+
+.dark-mode ::deep .monaco-editor .suggest-widget .monaco-list-row.focused {
+    background-color: var(--neutral-fill-stealth-hover, #3d3d3d);
+}
+
+/* Cursor color */
+::deep .monaco-editor .cursor {
+    background-color: var(--neutral-foreground-rest, #323130) !important;
+}
+
+.dark-mode ::deep .monaco-editor .cursor {
+    background-color: var(--neutral-foreground-rest, #d4d4d4) !important;
+}
+
+/* Text color */
+::deep .monaco-editor .view-lines {
+    color: var(--neutral-foreground-rest, #323130);
+}
+
+.dark-mode ::deep .monaco-editor .view-lines {
+    color: var(--neutral-foreground-rest, #d4d4d4);
+}
+
+/* Placeholder styling */
+::deep .monaco-placeholder {
+    color: var(--neutral-foreground-hint, #605e5c) !important;
+    font-family: var(--body-font, "Segoe UI", sans-serif);
+}
+
+.dark-mode ::deep .monaco-placeholder {
+    color: var(--neutral-foreground-hint, #8a8886) !important;
+}
