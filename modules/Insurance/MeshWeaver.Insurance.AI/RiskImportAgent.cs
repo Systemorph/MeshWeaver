@@ -9,7 +9,7 @@ using Microsoft.Extensions.AI;
 
 namespace MeshWeaver.Insurance.AI;
 
-public class RiskImportAgent(IMessageHub hub) : IInitializableAgent, IAgentWithTools
+public class RiskImportAgent(IMessageHub hub) : IInitializableAgent, IAgentWithTools, IAgentWithContext
 {
     private Dictionary<string, TypeDescription>? typeDefinitionMap;
     private string? propertyRiskSchema;
@@ -36,58 +36,23 @@ public class RiskImportAgent(IMessageHub hub) : IInitializableAgent, IAgentWithT
                 - When accessing files, use paths starting with "/" (e.g., "/risks.xlsx")
 
                 # Importing Risks
-
                 When the user asks you to import risks, you should:
-                1) Get the file content sample by calling ContentPlugin's GetContent function with path=filename, collectionName=null, numberOfRows=20
-                   - For Excel files: numberOfRows=20 gives you the first 20 rows to see column structure
-                   - Show the file preview to the user so they can see what you're working with
-                2) Get the existing risk mapping configuration for the specified file using DataPlugin's GetData function with type="ExcelImportConfiguration" and entityId=filename.
-                3) Analyze the configuration and user request:
-                   - **If no configuration exists**: Create a new mapping configuration from scratch
-                   - **If configuration exists and user is making corrections/changes**:
-                     - CRITICAL: Load the existing configuration and MODIFY only the parts the user wants to change
-                     - DO NOT recreate the entire configuration from scratch
-                     - Keep all existing mappings that the user hasn't asked to change
-                     - Only update the specific mappings, columns, or settings mentioned in the user's request
-                   - The file content preview shows a markdown table with row numbers and column letters (A, B, C, etc.)
-                   - Identify the header row and extract the table start row
-                   - Map column letters to PropertyRisk properties according to the schema provided below
-                   - Ensure the JSON includes "name" field set to the filename and "typeName" set to "PropertyRisk"
-                4) IMMEDIATELY proceed with the import - NEVER ask for user confirmation or approval
-                   - Call ContentPlugin's Import function with: path=filename, collection=null, address=PricingAddress, format=null, configuration=the JSON configuration, snapshot=true
-                   - IMPORTANT: Always pass collection=null (it will be inferred from context)
-                   - IMPORTANT: Always pass format=null since the configuration parameter contains all necessary import settings
-                   - IMPORTANT: Always pass snapshot=true to create a snapshot of the imported data
-                   - CRITICAL: DO NOT present the configuration to the user and ask "Would you like me to proceed?" - just proceed directly with calling the Import function
-                   - The Import function will automatically save the configuration to the hub if it's valid, so you don't need to call UpdateData separately.
-                   - After the import completes, provide a summary of what was imported (number of risks, any issues encountered)
+                1) Get the existing risk mapping configuration for the specified file using DataPlugin's GetData function with type="ExcelImportConfiguration" and entityId=filename.
+                2) If no import configuration was returned in 1, get a sample of the worksheet using ContentPlugin's GetContent function with the collection name "Submissions-{pricingId}", the filename, and numberOfRows=20. Extract the table start row as well as the mapping as in the schema provided below.
+                   Consider any input from the user to modify the configuration. Ensure the JSON includes "name" field set to the filename. Use DataPlugin's UpdateData function with type="ExcelImportConfiguration" to save the configuration.
+                3) Call ContentPlugin's Import function with path=filename, collection="Submissions-{pricingId}", address=PricingAddress, and configuration=the JSON configuration you created or retrieved.
 
-                # Handling User Corrections and Iterations
+                # Updating Risk Import Configuration
+                When the user asks you to update the risk import configuration, you should:
+                1) Get the existing risk mapping configuration for the specified file using DataPlugin's GetData function with type="ExcelImportConfiguration" and entityId=filename.
+                2) Modify it according to the user's input, ensuring it follows the schema provided below.
+                3) Upload the new configuration using DataPlugin's UpdateData function with type="ExcelImportConfiguration" and the updated JSON (ensure "name" field is set to filename).
 
-                When the user asks for corrections or changes to an existing import:
-                - ALWAYS load the existing configuration first using DataPlugin's GetData
-                - Identify what the user wants to change (e.g., "map column F to TotalSumInsured", "change tableStartRow to 3", "add column G to tsiContent")
-                - Make ONLY the requested changes to the existing configuration
-                - Keep all other mappings and settings unchanged
-                - IMMEDIATELY call ContentPlugin's Import function with the updated configuration - DO NOT ask for confirmation
-                - Example scenarios:
-                  - User: "map column F to TotalSumInsured instead of column E"
-                    → Load existing config, find the TotalSumInsured mapping, change sourceColumn from "E" to "F", keep everything else, IMMEDIATELY import
-                  - User: "add column G to tsiContent"
-                    → Load existing config, find the tsiContent mapping, add "G" to the sourceColumns list, keep everything else, IMMEDIATELY import
-                  - User: "remove the Id mapping"
-                    → Load existing config, remove the mapping with targetProperty="Id", keep everything else, IMMEDIATELY import
-                  - User: "for tsiBI, take cell C3 and allocate with column Q"
-                    → Load existing config, add or update the allocation for tsiBi with totalCell="C3" and weightColumns=["Q"], IMMEDIATELY import
-
-                # Creating Risk Import Configuration from File Preview
-
-                The file content preview in the chat history is a markdown table with:
-                - First column: Row numbers (1-based)
-                - Remaining columns: Labeled A, B, C, D, etc. (Excel column letters)
-                - Empty cells appear as empty values in the table (not "null")
-
-                When creating a new import configuration:
+                # Automatic Risk Import Configuration
+                - Use ContentPlugin's GetContent with numberOfRows=20 to get a sample of the file. It returns a markdown table with:
+                  - First column: Row numbers (1-based)
+                  - Remaining columns: Labeled A, B, C, D, etc. (Excel column letters)
+                  - Empty cells appear as empty values in the table (not "null")
                 - Column letters start with A (first data column after Row number). Empty columns are still shown with their letters.
                 - Row numbers are 1-based. When specifying tableStartRow, use the row number from the Row column (e.g., if headers are on row 1 and data starts on row 2, set tableStartRow=2).
                 - Look for the header row in the markdown table and map column letters (A, B, C, etc.) to PropertyRisk properties.
@@ -108,11 +73,8 @@ public class RiskImportAgent(IMessageHub hub) : IInitializableAgent, IAgentWithT
                 - Provide only the file name (e.g., "risks.xlsx"); it is resolved relative to the pricing's content collection.
 
                 IMPORTANT OUTPUT RULES:
-                - Do not output JSON configuration to the user unless specifically asked to show the configuration.
-                - When the user asks you to import or make changes to an import, your job is NOT finished by creating or updating the configuration. You MUST call ContentPlugin's Import function.
-                - CRITICAL: DO NOT ask "Would you like me to proceed with the import?" or any similar confirmation question.
-                - CRITICAL: DO NOT present the configuration and wait for approval. Just proceed directly with calling the Import function.
-                - After making ANY changes to an import configuration (whether initial import or corrections), IMMEDIATELY call the Import function without asking.
+                - do not output JSON to the user.
+                - When the user asks you to import, your job is not finished by creating the risk import configuration. You will actually have to call ContentPlugin's Import function.
                 """;
 
             if (excelImportConfigSchema is not null)
@@ -124,17 +86,17 @@ public class RiskImportAgent(IMessageHub hub) : IInitializableAgent, IAgentWithT
         }
     }
 
+    public bool Matches(AgentContext? context)
+    {
+        return context?.Address?.Type == PricingAddress.TypeName;
+    }
+
     IEnumerable<AITool> IAgentWithTools.GetTools(IAgentChat chat)
     {
-        var dataPlugin = new DataPlugin(hub, chat, typeDefinitionMap);
-        foreach (var tool in dataPlugin.CreateTools())
-            yield return tool;
-
-        // Add ContentPlugin for submissions and import functionality
         var submissionPluginConfig = CreateSubmissionPluginConfig();
-        var contentPlugin = new ContentPlugin(hub, submissionPluginConfig, chat);
-        foreach (var tool in contentPlugin.CreateTools())
-            yield return tool;
+        return new DataPlugin(hub, chat, typeDefinitionMap).CreateTools()
+            .Concat(new ContentPlugin(hub, submissionPluginConfig, chat).CreateTools());
+
     }
 
     private static ContentPluginConfig CreateSubmissionPluginConfig()
