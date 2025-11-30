@@ -49,7 +49,8 @@
       "WebFetch(domain:blazor.radzen.com)",
       "Bash(dir:*)",
       "WebFetch(domain:microsoft.github.io)",
-      "Bash(node --check:*)"
+      "Bash(node --check:*)",
+      "Bash(cd:*)"
     ],
     "deny": []
   }
