@@ -5,7 +5,7 @@
 
 <div class="input-box page-width">
     <div class="input-container">
-        <ChatMonacoEditor @ref="monacoEditor"
+        <MonacoEditorView @ref="monacoEditor"
                           @bind-Value="MessageText"
                           OnSubmit="SendMessageAsync"
                           IsDisabled="@IsDisabled"
@@ -28,7 +28,7 @@
 </div>
 
 @code {
-    private ChatMonacoEditor? monacoEditor;
+    private MonacoEditorView? monacoEditor;
     private string? MessageText;
 
     [Parameter]

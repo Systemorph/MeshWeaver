@@ -1,24 +1,22 @@
-@using BlazorMonaco
-@using BlazorMonaco.Editor
 @using Microsoft.FluentUI.AspNetCore.Components
 @inject IJSRuntime JSRuntime
 
-<div class="monaco-chat-editor-container @(isDarkMode ? "dark-mode" : "")" style="@ContainerStyle">
+<div class="monaco-editor-container" style="@ContainerStyle">
     <StandaloneCodeEditor @ref="editor"
                           Id="@EditorId"
                           ConstructionOptions="GetEditorOptions"
                           OnDidInit="OnEditorInit"
                           OnKeyDown="OnKeyDownHandler"
                           OnDidChangeModelContent="OnContentChanged"
-                          CssClass="monaco-chat-editor" />
+                          CssClass="monaco-editor-view" />
 </div>
 
 @code {
     private StandaloneCodeEditor? editor;
-    private string EditorId = $"chat-editor-{Guid.NewGuid():N}";
+    private string EditorId = $"monaco-editor-{Guid.NewGuid():N}";
     private bool isInitialized = false;
     private IJSObjectReference? jsModule;
-    private DotNetObjectReference<ChatMonacoEditor>? dotNetRef;
+    private DotNetObjectReference<MonacoEditorView>? dotNetRef;
     private bool isDarkMode = false;
 
     [CascadingParameter(Name = "ThemeMode")]
@@ -115,7 +113,7 @@
 
         // Load custom JS module for placeholder and agent completion
         jsModule = await JSRuntime.InvokeAsync<IJSObjectReference>("import",
-            "./_content/MeshWeaver.Blazor.Monaco/ChatMonacoEditor.razor.js");
+            "./_content/MeshWeaver.Blazor.Monaco/MonacoEditorView.razor.js");
 
         if (jsModule != null)
         {

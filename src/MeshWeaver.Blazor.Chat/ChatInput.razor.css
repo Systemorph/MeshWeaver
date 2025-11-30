@@ -22,21 +22,6 @@
     box-shadow: 0 0 0 2px var(--neutral-layer-1), 0 0 0 4px var(--accent-fill-rest);
 }
 
-::deep .monaco-chat-editor-container {
-    border: none;
-    border-radius: 4px;
-    background: var(--neutral-layer-1);
-}
-
-::deep .monaco-chat-editor-container:focus-within {
-    border-color: transparent;
-    box-shadow: none;
-}
-
-::deep .monaco-placeholder {
-    color: var(--neutral-foreground-hint);
-}
-
 .tools {
     display: flex;
     margin-top: 1rem;
