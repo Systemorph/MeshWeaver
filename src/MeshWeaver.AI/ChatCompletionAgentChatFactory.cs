@@ -43,7 +43,7 @@ public abstract class ChatCompletionAgentChatFactory(
         Logger.LogInformation("Thread deletion not applicable for ChatCompletionAgent: {ThreadId}", threadId);
     }
 
-    protected override async Task<ChatClientAgent> CreateOrUpdateAgentAsync(
+    protected override Task<ChatClientAgent> CreateOrUpdateAgentAsync(
         IAgentDefinition agentDefinition,
         ChatClientAgent? existingAgent,
         IAgentChat chat,
@@ -72,7 +72,7 @@ public abstract class ChatCompletionAgentChatFactory(
             services: null        // Optional: could be injected if needed
         );
 
-        return agent;
+        return Task.FromResult(agent);
     }
 
 }

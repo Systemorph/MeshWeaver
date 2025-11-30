@@ -1,6 +1,7 @@
 @inherits BlazorView<AgentChatControl, AgentChatView>
 
 @using MeshWeaver.AI.Persistence
+@using MeshWeaver.Blazor.Monaco
 @implements IDisposable
 @inject IAgentChatFactory AgentChatFactory
 @inject NavigationManager NavigationManager
@@ -91,7 +92,7 @@
         </div>
         <div class="chat-container">
             <MeshWeaver.Blazor.Chat.ChatInput OnSend="@AddUserMessageAsync" @ref="@chatInput"
-                IsDisabled="@isGeneratingResponse" AvailableAgents="@AgentDefinitions.ToList()" />
+                IsDisabled="@isGeneratingResponse" CompletionProvider="@GetAgentCompletionConfig()" />
         </div>
     </div>
 </div>

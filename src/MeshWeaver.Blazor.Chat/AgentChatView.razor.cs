@@ -1,5 +1,6 @@
 ﻿using MeshWeaver.AI;
 using MeshWeaver.AI.Persistence;
+using MeshWeaver.Blazor.Monaco;
 using MeshWeaver.Data;
 using MeshWeaver.Messaging;
 using MeshWeaver.ShortGuid;
@@ -565,6 +566,21 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
         {
             StateHasChanged();
         }
+    }
+
+    private CompletionProviderConfig GetAgentCompletionConfig()
+    {
+        return new CompletionProviderConfig
+        {
+            TriggerCharacters = ["@"],
+            Items = AgentDefinitions.Select(agent => new CompletionItem
+            {
+                Label = agent.Name,
+                InsertText = $"@{agent.Name} ",
+                Description = agent.Description,
+                Category = "Agents"
+            }).ToList()
+        };
     }
 
     public void Dispose()
