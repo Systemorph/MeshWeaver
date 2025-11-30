@@ -30,6 +30,38 @@
     background-color: transparent !important;
 }
 
+/* Remove Monaco's internal borders and frames */
+::deep .monaco-editor-view .monaco-editor {
+    border: none !important;
+    outline: none !important;
+}
+
+::deep .monaco-editor-view .monaco-editor .overflow-guard {
+    border: none !important;
+}
+
+/* Remove any focus outlines from Monaco - parent container handles focus styling */
+::deep .monaco-editor-view .monaco-editor:focus,
+::deep .monaco-editor-view .monaco-editor:focus-within {
+    outline: none !important;
+}
+
+::deep .monaco-editor-view .monaco-editor .inputarea {
+    outline: none !important;
+    border: none !important;
+}
+
+/* Ensure cursor color matches theme */
+::deep .monaco-editor-view .monaco-editor .cursor {
+    background-color: var(--neutral-foreground-rest) !important;
+}
+
+/* Selected text styling */
+::deep .monaco-editor-view .monaco-editor .selected-text {
+    background-color: var(--accent-fill-rest) !important;
+    opacity: 0.3;
+}
+
 /* Hide scrollbars but allow scrolling */
 ::deep .monaco-editor-view .monaco-scrollable-element > .scrollbar {
     display: none !important;
@@ -38,17 +70,43 @@
 /* Style the suggest widget to match Fluent UI */
 ::deep .monaco-editor .suggest-widget {
     border-radius: calc(var(--layer-corner-radius, 8px) * 1px);
-    border: 1px solid var(--neutral-stroke-rest);
-    box-shadow: var(--elevation-shadow-flyout, 0 8px 16px rgba(0, 0, 0, 0.14));
-    background: var(--neutral-layer-floating);
+    border: 1px solid var(--neutral-stroke-rest, #d1d1d1) !important;
+    box-shadow: var(--elevation-shadow-flyout, 0 8px 16px rgba(0, 0, 0, 0.14)) !important;
+    background: var(--neutral-layer-floating, #ffffff) !important;
+    z-index: 10000 !important;
+    min-width: 400px !important;
+    width: auto !important;
+    max-width: 600px !important;
 }
 
 ::deep .monaco-editor .suggest-widget .monaco-list-row {
     padding: 4px 8px;
+    color: var(--neutral-foreground-rest, #323130);
+    white-space: nowrap;
+}
+
+::deep .monaco-editor .suggest-widget .monaco-list .monaco-list-rows {
+    width: 100% !important;
+}
+
+::deep .monaco-editor .suggest-widget .suggest-widget-container {
+    width: 100% !important;
+}
+
+::deep .monaco-editor .suggest-widget .details-label,
+::deep .monaco-editor .suggest-widget .monaco-icon-label {
+    width: auto !important;
+    max-width: none !important;
 }
 
 ::deep .monaco-editor .suggest-widget .monaco-list-row.focused {
-    background-color: var(--neutral-fill-stealth-hover);
+    background-color: var(--neutral-fill-stealth-hover, #f3f2f1);
+}
+
+/* Ensure suggest widget details pane is visible */
+::deep .monaco-editor .suggest-widget .details {
+    background: var(--neutral-layer-floating, #ffffff) !important;
+    border: 1px solid var(--neutral-stroke-rest, #d1d1d1) !important;
 }
 
 /* Placeholder styling */

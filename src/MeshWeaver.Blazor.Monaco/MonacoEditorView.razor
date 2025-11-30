@@ -1,5 +1,7 @@
 @using Microsoft.FluentUI.AspNetCore.Components
+@using Microsoft.Extensions.Logging
 @inject IJSRuntime JSRuntime
+@inject ILogger<MonacoEditorView> Logger
 
 <div class="monaco-editor-container" style="@ContainerStyle">
     <StandaloneCodeEditor @ref="editor"
@@ -18,6 +20,8 @@
     private IJSObjectReference? jsModule;
     private DotNetObjectReference<MonacoEditorView>? dotNetRef;
     private bool isDarkMode = false;
+    private bool completionProviderRegistered = false;
+    private int lastCompletionItemCount = 0;
 
     [CascadingParameter(Name = "ThemeMode")]
     public DesignThemeModes Mode { get; set; }
@@ -44,7 +48,7 @@
     public string MaxHeight { get; set; } = "200px";
 
     [Parameter]
-    public List<AgentCompletionItem>? AvailableAgents { get; set; }
+    public CompletionProviderConfig? CompletionProvider { get; set; }
 
     private string ContainerStyle => $"height: {Height}; max-height: {MaxHeight}; min-height: 40px;";
 
@@ -79,6 +83,7 @@
             SuggestOnTriggerCharacters = true,
             AcceptSuggestionOnEnter = "on",
             TabCompletion = "on",
+            FixedOverflowWidgets = true,
             ReadOnly = IsDisabled,
             // Hide various UI elements
             Folding = false,
@@ -108,6 +113,8 @@
 
     private async Task OnEditorInit()
     {
+        Logger.LogDebug("OnEditorInit called. CompletionProvider={HasProvider}, Items={ItemCount}",
+            CompletionProvider != null, CompletionProvider?.Items?.Count ?? 0);
         isInitialized = true;
         dotNetRef = DotNetObjectReference.Create(this);
 
@@ -117,23 +124,49 @@
 
         if (jsModule != null)
         {
-            await jsModule.InvokeVoidAsync("initChatEditor", EditorId, Placeholder, dotNetRef);
+            await jsModule.InvokeVoidAsync("initEditor", EditorId, Placeholder, dotNetRef);
 
-            // Register completion provider if agents are available
-            if (AvailableAgents?.Any() == true)
-            {
-                await RegisterAgentCompletionProvider();
-            }
+            // Register completion provider if configured
+            await TryRegisterCompletionProvider();
         }
-
     }
 
-    private async Task RegisterAgentCompletionProvider()
+    private async Task TryRegisterCompletionProvider()
     {
-        if (jsModule != null && AvailableAgents != null)
+        var currentItemCount = CompletionProvider?.Items?.Count ?? 0;
+
+        // Only register if we have items and either haven't registered yet or items changed
+        if (currentItemCount == 0)
         {
-            var agents = AvailableAgents.Select(a => new { name = a.Name, description = a.Description }).ToArray();
-            await jsModule.InvokeVoidAsync("registerAgentCompletionProvider", EditorId, agents);
+            Logger.LogDebug("Skipping completion provider registration - no items");
+            return;
+        }
+
+        if (completionProviderRegistered && currentItemCount == lastCompletionItemCount)
+        {
+            Logger.LogDebug("Skipping completion provider registration - already registered with same items");
+            return;
+        }
+
+        if (jsModule != null && CompletionProvider != null)
+        {
+            var config = new
+            {
+                triggerCharacters = CompletionProvider.TriggerCharacters,
+                items = CompletionProvider.Items.Select(i => new
+                {
+                    label = i.Label,
+                    insertText = i.InsertText ?? i.Label,
+                    description = i.Description ?? "",
+                    detail = i.Detail ?? "",
+                    category = i.Category ?? ""
+                }).ToArray()
+            };
+            Logger.LogDebug("Registering completion provider with {ItemCount} items, triggers: {Triggers}",
+                config.items.Length, string.Join(",", config.triggerCharacters));
+            await jsModule.InvokeVoidAsync("registerCompletionProvider", EditorId, config);
+            completionProviderRegistered = true;
+            lastCompletionItemCount = currentItemCount;
         }
     }
 
@@ -201,29 +234,49 @@
 
     public async Task FocusAsync()
     {
-        if (editor != null)
+        if (editor != null && isInitialized)
         {
-            await editor.Focus();
+            try
+            {
+                await editor.Focus();
+            }
+            catch (Exception ex)
+            {
+                Logger.LogDebug(ex, "Error focusing editor - may not be fully initialized");
+            }
         }
     }
 
     public async Task SetReadOnlyAsync(bool readOnly)
     {
-        if (editor != null)
+        if (editor != null && isInitialized)
         {
-            await editor.UpdateOptions(new EditorUpdateOptions { ReadOnly = readOnly });
+            try
+            {
+                await editor.UpdateOptions(new EditorUpdateOptions { ReadOnly = readOnly });
+            }
+            catch (Exception ex)
+            {
+                Logger.LogDebug(ex, "Error setting read-only state - editor may not be fully initialized");
+            }
         }
     }
 
     protected override async Task OnParametersSetAsync()
     {
-        // Check if dark mode changed
-        var newDarkMode = await IsDarkModeAsync();
-        var themeChanged = newDarkMode != isDarkMode;
-        isDarkMode = newDarkMode;
-
-        if (editor != null && isInitialized)
+        // Only proceed if the editor is fully initialized
+        if (!isInitialized || editor == null || jsModule == null)
         {
+            return;
+        }
+
+        try
+        {
+            // Check if dark mode changed
+            var newDarkMode = await IsDarkModeAsync();
+            var themeChanged = newDarkMode != isDarkMode;
+            isDarkMode = newDarkMode;
+
             // Update read-only state and theme
             await editor.UpdateOptions(new EditorUpdateOptions
             {
@@ -231,11 +284,12 @@
                 Theme = themeChanged ? GetMonacoTheme() : null
             });
 
-            // Update agents if changed
-            if (AvailableAgents?.Any() == true && jsModule != null)
-            {
-                await RegisterAgentCompletionProvider();
-            }
+            // Try to register completion provider (will skip if already registered with same items)
+            await TryRegisterCompletionProvider();
+        }
+        catch (Exception ex)
+        {
+            Logger.LogDebug(ex, "Error in OnParametersSetAsync - editor may not be fully initialized");
         }
     }
 

@@ -12,7 +12,7 @@
                           Placeholder="Type your message..."
                           Height="60px"
                           MaxHeight="150px"
-                          AvailableAgents="@AgentCompletions" />
+                          CompletionProvider="@CompletionProvider" />
     </div>
 
     <div class="tools">
@@ -38,17 +38,10 @@
     public bool IsDisabled { get; set; }
 
     /// <summary>
-    /// List of available agents for autocomplete when typing @Name
+    /// Optional completion provider configuration for the editor.
     /// </summary>
     [Parameter]
-    public List<IAgentDefinition> AvailableAgents { get; set; } = new();
-
-    private List<AgentCompletionItem> AgentCompletions =>
-        AvailableAgents.Select(a => new AgentCompletionItem
-        {
-            Name = a.Name,
-            Description = a.Description
-        }).ToList();
+    public CompletionProviderConfig? CompletionProvider { get; set; }
 
     public async ValueTask FocusAsync()
     {

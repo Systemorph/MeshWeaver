@@ -48,7 +48,8 @@
       "Bash(git mv:*)",
       "WebFetch(domain:blazor.radzen.com)",
       "Bash(dir:*)",
-      "WebFetch(domain:microsoft.github.io)"
+      "WebFetch(domain:microsoft.github.io)",
+      "Bash(node --check:*)"
     ],
     "deny": []
   }
