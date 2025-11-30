@@ -1,0 +1,58 @@
+.monaco-editor-container {
+    width: 100%;
+    border: none;
+    overflow: hidden;
+    background: transparent;
+    position: relative;
+}
+
+/* Ensure the editor fills its container */
+::deep .monaco-editor-view {
+    width: 100% !important;
+    height: 100% !important;
+    min-height: 60px;
+}
+
+::deep .monaco-editor-view .monaco-editor {
+    width: 100% !important;
+    height: 100% !important;
+}
+
+::deep .monaco-editor-view .overflow-guard {
+    width: 100% !important;
+    height: 100% !important;
+}
+
+/* Monaco editor background - transparent to inherit from parent */
+::deep .monaco-editor-view .monaco-editor,
+::deep .monaco-editor-view .monaco-editor-background,
+::deep .monaco-editor-view .monaco-editor .margin {
+    background-color: transparent !important;
+}
+
+/* Hide scrollbars but allow scrolling */
+::deep .monaco-editor-view .monaco-scrollable-element > .scrollbar {
+    display: none !important;
+}
+
+/* Style the suggest widget to match Fluent UI */
+::deep .monaco-editor .suggest-widget {
+    border-radius: calc(var(--layer-corner-radius, 8px) * 1px);
+    border: 1px solid var(--neutral-stroke-rest);
+    box-shadow: var(--elevation-shadow-flyout, 0 8px 16px rgba(0, 0, 0, 0.14));
+    background: var(--neutral-layer-floating);
+}
+
+::deep .monaco-editor .suggest-widget .monaco-list-row {
+    padding: 4px 8px;
+}
+
+::deep .monaco-editor .suggest-widget .monaco-list-row.focused {
+    background-color: var(--neutral-fill-stealth-hover);
+}
+
+/* Placeholder styling */
+::deep .monaco-placeholder {
+    color: var(--neutral-foreground-hint) !important;
+    font-family: var(--body-font, "Segoe UI", sans-serif);
+}
