@@ -286,7 +286,6 @@ export function registerCompletionProvider(editorId, config) {
                 sortText: (item.category || 'zzz') + '_' + item.label.toLowerCase()
             }));
 
-            console.log('[Monaco] Returning', suggestions.length, 'suggestions for text:', textUntilPosition);
             return { suggestions };
         }
     });

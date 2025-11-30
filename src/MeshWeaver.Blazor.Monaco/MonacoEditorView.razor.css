@@ -67,47 +67,8 @@
     display: none !important;
 }
 
-/* Style the suggest widget to match Fluent UI */
-::deep .monaco-editor .suggest-widget {
-    border-radius: calc(var(--layer-corner-radius, 8px) * 1px);
-    border: 1px solid var(--neutral-stroke-rest, #d1d1d1) !important;
-    box-shadow: var(--elevation-shadow-flyout, 0 8px 16px rgba(0, 0, 0, 0.14)) !important;
-    background: var(--neutral-layer-floating, #ffffff) !important;
-    z-index: 10000 !important;
-    min-width: 400px !important;
-    width: auto !important;
-    max-width: 600px !important;
-}
-
-::deep .monaco-editor .suggest-widget .monaco-list-row {
-    padding: 4px 8px;
-    color: var(--neutral-foreground-rest, #323130);
-    white-space: nowrap;
-}
-
-::deep .monaco-editor .suggest-widget .monaco-list .monaco-list-rows {
-    width: 100% !important;
-}
-
-::deep .monaco-editor .suggest-widget .suggest-widget-container {
-    width: 100% !important;
-}
-
-::deep .monaco-editor .suggest-widget .details-label,
-::deep .monaco-editor .suggest-widget .monaco-icon-label {
-    width: auto !important;
-    max-width: none !important;
-}
-
-::deep .monaco-editor .suggest-widget .monaco-list-row.focused {
-    background-color: var(--neutral-fill-stealth-hover, #f3f2f1);
-}
-
-/* Ensure suggest widget details pane is visible */
-::deep .monaco-editor .suggest-widget .details {
-    background: var(--neutral-layer-floating, #ffffff) !important;
-    border: 1px solid var(--neutral-stroke-rest, #d1d1d1) !important;
-}
+/* Note: Suggest widget styles are applied globally via JavaScript
+   because FixedOverflowWidgets renders the widget outside the component's DOM tree */
 
 /* Placeholder styling */
 ::deep .monaco-placeholder {
