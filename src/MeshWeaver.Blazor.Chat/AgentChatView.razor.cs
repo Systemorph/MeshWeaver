@@ -1,4 +1,5 @@
 ﻿using MeshWeaver.AI;
+using MeshWeaver.AI.Completion;
 using MeshWeaver.AI.Persistence;
 using MeshWeaver.Blazor.Monaco;
 using MeshWeaver.Data;
@@ -570,17 +571,42 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
 
     private CompletionProviderConfig GetAgentCompletionConfig()
     {
+        // Only provide trigger characters - items are fetched async via GetCompletionsForEditorAsync
         return new CompletionProviderConfig
         {
             TriggerCharacters = ["@"],
-            Items = AgentDefinitions.Select(agent => new CompletionItem
-            {
-                Label = agent.Name,
-                InsertText = $"@{agent.Name} ",
-                Description = agent.Description,
-                Category = "Agents"
-            }).ToList()
+            Items = []
         };
+    }
+
+    /// <summary>
+    /// Async callback for editor autocomplete with server-side fuzzy scoring.
+    /// Called from MonacoEditorView when user types after @ trigger.
+    /// </summary>
+    private async Task<CompletionItem[]> GetCompletionsForEditorAsync(string query)
+    {
+        try
+        {
+            var context = GetCurrentAgentContext();
+            var fuzzyScorer = new FuzzyScorer();
+            var autocompleteService = new AutocompleteService(AgentDefinitions, fuzzyScorer);
+
+            var results = await autocompleteService.GetCompletionsAsync(query, context);
+
+            return results.Select(r => new CompletionItem
+            {
+                Label = r.Label,
+                InsertText = r.InsertText,
+                Description = r.Description,
+                Category = r.Category,
+                Detail = r.Score > 0 ? $"Score: {r.Score}" : null
+            }).ToArray();
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Error getting completions for query: {Query}", query);
+            return [];
+        }
     }
 
     public void Dispose()

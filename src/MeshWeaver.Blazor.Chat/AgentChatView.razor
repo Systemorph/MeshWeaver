@@ -92,7 +92,9 @@
         </div>
         <div class="chat-container">
             <MeshWeaver.Blazor.Chat.ChatInput OnSend="@AddUserMessageAsync" @ref="@chatInput"
-                IsDisabled="@isGeneratingResponse" CompletionProvider="@GetAgentCompletionConfig()" />
+                IsDisabled="@isGeneratingResponse"
+                CompletionProvider="@GetAgentCompletionConfig()"
+                AsyncCompletionCallback="@GetCompletionsForEditorAsync" />
         </div>
     </div>
 </div>

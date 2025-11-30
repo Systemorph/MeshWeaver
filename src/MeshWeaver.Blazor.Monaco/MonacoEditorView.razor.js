@@ -1,6 +1,23 @@
 // Monaco Editor View JavaScript module
 const editorState = new Map();
 
+// Debounce utility function
+function debounce(fn, delay) {
+    let timeoutId = null;
+    return function (...args) {
+        if (timeoutId) {
+            clearTimeout(timeoutId);
+        }
+        return new Promise((resolve) => {
+            timeoutId = setTimeout(async () => {
+                timeoutId = null;
+                const result = await fn.apply(this, args);
+                resolve(result);
+            }, delay);
+        });
+    };
+}
+
 // Add global styles for suggest widget (needed because FixedOverflowWidgets renders outside component)
 (function addSuggestWidgetStyles() {
     if (document.getElementById('monaco-suggest-styles')) return;
@@ -203,6 +220,7 @@ export function registerCompletionProvider(editorId, config) {
 
     // Parse config
     const triggerCharacters = config?.triggerCharacters || [];
+    const useAsync = config?.useAsync || false;
     let items = [];
     if (Array.isArray(config?.items)) {
         items = config.items;
@@ -210,7 +228,7 @@ export function registerCompletionProvider(editorId, config) {
         items = Object.values(config.items);
     }
 
-    state.completionConfig = { triggerCharacters, items };
+    state.completionConfig = { triggerCharacters, items, useAsync };
 
     // Dispose previous provider if exists
     if (state.completionDisposable) {
@@ -218,24 +236,36 @@ export function registerCompletionProvider(editorId, config) {
         state.completionDisposable = null;
     }
 
-    // Only register if we have items and trigger characters
-    if (items.length === 0 || triggerCharacters.length === 0) {
+    // Only register if we have items or async mode, and trigger characters
+    if (!useAsync && items.length === 0) {
+        return;
+    }
+    if (triggerCharacters.length === 0) {
         return;
     }
 
     // Build trigger character set for regex
     const escapedTriggers = triggerCharacters.map(c => c.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('');
 
+    // Create debounced async fetch function (150ms delay)
+    const debouncedFetch = debounce(async (query) => {
+        if (!state.dotNetRef) {
+            return [];
+        }
+        try {
+            return await state.dotNetRef.invokeMethodAsync('GetAsyncCompletions', query);
+        } catch (e) {
+            console.error('Error fetching async completions:', e);
+            return [];
+        }
+    }, 150);
+
     // Register new completion provider
     state.completionDisposable = monaco.languages.registerCompletionItemProvider('plaintext', {
         triggerCharacters: triggerCharacters,
-        provideCompletionItems: (model, position) => {
+        provideCompletionItems: async (model, position) => {
             const currentState = editorState.get(editorId);
-            const currentItems = currentState?.completionConfig?.items || [];
-
-            if (!Array.isArray(currentItems)) {
-                return { suggestions: [] };
-            }
+            const isAsync = currentState?.completionConfig?.useAsync || false;
 
             const textUntilPosition = model.getValueInRange({
                 startLineNumber: position.lineNumber,
@@ -250,14 +280,8 @@ export function registerCompletionProvider(editorId, config) {
                 return { suggestions: [] };
             }
 
-            const searchTerm = triggerMatch[1].toLowerCase();
-
-            // Filter items based on search term
-            const filteredItems = currentItems.filter(item =>
-                item && item.label &&
-                (item.label.toLowerCase().includes(searchTerm) ||
-                (item.description && item.description.toLowerCase().includes(searchTerm)))
-            );
+            const searchTerm = triggerMatch[1];
+            const triggerChar = triggerMatch[0].charAt(0);
 
             // Calculate range to replace (from trigger char to current position)
             const range = new monaco.Range(
@@ -267,10 +291,27 @@ export function registerCompletionProvider(editorId, config) {
                 position.column
             );
 
-            // Get the actual trigger character from the match
-            const triggerChar = triggerMatch[0].charAt(0);
+            let currentItems;
 
-            const suggestions = filteredItems.map((item) => ({
+            if (isAsync) {
+                // Async mode: fetch from server with debounce
+                currentItems = await debouncedFetch(searchTerm);
+            } else {
+                // Sync mode: filter locally
+                const allItems = currentState?.completionConfig?.items || [];
+                const searchTermLower = searchTerm.toLowerCase();
+                currentItems = allItems.filter(item =>
+                    item && item.label &&
+                    (item.label.toLowerCase().includes(searchTermLower) ||
+                    (item.description && item.description.toLowerCase().includes(searchTermLower)))
+                );
+            }
+
+            if (!Array.isArray(currentItems)) {
+                return { suggestions: [] };
+            }
+
+            const suggestions = currentItems.map((item) => ({
                 label: {
                     label: item.label,
                     description: item.description || ''
@@ -279,7 +320,7 @@ export function registerCompletionProvider(editorId, config) {
                 insertText: item.insertText || item.label,
                 range: range,
                 // Show category as detail (appears on the right side)
-                detail: item.category || '',
+                detail: item.category || item.detail || '',
                 // filterText tells Monaco what to match against the user's input
                 filterText: triggerChar + item.label,
                 // sortText: category first, then label for grouping

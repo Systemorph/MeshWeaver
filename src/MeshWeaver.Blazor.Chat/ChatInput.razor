@@ -12,7 +12,8 @@
                           Placeholder="Type your message..."
                           Height="60px"
                           MaxHeight="150px"
-                          CompletionProvider="@CompletionProvider" />
+                          CompletionProvider="@CompletionProvider"
+                          AsyncCompletionCallback="@AsyncCompletionCallback" />
     </div>
 
     <div class="tools">
@@ -42,6 +43,13 @@
     /// </summary>
     [Parameter]
     public CompletionProviderConfig? CompletionProvider { get; set; }
+
+    /// <summary>
+    /// Optional async callback for server-side completion with fuzzy scoring.
+    /// When provided, this will be used instead of static CompletionProvider items.
+    /// </summary>
+    [Parameter]
+    public Func<string, Task<CompletionItem[]>>? AsyncCompletionCallback { get; set; }
 
     public async ValueTask FocusAsync()
     {

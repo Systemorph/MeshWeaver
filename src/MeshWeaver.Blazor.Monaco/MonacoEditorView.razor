@@ -50,6 +50,13 @@
     [Parameter]
     public CompletionProviderConfig? CompletionProvider { get; set; }
 
+    /// <summary>
+    /// Optional async callback for server-side completion with fuzzy scoring.
+    /// When provided, this will be called instead of using static CompletionProvider items.
+    /// </summary>
+    [Parameter]
+    public Func<string, Task<CompletionItem[]>>? AsyncCompletionCallback { get; set; }
+
     private string ContainerStyle => $"height: {Height}; max-height: {MaxHeight}; min-height: 40px;";
 
     private string GetMonacoTheme() => isDarkMode ? "vs-dark" : "vs";
@@ -133,26 +140,50 @@
 
     private async Task TryRegisterCompletionProvider()
     {
+        if (jsModule == null)
+            return;
+
+        // Check if async mode should be used
+        var useAsync = AsyncCompletionCallback != null;
         var currentItemCount = CompletionProvider?.Items?.Count ?? 0;
 
-        // Only register if we have items and either haven't registered yet or items changed
-        if (currentItemCount == 0)
+        // For async mode, we always register (the callback handles everything)
+        // For sync mode, we need items
+        if (!useAsync && currentItemCount == 0)
         {
-            Logger.LogDebug("Skipping completion provider registration - no items");
+            Logger.LogDebug("Skipping completion provider registration - no items and no async callback");
             return;
         }
 
-        if (completionProviderRegistered && currentItemCount == lastCompletionItemCount)
+        // Skip if already registered with same configuration
+        if (completionProviderRegistered && !useAsync && currentItemCount == lastCompletionItemCount)
         {
             Logger.LogDebug("Skipping completion provider registration - already registered with same items");
             return;
         }
 
-        if (jsModule != null && CompletionProvider != null)
+        var triggerCharacters = CompletionProvider?.TriggerCharacters ?? ["@"];
+
+        if (useAsync)
         {
+            // Async mode - pass minimal config, JS will call back to C#
             var config = new
             {
-                triggerCharacters = CompletionProvider.TriggerCharacters,
+                triggerCharacters = triggerCharacters,
+                useAsync = true,
+                items = Array.Empty<object>()
+            };
+            Logger.LogDebug("Registering async completion provider with triggers: {Triggers}",
+                string.Join(",", triggerCharacters));
+            await jsModule.InvokeVoidAsync("registerCompletionProvider", EditorId, config);
+        }
+        else if (CompletionProvider != null)
+        {
+            // Sync mode - pass all items
+            var config = new
+            {
+                triggerCharacters = triggerCharacters,
+                useAsync = false,
                 items = CompletionProvider.Items.Select(i => new
                 {
                     label = i.Label,
@@ -162,12 +193,13 @@
                     category = i.Category ?? ""
                 }).ToArray()
             };
-            Logger.LogDebug("Registering completion provider with {ItemCount} items, triggers: {Triggers}",
-                config.items.Length, string.Join(",", config.triggerCharacters));
+            Logger.LogDebug("Registering sync completion provider with {ItemCount} items, triggers: {Triggers}",
+                config.items.Length, string.Join(",", triggerCharacters));
             await jsModule.InvokeVoidAsync("registerCompletionProvider", EditorId, config);
-            completionProviderRegistered = true;
-            lastCompletionItemCount = currentItemCount;
         }
+
+        completionProviderRegistered = true;
+        lastCompletionItemCount = currentItemCount;
     }
 
     private async Task OnContentChanged(ModelContentChangedEvent e)
@@ -207,6 +239,36 @@
     public async Task HandleSubmit()
     {
         await OnSubmit.InvokeAsync();
+    }
+
+    /// <summary>
+    /// JSInvokable method called from JavaScript to get async completions.
+    /// </summary>
+    [JSInvokable]
+    public async Task<object[]> GetAsyncCompletions(string query)
+    {
+        if (AsyncCompletionCallback == null)
+        {
+            return [];
+        }
+
+        try
+        {
+            var items = await AsyncCompletionCallback(query);
+            return items.Select(i => new
+            {
+                label = i.Label,
+                insertText = i.InsertText ?? i.Label,
+                description = i.Description ?? "",
+                detail = i.Detail ?? "",
+                category = i.Category ?? ""
+            }).ToArray<object>();
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Error getting async completions for query: {Query}", query);
+            return [];
+        }
     }
 
     public async ValueTask<string> GetValueAsync()

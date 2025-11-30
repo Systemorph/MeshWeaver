@@ -1,4 +1,5 @@
 ﻿using MeshWeaver.AI;
+using MeshWeaver.AI.Completion;
 using MeshWeaver.AI.Plugins;
 using MeshWeaver.ContentCollections;
 using MeshWeaver.Data;
@@ -6,6 +7,7 @@ using MeshWeaver.Insurance.Domain;
 using MeshWeaver.Layout;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.AI;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.Insurance.AI;
 
@@ -13,7 +15,7 @@ namespace MeshWeaver.Insurance.AI;
 /// Main Insurance agent that provides access to insurance pricing data and collections.
 /// </summary>
 [ExposedInDefaultAgent]
-public class InsuranceAgent(IMessageHub hub) : IInitializableAgent, IAgentWithTools, IAgentWithContext, IAgentWithHandoffs
+public class InsuranceAgent(IMessageHub hub) : IInitializableAgent, IAgentWithTools, IAgentWithContext, IAgentWithHandoffs, IAgentWithAutocompletion
 {
     private Dictionary<string, TypeDescription>? typeDefinitionMap;
     private Dictionary<string, LayoutAreaDefinition>? layoutAreaMap;
@@ -269,5 +271,50 @@ public class InsuranceAgent(IMessageHub hub) : IInitializableAgent, IAgentWithTo
             return false;
 
         return context.Address.Type == PricingAddress.TypeName;
+    }
+
+    /// <summary>
+    /// Returns autocomplete items for files in the current pricing's submission collection.
+    /// </summary>
+    public async Task<IEnumerable<AutocompleteItem>> GetAutocompletionItemsAsync(AgentContext? context)
+    {
+        if (context?.Address?.Type != PricingAddress.TypeName)
+            return [];
+
+        try
+        {
+            var config = CreateSubmissionPluginConfig();
+            var collectionConfig = config.ContextToConfigMap?.Invoke(context);
+
+            if (collectionConfig == null)
+                return [];
+
+            var contentService = hub.ServiceProvider.GetRequiredService<IContentService>();
+            contentService.AddConfiguration(collectionConfig);
+
+            var collection = await contentService.GetCollectionAsync(collectionConfig.Name);
+            if (collection == null)
+                return [];
+
+            var files = await collection.GetFilesAsync("/");
+            var items = new List<AutocompleteItem>();
+
+            foreach (var file in files)
+            {
+                var fullPath = $"{collectionConfig.Name}:{file.Path}";
+                items.Add(new AutocompleteItem(
+                    Label: file.Name,
+                    InsertText: $"@{fullPath} ",
+                    Description: fullPath,
+                    Category: "Files"
+                ));
+            }
+
+            return items;
+        }
+        catch
+        {
+            return [];
+        }
     }
 }
