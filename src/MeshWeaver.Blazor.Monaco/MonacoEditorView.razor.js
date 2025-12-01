@@ -229,6 +229,7 @@ export function registerCompletionProvider(editorId, config) {
     }
 
     state.completionConfig = { triggerCharacters, items, useAsync };
+    state.isCompletionPending = false;
 
     // Dispose previous provider if exists
     if (state.completionDisposable) {
@@ -253,10 +254,14 @@ export function registerCompletionProvider(editorId, config) {
             return [];
         }
         try {
-            return await state.dotNetRef.invokeMethodAsync('GetAsyncCompletions', query);
+            state.isCompletionPending = true;
+            const result = await state.dotNetRef.invokeMethodAsync('GetAsyncCompletions', query);
+            return result;
         } catch (e) {
             console.error('Error fetching async completions:', e);
             return [];
+        } finally {
+            state.isCompletionPending = false;
         }
     }, 150);
 
@@ -333,17 +338,36 @@ export function registerCompletionProvider(editorId, config) {
 }
 
 export function isAutocompleteVisible(editorId) {
-    const editorInstance = monaco.editor.getEditors().find(e => e.getContainerDomNode()?.id === editorId);
-    if (!editorInstance) return false;
+    // Check if async completion is pending
+    const state = editorState.get(editorId);
+    if (state?.isCompletionPending) {
+        return true;
+    }
 
-    // Check if suggest widget is visible
-    try {
-        const contribution = editorInstance.getContribution('editor.contrib.suggestController');
-        if (contribution && contribution.widget && contribution.widget.value) {
-            return contribution.widget.value.state === 3; // SuggestWidget.State.Open = 3
+    // Check DOM for visible suggest widgets (works with FixedOverflowWidgets)
+    const suggestWidgets = document.querySelectorAll('.monaco-editor .suggest-widget, .overflowingContentWidgets .suggest-widget');
+    for (const widget of suggestWidgets) {
+        const style = window.getComputedStyle(widget);
+        if (style.display !== 'none' && style.visibility !== 'hidden' && widget.offsetParent !== null) {
+            return true;
         }
-    } catch (e) {
-        // Fallback method
+    }
+
+    // Fallback: check editor contribution state
+    const editorInstance = monaco.editor.getEditors().find(e => e.getContainerDomNode()?.id === editorId);
+    if (editorInstance) {
+        try {
+            const contribution = editorInstance.getContribution('editor.contrib.suggestController');
+            if (contribution && contribution.widget && contribution.widget.value) {
+                const widgetState = contribution.widget.value.state;
+                // States: 0=Hidden, 1=Loading, 2=Empty, 3=Open, 4=Frozen, 5=Details
+                if (widgetState >= 1 && widgetState <= 5) {
+                    return true;
+                }
+            }
+        } catch (e) {
+            // Ignore errors
+        }
     }
 
     return false;
