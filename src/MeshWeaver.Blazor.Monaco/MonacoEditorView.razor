@@ -8,7 +8,6 @@
                           Id="@EditorId"
                           ConstructionOptions="GetEditorOptions"
                           OnDidInit="OnEditorInit"
-                          OnKeyDown="OnKeyDownHandler"
                           OnDidChangeModelContent="OnContentChanged"
                           CssClass="monaco-editor-view" />
 </div>
@@ -211,26 +210,6 @@
             {
                 Value = value;
                 await ValueChanged.InvokeAsync(value);
-            }
-        }
-    }
-
-    private async Task OnKeyDownHandler(KeyboardEvent e)
-    {
-        // Handle Enter without Shift to submit
-        if (e.Code == "Enter" && !e.ShiftKey && !e.CtrlKey && !e.AltKey)
-        {
-            // Check if autocomplete widget is visible
-            var isWidgetVisible = false;
-            if (jsModule != null)
-            {
-                isWidgetVisible = await jsModule.InvokeAsync<bool>("isAutocompleteVisible", EditorId);
-            }
-
-            if (!isWidgetVisible)
-            {
-                // Prevent default Enter behavior and submit
-                await OnSubmit.InvokeAsync();
             }
         }
     }
