@@ -29,11 +29,12 @@ public class RiskImportAgent(IMessageHub hub) : IInitializableAgent, IAgentWithT
 
                 ## Content Collection Context
 
-                IMPORTANT: The current context is set to pricing/{pricingId} where pricingId follows the format {company}-{uwy}.
-                - The submission files collection is named "Submissions-{pricingId}"
-                - All file paths are relative to the root (/) of this collection
-                - When listing files, you'll see paths like "/risks.xlsx", "/exposure.xlsx"
-                - When accessing files, use paths starting with "/" (e.g., "/risks.xlsx")
+                Files are referenced using the fully qualified 'collection:filename' format:
+                - Format: "Submissions-{pricingId}:filename" (e.g., "Submissions-Microsoft-2026:Microsoft.xlsx")
+                - Pass this full string directly to ContentPlugin functions - it will parse collection and path automatically
+                - When the user or InsuranceAgent mentions a file like "Submissions-Microsoft-2026:Microsoft.xlsx",
+                  use it directly in ContentPlugin calls (e.g., GetContent(filePath="Submissions-Microsoft-2026:Microsoft.xlsx"))
+                - DO NOT split the collection:filename format - pass it as-is to ContentPlugin
 
                 # Importing Risks
                 When the user asks you to import risks, you should:

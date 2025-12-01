@@ -50,7 +50,8 @@
       "Bash(dir:*)",
       "WebFetch(domain:microsoft.github.io)",
       "Bash(node --check:*)",
-      "Bash(cd:*)"
+      "Bash(cd:*)",
+      "Bash(git stash:*)"
     ],
     "deny": []
   }

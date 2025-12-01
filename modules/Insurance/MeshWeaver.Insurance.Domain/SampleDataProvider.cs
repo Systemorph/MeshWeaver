@@ -269,6 +269,8 @@ public static class SampleDataProvider
             {
                 Id = "Microsoft-2026",
                 InsuredName = "Microsoft",
+                InceptionDate = new DateTime(2026, 1, 1),
+                ExpirationDate = new DateTime(2026, 12, 31),
                 UnderwritingYear = 2026,
                 LineOfBusiness = "PROP",
                 Country = "US",
