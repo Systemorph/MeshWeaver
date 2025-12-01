@@ -30,18 +30,18 @@ public class RiskImportAgent(IMessageHub hub) : IInitializableAgent, IAgentWithT
                 ## Content Collection Context
 
                 Files are referenced using the fully qualified 'collection:filename' format:
-                - Format: "Submissions-{pricingId}:filename" (e.g., "Submissions-Microsoft-2026:Microsoft.xlsx")
+                - Format: "Submissions@{pricingId}:filename" (e.g., "Submissions@Microsoft@2026:Microsoft.xlsx")
                 - Pass this full string directly to ContentPlugin functions - it will parse collection and path automatically
-                - When the user or InsuranceAgent mentions a file like "Submissions-Microsoft-2026:Microsoft.xlsx",
-                  use it directly in ContentPlugin calls (e.g., GetContent(filePath="Submissions-Microsoft-2026:Microsoft.xlsx"))
+                - When the user or InsuranceAgent mentions a file like "Submissions@Microsoft@2026:Microsoft.xlsx",
+                  use it directly in ContentPlugin calls (e.g., GetContent(filePath="Submissions@Microsoft@2026:Microsoft.xlsx"))
                 - DO NOT split the collection:filename format - pass it as-is to ContentPlugin
 
                 # Importing Risks
                 When the user asks you to import risks, you should:
                 1) Get the existing risk mapping configuration for the specified file using DataPlugin's GetData function with type="ExcelImportConfiguration" and entityId=filename.
-                2) If no import configuration was returned in 1, get a sample of the worksheet using ContentPlugin's GetContent function with the collection name "Submissions-{pricingId}", the filename, and numberOfRows=20. Extract the table start row as well as the mapping as in the schema provided below.
+                2) If no import configuration was returned in 1, get a sample of the worksheet using ContentPlugin's GetContent function with the fully qualified path (e.g., "Submissions@Microsoft@2026:Microsoft.xlsx") and numberOfRows=20. Extract the table start row as well as the mapping as in the schema provided below.
                    Consider any input from the user to modify the configuration. Ensure the JSON includes "name" field set to the filename. Use DataPlugin's UpdateData function with type="ExcelImportConfiguration" to save the configuration.
-                3) Call ContentPlugin's Import function with path=filename, collection="Submissions-{pricingId}", address=PricingAddress, and configuration=the JSON configuration you created or retrieved.
+                3) Call ContentPlugin's Import function with the fully qualified path (e.g., "Submissions@Microsoft@2026:Microsoft.xlsx"), address=PricingAddress, and configuration=the JSON configuration you created or retrieved.
 
                 # Updating Risk Import Configuration
                 When the user asks you to update the risk import configuration, you should:
@@ -113,8 +113,8 @@ public class RiskImportAgent(IMessageHub hub) : IInitializableAgent, IAgentWithT
 
                 var pricingId = context.Address.Id;
 
-                // Parse pricingId in format {company}-{uwy}
-                var parts = pricingId.Split('-');
+                // Parse pricingId in format {company}@{uwy}
+                var parts = pricingId.Split('@');
                 if (parts.Length != 2)
                     return null!;
 
@@ -123,7 +123,7 @@ public class RiskImportAgent(IMessageHub hub) : IInitializableAgent, IAgentWithT
                 return new ContentCollectionConfig
                 {
                     SourceType = HubStreamProviderFactory.SourceType,
-                    Name = $"Submissions-{pricingId}",
+                    Name = $"Submissions@{pricingId}",
                     Address = context.Address
                 };
             }

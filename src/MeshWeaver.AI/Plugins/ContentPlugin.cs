@@ -25,10 +25,10 @@ namespace MeshWeaver.AI.Plugins;
 /// - The plugin automatically parses collection and path from the Id
 ///
 /// Examples:
-/// 1. Viewing "Slip.md" in "Submissions-Microsoft-2026" collection:
+/// 1. Viewing "Slip.md" in "Submissions@Microsoft@2026" collection:
 ///    - Area: "Content" or "Collection"
-///    - Id: "Submissions-Microsoft-2026/Slip.md"
-///    - Parsed collection: "Submissions-Microsoft-2026"
+///    - Id: "Submissions@Microsoft@2026/Slip.md"
+///    - Parsed collection: "Submissions@Microsoft@2026"
 ///    - Parsed path: "Slip.md"
 ///
 /// 2. Viewing root folder of "Documents" collection:
@@ -72,7 +72,7 @@ public class ContentPlugin
     }
 
     /// <summary>
-    /// Parses a path that may contain the collection:path syntax (e.g., "Submissions-Microsoft-2026:folder/file.xlsx").
+    /// Parses a path that may contain the collection:path syntax (e.g., "Submissions@Microsoft@2026:folder/file.xlsx").
     /// Returns the collection name and the file path separately.
     /// The path portion does not include a leading slash.
     /// </summary>
@@ -81,8 +81,8 @@ public class ContentPlugin
         if (string.IsNullOrEmpty(combinedPath))
             return (null, null);
 
-        // Check for collection:path syntax (e.g., "Submissions-Microsoft-2026:folder/file.xlsx")
-        // The collection name typically contains hyphens but not colons, so split on first ":"
+        // Check for collection:path syntax (e.g., "Submissions@Microsoft@2026:folder/file.xlsx")
+        // The collection name typically contains @ separators but not colons, so split on first ":"
         var colonIndex = combinedPath.IndexOf(':');
         if (colonIndex > 0 && colonIndex < combinedPath.Length - 1)
         {
@@ -98,19 +98,20 @@ public class ContentPlugin
     }
 
     /// <summary>
-    /// Gets the collection name from the provided parameter or parses from LayoutAreaReference.
+    /// Gets the collection name from the parsed path or resolves from context.
     /// The collection is resolved in this order:
-    /// 1. Explicit collectionName parameter if provided
+    /// 1. Parsed collection from 'collection:path' syntax if provided
     /// 2. Parsed from LayoutAreaReference.Id (format: "{collection}/{path}") ONLY when Area is "Content" or "Collection"
-    /// 3. If area is NOT "Content" or "Collection", returns null to allow resolution via ContextToConfigMap or config
+    /// 3. Via ContextToConfigMap if configured
+    /// 4. Falls back to first configured collection
     /// </summary>
-    private string? GetCollectionName(string? collectionName)
+    private string? GetCollectionName(string? parsedCollection)
     {
-        if (!string.IsNullOrEmpty(collectionName))
-            return collectionName;
+        if (!string.IsNullOrEmpty(parsedCollection))
+            return parsedCollection;
 
         if (chat == null)
-            return null;
+            return config.Collections.FirstOrDefault()?.Name;
 
         // Only parse from LayoutAreaReference.Id when area is "Content" or "Collection"
         if (chat.Context?.LayoutArea != null)
@@ -147,7 +148,7 @@ public class ContentPlugin
     /// Gets the path from the agent's LayoutAreaReference.Id.
     /// When LayoutAreaReference.Area is "Content" or "Collection", the Id format is "{collection}/{path}".
     /// This method extracts and returns the path portion.
-    /// For example, "Submissions-Microsoft-2026/Slip.md" returns "Slip.md".
+    /// For example, "Submissions@Microsoft@2026/Slip.md" returns "Slip.md".
     /// Returns null if no context is available.
     /// </summary>
     private string? GetPathFromContext()
@@ -173,24 +174,21 @@ public class ContentPlugin
         return null;
     }
 
-    [Description("Gets the content of a file from a specified collection. Supports Excel, Word, PDF, and any other format. " +
-                 "The filePath can use the 'collection:path' syntax (e.g., 'Submissions-Microsoft-2026:folder/file.xlsx')" +
-                 "to specify both collection and path in one parameter.")]
+    [Description("Gets the content of a file. Supports Excel, Word, PDF, and any other format. " +
+                 "Use the 'collection:path' syntax (e.g., 'Submissions@Microsoft@2026:file.xlsx').")]
     public async Task<string> GetContent(
-        [Description("The path to the file. Can be just the path (e.g., '/file.xlsx') or include collection with 'collection:path' syntax (e.g., 'Submissions-Microsoft-2026:file.xlsx').")]
+        [Description("The path to the file using 'collection:path' syntax (e.g., 'Submissions@Microsoft@2026:file.xlsx').")]
         string? filePath = null,
-        [Description("The name of the collection to read from. Pass null if using 'collection:path' syntax in filePath or to infer from context.")]
-        string? collectionName = null,
         [Description("Optional: number of rows to read. If null, reads entire file. For Excel files, reads first N rows from each worksheet.")]
         int? numberOfRows = null,
         CancellationToken cancellationToken = default)
     {
-        logger.LogInformation("GetContent called with filePath={FilePath}, collectionName={CollectionName}, numberOfRows={NumberOfRows}",
-            filePath, collectionName, numberOfRows);
+        logger.LogInformation("GetContent called with filePath={FilePath}, numberOfRows={NumberOfRows}",
+            filePath, numberOfRows);
 
-        // Parse collection:path syntax if present
+        // Parse collection:path syntax
         var (parsedCollection, parsedPath) = ParseCollectionPath(filePath);
-        var resolvedCollectionName = GetCollectionName(collectionName ?? parsedCollection);
+        var resolvedCollectionName = GetCollectionName(parsedCollection);
         if (string.IsNullOrEmpty(resolvedCollectionName))
             return "No collection specified and no default collection configured.";
 
@@ -432,22 +430,21 @@ public class ContentPlugin
         }
     }
 
-    [Description("Saves content as a file to a specified collection. " +
-                 "The filePath can use the 'collection:path' syntax (e.g., 'Submissions-Microsoft-2026:folder/file.xlsx').")]
+    [Description("Saves content as a file. " +
+                 "Use the 'collection:path' syntax (e.g., 'Submissions@Microsoft@2026:folder/file.xlsx').")]
     public async Task<string> SaveFile(
-        [Description("The path where the file should be saved. Can use 'collection:path' syntax.")] string filePath,
+        [Description("The path where the file should be saved using 'collection:path' syntax (e.g., 'Submissions@Microsoft@2026:file.txt').")] string filePath,
         [Description("The content to save to the file")] string content,
-        [Description("The name of the collection to save to. Pass null if using 'collection:path' syntax.")] string? collectionName = null,
         CancellationToken cancellationToken = default)
     {
-        logger.LogInformation("SaveFile called with filePath={FilePath}, collectionName={CollectionName}, contentLength={ContentLength}",
-            filePath, collectionName, content?.Length ?? 0);
+        logger.LogInformation("SaveFile called with filePath={FilePath}, contentLength={ContentLength}",
+            filePath, content?.Length ?? 0);
         if (content is null)
             return "No content supplied";
 
-        // Parse collection:path syntax if present
+        // Parse collection:path syntax
         var (parsedCollection, parsedPath) = ParseCollectionPath(filePath);
-        var resolvedCollectionName = GetCollectionName(collectionName ?? parsedCollection);
+        var resolvedCollectionName = GetCollectionName(parsedCollection);
         if (string.IsNullOrEmpty(resolvedCollectionName))
             return "No collection specified and no default collection configured.";
 
@@ -482,20 +479,19 @@ public class ContentPlugin
         }
     }
 
-    [Description("Lists all files in a specified collection at a given path. " +
-                 "The path can use the 'collection:path' syntax (e.g., 'Submissions-Microsoft-2026:folder').")]
+    [Description("Lists all files at a given path. " +
+                 "Use the 'collection:path' syntax (e.g., 'Submissions@Microsoft@2026:folder' or 'Submissions@Microsoft@2026:' for root).")]
     public async Task<string> ListFiles(
-        [Description("Collection name. Pass null if using 'collection:path' syntax in path parameter.")] string? collectionName = null,
-        [Description("Directory path (use '/' for root). Can use 'collection:path' syntax.")] string? path = null,
+        [Description("Directory path using 'collection:path' syntax (e.g., 'Submissions@Microsoft@2026:folder'). Use 'collection:' for root.")] string? path = null,
         CancellationToken cancellationToken = default)
     {
-        logger.LogInformation("ListFiles called with collectionName={CollectionName}, path={Path}", collectionName, path);
+        logger.LogInformation("ListFiles called with path={Path}", path);
 
         try
         {
-            // Parse collection:path syntax if present
+            // Parse collection:path syntax
             var (parsedCollection, parsedPath) = ParseCollectionPath(path);
-            var resolvedCollectionName = GetCollectionName(collectionName ?? parsedCollection);
+            var resolvedCollectionName = GetCollectionName(parsedCollection);
             if (string.IsNullOrEmpty(resolvedCollectionName))
                 return "No collection specified and no default collection configured.";
 
@@ -545,18 +541,17 @@ public class ContentPlugin
         }
     }
 
-    [Description("Lists all folders in a specified collection at a given path. " +
-                 "The path can use the 'collection:path' syntax (e.g., 'Submissions-Microsoft-2026:folder').")]
+    [Description("Lists all folders at a given path. " +
+                 "Use the 'collection:path' syntax (e.g., 'Submissions@Microsoft@2026:folder' or 'Submissions@Microsoft@2026:' for root).")]
     public async Task<string> ListFolders(
-        [Description("Collection name. Pass null if using 'collection:path' syntax in path parameter.")] string? collectionName = null,
-        [Description("Directory path (use '/' for root). Can use 'collection:path' syntax.")] string? path = null,
+        [Description("Directory path using 'collection:path' syntax (e.g., 'Submissions@Microsoft@2026:folder'). Use 'collection:' for root.")] string? path = null,
         CancellationToken cancellationToken = default)
     {
         try
         {
-            // Parse collection:path syntax if present
+            // Parse collection:path syntax
             var (parsedCollection, parsedPath) = ParseCollectionPath(path);
-            var resolvedCollectionName = GetCollectionName(collectionName ?? parsedCollection);
+            var resolvedCollectionName = GetCollectionName(parsedCollection);
             if (string.IsNullOrEmpty(resolvedCollectionName))
                 return "No collection specified and no default collection configured.";
 
@@ -578,18 +573,17 @@ public class ContentPlugin
         }
     }
 
-    [Description("Lists all files and folders in a specified collection at a given path. " +
-                 "The path can use the 'collection:path' syntax (e.g., 'Submissions-Microsoft-2026:folder').")]
+    [Description("Lists all files and folders at a given path. " +
+                 "Use the 'collection:path' syntax (e.g., 'Submissions@Microsoft@2026:folder' or 'Submissions@Microsoft@2026:' for root).")]
     public async Task<string> ListCollectionItems(
-        [Description("Collection name. Pass null if using 'collection:path' syntax in path parameter.")] string? collectionName = null,
-        [Description("Directory path (use '/' for root). Can use 'collection:path' syntax.")] string? path = null,
+        [Description("Directory path using 'collection:path' syntax (e.g., 'Submissions@Microsoft@2026:folder'). Use 'collection:' for root.")] string? path = null,
         CancellationToken cancellationToken = default)
     {
         try
         {
-            // Parse collection:path syntax if present
+            // Parse collection:path syntax
             var (parsedCollection, parsedPath) = ParseCollectionPath(path);
-            var resolvedCollectionName = GetCollectionName(collectionName ?? parsedCollection);
+            var resolvedCollectionName = GetCollectionName(parsedCollection);
             if (string.IsNullOrEmpty(resolvedCollectionName))
                 return "No collection specified and no default collection configured.";
 
@@ -616,22 +610,21 @@ public class ContentPlugin
     }
 
 
-    [Description("Deletes a file from a specified collection. " +
-                 "The filePath can use the 'collection:path' syntax (e.g., 'Submissions-Microsoft-2026:folder/file.xlsx').")]
-    public async Task<string> DeleteFile(
-        [Description("File path to delete. Can use 'collection:path' syntax.")] string? filePath = null,
-        [Description("Collection name. Pass null if using 'collection:path' syntax or to infer from context.")] string? collectionName = null,
+    [Description("Deletes a file or folder. " +
+                 "Use the 'collection:path' syntax (e.g., 'Submissions@Microsoft@2026:folder/file.xlsx' or 'Submissions@Microsoft@2026:folder').")]
+    public async Task<string> Delete(
+        [Description("Path to delete using 'collection:path' syntax (e.g., 'Submissions@Microsoft@2026:file.xlsx' for files or 'Submissions@Microsoft@2026:folder' for folders).")] string? path = null,
         CancellationToken cancellationToken = default)
     {
-        // Parse collection:path syntax if present
-        var (parsedCollection, parsedPath) = ParseCollectionPath(filePath);
-        var resolvedCollectionName = GetCollectionName(collectionName ?? parsedCollection);
+        // Parse collection:path syntax
+        var (parsedCollection, parsedPath) = ParseCollectionPath(path);
+        var resolvedCollectionName = GetCollectionName(parsedCollection);
         if (string.IsNullOrEmpty(resolvedCollectionName))
             return "No collection specified and no default collection configured.";
 
-        var resolvedFilePath = parsedPath ?? GetPathFromContext();
-        if (string.IsNullOrEmpty(resolvedFilePath))
-            return "No file path specified and no path found in context.";
+        var resolvedPath = parsedPath ?? GetPathFromContext();
+        if (string.IsNullOrEmpty(resolvedPath))
+            return "No path specified and no path found in context.";
 
         try
         {
@@ -639,29 +632,69 @@ public class ContentPlugin
             if (collection == null)
                 return $"Collection '{resolvedCollectionName}' not found.";
 
-            await collection.DeleteFileAsync(resolvedFilePath);
-            return $"File '{resolvedFilePath}' successfully deleted from collection '{resolvedCollectionName}'.";
-        }
-        catch (FileNotFoundException)
-        {
-            return $"File '{resolvedFilePath}' not found in collection '{resolvedCollectionName}'.";
+            // Determine if path is likely a file (has extension) or folder
+            var hasExtension = Path.HasExtension(resolvedPath);
+
+            if (hasExtension)
+            {
+                // Try file first, then folder
+                try
+                {
+                    await collection.DeleteFileAsync(resolvedPath);
+                    return $"File '{resolvedPath}' successfully deleted from collection '{resolvedCollectionName}'.";
+                }
+                catch (FileNotFoundException)
+                {
+                    // Try as folder
+                    try
+                    {
+                        await collection.DeleteFolderAsync(resolvedPath);
+                        return $"Folder '{resolvedPath}' successfully deleted from collection '{resolvedCollectionName}'.";
+                    }
+                    catch (DirectoryNotFoundException)
+                    {
+                        return $"'{resolvedPath}' not found in collection '{resolvedCollectionName}'.";
+                    }
+                }
+            }
+            else
+            {
+                // Try folder first, then file
+                try
+                {
+                    await collection.DeleteFolderAsync(resolvedPath);
+                    return $"Folder '{resolvedPath}' successfully deleted from collection '{resolvedCollectionName}'.";
+                }
+                catch (DirectoryNotFoundException)
+                {
+                    // Try as file
+                    try
+                    {
+                        await collection.DeleteFileAsync(resolvedPath);
+                        return $"File '{resolvedPath}' successfully deleted from collection '{resolvedCollectionName}'.";
+                    }
+                    catch (FileNotFoundException)
+                    {
+                        return $"'{resolvedPath}' not found in collection '{resolvedCollectionName}'.";
+                    }
+                }
+            }
         }
         catch (Exception ex)
         {
-            return $"Error deleting file '{resolvedFilePath}' from collection: {ex.Message}";
+            return $"Error deleting '{resolvedPath}' from collection '{resolvedCollectionName}': {ex.Message}";
         }
     }
 
-    [Description("Creates a new folder in a specified collection. " +
-                 "The folderPath can use the 'collection:path' syntax (e.g., 'Submissions-Microsoft-2026:folder/subfolder').")]
+    [Description("Creates a new folder. " +
+                 "Use the 'collection:path' syntax (e.g., 'Submissions@Microsoft@2026:folder/subfolder').")]
     public async Task<string> CreateFolder(
-        [Description("The path of the folder to create. Can use 'collection:path' syntax.")] string folderPath,
-        [Description("Collection name. Pass null if using 'collection:path' syntax or to infer from context.")] string? collectionName = null,
+        [Description("The folder path to create using 'collection:path' syntax (e.g., 'Submissions@Microsoft@2026:newfolder').")] string folderPath,
         CancellationToken cancellationToken = default)
     {
-        // Parse collection:path syntax if present
+        // Parse collection:path syntax
         var (parsedCollection, parsedPath) = ParseCollectionPath(folderPath);
-        var resolvedCollectionName = GetCollectionName(collectionName ?? parsedCollection);
+        var resolvedCollectionName = GetCollectionName(parsedCollection);
         if (string.IsNullOrEmpty(resolvedCollectionName))
             return "No collection specified and no default collection configured.";
 
@@ -681,42 +714,6 @@ public class ContentPlugin
         catch (Exception ex)
         {
             return $"Error creating folder '{resolvedFolderPath}' in collection: {ex.Message}";
-        }
-    }
-
-    [Description("Deletes a folder from a specified collection. " +
-                 "The folderPath can use the 'collection:path' syntax (e.g., 'Submissions-Microsoft-2026:folder/subfolder').")]
-    public async Task<string> DeleteFolder(
-        [Description("Folder path to delete. Can use 'collection:path' syntax.")] string? folderPath = null,
-        [Description("Collection name. Pass null if using 'collection:path' syntax or to infer from context.")] string? collectionName = null,
-        CancellationToken cancellationToken = default)
-    {
-        // Parse collection:path syntax if present
-        var (parsedCollection, parsedPath) = ParseCollectionPath(folderPath);
-        var resolvedCollectionName = GetCollectionName(collectionName ?? parsedCollection);
-        if (string.IsNullOrEmpty(resolvedCollectionName))
-            return "No collection specified and no default collection configured.";
-
-        var resolvedFolderPath = parsedPath ?? GetPathFromContext();
-        if (string.IsNullOrEmpty(resolvedFolderPath))
-            return "No folder path specified and no path found in context.";
-
-        try
-        {
-            var collection = await contentService.GetCollectionAsync(resolvedCollectionName, cancellationToken);
-            if (collection == null)
-                return $"Collection '{resolvedCollectionName}' not found.";
-
-            await collection.DeleteFolderAsync(resolvedFolderPath);
-            return $"Folder '{resolvedFolderPath}' successfully deleted from collection '{resolvedCollectionName}'.";
-        }
-        catch (DirectoryNotFoundException)
-        {
-            return $"Folder '{resolvedFolderPath}' not found in collection '{resolvedCollectionName}'.";
-        }
-        catch (Exception ex)
-        {
-            return $"Error deleting folder '{resolvedFolderPath}' from collection: {ex.Message}";
         }
     }
 
@@ -802,15 +799,14 @@ public class ContentPlugin
     //}
 
     [Description("Gets the MIME content type for a file based on its extension. " +
-                 "The filePath can use the 'collection:path' syntax (e.g., 'Submissions-Microsoft-2026:folder/file.xlsx').")]
+                 "Use the 'collection:path' syntax (e.g., 'Submissions@Microsoft@2026:folder/file.xlsx').")]
     public async Task<string> GetContentType(
-        [Description("File path. Can use 'collection:path' syntax.")] string? filePath = null,
-        [Description("Collection name. Pass null if using 'collection:path' syntax or to infer from context.")] string? collectionName = null,
+        [Description("File path using 'collection:path' syntax (e.g., 'Submissions@Microsoft@2026:file.xlsx').")] string? filePath = null,
         CancellationToken cancellationToken = default)
     {
-        // Parse collection:path syntax if present
+        // Parse collection:path syntax
         var (parsedCollection, parsedPath) = ParseCollectionPath(filePath);
-        var resolvedCollectionName = GetCollectionName(collectionName ?? parsedCollection);
+        var resolvedCollectionName = GetCollectionName(parsedCollection);
         if (string.IsNullOrEmpty(resolvedCollectionName))
             return "No collection specified and no default collection configured.";
 
@@ -833,16 +829,15 @@ public class ContentPlugin
         }
     }
 
-    [Description("Checks if a specific file exists in a collection. " +
-                 "The filePath can use the 'collection:path' syntax (e.g., 'Submissions-Microsoft-2026:folder/file.xlsx').")]
+    [Description("Checks if a specific file exists. " +
+                 "Use the 'collection:path' syntax (e.g., 'Submissions@Microsoft@2026:folder/file.xlsx').")]
     public async Task<string> FileExists(
-        [Description("The path to the file. Can use 'collection:path' syntax.")] string? filePath = null,
-        [Description("Collection name. Pass null if using 'collection:path' syntax or to infer from context.")] string? collectionName = null,
+        [Description("File path using 'collection:path' syntax (e.g., 'Submissions@Microsoft@2026:file.xlsx').")] string? filePath = null,
         CancellationToken cancellationToken = default)
     {
-        // Parse collection:path syntax if present
+        // Parse collection:path syntax
         var (parsedCollection, parsedPath) = ParseCollectionPath(filePath);
-        var resolvedCollectionName = GetCollectionName(collectionName ?? parsedCollection);
+        var resolvedCollectionName = GetCollectionName(parsedCollection);
         if (string.IsNullOrEmpty(resolvedCollectionName))
             return "No collection specified and no default collection configured.";
 
@@ -881,22 +876,21 @@ public class ContentPlugin
         return $"{baseName}_{timestamp}.{extension.TrimStart('.')}";
     }
 
-    [Description("Imports data from a file in a collection to a specified address. " +
-                 "The path can use the 'collection:path' syntax (e.g., 'Submissions-Microsoft-2026:folder/file.xlsx').")]
+    [Description("Imports data from a file to a specified address. " +
+                 "Use the 'collection:path' syntax (e.g., 'Submissions@Microsoft@2026:file.xlsx').")]
     public async Task<string> Import(
-        [Description("The path to the file to import. Can use 'collection:path' syntax.")] string path,
-        [Description("Collection name. Pass null if using 'collection:path' syntax or to infer from context.")] string? collection = null,
+        [Description("The path to the file to import using 'collection:path' syntax (e.g., 'Submissions@Microsoft@2026:file.xlsx').")] string path,
         [Description("The target address for the import (optional if default address is configured). Format: '{AddressType}/{AddressId}'.")] string? address = null,
         [Description("The import format to use (optional, defaults to 'Default')")] string? format = null,
         [Description("Optional import configuration as JSON string. When provided, this will be used instead of the format parameter.")] string? configuration = null,
         [Description("Whether to override any other instances as snapshot import. Default is false.")] bool snapshot = false)
     {
-        logger.LogInformation("Import called with path={Path}, collection={Collection}, address={Address}, format={Format}",
-            path, collection, address, format);
+        logger.LogInformation("Import called with path={Path}, address={Address}, format={Format}",
+            path, address, format);
 
-        // Parse collection:path syntax if present
+        // Parse collection:path syntax
         var (parsedCollection, parsedPath) = ParseCollectionPath(path);
-        var resolvedCollectionName = GetCollectionName(collection ?? parsedCollection);
+        var resolvedCollectionName = GetCollectionName(parsedCollection);
         if (string.IsNullOrEmpty(resolvedCollectionName))
             return "No collection specified and no default collection configured.";
 
@@ -1048,9 +1042,8 @@ public class ContentPlugin
             AIFunctionFactory.Create(ListFiles),
             AIFunctionFactory.Create(ListFolders),
             AIFunctionFactory.Create(ListCollectionItems),
-            AIFunctionFactory.Create(DeleteFile),
+            AIFunctionFactory.Create(Delete),
             AIFunctionFactory.Create(CreateFolder),
-            AIFunctionFactory.Create(DeleteFolder),
             AIFunctionFactory.Create(GetContentType),
             AIFunctionFactory.Create(FileExists),
             AIFunctionFactory.Create(GenerateUniqueFileName),

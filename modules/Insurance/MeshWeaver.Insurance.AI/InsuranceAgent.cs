@@ -35,7 +35,7 @@ public class InsuranceAgent(IMessageHub hub) : IInitializableAgent, IAgentWithTo
                 nameof(RiskImportAgent),
                 "Delegate to RiskImportAgent when the user wants to import property risks from Excel files. " +
                 "When delegating, provide a clear message that includes the fully qualified path in 'collection:filename' format. " +
-                "Example: 'Import property risks from Submissions-Microsoft-2026:Microsoft.xlsx'. " +
+                "Example: 'Import property risks from Submissions@Microsoft@2026:Microsoft.xlsx'. " +
                 "Handles files with columns like Location, TSI, Address, Country, Currency, Building Value, etc. " +
                 "Common file names: risks.xlsx, exposure.xlsx, property schedule, location schedule."
             );
@@ -44,7 +44,7 @@ public class InsuranceAgent(IMessageHub hub) : IInitializableAgent, IAgentWithTo
                 nameof(SlipImportAgent),
                 "Delegate to SlipImportAgent when the user wants to import insurance slips from PDF, Word, or Markdown documents. " +
                 "When delegating, provide a clear message that includes the fully qualified path in 'collection:filename' format. " +
-                "Example: 'Import slip data from Submissions-Microsoft-2026:slip.pdf'. " +
+                "Example: 'Import slip data from Submissions@Microsoft@2026:slip.pdf'. " +
                 "Handles files with content about Insured, Coverage, Premium, Reinsurance Layers, Limits, Rates, etc. " +
                 "Common file names: slip.pdf, slip.md, submission.pdf, placement.pdf, quote.pdf, slip.docx."
             );
@@ -57,36 +57,28 @@ public class InsuranceAgent(IMessageHub hub) : IInitializableAgent, IAgentWithTo
 
         ## Content Collection Context
 
-        IMPORTANT: The current context is set to pricing/{pricingId} where pricingId follows the format {company}-{uwy}.
+        IMPORTANT: The current context is set to pricing/{pricingId} where pricingId follows the format {company}@{uwy}.
         - The ContentPlugin is already configured to use the current pricing context automatically
-        - The submission files collection is named "Submissions-{pricingId}"
+        - The submission files collection is named "Submissions@{pricingId}"
         - All file paths are relative to the root of this collection
 
         ## Working with Submission Documents and Files
 
         CRITICAL: When users ask about submission files, documents, or content:
-        - The ContentPlugin is already configured for the current pricing context
-        - ALWAYS pass collectionName=null (or omit it entirely) - it will be inferred automatically from context
-        - Simply call the ContentPlugin functions with just the file path
-        - Use filenames without leading slash (e.g., "slip.pdf", "Microsoft.xlsx")
-        - DO NOT prepend "/" to file paths - just use the filename directly
+        - Use the fully qualified 'collection:path' syntax for all file operations
+        - Format: "Submissions@{pricingId}:filename" (e.g., "Submissions@Microsoft@2026:Microsoft.xlsx")
+        - The ContentPlugin parses the collection and path automatically from this syntax
 
-        **Alternative: collection:path Syntax**
-        ContentPlugin also supports the "collection:path" syntax where collection and path are combined:
-        - Format: "Submissions-{pricingId}:folder/file.xlsx" (e.g., "Submissions-Microsoft-2026:Microsoft.xlsx")
-        - When users reference files using @ mentions with this syntax, pass the full string to ContentPlugin
-        - Example: GetContent(filePath="Submissions-Microsoft-2026:Microsoft.xlsx") will automatically parse collection and path
-
-        Available ContentPlugin functions (always pass collectionName=null):
-        - {{{nameof(ContentPlugin.ListFiles)}}}(collectionName=null) - List all files in the current pricing's submissions
-        - {{{nameof(ContentPlugin.GetContent)}}}(filePath, collectionName=null, numberOfRows) - Get file content preview
-        - {{{nameof(ContentPlugin.SaveFile)}}}(filePath, content, collectionName=null) - Save a document
-        - {{{nameof(ContentPlugin.DeleteFile)}}}(filePath, collectionName=null) - Delete a file
+        Available ContentPlugin functions:
+        - {{{nameof(ContentPlugin.ListFiles)}}}(path) - List files. Use "Submissions@{pricingId}:" for root.
+        - {{{nameof(ContentPlugin.GetContent)}}}(filePath, numberOfRows) - Get file content preview
+        - {{{nameof(ContentPlugin.SaveFile)}}}(filePath, content) - Save a document
+        - {{{nameof(ContentPlugin.Delete)}}}(path) - Delete a file or folder
 
         Examples:
-        - User: "Show me the submission files" → Call {{{nameof(ContentPlugin.ListFiles)}}}(collectionName=null)
-        - User: "Preview Microsoft.xlsx" → Call {{{nameof(ContentPlugin.GetContent)}}}(filePath="Microsoft.xlsx", collectionName=null, numberOfRows=20)
-        - User: "Preview @Submissions-Microsoft-2026:Microsoft.xlsx" → Call {{{nameof(ContentPlugin.GetContent)}}}(filePath="Submissions-Microsoft-2026:Microsoft.xlsx") - syntax is auto-parsed
+        - User: "Show me the submission files" → Call {{{nameof(ContentPlugin.ListFiles)}}}(path="Submissions@Microsoft@2026:")
+        - User: "Preview Microsoft.xlsx" → Call {{{nameof(ContentPlugin.GetContent)}}}(filePath="Submissions@Microsoft@2026:Microsoft.xlsx", numberOfRows=20)
+        - User: "Preview @Submissions@Microsoft@2026:Microsoft.xlsx" → Call {{{nameof(ContentPlugin.GetContent)}}}(filePath="Submissions@Microsoft@2026:Microsoft.xlsx")
 
         ## Importing Files (Excel, PDF, Word)
 
@@ -105,8 +97,8 @@ public class InsuranceAgent(IMessageHub hub) : IInitializableAgent, IAgentWithTo
         - If the file type is unclear from the name, ask the user to clarify
         - CRITICAL: Pass the fully qualified path in 'collection:filename' format
         - Examples:
-          - {{{nameof(RiskImportAgent)}}}("Import property risks from Submissions-Microsoft-2026:Microsoft.xlsx")
-          - {{{nameof(SlipImportAgent)}}}("Import slip data from Submissions-Microsoft-2026:slip.pdf")
+          - {{{nameof(RiskImportAgent)}}}("Import property risks from Submissions@Microsoft@2026:Microsoft.xlsx")
+          - {{{nameof(SlipImportAgent)}}}("Import slip data from Submissions@Microsoft@2026:slip.pdf")
         - When delegating, use the fully qualified 'collection:filename' format - the agent will parse it automatically
 
         **Step 2: The specialist agent will handle everything**
@@ -140,7 +132,7 @@ public class InsuranceAgent(IMessageHub hub) : IInitializableAgent, IAgentWithTo
           - All previous import attempts and results
 
         CRITICAL Rules:
-        - Use fully qualified 'collection:filename' format (e.g., "Submissions-Microsoft-2026:Microsoft.xlsx")
+        - Use fully qualified 'collection:filename' format (e.g., "Submissions@Microsoft@2026:Microsoft.xlsx")
         - DO NOT preview files yourself - let the specialist agents handle that
         - DO NOT import files yourself - you are a triage/routing agent, not an import specialist
         - DO NOT analyze import-related requests yourself - immediately delegate to the specialist agent
@@ -193,9 +185,10 @@ public class InsuranceAgent(IMessageHub hub) : IInitializableAgent, IAgentWithTo
             yield return tool;
 
         // Always provide ContentPlugin - it will use ContextToConfigMap to determine the collection
+        // Exclude Import tool - InsuranceAgent should always delegate imports to specialist agents
         var submissionPluginConfig = CreateSubmissionPluginConfig();
         var contentPlugin = new ContentPlugin(hub, submissionPluginConfig, chat);
-        foreach (var tool in contentPlugin.CreateTools())
+        foreach (var tool in contentPlugin.CreateTools().Where(t => t.Name != "Import"))
             yield return tool;
     }
 
@@ -212,8 +205,8 @@ public class InsuranceAgent(IMessageHub hub) : IInitializableAgent, IAgentWithTo
 
                 var pricingId = context.Address.Id;
 
-                // Parse pricingId in format {company}-{uwy}
-                var parts = pricingId.Split('-');
+                // Parse pricingId in format {company}@{uwy}
+                var parts = pricingId.Split('@');
                 if (parts.Length != 2)
                     return null!;
 
@@ -226,7 +219,7 @@ public class InsuranceAgent(IMessageHub hub) : IInitializableAgent, IAgentWithTo
                 return new ContentCollectionConfig
                 {
                     SourceType = HubStreamProviderFactory.SourceType,
-                    Name = $"Submissions-{pricingId}",
+                    Name = $"Submissions@{pricingId}",
                     Address = context.Address,
                     BasePath = subPath
                 };
