@@ -32,11 +32,12 @@ public class SlipImportAgent(IMessageHub hub) : IInitializableAgent, IAgentWithT
 
                    ## Content Collection Context
 
-                   IMPORTANT: The current context is set to pricing/{pricingId} where pricingId follows the format {company}-{uwy}.
-                   - The submission files collection is automatically named "Submissions-{pricingId}"
-                   - Files are stored at the root level of this collection
-                   - When listing files, you'll see filenames like "Slip.pdf", "Slip.md", etc.
-                   - When accessing files with ExtractCompleteText, use just the filename (e.g., "Slip.pdf" or "Slip.md")
+                   Files are referenced using the fully qualified 'collection:filename' format:
+                   - Format: "Submissions-{pricingId}:filename" (e.g., "Submissions-Microsoft-2026:Slip.pdf")
+                   - Pass this full string directly to ContentPlugin functions - it will parse collection and path automatically
+                   - When the user or InsuranceAgent mentions a file like "Submissions-Microsoft-2026:Slip.pdf",
+                     use it directly in ContentPlugin calls (e.g., GetContent(filePath="Submissions-Microsoft-2026:Slip.pdf"))
+                   - DO NOT split the collection:filename format - pass it as-is to ContentPlugin
 
                    # Importing Slips
 
