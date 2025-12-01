@@ -33,10 +33,10 @@ public class SlipImportAgent(IMessageHub hub) : IInitializableAgent, IAgentWithT
                    ## Content Collection Context
 
                    Files are referenced using the fully qualified 'collection:filename' format:
-                   - Format: "Submissions-{pricingId}:filename" (e.g., "Submissions-Microsoft-2026:Slip.pdf")
+                   - Format: "Submissions@{pricingId}:filename" (e.g., "Submissions@Microsoft@2026:Slip.pdf")
                    - Pass this full string directly to ContentPlugin functions - it will parse collection and path automatically
-                   - When the user or InsuranceAgent mentions a file like "Submissions-Microsoft-2026:Slip.pdf",
-                     use it directly in ContentPlugin calls (e.g., GetContent(filePath="Submissions-Microsoft-2026:Slip.pdf"))
+                   - When the user or InsuranceAgent mentions a file like "Submissions@Microsoft@2026:Slip.pdf",
+                     use it directly in ContentPlugin calls (e.g., GetContent(filePath="Submissions@Microsoft@2026:Slip.pdf"))
                    - DO NOT split the collection:filename format - pass it as-is to ContentPlugin
 
                    # Importing Slips
@@ -194,8 +194,8 @@ public class SlipImportAgent(IMessageHub hub) : IInitializableAgent, IAgentWithT
 
                 var pricingId = context.Address.Id;
 
-                // Parse pricingId in format {company}-{uwy}
-                var parts = pricingId.Split('-');
+                // Parse pricingId in format {company}@{uwy}
+                var parts = pricingId.Split('@');
                 if (parts.Length != 2)
                     return null!;
 
@@ -204,7 +204,7 @@ public class SlipImportAgent(IMessageHub hub) : IInitializableAgent, IAgentWithT
                 return new ContentCollectionConfig
                 {
                     SourceType = HubStreamProviderFactory.SourceType,
-                    Name = $"Submissions-{pricingId}",
+                    Name = $"Submissions@{pricingId}",
                     Address = context.Address
                 };
             }

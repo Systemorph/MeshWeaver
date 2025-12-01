@@ -17,9 +17,9 @@ public static class ContentCollectionsExtensions
     /// </summary>
     /// <param name="collectionName">The base collection name</param>
     /// <param name="addressId">The hub's address ID</param>
-    /// <returns>The localized collection name in format: {collectionName}-{addressId}</returns>
+    /// <returns>The localized collection name in format: {collectionName}@{addressId}</returns>
     public static string GetLocalizedCollectionName(string collectionName, string addressId)
-        => $"{collectionName}-{addressId}";
+        => $"{collectionName}@{addressId}";
 
     public static MessageHubConfiguration AddArticles(
         this MessageHubConfiguration config,
