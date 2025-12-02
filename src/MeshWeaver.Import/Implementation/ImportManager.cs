@@ -315,7 +315,7 @@ public class ImportManager
         );
         activity?.LogInformation("Read data set with {Tables} tables. Will import in format {Format}", dataSet.Tables.Count, format);
 
-        format ??= importRequest.Format;
+        format ??= importRequest.Format ?? ImportFormat.Default;
 
         if (format == null)
             throw new ImportException("Format not specified.");

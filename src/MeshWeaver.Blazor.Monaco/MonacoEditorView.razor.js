@@ -140,17 +140,28 @@ export function initEditor(editorId, placeholder, dotNetRef) {
             updatePlaceholderVisibility(editorId, !value);
         });
 
-        // Handle Enter key for submit - use addAction for better context handling
-        editorInstance.addAction({
-            id: 'chat-submit',
-            label: 'Submit Message',
-            keybindings: [monaco.KeyCode.Enter],
-            // Only run when suggest widget is NOT visible
-            precondition: '!suggestWidgetVisible',
-            run: async () => {
-                const state = editorState.get(editorId);
-                if (state?.dotNetRef) {
-                    await state.dotNetRef.invokeMethodAsync('HandleSubmit');
+        // Handle Enter key for submit - use onKeyDown for direct control
+        editorInstance.onKeyDown(async (e) => {
+            // Check for Enter key without modifiers
+            if (e.keyCode === monaco.KeyCode.Enter && !e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey) {
+                // Check if suggest widget is visible
+                // States: 0=Hidden, 1=Loading, 2=Empty, 3=Open, 4=Frozen, 5=Details
+                // Use > 0 to handle undefined/null case (where !== 0 would wrongly be true)
+                const suggestController = editorInstance.getContribution('editor.contrib.suggestController');
+                const suggestState = suggestController?.model?.state;
+                const isSuggestVisible = typeof suggestState === 'number' && suggestState > 0;
+
+                if (!isSuggestVisible) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    const state = editorState.get(editorId);
+                    if (state?.dotNetRef) {
+                        try {
+                            await state.dotNetRef.invokeMethodAsync('HandleSubmit');
+                        } catch (err) {
+                            console.error('Error calling HandleSubmit:', err);
+                        }
+                    }
                 }
             }
         });
