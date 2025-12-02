@@ -1,15 +1,14 @@
 ﻿using System;
-using System.Collections.Generic;
 using System.Linq;
 using System.Reactive.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
 using FluentAssertions.Extensions;
-using MeshWeaver.Layout.Chart;
 using MeshWeaver.Data;
 using MeshWeaver.Fixture;
 using MeshWeaver.Layout;
+using MeshWeaver.Layout.Chart;
 using MeshWeaver.Layout.Pivot;
 using MeshWeaver.Messaging;
 using MeshWeaver.Northwind.Application;
@@ -141,7 +140,7 @@ public class NorthwindTest(ITestOutputHelper output) : HubTestBase(output)
             .FirstAsync(x => x != null);
 
         var stack = control.Should().BeOfType<StackControl>().Subject;
-        var gridArea =  stack.Areas.Last().Area;
+        var gridArea = stack.Areas.Last().Area;
         control = await stream.GetControlStream(gridArea.ToString()!)
             .Timeout(10.Seconds())
             .FirstAsync(x => x != null);
@@ -201,7 +200,7 @@ public class NorthwindTest(ITestOutputHelper output) : HubTestBase(output)
         var categoryToUpdate = categories.First();
         var originalCategoryName = categoryToUpdate.CategoryName;
 
-        output.WriteLine($"Original category: Id={categoryToUpdate.CategoryId}, Name='{originalCategoryName}'");
+        Output.WriteLine($"Original category: Id={categoryToUpdate.CategoryId}, Name='{originalCategoryName}'");
 
         // Verify initial data cube has entries with this category
         var initialCubeEntriesWithCategory = initialCubeData
@@ -209,7 +208,7 @@ public class NorthwindTest(ITestOutputHelper output) : HubTestBase(output)
             .ToList();
         initialCubeEntriesWithCategory.Should().HaveCountGreaterThan(0,
             $"Should have data cube entries with category '{originalCategoryName}'");
-        output.WriteLine($"Found {initialCubeEntriesWithCategory.Count} data cube entries with category '{originalCategoryName}'");
+        Output.WriteLine($"Found {initialCubeEntriesWithCategory.Count} data cube entries with category '{originalCategoryName}'");
 
         // Step 3: Update the category name
         var newCategoryName = originalCategoryName + TestCategoryNameSuffix;
@@ -217,11 +216,11 @@ public class NorthwindTest(ITestOutputHelper output) : HubTestBase(output)
 
         var changeRequest = new DataChangeRequest().WithUpdates(updatedCategory);
 
-        output.WriteLine($"Sending update: CategoryName '{originalCategoryName}' -> '{newCategoryName}'");
+        Output.WriteLine($"Sending update: CategoryName '{originalCategoryName}' -> '{newCategoryName}'");
         client.Post(changeRequest, o => o.WithTarget(new ReferenceDataAddress()));
 
         // Step 4: Wait for the NorthwindDataCube to update with the new category name
-        output.WriteLine("Waiting for NorthwindDataCube to reflect the category name change...");
+        Output.WriteLine("Waiting for NorthwindDataCube to reflect the category name change...");
 
         var updatedCubeData = await workspace
             .GetObservable<NorthwindDataCube>()
@@ -241,7 +240,7 @@ public class NorthwindTest(ITestOutputHelper output) : HubTestBase(output)
         updatedCubeEntriesWithNewCategory.Count.Should().Be(initialCubeEntriesWithCategory.Count,
             "Number of entries with updated category should match original count");
 
-        output.WriteLine($"SUCCESS: {updatedCubeEntriesWithNewCategory.Count} data cube entries now have category name '{newCategoryName}'");
+        Output.WriteLine($"SUCCESS: {updatedCubeEntriesWithNewCategory.Count} data cube entries now have category name '{newCategoryName}'");
 
         // Verify no entries remain with the old category name
         var entriesWithOldName = updatedCubeData
@@ -250,7 +249,7 @@ public class NorthwindTest(ITestOutputHelper output) : HubTestBase(output)
         entriesWithOldName.Should().BeEmpty(
             $"No data cube entries should still have old category name '{originalCategoryName}'");
 
-        output.WriteLine("SUCCESS: Virtual data source correctly propagated category update to NorthwindDataCube");
+        Output.WriteLine("SUCCESS: Virtual data source correctly propagated category update to NorthwindDataCube");
     }
 
     [Fact]
@@ -266,10 +265,10 @@ public class NorthwindTest(ITestOutputHelper output) : HubTestBase(output)
 
         var areas = response.Message.Areas.ToList();
         areas.Should().NotBeEmpty("Northwind should have layout areas defined");
-        output.WriteLine($"Found {areas.Count} layout areas");
+        Output.WriteLine($"Found {areas.Count} layout areas");
         foreach (var area in areas)
         {
-            output.WriteLine($"  - {area.Area}: {area.Description}");
+            Output.WriteLine($"  - {area.Area}: {area.Description}");
         }
     }
 
@@ -279,16 +278,16 @@ public class NorthwindTest(ITestOutputHelper output) : HubTestBase(output)
         var host = GetHost();
         var workspace = host.GetWorkspace();
 
-        output.WriteLine("Getting stream for LayoutAreas...");
-        var stream = workspace.GetStream(new LayoutAreaReference("LayoutAreas"));
+        Output.WriteLine("Getting stream for LayoutAreas...");
+        var stream = workspace.GetStream(new LayoutAreaReference("LayoutAreas"))!;
 
-        output.WriteLine("Waiting for first emission...");
+        Output.WriteLine("Waiting for first emission...");
         var result = await stream
             .Timeout(TimeSpan.FromSeconds(10))
             .FirstAsync();
 
         result.Should().NotBeNull();
-        output.WriteLine($"Got result: {result.Value}");
+        Output.WriteLine($"Got result: {result.Value}");
     }
 
 }

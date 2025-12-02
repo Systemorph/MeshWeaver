@@ -880,7 +880,7 @@ public class ContentPlugin
                  "Use the 'collection:path' syntax (e.g., 'Submissions@Microsoft@2026:file.xlsx').")]
     public async Task<string> Import(
         [Description("The path to the file to import using 'collection:path' syntax (e.g., 'Submissions@Microsoft@2026:file.xlsx').")] string path,
-        [Description("The target address for the import (optional if default address is configured). Format: '{AddressType}/{AddressId}'.")] string? address = null,
+        [Description("The target address for the import (optional if default address is configured). Format: '{AddressType}/{AddressId}' or an Address object.")] object? address = null,
         [Description("The import format to use (optional, defaults to 'Default')")] string? format = null,
         [Description("Optional import configuration as JSON string. When provided, this will be used instead of the format parameter.")] string? configuration = null,
         [Description("Whether to override any other instances as snapshot import. Default is false.")] bool snapshot = false)
@@ -904,7 +904,13 @@ public class ContentPlugin
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(60));
 
             // Parse the address - handle both string and Address types
-            var targetAddress = hub.GetAddress(address);
+            Address targetAddress;
+            if (address is Address addr)
+                targetAddress = addr;
+            else if (address is string addrString)
+                targetAddress = hub.GetAddress(addrString);
+            else
+                return $"Invalid address type: {address.GetType().Name}. Expected string or Address.";
 
             // Build ImportRequest JSON structure
             var importRequestJson = new JsonObject

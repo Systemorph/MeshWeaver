@@ -25,7 +25,7 @@ public class RiskImportAgent(IMessageHub hub) : IInitializableAgent, IAgentWithT
         {
             var baseText =
                 $$$"""
-                You control risk imports for a specific pricing. Use the provided tool:
+                You control risk imports for a specific pricing. Use the provided tools.
 
                 ## Content Collection Context
 
@@ -36,18 +36,48 @@ public class RiskImportAgent(IMessageHub hub) : IInitializableAgent, IAgentWithT
                   use it directly in ContentPlugin calls (e.g., GetContent(filePath="Submissions@Microsoft@2026:Microsoft.xlsx"))
                 - DO NOT split the collection:filename format - pass it as-is to ContentPlugin
 
-                # Importing Risks
-                When the user asks you to import risks, you should:
-                1) Get the existing risk mapping configuration for the specified file using DataPlugin's GetData function with type="ExcelImportConfiguration" and entityId=filename.
-                2) If no import configuration was returned in 1, get a sample of the worksheet using ContentPlugin's GetContent function with the fully qualified path (e.g., "Submissions@Microsoft@2026:Microsoft.xlsx") and numberOfRows=20. Extract the table start row as well as the mapping as in the schema provided below.
-                   Consider any input from the user to modify the configuration. Ensure the JSON includes "name" field set to the filename. Use DataPlugin's UpdateData function with type="ExcelImportConfiguration" to save the configuration.
-                3) Call ContentPlugin's Import function with the fully qualified path (e.g., "Submissions@Microsoft@2026:Microsoft.xlsx"), address=PricingAddress, and configuration=the JSON configuration you created or retrieved.
+                # Importing Risks - MANDATORY WORKFLOW
+
+                **CRITICAL: You MUST always follow ALL 5 steps below. Never skip any step. Never call Import without a configuration.**
+
+                When the user asks you to import risks, follow these steps IN ORDER:
+
+                **Step 1: Get Existing Configuration**
+                - Call DataPlugin's GetData with type="ExcelImportConfiguration" and entityId=<fully-qualified-path>
+                - Example: GetData(type="ExcelImportConfiguration", entityId="Submissions@Microsoft@2026:Microsoft.xlsx")
+                - The entityId MUST be the fully qualified path (collection:filename format)
+
+                **Step 2: Load Content Sample**
+                - ALWAYS call ContentPlugin's GetContent with the fully qualified path and numberOfRows=20
+                - Example: GetContent(filePath="Submissions@Microsoft@2026:Microsoft.xlsx", numberOfRows=20)
+                - This gives you the Excel structure to create/verify the mapping
+
+                **Step 3: Create or Update Configuration**
+                - If Step 1 returned no configuration: Create a new configuration from scratch based on the content sample
+                - If Step 1 returned an existing configuration: Review it against the content sample and update if needed
+                - Apply any user-provided modifications
+                - Ensure the configuration includes:
+                  - "name" field set to the fully qualified path (e.g., "Submissions@Microsoft@2026:Microsoft.xlsx")
+                  - "typeName" field set to "PropertyRisk"
+                  - Correct "dataStartRow" based on the content sample
+                  - Proper column mappings based on the content sample headers
+
+                **Step 4: Save Configuration**
+                - Call DataPlugin's UpdateData with type="ExcelImportConfiguration" and the configuration JSON
+                - Example: UpdateData(type="ExcelImportConfiguration", data=<configuration-json>)
+
+                **Step 5: Execute Import WITH Configuration**
+                - Call ImportRisks with the fully qualified path, address, AND the configuration
+                - Example: ImportRisks(path="Submissions@Microsoft@2026:Microsoft.xlsx", address="pricing/Microsoft@2026", configuration=<configuration-json>)
+                - The configuration parameter is REQUIRED - ImportRisks will reject calls without it
 
                 # Updating Risk Import Configuration
-                When the user asks you to update the risk import configuration, you should:
-                1) Get the existing risk mapping configuration for the specified file using DataPlugin's GetData function with type="ExcelImportConfiguration" and entityId=filename.
-                2) Modify it according to the user's input, ensuring it follows the schema provided below.
-                3) Upload the new configuration using DataPlugin's UpdateData function with type="ExcelImportConfiguration" and the updated JSON (ensure "name" field is set to filename).
+                When the user asks you to update the risk import configuration:
+                1) Get the existing configuration using DataPlugin's GetData with type="ExcelImportConfiguration" and entityId=<fully-qualified-path>
+                2) Load content sample using ContentPlugin's GetContent with numberOfRows=20
+                3) Modify the configuration according to the user's input
+                4) Save using DataPlugin's UpdateData with type="ExcelImportConfiguration"
+                5) If user wants to re-import, call ImportRisks WITH the updated configuration
 
                 # Automatic Risk Import Configuration
                 - Use ContentPlugin's GetContent with numberOfRows=20 to get a sample of the file. It returns a markdown table with:
@@ -75,7 +105,7 @@ public class RiskImportAgent(IMessageHub hub) : IInitializableAgent, IAgentWithT
 
                 IMPORTANT OUTPUT RULES:
                 - do not output JSON to the user.
-                - When the user asks you to import, your job is not finished by creating the risk import configuration. You will actually have to call ContentPlugin's Import function.
+                - When the user asks you to import, your job is not finished by creating the risk import configuration. You MUST call ImportRisks with the configuration.
                 """;
 
             if (excelImportConfigSchema is not null)

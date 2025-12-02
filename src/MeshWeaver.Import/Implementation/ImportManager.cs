@@ -28,7 +28,7 @@ public class ImportManager
         logger?.LogDebug("ImportManager constructor completed for hub {HubAddress}", hub.Address);
     }
 
-    public Task<IMessageDelivery> HandleImportRequest(IMessageDelivery<ImportRequest> request, CancellationToken cancellationToken)
+    public async Task<IMessageDelivery> HandleImportRequest(IMessageDelivery<ImportRequest> request, CancellationToken cancellationToken)
     {
         // Create cancellation token with timeout if specified in the import request
         var cancellationTokenSource = request.Message.Timeout.HasValue
@@ -37,51 +37,6 @@ public class ImportManager
 
         // Combine the provided cancellation token with our timeout token
         using var combined = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, cancellationTokenSource.Token);
-        return DoImport(request, combined.Token);
-    }
-
-    private void FailImport(Exception exception, IMessageDelivery<ImportRequest> request)
-    {
-        var message = new StringBuilder(exception.Message);
-        while (exception.InnerException != null)
-        {
-            message.AppendLine(exception.InnerException.Message);
-            exception = exception.InnerException;
-        }
-
-        var activity = new Activity(ActivityCategory.Import, Hub);
-        activity.LogError(message.ToString());
-
-        activity.Complete(ActivityStatus.Failed, log => Hub.Post(new ImportResponse(Hub.Version, log), o => o.ResponseFor(request)));
-    }
-
-    private async Task<IMessageDelivery> DoImport(
-        IMessageDelivery<ImportRequest> request,
-        CancellationToken cancellationToken
-    )
-    {
-
-        await ImportImpl(request, cancellationToken);
-        return request.Processed();
-    }
-
-    private void FinishWithException(IMessageDelivery request, Exception e,
-        Activity activity)
-    {
-        var message = new StringBuilder(e.Message);
-        while (e.InnerException != null)
-        {
-            message.AppendLine(e.InnerException.Message);
-            e = e.InnerException;
-        }
-
-        activity.LogError(message.ToString());
-        activity.Complete(log => Hub.Post(new ImportResponse(Hub.Version, log), o => o.ResponseFor(request)));
-    }
-
-
-    private async Task ImportImpl(IMessageDelivery<ImportRequest> request, CancellationToken cancellationToken)
-    {
         var activity = new Activity(ActivityCategory.Import, Hub, autoClose: false);
         var importActivity = activity.StartSubActivity(ActivityCategory.Import);
         try
@@ -89,7 +44,7 @@ public class ImportManager
 
             activity.LogInformation("Starting import {ActivityId} for request {RequestId}", activity.Id, request.Id);
 
-            var imported = await ImportInstancesAsync(request.Message, importActivity, cancellationToken);
+            var imported = await ImportInstancesAsync(request.Message, importActivity, combined.Token);
             importActivity.Complete(log =>
             {
                 if (log.HasErrors())
@@ -100,6 +55,18 @@ public class ImportManager
 
                 // Collect all objects to save
                 var objectsToSave = imported.Collections.Values.SelectMany(x => x.Instances.Values).ToList();
+
+                if (objectsToSave.Count == 0)
+                {
+                    var reason = request.Message.Configuration is null
+                        ? (request.Message.Format is null
+                            ? "No format nor configuration is specified."
+                            : $"Is the format {request.Message.Format} correct for this file?")
+                        : "Is the provided configuration correct?";
+                    activity.LogWarning("Import {ImportId} for {RequestId} resulted in no objects to save. Did you omit specifying configuration or format?", activity.Id, request.Id);
+                    activity.Complete();
+                    return;
+                }
                 Configuration.Workspace.RequestChange(
                     DataChangeRequest.Update(
                         objectsToSave.ToArray(),
@@ -127,8 +94,8 @@ public class ImportManager
                 activity.LogInformation("Finished import {ActivityId} for request {RequestId}", activity.Id, request.Id);
 
                 Hub.Post(new ImportResponse(Hub.Version, log), o => o.ResponseFor(request));
-
             });
+            return request.Processed();
 
         }
         catch (Exception e)
@@ -138,8 +105,44 @@ public class ImportManager
 
             activity.LogError("Import {ImportId} for {RequestId} failed with exception: {Exception}", activity.Id, request.Id, e.Message);
             FinishWithException(request, e, activity);
+
+            return request.Failed(e.Message);
         }
+
+
     }
+
+    private void FailImport(Exception exception, IMessageDelivery<ImportRequest> request)
+    {
+        var message = new StringBuilder(exception.Message);
+        while (exception.InnerException != null)
+        {
+            message.AppendLine(exception.InnerException.Message);
+            exception = exception.InnerException;
+        }
+
+        var activity = new Activity(ActivityCategory.Import, Hub);
+        activity.LogError(message.ToString());
+
+        activity.Complete(ActivityStatus.Failed, log => Hub.Post(new ImportResponse(Hub.Version, log), o => o.ResponseFor(request)));
+    }
+
+
+    private void FinishWithException(IMessageDelivery request, Exception e,
+        Activity activity)
+    {
+        var message = new StringBuilder(e.Message);
+        while (e.InnerException != null)
+        {
+            message.AppendLine(e.InnerException.Message);
+            e = e.InnerException;
+        }
+
+        activity.LogError(message.ToString());
+        activity.Complete(log => Hub.Post(new ImportResponse(Hub.Version, log), o => o.ResponseFor(request)));
+    }
+
+
 
     private ImportConfiguration? TryGetSaveableConfiguration(ImportConfiguration configuration, Activity activity)
     {

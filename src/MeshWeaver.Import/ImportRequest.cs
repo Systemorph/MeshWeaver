@@ -31,7 +31,7 @@ public record ImportRequest : IRequest<ImportResponse>
 
     public string MimeType { get; init; }
 
-    public string Format { get; init; } = ImportFormat.Default;
+    public string? Format { get; init; }
 
     /// <summary>
     /// Optional import configuration. When provided, this configuration will be used instead of the Format string.

@@ -45,13 +45,11 @@ SystemName,DisplayName
         var client = GetClient();
         var plugin = new ContentPlugin(client);
 
-        // Act
+        // Act - use fully qualified collection:path syntax
         var result = await plugin.Import(
-            path: "test-data.csv",
-            collection: "TestCollection",
+            path: "TestCollection:test-data.csv",
             address: new ImportAddress(2024),
-            format: null, // Use default format
-            cancellationToken: TestContext.Current.CancellationToken
+            format: null // Use default format
         );
 
         // Assert
@@ -80,13 +78,11 @@ SystemName,DisplayName
         var client = GetClient();
         var plugin = new ContentPlugin(client);
 
-        // Act
+        // Act - use fully qualified collection:path syntax
         var result = await plugin.Import(
-            path: "non-existent.csv",
-            collection: "TestCollection",
+            path: "TestCollection:non-existent.csv",
             address: new ImportAddress(2024),
-            format: null,
-            cancellationToken: TestContext.Current.CancellationToken
+            format: null
         );
 
         // Assert
@@ -100,13 +96,11 @@ SystemName,DisplayName
         var client = GetClient();
         var plugin = new ContentPlugin(client);
 
-        // Act
+        // Act - use fully qualified collection:path syntax with non-existent collection
         var result = await plugin.Import(
-            path: "test-data.csv",
-            collection: "NonExistentCollection",
+            path: "NonExistentCollection:test-data.csv",
             address: new ImportAddress(2024),
-            format: null,
-            cancellationToken: TestContext.Current.CancellationToken
+            format: null
         );
 
         // Assert
@@ -120,17 +114,15 @@ SystemName,DisplayName
         var client = GetClient();
         var plugin = new ContentPlugin(client);
 
-        // Act
+        // Act - path without collection:path syntax (no colon)
         var result = await plugin.Import(
             path: "test-data.csv",
-            collection: null,
-            address: "ImportAddress/2024",
-            format: null,
-            cancellationToken: TestContext.Current.CancellationToken
+            address: new ImportAddress(2024),
+            format: null
         );
 
-        // Assert
-        result.Should().Contain("Collection name is required");
+        // Assert - should fail because no collection can be resolved
+        result.Should().Contain("No collection specified", "should indicate missing collection");
     }
 
     [Fact]
@@ -140,13 +132,11 @@ SystemName,DisplayName
         var client = GetClient();
         var plugin = new ContentPlugin(client);
 
-        // Act
+        // Act - use fully qualified collection:path syntax but missing address
         var result = await plugin.Import(
-            path: "test-data.csv",
-            collection: "TestCollection",
+            path: "TestCollection:test-data.csv",
             address: null,
-            format: null,
-            cancellationToken: TestContext.Current.CancellationToken
+            format: null
         );
 
         // Assert
@@ -160,13 +150,11 @@ SystemName,DisplayName
         var client = GetClient();
         var plugin = new ContentPlugin(client);
 
-        // Act
+        // Act - use fully qualified collection:path syntax with explicit format
         var result = await plugin.Import(
-            path: "test-data.csv",
-            collection: "TestCollection",
+            path: "TestCollection:test-data.csv",
             address: new ImportAddress(2024),
-            format: "Default", // Explicit format
-            cancellationToken: TestContext.Current.CancellationToken
+            format: "Default" // Explicit format
         );
 
         // Assert
@@ -194,17 +182,15 @@ SystemName,DisplayName
         var configurationJson = @"{
             ""$type"": ""MeshWeaver.Import.Configuration.ImportConfiguration"",
             ""name"": ""test-config-not-registered"",
-            ""entityId"": ""2024""
+            ""address"": ""ImportAddress/2024""
         }";
 
-        // Act
+        // Act - use fully qualified collection:path syntax with configuration
         var result = await plugin.Import(
-            path: "test-data.csv",
-            collection: "TestCollection",
+            path: "TestCollection:test-data.csv",
             address: new ImportAddress(2024),
             format: null,
-            configuration: configurationJson,
-            cancellationToken: TestContext.Current.CancellationToken
+            configuration: configurationJson
         );
 
         // Assert

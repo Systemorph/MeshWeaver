@@ -136,7 +136,7 @@ public class ContentPluginTest(ITestOutputHelper output) : HubTestBase(output), 
         var plugin = new ContentPlugin(client);
 
         // act
-        var result = await plugin.GetContent(TestExcelFileName, TestCollectionName, cancellationToken: TestContext.Current.CancellationToken);
+        var result = await plugin.GetContent(GetFullyQualifiedName(TestExcelFileName, TestCollectionName), cancellationToken: TestContext.Current.CancellationToken);
 
         // assert
         result.Should().NotBeNullOrEmpty();
@@ -174,7 +174,8 @@ public class ContentPluginTest(ITestOutputHelper output) : HubTestBase(output), 
         const int rowLimit = 5;
 
         // act
-        var result = await plugin.GetContent(TestExcelFileName, TestCollectionName, numberOfRows: rowLimit, cancellationToken: TestContext.Current.CancellationToken);
+        var fullyQualifiedName = $"{TestCollectionName}:{TestExcelFileName}";
+        var result = await plugin.GetContent(fullyQualifiedName, numberOfRows: rowLimit, cancellationToken: TestContext.Current.CancellationToken);
 
         // assert
         result.Should().NotBeNullOrEmpty();
@@ -193,7 +194,7 @@ public class ContentPluginTest(ITestOutputHelper output) : HubTestBase(output), 
         // Verify it still has the markdown table structure
         result.Should().Contain("| Row | A | B | C | D | E |");
     }
-
+    private static string GetFullyQualifiedName(string fileName, string collectionName) => $"{collectionName}:{fileName}";
     /// <summary>
     /// Tests that GetContent with numberOfRows parameter limits text file output
     /// </summary>
@@ -206,7 +207,7 @@ public class ContentPluginTest(ITestOutputHelper output) : HubTestBase(output), 
         const int rowLimit = 10;
 
         // act
-        var result = await plugin.GetContent(TestTextFileName, TestCollectionName, numberOfRows: rowLimit, cancellationToken: TestContext.Current.CancellationToken);
+        var result = await plugin.GetContent(GetFullyQualifiedName(TestExcelFileName, TestCollectionName), numberOfRows: rowLimit, cancellationToken: TestContext.Current.CancellationToken);
 
         // assert
         result.Should().NotBeNullOrEmpty();
@@ -231,7 +232,7 @@ public class ContentPluginTest(ITestOutputHelper output) : HubTestBase(output), 
         var plugin = new ContentPlugin(client);
 
         // act
-        var result = await plugin.GetContent(TestTextFileName, TestCollectionName, cancellationToken: TestContext.Current.CancellationToken);
+        var result = await plugin.GetContent(GetFullyQualifiedName(TestTextFileName, TestCollectionName), cancellationToken: TestContext.Current.CancellationToken);
 
         // assert
         result.Should().NotBeNullOrEmpty();
@@ -256,7 +257,7 @@ public class ContentPluginTest(ITestOutputHelper output) : HubTestBase(output), 
         var plugin = new ContentPlugin(client);
 
         // act
-        var result = await plugin.GetContent(TestExcelFileName, TestCollectionName, cancellationToken: TestContext.Current.CancellationToken);
+        var result = await plugin.GetContent(GetFullyQualifiedName(TestExcelFileName, TestCollectionName), cancellationToken: TestContext.Current.CancellationToken);
 
         // assert
         result.Should().NotBeNullOrEmpty();
@@ -286,7 +287,7 @@ public class ContentPluginTest(ITestOutputHelper output) : HubTestBase(output), 
         var plugin = new ContentPlugin(client);
 
         // act
-        var result = await plugin.GetContent("test.xlsx", "non-existent-collection", cancellationToken: TestContext.Current.CancellationToken);
+        var result = await plugin.GetContent("non-existent-collection:test.xlsx", cancellationToken: TestContext.Current.CancellationToken);
 
         // assert
         result.Should().Contain("Collection 'non-existent-collection' not found");
@@ -303,7 +304,7 @@ public class ContentPluginTest(ITestOutputHelper output) : HubTestBase(output), 
         var plugin = new ContentPlugin(client);
 
         // act
-        var result = await plugin.GetContent("non-existent.xlsx", TestCollectionName, cancellationToken: TestContext.Current.CancellationToken);
+        var result = await plugin.GetContent($"{TestCollectionName}:non-existent.xlsx", cancellationToken: TestContext.Current.CancellationToken);
 
         // assert
         result.Should().Contain("File 'non-existent.xlsx' not found");
