@@ -14,6 +14,7 @@ public class RiskImportAgent(IMessageHub hub) : IInitializableAgent, IAgentWithT
     private Dictionary<string, TypeDescription>? typeDefinitionMap;
     private string? propertyRiskSchema;
     private string? excelImportConfigSchema;
+    private ContentPlugin? contentPlugin;
 
     public string Name => nameof(RiskImportAgent);
 
@@ -125,9 +126,52 @@ public class RiskImportAgent(IMessageHub hub) : IInitializableAgent, IAgentWithT
     IEnumerable<AITool> IAgentWithTools.GetTools(IAgentChat chat)
     {
         var submissionPluginConfig = CreateSubmissionPluginConfig();
-        return new DataPlugin(hub, chat, typeDefinitionMap).CreateTools()
-            .Concat(new ContentPlugin(hub, submissionPluginConfig, chat).CreateTools());
+        contentPlugin = new ContentPlugin(hub, submissionPluginConfig, chat);
 
+        // Return DataPlugin tools
+        foreach (var tool in new DataPlugin(hub, chat, typeDefinitionMap).CreateTools())
+            yield return tool;
+
+        // Return ContentPlugin tools EXCEPT Import (we provide our own ImportRisks)
+        foreach (var tool in contentPlugin.CreateTools().Where(t => t.Name != "Import"))
+            yield return tool;
+
+        // Add custom ImportRisks that enforces configuration requirement and null format
+        yield return AIFunctionFactory.Create(ImportRisks);
+    }
+
+    /// <summary>
+    /// Imports property risks from an Excel file. REQUIRES a configuration parameter.
+    /// Format is always null - the configuration contains all import settings.
+    /// </summary>
+    [System.ComponentModel.Description(
+        "Imports property risks from an Excel file. " +
+        "REQUIRES a configuration parameter - calls without configuration will be rejected. " +
+        "The configuration must be a valid ExcelImportConfiguration JSON. " +
+        "Format is not used - all settings come from the configuration.")]
+    private async Task<string> ImportRisks(
+        [System.ComponentModel.Description("The fully qualified path in 'collection:filename' format (e.g., 'Submissions@Microsoft@2026:Microsoft.xlsx')")]
+        string path,
+        [System.ComponentModel.Description("The target address for the import (e.g., 'pricing/Microsoft@2026')")]
+        string address,
+        [System.ComponentModel.Description("REQUIRED: The ExcelImportConfiguration JSON. Must include typeName, columnMappings, etc.")]
+        string configuration)
+    {
+        if (string.IsNullOrWhiteSpace(configuration))
+        {
+            return "ERROR: Configuration is REQUIRED for ImportRisks. " +
+                   "You MUST follow the 5-step workflow: " +
+                   "1) Get existing configuration, 2) Load content sample, 3) Create/update configuration, " +
+                   "4) Save configuration, 5) Call ImportRisks WITH the configuration JSON.";
+        }
+
+        if (contentPlugin == null)
+        {
+            return "ERROR: ContentPlugin not initialized.";
+        }
+
+        // Always pass format as null - configuration contains all settings
+        return await contentPlugin.Import(path, address, format: null, configuration: configuration);
     }
 
     private static ContentPluginConfig CreateSubmissionPluginConfig()

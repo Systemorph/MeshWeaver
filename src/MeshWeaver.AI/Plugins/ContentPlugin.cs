@@ -907,6 +907,8 @@ public class ContentPlugin
             Address targetAddress;
             if (address is Address addr)
                 targetAddress = addr;
+            else if (address is JsonElement { ValueKind: JsonValueKind.String })
+                targetAddress = hub.GetAddress(address.ToString()!);
             else if (address is string addrString)
                 targetAddress = hub.GetAddress(addrString);
             else
