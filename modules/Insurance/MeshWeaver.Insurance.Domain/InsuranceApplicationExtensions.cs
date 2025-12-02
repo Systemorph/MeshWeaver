@@ -64,10 +64,10 @@ public static class InsuranceApplicationExtensions
                 var addressId = hub.Address.Id;
                 var conf = sp.GetRequiredService<IConfiguration>();
 
-                // Parse addressId in format {company}@{uwy}
-                var parts = addressId.Split('@');
+                // Parse addressId in format {company}-{uwy}
+                var parts = addressId.Split('-');
                 if (parts.Length != 2)
-                    throw new InvalidOperationException($"Invalid address format: {addressId}. Expected format: {{company}}@{{uwy}}");
+                    throw new InvalidOperationException($"Invalid address format: {addressId}. Expected format: {{company}}-{{uwy}}");
 
                 var company = parts[0];
                 var uwy = parts[1];
