@@ -207,7 +207,7 @@ public class ContentPluginTest(ITestOutputHelper output) : HubTestBase(output), 
         const int rowLimit = 10;
 
         // act
-        var result = await plugin.GetContent(GetFullyQualifiedName(TestExcelFileName, TestCollectionName), numberOfRows: rowLimit, cancellationToken: TestContext.Current.CancellationToken);
+        var result = await plugin.GetContent(GetFullyQualifiedName(TestTextFileName, TestCollectionName), numberOfRows: rowLimit, cancellationToken: TestContext.Current.CancellationToken);
 
         // assert
         result.Should().NotBeNullOrEmpty();
