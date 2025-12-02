@@ -231,7 +231,7 @@ public static class SampleDataProvider
         {
             new Pricing
             {
-                Id = "PRC@2024@001",
+                Id = "PRC-2024-001",
                 InsuredName = "Global Manufacturing Corp",
                 InceptionDate = new DateTime(2024, 1, 1),
                 ExpirationDate = new DateTime(2024, 12, 31),
@@ -243,7 +243,7 @@ public static class SampleDataProvider
             },
             new Pricing
             {
-                Id = "PRC@2024@002",
+                Id = "PRC-2024-002",
                 InsuredName = "European Logistics Ltd",
                 InceptionDate = new DateTime(2024, 3, 1),
                 ExpirationDate = new DateTime(2025, 2, 28),
@@ -255,7 +255,7 @@ public static class SampleDataProvider
             },
             new Pricing
             {
-                Id = "PRC@2024@003",
+                Id = "PRC-2024-003",
                 InsuredName = "Tech Industries GmbH",
                 InceptionDate = new DateTime(2024, 6, 1),
                 ExpirationDate = new DateTime(2025, 5, 31),
@@ -267,7 +267,7 @@ public static class SampleDataProvider
             },
             new Pricing
             {
-                Id = "Microsoft@2026",
+                Id = "Microsoft-2026",
                 InsuredName = "Microsoft",
                 InceptionDate = new DateTime(2026, 1, 1),
                 ExpirationDate = new DateTime(2026, 12, 31),

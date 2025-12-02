@@ -38,10 +38,10 @@ public class RiskImportAgent(IMessageHub hub) : IInitializableAgent, IAgentWithT
                 ## Content Collection Context
 
                 Files are referenced using the fully qualified 'collection:filename' format:
-                - Format: "Submissions@{pricingId}:filename" (e.g., "Submissions@Microsoft@2026:Microsoft.xlsx")
+                - Format: "Submissions@{pricingId}:filename" (e.g., "Submissions@Microsoft-2026:Microsoft.xlsx")
                 - Pass this full string directly to ContentPlugin functions - it will parse collection and path automatically
-                - When the user or InsuranceAgent mentions a file like "Submissions@Microsoft@2026:Microsoft.xlsx",
-                  use it directly in ContentPlugin calls (e.g., GetContent(filePath="Submissions@Microsoft@2026:Microsoft.xlsx"))
+                - When the user or InsuranceAgent mentions a file like "Submissions@Microsoft-2026:Microsoft.xlsx",
+                  use it directly in ContentPlugin calls (e.g., GetContent(filePath="Submissions@Microsoft-2026:Microsoft.xlsx"))
                 - DO NOT split the collection:filename format - pass it as-is to ContentPlugin
 
                 # Importing Risks - MANDATORY WORKFLOW
@@ -52,12 +52,12 @@ public class RiskImportAgent(IMessageHub hub) : IInitializableAgent, IAgentWithT
 
                 **Step 1: Get Existing Configuration**
                 - Call DataPlugin's GetData with type="ExcelImportConfiguration" and entityId=<fully-qualified-path>
-                - Example: GetData(type="ExcelImportConfiguration", entityId="Submissions@Microsoft@2026:Microsoft.xlsx")
+                - Example: GetData(type="ExcelImportConfiguration", entityId="Submissions@Microsoft-2026:Microsoft.xlsx")
                 - The entityId MUST be the fully qualified path (collection:filename format)
 
                 **Step 2: Load Content Sample**
                 - ALWAYS call ContentPlugin's GetContent with the fully qualified path and numberOfRows=20
-                - Example: GetContent(filePath="Submissions@Microsoft@2026:Microsoft.xlsx", numberOfRows=20)
+                - Example: GetContent(filePath="Submissions@Microsoft-2026:Microsoft.xlsx", numberOfRows=20)
                 - This gives you the Excel structure to create/verify the mapping
 
                 **Step 3: Create or Update Configuration**
@@ -65,7 +65,7 @@ public class RiskImportAgent(IMessageHub hub) : IInitializableAgent, IAgentWithT
                 - If Step 1 returned an existing configuration: Review it against the content sample and update if needed
                 - Apply any user-provided modifications
                 - Ensure the configuration includes:
-                  - "name" field set to the fully qualified path (e.g., "Submissions@Microsoft@2026:Microsoft.xlsx")
+                  - "name" field set to the fully qualified path (e.g., "Submissions@Microsoft-2026:Microsoft.xlsx")
                   - "typeName" field set to "PropertyRisk"
                   - Correct "dataStartRow" based on the content sample
                   - Proper column mappings based on the content sample headers
@@ -76,7 +76,7 @@ public class RiskImportAgent(IMessageHub hub) : IInitializableAgent, IAgentWithT
 
                 **Step 5: Execute Import WITH Configuration**
                 - Call ImportRisks with the fully qualified path, address, AND the configuration
-                - Example: ImportRisks(path="Submissions@Microsoft@2026:Microsoft.xlsx", address="pricing/Microsoft@2026", configuration=<configuration-json>)
+                - Example: ImportRisks(path="Submissions@Microsoft-2026:Microsoft.xlsx", address="pricing/Microsoft-2026", configuration=<configuration-json>)
                 - The configuration parameter is REQUIRED - ImportRisks will reject calls without it
 
                 # Updating Risk Import Configuration
@@ -157,9 +157,9 @@ public class RiskImportAgent(IMessageHub hub) : IInitializableAgent, IAgentWithT
         "The configuration must be a valid ExcelImportConfiguration JSON. " +
         "Format is not used - all settings come from the configuration.")]
     private async Task<string> ImportRisks(
-        [System.ComponentModel.Description("The fully qualified path in 'collection:filename' format (e.g., 'Submissions@Microsoft@2026:Microsoft.xlsx')")]
+        [System.ComponentModel.Description("The fully qualified path in 'collection:filename' format (e.g., 'Submissions@Microsoft-2026:Microsoft.xlsx')")]
         string path,
-        [System.ComponentModel.Description("The target address for the import (e.g., 'pricing/Microsoft@2026')")]
+        [System.ComponentModel.Description("The target address for the import (e.g., 'pricing/Microsoft-2026')")]
         string address,
         [System.ComponentModel.Description("REQUIRED: The ExcelImportConfiguration JSON. Must include typeName, columnMappings, etc.")]
         string configuration)
@@ -194,8 +194,8 @@ public class RiskImportAgent(IMessageHub hub) : IInitializableAgent, IAgentWithT
 
                 var pricingId = context.Address.Id;
 
-                // Parse pricingId in format {company}@{uwy}
-                var parts = pricingId.Split('@');
+                // Parse pricingId in format {company}-{uwy}
+                var parts = pricingId.Split('-');
                 if (parts.Length != 2)
                     return null!;
 

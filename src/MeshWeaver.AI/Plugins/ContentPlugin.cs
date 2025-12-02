@@ -25,10 +25,10 @@ namespace MeshWeaver.AI.Plugins;
 /// - The plugin automatically parses collection and path from the Id
 ///
 /// Examples:
-/// 1. Viewing "Slip.md" in "Submissions@Microsoft@2026" collection:
+/// 1. Viewing "Slip.md" in "Submissions@Microsoft-2026" collection:
 ///    - Area: "Content" or "Collection"
-///    - Id: "Submissions@Microsoft@2026/Slip.md"
-///    - Parsed collection: "Submissions@Microsoft@2026"
+///    - Id: "Submissions@Microsoft-2026/Slip.md"
+///    - Parsed collection: "Submissions@Microsoft-2026"
 ///    - Parsed path: "Slip.md"
 ///
 /// 2. Viewing root folder of "Documents" collection:
@@ -72,7 +72,7 @@ public class ContentPlugin
     }
 
     /// <summary>
-    /// Parses a path that may contain the collection:path syntax (e.g., "Submissions@Microsoft@2026:folder/file.xlsx").
+    /// Parses a path that may contain the collection:path syntax (e.g., "Submissions@Microsoft-2026:folder/file.xlsx").
     /// Returns the collection name and the file path separately.
     /// The path portion does not include a leading slash.
     /// </summary>
@@ -81,7 +81,7 @@ public class ContentPlugin
         if (string.IsNullOrEmpty(combinedPath))
             return (null, null);
 
-        // Check for collection:path syntax (e.g., "Submissions@Microsoft@2026:folder/file.xlsx")
+        // Check for collection:path syntax (e.g., "Submissions@Microsoft-2026:folder/file.xlsx")
         // The collection name typically contains @ separators but not colons, so split on first ":"
         var colonIndex = combinedPath.IndexOf(':');
         if (colonIndex > 0 && colonIndex < combinedPath.Length - 1)
@@ -148,7 +148,7 @@ public class ContentPlugin
     /// Gets the path from the agent's LayoutAreaReference.Id.
     /// When LayoutAreaReference.Area is "Content" or "Collection", the Id format is "{collection}/{path}".
     /// This method extracts and returns the path portion.
-    /// For example, "Submissions@Microsoft@2026/Slip.md" returns "Slip.md".
+    /// For example, "Submissions@Microsoft-2026/Slip.md" returns "Slip.md".
     /// Returns null if no context is available.
     /// </summary>
     private string? GetPathFromContext()
@@ -175,9 +175,9 @@ public class ContentPlugin
     }
 
     [Description("Gets the content of a file. Supports Excel, Word, PDF, and any other format. " +
-                 "Use the 'collection:path' syntax (e.g., 'Submissions@Microsoft@2026:file.xlsx').")]
+                 "Use the 'collection:path' syntax (e.g., 'Submissions@Microsoft-2026:file.xlsx').")]
     public async Task<string> GetContent(
-        [Description("The path to the file using 'collection:path' syntax (e.g., 'Submissions@Microsoft@2026:file.xlsx').")]
+        [Description("The path to the file using 'collection:path' syntax (e.g., 'Submissions@Microsoft-2026:file.xlsx').")]
         string? filePath = null,
         [Description("Optional: number of rows to read. If null, reads entire file. For Excel files, reads first N rows from each worksheet.")]
         int? numberOfRows = null,
@@ -431,9 +431,9 @@ public class ContentPlugin
     }
 
     [Description("Saves content as a file. " +
-                 "Use the 'collection:path' syntax (e.g., 'Submissions@Microsoft@2026:folder/file.xlsx').")]
+                 "Use the 'collection:path' syntax (e.g., 'Submissions@Microsoft-2026:folder/file.xlsx').")]
     public async Task<string> SaveFile(
-        [Description("The path where the file should be saved using 'collection:path' syntax (e.g., 'Submissions@Microsoft@2026:file.txt').")] string filePath,
+        [Description("The path where the file should be saved using 'collection:path' syntax (e.g., 'Submissions@Microsoft-2026:file.txt').")] string filePath,
         [Description("The content to save to the file")] string content,
         CancellationToken cancellationToken = default)
     {
@@ -480,9 +480,9 @@ public class ContentPlugin
     }
 
     [Description("Lists all files at a given path. " +
-                 "Use the 'collection:path' syntax (e.g., 'Submissions@Microsoft@2026:folder' or 'Submissions@Microsoft@2026:' for root).")]
+                 "Use the 'collection:path' syntax (e.g., 'Submissions@Microsoft-2026:folder' or 'Submissions@Microsoft-2026:' for root).")]
     public async Task<string> ListFiles(
-        [Description("Directory path using 'collection:path' syntax (e.g., 'Submissions@Microsoft@2026:folder'). Use 'collection:' for root.")] string? path = null,
+        [Description("Directory path using 'collection:path' syntax (e.g., 'Submissions@Microsoft-2026:folder'). Use 'collection:' for root.")] string? path = null,
         CancellationToken cancellationToken = default)
     {
         logger.LogInformation("ListFiles called with path={Path}", path);
@@ -542,9 +542,9 @@ public class ContentPlugin
     }
 
     [Description("Lists all folders at a given path. " +
-                 "Use the 'collection:path' syntax (e.g., 'Submissions@Microsoft@2026:folder' or 'Submissions@Microsoft@2026:' for root).")]
+                 "Use the 'collection:path' syntax (e.g., 'Submissions@Microsoft-2026:folder' or 'Submissions@Microsoft-2026:' for root).")]
     public async Task<string> ListFolders(
-        [Description("Directory path using 'collection:path' syntax (e.g., 'Submissions@Microsoft@2026:folder'). Use 'collection:' for root.")] string? path = null,
+        [Description("Directory path using 'collection:path' syntax (e.g., 'Submissions@Microsoft-2026:folder'). Use 'collection:' for root.")] string? path = null,
         CancellationToken cancellationToken = default)
     {
         try
@@ -574,9 +574,9 @@ public class ContentPlugin
     }
 
     [Description("Lists all files and folders at a given path. " +
-                 "Use the 'collection:path' syntax (e.g., 'Submissions@Microsoft@2026:folder' or 'Submissions@Microsoft@2026:' for root).")]
+                 "Use the 'collection:path' syntax (e.g., 'Submissions@Microsoft-2026:folder' or 'Submissions@Microsoft-2026:' for root).")]
     public async Task<string> ListCollectionItems(
-        [Description("Directory path using 'collection:path' syntax (e.g., 'Submissions@Microsoft@2026:folder'). Use 'collection:' for root.")] string? path = null,
+        [Description("Directory path using 'collection:path' syntax (e.g., 'Submissions@Microsoft-2026:folder'). Use 'collection:' for root.")] string? path = null,
         CancellationToken cancellationToken = default)
     {
         try
@@ -611,9 +611,9 @@ public class ContentPlugin
 
 
     [Description("Deletes a file or folder. " +
-                 "Use the 'collection:path' syntax (e.g., 'Submissions@Microsoft@2026:folder/file.xlsx' or 'Submissions@Microsoft@2026:folder').")]
+                 "Use the 'collection:path' syntax (e.g., 'Submissions@Microsoft-2026:folder/file.xlsx' or 'Submissions@Microsoft-2026:folder').")]
     public async Task<string> Delete(
-        [Description("Path to delete using 'collection:path' syntax (e.g., 'Submissions@Microsoft@2026:file.xlsx' for files or 'Submissions@Microsoft@2026:folder' for folders).")] string? path = null,
+        [Description("Path to delete using 'collection:path' syntax (e.g., 'Submissions@Microsoft-2026:file.xlsx' for files or 'Submissions@Microsoft-2026:folder' for folders).")] string? path = null,
         CancellationToken cancellationToken = default)
     {
         // Parse collection:path syntax
@@ -687,9 +687,9 @@ public class ContentPlugin
     }
 
     [Description("Creates a new folder. " +
-                 "Use the 'collection:path' syntax (e.g., 'Submissions@Microsoft@2026:folder/subfolder').")]
+                 "Use the 'collection:path' syntax (e.g., 'Submissions@Microsoft-2026:folder/subfolder').")]
     public async Task<string> CreateFolder(
-        [Description("The folder path to create using 'collection:path' syntax (e.g., 'Submissions@Microsoft@2026:newfolder').")] string folderPath,
+        [Description("The folder path to create using 'collection:path' syntax (e.g., 'Submissions@Microsoft-2026:newfolder').")] string folderPath,
         CancellationToken cancellationToken = default)
     {
         // Parse collection:path syntax
@@ -799,9 +799,9 @@ public class ContentPlugin
     //}
 
     [Description("Gets the MIME content type for a file based on its extension. " +
-                 "Use the 'collection:path' syntax (e.g., 'Submissions@Microsoft@2026:folder/file.xlsx').")]
+                 "Use the 'collection:path' syntax (e.g., 'Submissions@Microsoft-2026:folder/file.xlsx').")]
     public async Task<string> GetContentType(
-        [Description("File path using 'collection:path' syntax (e.g., 'Submissions@Microsoft@2026:file.xlsx').")] string? filePath = null,
+        [Description("File path using 'collection:path' syntax (e.g., 'Submissions@Microsoft-2026:file.xlsx').")] string? filePath = null,
         CancellationToken cancellationToken = default)
     {
         // Parse collection:path syntax
@@ -830,9 +830,9 @@ public class ContentPlugin
     }
 
     [Description("Checks if a specific file exists. " +
-                 "Use the 'collection:path' syntax (e.g., 'Submissions@Microsoft@2026:folder/file.xlsx').")]
+                 "Use the 'collection:path' syntax (e.g., 'Submissions@Microsoft-2026:folder/file.xlsx').")]
     public async Task<string> FileExists(
-        [Description("File path using 'collection:path' syntax (e.g., 'Submissions@Microsoft@2026:file.xlsx').")] string? filePath = null,
+        [Description("File path using 'collection:path' syntax (e.g., 'Submissions@Microsoft-2026:file.xlsx').")] string? filePath = null,
         CancellationToken cancellationToken = default)
     {
         // Parse collection:path syntax
@@ -877,9 +877,9 @@ public class ContentPlugin
     }
 
     [Description("Imports data from a file to a specified address. " +
-                 "Use the 'collection:path' syntax (e.g., 'Submissions@Microsoft@2026:file.xlsx').")]
+                 "Use the 'collection:path' syntax (e.g., 'Submissions@Microsoft-2026:file.xlsx').")]
     public async Task<string> Import(
-        [Description("The path to the file to import using 'collection:path' syntax (e.g., 'Submissions@Microsoft@2026:file.xlsx').")] string path,
+        [Description("The path to the file to import using 'collection:path' syntax (e.g., 'Submissions@Microsoft-2026:file.xlsx').")] string path,
         [Description("The target address for the import (optional if default address is configured). Format: '{AddressType}/{AddressId}' or an Address object.")] object? address = null,
         [Description("The import format to use (optional, defaults to 'Default')")] string? format = null,
         [Description("Optional import configuration as JSON string. When provided, this will be used instead of the format parameter.")] string? configuration = null,
