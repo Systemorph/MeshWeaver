@@ -88,9 +88,6 @@ public class ContentPlugin
         {
             var collection = combinedPath[..colonIndex];
             var path = combinedPath[(colonIndex + 1)..];
-            // Ensure path starts with / for consistency
-            if (!path.StartsWith('/'))
-                path = "/" + path;
             return (collection, path);
         }
 
