@@ -9,7 +9,7 @@ using Microsoft.Extensions.AI;
 
 namespace MeshWeaver.Insurance.AI;
 
-public class RiskImportAgent(IMessageHub hub) : IInitializableAgent, IAgentWithTools, IAgentWithContext
+public class RiskImportAgent(IMessageHub hub) : IInitializableAgent, IAgentWithTools, IAgentWithContext, IAgentWithModelPreference
 {
     private Dictionary<string, TypeDescription>? typeDefinitionMap;
     private string? propertyRiskSchema;
@@ -18,7 +18,14 @@ public class RiskImportAgent(IMessageHub hub) : IInitializableAgent, IAgentWithT
 
     public string Name => nameof(RiskImportAgent);
 
+    public string? GroupName => "Insurance";
+    public int DisplayOrder => 1;
+    public string? IconName => "DocumentTable";
+
     public string Description => "Runs risk imports for a pricing. Creates mappings and imports property risk data from Excel files.";
+
+    public string? GetPreferredModel(IReadOnlyList<string> availableModels)
+        => availableModels.FirstOrDefault(m => m.Contains("claude-sonnet-4-5", StringComparison.OrdinalIgnoreCase));
 
     public string Instructions
     {

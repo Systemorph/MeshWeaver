@@ -1,6 +1,7 @@
 @using Microsoft.AspNetCore.Components
 @using ChatMessage = Microsoft.Extensions.AI.ChatMessage
 @using MeshWeaver.Blazor.Monaco
+@using MeshWeaver.AI
 @inject IJSRuntime JS
 
 <div class="input-box page-width">
@@ -17,6 +18,33 @@
     </div>
 
     <div class="tools">
+        @if (ShowSelectors && AgentDisplayInfos.Count > 0)
+        {
+            <div class="chat-selectors">
+                <FluentSelect TOption="AgentDisplayInfo"
+                              SelectedOption="@SelectedAgentInfo"
+                              SelectedOptionChanged="@OnAgentSelectionChanged"
+                              Items="@AgentDisplayInfos"
+                              OptionValue="@(a => a.Name)"
+                              OptionText="@(a => a.Name)"
+                              AriaLabel="@(SelectedAgentInfo?.Description ?? "Select Agent")"
+                              Style="min-width: 150px;">
+                    <OptionTemplate Context="agent">
+                        <div class="agent-option" style="padding-left: @(agent.IndentLevel * 12)px;" title="@agent.Description">
+                            <span class="agent-name">@agent.Name</span>
+                        </div>
+                    </OptionTemplate>
+                </FluentSelect>
+                <FluentSelect TOption="string"
+                              Value="@SelectedModel"
+                              ValueChanged="@OnModelSelectionChanged"
+                              Items="@AvailableModels"
+                              OptionValue="@(m => m)"
+                              OptionText="@(m => m)"
+                              AriaLabel="Select Model"
+                              Style="min-width: 180px;" />
+            </div>
+        }
         <button type="button" title="Send" class="send-button" @onclick="@SendMessageAsync"
             disabled="@(IsDisabled || string.IsNullOrWhiteSpace(MessageText))">
             <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5"
@@ -51,11 +79,71 @@
     [Parameter]
     public Func<string, Task<CompletionItem[]>>? AsyncCompletionCallback { get; set; }
 
+    /// <summary>
+    /// Whether to show agent/model selectors in the input bar.
+    /// </summary>
+    [Parameter]
+    public bool ShowSelectors { get; set; } = true;
+
+    /// <summary>
+    /// Available agents with display info (grouping, icons, descriptions, indent levels).
+    /// </summary>
+    [Parameter]
+    public IReadOnlyList<AgentDisplayInfo> AgentDisplayInfos { get; set; } = [];
+
+    /// <summary>
+    /// Currently selected agent display info.
+    /// </summary>
+    [Parameter]
+    public AgentDisplayInfo? SelectedAgentInfo { get; set; }
+
+    /// <summary>
+    /// Callback when agent selection changes.
+    /// </summary>
+    [Parameter]
+    public EventCallback<AgentDisplayInfo?> SelectedAgentInfoChanged { get; set; }
+
+    /// <summary>
+    /// Available models (sorted by factory order).
+    /// </summary>
+    [Parameter]
+    public IReadOnlyList<string> AvailableModels { get; set; } = [];
+
+    /// <summary>
+    /// Currently selected model.
+    /// </summary>
+    [Parameter]
+    public string? SelectedModel { get; set; }
+
+    /// <summary>
+    /// Callback when model selection changes.
+    /// </summary>
+    [Parameter]
+    public EventCallback<string?> SelectedModelChanged { get; set; }
+
     public async ValueTask FocusAsync()
     {
         if (monacoEditor != null)
         {
             await monacoEditor.FocusAsync();
+        }
+    }
+
+    private async Task OnAgentSelectionChanged(AgentDisplayInfo? agent)
+    {
+        if (agent != null && agent.Name != SelectedAgentInfo?.Name)
+        {
+            SelectedAgentInfo = agent;
+            await SelectedAgentInfoChanged.InvokeAsync(agent);
+        }
+    }
+
+    private async Task OnModelSelectionChanged(string? model)
+    {
+        if (model != SelectedModel)
+        {
+            SelectedModel = model;
+            await SelectedModelChanged.InvokeAsync(model);
         }
     }
 

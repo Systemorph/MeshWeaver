@@ -52,9 +52,9 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
     [Parameter] public EventCallback<ChatMessage> OnMessageAdded { get; set; }
 
     // Agent and model selection state
-    private string? selectedAgent;
+    private AgentDisplayInfo? selectedAgentInfo;
     private string? selectedModel;
-    private IReadOnlyList<string> availableAgents = [];
+    private IReadOnlyList<AgentDisplayInfo> agentDisplayInfos = [];
     private IReadOnlyList<string> availableModels = [];
     private bool pendingModelChange;
 
@@ -113,18 +113,19 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
         // Initialize agent preferences based on IAgentWithModelPreference implementations
         await AgentChatFactoryProvider.InitializeAgentPreferencesAsync();
 
-        // Get available agents
-        var agents = await AgentChatFactoryProvider.GetAgentsAsync();
-        availableAgents = agents.Keys.ToList();
-        selectedAgent = availableAgents.FirstOrDefault();
+        // Get available agents with display info (grouping, icons, descriptions, indent levels)
+        agentDisplayInfos = await AgentChatFactoryProvider.GetAgentsWithDisplayInfoAsync();
 
-        // Get available models (union from all factories)
+        // Try to select agent based on current context (IAgentWithContext.Matches)
+        selectedAgentInfo = SelectAgentByContext() ?? agentDisplayInfos.FirstOrDefault();
+
+        // Get available models (union from all factories, sorted by factory order)
         availableModels = AgentChatFactoryProvider.AllModels;
 
         // Set initial model based on agent preference or default
-        if (!string.IsNullOrEmpty(selectedAgent))
+        if (selectedAgentInfo != null)
         {
-            selectedModel = AgentChatFactoryProvider.GetPreferredModelForAgent(selectedAgent);
+            selectedModel = AgentChatFactoryProvider.GetPreferredModelForAgent(selectedAgentInfo.Name);
         }
         else
         {
@@ -134,15 +135,38 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
         StateHasChanged();
     }
 
-    private void OnAgentChanged(string? newAgent)
+    /// <summary>
+    /// Selects an agent based on the current context using IAgentWithContext.Matches().
+    /// </summary>
+    private AgentDisplayInfo? SelectAgentByContext()
     {
-        if (newAgent == selectedAgent || string.IsNullOrEmpty(newAgent))
+        var context = GetCurrentAgentContext();
+        if (context == null)
+            return null;
+
+        // Find the first agent that matches the current context
+        foreach (var agentInfo in agentDisplayInfos)
+        {
+            if (agentInfo.AgentDefinition is IAgentWithContext contextAgent && contextAgent.Matches(context))
+            {
+                Logger.LogDebug("Context-based agent selection: {AgentName} matches context {Context}",
+                    agentInfo.Name, context.Address);
+                return agentInfo;
+            }
+        }
+
+        return null;
+    }
+
+    private void OnAgentInfoChanged(AgentDisplayInfo? newAgentInfo)
+    {
+        if (newAgentInfo == null || newAgentInfo.Name == selectedAgentInfo?.Name)
             return;
 
-        selectedAgent = newAgent;
+        selectedAgentInfo = newAgentInfo;
 
         // Update model to agent's preferred model
-        var preferredModel = AgentChatFactoryProvider.GetPreferredModelForAgent(newAgent);
+        var preferredModel = AgentChatFactoryProvider.GetPreferredModelForAgent(newAgentInfo.Name);
         if (!string.IsNullOrEmpty(preferredModel) && preferredModel != selectedModel)
         {
             selectedModel = preferredModel;
@@ -160,9 +184,9 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
         selectedModel = newModel;
 
         // Update the agent's model preference
-        if (!string.IsNullOrEmpty(selectedAgent))
+        if (selectedAgentInfo != null)
         {
-            AgentChatFactoryProvider.SetModelPreferenceForAgent(selectedAgent, newModel);
+            AgentChatFactoryProvider.SetModelPreferenceForAgent(selectedAgentInfo.Name, newModel);
         }
 
         ScheduleAgentReinstantiation();
@@ -699,7 +723,8 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
                 InsertText = r.InsertText,
                 Description = r.Description,
                 Category = r.Category,
-                Detail = r.Score > 0 ? $"Score: {r.Score}" : null
+                Detail = r.Score > 0 ? $"Score: {r.Score}" : null,
+                Kind = MapAutocompleteKindToCompletionKind(r.Kind)
             }).ToArray();
         }
         catch (Exception ex)
@@ -708,6 +733,14 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
             return [];
         }
     }
+
+    private static CompletionItemKind MapAutocompleteKindToCompletionKind(AutocompleteKind kind) => kind switch
+    {
+        AutocompleteKind.Agent => CompletionItemKind.Module,
+        AutocompleteKind.File => CompletionItemKind.File,
+        AutocompleteKind.Command => CompletionItemKind.Function,
+        _ => CompletionItemKind.Text
+    };
 
     public void Dispose()
     => currentResponseCancellation.Cancel();

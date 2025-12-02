@@ -12,6 +12,11 @@ namespace MeshWeaver.Documentation.AI
         /// </summary>
 
         public string Name => GetType().Name;
+
+        public string? GroupName => "Documentation";
+        public int DisplayOrder => 100;
+        public string? IconName => "Games";
+
         /// <summary>
         /// name of the other player this agent can delegate to
         /// </summary>

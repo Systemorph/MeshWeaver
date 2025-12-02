@@ -22,6 +22,10 @@ public class InsuranceAgent(IMessageHub hub) : IInitializableAgent, IAgentWithTo
 
     public string Name => "InsuranceAgent";
 
+    public string? GroupName => "Insurance";
+    public int DisplayOrder => 0;
+    public string? IconName => "Shield";
+
     public string Description =>
         "Handles all questions and actions related to insurance pricings, property risks, and dimensions. " +
         "Provides access to pricing data, allows creation and management of pricings and property risks. " +

@@ -332,7 +332,9 @@ export function registerCompletionProvider(editorId, config) {
                     label: item.label,
                     description: item.description || ''
                 },
-                kind: monaco.languages.CompletionItemKind.User,
+                // Use item.kind if provided, otherwise default to Text (0)
+                // Monaco CompletionItemKind values match our enum: Module=8, File=16, Function=2, Text=0
+                kind: typeof item.kind === 'number' ? item.kind : monaco.languages.CompletionItemKind.Text,
                 insertText: item.insertText || item.label,
                 range: range,
                 // Show category as detail (appears on the right side)

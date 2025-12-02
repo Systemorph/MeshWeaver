@@ -23,6 +23,8 @@ public class AzureOpenAIChatCompletionAgentChatFactory(
 
     public override IReadOnlyList<string> Models => credentials.Models;
 
+    public override int DisplayOrder => credentials.DisplayOrder;
+
     protected override IChatClient CreateChatClient(IAgentDefinition agentDefinition)
     {
         // Validate credentials
