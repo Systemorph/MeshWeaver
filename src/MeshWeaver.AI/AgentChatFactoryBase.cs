@@ -13,6 +13,11 @@ public abstract class AgentChatFactoryBase : IAgentChatFactory
     protected readonly IMessageHub Hub;
     protected readonly Task<IReadOnlyDictionary<string, IAgentDefinition>> AgentDefinitions;
 
+    /// <summary>
+    /// The current model name being used for chat creation
+    /// </summary>
+    protected string? CurrentModelName { get; private set; }
+
     protected AgentChatFactoryBase(
         IMessageHub hub,
         IEnumerable<IAgentDefinition> agentDefinitions)
@@ -21,7 +26,18 @@ public abstract class AgentChatFactoryBase : IAgentChatFactory
         Logger = hub.ServiceProvider.GetRequiredService<ILoggerFactory>().CreateLogger(GetType());
         AgentDefinitions = Initialize(agentDefinitions);
     }
+
     protected ILogger Logger { get; }
+
+    /// <summary>
+    /// Factory identifier (e.g., "Azure OpenAI", "Azure Claude")
+    /// </summary>
+    public abstract string Name { get; }
+
+    /// <summary>
+    /// List of models this factory can create
+    /// </summary>
+    public abstract IReadOnlyList<string> Models { get; }
 
     protected async Task<IReadOnlyDictionary<string, IAgentDefinition>> Initialize(
         IEnumerable<IAgentDefinition> agentDefinitions)
@@ -37,8 +53,17 @@ public abstract class AgentChatFactoryBase : IAgentChatFactory
     }
 
 
-    public virtual async Task<IAgentChat> CreateAsync()
+    public virtual Task<IAgentChat> CreateAsync()
     {
+        // Use default model (first in the list)
+        var defaultModel = Models.FirstOrDefault();
+        return CreateAsync(defaultModel ?? string.Empty);
+    }
+
+    public virtual async Task<IAgentChat> CreateAsync(string modelName)
+    {
+        CurrentModelName = modelName;
+
         var agentDefinitions = await AgentDefinitions;
         var existingAgents = await GetExistingAgentsAsync();
 

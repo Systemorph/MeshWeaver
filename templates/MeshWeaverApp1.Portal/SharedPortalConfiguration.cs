@@ -1,5 +1,6 @@
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
+using MeshWeaver.AI;
 using MeshWeaver.AI.AzureOpenAI;
 using MeshWeaver.AI.Persistence;
 using MeshWeaver.Blazor.Infrastructure;
@@ -62,6 +63,9 @@ public static class SharedPortalConfiguration
             }
         });
         services.AddAzureOpenAI();
+
+        // Register the factory provider (must be after all factory registrations)
+        services.AddAgentChatFactoryProvider();
 
         // configure Azure Foundry chat
         //services.Configure<AzureAIFoundryConfiguration>(builder.Configuration.GetSection("AzureAIS"));

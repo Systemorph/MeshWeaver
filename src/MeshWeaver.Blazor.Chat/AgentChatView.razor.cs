@@ -7,6 +7,7 @@ using MeshWeaver.Messaging;
 using MeshWeaver.ShortGuid;
 using Microsoft.AspNetCore.Components;
 using Microsoft.Extensions.AI;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.JSInterop;
 using TextContent = Microsoft.Extensions.AI.TextContent;
@@ -33,7 +34,7 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
     private ChatConversation? currentConversation;
     private bool isLoadingConversation;
     private bool isGeneratingResponse;
-
+    private IAgentChatFactoryProvider AgentChatFactoryProvider => Hub.ServiceProvider.GetRequiredService<IAgentChatFactoryProvider>();
     // Bound context from the control
     private readonly AgentContext? boundContext;
 
@@ -49,6 +50,13 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
     private bool positionMenuVisible = false;
     [Parameter] public EventCallback<ChatPosition> OnPositionChanged { get; set; }
     [Parameter] public EventCallback<ChatMessage> OnMessageAdded { get; set; }
+
+    // Agent and model selection state
+    private string? selectedAgent;
+    private string? selectedModel;
+    private IReadOnlyList<string> availableAgents = [];
+    private IReadOnlyList<string> availableModels = [];
+    private bool pendingModelChange;
 
     private async Task OnNewMessageReceived(ChatMessage message)
     {
@@ -75,6 +83,9 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
             ");
         }
 
+        // Initialize agent and model selections
+        await InitializeAgentAndModelSelectionsAsync();
+
         // Try to load the most recent conversation on startup
         try
         {
@@ -97,6 +108,87 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
         }
     }
 
+    private async Task InitializeAgentAndModelSelectionsAsync()
+    {
+        // Initialize agent preferences based on IAgentWithModelPreference implementations
+        await AgentChatFactoryProvider.InitializeAgentPreferencesAsync();
+
+        // Get available agents
+        var agents = await AgentChatFactoryProvider.GetAgentsAsync();
+        availableAgents = agents.Keys.ToList();
+        selectedAgent = availableAgents.FirstOrDefault();
+
+        // Get available models (union from all factories)
+        availableModels = AgentChatFactoryProvider.AllModels;
+
+        // Set initial model based on agent preference or default
+        if (!string.IsNullOrEmpty(selectedAgent))
+        {
+            selectedModel = AgentChatFactoryProvider.GetPreferredModelForAgent(selectedAgent);
+        }
+        else
+        {
+            selectedModel = availableModels.FirstOrDefault();
+        }
+
+        StateHasChanged();
+    }
+
+    private void OnAgentChanged(string? newAgent)
+    {
+        if (newAgent == selectedAgent || string.IsNullOrEmpty(newAgent))
+            return;
+
+        selectedAgent = newAgent;
+
+        // Update model to agent's preferred model
+        var preferredModel = AgentChatFactoryProvider.GetPreferredModelForAgent(newAgent);
+        if (!string.IsNullOrEmpty(preferredModel) && preferredModel != selectedModel)
+        {
+            selectedModel = preferredModel;
+            ScheduleAgentReinstantiation();
+        }
+
+        StateHasChanged();
+    }
+
+    private void OnModelChanged(string? newModel)
+    {
+        if (newModel == selectedModel || string.IsNullOrEmpty(newModel))
+            return;
+
+        selectedModel = newModel;
+
+        // Update the agent's model preference
+        if (!string.IsNullOrEmpty(selectedAgent))
+        {
+            AgentChatFactoryProvider.SetModelPreferenceForAgent(selectedAgent, newModel);
+        }
+
+        ScheduleAgentReinstantiation();
+        StateHasChanged();
+    }
+
+    private void ScheduleAgentReinstantiation()
+    {
+        // If currently generating a response, mark that we need to reinstantiate after it finishes
+        if (isGeneratingResponse)
+        {
+            pendingModelChange = true;
+        }
+        else
+        {
+            // Immediately reinstantiate the agent with the new model
+            ReinstantiateAgent();
+        }
+    }
+
+    private void ReinstantiateAgent()
+    {
+        pendingModelChange = false;
+        lazyChat = GetLazyChat();
+    }
+
     public AgentChatView()
     {
         lazyChat = GetLazyChat();
@@ -111,7 +203,8 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
 
     private Lazy<Task<IAgentChat>> GetLazyChat()
     {
-        return new(() => AgentChatFactory.CreateAsync());
+        // Use the selected model, or default if none selected
+        return new(() => AgentChatFactoryProvider.CreateAsync(selectedModel ?? AgentChatFactoryProvider.AllModels.FirstOrDefault() ?? string.Empty));
     }
 
     // Public method to allow parent components to reset the conversation
@@ -370,6 +463,13 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
             }
 
             isGeneratingResponse = false;
+
+            // Check if model was changed while generating - reinstantiate now
+            if (pendingModelChange)
+            {
+                ReinstantiateAgent();
+            }
+
             StateHasChanged();
         }
     }

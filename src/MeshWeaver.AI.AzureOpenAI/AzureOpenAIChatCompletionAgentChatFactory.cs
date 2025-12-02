@@ -19,6 +19,10 @@ public class AzureOpenAIChatCompletionAgentChatFactory(
 {
     private readonly AzureOpenAIConfiguration credentials = options.Value ?? throw new ArgumentNullException(nameof(options));
 
+    public override string Name => "Azure OpenAI";
+
+    public override IReadOnlyList<string> Models => credentials.Models;
+
     protected override IChatClient CreateChatClient(IAgentDefinition agentDefinition)
     {
         // Validate credentials
@@ -27,13 +31,18 @@ public class AzureOpenAIChatCompletionAgentChatFactory(
         if (string.IsNullOrEmpty(credentials.ApiKey))
             throw new InvalidOperationException("Azure OpenAI API key is required in AI configuration");
 
+        // Use CurrentModelName if set, otherwise fall back to first model
+        var modelName = !string.IsNullOrEmpty(CurrentModelName) ? CurrentModelName : credentials.Models.FirstOrDefault();
+        if (string.IsNullOrEmpty(modelName))
+            throw new InvalidOperationException("No model configured for Azure OpenAI");
+
         // Create Azure OpenAI client and get chat client
         var azureClient = new AzureOpenAIClient(
             new Uri(credentials.Endpoint),
             new AzureKeyCredential(credentials.ApiKey));
 
         // Get the chat completion client for the model and convert it to IChatClient
-        var openAIChatClient = azureClient.GetChatClient(credentials.Models.First());
+        var openAIChatClient = azureClient.GetChatClient(modelName);
 
         // Use the AsChatClient extension method to convert OpenAI.Chat.ChatClient to Microsoft.Extensions.AI.IChatClient
         // Wrap with ChatClientBuilder and enable function invocation for automatic tool calling

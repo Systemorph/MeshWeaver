@@ -17,6 +17,10 @@ public class AzureClaudeChatCompletionAgentChatFactory(
 {
     private readonly AzureClaudeConfiguration configuration = options.Value ?? throw new ArgumentNullException(nameof(options));
 
+    public override string Name => "Azure Claude";
+
+    public override IReadOnlyList<string> Models => configuration.Models;
+
     protected override IChatClient CreateChatClient(IAgentDefinition agentDefinition)
     {
         if (string.IsNullOrEmpty(configuration.Endpoint))
@@ -25,7 +29,8 @@ public class AzureClaudeChatCompletionAgentChatFactory(
         if (string.IsNullOrEmpty(configuration.ApiKey))
             throw new InvalidOperationException("ApiKey is required in AzureClaudeConfiguration");
 
-        var modelName = configuration.Models.FirstOrDefault();
+        // Use CurrentModelName if set, otherwise fall back to first model
+        var modelName = !string.IsNullOrEmpty(CurrentModelName) ? CurrentModelName : configuration.Models.FirstOrDefault();
         if (string.IsNullOrEmpty(modelName))
             throw new InvalidOperationException("At least one model must be configured in AzureClaudeConfiguration.Models");
 
