@@ -19,4 +19,9 @@ public class AzureOpenAIConfiguration
     /// Available models/deployment names
     /// </summary>
     public string[] Models { get; set; } = Array.Empty<string>();
+
+    /// <summary>
+    /// Display order in model dropdown (lower = first)
+    /// </summary>
+    public int DisplayOrder { get; set; } = 0;
 }

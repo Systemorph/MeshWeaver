@@ -39,6 +39,11 @@ public abstract class AgentChatFactoryBase : IAgentChatFactory
     /// </summary>
     public abstract IReadOnlyList<string> Models { get; }
 
+    /// <summary>
+    /// Display order for sorting in model dropdown (lower = first)
+    /// </summary>
+    public abstract int DisplayOrder { get; }
+
     protected async Task<IReadOnlyDictionary<string, IAgentDefinition>> Initialize(
         IEnumerable<IAgentDefinition> agentDefinitions)
     {

@@ -144,14 +144,3 @@ body {
     color: var(--neutral-foreground-secondary);
     text-align: center;
 }
-
-.chat-selectors {
-    display: flex;
-    gap: 12px;
-    margin-bottom: 12px;
-    align-items: center;
-}
-
-.chat-selectors fluent-select {
-    flex-shrink: 0;
-}

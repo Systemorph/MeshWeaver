@@ -22,4 +22,23 @@ public interface IAgentDefinition
     /// </summary>
     string Instructions { get; }
 
+    /// <summary>
+    /// Gets the group name for UI categorization (e.g., "Insurance", "Northwind", "Todo", "Documentation")
+    /// </summary>
+    string? GroupName => null;
+
+    /// <summary>
+    /// Gets the display order within the group (lower = first)
+    /// </summary>
+    int DisplayOrder => 0;
+
+    /// <summary>
+    /// Gets the FluentUI icon name (e.g., "Shield", "Document", "Database")
+    /// </summary>
+    string? IconName => null;
+
+    /// <summary>
+    /// Gets custom SVG path override for the icon (optional)
+    /// </summary>
+    string? CustomIconSvg => null;
 }

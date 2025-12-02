@@ -15,6 +15,11 @@ public interface IAgentChatFactory
     IReadOnlyList<string> Models { get; }
 
     /// <summary>
+    /// Display order for sorting in model dropdown (lower = first)
+    /// </summary>
+    int DisplayOrder { get; }
+
+    /// <summary>
     /// Creates a chat using the default model
     /// </summary>
     Task<IAgentChat> CreateAsync();

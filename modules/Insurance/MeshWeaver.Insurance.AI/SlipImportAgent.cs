@@ -8,7 +8,7 @@ using Microsoft.Extensions.AI;
 
 namespace MeshWeaver.Insurance.AI;
 
-public class SlipImportAgent(IMessageHub hub) : IInitializableAgent, IAgentWithTools
+public class SlipImportAgent(IMessageHub hub) : IInitializableAgent, IAgentWithTools, IAgentWithModelPreference
 {
     private Dictionary<string, TypeDescription>? typeDefinitionMap;
     private string? pricingSchema;
@@ -17,6 +17,13 @@ public class SlipImportAgent(IMessageHub hub) : IInitializableAgent, IAgentWithT
     private string? referenceDataInfo;
 
     public string Name => nameof(SlipImportAgent);
+
+    public string? GroupName => "Insurance";
+    public int DisplayOrder => 2;
+    public string? IconName => "DocumentPdf";
+
+    public string? GetPreferredModel(IReadOnlyList<string> availableModels)
+        => availableModels.FirstOrDefault(m => m.Contains("claude-sonnet-4-5", StringComparison.OrdinalIgnoreCase));
 
     public string Description =>
         "Imports insurance slip documents from PDF or Markdown files and structures them into Pricing and ReinsuranceAcceptance data models using LLM-based extraction.";

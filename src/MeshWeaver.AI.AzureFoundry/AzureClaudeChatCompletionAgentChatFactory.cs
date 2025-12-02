@@ -21,6 +21,8 @@ public class AzureClaudeChatCompletionAgentChatFactory(
 
     public override IReadOnlyList<string> Models => configuration.Models;
 
+    public override int DisplayOrder => configuration.DisplayOrder;
+
     protected override IChatClient CreateChatClient(IAgentDefinition agentDefinition)
     {
         if (string.IsNullOrEmpty(configuration.Endpoint))

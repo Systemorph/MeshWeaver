@@ -60,3 +60,27 @@
     background-color: var(--neutral-fill-secondary-hover);
     color: var(--neutral-foreground-rest);
 }
+
+.chat-selectors {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    flex-shrink: 0;
+}
+
+.chat-selectors fluent-select {
+    flex-shrink: 0;
+}
+
+.agent-option {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 2px 0;
+}
+
+.agent-option .agent-name {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}

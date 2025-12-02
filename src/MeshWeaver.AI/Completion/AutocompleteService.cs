@@ -44,7 +44,8 @@ public class AutocompleteService
                 InsertText: $"@{agent.Name} ",
                 Description: agent.Description,
                 Category: "Agents",
-                Priority: AgentCategoryPriority
+                Priority: AgentCategoryPriority,
+                Kind: AutocompleteKind.Agent
             ));
         }
 
@@ -58,7 +59,9 @@ public class AutocompleteService
                 foreach (var item in items)
                 {
                     // Ensure file items have lower priority than agents
-                    allItems.Add(item with { Priority = FileCategoryPriority + item.Priority });
+                    // Set Kind to File if not already set
+                    var kind = item.Kind == AutocompleteKind.Other ? AutocompleteKind.File : item.Kind;
+                    allItems.Add(item with { Priority = FileCategoryPriority + item.Priority, Kind = kind });
                 }
             }
             catch
@@ -66,6 +69,12 @@ public class AutocompleteService
                 // Skip agents that fail to provide items
             }
         }
+
+        // Deduplicate by InsertText (keep highest priority item)
+        allItems = allItems
+            .GroupBy(i => i.InsertText)
+            .Select(g => g.OrderByDescending(i => i.Priority).First())
+            .ToList();
 
         // Apply fuzzy scoring
         var scored = _fuzzyScorer.Score(
@@ -85,7 +94,8 @@ public class AutocompleteService
                 s.Item.Description,
                 s.Item.Category,
                 s.Score,
-                s.MatchPositions
+                s.MatchPositions,
+                s.Item.Kind
             ))
             .ToList();
 
@@ -102,11 +112,13 @@ public class AutocompleteService
 /// <param name="Category">Category for grouping (e.g., "Agents", "Files").</param>
 /// <param name="Score">The fuzzy match score (higher is better).</param>
 /// <param name="MatchPositions">Positions of matched characters for highlighting.</param>
+/// <param name="Kind">The kind of item (Agent, File, Command) - determines icon.</param>
 public record AutocompleteResult(
     string Label,
     string InsertText,
     string? Description,
     string Category,
     int Score,
-    int[] MatchPositions
+    int[] MatchPositions,
+    AutocompleteKind Kind
 );

@@ -18,6 +18,11 @@ public class TodoAgent(IMessageHub hub) : IInitializableAgent, IAgentWithTools, 
     private Dictionary<string, TypeDescription>? typeDefinitionMap;
     private Dictionary<string, LayoutAreaDefinition>? layoutAreaMap;
     public string Name => "TodoAgent";
+
+    public string? GroupName => "Todo";
+    public int DisplayOrder => 0;
+    public string? IconName => "CheckmarkSquare";
+
     public string Description => "Handles all questions and actions related to todo items, categories, and task management. Provides access to todo data, allows creation, categorization, and management of todo items.";
     public string Instructions =>
         $@"The agent is the TodoAgent, specialized in managing todo items:

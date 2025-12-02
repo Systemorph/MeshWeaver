@@ -20,4 +20,9 @@ public class AzureClaudeConfiguration
     /// Available Claude models (e.g., claude-sonnet-4-20250514, claude-haiku-4-5)
     /// </summary>
     public string[] Models { get; set; } = [];
+
+    /// <summary>
+    /// Display order in model dropdown (lower = first)
+    /// </summary>
+    public int DisplayOrder { get; set; } = 0;
 }

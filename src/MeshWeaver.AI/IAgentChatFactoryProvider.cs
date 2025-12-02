@@ -58,4 +58,10 @@ public interface IAgentChatFactoryProvider
     /// Call this after agents are loaded.
     /// </summary>
     Task InitializeAgentPreferencesAsync();
+
+    /// <summary>
+    /// Gets agents with display info including auto-calculated indent levels
+    /// based on IAgentWithHandoffs delegation hierarchy.
+    /// </summary>
+    Task<IReadOnlyList<AgentDisplayInfo>> GetAgentsWithDisplayInfoAsync();
 }

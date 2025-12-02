@@ -60,18 +60,24 @@ public static class SharedPortalConfiguration
         services.AddPortalAI();
         services.AddMemoryChatPersistence();
 
-        // configure AzureOpenAI chat
-        services.Configure<AzureOpenAIConfiguration>(
-            builder.Configuration.GetSection("AzureOpenAIS")
-            );
-        services.AddAzureOpenAI();
+        // Configure AI factories (ordered by DisplayOrder - Anthropic first)
+        services.AddAzureFoundryClaude(config =>
+        {
+            builder.Configuration.GetSection("Anthropic").Bind(config);
+            config.DisplayOrder = 0;  // Anthropic first
+        });
 
-        // configure Azure Foundry Claude
-        services.Configure<AzureFoundryConfiguration>(builder.Configuration.GetSection("AzureAIS"));
-        services.AddAzureFoundry();
+        services.AddAzureFoundry(config =>
+        {
+            builder.Configuration.GetSection("AzureAIS").Bind(config);
+            config.DisplayOrder = 10;  // Azure Foundry second
+        });
 
-        services.Configure<AzureClaudeConfiguration>(builder.Configuration.GetSection("Anthropic"));
-        services.AddAzureFoundryClaude();
+        services.AddAzureOpenAI(config =>
+        {
+            builder.Configuration.GetSection("AzureOpenAIS").Bind(config);
+            config.DisplayOrder = 20;  // Azure OpenAI last
+        });
 
         // Register the factory provider (must be after all factory registrations)
         services.AddAgentChatFactoryProvider();

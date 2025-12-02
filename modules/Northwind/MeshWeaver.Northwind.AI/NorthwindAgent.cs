@@ -20,6 +20,10 @@ public class NorthwindAgent(IMessageHub hub) : IInitializableAgent, IAgentWithTo
     /// <inheritdoc cref="IAgentDefinition"/>
     public string Name => "NorthwindAgent";
 
+    public string? GroupName => "Northwind";
+    public int DisplayOrder => 0;
+    public string? IconName => "Database";
+
     /// <inheritdoc cref="IAgentDefinition"/>
     public string Description => "Any question around the Northwind domain should direct here. Provides access to Northwind domain data including customers, orders, products, and other business entities. Can query and analyze Northwind business data.";
 

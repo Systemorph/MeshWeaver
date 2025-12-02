@@ -20,4 +20,9 @@ public class AzureFoundryConfiguration
     /// Available models (e.g., gpt-4o, gpt-4o-mini)
     /// </summary>
     public string[] Models { get; set; } = [];
+
+    /// <summary>
+    /// Display order in model dropdown (lower = first)
+    /// </summary>
+    public int DisplayOrder { get; set; } = 0;
 }
