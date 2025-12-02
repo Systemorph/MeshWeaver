@@ -1,9 +1,7 @@
 @inherits BlazorView<AgentChatControl, AgentChatView>
 
 @using MeshWeaver.AI.Persistence
-@using MeshWeaver.Blazor.Monaco
 @implements IDisposable
-@inject IAgentChatFactory AgentChatFactory
 @inject NavigationManager NavigationManager
 @inject IChatPersistenceService ChatPersistenceService
 @inject IEnumerable<IAgentDefinition> AgentDefinitions
@@ -91,6 +89,24 @@
             }
         </div>
         <div class="chat-container">
+            <div class="chat-selectors">
+                <FluentSelect TOption="string"
+                              Value="@selectedAgent"
+                              ValueChanged="@OnAgentChanged"
+                              Items="@availableAgents"
+                              OptionValue="@(a => a)"
+                              OptionText="@(a => a)"
+                              AriaLabel="Select Agent"
+                              Style="min-width: 120px;" />
+                <FluentSelect TOption="string"
+                              Value="@selectedModel"
+                              ValueChanged="@OnModelChanged"
+                              Items="@availableModels"
+                              OptionValue="@(m => m)"
+                              OptionText="@(m => m)"
+                              AriaLabel="Select Model"
+                              Style="min-width: 180px;" />
+            </div>
             <MeshWeaver.Blazor.Chat.ChatInput OnSend="@AddUserMessageAsync" @ref="@chatInput"
                 IsDisabled="@isGeneratingResponse"
                 CompletionProvider="@GetAgentCompletionConfig()"

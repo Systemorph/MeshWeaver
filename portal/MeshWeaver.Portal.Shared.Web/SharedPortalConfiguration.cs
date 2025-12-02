@@ -1,5 +1,6 @@
 ﻿using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
+using MeshWeaver.AI;
 using MeshWeaver.AI.AzureFoundry;
 using MeshWeaver.AI.AzureOpenAI;
 using MeshWeaver.AI.Persistence;
@@ -60,14 +61,20 @@ public static class SharedPortalConfiguration
         services.AddMemoryChatPersistence();
 
         // configure AzureOpenAI chat
-        //services.Configure<AzureOpenAIConfiguration>(
-        //    builder.Configuration.GetSection("AzureOpenAIS")
-        //    );
-        //services.AddAzureOpenAI();
+        services.Configure<AzureOpenAIConfiguration>(
+            builder.Configuration.GetSection("AzureOpenAIS")
+            );
+        services.AddAzureOpenAI();
 
         // configure Azure Foundry Claude
+        services.Configure<AzureFoundryConfiguration>(builder.Configuration.GetSection("AzureAIS"));
+        services.AddAzureFoundry();
+
         services.Configure<AzureClaudeConfiguration>(builder.Configuration.GetSection("Anthropic"));
         services.AddAzureFoundryClaude();
+
+        // Register the factory provider (must be after all factory registrations)
+        services.AddAgentChatFactoryProvider();
 
         // setting up google maps configuration
         services.Configure<GoogleMapsConfiguration>(builder.Configuration.GetSection("GoogleMaps"));
