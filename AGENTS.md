@@ -67,7 +67,7 @@ dotnet new meshweaver-solution -n MyApp
   - `MeshWeaver.Blazor` - Blazor Server implementation
   - `MeshWeaver.Data` - CRUD operations with activity tracking
 
-- **`modules/`** - Business domain modules
+- **`samples/`** - Sample business domain applications
   - `Documentation/` - Interactive markdown with live code execution
   - `Northwind/` - Sample business application with analytics
   - `Todo/` - Simple CRUD demonstration
@@ -242,7 +242,7 @@ public class MyTest : HubTestBase, IAsyncLifetime
 
 - Framework code belongs in `src/`
 - Test code belongs in `test/`
-- Business modules go in `modules/` 
+- Sample applications go in `samples/` 
 - Each module should have its own set of hubs and address spaces (e.g., `@app/northwind`)
 - UI components should be framework-agnostic in the layout layer. The language are the controls inheriting from `UiControl`.
 - AI agents should use plugins to access application functionality

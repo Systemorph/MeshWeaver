@@ -200,7 +200,7 @@ This pattern enables maintaining consistency across distributed systems while al
 ## Related Projects
 - [MeshWeaver.Data.Contract](../MeshWeaver.Data.Contract/README.md) - Interface definitions
 - [MeshWeaver.Domain](../MeshWeaver.Domain/README.md) - Domain model definitions
-- [Northwind](../../modules/Northwind/README.md) - Reference implementation
+- [Northwind](../../samples/Northwind/README.md) - Reference implementation
 
 ## See Also
 Refer to the [main MeshWeaver documentation](../../Readme.md) for more information about the overall project. 

@@ -19,13 +19,13 @@ New-Item -ItemType Directory -Path $OutputPath -Force | Out-Null
 Write-Host "Copying template projects..." -ForegroundColor Yellow
 Copy-Item -Path "templates\MeshWeaverApp1.Portal" -Destination "$OutputPath\MeshWeaverApp1.Portal" -Recurse -Force
 
-# Copy and rename Todo module from modules directory
-Write-Host "Copying Todo module from modules..." -ForegroundColor Yellow
-Copy-Item -Path "modules\Todo\MeshWeaver.Todo" -Destination "$OutputPath\MeshWeaverApp1.Todo" -Recurse -Force -Exclude "bin", "obj"
+# Copy and rename Todo module from samples directory
+Write-Host "Copying Todo module from samples..." -ForegroundColor Yellow
+Copy-Item -Path "samples\Todo\MeshWeaver.Todo" -Destination "$OutputPath\MeshWeaverApp1.Todo" -Recurse -Force -Exclude "bin", "obj"
 
-# Copy and rename Todo.AI module from modules directory
-Write-Host "Copying Todo.AI module from modules..." -ForegroundColor Yellow
-Copy-Item -Path "modules\Todo\MeshWeaver.Todo.AI" -Destination "$OutputPath\MeshWeaverApp1.Todo.AI" -Recurse -Force -Exclude "bin", "obj"
+# Copy and rename Todo.AI module from samples directory
+Write-Host "Copying Todo.AI module from samples..." -ForegroundColor Yellow
+Copy-Item -Path "samples\Todo\MeshWeaver.Todo.AI" -Destination "$OutputPath\MeshWeaverApp1.Todo.AI" -Recurse -Force -Exclude "bin", "obj"
 
 # Copy and rename Todo test project
 Write-Host "Copying Todo test project..." -ForegroundColor Yellow

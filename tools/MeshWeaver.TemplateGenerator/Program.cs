@@ -94,11 +94,11 @@ public class TemplateGenerator
 
     private void CopyModules()
     {
-        Console.WriteLine("Copying Todo module from modules...");
-        CopyDirectory("modules/Todo/MeshWeaver.Todo", Path.Combine(_outputPath, "src", "MeshWeaverApp1.Todo"), ["bin", "obj", ".gitignore"]);
+        Console.WriteLine("Copying Todo module from samples...");
+        CopyDirectory("samples/Todo/MeshWeaver.Todo", Path.Combine(_outputPath, "src", "MeshWeaverApp1.Todo"), ["bin", "obj", ".gitignore"]);
 
-        Console.WriteLine("Copying Todo.AI module from modules...");
-        CopyDirectory("modules/Todo/MeshWeaver.Todo.AI", Path.Combine(_outputPath, "src", "MeshWeaverApp1.Todo.AI"), ["bin", "obj", ".gitignore"]);
+        Console.WriteLine("Copying Todo.AI module from samples...");
+        CopyDirectory("samples/Todo/MeshWeaver.Todo.AI", Path.Combine(_outputPath, "src", "MeshWeaverApp1.Todo.AI"), ["bin", "obj", ".gitignore"]);
 
         Console.WriteLine("Copying Todo test project...");
         CopyDirectory("test/MeshWeaver.Todo.Test", Path.Combine(_outputPath, "test", "MeshWeaverApp1.Todo.Test"), ["bin", "obj", "TestResults", ".gitignore"]);

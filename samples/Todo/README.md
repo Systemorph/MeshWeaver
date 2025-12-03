@@ -98,7 +98,7 @@ All changes are immediately reflected across all layout areas:
 ## Project Structure
 
 ```
-modules/Todo/MeshWeaver.Todo/
+samples/Todo/MeshWeaver.Todo/
 ├── MeshWeaver.Todo.csproj          # Project file with dependencies
 ├── TodoItem.cs                     # Main entity model (record type)
 ├── TodoStatus.cs                   # Status enumeration
@@ -140,7 +140,7 @@ This allows the Todo application to be discovered and instantiated by the MeshWe
 To build the project:
 
 ```bash
-cd modules/Todo/MeshWeaver.Todo
+cd samples/Todo/MeshWeaver.Todo
 dotnet build
 ```
 
