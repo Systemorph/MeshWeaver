@@ -9,10 +9,10 @@
     <PackageReference Include="Newtonsoft.Json" />
   </ItemGroup>
   <ItemGroup>
-    <ProjectReference Include="..\..\modules\Insurance\MeshWeaver.Insurance.AI\MeshWeaver.Insurance.AI.csproj" />
-    <ProjectReference Include="..\..\modules\Todo\MeshWeaver.Todo.AI\MeshWeaver.Todo.AI.csproj" />
-    <ProjectReference Include="..\..\modules\Northwind\MeshWeaver.Northwind.AI\MeshWeaver.Northwind.AI.csproj" />
-    <ProjectReference Include="..\..\modules\Documentation\MeshWeaver.Documentation.AI\MeshWeaver.Documentation.AI.csproj" />
+    <ProjectReference Include="..\..\samples\Insurance\MeshWeaver.Insurance.AI\MeshWeaver.Insurance.AI.csproj" />
+    <ProjectReference Include="..\..\samples\Todo\MeshWeaver.Todo.AI\MeshWeaver.Todo.AI.csproj" />
+    <ProjectReference Include="..\..\samples\Northwind\MeshWeaver.Northwind.AI\MeshWeaver.Northwind.AI.csproj" />
+    <ProjectReference Include="..\..\samples\Documentation\MeshWeaver.Documentation.AI\MeshWeaver.Documentation.AI.csproj" />
   </ItemGroup>
 
 </Project>
