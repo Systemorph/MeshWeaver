@@ -11,7 +11,7 @@ You can now hide collections from specific contexts using the `HiddenFrom` prope
     {
       "Name": "Documentation",
       "DisplayName": "Documentation",
-      "BasePath": "../../modules/Documentation/Markdown",
+      "BasePath": "../../samples/Documentation/Markdown",
       "HiddenFrom": []
     },
     {

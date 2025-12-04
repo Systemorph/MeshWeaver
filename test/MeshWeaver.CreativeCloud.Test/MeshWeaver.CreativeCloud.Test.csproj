@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\samples\CreativeCloud\MeshWeaver.CreativeCloud.Domain\MeshWeaver.CreativeCloud.Domain.csproj" />
+    <ProjectReference Include="..\..\samples\CreativeCloud\MeshWeaver.CreativeCloud.AI\MeshWeaver.CreativeCloud.AI.csproj" />
+    <ProjectReference Include="..\..\src\MeshWeaver.Hosting.Monolith.TestBase\MeshWeaver.Hosting.Monolith.TestBase.csproj" />
+  </ItemGroup>
+</Project>
