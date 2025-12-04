@@ -2,8 +2,10 @@
 using System.Collections.Generic;
 using System.ComponentModel.DataAnnotations;
 using System.Diagnostics;
+using System.Linq;
 using System.Reactive.Linq;
 using System.Text.Json;
+using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
 using FluentAssertions.Extensions;
@@ -16,9 +18,6 @@ using MeshWeaver.Layout.Composition;
 using MeshWeaver.Layout.DataGrid;
 using MeshWeaver.Messaging;
 using MeshWeaver.Utils;
-using System.Linq;
-using System.Threading;
-using Xunit;
 
 
 namespace MeshWeaver.Layout.Test;
@@ -69,6 +68,9 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
                     .WithView(nameof(DataGrid), DataGrid)
                     .WithView(nameof(DataBoundCheckboxes), DataBoundCheckboxes)
                     .WithView(nameof(AsyncView), AsyncView)
+                    .WithView(nameof(StartWithLoadingView), StartWithLoadingView)
+                    .WithView(nameof(StartWithDelayedView), StartWithDelayedView)
+                    .WithView(nameof(StartWithSubjectView), StartWithSubjectView)
             );
     }
 
@@ -99,13 +101,12 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
             .HaveCount(2)
             .And.Subject;
 
-        var areaControls = await areas
-            .ToAsyncEnumerable()
-            .Select(async a =>
+        var areaControls = await Task.WhenAll(
+            areas.Select(async a =>
                 await stream.GetControlStream(a.Area.ToString()!)
                 .Timeout(10.Seconds())
                 .FirstAsync(x => x != null)!)
-            .ToArrayAsync();
+        );
 
         areaControls.Should().HaveCount(2).And.AllBeOfType<HtmlControl>();
     }
@@ -620,6 +621,152 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         {
             Output.WriteLine($"Hosted deserialization failed: {ex.Message}");
         }
+    }
+
+
+    // Subject for testing controlled emission
+    private static readonly System.Reactive.Subjects.ReplaySubject<UiControl> TestSubject = new(1);
+
+    /// <summary>
+    /// Test that demonstrates the issue with IObservable views using StartWith.
+    /// When a view returns IObservable&lt;UiControl&gt; with .StartWith(loadingControl),
+    /// and the underlying data stream needs to initialize, the view can get stuck
+    /// at the loading state and never transition to the actual content.
+    /// </summary>
+    [HubFact]
+    public async Task TestStartWithLoading()
+    {
+        var reference = new LayoutAreaReference(nameof(StartWithLoadingView));
+
+        var hub = GetClient();
+        var workspace = hub.GetWorkspace();
+        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
+            new HostAddress(),
+            reference
+        );
+
+        // Get the control - we should eventually see "DataGrid" content, not stay at "Loading"
+        var controls = await stream
+            .GetControlStream(reference.Area.ToString()!)
+            .TakeUntil(o => o is DataGridControl)
+            .Timeout(5.Seconds())
+            .ToArray();
+
+        // Should have received at least the loading control and the final data grid
+        controls.Should().HaveCountGreaterThanOrEqualTo(1);
+
+        // The last control should be the DataGrid, not the Markdown loading message
+        controls.Last().Should().BeOfType<DataGridControl>();
+    }
+
+    /// <summary>
+    /// Test with delayed data emission to better reproduce the StartWith issue.
+    /// This simulates a scenario where data loads after a delay, which can cause
+    /// the view to get stuck at the loading state if there's a hashing/timing issue.
+    /// </summary>
+    [HubFact]
+    public async Task TestStartWithDelayedData()
+    {
+        var reference = new LayoutAreaReference(nameof(StartWithDelayedView));
+
+        var hub = GetClient();
+        var workspace = hub.GetWorkspace();
+        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
+            new HostAddress(),
+            reference
+        );
+
+        // First, we should get the loading control
+        var firstControl = await stream
+            .GetControlStream(reference.Area.ToString()!)
+            .Timeout(2.Seconds())
+            .FirstAsync(x => x != null);
+
+        firstControl.Should().BeOfType<MarkdownControl>()
+            .Which.Markdown.ToString().Should().Contain("Loading");
+
+        // Then, we should eventually get the actual content after the delay
+        var finalControl = await stream
+            .GetControlStream(reference.Area.ToString()!)
+            .TakeUntil(o => o is HtmlControl)
+            .Timeout(5.Seconds())
+            .LastAsync();
+
+        finalControl.Should().BeOfType<HtmlControl>()
+            .Which.Data.ToString().Should().Contain("Data Loaded");
+    }
+
+    private IObservable<UiControl> StartWithLoadingView(LayoutAreaHost area, RenderingContext context)
+    {
+        // This pattern is commonly used: return a stream that starts with a loading indicator
+        // and then emits the actual content when data is available
+        return area
+            .Hub.GetWorkspace()
+            .GetStream(typeof(DataRecord))
+            .Select(x => x.Value!.GetData<DataRecord>())
+            .DistinctUntilChanged()
+            .Select(data => (UiControl)area.ToDataGrid(data))
+            .StartWith(Controls.Markdown("# Loading...\n\n*Please wait while data loads...*"));
+    }
+
+    private IObservable<UiControl> StartWithDelayedView(LayoutAreaHost area, RenderingContext context)
+    {
+        // Simulate delayed data loading - this should still transition from loading to content
+        return Observable.Timer(TimeSpan.FromMilliseconds(500))
+            .Select(_ => (UiControl)Controls.Html("Data Loaded Successfully"))
+            .StartWith(Controls.Markdown("# Loading...\n\n*Please wait while data loads...*"));
+    }
+
+    private IObservable<UiControl> StartWithSubjectView(LayoutAreaHost area, RenderingContext context)
+    {
+        // Use a subject to control exactly when the actual content is emitted
+        // This helps isolate timing issues with StartWith
+        return TestSubject
+            .StartWith(Controls.Markdown("# Loading...\n\n*Waiting for data...*"));
+    }
+
+    /// <summary>
+    /// Test with controlled subject to isolate timing issues with StartWith.
+    /// This test ensures that when data is emitted after initialization,
+    /// the view properly transitions from loading to content.
+    /// </summary>
+    [HubFact]
+    public async Task TestStartWithControlledSubject()
+    {
+        // Reset the subject for this test
+        var subject = new System.Reactive.Subjects.ReplaySubject<UiControl>(1);
+
+        var reference = new LayoutAreaReference(nameof(StartWithSubjectView));
+
+        var hub = GetClient();
+        var workspace = hub.GetWorkspace();
+        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
+            new HostAddress(),
+            reference
+        );
+
+        // First control should be the loading message from StartWith
+        var firstControl = await stream
+            .GetControlStream(reference.Area.ToString()!)
+            .Timeout(2.Seconds())
+            .FirstAsync(x => x != null);
+
+        firstControl.Should().BeOfType<MarkdownControl>()
+            .Which.Markdown.ToString().Should().Contain("Loading");
+
+        // Now emit the actual content via the subject
+        TestSubject.OnNext(Controls.Html("Subject Data Loaded"));
+
+        // Wait for the content to transition
+        var finalControl = await stream
+            .GetControlStream(reference.Area.ToString()!)
+            .TakeUntil(o => o is HtmlControl)
+            .Timeout(3.Seconds())
+            .LastAsync();
+
+        // The final control should be the HTML content, not still the loading message
+        finalControl.Should().BeOfType<HtmlControl>()
+            .Which.Data.ToString().Should().Contain("Subject Data Loaded");
     }
 
     [HubFact]
