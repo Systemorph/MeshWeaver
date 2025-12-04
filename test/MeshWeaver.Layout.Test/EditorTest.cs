@@ -77,15 +77,10 @@ public class EditorTest(ITestOutputHelper output) : HubTestBase(output)
                 skin.Label.Should().NotBeNull();
                 skin.Description.Should().NotBeNull();
             });
-        var editorAreas = await editor.Areas.ToAsyncEnumerable()
-            .Select(async a => 
+        var editorAreas = await Task.WhenAll(
+            editor.Areas.Select(async a =>
                 await area.GetControlStream(a.Area.ToString()!).Timeout(5.Seconds()).FirstAsync())
-            .ToArrayAsync(
-                CancellationTokenSource.CreateLinkedTokenSource(
-                    TestContext.Current.CancellationToken,
-                    new CancellationTokenSource(5.Seconds()).Token
-                    ).Token
-            );
+        );
 
         editorAreas.Should().HaveCount(2);
         editorAreas.Should()
@@ -122,15 +117,10 @@ public class EditorTest(ITestOutputHelper output) : HubTestBase(output)
                 skin.Label.Should().NotBeNull();
                 skin.Description.Should().NotBeNull();
             });
-        var editorAreas = await editor.Areas.ToAsyncEnumerable()
-            .Select(async a =>
+        var editorAreas = await Task.WhenAll(
+            editor.Areas.Select(async a =>
                 await area.GetControlStream(a.Area.ToString()!).Timeout(5.Seconds()).FirstAsync(x => x is not null))
-            .ToArrayAsync(
-                CancellationTokenSource.CreateLinkedTokenSource(
-                    TestContext.Current.CancellationToken,
-                    new CancellationTokenSource(5.Seconds()).Token
-                ).Token
-                );
+        );
 
         editorAreas.Should().HaveCount(2);
         editorAreas.Should()
@@ -318,8 +308,8 @@ public class EditorTest(ITestOutputHelper output) : HubTestBase(output)
             Output.WriteLine($"🔧 DEBUG: Editor has {editor.Areas.Count} areas");
 
             Output.WriteLine("🔧 DEBUG: Starting to get controls for areas...");
-            var controls = await editor.Areas.ToAsyncEnumerable()
-                .Select(async a =>
+            var controls = await Task.WhenAll(
+                editor.Areas.Select(async a =>
                 {
                     Output.WriteLine($"🔧 DEBUG: Getting control for area: {a.Area}");
                     var areaControl = await stream.GetControlStream(a.Area.ToString()!).Timeout(5.Seconds())
@@ -327,12 +317,7 @@ public class EditorTest(ITestOutputHelper output) : HubTestBase(output)
                     Output.WriteLine($"🔧 DEBUG: Got area control: {areaControl?.GetType().Name}");
                     return areaControl;
                 })
-                .ToArrayAsync(
-                    CancellationTokenSource.CreateLinkedTokenSource(
-                        TestContext.Current.CancellationToken,
-                        new CancellationTokenSource(5.Seconds()).Token
-                    ).Token
-                    );
+            );
             Output.WriteLine($"🔧 DEBUG: Got {controls.Length} controls");
 
             controls.Should().HaveCount(ListPropertyBenchmarks.Length);

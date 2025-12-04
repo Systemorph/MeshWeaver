@@ -122,13 +122,14 @@ public static class LayoutExtensions
         var first = true;
         var collection = referencePointer.First();
         var idString = referencePointer.Skip(1).FirstOrDefault();
-        var id = idString == null ? null : JsonSerializer.Deserialize<object>(idString, stream.Hub.JsonSerializerOptions);
+        // Deserialize the id as string directly to ensure consistent comparison
+        var id = idString == null ? null : JsonSerializer.Deserialize<string>(idString, stream.Hub.JsonSerializerOptions);
 
         return stream
             .Where(i =>
                 first
                 || i.Updates.Any(
-                    p => p.Collection == collection && (p.Id == null || id == null || p.Id.Equals(id)))
+                    p => p.Collection == collection && (p.Id == null || id == null || MatchesId(p.Id, id)))
                 )
             .Select(i =>
                 {
@@ -139,6 +140,22 @@ public static class LayoutExtensions
                         : evaluated.Value.Deserialize<T>(stream.Hub.JsonSerializerOptions)!;
                 }
             );
+    }
+
+    private static bool MatchesId(object? updateId, string? targetId)
+    {
+        if (updateId == null || targetId == null)
+            return true;
+
+        // Handle JsonElement comparison
+        if (updateId is JsonElement je)
+        {
+            return je.ValueKind == JsonValueKind.String
+                ? je.GetString() == targetId
+                : je.ToString() == targetId;
+        }
+
+        return updateId.ToString() == targetId;
     }
 
     public static IObservable<object?> GetControlStream(
