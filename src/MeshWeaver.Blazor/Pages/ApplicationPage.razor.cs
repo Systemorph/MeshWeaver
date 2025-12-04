@@ -42,16 +42,23 @@ public partial class ApplicationPage : ComponentBase
     public IReadOnlyDictionary<string, object>? Options { get; set; } = ImmutableDictionary<string, object>.Empty;
     private object? Address => Hub.TypeRegistry.MapAddress(AddressType!, Application!);
 
+    /// <summary>
+    /// The default area to display when no area is specified in the URL.
+    /// </summary>
+    public const string DefaultArea = "Overview";
+
     private LayoutAreaReference Reference { get; set; } = null!;
     protected override Task OnParametersSetAsync()
     {
+        // Use default area if not specified
+        var area = string.IsNullOrEmpty(Area) ? DefaultArea : Area;
 
         var id = (string)WorkspaceReference.Decode(Id);
         var query = Navigation.ToAbsoluteUri(Navigation.Uri).Query;
         if (!string.IsNullOrEmpty(query))
             id += "?" + query;
 
-        Reference = new((string)WorkspaceReference.Decode(Area!))
+        Reference = new((string)WorkspaceReference.Decode(area))
         {
             Id = id,
         };

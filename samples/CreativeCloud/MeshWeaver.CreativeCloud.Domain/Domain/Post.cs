@@ -9,7 +9,7 @@ namespace MeshWeaver.CreativeCloud.Domain;
 /// Represents a social media post derived from a story.
 /// </summary>
 [Display(GroupName = "Content")]
-public record Post : INamed
+public record Post : INamed, IHasDependencies
 {
     /// <summary>
     /// Unique identifier for the post.
@@ -62,4 +62,17 @@ public record Post : INamed
     public DateTime? PublishedAt { get; init; }
 
     string INamed.DisplayName => Title;
+
+    /// <summary>
+    /// Dependencies for this post (parent story).
+    /// </summary>
+    public IReadOnlyCollection<string> Dependencies => GetDependencies();
+
+    private List<string> GetDependencies()
+    {
+        var deps = new List<string>();
+        if (!string.IsNullOrEmpty(StoryId))
+            deps.Add(DependencyHelper.Story(StoryId));
+        return deps;
+    }
 }

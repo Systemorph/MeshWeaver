@@ -9,7 +9,7 @@ namespace MeshWeaver.CreativeCloud.Domain;
 /// Represents a video derived from a story.
 /// </summary>
 [Display(GroupName = "Content")]
-public record Video : INamed
+public record Video : INamed, IHasDependencies
 {
     /// <summary>
     /// Unique identifier for the video.
@@ -62,4 +62,17 @@ public record Video : INamed
     public ContentStatus Status { get; init; } = ContentStatus.Draft;
 
     string INamed.DisplayName => Title;
+
+    /// <summary>
+    /// Dependencies for this video (parent story).
+    /// </summary>
+    public IReadOnlyCollection<string> Dependencies => GetDependencies();
+
+    private List<string> GetDependencies()
+    {
+        var deps = new List<string>();
+        if (!string.IsNullOrEmpty(StoryId))
+            deps.Add(DependencyHelper.Story(StoryId));
+        return deps;
+    }
 }

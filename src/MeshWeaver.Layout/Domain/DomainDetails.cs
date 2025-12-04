@@ -1,12 +1,10 @@
-using System.Reactive.Linq;
+﻿using System.Reactive.Linq;
 using System.Reflection;
 using MeshWeaver.Data;
 using MeshWeaver.Domain;
 using MeshWeaver.Layout.Composition;
-using MeshWeaver.Messaging;
 using MeshWeaver.Messaging.Serialization;
 using MeshWeaver.ShortGuid;
-using Microsoft.Extensions.DependencyInjection;
 using Namotion.Reflection;
 
 namespace MeshWeaver.Layout.Domain;
@@ -19,15 +17,15 @@ public static class DomainDetails
         var navigationIcons = $"<a href=\"/{host.Hub.Address}/DataModel/{typeDefinition.Type.Name}\" title=\"Data Model\" style=\"text-decoration: none; font-size: 2em; line-height: 1;\">⧉</a>";
         if (!string.IsNullOrWhiteSpace(typeDefinition.CollectionName))
             navigationIcons += $" <a href=\"/{host.Hub.Address}/Catalog/{typeDefinition.CollectionName}\" title=\"View Catalog\" style=\"text-decoration: none; font-size: 2em; line-height: 1;\">🗃️</a>";
-        
+
         var titleWithNav = $"<div style=\"display: flex !important; justify-content: space-between !important; align-items: center !important; margin-bottom: 1rem; width: 100%;\"><h1 style=\"margin: 0; flex-grow: 1;\">{typeDefinition.DisplayName}</h1><div style=\"flex-shrink: 0;\">{navigationIcons}</div></div>";
         var ret = new StackControl()
             .WithView(Controls.Html(titleWithNav));
-        
+
         var description = typeDefinition.Type.GetXmlDocsSummary();
         if (!string.IsNullOrWhiteSpace(description))
             ret = ret.WithView(Controls.Html($"<p>{description}</p>"));
-        
+
         return ret.WithView((areaHost, _) => DetailsLayout(areaHost, typeDefinition, id));
     }
 

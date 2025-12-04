@@ -9,7 +9,7 @@ namespace MeshWeaver.CreativeCloud.Domain;
 /// Represents an event (webinar, conference, workshop, meetup) derived from a story.
 /// </summary>
 [Display(GroupName = "Content")]
-public record Event : INamed
+public record Event : INamed, IHasDependencies
 {
     /// <summary>
     /// Unique identifier for the event.
@@ -66,4 +66,17 @@ public record Event : INamed
     public ContentStatus Status { get; init; } = ContentStatus.Draft;
 
     string INamed.DisplayName => Title;
+
+    /// <summary>
+    /// Dependencies for this event (parent story).
+    /// </summary>
+    public IReadOnlyCollection<string> Dependencies => GetDependencies();
+
+    private List<string> GetDependencies()
+    {
+        var deps = new List<string>();
+        if (!string.IsNullOrEmpty(StoryId))
+            deps.Add(DependencyHelper.Story(StoryId));
+        return deps;
+    }
 }

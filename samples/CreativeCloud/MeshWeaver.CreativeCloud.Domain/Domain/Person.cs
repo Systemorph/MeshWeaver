@@ -7,7 +7,7 @@ namespace MeshWeaver.CreativeCloud.Domain;
 /// Represents a person (content creator) in the content portal.
 /// </summary>
 [Display(GroupName = "People")]
-public record Person : INamed
+public record Person : INamed, IHasDependencies
 {
     /// <summary>
     /// Unique identifier for the person.
@@ -42,4 +42,9 @@ public record Person : INamed
     public string? ContentArchetypeId { get; init; }
 
     string INamed.DisplayName => $"{FirstName} {LastName}";
+
+    /// <summary>
+    /// Dependencies for this person (content archetype).
+    /// </summary>
+    public IReadOnlyCollection<string> Dependencies => Array.Empty<string>();
 }

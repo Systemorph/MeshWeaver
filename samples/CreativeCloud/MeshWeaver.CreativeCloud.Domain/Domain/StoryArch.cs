@@ -8,7 +8,7 @@ namespace MeshWeaver.CreativeCloud.Domain;
 /// Represents a story arch - a major theme or narrative that stories are grouped under.
 /// </summary>
 [Display(GroupName = "Content")]
-public record StoryArch : INamed
+public record StoryArch : INamed, IHasDependencies
 {
     /// <summary>
     /// Unique identifier for the story arch.
@@ -33,4 +33,9 @@ public record StoryArch : INamed
     public string? Theme { get; init; }
 
     string INamed.DisplayName => Name;
+
+    /// <summary>
+    /// Dependencies for this story arch (none).
+    /// </summary>
+    public IReadOnlyCollection<string> Dependencies => Array.Empty<string>();
 }

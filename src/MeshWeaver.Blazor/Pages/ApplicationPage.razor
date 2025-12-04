@@ -1,4 +1,6 @@
-@* Fallback route - matches any 4-segment path *@
+@* Routes for application pages - with and without area *@
+@page "/{AddressType}/{Application}"
+@page "/{AddressType}/{Application}/{Area}"
 @page "/{AddressType}/{Application}/{Area}/{**Id}"
 @using MeshWeaver.Messaging
 

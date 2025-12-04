@@ -31,6 +31,17 @@ public record MeshBuilder
             AddMeshNodeFactory(factory);
         }
 
+        // Register address types from attributes
+        var addressTypes = attributes.SelectMany(a => a.AddressTypes).ToArray();
+        if (addressTypes.Length > 0)
+        {
+            ConfigureHub(config =>
+            {
+                config.TypeRegistry.WithTypes(addressTypes);
+                return config;
+            });
+        }
+
         return this;
     }
 
