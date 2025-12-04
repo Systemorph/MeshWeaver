@@ -51,7 +51,8 @@
       "WebFetch(domain:microsoft.github.io)",
       "Bash(node --check:*)",
       "Bash(cd:*)",
-      "Bash(git stash:*)"
+      "Bash(git stash:*)",
+      "Bash(where python python3 powershell pwsh)"
     ],
     "deny": []
   }

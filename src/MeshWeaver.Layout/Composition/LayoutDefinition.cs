@@ -47,10 +47,25 @@ public record LayoutDefinition(IMessageHub Hub)
     }
 
     internal ImmutableDictionary<string, LayoutAreaDefinition> AreaDefinitions { get; init; } = ImmutableDictionary<string, LayoutAreaDefinition>.Empty;
-    internal string? ThumbnailBase { get; init; }
+    internal ThumbnailPattern? ThumbnailPattern { get; init; }
 
+    /// <summary>
+    /// Configures thumbnails using the default naming convention: {basePath}/{area}.png and {basePath}/{area}-dark.png
+    /// </summary>
     public LayoutDefinition WithThumbnailBasePath(string basePath)
-        => this with { ThumbnailBase = basePath};
+        => this with { ThumbnailPattern = ThumbnailPattern.FromBasePath(basePath) };
+
+    /// <summary>
+    /// Configures thumbnails using lambda expressions to generate URLs from area names.
+    /// </summary>
+    public LayoutDefinition WithThumbnailPattern(Func<string, string> lightUrlFactory, Func<string, string> darkUrlFactory)
+        => this with { ThumbnailPattern = new ThumbnailPattern(lightUrlFactory, darkUrlFactory) };
+
+    /// <summary>
+    /// Configures thumbnails using a custom pattern.
+    /// </summary>
+    public LayoutDefinition WithThumbnailPattern(ThumbnailPattern pattern)
+        => this with { ThumbnailPattern = pattern };
 
     public LayoutDefinition WithAreaDefinition(LayoutAreaDefinition? layoutArea) => 
         layoutArea == null 

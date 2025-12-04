@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../MeshWeaver.CreativeCloud.Domain/MeshWeaver.CreativeCloud.Domain.csproj" />
+    <ProjectReference Include="../../../src/MeshWeaver.AI/MeshWeaver.AI.csproj" />
+    <ProjectReference Include="../../../src/MeshWeaver.Data/MeshWeaver.Data.csproj" />
+    <ProjectReference Include="../../../src/MeshWeaver.Messaging.Hub/MeshWeaver.Messaging.Hub.csproj" />
+  </ItemGroup>
+</Project>

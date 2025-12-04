@@ -33,6 +33,10 @@
     <Project Path="samples/Todo/MeshWeaver.Todo.AI/MeshWeaver.Todo.AI.csproj" />
     <Project Path="samples/Todo/MeshWeaver.Todo/MeshWeaver.Todo.csproj" />
   </Folder>
+  <Folder Name="/samples/CreativeCloud/">
+    <Project Path="samples/CreativeCloud/MeshWeaver.CreativeCloud.AI/MeshWeaver.CreativeCloud.AI.csproj" />
+    <Project Path="samples/CreativeCloud/MeshWeaver.CreativeCloud.Domain/MeshWeaver.CreativeCloud.Domain.csproj" />
+  </Folder>
   <Folder Name="/portal/">
     <File Path="portal/Directory.Build.props" />
     <Project Path="portal/MeshWeaver.Portal.AI/MeshWeaver.Portal.AI.csproj" />
@@ -135,6 +139,7 @@
     <Project Path="test/MeshWeaver.Serialization.Test/MeshWeaver.Serialization.Test.csproj" />
     <Project Path="test/MeshWeaver.TestDomain/MeshWeaver.TestDomain.csproj" />
     <Project Path="test/MeshWeaver.Todo.Test/MeshWeaver.Todo.Test.csproj" />
+    <Project Path="test/MeshWeaver.CreativeCloud.Test/MeshWeaver.CreativeCloud.Test.csproj" />
   </Folder>
   <Folder Name="/tools/">
     <Project Path="tools/MeshWeaver.TemplateGenerator/MeshWeaver.TemplateGenerator.csproj" />
