@@ -14,6 +14,12 @@ public abstract class MeshNodeAttribute : Attribute
     /// </summary>
     public virtual IEnumerable<Func<Address, MeshNode?>> NodeFactories => [];
 
+    /// <summary>
+    /// Gets the address types to register with the mesh hub.
+    /// Key is the short type name (e.g., "story"), Value is the address type.
+    /// </summary>
+    public virtual IEnumerable<KeyValuePair<string, Type>> AddressTypes => [];
+
     protected MeshNode CreateFromHubConfiguration(Address address, string name,
         Func<MessageHubConfiguration, MessageHubConfiguration> hubConfiguration)
         => new(address.Type, address.Id, name)

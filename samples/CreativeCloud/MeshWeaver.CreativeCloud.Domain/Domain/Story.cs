@@ -9,7 +9,7 @@ namespace MeshWeaver.CreativeCloud.Domain;
 /// Represents a story - the main content piece that can be broken down into posts, videos, and events.
 /// </summary>
 [Display(GroupName = "Content")]
-public record Story : INamed
+public record Story : INamed, IHasDependencies
 {
     /// <summary>
     /// Unique identifier for the story.
@@ -59,4 +59,19 @@ public record Story : INamed
     public DateTime? PublishedAt { get; init; }
 
     string INamed.DisplayName => Title;
+
+    /// <summary>
+    /// Dependencies for this story (author, story arch).
+    /// </summary>
+    public IReadOnlyCollection<string> Dependencies => GetDependencies();
+
+    private List<string> GetDependencies()
+    {
+        var deps = new List<string>();
+        if (!string.IsNullOrEmpty(StoryArchId))
+            deps.Add(DependencyHelper.Arch(StoryArchId));
+        if (!string.IsNullOrEmpty(AuthorId))
+            deps.Add(DependencyHelper.Person(AuthorId));
+        return deps;
+    }
 }

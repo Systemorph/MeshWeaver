@@ -126,6 +126,7 @@ public static class LayoutExtensions
         var id = idString == null ? null : JsonSerializer.Deserialize<string>(idString, stream.Hub.JsonSerializerOptions);
 
         return stream
+            .Synchronize() // Ensure thread-safety for the 'first' closure variable
             .Where(i =>
                 first
                 || i.Updates.Any(

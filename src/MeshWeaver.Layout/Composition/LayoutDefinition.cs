@@ -11,6 +11,17 @@ public record LayoutDefinition(IMessageHub Hub)
 {
     private ImmutableList<(Func<RenderingContext, bool> Filter, AsyncRenderer Renderer)> AsyncRenderers { get; init; } = [];
 
+    /// <summary>
+    /// The default area to display when no area is specified in the URL.
+    /// </summary>
+    public string? DefaultArea { get; init; }
+
+    /// <summary>
+    /// Sets the default area to display when no area is specified in the URL.
+    /// </summary>
+    public LayoutDefinition WithDefaultArea(string area)
+        => this with { DefaultArea = area };
+
     public LayoutDefinition WithRenderer(Func<RenderingContext, bool> filter, Renderer renderer)
         => this with
         {

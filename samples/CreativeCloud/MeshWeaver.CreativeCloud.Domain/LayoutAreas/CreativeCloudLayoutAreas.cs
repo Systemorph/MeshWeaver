@@ -200,8 +200,9 @@ public static class CreativeCloudLayoutAreas
 
             foreach (var story in group.OrderByDescending(s => s.CreatedAt))
             {
+                var detailsUrl = GetDetailsUrl(StoryAddress.TypeName, story.Id);
                 var sb = new StringBuilder();
-                sb.AppendLine($"**{story.Title}**");
+                sb.AppendLine($"**[{story.Title}]({detailsUrl})**");
                 if (!string.IsNullOrEmpty(story.StoryArchId))
                     sb.AppendLine($"*Arch: {story.StoryArchId}*");
                 if (story.CreatedAt.HasValue)
@@ -252,11 +253,12 @@ public static class CreativeCloudLayoutAreas
 
             foreach (var post in group.OrderByDescending(p => p.ScheduledAt ?? p.PublishedAt))
             {
+                var detailsUrl = GetDetailsUrl(PostAddress.TypeName, post.Id);
                 var statusIcon = GetStatusIcon(post.Status);
                 var pillarBadge = !string.IsNullOrEmpty(post.ContentPillar) ? $"`{post.ContentPillar}`" : "";
 
                 var sb = new StringBuilder();
-                sb.AppendLine($"{statusIcon} **{post.Title}** {pillarBadge}");
+                sb.AppendLine($"{statusIcon} **[{post.Title}]({detailsUrl})** {pillarBadge}");
                 if (post.ScheduledAt.HasValue)
                     sb.AppendLine($"Scheduled: {post.ScheduledAt.Value:yyyy-MM-dd HH:mm}");
                 if (post.PublishedAt.HasValue)
@@ -307,13 +309,14 @@ public static class CreativeCloudLayoutAreas
 
             foreach (var video in group)
             {
+                var detailsUrl = GetDetailsUrl(VideoAddress.TypeName, video.Id);
                 var statusIcon = GetStatusIcon(video.Status);
                 var duration = video.DurationSeconds.HasValue
                     ? $"{video.DurationSeconds / 60}:{video.DurationSeconds % 60:D2}"
                     : "N/A";
 
                 var sb = new StringBuilder();
-                sb.AppendLine($"{statusIcon} **{video.Title}**");
+                sb.AppendLine($"{statusIcon} **[{video.Title}]({detailsUrl})**");
                 sb.AppendLine($"Duration: {duration}");
                 if (!string.IsNullOrEmpty(video.Description))
                     sb.AppendLine($"*{video.Description}*");
@@ -363,10 +366,11 @@ public static class CreativeCloudLayoutAreas
 
             foreach (var evt in group.OrderBy(e => e.StartDate))
             {
+                var detailsUrl = GetDetailsUrl(EventAddress.TypeName, evt.Id);
                 var statusIcon = GetStatusIcon(evt.Status);
 
                 var sb = new StringBuilder();
-                sb.AppendLine($"{statusIcon} **{evt.Title}**");
+                sb.AppendLine($"{statusIcon} **[{evt.Title}]({detailsUrl})**");
                 if (evt.StartDate.HasValue)
                     sb.AppendLine($"Date: {evt.StartDate.Value:yyyy-MM-dd HH:mm}");
                 if (!string.IsNullOrEmpty(evt.Location))
@@ -409,8 +413,9 @@ public static class CreativeCloudLayoutAreas
 
         foreach (var person in persons.OrderBy(p => p.LastName).ThenBy(p => p.FirstName))
         {
+            var detailsUrl = GetDetailsUrl(PersonAddress.TypeName, person.Id);
             var sb = new StringBuilder();
-            sb.AppendLine($"**{person.FirstName} {person.LastName}**");
+            sb.AppendLine($"**[{person.FirstName} {person.LastName}]({detailsUrl})**");
             if (!string.IsNullOrEmpty(person.Company))
                 sb.AppendLine($"Company: {person.Company}");
             if (!string.IsNullOrEmpty(person.Email))
@@ -452,8 +457,9 @@ public static class CreativeCloudLayoutAreas
 
         foreach (var arch in arches)
         {
+            var detailsUrl = GetDetailsUrl(ArchAddress.TypeName, arch.Id);
             var sb = new StringBuilder();
-            sb.AppendLine($"**{arch.Name}**");
+            sb.AppendLine($"**[{arch.Name}]({detailsUrl})**");
             if (!string.IsNullOrEmpty(arch.Theme))
                 sb.AppendLine($"Theme: {arch.Theme}");
             if (!string.IsNullOrEmpty(arch.Description))
@@ -672,6 +678,9 @@ public static class CreativeCloudLayoutAreas
         ContentStatus.Archived => "📦",
         _ => "❓"
     };
+
+    private static string GetDetailsUrl(string type, string id)
+        => $"/{type}/{id}";
 
     #endregion
 }
