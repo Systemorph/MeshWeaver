@@ -127,7 +127,9 @@ public static class InsuranceApplicationExtensions
                 )
                 // Configure default data reference: data:pricing/pricingId returns the main Pricing entity
                 .WithDefaultDataReference(workspace =>
-                    workspace.GetObservable<Pricing>().Select(p => p.FirstOrDefault()));
+                    workspace.GetObservable<Pricing>().Select(p => p.FirstOrDefault()))
+                // Configure content provider for file access via data:pricing/pricingId/Submissions/path
+                .WithContentProvider("Submissions", GetLocalizedCollectionName("Submissions", pricingId));
             })
             .AddLayout(l => l
                 .WithView(nameof(LayoutAreas.PricingOverviewLayoutArea.Overview),
