@@ -124,7 +124,10 @@ public static class InsuranceApplicationExtensions
                     .WithType<Country>(t => t.WithInitialData(_ => Task.FromResult(SampleDataProvider.GetCountries())))
                     .WithType<LegalEntity>(t => t.WithInitialData(_ => Task.FromResult(SampleDataProvider.GetLegalEntities())))
                     .WithType<Currency>(t => t.WithInitialData(_ => Task.FromResult(SampleDataProvider.GetCurrencies())))
-                );
+                )
+                // Configure default data reference: data:pricing/pricingId returns the main Pricing entity
+                .WithDefaultDataReference(workspace =>
+                    workspace.GetObservable<Pricing>().Select(p => p.FirstOrDefault()));
             })
             .AddLayout(l => l
                 .WithView(nameof(LayoutAreas.PricingOverviewLayoutArea.Overview),

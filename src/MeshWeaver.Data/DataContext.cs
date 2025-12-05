@@ -1,4 +1,5 @@
 ﻿using System.Collections.Immutable;
+using System.Reactive.Linq;
 using MeshWeaver.Domain;
 using MeshWeaver.Messaging;
 using MeshWeaver.Messaging.Serialization;
@@ -67,6 +68,12 @@ public sealed record DataContext : IDisposable
     internal TimeSpan InitializationTimeout { get; set; } = TimeSpan.FromHours(60);
     public IMessageHub Hub { get; }
     public IWorkspace Workspace { get; }
+
+    /// <summary>
+    /// Factory function that provides the default data reference for this context.
+    /// Used when accessing data via data:addressType/addressId without specifying a collection.
+    /// </summary>
+    public Func<IWorkspace, IObservable<object?>>? DefaultDataReferenceFactory { get; init; }
 
     public DataContext WithInitializationTimeout(TimeSpan timeout) =>
         this with { InitializationTimeout = timeout };
@@ -137,7 +144,7 @@ public sealed record DataContext : IDisposable
 }
 
 /// <summary>
-/// Extensions for DataContext to support virtual data sources
+/// Extensions for DataContext to support virtual data sources and default data references
 /// </summary>
 public static class DataContextExtensions
 {
@@ -160,5 +167,34 @@ public static class DataContextExtensions
             var virtualDataSource = new VirtualDataSource(id, dataContext.Workspace);
             return configure(virtualDataSource);
         });
+    }
+
+    /// <summary>
+    /// Configures the default data reference for this context.
+    /// The default data reference is used when accessing data via data:addressType/addressId
+    /// without specifying a collection name.
+    /// </summary>
+    /// <typeparam name="T">The type of data to return</typeparam>
+    /// <param name="dataContext">The data context to configure</param>
+    /// <param name="factory">Factory function that creates an observable for the default data</param>
+    /// <returns>Updated data context with the default data reference configured</returns>
+    /// <example>
+    /// <code>
+    /// .AddData(data => data
+    ///     .AddSource(src => src.WithType&lt;Pricing&gt;(...))
+    ///     .WithDefaultDataReference(workspace =>
+    ///         workspace.GetObservable&lt;Pricing&gt;().Select(p => p.FirstOrDefault()))
+    /// )
+    /// </code>
+    /// </example>
+    public static DataContext WithDefaultDataReference<T>(
+        this DataContext dataContext,
+        Func<IWorkspace, IObservable<T?>> factory)
+    {
+        return dataContext with
+        {
+            DefaultDataReferenceFactory = workspace =>
+                factory(workspace).Select(x => (object?)x)
+        };
     }
 }
