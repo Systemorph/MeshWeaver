@@ -57,12 +57,6 @@ public partial class MobileNavMenu : ComponentBase
             DesktopNavMenu.PricingIcon(),
             LinkMatchRegex: new Regex("^/app/Insurance/Pricings")
         );
-        yield return new MobileNavMenuEntry(
-            "CreativeCloud",
-            () => NavigateToAsync("/app/CreativeCloud/LayoutAreas"),
-            DesktopNavMenu.CreativeCloudIcon(),
-            LinkMatchRegex: new Regex("^/app/CreativeCloud")
-        );
         yield return new MobileNavMenuEntry("Documentation Areas",
             () => NavigateToAsync("/app/Documentation/LayoutAreas"),
             DesktopNavMenu.DocumentationIcon(),

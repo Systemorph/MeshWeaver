@@ -87,8 +87,4 @@ public partial class DesktopNavMenu : ComponentBase
             ? new Icons.Filled.Size24.Money()
             : new Icons.Regular.Size24.Money();
 
-    public static Icon CreativeCloudIcon(bool active = false)
-        => active
-            ? new Icons.Filled.Size24.Lightbulb()
-            : new Icons.Regular.Size24.Lightbulb();
 }
