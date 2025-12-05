@@ -1,5 +1,4 @@
-﻿using MeshWeaver.AI.Application;
-using MeshWeaver.CreativeCloud.Domain;
+using MeshWeaver.AI.Application;
 using MeshWeaver.Documentation;
 using MeshWeaver.Insurance.Domain;
 using MeshWeaver.Kernel.Hub;
@@ -20,7 +19,6 @@ public static  class SharedMeshConfiguration
             .InstallAssemblies(typeof(AgentsApplicationAttribute).Assembly.Location)
             .InstallAssemblies(typeof(TodoApplicationAttribute).Assembly.Location)
             .InstallAssemblies(typeof(InsuranceApplicationAttribute).Assembly.Location)
-            .InstallAssemblies(typeof(CreativeCloudApplicationAttribute).Assembly.Location)
             .AddKernel();
     }
 

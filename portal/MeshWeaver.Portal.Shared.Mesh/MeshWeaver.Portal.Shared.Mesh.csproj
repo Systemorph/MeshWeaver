@@ -7,7 +7,6 @@
     <ProjectReference Include="..\..\samples\Documentation\MeshWeaver.Documentation\MeshWeaver.Documentation.csproj" />
     <ProjectReference Include="..\..\samples\Northwind\MeshWeaver.Northwind.Application\MeshWeaver.Northwind.Application.csproj" />
     <ProjectReference Include="..\..\samples\Todo\MeshWeaver.Todo\MeshWeaver.Todo.csproj" />
-    <ProjectReference Include="..\..\samples\CreativeCloud\MeshWeaver.CreativeCloud.Domain\MeshWeaver.CreativeCloud.Domain.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.AI.Application\MeshWeaver.AI.Application.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Kernel.Hub\MeshWeaver.Kernel.Hub.csproj" />
     <ProjectReference Include="..\..\samples\Insurance\MeshWeaver.Insurance.Domain\MeshWeaver.Insurance.Domain.csproj" />
