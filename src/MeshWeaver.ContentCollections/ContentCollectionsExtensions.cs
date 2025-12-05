@@ -77,6 +77,7 @@ public static class ContentCollectionsExtensions
         {
             services
                 .AddScoped<IContentService, ContentService>()
+                .AddScoped<Data.IFileContentProvider, FileContentProvider>()
                 .AddKeyedScoped<IStreamProviderFactory, FileSystemStreamProviderFactory>(FileSystemStreamProvider.SourceType)
                 .AddKeyedScoped<IStreamProviderFactory, EmbeddedResourceStreamProviderFactory>(EmbeddedResourceStreamProvider.SourceType)
                 .AddKeyedScoped<IStreamProviderFactory, HubStreamProviderFactory>(HubStreamProviderFactory.SourceType);

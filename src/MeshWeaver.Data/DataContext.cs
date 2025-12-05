@@ -75,6 +75,13 @@ public sealed record DataContext : IDisposable
     /// </summary>
     public Func<IWorkspace, IObservable<object?>>? DefaultDataReferenceFactory { get; init; }
 
+    /// <summary>
+    /// Mapping of collection names in data paths to content collection names.
+    /// Used for accessing files via data:addressType/addressId/collection/path patterns.
+    /// </summary>
+    public ImmutableDictionary<string, string> ContentProviders { get; init; } =
+        ImmutableDictionary<string, string>.Empty;
+
     public DataContext WithInitializationTimeout(TimeSpan timeout) =>
         this with { InitializationTimeout = timeout };
 
@@ -195,6 +202,35 @@ public static class DataContextExtensions
         {
             DefaultDataReferenceFactory = workspace =>
                 factory(workspace).Select(x => (object?)x)
+        };
+    }
+
+    /// <summary>
+    /// Registers a content provider that maps a collection name in data paths to a content collection.
+    /// This enables accessing files via data:addressType/addressId/collection/path patterns.
+    /// </summary>
+    /// <param name="dataContext">The data context to configure</param>
+    /// <param name="collectionName">The collection name used in data paths (e.g., "Submissions")</param>
+    /// <param name="contentCollectionName">The actual content collection name to use (optional, defaults to collectionName)</param>
+    /// <returns>Updated data context with the content provider configured</returns>
+    /// <example>
+    /// <code>
+    /// .AddData(data => data
+    ///     .AddSource(...)
+    ///     .WithContentProvider("Submissions")  // Maps data:pricing/id/Submissions/file.xlsx to Submissions collection
+    /// )
+    /// </code>
+    /// </example>
+    public static DataContext WithContentProvider(
+        this DataContext dataContext,
+        string collectionName,
+        string? contentCollectionName = null)
+    {
+        return dataContext with
+        {
+            ContentProviders = dataContext.ContentProviders.Add(
+                collectionName,
+                contentCollectionName ?? collectionName)
         };
     }
 }

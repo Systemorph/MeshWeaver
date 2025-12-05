@@ -3,7 +3,7 @@ namespace MeshWeaver.Data;
 /// <summary>
 /// Base class for all content reference types that can be parsed from path patterns.
 /// Supports multiple path formats:
-/// - File: collection:path/to/file or collection@partition:path/to/file
+/// - Content: content:collection/path/to/file or content:collection@partition/path/to/file
 /// - Data: data:addressType/addressId[/collection[/entityId]]
 /// - Layout Area: area:areaName[/areaId]
 /// </summary>
@@ -32,8 +32,11 @@ public abstract record ContentReference
         if (path.StartsWith("area:", StringComparison.OrdinalIgnoreCase))
             return LayoutAreaContentReference.ParseAreaPath(path[5..]);
 
-        // Default: treat as file reference (collection:path or collection@partition:path)
-        return FileContentReference.ParseFilePath(path);
+        if (path.StartsWith("content:", StringComparison.OrdinalIgnoreCase))
+            return FileContentReference.ParseContentPath(path[8..]);
+
+        // Unknown prefix
+        throw new ArgumentException($"Invalid path: '{path}'. Expected prefix: data:, area:, or content:");
     }
 
     /// <summary>
@@ -60,8 +63,8 @@ public abstract record ContentReference
 /// <summary>
 /// Reference to file-based content.
 /// Supports formats:
-/// - collection:path/to/file
-/// - collection@partition:path/to/file
+/// - content:collection/path/to/file
+/// - content:collection@partition/path/to/file
 /// </summary>
 public record FileContentReference(string Collection, string FilePath, string? Partition = null)
     : ContentReference
@@ -69,23 +72,27 @@ public record FileContentReference(string Collection, string FilePath, string? P
     /// <inheritdoc />
     public override string ToPath() =>
         Partition != null
-            ? $"{Collection}@{Partition}:{FilePath}"
-            : $"{Collection}:{FilePath}";
+            ? $"content:{Collection}@{Partition}/{FilePath}"
+            : $"content:{Collection}/{FilePath}";
 
     /// <summary>
-    /// Parses a file path in the format collection:path or collection@partition:path
+    /// Parses a content path (the part after "content:").
+    /// Format: collection/path/to/file or collection@partition/path/to/file
     /// </summary>
-    public static FileContentReference ParseFilePath(string path)
+    public static FileContentReference ParseContentPath(string remainder)
     {
-        var colonIndex = path.IndexOf(':');
-        if (colonIndex <= 0)
-            throw new ArgumentException($"Invalid file path: '{path}'. Expected format: collection:path/to/file");
+        if (string.IsNullOrEmpty(remainder))
+            throw new ArgumentException("Invalid content path: path after 'content:' cannot be empty");
 
-        var collectionPart = path[..colonIndex];
-        var filePath = path[(colonIndex + 1)..];
+        var slashIndex = remainder.IndexOf('/');
+        if (slashIndex <= 0)
+            throw new ArgumentException($"Invalid content path: 'content:{remainder}'. Expected format: content:collection/path/to/file");
+
+        var collectionPart = remainder[..slashIndex];
+        var filePath = remainder[(slashIndex + 1)..];
 
         if (string.IsNullOrEmpty(filePath))
-            throw new ArgumentException($"Invalid file path: '{path}'. File path cannot be empty");
+            throw new ArgumentException($"Invalid content path: 'content:{remainder}'. File path cannot be empty");
 
         // Check for partition: collection@partition
         var atIndex = collectionPart.IndexOf('@');
@@ -95,9 +102,9 @@ public record FileContentReference(string Collection, string FilePath, string? P
             var partition = collectionPart[(atIndex + 1)..];
 
             if (string.IsNullOrEmpty(collection))
-                throw new ArgumentException($"Invalid file path: '{path}'. Collection name cannot be empty");
+                throw new ArgumentException($"Invalid content path: 'content:{remainder}'. Collection name cannot be empty");
             if (string.IsNullOrEmpty(partition))
-                throw new ArgumentException($"Invalid file path: '{path}'. Partition cannot be empty when @ is used");
+                throw new ArgumentException($"Invalid content path: 'content:{remainder}'. Partition cannot be empty when @ is used");
 
             return new FileContentReference(collection, filePath, partition);
         }

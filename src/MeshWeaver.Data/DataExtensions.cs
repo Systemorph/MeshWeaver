@@ -86,15 +86,11 @@ public static class DataExtensions
                     typeof(PatchDataChangeRequest),
                     typeof(GetDataRequest),
                     typeof(GetDataResponse),
-                    typeof(GetContentRequest),
-                    typeof(GetContentResponse),
-                    typeof(ContentType),
+                    typeof(UnifiedReference),
                     typeof(ContentReference),
                     typeof(FileContentReference),
                     typeof(DataContentReference),
-                    typeof(LayoutAreaContentReference),
-                    typeof(GetDefaultDataRequest),
-                    typeof(GetDefaultDataResponse)
+                    typeof(LayoutAreaContentReference)
                 )
                 .WithType(typeof(ActivityAddress), ActivityAddress.TypeName)
                 .WithType(typeof(ActivityLog), nameof(ActivityLog))
@@ -179,9 +175,7 @@ public static class DataExtensions
             .WithHandler<SubscribeRequest>(HandleSubscribeRequest)
             .WithHandler<GetSchemaRequest>(HandleGetSchemaRequest)
             .WithHandler<GetDomainTypesRequest>(HandleGetDomainTypesRequest)
-            .WithHandler<GetDataRequest>(HandleGetDataRequest)
-            .WithHandler<GetContentRequest>(HandleGetContentRequest)
-            .WithHandler<GetDefaultDataRequest>(HandleGetDefaultDataRequest);
+            .WithHandler<GetDataRequest>(HandleGetDataRequest);
 
     private static IMessageDelivery HandleGetDomainTypesRequest(IMessageHub hub, IMessageDelivery<GetDomainTypesRequest> request)
     {
@@ -252,6 +246,257 @@ public static class DataExtensions
         return request.Processed();
 
     }
+
+    /// <summary>
+    /// Handler for UnifiedReference which parses the path and dispatches to appropriate handlers.
+    /// </summary>
+    private static async Task<IMessageDelivery> HandleGetDataRequest(
+        IMessageHub hub,
+        UnifiedReference reference,
+        IMessageDelivery<GetDataRequest> request,
+        CancellationToken ct)
+    {
+        try
+        {
+            var path = reference.Path;
+            if (string.IsNullOrEmpty(path))
+            {
+                hub.Post(new GetDataResponse(null, 0) { Error = "Path cannot be empty" },
+                    o => o.ResponseFor(request));
+                return request.Processed();
+            }
+
+            var parsedRef = reference.ParsedReference;
+            var result = parsedRef switch
+            {
+                DataContentReference dataRef => await HandleUnifiedDataReferenceAsync(hub, dataRef, reference.NumberOfRows, ct),
+                LayoutAreaContentReference areaRef => await HandleUnifiedLayoutAreaAsync(hub, areaRef, ct),
+                FileContentReference fileRef => await HandleUnifiedFileReferenceAsync(hub, fileRef, reference.NumberOfRows, ct),
+                _ => new GetDataResponse(null, 0)
+                    { Error = $"Unknown reference type: {parsedRef.GetType().Name}" }
+            };
+
+            hub.Post(result, o => o.ResponseFor(request));
+        }
+        catch (Exception ex)
+        {
+            hub.Post(new GetDataResponse(null, 0) { Error = ex.Message },
+                o => o.ResponseFor(request));
+        }
+
+        return request.Processed();
+    }
+
+    /// <summary>
+    /// Handles data content requests from UnifiedReference.
+    /// </summary>
+    private static async Task<GetDataResponse> HandleUnifiedDataReferenceAsync(
+        IMessageHub hub,
+        DataContentReference dataRef,
+        int? numberOfRows,
+        CancellationToken ct)
+    {
+        if (dataRef.IsDefaultReference)
+        {
+            return await GetDefaultDataAsync(hub, ct);
+        }
+
+        // Check if collection is a content provider (for file access)
+        var workspace = hub.GetWorkspace();
+        var dataContext = workspace.DataContext;
+
+        if (dataRef.Collection != null &&
+            dataContext.ContentProviders.TryGetValue(dataRef.Collection, out var contentCollectionName))
+        {
+            return await GetFileContentAsync(hub, contentCollectionName, dataRef.EntityId, numberOfRows, ct);
+        }
+
+        // Build workspace reference for collection or entity
+        WorkspaceReference wsRef = dataRef.IsEntityReference
+            ? new EntityReference(dataRef.Collection!, dataRef.EntityId!)
+            : new CollectionReference(dataRef.Collection!);
+
+        return await GetDataFromWorkspaceAsync(hub, wsRef, ct);
+    }
+
+    /// <summary>
+    /// Gets the default data reference from the workspace.
+    /// </summary>
+    private static async Task<GetDataResponse> GetDefaultDataAsync(
+        IMessageHub hub,
+        CancellationToken ct)
+    {
+        try
+        {
+            var workspace = hub.GetWorkspace();
+            var dataContext = workspace.DataContext;
+
+            if (dataContext.DefaultDataReferenceFactory == null)
+            {
+                return new GetDataResponse(null, 0)
+                    { Error = "No default data reference configured for this address" };
+            }
+
+            var observable = dataContext.DefaultDataReferenceFactory(workspace);
+            var data = await observable.Timeout(TimeSpan.FromSeconds(30)).FirstAsync();
+
+            return new GetDataResponse(data, hub.Version);
+        }
+        catch (TimeoutException)
+        {
+            return new GetDataResponse(null, 0)
+                { Error = "Request timed out while accessing default data reference" };
+        }
+        catch (Exception ex)
+        {
+            return new GetDataResponse(null, 0)
+                { Error = $"Error accessing default data: {ex.Message}" };
+        }
+    }
+
+    /// <summary>
+    /// Gets data from the workspace using a workspace reference.
+    /// </summary>
+    private static Task<GetDataResponse> GetDataFromWorkspaceAsync(
+        IMessageHub hub,
+        WorkspaceReference reference,
+        CancellationToken ct)
+    {
+        return GetDataFromWorkspaceAsyncCore(hub, (dynamic)reference, ct);
+    }
+
+    private static async Task<GetDataResponse> GetDataFromWorkspaceAsyncCore<TReference>(
+        IMessageHub hub,
+        WorkspaceReference<TReference> reference,
+        CancellationToken ct)
+    {
+        try
+        {
+            var workspace = hub.GetWorkspace();
+            var stream = workspace.GetStream(reference, x => x.ReturnNullWhenNotPresent());
+
+            if (stream == null)
+            {
+                return new GetDataResponse(null, 0)
+                    { Error = $"No data found for reference: {reference}" };
+            }
+
+            var data = await stream.Timeout(TimeSpan.FromSeconds(30)).FirstAsync();
+
+            return new GetDataResponse(data.Value, hub.Version);
+        }
+        catch (TimeoutException)
+        {
+            return new GetDataResponse(null, 0)
+                { Error = $"Request timed out while accessing data" };
+        }
+        catch (Exception ex)
+        {
+            return new GetDataResponse(null, 0)
+                { Error = $"Error accessing data: {ex.Message}" };
+        }
+    }
+
+    /// <summary>
+    /// Gets file content from a content collection.
+    /// </summary>
+    private static async Task<GetDataResponse> GetFileContentAsync(
+        IMessageHub hub,
+        string contentCollectionName,
+        string? filePath,
+        int? numberOfRows,
+        CancellationToken ct)
+    {
+        if (string.IsNullOrEmpty(filePath))
+        {
+            return new GetDataResponse(null, 0)
+                { Error = "File path cannot be empty" };
+        }
+
+        var fileContentProvider = hub.ServiceProvider.GetService<IFileContentProvider>();
+        if (fileContentProvider == null)
+        {
+            return new GetDataResponse(null, 0)
+                { Error = "File content provider not available. Ensure AddContentCollections() is configured." };
+        }
+
+        var result = await fileContentProvider.GetFileContentAsync(
+            contentCollectionName,
+            filePath,
+            numberOfRows,
+            ct);
+
+        if (!result.Success)
+        {
+            return new GetDataResponse(null, 0)
+                { Error = result.Error };
+        }
+
+        return new GetDataResponse(result.Content, hub.Version);
+    }
+
+    /// <summary>
+    /// Handles layout area content requests from UnifiedReference.
+    /// </summary>
+    private static async Task<GetDataResponse> HandleUnifiedLayoutAreaAsync(
+        IMessageHub hub,
+        LayoutAreaContentReference areaRef,
+        CancellationToken ct)
+    {
+        try
+        {
+            var workspace = hub.GetWorkspace();
+
+            // Create LayoutAreaReference
+            var layoutAreaReference = new LayoutAreaReference(areaRef.AreaName);
+            if (areaRef.AreaId != null)
+            {
+                layoutAreaReference = layoutAreaReference with { Id = areaRef.AreaId };
+            }
+
+            // Get the stream for this layout area
+            var stream = workspace.GetStream(layoutAreaReference, x => x.ReturnNullWhenNotPresent());
+            if (stream == null)
+            {
+                return new GetDataResponse(null, 0)
+                    { Error = $"Layout area '{areaRef.AreaName}' not found" };
+            }
+
+            // Get the first value from the stream
+            var value = await stream.Timeout(TimeSpan.FromSeconds(30)).FirstAsync();
+            var json = JsonSerializer.Serialize(value.Value, hub.JsonSerializerOptions);
+
+            return new GetDataResponse(json, hub.Version);
+        }
+        catch (TimeoutException)
+        {
+            return new GetDataResponse(null, 0)
+                { Error = $"Request timed out while accessing layout area '{areaRef.AreaName}'" };
+        }
+        catch (Exception ex)
+        {
+            return new GetDataResponse(null, 0)
+                { Error = $"Error accessing layout area '{areaRef.AreaName}': {ex.Message}" };
+        }
+    }
+
+    /// <summary>
+    /// Handles file content requests from UnifiedReference (content: prefix).
+    /// </summary>
+    private static async Task<GetDataResponse> HandleUnifiedFileReferenceAsync(
+        IMessageHub hub,
+        FileContentReference fileRef,
+        int? numberOfRows,
+        CancellationToken ct)
+    {
+        // Build the collection name with partition if specified
+        var collectionName = fileRef.Partition != null
+            ? $"{fileRef.Collection}@{fileRef.Partition}"
+            : fileRef.Collection;
+
+        return await GetFileContentAsync(hub, collectionName, fileRef.FilePath, numberOfRows, ct);
+    }
+
     private static string GenerateJsonSchema(IMessageHub hub, string typeName)
     {
         var typeRegistry = hub.ServiceProvider.GetRequiredService<ITypeRegistry>();
@@ -345,242 +590,5 @@ public static class DataExtensions
         }
 
         return types.OrderBy(t => t.DisplayName);
-    }
-
-    /// <summary>
-    /// Handles GetContentRequest by parsing the path and dispatching to the appropriate handler.
-    /// </summary>
-    private static async Task<IMessageDelivery> HandleGetContentRequest(
-        IMessageHub hub,
-        IMessageDelivery<GetContentRequest> request,
-        CancellationToken ct)
-    {
-        try
-        {
-            var path = request.Message.Path;
-            if (string.IsNullOrEmpty(path))
-            {
-                hub.Post(new GetContentResponse(null, ContentType.Error) { Error = "Path cannot be empty" },
-                    o => o.ResponseFor(request));
-                return request.Processed();
-            }
-
-            var reference = ContentReference.Parse(path);
-            var result = reference switch
-            {
-                DataContentReference dataRef => await HandleDataContentAsync(hub, dataRef, ct),
-                LayoutAreaContentReference areaRef => await HandleLayoutAreaContentAsync(hub, areaRef, ct),
-                FileContentReference => new GetContentResponse(null, ContentType.Error)
-                    { Error = "File content access via GetContentRequest is not yet implemented. Use ContentPlugin.GetContent() instead." },
-                _ => new GetContentResponse(null, ContentType.Error)
-                    { Error = $"Unknown reference type: {reference.GetType().Name}" }
-            };
-
-            hub.Post(result, o => o.ResponseFor(request));
-        }
-        catch (Exception ex)
-        {
-            hub.Post(new GetContentResponse(null, ContentType.Error) { Error = ex.Message },
-                o => o.ResponseFor(request));
-        }
-
-        return request.Processed();
-    }
-
-    /// <summary>
-    /// Handles data content requests (data:addressType/addressId[/collection[/entityId]]).
-    /// The handler assumes the request has been routed to the correct hub,
-    /// so it always accesses data locally from its workspace.
-    /// </summary>
-    private static async Task<GetContentResponse> HandleDataContentAsync(
-        IMessageHub hub,
-        DataContentReference dataRef,
-        CancellationToken ct)
-    {
-        // The request has been routed to this hub, so access data locally.
-        // Clients should send GetContentRequest to the target address directly.
-
-        if (dataRef.IsDefaultReference)
-        {
-            // Handle default data reference
-            return await GetDefaultDataLocallyAsync(hub, ct);
-        }
-
-        // Build workspace reference for collection or entity
-        WorkspaceReference reference = dataRef.IsEntityReference
-            ? new EntityReference(dataRef.Collection!, dataRef.EntityId!)
-            : new CollectionReference(dataRef.Collection!);
-
-        // Handle locally - get data from workspace
-        return await GetDataLocallyAsync(hub, reference, ct);
-    }
-
-    /// <summary>
-    /// Gets the default data reference locally from the workspace.
-    /// Returns data as object - messaging layer handles serialization.
-    /// </summary>
-    private static async Task<GetContentResponse> GetDefaultDataLocallyAsync(
-        IMessageHub hub,
-        CancellationToken ct)
-    {
-        try
-        {
-            var workspace = hub.GetWorkspace();
-            var dataContext = workspace.DataContext;
-
-            if (dataContext.DefaultDataReferenceFactory == null)
-            {
-                return new GetContentResponse(null, ContentType.Error)
-                    { Error = "No default data reference configured for this address" };
-            }
-
-            var observable = dataContext.DefaultDataReferenceFactory(workspace);
-            var data = await observable.Timeout(TimeSpan.FromSeconds(30)).FirstAsync();
-
-            return new GetContentResponse(data, ContentType.Data, hub.Version);
-        }
-        catch (TimeoutException)
-        {
-            return new GetContentResponse(null, ContentType.Error)
-                { Error = "Request timed out while accessing default data reference" };
-        }
-        catch (Exception ex)
-        {
-            return new GetContentResponse(null, ContentType.Error)
-                { Error = $"Error accessing default data: {ex.Message}" };
-        }
-    }
-
-    /// <summary>
-    /// Gets data locally from the workspace using a workspace reference.
-    /// Uses dynamic dispatch to handle different reference types.
-    /// Returns data as object - messaging layer handles serialization.
-    /// </summary>
-    private static Task<GetContentResponse> GetDataLocallyAsync(
-        IMessageHub hub,
-        WorkspaceReference reference,
-        CancellationToken ct)
-    {
-        // Use dynamic dispatch like HandleGetDataRequest does
-        return GetDataLocallyAsyncCore(hub, (dynamic)reference, ct);
-    }
-
-    private static async Task<GetContentResponse> GetDataLocallyAsyncCore<TReference>(
-        IMessageHub hub,
-        WorkspaceReference<TReference> reference,
-        CancellationToken ct)
-    {
-        try
-        {
-            var workspace = hub.GetWorkspace();
-            var stream = workspace.GetStream(reference, x => x.ReturnNullWhenNotPresent());
-
-            if (stream == null)
-            {
-                return new GetContentResponse(null, ContentType.Error)
-                    { Error = $"No data found for reference: {reference}" };
-            }
-
-            var data = await stream.Timeout(TimeSpan.FromSeconds(30)).FirstAsync();
-
-            return new GetContentResponse(data.Value, ContentType.Data, data.Version);
-        }
-        catch (TimeoutException)
-        {
-            return new GetContentResponse(null, ContentType.Error)
-                { Error = $"Request timed out while accessing data" };
-        }
-        catch (Exception ex)
-        {
-            return new GetContentResponse(null, ContentType.Error)
-                { Error = $"Error accessing data: {ex.Message}" };
-        }
-    }
-
-    /// <summary>
-    /// Handles layout area content requests (area:areaName[/areaId]).
-    /// </summary>
-    private static async Task<GetContentResponse> HandleLayoutAreaContentAsync(
-        IMessageHub hub,
-        LayoutAreaContentReference areaRef,
-        CancellationToken ct)
-    {
-        try
-        {
-            var workspace = hub.GetWorkspace();
-
-            // Create LayoutAreaReference
-            var layoutAreaReference = new LayoutAreaReference(areaRef.AreaName);
-            if (areaRef.AreaId != null)
-            {
-                layoutAreaReference = layoutAreaReference with { Id = areaRef.AreaId };
-            }
-
-            // Get the stream for this layout area
-            var stream = workspace.GetStream(layoutAreaReference, x => x.ReturnNullWhenNotPresent());
-            if (stream == null)
-            {
-                return new GetContentResponse(null, ContentType.Error)
-                    { Error = $"Layout area '{areaRef.AreaName}' not found" };
-            }
-
-            // Get the first value from the stream
-            var value = await stream.Timeout(TimeSpan.FromSeconds(30)).FirstAsync();
-            var json = JsonSerializer.Serialize(value.Value, hub.JsonSerializerOptions);
-
-            return new GetContentResponse(json, ContentType.LayoutArea, hub.Version);
-        }
-        catch (TimeoutException)
-        {
-            return new GetContentResponse(null, ContentType.Error)
-                { Error = $"Request timed out while accessing layout area '{areaRef.AreaName}'" };
-        }
-        catch (Exception ex)
-        {
-            return new GetContentResponse(null, ContentType.Error)
-                { Error = $"Error accessing layout area '{areaRef.AreaName}': {ex.Message}" };
-        }
-    }
-
-    /// <summary>
-    /// Handles GetDefaultDataRequest by returning the default data reference configured for this hub.
-    /// </summary>
-    private static async Task<IMessageDelivery> HandleGetDefaultDataRequest(
-        IMessageHub hub,
-        IMessageDelivery<GetDefaultDataRequest> request,
-        CancellationToken ct)
-    {
-        try
-        {
-            var workspace = hub.GetWorkspace();
-            var factory = workspace.DataContext.DefaultDataReferenceFactory;
-
-            if (factory == null)
-            {
-                hub.Post(new GetDefaultDataResponse(null, 0)
-                    { Error = "No default data reference configured for this address" },
-                    o => o.ResponseFor(request));
-                return request.Processed();
-            }
-
-            var observable = factory(workspace);
-            var data = await observable.Timeout(TimeSpan.FromSeconds(30)).FirstAsync();
-
-            hub.Post(new GetDefaultDataResponse(data, hub.Version), o => o.ResponseFor(request));
-        }
-        catch (TimeoutException)
-        {
-            hub.Post(new GetDefaultDataResponse(null, 0)
-                { Error = "Request timed out while accessing default data reference" },
-                o => o.ResponseFor(request));
-        }
-        catch (Exception ex)
-        {
-            hub.Post(new GetDefaultDataResponse(null, 0)
-                { Error = $"Error accessing default data reference: {ex.Message}" },
-                o => o.ResponseFor(request));
-        }
-
-        return request.Processed();
     }
 }
