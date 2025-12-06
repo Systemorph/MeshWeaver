@@ -30,6 +30,21 @@ public record CommandContext
     public required Action<AgentDisplayInfo> SetCurrentAgent { get; init; }
 
     /// <summary>
+    /// Available models.
+    /// </summary>
+    public IReadOnlyList<string>? AvailableModels { get; init; }
+
+    /// <summary>
+    /// Currently selected model.
+    /// </summary>
+    public string? CurrentModel { get; init; }
+
+    /// <summary>
+    /// Callback to set the current model (for /model command).
+    /// </summary>
+    public Action<string>? SetCurrentModel { get; init; }
+
+    /// <summary>
     /// Current agent context (address, layout area).
     /// </summary>
     public AgentContext? AgentContext { get; init; }

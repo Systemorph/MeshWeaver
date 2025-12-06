@@ -14,6 +14,7 @@ public class AutocompleteService
 
     // Category priorities (higher = shown first)
     private const int CommandCategoryPriority = 2000;
+    private const int ModelCategoryPriority = 1500;
     private const int AgentCategoryPriority = 1000;
     private const int FileCategoryPriority = 100;
 
@@ -28,22 +29,25 @@ public class AutocompleteService
     /// <summary>
     /// Gets autocomplete suggestions based on the query and current context.
     /// </summary>
-    /// <param name="query">The search query (text after the @ or / trigger).</param>
+    /// <param name="query">The search query (text after the @, /, or model: trigger).</param>
     /// <param name="context">The current chat context.</param>
     /// <param name="maxResults">Maximum number of results to return.</param>
     /// <param name="commandRegistry">Optional command registry for / completions.</param>
+    /// <param name="availableModels">Optional list of available models for model: completions.</param>
     /// <returns>Scored and sorted autocomplete items.</returns>
     public async Task<IReadOnlyList<AutocompleteResult>> GetCompletionsAsync(
         string query,
         AgentContext? context,
         int maxResults = 20,
-        ChatCommandRegistry? commandRegistry = null)
+        ChatCommandRegistry? commandRegistry = null,
+        IReadOnlyList<string>? availableModels = null)
     {
         var allItems = new List<AutocompleteItem>();
 
         // Determine the query type based on what trigger was used
         var isCommandQuery = query.StartsWith("/");
         var isAgentQuery = query.StartsWith("@");
+        var isModelQuery = query.StartsWith("model:", StringComparison.OrdinalIgnoreCase);
 
         // Add command items if it's a / query
         if (isCommandQuery && commandRegistry != null)
@@ -61,8 +65,24 @@ public class AutocompleteService
             }
         }
 
+        // Add model items if it's a model: query
+        if (isModelQuery && availableModels != null)
+        {
+            foreach (var model in availableModels)
+            {
+                allItems.Add(new AutocompleteItem(
+                    Label: $"model:{model}",
+                    InsertText: $"model:{model} ",
+                    Description: $"AI Model",
+                    Category: "Models",
+                    Priority: ModelCategoryPriority,
+                    Kind: AutocompleteKind.Other
+                ));
+            }
+        }
+
         // Add agent items (for @ queries or when no specific trigger)
-        if (isAgentQuery || !isCommandQuery)
+        if (isAgentQuery || (!isCommandQuery && !isModelQuery))
         {
             foreach (var agent in _agentDefinitions)
             {
@@ -77,8 +97,8 @@ public class AutocompleteService
             }
         }
 
-        // Add file items from agents that support autocompletion (only for non-command queries)
-        if (!isCommandQuery)
+        // Add file items from agents that support autocompletion (only for @ queries or general queries)
+        if (!isCommandQuery && !isModelQuery)
         {
             var autocompletionAgents = _agentDefinitions.OfType<IAgentWithAutocompletion>();
             foreach (var agent in autocompletionAgents)
