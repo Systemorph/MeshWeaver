@@ -151,6 +151,7 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
     {
         commandRegistry = new ChatCommandRegistry(Logger);
         commandRegistry.Register(new AgentCommand());
+        commandRegistry.Register(new ModelCommand());
         commandRegistry.Register(new HelpCommand());
     }
 
@@ -430,6 +431,17 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
             if (agentInfo != null)
             {
                 OnAgentInfoChanged(agentInfo);
+            }
+        }
+
+        // Handle model reference (set as current model for this and future messages)
+        if (!string.IsNullOrEmpty(parsed.ModelReference))
+        {
+            var modelName = availableModels.FirstOrDefault(
+                m => m.Equals(parsed.ModelReference, StringComparison.OrdinalIgnoreCase));
+            if (modelName != null)
+            {
+                OnModelChanged(modelName);
             }
         }
 
@@ -766,7 +778,7 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
             var fuzzyScorer = new FuzzyScorer();
             var autocompleteService = new AutocompleteService(AgentDefinitions, fuzzyScorer);
 
-            var results = await autocompleteService.GetCompletionsAsync(query, context, commandRegistry: commandRegistry);
+            var results = await autocompleteService.GetCompletionsAsync(query, context, commandRegistry: commandRegistry, availableModels: availableModels);
 
             return results.Select(r => new CompletionItem
             {
@@ -826,6 +838,9 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
             AvailableAgents = agentDisplayInfos.ToDictionary(a => a.Name),
             CurrentAgent = selectedAgentInfo,
             SetCurrentAgent = agent => OnAgentInfoChanged(agent),
+            AvailableModels = availableModels,
+            CurrentModel = selectedModel,
+            SetCurrentModel = model => OnModelChanged(model),
             AgentContext = GetCurrentAgentContext(),
             CommandRegistry = commandRegistry
         };

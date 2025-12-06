@@ -290,19 +290,33 @@ export function registerCompletionProvider(editorId, config) {
                 endColumn: position.column
             });
 
-            // Check if we're after a trigger character (e.g., @)
-            const triggerMatch = textUntilPosition.match(new RegExp(`[${escapedTriggers}](\\w*)$`));
-            if (!triggerMatch) {
-                return { suggestions: [] };
+            let fullQuery;
+            let matchLength;
+
+            // First check for special prefix patterns like "model:"
+            const modelMatch = textUntilPosition.match(/(?:^|[^@\/\w])model:([\w\-\.]*)$/i);
+            if (modelMatch) {
+                // model: prefix detected
+                fullQuery = 'model:' + modelMatch[1];
+                matchLength = modelMatch[0].length - (modelMatch[0].startsWith('model:') ? 0 : 1); // Account for leading non-word char
+            } else {
+                // Check if we're after a trigger character (e.g., @, /)
+                const triggerMatch = textUntilPosition.match(new RegExp(`[${escapedTriggers}]([\\w\\-\\.]*)$`));
+                if (!triggerMatch) {
+                    return { suggestions: [] };
+                }
+
+                const searchTerm = triggerMatch[1];
+                const triggerChar = triggerMatch[0].charAt(0);
+                // Include trigger char in query for server to determine context (@ for agents, / for commands)
+                fullQuery = triggerChar + searchTerm;
+                matchLength = triggerMatch[0].length;
             }
 
-            const searchTerm = triggerMatch[1];
-            const triggerChar = triggerMatch[0].charAt(0);
-
-            // Calculate range to replace (from trigger char to current position)
+            // Calculate range to replace (from trigger/prefix to current position)
             const range = new monaco.Range(
                 position.lineNumber,
-                position.column - triggerMatch[0].length,
+                position.column - matchLength,
                 position.lineNumber,
                 position.column
             );
@@ -310,8 +324,8 @@ export function registerCompletionProvider(editorId, config) {
             let currentItems;
 
             if (isAsync) {
-                // Async mode: fetch from server with debounce
-                currentItems = await debouncedFetch(searchTerm);
+                // Async mode: fetch from server with debounce (send full query including trigger char)
+                currentItems = await debouncedFetch(fullQuery);
             } else {
                 // Sync mode: filter locally
                 const allItems = currentState?.completionConfig?.items || [];
@@ -340,7 +354,7 @@ export function registerCompletionProvider(editorId, config) {
                 // Show category as detail (appears on the right side)
                 detail: item.category || item.detail || '',
                 // filterText tells Monaco what to match against the user's input
-                filterText: triggerChar + item.label,
+                filterText: item.label,
                 // sortText: category first, then label for grouping
                 sortText: (item.category || 'zzz') + '_' + item.label.toLowerCase()
             }));
