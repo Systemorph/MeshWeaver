@@ -67,6 +67,58 @@ sequenceDiagram
 ```
 ````
 
+### Unified Content References
+
+MeshWeaver.Markdown supports unified content references using the `@("prefix:...")` syntax. This allows embedding various types of content directly in markdown documents.
+
+#### Layout Area References
+Display a layout area from another address:
+
+```markdown
+@("area:app/dashboard/Overview")
+@("area:app/dashboard/UserDetails/user123")
+```
+
+Format: `area:addressType/addressId/areaName[/areaId]`
+
+The legacy format without prefix is still supported for backward compatibility:
+
+```markdown
+@("app/dashboard/MyArea")
+```
+
+This is equivalent to `@("area:app/dashboard/MyArea")`.
+
+#### Data References
+Display data as JSON or in a structured format:
+
+```markdown
+@("data:app/myapp/Users")
+@("data:app/myapp/Users/user123")
+```
+
+Format: `data:addressType/addressId[/collection[/entityId]]`
+
+- Without collection: Returns default data entity
+- With collection: Returns entire collection
+- With collection and entityId: Returns single entity
+
+#### Content References
+Display file content based on its mime type:
+
+```markdown
+@("content:app/myapp/Documents/report.pdf")
+@("content:app/myapp/Documents@2024/annual-report.pdf")
+```
+
+Format: `content:addressType/addressId/collection[/path/to/file]` or `content:addressType/addressId/collection@partition/path/to/file`
+
+Supported content types are rendered appropriately:
+- Images: Displayed inline
+- Text/Markdown: Rendered as formatted content
+- PDF: Displayed with viewer or download link
+- Other: Download link provided
+
 ## Usage
 
 This component is primarily used in conjunction with the [MeshWeaver.Articles](../MeshWeaver.Articles/README.md) library, which provides a complete solution for managing and displaying markdown-based content. Please refer to the Articles documentation for configuration and implementation details.

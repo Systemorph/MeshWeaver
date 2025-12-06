@@ -62,6 +62,16 @@ public partial class MarkdownView
                     var areaId = node.GetAttributeValue($"data-{LayoutAreaMarkdownRenderer.AreaId}", null);
                     RenderLayoutArea(builder, address, area, areaId);
                     break;
+                case { Name: "div" } when node.GetAttributeValue("class", "").Contains(DataContentBlockRenderer.DataContent):
+                    var dataAddress = node.GetAttributeValue($"{DataContentBlockRenderer.AddressAttr}", null);
+                    var dataPath = node.GetAttributeValue($"{DataContentBlockRenderer.PathAttr}", null);
+                    RenderDataContent(builder, dataAddress, dataPath);
+                    break;
+                case { Name: "div" } when node.GetAttributeValue("class", "").Contains(FileContentBlockRenderer.FileContent):
+                    var fileAddress = node.GetAttributeValue($"{FileContentBlockRenderer.AddressAttr}", null);
+                    var filePath = node.GetAttributeValue($"{FileContentBlockRenderer.PathAttr}", null);
+                    RenderFileContent(builder, fileAddress, filePath);
+                    break;
                 case { Name: "div" } when node.GetAttributeValue("class", "").Contains("mermaid"):
                     builder.OpenComponent<Mermaid>(1);
                     builder.AddAttribute(2, nameof(Mermaid.Mode), Mode);
@@ -108,5 +118,35 @@ public partial class MarkdownView
         builder.CloseElement();
     }
 
+    private void RenderDataContent(RenderTreeBuilder builder, string address, string path)
+    {
+        builder.OpenElement(1, "div");
+        builder.AddAttribute(2, "class", "data-content");
 
+        builder.OpenComponent<LayoutAreaView>(3);
+        builder.AddAttribute(4, nameof(LayoutAreaView.ViewModel), new LayoutAreaControl((Address)address, new LayoutAreaReference("Data") { Id = path })
+        {
+            ShowProgress = true,
+            ProgressMessage = "Loading data..."
+        });
+        builder.CloseComponent();
+
+        builder.CloseElement();
+    }
+
+    private void RenderFileContent(RenderTreeBuilder builder, string address, string path)
+    {
+        builder.OpenElement(1, "div");
+        builder.AddAttribute(2, "class", "file-content");
+
+        builder.OpenComponent<LayoutAreaView>(3);
+        builder.AddAttribute(4, nameof(LayoutAreaView.ViewModel), new LayoutAreaControl((Address)address, new LayoutAreaReference("Content") { Id = path })
+        {
+            ShowProgress = true,
+            ProgressMessage = "Loading content..."
+        });
+        builder.CloseComponent();
+
+        builder.CloseElement();
+    }
 }

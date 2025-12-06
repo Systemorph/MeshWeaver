@@ -1,6 +1,8 @@
 ﻿using System.Text;
 using Markdig.Helpers;
 using Markdig.Parsers;
+using Markdig.Syntax;
+using MeshWeaver.Data;
 
 namespace MeshWeaver.Markdown;
 
@@ -42,8 +44,9 @@ public class LayoutAreaMarkdownParser : BlockParser
         if (string.IsNullOrWhiteSpace(area))
             return BlockState.None;
 
-        var layoutAreaComponentInfo = new LayoutAreaComponentInfo(area, this);
-        processor.NewBlocks.Push(layoutAreaComponentInfo);
+        // Try to parse as unified content reference (data:, content:, area:)
+        var block = CreateBlockFromToken(area);
+        processor.NewBlocks.Push(block);
 
         return BlockState.ContinueDiscard;
 
@@ -103,5 +106,29 @@ public class LayoutAreaMarkdownParser : BlockParser
 
     }
 
+    /// <summary>
+    /// Creates the appropriate block type based on the token content.
+    /// Supports unified reference notation (data:, content:, area:) and legacy format.
+    /// </summary>
+    private ContainerBlock CreateBlockFromToken(string token)
+    {
+        // Try to parse as unified content reference
+        if (ContentReference.TryParse(token, out var reference) && reference != null)
+        {
+            return reference switch
+            {
+                DataContentReference dataRef => new DataContentBlock(dataRef, this),
+                FileContentReference fileRef => new FileContentBlock(fileRef, this),
+                LayoutAreaContentReference areaRef => new LayoutAreaComponentInfo(
+                    $"{areaRef.AddressType}/{areaRef.AddressId}",
+                    areaRef.AreaName,
+                    areaRef.AreaId,
+                    this),
+                _ => throw new InvalidOperationException($"Unknown reference type: {reference.GetType().Name}")
+            };
+        }
 
+        // Fall back to legacy format (addressType/addressId/area)
+        return new LayoutAreaComponentInfo(token, this);
+    }
 }
