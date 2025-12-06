@@ -2,13 +2,24 @@ namespace MeshWeaver.Data;
 
 /// <summary>
 /// Base class for all content reference types that can be parsed from path patterns.
+/// All paths include address information for routing: prefix:addressType/addressId/...
 /// Supports multiple path formats:
-/// - Content: content:collection/path/to/file or content:collection@partition/path/to/file
+/// - Content: content:addressType/addressId/collection/path or content:addressType/addressId/collection@partition/path
 /// - Data: data:addressType/addressId[/collection[/entityId]]
-/// - Layout Area: area:areaName[/areaId]
+/// - Layout Area: area:addressType/addressId/areaName[/areaId]
 /// </summary>
 public abstract record ContentReference
 {
+    /// <summary>
+    /// The address type for routing (first part of the address).
+    /// </summary>
+    public abstract string AddressType { get; }
+
+    /// <summary>
+    /// The address ID for routing (second part of the address).
+    /// </summary>
+    public abstract string AddressId { get; }
+
     /// <summary>
     /// Converts the content reference back to its path string representation.
     /// </summary>
@@ -63,34 +74,52 @@ public abstract record ContentReference
 /// <summary>
 /// Reference to file-based content.
 /// Supports formats:
-/// - content:collection/path/to/file
-/// - content:collection@partition/path/to/file
+/// - content:addressType/addressId/collection/path/to/file
+/// - content:addressType/addressId/collection@partition/path/to/file
 /// </summary>
-public record FileContentReference(string Collection, string FilePath, string? Partition = null)
-    : ContentReference
+public record FileContentReference(
+    string AddressType,
+    string AddressId,
+    string Collection,
+    string FilePath,
+    string? Partition = null) : ContentReference
 {
+    /// <inheritdoc />
+    public override string AddressType { get; } = AddressType;
+
+    /// <inheritdoc />
+    public override string AddressId { get; } = AddressId;
+
     /// <inheritdoc />
     public override string ToPath() =>
         Partition != null
-            ? $"content:{Collection}@{Partition}/{FilePath}"
-            : $"content:{Collection}/{FilePath}";
+            ? $"content:{AddressType}/{AddressId}/{Collection}@{Partition}/{FilePath}"
+            : $"content:{AddressType}/{AddressId}/{Collection}/{FilePath}";
 
     /// <summary>
     /// Parses a content path (the part after "content:").
-    /// Format: collection/path/to/file or collection@partition/path/to/file
+    /// Format: addressType/addressId/collection/path or addressType/addressId/collection@partition/path
     /// </summary>
     public static FileContentReference ParseContentPath(string remainder)
     {
         if (string.IsNullOrEmpty(remainder))
             throw new ArgumentException("Invalid content path: path after 'content:' cannot be empty");
 
-        var slashIndex = remainder.IndexOf('/');
-        if (slashIndex <= 0)
-            throw new ArgumentException($"Invalid content path: 'content:{remainder}'. Expected format: content:collection/path/to/file");
+        var parts = remainder.Split('/', 4, StringSplitOptions.None);
+        if (parts.Length < 4)
+            throw new ArgumentException($"Invalid content path: 'content:{remainder}'. Expected format: content:addressType/addressId/collection/path");
 
-        var collectionPart = remainder[..slashIndex];
-        var filePath = remainder[(slashIndex + 1)..];
+        var addressType = parts[0];
+        var addressId = parts[1];
+        var collectionPart = parts[2];
+        var filePath = parts[3];
 
+        if (string.IsNullOrEmpty(addressType))
+            throw new ArgumentException($"Invalid content path: 'content:{remainder}'. Address type cannot be empty");
+        if (string.IsNullOrEmpty(addressId))
+            throw new ArgumentException($"Invalid content path: 'content:{remainder}'. Address ID cannot be empty");
+        if (string.IsNullOrEmpty(collectionPart))
+            throw new ArgumentException($"Invalid content path: 'content:{remainder}'. Collection cannot be empty");
         if (string.IsNullOrEmpty(filePath))
             throw new ArgumentException($"Invalid content path: 'content:{remainder}'. File path cannot be empty");
 
@@ -106,10 +135,10 @@ public record FileContentReference(string Collection, string FilePath, string? P
             if (string.IsNullOrEmpty(partition))
                 throw new ArgumentException($"Invalid content path: 'content:{remainder}'. Partition cannot be empty when @ is used");
 
-            return new FileContentReference(collection, filePath, partition);
+            return new FileContentReference(addressType, addressId, collection, filePath, partition);
         }
 
-        return new FileContentReference(collectionPart, filePath);
+        return new FileContentReference(addressType, addressId, collectionPart, filePath);
     }
 
     /// <inheritdoc />
@@ -129,6 +158,12 @@ public record DataContentReference(
     string? Collection = null,
     string? EntityId = null) : ContentReference
 {
+    /// <inheritdoc />
+    public override string AddressType { get; } = AddressType;
+
+    /// <inheritdoc />
+    public override string AddressId { get; } = AddressId;
+
     /// <summary>
     /// True if this reference uses the default data reference (no collection specified).
     /// </summary>
@@ -183,31 +218,44 @@ public record DataContentReference(
 /// <summary>
 /// Reference to a layout area.
 /// Supports formats:
-/// - area:areaName
-/// - area:areaName/areaId
+/// - area:addressType/addressId/areaName
+/// - area:addressType/addressId/areaName/areaId
 /// </summary>
-public record LayoutAreaContentReference(string AreaName, string? AreaId = null)
-    : ContentReference
+public record LayoutAreaContentReference(
+    string AddressType,
+    string AddressId,
+    string AreaName,
+    string? AreaId = null) : ContentReference
 {
     /// <inheritdoc />
+    public override string AddressType { get; } = AddressType;
+
+    /// <inheritdoc />
+    public override string AddressId { get; } = AddressId;
+
+    /// <inheritdoc />
     public override string ToPath() =>
-        AreaId != null ? $"area:{AreaName}/{AreaId}" : $"area:{AreaName}";
+        AreaId != null
+            ? $"area:{AddressType}/{AddressId}/{AreaName}/{AreaId}"
+            : $"area:{AddressType}/{AddressId}/{AreaName}";
 
     /// <summary>
     /// Parses an area path (the part after "area:").
-    /// Format: areaName[/areaId]
+    /// Format: addressType/addressId/areaName[/areaId]
     /// </summary>
     public static LayoutAreaContentReference ParseAreaPath(string remainder)
     {
         if (string.IsNullOrEmpty(remainder))
-            throw new ArgumentException("Invalid area path: area name cannot be empty");
+            throw new ArgumentException("Invalid area path: path after 'area:' cannot be empty");
 
-        var parts = remainder.Split('/', 2, StringSplitOptions.RemoveEmptyEntries);
+        var parts = remainder.Split('/', 4, StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length < 3)
+            throw new ArgumentException($"Invalid area path: 'area:{remainder}'. Expected format: area:addressType/addressId/areaName[/areaId]");
+
         return parts.Length switch
         {
-            0 => throw new ArgumentException("Invalid area path: area name is required"),
-            1 => new LayoutAreaContentReference(parts[0]),
-            _ => new LayoutAreaContentReference(parts[0], parts[1])
+            3 => new LayoutAreaContentReference(parts[0], parts[1], parts[2]),
+            _ => new LayoutAreaContentReference(parts[0], parts[1], parts[2], parts[3])
         };
     }
 

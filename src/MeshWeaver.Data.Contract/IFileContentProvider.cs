@@ -20,6 +20,30 @@ public interface IFileContentProvider
         string filePath,
         int? numberOfRows = null,
         CancellationToken ct = default);
+
+    /// <summary>
+    /// Saves content to a file.
+    /// </summary>
+    /// <param name="collectionName">The name of the content collection</param>
+    /// <param name="filePath">The path to the file within the collection</param>
+    /// <param name="content">The content to save</param>
+    /// <param name="ct">Cancellation token</param>
+    Task<FileOperationResult> SaveFileContentAsync(
+        string collectionName,
+        string filePath,
+        Stream content,
+        CancellationToken ct = default);
+
+    /// <summary>
+    /// Deletes a file.
+    /// </summary>
+    /// <param name="collectionName">The name of the content collection</param>
+    /// <param name="filePath">The path to the file within the collection</param>
+    /// <param name="ct">Cancellation token</param>
+    Task<FileOperationResult> DeleteFileAsync(
+        string collectionName,
+        string filePath,
+        CancellationToken ct = default);
 }
 
 /// <summary>
@@ -51,4 +75,30 @@ public record FileContentResult
     /// Creates a failed result with an error message.
     /// </summary>
     public static FileContentResult Fail(string error) => new() { Error = error };
+}
+
+/// <summary>
+/// Result of a file operation (save, delete, etc.).
+/// </summary>
+public record FileOperationResult
+{
+    /// <summary>
+    /// Error message if the operation failed.
+    /// </summary>
+    public string? Error { get; init; }
+
+    /// <summary>
+    /// True if the operation was successful.
+    /// </summary>
+    public bool Success => Error == null;
+
+    /// <summary>
+    /// Creates a successful result.
+    /// </summary>
+    public static FileOperationResult Ok() => new();
+
+    /// <summary>
+    /// Creates a failed result with an error message.
+    /// </summary>
+    public static FileOperationResult Fail(string error) => new() { Error = error };
 }

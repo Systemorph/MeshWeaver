@@ -69,4 +69,52 @@ public class FileContentProvider : IFileContentProvider
             return FileContentResult.Fail($"Error accessing file '{filePath}' from collection '{collectionName}': {ex.Message}");
         }
     }
+
+    public async Task<FileOperationResult> SaveFileContentAsync(
+        string collectionName,
+        string filePath,
+        Stream content,
+        CancellationToken ct = default)
+    {
+        try
+        {
+            var collection = await contentService.GetCollectionAsync(collectionName, ct);
+            if (collection == null)
+            {
+                return FileOperationResult.Fail($"Content collection '{collectionName}' not found");
+            }
+
+            var directory = Path.GetDirectoryName(filePath)?.Replace('\\', '/') ?? "";
+            var fileName = Path.GetFileName(filePath);
+
+            await collection.SaveFileAsync(directory, fileName, content);
+            return FileOperationResult.Ok();
+        }
+        catch (Exception ex)
+        {
+            return FileOperationResult.Fail($"Error saving file '{filePath}' to collection '{collectionName}': {ex.Message}");
+        }
+    }
+
+    public async Task<FileOperationResult> DeleteFileAsync(
+        string collectionName,
+        string filePath,
+        CancellationToken ct = default)
+    {
+        try
+        {
+            var collection = await contentService.GetCollectionAsync(collectionName, ct);
+            if (collection == null)
+            {
+                return FileOperationResult.Fail($"Content collection '{collectionName}' not found");
+            }
+
+            await collection.DeleteFileAsync(filePath);
+            return FileOperationResult.Ok();
+        }
+        catch (Exception ex)
+        {
+            return FileOperationResult.Fail($"Error deleting file '{filePath}' from collection '{collectionName}': {ex.Message}");
+        }
+    }
 }
