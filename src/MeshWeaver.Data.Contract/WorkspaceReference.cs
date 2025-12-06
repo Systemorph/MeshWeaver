@@ -86,9 +86,9 @@ public record PartitionedWorkspaceReference<TReduced>(object? Partition, Workspa
 /// <summary>
 /// Unified reference for accessing content via path patterns.
 /// Supports multiple path formats:
-/// - File: collection:path/to/file or collection@partition:path/to/file
 /// - Data: data:addressType/addressId[/collection[/entityId]]
-/// - Layout Area: area:areaName[/areaId]
+/// - Content: content:addressType/addressId/collection/path
+/// - Area: area:addressType/addressId/areaName[/areaId]
 /// </summary>
 /// <param name="Path">The unified path to access content</param>
 public record UnifiedReference(string Path) : WorkspaceReference<object>
@@ -104,5 +104,28 @@ public record UnifiedReference(string Path) : WorkspaceReference<object>
     public ContentReference ParsedReference => ContentReference.Parse(Path);
 
     public override string ToString() => Path;
+}
+
+/// <summary>
+/// Reference to a file in a content collection.
+/// Used by the content: prefix handler.
+/// </summary>
+/// <param name="Collection">The content collection name</param>
+/// <param name="Path">The path to the file within the collection</param>
+/// <param name="Partition">Optional partition for partitioned collections</param>
+public record FileReference(
+    string Collection,
+    string Path,
+    string? Partition = null) : WorkspaceReference<object>
+{
+    /// <summary>
+    /// Optional: number of rows to read (for files like Excel/CSV)
+    /// </summary>
+    public int? NumberOfRows { get; init; }
+
+    public override string ToString() =>
+        Partition != null
+            ? $"{Collection}@{Partition}/{Path}"
+            : $"{Collection}/{Path}";
 }
 

@@ -52,7 +52,8 @@
       "Bash(node --check:*)",
       "Bash(cd:*)",
       "Bash(git stash:*)",
-      "Bash(where python python3 powershell pwsh)"
+      "Bash(where python python3 powershell pwsh)",
+      "Bash(git grep:*)"
     ],
     "deny": []
   }

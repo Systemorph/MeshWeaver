@@ -1,0 +1,54 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 300">
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#1a1a2e;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#16213e;stop-opacity:1" />
+    </linearGradient>
+    <linearGradient id="centerGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#4facfe;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#00f2fe;stop-opacity:1" />
+    </linearGradient>
+    <linearGradient id="dataGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#667eea;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#764ba2;stop-opacity:1" />
+    </linearGradient>
+    <linearGradient id="contentGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#f093fb;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#f5576c;stop-opacity:1" />
+    </linearGradient>
+    <linearGradient id="areaGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#4facfe;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#00f2fe;stop-opacity:1" />
+    </linearGradient>
+  </defs>
+
+  <!-- Background -->
+  <rect width="400" height="300" fill="url(#bgGrad)"/>
+
+  <!-- Connection lines -->
+  <line x1="200" y1="150" x2="70" y2="80" stroke="#4facfe" stroke-width="2" opacity="0.6"/>
+  <line x1="200" y1="150" x2="330" y2="80" stroke="#f093fb" stroke-width="2" opacity="0.6"/>
+  <line x1="200" y1="150" x2="200" y2="250" stroke="#667eea" stroke-width="2" opacity="0.6"/>
+
+  <!-- Center node - @ symbol -->
+  <circle cx="200" cy="150" r="35" fill="url(#centerGrad)" opacity="0.9"/>
+  <text x="200" y="160" font-family="Arial, sans-serif" font-size="32" font-weight="bold" fill="#1a1a2e" text-anchor="middle">@</text>
+
+  <!-- Data node (bottom) -->
+  <rect x="160" y="220" width="80" height="50" rx="8" fill="url(#dataGrad)" opacity="0.9"/>
+  <text x="200" y="240" font-family="Arial, sans-serif" font-size="11" fill="white" text-anchor="middle">data:</text>
+  <text x="200" y="255" font-family="Arial, sans-serif" font-size="9" fill="white" text-anchor="middle" opacity="0.8">{ JSON }</text>
+
+  <!-- Content node (top right) -->
+  <rect x="290" y="50" width="80" height="50" rx="8" fill="url(#contentGrad)" opacity="0.9"/>
+  <text x="330" y="70" font-family="Arial, sans-serif" font-size="11" fill="white" text-anchor="middle">content:</text>
+  <text x="330" y="85" font-family="Arial, sans-serif" font-size="9" fill="white" text-anchor="middle" opacity="0.8">files</text>
+
+  <!-- Area node (top left) -->
+  <rect x="30" y="50" width="80" height="50" rx="8" fill="url(#areaGrad)" opacity="0.9"/>
+  <text x="70" y="70" font-family="Arial, sans-serif" font-size="11" fill="#1a1a2e" text-anchor="middle">area:</text>
+  <text x="70" y="85" font-family="Arial, sans-serif" font-size="9" fill="#1a1a2e" text-anchor="middle" opacity="0.8">layouts</text>
+
+  <!-- Title -->
+  <text x="200" y="25" font-family="Arial, sans-serif" font-size="14" font-weight="bold" fill="white" text-anchor="middle">Unified Content References</text>
+</svg>

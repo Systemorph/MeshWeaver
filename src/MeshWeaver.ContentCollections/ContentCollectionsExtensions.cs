@@ -3,6 +3,7 @@ using System.Text;
 using Markdig;
 using Markdig.Extensions.Yaml;
 using Markdig.Syntax;
+using MeshWeaver.Data;
 using MeshWeaver.Layout;
 using MeshWeaver.Markdown;
 using MeshWeaver.Messaging;
@@ -59,6 +60,8 @@ public static class ContentCollectionsExtensions
     {
         return config
             .WithServices(AddContentService)
+            .AddData(data => data
+                .WithUnifiedReferenceHandler("content", new ContentPrefixHandler()))
             .AddLayout(layout => layout
                 .WithView(nameof(ContentLayoutArea.Content), ContentLayoutArea.Content)
                 .WithView(nameof(FileBrowserLayoutAreas.FileBrowser), FileBrowserLayoutAreas.FileBrowser)

@@ -233,4 +233,29 @@ public static class DataContextExtensions
                 contentCollectionName ?? collectionName)
         };
     }
+
+    /// <summary>
+    /// Registers a unified reference handler for a specific prefix.
+    /// This enables accessing content via unified paths like "data:...", "area:...", "content:...".
+    /// </summary>
+    /// <param name="dataContext">The data context to configure</param>
+    /// <param name="prefix">The prefix to register (e.g., "data", "area", "content")</param>
+    /// <param name="handler">The handler that processes references with this prefix</param>
+    /// <returns>Updated data context (unchanged, handler is registered directly)</returns>
+    /// <example>
+    /// <code>
+    /// .AddData(data => data
+    ///     .WithUnifiedReferenceHandler("data", new DataPrefixHandler())
+    /// )
+    /// </code>
+    /// </example>
+    public static DataContext WithUnifiedReferenceHandler(
+        this DataContext dataContext,
+        string prefix,
+        IUnifiedReferenceHandler handler)
+    {
+        var registry = dataContext.Hub.ServiceProvider.GetRequiredService<IUnifiedReferenceRegistry>();
+        registry.Register(prefix, handler);
+        return dataContext;
+    }
 }

@@ -46,8 +46,8 @@ public abstract record ContentReference
         if (path.StartsWith("content:", StringComparison.OrdinalIgnoreCase))
             return FileContentReference.ParseContentPath(path[8..]);
 
-        // Unknown prefix
-        throw new ArgumentException($"Invalid path: '{path}'. Expected prefix: data:, area:, or content:");
+        // No recognized prefix - default to area:
+        return LayoutAreaContentReference.ParseAreaPath(path);
     }
 
     /// <summary>
@@ -241,7 +241,7 @@ public record LayoutAreaContentReference(
 
     /// <summary>
     /// Parses an area path (the part after "area:").
-    /// Format: addressType/addressId/areaName[/areaId]
+    /// Format: addressType/addressId/areaName[/areaId] or addressType/addressId/areaName?areaId
     /// </summary>
     public static LayoutAreaContentReference ParseAreaPath(string remainder)
     {
@@ -252,11 +252,26 @@ public record LayoutAreaContentReference(
         if (parts.Length < 3)
             throw new ArgumentException($"Invalid area path: 'area:{remainder}'. Expected format: area:addressType/addressId/areaName[/areaId]");
 
-        return parts.Length switch
+        var areaNamePart = parts[2];
+        string areaName;
+        string? areaId = null;
+
+        // Check for ? separator in area name (e.g., SalesGrowthSummary?Year=2025)
+        var queryIndex = areaNamePart.IndexOf('?');
+        if (queryIndex > 0)
         {
-            3 => new LayoutAreaContentReference(parts[0], parts[1], parts[2]),
-            _ => new LayoutAreaContentReference(parts[0], parts[1], parts[2], parts[3])
-        };
+            areaName = areaNamePart[..queryIndex];
+            areaId = areaNamePart[(queryIndex + 1)..];
+        }
+        else
+        {
+            areaName = areaNamePart;
+            // Check for areaId in parts[3] if available
+            if (parts.Length > 3)
+                areaId = parts[3];
+        }
+
+        return new LayoutAreaContentReference(parts[0], parts[1], areaName, areaId);
     }
 
     /// <inheritdoc />
