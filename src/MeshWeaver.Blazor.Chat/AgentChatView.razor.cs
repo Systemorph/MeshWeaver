@@ -1,5 +1,7 @@
 ﻿using MeshWeaver.AI;
+using MeshWeaver.AI.Commands;
 using MeshWeaver.AI.Completion;
+using MeshWeaver.AI.Parsing;
 using MeshWeaver.AI.Persistence;
 using MeshWeaver.Blazor.Monaco;
 using MeshWeaver.Data;
@@ -58,6 +60,10 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
     private IReadOnlyList<string> availableModels = [];
     private bool pendingModelChange;
 
+    // Pre-parser and command system
+    private readonly ChatPreParser chatPreParser = new();
+    private ChatCommandRegistry? commandRegistry;
+
     private async Task OnNewMessageReceived(ChatMessage message)
     {
         // Handle new message events (e.g., auto-scroll, notifications, analytics)
@@ -85,6 +91,9 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
 
         // Initialize agent and model selections
         await InitializeAgentAndModelSelectionsAsync();
+
+        // Initialize command system
+        InitializeCommands();
 
         // Try to load the most recent conversation on startup
         try
@@ -133,6 +142,16 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
         }
 
         StateHasChanged();
+    }
+
+    /// <summary>
+    /// Initializes the chat command system.
+    /// </summary>
+    private void InitializeCommands()
+    {
+        commandRegistry = new ChatCommandRegistry(Logger);
+        commandRegistry.Register(new AgentCommand());
+        commandRegistry.Register(new HelpCommand());
     }
 
     /// <summary>
@@ -398,6 +417,38 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
     {
         // Cancel any existing response
         CancelAnyCurrentResponse();
+
+        // Pre-parse the message for agent references and commands
+        var messageText = ExtractTextFromChatMessage(userMessage);
+        var parsed = chatPreParser.Parse(messageText);
+
+        // Handle agent reference (set as current agent for this and future messages)
+        if (!string.IsNullOrEmpty(parsed.AgentReference))
+        {
+            var agentInfo = agentDisplayInfos.FirstOrDefault(
+                a => a.Name.Equals(parsed.AgentReference, StringComparison.OrdinalIgnoreCase));
+            if (agentInfo != null)
+            {
+                OnAgentInfoChanged(agentInfo);
+            }
+        }
+
+        // Handle commands
+        if (parsed.Command != null)
+        {
+            await HandleCommandAsync(parsed.Command, messageText);
+
+            // If command doesn't send to AI, we're done
+            if (!parsed.ShouldSendToAI)
+            {
+                // Re-enable the input and focus it
+                if (chatInput != null)
+                {
+                    await chatInput.FocusAsync();
+                }
+                return;
+            }
+        }
 
         IAgentChat chat;
         try
@@ -698,7 +749,7 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
         // Only provide trigger characters - items are fetched async via GetCompletionsForEditorAsync
         return new CompletionProviderConfig
         {
-            TriggerCharacters = ["@"],
+            TriggerCharacters = ["@", "/"],
             Items = []
         };
     }
@@ -715,7 +766,7 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
             var fuzzyScorer = new FuzzyScorer();
             var autocompleteService = new AutocompleteService(AgentDefinitions, fuzzyScorer);
 
-            var results = await autocompleteService.GetCompletionsAsync(query, context);
+            var results = await autocompleteService.GetCompletionsAsync(query, context, commandRegistry: commandRegistry);
 
             return results.Select(r => new CompletionItem
             {
@@ -741,6 +792,68 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
         AutocompleteKind.Command => CompletionItemKind.Function,
         _ => CompletionItemKind.Text
     };
+
+    /// <summary>
+    /// Extracts text content from a ChatMessage.
+    /// </summary>
+    private static string ExtractTextFromChatMessage(ChatMessage message)
+    {
+        var textBuilder = new System.Text.StringBuilder();
+        foreach (var content in message.Contents)
+        {
+            if (content is TextContent textContent)
+            {
+                textBuilder.Append(textContent.Text);
+            }
+        }
+        return textBuilder.ToString();
+    }
+
+    /// <summary>
+    /// Handles a parsed chat command.
+    /// </summary>
+    private async Task HandleCommandAsync(ParsedCommand command, string originalMessage)
+    {
+        if (commandRegistry == null || !commandRegistry.TryGetCommand(command.Name, out var chatCommand) || chatCommand == null)
+        {
+            AddSystemMessage($"Unknown command: /{command.Name}. Type /help for available commands.");
+            return;
+        }
+
+        var context = new CommandContext
+        {
+            ParsedCommand = command,
+            AvailableAgents = agentDisplayInfos.ToDictionary(a => a.Name),
+            CurrentAgent = selectedAgentInfo,
+            SetCurrentAgent = agent => OnAgentInfoChanged(agent),
+            AgentContext = GetCurrentAgentContext(),
+            CommandRegistry = commandRegistry
+        };
+
+        var result = await chatCommand.ExecuteAsync(context);
+
+        if (!string.IsNullOrEmpty(result.Message))
+        {
+            // Show the user's command as a user message
+            var userCommandMessage = new ChatMessage(ChatRole.User, originalMessage);
+            messages.Add(userCommandMessage);
+
+            AddSystemMessage(result.Message);
+        }
+    }
+
+    /// <summary>
+    /// Adds a system message to the chat (for command output).
+    /// </summary>
+    private void AddSystemMessage(string message)
+    {
+        var systemMessage = new ChatMessage(ChatRole.Assistant, message)
+        {
+            AuthorName = "System"
+        };
+        messages.Add(systemMessage);
+        StateHasChanged();
+    }
 
     public void Dispose()
     => currentResponseCancellation.Cancel();
