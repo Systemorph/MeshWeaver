@@ -69,32 +69,50 @@ sequenceDiagram
 
 ### Unified Content References
 
-MeshWeaver.Markdown supports unified content references using the `@("prefix:...")` syntax. This allows embedding various types of content directly in markdown documents.
+MeshWeaver.Markdown supports unified content references for embedding various types of content directly in markdown documents.
+
+#### Syntax
+
+Basic syntax:
+```markdown
+@app/dashboard/Overview
+@data:app/myapp/Products
+@content:app/docs/readme.md
+```
+
+For paths with spaces or special characters, use quotes:
+```markdown
+@"content:app/docs/My Report 2025.pdf"
+@"app/dashboard/Sales Summary"
+```
+
+The legacy syntax with parentheses is also supported:
+```markdown
+@("app/dashboard/Overview")
+```
 
 #### Layout Area References
 Display a layout area from another address:
 
 ```markdown
-@("area:app/dashboard/Overview")
-@("area:app/dashboard/UserDetails/user123")
+@app/dashboard/Overview
+@area:app/dashboard/UserDetails/user123
 ```
 
 Format: `area:addressType/addressId/areaName[/areaId]`
 
-The legacy format without prefix is still supported for backward compatibility:
-
+Paths without a prefix default to `area:`, so these are equivalent:
 ```markdown
-@("app/dashboard/MyArea")
+@app/dashboard/MyArea
+@("area:app/dashboard/MyArea")
 ```
-
-This is equivalent to `@("area:app/dashboard/MyArea")`.
 
 #### Data References
 Display data as JSON or in a structured format:
 
 ```markdown
-@("data:app/myapp/Users")
-@("data:app/myapp/Users/user123")
+@data:app/myapp/Users
+@data:app/myapp/Users/user123
 ```
 
 Format: `data:addressType/addressId[/collection[/entityId]]`
@@ -107,8 +125,13 @@ Format: `data:addressType/addressId[/collection[/entityId]]`
 Display file content based on its mime type:
 
 ```markdown
-@("content:app/myapp/Documents/report.pdf")
-@("content:app/myapp/Documents@2024/annual-report.pdf")
+@content:app/myapp/Documents/report.pdf
+@content:app/myapp/Documents@2024/annual-report.pdf
+```
+
+For paths with spaces, use quoted syntax:
+```markdown
+@("content:app/myapp/Documents/My Report.pdf")
 ```
 
 Format: `content:addressType/addressId/collection[/path/to/file]` or `content:addressType/addressId/collection@partition/path/to/file`

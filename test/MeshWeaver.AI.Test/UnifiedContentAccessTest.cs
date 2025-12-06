@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.ComponentModel.DataAnnotations;
+using System.Diagnostics.CodeAnalysis;
 using System.IO;
 using System.Linq;
 using System.Reactive.Linq;
@@ -14,7 +15,10 @@ using MeshWeaver.Fixture;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Messaging;
+using Microsoft.Extensions.DependencyInjection;
 using Xunit;
+
+#pragma warning disable CS1591 // Missing XML comment for publicly visible type or member
 
 namespace MeshWeaver.AI.Test;
 
@@ -373,7 +377,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
         var testDir = Path.Combine(Path.GetTempPath(), "MeshWeaverTest_" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(testDir);
         var testFilePath = Path.Combine(testDir, "content-test.txt");
-        await File.WriteAllTextAsync(testFilePath, "Content via content: prefix");
+        await File.WriteAllTextAsync(testFilePath, "Content via content: prefix", TestContext.Current.CancellationToken);
 
         try
         {
@@ -413,7 +417,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
         var testDir = Path.Combine(Path.GetTempPath(), "MeshWeaverTest_" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(testDir);
         var testFilePath = Path.Combine(testDir, "test.txt");
-        await File.WriteAllTextAsync(testFilePath, "Hello, World!\nThis is a test file.\nLine 3.");
+        await File.WriteAllTextAsync(testFilePath, "Hello, World!\nThis is a test file.\nLine 3.", TestContext.Current.CancellationToken);
 
         try
         {
@@ -452,7 +456,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
         var testDir = Path.Combine(Path.GetTempPath(), "MeshWeaverTest_" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(testDir);
         var testFilePath = Path.Combine(testDir, "multiline.txt");
-        await File.WriteAllTextAsync(testFilePath, "Line 1\nLine 2\nLine 3\nLine 4\nLine 5");
+        await File.WriteAllTextAsync(testFilePath, "Line 1\nLine 2\nLine 3\nLine 4\nLine 5", TestContext.Current.CancellationToken);
 
         try
         {
@@ -520,7 +524,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
         var subDir = Path.Combine(testDir, "subfolder");
         Directory.CreateDirectory(subDir);
         var testFilePath = Path.Combine(subDir, "nested.txt");
-        await File.WriteAllTextAsync(testFilePath, "Nested file content");
+        await File.WriteAllTextAsync(testFilePath, "Nested file content", TestContext.Current.CancellationToken);
 
         try
         {
@@ -723,7 +727,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
         var testDir = Path.Combine(Path.GetTempPath(), "MeshWeaverTest_Update_" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(testDir);
         var testFilePath = Path.Combine(testDir, "update-test.txt");
-        await File.WriteAllTextAsync(testFilePath, "Original content");
+        await File.WriteAllTextAsync(testFilePath, "Original content", TestContext.Current.CancellationToken);
 
         try
         {
@@ -742,7 +746,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
             response.Message.Error.Should().BeNull();
 
             // Verify the file was updated
-            var fileContent = await File.ReadAllTextAsync(testFilePath);
+            var fileContent = await File.ReadAllTextAsync(testFilePath, TestContext.Current.CancellationToken);
             fileContent.Should().Be("Updated content");
         }
         finally
@@ -883,7 +887,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
         var testDir = Path.Combine(Path.GetTempPath(), "MeshWeaverTest_Delete_" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(testDir);
         var testFilePath = Path.Combine(testDir, "delete-test.txt");
-        await File.WriteAllTextAsync(testFilePath, "File to delete");
+        await File.WriteAllTextAsync(testFilePath, "File to delete", TestContext.Current.CancellationToken);
 
         try
         {
@@ -950,6 +954,350 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
         // assert
         response.Message.Success.Should().BeFalse();
         response.Message.Error.Should().Contain("not found");
+    }
+
+    #endregion
+
+    #region UnifiedReference Workspace Stream Tests
+
+    [Fact]
+    public async Task UnifiedReference_DataPrefix_Collection_ViaGetDataRequest()
+    {
+        // arrange
+        GetHost();
+        var client = GetClient();
+        var path = "data:host/1/TestPricing";
+
+        // act - use GetDataRequest which correctly handles the UnifiedReference
+        var response = await client.AwaitResponse(
+            new GetDataRequest(new UnifiedReference(path)),
+            o => o.WithTarget(new HostAddress()),
+            TestContext.Current.CancellationToken);
+
+        // assert
+        response.Message.Error.Should().BeNull();
+        response.Message.Data.Should().NotBeNull();
+        response.Message.Data.Should().BeOfType<InstanceCollection>();
+        var collection = (InstanceCollection)response.Message.Data!;
+        collection.Instances.Should().ContainKey(TestPricingId);
+    }
+
+    [Fact]
+    public async Task UnifiedReference_DataPrefix_Entity_ViaGetDataRequest()
+    {
+        // arrange
+        GetHost();
+        var client = GetClient();
+        var path = $"data:host/1/TestPricing/{TestPricingId}";
+
+        // act - use GetDataRequest which correctly handles the UnifiedReference
+        var response = await client.AwaitResponse(
+            new GetDataRequest(new UnifiedReference(path)),
+            o => o.WithTarget(new HostAddress()),
+            TestContext.Current.CancellationToken);
+
+        // assert
+        response.Message.Error.Should().BeNull();
+        response.Message.Data.Should().NotBeNull();
+        var pricing = response.Message.Data.Should().BeOfType<TestPricing>().Subject;
+        pricing.Id.Should().Be(TestPricingId);
+    }
+
+    [Fact]
+    public async Task UnifiedReference_AreaPrefix_ViaGetDataRequest()
+    {
+        // arrange
+        GetHost();
+        var client = GetClient();
+        var path = "area:host/1/TestArea";
+
+        // act - use GetDataRequest which correctly handles the UnifiedReference
+        var response = await client.AwaitResponse(
+            new GetDataRequest(new UnifiedReference(path)),
+            o => o.WithTarget(new HostAddress()),
+            TestContext.Current.CancellationToken);
+
+        // assert
+        response.Message.Error.Should().BeNull();
+        response.Message.Data.Should().NotBeNull();
+        // Layout areas return a JSON string
+        response.Message.Data.Should().BeOfType<string>();
+    }
+
+    [Fact]
+    public async Task UnifiedReference_ParsesPathAndUsesRegistry()
+    {
+        // arrange
+        var host = GetHost();
+        var registry = host.ServiceProvider.GetRequiredService<IUnifiedReferenceRegistry>();
+
+        // Verify all handlers are registered
+        registry.TryGetHandler("data", out _).Should().BeTrue();
+        registry.TryGetHandler("area", out _).Should().BeTrue();
+        // Note: content handler is only registered if AddContentCollections is called
+    }
+
+    [Fact]
+    public async Task UnifiedReference_Registry_HandlerRegisteredByAddData()
+    {
+        // arrange - just calling GetHost() triggers AddData() which should register the handler
+        var host = GetHost();
+        var registry = host.ServiceProvider.GetRequiredService<IUnifiedReferenceRegistry>();
+
+        // act & assert
+        registry.TryGetHandler("data", out var dataHandler).Should().BeTrue();
+        dataHandler.Should().BeOfType<DataPrefixHandler>();
+    }
+
+    [Fact]
+    public async Task UnifiedReference_Registry_AreaHandlerRegisteredByAddLayout()
+    {
+        // arrange - GetHost() triggers AddLayout() which should register the area handler
+        var host = GetHost();
+        var registry = host.ServiceProvider.GetRequiredService<IUnifiedReferenceRegistry>();
+
+        // act & assert
+        registry.TryGetHandler("area", out var areaHandler).Should().BeTrue();
+        areaHandler.Should().BeOfType<AreaPrefixHandler>();
+    }
+
+    #endregion
+
+    #region Registry Tests
+
+    [Fact]
+    public void DataPrefixHandler_GetAddress_ReturnsCorrectAddress()
+    {
+        // arrange
+        var handler = new DataPrefixHandler();
+        var reference = new DataContentReference("pricing", "MS-2024", "PropertyRisk", "risk1");
+
+        // act
+        var address = handler.GetAddress(reference);
+
+        // assert
+        address.Type.Should().Be("pricing");
+        address.Id.Should().Be("MS-2024");
+    }
+
+    [Fact]
+    public void DataPrefixHandler_CreateWorkspaceReference_ReturnsEntityReference_ForEntityPath()
+    {
+        // arrange
+        var handler = new DataPrefixHandler();
+        var reference = new DataContentReference("pricing", "MS-2024", "PropertyRisk", "risk1");
+
+        // act
+        var workspaceRef = handler.CreateWorkspaceReference(reference);
+
+        // assert
+        var entityRef = workspaceRef.Should().BeOfType<EntityReference>().Subject;
+        entityRef.Collection.Should().Be("PropertyRisk");
+        entityRef.Id.Should().Be("risk1");
+    }
+
+    [Fact]
+    public void DataPrefixHandler_CreateWorkspaceReference_ReturnsCollectionReference_ForCollectionPath()
+    {
+        // arrange
+        var handler = new DataPrefixHandler();
+        var reference = new DataContentReference("pricing", "MS-2024", "PropertyRisk");
+
+        // act
+        var workspaceRef = handler.CreateWorkspaceReference(reference);
+
+        // assert
+        var collectionRef = workspaceRef.Should().BeOfType<CollectionReference>().Subject;
+        collectionRef.Name.Should().Be("PropertyRisk");
+    }
+
+    [Fact]
+    public void DataPrefixHandler_CreateWorkspaceReference_ThrowsForDefaultReference()
+    {
+        // arrange
+        var handler = new DataPrefixHandler();
+        var reference = new DataContentReference("pricing", "MS-2024");
+
+        // act
+        var action = () => handler.CreateWorkspaceReference(reference);
+
+        // assert
+        action.Should().Throw<NotSupportedException>().WithMessage("*collection*");
+    }
+
+    [Fact]
+    public void AreaPrefixHandler_GetAddress_ReturnsCorrectAddress()
+    {
+        // arrange
+        var handler = new AreaPrefixHandler();
+        var reference = new LayoutAreaContentReference("pricing", "MS-2024", "Overview", "details");
+
+        // act
+        var address = handler.GetAddress(reference);
+
+        // assert
+        address.Type.Should().Be("pricing");
+        address.Id.Should().Be("MS-2024");
+    }
+
+    [Fact]
+    public void AreaPrefixHandler_CreateWorkspaceReference_ReturnsLayoutAreaReference()
+    {
+        // arrange
+        var handler = new AreaPrefixHandler();
+        var reference = new LayoutAreaContentReference("pricing", "MS-2024", "Overview", "details");
+
+        // act
+        var workspaceRef = handler.CreateWorkspaceReference(reference);
+
+        // assert
+        var layoutAreaRef = workspaceRef.Should().BeOfType<LayoutAreaReference>().Subject;
+        layoutAreaRef.Area.Should().Be("Overview");
+        layoutAreaRef.Id.Should().Be("details");
+    }
+
+    [Fact]
+    public void AreaPrefixHandler_CreateWorkspaceReference_HandlesNullAreaId()
+    {
+        // arrange
+        var handler = new AreaPrefixHandler();
+        var reference = new LayoutAreaContentReference("pricing", "MS-2024", "Overview");
+
+        // act
+        var workspaceRef = handler.CreateWorkspaceReference(reference);
+
+        // assert
+        var layoutAreaRef = workspaceRef.Should().BeOfType<LayoutAreaReference>().Subject;
+        layoutAreaRef.Area.Should().Be("Overview");
+        layoutAreaRef.Id.Should().BeNull();
+    }
+
+    [Fact]
+    public void ContentPrefixHandler_GetAddress_ReturnsCorrectAddress()
+    {
+        // arrange
+        var handler = new ContentPrefixHandler();
+        var reference = new FileContentReference("host", "1", "Submissions", "folder/file.xlsx", "MS-2024");
+
+        // act
+        var address = handler.GetAddress(reference);
+
+        // assert
+        address.Type.Should().Be("host");
+        address.Id.Should().Be("1");
+    }
+
+    [Fact]
+    public void ContentPrefixHandler_CreateWorkspaceReference_ReturnsFileReference()
+    {
+        // arrange
+        var handler = new ContentPrefixHandler();
+        var reference = new FileContentReference("host", "1", "Submissions", "folder/file.xlsx", "MS-2024");
+
+        // act
+        var workspaceRef = handler.CreateWorkspaceReference(reference);
+
+        // assert
+        var fileRef = workspaceRef.Should().BeOfType<FileReference>().Subject;
+        fileRef.Collection.Should().Be("Submissions");
+        fileRef.Path.Should().Be("folder/file.xlsx");
+        fileRef.Partition.Should().Be("MS-2024");
+    }
+
+    [Fact]
+    public void ContentPrefixHandler_CreateWorkspaceReference_HandlesNullPartition()
+    {
+        // arrange
+        var handler = new ContentPrefixHandler();
+        var reference = new FileContentReference("host", "1", "Submissions", "file.xlsx");
+
+        // act
+        var workspaceRef = handler.CreateWorkspaceReference(reference);
+
+        // assert
+        var fileRef = workspaceRef.Should().BeOfType<FileReference>().Subject;
+        fileRef.Collection.Should().Be("Submissions");
+        fileRef.Path.Should().Be("file.xlsx");
+        fileRef.Partition.Should().BeNull();
+    }
+
+    [Fact]
+    public void UnifiedReferenceRegistry_Register_And_TryGetHandler_Works()
+    {
+        // arrange
+        var registry = new UnifiedReferenceRegistry();
+        var handler = new DataPrefixHandler();
+
+        // act
+        registry.Register("data", handler);
+        var found = registry.TryGetHandler("data", out var retrievedHandler);
+
+        // assert
+        found.Should().BeTrue();
+        retrievedHandler.Should().BeSameAs(handler);
+    }
+
+    [Fact]
+    public void UnifiedReferenceRegistry_TryGetHandler_ReturnsFalse_ForUnregisteredPrefix()
+    {
+        // arrange
+        var registry = new UnifiedReferenceRegistry();
+
+        // act
+        var found = registry.TryGetHandler("unknown", out var handler);
+
+        // assert
+        found.Should().BeFalse();
+        handler.Should().BeNull();
+    }
+
+    [Fact]
+    public void UnifiedReferenceRegistry_IsCaseInsensitive()
+    {
+        // arrange
+        var registry = new UnifiedReferenceRegistry();
+        registry.Register("DATA", new DataPrefixHandler());
+
+        // act
+        var found = registry.TryGetHandler("data", out var handler);
+
+        // assert
+        found.Should().BeTrue();
+        handler.Should().NotBeNull();
+    }
+
+    [Fact]
+    public void UnifiedReferenceRegistry_Prefixes_ReturnsAllRegistered()
+    {
+        // arrange
+        var registry = new UnifiedReferenceRegistry();
+        registry.Register("data", new DataPrefixHandler());
+        registry.Register("area", new AreaPrefixHandler());
+        registry.Register("content", new ContentPrefixHandler());
+
+        // act
+        var prefixes = registry.Prefixes.ToList();
+
+        // assert
+        prefixes.Should().Contain("data");
+        prefixes.Should().Contain("area");
+        prefixes.Should().Contain("content");
+        prefixes.Should().HaveCount(3);
+    }
+
+    [Fact]
+    public void UnifiedReferenceRegistry_HandlesColonInPrefix()
+    {
+        // arrange
+        var registry = new UnifiedReferenceRegistry();
+        registry.Register("data:", new DataPrefixHandler());
+
+        // act
+        var found = registry.TryGetHandler("data", out var handler);
+
+        // assert
+        found.Should().BeTrue();
+        handler.Should().NotBeNull();
     }
 
     #endregion

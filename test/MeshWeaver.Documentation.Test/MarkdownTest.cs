@@ -296,4 +296,203 @@ Console.WriteLine(""Hello World"");
     }
 
     #endregion
+
+    #region Direct Path Syntax Tests (without parentheses)
+
+    [Fact]
+    public void DirectPathSyntax_LayoutArea()
+    {
+        // @app/test/MyArea without parentheses defaults to area reference
+        var markdown = "@app/test/MyArea";
+        var extension = new LayoutAreaMarkdownExtension();
+        var document = ParseMarkdown(markdown, extension);
+
+        var layoutAreas = document.Descendants<LayoutAreaComponentInfo>().ToArray();
+        layoutAreas.Should().HaveCount(1);
+        layoutAreas[0].Area.Should().Be("MyArea");
+        layoutAreas[0].Address.Should().Be("app/test");
+    }
+
+    [Fact]
+    public void DirectPathSyntax_LayoutAreaWithId()
+    {
+        var markdown = "@app/Northwind/AnnualReportSummary?Year=2025";
+        var extension = new LayoutAreaMarkdownExtension();
+        var document = ParseMarkdown(markdown, extension);
+
+        var layoutAreas = document.Descendants<LayoutAreaComponentInfo>().ToArray();
+        layoutAreas.Should().HaveCount(1);
+        layoutAreas[0].Area.Should().Be("AnnualReportSummary");
+        layoutAreas[0].Id.Should().Be("Year=2025");
+        layoutAreas[0].Address.Should().Be("app/Northwind");
+    }
+
+    [Fact]
+    public void DirectPathSyntax_SalesGrowthSummary()
+    {
+        var markdown = "@app/Northwind/SalesGrowthSummary?Year=2025";
+        var extension = new LayoutAreaMarkdownExtension();
+        var document = ParseMarkdown(markdown, extension);
+
+        var layoutAreas = document.Descendants<LayoutAreaComponentInfo>().ToArray();
+        layoutAreas.Should().HaveCount(1);
+        layoutAreas[0].Area.Should().Be("SalesGrowthSummary");
+        layoutAreas[0].Id.Should().Be("Year=2025");
+        layoutAreas[0].Address.Should().Be("app/Northwind");
+    }
+
+    [Fact]
+    public void DirectPathSyntax_DataReference()
+    {
+        var markdown = "@data:app/test/Users";
+        var extension = new LayoutAreaMarkdownExtension();
+        var document = ParseMarkdown(markdown, extension);
+
+        var dataBlocks = document.Descendants<DataContentBlock>().ToArray();
+        dataBlocks.Should().HaveCount(1);
+        dataBlocks[0].DataReference.Collection.Should().Be("Users");
+    }
+
+    [Fact]
+    public void DirectPathSyntax_ContentReference()
+    {
+        var markdown = "@content:app/test/Docs/readme.md";
+        var extension = new LayoutAreaMarkdownExtension();
+        var document = ParseMarkdown(markdown, extension);
+
+        var fileBlocks = document.Descendants<FileContentBlock>().ToArray();
+        fileBlocks.Should().HaveCount(1);
+        fileBlocks[0].FileReference.FilePath.Should().Be("readme.md");
+    }
+
+    [Fact]
+    public void DirectPathSyntax_MultipleReferences()
+    {
+        var markdown = @"
+@app/test/Dashboard
+@data:app/test/Users
+@content:app/test/Docs/file.txt
+";
+        var extension = new LayoutAreaMarkdownExtension();
+        var document = ParseMarkdown(markdown, extension);
+
+        document.Descendants<LayoutAreaComponentInfo>().Should().HaveCount(1);
+        document.Descendants<DataContentBlock>().Should().HaveCount(1);
+        document.Descendants<FileContentBlock>().Should().HaveCount(1);
+    }
+
+    [Fact]
+    public void DirectPathSyntax_WithTextAfter()
+    {
+        // Path should stop at whitespace
+        var markdown = "@app/test/MyArea some text after";
+        var extension = new LayoutAreaMarkdownExtension();
+        var document = ParseMarkdown(markdown, extension);
+
+        var layoutAreas = document.Descendants<LayoutAreaComponentInfo>().ToArray();
+        layoutAreas.Should().HaveCount(1);
+        layoutAreas[0].Area.Should().Be("MyArea");
+    }
+
+    #endregion
+
+    #region Quoted Syntax Tests (without parentheses)
+
+    [Fact]
+    public void QuotedSyntax_LayoutAreaWithSpaces()
+    {
+        // @"path with spaces" syntax
+        var markdown = "@\"app/test/My Area\"";
+        var extension = new LayoutAreaMarkdownExtension();
+        var document = ParseMarkdown(markdown, extension);
+
+        var layoutAreas = document.Descendants<LayoutAreaComponentInfo>().ToArray();
+        layoutAreas.Should().HaveCount(1);
+        layoutAreas[0].Area.Should().Be("My Area");
+    }
+
+    [Fact]
+    public void QuotedSyntax_ContentReferenceWithSpaces()
+    {
+        var markdown = "@\"content:app/test/Docs/My Report 2025.pdf\"";
+        var extension = new LayoutAreaMarkdownExtension();
+        var document = ParseMarkdown(markdown, extension);
+
+        var fileBlocks = document.Descendants<FileContentBlock>().ToArray();
+        fileBlocks.Should().HaveCount(1);
+        fileBlocks[0].FileReference.FilePath.Should().Be("My Report 2025.pdf");
+    }
+
+    [Fact]
+    public void QuotedSyntax_DataReference()
+    {
+        var markdown = "@\"data:app/test/User Accounts\"";
+        var extension = new LayoutAreaMarkdownExtension();
+        var document = ParseMarkdown(markdown, extension);
+
+        var dataBlocks = document.Descendants<DataContentBlock>().ToArray();
+        dataBlocks.Should().HaveCount(1);
+        dataBlocks[0].DataReference.Collection.Should().Be("User Accounts");
+    }
+
+    [Fact]
+    public void QuotedSyntax_MixedWithDirect()
+    {
+        var markdown = @"
+@app/test/SimpleArea
+@""content:app/test/Docs/Report with spaces.pdf""
+@data:app/test/Products
+";
+        var extension = new LayoutAreaMarkdownExtension();
+        var document = ParseMarkdown(markdown, extension);
+
+        document.Descendants<LayoutAreaComponentInfo>().Should().HaveCount(1);
+        document.Descendants<FileContentBlock>().Should().HaveCount(1);
+        document.Descendants<DataContentBlock>().Should().HaveCount(1);
+    }
+
+    #endregion
+
+    #region ContentReference.Parse Direct Tests
+
+    [Fact]
+    public void ContentReferenceParse_WithoutPrefix_DefaultsToArea()
+    {
+        // ContentReference.Parse should default to area: when no prefix provided
+        var reference = ContentReference.Parse("app/Northwind/Dashboard");
+
+        reference.Should().BeOfType<LayoutAreaContentReference>();
+        var areaRef = (LayoutAreaContentReference)reference;
+        areaRef.AddressType.Should().Be("app");
+        areaRef.AddressId.Should().Be("Northwind");
+        areaRef.AreaName.Should().Be("Dashboard");
+        areaRef.AreaId.Should().BeNull();
+    }
+
+    [Fact]
+    public void ContentReferenceParse_WithoutPrefix_QueryParams()
+    {
+        // ContentReference.Parse should handle query params in area reference
+        var reference = ContentReference.Parse("app/Northwind/SalesGrowthSummary?Year=2025");
+
+        reference.Should().BeOfType<LayoutAreaContentReference>();
+        var areaRef = (LayoutAreaContentReference)reference;
+        areaRef.AddressType.Should().Be("app");
+        areaRef.AddressId.Should().Be("Northwind");
+        areaRef.AreaName.Should().Be("SalesGrowthSummary");
+        areaRef.AreaId.Should().Be("Year=2025");
+    }
+
+    [Fact]
+    public void ContentReferenceParse_WithAreaPrefix_QueryParams()
+    {
+        var reference = ContentReference.Parse("area:app/Northwind/AnnualReportSummary?Year=2025");
+
+        reference.Should().BeOfType<LayoutAreaContentReference>();
+        var areaRef = (LayoutAreaContentReference)reference;
+        areaRef.AreaName.Should().Be("AnnualReportSummary");
+        areaRef.AreaId.Should().Be("Year=2025");
+    }
+
+    #endregion
 }

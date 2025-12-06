@@ -30,23 +30,22 @@ public static class LayoutExtensions
             config = config
                 .WithInitialization(h => h.ServiceProvider.GetRequiredService<IUiControlService>())
                 .WithServices(services => services.AddScoped<IUiControlService, UiControlService>())
-                .AddData(data =>
-                {
-                    return data.Configure(reduction =>
-                        reduction
-                            .AddWorkspaceReferenceStream<EntityStore>((workspace, reference, configuration) =>
-                                reference is not LayoutAreaReference layoutArea
-                                    ? null
-                                    : new LayoutAreaHost(
-                                            workspace,
-                                            layoutArea,
-                                            workspace.Hub.ServiceProvider
-                                                .GetRequiredService<IUiControlService>(),
-                                            configuration!)
-                                        .GetStream()
-                            )
-                    );
-                }).AddLayoutTypes()
+                .AddData(data => data
+                    .WithUnifiedReferenceHandler("area", new AreaPrefixHandler())
+                    .Configure(reduction => reduction
+                        .AddWorkspaceReferenceStream<EntityStore>((workspace, reference, configuration) =>
+                            reference is not LayoutAreaReference layoutArea
+                                ? null
+                                : new LayoutAreaHost(
+                                        workspace,
+                                        layoutArea,
+                                        workspace.Hub.ServiceProvider
+                                            .GetRequiredService<IUiControlService>(),
+                                        configuration!)
+                                    .GetStream()
+                        )
+                    )
+                ).AddLayoutTypes()
                 .WithSerialization(serialization => serialization.WithOptions(options =>
                     {
                         // Add converters in order of priority
@@ -79,7 +78,9 @@ public static class LayoutExtensions
         ?? [(Func<LayoutDefinition, LayoutDefinition>)(layout => layout.AddStandardViews())];
 
     private static LayoutDefinition AddStandardViews(this LayoutDefinition layout)
-        => layout.AddLayoutAreaCatalog();
+        => layout
+            .AddLayoutAreaCatalog()
+            .AddDataReferenceView();
 
     public static MessageHubConfiguration AddLayoutTypes(
         this MessageHubConfiguration configuration

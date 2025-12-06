@@ -1,5 +1,6 @@
 ﻿using System.ComponentModel;
 using System.Reactive.Linq;
+using MeshWeaver.Data;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Messaging;
@@ -42,16 +43,76 @@ public static class ContentLayoutArea
 
         return new MarkdownControl($"Unknown content type {content.GetType().Name}");
     }
+
+    /// <summary>
+    /// Renders file content based on mime type.
+    /// Handles both unified content reference format (content:addressType/addressId/collection/path)
+    /// and legacy format (collection/path).
+    /// </summary>
     [Browsable(false)]
     public static async Task<IObservable<UiControl?>> Content(LayoutAreaHost host, RenderingContext context, CancellationToken ct)
     {
-        // First split by ? to separate path from query parameters, then split path by /
         var idString = host.Reference.Id?.ToString() ?? "";
+
+        // Check if this is a unified content reference (starts with content:)
+        if (idString.StartsWith("content:", StringComparison.OrdinalIgnoreCase))
+        {
+            return await HandleUnifiedContentReference(host, idString, ct);
+        }
+
+        // Legacy format: collection/path
+        return await HandleLegacyContentReference(host, idString, ct);
+    }
+
+    private static async Task<IObservable<UiControl?>> HandleUnifiedContentReference(
+        LayoutAreaHost host,
+        string path,
+        CancellationToken ct)
+    {
+        // Parse the unified content reference
+        if (!ContentReference.TryParse(path, out var reference) || reference is not FileContentReference fileRef)
+            return Observable.Return<UiControl?>(new MarkdownControl($"Invalid content reference: {path}"));
+
+        // Get the collection name (with partition if specified)
+        var collectionName = fileRef.Partition != null
+            ? $"{fileRef.Collection}@{fileRef.Partition}"
+            : fileRef.Collection;
+
+        var articleService = host.Hub.GetContentService();
+        var collection = await articleService.GetCollectionAsync(collectionName, ct);
+        if (collection is null)
+            return Observable.Return<UiControl?>(new MarkdownControl($"Collection {collectionName} not found."));
+
+        var filePath = fileRef.FilePath;
+        var extension = Path.GetExtension(filePath).ToLowerInvariant();
+
+        // For images, get the raw content and render appropriately
+        if (IsImageFile(extension))
+        {
+            return await RenderImageContent(collection, filePath, extension, ct);
+        }
+
+        // For other content types, use the existing GetMarkdown pipeline
+        var contentStream = collection.GetMarkdown(filePath);
+        if (contentStream is null)
+            return Observable.Return<UiControl?>(new MarkdownControl($"{filePath} not found in collection {collectionName}."));
+
+        return contentStream.Select(content => content is null
+            ? new MarkdownControl($"{filePath} not found in collection {collectionName}")
+            : RenderContent(filePath, content, false));
+    }
+
+    private static async Task<IObservable<UiControl?>> HandleLegacyContentReference(
+        LayoutAreaHost host,
+        string idString,
+        CancellationToken ct)
+    {
+        // First split by ? to separate path from query parameters, then split path by /
         var pathPart = idString.Split('?')[0];
         var split = pathPart.Split('/');
 
         if (split is null || split.Length < 2)
-            return Observable.Return(new MarkdownControl("Path must be specified in the form of /collection/article"));
+            return Observable.Return<UiControl?>(new MarkdownControl("Path must be specified in the form of /collection/article"));
 
         // Parse query parameters from LayoutAreaReference
         var isPresentationMode = host.Reference.HasParameter("presentation") &&
@@ -60,17 +121,70 @@ public static class ContentLayoutArea
         var articleService = host.Hub.GetContentService();
         var collection = await articleService.GetCollectionAsync(split[0], ct);
         if (collection is null)
-            return Observable.Return(new MarkdownControl($"Collection {split[0]} not found."));
+            return Observable.Return<UiControl?>(new MarkdownControl($"Collection {split[0]} not found."));
         var path = string.Join('/', split.Skip(1));
 
-        var contentStream = collection?.GetMarkdown(path);
+        var contentStream = collection.GetMarkdown(path);
         if (contentStream is null)
-            return Observable.Return(new MarkdownControl($"{path} not found in collection {collection}."));
+            return Observable.Return<UiControl?>(new MarkdownControl($"{path} not found in collection {collection}."));
 
         return contentStream.Select(a => a is null ?
-            new MarkdownControl($"{path} found not in collection {collection}")
+            new MarkdownControl($"{path} not found in collection {collection}")
             : RenderContent(path, a, isPresentationMode));
     }
+
+    private static bool IsImageFile(string extension) => extension switch
+    {
+        ".png" or ".jpg" or ".jpeg" or ".gif" or ".webp" or ".ico" or ".bmp" => true,
+        ".svg" => true,
+        _ => false
+    };
+
+    private static async Task<IObservable<UiControl?>> RenderImageContent(
+        ContentCollection collection,
+        string filePath,
+        string extension,
+        CancellationToken ct)
+    {
+        try
+        {
+            await using var stream = await collection.GetContentAsync(filePath, ct);
+            if (stream == null)
+                return Observable.Return<UiControl?>(new MarkdownControl($"Image not found: {filePath}"));
+
+            if (extension == ".svg")
+            {
+                // SVG can be embedded as text
+                using var reader = new StreamReader(stream);
+                var svgContent = await reader.ReadToEndAsync(ct);
+                return Observable.Return<UiControl?>(new HtmlControl($"<div class='embedded-svg'>{svgContent}</div>"));
+            }
+
+            // For binary images, convert to base64 data URI
+            using var memoryStream = new MemoryStream();
+            await stream.CopyToAsync(memoryStream, ct);
+            var base64 = Convert.ToBase64String(memoryStream.ToArray());
+            var mimeType = GetMimeType(extension);
+            var imgHtml = $"<img src='data:{mimeType};base64,{base64}' alt='{Path.GetFileName(filePath)}' style='max-width: 100%;' />";
+            return Observable.Return<UiControl?>(new HtmlControl(imgHtml));
+        }
+        catch (Exception ex)
+        {
+            return Observable.Return<UiControl?>(new MarkdownControl($"Error loading image {filePath}: {ex.Message}"));
+        }
+    }
+
+    private static string GetMimeType(string extension) => extension switch
+    {
+        ".png" => "image/png",
+        ".jpg" or ".jpeg" => "image/jpeg",
+        ".gif" => "image/gif",
+        ".webp" => "image/webp",
+        ".ico" => "image/x-icon",
+        ".bmp" => "image/bmp",
+        ".svg" => "image/svg+xml",
+        _ => "application/octet-stream"
+    };
 
     public static async Task<IObservable<UiControl?>> RenderArticle(this IMessageHub hub, string collection, string id, CancellationToken ct)
     {

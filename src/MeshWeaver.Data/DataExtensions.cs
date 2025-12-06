@@ -33,6 +33,41 @@ public static class DataExtensions
         if (existingLambdas.Any())
             return ret;
         return ret
+                .WithServices(sc => sc.AddSingleton<IUnifiedReferenceRegistry, UnifiedReferenceRegistry>())
+                .AddData(data => data
+                    .WithUnifiedReferenceHandler("data", new DataPrefixHandler())
+                    .Configure(reduction => reduction
+                    .AddWorkspaceReferenceStream<object>((workspace, reference, configuration) =>
+                    {
+                        if (reference is not UnifiedReference unified)
+                            return null;
+
+                        var registry = workspace.Hub.ServiceProvider.GetRequiredService<IUnifiedReferenceRegistry>();
+                        var parsed = unified.ParsedReference;
+
+                        // Determine prefix from parsed type
+                        var prefix = parsed switch
+                        {
+                            DataContentReference => "data",
+                            LayoutAreaContentReference => "area",
+                            FileContentReference => "content",
+                            _ => null
+                        };
+
+                        if (prefix == null || !registry.TryGetHandler(prefix, out var handler) || handler == null)
+                            return null;
+
+                        // Get the target workspace reference
+                        var targetRef = handler.CreateWorkspaceReference(parsed);
+                        var targetAddress = handler.GetAddress(parsed);
+
+                        // If target is local, use existing stream
+                        if (targetAddress.Equals(workspace.Hub.Address))
+                            return GetStreamDynamic(workspace, targetRef, configuration);
+
+                        // If target is remote, get stream from remote hub
+                        return GetRemoteStreamDynamic(workspace, targetAddress, targetRef);
+                    })))
                 .WithInitialization(h => h.GetWorkspace())
                 .WithRoutes(routes => routes.WithHandler((delivery, _) => RouteStreamMessage(routes.Hub, delivery)))
                 .WithServices(sc => sc.AddScoped<IWorkspace>(sp =>
@@ -87,6 +122,7 @@ public static class DataExtensions
                     typeof(GetDataRequest),
                     typeof(GetDataResponse),
                     typeof(UnifiedReference),
+                    typeof(FileReference),
                     typeof(ContentReference),
                     typeof(FileContentReference),
                     typeof(DataContentReference),
@@ -846,5 +882,52 @@ public static class DataExtensions
         }
 
         return DeleteUnifiedReferenceResponse.Ok();
+    }
+
+    /// <summary>
+    /// Helper method to get a stream using dynamic typing since WorkspaceReference types vary.
+    /// </summary>
+    private static ISynchronizationStream<object>? GetStreamDynamic(
+        IWorkspace workspace,
+        WorkspaceReference targetRef,
+        Func<Serialization.StreamConfiguration<object>, Serialization.StreamConfiguration<object>>? configuration)
+    {
+        // Use dynamic dispatch to call the correct GetStream<T> method
+        return GetStreamDynamicCore(workspace, (dynamic)targetRef, configuration);
+    }
+
+    private static ISynchronizationStream<object>? GetStreamDynamicCore<T>(
+        IWorkspace workspace,
+        WorkspaceReference<T> targetRef,
+        Func<Serialization.StreamConfiguration<object>, Serialization.StreamConfiguration<object>>? configuration)
+    {
+        // Get the typed stream
+        var typedStream = workspace.GetStream(targetRef);
+        if (typedStream == null)
+            return null;
+
+        // Wrap in an object stream - this is a simplified approach
+        // In practice, the reduced stream pattern handles this via ReduceManager
+        return (ISynchronizationStream<object>?)typedStream;
+    }
+
+    /// <summary>
+    /// Helper method to get a remote stream using dynamic typing.
+    /// </summary>
+    private static ISynchronizationStream<object>? GetRemoteStreamDynamic(
+        IWorkspace workspace,
+        Address targetAddress,
+        WorkspaceReference targetRef)
+    {
+        return GetRemoteStreamDynamicCore(workspace, targetAddress, (dynamic)targetRef);
+    }
+
+    private static ISynchronizationStream<object>? GetRemoteStreamDynamicCore<T>(
+        IWorkspace workspace,
+        Address targetAddress,
+        WorkspaceReference<T> targetRef)
+    {
+        var typedStream = workspace.GetRemoteStream(targetAddress, targetRef);
+        return (ISynchronizationStream<object>?)typedStream;
     }
 }
