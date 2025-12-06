@@ -1,5 +1,7 @@
 #nullable enable
 
+using MeshWeaver.AI.Commands;
+
 namespace MeshWeaver.AI.Completion;
 
 /// <summary>
@@ -11,6 +13,7 @@ public class AutocompleteService
     private readonly FuzzyScorer _fuzzyScorer;
 
     // Category priorities (higher = shown first)
+    private const int CommandCategoryPriority = 2000;
     private const int AgentCategoryPriority = 1000;
     private const int FileCategoryPriority = 100;
 
@@ -25,48 +28,76 @@ public class AutocompleteService
     /// <summary>
     /// Gets autocomplete suggestions based on the query and current context.
     /// </summary>
-    /// <param name="query">The search query (text after the @ trigger).</param>
+    /// <param name="query">The search query (text after the @ or / trigger).</param>
     /// <param name="context">The current chat context.</param>
     /// <param name="maxResults">Maximum number of results to return.</param>
+    /// <param name="commandRegistry">Optional command registry for / completions.</param>
     /// <returns>Scored and sorted autocomplete items.</returns>
     public async Task<IReadOnlyList<AutocompleteResult>> GetCompletionsAsync(
         string query,
         AgentContext? context,
-        int maxResults = 20)
+        int maxResults = 20,
+        ChatCommandRegistry? commandRegistry = null)
     {
         var allItems = new List<AutocompleteItem>();
 
-        // Add agent items
-        foreach (var agent in _agentDefinitions)
+        // Determine the query type based on what trigger was used
+        var isCommandQuery = query.StartsWith("/");
+        var isAgentQuery = query.StartsWith("@");
+
+        // Add command items if it's a / query
+        if (isCommandQuery && commandRegistry != null)
         {
-            allItems.Add(new AutocompleteItem(
-                Label: agent.Name,
-                InsertText: $"@{agent.Name} ",
-                Description: agent.Description,
-                Category: "Agents",
-                Priority: AgentCategoryPriority,
-                Kind: AutocompleteKind.Agent
-            ));
+            foreach (var command in commandRegistry.GetAllCommands())
+            {
+                allItems.Add(new AutocompleteItem(
+                    Label: $"/{command.Name}",
+                    InsertText: $"/{command.Name} ",
+                    Description: command.Description,
+                    Category: "Commands",
+                    Priority: CommandCategoryPriority,
+                    Kind: AutocompleteKind.Command
+                ));
+            }
         }
 
-        // Add file items from agents that support autocompletion
-        var autocompletionAgents = _agentDefinitions.OfType<IAgentWithAutocompletion>();
-        foreach (var agent in autocompletionAgents)
+        // Add agent items (for @ queries or when no specific trigger)
+        if (isAgentQuery || !isCommandQuery)
         {
-            try
+            foreach (var agent in _agentDefinitions)
             {
-                var items = await agent.GetAutocompletionItemsAsync(context);
-                foreach (var item in items)
-                {
-                    // Ensure file items have lower priority than agents
-                    // Set Kind to File if not already set
-                    var kind = item.Kind == AutocompleteKind.Other ? AutocompleteKind.File : item.Kind;
-                    allItems.Add(item with { Priority = FileCategoryPriority + item.Priority, Kind = kind });
-                }
+                allItems.Add(new AutocompleteItem(
+                    Label: $"@agent:{agent.Name}",
+                    InsertText: $"@agent:{agent.Name} ",
+                    Description: agent.Description,
+                    Category: "Agents",
+                    Priority: AgentCategoryPriority,
+                    Kind: AutocompleteKind.Agent
+                ));
             }
-            catch
+        }
+
+        // Add file items from agents that support autocompletion (only for non-command queries)
+        if (!isCommandQuery)
+        {
+            var autocompletionAgents = _agentDefinitions.OfType<IAgentWithAutocompletion>();
+            foreach (var agent in autocompletionAgents)
             {
-                // Skip agents that fail to provide items
+                try
+                {
+                    var items = await agent.GetAutocompletionItemsAsync(context);
+                    foreach (var item in items)
+                    {
+                        // Ensure file items have lower priority than agents
+                        // Set Kind to File if not already set
+                        var kind = item.Kind == AutocompleteKind.Other ? AutocompleteKind.File : item.Kind;
+                        allItems.Add(item with { Priority = FileCategoryPriority + item.Priority, Kind = kind });
+                    }
+                }
+                catch
+                {
+                    // Skip agents that fail to provide items
+                }
             }
         }
 

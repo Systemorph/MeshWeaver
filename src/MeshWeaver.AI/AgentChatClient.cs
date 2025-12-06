@@ -1,6 +1,7 @@
 ﻿using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using MeshWeaver.AI.Persistence;
 using MeshWeaver.Layout;
 using MeshWeaver.Messaging;
@@ -330,6 +331,10 @@ public class AgentChatClient(
         }
     }
 
+    // Pattern: @agent:AgentName (anywhere in message)
+    private static readonly Regex AgentReferencePattern =
+        new(@"@agent:(\w+)", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
     private AIAgent? SelectAgent(ChatMessage? lastMessage)
     {
         logger.LogDebug("SelectAgent called. Current context: {Context}", Context != null ? $"Address={Context.Address}, LayoutArea={Context.LayoutArea?.Area}" : "null");
@@ -337,20 +342,27 @@ public class AgentChatClient(
         logger.LogDebug("Agent definitions with IAgentWithContext: {AgentDefinitions}",
             string.Join(", ", agentDefinitions.Values.OfType<IAgentWithContext>().Select(a => a.Name)));
 
-        // Check for explicit agent mention
+        // Check for explicit agent mention using @agent:Name format
         if (lastMessage != null)
         {
             var text = ExtractTextFromMessage(lastMessage);
-            if (text.TrimStart().StartsWith("@"))
+            var agentMatch = AgentReferencePattern.Match(text);
+            if (agentMatch.Success)
             {
-                var trimmedText = text.TrimStart();
-                var spaceIndex = trimmedText.IndexOf(' ');
-                var agentName = spaceIndex > 0 ? trimmedText.Substring(1, spaceIndex - 1) : trimmedText.Substring(1);
-
+                var agentName = agentMatch.Groups[1].Value;
+                // Try exact match first, then case-insensitive
                 if (agents.TryGetValue(agentName, out var agent))
                 {
-                    logger.LogDebug("Selected agent by explicit mention: {AgentName}", agentName);
+                    logger.LogDebug("Selected agent by @agent: reference: {AgentName}", agentName);
                     return agent;
+                }
+                // Case-insensitive fallback
+                var found = agents.FirstOrDefault(kvp =>
+                    kvp.Key.Equals(agentName, StringComparison.OrdinalIgnoreCase));
+                if (found.Value != null)
+                {
+                    logger.LogDebug("Selected agent by @agent: reference (case-insensitive): {AgentName}", found.Key);
+                    return found.Value;
                 }
             }
         }
