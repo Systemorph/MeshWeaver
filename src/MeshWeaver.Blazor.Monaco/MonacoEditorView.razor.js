@@ -293,25 +293,21 @@ export function registerCompletionProvider(editorId, config) {
             let fullQuery;
             let matchLength;
 
-            // First check for special prefix patterns like "model:"
-            const modelMatch = textUntilPosition.match(/(?:^|[^@\/\w])model:([\w\-\.]*)$/i);
-            if (modelMatch) {
-                // model: prefix detected
-                fullQuery = 'model:' + modelMatch[1];
-                matchLength = modelMatch[0].length - (modelMatch[0].startsWith('model:') ? 0 : 1); // Account for leading non-word char
-            } else {
-                // Check if we're after a trigger character (e.g., @, /)
-                const triggerMatch = textUntilPosition.match(new RegExp(`[${escapedTriggers}]([\\w\\-\\.]*)$`));
-                if (!triggerMatch) {
-                    return { suggestions: [] };
-                }
-
-                const searchTerm = triggerMatch[1];
-                const triggerChar = triggerMatch[0].charAt(0);
-                // Include trigger char in query for server to determine context (@ for agents, / for commands)
-                fullQuery = triggerChar + searchTerm;
-                matchLength = triggerMatch[0].length;
+            // Check if we're after a trigger character (e.g., @, /)
+            // Match trigger followed by any combination of word chars, hyphens, dots, and colons
+            // This allows @agent:Name, @model:Name, /command etc.
+            const triggerMatch = textUntilPosition.match(new RegExp(`[${escapedTriggers}]([\\w\\-\\.:]+)?$`));
+            if (!triggerMatch) {
+                return { suggestions: [] };
             }
+
+            const triggerChar = triggerMatch[0].charAt(0);
+            const afterTrigger = triggerMatch[1] || '';
+
+            // Include trigger char in query for server to determine context
+            // For @ prefix: could be @agent:Name, @model:Name, or just @something
+            fullQuery = triggerChar + afterTrigger;
+            matchLength = triggerMatch[0].length;
 
             // Calculate range to replace (from trigger/prefix to current position)
             const range = new monaco.Range(

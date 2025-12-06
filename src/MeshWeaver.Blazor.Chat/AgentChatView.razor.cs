@@ -759,6 +759,7 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
     private CompletionProviderConfig GetAgentCompletionConfig()
     {
         // Only provide trigger characters - items are fetched async via GetCompletionsForEditorAsync
+        // Note: @ triggers @agent:Name and @model:Name, / triggers commands
         return new CompletionProviderConfig
         {
             TriggerCharacters = ["@", "/"],

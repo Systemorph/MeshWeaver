@@ -46,8 +46,9 @@ public class AutocompleteService
 
         // Determine the query type based on what trigger was used
         var isCommandQuery = query.StartsWith("/");
-        var isAgentQuery = query.StartsWith("@");
-        var isModelQuery = query.StartsWith("model:", StringComparison.OrdinalIgnoreCase);
+        var isModelQuery = query.StartsWith("@model:", StringComparison.OrdinalIgnoreCase);
+        var isAgentQuery = query.StartsWith("@agent:", StringComparison.OrdinalIgnoreCase);
+        var isGenericAtQuery = query.StartsWith("@") && !isModelQuery && !isAgentQuery;
 
         // Add command items if it's a / query
         if (isCommandQuery && commandRegistry != null)
@@ -65,14 +66,14 @@ public class AutocompleteService
             }
         }
 
-        // Add model items if it's a model: query
-        if (isModelQuery && availableModels != null)
+        // Add model items if it's a @model: query or generic @ query
+        if ((isModelQuery || isGenericAtQuery) && availableModels != null)
         {
             foreach (var model in availableModels)
             {
                 allItems.Add(new AutocompleteItem(
-                    Label: $"model:{model}",
-                    InsertText: $"model:{model} ",
+                    Label: $"@model:{model}",
+                    InsertText: $"@model:{model} ",
                     Description: $"AI Model",
                     Category: "Models",
                     Priority: ModelCategoryPriority,
@@ -81,8 +82,8 @@ public class AutocompleteService
             }
         }
 
-        // Add agent items (for @ queries or when no specific trigger)
-        if (isAgentQuery || (!isCommandQuery && !isModelQuery))
+        // Add agent items (for @agent: query or generic @ query)
+        if (isAgentQuery || isGenericAtQuery)
         {
             foreach (var agent in _agentDefinitions)
             {

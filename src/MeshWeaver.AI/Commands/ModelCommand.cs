@@ -6,16 +6,16 @@ namespace MeshWeaver.AI.Commands;
 
 /// <summary>
 /// Command to switch the current AI model.
-/// Usage: /model model:ModelName or /model ModelName
+/// Usage: /model @model:ModelName or /model ModelName
 /// </summary>
 public class ModelCommand : IChatCommand
 {
     public string Name => "model";
     public string Description => "Switch to a different AI model for subsequent messages";
-    public string Usage => "/model model:Name or /model Name";
+    public string Usage => "/model @model:Name or /model Name";
 
     private static readonly Regex ModelRefPattern =
-        new(@"model:(.+)", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+        new(@"@model:(.+)", RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
     public Task<CommandResult> ExecuteAsync(CommandContext context, CancellationToken cancellationToken = default)
     {

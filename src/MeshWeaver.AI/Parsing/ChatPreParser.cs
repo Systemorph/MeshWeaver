@@ -75,9 +75,9 @@ public class ChatPreParser
     private static readonly Regex AgentReferencePattern =
         new(@"@agent:(\w+)", RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
-    // Pattern: model:ModelName (anywhere in message, model name can contain hyphens and dots)
+    // Pattern: @model:ModelName (anywhere in message, model name can contain hyphens and dots)
     private static readonly Regex ModelReferencePattern =
-        new(@"(?<![/@\w])model:([\w\-\.]+)", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+        new(@"@model:([\w\-\.]+)", RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
     // Pattern: /command at start of message
     private static readonly Regex CommandPattern =
