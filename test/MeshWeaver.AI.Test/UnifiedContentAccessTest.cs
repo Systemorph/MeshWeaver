@@ -87,10 +87,12 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
     public void ContentReference_Parse_AreaPath_WithoutId()
     {
         // arrange & act
-        var reference = ContentReference.Parse("area:Overview");
+        var reference = ContentReference.Parse("area:pricing/test-company-2024/Overview");
 
         // assert
         var areaRef = reference.Should().BeOfType<LayoutAreaContentReference>().Subject;
+        areaRef.AddressType.Should().Be("pricing");
+        areaRef.AddressId.Should().Be("test-company-2024");
         areaRef.AreaName.Should().Be("Overview");
         areaRef.AreaId.Should().BeNull();
     }
@@ -99,22 +101,26 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
     public void ContentReference_Parse_AreaPath_WithId()
     {
         // arrange & act
-        var reference = ContentReference.Parse("area:Overview/test-company-2024");
+        var reference = ContentReference.Parse("area:pricing/test-company-2024/Overview/details");
 
         // assert
         var areaRef = reference.Should().BeOfType<LayoutAreaContentReference>().Subject;
+        areaRef.AddressType.Should().Be("pricing");
+        areaRef.AddressId.Should().Be("test-company-2024");
         areaRef.AreaName.Should().Be("Overview");
-        areaRef.AreaId.Should().Be("test-company-2024");
+        areaRef.AreaId.Should().Be("details");
     }
 
     [Fact]
     public void ContentReference_Parse_ContentPath_Simple()
     {
         // arrange & act
-        var reference = ContentReference.Parse("content:Submissions/folder/file.xlsx");
+        var reference = ContentReference.Parse("content:host/1/Submissions/folder/file.xlsx");
 
         // assert
         var fileRef = reference.Should().BeOfType<FileContentReference>().Subject;
+        fileRef.AddressType.Should().Be("host");
+        fileRef.AddressId.Should().Be("1");
         fileRef.Collection.Should().Be("Submissions");
         fileRef.FilePath.Should().Be("folder/file.xlsx");
         fileRef.Partition.Should().BeNull();
@@ -124,10 +130,12 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
     public void ContentReference_Parse_ContentPath_WithPartition()
     {
         // arrange & act
-        var reference = ContentReference.Parse("content:Submissions@MS-2024/folder/file.xlsx");
+        var reference = ContentReference.Parse("content:host/1/Submissions@MS-2024/folder/file.xlsx");
 
         // assert
         var fileRef = reference.Should().BeOfType<FileContentReference>().Subject;
+        fileRef.AddressType.Should().Be("host");
+        fileRef.AddressId.Should().Be("1");
         fileRef.Collection.Should().Be("Submissions");
         fileRef.FilePath.Should().Be("folder/file.xlsx");
         fileRef.Partition.Should().Be("MS-2024");
@@ -155,8 +163,8 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
     {
         var paths = new[]
         {
-            "area:Overview",
-            "area:Overview/test-company-2024"
+            "area:pricing/test-company-2024/Overview",
+            "area:pricing/test-company-2024/Overview/details"
         };
 
         foreach (var path in paths)
@@ -171,8 +179,8 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
     {
         var paths = new[]
         {
-            "content:Submissions/file.xlsx",
-            "content:Submissions@MS-2024/folder/file.xlsx"
+            "content:host/1/Submissions/file.xlsx",
+            "content:host/1/Submissions@MS-2024/folder/file.xlsx"
         };
 
         foreach (var path in paths)
@@ -188,7 +196,9 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
     [InlineData("data:")]
     [InlineData("data:pricing")]
     [InlineData("content:")]
-    [InlineData("content:collection")]
+    [InlineData("content:host/1/collection")] // Missing file path
+    [InlineData("area:")]
+    [InlineData("area:host/1")] // Missing area name
     public void ContentReference_Parse_InvalidPath_ThrowsArgumentException(string invalidPath)
     {
         // arrange & act
@@ -277,7 +287,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
         // arrange - client sends request to host
         GetHost(); // Ensure host is initialized
         var client = GetClient();
-        var path = "area:TestArea";
+        var path = "area:host/1/TestArea";
 
         // act - send from client to host
         var response = await client.AwaitResponse(
@@ -305,7 +315,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
         // arrange - client sends request to host
         GetHost(); // Ensure host is initialized
         var client = GetClient();
-        var path = $"area:TestArea/{TestPricingId}";
+        var path = $"area:host/1/TestArea/{TestPricingId}";
 
         // act - send from client to host
         var response = await client.AwaitResponse(
@@ -369,7 +379,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
         {
             var host = GetHostWithFileProvider(testDir);
             var client = GetClient();
-            var path = "content:TestFiles/content-test.txt";
+            var path = "content:host/1/TestFiles/content-test.txt";
 
             // act - send from client to host
             var response = await client.AwaitResponse(
@@ -608,6 +618,338 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
     private static UiControl TestAreaView(LayoutAreaHost host, RenderingContext ctx)
     {
         return Controls.Html("<div>Test Area Content</div>");
+    }
+
+    #endregion
+
+    #region Update Tests
+
+    [Fact]
+    public async Task UpdateUnifiedReferenceRequest_DataEntity_UpdatesEntity()
+    {
+        // arrange
+        GetHost();
+        var client = GetClient();
+        var path = $"data:host/1/TestPricing/{TestPricingId}";
+
+        // First, verify the entity exists
+        var getResponse = await client.AwaitResponse(
+            new GetDataRequest(new UnifiedReference(path)),
+            o => o.WithTarget(new HostAddress()),
+            TestContext.Current.CancellationToken);
+        getResponse.Message.Error.Should().BeNull();
+
+        // act - update the entity
+        var updatedPricing = new TestPricing { Id = TestPricingId, Name = "Updated Pricing", Status = "Draft" };
+        var updateResponse = await client.AwaitResponse(
+            new UpdateUnifiedReferenceRequest(path, updatedPricing),
+            o => o.WithTarget(new HostAddress()),
+            TestContext.Current.CancellationToken);
+
+        // assert
+        updateResponse.Message.Success.Should().BeTrue();
+        updateResponse.Message.Error.Should().BeNull();
+        updateResponse.Message.Version.Should().BeGreaterThan(0);
+
+        // Verify the update took effect
+        var verifyResponse = await client.AwaitResponse(
+            new GetDataRequest(new UnifiedReference(path)),
+            o => o.WithTarget(new HostAddress()),
+            TestContext.Current.CancellationToken);
+        var updatedEntity = verifyResponse.Message.Data.Should().BeOfType<TestPricing>().Subject;
+        updatedEntity.Name.Should().Be("Updated Pricing");
+        updatedEntity.Status.Should().Be("Draft");
+    }
+
+    [Fact]
+    public async Task UpdateUnifiedReferenceRequest_EmptyPath_ReturnsError()
+    {
+        // arrange
+        GetHost();
+        var client = GetClient();
+
+        // act
+        var response = await client.AwaitResponse(
+            new UpdateUnifiedReferenceRequest("", new { }),
+            o => o.WithTarget(new HostAddress()),
+            TestContext.Current.CancellationToken);
+
+        // assert
+        response.Message.Success.Should().BeFalse();
+        response.Message.Error.Should().Contain("empty");
+    }
+
+    [Fact]
+    public async Task UpdateUnifiedReferenceRequest_InvalidPath_ReturnsError()
+    {
+        // arrange
+        GetHost();
+        var client = GetClient();
+
+        // act
+        var response = await client.AwaitResponse(
+            new UpdateUnifiedReferenceRequest("invalid", new { }),
+            o => o.WithTarget(new HostAddress()),
+            TestContext.Current.CancellationToken);
+
+        // assert
+        response.Message.Success.Should().BeFalse();
+        response.Message.Error.Should().NotBeNullOrEmpty();
+    }
+
+    [Fact]
+    public async Task UpdateUnifiedReferenceRequest_DefaultReference_ReturnsError()
+    {
+        // arrange
+        GetHost();
+        var client = GetClient();
+        var path = "data:host/1";
+
+        // act
+        var response = await client.AwaitResponse(
+            new UpdateUnifiedReferenceRequest(path, new { }),
+            o => o.WithTarget(new HostAddress()),
+            TestContext.Current.CancellationToken);
+
+        // assert
+        response.Message.Success.Should().BeFalse();
+        response.Message.Error.Should().Contain("default");
+    }
+
+    [Fact]
+    public async Task UpdateUnifiedReferenceRequest_FileContent_UpdatesFile()
+    {
+        // arrange - create test file
+        var testDir = Path.Combine(Path.GetTempPath(), "MeshWeaverTest_Update_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(testDir);
+        var testFilePath = Path.Combine(testDir, "update-test.txt");
+        await File.WriteAllTextAsync(testFilePath, "Original content");
+
+        try
+        {
+            var host = GetHostWithFileProvider(testDir);
+            var client = GetClient();
+            var path = "content:host/1/TestFiles/update-test.txt";
+
+            // act
+            var response = await client.AwaitResponse(
+                new UpdateUnifiedReferenceRequest(path, "Updated content"),
+                o => o.WithTarget(new HostAddress()),
+                TestContext.Current.CancellationToken);
+
+            // assert
+            response.Message.Success.Should().BeTrue();
+            response.Message.Error.Should().BeNull();
+
+            // Verify the file was updated
+            var fileContent = await File.ReadAllTextAsync(testFilePath);
+            fileContent.Should().Be("Updated content");
+        }
+        finally
+        {
+            if (Directory.Exists(testDir))
+                Directory.Delete(testDir, true);
+        }
+    }
+
+    [Fact]
+    public async Task UpdateUnifiedReferenceRequest_LayoutArea_ReturnsError()
+    {
+        // arrange
+        GetHost();
+        var client = GetClient();
+        var path = "area:host/1/TestArea";
+
+        // act
+        var response = await client.AwaitResponse(
+            new UpdateUnifiedReferenceRequest(path, new { }),
+            o => o.WithTarget(new HostAddress()),
+            TestContext.Current.CancellationToken);
+
+        // assert
+        response.Message.Success.Should().BeFalse();
+        response.Message.Error.Should().Contain("not supported");
+    }
+
+    #endregion
+
+    #region Delete Tests
+
+    [Fact]
+    public async Task DeleteUnifiedReferenceRequest_DataEntity_DeletesEntity()
+    {
+        // arrange - first create an entity to delete
+        GetHost();
+        var client = GetClient();
+        var newEntityId = "delete-test-" + Guid.NewGuid().ToString("N");
+
+        // Create a new entity first
+        var createRequest = new DataChangeRequest
+        {
+            Creations = [new TestPricing { Id = newEntityId, Name = "To Delete", Status = "Active" }],
+            ChangedBy = "test"
+        };
+        await client.AwaitResponse(
+            createRequest,
+            o => o.WithTarget(new HostAddress()),
+            TestContext.Current.CancellationToken);
+
+        // Verify it exists
+        var path = $"data:host/1/TestPricing/{newEntityId}";
+        var getResponse = await client.AwaitResponse(
+            new GetDataRequest(new UnifiedReference(path)),
+            o => o.WithTarget(new HostAddress()),
+            TestContext.Current.CancellationToken);
+        getResponse.Message.Data.Should().NotBeNull();
+
+        // act - delete the entity
+        var deleteResponse = await client.AwaitResponse(
+            new DeleteUnifiedReferenceRequest(path),
+            o => o.WithTarget(new HostAddress()),
+            TestContext.Current.CancellationToken);
+
+        // assert
+        deleteResponse.Message.Success.Should().BeTrue();
+        deleteResponse.Message.Error.Should().BeNull();
+
+        // Verify it was deleted
+        var verifyResponse = await client.AwaitResponse(
+            new GetDataRequest(new UnifiedReference(path)),
+            o => o.WithTarget(new HostAddress()),
+            TestContext.Current.CancellationToken);
+        verifyResponse.Message.Data.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task DeleteUnifiedReferenceRequest_EmptyPath_ReturnsError()
+    {
+        // arrange
+        GetHost();
+        var client = GetClient();
+
+        // act
+        var response = await client.AwaitResponse(
+            new DeleteUnifiedReferenceRequest(""),
+            o => o.WithTarget(new HostAddress()),
+            TestContext.Current.CancellationToken);
+
+        // assert
+        response.Message.Success.Should().BeFalse();
+        response.Message.Error.Should().Contain("empty");
+    }
+
+    [Fact]
+    public async Task DeleteUnifiedReferenceRequest_DefaultReference_ReturnsError()
+    {
+        // arrange
+        GetHost();
+        var client = GetClient();
+        var path = "data:host/1";
+
+        // act
+        var response = await client.AwaitResponse(
+            new DeleteUnifiedReferenceRequest(path),
+            o => o.WithTarget(new HostAddress()),
+            TestContext.Current.CancellationToken);
+
+        // assert
+        response.Message.Success.Should().BeFalse();
+        response.Message.Error.Should().Contain("default");
+    }
+
+    [Fact]
+    public async Task DeleteUnifiedReferenceRequest_CollectionPath_ReturnsError()
+    {
+        // arrange
+        GetHost();
+        var client = GetClient();
+        var path = "data:host/1/TestPricing";
+
+        // act
+        var response = await client.AwaitResponse(
+            new DeleteUnifiedReferenceRequest(path),
+            o => o.WithTarget(new HostAddress()),
+            TestContext.Current.CancellationToken);
+
+        // assert
+        response.Message.Success.Should().BeFalse();
+        response.Message.Error.Should().Contain("Entity ID must be specified");
+    }
+
+    [Fact]
+    public async Task DeleteUnifiedReferenceRequest_FileContent_DeletesFile()
+    {
+        // arrange - create test file
+        var testDir = Path.Combine(Path.GetTempPath(), "MeshWeaverTest_Delete_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(testDir);
+        var testFilePath = Path.Combine(testDir, "delete-test.txt");
+        await File.WriteAllTextAsync(testFilePath, "File to delete");
+
+        try
+        {
+            var host = GetHostWithFileProvider(testDir);
+            var client = GetClient();
+            var path = "content:host/1/TestFiles/delete-test.txt";
+
+            // Verify file exists
+            File.Exists(testFilePath).Should().BeTrue();
+
+            // act
+            var response = await client.AwaitResponse(
+                new DeleteUnifiedReferenceRequest(path),
+                o => o.WithTarget(new HostAddress()),
+                TestContext.Current.CancellationToken);
+
+            // assert
+            response.Message.Success.Should().BeTrue();
+            response.Message.Error.Should().BeNull();
+
+            // Verify file was deleted
+            File.Exists(testFilePath).Should().BeFalse();
+        }
+        finally
+        {
+            if (Directory.Exists(testDir))
+                Directory.Delete(testDir, true);
+        }
+    }
+
+    [Fact]
+    public async Task DeleteUnifiedReferenceRequest_LayoutArea_ReturnsError()
+    {
+        // arrange
+        GetHost();
+        var client = GetClient();
+        var path = "area:host/1/TestArea";
+
+        // act
+        var response = await client.AwaitResponse(
+            new DeleteUnifiedReferenceRequest(path),
+            o => o.WithTarget(new HostAddress()),
+            TestContext.Current.CancellationToken);
+
+        // assert
+        response.Message.Success.Should().BeFalse();
+        response.Message.Error.Should().Contain("not supported");
+    }
+
+    [Fact]
+    public async Task DeleteUnifiedReferenceRequest_NonExistentEntity_ReturnsError()
+    {
+        // arrange
+        GetHost();
+        var client = GetClient();
+        var path = "data:host/1/TestPricing/nonexistent-entity-id";
+
+        // act
+        var response = await client.AwaitResponse(
+            new DeleteUnifiedReferenceRequest(path),
+            o => o.WithTarget(new HostAddress()),
+            TestContext.Current.CancellationToken);
+
+        // assert
+        response.Message.Success.Should().BeFalse();
+        response.Message.Error.Should().Contain("not found");
     }
 
     #endregion

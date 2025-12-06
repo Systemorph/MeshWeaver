@@ -99,5 +99,53 @@ public record GetDataRequest(WorkspaceReference Reference) : IRequest<GetDataRes
 /// <param name="Version">The version of the data at the time of retrieval</param>
 public record GetDataResponse(object? Data, long Version)
 {
+    /// <summary>
+    /// Error message if the request failed.
+    /// </summary>
     public string? Error { get; init; }
+}
+
+/// <summary>
+/// Request to update content via unified reference path.
+/// Supports data:, content:, and area: path patterns.
+/// </summary>
+/// <param name="Path">The unified reference path (e.g., data:pricing/id/Collection/entityId, content:collection/file.txt, area:Overview)</param>
+/// <param name="Content">The content to update</param>
+public record UpdateUnifiedReferenceRequest(string Path, object Content) : IRequest<UpdateUnifiedReferenceResponse>
+{
+    public string? ChangedBy { get; init; }
+}
+
+/// <summary>
+/// Response for unified reference update.
+/// </summary>
+public record UpdateUnifiedReferenceResponse(long Version)
+{
+    public string? Error { get; init; }
+    public bool Success => Error == null;
+
+    public static UpdateUnifiedReferenceResponse Ok(long version) => new(version);
+    public static UpdateUnifiedReferenceResponse Fail(string error) => new(0) { Error = error };
+}
+
+/// <summary>
+/// Request to delete content via unified reference path.
+/// Supports data:, content:, and area: path patterns.
+/// </summary>
+/// <param name="Path">The unified reference path (e.g., data:pricing/id/Collection/entityId, content:collection/file.txt, area:Overview)</param>
+public record DeleteUnifiedReferenceRequest(string Path) : IRequest<DeleteUnifiedReferenceResponse>
+{
+    public string? ChangedBy { get; init; }
+}
+
+/// <summary>
+/// Response for unified reference deletion.
+/// </summary>
+public record DeleteUnifiedReferenceResponse
+{
+    public string? Error { get; init; }
+    public bool Success => Error == null;
+
+    public static DeleteUnifiedReferenceResponse Ok() => new();
+    public static DeleteUnifiedReferenceResponse Fail(string error) => new() { Error = error };
 }

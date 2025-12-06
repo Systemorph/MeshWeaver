@@ -180,9 +180,127 @@ public class DataPlugin(
             AIFunctionFactory.Create(GetDataTypes),
             AIFunctionFactory.Create(UpdateData),
             AIFunctionFactory.Create(DeleteData),
-            AIFunctionFactory.Create(GetSchema)
+            AIFunctionFactory.Create(GetSchema),
+            AIFunctionFactory.Create(GetContent),
+            AIFunctionFactory.Create(UpdateContent),
+            AIFunctionFactory.Create(DeleteContent)
         };
         return tools;
+    }
+
+    [Description("Gets content using a unified path. All paths include address for routing. Supports data:, content:, and area: prefixes. " +
+                 "Use data:addressType/addressId for default data, data:addressType/addressId/collection for collections, data:addressType/addressId/collection/entityId for entities. " +
+                 "Use content:addressType/addressId/collection/path for files (e.g., content:host/1/Submissions/file.xlsx). " +
+                 "Use area:addressType/addressId/areaName[/areaId] for layout areas (e.g., area:pricing/MS-2024/Overview).")]
+    public async Task<string> GetContent(
+        [Description("Unified path (e.g., 'data:pricing/MS-2024', 'content:host/1/Submissions/file.xlsx', 'area:pricing/MS-2024/Overview')")] string path,
+        [Description("Optional: number of rows to read for text files")] int? numberOfRows = null)
+    {
+        logger.LogInformation("GetContent called with path={Path}, numberOfRows={NumberOfRows}", path, numberOfRows);
+
+        if (string.IsNullOrWhiteSpace(path))
+            return "Path cannot be empty";
+
+        var address = chat.Context?.Address ?? hub.Address;
+
+        try
+        {
+            using var cts = new CancellationTokenSource(30.Seconds());
+            var reference = new UnifiedReference(path) { NumberOfRows = numberOfRows };
+            var response = await hub.AwaitResponse(
+                new GetDataRequest(reference),
+                o => o.WithTarget(address),
+                cts.Token);
+
+            if (!string.IsNullOrEmpty(response.Message.Error))
+                return $"Error: {response.Message.Error}";
+
+            return JsonSerializer.Serialize(response.Message.Data, hub.JsonSerializerOptions);
+        }
+        catch (OperationCanceledException)
+        {
+            return "Operation was cancelled and could not be completed.";
+        }
+    }
+
+    [Description("Updates content using a unified path. All paths include address for routing. Supports data: and content: prefixes. " +
+                 "Use data:addressType/addressId/collection/entityId to update data entities. " +
+                 "Use content:addressType/addressId/collection/path to update files.")]
+    public async Task<string> UpdateContent(
+        [Description("Unified path (e.g., 'data:pricing/MS-2024/PropertyRisk/risk1', 'content:host/1/Submissions/file.txt')")] string path,
+        [Description("The content to update (JSON for data, string for files)")] string content)
+    {
+        logger.LogInformation("UpdateContent called with path={Path}", path);
+
+        if (string.IsNullOrWhiteSpace(path))
+            return "Path cannot be empty";
+
+        var address = chat.Context?.Address ?? hub.Address;
+
+        try
+        {
+            using var cts = new CancellationTokenSource(30.Seconds());
+
+            // Parse content as JSON if it looks like JSON, otherwise use as string
+            object contentObj = content;
+            if (content.TrimStart().StartsWith("{") || content.TrimStart().StartsWith("["))
+            {
+                try
+                {
+                    contentObj = JsonDocument.Parse(content).RootElement;
+                }
+                catch
+                {
+                    // Keep as string if JSON parse fails
+                }
+            }
+
+            var response = await hub.AwaitResponse(
+                new UpdateUnifiedReferenceRequest(path, contentObj),
+                o => o.WithTarget(address),
+                cts.Token);
+
+            if (!response.Message.Success)
+                return $"Error: {response.Message.Error}";
+
+            return $"Content at '{path}' updated successfully.";
+        }
+        catch (OperationCanceledException)
+        {
+            return "Operation was cancelled and could not be completed.";
+        }
+    }
+
+    [Description("Deletes content using a unified path. All paths include address for routing. Supports data: and content: prefixes. " +
+                 "Use data:addressType/addressId/collection/entityId to delete data entities. " +
+                 "Use content:addressType/addressId/collection/path to delete files.")]
+    public async Task<string> DeleteContent(
+        [Description("Unified path (e.g., 'data:pricing/MS-2024/PropertyRisk/risk1', 'content:host/1/Submissions/file.txt')")] string path)
+    {
+        logger.LogInformation("DeleteContent called with path={Path}", path);
+
+        if (string.IsNullOrWhiteSpace(path))
+            return "Path cannot be empty";
+
+        var address = chat.Context?.Address ?? hub.Address;
+
+        try
+        {
+            using var cts = new CancellationTokenSource(30.Seconds());
+            var response = await hub.AwaitResponse(
+                new DeleteUnifiedReferenceRequest(path),
+                o => o.WithTarget(address),
+                cts.Token);
+
+            if (!response.Message.Success)
+                return $"Error: {response.Message.Error}";
+
+            return $"Content at '{path}' deleted successfully.";
+        }
+        catch (OperationCanceledException)
+        {
+            return "Operation was cancelled and could not be completed.";
+        }
     }
 
     private string EnrichDescriptionByTypes(string description)

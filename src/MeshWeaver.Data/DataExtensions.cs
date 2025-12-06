@@ -90,7 +90,11 @@ public static class DataExtensions
                     typeof(ContentReference),
                     typeof(FileContentReference),
                     typeof(DataContentReference),
-                    typeof(LayoutAreaContentReference)
+                    typeof(LayoutAreaContentReference),
+                    typeof(UpdateUnifiedReferenceRequest),
+                    typeof(UpdateUnifiedReferenceResponse),
+                    typeof(DeleteUnifiedReferenceRequest),
+                    typeof(DeleteUnifiedReferenceResponse)
                 )
                 .WithType(typeof(ActivityAddress), ActivityAddress.TypeName)
                 .WithType(typeof(ActivityLog), nameof(ActivityLog))
@@ -175,7 +179,9 @@ public static class DataExtensions
             .WithHandler<SubscribeRequest>(HandleSubscribeRequest)
             .WithHandler<GetSchemaRequest>(HandleGetSchemaRequest)
             .WithHandler<GetDomainTypesRequest>(HandleGetDomainTypesRequest)
-            .WithHandler<GetDataRequest>(HandleGetDataRequest);
+            .WithHandler<GetDataRequest>(HandleGetDataRequest)
+            .WithHandler<UpdateUnifiedReferenceRequest>(HandleUpdateUnifiedReferenceRequest)
+            .WithHandler<DeleteUnifiedReferenceRequest>(HandleDeleteUnifiedReferenceRequest);
 
     private static IMessageDelivery HandleGetDomainTypesRequest(IMessageHub hub, IMessageDelivery<GetDomainTypesRequest> request)
     {
@@ -590,5 +596,255 @@ public static class DataExtensions
         }
 
         return types.OrderBy(t => t.DisplayName);
+    }
+
+    private static async Task<IMessageDelivery> HandleUpdateUnifiedReferenceRequest(
+        IMessageHub hub,
+        IMessageDelivery<UpdateUnifiedReferenceRequest> request,
+        CancellationToken ct)
+    {
+        try
+        {
+            var path = request.Message.Path;
+            if (string.IsNullOrEmpty(path))
+            {
+                hub.Post(UpdateUnifiedReferenceResponse.Fail("Path cannot be empty"),
+                    o => o.ResponseFor(request));
+                return request.Processed();
+            }
+
+            var parsedRef = ContentReference.Parse(path);
+            var result = parsedRef switch
+            {
+                DataContentReference dataRef => await HandleUpdateDataReferenceAsync(hub, dataRef, request.Message.Content, request.Message.ChangedBy, ct),
+                FileContentReference fileRef => await HandleUpdateFileReferenceAsync(hub, fileRef, request.Message.Content, ct),
+                LayoutAreaContentReference areaRef => UpdateUnifiedReferenceResponse.Fail("Layout area updates are not supported via this API"),
+                _ => UpdateUnifiedReferenceResponse.Fail($"Unknown reference type: {parsedRef.GetType().Name}")
+            };
+
+            hub.Post(result, o => o.ResponseFor(request));
+        }
+        catch (Exception ex)
+        {
+            hub.Post(UpdateUnifiedReferenceResponse.Fail(ex.Message),
+                o => o.ResponseFor(request));
+        }
+
+        return request.Processed();
+    }
+
+    private static async Task<UpdateUnifiedReferenceResponse> HandleUpdateDataReferenceAsync(
+        IMessageHub hub,
+        DataContentReference dataRef,
+        object content,
+        string? changedBy,
+        CancellationToken ct)
+    {
+        if (dataRef.IsDefaultReference)
+        {
+            return UpdateUnifiedReferenceResponse.Fail("Cannot update default data reference directly. Specify a collection and optionally an entity ID.");
+        }
+
+        if (dataRef.Collection == null)
+        {
+            return UpdateUnifiedReferenceResponse.Fail("Collection must be specified for data updates");
+        }
+
+        // Check if this is a content provider (file access via data: path)
+        var workspace = hub.GetWorkspace();
+        var dataContext = workspace.DataContext;
+
+        if (dataContext.ContentProviders.TryGetValue(dataRef.Collection, out var contentCollectionName))
+        {
+            // This is a file update via data: path
+            if (string.IsNullOrEmpty(dataRef.EntityId))
+            {
+                return UpdateUnifiedReferenceResponse.Fail("File path (EntityId) must be specified for file updates");
+            }
+            var fileRef = new FileContentReference(dataRef.AddressType, dataRef.AddressId, contentCollectionName, dataRef.EntityId);
+            return await HandleUpdateFileReferenceAsync(hub, fileRef, content, ct);
+        }
+
+        // Regular data update - use DataChangeRequest
+        var changeRequest = new DataChangeRequest
+        {
+            Updates = [content],
+            ChangedBy = changedBy
+        };
+
+        var activity = hub.Address is ActivityAddress ? null : new Activity(ActivityCategory.DataUpdate, hub);
+        workspace.RequestChange(changeRequest, activity, null);
+
+        if (activity != null)
+        {
+            var tcs = new TaskCompletionSource<DataChangeResponse>();
+            activity.Complete(log => tcs.SetResult(new DataChangeResponse(hub.Version, log)));
+            var response = await tcs.Task;
+            return response.Status == DataChangeStatus.Committed
+                ? UpdateUnifiedReferenceResponse.Ok(response.Version)
+                : UpdateUnifiedReferenceResponse.Fail(response.Log.Messages.LastOrDefault()?.Message ?? "Update failed");
+        }
+
+        return UpdateUnifiedReferenceResponse.Ok(hub.Version);
+    }
+
+    private static async Task<UpdateUnifiedReferenceResponse> HandleUpdateFileReferenceAsync(
+        IMessageHub hub,
+        FileContentReference fileRef,
+        object content,
+        CancellationToken ct)
+    {
+        var fileContentProvider = hub.ServiceProvider.GetService<IFileContentProvider>();
+        if (fileContentProvider == null)
+        {
+            return UpdateUnifiedReferenceResponse.Fail("File content provider not available. Ensure AddContentCollections() is configured.");
+        }
+
+        var collectionName = fileRef.Partition != null
+            ? $"{fileRef.Collection}@{fileRef.Partition}"
+            : fileRef.Collection;
+
+        // Convert content to stream
+        var contentString = content is string str ? str : content?.ToString() ?? "";
+        using var memoryStream = new MemoryStream(System.Text.Encoding.UTF8.GetBytes(contentString));
+
+        var result = await fileContentProvider.SaveFileContentAsync(collectionName, fileRef.FilePath, memoryStream, ct);
+        if (!result.Success)
+        {
+            return UpdateUnifiedReferenceResponse.Fail(result.Error!);
+        }
+
+        return UpdateUnifiedReferenceResponse.Ok(hub.Version);
+    }
+
+    private static async Task<IMessageDelivery> HandleDeleteUnifiedReferenceRequest(
+        IMessageHub hub,
+        IMessageDelivery<DeleteUnifiedReferenceRequest> request,
+        CancellationToken ct)
+    {
+        try
+        {
+            var path = request.Message.Path;
+            if (string.IsNullOrEmpty(path))
+            {
+                hub.Post(DeleteUnifiedReferenceResponse.Fail("Path cannot be empty"),
+                    o => o.ResponseFor(request));
+                return request.Processed();
+            }
+
+            var parsedRef = ContentReference.Parse(path);
+            var result = parsedRef switch
+            {
+                DataContentReference dataRef => await HandleDeleteDataReferenceAsync(hub, dataRef, request.Message.ChangedBy, ct),
+                FileContentReference fileRef => await HandleDeleteFileReferenceAsync(hub, fileRef, ct),
+                LayoutAreaContentReference areaRef => DeleteUnifiedReferenceResponse.Fail("Layout area deletion is not supported via this API"),
+                _ => DeleteUnifiedReferenceResponse.Fail($"Unknown reference type: {parsedRef.GetType().Name}")
+            };
+
+            hub.Post(result, o => o.ResponseFor(request));
+        }
+        catch (Exception ex)
+        {
+            hub.Post(DeleteUnifiedReferenceResponse.Fail(ex.Message),
+                o => o.ResponseFor(request));
+        }
+
+        return request.Processed();
+    }
+
+    private static async Task<DeleteUnifiedReferenceResponse> HandleDeleteDataReferenceAsync(
+        IMessageHub hub,
+        DataContentReference dataRef,
+        string? changedBy,
+        CancellationToken ct)
+    {
+        if (dataRef.IsDefaultReference)
+        {
+            return DeleteUnifiedReferenceResponse.Fail("Cannot delete default data reference. Specify a collection and entity ID.");
+        }
+
+        if (dataRef.Collection == null)
+        {
+            return DeleteUnifiedReferenceResponse.Fail("Collection must be specified for data deletion");
+        }
+
+        // Check if this is a content provider (file access via data: path)
+        var workspace = hub.GetWorkspace();
+        var dataContext = workspace.DataContext;
+
+        if (dataContext.ContentProviders.TryGetValue(dataRef.Collection, out var contentCollectionName))
+        {
+            // This is a file delete via data: path
+            if (string.IsNullOrEmpty(dataRef.EntityId))
+            {
+                return DeleteUnifiedReferenceResponse.Fail("File path (EntityId) must be specified for file deletion");
+            }
+            var fileRef = new FileContentReference(dataRef.AddressType, dataRef.AddressId, contentCollectionName, dataRef.EntityId);
+            return await HandleDeleteFileReferenceAsync(hub, fileRef, ct);
+        }
+
+        if (!dataRef.IsEntityReference)
+        {
+            return DeleteUnifiedReferenceResponse.Fail("Entity ID must be specified for data deletion. Collection-level deletion is not supported.");
+        }
+
+        // We need to get the entity first to delete it
+        var entityRef = new EntityReference(dataRef.Collection, dataRef.EntityId!);
+        var stream = workspace.GetStream(entityRef, x => x.ReturnNullWhenNotPresent());
+        if (stream == null)
+        {
+            return DeleteUnifiedReferenceResponse.Fail($"Entity not found: {dataRef.Collection}/{dataRef.EntityId}");
+        }
+
+        var entityValue = await stream.Timeout(TimeSpan.FromSeconds(30)).FirstAsync();
+        if (entityValue.Value == null)
+        {
+            return DeleteUnifiedReferenceResponse.Fail($"Entity not found: {dataRef.Collection}/{dataRef.EntityId}");
+        }
+
+        var changeRequest = new DataChangeRequest
+        {
+            Deletions = [entityValue.Value],
+            ChangedBy = changedBy
+        };
+
+        var activity = hub.Address is ActivityAddress ? null : new Activity(ActivityCategory.DataUpdate, hub);
+        workspace.RequestChange(changeRequest, activity, null);
+
+        if (activity != null)
+        {
+            var tcs = new TaskCompletionSource<DataChangeResponse>();
+            activity.Complete(log => tcs.SetResult(new DataChangeResponse(hub.Version, log)));
+            var response = await tcs.Task;
+            return response.Status == DataChangeStatus.Committed
+                ? DeleteUnifiedReferenceResponse.Ok()
+                : DeleteUnifiedReferenceResponse.Fail(response.Log.Messages.LastOrDefault()?.Message ?? "Delete failed");
+        }
+
+        return DeleteUnifiedReferenceResponse.Ok();
+    }
+
+    private static async Task<DeleteUnifiedReferenceResponse> HandleDeleteFileReferenceAsync(
+        IMessageHub hub,
+        FileContentReference fileRef,
+        CancellationToken ct)
+    {
+        var fileContentProvider = hub.ServiceProvider.GetService<IFileContentProvider>();
+        if (fileContentProvider == null)
+        {
+            return DeleteUnifiedReferenceResponse.Fail("File content provider not available. Ensure AddContentCollections() is configured.");
+        }
+
+        var collectionName = fileRef.Partition != null
+            ? $"{fileRef.Collection}@{fileRef.Partition}"
+            : fileRef.Collection;
+
+        var result = await fileContentProvider.DeleteFileAsync(collectionName, fileRef.FilePath, ct);
+        if (!result.Success)
+        {
+            return DeleteUnifiedReferenceResponse.Fail(result.Error!);
+        }
+
+        return DeleteUnifiedReferenceResponse.Ok();
     }
 }
