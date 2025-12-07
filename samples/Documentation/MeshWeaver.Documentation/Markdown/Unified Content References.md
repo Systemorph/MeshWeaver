@@ -23,18 +23,18 @@ MeshWeaver provides a unified notation for referencing any form of content. Whet
 ```
 
 The prefix determines how the content is fetched and rendered:
-- `data:` - Fetches data entities and displays them as JSON
-- `content:` - Fetches file content and renders based on mime type
-- `area:` - Displays a layout area (default if no prefix is specified)
+- `data/` - Fetches data entities and displays them as JSON
+- `content/` - Fetches file content and renders based on mime type
+- `area/` - Displays a layout area (default if no prefix is specified)
 
-For paths containing spaces, use quotes: `@"content:app/Docs/My Report.pdf"`
+For paths containing spaces, use quotes: `@"content/app/Docs/My Report.pdf"`
 
 ## Content References
 
 Content references embed file content directly in your markdown. The content is rendered based on its mime type. The format is:
 
 ```
-@content:addressType/addressId/collection/path
+@content/addressType/addressId/collection/path
 ```
 
 ### Example: Embedding an Image
@@ -42,30 +42,30 @@ Content references embed file content directly in your markdown. The content is 
 To display an image from the Documentation collection:
 
 ```
-@content:app/Documentation/Documentation/images/meshbros.png
+@content/app/Documentation/Documentation/images/meshbros.png
 ```
 
-@content:app/Documentation/Documentation/images/meshbros.png
+@content/app/Documentation/Documentation/images/meshbros.png
 
 ### Example: Embedding a Markdown Document
 
 To include content from another markdown file:
 
 ```
-@content:app/Documentation/Documentation/embedded.md
+@content/app/Documentation/Documentation/embedded.md
 ```
 
-@content:app/Documentation/Documentation/embedded.md
+@content/app/Documentation/Documentation/embedded.md
 
 ## Layout Area References
 
 Layout areas display interactive components. The format is:
 
 ```
-@area:addressType/addressId/areaName
+@area/addressType/addressId/areaName
 ```
 
-You can omit the `area:` prefix since it's the default:
+You can omit the `area/` prefix since it's the default:
 
 ```
 @addressType/addressId/areaName

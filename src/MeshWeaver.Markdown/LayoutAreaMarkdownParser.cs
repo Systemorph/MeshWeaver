@@ -147,7 +147,7 @@ public class LayoutAreaMarkdownParser : BlockParser
 
     /// <summary>
     /// Reads a quoted path after @.
-    /// Example: @"content:app/docs/My Report.pdf"
+    /// Example: @"content/app/docs/My Report.pdf"
     /// </summary>
     private string? ReadQuotedPath(ref StringSlice slice)
     {
@@ -185,8 +185,14 @@ public class LayoutAreaMarkdownParser : BlockParser
     public const string ContentAreaName = "$Content";
 
     /// <summary>
+    /// Reserved prefixes for unified references.
+    /// These cannot be used as addressType values.
+    /// </summary>
+    private static readonly HashSet<string> ReservedPrefixes = ["data", "content", "area"];
+
+    /// <summary>
     /// Creates the appropriate block type based on the token content.
-    /// Supports unified reference notation (data:, content:, area:) and legacy format.
+    /// Supports unified reference notation (data/, content/, area/) and default format.
     /// </summary>
     private ContainerBlock CreateBlockFromToken(string token)
     {
@@ -252,36 +258,43 @@ public class LayoutAreaMarkdownParser : BlockParser
     /// <summary>
     /// Parses a path into its components.
     /// Supports formats:
-    /// - prefix:addressType/addressId/remainingPath (e.g., data:app/test/Collection)
+    /// - prefix/addressType/addressId/remainingPath (e.g., data/app/test/Collection)
     /// - addressType/addressId/remainingPath (defaults to area prefix)
+    /// Reserved prefixes (data, content, area) are detected by first path segment.
     /// </summary>
-    private static (string Prefix, string AddressType, string AddressId, string? RemainingPath)? ParsePath(string path)
+    private (string Prefix, string AddressType, string AddressId, string? RemainingPath)? ParsePath(string path)
     {
         if (string.IsNullOrEmpty(path))
             return null;
 
-        string prefix;
-        string pathAfterPrefix;
+        var parts = path.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length < 2)
+            return null;
 
-        var colonIndex = path.IndexOf(':');
-        if (colonIndex > 0 && colonIndex < path.IndexOf('/'))
+        string prefix;
+        int addressTypeIndex;
+
+        // Check if first segment is a reserved prefix
+        if (ReservedPrefixes.Contains(parts[0].ToLowerInvariant()))
         {
-            prefix = path[..colonIndex];
-            pathAfterPrefix = path[(colonIndex + 1)..];
+            prefix = parts[0].ToLowerInvariant();
+            addressTypeIndex = 1;
+
+            // Need at least prefix/addressType/addressId
+            if (parts.Length < 3)
+                return null;
         }
         else
         {
             prefix = "area"; // Default prefix
-            pathAfterPrefix = path;
+            addressTypeIndex = 0;
         }
 
-        var parts = pathAfterPrefix.Split('/', StringSplitOptions.RemoveEmptyEntries);
-        if (parts.Length < 2)
-            return null;
-
-        var addressType = parts[0];
-        var addressId = parts[1];
-        var remainingPath = parts.Length > 2 ? string.Join("/", parts.Skip(2)) : null;
+        var addressType = parts[addressTypeIndex];
+        var addressId = parts[addressTypeIndex + 1];
+        var remainingPath = parts.Length > addressTypeIndex + 2
+            ? string.Join("/", parts.Skip(addressTypeIndex + 2))
+            : null;
 
         return (prefix, addressType, addressId, remainingPath);
     }

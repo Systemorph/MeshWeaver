@@ -31,13 +31,13 @@ public class UnifiedPathRegistry : IUnifiedPathRegistry
         if (string.IsNullOrEmpty(path))
             return false;
 
-        // Find the prefix separator
-        var colonIndex = path.IndexOf(':');
-        if (colonIndex <= 0)
+        // Find the prefix separator (first /)
+        var slashIndex = path.IndexOf('/');
+        if (slashIndex <= 0)
             return false;
 
-        var prefix = path[..colonIndex];
-        var remainder = path[(colonIndex + 1)..];
+        var prefix = path[..slashIndex];
+        var remainder = path[(slashIndex + 1)..];
 
         if (!handlers.TryGetValue(prefix, out var handler))
             return false;

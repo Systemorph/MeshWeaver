@@ -45,7 +45,7 @@ public static class ContentLayoutArea
 
     /// <summary>
     /// Renders file content based on mime type.
-    /// Handles both unified content reference format (content:addressType/addressId/collection/path)
+    /// Handles both unified content reference format (content/addressType/addressId/collection/path)
     /// and legacy format (collection/path).
     /// </summary>
     [Browsable(false)]
@@ -53,8 +53,8 @@ public static class ContentLayoutArea
     {
         var idString = host.Reference.Id?.ToString() ?? "";
 
-        // Check if this is a unified content reference (starts with content:)
-        if (idString.StartsWith("content:", StringComparison.OrdinalIgnoreCase))
+        // Check if this is a unified content reference (starts with content/)
+        if (idString.StartsWith("content/", StringComparison.OrdinalIgnoreCase))
         {
             return await HandleUnifiedContentReference(host, idString, ct);
         }
@@ -69,14 +69,14 @@ public static class ContentLayoutArea
         CancellationToken ct)
     {
         // Parse the content reference inline
-        // Format: content:addressType/addressId/collection/path or content:addressType/addressId/collection@partition/path
-        var pathAfterPrefix = path.StartsWith("content:", StringComparison.OrdinalIgnoreCase)
+        // Format: content/addressType/addressId/collection/path or content/addressType/addressId/collection@partition/path
+        var pathAfterPrefix = path.StartsWith("content/", StringComparison.OrdinalIgnoreCase)
             ? path[8..]
             : path;
 
         var parts = pathAfterPrefix.Split('/', 4, StringSplitOptions.None);
         if (parts.Length < 4)
-            return Observable.Return<UiControl?>(new MarkdownControl($"Invalid content reference: {path}. Expected format: content:addressType/addressId/collection/path"));
+            return Observable.Return<UiControl?>(new MarkdownControl($"Invalid content reference: {path}. Expected format: content/addressType/addressId/collection/path"));
 
         var collectionPart = parts[2];
         var filePath = parts[3];
