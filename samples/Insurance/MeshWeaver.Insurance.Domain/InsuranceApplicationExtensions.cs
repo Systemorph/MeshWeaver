@@ -29,128 +29,131 @@ public static class InsuranceApplicationExtensions
         return services;
     }
 
-    /// <summary>
-    /// Configures the root Insurance application hub with dimension data and pricing catalog.
-    /// </summary>
-    public static MessageHubConfiguration ConfigureInsuranceApplication(this MessageHubConfiguration configuration)
-        => configuration
-            .AddEmbeddedResourceContentCollection("Insurance", typeof(InsuranceApplicationExtensions).Assembly, "Content")
-            .WithTypes(typeof(PricingAddress), typeof(ImportConfiguration), typeof(ExcelImportConfiguration), typeof(ReinsuranceAcceptance), typeof(ReinsuranceSection), typeof(ImportRequest), typeof(CollectionSource), typeof(GeocodingRequest), typeof(GeocodingResponse))
-            .AddData(data =>
-            {
-                var svc = data.Hub.ServiceProvider.GetRequiredService<IPricingService>();
-                return data.AddSource(src => src
-                    .WithType<LineOfBusiness>(t => t.WithInitialData(_ => Task.FromResult(SampleDataProvider.GetLinesOfBusiness())))
-                    .WithType<Country>(t => t.WithInitialData(_ => Task.FromResult(SampleDataProvider.GetCountries())))
-                    .WithType<LegalEntity>(t => t.WithInitialData(_ => Task.FromResult(SampleDataProvider.GetLegalEntities())))
-                    .WithType<Currency>(t => t.WithInitialData(_ => Task.FromResult(SampleDataProvider.GetCurrencies())))
-                    .WithType<Pricing>(t => t.WithInitialData(_ => Task.FromResult<IEnumerable<Pricing>>(svc.GetCatalog())))
-                );
-            })
-            .AddLayout(l => l
-                .WithView(nameof(LayoutAreas.PricingCatalogLayoutArea.Pricings),
-                    LayoutAreas.PricingCatalogLayoutArea.Pricings)
-            )
-            .AddArticles();
-
-    /// <summary>
-    /// Configures a single pricing hub that contains the pricing details and risks.
-    /// </summary>
-    public static MessageHubConfiguration ConfigureSinglePricingApplication(this MessageHubConfiguration configuration)
+    extension(MessageHubConfiguration configuration)
     {
-        return configuration
-            .WithServices(AddInsuranceDomainServices)
-            .AddContentCollection(sp =>
-            {
-                var hub = sp.GetRequiredService<IMessageHub>();
-                var addressId = hub.Address.Id;
-                var conf = sp.GetRequiredService<IConfiguration>();
-
-                // Parse addressId in format {company}-{uwy}
-                var parts = addressId.Split('-');
-                if (parts.Length != 2)
-                    throw new InvalidOperationException($"Invalid address format: {addressId}. Expected format: {{company}}-{{uwy}}");
-
-                var company = parts[0];
-                var uwy = parts[1];
-                var subPath = $"{company}/{uwy}";
-
-                // Get the global Submissions configuration from appsettings, or create a default one
-                var globalConfig = conf.GetSection("Submissions").Get<ContentCollectionConfig>();
-
-                // If no configuration exists, create a default FileSystem-based collection
-                if (globalConfig == null)
+        /// <summary>
+        /// Configures the root Insurance application hub with dimension data and pricing catalog.
+        /// </summary>
+        public MessageHubConfiguration ConfigureInsuranceApplication()
+            => configuration
+                .AddEmbeddedResourceContentCollection("Insurance", typeof(InsuranceApplicationExtensions).Assembly, "Content")
+                .WithTypes(typeof(PricingAddress), typeof(ImportConfiguration), typeof(ExcelImportConfiguration), typeof(ReinsuranceAcceptance), typeof(ReinsuranceSection), typeof(ImportRequest), typeof(CollectionSource), typeof(GeocodingRequest), typeof(GeocodingResponse))
+                .AddData(data =>
                 {
-                    // Default to a "Submissions" folder in the current directory
-                    var defaultBasePath = Path.Combine(Directory.GetCurrentDirectory(), "Submissions");
-                    globalConfig = new ContentCollectionConfig
-                    {
-                        SourceType = FileSystemStreamProvider.SourceType,
-                        Name = "Submissions",
-                        BasePath = defaultBasePath,
-                        DisplayName = "Submission Files"
-                    };
-                }
-
-                // Create localized config with modified name and basepath
-                var localizedName = GetLocalizedCollectionName("Submissions", addressId);
-                var fullPath = string.IsNullOrEmpty(subPath)
-                    ? globalConfig.BasePath ?? ""
-                    : Path.Combine(globalConfig.BasePath ?? "", subPath);
-
-                return globalConfig with
-                {
-                    Name = localizedName,
-                    BasePath = fullPath
-                };
-            })
-            .AddData(data =>
-            {
-                var svc = data.Hub.ServiceProvider.GetRequiredService<IPricingService>();
-                var pricingId = data.Hub.Address.Id;
-
-                return data.AddSource(src => src
-                    .WithType<Pricing>(t => t.WithInitialData(async ct =>
-                    {
-                        var pricing = await svc.GetHeaderAsync(pricingId);
-                        return pricing is null ? [] : [pricing];
-                    }))
-                    .WithType<PropertyRisk>(t => t.WithInitialData(async ct =>
-                        await svc.GetRisksAsync(pricingId, ct)))
-                    .WithType<ReinsuranceAcceptance>(t => t.WithInitialData(_ => Task.FromResult(Enumerable.Empty<ReinsuranceAcceptance>())))
-                    .WithType<ReinsuranceSection>(t => t.WithInitialData(_ => Task.FromResult(Enumerable.Empty<ReinsuranceSection>())))
-                    .WithType<ExcelImportConfiguration>(t => t.WithInitialData(async ct =>
-                        await svc.GetImportConfigurationsAsync(pricingId).ToArrayAsync(ct)))
-                    // Add dimension data mappings
-                    .WithType<LineOfBusiness>(t => t.WithInitialData(_ => Task.FromResult(SampleDataProvider.GetLinesOfBusiness())))
-                    .WithType<Country>(t => t.WithInitialData(_ => Task.FromResult(SampleDataProvider.GetCountries())))
-                    .WithType<LegalEntity>(t => t.WithInitialData(_ => Task.FromResult(SampleDataProvider.GetLegalEntities())))
-                    .WithType<Currency>(t => t.WithInitialData(_ => Task.FromResult(SampleDataProvider.GetCurrencies())))
+                    var svc = data.Hub.ServiceProvider.GetRequiredService<IPricingService>();
+                    return data.AddSource(src => src
+                        .WithType<LineOfBusiness>(t => t.WithInitialData(_ => Task.FromResult(SampleDataProvider.GetLinesOfBusiness())))
+                        .WithType<Country>(t => t.WithInitialData(_ => Task.FromResult(SampleDataProvider.GetCountries())))
+                        .WithType<LegalEntity>(t => t.WithInitialData(_ => Task.FromResult(SampleDataProvider.GetLegalEntities())))
+                        .WithType<Currency>(t => t.WithInitialData(_ => Task.FromResult(SampleDataProvider.GetCurrencies())))
+                        .WithType<Pricing>(t => t.WithInitialData(_ => Task.FromResult<IEnumerable<Pricing>>(svc.GetCatalog())))
+                    );
+                })
+                .AddLayout(l => l
+                    .WithView(nameof(LayoutAreas.PricingCatalogLayoutArea.Pricings),
+                        LayoutAreas.PricingCatalogLayoutArea.Pricings)
                 )
-                // Configure default data reference: data/pricing/pricingId returns the main Pricing entity
-                .WithDefaultDataReference(workspace =>
-                    workspace.GetObservable<Pricing>().Select(p => p.FirstOrDefault()))
-                // Configure content provider for file access via data/pricing/pricingId/Submissions/path
-                .WithContentProvider("Submissions", GetLocalizedCollectionName("Submissions", pricingId));
-            })
-            .AddLayout(l => l
-                .WithDefaultArea(nameof(LayoutAreas.PricingOverviewLayoutArea.Overview))
-                .WithView(nameof(LayoutAreas.PricingOverviewLayoutArea.Overview),
-                    LayoutAreas.PricingOverviewLayoutArea.Overview)
-                .WithView(nameof(LayoutAreas.SubmissionLayoutArea.Submission),
-                    LayoutAreas.SubmissionLayoutArea.Submission)
-                .WithView(nameof(LayoutAreas.PropertyRisksLayoutArea.PropertyRisks),
-                    LayoutAreas.PropertyRisksLayoutArea.PropertyRisks)
-                .WithView(nameof(LayoutAreas.RiskMapLayoutArea.RiskMap),
-                    LayoutAreas.RiskMapLayoutArea.RiskMap)
-                .WithView(nameof(LayoutAreas.ReinsuranceAcceptanceLayoutArea.Structure),
-                    LayoutAreas.ReinsuranceAcceptanceLayoutArea.Structure)
-                .WithView(nameof(LayoutAreas.ImportConfigsLayoutArea.ImportConfigs),
-                    LayoutAreas.ImportConfigsLayoutArea.ImportConfigs)
-                .AddDomainViews()
-            )
-            .AddImport()
-            .WithHandler<GeocodingRequest>(HandleGeocodingRequest);
+                .AddArticles();
+
+        /// <summary>
+        /// Configures a single pricing hub that contains the pricing details and risks.
+        /// </summary>
+        public MessageHubConfiguration ConfigureSinglePricingApplication()
+        {
+            return configuration
+                .WithServices(AddInsuranceDomainServices)
+                .AddContentCollection(sp =>
+                {
+                    var hub = sp.GetRequiredService<IMessageHub>();
+                    var addressId = hub.Address.Id;
+                    var conf = sp.GetRequiredService<IConfiguration>();
+
+                    // Parse addressId in format {company}-{uwy}
+                    var parts = addressId.Split('-');
+                    if (parts.Length != 2)
+                        throw new InvalidOperationException($"Invalid address format: {addressId}. Expected format: {{company}}-{{uwy}}");
+
+                    var company = parts[0];
+                    var uwy = parts[1];
+                    var subPath = $"{company}/{uwy}";
+
+                    // Get the global Submissions configuration from appsettings, or create a default one
+                    var globalConfig = conf.GetSection("Submissions").Get<ContentCollectionConfig>();
+
+                    // If no configuration exists, create a default FileSystem-based collection
+                    if (globalConfig == null)
+                    {
+                        // Default to a "Submissions" folder in the current directory
+                        var defaultBasePath = Path.Combine(Directory.GetCurrentDirectory(), "Submissions");
+                        globalConfig = new ContentCollectionConfig
+                        {
+                            SourceType = FileSystemStreamProvider.SourceType,
+                            Name = "Submissions",
+                            BasePath = defaultBasePath,
+                            DisplayName = "Submission Files"
+                        };
+                    }
+
+                    // Create localized config with modified name and basepath
+                    var localizedName = GetLocalizedCollectionName("Submissions", addressId);
+                    var fullPath = string.IsNullOrEmpty(subPath)
+                        ? globalConfig.BasePath ?? ""
+                        : Path.Combine(globalConfig.BasePath ?? "", subPath);
+
+                    return globalConfig with
+                    {
+                        Name = localizedName,
+                        BasePath = fullPath
+                    };
+                })
+                .AddData(data =>
+                {
+                    var svc = data.Hub.ServiceProvider.GetRequiredService<IPricingService>();
+                    var pricingId = data.Hub.Address.Id;
+
+                    return data.AddSource(src => src
+                            .WithType<Pricing>(t => t.WithInitialData(async ct =>
+                            {
+                                var pricing = await svc.GetHeaderAsync(pricingId);
+                                return pricing is null ? [] : [pricing];
+                            }))
+                            .WithType<PropertyRisk>(t => t.WithInitialData(async ct =>
+                                await svc.GetRisksAsync(pricingId, ct)))
+                            .WithType<ReinsuranceAcceptance>(t => t.WithInitialData(_ => Task.FromResult(Enumerable.Empty<ReinsuranceAcceptance>())))
+                            .WithType<ReinsuranceSection>(t => t.WithInitialData(_ => Task.FromResult(Enumerable.Empty<ReinsuranceSection>())))
+                            .WithType<ExcelImportConfiguration>(t => t.WithInitialData(async ct =>
+                                await svc.GetImportConfigurationsAsync(pricingId).ToArrayAsync(ct)))
+                            // Add dimension data mappings
+                            .WithType<LineOfBusiness>(t => t.WithInitialData(_ => Task.FromResult(SampleDataProvider.GetLinesOfBusiness())))
+                            .WithType<Country>(t => t.WithInitialData(_ => Task.FromResult(SampleDataProvider.GetCountries())))
+                            .WithType<LegalEntity>(t => t.WithInitialData(_ => Task.FromResult(SampleDataProvider.GetLegalEntities())))
+                            .WithType<Currency>(t => t.WithInitialData(_ => Task.FromResult(SampleDataProvider.GetCurrencies())))
+                        )
+                        // Configure default data reference: data/pricing/pricingId returns the main Pricing entity
+                        .WithDefaultDataReference(workspace =>
+                            workspace.GetObservable<Pricing>().Select(p => p.FirstOrDefault()))
+                        // Configure content provider for file access via data/pricing/pricingId/Submissions/path
+                        .WithContentProvider("Submissions", GetLocalizedCollectionName("Submissions", pricingId));
+                })
+                .AddLayout(l => l
+                    .WithDefaultArea(nameof(LayoutAreas.PricingOverviewLayoutArea.Overview))
+                    .WithView(nameof(LayoutAreas.PricingOverviewLayoutArea.Overview),
+                        LayoutAreas.PricingOverviewLayoutArea.Overview)
+                    .WithView(nameof(LayoutAreas.SubmissionLayoutArea.Submission),
+                        LayoutAreas.SubmissionLayoutArea.Submission)
+                    .WithView(nameof(LayoutAreas.PropertyRisksLayoutArea.PropertyRisks),
+                        LayoutAreas.PropertyRisksLayoutArea.PropertyRisks)
+                    .WithView(nameof(LayoutAreas.RiskMapLayoutArea.RiskMap),
+                        LayoutAreas.RiskMapLayoutArea.RiskMap)
+                    .WithView(nameof(LayoutAreas.ReinsuranceAcceptanceLayoutArea.Structure),
+                        LayoutAreas.ReinsuranceAcceptanceLayoutArea.Structure)
+                    .WithView(nameof(LayoutAreas.ImportConfigsLayoutArea.ImportConfigs),
+                        LayoutAreas.ImportConfigsLayoutArea.ImportConfigs)
+                    .AddDomainViews()
+                )
+                .AddImport()
+                .WithHandler<GeocodingRequest>(HandleGeocodingRequest);
+        }
     }
 
     private static async Task<IMessageDelivery> HandleGeocodingRequest(
@@ -197,7 +200,7 @@ public static class InsuranceApplicationExtensions
             var geocodingResponse = await geocodingService.GeocodeRisksAsync(riskList, ct);
 
             // If successful and we have updated risks, update the workspace
-            if (geocodingResponse.Success && geocodingResponse.UpdatedRisks != null && geocodingResponse.UpdatedRisks.Any())
+            if (geocodingResponse is { Success: true, UpdatedRisks: not null } && geocodingResponse.UpdatedRisks.Any())
             {
                 // Update the workspace with the geocoded risks
                 var dataChangeRequest = new DataChangeRequest

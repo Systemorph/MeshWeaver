@@ -179,6 +179,50 @@ public static class LayoutExtensions
                 .GetValueOrDefault(area)
         ).Where(x => x is not null);
 
+    /// <summary>
+    /// Gets the first available control from the areas collection.
+    /// Used when no specific area is requested (default area case).
+    /// </summary>
+    public static IObservable<UiControl?> GetFirstControlStream(
+        this ISynchronizationStream<EntityStore>? synchronizationItems
+    ) =>
+        synchronizationItems!.Select(i =>
+            i.Value?
+                .Collections
+                .GetValueOrDefault(LayoutAreaReference.Areas)
+                ?.Instances
+                .Values
+                .OfType<UiControl>()
+                .FirstOrDefault()
+        ).Where(x => x is not null);
+
+    /// <summary>
+    /// Gets the first available control from the areas collection (JsonElement stream).
+    /// Used when no specific area is requested (default area case).
+    /// </summary>
+    public static IObservable<UiControl?> GetFirstControlStream(
+        this ISynchronizationStream<JsonElement> synchronizationItems
+    ) =>
+        synchronizationItems
+            .Select(i =>
+            {
+                // Navigate to /areas and get the first property value
+                if (i.Value.ValueKind != JsonValueKind.Object)
+                    return null;
+                if (!i.Value.TryGetProperty(LayoutAreaReference.Areas, out var areas))
+                    return null;
+                if (areas.ValueKind != JsonValueKind.Object)
+                    return null;
+
+                // Get the first property (first area)
+                using var enumerator = areas.EnumerateObject();
+                if (!enumerator.MoveNext())
+                    return null;
+
+                return enumerator.Current.Value.Deserialize<UiControl>(synchronizationItems.Hub.JsonSerializerOptions);
+            })
+            .Where(x => x is not null);
+
     public static IObservable<object?> GetControlStream(
         this IMessageHub hub,
         Address address,

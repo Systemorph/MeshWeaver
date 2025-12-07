@@ -10,7 +10,7 @@ namespace MeshWeaver.Data;
 /// </summary>
 public record LayoutAreaReference : WorkspaceReference<EntityStore>
 {
-    public LayoutAreaReference(string area)
+    public LayoutAreaReference(string? area)
     {
         Area = area;
         parameters = new(ParseParameters);
@@ -41,7 +41,7 @@ public record LayoutAreaReference : WorkspaceReference<EntityStore>
     /// <summary>
     /// Name of the layout area.
     /// </summary>
-    public string Area { get; init; }
+    public string? Area { get; init; }
     /// <summary>
     /// Id of the layout area. Can contain optional parameters after a ? in URL format.
     /// </summary>
@@ -96,6 +96,8 @@ public record LayoutAreaReference : WorkspaceReference<EntityStore>
     /// <returns>A string representing the application href.</returns>
     public string ToHref(object address)
     {
+        if (Area == null)
+            return address.ToString()!;
         var ret = $"{address}/{WorkspaceReference.Encode(Area)}";
         if (Id?.ToString() is { } s)
             ret = $"{ret}/{WorkspaceReference.Encode(s)}";
@@ -108,6 +110,8 @@ public record LayoutAreaReference : WorkspaceReference<EntityStore>
     /// <returns>A string representing the application href.</returns>
     public string ToHref(Address address)
     {
+        if (Area is null)
+            return address.ToString()!;
         var ret = $"{address}/{WorkspaceReference.Encode(Area)}";
         if (Id?.ToString() is { } s)
             ret = $"{ret}/{WorkspaceReference.Encode(s)}";
@@ -116,11 +120,14 @@ public record LayoutAreaReference : WorkspaceReference<EntityStore>
 
     public string ToHref(string addressType, string addressId)
     {
-        var ret = $"area/{addressType}/{addressId}/{WorkspaceReference.Encode(Area)}";
-        if (Id?.ToString() is { } s)
-            ret = $"{ret}/{WorkspaceReference.Encode(s)}";
+        var ret = $"area/{addressType}/{addressId}";
+        if (Area is not null)
+        {
+            ret = $"{ret}/{WorkspaceReference.Encode(Area)}";
+            if (Id?.ToString() is { } s)
+                ret = $"{ret}/{WorkspaceReference.Encode(s)}";
+        }
         return ret;
-
     }
 
     private readonly Lazy<IReadOnlyDictionary<string, string?>> parameters = new();

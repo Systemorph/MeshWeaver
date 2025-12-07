@@ -24,30 +24,34 @@ public partial class NamedAreaView
         subscription?.Dispose();
         subscription = null;
         RootControl = null;
-        AreaToBeRendered = ViewModel.Area.ToString();
+        AreaToBeRendered = ViewModel.Area?.ToString() ?? string.Empty;
         base.BindData();
         DataBind(ViewModel.ProgressMessage, x => x.ProgressMessage);
         DataBind(ViewModel.ShowProgress, x => x.ShowProgress);
-        if (AreaToBeRendered is not null)
-            AddBinding(Stream!.GetControlStream(AreaToBeRendered!)
-                .Subscribe(x =>
+
+        // When area is empty, GetControlStream returns a NamedAreaControl pointing to the default area
+        var controlStream = Stream!.GetControlStream(AreaToBeRendered);
+
+        AddBinding(controlStream
+            .Subscribe(x =>
+            {
+                InvokeAsync(() =>
                 {
-                    InvokeAsync(() =>
+                    var control = x as UiControl;
+                    if (RootControl is null && control is null || RootControl != null && RootControl.Equals(control))
+                        return;
+                    RootControl = control;
+                    if (RootControl is not null)
                     {
-                        if (RootControl is null && x is null || RootControl != null && RootControl.Equals(x))
-                            return;
-                        RootControl = x;
-                        if (RootControl is not null)
-                        {
-                            DataBind(RootControl.PageTitle, y => y.PageTitle);
-                            DataBind(RootControl.Meta, y => y.MetaAttributes);
-                        }
-                        Logger.LogDebug("Setting area {Area} to rendering area {AreaToBeRendered} to type {Type}", Area,
-                            AreaToBeRendered, x?.GetType().Name ?? "null");
-                        RequestStateChange();
-                    });
-                })
-            );
+                        DataBind(RootControl.PageTitle, y => y.PageTitle);
+                        DataBind(RootControl.Meta, y => y.MetaAttributes);
+                    }
+                    Logger.LogDebug("Setting area {Area} to rendering area {AreaToBeRendered} to type {Type}", Area,
+                        AreaToBeRendered, control?.GetType().Name ?? "null");
+                    RequestStateChange();
+                });
+            })
+        );
     }
 
 

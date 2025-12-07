@@ -35,8 +35,9 @@ public class TodoLayoutAreaInteractionTest(ITestOutputHelper output) : TodoDataT
         // Wait for the final layout control (skip loading states)
         Output.WriteLine("⏳ Waiting for layout area to render with data...");
         var control = await stream
-            .GetControlStream(reference.Area)!
-            .OfType<LayoutGridControl>() // Wait specifically for LayoutGridControl
+            .GetControlStream(reference.Area!)
+            .Where(c => c is LayoutGridControl)
+            .Select(c => (LayoutGridControl)c!)
             .Timeout(10.Seconds())
             .FirstAsync();
 
@@ -193,8 +194,9 @@ public class TodoLayoutAreaInteractionTest(ITestOutputHelper output) : TodoDataT
     {
         Output.WriteLine("⏳ Waiting for initial layout area to render...");
         var initialControl = await stream
-            .GetControlStream(reference.Area)!
-            .OfType<LayoutGridControl>()
+            .GetControlStream(reference.Area!)
+            .Where(c => c is LayoutGridControl)
+            .Select(c => (LayoutGridControl)c!)
             //.Timeout(10.Seconds())
             .FirstAsync();
 

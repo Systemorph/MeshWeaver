@@ -130,7 +130,7 @@ public class PricingCatalogTests(ITestOutputHelper output) : InsuranceTestBase(o
         );
 
         // Get the control from the stream
-        var control = await stream.GetControlStream(reference.Area)
+        var control = await stream.GetControlStream(reference.Area!)
             .Timeout(10.Seconds())
             .FirstAsync(x => x != null);
 

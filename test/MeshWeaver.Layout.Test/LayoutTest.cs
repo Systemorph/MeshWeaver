@@ -91,7 +91,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
             reference
         );
 
-        var control = await stream.GetControlStream(reference.Area)
+        var control = await stream.GetControlStream(reference.Area!)
             .Timeout(10.Seconds())
             .FirstAsync(x => x != null);
         var areas = control
@@ -138,7 +138,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
             reference
         );
         var controls = await stream
-            .GetControlStream(reference.Area.ToString()!)
+            .GetControlStream(reference.Area!)
             .TakeUntil(o => o is HtmlControl)
             .Timeout(10.Seconds())
             .ToArray();
@@ -330,7 +330,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
             reference
         );
         var content = await stream
-            .GetControlStream(reference.Area.ToString()!)
+            .GetControlStream(reference.Area!)
             //.Timeout(TimeSpan.FromSeconds(3))
             .FirstAsync(x => x != null);
 
@@ -483,7 +483,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
             new HostAddress(),
             reference
         );
-        var content = await stream.GetControlStream(reference.Area.ToString()!)
+        var content = await stream.GetControlStream(reference.Area!)
             .Timeout(10.Seconds())
             .FirstAsync(x => x != null);
         var grid = content
@@ -537,7 +537,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
 
         var stopwatch = Stopwatch.StartNew();
 
-        var content = await stream.GetControlStream(reference.Area.ToString()!)
+        var content = await stream.GetControlStream(reference.Area!)
             .Timeout(10.Seconds())
             .FirstAsync(x => x != null);
 
@@ -647,7 +647,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
 
         // Get the control - we should eventually see "DataGrid" content, not stay at "Loading"
         var controls = await stream
-            .GetControlStream(reference.Area.ToString()!)
+            .GetControlStream(reference.Area!)
             .TakeUntil(o => o is DataGridControl)
             .Timeout(5.Seconds())
             .ToArray();
@@ -678,7 +678,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
 
         // First, we should get the loading control
         var firstControl = await stream
-            .GetControlStream(reference.Area.ToString()!)
+            .GetControlStream(reference.Area!)
             .Timeout(2.Seconds())
             .FirstAsync(x => x != null);
 
@@ -687,7 +687,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
 
         // Then, we should eventually get the actual content after the delay
         var finalControl = await stream
-            .GetControlStream(reference.Area.ToString()!)
+            .GetControlStream(reference.Area!)
             .TakeUntil(o => o is HtmlControl)
             .Timeout(5.Seconds())
             .LastAsync();
@@ -747,7 +747,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
 
         // First control should be the loading message from StartWith
         var firstControl = await stream
-            .GetControlStream(reference.Area.ToString()!)
+            .GetControlStream(reference.Area!)
             .Timeout(2.Seconds())
             .FirstAsync(x => x != null);
 
@@ -759,7 +759,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
 
         // Wait for the content to transition
         var finalControl = await stream
-            .GetControlStream(reference.Area.ToString()!)
+            .GetControlStream(reference.Area!)
             .TakeUntil(o => o is HtmlControl)
             .Timeout(3.Seconds())
             .LastAsync();
@@ -956,6 +956,123 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         // assert - truncated content should be smaller
         truncatedJson.Split('\n').Length.Should().Be(101); // 100 lines + "..."
         truncatedJson.Should().EndWith("...");
+    }
+}
+
+/// <summary>
+/// Tests for the DefaultArea functionality - when Area is null/empty,
+/// the system should use the configured DefaultArea via WithDefaultArea.
+/// </summary>
+public class DefaultAreaTest(ITestOutputHelper output) : HubTestBase(output)
+{
+    private const string DefaultView = nameof(DefaultView);
+    private const string OtherView = nameof(OtherView);
+
+    protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration configuration)
+    {
+        return base.ConfigureHost(configuration)
+            .WithRoutes(r =>
+                r.RouteAddress<ClientAddress>((_, d) => d.Package())
+            )
+            .AddLayout(layout =>
+                layout
+                    .WithDefaultArea(DefaultView) // Configure the default area
+                    .WithView(DefaultView, Controls.Html("This is the default view"))
+                    .WithView(OtherView, Controls.Html("This is another view"))
+            );
+    }
+
+    protected override MessageHubConfiguration ConfigureClient(
+        MessageHubConfiguration configuration
+    ) => base.ConfigureClient(configuration)
+        .AddLayoutClient(d => d);
+
+    [HubFact]
+    public async Task NullArea_ReturnsNamedAreaControlPointingToDefaultArea()
+    {
+        // Arrange - create a reference with null area
+        var reference = new LayoutAreaReference(null);
+
+        var workspace = GetClient().GetWorkspace();
+        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
+            new HostAddress(),
+            reference
+        );
+
+        // Act - get the control stream for empty area
+        var control = await stream.GetControlStream(string.Empty)
+            .Timeout(10.Seconds())
+            .FirstAsync(x => x != null);
+
+        // Assert - should get a NamedAreaControl pointing to the default area
+        var namedArea = control.Should().BeOfType<NamedAreaControl>().Which;
+        namedArea.Area.Should().Be(DefaultView);
+    }
+
+    [HubFact]
+    public async Task EmptyArea_ReturnsNamedAreaControlPointingToDefaultArea()
+    {
+        // Arrange - create a reference with empty area
+        var reference = new LayoutAreaReference(string.Empty);
+
+        var workspace = GetClient().GetWorkspace();
+        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
+            new HostAddress(),
+            reference
+        );
+
+        // Act - get the control stream for empty area
+        var control = await stream.GetControlStream(string.Empty)
+            .Timeout(10.Seconds())
+            .FirstAsync(x => x != null);
+
+        // Assert - should get a NamedAreaControl pointing to the default area
+        var namedArea = control.Should().BeOfType<NamedAreaControl>().Which;
+        namedArea.Area.Should().Be(DefaultView);
+    }
+
+    [HubFact]
+    public async Task ExplicitArea_UsesSpecifiedArea()
+    {
+        // Arrange - create a reference with explicit area
+        var reference = new LayoutAreaReference(OtherView);
+
+        var workspace = GetClient().GetWorkspace();
+        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
+            new HostAddress(),
+            reference
+        );
+
+        // Act - get the control stream for the specified area
+        var control = await stream.GetControlStream(reference.Area!)
+            .Timeout(10.Seconds())
+            .FirstAsync(x => x != null);
+
+        // Assert - should get the other view content, not the default
+        control.Should().BeOfType<HtmlControl>()
+            .Which.Data.ToString().Should().Contain("another view");
+    }
+
+    [HubFact]
+    public async Task DefaultAreaContent_IsRenderedCorrectly()
+    {
+        // Arrange - create a reference with null area
+        var reference = new LayoutAreaReference(null);
+
+        var workspace = GetClient().GetWorkspace();
+        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
+            new HostAddress(),
+            reference
+        );
+
+        // Act - get the control stream for the actual default view (not empty string)
+        var control = await stream.GetControlStream(DefaultView)
+            .Timeout(10.Seconds())
+            .FirstAsync(x => x != null);
+
+        // Assert - should get the default view content
+        control.Should().BeOfType<HtmlControl>()
+            .Which.Data.ToString().Should().Contain("default view");
     }
 }
 

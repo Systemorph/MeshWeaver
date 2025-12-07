@@ -90,3 +90,11 @@ To embed the Microsoft 2026 pricing overview:
 ```
 
 @pricing/Microsoft-2026/Overview
+
+You can also configure a default view for the pricing and then just reference:
+
+```
+@pricing/Microsoft-2026
+```
+
+@pricing/Microsoft-2026

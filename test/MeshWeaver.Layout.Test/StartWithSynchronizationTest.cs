@@ -105,7 +105,7 @@ public class StartWithSynchronizationTest(ITestOutputHelper output) : HubTestBas
 
         // Collect all controls emitted
         var controls = await stream
-            .GetControlStream(reference.Area.ToString()!)
+            .GetControlStream(reference.Area!)
             .TakeUntil(c => c is HtmlControl)
             .Timeout(5.Seconds())
             .ToArray();
@@ -143,7 +143,7 @@ public class StartWithSynchronizationTest(ITestOutputHelper output) : HubTestBas
 
         // First, we should get the loading control
         var firstControl = await stream
-            .GetControlStream(reference.Area.ToString()!)
+            .GetControlStream(reference.Area!)
             .Timeout(2.Seconds())
             .FirstAsync(x => x != null);
 
@@ -155,7 +155,7 @@ public class StartWithSynchronizationTest(ITestOutputHelper output) : HubTestBas
 
         // Then we should get the actual content
         var finalControl = await stream
-            .GetControlStream(reference.Area.ToString()!)
+            .GetControlStream(reference.Area!)
             .TakeUntil(c => c is HtmlControl)
             .Timeout(3.Seconds())
             .LastAsync();
@@ -191,7 +191,7 @@ public class StartWithSynchronizationTest(ITestOutputHelper output) : HubTestBas
 
         // The subject already has content, so we should get the HTML control
         var controls = await stream
-            .GetControlStream(reference.Area.ToString()!)
+            .GetControlStream(reference.Area!)
             .TakeUntil(c => c is HtmlControl)
             .Timeout(5.Seconds())
             .ToArray();
@@ -228,7 +228,7 @@ public class StartWithSynchronizationTest(ITestOutputHelper output) : HubTestBas
         // Subscribe and collect all controls
         var controlsReceived = new List<UiControl?>();
         var subscription = stream
-            .GetControlStream(reference.Area.ToString()!)
+            .GetControlStream(reference.Area!)
             .Subscribe(c =>
             {
                 Output.WriteLine($"Received: {c?.GetType().Name}: {GetControlContent(c)}");

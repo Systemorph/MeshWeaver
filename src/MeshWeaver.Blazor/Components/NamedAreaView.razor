@@ -31,7 +31,7 @@
     <DispatchView ViewModel="@RootControl" Stream="@Stream" Area="@Area" />
 
     @* Signal for thumbnail generator when LayoutAreas catalog has loaded *@
-    @if (Area.ToString() == "LayoutAreas")
+    @if (Area?.ToString() == "LayoutAreas")
     {
         <script>
             // Signal that the LayoutAreas catalog has finished loading

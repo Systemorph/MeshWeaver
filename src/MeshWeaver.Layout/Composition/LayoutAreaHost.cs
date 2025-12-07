@@ -45,8 +45,13 @@ public record LayoutAreaHost : IDisposable
 
         this.uiControlService = uiControlService;
         Workspace = workspace;
-        var context = new RenderingContext(reference.Area) { Layout = reference.Layout };
         LayoutDefinition = uiControlService.LayoutDefinition;
+
+        // When Area is null/empty, resolve to the default area
+        var isDefaultArea = string.IsNullOrEmpty(reference.Area);
+        var resolvedArea = isDefaultArea ? ResolveDefaultArea() : reference.Area!;
+        var context = new RenderingContext(resolvedArea) { Layout = reference.Layout };
+
         configuration ??= c => c;
         // Create stream with deferred initialization to avoid circular dependency
         // where initialization lambda uses 'this' before Stream property is assigned
@@ -58,13 +63,26 @@ public record LayoutAreaHost : IDisposable
             c => configuration.Invoke(c.WithDeferredInitialization())
                 .WithInitialization(async (_, _) =>
                 {
-                    return (
-                            await LayoutDefinition
-                                .RenderAsync(this, context, new EntityStore()
-                                    .Update(LayoutAreaReference.Areas, x => x)
-                                    .Update(LayoutAreaReference.Data, x => x)
-                                ))
-                        .Store;
+                    var store = new EntityStore()
+                        .Update(LayoutAreaReference.Areas, x => x)
+                        .Update(LayoutAreaReference.Data, x => x);
+
+                    var result = await LayoutDefinition.RenderAsync(this, context, store);
+
+                    // When Area was null/empty, store a NamedAreaControl at "" pointing to the resolved area
+                    if (isDefaultArea && !string.IsNullOrEmpty(resolvedArea))
+                    {
+                        var namedArea = new NamedAreaControl(resolvedArea);
+                        result = result with
+                        {
+                            Store = result.Store.Update(LayoutAreaReference.Areas,
+                                coll => coll.SetItem(string.Empty, namedArea)),
+                            Updates = result.Updates.Append(
+                                new EntityUpdate(LayoutAreaReference.Areas, string.Empty, namedArea))
+                        };
+                    }
+
+                    return result.Store;
                 })
                 .WithExceptionCallback(ex =>
             {
@@ -451,4 +469,23 @@ public record LayoutAreaHost : IDisposable
 
     internal IEnumerable<LayoutAreaDefinition> GetLayoutAreaDefinitions()
         => LayoutDefinition.AreaDefinitions.Values.Where(l => l.IsVisible());
+
+    /// <summary>
+    /// Resolves the default area name from LayoutDefinition.DefaultArea,
+    /// or falls back to the first visible area definition.
+    /// </summary>
+    private string ResolveDefaultArea()
+    {
+        // Try to use the configured default area
+        if (!string.IsNullOrEmpty(LayoutDefinition.DefaultArea))
+            return LayoutDefinition.DefaultArea;
+
+        // Fall back to the first visible area definition
+        var firstArea = LayoutDefinition.AreaDefinitions.Values
+            .Where(l => l.IsVisible())
+            .OrderBy(l => l.Order ?? 0)
+            .FirstOrDefault();
+
+        return firstArea?.Area ?? string.Empty;
+    }
 }

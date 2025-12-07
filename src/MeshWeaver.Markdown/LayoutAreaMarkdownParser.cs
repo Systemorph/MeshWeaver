@@ -228,11 +228,12 @@ public class LayoutAreaMarkdownParser : BlockParser
     /// Creates an area block from the remaining path.
     /// Format: areaName[/areaId...] or areaName?queryParams
     /// The areaId includes all remaining path segments joined with '/'
+    /// When no area is specified, null is passed to let the layout system determine the default.
     /// </summary>
     private ContainerBlock CreateAreaBlock(string address, string? remainingPath)
     {
         if (string.IsNullOrEmpty(remainingPath))
-            return new LayoutAreaComponentInfo(address, "Default", null, this);
+            return new LayoutAreaComponentInfo(address, null, null, this);
 
         // Check for ? separator (query params as area id)
         var queryIndex = remainingPath.IndexOf('?');

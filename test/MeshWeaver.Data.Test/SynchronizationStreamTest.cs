@@ -112,7 +112,8 @@ public class SynchronizationStreamTest(ITestOutputHelper output) : HubTestBase(o
         // Reduce to get a stream of DerivedData entities
         var derivedStream = stream.Reduce(new EntityReference(collectionName, "1"))!
             .Select(i => i.Value)
-            .OfType<DerivedData>()
+            .Where(v => v is DerivedData)
+            .Select(v => (DerivedData)v!)
             .Replay(1);
         derivedStream.Connect();
 
@@ -138,7 +139,7 @@ public class SynchronizationStreamTest(ITestOutputHelper output) : HubTestBase(o
                 stream.StreamId));
         });
 
-        await Task.Delay(100);
+        await Task.Delay(100, TestContext.Current.CancellationToken);
 
         // Assert: the Select stream should have received the projected IBaseData
         receivedBaseData.Should().HaveCount(1);
@@ -180,7 +181,7 @@ public class SynchronizationStreamTest(ITestOutputHelper output) : HubTestBase(o
                 stream.StreamId));
         });
 
-        await Task.Delay(100);
+        await Task.Delay(100, TestContext.Current.CancellationToken);
 
         stream.Update(state =>
         {
@@ -192,7 +193,7 @@ public class SynchronizationStreamTest(ITestOutputHelper output) : HubTestBase(o
                 stream.StreamId));
         });
 
-        await Task.Delay(100);
+        await Task.Delay(100, TestContext.Current.CancellationToken);
 
         // Assert: should have received both text values
         receivedTexts.Should().HaveCount(2);

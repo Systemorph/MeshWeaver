@@ -29,10 +29,7 @@ public static class PricingOverviewLayoutArea
                     : Controls.Stack
                         .WithView(PricingLayoutShared.BuildToolbar(pricingId, "Overview"))
                         .WithView(Controls.Markdown($"# Pricing Overview\n\n*Pricing '{pricingId}' not found.*"));
-            })
-            .StartWith(Controls.Stack
-                .WithView(PricingLayoutShared.BuildToolbar(pricingId, "Overview"))
-                .WithView(Controls.Markdown("# Pricing Overview\n\n*Loading...*")));
+            });
     }
 
     private static string RenderPricingOverview(Pricing pricing)
