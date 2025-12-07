@@ -13,8 +13,11 @@ namespace MeshWeaver.Documentation.AI
 
         public string Name => GetType().Name;
 
+        /// <inheritdoc />
         public string? GroupName => "Documentation";
+        /// <inheritdoc />
         public int DisplayOrder => 100;
+        /// <inheritdoc />
         public string? IconName => "Games";
 
         /// <summary>

@@ -1,21 +1,19 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.ComponentModel.DataAnnotations;
-using System.Diagnostics.CodeAnalysis;
 using System.IO;
 using System.Linq;
 using System.Reactive.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
 using FluentAssertions;
-using FluentAssertions.Extensions;
 using MeshWeaver.ContentCollections;
 using MeshWeaver.Data;
 using MeshWeaver.Fixture;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
+using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
-using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
 #pragma warning disable CS1591 // Missing XML comment for publicly visible type or member
@@ -34,181 +32,139 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
 {
     private const string TestPricingId = "test-company-2024";
 
-    #region ContentReference Parsing Tests
+    #region UnifiedPathHandler Parsing Tests
 
     [Fact]
-    public void ContentReference_Parse_DataPath_DefaultReference()
+    public void DataPathHandler_Parse_DefaultReference()
     {
         // arrange & act
-        var reference = ContentReference.Parse("data:pricing/test-company-2024");
+        var handler = new DataPathHandler();
+        var (address, reference) = handler.Parse("pricing/test-company-2024");
 
         // assert
-        var dataRef = reference.Should().BeOfType<DataContentReference>().Subject;
-        dataRef.AddressType.Should().Be("pricing");
-        dataRef.AddressId.Should().Be("test-company-2024");
-        dataRef.Collection.Should().BeNull();
-        dataRef.EntityId.Should().BeNull();
-        dataRef.IsDefaultReference.Should().BeTrue();
-        dataRef.IsCollectionReference.Should().BeFalse();
-        dataRef.IsEntityReference.Should().BeFalse();
+        address.Type.Should().Be("pricing");
+        address.Id.Should().Be("test-company-2024");
+        var dataRef = reference.Should().BeOfType<DataPathReference>().Subject;
+        dataRef.Path.Should().Be("");
     }
 
     [Fact]
-    public void ContentReference_Parse_DataPath_CollectionReference()
+    public void DataPathHandler_Parse_CollectionReference()
     {
         // arrange & act
-        var reference = ContentReference.Parse("data:pricing/test-company-2024/PropertyRisk");
+        var handler = new DataPathHandler();
+        var (address, reference) = handler.Parse("pricing/test-company-2024/PropertyRisk");
 
         // assert
-        var dataRef = reference.Should().BeOfType<DataContentReference>().Subject;
-        dataRef.AddressType.Should().Be("pricing");
-        dataRef.AddressId.Should().Be("test-company-2024");
-        dataRef.Collection.Should().Be("PropertyRisk");
-        dataRef.EntityId.Should().BeNull();
-        dataRef.IsDefaultReference.Should().BeFalse();
-        dataRef.IsCollectionReference.Should().BeTrue();
-        dataRef.IsEntityReference.Should().BeFalse();
+        address.Type.Should().Be("pricing");
+        address.Id.Should().Be("test-company-2024");
+        var dataRef = reference.Should().BeOfType<DataPathReference>().Subject;
+        dataRef.Path.Should().Be("PropertyRisk");
     }
 
     [Fact]
-    public void ContentReference_Parse_DataPath_EntityReference()
+    public void DataPathHandler_Parse_EntityReference()
     {
         // arrange & act
-        var reference = ContentReference.Parse("data:pricing/test-company-2024/PropertyRisk/risk1");
+        var handler = new DataPathHandler();
+        var (address, reference) = handler.Parse("pricing/test-company-2024/PropertyRisk/risk1");
 
         // assert
-        var dataRef = reference.Should().BeOfType<DataContentReference>().Subject;
-        dataRef.AddressType.Should().Be("pricing");
-        dataRef.AddressId.Should().Be("test-company-2024");
-        dataRef.Collection.Should().Be("PropertyRisk");
-        dataRef.EntityId.Should().Be("risk1");
-        dataRef.IsDefaultReference.Should().BeFalse();
-        dataRef.IsCollectionReference.Should().BeFalse();
-        dataRef.IsEntityReference.Should().BeTrue();
+        address.Type.Should().Be("pricing");
+        address.Id.Should().Be("test-company-2024");
+        var dataRef = reference.Should().BeOfType<DataPathReference>().Subject;
+        dataRef.Path.Should().Be("PropertyRisk/risk1");
     }
 
     [Fact]
-    public void ContentReference_Parse_AreaPath_WithoutId()
+    public void AreaPathHandler_Parse_WithoutId()
     {
         // arrange & act
-        var reference = ContentReference.Parse("area:pricing/test-company-2024/Overview");
+        var handler = new AreaPathHandler();
+        var (address, reference) = handler.Parse("pricing/test-company-2024/Overview");
 
         // assert
-        var areaRef = reference.Should().BeOfType<LayoutAreaContentReference>().Subject;
-        areaRef.AddressType.Should().Be("pricing");
-        areaRef.AddressId.Should().Be("test-company-2024");
-        areaRef.AreaName.Should().Be("Overview");
-        areaRef.AreaId.Should().BeNull();
+        address.Type.Should().Be("pricing");
+        address.Id.Should().Be("test-company-2024");
+        var areaRef = reference.Should().BeOfType<LayoutAreaReference>().Subject;
+        areaRef.Area.Should().Be("Overview");
+        areaRef.Id.Should().BeNull();
     }
 
     [Fact]
-    public void ContentReference_Parse_AreaPath_WithId()
+    public void AreaPathHandler_Parse_WithId()
     {
         // arrange & act
-        var reference = ContentReference.Parse("area:pricing/test-company-2024/Overview/details");
+        var handler = new AreaPathHandler();
+        var (address, reference) = handler.Parse("pricing/test-company-2024/Overview/details");
 
         // assert
-        var areaRef = reference.Should().BeOfType<LayoutAreaContentReference>().Subject;
-        areaRef.AddressType.Should().Be("pricing");
-        areaRef.AddressId.Should().Be("test-company-2024");
-        areaRef.AreaName.Should().Be("Overview");
-        areaRef.AreaId.Should().Be("details");
+        address.Type.Should().Be("pricing");
+        address.Id.Should().Be("test-company-2024");
+        var areaRef = reference.Should().BeOfType<LayoutAreaReference>().Subject;
+        areaRef.Area.Should().Be("Overview");
+        areaRef.Id.Should().Be("details");
     }
 
     [Fact]
-    public void ContentReference_Parse_ContentPath_Simple()
+    public void ContentPathHandler_Parse_Simple()
     {
         // arrange & act
-        var reference = ContentReference.Parse("content:host/1/Submissions/folder/file.xlsx");
+        var handler = new ContentPathHandler();
+        var (address, reference) = handler.Parse("host/1/Submissions/folder/file.xlsx");
 
         // assert
-        var fileRef = reference.Should().BeOfType<FileContentReference>().Subject;
-        fileRef.AddressType.Should().Be("host");
-        fileRef.AddressId.Should().Be("1");
+        address.Type.Should().Be("host");
+        address.Id.Should().Be("1");
+        var fileRef = reference.Should().BeOfType<FileReference>().Subject;
         fileRef.Collection.Should().Be("Submissions");
-        fileRef.FilePath.Should().Be("folder/file.xlsx");
+        fileRef.Path.Should().Be("folder/file.xlsx");
         fileRef.Partition.Should().BeNull();
     }
 
     [Fact]
-    public void ContentReference_Parse_ContentPath_WithPartition()
+    public void ContentPathHandler_Parse_WithPartition()
     {
         // arrange & act
-        var reference = ContentReference.Parse("content:host/1/Submissions@MS-2024/folder/file.xlsx");
+        var handler = new ContentPathHandler();
+        var (address, reference) = handler.Parse("host/1/Submissions@MS-2024/folder/file.xlsx");
 
         // assert
-        var fileRef = reference.Should().BeOfType<FileContentReference>().Subject;
-        fileRef.AddressType.Should().Be("host");
-        fileRef.AddressId.Should().Be("1");
+        address.Type.Should().Be("host");
+        address.Id.Should().Be("1");
+        var fileRef = reference.Should().BeOfType<FileReference>().Subject;
         fileRef.Collection.Should().Be("Submissions");
-        fileRef.FilePath.Should().Be("folder/file.xlsx");
+        fileRef.Path.Should().Be("folder/file.xlsx");
         fileRef.Partition.Should().Be("MS-2024");
-    }
-
-    [Fact]
-    public void ContentReference_ToPath_DataReference_RoundTrips()
-    {
-        var paths = new[]
-        {
-            "data:pricing/test-company-2024",
-            "data:pricing/test-company-2024/PropertyRisk",
-            "data:pricing/test-company-2024/PropertyRisk/risk1"
-        };
-
-        foreach (var path in paths)
-        {
-            var reference = ContentReference.Parse(path);
-            reference.ToPath().Should().Be(path);
-        }
-    }
-
-    [Fact]
-    public void ContentReference_ToPath_AreaReference_RoundTrips()
-    {
-        var paths = new[]
-        {
-            "area:pricing/test-company-2024/Overview",
-            "area:pricing/test-company-2024/Overview/details"
-        };
-
-        foreach (var path in paths)
-        {
-            var reference = ContentReference.Parse(path);
-            reference.ToPath().Should().Be(path);
-        }
-    }
-
-    [Fact]
-    public void ContentReference_ToPath_ContentReference_RoundTrips()
-    {
-        var paths = new[]
-        {
-            "content:host/1/Submissions/file.xlsx",
-            "content:host/1/Submissions@MS-2024/folder/file.xlsx"
-        };
-
-        foreach (var path in paths)
-        {
-            var reference = ContentReference.Parse(path);
-            reference.ToPath().Should().Be(path);
-        }
     }
 
     [Theory]
     [InlineData("")]
-    [InlineData("invalid")]
-    [InlineData("data:")]
-    [InlineData("data:pricing")]
-    [InlineData("content:")]
-    [InlineData("content:host/1/collection")] // Missing file path
-    [InlineData("area:")]
-    [InlineData("area:host/1")] // Missing area name
-    public void ContentReference_Parse_InvalidPath_ThrowsArgumentException(string invalidPath)
+    [InlineData("pricing")]
+    public void DataPathHandler_Parse_InvalidPath_ThrowsArgumentException(string invalidPath)
     {
-        // arrange & act
-        var action = () => ContentReference.Parse(invalidPath);
+        var handler = new DataPathHandler();
+        var action = () => handler.Parse(invalidPath);
+        action.Should().Throw<ArgumentException>();
+    }
 
-        // assert
+    [Theory]
+    [InlineData("")]
+    [InlineData("host/1")] // Missing area name
+    public void AreaPathHandler_Parse_InvalidPath_ThrowsArgumentException(string invalidPath)
+    {
+        var handler = new AreaPathHandler();
+        var action = () => handler.Parse(invalidPath);
+        action.Should().Throw<ArgumentException>();
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("host/1/collection")] // Missing file path
+    public void ContentPathHandler_Parse_InvalidPath_ThrowsArgumentException(string invalidPath)
+    {
+        var handler = new ContentPathHandler();
+        var action = () => handler.Parse(invalidPath);
         action.Should().Throw<ArgumentException>();
     }
 
@@ -1025,40 +981,41 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
     }
 
     [Fact]
-    public async Task UnifiedReference_ParsesPathAndUsesRegistry()
+    public void UnifiedPathRegistry_ParsesPathAndUsesRegistry()
     {
-        // arrange
-        var host = GetHost();
-        var registry = host.ServiceProvider.GetRequiredService<IUnifiedReferenceRegistry>();
+        // arrange - test the registry directly without needing mesh infrastructure
+        var registry = new UnifiedPathRegistry();
+        registry.Register("data", new DataPathHandler());
+        registry.Register("area", new AreaPathHandler());
+        registry.Register("content", new ContentPathHandler());
 
-        // Verify all handlers are registered
-        registry.TryGetHandler("data", out _).Should().BeTrue();
-        registry.TryGetHandler("area", out _).Should().BeTrue();
-        // Note: content handler is only registered if AddContentCollections is called
+        // act & assert - verify registry can resolve paths
+        registry.TryResolve("data:pricing/MS-2024/TestPricing", out var dataAddr, out var dataRef).Should().BeTrue();
+        dataAddr!.Type.Should().Be("pricing");
+        dataRef.Should().BeOfType<DataPathReference>(); // DataPathHandler now returns DataPathReference
+
+        registry.TryResolve("area:pricing/MS-2024/Overview", out var areaAddr, out var areaRef).Should().BeTrue();
+        areaAddr!.Type.Should().Be("pricing");
+        areaRef.Should().BeOfType<LayoutAreaReference>();
+
+        registry.TryResolve("content:pricing/MS-2024/Submissions/file.xlsx", out var contentAddr, out var contentRef).Should().BeTrue();
+        contentAddr!.Type.Should().Be("pricing");
+        contentRef.Should().BeOfType<FileReference>();
     }
 
     [Fact]
-    public async Task UnifiedReference_Registry_HandlerRegisteredByAddData()
+    public void UnifiedPathRegistry_BuiltInHandlersWork()
     {
-        // arrange - just calling GetHost() triggers AddData() which should register the handler
-        var host = GetHost();
-        var registry = host.ServiceProvider.GetRequiredService<IUnifiedReferenceRegistry>();
+        // arrange - test built-in handlers directly
+        var registry = new UnifiedPathRegistry();
+        registry.Register("data", new DataPathHandler());
+        registry.Register("area", new AreaPathHandler());
+        registry.Register("content", new ContentPathHandler());
 
         // act & assert
-        registry.TryGetHandler("data", out var dataHandler).Should().BeTrue();
-        dataHandler.Should().BeOfType<DataPrefixHandler>();
-    }
-
-    [Fact]
-    public async Task UnifiedReference_Registry_AreaHandlerRegisteredByAddLayout()
-    {
-        // arrange - GetHost() triggers AddLayout() which should register the area handler
-        var host = GetHost();
-        var registry = host.ServiceProvider.GetRequiredService<IUnifiedReferenceRegistry>();
-
-        // act & assert
-        registry.TryGetHandler("area", out var areaHandler).Should().BeTrue();
-        areaHandler.Should().BeOfType<AreaPrefixHandler>();
+        registry.Prefixes.Should().Contain("data");
+        registry.Prefixes.Should().Contain("area");
+        registry.Prefixes.Should().Contain("content");
     }
 
     #endregion
@@ -1066,214 +1023,179 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
     #region Registry Tests
 
     [Fact]
-    public void DataPrefixHandler_GetAddress_ReturnsCorrectAddress()
+    public void DataPathHandler_Parse_ReturnsDataPathReference_ForEntityPath()
     {
         // arrange
-        var handler = new DataPrefixHandler();
-        var reference = new DataContentReference("pricing", "MS-2024", "PropertyRisk", "risk1");
+        var handler = new DataPathHandler();
 
         // act
-        var address = handler.GetAddress(reference);
+        var (address, reference) = handler.Parse("pricing/MS-2024/PropertyRisk/risk1");
 
         // assert
         address.Type.Should().Be("pricing");
         address.Id.Should().Be("MS-2024");
+        var dataPathRef = reference.Should().BeOfType<DataPathReference>().Subject;
+        dataPathRef.Path.Should().Be("PropertyRisk/risk1");
     }
 
     [Fact]
-    public void DataPrefixHandler_CreateWorkspaceReference_ReturnsEntityReference_ForEntityPath()
+    public void DataPathHandler_Parse_ReturnsDataPathReference_ForCollectionPath()
     {
         // arrange
-        var handler = new DataPrefixHandler();
-        var reference = new DataContentReference("pricing", "MS-2024", "PropertyRisk", "risk1");
+        var handler = new DataPathHandler();
 
         // act
-        var workspaceRef = handler.CreateWorkspaceReference(reference);
-
-        // assert
-        var entityRef = workspaceRef.Should().BeOfType<EntityReference>().Subject;
-        entityRef.Collection.Should().Be("PropertyRisk");
-        entityRef.Id.Should().Be("risk1");
-    }
-
-    [Fact]
-    public void DataPrefixHandler_CreateWorkspaceReference_ReturnsCollectionReference_ForCollectionPath()
-    {
-        // arrange
-        var handler = new DataPrefixHandler();
-        var reference = new DataContentReference("pricing", "MS-2024", "PropertyRisk");
-
-        // act
-        var workspaceRef = handler.CreateWorkspaceReference(reference);
-
-        // assert
-        var collectionRef = workspaceRef.Should().BeOfType<CollectionReference>().Subject;
-        collectionRef.Name.Should().Be("PropertyRisk");
-    }
-
-    [Fact]
-    public void DataPrefixHandler_CreateWorkspaceReference_ThrowsForDefaultReference()
-    {
-        // arrange
-        var handler = new DataPrefixHandler();
-        var reference = new DataContentReference("pricing", "MS-2024");
-
-        // act
-        var action = () => handler.CreateWorkspaceReference(reference);
-
-        // assert
-        action.Should().Throw<NotSupportedException>().WithMessage("*collection*");
-    }
-
-    [Fact]
-    public void AreaPrefixHandler_GetAddress_ReturnsCorrectAddress()
-    {
-        // arrange
-        var handler = new AreaPrefixHandler();
-        var reference = new LayoutAreaContentReference("pricing", "MS-2024", "Overview", "details");
-
-        // act
-        var address = handler.GetAddress(reference);
+        var (address, reference) = handler.Parse("pricing/MS-2024/PropertyRisk");
 
         // assert
         address.Type.Should().Be("pricing");
         address.Id.Should().Be("MS-2024");
+        var dataPathRef = reference.Should().BeOfType<DataPathReference>().Subject;
+        dataPathRef.Path.Should().Be("PropertyRisk");
     }
 
     [Fact]
-    public void AreaPrefixHandler_CreateWorkspaceReference_ReturnsLayoutAreaReference()
+    public void DataPathHandler_Parse_ReturnsEmptyDataPathReference_ForDefaultPath()
     {
         // arrange
-        var handler = new AreaPrefixHandler();
-        var reference = new LayoutAreaContentReference("pricing", "MS-2024", "Overview", "details");
+        var handler = new DataPathHandler();
 
         // act
-        var workspaceRef = handler.CreateWorkspaceReference(reference);
+        var (address, reference) = handler.Parse("pricing/MS-2024");
 
         // assert
-        var layoutAreaRef = workspaceRef.Should().BeOfType<LayoutAreaReference>().Subject;
+        address.Type.Should().Be("pricing");
+        address.Id.Should().Be("MS-2024");
+        var dataPathRef = reference.Should().BeOfType<DataPathReference>().Subject;
+        dataPathRef.Path.Should().Be("");
+    }
+
+    [Fact]
+    public void AreaPathHandler_Parse_ReturnsCorrectAddressAndReference()
+    {
+        // arrange
+        var handler = new AreaPathHandler();
+
+        // act
+        var (address, reference) = handler.Parse("pricing/MS-2024/Overview/details");
+
+        // assert
+        address.Type.Should().Be("pricing");
+        address.Id.Should().Be("MS-2024");
+        var layoutAreaRef = reference.Should().BeOfType<LayoutAreaReference>().Subject;
         layoutAreaRef.Area.Should().Be("Overview");
         layoutAreaRef.Id.Should().Be("details");
     }
 
     [Fact]
-    public void AreaPrefixHandler_CreateWorkspaceReference_HandlesNullAreaId()
+    public void AreaPathHandler_Parse_HandlesNullAreaId()
     {
         // arrange
-        var handler = new AreaPrefixHandler();
-        var reference = new LayoutAreaContentReference("pricing", "MS-2024", "Overview");
+        var handler = new AreaPathHandler();
 
         // act
-        var workspaceRef = handler.CreateWorkspaceReference(reference);
+        var (address, reference) = handler.Parse("pricing/MS-2024/Overview");
 
         // assert
-        var layoutAreaRef = workspaceRef.Should().BeOfType<LayoutAreaReference>().Subject;
+        address.Type.Should().Be("pricing");
+        address.Id.Should().Be("MS-2024");
+        var layoutAreaRef = reference.Should().BeOfType<LayoutAreaReference>().Subject;
         layoutAreaRef.Area.Should().Be("Overview");
         layoutAreaRef.Id.Should().BeNull();
     }
 
     [Fact]
-    public void ContentPrefixHandler_GetAddress_ReturnsCorrectAddress()
+    public void ContentPathHandler_Parse_ReturnsCorrectAddressAndReference()
     {
         // arrange
-        var handler = new ContentPrefixHandler();
-        var reference = new FileContentReference("host", "1", "Submissions", "folder/file.xlsx", "MS-2024");
+        var handler = new ContentPathHandler();
 
         // act
-        var address = handler.GetAddress(reference);
+        var (address, reference) = handler.Parse("host/1/Submissions@MS-2024/folder/file.xlsx");
 
         // assert
         address.Type.Should().Be("host");
         address.Id.Should().Be("1");
-    }
-
-    [Fact]
-    public void ContentPrefixHandler_CreateWorkspaceReference_ReturnsFileReference()
-    {
-        // arrange
-        var handler = new ContentPrefixHandler();
-        var reference = new FileContentReference("host", "1", "Submissions", "folder/file.xlsx", "MS-2024");
-
-        // act
-        var workspaceRef = handler.CreateWorkspaceReference(reference);
-
-        // assert
-        var fileRef = workspaceRef.Should().BeOfType<FileReference>().Subject;
+        var fileRef = reference.Should().BeOfType<FileReference>().Subject;
         fileRef.Collection.Should().Be("Submissions");
         fileRef.Path.Should().Be("folder/file.xlsx");
         fileRef.Partition.Should().Be("MS-2024");
     }
 
     [Fact]
-    public void ContentPrefixHandler_CreateWorkspaceReference_HandlesNullPartition()
+    public void ContentPathHandler_Parse_HandlesNullPartition()
     {
         // arrange
-        var handler = new ContentPrefixHandler();
-        var reference = new FileContentReference("host", "1", "Submissions", "file.xlsx");
+        var handler = new ContentPathHandler();
 
         // act
-        var workspaceRef = handler.CreateWorkspaceReference(reference);
+        var (address, reference) = handler.Parse("host/1/Submissions/file.xlsx");
 
         // assert
-        var fileRef = workspaceRef.Should().BeOfType<FileReference>().Subject;
+        address.Type.Should().Be("host");
+        address.Id.Should().Be("1");
+        var fileRef = reference.Should().BeOfType<FileReference>().Subject;
         fileRef.Collection.Should().Be("Submissions");
         fileRef.Path.Should().Be("file.xlsx");
         fileRef.Partition.Should().BeNull();
     }
 
     [Fact]
-    public void UnifiedReferenceRegistry_Register_And_TryGetHandler_Works()
+    public void UnifiedPathRegistry_Register_And_TryResolve_Works()
     {
         // arrange
-        var registry = new UnifiedReferenceRegistry();
-        var handler = new DataPrefixHandler();
+        var registry = new UnifiedPathRegistry();
+        registry.Register("data", new DataPathHandler());
 
         // act
-        registry.Register("data", handler);
-        var found = registry.TryGetHandler("data", out var retrievedHandler);
+        var found = registry.TryResolve("data:pricing/MS-2024/Collection", out var address, out var reference);
 
         // assert
         found.Should().BeTrue();
-        retrievedHandler.Should().BeSameAs(handler);
+        address!.Type.Should().Be("pricing");
+        address.Id.Should().Be("MS-2024");
+        var dataPathRef = reference.Should().BeOfType<DataPathReference>().Subject;
+        dataPathRef.Path.Should().Be("Collection");
     }
 
     [Fact]
-    public void UnifiedReferenceRegistry_TryGetHandler_ReturnsFalse_ForUnregisteredPrefix()
+    public void UnifiedPathRegistry_TryResolve_ReturnsFalse_ForUnregisteredPrefix()
     {
         // arrange
-        var registry = new UnifiedReferenceRegistry();
+        var registry = new UnifiedPathRegistry();
 
         // act
-        var found = registry.TryGetHandler("unknown", out var handler);
+        var found = registry.TryResolve("unknown:path", out var address, out var reference);
 
         // assert
         found.Should().BeFalse();
-        handler.Should().BeNull();
+        address.Should().BeNull();
+        reference.Should().BeNull();
     }
 
     [Fact]
-    public void UnifiedReferenceRegistry_IsCaseInsensitive()
+    public void UnifiedPathRegistry_IsCaseInsensitive()
     {
         // arrange
-        var registry = new UnifiedReferenceRegistry();
-        registry.Register("DATA", new DataPrefixHandler());
+        var registry = new UnifiedPathRegistry();
+        registry.Register("DATA", new DataPathHandler());
 
         // act
-        var found = registry.TryGetHandler("data", out var handler);
+        var found = registry.TryResolve("data:pricing/MS-2024/Collection", out var address, out _);
 
         // assert
         found.Should().BeTrue();
-        handler.Should().NotBeNull();
+        address.Should().NotBeNull();
     }
 
     [Fact]
-    public void UnifiedReferenceRegistry_Prefixes_ReturnsAllRegistered()
+    public void UnifiedPathRegistry_Prefixes_ReturnsAllRegistered()
     {
         // arrange
-        var registry = new UnifiedReferenceRegistry();
-        registry.Register("data", new DataPrefixHandler());
-        registry.Register("area", new AreaPrefixHandler());
-        registry.Register("content", new ContentPrefixHandler());
+        var registry = new UnifiedPathRegistry();
+        registry.Register("data", new DataPathHandler());
+        registry.Register("area", new AreaPathHandler());
+        registry.Register("content", new ContentPathHandler());
 
         // act
         var prefixes = registry.Prefixes.ToList();
@@ -1285,19 +1207,205 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
         prefixes.Should().HaveCount(3);
     }
 
+    #endregion
+
+    #region Custom DataPath and Global Registry Tests
+
     [Fact]
-    public void UnifiedReferenceRegistry_HandlesColonInPrefix()
+    public async Task DataPathReference_LocalResolution_ReturnsCollection()
     {
         // arrange
-        var registry = new UnifiedReferenceRegistry();
-        registry.Register("data:", new DataPrefixHandler());
+        GetHost();
+        var client = GetClient();
 
-        // act
-        var found = registry.TryGetHandler("data", out var handler);
+        // act - use DataPathReference for local path resolution
+        var response = await client.AwaitResponse(
+            new GetDataRequest(new DataPathReference("TestPricing")),
+            o => o.WithTarget(new HostAddress()),
+            TestContext.Current.CancellationToken);
 
         // assert
-        found.Should().BeTrue();
-        handler.Should().NotBeNull();
+        response.Message.Error.Should().BeNull();
+        response.Message.Data.Should().NotBeNull();
+        response.Message.Data.Should().BeOfType<InstanceCollection>();
+    }
+
+    [Fact]
+    public async Task DataPathReference_LocalResolution_ReturnsEntity()
+    {
+        // arrange
+        GetHost();
+        var client = GetClient();
+
+        // act - use DataPathReference for local path resolution
+        var response = await client.AwaitResponse(
+            new GetDataRequest(new DataPathReference($"TestPricing/{TestPricingId}")),
+            o => o.WithTarget(new HostAddress()),
+            TestContext.Current.CancellationToken);
+
+        // assert
+        response.Message.Error.Should().BeNull();
+        response.Message.Data.Should().NotBeNull();
+        var pricing = response.Message.Data.Should().BeOfType<TestPricing>().Subject;
+        pricing.Id.Should().Be(TestPricingId);
+    }
+
+    [Fact]
+    public void ContentWorkspaceReference_ToString_FormatsCorrectly()
+    {
+        // arrange
+        var refWithoutPartition = new ContentWorkspaceReference("TestCollection", "path/to/file.txt");
+        var refWithPartition = new ContentWorkspaceReference("TestCollection", "path/to/file.txt", "partition1");
+
+        // act & assert
+        refWithoutPartition.ToString().Should().Be("TestCollection/path/to/file.txt");
+        refWithPartition.ToString().Should().Be("TestCollection@partition1/path/to/file.txt");
+    }
+
+    [Fact]
+    public async Task ContentWorkspaceReference_GetData_ReturnsFileContent()
+    {
+        // arrange - create test file
+        var testDir = Path.Combine(Path.GetTempPath(), "MeshWeaverTest_ContentRef_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(testDir);
+        var testFilePath = Path.Combine(testDir, "ref-test.txt");
+        await File.WriteAllTextAsync(testFilePath, "Content workspace reference test", TestContext.Current.CancellationToken);
+
+        try
+        {
+            var host = GetHostWithFileProvider(testDir);
+            var client = GetClient();
+
+            // act - use ContentWorkspaceReference directly
+            var response = await client.AwaitResponse(
+                new GetDataRequest(new ContentWorkspaceReference("TestFiles", "ref-test.txt")),
+                o => o.WithTarget(new HostAddress()),
+                TestContext.Current.CancellationToken);
+
+            // assert
+            response.Message.Error.Should().BeNull();
+            response.Message.Data.Should().NotBeNull();
+            var content = response.Message.Data as string;
+            content.Should().Contain("Content workspace reference test");
+        }
+        finally
+        {
+            if (Directory.Exists(testDir))
+                Directory.Delete(testDir, true);
+        }
+    }
+
+    [Fact]
+    public async Task FileReference_GetData_ReturnsFileContent()
+    {
+        // arrange - create test file
+        var testDir = Path.Combine(Path.GetTempPath(), "MeshWeaverTest_FileRef_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(testDir);
+        var testFilePath = Path.Combine(testDir, "fileref-test.txt");
+        await File.WriteAllTextAsync(testFilePath, "File reference test content", TestContext.Current.CancellationToken);
+
+        try
+        {
+            var host = GetHostWithFileProvider(testDir);
+            var client = GetClient();
+
+            // act - use FileReference directly
+            var response = await client.AwaitResponse(
+                new GetDataRequest(new FileReference("TestFiles", "fileref-test.txt")),
+                o => o.WithTarget(new HostAddress()),
+                TestContext.Current.CancellationToken);
+
+            // assert
+            response.Message.Error.Should().BeNull();
+            response.Message.Data.Should().NotBeNull();
+            var content = response.Message.Data as string;
+            content.Should().Contain("File reference test content");
+        }
+        finally
+        {
+            if (Directory.Exists(testDir))
+                Directory.Delete(testDir, true);
+        }
+    }
+
+    [Fact]
+    public void UnifiedPathRegistry_CustomPrefixHandler_CanBeRegistered()
+    {
+        // arrange - create a custom prefix handler for a domain-specific path
+        var registry = new UnifiedPathRegistry();
+        var customHandler = new CustomPricingPathHandler();
+
+        // act
+        registry.Register("pricing", customHandler);
+
+        // assert
+        registry.Prefixes.Should().Contain("pricing");
+        registry.TryResolve("pricing:MS-2024", out var address, out var reference).Should().BeTrue();
+        address!.Type.Should().Be("pricing");
+        address.Id.Should().Be("MS-2024");
+        reference.Should().BeOfType<EntityReference>();
+    }
+
+    [Fact]
+    public void UnifiedPathRegistry_MultipleCustomPrefixes_CoexistWithBuiltIn()
+    {
+        // arrange
+        var registry = new UnifiedPathRegistry();
+
+        // Register built-in handlers
+        registry.Register("data", new DataPathHandler());
+        registry.Register("area", new AreaPathHandler());
+        registry.Register("content", new ContentPathHandler());
+
+        // Register custom handlers
+        registry.Register("pricing", new CustomPricingPathHandler());
+        registry.Register("claims", new CustomClaimsPathHandler());
+
+        // act & assert
+        registry.Prefixes.Should().HaveCount(5);
+
+        // Built-in handlers work
+        registry.TryResolve("data:host/1/Collection", out _, out _).Should().BeTrue();
+        registry.TryResolve("area:host/1/Overview", out _, out _).Should().BeTrue();
+
+        // Custom handlers work
+        registry.TryResolve("pricing:MS-2024", out var pricingAddr, out var pricingRef).Should().BeTrue();
+        pricingAddr!.Id.Should().Be("MS-2024");
+
+        registry.TryResolve("claims:CLM-001", out var claimsAddr, out var claimsRef).Should().BeTrue();
+        claimsAddr!.Id.Should().Be("CLM-001");
+    }
+
+
+
+    /// <summary>
+    /// Custom pricing path handler for testing custom prefix registration.
+    /// Resolves "pricing:MS-2024" to Address("pricing", "MS-2024") and EntityReference("Pricing", "MS-2024")
+    /// </summary>
+    private class CustomPricingPathHandler : IUnifiedPathHandler
+    {
+        public (Address Address, WorkspaceReference Reference) Parse(string pathAfterPrefix)
+        {
+            var pricingId = pathAfterPrefix;
+            var address = new Address("pricing", pricingId);
+            var reference = new EntityReference("Pricing", pricingId);
+            return (address, reference);
+        }
+    }
+
+    /// <summary>
+    /// Custom claims path handler for testing custom prefix registration.
+    /// Resolves "claims:CLM-001" to Address("claims", "CLM-001") and EntityReference("Claims", "CLM-001")
+    /// </summary>
+    private class CustomClaimsPathHandler : IUnifiedPathHandler
+    {
+        public (Address Address, WorkspaceReference Reference) Parse(string pathAfterPrefix)
+        {
+            var claimId = pathAfterPrefix;
+            var address = new Address("claims", claimId);
+            var reference = new EntityReference("Claims", claimId);
+            return (address, reference);
+        }
     }
 
     #endregion

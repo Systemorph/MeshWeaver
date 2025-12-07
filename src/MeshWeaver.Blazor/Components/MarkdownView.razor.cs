@@ -12,7 +12,7 @@ namespace MeshWeaver.Blazor.Components;
 public partial class MarkdownView
 {
     private string? Html { get; set; }
-    private string? Markdown;
+    private readonly string? Markdown;
 
     protected override void BindData()
     {
@@ -61,16 +61,6 @@ public partial class MarkdownView
                     var area = node.GetAttributeValue($"data-{LayoutAreaMarkdownRenderer.Area}", null);
                     var areaId = node.GetAttributeValue($"data-{LayoutAreaMarkdownRenderer.AreaId}", null);
                     RenderLayoutArea(builder, address, area, areaId);
-                    break;
-                case { Name: "div" } when node.GetAttributeValue("class", "").Contains(DataContentBlockRenderer.DataContent):
-                    var dataAddress = node.GetAttributeValue($"{DataContentBlockRenderer.AddressAttr}", null);
-                    var dataPath = node.GetAttributeValue($"{DataContentBlockRenderer.PathAttr}", null);
-                    RenderDataContent(builder, dataAddress, dataPath);
-                    break;
-                case { Name: "div" } when node.GetAttributeValue("class", "").Contains(FileContentBlockRenderer.FileContent):
-                    var fileAddress = node.GetAttributeValue($"{FileContentBlockRenderer.AddressAttr}", null);
-                    var filePath = node.GetAttributeValue($"{FileContentBlockRenderer.PathAttr}", null);
-                    RenderFileContent(builder, fileAddress, filePath);
                     break;
                 case { Name: "div" } when node.GetAttributeValue("class", "").Contains("mermaid"):
                     builder.OpenComponent<Mermaid>(1);

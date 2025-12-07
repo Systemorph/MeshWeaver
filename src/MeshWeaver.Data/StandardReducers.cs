@@ -3,6 +3,7 @@ using System.Text.Json;
 using Json.Patch;
 using Json.Pointer;
 using MeshWeaver.Data.Serialization;
+using MeshWeaver.Domain;
 using MeshWeaver.Messaging;
 
 namespace MeshWeaver.Data;
@@ -12,8 +13,9 @@ public static class StandardReducers
 
     public static ReduceManager<EntityStore> CreateReduceManager(this IMessageHub hub)
     {
+        var typeRegistry = hub.TypeRegistry;
         return new ReduceManager<EntityStore>(hub)
-            .AddWorkspaceReference<EntityReference, object>(ReduceEntityStoreTo)
+            .AddWorkspaceReference<EntityReference, object>((ci, r, initial) => ReduceEntityStoreTo(ci, r, initial, typeRegistry))
             .AddWorkspaceReference<CollectionReference, InstanceCollection>(ReduceEntityStoreTo)
             .AddWorkspaceReference<CollectionsReference, EntityStore>(ReduceEntityStoreTo)
             .AddWorkspaceReference<PartitionedWorkspaceReference<EntityStore>, EntityStore>(ReduceEntityStoreTo)
@@ -21,6 +23,10 @@ public static class StandardReducers
                 ReduceEntityStoreTo)
             .AddWorkspaceReference<PartitionedWorkspaceReference<object>, object>(ReduceEntityStoreTo)
             .AddWorkspaceReference<JsonPointerReference, JsonElement>((ci, r, _) => ReduceEntityStoreTo(ci, r, hub.JsonSerializerOptions))
+            .AddWorkspaceReference<ContentWorkspaceReference, object>(ReduceEntityStoreTo)
+            .AddWorkspaceReference<FileReference, object>(ReduceEntityStoreTo)
+            .AddWorkspaceReference<UnifiedReference, object>((ci, r, initial) => ReduceEntityStoreTo(ci, r, initial, typeRegistry))
+            .AddWorkspaceReference<DataPathReference, object>((ci, r, initial) => ReduceEntityStoreTo(ci, r, initial, typeRegistry))
             .AddPatchFunction(PatchEntityStore)
             .ForReducedStream<InstanceCollection>(reduced =>
                 reduced.AddPatchFunction(PatchInstanceCollectionJsonElement)
@@ -72,22 +78,87 @@ public static class StandardReducers
         return new(change.Value!, current.ChangedBy, current.StreamId, ChangeType.Patch, current.Version, [change]);
     }
 
-    private static ChangeItem<object> ReduceEntityStoreTo(ChangeItem<EntityStore> current, EntityReference reference, bool initial)
+    private static ChangeItem<object> ReduceEntityStoreTo(ChangeItem<EntityStore> current, EntityReference reference, bool initial, ITypeRegistry typeRegistry)
     {
+        // Convert string ID to proper key type if needed
+        var convertedId = ConvertKeyToProperType(reference.Id, reference.Collection, typeRegistry);
+        var convertedReference = convertedId != reference.Id
+            ? new EntityReference(reference.Collection, convertedId)
+            : reference;
+
         if (initial || current.ChangeType != ChangeType.Patch)
-            return new(current.Value?.ReduceImpl(reference), current.StreamId, current.Version);
-        var change =
-            current.Updates.FirstOrDefault(x => x.Collection == reference.Collection && Equals(x.Id, reference.Id));
+            return new(current.Value?.ReduceImpl(convertedReference), current.StreamId, current.Version);
+
+        // For patch comparison, also try to match with converted ID
+        var change = current.Updates.FirstOrDefault(x =>
+            x.Collection == reference.Collection &&
+            (Equals(x.Id, reference.Id) || Equals(x.Id, convertedId)));
         if (change is not null)
             return new(change.Value, current.ChangedBy, current.StreamId, ChangeType.Patch, current.Version, [change]);
 
         return new(
-            current.Value?.ReduceImpl(reference)!,
+            current.Value?.ReduceImpl(convertedReference)!,
             null,
             current.StreamId,
             ChangeType.Full,
             current.Version,
             ImmutableArray<EntityUpdate>.Empty);
+    }
+
+    /// <summary>
+    /// Converts a string key to the proper type based on the TypeDefinition for the collection.
+    /// </summary>
+    private static object ConvertKeyToProperType(object id, string collection, ITypeRegistry typeRegistry)
+    {
+        if (id is not string stringId)
+            return id;
+
+        var typeDefinition = typeRegistry.GetTypeDefinition(collection);
+        if (typeDefinition == null)
+            return id;
+
+        try
+        {
+            var keyType = typeDefinition.GetKeyType();
+            return ConvertStringToType(stringId, keyType) ?? id;
+        }
+        catch
+        {
+            // If GetKeyType throws (no key mapping), return original id
+            return id;
+        }
+    }
+
+    /// <summary>
+    /// Converts a string to the specified type.
+    /// </summary>
+    private static object? ConvertStringToType(string stringId, Type targetType)
+    {
+        if (targetType == typeof(string))
+            return stringId;
+        if (targetType == typeof(int) && int.TryParse(stringId, out var intValue))
+            return intValue;
+        if (targetType == typeof(long) && long.TryParse(stringId, out var longValue))
+            return longValue;
+        if (targetType == typeof(Guid) && Guid.TryParse(stringId, out var guidValue))
+            return guidValue;
+        if (targetType == typeof(double) && double.TryParse(stringId, out var doubleValue))
+            return doubleValue;
+        if (targetType == typeof(decimal) && decimal.TryParse(stringId, out var decimalValue))
+            return decimalValue;
+
+        // Try using TypeConverter as a fallback
+        try
+        {
+            var converter = System.ComponentModel.TypeDescriptor.GetConverter(targetType);
+            if (converter.CanConvertFrom(typeof(string)))
+                return converter.ConvertFromString(stringId);
+        }
+        catch
+        {
+            // Conversion failed
+        }
+        return null;
     }
     private static ChangeItem<JsonElement> ReduceEntityStoreTo(ChangeItem<EntityStore> current,
         JsonPointerReference reference, JsonSerializerOptions options)
@@ -222,6 +293,204 @@ public static class StandardReducers
     private static InstanceCollection DeserializeCollection(this ISynchronizationStream<EntityStore> stream, JsonElement updatedJson, JsonPointer pointer)
     {
         return pointer.Evaluate(updatedJson)!.Value.Deserialize<InstanceCollection>(stream.Hub.JsonSerializerOptions)!;
+    }
+
+    /// <summary>
+    /// Reducer for DataPathReference - parses the path and delegates to the appropriate reducer.
+    /// Path interpretation: first segment is collection, optional second segment is entityId.
+    /// </summary>
+    private static ChangeItem<object> ReduceEntityStoreTo(ChangeItem<EntityStore> current, DataPathReference reference, bool initial, ITypeRegistry typeRegistry)
+    {
+        var path = reference.Path;
+        if (string.IsNullOrEmpty(path))
+            return new ChangeItem<object>(null, current.StreamId, current.Version);
+
+        var parts = path.Split('/', 2, StringSplitOptions.RemoveEmptyEntries);
+        var collection = parts[0];
+        var entityId = parts.Length > 1 ? parts[1] : null;
+
+        if (entityId != null)
+        {
+            var entityRef = new EntityReference(collection, entityId);
+            return ReduceEntityStoreTo(current, entityRef, initial, typeRegistry);
+        }
+        else
+        {
+            var collectionRef = new CollectionReference(collection);
+            return new ChangeItem<object>(
+                current.Value?.ReduceImpl(collectionRef),
+                current.StreamId,
+                current.Version);
+        }
+    }
+
+    /// <summary>
+    /// Reducer for ContentWorkspaceReference - returns the content from the collection.
+    /// </summary>
+    private static ChangeItem<object> ReduceEntityStoreTo(ChangeItem<EntityStore> current, ContentWorkspaceReference reference, bool initial)
+    {
+        // Content references access files within a collection - retrieve from the content collection
+        var collection = current.Value?.GetCollection(reference.Collection);
+        if (collection == null)
+            return new ChangeItem<object>(null, current.StreamId, current.Version);
+
+        // Try to find the content by path
+        var instance = collection.Instances.FirstOrDefault(kvp =>
+            kvp.Key is string key && key.Equals(reference.Path, StringComparison.OrdinalIgnoreCase));
+
+        return new ChangeItem<object>(instance.Value, current.StreamId, current.Version);
+    }
+
+    /// <summary>
+    /// Reducer for FileReference - returns the file content from the collection.
+    /// </summary>
+    private static ChangeItem<object> ReduceEntityStoreTo(ChangeItem<EntityStore> current, FileReference reference, bool initial)
+    {
+        // File references access files within a collection - similar to ContentWorkspaceReference
+        var collection = current.Value?.GetCollection(reference.Collection);
+        if (collection == null)
+            return new ChangeItem<object>(null, current.StreamId, current.Version);
+
+        // Try to find the file by path
+        var instance = collection.Instances.FirstOrDefault(kvp =>
+            kvp.Key is string key && key.Equals(reference.Path, StringComparison.OrdinalIgnoreCase));
+
+        return new ChangeItem<object>(instance.Value, current.StreamId, current.Version);
+    }
+
+    /// <summary>
+    /// Reducer for UnifiedReference - parses the path and delegates to the appropriate reducer.
+    /// Note: UnifiedReference is primarily handled via GetDataRequest handlers, but this reducer
+    /// is needed for cases where workspace.GetStream is called directly with UnifiedReference.
+    /// </summary>
+    private static ChangeItem<object> ReduceEntityStoreTo(ChangeItem<EntityStore> current, UnifiedReference reference, bool initial, ITypeRegistry typeRegistry)
+    {
+        // Parse the unified path
+        var (prefix, remainingPath) = ParseUnifiedPath(reference.Path);
+
+        // Resolve based on the prefix
+        return prefix switch
+        {
+            "data" => ReduceDataPath(current, remainingPath, initial, typeRegistry),
+            "content" => ReduceContentPath(current, remainingPath),
+            _ => new ChangeItem<object>(null, current.StreamId, current.Version)
+        };
+    }
+
+    /// <summary>
+    /// Parses a unified path into prefix and remaining path.
+    /// </summary>
+    private static (string Prefix, string? RemainingPath) ParseUnifiedPath(string path)
+    {
+        if (string.IsNullOrEmpty(path))
+            return ("area", null);
+
+        string prefix;
+        string remainder;
+
+        if (path.StartsWith("data:", StringComparison.OrdinalIgnoreCase))
+        {
+            prefix = "data";
+            remainder = path[5..];
+        }
+        else if (path.StartsWith("area:", StringComparison.OrdinalIgnoreCase))
+        {
+            prefix = "area";
+            remainder = path[5..];
+        }
+        else if (path.StartsWith("content:", StringComparison.OrdinalIgnoreCase))
+        {
+            prefix = "content";
+            remainder = path[8..];
+        }
+        else
+        {
+            prefix = "area";
+            remainder = path;
+        }
+
+        // Skip the addressType/addressId parts to get the remaining path
+        var parts = remainder.Split('/', prefix == "content" ? 4 : 3, StringSplitOptions.None);
+        if (parts.Length < 2)
+            return (prefix, null);
+
+        return prefix switch
+        {
+            "data" => (prefix, parts.Length > 2 ? string.Join("/", parts.Skip(2)) : null),
+            "content" => (prefix, parts.Length > 2 ? string.Join("/", parts.Skip(2)) : null),
+            "area" => (prefix, parts.Length > 2 ? parts[2] : null),
+            _ => (prefix, null)
+        };
+    }
+
+    private static ChangeItem<object> ReduceDataPath(ChangeItem<EntityStore> current, string? path, bool initial, ITypeRegistry typeRegistry)
+    {
+        // Parse the path into collection and entity ID
+        var (collection, entityId) = ParseDataPath(path);
+
+        // Default data reference (no path) - return the entire store
+        if (collection == null)
+        {
+            return new ChangeItem<object>(current.Value, current.StreamId, current.Version);
+        }
+
+        // Entity reference
+        if (entityId != null)
+        {
+            var entityRef = new EntityReference(collection, entityId);
+            return ReduceEntityStoreTo(current, entityRef, initial, typeRegistry);
+        }
+
+        // Collection reference
+        var collectionRef = new CollectionReference(collection);
+        return new ChangeItem<object>(
+            current.Value?.ReduceImpl(collectionRef),
+            current.StreamId,
+            current.Version);
+    }
+
+    /// <summary>
+    /// Parses a data path into collection and entity ID.
+    /// Path format: collection[/entityId]
+    /// </summary>
+    private static (string? Collection, string? EntityId) ParseDataPath(string? path)
+    {
+        if (string.IsNullOrEmpty(path))
+            return (null, null);
+
+        var slashIndex = path.IndexOf('/');
+        if (slashIndex < 0)
+            return (path, null); // Collection only
+
+        var collection = path[..slashIndex];
+        var entityId = path[(slashIndex + 1)..];
+        return (collection, string.IsNullOrEmpty(entityId) ? null : entityId);
+    }
+
+    private static ChangeItem<object> ReduceContentPath(ChangeItem<EntityStore> current, string? remainingPath)
+    {
+        if (string.IsNullOrEmpty(remainingPath))
+            return new ChangeItem<object>(null, current.StreamId, current.Version);
+
+        var slashIndex = remainingPath.IndexOf('/');
+        if (slashIndex < 0)
+            return new ChangeItem<object>(null, current.StreamId, current.Version);
+
+        var collectionPart = remainingPath[..slashIndex];
+        var filePath = remainingPath[(slashIndex + 1)..];
+
+        // Handle partition
+        var collection = collectionPart.Contains('@') ? collectionPart[..collectionPart.IndexOf('@')] : collectionPart;
+
+        // Get the content from the collection by path
+        var entityCollection = current.Value?.GetCollection(collection);
+        if (entityCollection == null)
+            return new ChangeItem<object>(null, current.StreamId, current.Version);
+
+        var instance = entityCollection.Instances.FirstOrDefault(kvp =>
+            kvp.Key is string key && key.Equals(filePath, StringComparison.OrdinalIgnoreCase));
+
+        return new ChangeItem<object>(instance.Value, current.StreamId, current.Version);
     }
 
 }

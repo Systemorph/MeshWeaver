@@ -20,8 +20,11 @@ public class NorthwindAgent(IMessageHub hub) : IInitializableAgent, IAgentWithTo
     /// <inheritdoc cref="IAgentDefinition"/>
     public string Name => "NorthwindAgent";
 
+    /// <inheritdoc />
     public string? GroupName => "Northwind";
+    /// <inheritdoc />
     public int DisplayOrder => 0;
+    /// <inheritdoc />
     public string? IconName => "Database";
 
     /// <inheritdoc cref="IAgentDefinition"/>

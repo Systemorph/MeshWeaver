@@ -12,13 +12,15 @@ namespace MeshWeaver.Hosting;
 public abstract class MeshCatalogBase : IMeshCatalog
 {
     public MeshConfiguration Configuration { get; }
+    public IUnifiedPathRegistry PathRegistry { get; }
     private readonly IMemoryCache cache = new MemoryCache(new MemoryCacheOptions());
     private readonly MemoryCacheEntryOptions cacheOptions = new(){SlidingExpiration = TimeSpan.FromMinutes(5)};
     private readonly IMessageHub persistence;
     private readonly ILogger<MeshCatalogBase> logger;
-    protected MeshCatalogBase(IMessageHub hub, MeshConfiguration configuration)
+    protected MeshCatalogBase(IMessageHub hub, MeshConfiguration configuration, IUnifiedPathRegistry pathRegistry)
     {
         Configuration = configuration;
+        PathRegistry = pathRegistry;
         logger = hub.ServiceProvider.GetRequiredService<ILogger<MeshCatalogBase>>();
         persistence = hub.GetHostedHub(new PersistenceAddress())!;
         foreach (var node in Configuration.Nodes.Values)

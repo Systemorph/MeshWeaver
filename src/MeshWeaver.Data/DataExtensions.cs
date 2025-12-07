@@ -16,8 +16,70 @@ using Namotion.Reflection;
 
 namespace MeshWeaver.Data;
 
+/// <summary>
+/// Represents a parsed unified path with prefix, address, and remaining path.
+/// </summary>
+internal record ParsedPath(string Prefix, string AddressType, string AddressId, string? RemainingPath);
+
 public static class DataExtensions
 {
+    /// <summary>
+    /// Parses a unified path into its components.
+    /// Supports formats: data:, area:, content:, or no prefix (defaults to area:)
+    /// </summary>
+    private static ParsedPath ParseUnifiedPath(string path)
+    {
+        if (string.IsNullOrEmpty(path))
+            throw new ArgumentException("Path cannot be empty", nameof(path));
+
+        string prefix;
+        string remainder;
+
+        if (path.StartsWith("data:", StringComparison.OrdinalIgnoreCase))
+        {
+            prefix = "data";
+            remainder = path[5..];
+        }
+        else if (path.StartsWith("area:", StringComparison.OrdinalIgnoreCase))
+        {
+            prefix = "area";
+            remainder = path[5..];
+        }
+        else if (path.StartsWith("content:", StringComparison.OrdinalIgnoreCase))
+        {
+            prefix = "content";
+            remainder = path[8..];
+        }
+        else
+        {
+            // Default to area prefix
+            prefix = "area";
+            remainder = path;
+        }
+
+        var parts = remainder.Split('/', prefix == "content" ? 4 : 3, StringSplitOptions.None);
+        if (parts.Length < 2)
+            throw new ArgumentException($"Invalid path: '{path}'. Expected at least addressType/addressId");
+
+        var addressType = parts[0];
+        var addressId = parts[1];
+
+        if (string.IsNullOrEmpty(addressType))
+            throw new ArgumentException($"Invalid path: '{path}'. Address type cannot be empty");
+        if (string.IsNullOrEmpty(addressId))
+            throw new ArgumentException($"Invalid path: '{path}'. Address ID cannot be empty");
+
+        string? remainingPath = prefix switch
+        {
+            "data" => parts.Length > 2 ? string.Join("/", parts.Skip(2)) : null,
+            "area" => parts.Length > 2 ? parts[2] : null,
+            "content" => parts.Length > 2 ? string.Join("/", parts.Skip(2)) : null,
+            _ => null
+        };
+
+        return new ParsedPath(prefix, addressType, addressId, remainingPath);
+    }
+
     public static MessageHubConfiguration AddData(this MessageHubConfiguration config) =>
         config.AddData(x => x);
 
@@ -27,47 +89,39 @@ public static class DataExtensions
     )
     {
         var existingLambdas = config.GetListOfLambdas();
+        // Wrap the configuration to add workspace reference stream factories
+        var wrappedConfig = (DataContext data) =>
+        {
+            // First apply the user's configuration
+            data = dataPluginConfiguration(data);
+
+            // Register the data: prefix resolver for UnifiedReference (only if not already registered)
+            // This handles paths like "data:addressType/addressId/collection/entityId"
+            if (!data.UnifiedReferenceResolvers.ContainsKey("data"))
+            {
+                data = data.WithUnifiedReference("data", (workspace, path) =>
+                    CreateDataPathStream(workspace, path, null));
+            }
+
+            // Then register the built-in stream factories for DataPathReference and UnifiedReference
+            return data.Configure(reduction => reduction
+                .AddWorkspaceReferenceStream<object>((workspace, reference, configuration) =>
+                    reference is not DataPathReference dataPathRef
+                        ? null
+                        : CreateDataPathReferenceStream(workspace, dataPathRef, configuration))
+                .AddWorkspaceReferenceStream<object>((workspace, reference, configuration) =>
+                    reference is not UnifiedReference unifiedRef
+                        ? null
+                        : CreateUnifiedReferenceStream(workspace, unifiedRef, configuration))
+            );
+        };
+
         var ret = config
-                .Set(existingLambdas.Add(dataPluginConfiguration));
+                .Set(existingLambdas.Add(wrappedConfig));
 
         if (existingLambdas.Any())
             return ret;
         return ret
-                .WithServices(sc => sc.AddSingleton<IUnifiedReferenceRegistry, UnifiedReferenceRegistry>())
-                .AddData(data => data
-                    .WithUnifiedReferenceHandler("data", new DataPrefixHandler())
-                    .Configure(reduction => reduction
-                    .AddWorkspaceReferenceStream<object>((workspace, reference, configuration) =>
-                    {
-                        if (reference is not UnifiedReference unified)
-                            return null;
-
-                        var registry = workspace.Hub.ServiceProvider.GetRequiredService<IUnifiedReferenceRegistry>();
-                        var parsed = unified.ParsedReference;
-
-                        // Determine prefix from parsed type
-                        var prefix = parsed switch
-                        {
-                            DataContentReference => "data",
-                            LayoutAreaContentReference => "area",
-                            FileContentReference => "content",
-                            _ => null
-                        };
-
-                        if (prefix == null || !registry.TryGetHandler(prefix, out var handler) || handler == null)
-                            return null;
-
-                        // Get the target workspace reference
-                        var targetRef = handler.CreateWorkspaceReference(parsed);
-                        var targetAddress = handler.GetAddress(parsed);
-
-                        // If target is local, use existing stream
-                        if (targetAddress.Equals(workspace.Hub.Address))
-                            return GetStreamDynamic(workspace, targetRef, configuration);
-
-                        // If target is remote, get stream from remote hub
-                        return GetRemoteStreamDynamic(workspace, targetAddress, targetRef);
-                    })))
                 .WithInitialization(h => h.GetWorkspace())
                 .WithRoutes(routes => routes.WithHandler((delivery, _) => RouteStreamMessage(routes.Hub, delivery)))
                 .WithServices(sc => sc.AddScoped<IWorkspace>(sp =>
@@ -123,10 +177,8 @@ public static class DataExtensions
                     typeof(GetDataResponse),
                     typeof(UnifiedReference),
                     typeof(FileReference),
-                    typeof(ContentReference),
-                    typeof(FileContentReference),
-                    typeof(DataContentReference),
-                    typeof(LayoutAreaContentReference),
+                    typeof(DataPathReference),
+                    typeof(ContentWorkspaceReference),
                     typeof(UpdateUnifiedReferenceRequest),
                     typeof(UpdateUnifiedReferenceResponse),
                     typeof(DeleteUnifiedReferenceRequest),
@@ -209,6 +261,156 @@ public static class DataExtensions
 
     public static object DefaultId => Guid.NewGuid().AsString();
 
+    #region Workspace Reference Stream Factories
+
+    /// <summary>
+    /// Creates a stream for a DataPathReference.
+    /// Checks for virtual paths first, then delegates to collection-based resolution.
+    /// </summary>
+    private static ISynchronizationStream<object>? CreateDataPathReferenceStream(
+        IWorkspace workspace,
+        DataPathReference reference,
+        Func<StreamConfiguration<object>, StreamConfiguration<object>>? configuration)
+    {
+        var path = reference.Path;
+        if (string.IsNullOrEmpty(path))
+            return null;
+
+        // Parse path: first segment is collection/prefix, rest is entityId
+        var parts = path.Split('/', 2, StringSplitOptions.RemoveEmptyEntries);
+        var pathPrefix = parts[0];
+        var entityId = parts.Length > 1 ? parts[1] : null;
+
+        // Check for virtual path handler first
+        var dataContext = workspace.DataContext;
+        if (dataContext.VirtualPaths.TryGetValue(pathPrefix, out var virtualHandler))
+        {
+            return CreateVirtualPathStream(workspace, reference, virtualHandler, entityId, configuration);
+        }
+
+        // Fall back to collection-based resolution
+        if (entityId != null)
+        {
+            var entityRef = new EntityReference(pathPrefix, entityId);
+            return workspace.GetStream(entityRef, configuration);
+        }
+        else
+        {
+            var collectionRef = new CollectionReference(pathPrefix);
+            // CollectionReference returns InstanceCollection, cast stream to object
+            var stream = workspace.GetStream(collectionRef);
+            return stream as ISynchronizationStream<object>;
+        }
+    }
+
+    /// <summary>
+    /// Creates a stream for a virtual path that computes data from multiple source streams.
+    /// </summary>
+    private static ISynchronizationStream<object>? CreateVirtualPathStream(
+        IWorkspace workspace,
+        DataPathReference reference,
+        VirtualPathHandler virtualHandler,
+        string? entityId,
+        Func<StreamConfiguration<object>, StreamConfiguration<object>>? configuration)
+    {
+        var streamIdentity = new StreamIdentity(workspace.Hub.Address, entityId);
+        var stream = new SynchronizationStream<object>(
+            streamIdentity,
+            workspace.Hub,
+            reference,
+            workspace.ReduceManager.ReduceTo<object>(),
+            configuration ?? (c => c)
+        );
+
+        // Subscribe to the virtual handler's observable
+        var observable = virtualHandler(workspace, entityId);
+
+        stream.RegisterForDisposal(
+            observable
+                .Select(value => new ChangeItem<object>(value!, stream.StreamId, workspace.Hub.Version))
+                .DistinctUntilChanged()
+                .Synchronize()
+                .Subscribe(stream)
+        );
+
+        return stream;
+    }
+
+    /// <summary>
+    /// Creates a stream for a UnifiedReference by parsing and delegating to registered resolvers.
+    /// Resolvers are tried in order by prefix (first one returning non-null wins).
+    /// </summary>
+    private static ISynchronizationStream<object>? CreateUnifiedReferenceStream(
+        IWorkspace workspace,
+        UnifiedReference reference,
+        Func<StreamConfiguration<object>, StreamConfiguration<object>>? configuration)
+    {
+        var parsed = ParseUnifiedPath(reference.Path);
+        var dataContext = workspace.DataContext;
+        var normalizedPrefix = parsed.Prefix.ToLowerInvariant();
+
+        // Get resolvers for this prefix
+        if (!dataContext.UnifiedReferenceResolvers.TryGetValue(normalizedPrefix, out var resolvers))
+            return null;
+
+        // Try each registered resolver in order (first non-null wins)
+        // Resolvers are inserted at position 0, so later registrations have priority
+        foreach (var resolver in resolvers)
+        {
+            var stream = resolver(workspace, parsed.RemainingPath);
+            if (stream != null)
+                return stream;
+        }
+
+        // No resolver handled the path
+        return null;
+    }
+
+    private static ISynchronizationStream<object>? CreateDataPathStream(
+        IWorkspace workspace,
+        string? path,
+        Func<StreamConfiguration<object>, StreamConfiguration<object>>? configuration)
+    {
+        if (string.IsNullOrEmpty(path))
+            return null;
+
+        var dataPathRef = new DataPathReference(path);
+        return workspace.GetStream(dataPathRef, configuration);
+    }
+
+    private static ISynchronizationStream<object>? CreateContentPathStream(
+        IWorkspace workspace,
+        string? remainingPath,
+        Func<StreamConfiguration<object>, StreamConfiguration<object>>? configuration)
+    {
+        if (string.IsNullOrEmpty(remainingPath))
+            return null;
+
+        // remainingPath format: collection/path or collection@partition/path
+        var slashIndex = remainingPath.IndexOf('/');
+        if (slashIndex < 0)
+            return null;
+
+        var collectionPart = remainingPath[..slashIndex];
+        var filePath = remainingPath[(slashIndex + 1)..];
+
+        if (string.IsNullOrEmpty(filePath))
+            return null;
+
+        // Check for partition
+        var atIndex = collectionPart.IndexOf('@');
+        if (atIndex > 0)
+        {
+            var collection = collectionPart[..atIndex];
+            var partition = collectionPart[(atIndex + 1)..];
+            return workspace.GetStream(new FileReference(collection, filePath, partition), configuration);
+        }
+
+        return workspace.GetStream(new FileReference(collectionPart, filePath), configuration);
+    }
+
+    #endregion
+
     private static MessageHubConfiguration RegisterDataEvents(this MessageHubConfiguration configuration) =>
         configuration
             .WithHandler<DataChangeRequest>(HandleDataChangeRequest)
@@ -267,6 +469,113 @@ public static class DataExtensions
         return HandleGetDataRequest(hub, (dynamic)request.Message.Reference, request, ct);
     }
 
+    /// <summary>
+    /// Handler for DataPathReference which resolves relative data paths.
+    /// Supports local resolution, virtual paths, or forwarding to remote addresses.
+    /// </summary>
+    private static async Task<IMessageDelivery> HandleGetDataRequest(
+        IMessageHub hub,
+        DataPathReference reference,
+        IMessageDelivery<GetDataRequest> request,
+        CancellationToken ct)
+    {
+        try
+        {
+            var path = reference.Path;
+            if (string.IsNullOrEmpty(path))
+            {
+                hub.Post(new GetDataResponse(null, 0) { Error = "DataPathReference path cannot be empty" },
+                    o => o.ResponseFor(request));
+                return request.Processed();
+            }
+
+            // Parse path: first segment is collection/prefix, rest is entityId
+            var parts = path.Split('/', 2, StringSplitOptions.RemoveEmptyEntries);
+            var pathPrefix = parts[0];
+            var entityId = parts.Length > 1 ? parts[1] : null;
+
+            // Check for virtual path first
+            var workspace = hub.GetWorkspace();
+            var dataContext = workspace.DataContext;
+
+            if (dataContext.VirtualPaths.TryGetValue(pathPrefix, out var virtualHandler))
+            {
+                // Use virtual path handler
+                var observable = virtualHandler(workspace, entityId);
+                var value = await observable.FirstAsync();
+                hub.Post(new GetDataResponse(value, hub.Version), o => o.ResponseFor(request));
+            }
+            else
+            {
+                // Resolve locally using standard workspace reference based on path structure
+                WorkspaceReference resolvedRef = entityId != null
+                    ? new EntityReference(pathPrefix, entityId)
+                    : new CollectionReference(pathPrefix);
+                var result = await GetDataFromWorkspaceAsync(hub, resolvedRef, ct);
+                hub.Post(result, o => o.ResponseFor(request));
+            }
+        }
+        catch (Exception ex)
+        {
+            hub.Post(new GetDataResponse(null, 0) { Error = ex.Message },
+                o => o.ResponseFor(request));
+        }
+
+        return request.Processed();
+    }
+
+    /// <summary>
+    /// Handler for FileReference which retrieves file content from a content collection.
+    /// </summary>
+    private static async Task<IMessageDelivery> HandleGetDataRequest(
+        IMessageHub hub,
+        FileReference reference,
+        IMessageDelivery<GetDataRequest> request,
+        CancellationToken ct)
+    {
+        try
+        {
+            var collectionName = reference.Partition != null
+                ? $"{reference.Collection}@{reference.Partition}"
+                : reference.Collection;
+
+            var result = await GetFileContentAsync(hub, collectionName, reference.Path, reference.NumberOfRows, ct);
+            hub.Post(result, o => o.ResponseFor(request));
+        }
+        catch (Exception ex)
+        {
+            hub.Post(new GetDataResponse(null, 0) { Error = ex.ToString() }, o => o.ResponseFor(request));
+        }
+
+        return request.Processed();
+    }
+
+    /// <summary>
+    /// Handler for ContentWorkspaceReference which retrieves file content from a content collection.
+    /// </summary>
+    private static async Task<IMessageDelivery> HandleGetDataRequest(
+        IMessageHub hub,
+        ContentWorkspaceReference reference,
+        IMessageDelivery<GetDataRequest> request,
+        CancellationToken ct)
+    {
+        try
+        {
+            var collectionName = reference.Partition != null
+                ? $"{reference.Collection}@{reference.Partition}"
+                : reference.Collection;
+
+            var result = await GetFileContentAsync(hub, collectionName, reference.Path, reference.NumberOfRows, ct);
+            hub.Post(result, o => o.ResponseFor(request));
+        }
+        catch (Exception ex)
+        {
+            hub.Post(new GetDataResponse(null, 0) { Error = ex.ToString() }, o => o.ResponseFor(request));
+        }
+
+        return request.Processed();
+    }
+
     private static async Task<IMessageDelivery> HandleGetDataRequest<TReference>(IMessageHub hub,
         WorkspaceReference<TReference> reference, IMessageDelivery<GetDataRequest> request, CancellationToken _)
     {
@@ -290,7 +599,7 @@ public static class DataExtensions
     }
 
     /// <summary>
-    /// Handler for UnifiedReference which parses the path and dispatches to appropriate handlers.
+    /// Handler for UnifiedReference which resolves paths locally or forwards to remote addresses.
     /// </summary>
     private static async Task<IMessageDelivery> HandleGetDataRequest(
         IMessageHub hub,
@@ -308,17 +617,64 @@ public static class DataExtensions
                 return request.Processed();
             }
 
-            var parsedRef = reference.ParsedReference;
-            var result = parsedRef switch
-            {
-                DataContentReference dataRef => await HandleUnifiedDataReferenceAsync(hub, dataRef, reference.NumberOfRows, ct),
-                LayoutAreaContentReference areaRef => await HandleUnifiedLayoutAreaAsync(hub, areaRef, ct),
-                FileContentReference fileRef => await HandleUnifiedFileReferenceAsync(hub, fileRef, reference.NumberOfRows, ct),
-                _ => new GetDataResponse(null, 0)
-                    { Error = $"Unknown reference type: {parsedRef.GetType().Name}" }
-            };
+            // Parse the path to get address and reference type
+            var parsed = ParseUnifiedPath(path);
+            var targetAddress = new Address(parsed.AddressType, parsed.AddressId);
+            var isLocal = targetAddress.Equals(hub.Address);
 
-            hub.Post(result, o => o.ResponseFor(request));
+            // Resolve to appropriate workspace reference based on prefix
+            var (wsRef, immediateResult) = ResolveUnifiedReference(hub, parsed, isLocal);
+
+            // If we got an immediate result (e.g., default data), return it
+            if (immediateResult != null)
+            {
+                hub.Post(immediateResult, o => o.ResponseFor(request));
+                return request.Processed();
+            }
+
+            if (wsRef == null)
+            {
+                // For local default data reference (no path), get the default data
+                if (isLocal && parsed.Prefix == "data" && string.IsNullOrEmpty(parsed.RemainingPath))
+                {
+                    var defaultResult = await GetDefaultDataAsync(hub, ct);
+                    hub.Post(defaultResult, o => o.ResponseFor(request));
+                    return request.Processed();
+                }
+
+                hub.Post(new GetDataResponse(null, 0) { Error = "Could not resolve workspace reference" },
+                    o => o.ResponseFor(request));
+                return request.Processed();
+            }
+
+            // Handle local vs remote
+            if (isLocal)
+            {
+                // Resolve locally using prefix-specific handlers
+                var localResult = parsed.Prefix switch
+                {
+                    "data" => await HandleDataPathAsync(hub, parsed.RemainingPath, reference.NumberOfRows, ct),
+                    "area" => await HandleAreaPathAsync(hub, parsed.RemainingPath, ct),
+                    "content" => await HandleContentPathAsync(hub, parsed.RemainingPath, reference.NumberOfRows, ct),
+                    _ => await GetDataFromWorkspaceAsync(hub, wsRef, ct)
+                };
+                hub.Post(localResult, o => o.ResponseFor(request));
+            }
+            else
+            {
+                // Forward to remote address
+                var forwardRequest = new GetDataRequest(wsRef);
+                var response = await hub.AwaitResponse(forwardRequest, o => o.WithTarget(targetAddress), ct);
+                if (response is GetDataResponse dataResponse)
+                {
+                    hub.Post(dataResponse, o => o.ResponseFor(request));
+                }
+                else
+                {
+                    hub.Post(new GetDataResponse(null, 0) { Error = "Unexpected response type from remote" },
+                        o => o.ResponseFor(request));
+                }
+            }
         }
         catch (Exception ex)
         {
@@ -330,43 +686,221 @@ public static class DataExtensions
     }
 
     /// <summary>
-    /// Handles data content requests from UnifiedReference.
+    /// Resolves a parsed path to the appropriate workspace reference.
     /// </summary>
-    private static async Task<GetDataResponse> HandleUnifiedDataReferenceAsync(
+    private static (WorkspaceReference? Reference, GetDataResponse? ImmediateResult) ResolveUnifiedReference(
         IMessageHub hub,
-        DataContentReference dataRef,
+        ParsedPath parsed,
+        bool isLocal)
+    {
+        return parsed.Prefix switch
+        {
+            "data" => ResolveDataPath(hub, parsed.RemainingPath, isLocal),
+            "area" => (ResolveAreaPath(parsed.RemainingPath), null),
+            "content" => (ResolveContentPath(parsed.RemainingPath), null),
+            _ => (null, new GetDataResponse(null, 0) { Error = $"Unknown prefix: {parsed.Prefix}" })
+        };
+    }
+
+    /// <summary>
+    /// Resolves a data path to workspace reference.
+    /// </summary>
+    private static (WorkspaceReference? Reference, GetDataResponse? ImmediateResult) ResolveDataPath(
+        IMessageHub hub,
+        string? path,
+        bool isLocal)
+    {
+        var (collection, entityId) = ParseDataPath(path);
+
+        // Default reference (no path) - needs special handling
+        if (collection == null)
+        {
+            if (isLocal)
+                return (null, null); // Signal to use default data handling
+            return (new DataPathReference(""), null);
+        }
+
+        // Check if collection is a content provider (for file access via data: prefix)
+        if (isLocal)
+        {
+            var workspace = hub.GetWorkspace();
+            var dataContext = workspace.DataContext;
+            if (dataContext.ContentProviders.TryGetValue(collection, out var contentCollectionName))
+                return (new FileReference(contentCollectionName, entityId ?? ""), null);
+        }
+
+        // Standard collection or entity reference
+        WorkspaceReference wsRef = entityId != null
+            ? new EntityReference(collection, entityId)
+            : new CollectionReference(collection);
+
+        return (wsRef, null);
+    }
+
+    /// <summary>
+    /// Resolves an area path to LayoutAreaReference.
+    /// </summary>
+    private static WorkspaceReference? ResolveAreaPath(string? remainingPath)
+    {
+        if (string.IsNullOrEmpty(remainingPath))
+            return null;
+
+        var queryIndex = remainingPath.IndexOf('?');
+        if (queryIndex > 0)
+        {
+            var areaName = remainingPath[..queryIndex];
+            var areaId = remainingPath[(queryIndex + 1)..];
+            return new LayoutAreaReference(areaName) { Id = areaId };
+        }
+
+        // Check for slash separator: areaName/areaId
+        var slashIndex = remainingPath.IndexOf('/');
+        if (slashIndex > 0)
+        {
+            var areaName = remainingPath[..slashIndex];
+            var areaId = remainingPath[(slashIndex + 1)..];
+            return new LayoutAreaReference(areaName) { Id = string.IsNullOrEmpty(areaId) ? null : areaId };
+        }
+
+        return new LayoutAreaReference(remainingPath);
+    }
+
+    /// <summary>
+    /// Resolves a content path to FileReference.
+    /// </summary>
+    private static WorkspaceReference? ResolveContentPath(string? remainingPath)
+    {
+        if (string.IsNullOrEmpty(remainingPath))
+            return null;
+
+        var slashIndex = remainingPath.IndexOf('/');
+        if (slashIndex < 0)
+            return null;
+
+        var collectionPart = remainingPath[..slashIndex];
+        var filePath = remainingPath[(slashIndex + 1)..];
+
+        if (string.IsNullOrEmpty(filePath))
+            return null;
+
+        // Check for partition
+        var atIndex = collectionPart.IndexOf('@');
+        if (atIndex > 0)
+        {
+            var collection = collectionPart[..atIndex];
+            var partition = collectionPart[(atIndex + 1)..];
+            return new FileReference(collection, filePath, partition);
+        }
+
+        return new FileReference(collectionPart, filePath);
+    }
+
+    /// <summary>
+    /// Handles data path requests locally.
+    /// </summary>
+    private static async Task<GetDataResponse> HandleDataPathAsync(
+        IMessageHub hub,
+        string? path,
         int? numberOfRows,
         CancellationToken ct)
     {
-        if (dataRef.IsDefaultReference)
-        {
-            return await GetDefaultDataAsync(hub, ct);
-        }
+        var (collection, entityId) = ParseDataPath(path);
 
-        // Check if collection is a content provider (for file access)
+        // Default reference (no path)
+        if (collection == null)
+            return await GetDefaultDataAsync(hub, ct);
+
+        // Check if collection is a content provider
         var workspace = hub.GetWorkspace();
         var dataContext = workspace.DataContext;
 
-        if (dataRef.Collection != null &&
-            dataContext.ContentProviders.TryGetValue(dataRef.Collection, out var contentCollectionName))
-        {
-            return await GetFileContentAsync(hub, contentCollectionName, dataRef.EntityId, numberOfRows, ct);
-        }
+        if (dataContext.ContentProviders.TryGetValue(collection, out var contentCollectionName))
+            return await GetFileContentAsync(hub, contentCollectionName, entityId, numberOfRows, ct);
 
         // Build workspace reference for collection or entity
-        WorkspaceReference wsRef = dataRef.IsEntityReference
-            ? new EntityReference(dataRef.Collection!, dataRef.EntityId!)
-            : new CollectionReference(dataRef.Collection!);
+        WorkspaceReference wsRef = entityId != null
+            ? new EntityReference(collection, entityId)
+            : new CollectionReference(collection);
 
         return await GetDataFromWorkspaceAsync(hub, wsRef, ct);
     }
+
+    /// <summary>
+    /// Handles area path requests locally.
+    /// </summary>
+    private static async Task<GetDataResponse> HandleAreaPathAsync(
+        IMessageHub hub,
+        string? remainingPath,
+        CancellationToken ct)
+    {
+        var wsRef = ResolveAreaPath(remainingPath);
+        if (wsRef == null)
+            return new GetDataResponse(null, 0) { Error = "Invalid area path" };
+
+        return await GetDataFromWorkspaceAsync(hub, wsRef, ct);
+    }
+
+    /// <summary>
+    /// Handles content path requests locally.
+    /// </summary>
+    private static async Task<GetDataResponse> HandleContentPathAsync(
+        IMessageHub hub,
+        string? remainingPath,
+        int? numberOfRows,
+        CancellationToken ct)
+    {
+        if (string.IsNullOrEmpty(remainingPath))
+            return new GetDataResponse(null, 0) { Error = "Invalid content path" };
+
+        var slashIndex = remainingPath.IndexOf('/');
+        if (slashIndex < 0)
+            return new GetDataResponse(null, 0) { Error = "Invalid content path: missing file path" };
+
+        var collectionPart = remainingPath[..slashIndex];
+        var filePath = remainingPath[(slashIndex + 1)..];
+
+        // Check for partition
+        var atIndex = collectionPart.IndexOf('@');
+        string collectionName;
+        if (atIndex > 0)
+        {
+            var collection = collectionPart[..atIndex];
+            var partition = collectionPart[(atIndex + 1)..];
+            collectionName = $"{collection}@{partition}";
+        }
+        else
+        {
+            collectionName = collectionPart;
+        }
+
+        return await GetFileContentAsync(hub, collectionName, filePath, numberOfRows, ct);
+    }
+
+    /// <summary>
+    /// Parses a data path into collection and entity ID.
+    /// Path format: collection[/entityId]
+    /// </summary>
+    private static (string? Collection, string? EntityId) ParseDataPath(string? path)
+    {
+        if (string.IsNullOrEmpty(path))
+            return (null, null);
+
+        var slashIndex = path.IndexOf('/');
+        if (slashIndex < 0)
+            return (path, null); // Collection only
+
+        var collection = path[..slashIndex];
+        var entityId = path[(slashIndex + 1)..];
+        return (collection, string.IsNullOrEmpty(entityId) ? null : entityId);
+    }
+
 
     /// <summary>
     /// Gets the default data reference from the workspace.
     /// </summary>
     private static async Task<GetDataResponse> GetDefaultDataAsync(
         IMessageHub hub,
-        CancellationToken ct)
+        CancellationToken _)
     {
         try
         {
@@ -376,7 +910,7 @@ public static class DataExtensions
             if (dataContext.DefaultDataReferenceFactory == null)
             {
                 return new GetDataResponse(null, 0)
-                    { Error = "No default data reference configured for this address" };
+                { Error = "No default data reference configured for this address" };
             }
 
             var observable = dataContext.DefaultDataReferenceFactory(workspace);
@@ -387,12 +921,12 @@ public static class DataExtensions
         catch (TimeoutException)
         {
             return new GetDataResponse(null, 0)
-                { Error = "Request timed out while accessing default data reference" };
+            { Error = "Request timed out while accessing default data reference" };
         }
         catch (Exception ex)
         {
             return new GetDataResponse(null, 0)
-                { Error = $"Error accessing default data: {ex.Message}" };
+            { Error = $"Error accessing default data: {ex.Message}" };
         }
     }
 
@@ -410,7 +944,7 @@ public static class DataExtensions
     private static async Task<GetDataResponse> GetDataFromWorkspaceAsyncCore<TReference>(
         IMessageHub hub,
         WorkspaceReference<TReference> reference,
-        CancellationToken ct)
+        CancellationToken _)
     {
         try
         {
@@ -420,7 +954,7 @@ public static class DataExtensions
             if (stream == null)
             {
                 return new GetDataResponse(null, 0)
-                    { Error = $"No data found for reference: {reference}" };
+                { Error = $"No data found for reference: {reference}" };
             }
 
             var data = await stream.Timeout(TimeSpan.FromSeconds(30)).FirstAsync();
@@ -430,12 +964,12 @@ public static class DataExtensions
         catch (TimeoutException)
         {
             return new GetDataResponse(null, 0)
-                { Error = $"Request timed out while accessing data" };
+            { Error = $"Request timed out while accessing data" };
         }
         catch (Exception ex)
         {
             return new GetDataResponse(null, 0)
-                { Error = $"Error accessing data: {ex.Message}" };
+            { Error = $"Error accessing data: {ex.Message}" };
         }
     }
 
@@ -452,14 +986,14 @@ public static class DataExtensions
         if (string.IsNullOrEmpty(filePath))
         {
             return new GetDataResponse(null, 0)
-                { Error = "File path cannot be empty" };
+            { Error = "File path cannot be empty" };
         }
 
         var fileContentProvider = hub.ServiceProvider.GetService<IFileContentProvider>();
         if (fileContentProvider == null)
         {
             return new GetDataResponse(null, 0)
-                { Error = "File content provider not available. Ensure AddContentCollections() is configured." };
+            { Error = "File content provider not available. Ensure AddContentCollections() is configured." };
         }
 
         var result = await fileContentProvider.GetFileContentAsync(
@@ -471,73 +1005,12 @@ public static class DataExtensions
         if (!result.Success)
         {
             return new GetDataResponse(null, 0)
-                { Error = result.Error };
+            { Error = result.Error };
         }
 
         return new GetDataResponse(result.Content, hub.Version);
     }
 
-    /// <summary>
-    /// Handles layout area content requests from UnifiedReference.
-    /// </summary>
-    private static async Task<GetDataResponse> HandleUnifiedLayoutAreaAsync(
-        IMessageHub hub,
-        LayoutAreaContentReference areaRef,
-        CancellationToken ct)
-    {
-        try
-        {
-            var workspace = hub.GetWorkspace();
-
-            // Create LayoutAreaReference
-            var layoutAreaReference = new LayoutAreaReference(areaRef.AreaName);
-            if (areaRef.AreaId != null)
-            {
-                layoutAreaReference = layoutAreaReference with { Id = areaRef.AreaId };
-            }
-
-            // Get the stream for this layout area
-            var stream = workspace.GetStream(layoutAreaReference, x => x.ReturnNullWhenNotPresent());
-            if (stream == null)
-            {
-                return new GetDataResponse(null, 0)
-                    { Error = $"Layout area '{areaRef.AreaName}' not found" };
-            }
-
-            // Get the first value from the stream
-            var value = await stream.Timeout(TimeSpan.FromSeconds(30)).FirstAsync();
-            var json = JsonSerializer.Serialize(value.Value, hub.JsonSerializerOptions);
-
-            return new GetDataResponse(json, hub.Version);
-        }
-        catch (TimeoutException)
-        {
-            return new GetDataResponse(null, 0)
-                { Error = $"Request timed out while accessing layout area '{areaRef.AreaName}'" };
-        }
-        catch (Exception ex)
-        {
-            return new GetDataResponse(null, 0)
-                { Error = $"Error accessing layout area '{areaRef.AreaName}': {ex.Message}" };
-        }
-    }
-
-    /// <summary>
-    /// Handles file content requests from UnifiedReference (content: prefix).
-    /// </summary>
-    private static async Task<GetDataResponse> HandleUnifiedFileReferenceAsync(
-        IMessageHub hub,
-        FileContentReference fileRef,
-        int? numberOfRows,
-        CancellationToken ct)
-    {
-        // Build the collection name with partition if specified
-        var collectionName = fileRef.Partition != null
-            ? $"{fileRef.Collection}@{fileRef.Partition}"
-            : fileRef.Collection;
-
-        return await GetFileContentAsync(hub, collectionName, fileRef.FilePath, numberOfRows, ct);
-    }
 
     private static string GenerateJsonSchema(IMessageHub hub, string typeName)
     {
@@ -649,13 +1122,13 @@ public static class DataExtensions
                 return request.Processed();
             }
 
-            var parsedRef = ContentReference.Parse(path);
-            var result = parsedRef switch
+            var parsed = ParseUnifiedPath(path);
+            var result = parsed.Prefix switch
             {
-                DataContentReference dataRef => await HandleUpdateDataReferenceAsync(hub, dataRef, request.Message.Content, request.Message.ChangedBy, ct),
-                FileContentReference fileRef => await HandleUpdateFileReferenceAsync(hub, fileRef, request.Message.Content, ct),
-                LayoutAreaContentReference areaRef => UpdateUnifiedReferenceResponse.Fail("Layout area updates are not supported via this API"),
-                _ => UpdateUnifiedReferenceResponse.Fail($"Unknown reference type: {parsedRef.GetType().Name}")
+                "data" => await HandleUpdateDataPathAsync(hub, parsed.RemainingPath, request.Message.Content, request.Message.ChangedBy, ct),
+                "content" => await HandleUpdateContentPathAsync(hub, parsed.RemainingPath, request.Message.Content, ct),
+                "area" => UpdateUnifiedReferenceResponse.Fail("Layout area updates are not supported via this API"),
+                _ => UpdateUnifiedReferenceResponse.Fail($"Unknown prefix: {parsed.Prefix}")
             };
 
             hub.Post(result, o => o.ResponseFor(request));
@@ -669,36 +1142,33 @@ public static class DataExtensions
         return request.Processed();
     }
 
-    private static async Task<UpdateUnifiedReferenceResponse> HandleUpdateDataReferenceAsync(
+    private static async Task<UpdateUnifiedReferenceResponse> HandleUpdateDataPathAsync(
         IMessageHub hub,
-        DataContentReference dataRef,
+        string? path,
         object content,
         string? changedBy,
         CancellationToken ct)
     {
-        if (dataRef.IsDefaultReference)
+        var (collection, entityId) = ParseDataPath(path);
+
+        // Default reference (no path)
+        if (collection == null)
         {
             return UpdateUnifiedReferenceResponse.Fail("Cannot update default data reference directly. Specify a collection and optionally an entity ID.");
-        }
-
-        if (dataRef.Collection == null)
-        {
-            return UpdateUnifiedReferenceResponse.Fail("Collection must be specified for data updates");
         }
 
         // Check if this is a content provider (file access via data: path)
         var workspace = hub.GetWorkspace();
         var dataContext = workspace.DataContext;
 
-        if (dataContext.ContentProviders.TryGetValue(dataRef.Collection, out var contentCollectionName))
+        if (dataContext.ContentProviders.TryGetValue(collection, out var contentCollectionName))
         {
             // This is a file update via data: path
-            if (string.IsNullOrEmpty(dataRef.EntityId))
+            if (string.IsNullOrEmpty(entityId))
             {
-                return UpdateUnifiedReferenceResponse.Fail("File path (EntityId) must be specified for file updates");
+                return UpdateUnifiedReferenceResponse.Fail("File path must be specified for file updates");
             }
-            var fileRef = new FileContentReference(dataRef.AddressType, dataRef.AddressId, contentCollectionName, dataRef.EntityId);
-            return await HandleUpdateFileReferenceAsync(hub, fileRef, content, ct);
+            return await HandleUpdateFileAsync(hub, contentCollectionName, entityId, content, ct);
         }
 
         // Regular data update - use DataChangeRequest
@@ -724,9 +1194,43 @@ public static class DataExtensions
         return UpdateUnifiedReferenceResponse.Ok(hub.Version);
     }
 
-    private static async Task<UpdateUnifiedReferenceResponse> HandleUpdateFileReferenceAsync(
+    private static async Task<UpdateUnifiedReferenceResponse> HandleUpdateContentPathAsync(
         IMessageHub hub,
-        FileContentReference fileRef,
+        string? remainingPath,
+        object content,
+        CancellationToken ct)
+    {
+        if (string.IsNullOrEmpty(remainingPath))
+            return UpdateUnifiedReferenceResponse.Fail("Invalid content path");
+
+        var slashIndex = remainingPath.IndexOf('/');
+        if (slashIndex < 0)
+            return UpdateUnifiedReferenceResponse.Fail("Invalid content path: missing file path");
+
+        var collectionPart = remainingPath[..slashIndex];
+        var filePath = remainingPath[(slashIndex + 1)..];
+
+        // Check for partition
+        var atIndex = collectionPart.IndexOf('@');
+        string collectionName;
+        if (atIndex > 0)
+        {
+            var collection = collectionPart[..atIndex];
+            var partition = collectionPart[(atIndex + 1)..];
+            collectionName = $"{collection}@{partition}";
+        }
+        else
+        {
+            collectionName = collectionPart;
+        }
+
+        return await HandleUpdateFileAsync(hub, collectionName, filePath, content, ct);
+    }
+
+    private static async Task<UpdateUnifiedReferenceResponse> HandleUpdateFileAsync(
+        IMessageHub hub,
+        string collectionName,
+        string filePath,
         object content,
         CancellationToken ct)
     {
@@ -736,15 +1240,11 @@ public static class DataExtensions
             return UpdateUnifiedReferenceResponse.Fail("File content provider not available. Ensure AddContentCollections() is configured.");
         }
 
-        var collectionName = fileRef.Partition != null
-            ? $"{fileRef.Collection}@{fileRef.Partition}"
-            : fileRef.Collection;
-
         // Convert content to stream
         var contentString = content is string str ? str : content?.ToString() ?? "";
         using var memoryStream = new MemoryStream(System.Text.Encoding.UTF8.GetBytes(contentString));
 
-        var result = await fileContentProvider.SaveFileContentAsync(collectionName, fileRef.FilePath, memoryStream, ct);
+        var result = await fileContentProvider.SaveFileContentAsync(collectionName, filePath, memoryStream, ct);
         if (!result.Success)
         {
             return UpdateUnifiedReferenceResponse.Fail(result.Error!);
@@ -768,13 +1268,13 @@ public static class DataExtensions
                 return request.Processed();
             }
 
-            var parsedRef = ContentReference.Parse(path);
-            var result = parsedRef switch
+            var parsed = ParseUnifiedPath(path);
+            var result = parsed.Prefix switch
             {
-                DataContentReference dataRef => await HandleDeleteDataReferenceAsync(hub, dataRef, request.Message.ChangedBy, ct),
-                FileContentReference fileRef => await HandleDeleteFileReferenceAsync(hub, fileRef, ct),
-                LayoutAreaContentReference areaRef => DeleteUnifiedReferenceResponse.Fail("Layout area deletion is not supported via this API"),
-                _ => DeleteUnifiedReferenceResponse.Fail($"Unknown reference type: {parsedRef.GetType().Name}")
+                "data" => await HandleDeleteDataPathAsync(hub, parsed.RemainingPath, request.Message.ChangedBy, ct),
+                "content" => await HandleDeleteContentPathAsync(hub, parsed.RemainingPath, ct),
+                "area" => DeleteUnifiedReferenceResponse.Fail("Layout area deletion is not supported via this API"),
+                _ => DeleteUnifiedReferenceResponse.Fail($"Unknown prefix: {parsed.Prefix}")
             };
 
             hub.Post(result, o => o.ResponseFor(request));
@@ -788,54 +1288,52 @@ public static class DataExtensions
         return request.Processed();
     }
 
-    private static async Task<DeleteUnifiedReferenceResponse> HandleDeleteDataReferenceAsync(
+    private static async Task<DeleteUnifiedReferenceResponse> HandleDeleteDataPathAsync(
         IMessageHub hub,
-        DataContentReference dataRef,
+        string? path,
         string? changedBy,
         CancellationToken ct)
     {
-        if (dataRef.IsDefaultReference)
+        var (collection, entityId) = ParseDataPath(path);
+
+        // Default reference (no path)
+        if (collection == null)
         {
             return DeleteUnifiedReferenceResponse.Fail("Cannot delete default data reference. Specify a collection and entity ID.");
-        }
-
-        if (dataRef.Collection == null)
-        {
-            return DeleteUnifiedReferenceResponse.Fail("Collection must be specified for data deletion");
         }
 
         // Check if this is a content provider (file access via data: path)
         var workspace = hub.GetWorkspace();
         var dataContext = workspace.DataContext;
 
-        if (dataContext.ContentProviders.TryGetValue(dataRef.Collection, out var contentCollectionName))
+        if (dataContext.ContentProviders.TryGetValue(collection, out var contentCollectionName))
         {
             // This is a file delete via data: path
-            if (string.IsNullOrEmpty(dataRef.EntityId))
+            if (string.IsNullOrEmpty(entityId))
             {
-                return DeleteUnifiedReferenceResponse.Fail("File path (EntityId) must be specified for file deletion");
+                return DeleteUnifiedReferenceResponse.Fail("File path must be specified for file deletion");
             }
-            var fileRef = new FileContentReference(dataRef.AddressType, dataRef.AddressId, contentCollectionName, dataRef.EntityId);
-            return await HandleDeleteFileReferenceAsync(hub, fileRef, ct);
+            return await HandleDeleteFileAsync(hub, contentCollectionName, entityId, ct);
         }
 
-        if (!dataRef.IsEntityReference)
+        // Entity ID is required for deletion
+        if (entityId == null)
         {
             return DeleteUnifiedReferenceResponse.Fail("Entity ID must be specified for data deletion. Collection-level deletion is not supported.");
         }
 
         // We need to get the entity first to delete it
-        var entityRef = new EntityReference(dataRef.Collection, dataRef.EntityId!);
+        var entityRef = new EntityReference(collection, entityId);
         var stream = workspace.GetStream(entityRef, x => x.ReturnNullWhenNotPresent());
         if (stream == null)
         {
-            return DeleteUnifiedReferenceResponse.Fail($"Entity not found: {dataRef.Collection}/{dataRef.EntityId}");
+            return DeleteUnifiedReferenceResponse.Fail($"Entity not found: {collection}/{entityId}");
         }
 
         var entityValue = await stream.Timeout(TimeSpan.FromSeconds(30)).FirstAsync();
         if (entityValue.Value == null)
         {
-            return DeleteUnifiedReferenceResponse.Fail($"Entity not found: {dataRef.Collection}/{dataRef.EntityId}");
+            return DeleteUnifiedReferenceResponse.Fail($"Entity not found: {collection}/{entityId}");
         }
 
         var changeRequest = new DataChangeRequest
@@ -860,9 +1358,42 @@ public static class DataExtensions
         return DeleteUnifiedReferenceResponse.Ok();
     }
 
-    private static async Task<DeleteUnifiedReferenceResponse> HandleDeleteFileReferenceAsync(
+    private static async Task<DeleteUnifiedReferenceResponse> HandleDeleteContentPathAsync(
         IMessageHub hub,
-        FileContentReference fileRef,
+        string? remainingPath,
+        CancellationToken ct)
+    {
+        if (string.IsNullOrEmpty(remainingPath))
+            return DeleteUnifiedReferenceResponse.Fail("Invalid content path");
+
+        var slashIndex = remainingPath.IndexOf('/');
+        if (slashIndex < 0)
+            return DeleteUnifiedReferenceResponse.Fail("Invalid content path: missing file path");
+
+        var collectionPart = remainingPath[..slashIndex];
+        var filePath = remainingPath[(slashIndex + 1)..];
+
+        // Check for partition
+        var atIndex = collectionPart.IndexOf('@');
+        string collectionName;
+        if (atIndex > 0)
+        {
+            var collection = collectionPart[..atIndex];
+            var partition = collectionPart[(atIndex + 1)..];
+            collectionName = $"{collection}@{partition}";
+        }
+        else
+        {
+            collectionName = collectionPart;
+        }
+
+        return await HandleDeleteFileAsync(hub, collectionName, filePath, ct);
+    }
+
+    private static async Task<DeleteUnifiedReferenceResponse> HandleDeleteFileAsync(
+        IMessageHub hub,
+        string collectionName,
+        string filePath,
         CancellationToken ct)
     {
         var fileContentProvider = hub.ServiceProvider.GetService<IFileContentProvider>();
@@ -871,11 +1402,7 @@ public static class DataExtensions
             return DeleteUnifiedReferenceResponse.Fail("File content provider not available. Ensure AddContentCollections() is configured.");
         }
 
-        var collectionName = fileRef.Partition != null
-            ? $"{fileRef.Collection}@{fileRef.Partition}"
-            : fileRef.Collection;
-
-        var result = await fileContentProvider.DeleteFileAsync(collectionName, fileRef.FilePath, ct);
+        var result = await fileContentProvider.DeleteFileAsync(collectionName, filePath, ct);
         if (!result.Success)
         {
             return DeleteUnifiedReferenceResponse.Fail(result.Error!);
@@ -899,7 +1426,7 @@ public static class DataExtensions
     private static ISynchronizationStream<object>? GetStreamDynamicCore<T>(
         IWorkspace workspace,
         WorkspaceReference<T> targetRef,
-        Func<Serialization.StreamConfiguration<object>, Serialization.StreamConfiguration<object>>? configuration)
+        Func<Serialization.StreamConfiguration<object>, Serialization.StreamConfiguration<object>>? _)
     {
         // Get the typed stream
         var typedStream = workspace.GetStream(targetRef);

@@ -6,7 +6,7 @@ using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Hosting;
 
-public class InMemoryMeshCatalog(IMessageHub hub, MeshConfiguration configuration) : MeshCatalogBase(hub, configuration)
+public class InMemoryMeshCatalog(IMessageHub hub, MeshConfiguration configuration, IUnifiedPathRegistry pathRegistry) : MeshCatalogBase(hub, configuration, pathRegistry)
 {
     private readonly ILogger<InMemoryMeshCatalog> logger = hub.ServiceProvider.GetRequiredService<ILogger<InMemoryMeshCatalog>>();
     private readonly ConcurrentDictionary<Address, MeshNode> meshNodes = new();
