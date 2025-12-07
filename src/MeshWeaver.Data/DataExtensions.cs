@@ -295,10 +295,10 @@ public static class DataExtensions
             return workspace.GetStream(entityRef, configuration);
         }
 
-        // For collection paths, get the InstanceCollection stream and select to object
+        // For collection paths, get the InstanceCollection stream and select just the values
         var collectionRef = new CollectionReference(pathPrefix);
         var collectionStream = workspace.GetStream(collectionRef);
-        return collectionStream?.Select(x => (object)x);
+        return collectionStream?.Select(x => (object)x.Instances.Values.ToArray());
     }
 
     /// <summary>
