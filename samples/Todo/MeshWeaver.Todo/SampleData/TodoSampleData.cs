@@ -1,5 +1,4 @@
-﻿using MeshWeaver.ShortGuid;
-using MeshWeaver.Todo.Domain;
+﻿using MeshWeaver.Todo.Domain;
 
 namespace MeshWeaver.Todo.SampleData;
 
@@ -72,14 +71,11 @@ public static class TodoSampleData
     /// <returns>A collection of sample TodoItem objects</returns>
     public static IEnumerable<TodoItem> GetSampleTodos()
     {
-        var random = new Random(42); // Fixed seed for consistent results
-        var persons = ResponsiblePersons.AvailablePersons;
-
         return [
         // OVERDUE TASKS - One assigned to current user, others to team members (no unassigned overdue)
         new TodoItem
         {
-            Id = Guid.NewGuid().AsString(),
+            Id = "1",
             Title = "Security audit review",
             Description = "Review and address findings from the quarterly security audit - URGENT!",
             Category = "Work",
@@ -91,7 +87,7 @@ public static class TodoSampleData
         },
         new TodoItem
         {
-            Id = Guid.NewGuid().AsString(),
+            Id = "2",
             Title = "Fix production bug",
             Description = "Critical bug affecting user login functionality",
             Category = "Work",
@@ -105,7 +101,7 @@ public static class TodoSampleData
         // DUE TODAY TASKS - Mix of current user and team members
         new TodoItem
         {
-            Id = Guid.NewGuid().AsString(),
+            Id = "3",
             Title = "Team meeting preparation",
             Description = "Prepare slides and agenda for today's team meeting",
             Category = "Work",
@@ -116,7 +112,7 @@ public static class TodoSampleData
         },
         new TodoItem
         {
-            Id = Guid.NewGuid().AsString(),
+            Id = "4",
             Title = "Mobile app bug fixes",
             Description = "Fix critical bugs reported in the latest mobile app release",
             Category = "Work",
@@ -127,7 +123,7 @@ public static class TodoSampleData
         },
         new TodoItem
         {
-            Id = Guid.NewGuid().AsString(),
+            Id = "5",
             Title = "Code review: authentication module",
             Description = "Review Jordan's implementation of two-factor authentication",
             Category = "Work",
@@ -141,7 +137,7 @@ public static class TodoSampleData
         // FUTURE TASKS - Mostly in progress or completed, fewer pending
         new TodoItem
         {
-            Id = Guid.NewGuid().AsString(),
+            Id = "6",
             Title = "Complete project documentation",
             Description = "Write comprehensive documentation for the MeshWeaver Todo module",
             Category = "Work",
@@ -153,7 +149,7 @@ public static class TodoSampleData
         },
         new TodoItem
         {
-            Id = Guid.NewGuid().AsString(),
+            Id = "7",
             Title = "Client presentation",
             Description = "Prepare quarterly business review presentation for BigCorp client",
             Category = "Work",
@@ -164,7 +160,7 @@ public static class TodoSampleData
         },
         new TodoItem
         {
-            Id = Guid.NewGuid().AsString(),
+            Id = "8",
             Title = "Database migration script",
             Description = "Write and test migration scripts for the new user preferences table",
             Category = "Work",
@@ -177,7 +173,7 @@ public static class TodoSampleData
         // MORE UNASSIGNED TASKS - All future due dates for better planning demo
         new TodoItem
         {
-            Id = Guid.NewGuid().AsString(),
+            Id = "9",
             Title = "API documentation update",
             Description = "Update REST API documentation with new endpoints",
             Category = "Work",
@@ -188,7 +184,7 @@ public static class TodoSampleData
         },
         new TodoItem
         {
-            Id = Guid.NewGuid().AsString(),
+            Id = "10",
             Title = "Docker containerization",
             Description = "Containerize the microservices for better deployment",
             Category = "Work",
@@ -199,7 +195,7 @@ public static class TodoSampleData
         },
         new TodoItem
         {
-            Id = Guid.NewGuid().AsString(),
+            Id = "11",
             Title = "Performance testing suite",
             Description = "Create automated performance tests for the web application",
             Category = "Work",
@@ -210,7 +206,7 @@ public static class TodoSampleData
         },
         new TodoItem
         {
-            Id = Guid.NewGuid().AsString(),
+            Id = "12",
             Title = "User feedback analysis",
             Description = "Analyze Q3 user feedback and create improvement recommendations",
             Category = "Work",
@@ -221,7 +217,7 @@ public static class TodoSampleData
         },
         new TodoItem
         {
-            Id = Guid.NewGuid().AsString(),
+            Id = "13",
             Title = "Backup system verification",
             Description = "Test and verify that all backup systems are working correctly",
             Category = "Work",
@@ -232,7 +228,7 @@ public static class TodoSampleData
         },
         new TodoItem
         {
-            Id = Guid.NewGuid().AsString(),
+            Id = "14",
             Title = "Security vulnerability scan",
             Description = "Run comprehensive security scan and address any findings",
             Category = "Work",
@@ -243,7 +239,7 @@ public static class TodoSampleData
         },
         new TodoItem
         {
-            Id = Guid.NewGuid().AsString(),
+            Id = "15",
             Title = "Mobile app beta testing",
             Description = "Coordinate beta testing program for the new mobile app features",
             Category = "Work",
@@ -254,7 +250,7 @@ public static class TodoSampleData
         },
         new TodoItem
         {
-            Id = Guid.NewGuid().AsString(),
+            Id = "16",
             Title = "Database optimization",
             Description = "Optimize database queries and indexes for better performance",
             Category = "Work",
@@ -267,7 +263,7 @@ public static class TodoSampleData
         // COMPLETED AND ONGOING TASKS
         new TodoItem
         {
-            Id = Guid.NewGuid().AsString(),
+            Id = "17",
             Title = "Design user interface mockups",
             Description = "Create wireframes and mockups for the new dashboard feature",
             Category = "Work",
@@ -278,7 +274,7 @@ public static class TodoSampleData
         },
         new TodoItem
         {
-            Id = Guid.NewGuid().AsString(),
+            Id = "18",
             Title = "Quarterly expense report",
             Description = "Compile and submit Q3 expense reports",
             Category = "Finance",
@@ -289,7 +285,7 @@ public static class TodoSampleData
         },
         new TodoItem
         {
-            Id = Guid.NewGuid().AsString(),
+            Id = "19",
             Title = "Read technical book",
             Description = "Continue reading 'Clean Architecture' by Robert Martin",
             Category = "Learning",
@@ -300,7 +296,7 @@ public static class TodoSampleData
         },
         new TodoItem
         {
-            Id = Guid.NewGuid().AsString(),
+            Id = "20",
             Title = "Update resume",
             Description = "Add recent projects and skills to professional resume",
             Category = "Career",
@@ -311,7 +307,7 @@ public static class TodoSampleData
         },
         new TodoItem
         {
-            Id = Guid.NewGuid().AsString(),
+            Id = "21",
             Title = "Team lunch coordination",
             Description = "Organize monthly team lunch and book restaurant",
             Category = "Personal",
