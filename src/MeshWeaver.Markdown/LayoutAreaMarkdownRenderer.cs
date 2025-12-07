@@ -17,6 +17,6 @@ public class LayoutAreaMarkdownRenderer : HtmlObjectRenderer<LayoutAreaComponent
     public const string Area = "area";
     public const string AreaId = "area-id";
 
-    internal static string GetLayoutAreaDiv(object address, string area, object? id)
-        => $"<div class='{LayoutArea}' data-{Address}='{address}' data-{Area}={area} data-{AreaId}={id} ></div>";
+    internal static string GetLayoutAreaDiv(object address, string? area, object? id)
+        => $"<div class='{LayoutArea}' data-{Address}='{address}' data-{Area}='{area ?? string.Empty}' data-{AreaId}='{id}' ></div>";
 }

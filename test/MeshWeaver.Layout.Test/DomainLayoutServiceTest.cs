@@ -58,7 +58,7 @@ public class DomainLayoutServiceTest(ITestOutputHelper output) : HubTestBase(out
             new HostAddress(),
             reference
         );
-        var content = await stream.GetControlStream(reference.Area.ToString()!)
+        var content = await stream.GetControlStream(reference.Area!)
             .Timeout(10.Seconds())
             .FirstAsync(x => x != null);
         var stack = content
@@ -135,7 +135,7 @@ public class DomainLayoutServiceTest(ITestOutputHelper output) : HubTestBase(out
             new HostAddress(),
             reference
         );
-        var content = await stream.GetControlStream(reference.Area.ToString()!)
+        var content = await stream.GetControlStream(reference.Area!)
             .Timeout(10.Seconds())
             .FirstAsync(x => x != null);
         var stack = content

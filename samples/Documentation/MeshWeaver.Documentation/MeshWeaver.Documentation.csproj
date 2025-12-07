@@ -19,6 +19,10 @@
         <!-- Embed source files in the PDB -->
         <EmbedAllSources>true</EmbedAllSources>
     </PropertyGroup>
+
+    <ItemGroup>
+      <EmbeddedResource Include="Blog\Debug.md" />
+    </ItemGroup>
     <ItemGroup>
       <ProjectReference Include="..\..\..\src\MeshWeaver.ContentCollections\MeshWeaver.ContentCollections.csproj" />
       <ProjectReference Include="..\..\..\src\MeshWeaver.Layout\MeshWeaver.Layout.csproj" />

@@ -50,7 +50,7 @@ public class NavMenuExtensionsTest(ITestOutputHelper output) : HubTestBase(outpu
                 reference
             );
 
-            var control = await stream.GetControlStream(reference.Area.ToString()!)
+            var control = await stream.GetControlStream(reference.Area!)
                 .Timeout(10.Seconds())
                 .FirstAsync();
             
