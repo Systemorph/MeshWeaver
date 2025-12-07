@@ -19,8 +19,8 @@ namespace MeshWeaver.Northwind.Domain
     [Icon(FluentIcons.Provider, "Album")]
     [Display(GroupName = "Reference Data")]
     public record Territory(
-        [property: Key] string TerritoryId,
-        [property: Sort(IsDefaultSort = true)]string TerritoryDescription,
-        [property: Dimension(typeof(Region))]int RegionId
+        [property: Key] int TerritoryId,
+        [property: Sort(IsDefaultSort = true)] string TerritoryDescription,
+        [property: Dimension(typeof(Region))] int RegionId
     );
 }
