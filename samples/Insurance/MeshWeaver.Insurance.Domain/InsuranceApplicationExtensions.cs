@@ -127,10 +127,10 @@ public static class InsuranceApplicationExtensions
                     .WithType<LegalEntity>(t => t.WithInitialData(_ => Task.FromResult(SampleDataProvider.GetLegalEntities())))
                     .WithType<Currency>(t => t.WithInitialData(_ => Task.FromResult(SampleDataProvider.GetCurrencies())))
                 )
-                // Configure default data reference: data:pricing/pricingId returns the main Pricing entity
+                // Configure default data reference: data/pricing/pricingId returns the main Pricing entity
                 .WithDefaultDataReference(workspace =>
                     workspace.GetObservable<Pricing>().Select(p => p.FirstOrDefault()))
-                // Configure content provider for file access via data:pricing/pricingId/Submissions/path
+                // Configure content provider for file access via data/pricing/pricingId/Submissions/path
                 .WithContentProvider("Submissions", GetLocalizedCollectionName("Submissions", pricingId));
             })
             .AddLayout(l => l

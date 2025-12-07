@@ -90,7 +90,7 @@ Console.WriteLine(""Hello World"");
     [Fact]
     public void ParseDataContentReference()
     {
-        var markdown = "@(\"data:app/test/MyCollection\")";
+        var markdown = "@(\"data/app/test/MyCollection\")";
         var extension = new LayoutAreaMarkdownExtension();
         var document = ParseMarkdown(markdown, extension);
 
@@ -107,7 +107,7 @@ Console.WriteLine(""Hello World"");
     [Fact]
     public void ParseDataContentReferenceWithEntityId()
     {
-        var markdown = "@(\"data:app/test/MyCollection/entity123\")";
+        var markdown = "@(\"data/app/test/MyCollection/entity123\")";
         var extension = new LayoutAreaMarkdownExtension();
         var document = ParseMarkdown(markdown, extension);
 
@@ -122,7 +122,7 @@ Console.WriteLine(""Hello World"");
     [Fact]
     public void ParseDataContentReferenceDefault()
     {
-        var markdown = "@(\"data:app/test\")";
+        var markdown = "@(\"data/app/test\")";
         var extension = new LayoutAreaMarkdownExtension();
         var document = ParseMarkdown(markdown, extension);
 
@@ -138,7 +138,7 @@ Console.WriteLine(""Hello World"");
     [Fact]
     public void ParseFileContentReference()
     {
-        var markdown = "@(\"content:app/test/Documents/report.pdf\")";
+        var markdown = "@(\"content/app/test/Documents/report.pdf\")";
         var extension = new LayoutAreaMarkdownExtension();
         var document = ParseMarkdown(markdown, extension);
 
@@ -155,7 +155,7 @@ Console.WriteLine(""Hello World"");
     [Fact]
     public void ParseFileContentReferenceWithPartition()
     {
-        var markdown = "@(\"content:app/test/Documents@2024/report.pdf\")";
+        var markdown = "@(\"content/app/test/Documents@2024/report.pdf\")";
         var extension = new LayoutAreaMarkdownExtension();
         var document = ParseMarkdown(markdown, extension);
 
@@ -170,7 +170,7 @@ Console.WriteLine(""Hello World"");
     [Fact]
     public void ParseFileContentReferenceWithNestedPath()
     {
-        var markdown = "@(\"content:app/test/Documents/folder/subfolder/file.txt\")";
+        var markdown = "@(\"content/app/test/Documents/folder/subfolder/file.txt\")";
         var extension = new LayoutAreaMarkdownExtension();
         var document = ParseMarkdown(markdown, extension);
 
@@ -184,7 +184,7 @@ Console.WriteLine(""Hello World"");
     [Fact]
     public void ParseAreaContentReference()
     {
-        var markdown = "@(\"area:app/test/MyArea\")";
+        var markdown = "@(\"area/app/test/MyArea\")";
         var extension = new LayoutAreaMarkdownExtension();
         var document = ParseMarkdown(markdown, extension);
 
@@ -199,7 +199,7 @@ Console.WriteLine(""Hello World"");
     [Fact]
     public void ParseAreaContentReferenceWithId()
     {
-        var markdown = "@(\"area:app/test/MyArea/item123\")";
+        var markdown = "@(\"area/app/test/MyArea/item123\")";
         var extension = new LayoutAreaMarkdownExtension();
         var document = ParseMarkdown(markdown, extension);
 
@@ -227,7 +227,7 @@ Console.WriteLine(""Hello World"");
     [Fact]
     public void RenderDataContentBlock()
     {
-        var markdown = "@(\"data:app/test/Users\")";
+        var markdown = "@(\"data/app/test/Users\")";
         var extension = new LayoutAreaMarkdownExtension();
         var html = RenderMarkdown(markdown, extension);
 
@@ -239,7 +239,7 @@ Console.WriteLine(""Hello World"");
     [Fact]
     public void RenderFileContentBlock()
     {
-        var markdown = "@(\"content:app/test/Docs/readme.md\")";
+        var markdown = "@(\"content/app/test/Docs/readme.md\")";
         var extension = new LayoutAreaMarkdownExtension();
         var html = RenderMarkdown(markdown, extension);
 
@@ -252,9 +252,9 @@ Console.WriteLine(""Hello World"");
     public void MixedReferenceTypes()
     {
         var markdown = @"
-@(""data:app/test/Users"")
-@(""content:app/test/Docs/file.txt"")
-@(""area:app/test/Dashboard"")
+@(""data/app/test/Users"")
+@(""content/app/test/Docs/file.txt"")
+@(""area/app/test/Dashboard"")
 ";
         var extension = new LayoutAreaMarkdownExtension();
         var document = ParseMarkdown(markdown, extension);
@@ -270,7 +270,7 @@ Console.WriteLine(""Hello World"");
     [Fact]
     public void DataContentBlockPath()
     {
-        var markdown = "@(\"data:pricing/MS-2024/PropertyRisk/risk1\")";
+        var markdown = "@(\"data/pricing/MS-2024/PropertyRisk/risk1\")";
         var extension = new LayoutAreaMarkdownExtension();
         var document = ParseMarkdown(markdown, extension);
 
@@ -286,7 +286,7 @@ Console.WriteLine(""Hello World"");
     [Fact]
     public void FileContentBlockPath()
     {
-        var markdown = "@(\"content:host/1/Submissions@MS-2024/folder/file.xlsx\")";
+        var markdown = "@(\"content/host/1/Submissions@MS-2024/folder/file.xlsx\")";
         var extension = new LayoutAreaMarkdownExtension();
         var document = ParseMarkdown(markdown, extension);
 
@@ -348,7 +348,7 @@ Console.WriteLine(""Hello World"");
     [Fact]
     public void DirectPathSyntax_DataReference()
     {
-        var markdown = "@data:app/test/Users";
+        var markdown = "@data/app/test/Users";
         var extension = new LayoutAreaMarkdownExtension();
         var document = ParseMarkdown(markdown, extension);
 
@@ -361,7 +361,7 @@ Console.WriteLine(""Hello World"");
     [Fact]
     public void DirectPathSyntax_ContentReference()
     {
-        var markdown = "@content:app/test/Docs/readme.md";
+        var markdown = "@content/app/test/Docs/readme.md";
         var extension = new LayoutAreaMarkdownExtension();
         var document = ParseMarkdown(markdown, extension);
 
@@ -376,8 +376,8 @@ Console.WriteLine(""Hello World"");
     {
         var markdown = @"
 @app/test/Dashboard
-@data:app/test/Users
-@content:app/test/Docs/file.txt
+@data/app/test/Users
+@content/app/test/Docs/file.txt
 ";
         var extension = new LayoutAreaMarkdownExtension();
         var document = ParseMarkdown(markdown, extension);
@@ -422,7 +422,7 @@ Console.WriteLine(""Hello World"");
     [Fact]
     public void QuotedSyntax_ContentReferenceWithSpaces()
     {
-        var markdown = "@\"content:app/test/Docs/My Report 2025.pdf\"";
+        var markdown = "@\"content/app/test/Docs/My Report 2025.pdf\"";
         var extension = new LayoutAreaMarkdownExtension();
         var document = ParseMarkdown(markdown, extension);
 
@@ -435,7 +435,7 @@ Console.WriteLine(""Hello World"");
     [Fact]
     public void QuotedSyntax_DataReference()
     {
-        var markdown = "@\"data:app/test/User Accounts\"";
+        var markdown = "@\"data/app/test/User Accounts\"";
         var extension = new LayoutAreaMarkdownExtension();
         var document = ParseMarkdown(markdown, extension);
 
@@ -450,8 +450,8 @@ Console.WriteLine(""Hello World"");
     {
         var markdown = @"
 @app/test/SimpleArea
-@""content:app/test/Docs/Report with spaces.pdf""
-@data:app/test/Products
+@""content/app/test/Docs/Report with spaces.pdf""
+@data/app/test/Products
 ";
         var extension = new LayoutAreaMarkdownExtension();
         var document = ParseMarkdown(markdown, extension);

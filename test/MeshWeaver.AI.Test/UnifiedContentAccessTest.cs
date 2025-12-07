@@ -178,7 +178,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
         // arrange - client sends request to host
         GetHost(); // Ensure host is initialized
         var client = GetClient();
-        var path = "data:host/1/TestPricing";
+        var path = "data/host/1/TestPricing";
 
         // act - send from client to host
         var response = await client.AwaitResponse(
@@ -201,7 +201,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
         // arrange - client sends request to host
         GetHost(); // Ensure host is initialized
         var client = GetClient();
-        var path = $"data:host/1/TestPricing/{TestPricingId}";
+        var path = $"data/host/1/TestPricing/{TestPricingId}";
 
         // act - send from client to host
         var response = await client.AwaitResponse(
@@ -224,7 +224,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
         // arrange - client sends request to host
         GetHost(); // Ensure host is initialized
         var client = GetClient();
-        var path = "data:host/1";
+        var path = "data/host/1";
 
         // act - send from client to host
         var response = await client.AwaitResponse(
@@ -247,7 +247,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
         // arrange - client sends request to host
         GetHost(); // Ensure host is initialized
         var client = GetClient();
-        var path = "area:host/1/TestArea";
+        var path = "area/host/1/TestArea";
 
         // act - send from client to host
         var response = await client.AwaitResponse(
@@ -275,7 +275,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
         // arrange - client sends request to host
         GetHost(); // Ensure host is initialized
         var client = GetClient();
-        var path = $"area:host/1/TestArea/{TestPricingId}";
+        var path = $"area/host/1/TestArea/{TestPricingId}";
 
         // act - send from client to host
         var response = await client.AwaitResponse(
@@ -295,7 +295,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
         // arrange - client sends request to host
         GetHost(); // Ensure host is initialized
         var client = GetClient();
-        var path = "data:invalid";
+        var path = "data/invalid";
 
         // act - send from client to host
         var response = await client.AwaitResponse(
@@ -339,7 +339,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
         {
             var host = GetHostWithFileProvider(testDir);
             var client = GetClient();
-            var path = "content:host/1/TestFiles/content-test.txt";
+            var path = "content/host/1/TestFiles/content-test.txt";
 
             // act - send from client to host
             var response = await client.AwaitResponse(
@@ -380,7 +380,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
             // Create a host with file content provider
             var host = GetHostWithFileProvider(testDir);
             var client = GetClient();
-            var path = "data:host/1/TestFiles/test.txt";
+            var path = "data/host/1/TestFiles/test.txt";
 
             // act - send from client to host
             var response = await client.AwaitResponse(
@@ -418,7 +418,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
         {
             var host = GetHostWithFileProvider(testDir);
             var client = GetClient();
-            var path = "data:host/1/TestFiles/multiline.txt";
+            var path = "data/host/1/TestFiles/multiline.txt";
 
             // act - request only 2 rows
             var response = await client.AwaitResponse(
@@ -453,7 +453,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
         {
             var host = GetHostWithFileProvider(testDir);
             var client = GetClient();
-            var path = "data:host/1/TestFiles/nonexistent.txt";
+            var path = "data/host/1/TestFiles/nonexistent.txt";
 
             // act
             var response = await client.AwaitResponse(
@@ -486,7 +486,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
         {
             var host = GetHostWithFileProvider(testDir);
             var client = GetClient();
-            var path = "data:host/1/TestFiles/subfolder/nested.txt";
+            var path = "data/host/1/TestFiles/subfolder/nested.txt";
 
             // act
             var response = await client.AwaitResponse(
@@ -590,7 +590,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
         // arrange
         GetHost();
         var client = GetClient();
-        var path = $"data:host/1/TestPricing/{TestPricingId}";
+        var path = $"data/host/1/TestPricing/{TestPricingId}";
 
         // First, verify the entity exists
         var getResponse = await client.AwaitResponse(
@@ -663,7 +663,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
         // arrange
         GetHost();
         var client = GetClient();
-        var path = "data:host/1";
+        var path = "data/host/1";
 
         // act
         var response = await client.AwaitResponse(
@@ -689,7 +689,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
         {
             var host = GetHostWithFileProvider(testDir);
             var client = GetClient();
-            var path = "content:host/1/TestFiles/update-test.txt";
+            var path = "content/host/1/TestFiles/update-test.txt";
 
             // act
             var response = await client.AwaitResponse(
@@ -718,7 +718,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
         // arrange
         GetHost();
         var client = GetClient();
-        var path = "area:host/1/TestArea";
+        var path = "area/host/1/TestArea";
 
         // act
         var response = await client.AwaitResponse(
@@ -755,7 +755,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
             TestContext.Current.CancellationToken);
 
         // Verify it exists
-        var path = $"data:host/1/TestPricing/{newEntityId}";
+        var path = $"data/host/1/TestPricing/{newEntityId}";
         var getResponse = await client.AwaitResponse(
             new GetDataRequest(new UnifiedReference(path)),
             o => o.WithTarget(new HostAddress()),
@@ -804,7 +804,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
         // arrange
         GetHost();
         var client = GetClient();
-        var path = "data:host/1";
+        var path = "data/host/1";
 
         // act
         var response = await client.AwaitResponse(
@@ -823,7 +823,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
         // arrange
         GetHost();
         var client = GetClient();
-        var path = "data:host/1/TestPricing";
+        var path = "data/host/1/TestPricing";
 
         // act
         var response = await client.AwaitResponse(
@@ -849,7 +849,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
         {
             var host = GetHostWithFileProvider(testDir);
             var client = GetClient();
-            var path = "content:host/1/TestFiles/delete-test.txt";
+            var path = "content/host/1/TestFiles/delete-test.txt";
 
             // Verify file exists
             File.Exists(testFilePath).Should().BeTrue();
@@ -880,7 +880,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
         // arrange
         GetHost();
         var client = GetClient();
-        var path = "area:host/1/TestArea";
+        var path = "area/host/1/TestArea";
 
         // act
         var response = await client.AwaitResponse(
@@ -899,7 +899,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
         // arrange
         GetHost();
         var client = GetClient();
-        var path = "data:host/1/TestPricing/nonexistent-entity-id";
+        var path = "data/host/1/TestPricing/nonexistent-entity-id";
 
         // act
         var response = await client.AwaitResponse(
@@ -922,7 +922,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
         // arrange
         GetHost();
         var client = GetClient();
-        var path = "data:host/1/TestPricing";
+        var path = "data/host/1/TestPricing";
 
         // act - use GetDataRequest which correctly handles the UnifiedReference
         var response = await client.AwaitResponse(
@@ -944,7 +944,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
         // arrange
         GetHost();
         var client = GetClient();
-        var path = $"data:host/1/TestPricing/{TestPricingId}";
+        var path = $"data/host/1/TestPricing/{TestPricingId}";
 
         // act - use GetDataRequest which correctly handles the UnifiedReference
         var response = await client.AwaitResponse(
@@ -965,7 +965,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
         // arrange
         GetHost();
         var client = GetClient();
-        var path = "area:host/1/TestArea";
+        var path = "area/host/1/TestArea";
 
         // act - use GetDataRequest which correctly handles the UnifiedReference
         var response = await client.AwaitResponse(
@@ -990,15 +990,15 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
         registry.Register("content", new ContentPathHandler());
 
         // act & assert - verify registry can resolve paths
-        registry.TryResolve("data:pricing/MS-2024/TestPricing", out var dataAddr, out var dataRef).Should().BeTrue();
+        registry.TryResolve("data/pricing/MS-2024/TestPricing", out var dataAddr, out var dataRef).Should().BeTrue();
         dataAddr!.Type.Should().Be("pricing");
         dataRef.Should().BeOfType<DataPathReference>(); // DataPathHandler now returns DataPathReference
 
-        registry.TryResolve("area:pricing/MS-2024/Overview", out var areaAddr, out var areaRef).Should().BeTrue();
+        registry.TryResolve("area/pricing/MS-2024/Overview", out var areaAddr, out var areaRef).Should().BeTrue();
         areaAddr!.Type.Should().Be("pricing");
         areaRef.Should().BeOfType<LayoutAreaReference>();
 
-        registry.TryResolve("content:pricing/MS-2024/Submissions/file.xlsx", out var contentAddr, out var contentRef).Should().BeTrue();
+        registry.TryResolve("content/pricing/MS-2024/Submissions/file.xlsx", out var contentAddr, out var contentRef).Should().BeTrue();
         contentAddr!.Type.Should().Be("pricing");
         contentRef.Should().BeOfType<FileReference>();
     }
@@ -1148,7 +1148,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
         registry.Register("data", new DataPathHandler());
 
         // act
-        var found = registry.TryResolve("data:pricing/MS-2024/Collection", out var address, out var reference);
+        var found = registry.TryResolve("data/pricing/MS-2024/Collection", out var address, out var reference);
 
         // assert
         found.Should().BeTrue();
@@ -1181,7 +1181,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
         registry.Register("DATA", new DataPathHandler());
 
         // act
-        var found = registry.TryResolve("data:pricing/MS-2024/Collection", out var address, out _);
+        var found = registry.TryResolve("data/pricing/MS-2024/Collection", out var address, out _);
 
         // assert
         found.Should().BeTrue();
@@ -1365,8 +1365,8 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
         registry.Prefixes.Should().HaveCount(5);
 
         // Built-in handlers work
-        registry.TryResolve("data:host/1/Collection", out _, out _).Should().BeTrue();
-        registry.TryResolve("area:host/1/Overview", out _, out _).Should().BeTrue();
+        registry.TryResolve("data/host/1/Collection", out _, out _).Should().BeTrue();
+        registry.TryResolve("area/host/1/Overview", out _, out _).Should().BeTrue();
 
         // Custom handlers work
         registry.TryResolve("pricing:MS-2024", out var pricingAddr, out var pricingRef).Should().BeTrue();

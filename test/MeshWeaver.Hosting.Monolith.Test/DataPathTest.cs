@@ -458,7 +458,7 @@ public class DataPathTest(ITestOutputHelper output) : HubTestBase(output)
 
         // Act - Use UnifiedReference with data: prefix
         var response = await client.AwaitResponse(
-            new GetDataRequest(new UnifiedReference("data:host/1/Order")),
+            new GetDataRequest(new UnifiedReference("data/host/1/Order")),
             o => o.WithTarget(new HostAddress()),
             TestContext.Current.CancellationToken);
 
@@ -481,7 +481,7 @@ public class DataPathTest(ITestOutputHelper output) : HubTestBase(output)
 
         // Act - Use UnifiedReference with data: prefix for specific entity
         var response = await client.AwaitResponse(
-            new GetDataRequest(new UnifiedReference("data:host/1/Customer/C2")),
+            new GetDataRequest(new UnifiedReference("data/host/1/Customer/C2")),
             o => o.WithTarget(new HostAddress()),
             TestContext.Current.CancellationToken);
 

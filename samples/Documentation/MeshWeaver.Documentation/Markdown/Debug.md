@@ -11,8 +11,8 @@ Tags:
 
 ## Data Reference Test
 
-@data:app/Northwind/Order/10248
+@data/app/Northwind/Order/10248
 
 ## Content Reference Test
 
-@content:app/Documentation/Documentation/embedded.md
+@content/app/Documentation/Documentation/embedded.md

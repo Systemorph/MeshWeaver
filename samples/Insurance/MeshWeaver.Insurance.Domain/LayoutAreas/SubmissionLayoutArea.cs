@@ -10,7 +10,7 @@ namespace MeshWeaver.Insurance.Domain.LayoutAreas;
 
 /// <summary>
 /// Layout area for displaying submission details for a pricing.
-/// Uses the generic Collection layout area with area:'Collection', Id:'{collection}/{path}'
+/// Uses the generic Collection layout area with area/'Collection', Id:'{collection}/{path}'
 /// </summary>
 public static class SubmissionLayoutArea
 {

@@ -23,18 +23,18 @@ MeshWeaver provides a unified notation for referencing any form of content. Whet
 ```
 
 The prefix determines how the content is fetched and rendered:
-- `data:` - Fetches data entities and displays them as JSON
-- `content:` - Fetches file content and renders based on mime type
-- `area:` - Displays a layout area (default if no prefix is specified)
+- `data/` - Fetches data entities and displays them as JSON
+- `content/` - Fetches file content and renders based on mime type
+- `area/` - Displays a layout area (default if no prefix is specified)
 
-For paths containing spaces, use quotes: `@"content:app/Docs/My Report.pdf"`
+For paths containing spaces, use quotes: `@"content/app/Docs/My Report.pdf"`
 
 ## Data References
 
 Data references embed live data directly in your markdown, displayed as formatted JSON. The format is:
 
 ```
-@data:addressType/addressId/collection/entityId
+@data/addressType/addressId/collection/entityId
 ```
 
 ### Example: Fetching a Collection
@@ -42,37 +42,37 @@ Data references embed live data directly in your markdown, displayed as formatte
 To display all todo items:
 
 ```
-@data:app/Todo/TodoItem
+@data/app/Todo/TodoItem
 ```
 
-@data:app/Todo/TodoItem
+@data/app/Todo/TodoItem
 
 ### Example: Fetching a Single Entity
 
 To display a specific todo item by ID:
 
 ```
-@data:app/Todo/TodoItem/1
+@data/app/Todo/TodoItem/1
 ```
 
-@data:app/Todo/TodoItem/1
+@data/app/Todo/TodoItem/1
 
 ### Example: Fetching Categories
 
 To display all todo categories:
 
 ```
-@data:app/Todo/TodoCategory
+@data/app/Todo/TodoCategory
 ```
 
-@data:app/Todo/TodoCategory
+@data/app/Todo/TodoCategory
 
 ## Content References
 
 Content references embed file content directly in your markdown. The content is rendered based on its mime type. The format is:
 
 ```
-@content:addressType/addressId/collection/path
+@content/addressType/addressId/collection/path
 ```
 
 ### Example: Embedding an Image
@@ -80,20 +80,20 @@ Content references embed file content directly in your markdown. The content is 
 To display an image from the Todo collection:
 
 ```
-@content:app/Todo/Todo/images/todoapp.jpeg
+@content/app/Todo/Todo/images/todoapp.jpeg
 ```
 
-@content:app/Todo/Todo/images/todoapp.jpeg
+@content/app/Todo/Todo/images/todoapp.jpeg
 
 ## Layout Area References
 
 Layout areas display interactive components. The format is:
 
 ```
-@area:addressType/addressId/areaName
+@area/addressType/addressId/areaName
 ```
 
-You can omit the `area:` prefix since it's the default:
+You can omit the `area/` prefix since it's the default:
 
 ```
 @addressType/addressId/areaName

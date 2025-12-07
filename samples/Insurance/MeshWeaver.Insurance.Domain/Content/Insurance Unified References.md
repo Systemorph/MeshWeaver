@@ -23,80 +23,80 @@ This document showcases all addressable items in the Insurance application.
 Display all countries:
 
 ```
-@data:app/Insurance/Country
+@data/app/Insurance/Country
 ```
 
-@data:app/Insurance/Country
+@data/app/Insurance/Country
 
 ### Single Country
 
 Display a specific country:
 
 ```
-@data:app/Insurance/Country/US
+@data/app/Insurance/Country/US
 ```
 
-@data:app/Insurance/Country/US
+@data/app/Insurance/Country/US
 
 ### Currency Collection
 
 Display all currencies:
 
 ```
-@data:app/Insurance/Currency
+@data/app/Insurance/Currency
 ```
 
-@data:app/Insurance/Currency
+@data/app/Insurance/Currency
 
 ### Single Currency
 
 Display a specific currency:
 
 ```
-@data:app/Insurance/Currency/USD
+@data/app/Insurance/Currency/USD
 ```
 
-@data:app/Insurance/Currency/USD
+@data/app/Insurance/Currency/USD
 
 ### Line of Business Collection
 
 Display all lines of business:
 
 ```
-@data:app/Insurance/LineOfBusiness
+@data/app/Insurance/LineOfBusiness
 ```
 
-@data:app/Insurance/LineOfBusiness
+@data/app/Insurance/LineOfBusiness
 
 ### Single Line of Business
 
 Display a specific line of business:
 
 ```
-@data:app/Insurance/LineOfBusiness/PROP
+@data/app/Insurance/LineOfBusiness/PROP
 ```
 
-@data:app/Insurance/LineOfBusiness/PROP
+@data/app/Insurance/LineOfBusiness/PROP
 
 ### Legal Entity Collection
 
 Display all legal entities:
 
 ```
-@data:app/Insurance/LegalEntity
+@data/app/Insurance/LegalEntity
 ```
 
-@data:app/Insurance/LegalEntity
+@data/app/Insurance/LegalEntity
 
 ### Single Legal Entity
 
 Display a specific legal entity:
 
 ```
-@data:app/Insurance/LegalEntity/MW-US
+@data/app/Insurance/LegalEntity/MW-US
 ```
 
-@data:app/Insurance/LegalEntity/MW-US
+@data/app/Insurance/LegalEntity/MW-US
 
 ## Pricing Data
 
@@ -105,10 +105,10 @@ Display a specific legal entity:
 Display all pricings in the catalog:
 
 ```
-@data:app/Insurance/Pricing
+@data/app/Insurance/Pricing
 ```
 
-@data:app/Insurance/Pricing
+@data/app/Insurance/Pricing
 
 ## Layout Area References
 
