@@ -40,7 +40,8 @@ public static class TodoApplicationExtensions
                         )
                 )
                 .AddLayout(layout =>
-                    layout.WithView(nameof(TodoLayoutAreas.AllItems), TodoLayoutAreas.AllItems)
+                    layout.WithDefaultArea(nameof(TodoLayoutAreas.Summary))
+                        .WithView(nameof(TodoLayoutAreas.AllItems), TodoLayoutAreas.AllItems)
                         .WithView(nameof(TodoLayoutAreas.TodosByCategory), TodoLayoutAreas.TodosByCategory)
                         .WithView(nameof(TodoLayoutAreas.Summary), TodoLayoutAreas.Summary)
                         .WithView(nameof(TodoLayoutAreas.Planning), TodoLayoutAreas.Planning)
