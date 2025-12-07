@@ -169,14 +169,14 @@ public record LayoutAreaHost : IDisposable
         var ret = DisposeExistingAreas(store, context);
         InvokeAsync(async ct =>
         {
-            logger.LogDebug("Start rendering of {area}", context.Area);
+            logger?.LogDebug("Start rendering of {area}", context.Area);
             var observable = await asyncGenerator.Invoke(this, context, ct);
             RegisterForDisposal(context.Parent?.Area ?? context.Area,
                 observable
                     .Subscribe(c => UpdateArea(context, c), FailRendering)
             );
 
-            logger.LogDebug("End rendering of {area}", context.Area);
+            logger?.LogDebug("End rendering of {area}", context.Area);
 
         }, ex =>
         {

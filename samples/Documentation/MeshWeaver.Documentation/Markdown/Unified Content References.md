@@ -16,201 +16,105 @@ Tags:
   - "Content"
 ---
 
-MeshWeaver provides a unified notation for referencing any form of content. Whether you need to embed data,
-include file content, or display layout areas, the syntax follows a consistent pattern.
+MeshWeaver provides a unified notation for referencing any form of content. Whether you need to embed data, include file content, or display layout areas, the syntax follows a consistent pattern:
 
-## Syntax
-
-The basic syntax is:
 ```
-@prefix:addressType/addressId/resource/path
+@prefix:addressType/addressId/path
 ```
-
-Examples:
-```markdown
-@app/Northwind/Dashboard
-@data:app/Northwind/Products
-@content:app/Docs/readme.md
-```
-
-For paths containing spaces or special characters, use quotes:
-```markdown
-@"content:app/Docs/My Report 2025.pdf"
-@"app/Northwind/Sales Report"
-```
-
-The legacy syntax with parentheses is also supported for backward compatibility:
-```markdown
-@("app/Northwind/Dashboard")
-```
-
-## Prefixes
 
 The prefix determines how the content is fetched and rendered:
 - `data:` - Fetches data entities and displays them as JSON
 - `content:` - Fetches file content and renders based on mime type
-- `area:` - Displays a layout area (this is the default if no prefix is specified)
+- `area:` - Displays a layout area (default if no prefix is specified)
 
-## Layout Area References
-
-Layout areas are the most common reference type. They display interactive components from any address:
-
-```markdown
-@area:app/Northwind/AnnualReportSummary
-@area:app/Northwind/TopClients/Year=2025
-```
-
-Format: `area:addressType/addressId/areaName[/areaId]`
-
-For backward compatibility, you can omit the `area:` prefix:
-
-```markdown
-@app/Northwind/AnnualReportSummary
-```
-
-This is equivalent to `@area:app/Northwind/AnnualReportSummary`.
-
-### Example: Embedding a Layout Area
-
-Here we embed the Northwind annual report summary:
-
-@app/Northwind/AnnualReportSummary?Year=2025
+For paths containing spaces, use quotes: `@"content:app/Docs/My Report.pdf"`
 
 ## Data References
 
-Data references allow you to embed data directly in your markdown. The data is fetched and displayed
-as a formatted JSON code block:
+Data references embed live data directly in your markdown, displayed as formatted JSON. The format is:
 
-```markdown
-@data:app/Northwind/Category
-@data:app/Northwind/Category/1
+```
+@data:addressType/addressId/collection/entityId
 ```
 
-Format: `data:addressType/addressId[/collection[/entityId]]`
+### Example: Fetching a Collection
 
-- Without collection: Returns default data entity
-- With collection: Returns the entire collection
-- With collection and entityId: Returns a single entity
+To display all territories:
 
-### Example: Embedding an Order
-
-To display a specific order from the Northwind application:
-
-```markdown
-@data:app/Northwind/Order/10248
+```
+@data:app/Northwind/Territory
 ```
 
-Here is an actual order embedded:
+@data:app/Northwind/Territory
 
-@data:app/Northwind/Order/10248
+### Example: Fetching a Single Entity
 
-### Use Cases for Data References
+To display a specific territory by ID:
 
-- **Documentation**: Show live data examples in your documentation
-- **Debugging**: Quickly inspect data state in markdown reports
-- **Data Export**: Generate JSON snapshots of your data
+```
+@data:app/Northwind/Territory/06897
+```
+
+@data:app/Northwind/Territory/06897
 
 ## Content References
 
-Content references allow you to embed file content directly in your markdown. The content is
-rendered based on its mime type:
+Content references embed file content directly in your markdown. The content is rendered based on its mime type. The format is:
 
-```markdown
-@content:app/Northwind/Documents/report.pdf
 ```
-
-Format: `content:addressType/addressId/collection[/path/to/file]` 
-
-### Supported Content Types
-
-Content is rendered appropriately based on mime type:
-
-| Content Type | Rendering |
-|-------------|-----------|
-| Images (png, jpg, svg) | Displayed inline |
-| Text files (txt, md, json) | Rendered as formatted content |
-| PDF documents | Displayed with viewer or download link |
-| Other files | Download link provided |
+@content:addressType/addressId/collection/path
+```
 
 ### Example: Embedding an Image
 
-To display an image:
+To display an image from the Documentation collection:
 
-```markdown
+```
 @content:app/Documentation/Documentation/images/meshbros.png
 ```
 
-Here is an actual image embedded:
-
 @content:app/Documentation/Documentation/images/meshbros.png
 
-### Example: Including Another Markdown Document
+### Example: Including a Markdown Document
 
-You can include the content of another markdown file directly:
+To include content from another markdown file:
 
-```markdown
+```
 @content:app/Documentation/Documentation/embedded.md
 ```
 
-Here is the actual content of `embedded.md` included inline:
-
 @content:app/Documentation/Documentation/embedded.md
 
-## Combining References
+## Layout Area References
 
-You can mix different reference types in a single document to create rich, interactive reports:
+Layout areas display interactive components. The format is:
 
-```markdown
-# Sales Report
-
-## Overview Dashboard
-@app/Northwind/SalesDashboard?Year=2025
-
-## Raw Data Export
-@data:app/Northwind/Orders
-
-## Attached Documents
-@content:app/Northwind/Reports/Q4-Summary.pdf
+```
+@area:addressType/addressId/areaName
 ```
 
-## Path Parameters
+You can omit the `area:` prefix since it's the default:
 
-All reference types support path parameters using query string syntax:
-
-```markdown
-@app/Northwind/SalesReport?Year=2025&Region=Europe
-@data:app/Northwind/Order?limit=10
+```
+@addressType/addressId/areaName
 ```
 
-## Technical Details
+### Example: Embedding a Layout Area
 
-Behind the scenes, all unified references are processed through the `GetDataRequest`/`GetDataResponse`
-message pattern. The path is parsed by the `ContentReference.Parse()` method which determines the
-appropriate handler based on the prefix.
+To embed the Northwind annual report summary:
 
-```mermaid
-flowchart LR
-    A[Markdown Parser] --> B{Prefix?}
-    B -->|data:| C[DataContentReference]
-    B -->|content:| D[FileContentReference]
-    B -->|area: or none| E[LayoutAreaReference]
-    C --> F[GetDataRequest]
-    D --> F
-    E --> G[LayoutAreaView]
-    F --> H[Response Handler]
-    H --> I[Rendered Content]
-    G --> I
+```
+@app/Northwind/AnnualReportSummary?Year=2025
 ```
 
-## Summary
+@app/Northwind/AnnualReportSummary?Year=2025
 
-The unified content reference system provides a consistent, intuitive way to embed any type of
-content in your markdown documents. Whether you're building interactive reports, documentation,
-or data-driven applications, you can reference data, files, and layout areas using the same
-familiar syntax.
+### Example: Embedding Sales Growth Summary
 
-| Prefix | Purpose | Example |
-|--------|---------|---------|
-| `area:` (or none) | Layout areas | `@app/Northwind/Dashboard` |
-| `data:` | Data entities as JSON | `@data:app/Northwind/Products` |
-| `content:` | File content by mime type | `@content:app/Docs/readme.md` |
+To embed the sales growth chart:
+
+```
+@app/Northwind/SalesGrowthSummary?Year=2025
+```
+
+@app/Northwind/SalesGrowthSummary?Year=2025

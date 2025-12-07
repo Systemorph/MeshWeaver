@@ -294,13 +294,11 @@ public static class DataExtensions
             var entityRef = new EntityReference(pathPrefix, entityId);
             return workspace.GetStream(entityRef, configuration);
         }
-        else
-        {
-            var collectionRef = new CollectionReference(pathPrefix);
-            // CollectionReference returns InstanceCollection, cast stream to object
-            var stream = workspace.GetStream(collectionRef);
-            return stream as ISynchronizationStream<object>;
-        }
+
+        // For collection paths, get the InstanceCollection stream and select to object
+        var collectionRef = new CollectionReference(pathPrefix);
+        var collectionStream = workspace.GetStream(collectionRef);
+        return collectionStream?.Select(x => (object)x);
     }
 
     /// <summary>
