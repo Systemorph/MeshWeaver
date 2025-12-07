@@ -73,7 +73,7 @@ public class AgentChatClient(
         return sharedThread;
     }
 
-    private async Task SaveThreadAsync(AIAgent agent, AgentThread thread)
+    private async Task SaveThreadAsync(AIAgent _, AgentThread thread)
     {
         // Save the shared thread with a common key
         var serialized = thread.Serialize(hub.JsonSerializerOptions);

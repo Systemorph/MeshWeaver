@@ -138,7 +138,7 @@ public static class SharedPortalConfiguration
             builder.Configuration.GetSection("Styles"));
     }
 
-    public static TBuilder ConfigureWebPortal<TBuilder>(this TBuilder builder, IConfiguration configuration)
+    public static TBuilder ConfigureWebPortal<TBuilder>(this TBuilder builder, IConfiguration _)
         where TBuilder : MeshBuilder
         =>
             (TBuilder)builder

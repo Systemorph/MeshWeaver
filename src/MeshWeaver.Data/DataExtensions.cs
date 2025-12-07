@@ -341,7 +341,7 @@ public static class DataExtensions
     private static ISynchronizationStream<object>? CreateUnifiedReferenceStream(
         IWorkspace workspace,
         UnifiedReference reference,
-        Func<StreamConfiguration<object>, StreamConfiguration<object>>? configuration)
+        Func<StreamConfiguration<object>, StreamConfiguration<object>>? _)
     {
         var parsed = ParseUnifiedPath(reference.Path);
         var dataContext = workspace.DataContext;

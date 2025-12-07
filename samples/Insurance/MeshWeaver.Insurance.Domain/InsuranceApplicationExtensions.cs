@@ -34,6 +34,7 @@ public static class InsuranceApplicationExtensions
     /// </summary>
     public static MessageHubConfiguration ConfigureInsuranceApplication(this MessageHubConfiguration configuration)
         => configuration
+            .AddEmbeddedResourceContentCollection("Insurance", typeof(InsuranceApplicationExtensions).Assembly, "Content")
             .WithTypes(typeof(PricingAddress), typeof(ImportConfiguration), typeof(ExcelImportConfiguration), typeof(ReinsuranceAcceptance), typeof(ReinsuranceSection), typeof(ImportRequest), typeof(CollectionSource), typeof(GeocodingRequest), typeof(GeocodingResponse))
             .AddData(data =>
             {
@@ -49,7 +50,8 @@ public static class InsuranceApplicationExtensions
             .AddLayout(l => l
                 .WithView(nameof(LayoutAreas.PricingCatalogLayoutArea.Pricings),
                     LayoutAreas.PricingCatalogLayoutArea.Pricings)
-            );
+            )
+            .AddArticles();
 
     /// <summary>
     /// Configures a single pricing hub that contains the pricing details and risks.
@@ -132,6 +134,7 @@ public static class InsuranceApplicationExtensions
                 .WithContentProvider("Submissions", GetLocalizedCollectionName("Submissions", pricingId));
             })
             .AddLayout(l => l
+                .WithDefaultArea(nameof(LayoutAreas.PricingOverviewLayoutArea.Overview))
                 .WithView(nameof(LayoutAreas.PricingOverviewLayoutArea.Overview),
                     LayoutAreas.PricingOverviewLayoutArea.Overview)
                 .WithView(nameof(LayoutAreas.SubmissionLayoutArea.Submission),

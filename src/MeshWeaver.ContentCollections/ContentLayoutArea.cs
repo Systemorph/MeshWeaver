@@ -49,7 +49,7 @@ public static class ContentLayoutArea
     /// and legacy format (collection/path).
     /// </summary>
     [Browsable(false)]
-    public static async Task<IObservable<UiControl?>> Content(LayoutAreaHost host, RenderingContext context, CancellationToken ct)
+    public static async Task<IObservable<UiControl?>> Content(LayoutAreaHost host, RenderingContext _, CancellationToken ct)
     {
         var idString = host.Reference.Id?.ToString() ?? "";
 
@@ -211,7 +211,7 @@ public static class ContentLayoutArea
     /// Format: collection/path or collection@partition/path
     /// </summary>
     [Browsable(false)]
-    public static async Task<IObservable<UiControl?>> UnifiedContent(LayoutAreaHost host, RenderingContext context, CancellationToken ct)
+    public static async Task<IObservable<UiControl?>> UnifiedContent(LayoutAreaHost host, RenderingContext _, CancellationToken ct)
     {
         var contentPath = host.Reference.Id?.ToString() ?? "";
 

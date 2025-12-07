@@ -16,5 +16,9 @@
     <ProjectReference Include="..\..\..\src\MeshWeaver.Import\MeshWeaver.Import.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <EmbeddedResource Include="Content\**\*" />
+  </ItemGroup>
+
 
 </Project>
