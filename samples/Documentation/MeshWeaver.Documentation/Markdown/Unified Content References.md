@@ -137,24 +137,24 @@ Content is rendered appropriately based on mime type:
 To display an image:
 
 ```markdown
-@content:app/Documentation/Markdown/images/meshbros.png
+@content:app/Documentation/Documentation/images/meshbros.png
 ```
 
 Here is an actual image embedded:
 
-@content:app/Documentation/Markdown/images/meshbros.png
+@content:app/Documentation/Documentation/images/meshbros.png
 
 ### Example: Including Another Markdown Document
 
 You can include the content of another markdown file directly:
 
 ```markdown
-@content:app/Documentation/Markdown/embedded.md
+@content:app/Documentation/Documentation/embedded.md
 ```
 
 Here is the actual content of `embedded.md` included inline:
 
-@content:app/Documentation/Markdown/embedded.md
+@content:app/Documentation/Documentation/embedded.md
 
 ## Combining References
 
