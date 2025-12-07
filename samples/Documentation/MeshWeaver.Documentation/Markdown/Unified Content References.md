@@ -29,34 +29,6 @@ The prefix determines how the content is fetched and rendered:
 
 For paths containing spaces, use quotes: `@"content:app/Docs/My Report.pdf"`
 
-## Data References
-
-Data references embed live data directly in your markdown, displayed as formatted JSON. The format is:
-
-```
-@data:addressType/addressId/collection/entityId
-```
-
-### Example: Fetching a Collection
-
-To display all territories:
-
-```
-@data:app/Northwind/Territory
-```
-
-@data:app/Northwind/Territory
-
-### Example: Fetching a Single Entity
-
-To display a specific territory by ID:
-
-```
-@data:app/Northwind/Territory/06897
-```
-
-@data:app/Northwind/Territory/06897
-
 ## Content References
 
 Content references embed file content directly in your markdown. The content is rendered based on its mime type. The format is:
@@ -75,7 +47,7 @@ To display an image from the Documentation collection:
 
 @content:app/Documentation/Documentation/images/meshbros.png
 
-### Example: Including a Markdown Document
+### Example: Embedding a Markdown Document
 
 To include content from another markdown file:
 
@@ -99,22 +71,32 @@ You can omit the `area:` prefix since it's the default:
 @addressType/addressId/areaName
 ```
 
-### Example: Embedding a Layout Area
+### Example: Embedding the Calculator
 
-To embed the Northwind annual report summary:
-
-```
-@app/Northwind/AnnualReportSummary?Year=2025
-```
-
-@app/Northwind/AnnualReportSummary?Year=2025
-
-### Example: Embedding Sales Growth Summary
-
-To embed the sales growth chart:
+The Calculator layout area demonstrates a simple interactive component:
 
 ```
-@app/Northwind/SalesGrowthSummary?Year=2025
+@app/Documentation/Calculator
 ```
 
-@app/Northwind/SalesGrowthSummary?Year=2025
+@app/Documentation/Calculator
+
+### Example: Embedding the Counter
+
+The Counter layout area demonstrates stateful views with click actions:
+
+```
+@app/Documentation/Counter
+```
+
+@app/Documentation/Counter
+
+### Example: Embedding Progress Indicators
+
+The Progress layout area demonstrates progress bars:
+
+```
+@app/Documentation/Progress
+```
+
+@app/Documentation/Progress

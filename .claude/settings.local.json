@@ -53,7 +53,8 @@
       "Bash(cd:*)",
       "Bash(git stash:*)",
       "Bash(where python python3 powershell pwsh)",
-      "Bash(git grep:*)"
+      "Bash(git grep:*)",
+      "Bash(xargs:*)"
     ],
     "deny": []
   }
