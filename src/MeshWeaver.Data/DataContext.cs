@@ -82,6 +82,22 @@ public sealed record DataContext : IDisposable
     public ImmutableDictionary<string, string> ContentProviders { get; init; } =
         ImmutableDictionary<string, string>.Empty;
 
+    /// <summary>
+    /// Virtual path handlers that resolve custom data paths to streams.
+    /// Key is the path prefix (e.g., "OrderSummary"), value is a factory function
+    /// that returns an observable stream based on the path.
+    /// </summary>
+    public ImmutableDictionary<string, VirtualPathHandler> VirtualPaths { get; init; } =
+        ImmutableDictionary<string, VirtualPathHandler>.Empty;
+
+    /// <summary>
+    /// Unified reference resolvers keyed by prefix (e.g., "data", "area", "content").
+    /// Each prefix has a list of resolvers tried in order (first one returning non-null wins).
+    /// New resolvers are inserted at position 0 to allow overriding default behavior.
+    /// </summary>
+    public ImmutableDictionary<string, ImmutableList<UnifiedReferenceResolver>> UnifiedReferenceResolvers { get; init; } =
+        ImmutableDictionary<string, ImmutableList<UnifiedReferenceResolver>>.Empty;
+
     public DataContext WithInitializationTimeout(TimeSpan timeout) =>
         this with { InitializationTimeout = timeout };
 
@@ -149,6 +165,26 @@ public sealed record DataContext : IDisposable
     public string? GetCollectionName(Type type)
         => TypeSourcesByType.GetValueOrDefault(type)?.CollectionName;
 }
+
+/// <summary>
+/// Handler delegate for virtual data paths.
+/// Takes the workspace and optional entity ID, returns an observable stream.
+/// </summary>
+/// <param name="workspace">The workspace context</param>
+/// <param name="entityId">Optional entity ID from the path (e.g., "O1" from "OrderSummary/O1")</param>
+/// <returns>An observable stream of the computed data</returns>
+public delegate IObservable<object?> VirtualPathHandler(IWorkspace workspace, string? entityId);
+
+/// <summary>
+/// Resolver delegate for unified reference paths.
+/// Takes the path (without prefix) and returns a synchronization stream, or null if not handled.
+/// </summary>
+/// <param name="workspace">The workspace context</param>
+/// <param name="path">The path after the prefix (e.g., "collection/entity" from "data:addressType/addressId/collection/entity")</param>
+/// <returns>A synchronization stream if handled, null otherwise</returns>
+public delegate ISynchronizationStream<object>? UnifiedReferenceResolver(
+    IWorkspace workspace,
+    string? path);
 
 /// <summary>
 /// Extensions for DataContext to support virtual data sources and default data references
@@ -235,27 +271,100 @@ public static class DataContextExtensions
     }
 
     /// <summary>
-    /// Registers a unified reference handler for a specific prefix.
-    /// This enables accessing content via unified paths like "data:...", "area:...", "content:...".
+    /// Registers a virtual path handler that computes data from multiple streams.
+    /// Virtual paths allow custom data paths like "OrderSummary" or "OrderSummary/O1"
+    /// that resolve to computed/joined data from the workspace.
     /// </summary>
     /// <param name="dataContext">The data context to configure</param>
-    /// <param name="prefix">The prefix to register (e.g., "data", "area", "content")</param>
-    /// <param name="handler">The handler that processes references with this prefix</param>
-    /// <returns>Updated data context (unchanged, handler is registered directly)</returns>
+    /// <param name="pathPrefix">The path prefix to match (e.g., "OrderSummary")</param>
+    /// <param name="handler">Handler function that returns an observable stream for the path</param>
+    /// <returns>Updated data context with the virtual path configured</returns>
     /// <example>
     /// <code>
     /// .AddData(data => data
-    ///     .WithUnifiedReferenceHandler("data", new DataPrefixHandler())
+    ///     .AddSource(src => src.WithType&lt;Order&gt;(...))
+    ///     .AddSource(src => src.WithType&lt;Customer&gt;(...))
+    ///     .WithVirtualPath("OrderSummary", (workspace, entityId) =>
+    ///     {
+    ///         var orders = workspace.GetStream(typeof(Order));
+    ///         var customers = workspace.GetStream(typeof(Customer));
+    ///
+    ///         return Observable.CombineLatest(orders, customers, (o, c) =>
+    ///         {
+    ///             // Join orders with customers
+    ///             var result = JoinOrdersWithCustomers(o, c);
+    ///             // If entityId specified, return single entity
+    ///             return entityId != null
+    ///                 ? result.FirstOrDefault(x => x.Id == entityId)
+    ///                 : result;
+    ///         });
+    ///     })
     /// )
     /// </code>
     /// </example>
-    public static DataContext WithUnifiedReferenceHandler(
+    public static DataContext WithVirtualPath(
+        this DataContext dataContext,
+        string pathPrefix,
+        VirtualPathHandler handler)
+    {
+        return dataContext with
+        {
+            VirtualPaths = dataContext.VirtualPaths.Add(pathPrefix, handler)
+        };
+    }
+
+    /// <summary>
+    /// Registers a virtual path handler with a simpler signature for collection-only paths.
+    /// Use this when the path doesn't need entity-level resolution.
+    /// </summary>
+    /// <param name="dataContext">The data context to configure</param>
+    /// <param name="pathPrefix">The path prefix to match (e.g., "OrderSummary")</param>
+    /// <param name="handler">Handler function that returns an observable stream</param>
+    /// <returns>Updated data context with the virtual path configured</returns>
+    public static DataContext WithVirtualPath(
+        this DataContext dataContext,
+        string pathPrefix,
+        Func<IWorkspace, IObservable<object?>> handler)
+    {
+        return dataContext.WithVirtualPath(pathPrefix, (workspace, _) => handler(workspace));
+    }
+
+    /// <summary>
+    /// Registers a unified reference resolver for a specific prefix.
+    /// Resolvers are inserted at position 0 to allow later registrations to override earlier ones.
+    /// The first resolver returning non-null wins for that prefix.
+    /// </summary>
+    /// <param name="dataContext">The data context to configure</param>
+    /// <param name="prefix">The prefix to match (e.g., "data", "area", "content")</param>
+    /// <param name="resolver">Resolver function that creates a stream for a path, or returns null if not handled</param>
+    /// <returns>Updated data context with the resolver registered</returns>
+    /// <example>
+    /// <code>
+    /// .AddData(data => data
+    ///     .WithUnifiedReference("data", (workspace, path) =>
+    ///     {
+    ///         // path is the remaining path after "data:addressType/addressId/"
+    ///         // e.g., "collection/entityId"
+    ///         return CreateMyStream(workspace, path);
+    ///     })
+    /// )
+    /// </code>
+    /// </example>
+    public static DataContext WithUnifiedReference(
         this DataContext dataContext,
         string prefix,
-        IUnifiedReferenceHandler handler)
+        UnifiedReferenceResolver resolver)
     {
-        var registry = dataContext.Hub.ServiceProvider.GetRequiredService<IUnifiedReferenceRegistry>();
-        registry.Register(prefix, handler);
-        return dataContext;
+        var normalizedPrefix = prefix.TrimEnd(':').ToLowerInvariant();
+        var existingResolvers = dataContext.UnifiedReferenceResolvers.GetValueOrDefault(normalizedPrefix)
+            ?? ImmutableList<UnifiedReferenceResolver>.Empty;
+
+        return dataContext with
+        {
+            UnifiedReferenceResolvers = dataContext.UnifiedReferenceResolvers.SetItem(
+                normalizedPrefix,
+                existingResolvers.Insert(0, resolver))
+        };
     }
+
 }

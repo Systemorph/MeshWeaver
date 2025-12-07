@@ -11,6 +11,12 @@ public interface IMeshCatalog
     Task UpdateAsync(MeshNode node);
 
     Task<StreamInfo> GetStreamInfoAsync(Address address);
+
+    /// <summary>
+    /// Global registry for unified path prefixes.
+    /// Enables resolution of paths like "pricing:MS-2024" to target address and workspace reference.
+    /// </summary>
+    IUnifiedPathRegistry PathRegistry { get; }
 }
 
 

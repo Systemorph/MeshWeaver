@@ -2,7 +2,6 @@
 using Markdig.Helpers;
 using Markdig.Parsers;
 using Markdig.Syntax;
-using MeshWeaver.Data;
 
 namespace MeshWeaver.Markdown;
 
@@ -11,7 +10,7 @@ public class LayoutAreaMarkdownParser : BlockParser
 
     public LayoutAreaMarkdownParser()
     {
-        OpeningCharacters = ['@' ];
+        OpeningCharacters = ['@'];
     }
 
     public override BlockState TryOpen(BlockProcessor processor)
@@ -176,28 +175,114 @@ public class LayoutAreaMarkdownParser : BlockParser
     }
 
     /// <summary>
+    /// Area name for data references. Uses $ prefix to avoid name collisions.
+    /// </summary>
+    public const string DataAreaName = "$Data";
+
+    /// <summary>
+    /// Area name for content/file references. Uses $ prefix to avoid name collisions.
+    /// </summary>
+    public const string ContentAreaName = "$Content";
+
+    /// <summary>
     /// Creates the appropriate block type based on the token content.
     /// Supports unified reference notation (data:, content:, area:) and legacy format.
     /// </summary>
     private ContainerBlock CreateBlockFromToken(string token)
     {
-        // Try to parse as unified content reference
-        if (ContentReference.TryParse(token, out var reference) && reference != null)
+        // Parse prefix and extract address/path
+        var parsed = ParsePath(token);
+        if (parsed == null)
         {
-            return reference switch
-            {
-                DataContentReference dataRef => new DataContentBlock(dataRef, this),
-                FileContentReference fileRef => new FileContentBlock(fileRef, this),
-                LayoutAreaContentReference areaRef => new LayoutAreaComponentInfo(
-                    $"{areaRef.AddressType}/{areaRef.AddressId}",
-                    areaRef.AreaName,
-                    areaRef.AreaId,
-                    this),
-                _ => throw new InvalidOperationException($"Unknown reference type: {reference.GetType().Name}")
-            };
+            // Fall back to legacy format (addressType/addressId/area)
+            return new LayoutAreaComponentInfo(token, this);
         }
 
-        // Fall back to legacy format (addressType/addressId/area)
-        return new LayoutAreaComponentInfo(token, this);
+        var (prefix, addressType, addressId, remainingPath) = parsed.Value;
+        var address = $"{addressType}/{addressId}";
+
+        return prefix.ToLowerInvariant() switch
+        {
+            "data" => new LayoutAreaComponentInfo(
+                address,
+                DataAreaName,
+                remainingPath,
+                this),
+            "content" => new LayoutAreaComponentInfo(
+                address,
+                ContentAreaName,
+                remainingPath,
+                this),
+            "area" or "" => CreateAreaBlock(address, remainingPath),
+            _ => new LayoutAreaComponentInfo(token, this)
+        };
+    }
+
+    /// <summary>
+    /// Creates an area block from the remaining path.
+    /// Format: areaName[/areaId...] or areaName?queryParams
+    /// The areaId includes all remaining path segments joined with '/'
+    /// </summary>
+    private ContainerBlock CreateAreaBlock(string address, string? remainingPath)
+    {
+        if (string.IsNullOrEmpty(remainingPath))
+            return new LayoutAreaComponentInfo(address, "Default", null, this);
+
+        // Check for ? separator (query params as area id)
+        var queryIndex = remainingPath.IndexOf('?');
+        if (queryIndex > 0)
+        {
+            var areaName = remainingPath[..queryIndex];
+            var areaId = remainingPath[(queryIndex + 1)..];
+            return new LayoutAreaComponentInfo(address, areaName, areaId, this);
+        }
+
+        // Check for / separator - areaId is everything after the first /
+        var slashIndex = remainingPath.IndexOf('/');
+        if (slashIndex > 0)
+        {
+            var areaName = remainingPath[..slashIndex];
+            var areaId = remainingPath[(slashIndex + 1)..]; // Keep all remaining segments
+            return new LayoutAreaComponentInfo(address, areaName, areaId, this);
+        }
+
+        return new LayoutAreaComponentInfo(address, remainingPath, null, this);
+    }
+
+    /// <summary>
+    /// Parses a path into its components.
+    /// Supports formats:
+    /// - prefix:addressType/addressId/remainingPath (e.g., data:app/test/Collection)
+    /// - addressType/addressId/remainingPath (defaults to area prefix)
+    /// </summary>
+    private static (string Prefix, string AddressType, string AddressId, string? RemainingPath)? ParsePath(string path)
+    {
+        if (string.IsNullOrEmpty(path))
+            return null;
+
+        string prefix;
+        string pathAfterPrefix;
+
+        var colonIndex = path.IndexOf(':');
+        if (colonIndex > 0 && colonIndex < path.IndexOf('/'))
+        {
+            prefix = path[..colonIndex];
+            pathAfterPrefix = path[(colonIndex + 1)..];
+        }
+        else
+        {
+            prefix = "area"; // Default prefix
+            pathAfterPrefix = path;
+        }
+
+        var parts = pathAfterPrefix.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length < 2)
+            return null;
+
+        var addressType = parts[0];
+        var addressId = parts[1];
+        var remainingPath = parts.Length > 2 ? string.Join("/", parts.Skip(2)) : null;
+
+        return (prefix, addressType, addressId, remainingPath);
     }
 }

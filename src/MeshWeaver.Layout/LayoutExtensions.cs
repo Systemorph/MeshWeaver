@@ -30,9 +30,16 @@ public static class LayoutExtensions
             config = config
                 .WithInitialization(h => h.ServiceProvider.GetRequiredService<IUiControlService>())
                 .WithServices(services => services.AddScoped<IUiControlService, UiControlService>())
-                .AddData(data => data
-                    .WithUnifiedReferenceHandler("area", new AreaPrefixHandler())
-                    .Configure(reduction => reduction
+                .AddData(data =>
+                {
+                    // Register the area: prefix resolver for UnifiedReference (only if not already registered)
+                    // This handles paths like "area:areaName" or "area:areaName/areaId" or "area:areaName?queryParams"
+                    if (!data.UnifiedReferenceResolvers.ContainsKey("area"))
+                    {
+                        data = data.WithUnifiedReference("area", (workspace, path) =>
+                            CreateAreaPathStream(workspace, path));
+                    }
+                    return data.Configure(reduction => reduction
                         .AddWorkspaceReferenceStream<EntityStore>((workspace, reference, configuration) =>
                             reference is not LayoutAreaReference layoutArea
                                 ? null
@@ -44,8 +51,8 @@ public static class LayoutExtensions
                                         configuration!)
                                     .GetStream()
                         )
-                    )
-                ).AddLayoutTypes()
+                    );
+                }).AddLayoutTypes()
                 .WithSerialization(serialization => serialization.WithOptions(options =>
                     {
                         // Add converters in order of priority
@@ -350,4 +357,45 @@ public static class LayoutExtensions
 
     internal static bool IsVisible(this LayoutAreaDefinition l)
         => !l.Area.StartsWith("$") && l.IsInvisible != true;
+
+    /// <summary>
+    /// Creates a stream for area: unified reference paths.
+    /// Path format: areaName[/areaId...] or areaName?queryParams
+    /// </summary>
+    private static ISynchronizationStream<object>? CreateAreaPathStream(
+        IWorkspace workspace,
+        string? remainingPath)
+    {
+        if (string.IsNullOrEmpty(remainingPath))
+            return null;
+
+        string areaName;
+        string? areaId = null;
+
+        // Check for ? separator (query params as area id)
+        var queryIndex = remainingPath.IndexOf('?');
+        if (queryIndex > 0)
+        {
+            areaName = remainingPath[..queryIndex];
+            areaId = remainingPath[(queryIndex + 1)..];
+        }
+        else
+        {
+            // Check for / separator - areaId is everything after the first /
+            var slashIndex = remainingPath.IndexOf('/');
+            if (slashIndex > 0)
+            {
+                areaName = remainingPath[..slashIndex];
+                areaId = remainingPath[(slashIndex + 1)..];
+            }
+            else
+            {
+                areaName = remainingPath;
+            }
+        }
+
+        var layoutAreaRef = new LayoutAreaReference(areaName) { Id = areaId };
+        // LayoutAreaReference returns ISynchronizationStream<EntityStore>, cast to object
+        return (ISynchronizationStream<object>?)workspace.GetStream(layoutAreaRef, null);
+    }
 }

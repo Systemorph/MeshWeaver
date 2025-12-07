@@ -16,6 +16,7 @@ public static class WorkspaceStreams
     {
         var logger = workspace.Hub.ServiceProvider.GetRequiredService<ILogger<Workspace>>();
         logger.LogDebug("Retrieving workspace stream for {Address} and {Reference}", workspace.Hub.Address, reference);
+
         var collections = reference.GetCollections();
         var groups = collections.Select(c => (Collection: c,
                 DataSource: workspace.DataContext.DataSourcesByCollection.GetValueOrDefault(c)))
@@ -139,7 +140,6 @@ c => c
         return ret.Reduce(reference, configuration ?? (c => c));
     }
 
-
     private static IReadOnlyCollection<string> GetCollections(this WorkspaceReference reference)
     => reference switch
     {
@@ -148,8 +148,14 @@ c => c
             GetCollections(partitionedCollections.Reference),
         CollectionReference collection => [collection.Name],
         EntityReference entity => [entity.Collection],
+        ContentWorkspaceReference content => [content.Collection],
+        FileReference file => [file.Collection],
+        // These reference types are handled via registered stream factories, not collection-based resolution
+        DataPathReference => [],
+        UnifiedReference => [],
         _ => throw new NotSupportedException($"Collection reference {reference.GetType().Name} not supported.")
     };
+
 
 
 

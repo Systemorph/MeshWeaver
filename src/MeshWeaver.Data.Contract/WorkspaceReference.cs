@@ -1,5 +1,4 @@
-﻿#nullable enable
-using System.Text.Json;
+﻿using System.Text.Json;
 using MeshWeaver.Messaging;
 
 namespace MeshWeaver.Data;
@@ -58,7 +57,7 @@ public record CollectionsReference(params IReadOnlyCollection<string> Collection
 
 public record CombinedStreamReference(params StreamIdentity[] References) : WorkspaceReference<EntityStore>
 {
-    public override string ToString() => 
+    public override string ToString() =>
         string.Join(", ", References.Select(r => r.ToString()));
 }
 
@@ -98,11 +97,6 @@ public record UnifiedReference(string Path) : WorkspaceReference<object>
     /// </summary>
     public int? NumberOfRows { get; init; }
 
-    /// <summary>
-    /// Parses the path into a ContentReference.
-    /// </summary>
-    public ContentReference ParsedReference => ContentReference.Parse(Path);
-
     public override string ToString() => Path;
 }
 
@@ -128,4 +122,40 @@ public record FileReference(
             ? $"{Collection}@{Partition}/{Path}"
             : $"{Collection}/{Path}";
 }
+
+/// <summary>
+/// Reference for content access with collection and path.
+/// Alternative naming for FileReference for semantic clarity.
+/// </summary>
+/// <param name="Collection">The content collection name</param>
+/// <param name="Path">The path within the collection</param>
+/// <param name="Partition">Optional partition for partitioned collections</param>
+public record ContentWorkspaceReference(
+    string Collection,
+    string Path,
+    string? Partition = null) : WorkspaceReference<object>
+{
+    /// <summary>
+    /// Optional: number of rows to read (for files like Excel/CSV)
+    /// </summary>
+    public int? NumberOfRows { get; init; }
+
+    public override string ToString() =>
+        Partition != null
+            ? $"{Collection}@{Partition}/{Path}"
+            : $"{Collection}/{Path}";
+}
+
+/// <summary>
+/// Reference for data access via a relative path.
+/// The path is relative to the current hub and will be resolved by the local path registry.
+/// Path interpretation is hub-specific - the registry determines how to resolve it.
+/// </summary>
+/// <param name="Path">The relative data path (without prefix or address)</param>
+public record DataPathReference(string Path) : WorkspaceReference<object>
+{
+    public string Path { get; } = Path.StartsWith("data:") ? Path[5..] : Path;
+    public override string ToString() => $"data:{Path}";
+}
+
 

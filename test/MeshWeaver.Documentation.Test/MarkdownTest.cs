@@ -1,8 +1,9 @@
-﻿using System.Linq;
+﻿#pragma warning disable CS1591 // Missing XML comment for publicly visible type or member
+
+using System.Linq;
 using FluentAssertions;
 using Markdig;
 using Markdig.Syntax;
-using MeshWeaver.Data;
 using MeshWeaver.Fixture;
 using MeshWeaver.Markdown;
 using Xunit;
@@ -93,14 +94,14 @@ Console.WriteLine(""Hello World"");
         var extension = new LayoutAreaMarkdownExtension();
         var document = ParseMarkdown(markdown, extension);
 
-        var dataBlocks = document.Descendants<DataContentBlock>().ToArray();
-        dataBlocks.Should().HaveCount(1);
+        // Data references are now translated to LayoutAreaComponentInfo with $Data area
+        var layoutAreas = document.Descendants<LayoutAreaComponentInfo>().ToArray();
+        layoutAreas.Should().HaveCount(1);
 
-        var block = dataBlocks[0];
-        block.DataReference.AddressType.Should().Be("app");
-        block.DataReference.AddressId.Should().Be("test");
-        block.DataReference.Collection.Should().Be("MyCollection");
-        block.DataReference.EntityId.Should().BeNull();
+        var area = layoutAreas[0];
+        area.Area.Should().Be(LayoutAreaMarkdownParser.DataAreaName);
+        area.Id.Should().Be("MyCollection");
+        area.Address.Should().Be("app/test");
     }
 
     [Fact]
@@ -110,12 +111,12 @@ Console.WriteLine(""Hello World"");
         var extension = new LayoutAreaMarkdownExtension();
         var document = ParseMarkdown(markdown, extension);
 
-        var dataBlocks = document.Descendants<DataContentBlock>().ToArray();
-        dataBlocks.Should().HaveCount(1);
+        var layoutAreas = document.Descendants<LayoutAreaComponentInfo>().ToArray();
+        layoutAreas.Should().HaveCount(1);
 
-        var block = dataBlocks[0];
-        block.DataReference.Collection.Should().Be("MyCollection");
-        block.DataReference.EntityId.Should().Be("entity123");
+        var area = layoutAreas[0];
+        area.Area.Should().Be(LayoutAreaMarkdownParser.DataAreaName);
+        area.Id.Should().Be("MyCollection/entity123");
     }
 
     [Fact]
@@ -125,13 +126,13 @@ Console.WriteLine(""Hello World"");
         var extension = new LayoutAreaMarkdownExtension();
         var document = ParseMarkdown(markdown, extension);
 
-        var dataBlocks = document.Descendants<DataContentBlock>().ToArray();
-        dataBlocks.Should().HaveCount(1);
+        var layoutAreas = document.Descendants<LayoutAreaComponentInfo>().ToArray();
+        layoutAreas.Should().HaveCount(1);
 
-        var block = dataBlocks[0];
-        block.DataReference.AddressType.Should().Be("app");
-        block.DataReference.AddressId.Should().Be("test");
-        block.DataReference.IsDefaultReference.Should().BeTrue();
+        var area = layoutAreas[0];
+        area.Area.Should().Be(LayoutAreaMarkdownParser.DataAreaName);
+        area.Id.Should().BeNull();
+        area.Address.Should().Be("app/test");
     }
 
     [Fact]
@@ -141,15 +142,14 @@ Console.WriteLine(""Hello World"");
         var extension = new LayoutAreaMarkdownExtension();
         var document = ParseMarkdown(markdown, extension);
 
-        var fileBlocks = document.Descendants<FileContentBlock>().ToArray();
-        fileBlocks.Should().HaveCount(1);
+        // File references are now translated to LayoutAreaComponentInfo with $Content area
+        var layoutAreas = document.Descendants<LayoutAreaComponentInfo>().ToArray();
+        layoutAreas.Should().HaveCount(1);
 
-        var block = fileBlocks[0];
-        block.FileReference.AddressType.Should().Be("app");
-        block.FileReference.AddressId.Should().Be("test");
-        block.FileReference.Collection.Should().Be("Documents");
-        block.FileReference.FilePath.Should().Be("report.pdf");
-        block.FileReference.Partition.Should().BeNull();
+        var area = layoutAreas[0];
+        area.Area.Should().Be(LayoutAreaMarkdownParser.ContentAreaName);
+        area.Id.Should().Be("Documents/report.pdf");
+        area.Address.Should().Be("app/test");
     }
 
     [Fact]
@@ -159,13 +159,12 @@ Console.WriteLine(""Hello World"");
         var extension = new LayoutAreaMarkdownExtension();
         var document = ParseMarkdown(markdown, extension);
 
-        var fileBlocks = document.Descendants<FileContentBlock>().ToArray();
-        fileBlocks.Should().HaveCount(1);
+        var layoutAreas = document.Descendants<LayoutAreaComponentInfo>().ToArray();
+        layoutAreas.Should().HaveCount(1);
 
-        var block = fileBlocks[0];
-        block.FileReference.Collection.Should().Be("Documents");
-        block.FileReference.Partition.Should().Be("2024");
-        block.FileReference.FilePath.Should().Be("report.pdf");
+        var area = layoutAreas[0];
+        area.Area.Should().Be(LayoutAreaMarkdownParser.ContentAreaName);
+        area.Id.Should().Be("Documents@2024/report.pdf");
     }
 
     [Fact]
@@ -175,11 +174,11 @@ Console.WriteLine(""Hello World"");
         var extension = new LayoutAreaMarkdownExtension();
         var document = ParseMarkdown(markdown, extension);
 
-        var fileBlocks = document.Descendants<FileContentBlock>().ToArray();
-        fileBlocks.Should().HaveCount(1);
+        var layoutAreas = document.Descendants<LayoutAreaComponentInfo>().ToArray();
+        layoutAreas.Should().HaveCount(1);
 
-        var block = fileBlocks[0];
-        block.FileReference.FilePath.Should().Be("folder/subfolder/file.txt");
+        var area = layoutAreas[0];
+        area.Id.Should().Be("Documents/folder/subfolder/file.txt");
     }
 
     [Fact]
@@ -232,9 +231,9 @@ Console.WriteLine(""Hello World"");
         var extension = new LayoutAreaMarkdownExtension();
         var html = RenderMarkdown(markdown, extension);
 
-        html.Should().Contain("class='data-content'");
+        // Data references now render as layout area markers (without quotes around attribute values)
+        html.Should().Contain("data-area=$Data");
         html.Should().Contain("data-address='app/test'");
-        html.Should().Contain("data-path='data:app/test/Users'");
     }
 
     [Fact]
@@ -244,9 +243,9 @@ Console.WriteLine(""Hello World"");
         var extension = new LayoutAreaMarkdownExtension();
         var html = RenderMarkdown(markdown, extension);
 
-        html.Should().Contain("class='file-content'");
+        // Content references now render as layout area markers (without quotes around attribute values)
+        html.Should().Contain("data-area=$Content");
         html.Should().Contain("data-address='app/test'");
-        html.Should().Contain("data-path='content:app/test/Docs/readme.md'");
     }
 
     [Fact]
@@ -260,9 +259,12 @@ Console.WriteLine(""Hello World"");
         var extension = new LayoutAreaMarkdownExtension();
         var document = ParseMarkdown(markdown, extension);
 
-        document.Descendants<DataContentBlock>().Should().HaveCount(1);
-        document.Descendants<FileContentBlock>().Should().HaveCount(1);
-        document.Descendants<LayoutAreaComponentInfo>().Should().HaveCount(1);
+        // All three are now LayoutAreaComponentInfo with different areas
+        var layoutAreas = document.Descendants<LayoutAreaComponentInfo>().ToArray();
+        layoutAreas.Should().HaveCount(3);
+        layoutAreas.Count(a => a.Area == LayoutAreaMarkdownParser.DataAreaName).Should().Be(1);
+        layoutAreas.Count(a => a.Area == LayoutAreaMarkdownParser.ContentAreaName).Should().Be(1);
+        layoutAreas.Count(a => a.Area == "Dashboard").Should().Be(1);
     }
 
     [Fact]
@@ -272,12 +274,13 @@ Console.WriteLine(""Hello World"");
         var extension = new LayoutAreaMarkdownExtension();
         var document = ParseMarkdown(markdown, extension);
 
-        var dataBlocks = document.Descendants<DataContentBlock>().ToArray();
-        dataBlocks.Should().HaveCount(1);
+        var layoutAreas = document.Descendants<LayoutAreaComponentInfo>().ToArray();
+        layoutAreas.Should().HaveCount(1);
 
-        var block = dataBlocks[0];
-        block.Path.Should().Be("data:pricing/MS-2024/PropertyRisk/risk1");
-        block.Address.Should().Be("pricing/MS-2024");
+        var area = layoutAreas[0];
+        area.Area.Should().Be(LayoutAreaMarkdownParser.DataAreaName);
+        area.Id.Should().Be("PropertyRisk/risk1");
+        area.Address.Should().Be("pricing/MS-2024");
     }
 
     [Fact]
@@ -287,12 +290,13 @@ Console.WriteLine(""Hello World"");
         var extension = new LayoutAreaMarkdownExtension();
         var document = ParseMarkdown(markdown, extension);
 
-        var fileBlocks = document.Descendants<FileContentBlock>().ToArray();
-        fileBlocks.Should().HaveCount(1);
+        var layoutAreas = document.Descendants<LayoutAreaComponentInfo>().ToArray();
+        layoutAreas.Should().HaveCount(1);
 
-        var block = fileBlocks[0];
-        block.Path.Should().Be("content:host/1/Submissions@MS-2024/folder/file.xlsx");
-        block.Address.Should().Be("host/1");
+        var area = layoutAreas[0];
+        area.Area.Should().Be(LayoutAreaMarkdownParser.ContentAreaName);
+        area.Id.Should().Be("Submissions@MS-2024/folder/file.xlsx");
+        area.Address.Should().Be("host/1");
     }
 
     #endregion
@@ -348,9 +352,10 @@ Console.WriteLine(""Hello World"");
         var extension = new LayoutAreaMarkdownExtension();
         var document = ParseMarkdown(markdown, extension);
 
-        var dataBlocks = document.Descendants<DataContentBlock>().ToArray();
-        dataBlocks.Should().HaveCount(1);
-        dataBlocks[0].DataReference.Collection.Should().Be("Users");
+        var layoutAreas = document.Descendants<LayoutAreaComponentInfo>().ToArray();
+        layoutAreas.Should().HaveCount(1);
+        layoutAreas[0].Area.Should().Be(LayoutAreaMarkdownParser.DataAreaName);
+        layoutAreas[0].Id.Should().Be("Users");
     }
 
     [Fact]
@@ -360,9 +365,10 @@ Console.WriteLine(""Hello World"");
         var extension = new LayoutAreaMarkdownExtension();
         var document = ParseMarkdown(markdown, extension);
 
-        var fileBlocks = document.Descendants<FileContentBlock>().ToArray();
-        fileBlocks.Should().HaveCount(1);
-        fileBlocks[0].FileReference.FilePath.Should().Be("readme.md");
+        var layoutAreas = document.Descendants<LayoutAreaComponentInfo>().ToArray();
+        layoutAreas.Should().HaveCount(1);
+        layoutAreas[0].Area.Should().Be(LayoutAreaMarkdownParser.ContentAreaName);
+        layoutAreas[0].Id.Should().Be("Docs/readme.md");
     }
 
     [Fact]
@@ -376,9 +382,11 @@ Console.WriteLine(""Hello World"");
         var extension = new LayoutAreaMarkdownExtension();
         var document = ParseMarkdown(markdown, extension);
 
-        document.Descendants<LayoutAreaComponentInfo>().Should().HaveCount(1);
-        document.Descendants<DataContentBlock>().Should().HaveCount(1);
-        document.Descendants<FileContentBlock>().Should().HaveCount(1);
+        var layoutAreas = document.Descendants<LayoutAreaComponentInfo>().ToArray();
+        layoutAreas.Should().HaveCount(3);
+        layoutAreas.Count(a => a.Area == "Dashboard").Should().Be(1);
+        layoutAreas.Count(a => a.Area == LayoutAreaMarkdownParser.DataAreaName).Should().Be(1);
+        layoutAreas.Count(a => a.Area == LayoutAreaMarkdownParser.ContentAreaName).Should().Be(1);
     }
 
     [Fact]
@@ -418,9 +426,10 @@ Console.WriteLine(""Hello World"");
         var extension = new LayoutAreaMarkdownExtension();
         var document = ParseMarkdown(markdown, extension);
 
-        var fileBlocks = document.Descendants<FileContentBlock>().ToArray();
-        fileBlocks.Should().HaveCount(1);
-        fileBlocks[0].FileReference.FilePath.Should().Be("My Report 2025.pdf");
+        var layoutAreas = document.Descendants<LayoutAreaComponentInfo>().ToArray();
+        layoutAreas.Should().HaveCount(1);
+        layoutAreas[0].Area.Should().Be(LayoutAreaMarkdownParser.ContentAreaName);
+        layoutAreas[0].Id.Should().Be("Docs/My Report 2025.pdf");
     }
 
     [Fact]
@@ -430,9 +439,10 @@ Console.WriteLine(""Hello World"");
         var extension = new LayoutAreaMarkdownExtension();
         var document = ParseMarkdown(markdown, extension);
 
-        var dataBlocks = document.Descendants<DataContentBlock>().ToArray();
-        dataBlocks.Should().HaveCount(1);
-        dataBlocks[0].DataReference.Collection.Should().Be("User Accounts");
+        var layoutAreas = document.Descendants<LayoutAreaComponentInfo>().ToArray();
+        layoutAreas.Should().HaveCount(1);
+        layoutAreas[0].Area.Should().Be(LayoutAreaMarkdownParser.DataAreaName);
+        layoutAreas[0].Id.Should().Be("User Accounts");
     }
 
     [Fact]
@@ -446,52 +456,11 @@ Console.WriteLine(""Hello World"");
         var extension = new LayoutAreaMarkdownExtension();
         var document = ParseMarkdown(markdown, extension);
 
-        document.Descendants<LayoutAreaComponentInfo>().Should().HaveCount(1);
-        document.Descendants<FileContentBlock>().Should().HaveCount(1);
-        document.Descendants<DataContentBlock>().Should().HaveCount(1);
-    }
-
-    #endregion
-
-    #region ContentReference.Parse Direct Tests
-
-    [Fact]
-    public void ContentReferenceParse_WithoutPrefix_DefaultsToArea()
-    {
-        // ContentReference.Parse should default to area: when no prefix provided
-        var reference = ContentReference.Parse("app/Northwind/Dashboard");
-
-        reference.Should().BeOfType<LayoutAreaContentReference>();
-        var areaRef = (LayoutAreaContentReference)reference;
-        areaRef.AddressType.Should().Be("app");
-        areaRef.AddressId.Should().Be("Northwind");
-        areaRef.AreaName.Should().Be("Dashboard");
-        areaRef.AreaId.Should().BeNull();
-    }
-
-    [Fact]
-    public void ContentReferenceParse_WithoutPrefix_QueryParams()
-    {
-        // ContentReference.Parse should handle query params in area reference
-        var reference = ContentReference.Parse("app/Northwind/SalesGrowthSummary?Year=2025");
-
-        reference.Should().BeOfType<LayoutAreaContentReference>();
-        var areaRef = (LayoutAreaContentReference)reference;
-        areaRef.AddressType.Should().Be("app");
-        areaRef.AddressId.Should().Be("Northwind");
-        areaRef.AreaName.Should().Be("SalesGrowthSummary");
-        areaRef.AreaId.Should().Be("Year=2025");
-    }
-
-    [Fact]
-    public void ContentReferenceParse_WithAreaPrefix_QueryParams()
-    {
-        var reference = ContentReference.Parse("area:app/Northwind/AnnualReportSummary?Year=2025");
-
-        reference.Should().BeOfType<LayoutAreaContentReference>();
-        var areaRef = (LayoutAreaContentReference)reference;
-        areaRef.AreaName.Should().Be("AnnualReportSummary");
-        areaRef.AreaId.Should().Be("Year=2025");
+        var layoutAreas = document.Descendants<LayoutAreaComponentInfo>().ToArray();
+        layoutAreas.Should().HaveCount(3);
+        layoutAreas.Count(a => a.Area == "SimpleArea").Should().Be(1);
+        layoutAreas.Count(a => a.Area == LayoutAreaMarkdownParser.ContentAreaName).Should().Be(1);
+        layoutAreas.Count(a => a.Area == LayoutAreaMarkdownParser.DataAreaName).Should().Be(1);
     }
 
     #endregion

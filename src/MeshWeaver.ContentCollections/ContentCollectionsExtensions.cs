@@ -1,9 +1,11 @@
-﻿using System.Reflection;
+﻿using System.Reactive.Linq;
+using System.Reflection;
 using System.Text;
 using Markdig;
 using Markdig.Extensions.Yaml;
 using Markdig.Syntax;
 using MeshWeaver.Data;
+using MeshWeaver.Data.Serialization;
 using MeshWeaver.Layout;
 using MeshWeaver.Markdown;
 using MeshWeaver.Messaging;
@@ -56,14 +58,34 @@ public static class ContentCollectionsExtensions
         };
     }
 
+    /// <summary>
+    /// Area name for unified content references. Uses $ prefix to avoid name collisions.
+    /// </summary>
+    public const string ContentAreaName = "$Content";
+
     public static MessageHubConfiguration AddContentCollections(this MessageHubConfiguration config)
     {
         return config
             .WithServices(AddContentService)
-            .AddData(data => data
-                .WithUnifiedReferenceHandler("content", new ContentPrefixHandler()))
+            .AddData(data =>
+            {
+                // Register the content: prefix resolver for UnifiedReference (only if not already registered)
+                // This handles paths like "content:addressType/addressId/collection/path"
+                if (!data.UnifiedReferenceResolvers.ContainsKey("content"))
+                {
+                    data = data.WithUnifiedReference("content", (workspace, path) =>
+                        CreateContentPathStream(workspace, path));
+                }
+
+                return data.Configure(reduction => reduction
+                    .AddWorkspaceReferenceStream<object>((workspace, reference, configuration) =>
+                        reference is not FileReference fileRef
+                            ? null
+                            : CreateFileReferenceStream(workspace, fileRef, configuration)));
+                })
             .AddLayout(layout => layout
                 .WithView(nameof(ContentLayoutArea.Content), ContentLayoutArea.Content)
+                .WithView(ContentAreaName, ContentLayoutArea.UnifiedContent)
                 .WithView(nameof(FileBrowserLayoutAreas.FileBrowser), FileBrowserLayoutAreas.FileBrowser)
                 .WithView(nameof(CollectionLayoutArea.Collection), CollectionLayoutArea.Collection))
             .WithHandler<GetContentCollectionRequest>((hub, request) =>
@@ -72,6 +94,80 @@ public static class ContentCollectionsExtensions
                 hub.Post(response, o => o.ResponseFor(request));
                 return request.Processed();
             });
+    }
+
+    /// <summary>
+    /// Creates a stream for content: unified reference paths.
+    /// Path format: collection/path or collection@partition/path
+    /// </summary>
+    private static ISynchronizationStream<object>? CreateContentPathStream(
+        IWorkspace workspace,
+        string? remainingPath)
+    {
+        if (string.IsNullOrEmpty(remainingPath))
+            return null;
+
+        // remainingPath format: collection/path or collection@partition/path
+        var slashIndex = remainingPath.IndexOf('/');
+        if (slashIndex < 0)
+            return null;
+
+        var collectionPart = remainingPath[..slashIndex];
+        var filePath = remainingPath[(slashIndex + 1)..];
+
+        if (string.IsNullOrEmpty(filePath))
+            return null;
+
+        // Check for partition
+        var atIndex = collectionPart.IndexOf('@');
+        if (atIndex > 0)
+        {
+            var collection = collectionPart[..atIndex];
+            var partition = collectionPart[(atIndex + 1)..];
+            return workspace.GetStream(new FileReference(collection, filePath, partition), null);
+        }
+
+        return workspace.GetStream(new FileReference(collectionPart, filePath), null);
+    }
+
+    /// <summary>
+    /// Creates a stream for a FileReference by loading file content from the content service.
+    /// </summary>
+    private static ISynchronizationStream<object>? CreateFileReferenceStream(
+        IWorkspace workspace,
+        FileReference reference,
+        Func<StreamConfiguration<object>, StreamConfiguration<object>>? configuration)
+    {
+        var fileContentProvider = workspace.Hub.ServiceProvider.GetService<Data.IFileContentProvider>();
+        if (fileContentProvider == null)
+            return null;
+
+        var streamIdentity = new StreamIdentity(workspace.Hub.Address, reference.Path);
+        var stream = new SynchronizationStream<object>(
+            streamIdentity,
+            workspace.Hub,
+            reference,
+            workspace.ReduceManager.ReduceTo<object>(),
+            configuration ?? (c => c)
+        );
+
+        // Create an observable that loads the file content
+        var observable = Observable.FromAsync(async ct =>
+        {
+            var result = await fileContentProvider.GetFileContentAsync(reference.Collection, reference.Path, null, ct);
+            return result.Success ? (object?)result.Content : null;
+        });
+
+        stream.RegisterForDisposal(
+            observable
+                .Select(value => new ChangeItem<object>(value!, stream.StreamId, workspace.Hub.Version))
+                .Where(x => x.Value != null)
+                .DistinctUntilChanged()
+                .Synchronize()
+                .Subscribe(stream)
+        );
+
+        return stream;
     }
 
     public static IServiceCollection AddContentService(this IServiceCollection services)

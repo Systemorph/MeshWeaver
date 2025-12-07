@@ -17,6 +17,8 @@ public record MeshBuilder
     }
 
     private List<MeshNode> MeshNodes { get; } = new();
+    private readonly UnifiedPathRegistry pathRegistry = new();
+
     public MeshBuilder InstallAssemblies(params string[] assemblyLocations)
     {
         var attributes = assemblyLocations
@@ -40,6 +42,12 @@ public record MeshBuilder
                 config.TypeRegistry.WithTypes(addressTypes);
                 return config;
             });
+        }
+
+        // Register path prefixes from attributes
+        foreach (var prefix in attributes.SelectMany(a => a.PathPrefixes))
+        {
+            pathRegistry.Register(prefix.Key, prefix.Value);
         }
 
         return this;
@@ -88,14 +96,20 @@ public record MeshBuilder
 
     private void Register()
     {
+        // Register built-in path handlers
+        pathRegistry.Register("data", new DataPathHandler());
+        pathRegistry.Register("area", new AreaPathHandler());
+        pathRegistry.Register("content", new ContentPathHandler());
+
         ConfigureServices(services => services
             .AddSingleton(_ => new MeshConfiguration(MeshNodes.ToDictionary(x => x.Name), factories))
+            .AddSingleton<IUnifiedPathRegistry>(_ => pathRegistry)
             .AddSingleton(BuildHub)
             .AddSingleton<AccessService>()
             );
 
-        IReadOnlyCollection<Func<MeshConfiguration, MeshConfiguration>> meshConfig = MeshConfiguration; 
-        
+        IReadOnlyCollection<Func<MeshConfiguration, MeshConfiguration>> meshConfig = MeshConfiguration;
+
         ConfigureHub(conf => conf.WithRoutes(routes =>
                 routes.WithHandler((delivery, ct) =>
                 {

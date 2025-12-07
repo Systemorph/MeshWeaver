@@ -1,6 +1,5 @@
 ﻿using System.ComponentModel;
 using System.Reactive.Linq;
-using MeshWeaver.Data;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Messaging;
@@ -69,31 +68,51 @@ public static class ContentLayoutArea
         string path,
         CancellationToken ct)
     {
-        // Parse the unified content reference
-        if (!ContentReference.TryParse(path, out var reference) || reference is not FileContentReference fileRef)
-            return Observable.Return<UiControl?>(new MarkdownControl($"Invalid content reference: {path}"));
+        // Parse the content reference inline
+        // Format: content:addressType/addressId/collection/path or content:addressType/addressId/collection@partition/path
+        var pathAfterPrefix = path.StartsWith("content:", StringComparison.OrdinalIgnoreCase)
+            ? path[8..]
+            : path;
 
-        // Get the collection name (with partition if specified)
-        var collectionName = fileRef.Partition != null
-            ? $"{fileRef.Collection}@{fileRef.Partition}"
-            : fileRef.Collection;
+        var parts = pathAfterPrefix.Split('/', 4, StringSplitOptions.None);
+        if (parts.Length < 4)
+            return Observable.Return<UiControl?>(new MarkdownControl($"Invalid content reference: {path}. Expected format: content:addressType/addressId/collection/path"));
+
+        var collectionPart = parts[2];
+        var filePath = parts[3];
+
+        if (string.IsNullOrEmpty(collectionPart) || string.IsNullOrEmpty(filePath))
+            return Observable.Return<UiControl?>(new MarkdownControl($"Invalid content reference: {path}. Collection and path are required."));
+
+        // Check for partition: collection@partition
+        string collectionName;
+        var atIndex = collectionPart.IndexOf('@');
+        if (atIndex > 0)
+        {
+            var collection = collectionPart[..atIndex];
+            var partition = collectionPart[(atIndex + 1)..];
+            collectionName = $"{collection}@{partition}";
+        }
+        else
+        {
+            collectionName = collectionPart;
+        }
 
         var articleService = host.Hub.GetContentService();
-        var collection = await articleService.GetCollectionAsync(collectionName, ct);
-        if (collection is null)
+        var collection2 = await articleService.GetCollectionAsync(collectionName, ct);
+        if (collection2 is null)
             return Observable.Return<UiControl?>(new MarkdownControl($"Collection {collectionName} not found."));
 
-        var filePath = fileRef.FilePath;
         var extension = Path.GetExtension(filePath).ToLowerInvariant();
 
         // For images, get the raw content and render appropriately
         if (IsImageFile(extension))
         {
-            return await RenderImageContent(collection, filePath, extension, ct);
+            return await RenderImageContent(collection2, filePath, extension, ct);
         }
 
         // For other content types, use the existing GetMarkdown pipeline
-        var contentStream = collection.GetMarkdown(filePath);
+        var contentStream = collection2.GetMarkdown(filePath);
         if (contentStream is null)
             return Observable.Return<UiControl?>(new MarkdownControl($"{filePath} not found in collection {collectionName}."));
 
@@ -185,6 +204,54 @@ public static class ContentLayoutArea
         ".svg" => "image/svg+xml",
         _ => "application/octet-stream"
     };
+
+    /// <summary>
+    /// Handles unified content references ($Content area).
+    /// The host.Reference.Id contains the path like "Markdown/images/meshbros.png"
+    /// Format: collection/path or collection@partition/path
+    /// </summary>
+    [Browsable(false)]
+    public static async Task<IObservable<UiControl?>> UnifiedContent(LayoutAreaHost host, RenderingContext context, CancellationToken ct)
+    {
+        var contentPath = host.Reference.Id?.ToString() ?? "";
+
+        if (string.IsNullOrEmpty(contentPath))
+            return Observable.Return<UiControl?>(new MarkdownControl("No content path specified"));
+
+        // Split collection from file path
+        var firstSlash = contentPath.IndexOf('/');
+        if (firstSlash < 0)
+            return Observable.Return<UiControl?>(new MarkdownControl($"Invalid content path format (no file path): {contentPath}"));
+
+        var collectionPart = contentPath[..firstSlash];
+        var filePath = contentPath[(firstSlash + 1)..];
+
+        if (string.IsNullOrEmpty(filePath))
+            return Observable.Return<UiControl?>(new MarkdownControl($"Empty file path in: {contentPath}"));
+
+        // Get the collection (collectionPart may include @partition)
+        var articleService = host.Hub.GetContentService();
+        var collection = await articleService.GetCollectionAsync(collectionPart, ct);
+        if (collection is null)
+            return Observable.Return<UiControl?>(new MarkdownControl($"Collection {collectionPart} not found."));
+
+        var extension = Path.GetExtension(filePath).ToLowerInvariant();
+
+        // For images, get the raw content and render appropriately
+        if (IsImageFile(extension))
+        {
+            return await RenderImageContent(collection, filePath, extension, ct);
+        }
+
+        // For other content types, use the existing GetMarkdown pipeline
+        var contentStream = collection.GetMarkdown(filePath);
+        if (contentStream is null)
+            return Observable.Return<UiControl?>(new MarkdownControl($"{filePath} not found in collection {collectionPart}."));
+
+        return contentStream.Select(content => content is null
+            ? new MarkdownControl($"{filePath} not found in collection {collectionPart}")
+            : RenderContent(filePath, content, false));
+    }
 
     public static async Task<IObservable<UiControl?>> RenderArticle(this IMessageHub hub, string collection, string id, CancellationToken ct)
     {
