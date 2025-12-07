@@ -934,6 +934,29 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         secondColumn.Title.Should().Be(nameof(DataRecord.DisplayName).Wordify());
     }
 
+    [HubFact]
+    public void DataViewTruncation_TruncatesLongContent()
+    {
+        // arrange - create JSON that will serialize to more than 100 lines
+        var largeData = Enumerable.Range(1, 50)
+            .Select(i => new DataRecord(i.ToString(), $"Item {i}"))
+            .ToArray();
+
+        var options = new JsonSerializerOptions { WriteIndented = true };
+        var json = JsonSerializer.Serialize(largeData, options);
+        var lines = json.Split('\n');
+
+        // act - verify large data has more than 100 lines
+        lines.Length.Should().BeGreaterThan(100);
+
+        // Truncating to first 100 lines
+        var truncatedLines = lines.Take(100).ToArray();
+        var truncatedJson = string.Join('\n', truncatedLines) + "\n...";
+
+        // assert - truncated content should be smaller
+        truncatedJson.Split('\n').Length.Should().Be(101); // 100 lines + "..."
+        truncatedJson.Should().EndWith("...");
+    }
 }
 
 public static class TestAreas

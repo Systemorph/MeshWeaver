@@ -215,6 +215,48 @@ c => c
         return reducedStream;
     }
 
+    /// <summary>
+    /// Projects an ISynchronizationStream&lt;T1&gt; to ISynchronizationStream&lt;T2&gt; using a selector function.
+    /// Useful when T1 : T2 and you need to work with the base type stream.
+    /// </summary>
+    /// <typeparam name="TSource">The source stream type</typeparam>
+    /// <typeparam name="TResult">The result stream type</typeparam>
+    /// <param name="stream">The source synchronization stream</param>
+    /// <param name="selector">A function to project each element to the result type</param>
+    /// <returns>A new synchronization stream with projected values</returns>
+    public static ISynchronizationStream<TResult> Select<TSource, TResult>(
+        this ISynchronizationStream<TSource> stream,
+        Func<TSource, TResult> selector)
+    {
+        var projectedStream = new SynchronizationStream<TResult>(
+            stream.StreamIdentity,
+            stream.Host,
+            stream.Reference,
+            stream.ReduceManager.ReduceTo<TResult>(),
+            c => c
+        );
+
+        stream.RegisterForDisposal(projectedStream);
+
+        projectedStream.RegisterForDisposal(
+            stream
+                .Synchronize()
+                .Select(change => new ChangeItem<TResult>(
+                    change.Value is not null ? selector(change.Value) : default!,
+                    change.ChangedBy,
+                    change.StreamId,
+                    change.ChangeType,
+                    change.Version,
+                    change.Updates))
+                .Where(x => x.Value is not null)
+                .DistinctUntilChanged()
+                .Synchronize()
+                .Subscribe(projectedStream)
+        );
+
+        return projectedStream;
+    }
+
 
 
 }
