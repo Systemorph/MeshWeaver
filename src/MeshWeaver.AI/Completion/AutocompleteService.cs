@@ -29,11 +29,11 @@ public class AutocompleteService
     /// <summary>
     /// Gets autocomplete suggestions based on the query and current context.
     /// </summary>
-    /// <param name="query">The search query (text after the @, /, or model: trigger).</param>
+    /// <param name="query">The search query (text after the @, /, or @model/ trigger).</param>
     /// <param name="context">The current chat context.</param>
     /// <param name="maxResults">Maximum number of results to return.</param>
     /// <param name="commandRegistry">Optional command registry for / completions.</param>
-    /// <param name="availableModels">Optional list of available models for model: completions.</param>
+    /// <param name="availableModels">Optional list of available models for @model/ completions.</param>
     /// <returns>Scored and sorted autocomplete items.</returns>
     public async Task<IReadOnlyList<AutocompleteResult>> GetCompletionsAsync(
         string query,
@@ -46,9 +46,10 @@ public class AutocompleteService
 
         // Determine the query type based on what trigger was used
         var isCommandQuery = query.StartsWith("/");
-        var isModelQuery = query.StartsWith("@model:", StringComparison.OrdinalIgnoreCase);
-        var isAgentQuery = query.StartsWith("@agent:", StringComparison.OrdinalIgnoreCase);
-        var isGenericAtQuery = query.StartsWith("@") && !isModelQuery && !isAgentQuery;
+        var isModelQuery = query.StartsWith("@model/", StringComparison.OrdinalIgnoreCase);
+        var isAgentQuery = query.StartsWith("@agent/", StringComparison.OrdinalIgnoreCase);
+        var isContentQuery = query.StartsWith("@content/", StringComparison.OrdinalIgnoreCase);
+        var isGenericAtQuery = query.StartsWith("@") && !isModelQuery && !isAgentQuery && !isContentQuery;
 
         // Add command items if it's a / query
         if (isCommandQuery && commandRegistry != null)
@@ -66,14 +67,14 @@ public class AutocompleteService
             }
         }
 
-        // Add model items if it's a @model: query or generic @ query
+        // Add model items if it's a @model/ query or generic @ query
         if ((isModelQuery || isGenericAtQuery) && availableModels != null)
         {
             foreach (var model in availableModels)
             {
                 allItems.Add(new AutocompleteItem(
-                    Label: $"@model:{model}",
-                    InsertText: $"@model:{model} ",
+                    Label: $"@model/{model}",
+                    InsertText: $"@model/{model} ",
                     Description: $"AI Model",
                     Category: "Models",
                     Priority: ModelCategoryPriority,
@@ -82,14 +83,14 @@ public class AutocompleteService
             }
         }
 
-        // Add agent items (for @agent: query or generic @ query)
+        // Add agent items (for @agent/ query or generic @ query)
         if (isAgentQuery || isGenericAtQuery)
         {
             foreach (var agent in _agentDefinitions)
             {
                 allItems.Add(new AutocompleteItem(
-                    Label: $"@agent:{agent.Name}",
-                    InsertText: $"@agent:{agent.Name} ",
+                    Label: $"@agent/{agent.Name}",
+                    InsertText: $"@agent/{agent.Name} ",
                     Description: agent.Description,
                     Category: "Agents",
                     Priority: AgentCategoryPriority,
@@ -98,8 +99,8 @@ public class AutocompleteService
             }
         }
 
-        // Add file items from agents that support autocompletion (only for @ queries or general queries)
-        if (!isCommandQuery && !isModelQuery)
+        // Add file items from agents that support autocompletion (for @ queries, content queries, or general queries)
+        if (!isCommandQuery && !isModelQuery && !isAgentQuery)
         {
             var autocompletionAgents = _agentDefinitions.OfType<IAgentWithAutocompletion>();
             foreach (var agent in autocompletionAgents)

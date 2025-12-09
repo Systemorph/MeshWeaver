@@ -6,16 +6,16 @@ namespace MeshWeaver.AI.Commands;
 
 /// <summary>
 /// Command to switch the current agent.
-/// Usage: /agent @agent:AgentName or /agent AgentName
+/// Usage: /agent @agent/AgentName or /agent AgentName
 /// </summary>
 public class AgentCommand : IChatCommand
 {
     public string Name => "agent";
     public string Description => "Switch to a different agent for subsequent messages";
-    public string Usage => "/agent @agent:Name or /agent Name";
+    public string Usage => "/agent @agent/Name or /agent Name";
 
     private static readonly Regex AgentRefPattern =
-        new(@"@agent:(\w+)", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+        new(@"@agent/(\w+)", RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
     public Task<CommandResult> ExecuteAsync(CommandContext context, CancellationToken cancellationToken = default)
     {
@@ -38,7 +38,7 @@ public class AgentCommand : IChatCommand
         }
         else
         {
-            // Allow just the agent name without @agent: prefix
+            // Allow just the agent name without @agent/ prefix
             agentName = context.ParsedCommand.Arguments[0].TrimStart('@');
         }
 

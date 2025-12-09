@@ -20,12 +20,12 @@ public record ParsedChatMessage
     public required string ProcessedText { get; init; }
 
     /// <summary>
-    /// Agent name extracted from @agent:Name reference anywhere in message.
+    /// Agent name extracted from @agent/Name reference anywhere in message.
     /// </summary>
     public string? AgentReference { get; init; }
 
     /// <summary>
-    /// Model name extracted from model:Name reference anywhere in message.
+    /// Model name extracted from @model/Name reference anywhere in message.
     /// </summary>
     public string? ModelReference { get; init; }
 
@@ -71,13 +71,13 @@ public record ParsedCommand
 /// </summary>
 public class ChatPreParser
 {
-    // Pattern: @agent:AgentName (anywhere in message)
+    // Pattern: @agent/AgentName (anywhere in message)
     private static readonly Regex AgentReferencePattern =
-        new(@"@agent:(\w+)", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+        new(@"@agent/(\w+)", RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
-    // Pattern: @model:ModelName (anywhere in message, model name can contain hyphens and dots)
+    // Pattern: @model/ModelName (anywhere in message, model name can contain hyphens and dots)
     private static readonly Regex ModelReferencePattern =
-        new(@"@model:([\w\-\.]+)", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+        new(@"@model/([\w\-\.]+)", RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
     // Pattern: /command at start of message
     private static readonly Regex CommandPattern =
@@ -103,14 +103,14 @@ public class ChatPreParser
         ParsedCommand? command = null;
         var processedText = text;
 
-        // Check for @agent:Name reference anywhere in message
+        // Check for @agent/Name reference anywhere in message
         var agentMatch = AgentReferencePattern.Match(trimmedText);
         if (agentMatch.Success)
         {
             agentReference = agentMatch.Groups[1].Value;
         }
 
-        // Check for model:Name reference anywhere in message
+        // Check for @model/Name reference anywhere in message
         var modelMatch = ModelReferencePattern.Match(trimmedText);
         if (modelMatch.Success)
         {

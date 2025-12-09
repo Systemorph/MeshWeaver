@@ -16,16 +16,18 @@ Tags:
   - "Content"
 ---
 
-MeshWeaver provides a unified notation for referencing any form of content. Whether you need to embed data, include file content, or display layout areas, the syntax follows a consistent pattern:
+MeshWeaver provides a unified notation for referencing any form of content. Whether you need to embed data, include file content, display layout areas, or select AI agents and models, the syntax follows a consistent pattern:
 
 ```
-@prefix:addressType/addressId/path
+@prefix/addressType/addressId/path
 ```
 
 The prefix determines how the content is fetched and rendered:
 - `data/` - Fetches data entities and displays them as JSON
 - `content/` - Fetches file content and renders based on mime type
 - `area/` - Displays a layout area (default if no prefix is specified)
+- `agent/` - Selects an AI agent for chat interactions
+- `model/` - Selects an AI model for chat interactions
 
 For paths containing spaces, use quotes: `@"content/app/Docs/My Report.pdf"`
 
@@ -100,3 +102,69 @@ The Progress layout area demonstrates progress bars:
 ```
 
 @app/Documentation/Progress
+
+## Agent References
+
+Agent references allow you to select a specific AI agent for chat interactions. The format is:
+
+```
+@agent/AgentName
+```
+
+Agents are specialized AI assistants configured for specific tasks or domains. When you mention an agent reference in your message, that agent will handle the conversation.
+
+### Example: Selecting an Agent
+
+To select the Documentation agent:
+
+```
+@agent/Documentation
+```
+
+You can combine agent selection with a prompt in the same message:
+
+```
+@agent/RiskImportAgent import Microsoft.xlsx
+```
+
+Agents can also be selected automatically based on the current navigation context. When you navigate to different areas of the application, the most appropriate agent for that context is automatically selected.
+
+## Model References
+
+Model references allow you to select a specific AI model for chat interactions. The format is:
+
+```
+@model/ModelName
+```
+
+### Example: Selecting a Model
+
+To select a specific model:
+
+```
+@model/claude-3-5-sonnet
+```
+
+Model names can contain letters, numbers, hyphens, and dots (e.g., `claude-3-5-sonnet`, `gpt-4.0`).
+
+## Slash Commands
+
+In addition to @ references, you can use slash commands for agent and model selection:
+
+- `/agent AgentName` - Switch to the specified agent
+- `/model ModelName` - Switch to the specified model
+- `/help` - Show available commands
+
+### Examples
+
+Switch to the RiskImport agent using a slash command:
+
+```
+/agent @agent/RiskImportAgent
+```
+
+Switch to a specific model:
+
+```
+/model @model/claude-haiku-4-5
+```

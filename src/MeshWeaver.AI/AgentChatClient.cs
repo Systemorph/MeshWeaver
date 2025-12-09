@@ -331,9 +331,9 @@ public class AgentChatClient(
         }
     }
 
-    // Pattern: @agent:AgentName (anywhere in message)
+    // Pattern: @agent/AgentName (anywhere in message)
     private static readonly Regex AgentReferencePattern =
-        new(@"@agent:(\w+)", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+        new(@"@agent/(\w+)", RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
     private AIAgent? SelectAgent(ChatMessage? lastMessage)
     {
@@ -342,7 +342,7 @@ public class AgentChatClient(
         logger.LogDebug("Agent definitions with IAgentWithContext: {AgentDefinitions}",
             string.Join(", ", agentDefinitions.Values.OfType<IAgentWithContext>().Select(a => a.Name)));
 
-        // Check for explicit agent mention using @agent:Name format
+        // Check for explicit agent mention using @agent/Name format
         if (lastMessage != null)
         {
             var text = ExtractTextFromMessage(lastMessage);
@@ -353,7 +353,7 @@ public class AgentChatClient(
                 // Try exact match first, then case-insensitive
                 if (agents.TryGetValue(agentName, out var agent))
                 {
-                    logger.LogDebug("Selected agent by @agent: reference: {AgentName}", agentName);
+                    logger.LogDebug("Selected agent by @agent/ reference: {AgentName}", agentName);
                     return agent;
                 }
                 // Case-insensitive fallback
@@ -361,7 +361,7 @@ public class AgentChatClient(
                     kvp.Key.Equals(agentName, StringComparison.OrdinalIgnoreCase));
                 if (found.Value != null)
                 {
-                    logger.LogDebug("Selected agent by @agent: reference (case-insensitive): {AgentName}", found.Key);
+                    logger.LogDebug("Selected agent by @agent/ reference (case-insensitive): {AgentName}", found.Key);
                     return found.Value;
                 }
             }

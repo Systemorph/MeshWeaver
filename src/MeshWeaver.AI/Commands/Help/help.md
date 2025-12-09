@@ -21,5 +21,5 @@ The `/help` command displays information about available chat commands. Use it w
 ### Tips
 
 - Commands start with `/`
-- Use `@agent:Name` anywhere in your message to address a specific agent
+- Use `@agent/Name` anywhere in your message to address a specific agent
 - Type `/` to see command suggestions in the autocomplete

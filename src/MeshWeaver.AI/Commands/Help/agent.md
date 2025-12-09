@@ -2,7 +2,7 @@
 
 Switch to a different agent for subsequent messages.
 
-**Usage:** `/agent @agent:Name` or `/agent Name`
+**Usage:** `/agent @agent/Name` or `/agent Name`
 
 ### Description
 
@@ -11,7 +11,7 @@ The `/agent` command allows you to change which AI agent handles your messages. 
 ### Examples
 
 ```
-/agent @agent:InsuranceAgent
+/agent @agent/InsuranceAgent
 /agent InsuranceAgent
 /agent insurance
 ```
@@ -20,4 +20,4 @@ The `/agent` command allows you to change which AI agent handles your messages. 
 
 - Agent names are case-insensitive
 - The agent selection persists until you explicitly switch to another agent
-- You can also use `@agent:Name` inline in any message to temporarily address a specific agent
+- You can also use `@agent/Name` inline in any message to temporarily address a specific agent

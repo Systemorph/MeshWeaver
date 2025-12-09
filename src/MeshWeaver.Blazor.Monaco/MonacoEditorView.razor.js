@@ -256,7 +256,7 @@ export function registerCompletionProvider(editorId, config) {
         return;
     }
 
-    // Build trigger character set for regex
+    // Build trigger character set for regex (not used directly anymore, but kept for reference)
     const escapedTriggers = triggerCharacters.map(c => c.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('');
 
     // Create debounced async fetch function (150ms delay)
@@ -277,9 +277,18 @@ export function registerCompletionProvider(editorId, config) {
     }, 150);
 
     // Register new completion provider
+    // Note: Monaco registers providers globally per language, so we need to check
+    // if this request is for our specific editor instance
     state.completionDisposable = monaco.languages.registerCompletionItemProvider('plaintext', {
         triggerCharacters: triggerCharacters,
         provideCompletionItems: async (model, position) => {
+            // Check if this model belongs to our editor
+            const editorInstance = monaco.editor.getEditors().find(e => e.getContainerDomNode()?.id === editorId);
+            if (!editorInstance || editorInstance.getModel() !== model) {
+                // This completion request is not for our editor, skip it
+                return { suggestions: [] };
+            }
+
             const currentState = editorState.get(editorId);
             const isAsync = currentState?.completionConfig?.useAsync || false;
 
@@ -294,9 +303,25 @@ export function registerCompletionProvider(editorId, config) {
             let matchLength;
 
             // Check if we're after a trigger character (e.g., @, /)
-            // Match trigger followed by any combination of word chars, hyphens, dots, and colons
-            // This allows @agent:Name, @model:Name, /command etc.
-            const triggerMatch = textUntilPosition.match(new RegExp(`[${escapedTriggers}]([\\w\\-\\.:]+)?$`));
+            // We need different handling for @ vs / triggers:
+            // - @ can be followed by paths with slashes: @agent/Name, @content/path/file
+            // - / is only a trigger at word boundary (for commands like /agent)
+
+            // First try to match @ followed by path (including slashes)
+            let triggerMatch = textUntilPosition.match(/@([\w\-\./]+)?$/);
+
+            // If no @ match, try / but only if it's at word boundary (start or after space)
+            if (!triggerMatch) {
+                triggerMatch = textUntilPosition.match(/(?:^|\s)\/([\w\-\.]+)?$/);
+                if (triggerMatch) {
+                    // Adjust match to not include the leading space
+                    const fullMatch = triggerMatch[0];
+                    const slashIndex = fullMatch.indexOf('/');
+                    triggerMatch[0] = fullMatch.substring(slashIndex);
+                    // triggerMatch[1] stays the same (the capture group)
+                }
+            }
+
             if (!triggerMatch) {
                 return { suggestions: [] };
             }
@@ -305,7 +330,7 @@ export function registerCompletionProvider(editorId, config) {
             const afterTrigger = triggerMatch[1] || '';
 
             // Include trigger char in query for server to determine context
-            // For @ prefix: could be @agent:Name, @model:Name, or just @something
+            // For @ prefix: could be @agent/Name, @model/Name, or just @something
             fullQuery = triggerChar + afterTrigger;
             matchLength = triggerMatch[0].length;
 

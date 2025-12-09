@@ -72,7 +72,7 @@ public class HelpCommand : IChatCommand
             }
 
             sb.AppendLine("---");
-            sb.AppendLine("**Tip:** You can also use `@agent:Name` anywhere in your message to address a specific agent.");
+            sb.AppendLine("**Tip:** You can also use `@agent/Name` anywhere in your message to address a specific agent.");
         }
 
         return Task.FromResult(CommandResult.Ok(sb.ToString()));
