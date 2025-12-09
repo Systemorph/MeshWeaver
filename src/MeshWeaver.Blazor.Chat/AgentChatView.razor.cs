@@ -23,7 +23,7 @@ public enum ChatPosition
     Bottom
 }
 
-public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
+public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>, IDisposable
 {
     private Lazy<Task<IAgentChat>> lazyChat;
     private CancellationTokenSource currentResponseCancellation = new();
@@ -39,6 +39,8 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
     private IAgentChatFactoryProvider AgentChatFactoryProvider => Hub.ServiceProvider.GetRequiredService<IAgentChatFactoryProvider>();
     // Bound context from the control
     private readonly AgentContext? boundContext;
+    // Track last navigation context for agent reselection
+    private AgentContext? lastNavigationContext;
 
     // Bound title from the control
     private readonly string chatTitle = "AI Chat";
@@ -76,6 +78,9 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
 
     protected override async Task OnInitializedAsync()
     {
+        // Subscribe to navigation changes to update agent selection
+        NavigationManager.LocationChanged += OnLocationChanged;
+
         // Remove padding/margin from body-content when this is a standalone chat page
         var currentPath = NavigationManager.ToBaseRelativePath(NavigationManager.Uri);
         if (currentPath == "chat")
@@ -91,6 +96,9 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
 
         // Initialize agent and model selections
         await InitializeAgentAndModelSelectionsAsync();
+
+        // Store the initial navigation context
+        lastNavigationContext = GetCurrentAgentContext();
 
         // Initialize command system
         InitializeCommands();
@@ -142,6 +150,48 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
         }
 
         StateHasChanged();
+    }
+
+    /// <summary>
+    /// Handles navigation changes to update agent selection based on new context.
+    /// </summary>
+    private void OnLocationChanged(object? sender, Microsoft.AspNetCore.Components.Routing.LocationChangedEventArgs e)
+    {
+        var newContext = GetCurrentAgentContext();
+
+        // Check if the context has actually changed (compare address and layout area)
+        var contextChanged = !ContextsAreEqual(lastNavigationContext, newContext);
+
+        if (contextChanged)
+        {
+            Logger.LogDebug("Navigation context changed from {OldContext} to {NewContext}",
+                lastNavigationContext?.Address?.ToString() ?? "null",
+                newContext?.Address?.ToString() ?? "null");
+
+            lastNavigationContext = newContext;
+
+            // Try to find an agent that matches the new context
+            var matchingAgent = SelectAgentByContext();
+            if (matchingAgent != null && matchingAgent.Name != selectedAgentInfo?.Name)
+            {
+                Logger.LogDebug("Auto-selecting agent {AgentName} based on navigation context", matchingAgent.Name);
+                OnAgentInfoChanged(matchingAgent);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Compares two AgentContext instances for equality.
+    /// </summary>
+    private static bool ContextsAreEqual(AgentContext? a, AgentContext? b)
+    {
+        if (a == null && b == null) return true;
+        if (a == null || b == null) return false;
+
+        var addressEqual = a.Address?.ToString() == b.Address?.ToString();
+        var layoutAreaEqual = a.LayoutArea?.Area == b.LayoutArea?.Area;
+
+        return addressEqual && layoutAreaEqual;
     }
 
     /// <summary>
@@ -759,7 +809,7 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
     private CompletionProviderConfig GetAgentCompletionConfig()
     {
         // Only provide trigger characters - items are fetched async via GetCompletionsForEditorAsync
-        // Note: @ triggers @agent:Name and @model:Name, / triggers commands
+        // Note: @ triggers @agent/Name and @model/Name, / triggers commands
         return new CompletionProviderConfig
         {
             TriggerCharacters = ["@", "/"],
@@ -872,7 +922,10 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
     }
 
     public void Dispose()
-    => currentResponseCancellation.Cancel();
+    {
+        NavigationManager.LocationChanged -= OnLocationChanged;
+        currentResponseCancellation.Cancel();
+    }
 
 
 }
