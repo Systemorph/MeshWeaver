@@ -1,4 +1,4 @@
-﻿using MeshWeaver.AI;
+using MeshWeaver.AI;
 using MeshWeaver.Blazor.Chat;
 using MeshWeaver.Messaging;
 using MeshWeaver.Portal.Shared.Web.Components;
@@ -7,6 +7,7 @@ using Microsoft.AspNetCore.Components;
 using Microsoft.AspNetCore.Components.Routing;
 using Microsoft.FluentUI.AspNetCore.Components;
 using Microsoft.JSInterop;
+// ChatWindowStateService is now in MeshWeaver.Blazor.Chat namespace
 
 namespace MeshWeaver.Portal.Shared.Web.Layout;
 
@@ -15,6 +16,7 @@ public partial class MainLayout : IDisposable
     [Inject] private IJSRuntime JSRuntime { get; set; } = null!;
     [Inject] private NavigationManager NavigationManager { get; set; } = null!;
     [Inject] private IMessageHub Hub { get; set; } = null!;
+    [Inject] private ChatWindowStateService ChatState { get; set; } = null!;
 
     private const string MessageBarSection = "MessagesTop";
     private const string ChatAreaName = "AgentChat";
@@ -22,11 +24,34 @@ public partial class MainLayout : IDisposable
     private bool isNavMenuOpen;
     private readonly AgentChatControl chatControl = new();
     private IJSObjectReference? jsModule;
+    private DotNetObjectReference<MainLayout>? dotNetRef;
 
     protected override void OnInitialized()
     {
         base.OnInitialized();
         NavigationManager.LocationChanged += OnLocationChanged;
+        ChatState.OnStateChanged += OnChatStateChanged;
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            await EnsureJsModuleAsync();
+            dotNetRef = DotNetObjectReference.Create(this);
+            await jsModule!.InvokeVoidAsync("initialize", dotNetRef);
+
+            // Apply persisted size if available
+            if (ChatState.IsVisible && (ChatState.Width.HasValue || ChatState.Height.HasValue))
+            {
+                await ApplyPersistedSizeAsync();
+            }
+        }
+    }
+
+    private void OnChatStateChanged()
+    {
+        InvokeAsync(StateHasChanged);
     }
 
     private void OnLocationChanged(object? sender, LocationChangedEventArgs e)
@@ -42,13 +67,16 @@ public partial class MainLayout : IDisposable
             CloseMobileNavMenu();
         }
     }
+
     [CascadingParameter]
     public required ViewportInformation ViewportInformation { get; set; }
+
     private void CloseMobileNavMenu()
     {
         isNavMenuOpen = false;
         StateHasChanged();
     }
+
     private IDialogReference? dialog;
 
     private async Task OpenSiteSettingsAsync()
@@ -65,24 +93,47 @@ public partial class MainLayout : IDisposable
 
         await dialog.Result;
     }
-    public bool IsAIChatVisible { get; private set; }
-    private AgentChatView? chatComponent;
-    private ChatPosition chatPosition = ChatPosition.Right;
 
-    public void ToggleAIChatVisibility()
+    public bool IsAIChatVisible => ChatState.IsVisible;
+    private AgentChatView? chatComponent;
+    private ChatPosition chatPosition => ChatState.Position;
+
+    public async Task ToggleAIChatVisibility()
     {
-        IsAIChatVisible = !IsAIChatVisible;
-        StateHasChanged();
+        ChatState.Toggle();
+
+        if (ChatState.IsVisible)
+        {
+            // Apply persisted size when opening
+            await ApplyPersistedSizeAsync();
+        }
+    }
+
+    private async Task ApplyPersistedSizeAsync()
+    {
+        await EnsureJsModuleAsync();
+        await jsModule!.InvokeVoidAsync("applyChatSize", ChatState.Width, ChatState.Height);
+    }
+
+    private async Task EnsureJsModuleAsync()
+    {
+        jsModule ??= await JSRuntime.InvokeAsync<IJSObjectReference>(
+            "import", "./_content/MeshWeaver.Blazor.Chat/AgentChatView.razor.js");
     }
 
     private async Task StartResize()
     {
-        // Lazily load the JavaScript module
-        jsModule ??= await JSRuntime.InvokeAsync<IJSObjectReference>(
-            "import", "./_content/MeshWeaver.Blazor.Chat/AgentChatView.razor.js");
+        await EnsureJsModuleAsync();
+        await jsModule!.InvokeVoidAsync("startResize");
+    }
 
-        // Call the JavaScript function to handle the resize operation
-        await jsModule.InvokeVoidAsync("startResize");
+    /// <summary>
+    /// Called from JavaScript when resize ends to persist the new size.
+    /// </summary>
+    [JSInvokable]
+    public void OnResizeEnd(int? width, int? height)
+    {
+        ChatState.SetSize(width, height);
     }
 
     private async Task HandleNewChatAsync()
@@ -95,13 +146,14 @@ public partial class MainLayout : IDisposable
 
     private void HandleChatPositionChanged(ChatPosition newPosition)
     {
-        chatPosition = newPosition;
-        StateHasChanged();
+        ChatState.SetPosition(newPosition);
     }
 
     public void Dispose()
     {
         NavigationManager.LocationChanged -= OnLocationChanged;
+        ChatState.OnStateChanged -= OnChatStateChanged;
+        dotNetRef?.Dispose();
         jsModule?.DisposeAsync();
     }
 }

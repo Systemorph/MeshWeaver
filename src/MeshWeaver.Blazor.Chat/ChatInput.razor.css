@@ -1,4 +1,4 @@
-﻿.input-box {
+.input-box {
     display: flex;
     flex-direction: column;
     background: var(--neutral-layer-1);
@@ -7,13 +7,17 @@
     padding: 0.5rem 0.75rem;
     margin-top: 0.75rem;
     color: var(--neutral-foreground-rest);
+    min-width: 0; /* Allow shrinking in flex context */
+    overflow: hidden;
 }
 
 .input-container {
     position: relative;
     flex-grow: 1;
     width: 100%;
+    min-width: 0; /* Allow shrinking below content size */
     min-height: 60px;
+    overflow: hidden; /* Constrain Monaco */
 }
 
 

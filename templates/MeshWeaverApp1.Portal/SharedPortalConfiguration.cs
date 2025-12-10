@@ -11,6 +11,7 @@ using MeshWeaver.Mesh;
 using MeshWeaverApp1.Todo.AI;
 using MeshWeaverApp1.Portal.Infrastructure;
 using MeshWeaverApp1.Portal.Resize;
+using MeshWeaver.Blazor.Chat;
 using Microsoft.AspNetCore.Authentication.OpenIdConnect;
 using Microsoft.Identity.Web;
 using Microsoft.Identity.Web.UI;
@@ -33,14 +34,15 @@ public static class SharedPortalConfiguration
 
         var services = builder.Services;
         services.AddRazorPages()
-
             .AddMicrosoftIdentityUI();
+
         services.AddRazorComponents()
             .AddInteractiveServerComponents()
             .AddHubOptions(opt =>
             {
                 opt.DisableImplicitFromServicesParameters = true;
-            });
+            })
+            .AddChatWindowState();
 
         services.AddTodoAI();
         services.AddMemoryChatPersistence();
