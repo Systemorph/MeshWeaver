@@ -1,5 +1,7 @@
 .monaco-editor-container {
     width: 100%;
+    min-width: 0; /* Critical: allow shrinking in flex containers */
+    max-width: 100%; /* Prevent overflow */
     border: none;
     overflow: hidden;
     background: transparent;

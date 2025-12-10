@@ -4,6 +4,7 @@ using MeshWeaver.AI;
 using MeshWeaver.AI.AzureFoundry;
 using MeshWeaver.AI.AzureOpenAI;
 using MeshWeaver.AI.Persistence;
+using MeshWeaver.Blazor.Chat;
 using MeshWeaver.Blazor.GoogleMaps;
 using MeshWeaver.Blazor.Infrastructure;
 using MeshWeaver.Blazor.Pages;
@@ -46,14 +47,15 @@ public static class SharedPortalConfiguration
         var services = builder.Services;
 
         services.AddRazorPages()
-
             .AddMicrosoftIdentityUI();
+
         services.AddRazorComponents()
             .AddInteractiveServerComponents()
             .AddHubOptions(opt =>
             {
                 opt.DisableImplicitFromServicesParameters = true;
-            });
+            })
+            .AddChatWindowState();
 
         // Configure Radzen
         services.AddRadzenServices();
