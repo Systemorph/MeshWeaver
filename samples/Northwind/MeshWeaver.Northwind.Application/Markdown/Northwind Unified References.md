@@ -23,110 +23,110 @@ This document showcases all addressable items in the Northwind application.
 Display all orders:
 
 ```
-@data/app/Northwind/Order
+@app/Northwind/data/Order
 ```
 
-@data/app/Northwind/Order
+@app/Northwind/data/Order
 
 ### Single Order
 
 Display a specific order:
 
 ```
-@data/app/Northwind/Order/10248
+@app/Northwind/data/Order/10248
 ```
 
-@data/app/Northwind/Order/10248
+@app/Northwind/data/Order/10248
 
 ### Order Details Collection
 
 Display all order details:
 
 ```
-@data/app/Northwind/OrderDetails
+@app/Northwind/data/OrderDetails
 ```
 
-@data/app/Northwind/OrderDetails
+@app/Northwind/data/OrderDetails
 
 ### Customer Collection
 
 Display all customers:
 
 ```
-@data/app/Northwind/Customer
+@app/Northwind/data/Customer
 ```
 
-@data/app/Northwind/Customer
+@app/Northwind/data/Customer
 
 ### Single Customer
 
 Display a specific customer:
 
 ```
-@data/app/Northwind/Customer/ALFKI
+@app/Northwind/data/Customer/ALFKI
 ```
 
-@data/app/Northwind/Customer/ALFKI
+@app/Northwind/data/Customer/ALFKI
 
 ### Product Collection
 
 Display all products:
 
 ```
-@data/app/Northwind/Product
+@app/Northwind/data/Product
 ```
 
-@data/app/Northwind/Product
+@app/Northwind/data/Product
 
 ### Single Product
 
 Display a specific product:
 
 ```
-@data/app/Northwind/Product/1
+@app/Northwind/data/Product/1
 ```
 
-@data/app/Northwind/Product/1
+@app/Northwind/data/Product/1
 
 ### Employee Collection
 
 Display all employees:
 
 ```
-@data/app/Northwind/Employee
+@app/Northwind/data/Employee
 ```
 
-@data/app/Northwind/Employee
+@app/Northwind/data/Employee
 
 ### Single Employee
 
 Display a specific employee:
 
 ```
-@data/app/Northwind/Employee/1
+@app/Northwind/data/Employee/1
 ```
 
-@data/app/Northwind/Employee/1
+@app/Northwind/data/Employee/1
 
 ### Supplier Collection
 
 Display all suppliers:
 
 ```
-@data/app/Northwind/Supplier
+@app/Northwind/data/Supplier
 ```
 
-@data/app/Northwind/Supplier
+@app/Northwind/data/Supplier
 
 ### Single Supplier
 
 Display a specific supplier:
 
 ```
-@data/app/Northwind/Supplier/1
+@app/Northwind/data/Supplier/1
 ```
 
-@data/app/Northwind/Supplier/1
+@app/Northwind/data/Supplier/1
 
 ## Reference Data
 
@@ -135,60 +135,60 @@ Display a specific supplier:
 Display all categories:
 
 ```
-@data/app/Northwind/Category
+@app/Northwind/data/Category
 ```
 
-@data/app/Northwind/Category
+@app/Northwind/data/Category
 
 ### Single Category
 
 Display a specific category:
 
 ```
-@data/app/Northwind/Category/1
+@app/Northwind/data/Category/1
 ```
 
-@data/app/Northwind/Category/1
+@app/Northwind/data/Category/1
 
 ### Region Collection
 
 Display all regions:
 
 ```
-@data/app/Northwind/Region
+@app/Northwind/data/Region
 ```
 
-@data/app/Northwind/Region
+@app/Northwind/data/Region
 
 ### Single Region
 
 Display a specific region:
 
 ```
-@data/app/Northwind/Region/1
+@app/Northwind/data/Region/1
 ```
 
-@data/app/Northwind/Region/1
+@app/Northwind/data/Region/1
 
 ### Territory Collection
 
 Display all territories:
 
 ```
-@data/app/Northwind/Territory
+@app/Northwind/data/Territory
 ```
 
-@data/app/Northwind/Territory
+@app/Northwind/data/Territory
 
 ### Single Territory
 
 Display a specific territory:
 
 ```
-@data/app/Northwind/Territory/01581
+@app/Northwind/data/Territory/01581
 ```
 
-@data/app/Northwind/Territory/01581
+@app/Northwind/data/Territory/01581
 
 ## Layout Area References
 

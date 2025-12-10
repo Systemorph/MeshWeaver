@@ -23,10 +23,11 @@ namespace MeshWeaver.AI.Test;
 /// <summary>
 /// Tests for the unified content access system using GetDataRequest with UnifiedReference.
 /// Tests the path patterns:
-/// - data:addressType/addressId (default data reference)
-/// - data:addressType/addressId/collection (collection)
-/// - data:addressType/addressId/collection/entityId (entity)
-/// - area:areaName/areaId (layout area)
+/// - addressType/addressId/data (default data reference)
+/// - addressType/addressId/data/collection (collection)
+/// - addressType/addressId/data/collection/entityId (entity)
+/// - addressType/addressId/areaName (layout area, area is default)
+/// - addressType/addressId/content/collection/path (content)
 /// </summary>
 public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(output)
 {
@@ -39,7 +40,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
     {
         // arrange & act
         var handler = new DataPathHandler();
-        var (address, reference) = handler.Parse("pricing/test-company-2024");
+        var (address, reference) = handler.Parse("pricing", "test-company-2024", "");
 
         // assert
         address.Type.Should().Be("pricing");
@@ -53,7 +54,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
     {
         // arrange & act
         var handler = new DataPathHandler();
-        var (address, reference) = handler.Parse("pricing/test-company-2024/PropertyRisk");
+        var (address, reference) = handler.Parse("pricing", "test-company-2024", "PropertyRisk");
 
         // assert
         address.Type.Should().Be("pricing");
@@ -67,7 +68,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
     {
         // arrange & act
         var handler = new DataPathHandler();
-        var (address, reference) = handler.Parse("pricing/test-company-2024/PropertyRisk/risk1");
+        var (address, reference) = handler.Parse("pricing", "test-company-2024", "PropertyRisk/risk1");
 
         // assert
         address.Type.Should().Be("pricing");
@@ -81,7 +82,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
     {
         // arrange & act
         var handler = new AreaPathHandler();
-        var (address, reference) = handler.Parse("pricing/test-company-2024/Overview");
+        var (address, reference) = handler.Parse("pricing", "test-company-2024", "Overview");
 
         // assert
         address.Type.Should().Be("pricing");
@@ -96,7 +97,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
     {
         // arrange & act
         var handler = new AreaPathHandler();
-        var (address, reference) = handler.Parse("pricing/test-company-2024/Overview/details");
+        var (address, reference) = handler.Parse("pricing", "test-company-2024", "Overview/details");
 
         // assert
         address.Type.Should().Be("pricing");
@@ -111,7 +112,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
     {
         // arrange & act
         var handler = new ContentPathHandler();
-        var (address, reference) = handler.Parse("host/1/Submissions/folder/file.xlsx");
+        var (address, reference) = handler.Parse("host", "1", "Submissions/folder/file.xlsx");
 
         // assert
         address.Type.Should().Be("host");
@@ -127,7 +128,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
     {
         // arrange & act
         var handler = new ContentPathHandler();
-        var (address, reference) = handler.Parse("host/1/Submissions@MS-2024/folder/file.xlsx");
+        var (address, reference) = handler.Parse("host", "1", "Submissions@MS-2024/folder/file.xlsx");
 
         // assert
         address.Type.Should().Be("host");
@@ -138,33 +139,28 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
         fileRef.Partition.Should().Be("MS-2024");
     }
 
-    [Theory]
-    [InlineData("")]
-    [InlineData("pricing")]
-    public void DataPathHandler_Parse_InvalidPath_ThrowsArgumentException(string invalidPath)
+    [Fact]
+    public void AreaPathHandler_Parse_EmptyPath_ReturnsNullArea()
     {
-        var handler = new DataPathHandler();
-        var action = () => handler.Parse(invalidPath);
-        action.Should().Throw<ArgumentException>();
-    }
-
-    [Theory]
-    [InlineData("")]
-    [InlineData("host/1")] // Missing area name
-    public void AreaPathHandler_Parse_InvalidPath_ThrowsArgumentException(string invalidPath)
-    {
+        // arrange & act
         var handler = new AreaPathHandler();
-        var action = () => handler.Parse(invalidPath);
-        action.Should().Throw<ArgumentException>();
+        var (address, reference) = handler.Parse("host", "1", "");
+
+        // assert
+        address.Type.Should().Be("host");
+        address.Id.Should().Be("1");
+        var areaRef = reference.Should().BeOfType<LayoutAreaReference>().Subject;
+        areaRef.Area.Should().BeNull();
+        areaRef.Id.Should().BeNull();
     }
 
     [Theory]
     [InlineData("")]
-    [InlineData("host/1/collection")] // Missing file path
+    [InlineData("collection")] // Missing file path
     public void ContentPathHandler_Parse_InvalidPath_ThrowsArgumentException(string invalidPath)
     {
         var handler = new ContentPathHandler();
-        var action = () => handler.Parse(invalidPath);
+        var action = () => handler.Parse("host", "1", invalidPath);
         action.Should().Throw<ArgumentException>();
     }
 
@@ -178,7 +174,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
         // arrange - client sends request to host
         GetHost(); // Ensure host is initialized
         var client = GetClient();
-        var path = "data/host/1/TestPricing";
+        var path = "host/1/data/TestPricing";
 
         // act - send from client to host
         var response = await client.AwaitResponse(
@@ -201,7 +197,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
         // arrange - client sends request to host
         GetHost(); // Ensure host is initialized
         var client = GetClient();
-        var path = $"data/host/1/TestPricing/{TestPricingId}";
+        var path = $"host/1/data/TestPricing/{TestPricingId}";
 
         // act - send from client to host
         var response = await client.AwaitResponse(
@@ -224,7 +220,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
         // arrange - client sends request to host
         GetHost(); // Ensure host is initialized
         var client = GetClient();
-        var path = "data/host/1";
+        var path = "host/1/data";
 
         // act - send from client to host
         var response = await client.AwaitResponse(
@@ -247,7 +243,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
         // arrange - client sends request to host
         GetHost(); // Ensure host is initialized
         var client = GetClient();
-        var path = "area/host/1/TestArea";
+        var path = "host/1/TestArea"; // area is default, no keyword needed
 
         // act - send from client to host
         var response = await client.AwaitResponse(
@@ -275,7 +271,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
         // arrange - client sends request to host
         GetHost(); // Ensure host is initialized
         var client = GetClient();
-        var path = $"area/host/1/TestArea/{TestPricingId}";
+        var path = $"host/1/TestArea/{TestPricingId}"; // area is default, no keyword needed
 
         // act - send from client to host
         var response = await client.AwaitResponse(
@@ -295,7 +291,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
         // arrange - client sends request to host
         GetHost(); // Ensure host is initialized
         var client = GetClient();
-        var path = "data/invalid";
+        var path = "invalid"; // Single segment is invalid
 
         // act - send from client to host
         var response = await client.AwaitResponse(
@@ -333,13 +329,13 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
         var testDir = Path.Combine(Path.GetTempPath(), "MeshWeaverTest_" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(testDir);
         var testFilePath = Path.Combine(testDir, "content-test.txt");
-        await File.WriteAllTextAsync(testFilePath, "Content via content: prefix", TestContext.Current.CancellationToken);
+        await File.WriteAllTextAsync(testFilePath, "Content via content keyword", TestContext.Current.CancellationToken);
 
         try
         {
             var host = GetHostWithFileProvider(testDir);
             var client = GetClient();
-            var path = "content/host/1/TestFiles/content-test.txt";
+            var path = "host/1/content/TestFiles/content-test.txt";
 
             // act - send from client to host
             var response = await client.AwaitResponse(
@@ -353,7 +349,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
             dataResponse.Data.Should().NotBeNull();
 
             var content = dataResponse.Data as string;
-            content.Should().Contain("Content via content: prefix");
+            content.Should().Contain("Content via content keyword");
         }
         finally
         {
@@ -380,7 +376,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
             // Create a host with file content provider
             var host = GetHostWithFileProvider(testDir);
             var client = GetClient();
-            var path = "data/host/1/TestFiles/test.txt";
+            var path = "host/1/data/TestFiles/test.txt";
 
             // act - send from client to host
             var response = await client.AwaitResponse(
@@ -418,7 +414,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
         {
             var host = GetHostWithFileProvider(testDir);
             var client = GetClient();
-            var path = "data/host/1/TestFiles/multiline.txt";
+            var path = "host/1/data/TestFiles/multiline.txt";
 
             // act - request only 2 rows
             var response = await client.AwaitResponse(
@@ -453,7 +449,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
         {
             var host = GetHostWithFileProvider(testDir);
             var client = GetClient();
-            var path = "data/host/1/TestFiles/nonexistent.txt";
+            var path = "host/1/data/TestFiles/nonexistent.txt";
 
             // act
             var response = await client.AwaitResponse(
@@ -486,7 +482,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
         {
             var host = GetHostWithFileProvider(testDir);
             var client = GetClient();
-            var path = "data/host/1/TestFiles/subfolder/nested.txt";
+            var path = "host/1/data/TestFiles/subfolder/nested.txt";
 
             // act
             var response = await client.AwaitResponse(
@@ -590,7 +586,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
         // arrange
         GetHost();
         var client = GetClient();
-        var path = $"data/host/1/TestPricing/{TestPricingId}";
+        var path = $"host/1/data/TestPricing/{TestPricingId}";
 
         // First, verify the entity exists
         var getResponse = await client.AwaitResponse(
@@ -663,7 +659,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
         // arrange
         GetHost();
         var client = GetClient();
-        var path = "data/host/1";
+        var path = "host/1/data";
 
         // act
         var response = await client.AwaitResponse(
@@ -689,7 +685,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
         {
             var host = GetHostWithFileProvider(testDir);
             var client = GetClient();
-            var path = "content/host/1/TestFiles/update-test.txt";
+            var path = "host/1/content/TestFiles/update-test.txt";
 
             // act
             var response = await client.AwaitResponse(
@@ -718,7 +714,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
         // arrange
         GetHost();
         var client = GetClient();
-        var path = "area/host/1/TestArea";
+        var path = "host/1/TestArea"; // area is default
 
         // act
         var response = await client.AwaitResponse(
@@ -755,7 +751,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
             TestContext.Current.CancellationToken);
 
         // Verify it exists
-        var path = $"data/host/1/TestPricing/{newEntityId}";
+        var path = $"host/1/data/TestPricing/{newEntityId}";
         var getResponse = await client.AwaitResponse(
             new GetDataRequest(new UnifiedReference(path)),
             o => o.WithTarget(new HostAddress()),
@@ -804,7 +800,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
         // arrange
         GetHost();
         var client = GetClient();
-        var path = "data/host/1";
+        var path = "host/1/data";
 
         // act
         var response = await client.AwaitResponse(
@@ -823,7 +819,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
         // arrange
         GetHost();
         var client = GetClient();
-        var path = "data/host/1/TestPricing";
+        var path = "host/1/data/TestPricing";
 
         // act
         var response = await client.AwaitResponse(
@@ -849,7 +845,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
         {
             var host = GetHostWithFileProvider(testDir);
             var client = GetClient();
-            var path = "content/host/1/TestFiles/delete-test.txt";
+            var path = "host/1/content/TestFiles/delete-test.txt";
 
             // Verify file exists
             File.Exists(testFilePath).Should().BeTrue();
@@ -880,7 +876,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
         // arrange
         GetHost();
         var client = GetClient();
-        var path = "area/host/1/TestArea";
+        var path = "host/1/TestArea"; // area is default
 
         // act
         var response = await client.AwaitResponse(
@@ -899,7 +895,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
         // arrange
         GetHost();
         var client = GetClient();
-        var path = "data/host/1/TestPricing/nonexistent-entity-id";
+        var path = "host/1/data/TestPricing/nonexistent-entity-id";
 
         // act
         var response = await client.AwaitResponse(
@@ -917,12 +913,12 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
     #region UnifiedReference Workspace Stream Tests
 
     [Fact]
-    public async Task UnifiedReference_DataPrefix_Collection_ViaGetDataRequest()
+    public async Task UnifiedReference_DataKeyword_Collection_ViaGetDataRequest()
     {
         // arrange
         GetHost();
         var client = GetClient();
-        var path = "data/host/1/TestPricing";
+        var path = "host/1/data/TestPricing";
 
         // act - use GetDataRequest which correctly handles the UnifiedReference
         var response = await client.AwaitResponse(
@@ -939,12 +935,12 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
     }
 
     [Fact]
-    public async Task UnifiedReference_DataPrefix_Entity_ViaGetDataRequest()
+    public async Task UnifiedReference_DataKeyword_Entity_ViaGetDataRequest()
     {
         // arrange
         GetHost();
         var client = GetClient();
-        var path = $"data/host/1/TestPricing/{TestPricingId}";
+        var path = $"host/1/data/TestPricing/{TestPricingId}";
 
         // act - use GetDataRequest which correctly handles the UnifiedReference
         var response = await client.AwaitResponse(
@@ -960,12 +956,12 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
     }
 
     [Fact]
-    public async Task UnifiedReference_AreaPrefix_ViaGetDataRequest()
+    public async Task UnifiedReference_AreaDefault_ViaGetDataRequest()
     {
         // arrange
         GetHost();
         var client = GetClient();
-        var path = "area/host/1/TestArea";
+        var path = "host/1/TestArea"; // area is default, no keyword needed
 
         // act - use GetDataRequest which correctly handles the UnifiedReference
         var response = await client.AwaitResponse(
@@ -989,16 +985,23 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
         registry.Register("area", new AreaPathHandler());
         registry.Register("content", new ContentPathHandler());
 
-        // act & assert - verify registry can resolve paths
-        registry.TryResolve("data/pricing/MS-2024/TestPricing", out var dataAddr, out var dataRef).Should().BeTrue();
+        // act & assert - verify registry can resolve paths with new format
+        // Format: addressType/addressId/keyword/remainingPath
+        registry.TryResolve("pricing/MS-2024/data/TestPricing", out var dataAddr, out var dataRef).Should().BeTrue();
         dataAddr!.Type.Should().Be("pricing");
-        dataRef.Should().BeOfType<DataPathReference>(); // DataPathHandler now returns DataPathReference
+        dataRef.Should().BeOfType<DataPathReference>();
 
-        registry.TryResolve("area/pricing/MS-2024/Overview", out var areaAddr, out var areaRef).Should().BeTrue();
+        // Area with explicit keyword
+        registry.TryResolve("pricing/MS-2024/area/Overview", out var areaAddr, out var areaRef).Should().BeTrue();
         areaAddr!.Type.Should().Be("pricing");
         areaRef.Should().BeOfType<LayoutAreaReference>();
 
-        registry.TryResolve("content/pricing/MS-2024/Submissions/file.xlsx", out var contentAddr, out var contentRef).Should().BeTrue();
+        // Area as default (no keyword)
+        registry.TryResolve("pricing/MS-2024/Overview", out var areaAddr2, out var areaRef2).Should().BeTrue();
+        areaAddr2!.Type.Should().Be("pricing");
+        areaRef2.Should().BeOfType<LayoutAreaReference>();
+
+        registry.TryResolve("pricing/MS-2024/content/Submissions/file.xlsx", out var contentAddr, out var contentRef).Should().BeTrue();
         contentAddr!.Type.Should().Be("pricing");
         contentRef.Should().BeOfType<FileReference>();
     }
@@ -1013,9 +1016,9 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
         registry.Register("content", new ContentPathHandler());
 
         // act & assert
-        registry.Prefixes.Should().Contain("data");
-        registry.Prefixes.Should().Contain("area");
-        registry.Prefixes.Should().Contain("content");
+        registry.Keywords.Should().Contain("data");
+        registry.Keywords.Should().Contain("area");
+        registry.Keywords.Should().Contain("content");
     }
 
     #endregion
@@ -1029,7 +1032,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
         var handler = new DataPathHandler();
 
         // act
-        var (address, reference) = handler.Parse("pricing/MS-2024/PropertyRisk/risk1");
+        var (address, reference) = handler.Parse("pricing", "MS-2024", "PropertyRisk/risk1");
 
         // assert
         address.Type.Should().Be("pricing");
@@ -1045,7 +1048,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
         var handler = new DataPathHandler();
 
         // act
-        var (address, reference) = handler.Parse("pricing/MS-2024/PropertyRisk");
+        var (address, reference) = handler.Parse("pricing", "MS-2024", "PropertyRisk");
 
         // assert
         address.Type.Should().Be("pricing");
@@ -1061,7 +1064,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
         var handler = new DataPathHandler();
 
         // act
-        var (address, reference) = handler.Parse("pricing/MS-2024");
+        var (address, reference) = handler.Parse("pricing", "MS-2024", "");
 
         // assert
         address.Type.Should().Be("pricing");
@@ -1077,7 +1080,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
         var handler = new AreaPathHandler();
 
         // act
-        var (address, reference) = handler.Parse("pricing/MS-2024/Overview/details");
+        var (address, reference) = handler.Parse("pricing", "MS-2024", "Overview/details");
 
         // assert
         address.Type.Should().Be("pricing");
@@ -1094,7 +1097,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
         var handler = new AreaPathHandler();
 
         // act
-        var (address, reference) = handler.Parse("pricing/MS-2024/Overview");
+        var (address, reference) = handler.Parse("pricing", "MS-2024", "Overview");
 
         // assert
         address.Type.Should().Be("pricing");
@@ -1111,7 +1114,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
         var handler = new ContentPathHandler();
 
         // act
-        var (address, reference) = handler.Parse("host/1/Submissions@MS-2024/folder/file.xlsx");
+        var (address, reference) = handler.Parse("host", "1", "Submissions@MS-2024/folder/file.xlsx");
 
         // assert
         address.Type.Should().Be("host");
@@ -1129,7 +1132,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
         var handler = new ContentPathHandler();
 
         // act
-        var (address, reference) = handler.Parse("host/1/Submissions/file.xlsx");
+        var (address, reference) = handler.Parse("host", "1", "Submissions/file.xlsx");
 
         // assert
         address.Type.Should().Be("host");
@@ -1146,9 +1149,10 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
         // arrange
         var registry = new UnifiedPathRegistry();
         registry.Register("data", new DataPathHandler());
+        registry.Register("area", new AreaPathHandler()); // Need area for default fallback
 
-        // act
-        var found = registry.TryResolve("data/pricing/MS-2024/Collection", out var address, out var reference);
+        // act - new format: addressType/addressId/keyword/remainingPath
+        var found = registry.TryResolve("pricing/MS-2024/data/Collection", out var address, out var reference);
 
         // assert
         found.Should().BeTrue();
@@ -1159,13 +1163,13 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
     }
 
     [Fact]
-    public void UnifiedPathRegistry_TryResolve_ReturnsFalse_ForUnregisteredPrefix()
+    public void UnifiedPathRegistry_TryResolve_ReturnsFalse_ForInvalidPath()
     {
         // arrange
         var registry = new UnifiedPathRegistry();
 
-        // act
-        var found = registry.TryResolve("unknown:path", out var address, out var reference);
+        // act - single segment is invalid (need at least addressType/addressId)
+        var found = registry.TryResolve("unknown", out var address, out var reference);
 
         // assert
         found.Should().BeFalse();
@@ -1179,9 +1183,10 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
         // arrange
         var registry = new UnifiedPathRegistry();
         registry.Register("DATA", new DataPathHandler());
+        registry.Register("area", new AreaPathHandler()); // Need area for default fallback
 
-        // act
-        var found = registry.TryResolve("data/pricing/MS-2024/Collection", out var address, out _);
+        // act - keyword matching is case-insensitive
+        var found = registry.TryResolve("pricing/MS-2024/data/Collection", out var address, out _);
 
         // assert
         found.Should().BeTrue();
@@ -1189,7 +1194,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
     }
 
     [Fact]
-    public void UnifiedPathRegistry_Prefixes_ReturnsAllRegistered()
+    public void UnifiedPathRegistry_Keywords_ReturnsAllRegistered()
     {
         // arrange
         var registry = new UnifiedPathRegistry();
@@ -1198,13 +1203,13 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
         registry.Register("content", new ContentPathHandler());
 
         // act
-        var prefixes = registry.Prefixes.ToList();
+        var keywords = registry.Keywords.ToList();
 
         // assert
-        prefixes.Should().Contain("data");
-        prefixes.Should().Contain("area");
-        prefixes.Should().Contain("content");
-        prefixes.Should().HaveCount(3);
+        keywords.Should().Contain("data");
+        keywords.Should().Contain("area");
+        keywords.Should().Contain("content");
+        keywords.Should().HaveCount(3);
     }
 
     #endregion
@@ -1329,25 +1334,27 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
     }
 
     [Fact]
-    public void UnifiedPathRegistry_CustomPrefixHandler_CanBeRegistered()
+    public void UnifiedPathRegistry_CustomKeywordHandler_CanBeRegistered()
     {
-        // arrange - create a custom prefix handler for a domain-specific path
+        // arrange - create a custom keyword handler for a domain-specific path
         var registry = new UnifiedPathRegistry();
-        var customHandler = new CustomPricingPathHandler();
+        var customHandler = new CustomPricingKeywordHandler();
 
         // act
         registry.Register("pricing", customHandler);
+        registry.Register("area", new AreaPathHandler()); // Need area for default fallback
 
         // assert
-        registry.Prefixes.Should().Contain("pricing");
-        registry.TryResolve("pricing:MS-2024", out var address, out var reference).Should().BeTrue();
-        address!.Type.Should().Be("pricing");
+        registry.Keywords.Should().Contain("pricing");
+        // Format: addressType/addressId/keyword/remainingPath
+        registry.TryResolve("company/MS-2024/pricing/details", out var address, out var reference).Should().BeTrue();
+        address!.Type.Should().Be("company");
         address.Id.Should().Be("MS-2024");
         reference.Should().BeOfType<EntityReference>();
     }
 
     [Fact]
-    public void UnifiedPathRegistry_MultipleCustomPrefixes_CoexistWithBuiltIn()
+    public void UnifiedPathRegistry_MultipleCustomKeywords_CoexistWithBuiltIn()
     {
         // arrange
         var registry = new UnifiedPathRegistry();
@@ -1358,52 +1365,50 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
         registry.Register("content", new ContentPathHandler());
 
         // Register custom handlers
-        registry.Register("pricing", new CustomPricingPathHandler());
-        registry.Register("claims", new CustomClaimsPathHandler());
+        registry.Register("pricing", new CustomPricingKeywordHandler());
+        registry.Register("claims", new CustomClaimsKeywordHandler());
 
         // act & assert
-        registry.Prefixes.Should().HaveCount(5);
+        registry.Keywords.Should().HaveCount(5);
 
-        // Built-in handlers work
-        registry.TryResolve("data/host/1/Collection", out _, out _).Should().BeTrue();
-        registry.TryResolve("area/host/1/Overview", out _, out _).Should().BeTrue();
+        // Built-in handlers work with new format
+        registry.TryResolve("host/1/data/Collection", out _, out _).Should().BeTrue();
+        registry.TryResolve("host/1/Overview", out _, out _).Should().BeTrue(); // area is default
 
         // Custom handlers work
-        registry.TryResolve("pricing:MS-2024", out var pricingAddr, out var pricingRef).Should().BeTrue();
-        pricingAddr!.Id.Should().Be("MS-2024");
+        registry.TryResolve("company/MS-2024/pricing/details", out var pricingAddr, out var pricingRef).Should().BeTrue();
+        pricingAddr!.Type.Should().Be("company");
 
-        registry.TryResolve("claims:CLM-001", out var claimsAddr, out var claimsRef).Should().BeTrue();
-        claimsAddr!.Id.Should().Be("CLM-001");
+        registry.TryResolve("company/CLM-001/claims/info", out var claimsAddr, out var claimsRef).Should().BeTrue();
+        claimsAddr!.Type.Should().Be("company");
     }
 
 
 
     /// <summary>
-    /// Custom pricing path handler for testing custom prefix registration.
-    /// Resolves "pricing:MS-2024" to Address("pricing", "MS-2024") and EntityReference("Pricing", "MS-2024")
+    /// Custom pricing keyword handler for testing custom keyword registration.
+    /// Uses the new format: addressType/addressId/pricing/remainingPath
     /// </summary>
-    private class CustomPricingPathHandler : IUnifiedPathHandler
+    private class CustomPricingKeywordHandler : IUnifiedPathHandler
     {
-        public (Address Address, WorkspaceReference Reference) Parse(string pathAfterPrefix)
+        public (Address Address, WorkspaceReference Reference) Parse(string addressType, string addressId, string remainingPath)
         {
-            var pricingId = pathAfterPrefix;
-            var address = new Address("pricing", pricingId);
-            var reference = new EntityReference("Pricing", pricingId);
+            var address = new Address(addressType, addressId);
+            var reference = new EntityReference("Pricing", remainingPath ?? addressId);
             return (address, reference);
         }
     }
 
     /// <summary>
-    /// Custom claims path handler for testing custom prefix registration.
-    /// Resolves "claims:CLM-001" to Address("claims", "CLM-001") and EntityReference("Claims", "CLM-001")
+    /// Custom claims keyword handler for testing custom keyword registration.
+    /// Uses the new format: addressType/addressId/claims/remainingPath
     /// </summary>
-    private class CustomClaimsPathHandler : IUnifiedPathHandler
+    private class CustomClaimsKeywordHandler : IUnifiedPathHandler
     {
-        public (Address Address, WorkspaceReference Reference) Parse(string pathAfterPrefix)
+        public (Address Address, WorkspaceReference Reference) Parse(string addressType, string addressId, string remainingPath)
         {
-            var claimId = pathAfterPrefix;
-            var address = new Address("claims", claimId);
-            var reference = new EntityReference("Claims", claimId);
+            var address = new Address(addressType, addressId);
+            var reference = new EntityReference("Claims", remainingPath ?? addressId);
             return (address, reference);
         }
     }

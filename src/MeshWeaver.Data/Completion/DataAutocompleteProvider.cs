@@ -10,12 +10,14 @@ public class DataAutocompleteProvider(IWorkspace workspace) : IAutocompleteProvi
     public Task<IEnumerable<AutocompleteItem>> GetItemsAsync(string query, CancellationToken ct = default)
     {
         var dataContext = workspace.DataContext;
+        var address = workspace.Hub.Address;
 
         // Get all collection names from TypeSources
+        // Format: addressType/addressId/data/collectionName
         var items = dataContext.TypeSources.Keys
             .Select(collectionName => new AutocompleteItem(
                 Label: collectionName,
-                InsertText: $"@data/{collectionName} ",
+                InsertText: $"@{address}/data/{collectionName} ",
                 Description: $"Data collection: {collectionName}",
                 Category: "Data Collections",
                 Priority: 0,

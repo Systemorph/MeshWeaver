@@ -120,7 +120,8 @@ public record LayoutAreaReference : WorkspaceReference<EntityStore>
 
     public string ToHref(string addressType, string addressId)
     {
-        var ret = $"area/{addressType}/{addressId}";
+        // Format: addressType/addressId/areaName[/areaId] (area is default, no keyword needed)
+        var ret = $"{addressType}/{addressId}";
         if (Area is not null)
         {
             ret = $"{ret}/{WorkspaceReference.Encode(Area)}";

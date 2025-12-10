@@ -18,15 +18,25 @@ public record AgentContext
     public LayoutAreaReference? LayoutArea { get; init; }
 
     /// <summary>
-    /// The full unified reference path (e.g., "area/pricing/MS-2024/Summary" or "pricing/MS-2024/Summary").
+    /// The full unified reference path (e.g., "pricing/MS-2024/Summary" or "pricing/MS-2024/data/Collection").
+    /// Format: addressType/addressId[/keyword[/remainingPath]]
+    /// If no keyword specified, defaults to area.
     /// This is the canonical context string for autocomplete and routing.
     /// </summary>
     public string? Context { get; init; }
 
     /// <summary>
+    /// Reserved keywords that determine reference type.
+    /// </summary>
+    private static readonly HashSet<string> ReservedKeywords = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "data", "content", "area"
+    };
+
+    /// <summary>
     /// Creates an AgentContext from a full unified reference path.
     /// </summary>
-    /// <param name="unifiedPath">The unified path (e.g., "area/pricing/MS-2024/Summary").</param>
+    /// <param name="unifiedPath">The unified path (e.g., "pricing/MS-2024/Summary").</param>
     /// <returns>A new AgentContext with parsed Address and LayoutArea.</returns>
     public static AgentContext FromUnifiedPath(string unifiedPath)
     {
@@ -41,34 +51,40 @@ public record AgentContext
             return new AgentContext { Context = unifiedPath };
         }
 
-        // Handle standard prefixes (area/, data/, content/) - skip prefix segment
-        var startIndex = 0;
-        if (segments.Length > 0 && IsStandardPrefix(segments[0]))
-        {
-            startIndex = 1;
-        }
-
-        // Need at least addressType and addressId after the prefix
-        if (segments.Length < startIndex + 2)
+        // New format: addressType/addressId[/keyword[/remainingPath]]
+        // Need at least addressType and addressId
+        if (segments.Length < 2)
             return new AgentContext { Context = unifiedPath };
 
-        var addressType = segments[startIndex];
-        var addressId = segments[startIndex + 1];
+        var addressType = segments[0];
+        var addressId = segments[1];
         var address = new Address(addressType, addressId);
 
-        // Extract layout area if present
-        LayoutAreaReference? layoutArea = null;
-        if (segments.Length > startIndex + 2)
+        // Check if third segment is a keyword
+        string? keyword = null;
+        if (segments.Length > 2 && ReservedKeywords.Contains(segments[2]))
         {
-            var areaName = segments[startIndex + 2];
-            var areaId = segments.Length > startIndex + 3
-                ? string.Join('/', segments.Skip(startIndex + 3))
-                : null;
+            keyword = segments[2];
+        }
 
-            layoutArea = new LayoutAreaReference(areaName)
+        // Extract layout area if this is an area reference (default or explicit)
+        LayoutAreaReference? layoutArea = null;
+        if (keyword == null || keyword.Equals("area", StringComparison.OrdinalIgnoreCase))
+        {
+            // Area reference: remaining segments are areaName/areaId
+            var areaStartIndex = keyword == null ? 2 : 3;
+            if (segments.Length > areaStartIndex)
             {
-                Id = areaId
-            };
+                var areaName = segments[areaStartIndex];
+                var areaId = segments.Length > areaStartIndex + 1
+                    ? string.Join('/', segments.Skip(areaStartIndex + 1))
+                    : null;
+
+                layoutArea = new LayoutAreaReference(areaName)
+                {
+                    Id = areaId
+                };
+            }
         }
 
         return new AgentContext
@@ -110,9 +126,4 @@ public record AgentContext
     private static bool IsReservedPrefix(string segment)
         => segment.Equals("agent", StringComparison.OrdinalIgnoreCase)
            || segment.Equals("model", StringComparison.OrdinalIgnoreCase);
-
-    private static bool IsStandardPrefix(string segment)
-        => segment.Equals("area", StringComparison.OrdinalIgnoreCase)
-           || segment.Equals("data", StringComparison.OrdinalIgnoreCase)
-           || segment.Equals("content", StringComparison.OrdinalIgnoreCase);
 }

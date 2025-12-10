@@ -50,8 +50,9 @@ public class LayoutAreaMarkdownParser : BlockParser
         }
         else if (char.IsLetterOrDigit(nextChar) || nextChar == '/')
         {
-            // Direct syntax without parentheses: @app/Northwind/Overview
-            // Defaults to area reference
+            // Direct syntax without parentheses: @addressType/addressId/areaName
+            // Format: addressType/addressId[/keyword[/remainingPath]]
+            // Defaults to area reference if no keyword
             token = ReadDirectPath(ref line);
             if (string.IsNullOrWhiteSpace(token))
                 return BlockState.None;
@@ -61,7 +62,7 @@ public class LayoutAreaMarkdownParser : BlockParser
             return BlockState.None;
         }
 
-        // Try to parse as unified content reference (data:, content:, area:)
+        // Try to parse as unified content reference (addressType/addressId/keyword/...)
         var block = CreateBlockFromToken(token);
         processor.NewBlocks.Push(block);
 
@@ -185,29 +186,31 @@ public class LayoutAreaMarkdownParser : BlockParser
     public const string ContentAreaName = "$Content";
 
     /// <summary>
-    /// Reserved prefixes for unified references.
-    /// These cannot be used as addressType values.
+    /// Reserved keywords for unified references.
+    /// When one of these appears as the third segment, it determines the reference type.
     /// </summary>
-    private static readonly HashSet<string> ReservedPrefixes = ["data", "content", "area"];
+    private static readonly HashSet<string> ReservedKeywords = ["data", "content", "area"];
 
     /// <summary>
     /// Creates the appropriate block type based on the token content.
-    /// Supports unified reference notation (data/, content/, area/) and default format.
+    /// Supports unified reference notation (addressType/addressId/keyword/...) and default format.
+    /// Format: addressType/addressId[/keyword[/remainingPath]]
+    /// If no keyword is specified, defaults to area.
     /// </summary>
     private ContainerBlock CreateBlockFromToken(string token)
     {
-        // Parse prefix and extract address/path
+        // Parse address and extract keyword/path
         var parsed = ParsePath(token);
         if (parsed == null)
         {
-            // Fall back to legacy format (addressType/addressId/area)
+            // Fall back to legacy format
             return new LayoutAreaComponentInfo(token, this);
         }
 
-        var (prefix, addressType, addressId, remainingPath) = parsed.Value;
+        var (addressType, addressId, keyword, remainingPath) = parsed.Value;
         var address = $"{addressType}/{addressId}";
 
-        return prefix.ToLowerInvariant() switch
+        return keyword.ToLowerInvariant() switch
         {
             "data" => new LayoutAreaComponentInfo(
                 address,
@@ -258,12 +261,11 @@ public class LayoutAreaMarkdownParser : BlockParser
 
     /// <summary>
     /// Parses a path into its components.
-    /// Supports formats:
-    /// - prefix/addressType/addressId/remainingPath (e.g., data/app/test/Collection)
-    /// - addressType/addressId/remainingPath (defaults to area prefix)
-    /// Reserved prefixes (data, content, area) are detected by first path segment.
+    /// Format: addressType/addressId[/keyword[/remainingPath]]
+    /// If keyword is not a reserved keyword (data, content, area), it's treated as part of remainingPath
+    /// and the keyword defaults to "area".
     /// </summary>
-    private (string Prefix, string AddressType, string AddressId, string? RemainingPath)? ParsePath(string path)
+    private (string AddressType, string AddressId, string Keyword, string? RemainingPath)? ParsePath(string path)
     {
         if (string.IsNullOrEmpty(path))
             return null;
@@ -272,31 +274,29 @@ public class LayoutAreaMarkdownParser : BlockParser
         if (parts.Length < 2)
             return null;
 
-        string prefix;
-        int addressTypeIndex;
+        var addressType = parts[0];
+        var addressId = parts[1];
 
-        // Check if first segment is a reserved prefix
-        if (ReservedPrefixes.Contains(parts[0].ToLowerInvariant()))
+        string keyword;
+        string? remainingPath;
+
+        if (parts.Length >= 3 && ReservedKeywords.Contains(parts[2].ToLowerInvariant()))
         {
-            prefix = parts[0].ToLowerInvariant();
-            addressTypeIndex = 1;
-
-            // Need at least prefix/addressType/addressId
-            if (parts.Length < 3)
-                return null;
+            // Explicit keyword specified (e.g., host/1/data/Collection)
+            keyword = parts[2].ToLowerInvariant();
+            remainingPath = parts.Length > 3
+                ? string.Join("/", parts.Skip(3))
+                : null;
         }
         else
         {
-            prefix = "area"; // Default prefix
-            addressTypeIndex = 0;
+            // No keyword or unrecognized keyword - default to area
+            keyword = "area";
+            remainingPath = parts.Length > 2
+                ? string.Join("/", parts.Skip(2))
+                : null;
         }
 
-        var addressType = parts[addressTypeIndex];
-        var addressId = parts[addressTypeIndex + 1];
-        var remainingPath = parts.Length > addressTypeIndex + 2
-            ? string.Join("/", parts.Skip(addressTypeIndex + 2))
-            : null;
-
-        return (prefix, addressType, addressId, remainingPath);
+        return (addressType, addressId, keyword, remainingPath);
     }
 }
