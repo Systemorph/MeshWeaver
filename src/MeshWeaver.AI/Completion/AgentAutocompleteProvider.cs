@@ -6,14 +6,43 @@ namespace MeshWeaver.AI.Completion;
 
 /// <summary>
 /// Provides autocomplete items for agents.
-/// This is a local provider (no address routing) for the agent/ prefix.
+/// Gets agents from IAgentChatFactoryProvider when available, or IEnumerable&lt;IAgentDefinition&gt;.
 /// </summary>
-public class AgentAutocompleteProvider(IEnumerable<IAgentDefinition> agentDefinitions) : IAutocompleteProvider
+public class AgentAutocompleteProvider : IAutocompleteProvider
 {
-    /// <inheritdoc />
-    public Task<IEnumerable<AutocompleteItem>> GetItemsAsync(string query, CancellationToken ct = default)
+    private readonly IAgentChatFactoryProvider? _factoryProvider;
+    private readonly IEnumerable<IAgentDefinition>? _agentDefinitions;
+
+    public AgentAutocompleteProvider(IAgentChatFactoryProvider factoryProvider)
     {
-        var items = agentDefinitions
+        _factoryProvider = factoryProvider;
+    }
+
+    public AgentAutocompleteProvider(IEnumerable<IAgentDefinition> agentDefinitions)
+    {
+        _agentDefinitions = agentDefinitions;
+    }
+
+    /// <inheritdoc />
+    public async Task<IEnumerable<AutocompleteItem>> GetItemsAsync(string query, CancellationToken ct = default)
+    {
+        IEnumerable<IAgentDefinition> agents;
+
+        if (_factoryProvider != null)
+        {
+            var agentDict = await _factoryProvider.GetAgentsAsync();
+            agents = agentDict.Values;
+        }
+        else if (_agentDefinitions != null)
+        {
+            agents = _agentDefinitions;
+        }
+        else
+        {
+            return [];
+        }
+
+        var items = agents
             .Select(agent => new AutocompleteItem(
                 Label: $"@agent/{agent.Name}",
                 InsertText: $"@agent/{agent.Name} ",
@@ -23,6 +52,6 @@ public class AgentAutocompleteProvider(IEnumerable<IAgentDefinition> agentDefini
                 Kind: AutocompleteKind.Agent
             ));
 
-        return Task.FromResult(items);
+        return items;
     }
 }

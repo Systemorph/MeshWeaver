@@ -2,6 +2,7 @@ using MeshWeaver.AI.Application.Layout;
 using MeshWeaver.AI.Completion;
 using MeshWeaver.Data.Completion;
 using MeshWeaver.Mesh.Completion;
+using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -21,9 +22,30 @@ public static class AgentsApplicationExtensions
         => application
             .AddAIViews()
             .WithServices(services => services
-                .AddScoped<IAutocompleteProvider, AgentAutocompleteProvider>()
-                .AddScoped<IAutocompleteProvider, ModelAutocompleteProvider>()
-                .AddScoped<IAutocompleteProvider, MeshCatalogAutocompleteProvider>()
+                // Agent provider - uses factory provider if available
+                .AddScoped<IAutocompleteProvider>(sp =>
+                {
+                    var factoryProvider = sp.GetService<IAgentChatFactoryProvider>();
+                    if (factoryProvider != null)
+                        return new AgentAutocompleteProvider(factoryProvider);
+                    var agentDefinitions = sp.GetServices<IAgentDefinition>();
+                    return new AgentAutocompleteProvider(agentDefinitions);
+                })
+                // Model provider - uses factory provider if available
+                .AddScoped<IAutocompleteProvider>(sp =>
+                {
+                    var factoryProvider = sp.GetService<IAgentChatFactoryProvider>();
+                    if (factoryProvider != null)
+                        return new ModelAutocompleteProvider(factoryProvider);
+                    return new ModelAutocompleteProvider();
+                })
+                // Mesh catalog provider
+                .AddScoped<IAutocompleteProvider>(sp =>
+                {
+                    var meshCatalog = sp.GetService<IMeshCatalog>();
+                    return new MeshCatalogAutocompleteProvider(meshCatalog);
+                })
+                // Command provider
                 .AddScoped<IAutocompleteProvider, CommandAutocompleteProvider>())
             .WithHandler<AutocompleteRequest>(HandleAutocompleteRequest);
 

@@ -321,10 +321,12 @@ public class AutocompleteServiceTest
         // act
         var items = (await provider.GetItemsAsync("@")).ToList();
 
-        // assert
-        items.Should().HaveCount(2);
+        // assert - includes catalog namespaces + reserved prefixes (@agent/, @model/)
+        items.Should().HaveCount(4);
         items.Should().Contain(i => i.Label == "@pricing/");
         items.Should().Contain(i => i.Label == "@northwind/");
+        items.Should().Contain(i => i.Label == "@agent/");
+        items.Should().Contain(i => i.Label == "@model/");
 
         var pricingItem = items.First(i => i.Label == "@pricing/");
         pricingItem.Description.Should().Be("Insurance pricing submissions");

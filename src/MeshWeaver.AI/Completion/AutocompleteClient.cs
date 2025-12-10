@@ -2,40 +2,40 @@
 
 using MeshWeaver.Data;
 using MeshWeaver.Data.Completion;
+using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 
 namespace MeshWeaver.AI.Completion;
 
 /// <summary>
-/// Client that dispatches autocomplete requests to configured hub addresses.
-/// Uses a lambda function to determine which addresses to query based on the current context.
+/// Client that dispatches autocomplete requests to hub addresses.
+/// Always dispatches to base addresses plus all namespace addresses that have autocomplete configured.
+/// Each provider is responsible for filtering its results based on the query.
 /// </summary>
 public class AutocompleteClient(
     IMessageHub hub,
-    Func<AgentContext?, IReadOnlyCollection<Address>> getDispatchAddresses)
+    Func<AgentContext?, IReadOnlyCollection<Address>> getBaseAddresses,
+    IMeshCatalog? meshCatalog = null)
 {
     private static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(2);
 
     /// <summary>
-    /// Gets autocomplete suggestions by dispatching requests to configured addresses.
+    /// Gets autocomplete suggestions by dispatching requests to all configured addresses.
     /// </summary>
-    /// <param name="query">The search query (text being typed).</param>
-    /// <param name="context">The current agent context.</param>
-    /// <param name="ct">Cancellation token.</param>
-    /// <returns>Aggregated autocomplete response from all dispatched addresses.</returns>
     public async Task<AutocompleteResponse> GetCompletionsAsync(
         string query,
         AgentContext? context,
         CancellationToken ct = default)
     {
         var allItems = new List<AutocompleteItem>();
-        var addresses = getDispatchAddresses(context);
+
+        // Get all addresses to query
+        var addresses = await GetAllDispatchAddressesAsync(context, ct);
 
         foreach (var address in addresses)
         {
             try
             {
-                // Use a timeout to avoid hanging if the target hub doesn't exist or respond
                 using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
                 timeoutCts.CancelAfter(DefaultTimeout);
 
@@ -62,5 +62,43 @@ public class AutocompleteClient(
             .ToList();
 
         return new AutocompleteResponse(deduplicated);
+    }
+
+    /// <summary>
+    /// Gets all addresses to dispatch to: base addresses + all namespace addresses + context address.
+    /// </summary>
+    private async Task<IReadOnlyCollection<Address>> GetAllDispatchAddressesAsync(
+        AgentContext? context,
+        CancellationToken ct)
+    {
+        var addresses = new HashSet<Address>();
+
+        // Add base addresses (app/Agents)
+        foreach (var addr in getBaseAddresses(context))
+        {
+            addresses.Add(addr);
+        }
+
+        // Add all namespace autocomplete addresses
+        if (meshCatalog != null)
+        {
+            var namespaces = await meshCatalog.GetNamespacesAsync(ct);
+            foreach (var ns in namespaces)
+            {
+                var nsAddress = ns.AutocompleteAddress?.Invoke(context);
+                if (nsAddress != null)
+                {
+                    addresses.Add(nsAddress);
+                }
+            }
+        }
+
+        // Add context address if present
+        if (context?.Address != null)
+        {
+            addresses.Add(context.Address);
+        }
+
+        return addresses.ToList();
     }
 }

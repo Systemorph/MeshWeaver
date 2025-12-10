@@ -6,12 +6,21 @@ namespace MeshWeaver.AI.Completion;
 
 /// <summary>
 /// Provides autocomplete items for AI models.
-/// This is a local provider (no address routing) for the model/ prefix.
-/// Items are only returned when explicitly requested (after /model command).
+/// Gets models from IAgentChatFactoryProvider when available.
 /// </summary>
 public class ModelAutocompleteProvider : IAutocompleteProvider
 {
-    private IReadOnlyList<string> _availableModels = [];
+    private readonly IAgentChatFactoryProvider? _factoryProvider;
+    private IReadOnlyList<string>? _availableModels;
+
+    public ModelAutocompleteProvider(IAgentChatFactoryProvider factoryProvider)
+    {
+        _factoryProvider = factoryProvider;
+    }
+
+    public ModelAutocompleteProvider()
+    {
+    }
 
     /// <summary>
     /// Sets the available models for autocomplete.
@@ -25,7 +34,22 @@ public class ModelAutocompleteProvider : IAutocompleteProvider
     /// <inheritdoc />
     public Task<IEnumerable<AutocompleteItem>> GetItemsAsync(string query, CancellationToken ct = default)
     {
-        var items = _availableModels
+        IReadOnlyList<string> models;
+
+        if (_factoryProvider != null)
+        {
+            models = _factoryProvider.AllModels;
+        }
+        else if (_availableModels != null)
+        {
+            models = _availableModels;
+        }
+        else
+        {
+            return Task.FromResult<IEnumerable<AutocompleteItem>>([]);
+        }
+
+        var items = models
             .Select(model => new AutocompleteItem(
                 Label: $"@model/{model}",
                 InsertText: $"@model/{model} ",
