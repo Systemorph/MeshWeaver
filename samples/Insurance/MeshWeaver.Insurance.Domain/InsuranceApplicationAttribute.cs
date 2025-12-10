@@ -1,5 +1,4 @@
-using MeshWeaver.Mesh;
-using MeshWeaver.Messaging;
+﻿using MeshWeaver.Mesh;
 
 [assembly: MeshWeaver.Insurance.Domain.InsuranceApplication]
 
@@ -28,16 +27,24 @@ public class InsuranceApplicationAttribute : MeshNodeAttribute
     ];
 
     /// <summary>
-    /// Gets the node factories for dynamic pricing nodes (one per PricingAddress).
+    /// Gets namespaces that describe available address types for autocomplete.
+    /// The pricing namespace creates dynamic pricing nodes and routes autocomplete to Insurance application.
     /// </summary>
-    public override IEnumerable<Func<Address, MeshNode?>> NodeFactories =>
+    public override IEnumerable<MeshNamespace> Namespaces =>
     [
-        address =>
-            address.Type == PricingAddress.TypeName
-                ? new MeshNode(address.Type, address.Id, address.ToString())
-                {
-                    HubConfiguration = InsuranceApplicationExtensions.ConfigureSinglePricingApplication
-                }
-                : null
+        new MeshNamespace(PricingAddress.TypeName, "Pricing")
+        {
+            Description = "Insurance pricing submissions",
+            IconName = "Calculator",
+            DisplayOrder = 100,
+            AutocompleteAddress = _ => Address,
+            Factory = address =>
+                address.Type == PricingAddress.TypeName
+                    ? new MeshNode(address.Type, address.Id, address.ToString())
+                    {
+                        HubConfiguration = InsuranceApplicationExtensions.ConfigureSinglePricingApplication
+                    }
+                    : null
+        }
     ];
 }

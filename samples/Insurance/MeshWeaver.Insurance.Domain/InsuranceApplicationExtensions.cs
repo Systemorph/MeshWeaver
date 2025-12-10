@@ -1,8 +1,10 @@
 ﻿using System.Reactive.Linq;
 using MeshWeaver.ContentCollections;
 using MeshWeaver.Data;
+using MeshWeaver.Data.Completion;
 using MeshWeaver.Import;
 using MeshWeaver.Import.Configuration;
+using MeshWeaver.Insurance.Domain.Completion;
 using MeshWeaver.Insurance.Domain.Services;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Domain;
@@ -38,6 +40,7 @@ public static class InsuranceApplicationExtensions
             => configuration
                 .AddEmbeddedResourceContentCollection("Insurance", typeof(InsuranceApplicationExtensions).Assembly, "Content")
                 .WithTypes(typeof(PricingAddress), typeof(ImportConfiguration), typeof(ExcelImportConfiguration), typeof(ReinsuranceAcceptance), typeof(ReinsuranceSection), typeof(ImportRequest), typeof(CollectionSource), typeof(GeocodingRequest), typeof(GeocodingResponse))
+                .WithServices(services => services.AddScoped<IAutocompleteProvider, PricingAutocompleteProvider>())
                 .AddData(data =>
                 {
                     var svc = data.Hub.ServiceProvider.GetRequiredService<IPricingService>();
@@ -227,4 +230,5 @@ public static class InsuranceApplicationExtensions
 
         return request.Processed();
     }
+
 }

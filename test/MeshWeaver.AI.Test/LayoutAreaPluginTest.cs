@@ -8,6 +8,7 @@ using FluentAssertions;
 using FluentAssertions.Extensions;
 using MeshWeaver.AI.Persistence;
 using MeshWeaver.AI.Plugins;
+using MeshWeaver.Data;
 using MeshWeaver.Fixture;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;

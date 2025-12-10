@@ -2,6 +2,7 @@
 using System.ComponentModel.DataAnnotations;
 using System.ComponentModel.DataAnnotations.Schema;
 using System.Text.Json.Serialization;
+using MeshWeaver.Data;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -42,6 +43,22 @@ public record MeshNode(
 {
     [Key] public string Key { get; init; } = AddressId == null ? AddressType : $"{AddressType}/{AddressId}";
     public const string MeshIn = nameof(MeshIn);
+
+    /// <summary>
+    /// Human-readable description of this mesh node for display in autocomplete and UI.
+    /// </summary>
+    public string? Description { get; init; }
+
+    /// <summary>
+    /// Icon name for display in UI (e.g., "Shield", "Database", "Folder").
+    /// </summary>
+    public string? IconName { get; init; }
+
+    /// <summary>
+    /// Display order for sorting in autocomplete lists (lower values appear first).
+    /// </summary>
+    public int DisplayOrder { get; init; }
+
     public string? ThumbNail { get; init; }
     public string? StreamProvider { get; init; }
     public string? Namespace { get; init; }
@@ -68,4 +85,44 @@ public enum InstantiationType
 {
     HubConfiguration,
     Script
+}
+
+/// <summary>
+/// Represents a namespace in the mesh that can create MeshNodes for a specific address type.
+/// Used for autocomplete to show available address types with their descriptions.
+/// </summary>
+public record MeshNamespace(
+    string AddressType,
+    string Name
+)
+{
+    /// <summary>
+    /// Human-readable description for display in autocomplete and UI.
+    /// </summary>
+    public string? Description { get; init; }
+
+    /// <summary>
+    /// Icon name for display in UI (e.g., "Shield", "Database", "Folder").
+    /// </summary>
+    public string? IconName { get; init; }
+
+    /// <summary>
+    /// Display order for sorting in autocomplete lists (lower values appear first).
+    /// </summary>
+    public int DisplayOrder { get; init; }
+
+    /// <summary>
+    /// Factory function that creates a MeshNode for a given address.
+    /// Returns null if the address doesn't match this namespace.
+    /// </summary>
+    [JsonIgnore, NotMapped]
+    public Func<Address, MeshNode?>? Factory { get; init; }
+
+    /// <summary>
+    /// Function that returns the address to route autocomplete requests to.
+    /// Receives the current AgentContext to determine the appropriate target.
+    /// Returns null if autocomplete should not be routed.
+    /// </summary>
+    [JsonIgnore, NotMapped]
+    public Func<AgentContext?, Address?>? AutocompleteAddress { get; init; }
 }

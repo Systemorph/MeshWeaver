@@ -1,30 +1,30 @@
 #nullable enable
 
-namespace MeshWeaver.AI.Completion;
+namespace MeshWeaver.Data.Completion;
 
 /// <summary>
-/// Kind of autocomplete item (determines the icon shown).
+/// Types of autocomplete items for display purposes.
 /// </summary>
 public enum AutocompleteKind
 {
-    /// <summary>AI Agent</summary>
+    /// <summary>An AI agent</summary>
     Agent,
-    /// <summary>File reference</summary>
+    /// <summary>A file or content item</summary>
     File,
-    /// <summary>Command or action</summary>
+    /// <summary>A slash command</summary>
     Command,
-    /// <summary>Other item</summary>
+    /// <summary>Other types of items</summary>
     Other
 }
 
 /// <summary>
-/// Represents an item in the autocomplete dropdown.
+/// Represents a single autocomplete suggestion.
 /// </summary>
 /// <param name="Label">Display text shown in the autocomplete dropdown.</param>
 /// <param name="InsertText">Text that gets inserted when the item is selected.</param>
 /// <param name="Description">Additional description shown in the dropdown.</param>
-/// <param name="Category">Category for grouping (e.g., "Agents", "Files"). Agents have priority over Files.</param>
-/// <param name="Priority">Priority within category. Higher values are shown first.</param>
+/// <param name="Category">Category for grouping (e.g., "Agents", "Files").</param>
+/// <param name="Priority">Sorting priority within the category (higher = shown first).</param>
 /// <param name="Kind">The kind of item (Agent, File, Command) - determines icon.</param>
 public record AutocompleteItem(
     string Label,

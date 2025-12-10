@@ -1,5 +1,51 @@
 // AgentChatView JavaScript functionality
 // This script handles resizing of the chat panel in different positions (left, right, bottom)
+
+let mainLayoutRef = null;
+
+export function initialize(dotNetRef) {
+    mainLayoutRef = dotNetRef;
+}
+
+export function resetChatSize() {
+    const layout = document.querySelector('.layout');
+    if (layout) {
+        layout.style.removeProperty('--chat-width');
+        layout.style.removeProperty('--chat-height');
+    }
+}
+
+export function applyChatSize(width, height) {
+    const layout = document.querySelector('.layout');
+    if (!layout) return;
+
+    if (width) {
+        layout.style.setProperty('--chat-width', `${width}px`);
+    }
+    if (height) {
+        layout.style.setProperty('--chat-height', `${height}px`);
+    }
+
+    // Trigger Monaco layout after applying size
+    triggerMonacoLayout();
+}
+
+function triggerMonacoLayout() {
+    // Force layout recalculation - Monaco needs this to detect container size changes
+    if (typeof monaco !== 'undefined' && monaco.editor) {
+        monaco.editor.getEditors().forEach(editor => {
+            // Get the container and force it to recalculate
+            const container = editor.getContainerDomNode();
+            if (container) {
+                // Force a reflow by reading offsetWidth
+                void container.offsetWidth;
+            }
+            // Now trigger Monaco's layout
+            editor.layout();
+        });
+    }
+}
+
 export function startResize() {
     // Only allow resizing on desktop (screen width >= 768px)
     if (window.innerWidth < 768) return;
@@ -21,6 +67,22 @@ export function startResize() {
     // Simple throttling for horizontal resize only
     let lastUpdate = 0;
     const throttleMs = isBottom ? 0 : 8; // Only throttle horizontal resize
+
+    // Track current size for persisting
+    let currentWidth = null;
+    let currentHeight = null;
+
+    // Use requestAnimationFrame for smooth Monaco layout updates during resize
+    let rafId = null;
+    const scheduleMonacoLayout = () => {
+        if (rafId) {
+            cancelAnimationFrame(rafId);
+        }
+        rafId = requestAnimationFrame(() => {
+            rafId = null;
+            triggerMonacoLayout();
+        });
+    };
 
     // Set up the mouse events for resizing
     const mouseMoveHandler = (e) => {
@@ -45,6 +107,7 @@ export function startResize() {
 
             // Update the CSS custom property to adjust the chat area height
             layout.style.setProperty('--chat-height', `${newHeight}px`);
+            currentHeight = Math.round(newHeight);
         } else if (isLeft) {
             // Calculate the new width based on mouse position (from left edge)
             const width = e.clientX - 60; // Subtract nav menu width
@@ -56,6 +119,7 @@ export function startResize() {
 
             // Update the CSS custom property to adjust the chat area width
             layout.style.setProperty('--chat-width', `${newWidth}px`);
+            currentWidth = Math.round(newWidth);
         } else if (isRight) {
             // Calculate the new width based on mouse position (from right edge)
             const width = window.innerWidth - e.clientX;
@@ -67,7 +131,11 @@ export function startResize() {
 
             // Update the CSS custom property to adjust the chat area width
             layout.style.setProperty('--chat-width', `${newWidth}px`);
+            currentWidth = Math.round(newWidth);
         }
+
+        // Trigger Monaco editor layout recalculation during resize
+        scheduleMonacoLayout();
     };
 
     const mouseUpHandler = () => {
@@ -76,6 +144,27 @@ export function startResize() {
         document.removeEventListener('mouseup', mouseUpHandler);
         document.body.style.cursor = '';
         document.body.style.userSelect = '';
+
+        // Cancel any pending RAF
+        if (rafId) {
+            cancelAnimationFrame(rafId);
+            rafId = null;
+        }
+
+        // Final Monaco layout update after resize completes
+        triggerMonacoLayout();
+
+        // Also dispatch resize event as backup
+        window.dispatchEvent(new Event('resize'));
+
+        // Notify .NET about the new size for persistence
+        if (mainLayoutRef && (currentWidth !== null || currentHeight !== null)) {
+            try {
+                mainLayoutRef.invokeMethodAsync('OnResizeEnd', currentWidth, currentHeight);
+            } catch (e) {
+                console.error('Error notifying .NET about resize:', e);
+            }
+        }
     };
 
     // Set cursor style for the entire page during resize

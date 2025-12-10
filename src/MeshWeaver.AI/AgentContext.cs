@@ -1,11 +1,4 @@
-﻿using MeshWeaver.Data;
-using MeshWeaver.Messaging;
+// AgentContext has been moved to MeshWeaver.Data namespace.
+// This file provides a type alias for backward compatibility.
 
-namespace MeshWeaver.AI;
-
-public record AgentContext
-{
-    public Address? Address { get; init; }
-
-    public LayoutAreaReference? LayoutArea { get; init; }
-}
+global using AgentContext = MeshWeaver.Data.AgentContext;

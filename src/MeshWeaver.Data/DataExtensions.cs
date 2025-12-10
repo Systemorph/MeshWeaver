@@ -4,6 +4,8 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Schema;
 using Json.Patch;
+using MeshWeaver.AI.Completion;
+using MeshWeaver.Data.Completion;
 using MeshWeaver.Data.Persistence;
 using MeshWeaver.Data.Serialization;
 using MeshWeaver.Domain;
@@ -57,7 +59,7 @@ public static class DataExtensions
             remainder = path;
         }
 
-        var parts = remainder.Split('/', prefix == "content" ? 4 : 3, StringSplitOptions.None);
+        var parts = remainder.Split('/', prefix == "content" ? 4 : 3);
         if (parts.Length < 2)
             throw new ArgumentException($"Invalid path: '{path}'. Expected at least addressType/addressId");
 
@@ -88,108 +90,98 @@ public static class DataExtensions
         Func<DataContext, DataContext> dataPluginConfiguration
     )
     {
-        var existingLambdas = config.GetListOfLambdas();
-        // Wrap the configuration to add workspace reference stream factories
-        var wrappedConfig = (DataContext data) =>
+
+        var listOfLambdas = config.Get<ImmutableList<Func<DataContext, DataContext>>>();
+        if (listOfLambdas is null)
         {
-            // First apply the user's configuration
-            data = dataPluginConfiguration(data);
+            listOfLambdas = [DefaultConfig];
+            config = GetDefaultConfiguration(config);
+        }
 
-            // Register the data: prefix resolver for UnifiedReference (only if not already registered)
-            // This handles paths like "data:addressType/addressId/collection/entityId"
-            if (!data.UnifiedReferenceResolvers.ContainsKey("data"))
-            {
-                data = data.WithUnifiedReference("data", (workspace, path) =>
-                    CreateDataPathStream(workspace, path, null));
-            }
 
-            // Then register the built-in stream factories for DataPathReference and UnifiedReference
-            return data.Configure(reduction => reduction
-                .AddWorkspaceReferenceStream<object>((workspace, reference, configuration) =>
-                    reference is not DataPathReference dataPathRef
-                        ? null
-                        : CreateDataPathReferenceStream(workspace, dataPathRef, configuration))
-                .AddWorkspaceReferenceStream<object>((workspace, reference, configuration) =>
-                    reference is not UnifiedReference unifiedRef
-                        ? null
-                        : CreateUnifiedReferenceStream(workspace, unifiedRef, configuration))
-            );
-        };
 
-        var ret = config
-                .Set(existingLambdas.Add(wrappedConfig));
+        return config
+                .Set(listOfLambdas.Add(dataPluginConfiguration));
 
-        if (existingLambdas.Any())
-            return ret;
-        return ret
-                .WithInitialization(h => h.GetWorkspace())
-                .WithRoutes(routes => routes.WithHandler((delivery, _) => RouteStreamMessage(routes.Hub, delivery)))
-                .WithServices(sc => sc.AddScoped<IWorkspace>(sp =>
+
+
+    }
+
+
+    private static MessageHubConfiguration GetDefaultConfiguration(MessageHubConfiguration config)
+    {
+        return config
+            .WithInitialization(h => h.GetWorkspace())
+            .WithRoutes(routes => routes.WithHandler((delivery, _) => RouteStreamMessage(routes.Hub, delivery)))
+            .WithServices(sc => sc
+                .AddScoped<IWorkspace>(sp =>
                 {
                     var hub = sp.GetRequiredService<IMessageHub>();
                     // Use factory pattern to lazily resolve logger to avoid circular dependency
                     var loggerFactory = sp.GetRequiredService<ILoggerFactory>();
                     return new Workspace(hub, loggerFactory.CreateLogger<Workspace>());
-                }))
-                .WithSerialization(serialization =>
-                    serialization.WithOptions(options =>
-                    {
-                        if (!options.Converters.Any(c => c is EntityStoreConverter))
-                            options.Converters.Insert(
-                                0,
-                                new EntityStoreConverter(
-                                    serialization.Hub.ServiceProvider.GetRequiredService<ITypeRegistry>()
-                                )
-                            );
-                        if (!options.Converters.Any(c => c is InstanceCollectionConverter))
-                            options.Converters.Insert(
-                                0,
-                                new InstanceCollectionConverter(
-                                    serialization.Hub.ServiceProvider.GetRequiredService<ITypeRegistry>()
-                                )
-                            );
-                    })).WithTypes(
-                    typeof(EntityStore),
-                    typeof(InstanceCollection),
-                    typeof(WorkspaceReference),
-                    typeof(EntityReference),
-                    typeof(InstanceReference),
-                    typeof(CollectionReference),
-                    typeof(CollectionsReference),
-                    typeof(JsonPointerReference),
-                    typeof(LayoutAreaReference),
-                    typeof(AggregateWorkspaceReference),
-                    typeof(CombinedStreamReference),
-                    typeof(StreamIdentity),
-                    typeof(JsonPatch),
-                    typeof(DataChangedEvent),
-                    typeof(DataChangeRequest),
-                    typeof(DataChangeResponse),
-                    typeof(SubscribeRequest),
-                    typeof(UnsubscribeRequest),
-                    typeof(GetSchemaRequest),
-                    typeof(SchemaResponse),
-                    typeof(GetDomainTypesRequest),
-                    typeof(DomainTypesResponse),
-                    typeof(TypeDescription),
-                    typeof(PatchDataChangeRequest),
-                    typeof(GetDataRequest),
-                    typeof(GetDataResponse),
-                    typeof(UnifiedReference),
-                    typeof(FileReference),
-                    typeof(DataPathReference),
-                    typeof(ContentWorkspaceReference),
-                    typeof(UpdateUnifiedReferenceRequest),
-                    typeof(UpdateUnifiedReferenceResponse),
-                    typeof(DeleteUnifiedReferenceRequest),
-                    typeof(DeleteUnifiedReferenceResponse)
-                )
-                .WithType(typeof(ActivityAddress), ActivityAddress.TypeName)
-                .WithType(typeof(ActivityLog), nameof(ActivityLog))
-                .RegisterDataEvents()
-                .WithInitializationGate(DataContext.InitializationGateName)
-            ;
-
+                })
+                .AddScoped<IAutocompleteProvider, DataAutocompleteProvider>())
+            .WithSerialization(serialization =>
+                serialization.WithOptions(options =>
+                {
+                    if (!options.Converters.Any(c => c is EntityStoreConverter))
+                        options.Converters.Insert(
+                            0,
+                            new EntityStoreConverter(
+                                serialization.Hub.ServiceProvider.GetRequiredService<ITypeRegistry>()
+                            )
+                        );
+                    if (!options.Converters.Any(c => c is InstanceCollectionConverter))
+                        options.Converters.Insert(
+                            0,
+                            new InstanceCollectionConverter(
+                                serialization.Hub.ServiceProvider.GetRequiredService<ITypeRegistry>()
+                            )
+                        );
+                })).WithTypes(
+                typeof(EntityStore),
+                typeof(InstanceCollection),
+                typeof(WorkspaceReference),
+                typeof(EntityReference),
+                typeof(InstanceReference),
+                typeof(CollectionReference),
+                typeof(CollectionsReference),
+                typeof(JsonPointerReference),
+                typeof(LayoutAreaReference),
+                typeof(AggregateWorkspaceReference),
+                typeof(CombinedStreamReference),
+                typeof(StreamIdentity),
+                typeof(JsonPatch),
+                typeof(DataChangedEvent),
+                typeof(DataChangeRequest),
+                typeof(DataChangeResponse),
+                typeof(SubscribeRequest),
+                typeof(UnsubscribeRequest),
+                typeof(GetSchemaRequest),
+                typeof(SchemaResponse),
+                typeof(GetDomainTypesRequest),
+                typeof(DomainTypesResponse),
+                typeof(TypeDescription),
+                typeof(PatchDataChangeRequest),
+                typeof(GetDataRequest),
+                typeof(GetDataResponse),
+                typeof(UnifiedReference),
+                typeof(FileReference),
+                typeof(DataPathReference),
+                typeof(ContentWorkspaceReference),
+                typeof(UpdateUnifiedReferenceRequest),
+                typeof(UpdateUnifiedReferenceResponse),
+                typeof(DeleteUnifiedReferenceRequest),
+                typeof(DeleteUnifiedReferenceResponse),
+                typeof(AutocompleteRequest),
+                typeof(AutocompleteResponse),
+                typeof(AutocompleteItem)
+            )
+            .WithType(typeof(ActivityAddress), ActivityAddress.TypeName)
+            .WithType(typeof(ActivityLog), nameof(ActivityLog))
+            .RegisterDataEvents()
+            .WithInitializationGate(DataContext.InitializationGateName);
     }
 
     private static Task<IMessageDelivery> RouteStreamMessage(IMessageHub hub, IMessageDelivery request)
@@ -224,19 +216,38 @@ public static class DataExtensions
         return Task.FromResult(request.Forwarded());
     }
 
-    internal static ImmutableList<Func<DataContext, DataContext>> GetListOfLambdas(
-        this MessageHubConfiguration config
-    )
-    {
-        return config.Get<ImmutableList<Func<DataContext, DataContext>>>()
-            ?? ImmutableList<Func<DataContext, DataContext>>.Empty;
+
+    private static DataContext DefaultConfig(DataContext data)
+    { // Register the data: prefix resolver for UnifiedReference (only if not already registered)
+      // This handles paths like "data:addressType/addressId/collection/entityId"
+        if (!data.UnifiedReferenceResolvers.ContainsKey("data"))
+        {
+            data = data.WithUnifiedReference("data", (workspace, path) =>
+                CreateDataPathStream(workspace, path, null));
+        }
+
+        // Then register the built-in stream factories for DataPathReference and UnifiedReference
+        return data.Configure(reduction => reduction
+            .AddWorkspaceReferenceStream<object>((workspace, reference, configuration) =>
+                reference is not DataPathReference dataPathRef
+                    ? null
+                    : CreateDataPathReferenceStream(workspace, dataPathRef, configuration))
+            .AddWorkspaceReferenceStream<object>((workspace, reference, configuration) =>
+                reference is not UnifiedReference unifiedRef
+                    ? null
+                    : CreateUnifiedReferenceStream(workspace, unifiedRef, configuration))
+        );
     }
+
 
     internal static DataContext GetDataConfiguration(this IWorkspace workspace)
     {
-        var dataPluginConfig = workspace.Hub.Configuration.GetListOfLambdas();
+        var listOfLambdas = workspace.Hub.Configuration.Get<ImmutableList<Func<DataContext, DataContext>>>();
+
+        if (listOfLambdas is null)
+            throw new InvalidOperationException("Configuration of message hub is inconsistent: AddData was not called.");
         var ret = new DataContext(workspace);
-        foreach (var func in dataPluginConfig)
+        foreach (var func in listOfLambdas)
             ret = func.Invoke(ret);
         return ret;
     }
@@ -417,7 +428,8 @@ public static class DataExtensions
             .WithHandler<GetDomainTypesRequest>(HandleGetDomainTypesRequest)
             .WithHandler<GetDataRequest>(HandleGetDataRequest)
             .WithHandler<UpdateUnifiedReferenceRequest>(HandleUpdateUnifiedReferenceRequest)
-            .WithHandler<DeleteUnifiedReferenceRequest>(HandleDeleteUnifiedReferenceRequest);
+            .WithHandler<DeleteUnifiedReferenceRequest>(HandleDeleteUnifiedReferenceRequest)
+            .WithHandler<AutocompleteRequest>(HandleAutocompleteRequest);
 
     private static IMessageDelivery HandleGetDomainTypesRequest(IMessageHub hub, IMessageDelivery<GetDomainTypesRequest> request)
     {
@@ -1454,5 +1466,35 @@ public static class DataExtensions
     {
         var typedStream = workspace.GetRemoteStream(targetAddress, targetRef);
         return (ISynchronizationStream<object>?)typedStream;
+    }
+
+    /// <summary>
+    /// Handles AutocompleteRequest by aggregating items from all registered IAutocompleteProvider services.
+    /// </summary>
+    private static async Task<IMessageDelivery> HandleAutocompleteRequest(
+        IMessageHub hub,
+        IMessageDelivery<AutocompleteRequest> request,
+        CancellationToken ct)
+    {
+        var providers = hub.ServiceProvider.GetServices<IAutocompleteProvider>();
+        var query = request.Message.Query;
+
+        var allItems = new List<AutocompleteItem>();
+        foreach (var provider in providers)
+        {
+            try
+            {
+                var items = await provider.GetItemsAsync(query, ct);
+                allItems.AddRange(items);
+            }
+            catch
+            {
+                // Skip providers that fail
+            }
+        }
+
+        var response = new AutocompleteResponse(allItems);
+        hub.Post(response, o => o.ResponseFor(request));
+        return request.Processed();
     }
 }

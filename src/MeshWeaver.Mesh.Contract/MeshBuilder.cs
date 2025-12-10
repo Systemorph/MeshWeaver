@@ -33,6 +33,12 @@ public record MeshBuilder
             AddMeshNodeFactory(factory);
         }
 
+        // Install namespaces from attributes (for autocomplete)
+        foreach (var ns in attributes.SelectMany(a => a.Namespaces))
+        {
+            AddMeshNamespace(ns);
+        }
+
         // Register address types from attributes
         var addressTypes = attributes.SelectMany(a => a.AddressTypes).ToArray();
         if (addressTypes.Length > 0)
@@ -102,7 +108,7 @@ public record MeshBuilder
         pathRegistry.Register("content", new ContentPathHandler());
 
         ConfigureServices(services => services
-            .AddSingleton(_ => new MeshConfiguration(MeshNodes.ToDictionary(x => x.Name), factories))
+            .AddSingleton(_ => new MeshConfiguration(MeshNodes.ToDictionary(x => x.Name), factories, namespaces))
             .AddSingleton<IUnifiedPathRegistry>(_ => pathRegistry)
             .AddSingleton(BuildHub)
             .AddSingleton<AccessService>()
@@ -136,13 +142,29 @@ public record MeshBuilder
     {
         MeshNodes.AddRange(nodes);
         return this;
-    } 
+    }
 
     private readonly List<Func<Address, MeshNode?>> factories = new();
+    private readonly List<MeshNamespace> namespaces = new();
+
     public MeshBuilder AddMeshNodeFactory(Func<Address, MeshNode?> meshNodeFactory)
     {
         factories.Add(meshNodeFactory);
         return this;
     }
 
+    /// <summary>
+    /// Adds a namespace that describes an address type for autocomplete.
+    /// The namespace provides metadata (description, icon) and optionally a factory function.
+    /// </summary>
+    public MeshBuilder AddMeshNamespace(MeshNamespace ns)
+    {
+        namespaces.Add(ns);
+        // If the namespace has a factory function, also register it
+        if (ns.Factory != null)
+        {
+            factories.Add(ns.Factory);
+        }
+        return this;
+    }
 }
