@@ -822,23 +822,22 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
     /// <summary>
     /// Async callback for editor autocomplete with server-side fuzzy scoring.
     /// Called from MonacoEditorView when user types after @ trigger.
-    /// Uses the AutocompleteClient to dispatch requests to app/Agents and context address.
+    /// Uses the AutocompleteClient to dispatch requests based on query stage.
     /// </summary>
     private async Task<CompletionItem[]> GetCompletionsForEditorAsync(string query)
     {
         try
         {
             var context = GetCurrentAgentContext();
+            var meshCatalog = Hub.ServiceProvider.GetService<IMeshCatalog>();
 
-            // Create autocomplete client with dispatch lambda
-            // Returns app/Agents (for agents, models, prefixes, commands) and current context address
-            var client = new AutocompleteClient(Hub, ctx =>
-            {
-                var addresses = new List<Address> { AI.Application.ApplicationAddress.Agents };
-                if (ctx?.Address != null)
-                    addresses.Add(ctx.Address);
-                return addresses;
-            });
+            // Create autocomplete client with:
+            // - Base addresses: app/Agents (for agents, models, prefixes, commands)
+            // - MeshCatalog: for namespace address resolution (e.g., @pricing/ -> Insurance app)
+            var client = new AutocompleteClient(
+                Hub,
+                _ => [AI.Application.ApplicationAddress.Agents],
+                meshCatalog);
 
             // Get completions from dispatched addresses
             var response = await client.GetCompletionsAsync(query, context);
