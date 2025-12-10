@@ -45,83 +45,19 @@ public static class ContentLayoutArea
 
     /// <summary>
     /// Renders file content based on mime type.
-    /// Handles both unified content reference format (content/addressType/addressId/collection/path)
-    /// and legacy format (collection/path).
+    /// Handles unified content reference format where the path is passed via $Content area.
+    /// Format: collection/path or collection@partition/path
     /// </summary>
     [Browsable(false)]
     public static async Task<IObservable<UiControl?>> Content(LayoutAreaHost host, RenderingContext _, CancellationToken ct)
     {
         var idString = host.Reference.Id?.ToString() ?? "";
 
-        // Check if this is a unified content reference (starts with content/)
-        if (idString.StartsWith("content/", StringComparison.OrdinalIgnoreCase))
-        {
-            return await HandleUnifiedContentReference(host, idString, ct);
-        }
-
-        // Legacy format: collection/path
-        return await HandleLegacyContentReference(host, idString, ct);
+        // Format: collection/path or collection@partition/path
+        return await HandleContentReference(host, idString, ct);
     }
 
-    private static async Task<IObservable<UiControl?>> HandleUnifiedContentReference(
-        LayoutAreaHost host,
-        string path,
-        CancellationToken ct)
-    {
-        // Parse the content reference inline
-        // Format: content/addressType/addressId/collection/path or content/addressType/addressId/collection@partition/path
-        var pathAfterPrefix = path.StartsWith("content/", StringComparison.OrdinalIgnoreCase)
-            ? path[8..]
-            : path;
-
-        var parts = pathAfterPrefix.Split('/', 4, StringSplitOptions.None);
-        if (parts.Length < 4)
-            return Observable.Return<UiControl?>(new MarkdownControl($"Invalid content reference: {path}. Expected format: content/addressType/addressId/collection/path"));
-
-        var collectionPart = parts[2];
-        var filePath = parts[3];
-
-        if (string.IsNullOrEmpty(collectionPart) || string.IsNullOrEmpty(filePath))
-            return Observable.Return<UiControl?>(new MarkdownControl($"Invalid content reference: {path}. Collection and path are required."));
-
-        // Check for partition: collection@partition
-        string collectionName;
-        var atIndex = collectionPart.IndexOf('@');
-        if (atIndex > 0)
-        {
-            var collection = collectionPart[..atIndex];
-            var partition = collectionPart[(atIndex + 1)..];
-            collectionName = $"{collection}@{partition}";
-        }
-        else
-        {
-            collectionName = collectionPart;
-        }
-
-        var articleService = host.Hub.GetContentService();
-        var collection2 = await articleService.GetCollectionAsync(collectionName, ct);
-        if (collection2 is null)
-            return Observable.Return<UiControl?>(new MarkdownControl($"Collection {collectionName} not found."));
-
-        var extension = Path.GetExtension(filePath).ToLowerInvariant();
-
-        // For images, get the raw content and render appropriately
-        if (IsImageFile(extension))
-        {
-            return await RenderImageContent(collection2, filePath, extension, ct);
-        }
-
-        // For other content types, use the existing GetMarkdown pipeline
-        var contentStream = collection2.GetMarkdown(filePath);
-        if (contentStream is null)
-            return Observable.Return<UiControl?>(new MarkdownControl($"{filePath} not found in collection {collectionName}."));
-
-        return contentStream.Select(content => content is null
-            ? new MarkdownControl($"{filePath} not found in collection {collectionName}")
-            : RenderContent(filePath, content, false));
-    }
-
-    private static async Task<IObservable<UiControl?>> HandleLegacyContentReference(
+    private static async Task<IObservable<UiControl?>> HandleContentReference(
         LayoutAreaHost host,
         string idString,
         CancellationToken ct)

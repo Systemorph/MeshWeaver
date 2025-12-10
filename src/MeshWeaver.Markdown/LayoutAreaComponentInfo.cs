@@ -14,7 +14,7 @@ public class LayoutAreaComponentInfo : ContainerBlock
 
         var parts = url.Split('/');
         if (parts.Length < 3)
-            throw new ArgumentException($"Invalid URL format '{url}'. Expected format: 'addressType/addressId/area' or 'addressType/addressId/area/areaId'", nameof(url));
+            throw new ArgumentException($"Invalid URL format '{url}'. Expected format: 'addressType/addressId/areaName' or 'addressType/addressId/areaName/areaId'", nameof(url));
 
         Address = $"{parts[0]}/{parts[1]}";
         Area = parts[2];

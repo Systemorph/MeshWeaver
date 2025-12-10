@@ -23,50 +23,50 @@ This document showcases all addressable items in the Todo application.
 Display all todo items:
 
 ```
-@data/app/Todo/TodoItem
+@app/Todo/data/TodoItem
 ```
 
-@data/app/Todo/TodoItem
+@app/Todo/data/TodoItem
 
 ### Single TodoItem
 
 Display a specific todo item by ID:
 
 ```
-@data/app/Todo/TodoItem/1
+@app/Todo/data/TodoItem/1
 ```
 
-@data/app/Todo/TodoItem/1
+@app/Todo/data/TodoItem/1
 
 ### TodoCategory Collection
 
 Display all todo categories:
 
 ```
-@data/app/Todo/TodoCategory
+@app/Todo/data/TodoCategory
 ```
 
-@data/app/Todo/TodoCategory
+@app/Todo/data/TodoCategory
 
 ### Single TodoCategory
 
 Display a specific category:
 
 ```
-@data/app/Todo/TodoCategory/Work
+@app/Todo/data/TodoCategory/Work
 ```
 
-@data/app/Todo/TodoCategory/Work
+@app/Todo/data/TodoCategory/Work
 
 ## Content References
 
 ### Embedding an Image
 
 ```
-@content/app/Todo/Todo/images/todoapp.jpeg
+@app/Todo/content/Todo/images/todoapp.jpeg
 ```
 
-@content/app/Todo/Todo/images/todoapp.jpeg
+@app/Todo/content/Todo/images/todoapp.jpeg
 
 ## Layout Area References
 

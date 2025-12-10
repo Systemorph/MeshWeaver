@@ -19,24 +19,26 @@ Tags:
 MeshWeaver provides a unified notation for referencing any form of content. Whether you need to embed data, include file content, display layout areas, or select AI agents and models, the syntax follows a consistent pattern:
 
 ```
-@prefix/addressType/addressId/path
+@addressType/addressId[/keyword[/path]]
 ```
 
-The prefix determines how the content is fetched and rendered:
-- `data/` - Fetches data entities and displays them as JSON
-- `content/` - Fetches file content and renders based on mime type
-- `area/` - Displays a layout area (default if no prefix is specified)
+The keyword determines how the content is fetched and rendered:
+- `data` - Fetches data entities and displays them as JSON
+- `content` - Fetches file content and renders based on mime type
+- `area` - Displays a layout area (this is the default if no keyword is specified)
+
+Special prefixes for AI interactions:
 - `agent/` - Selects an AI agent for chat interactions
 - `model/` - Selects an AI model for chat interactions
 
-For paths containing spaces, use quotes: `@"content/app/Docs/My Report.pdf"`
+For paths containing spaces, use quotes: `@"app/Docs/content/My Report.pdf"`
 
 ## Content References
 
 Content references embed file content directly in your markdown. The content is rendered based on its mime type. The format is:
 
 ```
-@content/addressType/addressId/collection/path
+@addressType/addressId/content/collection/path
 ```
 
 ### Example: Embedding an Image
@@ -44,34 +46,30 @@ Content references embed file content directly in your markdown. The content is 
 To display an image from the Documentation collection:
 
 ```
-@content/app/Documentation/Documentation/images/meshbros.png
+@app/Documentation/content/Documentation/images/meshbros.png
 ```
 
-@content/app/Documentation/Documentation/images/meshbros.png
+@app/Documentation/content/Documentation/images/meshbros.png
 
 ### Example: Embedding a Markdown Document
 
 To include content from another markdown file:
 
 ```
-@content/app/Documentation/Documentation/embedded.md
+@app/Documentation/content/Documentation/embedded.md
 ```
 
-@content/app/Documentation/Documentation/embedded.md
+@app/Documentation/content/Documentation/embedded.md
 
 ## Layout Area References
 
 Layout areas display interactive components. The format is:
 
 ```
-@area/addressType/addressId/areaName
-```
-
-You can omit the `area/` prefix since it's the default:
-
-```
 @addressType/addressId/areaName
 ```
+
+Since `area` is the default keyword, you don't need to specify it explicitly.
 
 ### Example: Embedding the Calculator
 

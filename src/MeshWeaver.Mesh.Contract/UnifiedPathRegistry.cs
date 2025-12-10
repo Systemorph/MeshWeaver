@@ -6,20 +6,23 @@ namespace MeshWeaver.Mesh;
 
 /// <summary>
 /// Thread-safe implementation of the unified path registry.
+/// Path format: addressType/addressId/keyword/remainingPath
+/// where keyword is one of the registered handlers (data, area, content).
+/// If no keyword is specified, defaults to "area".
 /// </summary>
 public class UnifiedPathRegistry : IUnifiedPathRegistry
 {
     private readonly ConcurrentDictionary<string, IUnifiedPathHandler> handlers = new(StringComparer.OrdinalIgnoreCase);
 
     /// <inheritdoc />
-    public void Register(string prefix, IUnifiedPathHandler handler)
+    public void Register(string keyword, IUnifiedPathHandler handler)
     {
-        if (string.IsNullOrEmpty(prefix))
-            throw new ArgumentException("Prefix cannot be null or empty", nameof(prefix));
+        if (string.IsNullOrEmpty(keyword))
+            throw new ArgumentException("Keyword cannot be null or empty", nameof(keyword));
         if (handler == null)
             throw new ArgumentNullException(nameof(handler));
 
-        handlers[prefix] = handler;
+        handlers[keyword] = handler;
     }
 
     /// <inheritdoc />
@@ -31,20 +34,39 @@ public class UnifiedPathRegistry : IUnifiedPathRegistry
         if (string.IsNullOrEmpty(path))
             return false;
 
-        // Find the prefix separator (first /)
-        var slashIndex = path.IndexOf('/');
-        if (slashIndex <= 0)
+        // Path format: addressType/addressId[/keyword[/remainingPath]]
+        var parts = path.Split('/', StringSplitOptions.None);
+        if (parts.Length < 2)
             return false;
 
-        var prefix = path[..slashIndex];
-        var remainder = path[(slashIndex + 1)..];
+        var addressType = parts[0];
+        var addressId = parts[1];
 
-        if (!handlers.TryGetValue(prefix, out var handler))
+        if (string.IsNullOrEmpty(addressType) || string.IsNullOrEmpty(addressId))
             return false;
+
+        // Determine keyword and remaining path
+        string keyword;
+        string remainingPath;
+
+        if (parts.Length >= 3 && handlers.TryGetValue(parts[2], out var handler))
+        {
+            // Explicit keyword specified (e.g., host/1/data/Collection)
+            keyword = parts[2];
+            remainingPath = parts.Length > 3 ? string.Join("/", parts.Skip(3)) : "";
+        }
+        else
+        {
+            // No keyword or unrecognized keyword - default to "area"
+            keyword = "area";
+            remainingPath = parts.Length > 2 ? string.Join("/", parts.Skip(2)) : "";
+            if (!handlers.TryGetValue(keyword, out handler))
+                return false;
+        }
 
         try
         {
-            var result = handler.Parse(remainder);
+            var result = handler.Parse(addressType, addressId, remainingPath);
             targetAddress = result.Address;
             reference = result.Reference;
             return true;
@@ -56,5 +78,5 @@ public class UnifiedPathRegistry : IUnifiedPathRegistry
     }
 
     /// <inheritdoc />
-    public IEnumerable<string> Prefixes => handlers.Keys;
+    public IEnumerable<string> Keywords => handlers.Keys;
 }
