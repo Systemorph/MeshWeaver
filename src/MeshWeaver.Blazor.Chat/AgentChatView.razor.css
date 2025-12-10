@@ -55,6 +55,8 @@ body {
     flex-shrink: 0;
     position: relative;
     z-index: 10;
+    min-width: 0; /* Allow shrinking */
+    overflow: hidden;
 }
 
 .chat-header {

@@ -1,10 +1,12 @@
-﻿using MeshWeaver.AI;
+using MeshWeaver.AI;
 using MeshWeaver.AI.Commands;
 using MeshWeaver.AI.Completion;
 using MeshWeaver.AI.Parsing;
 using MeshWeaver.AI.Persistence;
 using MeshWeaver.Blazor.Monaco;
 using MeshWeaver.Data;
+using MeshWeaver.Data.Completion;
+using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using MeshWeaver.ShortGuid;
 using Microsoft.AspNetCore.Components;
@@ -820,26 +822,48 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
     /// <summary>
     /// Async callback for editor autocomplete with server-side fuzzy scoring.
     /// Called from MonacoEditorView when user types after @ trigger.
+    /// Uses the AutocompleteClient to dispatch requests to app/Agents and context address.
     /// </summary>
     private async Task<CompletionItem[]> GetCompletionsForEditorAsync(string query)
     {
         try
         {
             var context = GetCurrentAgentContext();
-            var fuzzyScorer = new FuzzyScorer();
-            var autocompleteService = new AutocompleteService(AgentDefinitions, fuzzyScorer);
 
-            var results = await autocompleteService.GetCompletionsAsync(query, context, commandRegistry: commandRegistry, availableModels: availableModels);
-
-            return results.Select(r => new CompletionItem
+            // Create autocomplete client with dispatch lambda
+            // Returns app/Agents (for agents, models, prefixes, commands) and current context address
+            var client = new AutocompleteClient(Hub, ctx =>
             {
-                Label = r.Label,
-                InsertText = r.InsertText,
-                Description = r.Description,
-                Category = r.Category,
-                Detail = r.Score > 0 ? $"Score: {r.Score}" : null,
-                Kind = MapAutocompleteKindToCompletionKind(r.Kind)
-            }).ToArray();
+                var addresses = new List<Address> { AI.Application.ApplicationAddress.Agents };
+                if (ctx?.Address != null)
+                    addresses.Add(ctx.Address);
+                return addresses;
+            });
+
+            // Get completions from dispatched addresses
+            var response = await client.GetCompletionsAsync(query, context);
+
+            // Apply local fuzzy scoring for better UI display
+            var fuzzyScorer = new FuzzyScorer();
+            var scored = fuzzyScorer.Score(response.Items, query, i => i.Label);
+
+            // Sort by priority (desc), then fuzzy score (desc)
+            var results = scored
+                .OrderByDescending(s => s.Item.Priority)
+                .ThenByDescending(s => s.Score)
+                .Take(20)
+                .Select(s => new CompletionItem
+                {
+                    Label = s.Item.Label,
+                    InsertText = s.Item.InsertText,
+                    Description = s.Item.Description,
+                    Category = s.Item.Category,
+                    Detail = s.Score > 0 ? $"Score: {s.Score}" : null,
+                    Kind = MapAutocompleteKindToCompletionKind(s.Item.Kind)
+                })
+                .ToArray();
+
+            return results;
         }
         catch (Exception ex)
         {

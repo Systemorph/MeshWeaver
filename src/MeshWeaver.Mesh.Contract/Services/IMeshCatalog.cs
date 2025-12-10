@@ -17,6 +17,12 @@ public interface IMeshCatalog
     /// Enables resolution of paths like "pricing:MS-2024" to target address and workspace reference.
     /// </summary>
     IUnifiedPathRegistry PathRegistry { get; }
+
+    /// <summary>
+    /// Gets all namespaces that describe available address types for autocomplete.
+    /// Used for autocomplete to show top-level items like "pricing/", "agent/", etc.
+    /// </summary>
+    Task<IReadOnlyList<MeshNamespace>> GetNamespacesAsync(CancellationToken ct = default);
 }
 
 

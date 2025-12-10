@@ -73,4 +73,16 @@ public abstract class MeshCatalogBase : IMeshCatalog
 
 
     protected abstract Task UpdateNodeAsync(MeshNode node);
+
+    /// <inheritdoc />
+    public Task<IReadOnlyList<MeshNamespace>> GetNamespacesAsync(CancellationToken ct = default)
+    {
+        // Return namespaces - these represent address types available for autocomplete
+        var namespaces = Configuration.Namespaces
+            .OrderBy(n => n.DisplayOrder)
+            .ThenBy(n => n.Name)
+            .ToList();
+
+        return Task.FromResult<IReadOnlyList<MeshNamespace>>(namespaces);
+    }
 }

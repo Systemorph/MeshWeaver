@@ -12,6 +12,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\MeshWeaver.AI\MeshWeaver.AI.csproj" />
+    <ProjectReference Include="..\MeshWeaver.AI.Application\MeshWeaver.AI.Application.csproj" />
     <ProjectReference Include="..\MeshWeaver.Blazor\MeshWeaver.Blazor.csproj" />
     <ProjectReference Include="..\MeshWeaver.Blazor.Monaco\MeshWeaver.Blazor.Monaco.csproj" />
     <ProjectReference Include="..\MeshWeaver.Layout\MeshWeaver.Layout.csproj" />

@@ -6,7 +6,9 @@ using Json.Patch;
 using Json.Pointer;
 using Microsoft.Extensions.DependencyInjection;
 using MeshWeaver.Data;
+using MeshWeaver.Data.Completion;
 using MeshWeaver.Layout.Client;
+using MeshWeaver.Layout.Completion;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Layout.DataGrid;
 using MeshWeaver.Messaging;
@@ -29,7 +31,9 @@ public static class LayoutExtensions
             var typeRegistry = config.TypeRegistry;
             config = config
                 .WithInitialization(h => h.ServiceProvider.GetRequiredService<IUiControlService>())
-                .WithServices(services => services.AddScoped<IUiControlService, UiControlService>())
+                .WithServices(services => services
+                    .AddScoped<IUiControlService, UiControlService>()
+                    .AddScoped<IAutocompleteProvider, LayoutAreaAutocompleteProvider>())
                 .AddData(data =>
                 {
                     // Register the area: prefix resolver for UnifiedReference (only if not already registered)

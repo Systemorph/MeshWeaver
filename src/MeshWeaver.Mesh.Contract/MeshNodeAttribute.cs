@@ -15,6 +15,12 @@ public abstract class MeshNodeAttribute : Attribute
     public virtual IEnumerable<Func<Address, MeshNode?>> NodeFactories => [];
 
     /// <summary>
+    /// Gets namespaces that describe available address types for autocomplete.
+    /// Each namespace provides metadata (name, description, icon) and optionally a factory function.
+    /// </summary>
+    public virtual IEnumerable<MeshNamespace> Namespaces => [];
+
+    /// <summary>
     /// Gets the address types to register with the mesh hub.
     /// Key is the short type name (e.g., "story"), Value is the address type.
     /// </summary>
