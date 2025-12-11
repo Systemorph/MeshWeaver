@@ -188,12 +188,12 @@ public class DataPlugin(
         return tools;
     }
 
-    [Description("Gets content using a unified path. All paths include address for routing. Supports data:, content:, and area: prefixes. " +
-                 "Use data:addressType/addressId for default data, data:addressType/addressId/collection for collections, data:addressType/addressId/collection/entityId for entities. " +
-                 "Use content:addressType/addressId/collection/path for files (e.g., content:host/1/Submissions/file.xlsx). " +
-                 "Use area:addressType/addressId/areaName[/areaId] for layout areas (e.g., area:pricing/MS-2024/Overview).")]
+    [Description("Gets content using a unified path. All paths start with address for routing. " +
+                 "Use addressType/addressId/data for default data, addressType/addressId/data/collection for collections, addressType/addressId/data/collection/entityId for entities. " +
+                 "Use addressType/addressId/content/collection/path for files (e.g., host/1/content/Submissions/file.xlsx). " +
+                 "Use addressType/addressId/areaName for layout areas (e.g., pricing/MS-2024/Overview). Area is the default if no keyword is specified.")]
     public async Task<string> GetContent(
-        [Description("Unified path (e.g., 'data:pricing/MS-2024', 'content:host/1/Submissions/file.xlsx', 'area:pricing/MS-2024/Overview')")] string path,
+        [Description("Unified path (e.g., 'pricing/MS-2024/data', 'host/1/content/Submissions/file.xlsx', 'pricing/MS-2024/Overview')")] string path,
         [Description("Optional: number of rows to read for text files")] int? numberOfRows = null)
     {
         logger.LogInformation("GetContent called with path={Path}, numberOfRows={NumberOfRows}", path, numberOfRows);
@@ -223,11 +223,11 @@ public class DataPlugin(
         }
     }
 
-    [Description("Updates content using a unified path. All paths include address for routing. Supports data: and content: prefixes. " +
-                 "Use data:addressType/addressId/collection/entityId to update data entities. " +
-                 "Use content:addressType/addressId/collection/path to update files.")]
+    [Description("Updates content using a unified path. All paths start with address for routing. " +
+                 "Use addressType/addressId/data/collection/entityId to update data entities. " +
+                 "Use addressType/addressId/content/collection/path to update files.")]
     public async Task<string> UpdateContent(
-        [Description("Unified path (e.g., 'data:pricing/MS-2024/PropertyRisk/risk1', 'content:host/1/Submissions/file.txt')")] string path,
+        [Description("Unified path (e.g., 'pricing/MS-2024/data/PropertyRisk/risk1', 'host/1/content/Submissions/file.txt')")] string path,
         [Description("The content to update (JSON for data, string for files)")] string content)
     {
         logger.LogInformation("UpdateContent called with path={Path}", path);
@@ -271,11 +271,11 @@ public class DataPlugin(
         }
     }
 
-    [Description("Deletes content using a unified path. All paths include address for routing. Supports data: and content: prefixes. " +
-                 "Use data:addressType/addressId/collection/entityId to delete data entities. " +
-                 "Use content:addressType/addressId/collection/path to delete files.")]
+    [Description("Deletes content using a unified path. All paths start with address for routing. " +
+                 "Use addressType/addressId/data/collection/entityId to delete data entities. " +
+                 "Use addressType/addressId/content/collection/path to delete files.")]
     public async Task<string> DeleteContent(
-        [Description("Unified path (e.g., 'data:pricing/MS-2024/PropertyRisk/risk1', 'content:host/1/Submissions/file.txt')")] string path)
+        [Description("Unified path (e.g., 'pricing/MS-2024/data/PropertyRisk/risk1', 'host/1/content/Submissions/file.txt')")] string path)
     {
         logger.LogInformation("DeleteContent called with path={Path}", path);
 
