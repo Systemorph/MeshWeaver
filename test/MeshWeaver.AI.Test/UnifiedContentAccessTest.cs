@@ -238,7 +238,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
     }
 
     [Fact]
-    public async Task GetDataRequest_UnifiedReference_AreaPath_ReturnsLayoutAreaJson()
+    public async Task GetDataRequest_UnifiedReference_AreaPath_ReturnsLayoutAreaEntityStore()
     {
         // arrange - client sends request to host
         GetHost(); // Ensure host is initialized
@@ -256,13 +256,8 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
         dataResponse.Error.Should().BeNull();
         dataResponse.Data.Should().NotBeNull();
 
-        // Should be valid JSON string
-        var jsonString = dataResponse.Data as string;
-        jsonString.Should().NotBeNullOrEmpty();
-
-        // Should be parseable JSON
-        var action = () => JsonDocument.Parse(jsonString!);
-        action.Should().NotThrow();
+        // LayoutAreaReference returns EntityStore which contains the area's state
+        dataResponse.Data.Should().BeOfType<EntityStore>();
     }
 
     [Fact]
@@ -972,8 +967,8 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
         // assert
         response.Message.Error.Should().BeNull();
         response.Message.Data.Should().NotBeNull();
-        // Layout areas return a JSON string
-        response.Message.Data.Should().BeOfType<string>();
+        // LayoutAreaReference returns EntityStore which contains the area's state
+        response.Message.Data.Should().BeOfType<EntityStore>();
     }
 
     [Fact]
