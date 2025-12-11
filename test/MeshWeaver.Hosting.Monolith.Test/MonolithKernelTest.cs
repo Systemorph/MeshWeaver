@@ -95,7 +95,6 @@ public class MonolithKernelTest(ITestOutputHelper output) : MonolithMeshTestBase
     public async Task CalculatorDirectlyThroughKernel()
     {
         const string Code = @"using MeshWeaver.Layout;
-using MeshWeaver.Mesh;
 using static MeshWeaver.Layout.Controls;
 using static MeshWeaver.Layout.EditorExtensions;
 record Calculator(double Summand1, double Summand2);
