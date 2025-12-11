@@ -58,8 +58,13 @@ internal class HierarchicalRouting
         if (delivery.State != MessageDeliveryState.Submitted)
             return delivery;
 
-        if (delivery.Target is null || delivery.Target.Equals(hub.Address) ||
-            (delivery.Target is HostedAddress ha && hub.Address.Equals(ha.Address)))
+        // Check if we're at the target hub
+        // Compare ignoring the Host part - the inner address is what matters for determining if we're at the target
+        if (delivery.Target is null)
+            return delivery;
+
+        var targetWithoutHost = delivery.Target with { Host = null };
+        if (targetWithoutHost.Equals(hub.Address))
             return delivery;
 
         return RouteAlongHostingHierarchy(delivery);
@@ -72,30 +77,33 @@ internal class HierarchicalRouting
 
 
         var isDisposing = hub.RunLevel >= MessageHubRunLevel.DisposeHostedHubs;
-        if (delivery.Target is HostedAddress hosted)
+        if (delivery.Target.Host != null)
         {
+            var hosted = delivery.Target;
             logger.LogDebug("Routing delivery {id} of type {type} to host with address {target}", delivery.Id,
                 delivery.Message.GetType().Name, hosted.Host);
             if (hub.Address.Equals(hosted.Host))
             {
-                var nextLevelAddress = hosted.Address;
-                if (nextLevelAddress is HostedAddress hostedInner)
-                    nextLevelAddress = hostedInner.Host;
-                
+                // Get the inner address (the target without its host)
+                var nextLevelAddress = hosted with { Host = null };
+                // If the inner address also has a host, route to that host first
+                if (nextLevelAddress.Host != null)
+                    nextLevelAddress = nextLevelAddress.Host;
+
                 // During disposal, only look for existing hubs, don't create new ones
                 var creation = isDisposing ? HostedHubCreation.Never : HostedHubCreation.Always;
                 var hostedHub = hub.GetHostedHub(nextLevelAddress, x => x, creation);
-                
+
                 if (hostedHub is not null)
                 {
-                    hostedHub.DeliverMessage(delivery.WithTarget(hosted.Address));
+                    hostedHub.DeliverMessage(delivery.WithTarget(hosted with { Host = null }));
                     return delivery.Forwarded();
                 }
-                
-                var errorMessage = isDisposing 
-                    ? $"No existing route found for host {hosted.Address} and hub {hub.Address} is disposing"
-                    : $"No route found for host {hosted.Address}. Last tried in {hub.Address}";
-                    
+
+                var errorMessage = isDisposing
+                    ? $"No existing route found for host {hosted} and hub {hub.Address} is disposing"
+                    : $"No route found for host {hosted}. Last tried in {hub.Address}";
+
                 logger.LogDebug(errorMessage);
                 hub.Post(
                     new DeliveryFailure(delivery)
@@ -152,8 +160,8 @@ internal class HierarchicalRouting
         
         logger.LogDebug("Routing delivery {id} of type {type} to parent {target}", delivery.Id,
             delivery.Message.GetType().Name, parentHub.Address);
-        if (parentHub.Address is not MeshAddress)
-            delivery = delivery.WithSender(new HostedAddress(delivery.Sender, parentHub.Address));
+        if (parentHub.Address.Type != AddressExtensions.MeshType)
+            delivery = delivery.WithSender(delivery.Sender.WithHost(parentHub.Address));
         parentHub.DeliverMessage(delivery);
         return delivery.Forwarded();
     }

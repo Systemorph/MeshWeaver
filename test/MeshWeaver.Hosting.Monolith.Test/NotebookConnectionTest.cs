@@ -80,9 +80,9 @@ new {typeof(MarkdownControl).FullName}(""Hello World"")"
         var uiClient = Server.Services
             .GetRequiredService<IMessageHub>()
             .ServiceProvider
-            .CreateMessageHub(new UiAddress(), c => c.AddLayoutClient(x => x));
+            .CreateMessageHub(AddressExtensions.CreateUiAddress(), c => c.AddLayoutClient(x => x));
         var stream = uiClient.GetWorkspace()
-            .GetRemoteStream(new KernelAddress() { Id = addressId }, new LayoutAreaReference(area));
+            .GetRemoteStream(AddressExtensions.CreateKernelAddress(addressId), new LayoutAreaReference(area));
 
         var control = await stream
             .GetControlStream(area.ToString()!)

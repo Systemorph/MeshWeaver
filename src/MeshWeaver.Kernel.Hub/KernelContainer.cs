@@ -95,23 +95,24 @@ public class KernelContainer(IServiceProvider serviceProvider)
 
     private async Task<IMessageDelivery> RouteToSubHubs(IMessageHub kernelHub, IMessageDelivery request, CancellationToken cancellationToken)
     {
-        if (request.Target is not HostedAddress hosted || !kernelHub.Address.Equals(hosted.Host))
+        if (request.Target?.Host == null || !kernelHub.Address.Equals(request.Target.Host))
             return request;
         try
         {
-            var hub = kernelHub.GetHostedHub(hosted.Address, HostedHubCreation.Never);
+            var hub = kernelHub.GetHostedHub(request.Target with { Host = null }, HostedHubCreation.Never);
             if (hub is not null)
             {
                 hub.DeliverMessage(request);
                 return request.Processed();
             }
 
-            var meshNode = await meshCatalog.GetNodeAsync(hosted.Address);
+            var innerAddress = request.Target;
+            var meshNode = await meshCatalog.GetNodeAsync(innerAddress);
             if (meshNode == null)
-                return DeliveryFailure(kernelHub, request, $"No mesh node was found for {hosted.Address}");
+                return DeliveryFailure(kernelHub, request, $"No mesh node was found for {innerAddress}");
 
             if (meshNode.StartupScript is null)
-                return DeliveryFailure(kernelHub, request, $"No startup script is defined for {hosted.Address}");
+                return DeliveryFailure(kernelHub, request, $"No startup script is defined for {innerAddress}");
 
             var kernel = await kernelHub.ServiceProvider.GetRequiredService<Task<CompositeKernel>>();
             var result = await kernel.SendAsync(new SubmitCode(meshNode.StartupScript), cancellationToken);
@@ -126,14 +127,14 @@ public class KernelContainer(IServiceProvider serviceProvider)
             }
 
 
-            hub = kernelHub.GetHostedHub(hosted.Address, HostedHubCreation.Never);
+            hub = kernelHub.GetHostedHub(innerAddress with { Host = null }, HostedHubCreation.Never);
             if (hub is not null)
             {
-                hub.DeliverMessage(request.ForwardTo(hosted.Address));
+                hub.DeliverMessage(request.ForwardTo(innerAddress with { Host = null }));
                 return request.Processed();
             }
 
-            return DeliveryFailure(kernelHub, request, $"Could not start hub for {hosted.Address}");
+            return DeliveryFailure(kernelHub, request, $"Could not start hub for {innerAddress}");
         }
         catch (ObjectDisposedException)
         {
@@ -269,7 +270,7 @@ public class KernelContainer(IServiceProvider serviceProvider)
 
         ret.KernelInfo.Uri = new Uri(ret.KernelInfo.Uri.ToString().Replace("local", "mesh"));
 
-        ret.AddAssemblyReferences([typeof(IMessageHub).Assembly.Location, typeof(KernelAddress).Assembly.Location, typeof(UiControl).Assembly.Location, typeof(DataExtensions).Assembly.Location]);
+        ret.AddAssemblyReferences([typeof(IMessageHub).Assembly.Location, typeof(Address).Assembly.Location, typeof(UiControl).Assembly.Location, typeof(DataExtensions).Assembly.Location]);
 
         var composite = new CompositeKernel("mesh")
             .UseNugetDirective(OnResolve);

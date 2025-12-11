@@ -30,7 +30,7 @@ internal class TypeRegistry(ITypeRegistry? parent) : ITypeRegistry
         typeof(byte[]),
         typeof(RawJson),
         typeof(MessageDelivery<>),
-        typeof(HostedAddress),
+        typeof(Address),
         typeof(HeartbeatEvent),
         typeof(DeliveryFailure),
         typeof(DisposeRequest)

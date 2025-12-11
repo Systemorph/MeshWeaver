@@ -65,7 +65,7 @@ public static class OrleansServerRegistryExtensions
     }
     internal static MeshHostBuilder CreateOrleansConnectionBuilder(this IHostBuilder hostBuilder)
     {
-        var builder = new MeshHostBuilder(hostBuilder, new MeshAddress());
+        var builder = new MeshHostBuilder(hostBuilder, AddressExtensions.CreateMeshAddress());
         builder.ConfigureMeshWeaver();
         builder.Host.ConfigureServices(services =>
         {

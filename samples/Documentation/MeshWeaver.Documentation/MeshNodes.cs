@@ -1,12 +1,14 @@
 ﻿using MeshWeaver.Documentation;
 using MeshWeaver.Mesh;
+using MeshWeaver.Messaging;
+
 [assembly: DocumentationApplication]
 
 namespace MeshWeaver.Documentation;
 
 
 /// <summary>
-/// This is the configuration of the Northwind application mesh node.
+/// This is the configuration of the Documentation application mesh node.
 /// </summary>
 public class DocumentationApplicationAttribute : MeshNodeAttribute
 {
@@ -20,7 +22,7 @@ public class DocumentationApplicationAttribute : MeshNodeAttribute
     /// Main definition of the mesh node.
     /// </summary>
     public MeshNode Documentation => CreateFromHubConfiguration(
-        new ApplicationAddress(nameof(Documentation)),
+        AddressExtensions.CreateAppAddress(nameof(Documentation)),
         nameof(Documentation),
         DocumentationApplicationExtensions.ConfigureDocumentation
     );

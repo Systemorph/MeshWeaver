@@ -12,14 +12,14 @@ namespace MeshWeaver.Serialization.Test;
 
 public class CollectionsOfObjectTest : TestBase
 {
-    record ClientAddress() : Address("client", "1");
+    private static Address CreateClientAddress() => new Address("client", "1");
 
     [Inject]
     private IMessageHub Client { get; set; } = null!;
 
     public CollectionsOfObjectTest(ITestOutputHelper output) : base(output)
     {
-        Services.AddSingleton(sp => sp.CreateMessageHub(new ClientAddress(), ConfigureClient));
+        Services.AddSingleton(sp => sp.CreateMessageHub(CreateClientAddress(), ConfigureClient));
     }
 
     private static MessageHubConfiguration ConfigureClient(MessageHubConfiguration c)

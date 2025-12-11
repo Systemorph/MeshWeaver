@@ -30,8 +30,8 @@ namespace MeshWeaver.Hosting.Monolith.Test
         {
             await base.InitializeAsync();
             var builder = (MeshHostBuilder)ConfigureMesh(
-                new MeshHostBuilder(new HostBuilder(), 
-                    new MeshAddress())
+                new MeshHostBuilder(new HostBuilder(),
+                    AddressExtensions.CreateMeshAddress())
                 );
             Host = await builder.Host
                 .ConfigureWebHostDefaults(webBuilder =>

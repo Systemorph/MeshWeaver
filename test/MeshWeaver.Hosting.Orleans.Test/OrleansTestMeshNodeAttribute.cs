@@ -1,5 +1,6 @@
 ﻿using System.Collections.Generic;
 using MeshWeaver.Mesh;
+using MeshWeaver.Messaging;
 
 [assembly: MeshWeaver.Hosting.Orleans.Test.OrleansTestMeshNode]
 
@@ -22,6 +23,6 @@ public class OrleansTestMeshNodeAttribute : MeshNodeAttribute
         OrleansTestMeshExtensions.ConfigureOrleansTestApplication
     );
 
-    public static readonly ApplicationAddress Address = 
-        new ApplicationAddress(nameof(OrleansTest));
+    public static readonly Address Address =
+        AddressExtensions.CreateAppAddress(nameof(OrleansTest));
 }

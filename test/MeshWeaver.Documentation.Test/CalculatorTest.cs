@@ -43,7 +43,7 @@ public class CalculatorTest(ITestOutputHelper output) : DocumentationTestBase(ou
         article.Name.Should().Be("Calculator");
         article.Content.Should().NotBeNull();
         article.PrerenderedHtml.Should().NotBeNull();
-        var kernelAddress = new KernelAddress();
+        var kernelAddress = AddressExtensions.CreateKernelAddress();
         if (article.CodeSubmissions != null)
         {
             foreach (var s in article.CodeSubmissions)

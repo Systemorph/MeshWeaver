@@ -31,7 +31,7 @@ public class MonolithMeshTest(ITestOutputHelper output) : MonolithMeshTestBase(o
     public async Task HubWorksAfterDisposal(string id)
     {
         var client = GetClient();
-        var address = new ApplicationAddress(id);
+        var address = AddressExtensions.CreateAppAddress(id);
 
         var response = await client
             .AwaitResponse(new PingRequest(), o => o.WithTarget(address)
@@ -51,13 +51,13 @@ public class MonolithMeshTest(ITestOutputHelper output) : MonolithMeshTestBase(o
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder) =>
         base.ConfigureMesh(builder)
-            .AddMeshNodes(new MeshNode(ApplicationAddress.TypeName, "HubFactory", "HubFactory")
+            .AddMeshNodes(new MeshNode(AddressExtensions.AppType, "HubFactory", "HubFactory")
             {
                 HubConfiguration = x => x
             })
-                .AddMeshNodes(new MeshNode(ApplicationAddress.TypeName, "Kernel", "Kernel")
+                .AddMeshNodes(new MeshNode(AddressExtensions.AppType, "Kernel", "Kernel")
                 {
-                    StartupScript = @$"using MeshWeaver.Messaging; Mesh.ServiceProvider.CreateMessageHub(new {typeof(ApplicationAddress).FullName}(""Kernel""))"
+                    StartupScript = @$"using MeshWeaver.Messaging; Mesh.ServiceProvider.CreateMessageHub(AddressExtensions.CreateAppAddress(""Kernel""))"
                 })
             .AddKernel();
 }

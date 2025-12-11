@@ -38,7 +38,7 @@ public class MonolithKernelTest(ITestOutputHelper output) : MonolithMeshTestBase
             {
                 IFrameUrl = "http://localhost/area"
             },
-            o => o.WithTarget(new KernelAddress()));
+            o => o.WithTarget(AddressExtensions.CreateKernelAddress()));
         var kernelEvent = await kernelEventsStream
             .Select(e => Microsoft.DotNet.Interactive.Connection.KernelEventEnvelope.Deserialize(e.Envelope).Event)
             .TakeUntil(e => e is CommandSucceeded || e is CommandFailed)
@@ -56,7 +56,7 @@ public class MonolithKernelTest(ITestOutputHelper output) : MonolithMeshTestBase
     {
         var client = GetClient();
         var area = await client
-            .GetControlStream(new ApplicationAddress(Test), "Dashboard")
+            .GetControlStream(AddressExtensions.CreateAppAddress(Test), "Dashboard")
             .Timeout(20.Seconds())
             .FirstAsync(x => x is not null);
         area.Should().NotBeNull();
@@ -69,7 +69,7 @@ public class MonolithKernelTest(ITestOutputHelper output) : MonolithMeshTestBase
         var client = GetClient();
         client.Post(
             new SubmitCodeRequest(TestHubExtensions.GetDashboardCommand) { IFrameUrl = url },
-            o => o.WithTarget(new KernelAddress()));
+            o => o.WithTarget(AddressExtensions.CreateKernelAddress()));
         var kernelEvents = await kernelEventsStream
             .Select(e => Microsoft.DotNet.Interactive.Connection.KernelEventEnvelope.Deserialize(e.Envelope).Event)
             .TakeUntil(e => e is CommandSucceeded || e is CommandFailed)
@@ -102,7 +102,7 @@ record Calculator(double Summand1, double Summand2);
 static UiControl CalculatorSum(Calculator c) => Markdown($""**Sum**: {c.Summand1 + c.Summand2}"");
 Mesh.Edit(new Calculator(1,2), CalculatorSum)
 ";
-        var kernel = new KernelAddress();
+        var kernel = AddressExtensions.CreateKernelAddress();
         const string Area = nameof(Area);
         var client = GetClient();
         client.Post(

@@ -180,7 +180,7 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
     protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration) =>
         base.ConfigureClient(configuration)
             .AddData(data =>
-                data.AddHubSource(new HostAddress(), dataSource =>
+                data.AddHubSource(CreateHostAddress(), dataSource =>
                     dataSource
                         .WithType<SerializationTestData>()
                         .WithType<NestedData>()
@@ -202,7 +202,7 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
         // act
         var response = await client.AwaitResponse(
             new GetSchemaRequest(typeName!),
-            o => o.WithTarget(new ClientAddress()),
+            o => o.WithTarget(CreateClientAddress()),
             new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token
         );
 
@@ -240,7 +240,7 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
         // act
         var response = await client.AwaitResponse(
             new GetSchemaRequest(typeName!),
-            o => o.WithTarget(new ClientAddress()),
+            o => o.WithTarget(CreateClientAddress()),
             new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token
         );        // assert
         var schemaResponse = response.Message.Should().BeOfType<SchemaResponse>().Which;
@@ -274,7 +274,7 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
         // act
         var response = await client.AwaitResponse(
             new GetSchemaRequest(typeName!),
-            o => o.WithTarget(new ClientAddress()),
+            o => o.WithTarget(CreateClientAddress()),
             new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token
         );        // assert
         var schemaResponse = response.Message.Should().BeOfType<SchemaResponse>().Which;
@@ -297,7 +297,7 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
         // act
         var response = await client.AwaitResponse(
             new GetSchemaRequest(typeName!),
-            o => o.WithTarget(new ClientAddress()),
+            o => o.WithTarget(CreateClientAddress()),
             new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token
         );
 
@@ -330,7 +330,7 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
         // act
         var response = await client.AwaitResponse(
             new GetSchemaRequest(typeName!),
-            o => o.WithTarget(new ClientAddress()),
+            o => o.WithTarget(CreateClientAddress()),
             new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token
         );        // assert
         var schemaResponse = response.Message.Should().BeOfType<SchemaResponse>().Which;
@@ -351,7 +351,7 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
         // act
         var response = await client.AwaitResponse(
             new GetDomainTypesRequest(),
-            o => o.WithTarget(new ClientAddress()),
+            o => o.WithTarget(CreateClientAddress()),
             new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token
         );
 
@@ -385,7 +385,7 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
         // act
         var response = await client.AwaitResponse(
             DataChangeRequest.Update([testData]),
-            o => o.WithTarget(new ClientAddress()),
+            o => o.WithTarget(CreateClientAddress()),
             new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token
         );
 
@@ -419,7 +419,7 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
         // act
         var response = await client.AwaitResponse(
             new GetSchemaRequest(typeName!),
-            o => o.WithTarget(new ClientAddress()),
+            o => o.WithTarget(CreateClientAddress()),
             new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token
         );
 
@@ -441,7 +441,7 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
         // act
         var response = await client.AwaitResponse(
             new GetDomainTypesRequest(),
-            o => o.WithTarget(new ClientAddress()),
+            o => o.WithTarget(CreateClientAddress()),
             new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token
         );
 
@@ -473,7 +473,7 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
         // act
         var response = await client.AwaitResponse(
             DataChangeRequest.Update([updatedData]),
-            o => o.WithTarget(new ClientAddress()),
+            o => o.WithTarget(CreateClientAddress()),
             new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token
         );
 
@@ -505,7 +505,7 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
         // act
         var response = await client.AwaitResponse(
             new GetSchemaRequest(typeName!),
-            o => o.WithTarget(new ClientAddress()),
+            o => o.WithTarget(CreateClientAddress()),
             new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token);        // assert
         var schemaResponse = response.Message.Should().BeOfType<SchemaResponse>().Which;
         schemaResponse.Schema.Should().NotBe("{}");
@@ -546,7 +546,7 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
         // act
         var response = await client.AwaitResponse(
             new GetSchemaRequest(typeName!),
-            o => o.WithTarget(new ClientAddress()),
+            o => o.WithTarget(CreateClientAddress()),
             new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token);        // assert
         var schemaResponse = response.Message.Should().BeOfType<SchemaResponse>().Which;
         schemaResponse.Schema.Should().NotBe("{}");
@@ -576,7 +576,7 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
         // act
         var response = await client.AwaitResponse(
             new GetSchemaRequest(typeName!),
-            o => o.WithTarget(new ClientAddress()),
+            o => o.WithTarget(CreateClientAddress()),
             new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token);        // assert
         var schemaResponse = response.Message.Should().BeOfType<SchemaResponse>().Which;
         schemaResponse.Schema.Should().NotBe("{}");
@@ -607,7 +607,7 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
         // act
         var response = await client.AwaitResponse(
             new GetSchemaRequest(typeName!),
-            o => o.WithTarget(new ClientAddress()),
+            o => o.WithTarget(CreateClientAddress()),
             new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token);        // assert
         var schemaResponse = response.Message.Should().BeOfType<SchemaResponse>().Which;
         schemaResponse.Schema.Should().NotBe("{}");
@@ -640,7 +640,7 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
         // act
         var response = await client.AwaitResponse(
             new GetDomainTypesRequest(),
-            o => o.WithTarget(new ClientAddress()),
+            o => o.WithTarget(CreateClientAddress()),
             new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token
         );
 
@@ -684,7 +684,7 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
         // act
         var response = await client.AwaitResponse(
             DataChangeRequest.Update(new object[] { container }),
-            o => o.WithTarget(new ClientAddress()),
+            o => o.WithTarget(CreateClientAddress()),
             new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token
         );
 
@@ -740,7 +740,7 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
         // act
         var response = await client.AwaitResponse(
             new GetSchemaRequest(typeName!),
-            o => o.WithTarget(new ClientAddress()),
+            o => o.WithTarget(CreateClientAddress()),
             new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token);        // assert
         var schemaResponse = response.Message.Should().BeOfType<SchemaResponse>().Which;
         schemaResponse.Schema.Should().NotBe("{}");
@@ -781,7 +781,7 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
         // act
         var response = await client.AwaitResponse(
             new GetSchemaRequest(typeName!),
-            o => o.WithTarget(new ClientAddress()),
+            o => o.WithTarget(CreateClientAddress()),
             new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token
         );
 
@@ -820,7 +820,7 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
         // act
         var response = await client.AwaitResponse(
             new GetSchemaRequest(typeName!),
-            o => o.WithTarget(new ClientAddress()),
+            o => o.WithTarget(CreateClientAddress()),
             new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token
         );        // assert
         var schemaResponse = response.Message.Should().BeOfType<SchemaResponse>().Which;
@@ -856,7 +856,7 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
         // act
         var response = await client.AwaitResponse(
             new GetSchemaRequest(typeName!),
-            o => o.WithTarget(new ClientAddress()),
+            o => o.WithTarget(CreateClientAddress()),
             new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token);        // assert
         var schemaResponse = response.Message.Should().BeOfType<SchemaResponse>().Which;
         schemaResponse.Schema.Should().NotBe("{}");
@@ -908,7 +908,7 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
         // act
         var response = await client.AwaitResponse(
             new GetSchemaRequest(typeName!),
-            o => o.WithTarget(new ClientAddress()),
+            o => o.WithTarget(CreateClientAddress()),
             new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token
         );
 
@@ -1174,7 +1174,7 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
         // act - get all registered types
         var response = await client.AwaitResponse(
             new GetDomainTypesRequest(),
-            o => o.WithTarget(new ClientAddress()),
+            o => o.WithTarget(CreateClientAddress()),
             new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token
         );
 
@@ -1212,7 +1212,7 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
         // act
         var response = await client.AwaitResponse(
             new GetSchemaRequest(typeName!),
-            o => o.WithTarget(new ClientAddress()),
+            o => o.WithTarget(CreateClientAddress()),
             new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token
         );
 
@@ -1249,7 +1249,7 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
             // act
             var response = await client.AwaitResponse(
                 new GetSchemaRequest(typeName),
-                o => o.WithTarget(new ClientAddress()),
+                o => o.WithTarget(CreateClientAddress()),
                 new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token
             );
 

@@ -7,7 +7,7 @@ namespace MeshWeaver.Hosting.Monolith.Test;
 public static class TestHubExtensions
 {
     public static IMessageHub CreateTestHub(IMessageHub mesh)
-        => mesh.ServiceProvider.CreateMessageHub(new ApplicationAddress(nameof(Test)), config => config
+        => mesh.ServiceProvider.CreateMessageHub(AddressExtensions.CreateAppAddress(nameof(Test)), config => config
             .AddLayout(layout =>
                 layout.WithView(ctx =>
                         ctx.Area == "Dashboard",
@@ -15,7 +15,7 @@ public static class TestHubExtensions
                 )
             )
         );
-    public static readonly MeshNode Node = new(ApplicationAddress.TypeName, nameof(Test), nameof(Test))
+    public static readonly MeshNode Node = new(AddressExtensions.AppType, nameof(Test), nameof(Test))
     {
         StartupScript = $"""
                          #r "{typeof(TestHubExtensions).Namespace}"
@@ -23,9 +23,9 @@ public static class TestHubExtensions
                          """
     };
     public static readonly string GetDashboardCommand =
-        @"
+        @$"
 using static MeshWeaver.Layout.Controls;
-using MeshWeaver.Mesh;
-LayoutArea(new ApplicationAddress(""Test""), ""Dashboard"")";
+using MeshWeaver.Messaging;
+LayoutArea(AddressExtensions.CreateAppAddress(""Test""), ""Dashboard"")";
 
 }

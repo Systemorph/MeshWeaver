@@ -53,7 +53,7 @@ public class DataChangeStreamUpdateTest(ITestOutputHelper output) : HubTestBase(
     {
         return base.ConfigureHost(configuration)
             .WithRoutes(r =>
-                r.RouteAddress<ClientAddress>((_, d) => d.Package())
+                r.RouteAddress(ClientType, (_, d) => d.Package())
             )
             .AddData(data =>
                 data.AddSource(ds =>
@@ -180,7 +180,7 @@ public class DataChangeStreamUpdateTest(ITestOutputHelper output) : HubTestBase(
 
         // Step 2: Subscribe to layout area (simulating layout area rendering)
         var stream = workspace.GetRemoteStream<System.Text.Json.JsonElement, LayoutAreaReference>(
-            new HostAddress(),
+            CreateHostAddress(),
             new LayoutAreaReference(nameof(TaskListView))
         );
 
@@ -199,7 +199,7 @@ public class DataChangeStreamUpdateTest(ITestOutputHelper output) : HubTestBase(
 
         // Step 3: Get the task we want to update
         var tasksData = await workspace
-            .GetRemoteStream<TestTaskItem>(new HostAddress())!
+            .GetRemoteStream<TestTaskItem>(CreateHostAddress())!
             .Timeout(5.Seconds())
             .FirstAsync();
 
@@ -226,7 +226,7 @@ public class DataChangeStreamUpdateTest(ITestOutputHelper output) : HubTestBase(
             .Where(x => x != null && x.ToString().Contains("Status:** InProgress"))
             .Timeout(10.Seconds())
             .FirstAsync();
-        client.Post(changeRequest, o => o.WithTarget(new HostAddress()));
+        client.Post(changeRequest, o => o.WithTarget(CreateHostAddress()));
 
         // Step 5: Verify that layout area updates to show the change
         var updatedControl = await updatedControlTask;
@@ -241,7 +241,7 @@ public class DataChangeStreamUpdateTest(ITestOutputHelper output) : HubTestBase(
 
         // Additional verification: Check that task count view also updates
         var countStream = workspace.GetRemoteStream<System.Text.Json.JsonElement, LayoutAreaReference>(
-            new HostAddress(),
+            CreateHostAddress(),
             new LayoutAreaReference(nameof(TaskCountView))
         );
 
@@ -270,7 +270,7 @@ public class DataChangeStreamUpdateTest(ITestOutputHelper output) : HubTestBase(
         var workspace = client.GetWorkspace();
 
         var stream = workspace.GetRemoteStream<System.Text.Json.JsonElement, LayoutAreaReference>(
-            new HostAddress(),
+            CreateHostAddress(),
             new LayoutAreaReference(nameof(TaskCountView))
         );
 
@@ -282,7 +282,7 @@ public class DataChangeStreamUpdateTest(ITestOutputHelper output) : HubTestBase(
 
         // Get initial tasks
         var tasksData = await workspace
-            .GetRemoteStream<TestTaskItem>(new HostAddress())!
+            .GetRemoteStream<TestTaskItem>(CreateHostAddress())!
             .Timeout(5.Seconds())
             .FirstAsync();
 
@@ -304,7 +304,7 @@ public class DataChangeStreamUpdateTest(ITestOutputHelper output) : HubTestBase(
             .Timeout(10.Seconds())
             .FirstAsync();
 
-        client.Post(changeRequest, o => o.WithTarget(new HostAddress()));
+        client.Post(changeRequest, o => o.WithTarget(CreateHostAddress()));
 
         // Verify all tasks are now completed
         var allCompletedControl = await allCompletedTask;
@@ -328,7 +328,7 @@ public class DataChangeStreamUpdateTest(ITestOutputHelper output) : HubTestBase(
         var workspace = client.GetWorkspace();
 
         var stream = workspace.GetRemoteStream<System.Text.Json.JsonElement, LayoutAreaReference>(
-            new HostAddress(),
+            CreateHostAddress(),
             new LayoutAreaReference(nameof(TaskCountView))
         );
 
@@ -350,7 +350,7 @@ public class DataChangeStreamUpdateTest(ITestOutputHelper output) : HubTestBase(
         var createRequest = new DataChangeRequest().WithCreations(newTask);
 
         Output.WriteLine($"📤 Creating new task: '{newTask.Title}'");
-        client.Post(createRequest, o => o.WithTarget(new HostAddress()));
+        client.Post(createRequest, o => o.WithTarget(CreateHostAddress()));
 
         // Verify task count increased
         var updatedControl = await stream
@@ -376,7 +376,7 @@ public class DataChangeStreamUpdateTest(ITestOutputHelper output) : HubTestBase(
         var workspace = client.GetWorkspace();
 
         var stream = workspace.GetRemoteStream<System.Text.Json.JsonElement, LayoutAreaReference>(
-            new HostAddress(),
+            CreateHostAddress(),
             new LayoutAreaReference(nameof(TaskListView))
         );
 
@@ -388,7 +388,7 @@ public class DataChangeStreamUpdateTest(ITestOutputHelper output) : HubTestBase(
 
         // Get task to delete
         var tasksData = await workspace
-            .GetRemoteStream<TestTaskItem>(new HostAddress())!
+            .GetRemoteStream<TestTaskItem>(CreateHostAddress())!
             .Timeout(5.Seconds())!
             .FirstAsync();
 
@@ -396,7 +396,7 @@ public class DataChangeStreamUpdateTest(ITestOutputHelper output) : HubTestBase(
         var deleteRequest = new DataChangeRequest().WithDeletions(taskToDelete);
 
         Output.WriteLine($"📤 Deleting task: '{taskToDelete.Title}'");
-        client.Post(deleteRequest, o => o.WithTarget(new HostAddress()));
+        client.Post(deleteRequest, o => o.WithTarget(CreateHostAddress()));
 
         // Verify task is no longer in the list
         var updatedControl = await stream

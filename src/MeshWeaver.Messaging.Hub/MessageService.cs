@@ -188,9 +188,9 @@ public class MessageService : IMessageService
         // For all other messages, wait for parent to be ready before routing
         if (ParentHub is not null)
         {
-            if (delivery.Target is HostedAddress ha && hub.Address.Equals(ha.Address) &&
-                ha.Host.Equals(ParentHub.Address))
-                delivery = delivery.WithTarget(ha.Address);
+            if (delivery.Target?.Host != null && hub.Address.Equals(delivery.Target) &&
+                delivery.Target.Host.Equals(ParentHub.Address))
+                delivery = delivery.WithTarget(delivery.Target with { Host = null });
         }
 
 
@@ -198,7 +198,9 @@ public class MessageService : IMessageService
         if (!delivery.RoutingPath.Contains(hub.Address))
             delivery = delivery.AddToRoutingPath(hub.Address);
 
-        var isOnTarget = delivery.Target is null || delivery.Target.Equals(hub.Address);
+        // Compare target to hub address, ignoring the Host part (path tracking info)
+        var targetWithoutHost = delivery.Target is null ? null : (delivery.Target with { Host = null });
+        var isOnTarget = delivery.Target is null || (targetWithoutHost?.Equals(hub.Address) ?? false);
 
         // Only defer messages that are targeted at this hub
         // Messages being routed through should not be deferred
@@ -297,7 +299,9 @@ public class MessageService : IMessageService
         if (!delivery.RoutingPath.Contains(hub.Address))
             delivery = delivery.AddToRoutingPath(hub.Address);
 
-        var isOnTarget = delivery.Target is null || delivery.Target.Equals(hub.Address);
+        // Compare target to hub address, ignoring the Host part (path tracking info)
+        var deferredTargetWithoutHost = delivery.Target is null ? null : (delivery.Target with { Host = null });
+        var isOnTarget = delivery.Target is null || (deferredTargetWithoutHost?.Equals(hub.Address) ?? false);
 
         // Skip deferral check - we're reprocessing after gates opened
         if (isOnTarget)

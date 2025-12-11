@@ -16,7 +16,7 @@ public class Activity : ILogger, IDisposable
         Category = category;
         ParentHub = parentHub ?? throw new ArgumentNullException(nameof(parentHub));
         Id = Guid.NewGuid().AsString();
-        Address = new ActivityAddress(Id);
+        Address = AddressExtensions.CreateActivityAddress(Id);
         Hub = parentHub.GetHostedHub(Address, conf => ConfigureActivityHub(this, conf));
         logger = Hub.ServiceProvider.GetRequiredService<ILogger<Activity>>();
         this.autoClose = autoClose;
@@ -29,7 +29,7 @@ public class Activity : ILogger, IDisposable
     public string Category { get; }
 
     public string Id { get; }
-    public ActivityAddress Address { get; }
+    public Address Address { get; }
 
     public ConcurrentBag<Activity> SubActivities { get; } = new();
 

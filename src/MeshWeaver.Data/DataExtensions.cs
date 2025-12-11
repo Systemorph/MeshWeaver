@@ -178,7 +178,7 @@ public static class DataExtensions
                 typeof(AutocompleteResponse),
                 typeof(AutocompleteItem)
             )
-            .WithType(typeof(ActivityAddress), ActivityAddress.TypeName)
+            .WithType(typeof(Address), nameof(Address))
             .WithType(typeof(ActivityLog), nameof(ActivityLog))
             .RegisterDataEvents()
             .WithInitializationGate(DataContext.InitializationGateName);
@@ -457,7 +457,7 @@ public static class DataExtensions
     private static IMessageDelivery HandleDataChangeRequest(IMessageHub hub,
         IMessageDelivery<DataChangeRequest> request)
     {
-        var activity = hub.Address is ActivityAddress ? null : new Activity(ActivityCategory.DataUpdate, hub);
+        var activity = hub.Address.Type == AddressExtensions.ActivityType ? null : new Activity(ActivityCategory.DataUpdate, hub);
         hub.GetWorkspace().RequestChange(request.Message with { ChangedBy = request.Message.ChangedBy }, activity,
             request);
         if (activity is null)
@@ -1188,7 +1188,7 @@ public static class DataExtensions
             ChangedBy = changedBy
         };
 
-        var activity = hub.Address is ActivityAddress ? null : new Activity(ActivityCategory.DataUpdate, hub);
+        var activity = hub.Address.Type == AddressExtensions.ActivityType ? null : new Activity(ActivityCategory.DataUpdate, hub);
         workspace.RequestChange(changeRequest, activity, null);
 
         if (activity != null)
@@ -1352,7 +1352,7 @@ public static class DataExtensions
             ChangedBy = changedBy
         };
 
-        var activity = hub.Address is ActivityAddress ? null : new Activity(ActivityCategory.DataUpdate, hub);
+        var activity = hub.Address.Type == AddressExtensions.ActivityType ? null : new Activity(ActivityCategory.DataUpdate, hub);
         workspace.RequestChange(changeRequest, activity, null);
 
         if (activity != null)

@@ -13,6 +13,7 @@ using MeshWeaver.ContentCollections;
 using MeshWeaver.GoogleMaps;
 using MeshWeaver.Hosting.Blazor;
 using MeshWeaver.Hosting.SignalR;
+using MeshWeaver.Messaging;
 using MeshWeaver.Insurance.Domain;
 using MeshWeaver.Insurance.Domain.Services;
 using MeshWeaver.Mesh;
@@ -145,7 +146,6 @@ public static class SharedPortalConfiguration
         =>
             (TBuilder)builder
                 .ConfigureHub(mesh => mesh
-                    .WithType(typeof(PricingAddress), PricingAddress.TypeName)
                     .AddContentCollections()
                     .AddRadzenDataGrid()
                     .AddRadzenCharts()
@@ -158,19 +158,19 @@ public static class SharedPortalConfiguration
                             {
                                 SourceType = HubStreamProviderFactory.SourceType,
                                 Name = "Blog",
-                                Address = new ApplicationAddress("Documentation")
+                                Address = AddressExtensions.CreateAppAddress("Documentation")
                             },
                             new ContentCollectionConfig()
                             {
                                 SourceType = HubStreamProviderFactory.SourceType,
                                 Name = "Documentation",
-                                Address = new ApplicationAddress("Documentation")
+                                Address = AddressExtensions.CreateAppAddress("Documentation")
                             },
                             new ContentCollectionConfig()
                             {
                                 SourceType = HubStreamProviderFactory.SourceType,
                                 Name = "Todo",
-                                Address = new ApplicationAddress("Todo")
+                                Address = AddressExtensions.CreateAppAddress("Todo")
                             }
                         )
                     )

@@ -31,12 +31,12 @@ public class RawJsonTest(ITestOutputHelper output) : HubTestBase(output)
         var client = GetClient();
         // arrange
         var postOptions = new PostOptions(client.Address)
-            .WithTarget(new HostAddress())
+            .WithTarget(CreateHostAddress())
             .WithProperties(
                 new Dictionary<string, object>
                 {
                     { "MyId", "394" },
-                    { "MyAddress", new ClientAddress() },
+                    { "MyAddress", CreateClientAddress() },
                     { "MyId2", "22394" },
                 }
             );
@@ -72,12 +72,12 @@ public class RawJsonTest(ITestOutputHelper output) : HubTestBase(output)
         var client = GetClient();
         // arrange
         var postOptions = new PostOptions(client.Address)
-            .WithTarget(new HostAddress())
+            .WithTarget(CreateHostAddress())
             .WithProperties(
                 new Dictionary<string, object>
                 {
                     { "MyId", "394" },
-                    { "MyAddress", new ClientAddress() },
+                    { "MyAddress", CreateClientAddress() },
                     { "MyId2", "22394" },
                 }
             );

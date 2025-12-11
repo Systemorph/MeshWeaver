@@ -12,7 +12,7 @@ builder.AddServiceDefaults();
 
 
 builder.UseMeshWeaver(
-    new MeshAddress(),
+    AddressExtensions.CreateMeshAddress(),
     config => config
         .ConfigureWebPortal(builder.Configuration)
         .ConfigurePortalMesh()

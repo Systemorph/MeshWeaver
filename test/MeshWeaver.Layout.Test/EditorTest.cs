@@ -95,7 +95,7 @@ public class EditorTest(ITestOutputHelper output) : HubTestBase(output)
 
         var workspace = client.GetWorkspace();
         var area = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
-            new HostAddress(),
+            CreateHostAddress(),
             new LayoutAreaReference(nameof(EditorWithResult)));
         var control = await area
             .GetControlStream(nameof(EditorWithResult))
@@ -159,7 +159,7 @@ public class EditorTest(ITestOutputHelper output) : HubTestBase(output)
 
         var workspace = client.GetWorkspace();
         var area = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
-            new HostAddress(),
+            CreateHostAddress(),
             new LayoutAreaReference(nameof(EditorWithDelayedResult)));
         var control = await area
             .GetControlStream(nameof(EditorWithDelayedResult))
@@ -293,7 +293,7 @@ public class EditorTest(ITestOutputHelper output) : HubTestBase(output)
             
             var stream = workspace
                 .GetRemoteStream<JsonElement, LayoutAreaReference>(
-                new HostAddress(),
+                CreateHostAddress(),
                 new LayoutAreaReference(nameof(EditorWithListFormProperties)));
             Output.WriteLine("🔧 DEBUG: Got stream");
 

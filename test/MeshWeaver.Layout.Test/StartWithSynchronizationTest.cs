@@ -31,7 +31,7 @@ public class StartWithSynchronizationTest(ITestOutputHelper output) : HubTestBas
     protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration configuration)
     {
         return base.ConfigureHost(configuration)
-            .WithRoutes(r => r.RouteAddress<ClientAddress>((_, d) => d.Package()))
+            .WithRoutes(r => r.RouteAddress(ClientType, (_, d) => d.Package()))
             .AddData(data => data
                 .AddSource(ds => ds
                     .WithType<TestDataRecord>(t => t
@@ -97,7 +97,7 @@ public class StartWithSynchronizationTest(ITestOutputHelper output) : HubTestBas
 
         // Use GetRemoteStream to go through JSON synchronization
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
-            new HostAddress(),
+            CreateHostAddress(),
             reference
         );
 
@@ -135,7 +135,7 @@ public class StartWithSynchronizationTest(ITestOutputHelper output) : HubTestBas
         var workspace = client.GetWorkspace();
 
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
-            new HostAddress(),
+            CreateHostAddress(),
             reference
         );
 
@@ -183,7 +183,7 @@ public class StartWithSynchronizationTest(ITestOutputHelper output) : HubTestBas
         var workspace = client.GetWorkspace();
 
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
-            new HostAddress(),
+            CreateHostAddress(),
             reference
         );
 
@@ -221,7 +221,7 @@ public class StartWithSynchronizationTest(ITestOutputHelper output) : HubTestBas
         var workspace = client.GetWorkspace();
 
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
-            new HostAddress(),
+            CreateHostAddress(),
             reference
         );
 

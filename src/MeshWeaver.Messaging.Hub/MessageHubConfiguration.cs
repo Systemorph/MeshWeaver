@@ -93,8 +93,7 @@ public record MessageHubConfiguration
     public MessageHubConfiguration WithHostedHub(Address address,
         Func<MessageHubConfiguration, MessageHubConfiguration> configuration)
         =>
-            this.WithTypes(address.GetType())
-                .WithRoutes(f => f.RouteAddress<Address>((a, d) =>
+            this.WithRoutes(f => f.RouteAddress(address.Type, (a, d) =>
         {
             if (!address.Equals(a))
                 return d;
