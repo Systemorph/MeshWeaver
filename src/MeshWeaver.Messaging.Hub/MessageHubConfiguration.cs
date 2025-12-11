@@ -144,7 +144,14 @@ public record MessageHubConfiguration
         };
     }
 
-    private static bool DefaultFilter(IMessageHub hub, IMessageDelivery delivery) => delivery.Target == null || delivery.Target.Equals(hub.Address);
+    private static bool DefaultFilter(IMessageHub hub, IMessageDelivery delivery)
+    {
+        if (delivery.Target == null)
+            return true;
+        // Compare without Host since Host tracks routing path, not destination
+        var targetWithoutHost = delivery.Target with { Host = null };
+        return targetWithoutHost.Equals(hub.Address);
+    }
 
     public MessageHubConfiguration WithInitialization(Action<IMessageHub> action) => this with
     {

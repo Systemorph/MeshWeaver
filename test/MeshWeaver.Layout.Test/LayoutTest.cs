@@ -554,7 +554,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
     public void TestSerializationOptionsComparison()
     {
         var client = GetClient();
-        var hosted = client.GetHostedHub(new SynchronizationAddress());
+        var hosted = client.GetHostedHub(SynchronizationAddress.Create());
 
         Output.WriteLine("=== CLIENT HUB CONVERTERS ===");
         for (int i = 0; i < client.JsonSerializerOptions.Converters.Count; i++)
@@ -773,7 +773,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
     public void TestPolymorphicCollectionSerialization()
     {
         var client = GetClient();
-        var hosted = client.GetHostedHub(new SynchronizationAddress());
+        var hosted = client.GetHostedHub(SynchronizationAddress.Create());
 
         // Test 1: Simple individual object
         var singleColumn = new PropertyColumnControl<string>
@@ -857,7 +857,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         Output.WriteLine($"Serialized JSON: {serialized}");
 
         var client = GetClient();
-        var hosted = client.GetHostedHub(new SynchronizationAddress());
+        var hosted = client.GetHostedHub(SynchronizationAddress.Create());
 
         Output.WriteLine($"Client JsonSerializerOptions converters: {client.JsonSerializerOptions.Converters.Count}");
         foreach (var converter in client.JsonSerializerOptions.Converters)

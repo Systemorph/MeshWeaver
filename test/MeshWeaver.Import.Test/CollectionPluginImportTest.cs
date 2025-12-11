@@ -32,7 +32,7 @@ SystemName,DisplayName
         File.WriteAllText(Path.Combine(_testFilesPath, "test-data.csv"), csvContent);
 
         return base.ConfigureRouter(configuration)
-            .WithTypes(typeof(ImportAddress), typeof(ImportRequest), typeof(CollectionSource))
+            .WithTypes(typeof(ImportRequest), typeof(CollectionSource))
             .AddContentCollections()
             .AddFileSystemContentCollection("TestCollection", _ => _testFilesPath)
             .ConfigureImportRouter();
@@ -48,7 +48,7 @@ SystemName,DisplayName
         // Act - use fully qualified collection:path syntax
         var result = await plugin.Import(
             path: "TestCollection:test-data.csv",
-            address: new ImportAddress(2024),
+            address: ImportAddress.Create(2024),
             format: null // Use default format
         );
 
@@ -57,7 +57,7 @@ SystemName,DisplayName
         result.Should().NotContain("Error", "there should be no errors");
 
         // Verify data was imported
-        var referenceDataHub = Router.GetHostedHub(new ReferenceDataAddress());
+        var referenceDataHub = Router.GetHostedHub(ReferenceDataAddress.Create());
         var workspace = referenceDataHub.ServiceProvider.GetRequiredService<IWorkspace>();
 
         var allData = await workspace.GetObservable<LineOfBusiness>()
@@ -81,7 +81,7 @@ SystemName,DisplayName
         // Act - use fully qualified collection:path syntax
         var result = await plugin.Import(
             path: "TestCollection:non-existent.csv",
-            address: new ImportAddress(2024),
+            address: ImportAddress.Create(2024),
             format: null
         );
 
@@ -99,7 +99,7 @@ SystemName,DisplayName
         // Act - use fully qualified collection:path syntax with non-existent collection
         var result = await plugin.Import(
             path: "NonExistentCollection:test-data.csv",
-            address: new ImportAddress(2024),
+            address: ImportAddress.Create(2024),
             format: null
         );
 
@@ -117,7 +117,7 @@ SystemName,DisplayName
         // Act - path without collection:path syntax (no colon)
         var result = await plugin.Import(
             path: "test-data.csv",
-            address: new ImportAddress(2024),
+            address: ImportAddress.Create(2024),
             format: null
         );
 
@@ -153,7 +153,7 @@ SystemName,DisplayName
         // Act - use fully qualified collection:path syntax with explicit format
         var result = await plugin.Import(
             path: "TestCollection:test-data.csv",
-            address: new ImportAddress(2024),
+            address: ImportAddress.Create(2024),
             format: "Default" // Explicit format
         );
 
@@ -161,7 +161,7 @@ SystemName,DisplayName
         result.Should().Contain("succeeded", "import should succeed with explicit format");
 
         // Verify data was imported
-        var referenceDataHub = Router.GetHostedHub(new ReferenceDataAddress());
+        var referenceDataHub = Router.GetHostedHub(ReferenceDataAddress.Create());
         var workspace = referenceDataHub.ServiceProvider.GetRequiredService<IWorkspace>();
 
         var allData = await workspace.GetObservable<LineOfBusiness>()
@@ -188,7 +188,7 @@ SystemName,DisplayName
         // Act - use fully qualified collection:path syntax with configuration
         var result = await plugin.Import(
             path: "TestCollection:test-data.csv",
-            address: new ImportAddress(2024),
+            address: ImportAddress.Create(2024),
             format: null,
             configuration: configurationJson
         );
@@ -201,7 +201,7 @@ SystemName,DisplayName
         result.Should().NotContain("Unknown format", "should not try to resolve configuration as format");
 
         // Verify data was imported
-        var referenceDataHub = Router.GetHostedHub(new ReferenceDataAddress());
+        var referenceDataHub = Router.GetHostedHub(ReferenceDataAddress.Create());
         var workspace = referenceDataHub.ServiceProvider.GetRequiredService<IWorkspace>();
 
         var allData = await workspace.GetObservable<LineOfBusiness>()

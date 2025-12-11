@@ -598,12 +598,11 @@ public sealed class MessageHub : IMessageHub
         return result;
     }
 
-    public IMessageHub? GetHostedHub<TAddress1>(
-        TAddress1 address,
+    public IMessageHub? GetHostedHub(
+        Address address,
         Func<MessageHubConfiguration, MessageHubConfiguration> config,
         HostedHubCreation create
     )
-        where TAddress1 : Address
     {
         var messageHub = hostedHubs.GetHub(address, config, create);
         return messageHub;
@@ -936,7 +935,12 @@ public sealed class MessageHub : IMessageHub
         WithTypeAndRelatedTypesFor(typeof(TMessage));
         return Register(
             (d, c) => action((IMessageDelivery<TMessage>)d, c),
-            d => (d.Target == null || Address.Equals(d.Target)) && d is IMessageDelivery<TMessage> md && filter(md)
+            d =>
+            {
+                // Compare without Host since Host tracks routing path
+                var targetWithoutHost = d.Target is not null ? d.Target with { Host = null } : null;
+                return (targetWithoutHost == null || Address.Equals(targetWithoutHost)) && d is IMessageDelivery<TMessage> md && filter(md);
+            }
         );
     }
 

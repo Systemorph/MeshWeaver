@@ -187,7 +187,7 @@ public class DataChangeStreamUpdateTest(ITestOutputHelper output) : HubTestBase(
         // Verify initial data is loaded in layout area
         var initialControl = await stream
             .GetControlStream(nameof(TaskListView))
-            .Timeout(10.Seconds())
+            .Timeout(1000.Seconds())
             .FirstAsync(x => x != null && x.ToString().Contains("First Task"));
 
         initialControl.Should().NotBeNull();

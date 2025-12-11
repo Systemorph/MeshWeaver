@@ -13,8 +13,7 @@ public class HostedHubsCollection(IServiceProvider serviceProvider, Address addr
 
     private readonly ConcurrentDictionary<Address, IMessageHub> messageHubs = new(AddressComparer.Instance);
 
-    public IMessageHub? GetHub<TAddress>(TAddress address, Func<MessageHubConfiguration, MessageHubConfiguration> config, HostedHubCreation create)
-        where TAddress : Address
+    public IMessageHub? GetHub(Address address, Func<MessageHubConfiguration, MessageHubConfiguration> config, HostedHubCreation create)
     {
         if (messageHubs.TryGetValue(address, out var hub))
             return hub;
@@ -46,8 +45,7 @@ public class HostedHubsCollection(IServiceProvider serviceProvider, Address addr
         hub.RegisterForDisposal(h => messageHubs.TryRemove(h.Address, out _));
     }
 
-    private IMessageHub? CreateHub<TAddress>(TAddress address, Func<MessageHubConfiguration, MessageHubConfiguration> config)
-    where TAddress : Address
+    private IMessageHub? CreateHub(Address address, Func<MessageHubConfiguration, MessageHubConfiguration> config)
     {
         if (IsDisposing)
         {

@@ -49,7 +49,7 @@ SystemName,DisplayName
         // Act
         var importResponse = await client.AwaitResponse(
             importRequest,
-            o => o.WithTarget(new ImportAddress(2024)),
+            o => o.WithTarget(ImportAddress.Create(2024)),
             TestContext.Current.CancellationToken
         );
 
@@ -57,7 +57,7 @@ SystemName,DisplayName
         importResponse.Message.Log.Status.Should().Be(ActivityStatus.Succeeded);
 
         // Verify data was imported
-        var referenceDataHub = Router.GetHostedHub(new ReferenceDataAddress());
+        var referenceDataHub = Router.GetHostedHub(ReferenceDataAddress.Create());
         var workspace = referenceDataHub.ServiceProvider.GetRequiredService<IWorkspace>();
 
         var allData = await workspace.GetObservable<LineOfBusiness>()
@@ -85,7 +85,7 @@ SystemName,DisplayName
             new CancellationTokenSource(5.Seconds()).Token).Token;
         var importResponse = await client.AwaitResponse(
             importRequest,
-            o => o.WithTarget(new ImportAddress(2024)),
+            o => o.WithTarget(ImportAddress.Create(2024)),
             token
         );
 
@@ -93,7 +93,7 @@ SystemName,DisplayName
         importResponse.Message.Log.Status.Should().Be(ActivityStatus.Succeeded);
 
         // Verify data was imported
-        var referenceDataHub = Router.GetHostedHub(new ReferenceDataAddress());
+        var referenceDataHub = Router.GetHostedHub(ReferenceDataAddress.Create());
         var workspace = referenceDataHub.ServiceProvider.GetRequiredService<IWorkspace>();
 
         var allData = await workspace.GetObservable<LineOfBusiness>()
@@ -114,7 +114,7 @@ SystemName,DisplayName
         // Act
         var importResponse = await client.AwaitResponse(
             importRequest,
-            o => o.WithTarget(new ImportAddress(2024)),
+            o => o.WithTarget(ImportAddress.Create(2024)),
             TestContext.Current.CancellationToken
         );
 
@@ -135,7 +135,7 @@ SystemName,DisplayName
         // Act
         var importResponse = await client.AwaitResponse(
             importRequest,
-            o => o.WithTarget(new ImportAddress(2024)),
+            o => o.WithTarget(ImportAddress.Create(2024)),
             TestContext.Current.CancellationToken
         );
 

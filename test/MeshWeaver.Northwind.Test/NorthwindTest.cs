@@ -28,14 +28,14 @@ public class NorthwindTest(ITestOutputHelper output) : HubTestBase(output)
         return base.ConfigureRouter(configuration)
             .WithRoutes(forward =>
                 forward
-                    .RouteAddressTypeToHostedHub(NorthwindAddresses.ReferenceDataType, c =>
+                    .RouteAddressToHostedHub(NorthwindAddresses.ReferenceDataType, c =>
                         c.AddNorthwindReferenceData()
                     )
-                    .RouteAddressTypeToHostedHub(NorthwindAddresses.EmployeeType, c => c.AddNorthwindEmployees())
-                    .RouteAddressTypeToHostedHub(NorthwindAddresses.OrderType, c => c.AddNorthwindOrders())
-                    .RouteAddressTypeToHostedHub(NorthwindAddresses.SupplierType, c => c.AddNorthwindSuppliers())
-                    .RouteAddressTypeToHostedHub(NorthwindAddresses.ProductType, c => c.AddNorthwindProducts())
-                    .RouteAddressTypeToHostedHub(NorthwindAddresses.CustomerType, c => c.AddNorthwindCustomers())
+                    .RouteAddressToHostedHub(NorthwindAddresses.EmployeeType, c => c.AddNorthwindEmployees())
+                    .RouteAddressToHostedHub(NorthwindAddresses.OrderType, c => c.AddNorthwindOrders())
+                    .RouteAddressToHostedHub(NorthwindAddresses.SupplierType, c => c.AddNorthwindSuppliers())
+                    .RouteAddressToHostedHub(NorthwindAddresses.ProductType, c => c.AddNorthwindProducts())
+                    .RouteAddressToHostedHub(NorthwindAddresses.CustomerType, c => c.AddNorthwindCustomers())
             );
     }
 

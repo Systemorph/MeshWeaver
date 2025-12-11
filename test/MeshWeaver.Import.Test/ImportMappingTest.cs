@@ -19,7 +19,7 @@ namespace MeshWeaver.Import.Test;
 
 public class ImportMappingTest(ITestOutputHelper output) : HubTestBase(output)
 {
-    private static readonly Address ImportAddress = new TestDomain.ImportAddress();
+    private static readonly Address ImportAddress = TestDomain.TestImportAddress.Create();
     protected override MessageHubConfiguration ConfigureHost(
         MessageHubConfiguration configuration
     ) =>
@@ -34,7 +34,7 @@ public class ImportMappingTest(ITestOutputHelper output) : HubTestBase(output)
     {
         return base.ConfigureRouter(conf)
             .WithHostedHub(
-                new TestDomain.ImportAddress(),
+                TestDomain.TestImportAddress.Create(),
                 config =>
                     config
                         .AddData(data =>
@@ -67,7 +67,7 @@ public class ImportMappingTest(ITestOutputHelper output) : HubTestBase(output)
         var importRequest = new ImportRequest(content) { Format = format };
         var importResponse = await GetClient().AwaitResponse(
             importRequest,
-            o => o.WithTarget(new TestDomain.ImportAddress()),
+            o => o.WithTarget(TestDomain.TestImportAddress.Create()),
             CancellationTokenSource.CreateLinkedTokenSource(
                 TestContext.Current.CancellationToken
                 //, new CancellationTokenSource(10.Seconds()).Token
@@ -195,7 +195,7 @@ Record3SystemName,Record3DisplayName";
         log.Status.Should().Be(ActivityStatus.Succeeded);
 
         Logger.LogInformation("*** Import Finished ***");
-        var address = new TestDomain.ImportAddress();
+        var address = TestDomain.TestImportAddress.Create();
         var ret2 = await GetDataAsync<MyRecord2>(address, x => x.Count > 0);
 
         ret2.Should().HaveCount(1);

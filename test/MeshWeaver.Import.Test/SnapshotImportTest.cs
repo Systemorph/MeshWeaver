@@ -17,7 +17,7 @@ namespace MeshWeaver.Import.Test;
 
 public class SnapshotImportTest(ITestOutputHelper output) : HubTestBase(output)
 {
-    private static readonly Address ImportAddress = new TestDomain.ImportAddress();
+    private static readonly Address ImportAddress = TestDomain.TestImportAddress.Create();
     protected override MessageHubConfiguration ConfigureHost(
         MessageHubConfiguration configuration
     ) =>
@@ -32,7 +32,7 @@ public class SnapshotImportTest(ITestOutputHelper output) : HubTestBase(output)
     {
         return base.ConfigureRouter(configuration)
             .WithHostedHub(
-                new TestDomain.ImportAddress(),
+                TestDomain.TestImportAddress.Create(),
                 config =>
                     config
                         .AddData(data =>
@@ -62,7 +62,7 @@ B4,B,4
         var importRequest = new ImportRequest(content);
         var importResponse = await client.AwaitResponse(
             importRequest,
-            o => o.WithTarget(new TestDomain.ImportAddress()),
+            o => o.WithTarget(TestDomain.TestImportAddress.Create()),
             CancellationTokenSource.CreateLinkedTokenSource(
                 TestContext.Current.CancellationToken
                 , new CancellationTokenSource(10.Seconds()).Token
@@ -85,7 +85,7 @@ SystemName,DisplayName
         importRequest = new ImportRequest(content2) { UpdateOptions = new() { Snapshot = true } };
         importResponse = await client.AwaitResponse(
             importRequest,
-            o => o.WithTarget(new TestDomain.ImportAddress()),
+            o => o.WithTarget(TestDomain.TestImportAddress.Create()),
             CancellationTokenSource.CreateLinkedTokenSource(
                 TestContext.Current.CancellationToken,
                 new CancellationTokenSource(10.Seconds()).Token
@@ -120,7 +120,7 @@ B4,B,4
         var importRequest = new ImportRequest(content1);
         var importResponse = await client.AwaitResponse(
             importRequest,
-            o => o.WithTarget(new TestDomain.ImportAddress()),
+            o => o.WithTarget(TestDomain.TestImportAddress.Create()),
             CancellationTokenSource.CreateLinkedTokenSource(
                 TestContext.Current.CancellationToken
                 //, new CancellationTokenSource(10.Seconds()).Token
@@ -143,7 +143,7 @@ SystemName,DisplayName
         importRequest = new ImportRequest(content2) { UpdateOptions = new() { Snapshot = true } };
         importResponse = await client.AwaitResponse(
             importRequest,
-            o => o.WithTarget(new TestDomain.ImportAddress()),
+            o => o.WithTarget(TestDomain.TestImportAddress.Create()),
             CancellationTokenSource.CreateLinkedTokenSource(
                 TestContext.Current.CancellationToken,
                 new CancellationTokenSource(10.Seconds()).Token
@@ -173,7 +173,7 @@ SystemName2,DisplayName2
         importRequest = new ImportRequest(content3);
         importResponse = await client.AwaitResponse(
             importRequest,
-            o => o.WithTarget(new TestDomain.ImportAddress()),
+            o => o.WithTarget(TestDomain.TestImportAddress.Create()),
             CancellationTokenSource.CreateLinkedTokenSource(
                 TestContext.Current.CancellationToken,
                 new CancellationTokenSource(10.Seconds()).Token
@@ -206,7 +206,7 @@ B4,B,4
         var importRequest = new ImportRequest(content);
         var importResponse = await client.AwaitResponse(
             importRequest,
-            o => o.WithTarget(new TestDomain.ImportAddress()),
+            o => o.WithTarget(TestDomain.TestImportAddress.Create()),
             CancellationTokenSource.CreateLinkedTokenSource(
                 TestContext.Current.CancellationToken,
                 new CancellationTokenSource(10.Seconds()).Token
@@ -226,7 +226,7 @@ SystemName,DisplayName,Number
         importRequest = new ImportRequest(content2) { UpdateOptions = new() { Snapshot = true } };
         importResponse = await client.AwaitResponse(
             importRequest,
-            o => o.WithTarget(new TestDomain.ImportAddress()),
+            o => o.WithTarget(TestDomain.TestImportAddress.Create()),
             CancellationTokenSource.CreateLinkedTokenSource(
                 TestContext.Current.CancellationToken,
                 new CancellationTokenSource(10.Seconds()).Token

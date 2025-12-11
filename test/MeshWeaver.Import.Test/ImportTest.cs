@@ -60,7 +60,7 @@ public class ImportTest(ITestOutputHelper output) : HubTestBase(output)
         Logger.LogInformation("DistributedImportTest {TestId}: Sending import request with {Timeout}s timeout", testId, importRequest.Timeout?.TotalSeconds);
         var importResponse = await client.AwaitResponse(
             importRequest,
-            o => o.WithTarget(new ImportAddress(2024)),
+            o => o.WithTarget(ImportAddress.Create(2024)),
             CancellationTokenSource.CreateLinkedTokenSource(
                 TestContext.Current.CancellationToken,
                 new CancellationTokenSource(10.Seconds()).Token
@@ -73,7 +73,7 @@ public class ImportTest(ITestOutputHelper output) : HubTestBase(output)
 
         Logger.LogInformation("DistributedImportTest {TestId}: Getting transactional workspace", testId);
         var workspace = GetWorkspace(
-            Router.GetHostedHub(new TransactionalDataAddress(2024, "1"))
+            Router.GetHostedHub(TransactionalDataAddress.Create(2024, "1"))
         );
         var transactionalItems1 = await workspace
             .GetObservable<TransactionalData>()
@@ -83,7 +83,7 @@ public class ImportTest(ITestOutputHelper output) : HubTestBase(output)
 
         Logger.LogInformation("DistributedImportTest {TestId}: Getting computed workspace", testId);
         var computedItems1 = await (GetWorkspace(
-                Router.GetHostedHub(new ComputedDataAddress(2024, "1"))
+                Router.GetHostedHub(ComputedDataAddress.Create(2024, "1"))
             ))
             .GetObservable<ComputedData>()
             .Timeout(5.Seconds())
@@ -125,7 +125,7 @@ Id,Year,LoB,BusinessUnit,Value
         var importRequest = new ImportRequest(VanillaCsv); // Add timeout for bulk test scenarios
         var importResponse = await client.AwaitResponse(
             importRequest,
-            o => o.WithTarget(new ImportAddress(2024)),
+            o => o.WithTarget(ImportAddress.Create(2024)),
             CancellationTokenSource.CreateLinkedTokenSource(
                 TestContext.Current.CancellationToken
                 , new CancellationTokenSource(10.Seconds()).Token
@@ -133,7 +133,7 @@ Id,Year,LoB,BusinessUnit,Value
         );
         importResponse.Message.Log.Status.Should().Be(ActivityStatus.Succeeded);
         var workspace = GetWorkspace(
-            Router.GetHostedHub(new ReferenceDataAddress(), null!)
+            Router.GetHostedHub(ReferenceDataAddress.Create(), null!)
         );
         var items = await workspace
             .GetObservable<LineOfBusiness>()
@@ -163,7 +163,7 @@ SystemName,DisplayName
             .WithTimeout(15.Seconds()); // Add timeout for bulk test scenarios
         var importResponse = await client.AwaitResponse(
             importRequest,
-            o => o.WithTarget(new ImportAddress(2024)),
+            o => o.WithTarget(ImportAddress.Create(2024)),
             CancellationTokenSource.CreateLinkedTokenSource(
                 TestContext.Current.CancellationToken,
                 new CancellationTokenSource(15.Seconds()).Token
@@ -175,7 +175,7 @@ SystemName,DisplayName
             new CancellationTokenSource(5.Seconds()).Token
         ).Token);
         var workspace = GetWorkspace(
-            Router.GetHostedHub(new ReferenceDataAddress(), null!)
+            Router.GetHostedHub(ReferenceDataAddress.Create(), null!)
         );
         var actualLoBs = await workspace.GetObservable<LineOfBusiness>().FirstAsync(x => x.First().DisplayName.StartsWith("LoB"));
         var actualBUs = await workspace.GetObservable<BusinessUnit>().FirstAsync(x => x.Count > 2);

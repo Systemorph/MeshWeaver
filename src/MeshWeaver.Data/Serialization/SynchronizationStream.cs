@@ -204,7 +204,7 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
         logger = Host.ServiceProvider.GetRequiredService<ILogger<SynchronizationStream<TStream>>>();
         logger.LogDebug("Creating Synchronization Stream {StreamId} for Host {Host} and {StreamIdentity} and {Reference}", StreamId, Host.Address, StreamIdentity, Reference);
 
-        Hub = Host.GetHostedHub(new SynchronizationAddress(ClientId), ConfigureSynchronizationHub);
+        Hub = Host.GetHostedHub(SynchronizationAddress.Create(ClientId), ConfigureSynchronizationHub);
     }
 
     private MessageHubConfiguration ConfigureSynchronizationHub(MessageHubConfiguration config)
@@ -212,8 +212,7 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
         config = config
             .WithTypes(
                 typeof(EntityStore),
-                typeof(JsonElement),
-                typeof(SynchronizationAddress)
+                typeof(JsonElement)
             )
             .WithHandler<DataChangedEvent>((hub, delivery) =>
                 {

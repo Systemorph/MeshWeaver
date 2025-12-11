@@ -19,47 +19,33 @@ using Namotion.Reflection;
 namespace MeshWeaver.Data;
 
 /// <summary>
-/// Represents a parsed unified path with prefix, address, and remaining path.
+/// Represents a parsed unified path with keyword, address, and remaining path.
+/// Keywords: data, area, content. Area is the default when no keyword is specified.
+/// Format: addressType/addressId[/keyword[/path]] where keyword defaults to "area" if not a reserved keyword.
 /// </summary>
-internal record ParsedPath(string Prefix, string AddressType, string AddressId, string? RemainingPath);
+internal record ParsedPath(string Keyword, string AddressType, string AddressId, string? RemainingPath);
 
 public static class DataExtensions
 {
     /// <summary>
+    /// Reserved keywords that identify the type of reference.
+    /// </summary>
+    private static readonly HashSet<string> ReservedKeywords = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "data", "area", "content"
+    };
+
+    /// <summary>
     /// Parses a unified path into its components.
-    /// Supports formats: data:, area:, content:, or no prefix (defaults to area:)
+    /// Format: addressType/addressId[/keyword[/path]]
+    /// If no keyword is specified (or third segment is not a reserved keyword), defaults to "area".
     /// </summary>
     private static ParsedPath ParseUnifiedPath(string path)
     {
         if (string.IsNullOrEmpty(path))
             throw new ArgumentException("Path cannot be empty", nameof(path));
 
-        string prefix;
-        string remainder;
-
-        if (path.StartsWith("data:", StringComparison.OrdinalIgnoreCase))
-        {
-            prefix = "data";
-            remainder = path[5..];
-        }
-        else if (path.StartsWith("area:", StringComparison.OrdinalIgnoreCase))
-        {
-            prefix = "area";
-            remainder = path[5..];
-        }
-        else if (path.StartsWith("content:", StringComparison.OrdinalIgnoreCase))
-        {
-            prefix = "content";
-            remainder = path[8..];
-        }
-        else
-        {
-            // Default to area prefix
-            prefix = "area";
-            remainder = path;
-        }
-
-        var parts = remainder.Split('/', prefix == "content" ? 4 : 3);
+        var parts = path.Split('/');
         if (parts.Length < 2)
             throw new ArgumentException($"Invalid path: '{path}'. Expected at least addressType/addressId");
 
@@ -71,15 +57,23 @@ public static class DataExtensions
         if (string.IsNullOrEmpty(addressId))
             throw new ArgumentException($"Invalid path: '{path}'. Address ID cannot be empty");
 
-        string? remainingPath = prefix switch
-        {
-            "data" => parts.Length > 2 ? string.Join("/", parts.Skip(2)) : null,
-            "area" => parts.Length > 2 ? parts[2] : null,
-            "content" => parts.Length > 2 ? string.Join("/", parts.Skip(2)) : null,
-            _ => null
-        };
+        string keyword;
+        string? remainingPath;
 
-        return new ParsedPath(prefix, addressType, addressId, remainingPath);
+        // Check if third segment is a reserved keyword
+        if (parts.Length >= 3 && ReservedKeywords.Contains(parts[2]))
+        {
+            keyword = parts[2].ToLowerInvariant();
+            remainingPath = parts.Length > 3 ? string.Join("/", parts.Skip(3)) : null;
+        }
+        else
+        {
+            // Default to "area" keyword, remaining path is everything after addressId
+            keyword = "area";
+            remainingPath = parts.Length > 2 ? string.Join("/", parts.Skip(2)) : null;
+        }
+
+        return new ParsedPath(keyword, addressType, addressId, remainingPath);
     }
 
     public static MessageHubConfiguration AddData(this MessageHubConfiguration config) =>
@@ -186,7 +180,9 @@ public static class DataExtensions
 
     private static Task<IMessageDelivery> RouteStreamMessage(IMessageHub hub, IMessageDelivery request)
     {
-        if (request.Target is not null && !request.Target.Equals(hub.Address))
+        // Check if we're at the target - compare without Host since Host tracks routing path
+        var targetWithoutHost = request.Target is not null ? request.Target with { Host = null } : null;
+        if (targetWithoutHost is not null && !targetWithoutHost.Equals(hub.Address))
             return Task.FromResult(request);
 
         var message = request.Message;
@@ -208,7 +204,7 @@ public static class DataExtensions
         if (message is not StreamMessage streamMessage)
             return Task.FromResult(request);
 
-        request = request.ForwardTo(new SynchronizationAddress(streamMessage.StreamId));
+        request = request.ForwardTo(SynchronizationAddress.Create(streamMessage.StreamId));
         var syncHub = hub.GetHostedHub(request.Target!, create: HostedHubCreation.Never);
         if (syncHub is null)
             return Task.FromResult(request.Ignored());
@@ -356,7 +352,7 @@ public static class DataExtensions
     {
         var parsed = ParseUnifiedPath(reference.Path);
         var dataContext = workspace.DataContext;
-        var normalizedPrefix = parsed.Prefix.ToLowerInvariant();
+        var normalizedPrefix = parsed.Keyword.ToLowerInvariant();
 
         // Get resolvers for this prefix
         if (!dataContext.UnifiedReferenceResolvers.TryGetValue(normalizedPrefix, out var resolvers))
@@ -645,7 +641,7 @@ public static class DataExtensions
             if (wsRef == null)
             {
                 // For local default data reference (no path), get the default data
-                if (isLocal && parsed.Prefix == "data" && string.IsNullOrEmpty(parsed.RemainingPath))
+                if (isLocal && parsed.Keyword == "data" && string.IsNullOrEmpty(parsed.RemainingPath))
                 {
                     var defaultResult = await GetDefaultDataAsync(hub, ct);
                     hub.Post(defaultResult, o => o.ResponseFor(request));
@@ -661,7 +657,7 @@ public static class DataExtensions
             if (isLocal)
             {
                 // Resolve locally using prefix-specific handlers
-                var localResult = parsed.Prefix switch
+                var localResult = parsed.Keyword switch
                 {
                     "data" => await HandleDataPathAsync(hub, parsed.RemainingPath, reference.NumberOfRows, ct),
                     "area" => await HandleAreaPathAsync(hub, parsed.RemainingPath, ct),
@@ -703,12 +699,12 @@ public static class DataExtensions
         ParsedPath parsed,
         bool isLocal)
     {
-        return parsed.Prefix switch
+        return parsed.Keyword switch
         {
             "data" => ResolveDataPath(hub, parsed.RemainingPath, isLocal),
             "area" => (ResolveAreaPath(parsed.RemainingPath), null),
             "content" => (ResolveContentPath(parsed.RemainingPath), null),
-            _ => (null, new GetDataResponse(null, 0) { Error = $"Unknown prefix: {parsed.Prefix}" })
+            _ => (null, new GetDataResponse(null, 0) { Error = $"Unknown keyword: {parsed.Keyword}" })
         };
     }
 
@@ -1133,12 +1129,12 @@ public static class DataExtensions
             }
 
             var parsed = ParseUnifiedPath(path);
-            var result = parsed.Prefix switch
+            var result = parsed.Keyword switch
             {
                 "data" => await HandleUpdateDataPathAsync(hub, parsed.RemainingPath, request.Message.Content, request.Message.ChangedBy, ct),
                 "content" => await HandleUpdateContentPathAsync(hub, parsed.RemainingPath, request.Message.Content, ct),
                 "area" => UpdateUnifiedReferenceResponse.Fail("Layout area updates are not supported via this API"),
-                _ => UpdateUnifiedReferenceResponse.Fail($"Unknown prefix: {parsed.Prefix}")
+                _ => UpdateUnifiedReferenceResponse.Fail($"Unknown keyword: {parsed.Keyword}")
             };
 
             hub.Post(result, o => o.ResponseFor(request));
@@ -1279,12 +1275,12 @@ public static class DataExtensions
             }
 
             var parsed = ParseUnifiedPath(path);
-            var result = parsed.Prefix switch
+            var result = parsed.Keyword switch
             {
                 "data" => await HandleDeleteDataPathAsync(hub, parsed.RemainingPath, request.Message.ChangedBy, ct),
                 "content" => await HandleDeleteContentPathAsync(hub, parsed.RemainingPath, ct),
                 "area" => DeleteUnifiedReferenceResponse.Fail("Layout area deletion is not supported via this API"),
-                _ => DeleteUnifiedReferenceResponse.Fail($"Unknown prefix: {parsed.Prefix}")
+                _ => DeleteUnifiedReferenceResponse.Fail($"Unknown keyword: {parsed.Keyword}")
             };
 
             hub.Post(result, o => o.ResponseFor(request));

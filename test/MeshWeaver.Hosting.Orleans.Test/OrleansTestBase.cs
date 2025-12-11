@@ -57,7 +57,6 @@ public abstract class OrleansTestBase(ITestOutputHelper output) : TestBase(outpu
             await Cluster.DisposeAsync();
         await base.DisposeAsync();
     }
-    protected record ClientAddress(string? Id = null) : Address("client", Id ?? "1");
 
 
 }

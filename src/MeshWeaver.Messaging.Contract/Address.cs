@@ -2,7 +2,7 @@
 
 namespace MeshWeaver.Messaging;
 
-public record Address(string Type, params string[] Segments)
+public sealed record Address(string Type, params string[] Segments)
 {
     /// <summary>
     /// Backward compatibility: Id returns all segments joined with "/"
@@ -27,7 +27,7 @@ public record Address(string Type, params string[] Segments)
         ? $"{Host}@{this}"
         : ToString();
 
-    public virtual bool Equals(Address? other)
+    public bool Equals(Address? other)
     {
         if (ReferenceEquals(null, other)) return false;
         if (ReferenceEquals(this, other)) return true;

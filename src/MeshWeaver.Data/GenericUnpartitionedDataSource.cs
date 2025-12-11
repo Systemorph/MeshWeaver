@@ -9,9 +9,10 @@ using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Data;
 
-public record DataSourceAddress(string Id) : Address(TypeName, Id)
+public static class DataSourceAddress
 {
     public const string TypeName = "ds";
+    public static Address Create(string id) => new(TypeName, id);
 }
 
 public interface IDataSource : IDisposable
@@ -150,7 +151,7 @@ public abstract record DataSource<TDataSource, TTypeSource>(object Id, IWorkspac
 
     public ISynchronizationStream<EntityStore> GetStreamForPartition(object? partition)
     {
-        var identity = new StreamIdentity(new DataSourceAddress(Id.ToString() ?? ""), partition);
+        var identity = new StreamIdentity(DataSourceAddress.Create(Id.ToString() ?? ""), partition);
         lock (Streams)
         {
             if (Streams.TryGetValue(partition ?? Id, out var ret))

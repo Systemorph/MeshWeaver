@@ -46,6 +46,8 @@ public record RouteConfiguration(IMessageHub Hub)
 
     /// <summary>
     /// Routes addresses of a specific type to an async handler.
+    /// Only matches when Target.Type equals addressType directly.
+    /// Does NOT match based on Target.Host.Type - use RouteAddressToHostedHub for that.
     /// </summary>
     public RouteConfiguration RouteAddress(string addressType, AsyncRouteDelivery handler)
         => this with
@@ -55,15 +57,14 @@ public record RouteConfiguration(IMessageHub Hub)
                     if (delivery.State != MessageDeliveryState.Submitted || Hub.Address.Equals(delivery.Target))
                         return delivery;
 
-                    // Match by type string (first segment)
+                    // Match by type string - only when Target.Type matches directly
+                    // Do NOT match based on Target.Host.Type to avoid routing loops
                     if (delivery.Target?.Type == addressType)
                     {
-                        return await handler(delivery.Target, delivery, cancellationToken);
-                    }
-
-                    if (delivery.Target?.Host?.Type == addressType)
-                    {
-                        return await handler(delivery.Target.Host, delivery.WithTarget(delivery.Target with { Host = null }), cancellationToken);
+                        // Extract just the inner address (without Host) for routing
+                        // The inner address is what we route to; Host tracks the routing path
+                        var innerAddress = delivery.Target with { Host = null };
+                        return await handler(innerAddress, delivery, cancellationToken);
                     }
 
                     return delivery;
@@ -73,12 +74,54 @@ public record RouteConfiguration(IMessageHub Hub)
 
     /// <summary>
     /// Routes addresses of a specific type (by type string) to a hosted hub.
+    /// Also handles messages where Target.Host.Type matches - routing to the Host address first.
     /// </summary>
     public RouteConfiguration RouteAddressToHostedHub(string addressType, Func<MessageHubConfiguration, MessageHubConfiguration> configuration)
-        => RouteAddressToHub(addressType, a =>
+    {
+        // Create a hub factory
+        IMessageHub? GetOrCreateHub(Address address)
         {
-            // During disposal, only try to get existing hubs, don't create new ones
             var creation = Hub.RunLevel >= MessageHubRunLevel.DisposeHostedHubs ? HostedHubCreation.Never : HostedHubCreation.Always;
-            return Hub.GetHostedHub(a, configuration, creation);
-        });
+            return Hub.GetHostedHub(address, configuration, creation);
+        }
+
+        // First add the direct Target.Type matching via RouteAddressToHub
+        var result = RouteAddressToHub(addressType, GetOrCreateHub);
+
+        // Then add a handler for Target.Host.Type matching
+        return result with
+        {
+            Handlers = result.Handlers.Add(async (delivery, cancellationToken) =>
+            {
+                if (delivery.State != MessageDeliveryState.Submitted || Hub.Address.Equals(delivery.Target))
+                    return delivery;
+
+                // Match when Target.Host.Type equals addressType - route to the Host hub first
+                if (delivery.Target?.Host?.Type == addressType)
+                {
+                    if (Hub.RunLevel >= MessageHubRunLevel.DisposeHostedHubs)
+                    {
+                        Hub.Post(
+                            new DeliveryFailure(delivery)
+                            {
+                                ErrorType = ErrorType.Rejected,
+                                Message = $"Cannot route to hosted hub {delivery.Target.Host} - parent hub {Hub.Address} is disposing"
+                            }, o => o.ResponseFor(delivery)
+                        );
+                        return delivery.Failed("Parent hub disposing");
+                    }
+
+                    var hub = GetOrCreateHub(delivery.Target.Host);
+                    if (hub == null)
+                        return delivery.NotFound();
+
+                    // Deliver with Target stripped of its Host
+                    hub.DeliverMessage(delivery.WithTarget(delivery.Target with { Host = null }));
+                    return delivery.Forwarded();
+                }
+
+                return delivery;
+            })
+        };
+    }
 }
