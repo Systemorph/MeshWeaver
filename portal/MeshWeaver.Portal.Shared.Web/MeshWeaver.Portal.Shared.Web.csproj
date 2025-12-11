@@ -15,7 +15,6 @@
         <ProjectReference Include="..\..\src\MeshWeaver.Blazor.Chat\MeshWeaver.Blazor.Chat.csproj" />
         <ProjectReference Include="..\..\src\MeshWeaver.Blazor\MeshWeaver.Blazor.csproj" />
         <ProjectReference Include="..\..\src\MeshWeaver.Hosting.Blazor\MeshWeaver.Hosting.Blazor.csproj" />
-        <ProjectReference Include="..\..\src\MeshWeaver.Hosting.SignalR\MeshWeaver.Hosting.SignalR.csproj" />
         <ProjectReference Include="..\..\src\MeshWeaver.Kernel.Hub\MeshWeaver.Kernel.Hub.csproj" />
     </ItemGroup>
     <ItemGroup>

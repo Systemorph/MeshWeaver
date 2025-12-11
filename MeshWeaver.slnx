@@ -69,9 +69,7 @@
     <Project Path="src/MeshWeaver.Blazor/MeshWeaver.Blazor.csproj" />
     <Project Path="src/MeshWeaver.BusinessRules.Generator/MeshWeaver.BusinessRules.Generator.csproj" />
     <Project Path="src/MeshWeaver.BusinessRules/MeshWeaver.BusinessRules.csproj" />
-    <Project Path="src/MeshWeaver.Connection.Notebook/MeshWeaver.Connection.Notebook.csproj" />
     <Project Path="src/MeshWeaver.Connection.Orleans/MeshWeaver.Connection.Orleans.csproj" />
-    <Project Path="src/MeshWeaver.Connection.SignalR/MeshWeaver.Connection.SignalR.csproj" />
     <Project Path="src/MeshWeaver.ContentCollections/MeshWeaver.ContentCollections.csproj" />
     <Project Path="src/MeshWeaver.Data.Contract/MeshWeaver.Data.Contract.csproj" />
     <Project Path="src/MeshWeaver.Data/MeshWeaver.Data.csproj" />
@@ -92,7 +90,6 @@
     <Project Path="src/MeshWeaver.Hosting.Monolith/MeshWeaver.Hosting.Monolith.csproj" />
     <Project Path="src/MeshWeaver.Hosting.Orleans/MeshWeaver.Hosting.Orleans.csproj" />
     <Project Path="src/MeshWeaver.Hosting.PostgreSql/MeshWeaver.Hosting.PostgreSql.csproj" />
-    <Project Path="src/MeshWeaver.Hosting.SignalR/MeshWeaver.Hosting.SignalR.csproj" />
     <Project Path="src/MeshWeaver.Hosting/MeshWeaver.Hosting.csproj" />
     <Project Path="src/MeshWeaver.Import/MeshWeaver.Import.csproj" />
     <Project Path="src/MeshWeaver.Kernel.Hub/MeshWeaver.Kernel.Hub.csproj" />
