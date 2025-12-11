@@ -90,7 +90,8 @@ Console.WriteLine(""Hello World"");
     [Fact]
     public void ParseDataContentReference()
     {
-        var markdown = "@(\"data/app/test/MyCollection\")";
+        // New format: addressType/addressId/keyword/path
+        var markdown = "@(\"app/test/data/MyCollection\")";
         var extension = new LayoutAreaMarkdownExtension();
         var document = ParseMarkdown(markdown, extension);
 
@@ -107,7 +108,8 @@ Console.WriteLine(""Hello World"");
     [Fact]
     public void ParseDataContentReferenceWithEntityId()
     {
-        var markdown = "@(\"data/app/test/MyCollection/entity123\")";
+        // New format: addressType/addressId/keyword/path
+        var markdown = "@(\"app/test/data/MyCollection/entity123\")";
         var extension = new LayoutAreaMarkdownExtension();
         var document = ParseMarkdown(markdown, extension);
 
@@ -117,12 +119,14 @@ Console.WriteLine(""Hello World"");
         var area = layoutAreas[0];
         area.Area.Should().Be(LayoutAreaMarkdownParser.DataAreaName);
         area.Id.Should().Be("MyCollection/entity123");
+        area.Address.Should().Be("app/test");
     }
 
     [Fact]
     public void ParseDataContentReferenceDefault()
     {
-        var markdown = "@(\"data/app/test\")";
+        // New format: addressType/addressId/keyword
+        var markdown = "@(\"app/test/data\")";
         var extension = new LayoutAreaMarkdownExtension();
         var document = ParseMarkdown(markdown, extension);
 
@@ -138,7 +142,8 @@ Console.WriteLine(""Hello World"");
     [Fact]
     public void ParseFileContentReference()
     {
-        var markdown = "@(\"content/app/test/Documents/report.pdf\")";
+        // New format: addressType/addressId/keyword/path
+        var markdown = "@(\"app/test/content/Documents/report.pdf\")";
         var extension = new LayoutAreaMarkdownExtension();
         var document = ParseMarkdown(markdown, extension);
 
@@ -155,7 +160,8 @@ Console.WriteLine(""Hello World"");
     [Fact]
     public void ParseFileContentReferenceWithPartition()
     {
-        var markdown = "@(\"content/app/test/Documents@2024/report.pdf\")";
+        // New format: addressType/addressId/keyword/path
+        var markdown = "@(\"app/test/content/Documents@2024/report.pdf\")";
         var extension = new LayoutAreaMarkdownExtension();
         var document = ParseMarkdown(markdown, extension);
 
@@ -165,12 +171,14 @@ Console.WriteLine(""Hello World"");
         var area = layoutAreas[0];
         area.Area.Should().Be(LayoutAreaMarkdownParser.ContentAreaName);
         area.Id.Should().Be("Documents@2024/report.pdf");
+        area.Address.Should().Be("app/test");
     }
 
     [Fact]
     public void ParseFileContentReferenceWithNestedPath()
     {
-        var markdown = "@(\"content/app/test/Documents/folder/subfolder/file.txt\")";
+        // New format: addressType/addressId/keyword/path
+        var markdown = "@(\"app/test/content/Documents/folder/subfolder/file.txt\")";
         var extension = new LayoutAreaMarkdownExtension();
         var document = ParseMarkdown(markdown, extension);
 
@@ -178,13 +186,16 @@ Console.WriteLine(""Hello World"");
         layoutAreas.Should().HaveCount(1);
 
         var area = layoutAreas[0];
+        area.Area.Should().Be(LayoutAreaMarkdownParser.ContentAreaName);
         area.Id.Should().Be("Documents/folder/subfolder/file.txt");
+        area.Address.Should().Be("app/test");
     }
 
     [Fact]
     public void ParseAreaContentReference()
     {
-        var markdown = "@(\"area/app/test/MyArea\")";
+        // New format: addressType/addressId/keyword/path
+        var markdown = "@(\"app/test/area/MyArea\")";
         var extension = new LayoutAreaMarkdownExtension();
         var document = ParseMarkdown(markdown, extension);
 
@@ -199,7 +210,8 @@ Console.WriteLine(""Hello World"");
     [Fact]
     public void ParseAreaContentReferenceWithId()
     {
-        var markdown = "@(\"area/app/test/MyArea/item123\")";
+        // New format: addressType/addressId/keyword/path
+        var markdown = "@(\"app/test/area/MyArea/item123\")";
         var extension = new LayoutAreaMarkdownExtension();
         var document = ParseMarkdown(markdown, extension);
 
@@ -209,6 +221,7 @@ Console.WriteLine(""Hello World"");
         var area = layoutAreas[0];
         area.Area.Should().Be("MyArea");
         area.Id.Should().Be("item123");
+        area.Address.Should().Be("app/test");
     }
 
     [Fact]
@@ -227,34 +240,37 @@ Console.WriteLine(""Hello World"");
     [Fact]
     public void RenderDataContentBlock()
     {
-        var markdown = "@(\"data/app/test/Users\")";
+        // New format: addressType/addressId/keyword/path
+        var markdown = "@(\"app/test/data/Users\")";
         var extension = new LayoutAreaMarkdownExtension();
         var html = RenderMarkdown(markdown, extension);
 
-        // Data references now render as layout area markers (without quotes around attribute values)
-        html.Should().Contain("data-area=$Data");
+        // Data references render as layout area markers
+        html.Should().Contain("data-area='$Data'");
         html.Should().Contain("data-address='app/test'");
     }
 
     [Fact]
     public void RenderFileContentBlock()
     {
-        var markdown = "@(\"content/app/test/Docs/readme.md\")";
+        // New format: addressType/addressId/keyword/path
+        var markdown = "@(\"app/test/content/Docs/readme.md\")";
         var extension = new LayoutAreaMarkdownExtension();
         var html = RenderMarkdown(markdown, extension);
 
-        // Content references now render as layout area markers (without quotes around attribute values)
-        html.Should().Contain("data-area=$Content");
+        // Content references render as layout area markers
+        html.Should().Contain("data-area='$Content'");
         html.Should().Contain("data-address='app/test'");
     }
 
     [Fact]
     public void MixedReferenceTypes()
     {
+        // New format: addressType/addressId/keyword/path
         var markdown = @"
-@(""data/app/test/Users"")
-@(""content/app/test/Docs/file.txt"")
-@(""area/app/test/Dashboard"")
+@(""app/test/data/Users"")
+@(""app/test/content/Docs/file.txt"")
+@(""app/test/area/Dashboard"")
 ";
         var extension = new LayoutAreaMarkdownExtension();
         var document = ParseMarkdown(markdown, extension);
@@ -270,7 +286,8 @@ Console.WriteLine(""Hello World"");
     [Fact]
     public void DataContentBlockPath()
     {
-        var markdown = "@(\"data/pricing/MS-2024/PropertyRisk/risk1\")";
+        // New format: addressType/addressId/keyword/path
+        var markdown = "@(\"pricing/MS-2024/data/PropertyRisk/risk1\")";
         var extension = new LayoutAreaMarkdownExtension();
         var document = ParseMarkdown(markdown, extension);
 
@@ -286,7 +303,8 @@ Console.WriteLine(""Hello World"");
     [Fact]
     public void FileContentBlockPath()
     {
-        var markdown = "@(\"content/host/1/Submissions@MS-2024/folder/file.xlsx\")";
+        // New format: addressType/addressId/keyword/path
+        var markdown = "@(\"host/1/content/Submissions@MS-2024/folder/file.xlsx\")";
         var extension = new LayoutAreaMarkdownExtension();
         var document = ParseMarkdown(markdown, extension);
 
@@ -348,7 +366,8 @@ Console.WriteLine(""Hello World"");
     [Fact]
     public void DirectPathSyntax_DataReference()
     {
-        var markdown = "@data/app/test/Users";
+        // New format: addressType/addressId/keyword/path
+        var markdown = "@app/test/data/Users";
         var extension = new LayoutAreaMarkdownExtension();
         var document = ParseMarkdown(markdown, extension);
 
@@ -356,12 +375,14 @@ Console.WriteLine(""Hello World"");
         layoutAreas.Should().HaveCount(1);
         layoutAreas[0].Area.Should().Be(LayoutAreaMarkdownParser.DataAreaName);
         layoutAreas[0].Id.Should().Be("Users");
+        layoutAreas[0].Address.Should().Be("app/test");
     }
 
     [Fact]
     public void DirectPathSyntax_ContentReference()
     {
-        var markdown = "@content/app/test/Docs/readme.md";
+        // New format: addressType/addressId/keyword/path
+        var markdown = "@app/test/content/Docs/readme.md";
         var extension = new LayoutAreaMarkdownExtension();
         var document = ParseMarkdown(markdown, extension);
 
@@ -369,15 +390,17 @@ Console.WriteLine(""Hello World"");
         layoutAreas.Should().HaveCount(1);
         layoutAreas[0].Area.Should().Be(LayoutAreaMarkdownParser.ContentAreaName);
         layoutAreas[0].Id.Should().Be("Docs/readme.md");
+        layoutAreas[0].Address.Should().Be("app/test");
     }
 
     [Fact]
     public void DirectPathSyntax_MultipleReferences()
     {
+        // New format: addressType/addressId/keyword/path (keyword defaults to "area" if not specified)
         var markdown = @"
 @app/test/Dashboard
-@data/app/test/Users
-@content/app/test/Docs/file.txt
+@app/test/data/Users
+@app/test/content/Docs/file.txt
 ";
         var extension = new LayoutAreaMarkdownExtension();
         var document = ParseMarkdown(markdown, extension);
@@ -422,7 +445,8 @@ Console.WriteLine(""Hello World"");
     [Fact]
     public void QuotedSyntax_ContentReferenceWithSpaces()
     {
-        var markdown = "@\"content/app/test/Docs/My Report 2025.pdf\"";
+        // New format: addressType/addressId/keyword/path
+        var markdown = "@\"app/test/content/Docs/My Report 2025.pdf\"";
         var extension = new LayoutAreaMarkdownExtension();
         var document = ParseMarkdown(markdown, extension);
 
@@ -430,12 +454,14 @@ Console.WriteLine(""Hello World"");
         layoutAreas.Should().HaveCount(1);
         layoutAreas[0].Area.Should().Be(LayoutAreaMarkdownParser.ContentAreaName);
         layoutAreas[0].Id.Should().Be("Docs/My Report 2025.pdf");
+        layoutAreas[0].Address.Should().Be("app/test");
     }
 
     [Fact]
     public void QuotedSyntax_DataReference()
     {
-        var markdown = "@\"data/app/test/User Accounts\"";
+        // New format: addressType/addressId/keyword/path
+        var markdown = "@\"app/test/data/User Accounts\"";
         var extension = new LayoutAreaMarkdownExtension();
         var document = ParseMarkdown(markdown, extension);
 
@@ -443,15 +469,17 @@ Console.WriteLine(""Hello World"");
         layoutAreas.Should().HaveCount(1);
         layoutAreas[0].Area.Should().Be(LayoutAreaMarkdownParser.DataAreaName);
         layoutAreas[0].Id.Should().Be("User Accounts");
+        layoutAreas[0].Address.Should().Be("app/test");
     }
 
     [Fact]
     public void QuotedSyntax_MixedWithDirect()
     {
+        // New format: addressType/addressId/keyword/path (keyword defaults to "area" if not specified)
         var markdown = @"
 @app/test/SimpleArea
-@""content/app/test/Docs/Report with spaces.pdf""
-@data/app/test/Products
+@""app/test/content/Docs/Report with spaces.pdf""
+@app/test/data/Products
 ";
         var extension = new LayoutAreaMarkdownExtension();
         var document = ParseMarkdown(markdown, extension);

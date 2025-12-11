@@ -11,7 +11,6 @@ Tags:
 
 ```csharp --render calculator
 using MeshWeaver.Layout;
-using MeshWeaver.Mesh;
 using static MeshWeaver.Layout.Controls;
 using static MeshWeaver.Layout.EditorExtensions;
 record Calculator(double Summand1, double Summand2);
