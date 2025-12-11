@@ -12,7 +12,6 @@ using MeshWeaver.Blazor.Radzen;
 using MeshWeaver.ContentCollections;
 using MeshWeaver.GoogleMaps;
 using MeshWeaver.Hosting.Blazor;
-using MeshWeaver.Hosting.SignalR;
 using MeshWeaver.Messaging;
 using MeshWeaver.Insurance.Domain;
 using MeshWeaver.Insurance.Domain.Services;
@@ -174,8 +173,7 @@ public static class SharedPortalConfiguration
                             }
                         )
                     )
-                )
-                .AddSignalRHubs();
+                );
 
 
     public static void StartPortalApplication(this WebApplication app)
