@@ -4,6 +4,7 @@ using MeshWeaver.Layout;
 using MeshWeaver.Layout.Client;
 using MeshWeaver.Markdown;
 using MeshWeaver.Mesh;
+using MeshWeaver.Messaging;
 using Microsoft.AspNetCore.Components;
 using Microsoft.FluentUI.AspNetCore.Components;
 
@@ -69,7 +70,7 @@ public partial class ArticleView
         InvokeAsync(StateHasChanged);
     }
 
-    private readonly KernelAddress KernelAddress = new();
+    private readonly Address KernelAddress = AddressExtensions.CreateKernelAddress();
 
     private MarkdownControl MarkdownControl
     {

@@ -1,10 +1,14 @@
 ﻿using System.Text.Json;
 using System.Text.Json.Serialization;
-using MeshWeaver.Domain;
 
 namespace MeshWeaver.Messaging.Serialization;
 
-public class AddressConverter(ITypeRegistry typeRegistry) : JsonConverter<Address>
+/// <summary>
+/// JSON converter for Address that handles both string and object formats.
+/// String format: "type/seg1/seg2" or "host-type/host-seg@inner-type/inner-seg" for hosted addresses.
+/// Object format: { "type": "...", "id": "..." } for backward compatibility.
+/// </summary>
+public class AddressConverter : JsonConverter<Address>
 {
     public override Address Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
     {
@@ -16,10 +20,11 @@ public class AddressConverter(ITypeRegistry typeRegistry) : JsonConverter<Addres
         };
     }
 
-    private Address ReadFromObject(ref Utf8JsonReader reader)
+    private static Address ReadFromObject(ref Utf8JsonReader reader)
     {
         string? type = null;
         string? id = null;
+        string? host = null;
         if (reader.TokenType != JsonTokenType.StartObject)
             throw new JsonException("Expected StartObject token");
         while (reader.Read())
@@ -38,43 +43,32 @@ public class AddressConverter(ITypeRegistry typeRegistry) : JsonConverter<Addres
                     case "id":
                         id = reader.GetString();
                         break;
+                    case "host":
+                        host = reader.GetString();
+                        break;
                     default:
                         reader.Skip();
                         break;
                 }
             }
         }
-        if (type == null || id == null)
-            throw new JsonException("Invalid address object format");
-        return ParseAddress(type, id);
+        if (type == null)
+            throw new JsonException("Invalid address object format: missing type");
+
+        // Parse segments from id (can be empty)
+        var segments = string.IsNullOrEmpty(id) ? [] : id.Split('/');
+        var address = new Address(type, segments);
+
+        // If host is present, parse and attach it
+        if (!string.IsNullOrEmpty(host))
+        {
+            address = address with { Host = ParseSimple(host) };
+        }
+
+        return address;
     }
 
-    private Address ReadFromArray(IReadOnlyList<string> parts)
-    {
-        if (parts.Count == 0 || parts.Count == 1)
-        {
-            throw new JsonException("Invalid address format");
-        }
-
-        if (parts.Count == 2)
-        {
-            var addressType = parts[0];
-            var id = parts[1];
-            return ParseAddress(addressType, id);
-        }
-        if (parts.Count == 3)
-        {
-            var addressType = parts[0];
-            var id = $"{parts[1]}/{parts[2]}";
-            return ParseAddress(addressType, id);
-        }
-
-        var host = ReadFromArray(parts.Take(2).ToArray());
-        var address = ReadFromArray(parts.Skip(2).ToArray());
-        return new HostedAddress(address, host);
-    }
-
-    private Address ReadFromString(ref Utf8JsonReader reader)
+    private static Address ReadFromString(ref Utf8JsonReader reader)
     {
         var addressString = reader.GetString();
         if (addressString == null)
@@ -82,23 +76,19 @@ public class AddressConverter(ITypeRegistry typeRegistry) : JsonConverter<Addres
             throw new JsonException("Address string is null");
         }
 
-        var parts = addressString.Split('/');
-        return ReadFromArray(parts);
+        // Use the implicit operator which handles @ separator
+        return addressString;
     }
 
-    private Address ParseAddress(string addressType, string id)
+    private static Address ParseSimple(string address)
     {
-        if (!typeRegistry.TryGetType(addressType, out var concreteType))
-        {
-            return new Address(addressType, id);
-        }
-
-        var address = (Address)Activator.CreateInstance(concreteType!.Type, [id])!;
-        return address;
+        var parts = address.Split('/');
+        return new Address(parts[0], parts.Length > 1 ? parts[1..] : []);
     }
 
     public override void Write(Utf8JsonWriter writer, Address value, JsonSerializerOptions options)
     {
-        writer.WriteStringValue(value.ToString());
+        // Use ToFullString to include host if present
+        writer.WriteStringValue(value.ToFullString());
     }
 }

@@ -30,7 +30,7 @@ public class MessageHubTest(ITestOutputHelper output) : HubTestBase(output)
         var host = GetHost();
         var response = await host.AwaitResponse(
             new SayHelloRequest(),
-            o => o.WithTarget(new HostAddress())
+            o => o.WithTarget(CreateHostAddress())
             , new CancellationTokenSource(10.Seconds()).Token
         );
         response.Should().BeAssignableTo<IMessageDelivery<HelloEvent>>();
@@ -42,7 +42,7 @@ public class MessageHubTest(ITestOutputHelper output) : HubTestBase(output)
         var client = GetClient();
         var response = await client.AwaitResponse(
             new SayHelloRequest(),
-            o => o.WithTarget(new HostAddress()),
+            o => o.WithTarget(CreateHostAddress()),
             CancellationTokenSource.CreateLinkedTokenSource(
                 TestContext.Current.CancellationToken,
                 new CancellationTokenSource(5.Seconds()).Token
@@ -58,7 +58,7 @@ public class MessageHubTest(ITestOutputHelper output) : HubTestBase(output)
 
         var response = await client.AwaitResponse(
             new SayHelloRequest(),
-            o => o.WithTarget(new HostAddress()),
+            o => o.WithTarget(CreateHostAddress()),
             TestContext.Current.CancellationToken
         );
         response.Should().BeAssignableTo<IMessageDelivery<HelloEvent>>();
@@ -70,26 +70,26 @@ public class MessageHubTest(ITestOutputHelper output) : HubTestBase(output)
         // Create a test message delivery with a routing cycle
         var testMessage = new SayHelloRequest();
         var delivery = new MessageDelivery<SayHelloRequest>(
-            new ClientAddress(), 
-            new HostAddress(), 
-            testMessage, 
+            CreateClientAddress(),
+            CreateHostAddress(),
+            testMessage,
             new System.Text.Json.JsonSerializerOptions()
         );
 
         // Simulate a routing path that would create a cycle
-        var routerAddress = new RouterAddress();
-        var hostAddress = new HostAddress();
-        
+        var routerAddress = CreateRouterAddress();
+        var hostAddress = CreateHostAddress();
+
         var deliveryWithPath = (MessageDelivery<SayHelloRequest>)delivery.AddToRoutingPath(routerAddress);
         deliveryWithPath = (MessageDelivery<SayHelloRequest>)deliveryWithPath.AddToRoutingPath(hostAddress);
-        
+
         // Verify that a cycle is detected when we try to route to an address already in the path
         deliveryWithPath.RoutingPath.Contains(routerAddress).Should().BeTrue();
         deliveryWithPath.RoutingPath.Contains(hostAddress).Should().BeTrue();
-        
+
         // Verify that no cycle is detected for a new address
-        deliveryWithPath.RoutingPath.Contains(new ClientAddress("different")).Should().BeFalse();
-        
+        deliveryWithPath.RoutingPath.Contains(CreateClientAddress("different")).Should().BeFalse();
+
         // Verify the routing path contains the expected addresses
         deliveryWithPath.RoutingPath.Should().Contain(routerAddress);
         deliveryWithPath.RoutingPath.Should().Contain(hostAddress);

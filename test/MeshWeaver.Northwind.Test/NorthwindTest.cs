@@ -28,14 +28,14 @@ public class NorthwindTest(ITestOutputHelper output) : HubTestBase(output)
         return base.ConfigureRouter(configuration)
             .WithRoutes(forward =>
                 forward
-                    .RouteAddressToHostedHub<ReferenceDataAddress>(c =>
+                    .RouteAddressTypeToHostedHub(NorthwindAddresses.ReferenceDataType, c =>
                         c.AddNorthwindReferenceData()
                     )
-                    .RouteAddressToHostedHub<EmployeeAddress>(c => c.AddNorthwindEmployees())
-                    .RouteAddressToHostedHub<OrderAddress>(c => c.AddNorthwindOrders())
-                    .RouteAddressToHostedHub<SupplierAddress>(c => c.AddNorthwindSuppliers())
-                    .RouteAddressToHostedHub<ProductAddress>(c => c.AddNorthwindProducts())
-                    .RouteAddressToHostedHub<CustomerAddress>(c => c.AddNorthwindCustomers())
+                    .RouteAddressTypeToHostedHub(NorthwindAddresses.EmployeeType, c => c.AddNorthwindEmployees())
+                    .RouteAddressTypeToHostedHub(NorthwindAddresses.OrderType, c => c.AddNorthwindOrders())
+                    .RouteAddressTypeToHostedHub(NorthwindAddresses.SupplierType, c => c.AddNorthwindSuppliers())
+                    .RouteAddressTypeToHostedHub(NorthwindAddresses.ProductType, c => c.AddNorthwindProducts())
+                    .RouteAddressTypeToHostedHub(NorthwindAddresses.CustomerType, c => c.AddNorthwindCustomers())
             );
     }
 
@@ -45,14 +45,14 @@ public class NorthwindTest(ITestOutputHelper output) : HubTestBase(output)
             .AddNorthwindViewModels()
             .AddData(data =>
                 data.AddHubSource(
-                        new ReferenceDataAddress(),
+                        NorthwindAddresses.ReferenceData(),
                         dataSource => dataSource.AddNorthwindReferenceData()
                     )
-                    .AddHubSource(new CustomerAddress(), c => c.WithType<Customer>())
-                    .AddHubSource(new ProductAddress(), c => c.WithType<Product>())
-                    .AddHubSource(new EmployeeAddress(), c => c.WithType<Employee>())
-                    .AddHubSource(new OrderAddress(), c => c.WithType<Order>().WithType<OrderDetails>())
-                    .AddHubSource(new SupplierAddress(), c => c.WithType<Supplier>())
+                    .AddHubSource(NorthwindAddresses.Customer(), c => c.WithType<Customer>())
+                    .AddHubSource(NorthwindAddresses.Product(), c => c.WithType<Product>())
+                    .AddHubSource(NorthwindAddresses.Employee(), c => c.WithType<Employee>())
+                    .AddHubSource(NorthwindAddresses.Order(), c => c.WithType<Order>().WithType<OrderDetails>())
+                    .AddHubSource(NorthwindAddresses.Supplier(), c => c.WithType<Supplier>())
             )
             .AddNorthwindDataCube();
     }
@@ -63,7 +63,7 @@ public class NorthwindTest(ITestOutputHelper output) : HubTestBase(output)
         base.ConfigureClient(configuration)
             .WithTypes(typeof(ChartControl), typeof(PivotGridControl))
             .AddData(data =>
-                data.AddHubSource(new HostAddress(), dataSource => dataSource
+                data.AddHubSource(CreateHostAddress(), dataSource => dataSource
                     .AddNorthwindDomain()
                     .WithType<NorthwindDataCube>())
             ).AddLayoutClient(x => x);
@@ -217,7 +217,7 @@ public class NorthwindTest(ITestOutputHelper output) : HubTestBase(output)
         var changeRequest = new DataChangeRequest().WithUpdates(updatedCategory);
 
         Output.WriteLine($"Sending update: CategoryName '{originalCategoryName}' -> '{newCategoryName}'");
-        client.Post(changeRequest, o => o.WithTarget(new ReferenceDataAddress()));
+        client.Post(changeRequest, o => o.WithTarget(NorthwindAddresses.ReferenceData()));
 
         // Step 4: Wait for the NorthwindDataCube to update with the new category name
         Output.WriteLine("Waiting for NorthwindDataCube to reflect the category name change...");
@@ -259,7 +259,7 @@ public class NorthwindTest(ITestOutputHelper output) : HubTestBase(output)
 
         var response = await client.AwaitResponse(
             new GetLayoutAreasRequest(),
-            o => o.WithTarget(new HostAddress()),
+            o => o.WithTarget(CreateHostAddress()),
             new CancellationTokenSource(Timeout).Token
         );
 

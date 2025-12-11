@@ -120,7 +120,7 @@ public class SchemaTests(ITestOutputHelper output) : HubTestBase(output)
         var typeName = nameof(TestSchemaData);        // act
         var response = await client.AwaitResponse(
             new GetSchemaRequest(typeName),
-            o => o.WithTarget(new ClientAddress()),
+            o => o.WithTarget(CreateClientAddress()),
             new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token
         );// assert
         var schemaResponse = response.Message.Should().BeOfType<SchemaResponse>().Which;
@@ -251,7 +251,7 @@ public class SchemaTests(ITestOutputHelper output) : HubTestBase(output)
         // act
         var response = await client.AwaitResponse(
             new GetSchemaRequest(unknownTypeName),
-            o => o.WithTarget(new ClientAddress()),
+            o => o.WithTarget(CreateClientAddress()),
             new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token
         );
 
@@ -273,7 +273,7 @@ public class SchemaTests(ITestOutputHelper output) : HubTestBase(output)
         // act
         var response = await client.AwaitResponse(
             new GetDomainTypesRequest(),
-            o => o.WithTarget(new ClientAddress()),
+            o => o.WithTarget(CreateClientAddress()),
             new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token
         );
 
@@ -301,7 +301,7 @@ public class SchemaTests(ITestOutputHelper output) : HubTestBase(output)
         // act
         var response = await client.AwaitResponse(
             new GetDomainTypesRequest(),
-            o => o.WithTarget(new ClientAddress()),
+            o => o.WithTarget(CreateClientAddress()),
             new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token
         );
 
@@ -333,7 +333,7 @@ public class SchemaTests(ITestOutputHelper output) : HubTestBase(output)
         // act
         var response = await client.AwaitResponse(
             new GetSchemaRequest(typeName!),
-            o => o.WithTarget(new ClientAddress()),
+            o => o.WithTarget(CreateClientAddress()),
             new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token
         );        // assert
         var schemaResponse = response.Message.Should().BeOfType<SchemaResponse>().Which;
@@ -377,7 +377,7 @@ public class SchemaTests(ITestOutputHelper output) : HubTestBase(output)
         // act
         var response = await client.AwaitResponse(
             new GetDomainTypesRequest(),
-            o => o.WithTarget(new ClientAddress()),
+            o => o.WithTarget(CreateClientAddress()),
             new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token
         );
 
@@ -410,7 +410,7 @@ public class SchemaTests(ITestOutputHelper output) : HubTestBase(output)
         // act
         var response = await client.AwaitResponse(
             new GetDomainTypesRequest(),
-            o => o.WithTarget(new ClientAddress()),
+            o => o.WithTarget(CreateClientAddress()),
             new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token
         );
 
@@ -440,7 +440,7 @@ public class SchemaTests(ITestOutputHelper output) : HubTestBase(output)
         // act
         var response = await client.AwaitResponse(
             new GetSchemaRequest(typeName),
-            o => o.WithTarget(new ClientAddress()),
+            o => o.WithTarget(CreateClientAddress()),
             new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token
         );
 
@@ -498,7 +498,7 @@ public class SchemaTests(ITestOutputHelper output) : HubTestBase(output)
         // act
         var response = await client.AwaitResponse(
             new GetSchemaRequest(typeName),
-            o => o.WithTarget(new ClientAddress()),
+            o => o.WithTarget(CreateClientAddress()),
             new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token
         );
 
@@ -532,7 +532,7 @@ public class SchemaTests(ITestOutputHelper output) : HubTestBase(output)
         // act
         var response = await client.AwaitResponse(
             new GetSchemaRequest(typeName),
-            o => o.WithTarget(new ClientAddress()),
+            o => o.WithTarget(CreateClientAddress()),
             new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token
         );
 
@@ -574,7 +574,7 @@ public class SchemaTests(ITestOutputHelper output) : HubTestBase(output)
         // act
         var response = await client.AwaitResponse(
             new GetSchemaRequest(typeName),
-            o => o.WithTarget(new ClientAddress()),
+            o => o.WithTarget(CreateClientAddress()),
             new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token
         );
 

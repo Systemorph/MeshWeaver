@@ -22,7 +22,7 @@ public abstract class MeshCatalogBase : IMeshCatalog
         Configuration = configuration;
         PathRegistry = pathRegistry;
         logger = hub.ServiceProvider.GetRequiredService<ILogger<MeshCatalogBase>>();
-        persistence = hub.GetHostedHub(new PersistenceAddress())!;
+        persistence = hub.GetHostedHub(AddressExtensions.CreatePersistenceAddress())!;
         foreach (var node in Configuration.Nodes.Values)
                 UpdateNode(node);
 
@@ -63,8 +63,8 @@ public abstract class MeshCatalogBase : IMeshCatalog
 
     private readonly Dictionary<string, StreamInfo> channelTypes = new()
     {
-        { ApplicationAddress.TypeName, new(StreamType.Channel, StreamProviders.Hub, ChannelNames.Hub) },
-        { KernelAddress.TypeName, new(StreamType.Channel, StreamProviders.Hub, ChannelNames.Hub) }
+        { AddressExtensions.AppType, new(StreamType.Channel, StreamProviders.Hub, ChannelNames.Hub) },
+        { AddressExtensions.KernelType, new(StreamType.Channel, StreamProviders.Hub, ChannelNames.Hub) }
     };
     public Task<StreamInfo> GetStreamInfoAsync(Address address)
     {

@@ -48,7 +48,7 @@ public class DataSynchronizationTest(ITestOutputHelper output) : HubTestBase(out
         return base.ConfigureClient(configuration)
             .AddData(data =>
                 data.AddHubSource(
-                    new HostAddress(),
+                    CreateHostAddress(),
                     dataSource => dataSource.WithType<BusinessUnit>().WithType<LineOfBusiness>()
                 )
             );

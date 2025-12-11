@@ -127,7 +127,7 @@ public class RiskImportAgent(IMessageHub hub) : IInitializableAgent, IAgentWithT
 
     public bool Matches(AgentContext? context)
     {
-        return context?.Address?.Type == PricingAddress.TypeName;
+        return context?.Address?.Type == InsuranceApplicationAttribute.PricingType;
     }
 
     IEnumerable<AITool> IAgentWithTools.GetTools(IAgentChat chat)
@@ -189,15 +189,12 @@ public class RiskImportAgent(IMessageHub hub) : IInitializableAgent, IAgentWithT
             ContextToConfigMap = context =>
             {
                 // Only handle pricing contexts
-                if (context?.Address?.Type != PricingAddress.TypeName)
+                if (context?.Address?.Type != InsuranceApplicationAttribute.PricingType)
                     return null!;
 
                 var pricingId = context.Address.Id;
 
-                // Parse pricingId in format {company}-{uwy}
-                var parts = pricingId.Split('-');
-                if (parts.Length != 2)
-                    return null!;
+                // Pricing format: pricing/company/year (segments already validated)
 
                 // Use Hub-based collection config pointing to the pricing address
                 // This allows the ContentPlugin to query the pricing hub for the actual collection configuration
@@ -217,7 +214,7 @@ public class RiskImportAgent(IMessageHub hub) : IInitializableAgent, IAgentWithT
         {
             var typesResponse = await hub.AwaitResponse(
                 new GetDomainTypesRequest(),
-                o => o.WithTarget(new PricingAddress("default")));
+                o => o.WithTarget(new Address(InsuranceApplicationAttribute.PricingType, "default", "2024")));
             var types = typesResponse?.Message?.Types;
             typeDefinitionMap = types?.Select(t => t with { Address = null }).ToDictionary(x => x.Name!);
         }
@@ -230,7 +227,7 @@ public class RiskImportAgent(IMessageHub hub) : IInitializableAgent, IAgentWithT
         {
             var resp = await hub.AwaitResponse(
                 new GetSchemaRequest("ExcelImportConfiguration"),
-                o => o.WithTarget(new PricingAddress("default")));
+                o => o.WithTarget(new Address(InsuranceApplicationAttribute.PricingType, "default", "2024")));
 
             // Hard-code TypeName to "PropertyRisk" in the schema
             var schema = resp?.Message?.Schema;
@@ -268,7 +265,7 @@ public class RiskImportAgent(IMessageHub hub) : IInitializableAgent, IAgentWithT
         {
             var resp = await hub.AwaitResponse(
                 new GetSchemaRequest(nameof(PropertyRisk)),
-                o => o.WithTarget(new PricingAddress("default")));
+                o => o.WithTarget(new Address(InsuranceApplicationAttribute.PricingType, "default", "2024")));
             propertyRiskSchema = resp?.Message?.Schema;
         }
         catch

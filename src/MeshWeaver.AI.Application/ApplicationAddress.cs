@@ -10,5 +10,5 @@ public static class ApplicationAddress
     /// <summary>
     /// Address for the Agents application
     /// </summary>
-    public static Address Agents => new Mesh.ApplicationAddress("Agents");
+    public static Address Agents => AddressExtensions.CreateAppAddress("Agents");
 }

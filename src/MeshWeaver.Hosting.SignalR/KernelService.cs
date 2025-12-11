@@ -1,5 +1,4 @@
 ﻿using MeshWeaver.Kernel;
-using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.Caching.Memory;
 
@@ -7,7 +6,7 @@ namespace MeshWeaver.Hosting.SignalR;
 
 public class KernelService(IMessageHub hub, IMemoryCache memoryCache) : IKernelService
 {
-    private async Task<KernelClient> GetKernelClientAsync(KernelAddress kernelAddress)
+    private async Task<KernelClient> GetKernelClientAsync(Address kernelAddress)
     {
         var client = await memoryCache.GetOrCreateAsync(
             kernelAddress, _ => Task.FromResult(new KernelClient(hub, kernelAddress)),
@@ -29,13 +28,13 @@ public class KernelService(IMessageHub hub, IMemoryCache memoryCache) : IKernelS
         ((KernelClient)value).Dispose();
     }
 
-    public Task SubmitCommandAsync(KernelAddress kernelAddress, string kernelCommandEnvelope, string? layoutAreaUrl) => 
+    public Task SubmitCommandAsync(Address kernelAddress, string kernelCommandEnvelope, string? layoutAreaUrl) =>
         PostToKernel(new KernelCommandEnvelope(kernelCommandEnvelope){IFrameUrl = layoutAreaUrl}, kernelAddress);
 
-    public Task SubmitEventAsync(KernelAddress kernelAddress, string commandEnvelope) => 
+    public Task SubmitEventAsync(Address kernelAddress, string commandEnvelope) =>
         PostToKernel(new KernelEventEnvelope(commandEnvelope), kernelAddress);
 
-    public void DisposeKernel(KernelAddress kernelAddress)
+    public void DisposeKernel(Address kernelAddress)
     {
         if (memoryCache.TryGetValue(kernelAddress, out var val) && val is KernelClient client)
         {
@@ -44,7 +43,7 @@ public class KernelService(IMessageHub hub, IMemoryCache memoryCache) : IKernelS
         }
     }
 
-    private async Task PostToKernel(object message, KernelAddress kernelAddress)
+    private async Task PostToKernel(object message, Address kernelAddress)
     {
         var client = await GetKernelClientAsync(kernelAddress);
         client.PostToKernel(message);
@@ -56,7 +55,7 @@ public class KernelClient : IDisposable
 {
     private readonly IMessageHub hub;
     private readonly Timer timer;
-    public KernelClient(IMessageHub hub, KernelAddress kernelAddress)
+    public KernelClient(IMessageHub hub, Address kernelAddress)
     {
         this.hub = hub;
         timer = new(SendHeartBeat, null, TimeSpan.FromMinutes(1), TimeSpan.FromMinutes(1));
@@ -68,7 +67,7 @@ public class KernelClient : IDisposable
         hub.Post(new HeartbeatEvent(), o => o.WithTarget(KernelAddress));
     }
 
-    public KernelAddress KernelAddress { get; }
+    public Address KernelAddress { get; }
 
     public void Dispose()
     {

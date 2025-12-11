@@ -28,7 +28,7 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
     {
         // arrange
         var client = GetClient();
-        var mockChat = new MockAgentChat { Context = new AgentContext { Address = new HostAddress() } };
+        var mockChat = new MockAgentChat { Context = new AgentContext { Address = CreateHostAddress() } };
         var plugin = new DataPlugin(client, mockChat);
 
         // act
@@ -67,7 +67,7 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
     {
         // arrange
         var client = GetClient();
-        var mockChat = new MockAgentChat { Context = new AgentContext { Address = new HostAddress() } };
+        var mockChat = new MockAgentChat { Context = new AgentContext { Address = CreateHostAddress() } };
         var plugin = new DataPlugin(client, mockChat);
 
         // act
@@ -86,7 +86,7 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
     {
         // arrange
         var client = GetClient();
-        var mockChat = new MockAgentChat { Context = new AgentContext { Address = new HostAddress() } };
+        var mockChat = new MockAgentChat { Context = new AgentContext { Address = CreateHostAddress() } };
         var plugin = new DataPlugin(client, mockChat);
 
         // act

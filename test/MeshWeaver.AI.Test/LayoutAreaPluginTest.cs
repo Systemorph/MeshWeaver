@@ -88,7 +88,7 @@ public class LayoutAreaPluginTest(ITestOutputHelper output) : HubTestBase(output
         // act
         var response = await client.AwaitResponse(
             new GetLayoutAreasRequest(),
-            o => o.WithTarget(new HostAddress()),
+            o => o.WithTarget(CreateHostAddress()),
             CancellationTokenSource.CreateLinkedTokenSource(
                 TestContext.Current.CancellationToken,
                 new CancellationTokenSource(10.Seconds()).Token
@@ -115,7 +115,7 @@ public class LayoutAreaPluginTest(ITestOutputHelper output) : HubTestBase(output
     {
         // arrange
         var client = GetClient();
-        var mockChat = new MockAgentChat { Context = new AgentContext { Address = new HostAddress() } };
+        var mockChat = new MockAgentChat { Context = new AgentContext { Address = CreateHostAddress() } };
         var plugin = new LayoutAreaPlugin(client, mockChat);
 
         // act
@@ -147,7 +147,7 @@ public class LayoutAreaPluginTest(ITestOutputHelper output) : HubTestBase(output
     {
         // arrange
         var client = GetClient();
-        var mockChat = new MockAgentChat { Context = new AgentContext { Address = new HostAddress() } };
+        var mockChat = new MockAgentChat { Context = new AgentContext { Address = CreateHostAddress() } };
         var plugin = new LayoutAreaPlugin(client, mockChat);
         var areaName = "TestArea1";
 
@@ -167,7 +167,7 @@ public class LayoutAreaPluginTest(ITestOutputHelper output) : HubTestBase(output
     {
         // arrange
         var client = GetClient();
-        var mockChat = new MockAgentChat { Context = new AgentContext { Address = new HostAddress() } };
+        var mockChat = new MockAgentChat { Context = new AgentContext { Address = CreateHostAddress() } };
         var plugin = new LayoutAreaPlugin(client, mockChat);
         var areaName = "TestArea1";
         var id = "testId";
@@ -210,12 +210,12 @@ public class LayoutAreaPluginTest(ITestOutputHelper output) : HubTestBase(output
     {
         // arrange
         var client = GetClient();
-        var mockChat = new MockAgentChat { Context = new AgentContext { Address = new HostAddress() } };
+        var mockChat = new MockAgentChat { Context = new AgentContext { Address = CreateHostAddress() } };
 
         var getAreasResponse = await client
             .AwaitResponse(
                 new GetLayoutAreasRequest(),
-                o => o.WithTarget(new HostAddress())
+                o => o.WithTarget(CreateHostAddress())
                 , CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken, new CancellationTokenSource(3.Seconds()).Token).Token
                 );
 
@@ -272,7 +272,7 @@ public class LayoutAreaPluginTest(ITestOutputHelper output) : HubTestBase(output
     {
         // arrange
         var client = GetClient();
-        var mockChat = new MockAgentChat { Context = new AgentContext { Address = new HostAddress() } };
+        var mockChat = new MockAgentChat { Context = new AgentContext { Address = CreateHostAddress() } };
         var plugin = new LayoutAreaPlugin(client, mockChat);
 
         // act

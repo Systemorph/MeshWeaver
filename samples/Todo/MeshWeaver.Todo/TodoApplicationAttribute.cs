@@ -1,4 +1,5 @@
 ﻿using MeshWeaver.Mesh;
+using MeshWeaver.Messaging;
 using MeshWeaver.Todo;
 
 [assembly: TodoApplication]
@@ -25,5 +26,5 @@ public class TodoApplicationAttribute : MeshNodeAttribute
     /// <summary>
     /// Address of the Todo application
     /// </summary>
-    public static readonly ApplicationAddress Address = new("Todo");
+    public static readonly Address Address = AddressExtensions.CreateAppAddress("Todo");
 }

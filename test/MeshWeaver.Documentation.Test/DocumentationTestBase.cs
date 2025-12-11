@@ -62,7 +62,7 @@ namespace MeshWeaver.Documentation.Test
         /// <summary>
         /// Address of the documentation application
         /// </summary>
-        protected static readonly ApplicationAddress Address = new("Documentation");
+        protected static readonly Address Address = AddressExtensions.CreateAppAddress("Documentation");
 
         /// <summary>
         /// Gets the id from "/data/\"id\""

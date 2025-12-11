@@ -97,7 +97,7 @@ public class ImportRemappingTest(ITestOutputHelper output) : HubTestBase(output)
         // act
         var importResponse = await client.AwaitResponse(
             importRequest,
-            o => o.WithTarget(new HostAddress())
+            o => o.WithTarget(CreateHostAddress())
             , new CancellationTokenSource(10.Seconds()).Token
         );
 

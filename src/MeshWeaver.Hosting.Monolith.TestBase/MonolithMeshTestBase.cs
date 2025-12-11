@@ -20,7 +20,7 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
         var builder = ConfigureMesh(
             new(
                 c => c.Invoke(Services),
-                new MeshAddress()
+                AddressExtensions.CreateMeshAddress()
             )
         );
         Services.AddSingleton(builder.BuildHub);

@@ -9,7 +9,7 @@ namespace MeshWeaver.Blazor.Infrastructure;
 
 public class PortalApplication(IMessageHub hub, IRoutingService routingService) : IDisposable
 {
-    public IMessageHub Hub { get; } = hub.GetHostedHub(new PortalAddress(),
+    public IMessageHub Hub { get; } = hub.GetHostedHub(AddressExtensions.CreatePortalAddress(),
         c =>
             hub.ServiceProvider.GetRequiredService<ILayoutClient>()
                 .Configuration

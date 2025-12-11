@@ -9,12 +9,13 @@ namespace MeshWeaver.Fixture;
 public class HubTestBase : TestBase
 {
 
-    protected record RouterAddress(string? Id = null) : Address("router", Id ?? "1");
+    protected const string RouterType = "router";
+    protected const string HostType = "host";
+    protected const string ClientType = "client";
 
-    protected record HostAddress(string? Id = null) : Address("host", Id ?? "1");
-
-
-    protected record ClientAddress(string? Id = null) : Address("client", Id ?? "1");
+    protected static Address CreateRouterAddress(string? id = null) => new(RouterType, id ?? "1");
+    protected static Address CreateHostAddress(string? id = null) => new(HostType, id ?? "1");
+    protected static Address CreateClientAddress(string? id = null) => new(ClientType, id ?? "1");
 
     [Inject]
     protected IMessageHub Router = null!;
@@ -26,40 +27,35 @@ public class HubTestBase : TestBase
     {
 
         Services.AddSingleton(
-            sp => sp.CreateMessageHub(new RouterAddress(), ConfigureRouter)
+            sp => sp.CreateMessageHub(CreateRouterAddress(), ConfigureRouter)
         );
     }
-    private static readonly Dictionary<string, Type> AddressTypes = new()
-    {
-        { new ClientAddress().Type, typeof(ClientAddress) },
-        { new HostAddress().Type, typeof(HostAddress) },
-        { new RouterAddress().Type, typeof(RouterAddress) },
-    };
+
     protected virtual MessageHubConfiguration ConfigureRouter(MessageHubConfiguration conf)
     {
         return conf.WithRoutes(forward =>
             forward
-                .RouteAddressToHostedHub<HostAddress>(ConfigureHost)
-                .RouteAddressToHostedHub<ClientAddress>(ConfigureClient)
-        ).WithTypes(AddressTypes);
+                .RouteAddressToHostedHub(HostType, ConfigureHost)
+                .RouteAddressToHostedHub(ClientType, ConfigureClient)
+        );
     }
 
     protected virtual MessageHubConfiguration ConfigureHost(
         MessageHubConfiguration configuration
-    ) => configuration.WithTypes(AddressTypes);
+    ) => configuration;
 
     protected virtual MessageHubConfiguration ConfigureClient(
         MessageHubConfiguration configuration
-    ) => configuration.WithTypes(AddressTypes);
+    ) => configuration;
 
     protected virtual IMessageHub GetHost(Func<MessageHubConfiguration, MessageHubConfiguration>? configuration = default)
     {
-        return Router.GetHostedHub(new HostAddress(), configuration ?? ConfigureHost);
+        return Router.GetHostedHub(CreateHostAddress(), configuration ?? ConfigureHost);
     }
 
     protected virtual IMessageHub GetClient(Func<MessageHubConfiguration, MessageHubConfiguration>? configuration = default)
     {
-        return Router.GetHostedHub(new ClientAddress(), configuration ?? ConfigureClient);
+        return Router.GetHostedHub(CreateClientAddress(), configuration ?? ConfigureClient);
     }
     public override async ValueTask DisposeAsync()
     {

@@ -99,7 +99,7 @@ public class NorthwindAgent(IMessageHub hub) : IInitializableAgent, IAgentWithTo
             yield return tool;
     }
 
-    private static readonly Address NorthwindAddress = new ApplicationAddress("Northwind");
+    private static readonly Address NorthwindAddress = AddressExtensions.CreateAppAddress("Northwind");
 
     async Task IInitializableAgent.InitializeAsync()
     {

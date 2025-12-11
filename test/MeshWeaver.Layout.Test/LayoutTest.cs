@@ -31,7 +31,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
     {
         return base.ConfigureHost(configuration)
             .WithRoutes(r =>
-                r.RouteAddress<ClientAddress>((_, d) => d.Package())
+                r.RouteAddress(ClientType, (_, d) => d.Package())
             )
             .AddData(data =>
                 data.AddSource(
@@ -87,7 +87,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
 
         var workspace = GetClient().GetWorkspace();
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
-            new HostAddress(),
+            CreateHostAddress(),
             reference
         );
 
@@ -134,7 +134,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
 
         var workspace = GetClient().GetWorkspace();
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
-            new HostAddress(),
+            CreateHostAddress(),
             reference
         );
         var controls = await stream
@@ -167,7 +167,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         var hub = GetClient();
         var workspace = hub.GetWorkspace();
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
-            new HostAddress(),
+            CreateHostAddress(),
             reference
         );
         var reportArea = $"{reference.Area}/Content";
@@ -232,7 +232,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         var hub = GetClient();
         var workspace = hub.GetWorkspace();
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
-            new HostAddress(),
+            CreateHostAddress(),
             reference
         );
         var controlArea = $"{reference.Area}";
@@ -286,7 +286,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         var hub = GetClient();
         var workspace = hub.GetWorkspace();
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
-            new HostAddress(),
+            CreateHostAddress(),
             reference
         );
         var buttonArea = $"{reference.Area}/Button";
@@ -299,7 +299,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
             .Which.Data.ToString()
             .Should()
             .Contain("Count");
-        hub.Post(new ClickedEvent(buttonArea, stream.StreamId), o => o.WithTarget(new HostAddress()));
+        hub.Post(new ClickedEvent(buttonArea, stream.StreamId), o => o.WithTarget(CreateHostAddress()));
         var counterArea = $"{reference.Area}/Counter";
         content = await stream
             .GetControlStream(counterArea)
@@ -326,7 +326,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         var hub = GetClient();
         var workspace = hub.GetWorkspace();
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
-            new HostAddress(),
+            CreateHostAddress(),
             reference
         );
         var content = await stream
@@ -386,7 +386,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         var hub = GetClient();
         var workspace = hub.GetWorkspace();
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
-            new HostAddress(),
+            CreateHostAddress(),
             reference
         );
         var controlArea = $"{reference.Area}/{Filter}";
@@ -480,7 +480,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         var hub = GetClient();
         var workspace = hub.GetWorkspace();
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
-            new HostAddress(),
+            CreateHostAddress(),
             reference
         );
         var content = await stream.GetControlStream(reference.Area!)
@@ -531,7 +531,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         var hub = GetClient();
         var workspace = hub.GetWorkspace();
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
-            new HostAddress(),
+            CreateHostAddress(),
             reference
         );
 
@@ -641,7 +641,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         var hub = GetClient();
         var workspace = hub.GetWorkspace();
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
-            new HostAddress(),
+            CreateHostAddress(),
             reference
         );
 
@@ -672,7 +672,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         var hub = GetClient();
         var workspace = hub.GetWorkspace();
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
-            new HostAddress(),
+            CreateHostAddress(),
             reference
         );
 
@@ -741,7 +741,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         var hub = GetClient();
         var workspace = hub.GetWorkspace();
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
-            new HostAddress(),
+            CreateHostAddress(),
             reference
         );
 
@@ -972,7 +972,7 @@ public class DefaultAreaTest(ITestOutputHelper output) : HubTestBase(output)
     {
         return base.ConfigureHost(configuration)
             .WithRoutes(r =>
-                r.RouteAddress<ClientAddress>((_, d) => d.Package())
+                r.RouteAddress(ClientType, (_, d) => d.Package())
             )
             .AddLayout(layout =>
                 layout
@@ -995,7 +995,7 @@ public class DefaultAreaTest(ITestOutputHelper output) : HubTestBase(output)
 
         var workspace = GetClient().GetWorkspace();
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
-            new HostAddress(),
+            CreateHostAddress(),
             reference
         );
 
@@ -1017,7 +1017,7 @@ public class DefaultAreaTest(ITestOutputHelper output) : HubTestBase(output)
 
         var workspace = GetClient().GetWorkspace();
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
-            new HostAddress(),
+            CreateHostAddress(),
             reference
         );
 
@@ -1039,7 +1039,7 @@ public class DefaultAreaTest(ITestOutputHelper output) : HubTestBase(output)
 
         var workspace = GetClient().GetWorkspace();
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
-            new HostAddress(),
+            CreateHostAddress(),
             reference
         );
 
@@ -1061,7 +1061,7 @@ public class DefaultAreaTest(ITestOutputHelper output) : HubTestBase(output)
 
         var workspace = GetClient().GetWorkspace();
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
-            new HostAddress(),
+            CreateHostAddress(),
             reference
         );
 

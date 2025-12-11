@@ -1,4 +1,4 @@
-﻿using System.Collections.Immutable;
+using System.Collections.Immutable;
 
 namespace MeshWeaver.Messaging;
 
@@ -11,9 +11,11 @@ public record RouteConfiguration(IMessageHub Hub)
 
     public RouteConfiguration WithHandler(AsyncDelivery handler) => this with { Handlers = Handlers.Add(handler) };
 
-    public RouteConfiguration RouteAddressToHub<TAddress>(Func<TAddress, IMessageHub?> hubFactory)
-        where TAddress : Address =>
-        RouteAddress<TAddress>((routedAddress, d) =>
+    /// <summary>
+    /// Routes addresses of a specific type (by type string) to a hub created by the factory.
+    /// </summary>
+    public RouteConfiguration RouteAddressToHub(string addressType, Func<Address, IMessageHub?> hubFactory)
+        => RouteAddress(addressType, (routedAddress, d) =>
         {
             // Check if the parent hub is disposing before attempting to create/route to hosted hubs
             if (Hub.RunLevel >= MessageHubRunLevel.DisposeHostedHubs)
@@ -36,12 +38,16 @@ public record RouteConfiguration(IMessageHub Hub)
             return d.Forwarded();
         });
 
-    public RouteConfiguration RouteAddress<TAddress>(SyncRouteDelivery<TAddress> handler)
-        where TAddress : Address =>
-        RouteAddress<TAddress>((routedAddress, d, _) => Task.FromResult(handler(routedAddress, d)));
+    /// <summary>
+    /// Routes addresses of a specific type to a handler.
+    /// </summary>
+    public RouteConfiguration RouteAddress(string addressType, SyncRouteDelivery handler)
+        => RouteAddress(addressType, (routedAddress, d, _) => Task.FromResult(handler(routedAddress, d)));
 
-    public RouteConfiguration RouteAddress<TAddress>(AsyncRouteDelivery<TAddress> handler)
-    where TAddress : Address
+    /// <summary>
+    /// Routes addresses of a specific type to an async handler.
+    /// </summary>
+    public RouteConfiguration RouteAddress(string addressType, AsyncRouteDelivery handler)
         => this with
         {
             Handlers = Handlers.Add(async (delivery, cancellationToken) =>
@@ -49,30 +55,30 @@ public record RouteConfiguration(IMessageHub Hub)
                     if (delivery.State != MessageDeliveryState.Submitted || Hub.Address.Equals(delivery.Target))
                         return delivery;
 
-                    if (delivery.Target is TAddress routedAddress)
-                        return await handler(routedAddress, delivery, cancellationToken);
+                    // Match by type string (first segment)
+                    if (delivery.Target?.Type == addressType)
+                    {
+                        return await handler(delivery.Target, delivery, cancellationToken);
+                    }
 
-                    if (delivery.Target is HostedAddress { Host: TAddress hostRoutedAddress, Address: { } address })
-                        return await handler(hostRoutedAddress, delivery.WithTarget(address), cancellationToken);
+                    if (delivery.Target?.Host?.Type == addressType)
+                    {
+                        return await handler(delivery.Target.Host, delivery.WithTarget(delivery.Target with { Host = null }), cancellationToken);
+                    }
 
                     return delivery;
                 }
             ),
         };
 
-
-
-
-    public RouteConfiguration RouteAddressToHostedHub<TAddress>(Func<MessageHubConfiguration, MessageHubConfiguration> configuration)
-        where TAddress : Address
-        => RouteAddressToHub<TAddress>(a =>
+    /// <summary>
+    /// Routes addresses of a specific type (by type string) to a hosted hub.
+    /// </summary>
+    public RouteConfiguration RouteAddressToHostedHub(string addressType, Func<MessageHubConfiguration, MessageHubConfiguration> configuration)
+        => RouteAddressToHub(addressType, a =>
         {
             // During disposal, only try to get existing hubs, don't create new ones
             var creation = Hub.RunLevel >= MessageHubRunLevel.DisposeHostedHubs ? HostedHubCreation.Never : HostedHubCreation.Always;
             return Hub.GetHostedHub(a, configuration, creation);
         });
-
 }
-
-
-

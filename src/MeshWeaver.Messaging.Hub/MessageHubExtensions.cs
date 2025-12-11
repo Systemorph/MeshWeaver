@@ -51,22 +51,24 @@ public static class MessageHubExtensions
     {
         if (address is T ret)
             return ret;
-        if (address is HostedAddress hosted)
-            return GetAddressOfType<T>(hosted.Address);
+        if (address is Address { Host: not null } hosted)
+            return GetAddressOfType<T>(hosted with { Host = null });
         return default;
+    }
+
+    public static Address? GetAddressOfType(object address, string addressType)
+    {
+        if (address is Address addr && addr.Type == addressType)
+            return addr;
+        if (address is Address { Host: not null } hosted)
+            return GetAddressOfType(hosted with { Host = null }, addressType);
+        return null;
     }
 
     public static Address GetAddress(this IMessageHub hub, string address)
     {
-        var split = address.Split('/');
-        if (split.Length < 2)
-            throw new InvalidOperationException($"Address {address} is not in the correct format. Expected format is AddressType/AddressId");
-        var type = hub.GetTypeRegistry().GetType(split[0]);
-
-        if (type is null)
-            throw new InvalidOperationException($"Unknown address type {split[0]} for {address}. Expected format is AddressType/AddressId");
-
-        return (Address)Activator.CreateInstance(type, [string.Join('/', split.Skip(1))])!;
+        // Use implicit conversion which handles @ separator for hosted addresses
+        return address;
     }
 
     /// <summary>

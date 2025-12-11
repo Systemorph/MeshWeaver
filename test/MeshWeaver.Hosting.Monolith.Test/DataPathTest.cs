@@ -191,7 +191,7 @@ public class DataPathTest(ITestOutputHelper output) : HubTestBase(output)
         // Act - request collection via DataPathReference
         var response = await client.AwaitResponse(
             new GetDataRequest(new DataPathReference("Order")),
-            o => o.WithTarget(new HostAddress()),
+            o => o.WithTarget(CreateHostAddress()),
             TestContext.Current.CancellationToken);
 
         // Assert
@@ -214,7 +214,7 @@ public class DataPathTest(ITestOutputHelper output) : HubTestBase(output)
         // Act - request entity via DataPathReference
         var response = await client.AwaitResponse(
             new GetDataRequest(new DataPathReference("Order/O1")),
-            o => o.WithTarget(new HostAddress()),
+            o => o.WithTarget(CreateHostAddress()),
             TestContext.Current.CancellationToken);
 
         // Assert
@@ -239,7 +239,7 @@ public class DataPathTest(ITestOutputHelper output) : HubTestBase(output)
         // Act - request virtual collection via DataPathReference
         var response = await client.AwaitResponse(
             new GetDataRequest(new DataPathReference("OrderSummary")),
-            o => o.WithTarget(new HostAddress()),
+            o => o.WithTarget(CreateHostAddress()),
             TestContext.Current.CancellationToken);
 
         // Assert
@@ -274,7 +274,7 @@ public class DataPathTest(ITestOutputHelper output) : HubTestBase(output)
         // First, we need to get to the target hub and subscribe
         var subscribeResponse = await client.AwaitResponse(
             new GetDataRequest(new DataPathReference("Order")),
-            o => o.WithTarget(new HostAddress()),
+            o => o.WithTarget(CreateHostAddress()),
             TestContext.Current.CancellationToken);
 
         subscribeResponse.Message.Error.Should().BeNull();
@@ -285,7 +285,7 @@ public class DataPathTest(ITestOutputHelper output) : HubTestBase(output)
         var updatedOrder = new Order("O1", "C1", 999.99m, "Updated");
         var updateResponse = await client.AwaitResponse(
             DataChangeRequest.Update([updatedOrder]),
-            o => o.WithTarget(new HostAddress()),
+            o => o.WithTarget(CreateHostAddress()),
             TestContext.Current.CancellationToken);
 
         updateResponse.Message.Should().BeOfType<DataChangeResponse>();
@@ -293,7 +293,7 @@ public class DataPathTest(ITestOutputHelper output) : HubTestBase(output)
         // Assert - Verify the update took effect
         var verifyResponse = await client.AwaitResponse(
             new GetDataRequest(new DataPathReference("Order/O1")),
-            o => o.WithTarget(new HostAddress()),
+            o => o.WithTarget(CreateHostAddress()),
             TestContext.Current.CancellationToken);
 
         verifyResponse.Message.Error.Should().BeNull();
@@ -315,7 +315,7 @@ public class DataPathTest(ITestOutputHelper output) : HubTestBase(output)
         // Get initial virtual data
         var initialResponse = await client.AwaitResponse(
             new GetDataRequest(new DataPathReference("OrderSummary")),
-            o => o.WithTarget(new HostAddress()),
+            o => o.WithTarget(CreateHostAddress()),
             TestContext.Current.CancellationToken);
 
         initialResponse.Message.Error.Should().BeNull();
@@ -329,7 +329,7 @@ public class DataPathTest(ITestOutputHelper output) : HubTestBase(output)
         var updatedOrder = new Order("O1", "C1", 500.00m, "Modified");
         await client.AwaitResponse(
             DataChangeRequest.Update([updatedOrder]),
-            o => o.WithTarget(new HostAddress()),
+            o => o.WithTarget(CreateHostAddress()),
             TestContext.Current.CancellationToken);
 
         // Allow some time for the virtual data source to update
@@ -338,7 +338,7 @@ public class DataPathTest(ITestOutputHelper output) : HubTestBase(output)
         // Assert - Verify virtual data source reflects the change
         var updatedResponse = await client.AwaitResponse(
             new GetDataRequest(new DataPathReference("OrderSummary")),
-            o => o.WithTarget(new HostAddress()),
+            o => o.WithTarget(CreateHostAddress()),
             TestContext.Current.CancellationToken);
 
         updatedResponse.Message.Error.Should().BeNull();
@@ -363,7 +363,7 @@ public class DataPathTest(ITestOutputHelper output) : HubTestBase(output)
         // Get initial count
         var initialResponse = await client.AwaitResponse(
             new GetDataRequest(new DataPathReference("OrderSummary")),
-            o => o.WithTarget(new HostAddress()),
+            o => o.WithTarget(CreateHostAddress()),
             TestContext.Current.CancellationToken);
 
         var initialCount = (initialResponse.Message.Data as InstanceCollection)!.Instances.Count;
@@ -373,7 +373,7 @@ public class DataPathTest(ITestOutputHelper output) : HubTestBase(output)
         var newOrder = new Order("O4", "C3", 300.00m, "New");
         await client.AwaitResponse(
             DataChangeRequest.Update([newOrder]),
-            o => o.WithTarget(new HostAddress()),
+            o => o.WithTarget(CreateHostAddress()),
             TestContext.Current.CancellationToken);
 
         // Allow time for propagation
@@ -382,7 +382,7 @@ public class DataPathTest(ITestOutputHelper output) : HubTestBase(output)
         // Assert - Verify virtual data source has the new entity
         var updatedResponse = await client.AwaitResponse(
             new GetDataRequest(new DataPathReference("OrderSummary")),
-            o => o.WithTarget(new HostAddress()),
+            o => o.WithTarget(CreateHostAddress()),
             TestContext.Current.CancellationToken);
 
         var updatedSummaries = (updatedResponse.Message.Data as InstanceCollection)!
@@ -408,7 +408,7 @@ public class DataPathTest(ITestOutputHelper output) : HubTestBase(output)
         // Get initial data
         var initialResponse = await client.AwaitResponse(
             new GetDataRequest(new DataPathReference("OrderSummary")),
-            o => o.WithTarget(new HostAddress()),
+            o => o.WithTarget(CreateHostAddress()),
             TestContext.Current.CancellationToken);
 
         var initialSummaries = (initialResponse.Message.Data as InstanceCollection)!
@@ -422,7 +422,7 @@ public class DataPathTest(ITestOutputHelper output) : HubTestBase(output)
         var updatedCustomer = new Customer("C1", "Alice Johnson", "alice.johnson@example.com");
         await client.AwaitResponse(
             DataChangeRequest.Update([updatedCustomer]),
-            o => o.WithTarget(new HostAddress()),
+            o => o.WithTarget(CreateHostAddress()),
             TestContext.Current.CancellationToken);
 
         // Allow time for propagation
@@ -431,7 +431,7 @@ public class DataPathTest(ITestOutputHelper output) : HubTestBase(output)
         // Assert - Verify virtual data source reflects customer update
         var updatedResponse = await client.AwaitResponse(
             new GetDataRequest(new DataPathReference("OrderSummary")),
-            o => o.WithTarget(new HostAddress()),
+            o => o.WithTarget(CreateHostAddress()),
             TestContext.Current.CancellationToken);
 
         var updatedSummaries = (updatedResponse.Message.Data as InstanceCollection)!
@@ -459,7 +459,7 @@ public class DataPathTest(ITestOutputHelper output) : HubTestBase(output)
         // Act - Use UnifiedReference with data: prefix
         var response = await client.AwaitResponse(
             new GetDataRequest(new UnifiedReference("data/host/1/Order")),
-            o => o.WithTarget(new HostAddress()),
+            o => o.WithTarget(CreateHostAddress()),
             TestContext.Current.CancellationToken);
 
         // Assert
@@ -482,7 +482,7 @@ public class DataPathTest(ITestOutputHelper output) : HubTestBase(output)
         // Act - Use UnifiedReference with data: prefix for specific entity
         var response = await client.AwaitResponse(
             new GetDataRequest(new UnifiedReference("data/host/1/Customer/C2")),
-            o => o.WithTarget(new HostAddress()),
+            o => o.WithTarget(CreateHostAddress()),
             TestContext.Current.CancellationToken);
 
         // Assert

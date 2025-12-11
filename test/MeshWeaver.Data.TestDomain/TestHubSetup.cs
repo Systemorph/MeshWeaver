@@ -26,20 +26,26 @@ public static class TestHubSetup
 
     public static MessageHubConfiguration ConfigureTransactionalModel(
         this MessageHubConfiguration configuration,
-        TransactionalDataAddress address
-    ) =>
-        configuration.AddData(data =>
+        Address address
+    )
+    {
+        // Parse the address Id which has format "Year-BusinessUnit"
+        var parts = address.Id.Split('-');
+        var year = int.Parse(parts[0]);
+        var businessUnit = parts[1];
+        return configuration.AddData(data =>
             data.AddSource(
                 dataSource =>
                     dataSource.WithType<TransactionalData>(t =>
                         t.WithInitialData(
                             TestData.TransactionalData.Where(v =>
-                                v.BusinessUnit == address.BusinessUnit && v.Year == address.Year
+                                v.BusinessUnit == businessUnit && v.Year == year
                             )
                         )
                     )
             )
         );
+    }
 
     public static MessageHubConfiguration ConfigureComputedModel(
         this MessageHubConfiguration configuration
@@ -55,11 +61,11 @@ public static class TestHubSetup
     public static MessageHubConfiguration ConfigureImportRouter(this MessageHubConfiguration config)
         => config.WithRoutes(forward =>
             forward
-                .RouteAddressToHostedHub<ReferenceDataAddress>(c => c.ConfigureReferenceDataModel())
-                .RouteAddressToHostedHub<TransactionalDataAddress>(c =>
-                    c.ConfigureTransactionalModel((TransactionalDataAddress)c.Address))
-                .RouteAddressToHostedHub<ComputedDataAddress>(c => c.ConfigureComputedModel())
-                .RouteAddressToHostedHub<ImportAddress>(c => c.ConfigureImportHub())
+                .RouteAddressToHostedHub(nameof(ReferenceDataAddress), c => c.ConfigureReferenceDataModel())
+                .RouteAddressToHostedHub(nameof(TransactionalData), c =>
+                    c.ConfigureTransactionalModel(c.Address))
+                .RouteAddressToHostedHub(nameof(ComputedDataAddress), c => c.ConfigureComputedModel())
+                .RouteAddressToHostedHub(nameof(ImportAddress), c => c.ConfigureImportHub())
         );
     public static MessageHubConfiguration ConfigureImportHub(
         this MessageHubConfiguration config

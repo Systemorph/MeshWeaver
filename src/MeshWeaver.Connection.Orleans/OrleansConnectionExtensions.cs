@@ -13,7 +13,7 @@ public static class OrleansConnectionExtensions
 {
     internal static MeshHostApplicationBuilder CreateOrleansConnectionBuilder(this IHostApplicationBuilder hostBuilder, Address? address = null)
     {
-        var builder = new MeshHostApplicationBuilder(hostBuilder, address ?? new MeshAddress());
+        var builder = new MeshHostApplicationBuilder(hostBuilder, address ?? AddressExtensions.CreateMeshAddress());
         ConfigureMeshWeaver(builder);
         builder.ConfigureServices(services =>
             services.AddOrleansMeshServices());
@@ -22,7 +22,7 @@ public static class OrleansConnectionExtensions
     }
     internal static MeshHostBuilder CreateOrleansConnectionBuilder(this IHostBuilder hostBuilder)
     {
-        var builder = new MeshHostBuilder(hostBuilder, new MeshAddress());
+        var builder = new MeshHostBuilder(hostBuilder, AddressExtensions.CreateMeshAddress());
         ConfigureMeshWeaver(builder);
         builder.Host.ConfigureServices(services =>
         {

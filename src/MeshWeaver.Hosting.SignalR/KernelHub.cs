@@ -12,8 +12,8 @@ public class KernelHub : Hub
 {
     public const string EndPoint = "kernel";
     public const string KernelEventsMethod = "kernelEvents";
-    private readonly ConcurrentDictionary<KernelAddress, ImmutableList<string>> connectionsByKernel = new();
-    private readonly ConcurrentDictionary<string, KernelAddress> kernelByConnection = new();
+    private readonly ConcurrentDictionary<Address, ImmutableList<string>> connectionsByKernel = new();
+    private readonly ConcurrentDictionary<string, Address> kernelByConnection = new();
     private readonly IKernelService kernelService;
     private readonly IHttpContextAccessor httpContextAccessor;
 
@@ -48,7 +48,7 @@ public class KernelHub : Hub
 
     public bool Connect(string kernelId)
     {
-        var kernel = new KernelAddress { Id = kernelId };
+        var kernel = AddressExtensions.CreateKernelAddress(kernelId);
         kernelByConnection[Context.ConnectionId] = kernel;
         connectionsByKernel.AddOrUpdate(
             kernel, _ => [Context.ConnectionId],
@@ -82,7 +82,7 @@ public class KernelHub : Hub
         this.httpContextAccessor = httpContextAccessor;
         hub.Register<KernelEventEnvelope>(async (d, ct) =>
         {
-            var kernelAddress = MessageHubExtensions.GetAddressOfType<KernelAddress>(d.Sender);
+            var kernelAddress = MessageHubExtensions.GetAddressOfType(d.Sender, AddressExtensions.KernelType);
             if (kernelAddress is null)
                 return d;
 

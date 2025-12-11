@@ -20,7 +20,7 @@ builder.ConfigurePostgreSqlContext("meshweaverdb");
 
 // Configure Orleans with Azure Table Storage
 var serviceId = OrleansConstants.ServiceId;
-var address = new MeshAddress();
+var address = AddressExtensions.CreateMeshAddress();
 builder.UseOrleansMeshServer(address, silo =>
         silo.Configure<ClusterOptions>(opts =>
         {

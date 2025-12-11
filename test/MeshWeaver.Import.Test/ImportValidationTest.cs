@@ -37,7 +37,7 @@ public class ImportValidationTest(ITestOutputHelper output) : HubTestBase(output
                     config
                         .AddData(data =>
                             data.AddHubSource(
-                                new HostAddress(),
+                                CreateHostAddress(),
                                 source =>
                                     source
                                         .ConfigureCategory(TestDomain.ContractDomain)

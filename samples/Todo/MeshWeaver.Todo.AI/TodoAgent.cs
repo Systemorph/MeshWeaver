@@ -14,7 +14,7 @@ namespace MeshWeaver.Todo.AI;
 [ExposedInDefaultAgent]
 public class TodoAgent(IMessageHub hub) : IInitializableAgent, IAgentWithTools, IAgentWithContext
 {
-    private static readonly ApplicationAddress TodoApplicationAddress = new("Todo");
+    private static readonly Address TodoApplicationAddress = AddressExtensions.CreateAppAddress("Todo");
     private Dictionary<string, TypeDescription>? typeDefinitionMap;
     private Dictionary<string, LayoutAreaDefinition>? layoutAreaMap;
     public string Name => "TodoAgent";

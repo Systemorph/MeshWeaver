@@ -1,12 +1,12 @@
-﻿using MeshWeaver.Mesh;
+﻿using MeshWeaver.Messaging;
 
 namespace MeshWeaver.Hosting.SignalR
 {
     public interface IKernelService
     {
 
-        Task SubmitCommandAsync(KernelAddress kernelAddress, string commandEnvelope, string? layoutAreaUrl);
-        Task SubmitEventAsync(KernelAddress kernelAddress, string commandEnvelope);
-        void DisposeKernel(KernelAddress kernelAddress);
+        Task SubmitCommandAsync(Address kernelAddress, string commandEnvelope, string? layoutAreaUrl);
+        Task SubmitEventAsync(Address kernelAddress, string commandEnvelope);
+        void DisposeKernel(Address kernelAddress);
     }
 }

@@ -203,19 +203,19 @@ public class InsuranceAgent(IMessageHub hub) : IInitializableAgent, IAgentWithTo
             ContextToConfigMap = context =>
             {
                 // Only handle pricing contexts
-                if (context?.Address?.Type != PricingAddress.TypeName)
+                if (context?.Address?.Type != InsuranceApplicationAttribute.PricingType)
                     return null!;
 
                 var pricingId = context.Address.Id;
+                var segments = context.Address.Segments;
 
-                // Parse pricingId in format {company}-{uwy}
-                var parts = pricingId.Split('-');
-                if (parts.Length != 2)
+                // Pricing format: pricing/company/year
+                if (segments.Length < 2)
                     return null!;
 
-                var company = parts[0];
-                var uwy = parts[1];
-                var subPath = $"{company}/{uwy}";
+                var company = segments[0];
+                var year = segments[1];
+                var subPath = $"{company}/{year}";
 
                 // Create Hub-based collection config pointing to the pricing address
                 // This matches the logic in InsuranceApplicationExtensions
@@ -236,7 +236,7 @@ public class InsuranceAgent(IMessageHub hub) : IInitializableAgent, IAgentWithTo
         {
             var typesResponse = await hub.AwaitResponse(
                 new GetDomainTypesRequest(),
-                o => o.WithTarget(new PricingAddress("default")));
+                o => o.WithTarget(new Address(InsuranceApplicationAttribute.PricingType, "default", "2024")));
             typeDefinitionMap = typesResponse?.Message?.Types?.Select(t => t with { Address = null }).ToDictionary(x => x.Name!);
         }
         catch
@@ -248,7 +248,7 @@ public class InsuranceAgent(IMessageHub hub) : IInitializableAgent, IAgentWithTo
         {
             var layoutAreaResponse = await hub.AwaitResponse(
                 new GetLayoutAreasRequest(),
-                o => o.WithTarget(new PricingAddress("default")));
+                o => o.WithTarget(new Address(InsuranceApplicationAttribute.PricingType, "default", "2024")));
             layoutAreaMap = layoutAreaResponse?.Message?.Areas?.ToDictionary(x => x.Area);
         }
         catch
@@ -265,7 +265,7 @@ public class InsuranceAgent(IMessageHub hub) : IInitializableAgent, IAgentWithTo
         if (context?.Address == null)
             return false;
 
-        return context.Address.Type == PricingAddress.TypeName;
+        return context.Address.Type == InsuranceApplicationAttribute.PricingType;
     }
 
 }

@@ -5,6 +5,7 @@ using MeshWeaver.Data;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Insurance.Domain;
 using MeshWeaver.Mesh;
+using MeshWeaver.Messaging;
 using Xunit;
 
 namespace MeshWeaver.Insurance.Test;
@@ -20,7 +21,7 @@ public abstract class InsuranceTestBase(ITestOutputHelper output) : MonolithMesh
             .InstallAssemblies(typeof(InsuranceApplicationAttribute).Assembly.Location);
     }
 
-    protected async Task<IReadOnlyCollection<PropertyRisk>> GetPropertyRisksAsync(PricingAddress address)
+    protected async Task<IReadOnlyCollection<PropertyRisk>> GetPropertyRisksAsync(Address address)
     {
         var hub = Mesh;
         var risksResp = await hub.AwaitResponse(

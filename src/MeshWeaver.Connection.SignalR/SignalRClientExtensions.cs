@@ -120,6 +120,6 @@ public static class SignalRClientExtensions
 
     private static bool AnyInHierarchyEquals(object hubAddress, object? deliveryTarget)
     => deliveryTarget != null && (hubAddress.Equals(deliveryTarget) ||
-                                  (deliveryTarget is HostedAddress hosted && AnyInHierarchyEquals(hubAddress, hosted.Host)
+                                  (deliveryTarget is Address { Host: not null } hosted && AnyInHierarchyEquals(hubAddress, hosted.Host)
                                   ));
 }

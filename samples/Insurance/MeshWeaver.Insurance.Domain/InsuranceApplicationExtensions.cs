@@ -39,7 +39,7 @@ public static class InsuranceApplicationExtensions
         public MessageHubConfiguration ConfigureInsuranceApplication()
             => configuration
                 .AddEmbeddedResourceContentCollection("Insurance", typeof(InsuranceApplicationExtensions).Assembly, "Content")
-                .WithTypes(typeof(PricingAddress), typeof(ImportConfiguration), typeof(ExcelImportConfiguration), typeof(ReinsuranceAcceptance), typeof(ReinsuranceSection), typeof(ImportRequest), typeof(CollectionSource), typeof(GeocodingRequest), typeof(GeocodingResponse))
+                .WithTypes(typeof(ImportConfiguration), typeof(ExcelImportConfiguration), typeof(ReinsuranceAcceptance), typeof(ReinsuranceSection), typeof(ImportRequest), typeof(CollectionSource), typeof(GeocodingRequest), typeof(GeocodingResponse))
                 .WithServices(services => services.AddScoped<IAutocompleteProvider, PricingAutocompleteProvider>())
                 .AddData(data =>
                 {
@@ -60,6 +60,7 @@ public static class InsuranceApplicationExtensions
 
         /// <summary>
         /// Configures a single pricing hub that contains the pricing details and risks.
+        /// Addresses have format: pricing/company/year (e.g., pricing/Microsoft/2026)
         /// </summary>
         public MessageHubConfiguration ConfigureSinglePricingApplication()
         {
@@ -68,17 +69,16 @@ public static class InsuranceApplicationExtensions
                 .AddContentCollection(sp =>
                 {
                     var hub = sp.GetRequiredService<IMessageHub>();
-                    var addressId = hub.Address.Id;
+                    var segments = hub.Address.Segments;
                     var conf = sp.GetRequiredService<IConfiguration>();
 
-                    // Parse addressId in format {company}-{uwy}
-                    var parts = addressId.Split('-');
-                    if (parts.Length != 2)
-                        throw new InvalidOperationException($"Invalid address format: {addressId}. Expected format: {{company}}-{{uwy}}");
+                    // Segments[0] = company, Segments[1] = year
+                    if (segments.Length < 2)
+                        throw new InvalidOperationException($"Invalid address format: {hub.Address}. Expected format: pricing/company/year");
 
-                    var company = parts[0];
-                    var uwy = parts[1];
-                    var subPath = $"{company}/{uwy}";
+                    var company = segments[0];
+                    var year = segments[1];
+                    var subPath = $"{company}/{year}";
 
                     // Get the global Submissions configuration from appsettings, or create a default one
                     var globalConfig = conf.GetSection("Submissions").Get<ContentCollectionConfig>();
@@ -98,7 +98,8 @@ public static class InsuranceApplicationExtensions
                     }
 
                     // Create localized config with modified name and basepath
-                    var localizedName = GetLocalizedCollectionName("Submissions", addressId);
+                    var pricingId = hub.Address.Id; // company/year
+                    var localizedName = GetLocalizedCollectionName("Submissions", pricingId);
                     var fullPath = string.IsNullOrEmpty(subPath)
                         ? globalConfig.BasePath ?? ""
                         : Path.Combine(globalConfig.BasePath ?? "", subPath);

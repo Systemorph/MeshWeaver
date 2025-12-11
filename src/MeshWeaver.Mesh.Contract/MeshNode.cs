@@ -112,6 +112,13 @@ public record MeshNamespace(
     public int DisplayOrder { get; init; }
 
     /// <summary>
+    /// Minimum number of segments required for addresses of this type.
+    /// Additional segments may be added based on autocomplete responses.
+    /// Default is 1 (type + one segment).
+    /// </summary>
+    public int MinSegments { get; init; } = 1;
+
+    /// <summary>
     /// Factory function that creates a MeshNode for a given address.
     /// Returns null if the address doesn't match this namespace.
     /// </summary>

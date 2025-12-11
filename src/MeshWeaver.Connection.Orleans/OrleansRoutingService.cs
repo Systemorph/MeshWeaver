@@ -42,8 +42,8 @@ public class OrleansRoutingService(
 
     private async Task<StreamInfo?> GetStreamInfoAsync(Address target)
     {
-        if (target is HostedAddress ha)
-            return await GetStreamInfoAsync(ha.Host);
+        if (target.Host != null)
+            return await GetStreamInfoAsync(target.Host);
         var streamInfo = cache.TryGetValue(target, out var cached)
             ? cached as StreamInfo
             : await GetStreamInfoFromRoutingGrainAsync(target);

@@ -27,17 +27,16 @@ public class HostedHubTest(ITestOutputHelper output) : HubTestBase(output)
         return base.ConfigureClient(configuration);
     }
 
-    public record NewAddress() : Address("new", "1");
     [Fact]
     public async Task HostedPingPong()
     {
         var client = GetClient();
         var subHub =
-            client.ServiceProvider.CreateMessageHub(new NewAddress(),
+            client.ServiceProvider.CreateMessageHub(new Address("new", "1"),
                 conf => conf.WithTypes(typeof(Ping), typeof(Pong))
                 );
         var response = await subHub
-            .AwaitResponse(new Ping(), o => o.WithTarget(new HostAddress())
+            .AwaitResponse(new Ping(), o => o.WithTarget(CreateHostAddress())
                 , new CancellationTokenSource(5.Seconds()).Token
                 );
         response.Message.Should().BeOfType<Pong>();

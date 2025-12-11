@@ -22,7 +22,7 @@ namespace MeshWeaver.Northwind.Test;
 /// </summary>
 public class NorthwindApplicationTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
-    private static readonly ApplicationAddress NorthwindAddress = new("Northwind");
+    private static readonly Address NorthwindAddress = AddressExtensions.CreateAppAddress("Northwind");
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
     {

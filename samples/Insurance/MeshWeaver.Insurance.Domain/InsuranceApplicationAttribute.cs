@@ -1,4 +1,5 @@
 ﻿using MeshWeaver.Mesh;
+using MeshWeaver.Messaging;
 
 [assembly: MeshWeaver.Insurance.Domain.InsuranceApplication]
 
@@ -11,9 +12,14 @@ namespace MeshWeaver.Insurance.Domain;
 public class InsuranceApplicationAttribute : MeshNodeAttribute
 {
     /// <summary>
+    /// Pricing address type constant.
+    /// </summary>
+    public const string PricingType = "pricing";
+
+    /// <summary>
     /// Root Insurance application address.
     /// </summary>
-    public static readonly ApplicationAddress Address = new("Insurance");
+    public static readonly Address Address = AddressExtensions.CreateAppAddress("Insurance");
 
     /// <summary>
     /// Gets the mesh nodes for the Insurance application.
@@ -29,17 +35,19 @@ public class InsuranceApplicationAttribute : MeshNodeAttribute
     /// <summary>
     /// Gets namespaces that describe available address types for autocomplete.
     /// The pricing namespace creates dynamic pricing nodes and routes autocomplete to Insurance application.
+    /// Pricing addresses have format: pricing/company/year (e.g., pricing/Microsoft/2026)
     /// </summary>
     public override IEnumerable<MeshNamespace> Namespaces =>
     [
-        new MeshNamespace(PricingAddress.TypeName, "Pricing")
+        new MeshNamespace(PricingType, "Pricing")
         {
             Description = "Insurance pricing submissions",
             IconName = "Calculator",
             DisplayOrder = 100,
+            MinSegments = 2, // company + year
             AutocompleteAddress = _ => Address,
             Factory = address =>
-                address.Type == PricingAddress.TypeName
+                address.Type == PricingType
                     ? new MeshNode(address.Type, address.Id, address.ToString())
                     {
                         HubConfiguration = InsuranceApplicationExtensions.ConfigureSinglePricingApplication

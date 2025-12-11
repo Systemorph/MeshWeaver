@@ -72,7 +72,7 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
     ) =>
         base.ConfigureClient(configuration)
             .AddData(data =>
-                data.AddHubSource(new HostAddress(), dataSource => dataSource.WithType<MyData>())
+                data.AddHubSource(CreateHostAddress(), dataSource => dataSource.WithType<MyData>())
             );
 
     /// <summary>
@@ -113,7 +113,7 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
         // act
         var updateResponse = await client.AwaitResponse(
             DataChangeRequest.Update(updateItems),
-            o => o.WithTarget(new ClientAddress()),
+            o => o.WithTarget(CreateClientAddress()),
             CancellationTokenSource.CreateLinkedTokenSource(
                 TestContext.Current.CancellationToken,
                 new CancellationTokenSource(3.Seconds()).Token
@@ -173,7 +173,7 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
         // act
         var deleteResponse = await client.AwaitResponse(
             DataChangeRequest.Delete(toBeDeleted, "TestUser"),
-            o => o.WithTarget(new ClientAddress()),
+            o => o.WithTarget(CreateClientAddress()),
             CancellationTokenSource.CreateLinkedTokenSource(
                 TestContext.Current.CancellationToken,
                 new CancellationTokenSource(10.Seconds()).Token
@@ -229,7 +229,7 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
         };
         await client.AwaitResponse(
             DataChangeRequest.Update([myInstance]),
-            o => o.WithTarget(new ClientAddress()),
+            o => o.WithTarget(CreateClientAddress()),
             CancellationTokenSource.CreateLinkedTokenSource(
                 TestContext.Current.CancellationToken,
                 new CancellationTokenSource(10.Seconds()).Token
@@ -290,7 +290,7 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
         // act
         var updateResponse = await client.AwaitResponse(
             DataChangeRequest.Update(updateItems),
-            o => o.WithTarget(new ClientAddress()),
+            o => o.WithTarget(CreateClientAddress()),
             CancellationTokenSource.CreateLinkedTokenSource(
                 TestContext.Current.CancellationToken,
                 new CancellationTokenSource(3.Seconds()).Token
@@ -338,7 +338,7 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
         // act
         var response = await client.AwaitResponse(
             new GetSchemaRequest(typeName),
-            o => o.WithTarget(new ClientAddress()),
+            o => o.WithTarget(CreateClientAddress()),
             CancellationTokenSource.CreateLinkedTokenSource(
                 TestContext.Current.CancellationToken,
                 new CancellationTokenSource(10.Seconds()).Token
@@ -374,7 +374,7 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
         // act
         var response = await client.AwaitResponse(
             new GetSchemaRequest(unknownTypeName),
-            o => o.WithTarget(new ClientAddress()),
+            o => o.WithTarget(CreateClientAddress()),
             CancellationTokenSource.CreateLinkedTokenSource(
                 TestContext.Current.CancellationToken,
                 new CancellationTokenSource(10.Seconds()).Token
@@ -399,7 +399,7 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
         // act
         var response = await client.AwaitResponse(
             new GetDomainTypesRequest(),
-            o => o.WithTarget(new ClientAddress()),
+            o => o.WithTarget(CreateClientAddress()),
             CancellationTokenSource.CreateLinkedTokenSource(
                 TestContext.Current.CancellationToken,
                 new CancellationTokenSource(10.Seconds()).Token
@@ -429,7 +429,7 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
         // act
         var response = await client.AwaitResponse(
             new GetDomainTypesRequest(),
-            o => o.WithTarget(new ClientAddress()),
+            o => o.WithTarget(CreateClientAddress()),
             CancellationTokenSource.CreateLinkedTokenSource(
                 TestContext.Current.CancellationToken,
                 new CancellationTokenSource(10.Seconds()).Token
@@ -461,7 +461,7 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
         // act
         var updateResponse = await client.AwaitResponse(
             DataChangeRequest.Update(invalidItems),
-            o => o.WithTarget(new ClientAddress()),
+            o => o.WithTarget(CreateClientAddress()),
             CancellationTokenSource.CreateLinkedTokenSource(
                 TestContext.Current.CancellationToken,
                 new CancellationTokenSource(10.Seconds()).Token
@@ -496,7 +496,7 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
         // act
         var updateResponse = await client.AwaitResponse(
             DataChangeRequest.Update(new object[] { newItem }),
-            o => o.WithTarget(new ClientAddress()),
+            o => o.WithTarget(CreateClientAddress()),
             CancellationTokenSource.CreateLinkedTokenSource(
                 TestContext.Current.CancellationToken,
                 new CancellationTokenSource(10.Seconds()).Token
@@ -530,7 +530,7 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
         {
             client.AwaitResponse(
                 DataChangeRequest.Update(updates1),
-                o => o.WithTarget(new ClientAddress()),
+                o => o.WithTarget(CreateClientAddress()),
                 CancellationTokenSource.CreateLinkedTokenSource(
                     TestContext.Current.CancellationToken,
                     new CancellationTokenSource(10.Seconds()).Token
@@ -538,7 +538,7 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
             ),
             client.AwaitResponse(
                 DataChangeRequest.Update(updates2),
-                o => o.WithTarget(new ClientAddress()),
+                o => o.WithTarget(CreateClientAddress()),
                 CancellationTokenSource.CreateLinkedTokenSource(
                     TestContext.Current.CancellationToken,
                     new CancellationTokenSource(10.Seconds()).Token
@@ -546,7 +546,7 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
             ),
             client.AwaitResponse(
                 DataChangeRequest.Update(updates3),
-                o => o.WithTarget(new ClientAddress()),
+                o => o.WithTarget(CreateClientAddress()),
                 CancellationTokenSource.CreateLinkedTokenSource(
                     TestContext.Current.CancellationToken,
                     new CancellationTokenSource(10.Seconds()).Token
@@ -583,7 +583,7 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
         // act & assert for null
         var responseNull = await client.AwaitResponse(
             new GetSchemaRequest(null!),
-            o => o.WithTarget(new ClientAddress()),
+            o => o.WithTarget(CreateClientAddress()),
             CancellationTokenSource.CreateLinkedTokenSource(
                 TestContext.Current.CancellationToken,
                 new CancellationTokenSource(10.Seconds()).Token
@@ -596,7 +596,7 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
         // act & assert for empty string
         var responseEmpty = await client.AwaitResponse(
             new GetSchemaRequest(""),
-            o => o.WithTarget(new ClientAddress()),
+            o => o.WithTarget(CreateClientAddress()),
             CancellationTokenSource.CreateLinkedTokenSource(
                 TestContext.Current.CancellationToken,
                 new CancellationTokenSource(10.Seconds()).Token
@@ -636,7 +636,7 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
         // act - update from client
         await client.AwaitResponse(
             DataChangeRequest.Update([updateItem]),
-            o => o.WithTarget(new ClientAddress()),
+            o => o.WithTarget(CreateClientAddress()),
             CancellationTokenSource.CreateLinkedTokenSource(
                 TestContext.Current.CancellationToken,
                 new CancellationTokenSource(10.Seconds()).Token
@@ -695,7 +695,7 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
         // act
         var response = await client.AwaitResponse(
             new GetDataRequest(collectionRef),
-            o => o.WithTarget(new HostAddress()),
+            o => o.WithTarget(CreateHostAddress()),
             CancellationTokenSource.CreateLinkedTokenSource(
                 TestContext.Current.CancellationToken,
                 new CancellationTokenSource(10.Seconds()).Token
@@ -723,7 +723,7 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
         // act
         var response = await client.AwaitResponse(
             new GetDataRequest(entityRef),
-            o => o.WithTarget(new ClientAddress()),
+            o => o.WithTarget(CreateClientAddress()),
             CancellationTokenSource.CreateLinkedTokenSource(
                 TestContext.Current.CancellationToken,
                 new CancellationTokenSource(10.Seconds()).Token
@@ -751,7 +751,7 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
         // The exact behavior should be consistent with the stream-based approach
         var response = await client.AwaitResponse(
             new GetDataRequest(entityRef),
-            o => o.WithTarget(new ClientAddress()),
+            o => o.WithTarget(CreateClientAddress()),
             CancellationTokenSource.CreateLinkedTokenSource(
                 TestContext.Current.CancellationToken
                 , new CancellationTokenSource(10.Seconds()).Token

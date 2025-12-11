@@ -18,7 +18,7 @@ builder.AddKeyedAzureBlobServiceClient(StorageProviders.Reinsurance);
 builder.ConfigureWebPortalServices();
 builder.ConfigurePostgreSqlContext("meshweaverdb");
 
-var address = new MeshAddress();
+var address = AddressExtensions.CreateMeshAddress();
 builder.UseOrleansMeshClient(address, client =>
         client.Configure<ClusterOptions>(opts =>
         {

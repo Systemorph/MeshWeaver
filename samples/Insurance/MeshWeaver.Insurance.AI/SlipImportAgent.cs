@@ -196,15 +196,12 @@ public class SlipImportAgent(IMessageHub hub) : IInitializableAgent, IAgentWithT
             ContextToConfigMap = context =>
             {
                 // Only handle pricing contexts
-                if (context?.Address?.Type != PricingAddress.TypeName)
+                if (context?.Address?.Type != InsuranceApplicationAttribute.PricingType)
                     return null!;
 
                 var pricingId = context.Address.Id;
 
-                // Parse pricingId in format {company}-{uwy}
-                var parts = pricingId.Split('-');
-                if (parts.Length != 2)
-                    return null!;
+                // Pricing format is now company/year (already in address.Id)
 
                 // Use Hub-based collection config pointing to the pricing address
                 // This allows the ContentPlugin to query the pricing hub for the actual collection configuration
@@ -220,7 +217,7 @@ public class SlipImportAgent(IMessageHub hub) : IInitializableAgent, IAgentWithT
 
     async Task IInitializableAgent.InitializeAsync()
     {
-        var pricingAddress = new PricingAddress("default");
+        var pricingAddress = new Address(InsuranceApplicationAttribute.PricingType, "default", "2024");
 
         try
         {

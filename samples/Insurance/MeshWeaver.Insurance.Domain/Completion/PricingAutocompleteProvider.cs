@@ -6,6 +6,7 @@ namespace MeshWeaver.Insurance.Domain.Completion;
 /// <summary>
 /// Provides autocomplete items for insurance pricing submissions.
 /// Returns all available pricing IDs from the pricing catalog.
+/// Pricing format: pricing/company/year
 /// </summary>
 public class PricingAutocompleteProvider(IPricingService pricingService) : IAutocompleteProvider
 {
@@ -14,9 +15,10 @@ public class PricingAutocompleteProvider(IPricingService pricingService) : IAuto
     {
         var pricings = pricingService.GetCatalog();
 
+        // p.Id is now in format "company/year" (e.g., "Microsoft/2026")
         var items = pricings.Select(p => new AutocompleteItem(
-            Label: $"@{PricingAddress.TypeName}/{p.Id}/",
-            InsertText: $"@{PricingAddress.TypeName}/{p.Id}/",
+            Label: $"@{InsuranceApplicationAttribute.PricingType}/{p.Id}/",
+            InsertText: $"@{InsuranceApplicationAttribute.PricingType}/{p.Id}/",
             Description: p.InsuredName ?? p.Id,
             Category: "Pricing",
             Priority: 1000,

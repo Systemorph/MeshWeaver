@@ -43,14 +43,14 @@ namespace MeshWeaver.Hosting
             if (delivery.Target == null)
                 return delivery;
 
-            if (delivery.Target is MeshAddress)
+            if (delivery.Target.Type == AddressExtensions.MeshType)
             {
                 Mesh.DeliverMessage(delivery);
                 return delivery.Forwarded(Mesh.Address);
             }
 
-            if (delivery.Target is HostedAddress { Host: MeshAddress } hosted)
-                delivery = delivery.WithTarget(hosted.Address);
+            if (delivery.Target is { Host.Type: AddressExtensions.MeshType })
+                delivery = delivery.WithTarget(delivery.Target with { Host = null });
 
             var address = GetHostAddress(delivery.Target!);
 
@@ -71,7 +71,8 @@ namespace MeshWeaver.Hosting
         protected virtual Task<IMessageDelivery> RouteToKernel(IMessageDelivery delivery, MeshNode node, Address address, CancellationToken ct)
         {
             var kernelId = GetKernelId(delivery, node, address);
-            delivery = delivery.WithTarget(new HostedAddress(delivery.Target!, new KernelAddress() { Id = kernelId }));
+            var kernelAddress = AddressExtensions.CreateKernelAddress(kernelId);
+            delivery = delivery.WithTarget(delivery.Target!.WithHost(kernelAddress));
             return RouteInMesh(delivery, ct);
         }
 
@@ -110,11 +111,11 @@ namespace MeshWeaver.Hosting
 
         private Address GetHostAddress(Address address)
         {
-            if (address is HostedAddress hosted)
+            if (address.Host != null)
             {
-                var host = GetHostAddress(hosted.Host);
-                if (host is MeshAddress)
-                    return hosted.Address;
+                var host = GetHostAddress(address.Host);
+                if (host.Type == AddressExtensions.MeshType)
+                    return address with { Host = null };
                 return host;
             }
 

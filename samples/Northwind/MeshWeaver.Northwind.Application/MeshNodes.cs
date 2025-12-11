@@ -1,4 +1,5 @@
 ﻿using MeshWeaver.Mesh;
+using MeshWeaver.Messaging;
 using MeshWeaver.Northwind.Application;
 
 [assembly: NorthwindApplication]
@@ -21,7 +22,7 @@ public class NorthwindApplicationAttribute : MeshNodeAttribute
     /// Main definition of the mesh node.
     /// </summary>
     public MeshNode Northwind => CreateFromHubConfiguration(
-        new ApplicationAddress(nameof(Northwind)),
+        AddressExtensions.CreateAppAddress(nameof(Northwind)),
         nameof(Northwind),
         NorthwindApplicationExtensions.ConfigureNorthwindApplication
     );

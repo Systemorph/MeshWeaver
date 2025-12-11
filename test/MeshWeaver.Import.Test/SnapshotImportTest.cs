@@ -37,7 +37,7 @@ public class SnapshotImportTest(ITestOutputHelper output) : HubTestBase(output)
                     config
                         .AddData(data =>
                             data.AddHubSource(
-                                new HostAddress(),
+                                CreateHostAddress(),
                                 source => source.ConfigureCategory(TestDomain.TestRecordsDomain)
                             )
                         )
@@ -99,7 +99,7 @@ SystemName,DisplayName
         ret.Should().HaveCount(1);
         ret.Should().ContainSingle().Which.Number.Should().Be(5);
 
-        var ret2 = await GetDataAsync<MyRecord>(new HostAddress(), x => x.Count == 1);
+        var ret2 = await GetDataAsync<MyRecord>(CreateHostAddress(), x => x.Count == 1);
         ret2.Should().HaveCount(1);
         ret2.Should().ContainSingle().Which.Number.Should().Be(5);
     }
@@ -214,7 +214,7 @@ B4,B,4
         );
         importResponse.Message.Log.Status.Should().Be(ActivityStatus.Succeeded);
 
-        var ret = await GetDataAsync<MyRecord>(new HostAddress(), x => x.Count >= 4);
+        var ret = await GetDataAsync<MyRecord>(CreateHostAddress(), x => x.Count >= 4);
 
         ret.Should().HaveCount(4);
 
@@ -239,7 +239,7 @@ SystemName,DisplayName,Number
             new CancellationTokenSource(5.Seconds()).Token
         ).Token);
 
-        ret = await GetDataAsync<MyRecord>(new HostAddress(), x => x.Count == 0);
+        ret = await GetDataAsync<MyRecord>(CreateHostAddress(), x => x.Count == 0);
 
         ret.Should().BeEmpty();
     }

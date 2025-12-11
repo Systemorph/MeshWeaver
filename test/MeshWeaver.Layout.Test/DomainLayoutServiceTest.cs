@@ -26,7 +26,7 @@ public class DomainLayoutServiceTest(ITestOutputHelper output) : HubTestBase(out
     {
         return base.ConfigureHost(configuration)
             .WithRoutes(r =>
-                r.RouteAddress<ClientAddress>((_, d) => d.Package())
+                r.RouteAddress(ClientType, (_, d) => d.Package())
             )
             .AddData(data =>
                 data.AddSource(
@@ -43,7 +43,7 @@ public class DomainLayoutServiceTest(ITestOutputHelper output) : HubTestBase(out
     {
         return base.ConfigureClient(configuration)
             .WithRoutes(r =>
-                r.RouteAddress<HostAddress>((_, d) => d.Package())
+                r.RouteAddress(HostType, (_, d) => d.Package())
             )
             .AddLayoutClient();
     }
@@ -55,7 +55,7 @@ public class DomainLayoutServiceTest(ITestOutputHelper output) : HubTestBase(out
         var client = GetClient();
         var workspace = client.GetWorkspace();
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
-            new HostAddress(),
+            CreateHostAddress(),
             reference
         );
         var content = await stream.GetControlStream(reference.Area!)
@@ -105,7 +105,7 @@ public class DomainLayoutServiceTest(ITestOutputHelper output) : HubTestBase(out
         stream.Dispose();
         await Task.Delay(10);
         stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
-            new HostAddress(),
+            CreateHostAddress(),
             reference
         );
         controlFromStream = await stream
@@ -132,7 +132,7 @@ public class DomainLayoutServiceTest(ITestOutputHelper output) : HubTestBase(out
         var client = GetClient();
         var workspace = client.GetWorkspace();
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
-            new HostAddress(),
+            CreateHostAddress(),
             reference
         );
         var content = await stream.GetControlStream(reference.Area!)
