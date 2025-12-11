@@ -10,9 +10,10 @@ namespace MeshWeaver.Data.TestDomain;
 
 public static class TestDomain
 {
-    public record ImportAddress() : Address(TypeName, "1")
+    public static class TestImportAddress
     {
         public const string TypeName = "import";
+        public static Address Create() => new(TypeName, "1");
     }
 
     public static readonly Dictionary<Type, IEnumerable<object>> TestRecordsDomain =

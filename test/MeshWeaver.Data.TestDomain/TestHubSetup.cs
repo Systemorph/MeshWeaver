@@ -72,17 +72,17 @@ public static class TestHubSetup
     ) =>
         config
             .AddData(data =>
-                data.AddPartitionedHubSource<TransactionalDataAddress>(
+                data.AddPartitionedHubSource<Address>(
                         c =>
-                            c.WithType<TransactionalData>(td => new TransactionalDataAddress(td.Year, td.BusinessUnit))
-                                .InitializingPartitions(new TransactionalDataAddress(2024, "1"), new TransactionalDataAddress(2024, "2"))
+                            c.WithType<TransactionalData>(td => TransactionalDataAddress.Create(td.Year, td.BusinessUnit))
+                                .InitializingPartitions(TransactionalDataAddress.Create(2024, "1"), TransactionalDataAddress.Create(2024, "2"))
                     )
-                    .AddPartitionedHubSource<ComputedDataAddress>(
-                        c => c.WithType<ComputedData>(cd => new(cd.Year, cd.BusinessUnit))
-                            .InitializingPartitions(new ComputedDataAddress(2024, "1"), new ComputedDataAddress(2024, "2"))
+                    .AddPartitionedHubSource<Address>(
+                        c => c.WithType<ComputedData>(cd => ComputedDataAddress.Create(cd.Year, cd.BusinessUnit))
+                            .InitializingPartitions(ComputedDataAddress.Create(2024, "1"), ComputedDataAddress.Create(2024, "2"))
                     )
                     .AddHubSource(
-                        new ReferenceDataAddress(),
+                        ReferenceDataAddress.Create(),
                         dataSource =>
                             dataSource.WithType<BusinessUnit>().WithType<LineOfBusiness>()
                     )

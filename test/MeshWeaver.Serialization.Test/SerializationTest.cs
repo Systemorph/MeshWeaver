@@ -91,7 +91,7 @@ public class SerializationTest(ITestOutputHelper output) : HubTestBase(output)
     public void TestHostedHubSerializationOptions()
     {
         var client = Router.GetHostedHub(CreateClientAddress(), ConfigureClient);
-        var hosted = client.GetHostedHub(new SynchronizationAddress());
+        var hosted = client.GetHostedHub(SynchronizationAddress.Create());
 
         Output.WriteLine("=== CLIENT HUB CONVERTERS ===");
         foreach (var converter in client.JsonSerializerOptions.Converters)
@@ -123,7 +123,7 @@ public class SerializationTest(ITestOutputHelper output) : HubTestBase(output)
     public void TestSimplePolymorphicSerialization()
     {
         var client = Router.GetHostedHub(CreateClientAddress(), ConfigureClient);
-        var hosted = client.GetHostedHub(new SynchronizationAddress());
+        var hosted = client.GetHostedHub(SynchronizationAddress.Create());
 
         // Test simple polymorphic object
         var testMessage = new PolymorphicTestMessage
@@ -155,7 +155,7 @@ public class SerializationTest(ITestOutputHelper output) : HubTestBase(output)
     public void TestPolymorphicCollectionSerialization()
     {
         var client = Router.GetHostedHub(CreateClientAddress(), ConfigureClient);
-        var hosted = client.GetHostedHub(new SynchronizationAddress());
+        var hosted = client.GetHostedHub(SynchronizationAddress.Create());
 
         // Test collection of polymorphic objects
         var testMessages = new List<object>
@@ -211,7 +211,7 @@ public class SerializationTest(ITestOutputHelper output) : HubTestBase(output)
     public void TestGenericPolymorphicTypeSerialization()
     {
         var client = Router.GetHostedHub(CreateClientAddress(), ConfigureClient);
-        var hosted = client.GetHostedHub(new SynchronizationAddress());
+        var hosted = client.GetHostedHub(SynchronizationAddress.Create());
 
         // Create a generic polymorphic type similar to PropertyColumnControl<string>
         var genericObject = new GenericTestClass<string>

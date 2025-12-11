@@ -119,7 +119,9 @@ public record MeshBuilder
         ConfigureHub(conf => conf.WithRoutes(routes =>
                 routes.WithHandler((delivery, ct) =>
                 {
-                    if (delivery.State != MessageDeliveryState.Submitted || delivery.Target == null || delivery.Target.Equals(Address))
+                    // Compare without Host since Host tracks routing path
+                    var targetWithoutHost = delivery.Target is not null ? delivery.Target with { Host = null } : null;
+                    if (delivery.State != MessageDeliveryState.Submitted || targetWithoutHost == null || targetWithoutHost.Equals(Address))
                         return Task.FromResult(delivery);
 
                     return routes.Hub.ServiceProvider.GetRequiredService<IRoutingService>().DeliverMessageAsync(delivery.Package(), ct);

@@ -11,7 +11,7 @@ namespace MeshWeaver.Hosting.Monolith.TestBase;
 
 public abstract class MonolithMeshTestBase : Fixture.TestBase
 {
-    protected record ClientAddress() : Address("client", "1");
+    protected static Address CreateClientAddress() => new("client", "1");
     protected virtual MeshBuilder ConfigureMesh(MeshBuilder builder)
         => builder
             .UseMonolithMesh()
@@ -34,7 +34,7 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
 
     protected IMessageHub GetClient(Func<MessageHubConfiguration, MessageHubConfiguration>? config = null)
     {
-        return Mesh.ServiceProvider.CreateMessageHub(new ClientAddress(), config ?? ConfigureClient)!;
+        return Mesh.ServiceProvider.CreateMessageHub(CreateClientAddress(), config ?? ConfigureClient)!;
     }
 
     protected virtual MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration) =>

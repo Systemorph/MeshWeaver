@@ -346,8 +346,10 @@ public class MessageService : IMessageService
                 {
 
                     delivery = await hub.HandleMessageAsync(delivery, cancellationTokenSource.Token);
+                    // Compare target without Host since Host tracks routing path
+                    var ignoredTargetWithoutHost = delivery.Target is not null ? delivery.Target with { Host = null } : null;
                     if (!isDisposing && delivery is { State: MessageDeliveryState.Ignored, Message: not DeliveryFailure }
-                                            && (delivery.Target == null || delivery.Target.Equals(hub.Address))
+                                            && (ignoredTargetWithoutHost == null || ignoredTargetWithoutHost.Equals(hub.Address))
                                             && !delivery.Message.GetType().HasAttribute<CanBeIgnoredAttribute>())
                         ReportFailure(delivery.WithProperty("Error", $"No handler found for delivery {delivery.Message.GetType().FullName}"));
                 }
