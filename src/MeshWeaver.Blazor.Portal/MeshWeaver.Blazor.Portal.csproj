@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk.Razor">
+  <PropertyGroup>
+    <ProjectGuid>{8b7e3c9a-5f2d-4e1b-a8c3-6d9f0e2b1a4c}</ProjectGuid>
+    <StaticWebAssetBasePath>_content/MeshWeaver.Blazor.Portal</StaticWebAssetBasePath>
+  </PropertyGroup>
+  <ItemGroup>
+    <SupportedPlatform Include="browser" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\MeshWeaver.Blazor\MeshWeaver.Blazor.csproj" />
+    <ProjectReference Include="..\MeshWeaver.Blazor.Chat\MeshWeaver.Blazor.Chat.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.AspNetCore.Components.Web" />
+    <PackageReference Include="Microsoft.FluentUI.AspNetCore.Components" />
+    <PackageReference Include="Microsoft.FluentUI.AspNetCore.Components.Icons" />
+    <PackageReference Include="Microsoft.Identity.Web" />
+  </ItemGroup>
+</Project>

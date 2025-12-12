@@ -1,11 +1,12 @@
-﻿// ------------------------------------------------------------------------
+// ------------------------------------------------------------------------
 // MIT License - Copyright (c) Microsoft Corporation. All rights reserved.
 // ------------------------------------------------------------------------
 
 using System.Reflection;
 
-namespace MeshWeaver.Portal.Shared.Web.Infrastructure;
-internal class AppVersionService : IAppVersionService
+namespace MeshWeaver.Blazor.Portal.Infrastructure;
+
+public class AppVersionService : IAppVersionService
 {
     public string Version
     {

@@ -1,7 +1,7 @@
-﻿// Licensed to the .NET Foundation under one or more agreements.
+// Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
-namespace MeshWeaver.Portal.Shared.Web.Resize;
+namespace MeshWeaver.Blazor.Portal.Resize;
 
 /// <param name="IsDesktop">Whether the viewport is desktop-sized</param>
 /// <param name="IsUltraLowHeight">Ultra low height is users with very high zooms and/or very low resolutions,

@@ -1,10 +1,10 @@
-﻿using MeshWeaver.Portal.Shared.Web.Infrastructure;
+using MeshWeaver.Blazor.Portal.Infrastructure;
 using Microsoft.AspNetCore.Components;
 using Microsoft.Extensions.Logging;
 using Microsoft.FluentUI.AspNetCore.Components;
 using Microsoft.FluentUI.AspNetCore.Components.Extensions;
 
-namespace MeshWeaver.Portal.Shared.Web.Components;
+namespace MeshWeaver.Blazor.Portal.Components;
 
 public partial class SiteSettingsPanel
 {

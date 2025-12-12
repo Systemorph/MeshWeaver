@@ -1,8 +1,8 @@
-﻿using System.Diagnostics;
+using System.Diagnostics;
 using Microsoft.AspNetCore.Components;
 using Microsoft.FluentUI.AspNetCore.Components;
 
-namespace MeshWeaver.Portal.Shared.Web.Components;
+namespace MeshWeaver.Blazor.Portal.Components;
 
 public partial class SearchBar : IAsyncDisposable
 {

@@ -1,12 +1,12 @@
-﻿@using Microsoft.FluentUI.AspNetCore.Components.Icons.Regular
+@using Microsoft.FluentUI.AspNetCore.Components.Icons.Regular
 @implements IDisposable
 @inject IDialogService DialogService
 @inject IMessageService MessageService
 
 <FluentButton BackgroundColor="transparent" OnClick="OpenNotificationCenterAsync" Title="Notification center">
-    @if (MessageService.Count(App.MessagesNotificationCenter) > 0)
+    @if (MessageService.Count(PortalConstants.MessagesNotificationCenter) > 0)
 {
-        <FluentCounterBadge Count="@MessageService.Count(App.MessagesNotificationCenter)"
+        <FluentCounterBadge Count="@MessageService.Count(PortalConstants.MessagesNotificationCenter)"
                         Max="9"
                         ShowOverflow="true"
                         BackgroundColor="@Color.Error"
@@ -19,16 +19,16 @@
 }
 else
 {
-    @NotificationIcon() 
+    @NotificationIcon()
 }
 </FluentButton>
 
 @code {
     private IDialogReference? Dialog;
-   
+
     protected override void OnInitialized()
     {
-        MessageService.OnMessageItemsUpdated += UpdateCount;    
+        MessageService.OnMessageItemsUpdated += UpdateCount;
     }
 
     private void UpdateCount()
