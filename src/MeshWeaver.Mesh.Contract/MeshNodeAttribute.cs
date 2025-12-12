@@ -36,7 +36,7 @@ public abstract class MeshNodeAttribute : Attribute
 
     protected MeshNode CreateFromHubConfiguration(Address address, string name,
         Func<MessageHubConfiguration, MessageHubConfiguration> hubConfiguration)
-        => new(address.Type, address.Id, name)
+        => new(address, name)
         {
             AssemblyLocation = GetType().Assembly.Location,
             HubConfiguration = hubConfiguration

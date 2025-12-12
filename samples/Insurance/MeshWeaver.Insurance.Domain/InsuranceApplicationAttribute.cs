@@ -48,7 +48,7 @@ public class InsuranceApplicationAttribute : MeshNodeAttribute
             AutocompleteAddress = _ => Address,
             Factory = address =>
                 address.Type == PricingType
-                    ? new MeshNode(address.Type, address.Id, address.ToString())
+                    ? new MeshNode(address, address.ToString())
                     {
                         HubConfiguration = InsuranceApplicationExtensions.ConfigureSinglePricingApplication
                     }

@@ -26,9 +26,10 @@ public record AgentContext
     public string? Context { get; init; }
 
     /// <summary>
-    /// Reserved keywords that determine reference type.
+    /// Standard prefixes that indicate the reference type when used as first segment.
+    /// These get stripped and the remaining path is parsed as addressType/addressId/...
     /// </summary>
-    private static readonly HashSet<string> ReservedKeywords = new(StringComparer.OrdinalIgnoreCase)
+    private static readonly HashSet<string> StandardPrefixes = new(StringComparer.OrdinalIgnoreCase)
     {
         "data", "content", "area"
     };
@@ -36,7 +37,7 @@ public record AgentContext
     /// <summary>
     /// Creates an AgentContext from a full unified reference path.
     /// </summary>
-    /// <param name="unifiedPath">The unified path (e.g., "pricing/MS-2024/Summary").</param>
+    /// <param name="unifiedPath">The unified path (e.g., "pricing/MS-2024/Summary" or "area/pricing/MS-2024/Summary").</param>
     /// <returns>A new AgentContext with parsed Address and LayoutArea.</returns>
     public static AgentContext FromUnifiedPath(string unifiedPath)
     {
@@ -51,40 +52,38 @@ public record AgentContext
             return new AgentContext { Context = unifiedPath };
         }
 
-        // New format: addressType/addressId[/keyword[/remainingPath]]
-        // Need at least addressType and addressId
-        if (segments.Length < 2)
-            return new AgentContext { Context = unifiedPath };
-
-        var addressType = segments[0];
-        var addressId = segments[1];
-        var address = new Address(addressType, addressId);
-
-        // Check if third segment is a keyword
-        string? keyword = null;
-        if (segments.Length > 2 && ReservedKeywords.Contains(segments[2]))
+        // Check if first segment is a standard prefix (area/, data/, content/)
+        // If so, skip it and parse the rest
+        var startIndex = 0;
+        string? prefixKeyword = null;
+        if (segments.Length > 0 && StandardPrefixes.Contains(segments[0]))
         {
-            keyword = segments[2];
+            prefixKeyword = segments[0];
+            startIndex = 1;
         }
 
-        // Extract layout area if this is an area reference (default or explicit)
-        LayoutAreaReference? layoutArea = null;
-        if (keyword == null || keyword.Equals("area", StringComparison.OrdinalIgnoreCase))
-        {
-            // Area reference: remaining segments are areaName/areaId
-            var areaStartIndex = keyword == null ? 2 : 3;
-            if (segments.Length > areaStartIndex)
-            {
-                var areaName = segments[areaStartIndex];
-                var areaId = segments.Length > areaStartIndex + 1
-                    ? string.Join('/', segments.Skip(areaStartIndex + 1))
-                    : null;
+        // Need at least addressType and addressId after any prefix
+        if (segments.Length < startIndex + 2)
+            return new AgentContext { Context = unifiedPath };
 
-                layoutArea = new LayoutAreaReference(areaName)
-                {
-                    Id = areaId
-                };
-            }
+        var addressType = segments[startIndex];
+        var addressId = segments[startIndex + 1];
+        var address = new Address(addressType, addressId);
+
+        // Extract layout area from remaining segments after address
+        LayoutAreaReference? layoutArea = null;
+        var areaStartIndex = startIndex + 2;
+        if (segments.Length > areaStartIndex)
+        {
+            var areaName = segments[areaStartIndex];
+            var areaId = segments.Length > areaStartIndex + 1
+                ? string.Join('/', segments.Skip(areaStartIndex + 1))
+                : null;
+
+            layoutArea = new LayoutAreaReference(areaName)
+            {
+                Id = areaId
+            };
         }
 
         return new AgentContext

@@ -95,8 +95,14 @@ public class MeshWeaverDbContext(DbContextOptions<MeshWeaverDbContext> options)
             entity.HasKey(e => e.Key);
             entity.Property(e => e.Key).IsRequired();
             entity.Property(e => e.Name).IsRequired();
-            entity.Property(e => e.AddressType).IsRequired();
-            entity.Property(e => e.AddressId);
+
+            // Store Address as string using its ToString() representation
+            entity.Property(e => e.Address)
+                .HasConversion(
+                    a => a.ToString(),
+                    s => (Messaging.Address)s)
+                .IsRequired();
+
             entity.Property(e => e.ThumbNail);
             entity.Property(e => e.StreamProvider);
             entity.Property(e => e.Namespace);

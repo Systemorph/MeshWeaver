@@ -1,18 +1,16 @@
-@* Routes for application pages - with and without area *@
-@page "/{AddressType}/{Application}"
-@page "/{AddressType}/{Application}/{Area}"
-@page "/{AddressType}/{Application}/{Area}/{**Id}"
+@* Routes for application pages - entire path is matched against registered namespace patterns *@
+@page "/{**Path}"
 @using MeshWeaver.Messaging
 
 <FluentDesignTheme @bind-Mode="@Mode" StorageName="theme" />
 
 <PageTitle>@PageTitle</PageTitle>
 <CascadingValue Value="@Mode" Name="ThemeMode">
-    @if (!Hub.TypeRegistry.TryGetType(AddressType!, out var t) || !typeof(Address).IsAssignableFrom(t!.Type))
+    @if (Resolution is null)
     {
         <div class="error-container">
-            <h2>Invalid Address Type</h2>
-            <p>The address type '<strong>@AddressType</strong>' is not registered in the system.</p>
+            <h2>Page Not Found</h2>
+            <p>The path '<strong>@Path</strong>' does not match any registered address pattern.</p>
             <p>Please double-check the url you have entered.</p>
         </div>
     }

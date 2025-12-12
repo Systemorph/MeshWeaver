@@ -36,12 +36,11 @@ public record MessageLog(
     public long Id { get; init; }
 }
 public record MeshNode(
-    string AddressType,
-    string? AddressId,
+    Address Address,
     string Name
 )
 {
-    [Key] public string Key { get; init; } = AddressId == null ? AddressType : $"{AddressType}/{AddressId}";
+    [Key] public string Key { get; init; } = Address.ToString();
     public const string MeshIn = nameof(MeshIn);
 
     /// <summary>
@@ -88,11 +87,11 @@ public enum InstantiationType
 }
 
 /// <summary>
-/// Represents a namespace in the mesh that can create MeshNodes for a specific address type.
+/// Represents a namespace in the mesh that can create MeshNodes for a specific address prefix.
 /// Used for autocomplete to show available address types with their descriptions.
 /// </summary>
 public record MeshNamespace(
-    string AddressType,
+    string Prefix,
     string Name
 )
 {
@@ -112,11 +111,19 @@ public record MeshNamespace(
     public int DisplayOrder { get; init; }
 
     /// <summary>
-    /// Minimum number of segments required for addresses of this type.
+    /// Minimum number of segments required for addresses of this namespace.
     /// Additional segments may be added based on autocomplete responses.
-    /// Default is 1 (type + one segment).
+    /// Default is 1 (prefix + one segment).
     /// </summary>
     public int MinSegments { get; init; } = 1;
+
+    /// <summary>
+    /// Regex pattern for matching URL paths to this namespace.
+    /// Should contain named capture group "address" for the full address string.
+    /// If null, defaults to matching Prefix as first segment with MinSegments.
+    /// Example: @"^(?&lt;address&gt;pricing/[^/]+/[^/]+)(?:/(?&lt;remainder&gt;.*))?$"
+    /// </summary>
+    public string? Pattern { get; init; }
 
     /// <summary>
     /// Factory function that creates a MeshNode for a given address.

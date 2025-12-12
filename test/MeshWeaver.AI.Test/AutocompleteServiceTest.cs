@@ -1,7 +1,6 @@
-using System.Linq;
+﻿using System.Linq;
 using System.Threading.Tasks;
 using FluentAssertions;
-using MeshWeaver.AI;
 using MeshWeaver.AI.Completion;
 using MeshWeaver.Data;
 using MeshWeaver.Data.Completion;
@@ -135,7 +134,7 @@ public class AutocompleteServiceTest
         var context = new AgentContext
         {
             Address = new Messaging.Address("pricing", "MS-2024"),
-            LayoutArea = new Data.LayoutAreaReference("Summary")
+            LayoutArea = new LayoutAreaReference("Summary")
         };
 
         // act
@@ -191,7 +190,7 @@ public class AutocompleteServiceTest
         var service = new AutocompleteService(fuzzyScorer, [agentProvider]);
 
         // act
-        var results = await service.GetCompletionsAsync("@agent/", 20);
+        var results = await service.GetCompletionsAsync("@agent/", 20, TestContext.Current.CancellationToken);
 
         // assert - should return agent from provider
         results.Should().NotBeEmpty();
@@ -205,8 +204,8 @@ public class AutocompleteServiceTest
         var fuzzyScorer = new FuzzyScorer();
         var service = new AutocompleteService(fuzzyScorer, []);
 
-        // act
-        var results = await service.GetCompletionsAsync("@", 20);
+        // act  
+        var results = await service.GetCompletionsAsync("@", 20, TestContext.Current.CancellationToken);
 
         // assert
         results.Should().BeEmpty();
@@ -225,7 +224,7 @@ public class AutocompleteServiceTest
         var service = new AutocompleteService(fuzzyScorer, [agentProvider]);
 
         // act - partial query should fuzzy match
-        var results = await service.GetCompletionsAsync("@agent/Test", 20);
+        var results = await service.GetCompletionsAsync("@agent/Test", 20, TestContext.Current.CancellationToken);
 
         // assert
         results.Should().Contain(r => r.Label == "@agent/TestAgent");
@@ -247,7 +246,7 @@ public class AutocompleteServiceTest
         var service = new AutocompleteService(fuzzyScorer, [agentProvider, modelProvider]);
 
         // act
-        var results = await service.GetCompletionsAsync("@", 20);
+        var results = await service.GetCompletionsAsync("@", 20, TestContext.Current.CancellationToken);
 
         // assert - should have items from both providers
         results.Should().Contain(r => r.Label == "@agent/TestAgent");
@@ -272,7 +271,7 @@ public class AutocompleteServiceTest
         var request = new AutocompleteRequest("@agent/", null);
 
         // act
-        var response = await service.GetCompletionsAsync(request);
+        var response = await service.GetCompletionsAsync(request, TestContext.Current.CancellationToken);
 
         // assert
         response.Should().NotBeNull();
@@ -289,7 +288,7 @@ public class AutocompleteServiceTest
         var request = new AutocompleteRequest("@area/", "pricing/MS-2024");
 
         // act
-        var response = await service.GetCompletionsAsync(request);
+        var response = await service.GetCompletionsAsync(request, TestContext.Current.CancellationToken);
 
         // assert
         response.Should().NotBeNull();
@@ -319,7 +318,7 @@ public class AutocompleteServiceTest
         var provider = new MeshCatalogAutocompleteProvider(mockCatalog);
 
         // act
-        var items = (await provider.GetItemsAsync("@")).ToList();
+        var items = (await provider.GetItemsAsync("@", TestContext.Current.CancellationToken)).ToList();
 
         // assert - includes catalog namespaces + reserved prefixes (@agent/, @model/)
         items.Should().HaveCount(4);
@@ -345,7 +344,7 @@ public class AutocompleteServiceTest
         var service = new AutocompleteService(fuzzyScorer, [catalogProvider]);
 
         // act - "pri" should fuzzy match "pricing"
-        var results = await service.GetCompletionsAsync("@pri", 20);
+        var results = await service.GetCompletionsAsync("@pri", 20, TestContext.Current.CancellationToken);
 
         // assert
         results.Should().Contain(r => r.Label == "@pricing/");
@@ -367,7 +366,7 @@ public class AutocompleteServiceTest
         var provider = new AgentAutocompleteProvider(agents);
 
         // act
-        var items = (await provider.GetItemsAsync("")).ToList();
+        var items = (await provider.GetItemsAsync("", TestContext.Current.CancellationToken)).ToList();
 
         // assert
         items.Should().HaveCount(2);
@@ -384,7 +383,7 @@ public class AutocompleteServiceTest
         provider.SetAvailableModels(["model1", "model2", "model3"]);
 
         // act
-        var items = (await provider.GetItemsAsync("")).ToList();
+        var items = (await provider.GetItemsAsync("", TestContext.Current.CancellationToken)).ToList();
 
         // assert
         items.Should().HaveCount(3);
@@ -401,7 +400,7 @@ public class AutocompleteServiceTest
         // Don't set any models
 
         // act
-        var items = (await provider.GetItemsAsync("")).ToList();
+        var items = (await provider.GetItemsAsync("", TestContext.Current.CancellationToken)).ToList();
 
         // assert
         items.Should().BeEmpty();
@@ -431,6 +430,33 @@ public class AutocompleteServiceTest
         public Task<Mesh.Services.StreamInfo> GetStreamInfoAsync(Messaging.Address address) => throw new System.NotImplementedException();
         public Task<System.Collections.Generic.IReadOnlyList<Mesh.MeshNamespace>> GetNamespacesAsync(System.Threading.CancellationToken ct = default) =>
             Task.FromResult(namespaces);
+        public Mesh.MeshNamespace? GetNamespace(string prefix) => namespaces.FirstOrDefault(n => n.Prefix == prefix);
+        public Mesh.Services.AddressResolution? ResolveAddress(string addressType, string? id = null)
+        {
+            var ns = namespaces.FirstOrDefault(n => n.Prefix == addressType);
+            if (ns is null)
+                return null;
+            var address = string.IsNullOrEmpty(id)
+                ? new Messaging.Address(addressType)
+                : new Messaging.Address(addressType, id);
+            return new Mesh.Services.AddressResolution(address, null);
+        }
+        public Mesh.Services.AddressResolution? ResolvePath(string path)
+        {
+            if (string.IsNullOrEmpty(path))
+                return null;
+            var parts = path.TrimStart('/').Split('/');
+            if (parts.Length == 0)
+                return null;
+            var ns = namespaces.FirstOrDefault(n => n.Prefix == parts[0]);
+            if (ns is null)
+                return null;
+            var minSegments = ns.MinSegments;
+            var addressParts = parts.Take(minSegments + 1).ToArray();
+            var address = new Messaging.Address(addressParts);
+            var remainder = parts.Length > minSegments + 1 ? string.Join("/", parts.Skip(minSegments + 1)) : null;
+            return new Mesh.Services.AddressResolution(address, remainder);
+        }
     }
 
     #endregion

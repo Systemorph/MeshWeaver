@@ -389,17 +389,17 @@ public static class ContentCollectionsExtensions
             return resourceUrl;
         }
 
-        // Otherwise, prepend with address/static/collection or static/collection
+        // Prepend with /static/{address}/{collection} or /static/{collection}
         return address != null
-            ? $"{address}/static/{collection}/{resourceUrl}"
-            : $"static/{collection}/{resourceUrl}";
+            ? $"/static/{address}/{collection}/{resourceUrl}"
+            : $"/static/{collection}/{resourceUrl}";
     }
 
 
     public static string GetContentUrl(string collection, string path, Address? address = null)
         => address != null
-            ? $"{address}/Content/{collection}/{path}"
-            : $"Content/{collection}/{path}";
+            ? $"/content/{address}/{collection}/{path}"
+            : $"/content/{collection}/{path}";
 
 
     public static MessageHubConfiguration AddEmbeddedResourceContentCollection(

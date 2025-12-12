@@ -23,6 +23,24 @@ public interface IMeshCatalog
     /// Used for autocomplete to show top-level items like "pricing/", "agent/", etc.
     /// </summary>
     Task<IReadOnlyList<MeshNamespace>> GetNamespacesAsync(CancellationToken ct = default);
+
+    /// <summary>
+    /// Gets a namespace by its prefix (address type).
+    /// Returns null if the namespace is not registered.
+    /// </summary>
+    MeshNamespace? GetNamespace(string prefix);
+
+    /// <summary>
+    /// Resolves an address from URL components using registered namespaces.
+    /// Returns the resolved Address and namespace, or null if the address type is not registered.
+    /// </summary>
+    AddressResolution? ResolveAddress(string addressType, string? id = null);
+
+    /// <summary>
+    /// Resolves a full URL path to an address using registered namespace patterns.
+    /// Returns the resolved Address, namespace, and parsed area/id from the path.
+    /// </summary>
+    AddressResolution? ResolvePath(string path);
 }
 
 
@@ -40,3 +58,11 @@ public record StorageInfo(
 
 
 public record StartupInfo(Address Address, string PackageName, string AssemblyLocation);
+
+/// <summary>
+/// Result of address resolution containing the resolved address and remaining path.
+/// </summary>
+public record AddressResolution(
+    Address Address,
+    string? Remainder
+);

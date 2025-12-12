@@ -9,7 +9,7 @@ public static class KernelExtensions
         => builder
             .AddMeshNodeFactory(address =>
                 address.Type == AddressExtensions.KernelType
-                    ? new(address.Type, address.Id, address.ToString())
+                    ? new MeshNode(address, address.ToString())
                     {
                         AssemblyLocation = typeof(KernelExtensions).Assembly.Location,
                         HubConfiguration = ConfigureHub

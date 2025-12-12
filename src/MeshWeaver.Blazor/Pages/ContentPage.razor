@@ -1,4 +1,9 @@
-﻿@page "/content/{Collection}/{**Path}"
+@* Content page routes:
+   - /content/{Collection}/{**Path} - global content from portal hub
+   - /content/{AddressType}/{AddressId}/{Collection}/{**Path} - hub-scoped content
+*@
+@page "/content/{Collection}/{**Path}"
+@page "/content/{AddressType}/{AddressId}/{Collection}/{**Path}"
 @inject NavigationManager NavigationManager
 
 @if (!string.IsNullOrEmpty(ErrorMessage))
@@ -10,14 +15,14 @@
         </div>
         <div class="error-content">
             <h1>Collection Not Found</h1>
-            <p>The collection <strong>@Collection</strong> does not exist.</p>
+            <p>The collection <strong>@ResolvedCollection</strong> does not exist.</p>
             <p>Please check the URL or contact an administrator.</p>
         </div>
     </div>
 }
 else if(ContentType == "text/markdown")
 {
-    <LayoutArea Address="@PortalApplication.Hub.Address" Area="Content" Id="@(Collection + '/' + Path)"/>
+    <LayoutArea Address="@TargetAddress" Area="Content" Id="@(ResolvedCollection + '/' + ResolvedPath)"/>
 }
 else if (Content != null)
 {

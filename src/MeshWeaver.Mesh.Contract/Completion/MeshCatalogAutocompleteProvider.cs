@@ -26,8 +26,8 @@ public class MeshCatalogAutocompleteProvider(IMeshCatalog? meshCatalog) : IAutoc
             foreach (var ns in namespaces)
             {
                 items.Add(new AutocompleteItem(
-                    Label: $"@{ns.AddressType}/",
-                    InsertText: $"@{ns.AddressType}/",
+                    Label: $"@{ns.Prefix}/",
+                    InsertText: $"@{ns.Prefix}/",
                     Description: ns.Description ?? ns.Name,
                     Category: "Prefixes",
                     Priority: PrefixCategoryPriority - ns.DisplayOrder,

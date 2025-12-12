@@ -3,6 +3,7 @@ using MeshWeaver.Blazor.Infrastructure;
 using MeshWeaver.ContentCollections;
 using MeshWeaver.Layout.Client;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
@@ -132,12 +133,47 @@ public static class BlazorHostingExtensions
         return textTypes.Contains(contentType) || contentType.StartsWith("text/");
     }
 
+    /// <summary>
+    /// Maps hub-scoped static content endpoint.
+    /// Routes like: /static/{addressType}/{addressId}/{collection}/{**path}
+    /// Example: /static/app/Northwind/Northwind/thumbnails/logo.png
+    /// The addressType is validated by the route constraint, remainder contains addressId/collection/path.
+    /// </summary>
     private static void MapHubStaticContent(this IEndpointRouteBuilder app, IMessageHub mainHub)
-        => app.MapGet("/{addressType:addresstype}/{addressId}/static/{collection}/{**path}",
-            async (HttpContext context, string addressType, string addressId, string collection, string path) =>
+    {
+        // Route pattern: /static/{addressType}/{**remainder}
+        // remainder = addressId/collection/path
+        app.MapGet("/static/{addressType:addresstype}/{**remainder}",
+            async (HttpContext context, string addressType, string remainder) =>
         {
+            if (string.IsNullOrEmpty(remainder))
+            {
+                return Results.NotFound("Path is required");
+            }
+
             try
             {
+                // Parse the remainder to extract addressId, collection, and path
+                // Expected format: {addressId}/{collection}/{path}
+                // Example: Northwind/Northwind/thumbnails/logo.png
+                var parts = remainder.Split('/');
+
+                // Need at least: addressId, collection, path (3 segments minimum)
+                if (parts.Length < 3)
+                {
+                    return Results.NotFound("Invalid static content path format. Expected: /static/{addressType}/{addressId}/{collection}/{path}");
+                }
+
+                // First segment is addressId, second is collection, rest is path
+                var addressId = parts[0];
+                var collection = parts[1];
+                var path = string.Join("/", parts.Skip(2));
+
+                if (string.IsNullOrEmpty(collection) || string.IsNullOrEmpty(path))
+                {
+                    return Results.NotFound("Collection and path are required");
+                }
+
                 var portal = mainHub.ServiceProvider.GetRequiredService<PortalApplication>().Hub;
 
                 // Get content service directly from the target hub
@@ -147,11 +183,14 @@ public static class BlazorHostingExtensions
                     return Results.NotFound("Content service not configured");
                 }
 
+                // Build the address using the unified Address format
+                var address = new Address(addressType, addressId);
+
                 contentService.AddConfiguration(new ContentCollectionConfig()
                 {
                     Name = collection,
                     SourceType = HubStreamProviderFactory.SourceType,
-                    Address = portal.TypeRegistry.MapAddress(addressType, addressId)
+                    Address = address
                 });
 
                 // Get or initialize the collection by name
@@ -207,5 +246,6 @@ public static class BlazorHostingExtensions
                 return Results.Problem($"Error retrieving static content: {ex.Message}");
             }
         });
+    }
 
 }
