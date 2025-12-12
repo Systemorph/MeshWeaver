@@ -1,4 +1,4 @@
-﻿using MeshWeaver.Mesh;
+using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 
 [assembly: MeshWeaver.Insurance.Domain.InsuranceApplication]
@@ -7,7 +7,7 @@ namespace MeshWeaver.Insurance.Domain;
 
 /// <summary>
 /// Mesh node attribute for Insurance application configuration.
-/// Defines the root Insurance node. Individual pricing nodes are created dynamically via factory.
+/// Defines the root Insurance node and a pricing node for score-based matching.
 /// </summary>
 public class InsuranceApplicationAttribute : MeshNodeAttribute
 {
@@ -27,32 +27,18 @@ public class InsuranceApplicationAttribute : MeshNodeAttribute
     public override IEnumerable<MeshNode> Nodes =>
     [
         CreateFromHubConfiguration(
-            Address,
+            Address.ToString(),
             nameof(InsuranceApplicationAttribute),
-            InsuranceApplicationExtensions.ConfigureInsuranceApplication)
-    ];
-
-    /// <summary>
-    /// Gets namespaces that describe available address types for autocomplete.
-    /// The pricing namespace creates dynamic pricing nodes and routes autocomplete to Insurance application.
-    /// Pricing addresses have format: pricing/company/year (e.g., pricing/Microsoft/2026)
-    /// </summary>
-    public override IEnumerable<MeshNamespace> Namespaces =>
-    [
-        new MeshNamespace(PricingType, "Pricing")
+            InsuranceApplicationExtensions.ConfigureInsuranceApplication),
+        // Pricing node - matches any pricing/* path using score-based matching
+        new MeshNode(PricingType)
         {
+            Name = "Pricing",
             Description = "Insurance pricing submissions",
             IconName = "Calculator",
             DisplayOrder = 100,
-            MinSegments = 2, // company + year
-            AutocompleteAddress = _ => Address,
-            Factory = address =>
-                address.Type == PricingType
-                    ? new MeshNode(address, address.ToString())
-                    {
-                        HubConfiguration = InsuranceApplicationExtensions.ConfigureSinglePricingApplication
-                    }
-                    : null
+            HubConfiguration = InsuranceApplicationExtensions.ConfigureSinglePricingApplication,
+            AutocompleteAddress = _ => Address
         }
     ];
 }

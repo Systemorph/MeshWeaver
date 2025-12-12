@@ -48,7 +48,7 @@ public static class TodoApplicationExtensions
                         .WithView(nameof(TodoLayoutAreas.MyTasks), TodoLayoutAreas.MyTasks)
                         .WithView(nameof(TodoLayoutAreas.Backlog), TodoLayoutAreas.Backlog)
                         .WithView(nameof(TodoLayoutAreas.TodaysFocus), TodoLayoutAreas.TodaysFocus)
-                        .WithThumbnailBasePath("/app/Todo/static/Todo/thumbnails")
+                        .WithThumbnailBasePath("/static/app/Todo/Todo/thumbnails")
                 )
                 .AddArticles()
             ;

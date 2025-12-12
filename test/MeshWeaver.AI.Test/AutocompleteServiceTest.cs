@@ -299,18 +299,20 @@ public class AutocompleteServiceTest
     #region MeshCatalogAutocompleteProvider Tests
 
     [Fact]
-    public async Task MeshCatalogAutocompleteProvider_GetItems_ReturnsNamespaces()
+    public async Task MeshCatalogAutocompleteProvider_GetItems_ReturnsNodes()
     {
         // arrange
         var mockCatalog = new MockMeshCatalog(
         [
-            new Mesh.MeshNamespace("pricing", "Pricing")
+            new Mesh.MeshNode("pricing")
             {
+                Name = "Pricing",
                 Description = "Insurance pricing submissions",
                 DisplayOrder = 100
             },
-            new Mesh.MeshNamespace("northwind", "Northwind")
+            new Mesh.MeshNode("northwind")
             {
+                Name = "Northwind",
                 Description = "Northwind sample data",
                 DisplayOrder = 200
             }
@@ -320,7 +322,7 @@ public class AutocompleteServiceTest
         // act
         var items = (await provider.GetItemsAsync("@", TestContext.Current.CancellationToken)).ToList();
 
-        // assert - includes catalog namespaces + reserved prefixes (@agent/, @model/)
+        // assert - includes catalog nodes + reserved prefixes (@agent/, @model/)
         items.Should().HaveCount(4);
         items.Should().Contain(i => i.Label == "@pricing/");
         items.Should().Contain(i => i.Label == "@northwind/");
@@ -337,7 +339,7 @@ public class AutocompleteServiceTest
         // arrange
         var mockCatalog = new MockMeshCatalog(
         [
-            new Mesh.MeshNamespace("pricing", "Pricing") { Description = "Insurance pricing" }
+            new Mesh.MeshNode("pricing") { Name = "Pricing", Description = "Insurance pricing" }
         ]);
         var catalogProvider = new MeshCatalogAutocompleteProvider(mockCatalog);
         var fuzzyScorer = new FuzzyScorer();
@@ -420,42 +422,53 @@ public class AutocompleteServiceTest
         public string Instructions { get; init; } = "";
     }
 
-    private class MockMeshCatalog(System.Collections.Generic.IReadOnlyList<Mesh.MeshNamespace> namespaces) : Mesh.Services.IMeshCatalog
+    private class MockMeshCatalog(System.Collections.Generic.IReadOnlyList<Mesh.MeshNode> nodes) : Mesh.Services.IMeshCatalog
     {
-        public Mesh.MeshConfiguration Configuration => throw new System.NotImplementedException();
+        public Mesh.MeshConfiguration Configuration => new(nodes.ToDictionary(n => n.Key));
         public Mesh.IUnifiedPathRegistry PathRegistry => throw new System.NotImplementedException();
 
         public Task<Mesh.MeshNode?> GetNodeAsync(Messaging.Address address) => Task.FromResult<Mesh.MeshNode?>(null);
         public Task UpdateAsync(Mesh.MeshNode node) => Task.CompletedTask;
         public Task<Mesh.Services.StreamInfo> GetStreamInfoAsync(Messaging.Address address) => throw new System.NotImplementedException();
-        public Task<System.Collections.Generic.IReadOnlyList<Mesh.MeshNamespace>> GetNamespacesAsync(System.Threading.CancellationToken ct = default) =>
-            Task.FromResult(namespaces);
-        public Mesh.MeshNamespace? GetNamespace(string prefix) => namespaces.FirstOrDefault(n => n.Prefix == prefix);
-        public Mesh.Services.AddressResolution? ResolveAddress(string addressType, string? id = null)
-        {
-            var ns = namespaces.FirstOrDefault(n => n.Prefix == addressType);
-            if (ns is null)
-                return null;
-            var address = string.IsNullOrEmpty(id)
-                ? new Messaging.Address(addressType)
-                : new Messaging.Address(addressType, id);
-            return new Mesh.Services.AddressResolution(address, null);
-        }
         public Mesh.Services.AddressResolution? ResolvePath(string path)
         {
             if (string.IsNullOrEmpty(path))
                 return null;
-            var parts = path.TrimStart('/').Split('/');
-            if (parts.Length == 0)
+            var segments = path.TrimStart('/').Split('/');
+            if (segments.Length == 0)
                 return null;
-            var ns = namespaces.FirstOrDefault(n => n.Prefix == parts[0]);
-            if (ns is null)
+
+            // Score-based matching
+            var bestMatch = nodes
+                .Select(node => (Node: node, Score: ScoreMatch(node, segments)))
+                .Where(m => m.Score > 0)
+                .OrderByDescending(m => m.Score)
+                .FirstOrDefault();
+
+            if (bestMatch.Node == null)
                 return null;
-            var minSegments = ns.MinSegments;
-            var addressParts = parts.Take(minSegments + 1).ToArray();
-            var address = new Messaging.Address(addressParts);
-            var remainder = parts.Length > minSegments + 1 ? string.Join("/", parts.Skip(minSegments + 1)) : null;
-            return new Mesh.Services.AddressResolution(address, remainder);
+
+            var matchedSegments = bestMatch.Score;
+            var remainder = matchedSegments < segments.Length
+                ? string.Join("/", segments.Skip(matchedSegments))
+                : null;
+
+            return new Mesh.Services.AddressResolution(bestMatch.Node.Prefix, remainder);
+        }
+
+        private static int ScoreMatch(Mesh.MeshNode node, string[] pathSegments)
+        {
+            var nodeSegments = node.Segments;
+            if (nodeSegments.Length > pathSegments.Length)
+                return 0;
+
+            for (int i = 0; i < nodeSegments.Length; i++)
+            {
+                if (!nodeSegments[i].Equals(pathSegments[i], System.StringComparison.OrdinalIgnoreCase))
+                    return 0;
+            }
+
+            return nodeSegments.Length;
         }
     }
 

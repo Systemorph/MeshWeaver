@@ -94,26 +94,19 @@ public class MeshWeaverDbContext(DbContextOptions<MeshWeaverDbContext> options)
         {
             entity.HasKey(e => e.Key);
             entity.Property(e => e.Key).IsRequired();
-            entity.Property(e => e.Name).IsRequired();
+            entity.Property(e => e.Prefix).IsRequired();
+            entity.Property(e => e.Name);
+            entity.Property(e => e.NodeType);
 
-            // Store Address as string using its ToString() representation
-            entity.Property(e => e.Address)
-                .HasConversion(
-                    a => a.ToString(),
-                    s => (Messaging.Address)s)
-                .IsRequired();
-
-            entity.Property(e => e.ThumbNail);
-            entity.Property(e => e.StreamProvider);
-            entity.Property(e => e.Namespace);
             entity.Property(e => e.AssemblyLocation);
             entity.Property(e => e.StartupScript);
             entity.Property(e => e.RoutingType);
             entity.Property(e => e.InstantiationType);
 
-            // Ignore the HubConfiguration as it's not serializable
+            // Ignore non-serializable properties
             entity.Ignore(e => e.HubConfiguration);
             entity.Ignore(e => e.GlobalServiceConfigurations);
+            entity.Ignore(e => e.Segments);
         });
 
         // Configure DataProtectionKey entity

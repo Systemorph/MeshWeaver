@@ -244,7 +244,7 @@ public partial class FileBrowser
             // The browser will handle the download based on the content-disposition header
             foreach (var file in filesToDownload)
             {
-                var downloadUrl = $"/{addressType}/{addressId}/static/{CollectionName}{file.Path}?download";
+                var downloadUrl = $"/static/{addressType}/{addressId}/{CollectionName}{file.Path}?download";
                 await JSRuntime.InvokeVoidAsync("open", downloadUrl, "_blank");
                 // Add a small delay between downloads to avoid browser blocking multiple downloads
                 await Task.Delay(100);

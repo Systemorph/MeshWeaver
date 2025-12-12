@@ -37,7 +37,7 @@ public partial class ApplicationPage : ComponentBase
     public IReadOnlyDictionary<string, object>? Options { get; set; } = ImmutableDictionary<string, object>.Empty;
 
     private AddressResolution? Resolution { get; set; }
-    private Address? Address => Resolution?.Address;
+    private Address? Address => Resolution != null ? (Address)Resolution.Prefix : null;
 
     private LayoutAreaReference Reference { get; set; } = null!;
     protected override Task OnParametersSetAsync()

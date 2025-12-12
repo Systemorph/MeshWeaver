@@ -65,9 +65,9 @@ public class AutocompleteClient(
     }
 
     /// <summary>
-    /// Gets all addresses to dispatch to: base addresses + all namespace addresses + context address.
+    /// Gets all addresses to dispatch to: base addresses + all node autocomplete addresses + context address.
     /// </summary>
-    private async Task<IReadOnlyCollection<Address>> GetAllDispatchAddressesAsync(
+    private Task<IReadOnlyCollection<Address>> GetAllDispatchAddressesAsync(
         AgentContext? context,
         CancellationToken ct)
     {
@@ -79,16 +79,15 @@ public class AutocompleteClient(
             addresses.Add(addr);
         }
 
-        // Add all namespace autocomplete addresses
+        // Add all node autocomplete addresses
         if (meshCatalog != null)
         {
-            var namespaces = await meshCatalog.GetNamespacesAsync(ct);
-            foreach (var ns in namespaces)
+            foreach (var node in meshCatalog.Configuration.Nodes.Values)
             {
-                var nsAddress = ns.AutocompleteAddress?.Invoke(context);
-                if (nsAddress != null)
+                var nodeAddress = node.AutocompleteAddress?.Invoke(context);
+                if (nodeAddress != null)
                 {
-                    addresses.Add(nsAddress);
+                    addresses.Add(nodeAddress);
                 }
             }
         }
@@ -99,6 +98,6 @@ public class AutocompleteClient(
             addresses.Add(context.Address);
         }
 
-        return addresses.ToList();
+        return Task.FromResult<IReadOnlyCollection<Address>>(addresses.ToList());
     }
 }
