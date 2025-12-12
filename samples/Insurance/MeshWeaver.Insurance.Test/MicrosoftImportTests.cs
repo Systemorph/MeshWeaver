@@ -16,7 +16,7 @@ namespace MeshWeaver.Insurance.Test;
 public class MicrosoftImportTests(ITestOutputHelper output) : InsuranceTestBase(output)
 {
     private readonly string _testFilesPath = Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "Files", "Microsoft", "2026");
-    private const string MicrosoftPricingId = "Microsoft-2026";
+    private const string MicrosoftPricingId = "Microsoft/2026";
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
     {
@@ -118,7 +118,7 @@ public class MicrosoftImportTests(ITestOutputHelper output) : InsuranceTestBase(
             .FirstAsync(x => x.Count > 0);
 
         risks.Should().NotBeEmpty("import should return at least one risk");
-        risks.All(r => r.PricingId == MicrosoftPricingId).Should().BeTrue("all risks should have PricingId set to Microsoft-2026");
+        risks.All(r => r.PricingId == MicrosoftPricingId).Should().BeTrue("all risks should have PricingId set to Microsoft/2026");
         risks.All(r => !string.IsNullOrWhiteSpace(r.Id)).Should().BeTrue("all risks should have an Id");
 
         // Verify source tracking

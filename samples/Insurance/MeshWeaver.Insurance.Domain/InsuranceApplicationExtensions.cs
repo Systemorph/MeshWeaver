@@ -72,12 +72,12 @@ public static class InsuranceApplicationExtensions
                     var segments = hub.Address.Segments;
                     var conf = sp.GetRequiredService<IConfiguration>();
 
-                    // Segments[0] = company, Segments[1] = year
-                    if (segments.Length < 2)
+                    // Segments[0] = pricing, Segments[1] = company, Segments[2] = year
+                    if (segments.Length < 3)
                         throw new InvalidOperationException($"Invalid address format: {hub.Address}. Expected format: pricing/company/year");
 
-                    var company = segments[0];
-                    var year = segments[1];
+                    var company = segments[1];
+                    var year = segments[2];
                     var subPath = $"{company}/{year}";
 
                     // Get the global Submissions configuration from appsettings, or create a default one

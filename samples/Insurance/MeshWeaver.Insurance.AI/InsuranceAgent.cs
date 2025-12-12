@@ -38,7 +38,7 @@ public class InsuranceAgent(IMessageHub hub) : IInitializableAgent, IAgentWithTo
                 nameof(RiskImportAgent),
                 "Delegate to RiskImportAgent when the user wants to import property risks from Excel files. " +
                 "When delegating, provide a clear message that includes the fully qualified path in 'collection:filename' format. " +
-                "Example: 'Import property risks from Submissions@Microsoft-2026:Microsoft.xlsx'. " +
+                "Example: 'Import property risks from Submissions@Microsoft/2026:Microsoft.xlsx'. " +
                 "Handles files with columns like Location, TSI, Address, Country, Currency, Building Value, etc. " +
                 "Common file names: risks.xlsx, exposure.xlsx, property schedule, location schedule."
             );
@@ -47,7 +47,7 @@ public class InsuranceAgent(IMessageHub hub) : IInitializableAgent, IAgentWithTo
                 nameof(SlipImportAgent),
                 "Delegate to SlipImportAgent when the user wants to import insurance slips from PDF, Word, or Markdown documents. " +
                 "When delegating, provide a clear message that includes the fully qualified path in 'collection:filename' format. " +
-                "Example: 'Import slip data from Submissions@Microsoft-2026:slip.pdf'. " +
+                "Example: 'Import slip data from Submissions@Microsoft/2026:slip.pdf'. " +
                 "Handles files with content about Insured, Coverage, Premium, Reinsurance Layers, Limits, Rates, etc. " +
                 "Common file names: slip.pdf, slip.md, submission.pdf, placement.pdf, quote.pdf, slip.docx."
             );
@@ -69,7 +69,7 @@ public class InsuranceAgent(IMessageHub hub) : IInitializableAgent, IAgentWithTo
 
         CRITICAL: When users ask about submission files, documents, or content:
         - Use the fully qualified 'collection:path' syntax for all file operations
-        - Format: "Submissions@{pricingId}:filename" (e.g., "Submissions@Microsoft-2026:Microsoft.xlsx")
+        - Format: "Submissions@{pricingId}:filename" (e.g., "Submissions@Microsoft/2026:Microsoft.xlsx")
         - The ContentPlugin parses the collection and path automatically from this syntax
 
         Available ContentPlugin functions:
@@ -79,9 +79,9 @@ public class InsuranceAgent(IMessageHub hub) : IInitializableAgent, IAgentWithTo
         - {{{nameof(ContentPlugin.Delete)}}}(path) - Delete a file or folder
 
         Examples:
-        - User: "Show me the submission files" → Call {{{nameof(ContentPlugin.ListFiles)}}}(path="Submissions@Microsoft-2026:")
-        - User: "Preview Microsoft.xlsx" → Call {{{nameof(ContentPlugin.GetContent)}}}(filePath="Submissions@Microsoft-2026:Microsoft.xlsx", numberOfRows=20)
-        - User: "Preview @Submissions@Microsoft-2026:Microsoft.xlsx" → Call {{{nameof(ContentPlugin.GetContent)}}}(filePath="Submissions@Microsoft-2026:Microsoft.xlsx")
+        - User: "Show me the submission files" → Call {{{nameof(ContentPlugin.ListFiles)}}}(path="Submissions@Microsoft/2026:")
+        - User: "Preview Microsoft.xlsx" → Call {{{nameof(ContentPlugin.GetContent)}}}(filePath="Submissions@Microsoft/2026:Microsoft.xlsx", numberOfRows=20)
+        - User: "Preview @Submissions@Microsoft/2026:Microsoft.xlsx" → Call {{{nameof(ContentPlugin.GetContent)}}}(filePath="Submissions@Microsoft/2026:Microsoft.xlsx")
 
         ## Importing Files (Excel, PDF, Word)
 
@@ -100,8 +100,8 @@ public class InsuranceAgent(IMessageHub hub) : IInitializableAgent, IAgentWithTo
         - If the file type is unclear from the name, ask the user to clarify
         - CRITICAL: Pass the fully qualified path in 'collection:filename' format
         - Examples:
-          - {{{nameof(RiskImportAgent)}}}("Import property risks from Submissions@Microsoft-2026:Microsoft.xlsx")
-          - {{{nameof(SlipImportAgent)}}}("Import slip data from Submissions@Microsoft-2026:slip.pdf")
+          - {{{nameof(RiskImportAgent)}}}("Import property risks from Submissions@Microsoft/2026:Microsoft.xlsx")
+          - {{{nameof(SlipImportAgent)}}}("Import slip data from Submissions@Microsoft/2026:slip.pdf")
         - When delegating, use the fully qualified 'collection:filename' format - the agent will parse it automatically
 
         **Step 2: The specialist agent will handle everything**
@@ -135,7 +135,7 @@ public class InsuranceAgent(IMessageHub hub) : IInitializableAgent, IAgentWithTo
           - All previous import attempts and results
 
         CRITICAL Rules:
-        - Use fully qualified 'collection:filename' format (e.g., "Submissions@Microsoft-2026:Microsoft.xlsx")
+        - Use fully qualified 'collection:filename' format (e.g., "Submissions@Microsoft/2026:Microsoft.xlsx")
         - DO NOT preview files yourself - let the specialist agents handle that
         - DO NOT import files yourself - you are a triage/routing agent, not an import specialist
         - DO NOT analyze import-related requests yourself - immediately delegate to the specialist agent
@@ -210,11 +210,12 @@ public class InsuranceAgent(IMessageHub hub) : IInitializableAgent, IAgentWithTo
                 var segments = context.Address.Segments;
 
                 // Pricing format: pricing/company/year
-                if (segments.Length < 2)
+                // Segments[0] = pricing, Segments[1] = company, Segments[2] = year
+                if (segments.Length < 3)
                     return null!;
 
-                var company = segments[0];
-                var year = segments[1];
+                var company = segments[1];
+                var year = segments[2];
                 var subPath = $"{company}/{year}";
 
                 // Create Hub-based collection config pointing to the pricing address

@@ -78,6 +78,14 @@ public record MeshNode(string Prefix)
     /// </summary>
     public int DisplayOrder { get; init; }
 
+    /// <summary>
+    /// Number of segments to include in the address when creating hub instances.
+    /// For example, prefix "pricing" with AddressSegments=3 means URLs like "pricing/Microsoft/2026"
+    /// will create hubs with address "pricing/Microsoft/2026".
+    /// If not set (0), defaults to the number of segments in the Prefix.
+    /// </summary>
+    public int AddressSegments { get; init; }
+
     public string? ThumbNail { get; init; }
     public string? StreamProvider { get; init; }
     public string? AssemblyLocation { get; init; }

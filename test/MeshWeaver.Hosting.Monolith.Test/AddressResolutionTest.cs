@@ -1,3 +1,4 @@
+using System.Threading.Tasks;
 using FluentAssertions;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
@@ -203,4 +204,161 @@ public class AddressResolutionTest(ITestOutputHelper output) : MonolithMeshTestB
     }
 
     #endregion
+}
+
+/// <summary>
+/// Tests for MeshNode.AddressSegments functionality.
+/// Verifies that nodes with AddressSegments > prefix segments correctly expand addresses.
+/// </summary>
+public class AddressSegmentsTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
+{
+    private const string PricingType = "pricing";
+
+    protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
+    {
+        return base.ConfigureMesh(builder)
+            // Register pricing node with AddressSegments=3 (pricing/company/year)
+            .AddMeshNodes(
+                new MeshNode(PricingType)
+                {
+                    Name = "Pricing",
+                    Description = "Insurance pricing submissions",
+                    IconName = "Calculator",
+                    DisplayOrder = 100,
+                    AddressSegments = 3, // pricing/company/year
+                    HubConfiguration = _ => _
+                }
+            );
+    }
+
+    [Fact]
+    public void ResolvePath_WithAddressSegments_ExpandsAddress()
+    {
+        // Arrange
+        var meshCatalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
+
+        // Act - pricing/Microsoft/2026/Overview
+        // Node "pricing" with AddressSegments=3 means address is "pricing/Microsoft/2026"
+        var resolution = meshCatalog.ResolvePath("pricing/Microsoft/2026/Overview");
+
+        // Assert
+        resolution.Should().NotBeNull();
+        resolution!.Prefix.Should().Be("pricing/Microsoft/2026");
+        resolution.Remainder.Should().Be("Overview");
+    }
+
+    [Fact]
+    public void ResolvePath_WithAddressSegments_ExactMatch_ReturnsNullRemainder()
+    {
+        // Arrange
+        var meshCatalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
+
+        // Act - exact match with AddressSegments=3
+        var resolution = meshCatalog.ResolvePath("pricing/Microsoft/2026");
+
+        // Assert
+        resolution.Should().NotBeNull();
+        resolution!.Prefix.Should().Be("pricing/Microsoft/2026");
+        resolution.Remainder.Should().BeNull();
+    }
+
+    [Fact]
+    public void ResolvePath_WithAddressSegments_FewerSegmentsThanRequired_UsesAvailableSegments()
+    {
+        // Arrange
+        var meshCatalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
+
+        // Act - only 2 segments when AddressSegments=3
+        var resolution = meshCatalog.ResolvePath("pricing/Microsoft");
+
+        // Assert
+        resolution.Should().NotBeNull();
+        resolution!.Prefix.Should().Be("pricing/Microsoft");
+        resolution.Remainder.Should().BeNull();
+    }
+
+    [Theory]
+    [InlineData("pricing/Microsoft/2026", "pricing/Microsoft/2026", null)]
+    [InlineData("pricing/Microsoft/2026/Overview", "pricing/Microsoft/2026", "Overview")]
+    [InlineData("pricing/Microsoft/2026/Overview/details", "pricing/Microsoft/2026", "Overview/details")]
+    [InlineData("pricing/Acme/2025/Reports/Q1/summary", "pricing/Acme/2025", "Reports/Q1/summary")]
+    public void ResolvePath_WithAddressSegments_VariousPaths_ReturnsCorrectPrefixAndRemainder(
+        string path, string expectedPrefix, string? expectedRemainder)
+    {
+        // Arrange
+        var meshCatalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
+
+        // Act
+        var resolution = meshCatalog.ResolvePath(path);
+
+        // Assert
+        resolution.Should().NotBeNull();
+        resolution!.Prefix.Should().Be(expectedPrefix);
+        resolution.Remainder.Should().Be(expectedRemainder);
+    }
+
+    [Fact]
+    public void ResolvePath_WithAddressSegments_CaseInsensitive_PreservesOriginalCase()
+    {
+        // Arrange
+        var meshCatalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
+
+        // Act - case-insensitive matching for prefix, preserves path case for additional segments
+        var resolution = meshCatalog.ResolvePath("PRICING/Microsoft/2026/Overview");
+
+        // Assert
+        resolution.Should().NotBeNull();
+        // "pricing" comes from node (lowercase), "Microsoft/2026" comes from path (original case)
+        resolution!.Prefix.Should().Be("pricing/Microsoft/2026");
+        resolution.Remainder.Should().Be("Overview");
+    }
+
+    [Fact]
+    public async Task GetNodeAsync_WithTemplateNode_ReturnsNodeWithFullAddress()
+    {
+        // Arrange
+        var meshCatalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
+
+        // Act - request a node with address pricing/Microsoft/2026
+        // The template node "pricing" with AddressSegments=3 should be used
+        var node = await meshCatalog.GetNodeAsync(new Address("pricing", "Microsoft", "2026"));
+
+        // Assert
+        node.Should().NotBeNull();
+        node!.Key.Should().Be("pricing/Microsoft/2026");
+        node.Name.Should().Be("Pricing"); // Inherited from template
+        node.HubConfiguration.Should().NotBeNull(); // Inherited from template
+    }
+
+    [Fact]
+    public async Task GetNodeAsync_WithTemplateNode_CachesResult()
+    {
+        // Arrange
+        var meshCatalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
+        var address = new Address("pricing", "Acme", "2025");
+
+        // Act - request same node twice
+        var node1 = await meshCatalog.GetNodeAsync(address);
+        var node2 = await meshCatalog.GetNodeAsync(address);
+
+        // Assert - should return cached result
+        node1.Should().NotBeNull();
+        node2.Should().NotBeNull();
+        node1.Should().BeSameAs(node2);
+    }
+
+    [Fact]
+    public async Task GetNodeAsync_WithExactMatch_ReturnsConfiguredNode()
+    {
+        // Arrange
+        var meshCatalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
+
+        // Act - request the template node itself
+        var node = await meshCatalog.GetNodeAsync(new Address("pricing"));
+
+        // Assert
+        node.Should().NotBeNull();
+        node!.Key.Should().Be("pricing");
+        node.AddressSegments.Should().Be(3);
+    }
 }

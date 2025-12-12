@@ -267,7 +267,7 @@ public static class SampleDataProvider
             },
             new Pricing
             {
-                Id = "Microsoft-2026",
+                Id = "Microsoft/2026",
                 InsuredName = "Microsoft",
                 InceptionDate = new DateTime(2026, 1, 1),
                 ExpirationDate = new DateTime(2026, 12, 31),

@@ -126,60 +126,60 @@ The pricing catalog showing all available pricings:
 
 ### Pricing Overview
 
-The overview for a specific pricing (e.g., Microsoft-2026):
+The overview for a specific pricing (e.g., Microsoft/2026):
 
 ```
-@pricing/Microsoft-2026/Overview
+@pricing/Microsoft/2026/Overview
 ```
 
-@pricing/Microsoft-2026/Overview
+@pricing/Microsoft/2026/Overview
 
 ### Property Risks
 
 Property risks for a pricing:
 
 ```
-@pricing/Microsoft-2026/PropertyRisks
+@pricing/Microsoft/2026/PropertyRisks
 ```
 
-@pricing/Microsoft-2026/PropertyRisks
+@pricing/Microsoft/2026/PropertyRisks
 
 ### Risk Map
 
 Geographic visualization of property risks:
 
 ```
-@pricing/Microsoft-2026/RiskMap
+@pricing/Microsoft/2026/RiskMap
 ```
 
-@pricing/Microsoft-2026/RiskMap
+@pricing/Microsoft/2026/RiskMap
 
 ### Reinsurance Structure
 
 Reinsurance acceptance structure:
 
 ```
-@pricing/Microsoft-2026/Structure
+@pricing/Microsoft/2026/Structure
 ```
 
-@pricing/Microsoft-2026/Structure
+@pricing/Microsoft/2026/Structure
 
 ### Submission Files
 
 File browser for submission documents:
 
 ```
-@pricing/Microsoft-2026/Submission
+@pricing/Microsoft/2026/Submission
 ```
 
-@pricing/Microsoft-2026/Submission
+@pricing/Microsoft/2026/Submission
 
 ### Import Configurations
 
 Excel import configurations:
 
 ```
-@pricing/Microsoft-2026/ImportConfigs
+@pricing/Microsoft/2026/ImportConfigs
 ```
 
-@pricing/Microsoft-2026/ImportConfigs
+@pricing/Microsoft/2026/ImportConfigs

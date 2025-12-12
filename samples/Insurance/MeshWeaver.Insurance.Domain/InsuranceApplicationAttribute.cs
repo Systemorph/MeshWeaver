@@ -1,4 +1,4 @@
-using MeshWeaver.Mesh;
+﻿using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 
 [assembly: MeshWeaver.Insurance.Domain.InsuranceApplication]
@@ -30,13 +30,14 @@ public class InsuranceApplicationAttribute : MeshNodeAttribute
             Address.ToString(),
             nameof(InsuranceApplicationAttribute),
             InsuranceApplicationExtensions.ConfigureInsuranceApplication),
-        // Pricing node - matches any pricing/* path using score-based matching
-        new MeshNode(PricingType)
+        // Pricing node - matches pricing/company/year paths (3 segments)
+        new(PricingType)
         {
             Name = "Pricing",
             Description = "Insurance pricing submissions",
             IconName = "Calculator",
             DisplayOrder = 100,
+            AddressSegments = 3, // pricing/company/year
             HubConfiguration = InsuranceApplicationExtensions.ConfigureSinglePricingApplication,
             AutocompleteAddress = _ => Address
         }

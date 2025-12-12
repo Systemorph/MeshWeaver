@@ -102,6 +102,7 @@ public class MeshWeaverDbContext(DbContextOptions<MeshWeaverDbContext> options)
             entity.Property(e => e.StartupScript);
             entity.Property(e => e.RoutingType);
             entity.Property(e => e.InstantiationType);
+            entity.Property(e => e.AddressSegments);
 
             // Ignore non-serializable properties
             entity.Ignore(e => e.HubConfiguration);
