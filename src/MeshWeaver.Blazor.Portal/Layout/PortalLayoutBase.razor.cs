@@ -1,30 +1,46 @@
 using MeshWeaver.AI;
 using MeshWeaver.Blazor.Chat;
-using MeshWeaver.Messaging;
 using MeshWeaver.Blazor.Portal.Components;
 using MeshWeaver.Blazor.Portal.Resize;
 using Microsoft.AspNetCore.Components;
 using Microsoft.AspNetCore.Components.Routing;
 using Microsoft.FluentUI.AspNetCore.Components;
 using Microsoft.JSInterop;
-// ChatWindowStateService is now in MeshWeaver.Blazor.Chat namespace
 
-namespace MeshWeaver.Portal.Shared.Web.Layout;
+namespace MeshWeaver.Blazor.Portal.Layout;
 
-public partial class MainLayout : IDisposable
+public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
 {
-    [Inject] private IJSRuntime JSRuntime { get; set; } = null!;
-    [Inject] private NavigationManager NavigationManager { get; set; } = null!;
-    [Inject] private IMessageHub Hub { get; set; } = null!;
-    [Inject] private ChatWindowStateService ChatState { get; set; } = null!;
+    [Inject] protected IJSRuntime JSRuntime { get; set; } = null!;
+    [Inject] protected NavigationManager NavigationManager { get; set; } = null!;
+    [Inject] protected ChatWindowStateService ChatState { get; set; } = null!;
 
-    private const string MessageBarSection = "MessagesTop";
-    private const string ChatAreaName = "AgentChat";
+    /// <summary>
+    /// Render fragment for header links (social media icons, etc.)
+    /// </summary>
+    [Parameter]
+    public RenderFragment? HeaderLinks { get; set; }
+
+    /// <summary>
+    /// Render fragment for desktop navigation menu
+    /// </summary>
+    [Parameter]
+    public RenderFragment? DesktopNavMenu { get; set; }
+
+    /// <summary>
+    /// Render fragment for mobile navigation menu
+    /// </summary>
+    [Parameter]
+    public RenderFragment? MobileNavMenu { get; set; }
+
+    protected const string MessageBarSection = "MessagesTop";
 
     private bool isNavMenuOpen;
+    protected bool IsNavMenuOpen => isNavMenuOpen;
+
     private readonly AgentChatControl chatControl = new();
     private IJSObjectReference? jsModule;
-    private DotNetObjectReference<MainLayout>? dotNetRef;
+    private DotNetObjectReference<PortalLayoutBase>? dotNetRef;
 
     protected override void OnInitialized()
     {
@@ -71,7 +87,12 @@ public partial class MainLayout : IDisposable
     [CascadingParameter]
     public required ViewportInformation ViewportInformation { get; set; }
 
-    private void CloseMobileNavMenu()
+    protected void ToggleNavMenu()
+    {
+        isNavMenuOpen = !isNavMenuOpen;
+    }
+
+    protected void CloseMobileNavMenu()
     {
         isNavMenuOpen = false;
         StateHasChanged();
@@ -79,13 +100,13 @@ public partial class MainLayout : IDisposable
 
     private IDialogReference? dialog;
 
-    private async Task OpenSiteSettingsAsync()
+    protected async Task OpenSiteSettingsAsync()
     {
         dialog = await DialogService.ShowPanelAsync<SiteSettingsPanel>(new DialogParameters()
         {
             ShowTitle = true,
             Title = "Site settings",
-            Alignment = Microsoft.FluentUI.AspNetCore.Components.HorizontalAlignment.Right,
+            Alignment = HorizontalAlignment.Right,
             PrimaryAction = "OK",
             SecondaryAction = null,
             ShowDismiss = true
@@ -96,7 +117,7 @@ public partial class MainLayout : IDisposable
 
     public bool IsAIChatVisible => ChatState.IsVisible;
     private AgentChatView? chatComponent;
-    private ChatPosition chatPosition => ChatState.Position;
+    protected ChatPosition ChatPositionValue => ChatState.Position;
 
     public async Task ToggleAIChatVisibility()
     {
@@ -121,7 +142,7 @@ public partial class MainLayout : IDisposable
             "import", "./_content/MeshWeaver.Blazor.Chat/AgentChatView.razor.js");
     }
 
-    private async Task StartResize()
+    protected async Task StartResize()
     {
         await EnsureJsModuleAsync();
         await jsModule!.InvokeVoidAsync("startResize");
@@ -136,7 +157,7 @@ public partial class MainLayout : IDisposable
         ChatState.SetSize(width, height);
     }
 
-    private async Task HandleNewChatAsync()
+    protected async Task HandleNewChatAsync()
     {
         if (chatComponent != null)
         {
@@ -144,7 +165,7 @@ public partial class MainLayout : IDisposable
         }
     }
 
-    private void HandleChatPositionChanged(ChatPosition newPosition)
+    protected void HandleChatPositionChanged(ChatPosition newPosition)
     {
         ChatState.SetPosition(newPosition);
     }
