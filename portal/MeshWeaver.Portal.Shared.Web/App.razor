@@ -1,6 +1,10 @@
-﻿@using Microsoft.Extensions.Configuration
+@using Microsoft.Extensions.Configuration
+@using MeshWeaver.Blazor.Components
 
 @inject IConfiguration Configuration
+
+<!DOCTYPE html>
+<html lang="en">
 
 <head>
     <meta charset="utf-8" />
@@ -17,18 +21,22 @@
     <HeadOutlet @rendermode="RenderMode.InteractiveServer" />
     <PageTitle>Mesh Weaver</PageTitle>
 </head>
-<FluentDesignTheme StorageName="theme"></FluentDesignTheme>
-<body>
 
-<Routes @rendermode="RenderMode.InteractiveServer" />
-<CookiePolicy @rendermode="RenderMode.InteractiveServer" />
-<script src="_content/BlazorMonaco/jsInterop.js"></script>
-<script src="_content/BlazorMonaco/lib/monaco-editor/min/vs/loader.js"></script>
-<script src="_content/BlazorMonaco/lib/monaco-editor/min/vs/editor/editor.main.js"></script>
-<script src="_framework/blazor.web.js"></script>
-<script src="_content/MeshWeaver.Blazor/js/theme-handler.js"></script>
-<script src="_content/MeshWeaver.Blazor.Portal/js/app.js"></script>
+<body>
+    <CascadingValue Name="ThemeMode" Value="@(Mode)">
+        <ThemeSync @bind-Mode="@Mode" @rendermode="RenderMode.InteractiveServer" />
+        <Routes @rendermode="RenderMode.InteractiveServer" />
+        <CookiePolicy @rendermode="RenderMode.InteractiveServer" />
+    </CascadingValue>
+    <script src="_content/MeshWeaver.Blazor.Portal/Layout/PortalLayoutBase.razor.js" type="module"></script>
+    <script src="_content/BlazorMonaco/jsInterop.js"></script>
+    <script src="_content/BlazorMonaco/lib/monaco-editor/min/vs/loader.js"></script>
+    <script src="_content/BlazorMonaco/lib/monaco-editor/min/vs/editor/editor.main.js"></script>
+    <script src="_framework/blazor.web.js"></script>
 </body>
 
+</html>
 
-
+@code {
+    private DesignThemeModes Mode;
+}

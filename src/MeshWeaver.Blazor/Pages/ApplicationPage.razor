@@ -2,6 +2,12 @@
 @page "/{**Path}"
 @using MeshWeaver.Messaging
 
+@* Reserved paths (_content, _framework, etc.) should not render anything - let static files handle them *@
+@if (isReservedPath)
+{
+    return;
+}
+
 <FluentDesignTheme @bind-Mode="@Mode" StorageName="theme" />
 
 <PageTitle>@PageTitle</PageTitle>

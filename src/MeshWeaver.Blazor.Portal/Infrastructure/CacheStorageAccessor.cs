@@ -3,7 +3,7 @@ using Microsoft.JSInterop;
 
 namespace MeshWeaver.Blazor.Portal.Infrastructure;
 
-public class CacheStorageAccessor(IJSRuntime js, IAppVersionService vs) : JSModule(js, "./_content/MeshWeaver.Blazor.Portal/js/CacheStorageAccessor.js")
+public class CacheStorageAccessor(IJSRuntime js, IAppVersionService vs) : JSModule(js, "./_content/MeshWeaver.Blazor.Portal/Layout/PortalLayoutBase.razor.js")
 {
     private string? currentCacheVersion;
 

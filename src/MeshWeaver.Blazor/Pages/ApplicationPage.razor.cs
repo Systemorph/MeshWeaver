@@ -13,8 +13,12 @@ namespace MeshWeaver.Blazor.Pages;
 
 public partial class ApplicationPage : ComponentBase
 {
+    // Reserved path prefixes that should not be handled by this page (static files, framework assets)
+    private static readonly string[] ReservedPrefixes = ["_content", "_framework", "_blazor", "_vs"];
+
     private DesignThemeModes Mode { get; set; }
     private LayoutAreaControl ViewModel { get; set; } = null!;
+    private bool isReservedPath;
 
     [Inject]
     private NavigationManager Navigation { get; set; } = null!;
@@ -42,6 +46,16 @@ public partial class ApplicationPage : ComponentBase
     private LayoutAreaReference Reference { get; set; } = null!;
     protected override Task OnParametersSetAsync()
     {
+        // Check if this is a reserved path that should be handled by static files middleware
+        var firstSegment = Path?.Split('/').FirstOrDefault();
+        if (ReservedPrefixes.Any(prefix => firstSegment?.Equals(prefix, StringComparison.OrdinalIgnoreCase) == true))
+        {
+            isReservedPath = true;
+            return Task.CompletedTask;
+        }
+
+        isReservedPath = false;
+
         // Resolve the entire path using pattern matching
         Resolution = MeshCatalog.ResolvePath(Path ?? "");
 
