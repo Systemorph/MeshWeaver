@@ -1,8 +1,8 @@
 using MeshWeaver.AI;
 using MeshWeaver.Blazor.Chat;
 using MeshWeaver.Messaging;
-using MeshWeaver.Portal.Shared.Web.Components;
-using MeshWeaver.Portal.Shared.Web.Resize;
+using MeshWeaver.Blazor.Portal.Components;
+using MeshWeaver.Blazor.Portal.Resize;
 using Microsoft.AspNetCore.Components;
 using Microsoft.AspNetCore.Components.Routing;
 using Microsoft.FluentUI.AspNetCore.Components;

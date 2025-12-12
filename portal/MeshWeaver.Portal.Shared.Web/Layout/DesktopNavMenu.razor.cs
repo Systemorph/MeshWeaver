@@ -2,6 +2,7 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 
 using MeshWeaver.Layout.Views;
+using MeshWeaver.Blazor.Portal.Infrastructure;
 using Microsoft.AspNetCore.Components;
 using Microsoft.FluentUI.AspNetCore.Components;
 using Microsoft.FluentUI.AspNetCore.Components.Icons.Regular;
@@ -13,18 +14,18 @@ public partial class DesktopNavMenu : ComponentBase
 {
     public static Icon TodoArticleIcon(bool active = false) =>
         active
-            ? new Portal.Shared.Web.Infrastructure.PortalIcons.Size24.TodoArticleActive()
-            : new Portal.Shared.Web.Infrastructure.PortalIcons.Size24.TodoArticle();
+            ? new PortalIcons.Size24.TodoArticleActive()
+            : new PortalIcons.Size24.TodoArticle();
 
     public static Icon NorthwindArticleIcon(bool active = false) =>
         active
-            ? new Portal.Shared.Web.Infrastructure.PortalIcons.Size24.NorthwindArticleActive()
-            : new Portal.Shared.Web.Infrastructure.PortalIcons.Size24.NorthwindArticle();
+            ? new PortalIcons.Size24.NorthwindArticleActive()
+            : new PortalIcons.Size24.NorthwindArticle();
 
     public static Icon DocumentationArticleIcon(bool active = false) =>
         active
-            ? new Portal.Shared.Web.Infrastructure.PortalIcons.Size24.DocumentationArticleActive()
-            : new Portal.Shared.Web.Infrastructure.PortalIcons.Size24.DocumentationArticle();
+            ? new PortalIcons.Size24.DocumentationArticleActive()
+            : new PortalIcons.Size24.DocumentationArticle();
     public static Icon ArticlesIcon(bool active = false)
         => active
             ? new Icons.Filled.Size24.Book()
@@ -68,8 +69,8 @@ public partial class DesktopNavMenu : ComponentBase
     public static Icon NorthwindIcon(bool active = false)
     {
         return active
-            ? new Portal.Shared.Web.Infrastructure.PortalIcons.Size24.NorthwindActive()
-            : new Portal.Shared.Web.Infrastructure.PortalIcons.Size24.Northwind();
+            ? new PortalIcons.Size24.NorthwindActive()
+            : new PortalIcons.Size24.Northwind();
     }
 
     public static Icon BlogIcon(bool active = false)
