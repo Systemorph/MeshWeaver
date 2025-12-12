@@ -9,18 +9,6 @@ public abstract class MeshNodeAttribute : Attribute
     public virtual IEnumerable<MeshNode> Nodes => [];
 
     /// <summary>
-    /// Gets the mesh node factories for dynamic node creation.
-    /// Each factory receives an Address and can return a MeshNode or null if it doesn't handle that address.
-    /// </summary>
-    public virtual IEnumerable<Func<Address, MeshNode?>> NodeFactories => [];
-
-    /// <summary>
-    /// Gets namespaces that describe available address types for autocomplete.
-    /// Each namespace provides metadata (name, description, icon) and optionally a factory function.
-    /// </summary>
-    public virtual IEnumerable<MeshNamespace> Namespaces => [];
-
-    /// <summary>
     /// Gets the address types to register with the mesh hub.
     /// Key is the short type name (e.g., "story"), Value is the address type.
     /// </summary>
@@ -34,13 +22,12 @@ public abstract class MeshNodeAttribute : Attribute
     /// </summary>
     public virtual IEnumerable<KeyValuePair<string, IUnifiedPathHandler>> PathPrefixes => [];
 
-    protected MeshNode CreateFromHubConfiguration(Address address, string name,
+    protected MeshNode CreateFromHubConfiguration(string prefix, string name,
         Func<MessageHubConfiguration, MessageHubConfiguration> hubConfiguration)
-        => new(address, name)
+        => new(prefix)
         {
+            Name = name,
             AssemblyLocation = GetType().Assembly.Location,
             HubConfiguration = hubConfiguration
         };
-
-
 }

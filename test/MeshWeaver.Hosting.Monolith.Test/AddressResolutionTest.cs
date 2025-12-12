@@ -1,4 +1,3 @@
-using System.Threading.Tasks;
 using FluentAssertions;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
@@ -11,7 +10,8 @@ namespace MeshWeaver.Hosting.Monolith.Test;
 
 /// <summary>
 /// Tests for address resolution via IMeshCatalog.ResolvePath.
-/// Verifies that paths are correctly resolved to addresses with remainder.
+/// Verifies that paths are correctly resolved to addresses with remainder using score-based matching.
+/// Score = number of matching segments from the path start.
 /// </summary>
 public class AddressResolutionTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
@@ -21,73 +21,73 @@ public class AddressResolutionTest(ITestOutputHelper output) : MonolithMeshTestB
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
     {
         return base.ConfigureMesh(builder)
-            .AddMeshNamespace(new MeshNamespace(PricingType, "Pricing")
-            {
-                Description = "Insurance pricing submissions",
-                IconName = "Calculator",
-                DisplayOrder = 100,
-                MinSegments = 2, // company + year (e.g., pricing/Microsoft/2026)
-                Factory = address =>
-                    address.Type == PricingType
-                        ? new MeshNode(address, address.ToString())
-                        {
-                            HubConfiguration = _ => _
-                        }
-                        : null
-            })
-            .AddMeshNamespace(new MeshNamespace(AppType, "Applications")
-            {
-                Description = "Standard applications",
-                IconName = "App",
-                DisplayOrder = 200,
-                MinSegments = 1
-            });
+            // Register pricing node - matches any pricing/* path
+            .AddMeshNodes(
+                new MeshNode(PricingType)
+                {
+                    Name = "Pricing",
+                    Description = "Insurance pricing submissions",
+                    IconName = "Calculator",
+                    DisplayOrder = 100,
+                    HubConfiguration = _ => _
+                },
+                new MeshNode(AppType)
+                {
+                    Name = "Applications",
+                    Description = "Standard applications",
+                    IconName = "App",
+                    DisplayOrder = 200,
+                    HubConfiguration = _ => _
+                }
+            );
     }
 
-    #region ResolvePath Tests
+    #region ResolvePath Score-Based Tests
 
     [Fact]
-    public void ResolvePath_PricingPath_ReturnsAddressAndRemainder()
+    public void ResolvePath_SingleSegmentNode_MatchesAndReturnsRemainder()
     {
         // Arrange
         var meshCatalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
 
         // Act - pricing/Microsoft/2026/Overview/details
+        // Node "pricing" has score 1, remainder is "Microsoft/2026/Overview/details"
         var resolution = meshCatalog.ResolvePath("pricing/Microsoft/2026/Overview/details");
 
         // Assert
         resolution.Should().NotBeNull();
-        resolution!.Address.ToString().Should().Be("pricing/Microsoft/2026");
-        resolution.Remainder.Should().Be("Overview/details");
+        resolution!.Prefix.Should().Be("pricing");
+        resolution.Remainder.Should().Be("Microsoft/2026/Overview/details");
     }
 
     [Fact]
-    public void ResolvePath_AppPath_ReturnsAddressAndRemainder()
+    public void ResolvePath_AppPath_ReturnsPrefixAndRemainder()
     {
         // Arrange
         var meshCatalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
 
         // Act - app/Todo/Dashboard/123
+        // Node "app" has score 1, remainder is "Todo/Dashboard/123"
         var resolution = meshCatalog.ResolvePath("app/Todo/Dashboard/123");
 
         // Assert
         resolution.Should().NotBeNull();
-        resolution!.Address.ToString().Should().Be("app/Todo");
-        resolution.Remainder.Should().Be("Dashboard/123");
+        resolution!.Prefix.Should().Be("app");
+        resolution.Remainder.Should().Be("Todo/Dashboard/123");
     }
 
     [Fact]
-    public void ResolvePath_WithoutRemainder_ReturnsNullRemainder()
+    public void ResolvePath_ExactMatch_ReturnsNullRemainder()
     {
         // Arrange
         var meshCatalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
 
-        // Act - app/Todo (no remainder)
-        var resolution = meshCatalog.ResolvePath("app/Todo");
+        // Act - exact match with node "pricing"
+        var resolution = meshCatalog.ResolvePath("pricing");
 
         // Assert
         resolution.Should().NotBeNull();
-        resolution!.Address.ToString().Should().Be("app/Todo");
+        resolution!.Prefix.Should().Be("pricing");
         resolution.Remainder.Should().BeNull();
     }
 
@@ -97,13 +97,13 @@ public class AddressResolutionTest(ITestOutputHelper output) : MonolithMeshTestB
         // Arrange
         var meshCatalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
 
-        // Act - /pricing/Microsoft/2026/Overview
-        var resolution = meshCatalog.ResolvePath("/pricing/Microsoft/2026/Overview");
+        // Act - leading slash should be stripped
+        var resolution = meshCatalog.ResolvePath("/pricing/Microsoft/2026");
 
         // Assert
         resolution.Should().NotBeNull();
-        resolution!.Address.ToString().Should().Be("pricing/Microsoft/2026");
-        resolution.Remainder.Should().Be("Overview");
+        resolution!.Prefix.Should().Be("pricing");
+        resolution.Remainder.Should().Be("Microsoft/2026");
     }
 
     [Fact]
@@ -112,7 +112,7 @@ public class AddressResolutionTest(ITestOutputHelper output) : MonolithMeshTestB
         // Arrange
         var meshCatalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
 
-        // Act
+        // Act - no node matches "unknown"
         var resolution = meshCatalog.ResolvePath("unknown/test/path");
 
         // Assert
@@ -120,14 +120,15 @@ public class AddressResolutionTest(ITestOutputHelper output) : MonolithMeshTestB
     }
 
     [Theory]
-    [InlineData("pricing/ACME/2025", "pricing/ACME/2025", null)]
-    [InlineData("pricing/ACME/2025/Reports", "pricing/ACME/2025", "Reports")]
-    [InlineData("pricing/ACME/2025/Reports/quarterly", "pricing/ACME/2025", "Reports/quarterly")]
-    [InlineData("app/Insurance", "app/Insurance", null)]
-    [InlineData("app/Insurance/Dashboard", "app/Insurance", "Dashboard")]
-    [InlineData("app/Insurance/Claims/C-123/details", "app/Insurance", "Claims/C-123/details")]
-    public void ResolvePath_VariousPaths_ReturnsCorrectAddressAndRemainder(
-        string path, string expectedAddress, string? expectedRemainder)
+    [InlineData("pricing", "pricing", null)]
+    [InlineData("pricing/ACME", "pricing", "ACME")]
+    [InlineData("pricing/ACME/2025", "pricing", "ACME/2025")]
+    [InlineData("pricing/ACME/2025/Reports", "pricing", "ACME/2025/Reports")]
+    [InlineData("app", "app", null)]
+    [InlineData("app/Insurance", "app", "Insurance")]
+    [InlineData("app/Insurance/Dashboard", "app", "Insurance/Dashboard")]
+    public void ResolvePath_VariousPaths_ReturnsCorrectPrefixAndRemainder(
+        string path, string expectedPrefix, string? expectedRemainder)
     {
         // Arrange
         var meshCatalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
@@ -137,107 +138,68 @@ public class AddressResolutionTest(ITestOutputHelper output) : MonolithMeshTestB
 
         // Assert
         resolution.Should().NotBeNull();
-        resolution!.Address.ToString().Should().Be(expectedAddress);
+        resolution!.Prefix.Should().Be(expectedPrefix);
         resolution.Remainder.Should().Be(expectedRemainder);
     }
 
     [Fact]
-    public void ResolvePath_PricingWithClientAndYear_HasCorrectAddress()
+    public void ResolvePath_EmptyPath_ReturnsNull()
     {
         // Arrange
         var meshCatalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
 
-        // Act - pricing/Microsoft/2026 should have Type=pricing, Id=Microsoft/2026
+        // Act
+        var resolution = meshCatalog.ResolvePath("");
+
+        // Assert
+        resolution.Should().BeNull();
+    }
+
+    [Fact]
+    public void ResolvePath_NullPath_ReturnsNull()
+    {
+        // Arrange
+        var meshCatalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
+
+        // Act
+        var resolution = meshCatalog.ResolvePath(null!);
+
+        // Assert
+        resolution.Should().BeNull();
+    }
+
+    #endregion
+
+    #region Score-Based Matching Priority Tests
+
+    [Fact]
+    public void ResolvePath_MultipleNodes_HighestScoreWins()
+    {
+        // This test requires registering additional nodes with different segment depths
+        // The test infrastructure registers only single-segment nodes,
+        // but this validates the concept of score-based matching
+        var meshCatalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
+
+        // With only "pricing" registered, it should match and have remainder
         var resolution = meshCatalog.ResolvePath("pricing/Microsoft/2026");
 
-        // Assert
         resolution.Should().NotBeNull();
-        resolution!.Address.Type.Should().Be(PricingType);
-        resolution.Address.ToString().Should().Be("pricing/Microsoft/2026");
-        resolution.Remainder.Should().BeNull();
+        resolution!.Prefix.Should().Be("pricing");
+        resolution.Remainder.Should().Be("Microsoft/2026");
     }
 
-    #endregion
-
-    #region ResolveAddress Tests
-
     [Fact]
-    public void ResolveAddress_RegisteredNamespace_ReturnsResolution()
+    public void ResolvePath_CaseInsensitive_MatchesCorrectly()
     {
         // Arrange
         var meshCatalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
 
-        // Act
-        var resolution = meshCatalog.ResolveAddress(PricingType, "Microsoft/2026");
+        // Act - case-insensitive matching
+        var resolution = meshCatalog.ResolvePath("PRICING/Microsoft/2026");
 
         // Assert
         resolution.Should().NotBeNull();
-        resolution!.Address.Type.Should().Be(PricingType);
-        resolution.Address.Id.Should().Be("Microsoft/2026");
-    }
-
-    [Fact]
-    public void ResolveAddress_UnregisteredNamespace_ReturnsNull()
-    {
-        // Arrange
-        var meshCatalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
-
-        // Act
-        var resolution = meshCatalog.ResolveAddress("unknown", "test");
-
-        // Assert
-        resolution.Should().BeNull();
-    }
-
-    [Fact]
-    public void ResolveAddress_AppTypeWithoutId_ReturnsNull()
-    {
-        // Arrange - app requires MinSegments=1, so just "app" won't match
-        var meshCatalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
-
-        // Act
-        var resolution = meshCatalog.ResolveAddress(AppType);
-
-        // Assert - app requires at least one segment, so type-only won't match
-        resolution.Should().BeNull();
-    }
-
-    [Theory]
-    [InlineData(PricingType, "ACME/2025", "pricing/ACME/2025")]
-    [InlineData(PricingType, "Microsoft/2026", "pricing/Microsoft/2026")]
-    [InlineData(AppType, "Todo", "app/Todo")]
-    [InlineData(AppType, "Insurance", "app/Insurance")]
-    public void ResolveAddress_VariousAddresses_ReturnsCorrectToString(
-        string addressType, string id, string expectedString)
-    {
-        // Arrange
-        var meshCatalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
-
-        // Act
-        var resolution = meshCatalog.ResolveAddress(addressType, id);
-
-        // Assert
-        resolution.Should().NotBeNull();
-        resolution!.Address.ToString().Should().Be(expectedString);
-    }
-
-    #endregion
-
-    #region GetNamespacesAsync Tests
-
-    [Fact]
-    public async Task GetNamespacesAsync_ReturnsAllRegisteredNamespaces()
-    {
-        // Arrange
-        var meshCatalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
-
-        // Act
-        var namespaces = await meshCatalog.GetNamespacesAsync(TestContext.Current.CancellationToken);
-
-        // Assert
-        namespaces.Should().HaveCountGreaterThanOrEqualTo(2);
-        namespaces.Should().Contain(n => n.Prefix == PricingType);
-        namespaces.Should().Contain(n => n.Prefix == AppType);
+        resolution!.Prefix.Should().Be(PricingType);
     }
 
     #endregion

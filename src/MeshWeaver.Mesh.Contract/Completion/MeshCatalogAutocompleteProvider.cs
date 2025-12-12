@@ -1,13 +1,12 @@
-#nullable enable
-
+﻿
 using MeshWeaver.Data.Completion;
 using MeshWeaver.Mesh.Services;
 
 namespace MeshWeaver.Mesh.Completion;
 
 /// <summary>
-/// Provides autocomplete items for registered mesh namespaces (prefixes).
-/// Returns items like "@pricing/", "@agent/", "@model/" based on registered MeshNamespaces
+/// Provides autocomplete items for registered mesh nodes.
+/// Returns items like "@app/", "@pricing/" based on registered MeshNodes
 /// plus reserved prefixes (agent, model).
 /// </summary>
 public class MeshCatalogAutocompleteProvider(IMeshCatalog? meshCatalog) : IAutocompleteProvider
@@ -15,22 +14,26 @@ public class MeshCatalogAutocompleteProvider(IMeshCatalog? meshCatalog) : IAutoc
     private const int PrefixCategoryPriority = 1800;
 
     /// <inheritdoc />
-    public async Task<IEnumerable<AutocompleteItem>> GetItemsAsync(string query, CancellationToken ct = default)
+    public Task<IEnumerable<AutocompleteItem>> GetItemsAsync(string query, CancellationToken ct = default)
     {
         var items = new List<AutocompleteItem>();
 
-        // Get namespaces from mesh catalog
+        // Get nodes from mesh catalog - use top-level nodes (single segment) for autocomplete
         if (meshCatalog != null)
         {
-            var namespaces = await meshCatalog.GetNamespacesAsync(ct);
-            foreach (var ns in namespaces)
+            var topLevelNodes = meshCatalog.Configuration.Nodes.Values
+                .Where(n => n.Segments.Length == 1)
+                .OrderBy(n => n.DisplayOrder)
+                .ThenBy(n => n.Name);
+
+            foreach (var node in topLevelNodes)
             {
                 items.Add(new AutocompleteItem(
-                    Label: $"@{ns.Prefix}/",
-                    InsertText: $"@{ns.Prefix}/",
-                    Description: ns.Description ?? ns.Name,
+                    Label: $"@{node.Prefix}/",
+                    InsertText: $"@{node.Prefix}/",
+                    Description: node.Description ?? node.Name,
                     Category: "Prefixes",
-                    Priority: PrefixCategoryPriority - ns.DisplayOrder,
+                    Priority: PrefixCategoryPriority - node.DisplayOrder,
                     Kind: AutocompleteKind.Other
                 ));
             }
@@ -61,6 +64,6 @@ public class MeshCatalogAutocompleteProvider(IMeshCatalog? meshCatalog) : IAutoc
             ));
         }
 
-        return items;
+        return Task.FromResult<IEnumerable<AutocompleteItem>>(items);
     }
 }

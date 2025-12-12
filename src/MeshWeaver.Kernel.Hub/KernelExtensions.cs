@@ -1,21 +1,24 @@
-﻿using MeshWeaver.Mesh;
+using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 
 namespace MeshWeaver.Kernel.Hub;
 
 public static class KernelExtensions
 {
+    /// <summary>
+    /// Registers a kernel node that handles all kernel/* addresses.
+    /// The kernel node matches any path starting with "kernel/" using score-based matching.
+    /// </summary>
     public static MeshBuilder AddKernel(this MeshBuilder builder)
-        => builder
-            .AddMeshNodeFactory(address =>
-                address.Type == AddressExtensions.KernelType
-                    ? new MeshNode(address, address.ToString())
-                    {
-                        AssemblyLocation = typeof(KernelExtensions).Assembly.Location,
-                        HubConfiguration = ConfigureHub
-                    }
-                    : null
-            );
+        => builder.AddMeshNodes(
+            new MeshNode(AddressExtensions.KernelType)
+            {
+                Name = "Kernel",
+                AssemblyLocation = typeof(KernelExtensions).Assembly.Location,
+                HubConfiguration = ConfigureHub,
+                Description = "Jupyter kernel for code execution"
+            }
+        );
 
     private static MessageHubConfiguration ConfigureHub(this MessageHubConfiguration config)
     {
@@ -23,4 +26,3 @@ public static class KernelExtensions
         return kernelContainer.ConfigureHub(config);
     }
 }
-

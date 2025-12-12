@@ -19,26 +19,9 @@ public interface IMeshCatalog
     IUnifiedPathRegistry PathRegistry { get; }
 
     /// <summary>
-    /// Gets all namespaces that describe available address types for autocomplete.
-    /// Used for autocomplete to show top-level items like "pricing/", "agent/", etc.
-    /// </summary>
-    Task<IReadOnlyList<MeshNamespace>> GetNamespacesAsync(CancellationToken ct = default);
-
-    /// <summary>
-    /// Gets a namespace by its prefix (address type).
-    /// Returns null if the namespace is not registered.
-    /// </summary>
-    MeshNamespace? GetNamespace(string prefix);
-
-    /// <summary>
-    /// Resolves an address from URL components using registered namespaces.
-    /// Returns the resolved Address and namespace, or null if the address type is not registered.
-    /// </summary>
-    AddressResolution? ResolveAddress(string addressType, string? id = null);
-
-    /// <summary>
-    /// Resolves a full URL path to an address using registered namespace patterns.
-    /// Returns the resolved Address, namespace, and parsed area/id from the path.
+    /// Resolves a full URL path to an address using score-based matching.
+    /// Returns the best matching node's address and the remaining path segments.
+    /// Score is the number of matching segments from the path start.
     /// </summary>
     AddressResolution? ResolvePath(string path);
 }
@@ -60,9 +43,9 @@ public record StorageInfo(
 public record StartupInfo(Address Address, string PackageName, string AssemblyLocation);
 
 /// <summary>
-/// Result of address resolution containing the resolved address and remaining path.
+/// Result of path resolution containing the matched prefix and remaining path.
 /// </summary>
 public record AddressResolution(
-    Address Address,
+    string Prefix,
     string? Remainder
 );
