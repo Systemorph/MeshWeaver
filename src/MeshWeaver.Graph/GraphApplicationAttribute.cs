@@ -50,17 +50,17 @@ public class GraphApplicationAttribute : MeshNodeAttribute
         return segments.Length switch
         {
             // @graph/{org} - Organization hub
-            1 => new MeshNode(address.Type, address.Id, $"Organization: {segments[0]}")
+            1 => new MeshNode(address, $"Organization: {segments[0]}")
             {
                 HubConfiguration = config => GraphHubConfiguration.ConfigureOrganizationHub(config, segments[0])
             },
             // @graph/{org}/{namespace} - Namespace hub
-            2 => new MeshNode(address.Type, address.Id, $"Namespace: {segments[0]}/{segments[1]}")
+            2 => new MeshNode(address, $"Namespace: {segments[0]}/{segments[1]}")
             {
                 HubConfiguration = config => GraphHubConfiguration.ConfigureNamespaceHub(config, segments[0], segments[1])
             },
             // @graph/{org}/{namespace}/{type}/{id} - Vertex hub
-            >= 4 => new MeshNode(address.Type, address.Id, $"Vertex: {string.Join("/", segments)}")
+            >= 4 => new MeshNode(address, $"Vertex: {string.Join("/", segments)}")
             {
                 HubConfiguration = config => GraphHubConfiguration.ConfigureVertexHub(
                     config, segments[0], segments[1], segments[2], segments[3])

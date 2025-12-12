@@ -2,12 +2,24 @@
 
 namespace MeshWeaver.Messaging;
 
-public sealed record Address(string Type, params string[] Segments)
+/// <summary>
+/// Unified address consisting of path segments.
+/// Example: "pricing/Microsoft/2026" has segments ["pricing", "Microsoft", "2026"]
+/// </summary>
+public sealed record Address(params string[] Segments)
 {
     /// <summary>
-    /// Backward compatibility: Id returns all segments joined with "/"
+    /// Gets the first segment (typically the type/namespace).
     /// </summary>
-    public string Id => string.Join("/", Segments);
+    public string Type => Segments.Length > 0 ? Segments[0] : "";
+
+    /// <summary>
+    /// Gets segments after the first one joined with "/".
+    /// For backward compatibility.
+    /// </summary>
+    public string Id => Segments.Length > 1
+        ? string.Join("/", Segments.Skip(1))
+        : "";
 
     /// <summary>
     /// Host address for hosted/nested addresses.
@@ -15,13 +27,11 @@ public sealed record Address(string Type, params string[] Segments)
     /// </summary>
     public Address? Host { get; init; }
 
-    public sealed override string ToString() => Segments.Length > 0
-        ? $"{Type}/{string.Join('/', Segments)}"
-        : Type;
+    public sealed override string ToString() => string.Join("/", Segments);
 
     /// <summary>
     /// Returns full string representation including host if present.
-    /// Format: "host-type/host-segments@inner-type/inner-segments"
+    /// Format: "host@inner"
     /// </summary>
     public string ToFullString() => Host != null
         ? $"{Host}@{this}"
@@ -31,7 +41,6 @@ public sealed record Address(string Type, params string[] Segments)
     {
         if (ReferenceEquals(null, other)) return false;
         if (ReferenceEquals(this, other)) return true;
-        if (Type != other.Type) return false;
         if (Segments.Length != other.Segments.Length) return false;
         for (int i = 0; i < Segments.Length; i++)
         {
@@ -46,7 +55,6 @@ public sealed record Address(string Type, params string[] Segments)
     public override int GetHashCode()
     {
         var hash = new HashCode();
-        hash.Add(Type);
         foreach (var segment in Segments)
             hash.Add(segment);
         if (Host != null)
@@ -64,18 +72,15 @@ public sealed record Address(string Type, params string[] Segments)
         {
             var hostPart = address[..atIndex];
             var innerPart = address[(atIndex + 1)..];
-            var host = ParseSimple(hostPart);
-            var inner = ParseSimple(innerPart);
+            var host = Parse(hostPart);
+            var inner = Parse(innerPart);
             return inner with { Host = host };
         }
-        return ParseSimple(address);
+        return Parse(address);
     }
 
-    private static Address ParseSimple(string address)
-    {
-        var parts = address.Split('/');
-        return new Address(parts[0], parts.Length > 1 ? parts[1..] : []);
-    }
+    private static Address Parse(string address) =>
+        new(address.Split('/'));
 }
 
 public static class AddressExtensions

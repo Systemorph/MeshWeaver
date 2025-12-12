@@ -1,4 +1,5 @@
 ﻿using System.Reflection;
+using System.Text.RegularExpressions;
 using MeshWeaver.Data;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
@@ -17,6 +18,8 @@ public abstract class MeshCatalogBase : IMeshCatalog
     private readonly MemoryCacheEntryOptions cacheOptions = new(){SlidingExpiration = TimeSpan.FromMinutes(5)};
     private readonly IMessageHub persistence;
     private readonly ILogger<MeshCatalogBase> logger;
+    private readonly List<(MeshNamespace Namespace, Regex Regex)> compiledPatterns;
+
     protected MeshCatalogBase(IMessageHub hub, MeshConfiguration configuration, IUnifiedPathRegistry pathRegistry)
     {
         Configuration = configuration;
@@ -26,6 +29,33 @@ public abstract class MeshCatalogBase : IMeshCatalog
         foreach (var node in Configuration.Nodes.Values)
                 UpdateNode(node);
 
+        // Pre-compile regex patterns for namespaces
+        compiledPatterns = BuildPatterns();
+    }
+
+    private List<(MeshNamespace Namespace, Regex Regex)> BuildPatterns()
+    {
+        var patterns = new List<(MeshNamespace, Regex)>();
+
+        // Add patterns from explicit namespaces
+        foreach (var ns in Configuration.Namespaces.OrderBy(n => n.DisplayOrder))
+        {
+            var pattern = ns.Pattern ?? GenerateNamespacePattern(ns);
+            var regex = new Regex(pattern, RegexOptions.Compiled | RegexOptions.IgnoreCase);
+            patterns.Add((ns, regex));
+        }
+
+        return patterns;
+    }
+
+    private static string GenerateNamespacePattern(MeshNamespace ns)
+    {
+        // Generate pattern based on Prefix and MinSegments
+        // Pattern format: ^{prefix}(/segment){MinSegments}(/remainder)?$
+        // Captures: address (full address), remainder (optional)
+        var prefix = Regex.Escape(ns.Prefix);
+        var segments = string.Concat(Enumerable.Repeat("/[^/]+", ns.MinSegments));
+        return $@"^(?<address>{prefix}{segments})(?:/(?<remainder>.*))?$";
     }
 
     public async Task<MeshNode?> GetNodeAsync(Address address)
@@ -84,5 +114,90 @@ public abstract class MeshCatalogBase : IMeshCatalog
             .ToList();
 
         return Task.FromResult<IReadOnlyList<MeshNamespace>>(namespaces);
+    }
+
+    /// <inheritdoc />
+    public MeshNamespace? GetNamespace(string prefix)
+    {
+        return Configuration.Namespaces.FirstOrDefault(n =>
+            string.Equals(n.Prefix, prefix, StringComparison.OrdinalIgnoreCase));
+    }
+
+    /// <inheritdoc />
+    public AddressResolution? ResolveAddress(string addressType, string? id = null)
+    {
+        var address = string.IsNullOrEmpty(id)
+            ? new Address(addressType)
+            : new Address(addressType, id);
+
+        return ResolvePath(address.ToString());
+    }
+
+    /// <inheritdoc />
+    public AddressResolution? ResolvePath(string path)
+    {
+        if (string.IsNullOrEmpty(path))
+            return null;
+
+        // Normalize path - remove leading slash if present
+        path = path.TrimStart('/');
+
+        // 1. Try namespace patterns first (these have MinSegments defined)
+        foreach (var (_, regex) in compiledPatterns)
+        {
+            var match = regex.Match(path);
+            if (match.Success)
+            {
+                var addressStr = match.Groups["address"].Value;
+                var remainder = match.Groups["remainder"].Success ? match.Groups["remainder"].Value : null;
+                if (string.IsNullOrEmpty(remainder))
+                    remainder = null;
+
+                return new AddressResolution((Address)addressStr, remainder);
+            }
+        }
+
+        // 2. Try matching against registered nodes using their Address (longest match first)
+        var matchingAddress = Configuration.Nodes.Values
+            .Select(node => node.Address)
+            .Where(addr => PathStartsWithAddress(path, addr))
+            .OrderByDescending(addr => addr.ToString().Length)
+            .FirstOrDefault();
+
+        if (matchingAddress != null)
+            return new AddressResolution(matchingAddress, GetRemainder(path, matchingAddress));
+
+        // 3. Try factories - build address incrementally and check if factory accepts it
+        var parts = path.Split('/');
+        for (var i = parts.Length; i >= 1; i--)
+        {
+            var candidateAddress = (Address)string.Join("/", parts.Take(i));
+            var factoryMatch = Configuration.MeshNodeFactories
+                .Select(f => f.Invoke(candidateAddress))
+                .FirstOrDefault(x => x != null);
+
+            if (factoryMatch != null)
+            {
+                var remainder = i < parts.Length ? string.Join("/", parts.Skip(i)) : null;
+                return new AddressResolution(candidateAddress, remainder);
+            }
+        }
+
+        return null;
+    }
+
+    private static bool PathStartsWithAddress(string path, Address address)
+    {
+        var addressStr = address.ToString();
+        return path.Equals(addressStr, StringComparison.OrdinalIgnoreCase)
+            || path.StartsWith(addressStr + "/", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string? GetRemainder(string path, Address address)
+    {
+        var addressStr = address.ToString();
+        if (path.Length <= addressStr.Length)
+            return null;
+        return path.Substring(addressStr.Length + 1); // +1 to skip the /
     }
 }

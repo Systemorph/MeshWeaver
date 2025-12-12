@@ -55,9 +55,10 @@ public class AddressConverter : JsonConverter<Address>
         if (type == null)
             throw new JsonException("Invalid address object format: missing type");
 
-        // Parse segments from id (can be empty)
-        var segments = string.IsNullOrEmpty(id) ? [] : id.Split('/');
-        var address = new Address(type, segments);
+        // Build segments array: type + id segments
+        var idSegments = string.IsNullOrEmpty(id) ? [] : id.Split('/');
+        var allSegments = new[] { type }.Concat(idSegments).ToArray();
+        var address = new Address(allSegments);
 
         // If host is present, parse and attach it
         if (!string.IsNullOrEmpty(host))
@@ -80,11 +81,8 @@ public class AddressConverter : JsonConverter<Address>
         return addressString;
     }
 
-    private static Address ParseSimple(string address)
-    {
-        var parts = address.Split('/');
-        return new Address(parts[0], parts.Length > 1 ? parts[1..] : []);
-    }
+    private static Address ParseSimple(string address) =>
+        new(address.Split('/'));
 
     public override void Write(Utf8JsonWriter writer, Address value, JsonSerializerOptions options)
     {

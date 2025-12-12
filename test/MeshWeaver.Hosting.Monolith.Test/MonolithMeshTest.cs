@@ -51,11 +51,11 @@ public class MonolithMeshTest(ITestOutputHelper output) : MonolithMeshTestBase(o
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder) =>
         base.ConfigureMesh(builder)
-            .AddMeshNodes(new MeshNode(AddressExtensions.AppType, "HubFactory", "HubFactory")
+            .AddMeshNodes(new MeshNode(new Address(AddressExtensions.AppType, "HubFactory"), "HubFactory")
             {
                 HubConfiguration = x => x
             })
-                .AddMeshNodes(new MeshNode(AddressExtensions.AppType, "Kernel", "Kernel")
+                .AddMeshNodes(new MeshNode(new Address(AddressExtensions.AppType, "Kernel"), "Kernel")
                 {
                     StartupScript = @$"using MeshWeaver.Messaging; Mesh.ServiceProvider.CreateMessageHub(AddressExtensions.CreateAppAddress(""Kernel""))"
                 })
