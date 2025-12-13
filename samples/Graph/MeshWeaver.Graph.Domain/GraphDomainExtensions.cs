@@ -1,4 +1,4 @@
-using MeshWeaver.Graph.Domain.Models;
+﻿using MeshWeaver.Graph.Domain.Models;
 using MeshWeaver.Messaging;
 
 namespace MeshWeaver.Graph.Domain;
@@ -29,7 +29,6 @@ public static class GraphDomainExtensions
         public MessageHubConfiguration ConfigureGraphHub()
             => configuration
                 .ConfigureMeshHub()
-                .WithDataType<Organization>()
                 .Build();
 
         /// <summary>
@@ -40,7 +39,7 @@ public static class GraphDomainExtensions
         public MessageHubConfiguration ConfigureOrganizationHub()
             => configuration
                 .ConfigureMeshHub()
-                .WithDataTypes(typeof(Organization), typeof(Project))
+                .WithDataType<Organization>()
                 .Build();
 
         /// <summary>
@@ -51,7 +50,7 @@ public static class GraphDomainExtensions
         public MessageHubConfiguration ConfigureProjectHub()
             => configuration
                 .ConfigureMeshHub()
-                .WithDataTypes(typeof(Project), typeof(Story))
+                .WithDataType<Project>()
                 .Build();
 
         /// <summary>

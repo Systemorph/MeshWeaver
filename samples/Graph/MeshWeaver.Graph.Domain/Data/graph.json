@@ -1,0 +1,9 @@
+{
+  "path": "graph",
+  "key": "graph",
+  "name": "Graph",
+  "description": "Root of hierarchical graph",
+  "nodeType": "graph",
+  "iconName": "Diagram",
+  "displayOrder": 1
+}

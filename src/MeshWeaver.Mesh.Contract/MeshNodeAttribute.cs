@@ -28,6 +28,9 @@ public abstract class MeshNodeAttribute : Attribute
     /// </summary>
     public virtual IEnumerable<KeyValuePair<string, IUnifiedPathHandler>> PathPrefixes => [];
 
+    /// <summary>
+    /// Creates a mesh node from a hub configuration using a string prefix.
+    /// </summary>
     protected MeshNode CreateFromHubConfiguration(string prefix, string name,
         Func<MessageHubConfiguration, MessageHubConfiguration> hubConfiguration)
         => new(prefix)
@@ -36,4 +39,11 @@ public abstract class MeshNodeAttribute : Attribute
             AssemblyLocation = GetType().Assembly.Location,
             HubConfiguration = hubConfiguration
         };
+
+    /// <summary>
+    /// Creates a mesh node from a hub configuration using an Address.
+    /// </summary>
+    protected MeshNode CreateFromHubConfiguration(Address address, string name,
+        Func<MessageHubConfiguration, MessageHubConfiguration> hubConfiguration)
+        => CreateFromHubConfiguration(address.ToString(), name, hubConfiguration);
 }

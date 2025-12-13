@@ -1,5 +1,4 @@
 ﻿using MeshWeaver.Data;
-using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
@@ -14,10 +13,10 @@ namespace MeshWeaver.Graph;
 public class MeshHubBuilder
 {
     private readonly MessageHubConfiguration _configuration;
-    private readonly List<Type> _dataTypes = new();
     private readonly List<Func<MessageHubConfiguration, MessageHubConfiguration>> _hubConfigurations = new();
     private Func<IMessageHub, CancellationToken, Task>? _initializationFunc;
     private bool _addMeshNavigation = true;
+    private Type? DataType { get; set; }
 
     /// <summary>
     /// Creates a new MeshHubBuilder for the given hub configuration.
@@ -26,7 +25,6 @@ public class MeshHubBuilder
     public MeshHubBuilder(MessageHubConfiguration configuration)
     {
         _configuration = configuration;
-        _dataTypes.Add(typeof(MeshNode));
         _initializationFunc = DefaultInitializeAsync;
     }
 
@@ -35,18 +33,10 @@ public class MeshHubBuilder
     /// </summary>
     public MeshHubBuilder WithDataType<T>()
     {
-        _dataTypes.Add(typeof(T));
+        DataType = typeof(T);
         return this;
     }
 
-    /// <summary>
-    /// Registers multiple data types for this hub.
-    /// </summary>
-    public MeshHubBuilder WithDataTypes(params Type[] types)
-    {
-        _dataTypes.AddRange(types);
-        return this;
-    }
 
     /// <summary>
     /// Adds additional hub configuration.
@@ -86,9 +76,9 @@ public class MeshHubBuilder
         var config = _configuration;
 
         // Register all data types
-        if (_dataTypes.Count > 0)
+        if (DataType is not null)
         {
-            config = config.WithTypes(_dataTypes.ToArray());
+            config = config.AddData(data => data.AddSource(source => source.WithType(DataType)));
         }
 
         // Add mesh navigation (autocomplete + catalog view)
@@ -97,8 +87,6 @@ public class MeshHubBuilder
             config = config.AddMeshNavigation();
         }
 
-        // Add data source for registered types
-        config = config.AddData(CreateDataContext);
 
         // Apply additional hub configurations
         foreach (var hubConfig in _hubConfigurations)
@@ -129,35 +117,6 @@ public class MeshHubBuilder
         return config;
     }
 
-    /// <summary>
-    /// Creates the data context with registered types.
-    /// </summary>
-    private DataContext CreateDataContext(DataContext dataContext)
-    {
-        // Create a data source with all registered types
-        return dataContext.AddSource(src =>
-        {
-            var source = src;
-            foreach (var type in _dataTypes)
-            {
-                source = AddTypeToSource(source, type);
-            }
-            return source;
-        });
-    }
-
-    /// <summary>
-    /// Adds a type to the data source using reflection to call the generic WithType method.
-    /// </summary>
-    private static GenericUnpartitionedDataSource AddTypeToSource(GenericUnpartitionedDataSource source, Type type)
-    {
-        // Use reflection to call WithType<T>()
-        var method = typeof(GenericUnpartitionedDataSource)
-            .GetMethods()
-            .First(m => m.Name == "WithType" && m.IsGenericMethodDefinition && m.GetParameters().Length == 0);
-        var genericMethod = method.MakeGenericMethod(type);
-        return (GenericUnpartitionedDataSource)genericMethod.Invoke(source, null)!;
-    }
 
     /// <summary>
     /// Default initialization that loads data from IPersistenceService.

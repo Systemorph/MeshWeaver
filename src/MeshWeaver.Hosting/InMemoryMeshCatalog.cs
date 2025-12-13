@@ -1,5 +1,4 @@
-﻿using System.Collections.Concurrent;
-using MeshWeaver.Mesh;
+﻿using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
@@ -7,28 +6,33 @@ using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Hosting;
 
+/// <summary>
+/// Mesh catalog that loads nodes from the persistence service.
+/// </summary>
 public class InMemoryMeshCatalog(
     IMessageHub hub,
     MeshConfiguration configuration,
     IUnifiedPathRegistry pathRegistry,
-    IPersistenceService? persistenceService = null)
+    IPersistenceService persistenceService)
     : MeshCatalogBase(hub, configuration, pathRegistry, persistenceService)
 {
     private readonly ILogger<InMemoryMeshCatalog> logger = hub.ServiceProvider.GetRequiredService<ILogger<InMemoryMeshCatalog>>();
-    private readonly ConcurrentDictionary<Address, MeshNode> meshNodes = new();
-    protected override Task<MeshNode?> LoadMeshNode(Address address) => 
-        Task.FromResult(meshNodes.GetValueOrDefault(address));
 
-    public override Task UpdateAsync(MeshNode node)
-    {
-        meshNodes[node.Key] = node;
-        return Task.CompletedTask;
-    }
+    /// <summary>
+    /// Loads a mesh node from the persistence service.
+    /// </summary>
+    protected override Task<MeshNode?> LoadMeshNode(Address address) =>
+        Persistence.GetNodeAsync(address.ToString());
 
-    protected override Task UpdateNodeAsync(MeshNode node)
-    {
-        meshNodes[node.Key] = node;
-        return Task.CompletedTask;
-    }
+    /// <summary>
+    /// Updates a node in the persistence service.
+    /// </summary>
+    public override Task UpdateAsync(MeshNode node) =>
+        Persistence.SaveNodeAsync(node);
 
+    /// <summary>
+    /// Updates a node in the persistence service.
+    /// </summary>
+    protected override Task UpdateNodeAsync(MeshNode node) =>
+        Persistence.SaveNodeAsync(node);
 }

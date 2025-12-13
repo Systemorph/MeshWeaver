@@ -1,8 +1,10 @@
 ﻿using MeshWeaver.Connection.Orleans;
+using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
 
 namespace MeshWeaver.Hosting.Orleans;
@@ -75,10 +77,15 @@ public static class OrleansServerRegistryExtensions
         return builder;
     }
 
-    public static IServiceCollection AddOrleansMeshServices(this IServiceCollection services) =>
-        services
+    public static IServiceCollection AddOrleansMeshServices(this IServiceCollection services)
+    {
+        // Register default in-memory persistence if not already registered
+        services.TryAddSingleton<IPersistenceService>(new InMemoryPersistenceService());
+
+        return services
             .AddSingleton<IRoutingService, OrleansRoutingService>()
             .AddSingleton<IMeshCatalog, InMemoryMeshCatalog>();
+    }
 
 
 }
