@@ -202,8 +202,12 @@ public abstract record GenericUnpartitionedDataSource<TDataSource>(object Id, IW
     where TDataSource : GenericUnpartitionedDataSource<TDataSource>
 {
 
+    private static readonly MethodInfo WithTypeGeneric = ReflectionHelper.GetMethodGeneric<
+        GenericUnpartitionedDataSource<TDataSource>>(x => x.WithType<object>((Func<ITypeSource, ITypeSource>?)null));
     public override TDataSource WithType<T>(Func<ITypeSource, ITypeSource>? config) =>
         WithType<T>(x => (TypeSourceWithType<T>)(config ?? (y => y))(x));
+    public override TDataSource WithType(Type type, Func<ITypeSource, ITypeSource>? config = null) =>
+        (TDataSource)WithTypeGeneric.MakeGenericMethod(type).InvokeAsFunction(this, config ?? (Func<ITypeSource, ITypeSource>)(x => x));
 
     public TDataSource WithType<T>(Func<TypeSourceWithType<T>, TypeSourceWithType<T>>? configurator)
         where T : class => WithTypeSource(typeof(T), (configurator ?? (x => x)).Invoke(new(Workspace, Id)));

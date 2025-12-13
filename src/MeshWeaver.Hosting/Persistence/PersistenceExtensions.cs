@@ -47,6 +47,7 @@ public static class PersistenceExtensions
 
     /// <summary>
     /// Adds an in-memory persistence service backed by file system storage.
+    /// Initializes the service by loading existing data from the file system.
     /// </summary>
     /// <param name="services">The service collection</param>
     /// <param name="baseDirectory">The base directory for storing JSON files</param>
@@ -55,6 +56,10 @@ public static class PersistenceExtensions
     {
         var storageAdapter = new FileSystemStorageAdapter(baseDirectory);
         var persistenceService = new InMemoryPersistenceService(storageAdapter);
+
+        // Initialize synchronously to load existing data from file system
+        persistenceService.InitializeAsync().GetAwaiter().GetResult();
+
         services.AddSingleton<IStorageAdapter>(storageAdapter);
         services.AddSingleton<IPersistenceService>(persistenceService);
         return services;

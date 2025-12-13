@@ -43,71 +43,22 @@ public class GraphDomainAttribute : MeshNodeAttribute
     public static readonly Address GraphAddress = new(GraphType);
 
     /// <summary>
-    /// Gets the mesh node templates for the Graph domain.
-    /// These are factory templates that define how to configure hubs when paths match.
-    /// Actual node data comes from the file system.
-    /// Template paths use format: $template/{prefix}/{addressSegments}
+    /// Gets the mesh nodes for the Graph domain.
+    /// Only the root "graph" node is registered here.
+    /// Child nodes (organizations, projects, stories) are loaded from the file system
+    /// and their HubConfiguration is determined by NodeType via NodeTypeConfigurations.
     /// </summary>
     public override IEnumerable<MeshNode> Nodes =>
     [
-        // Root graph hub template - matches "graph" exactly (1 segment)
+        // Root graph hub - matches "graph" exactly
         new(GraphType)
         {
             Name = "Graph",
+            NodeType = GraphType,
             Description = "Root of hierarchical graph",
             IconName = "Diagram",
             DisplayOrder = 1,
-            HubConfiguration = GraphDomainExtensions.ConfigureGraphHub,
-            AutocompleteAddress = _ => GraphAddress
-        },
-
-        // Organization template - matches graph/{orgId} (2 segments)
-        // e.g., graph/org3
-        new("$template/graph/2")
-        {
-            Name = "Organization",
-            NodeType = OrgType,
-            Description = "Organization template",
-            IconName = "Building",
-            DisplayOrder = 10,
-            AddressSegments = 2,
-            HubConfiguration = GraphDomainExtensions.ConfigureOrganizationHub,
-            AutocompleteAddress = _ => GraphAddress
-        },
-
-        // Project template - matches graph/{orgId}/{projectId} (3 segments)
-        // e.g., graph/org3/project1
-        new("$template/graph/3")
-        {
-            Name = "Project",
-            NodeType = ProjectType,
-            Description = "Project template",
-            IconName = "Folder",
-            DisplayOrder = 20,
-            AddressSegments = 3,
-            HubConfiguration = GraphDomainExtensions.ConfigureProjectHub,
-            AutocompleteAddress = ctx => ctx?.Address != null && ctx.Address.Segments.Length >= 2
-                ? new Address(string.Join("/", ctx.Address.Segments.Take(2)))
-                : GraphAddress
-        },
-
-        // Story template - matches graph/{orgId}/{projectId}/{storyId} (4 segments)
-        // e.g., graph/org3/project1/story2
-        new("$template/graph/4")
-        {
-            Name = "Story",
-            NodeType = StoryType,
-            Description = "Story template",
-            IconName = "Document",
-            DisplayOrder = 30,
-            AddressSegments = 4,
-            HubConfiguration = GraphDomainExtensions.ConfigureStoryHub,
-            AutocompleteAddress = ctx =>
-            {
-                if (ctx?.Address == null || ctx.Address.Segments.Length < 3)
-                    return GraphAddress;
-                return new Address(string.Join("/", ctx.Address.Segments.Take(3)));
-            }
+            HubConfiguration = GraphDomainExtensions.ConfigureGraphHub
         }
     ];
 
@@ -117,6 +68,16 @@ public class GraphDomainAttribute : MeshNodeAttribute
     /// </summary>
     public override IEnumerable<NodeTypeConfiguration> NodeTypeConfigurations =>
     [
+        new NodeTypeConfiguration
+        {
+            NodeType = GraphType,
+            DataType = typeof(object), // Graph root has no specific content type
+            HubConfiguration = GraphDomainExtensions.ConfigureGraphHub,
+            DisplayName = "Graph",
+            IconName = "Diagram",
+            Description = "Root of hierarchical graph",
+            DisplayOrder = 1
+        },
         new NodeTypeConfiguration
         {
             NodeType = OrgType,

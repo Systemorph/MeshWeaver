@@ -17,6 +17,7 @@ public record MeshBuilder
     }
 
     private List<MeshNode> MeshNodes { get; } = new();
+    private List<NodeTypeConfiguration> NodeTypeConfigs { get; } = new();
     private readonly UnifiedPathRegistry pathRegistry = new();
 
     public MeshBuilder InstallAssemblies(params string[] assemblyLocations)
@@ -26,6 +27,9 @@ public record MeshBuilder
             .SelectMany(a => a.GetCustomAttributes<MeshNodeAttribute>())
             .ToArray();
         MeshNodes.AddRange(attributes.SelectMany(a => InstallServices(a.Nodes)));
+
+        // Collect node type configurations from attributes
+        NodeTypeConfigs.AddRange(attributes.SelectMany(a => a.NodeTypeConfigurations));
 
         // Register address types from attributes
         var addressTypes = attributes.SelectMany(a => a.AddressTypes).ToArray();
@@ -96,7 +100,9 @@ public record MeshBuilder
         pathRegistry.Register("content", new ContentPathHandler());
 
         ConfigureServices(services => services
-            .AddSingleton(_ => new MeshConfiguration(MeshNodes.ToDictionary(x => x.Key)))
+            .AddSingleton(_ => new MeshConfiguration(
+                MeshNodes.ToDictionary(x => x.Key),
+                NodeTypeConfigs.ToDictionary(x => x.NodeType)))
             .AddSingleton<IUnifiedPathRegistry>(_ => pathRegistry)
             .AddSingleton(BuildHub)
             .AddSingleton<AccessService>()
