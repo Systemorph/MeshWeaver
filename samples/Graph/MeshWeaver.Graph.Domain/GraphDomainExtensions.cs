@@ -55,14 +55,13 @@ public static class GraphDomainExtensions
 
         /// <summary>
         /// Configures a story hub at graph/{orgId}/{projectId}/{storyId}.
-        /// Shows the story details (no mesh navigation since stories are leaf nodes).
+        /// Shows the story details. Mesh navigation is enabled (will show empty children list).
         /// Data is loaded automatically from IPersistenceService.
         /// </summary>
         public MessageHubConfiguration ConfigureStoryHub()
             => configuration
                 .ConfigureMeshHub()
                 .WithDataType<Story>()
-                .WithMeshNavigation(false) // Stories are leaf nodes, no navigation needed
                 .Build();
     }
 }
