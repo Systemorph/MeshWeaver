@@ -1,12 +1,7 @@
 @* Routes for application pages - entire path is matched against registered namespace patterns *@
-@page "/{**Path}"
+@* The :nonfile constraint prevents matching static file paths like _content, _framework, etc. *@
+@page "/{*Path:nonfile}"
 @using MeshWeaver.Messaging
-
-@* Reserved paths (_content, _framework, etc.) should not render anything - let static files handle them *@
-@if (isReservedPath)
-{
-    return;
-}
 
 <FluentDesignTheme @bind-Mode="@Mode" StorageName="theme" />
 
