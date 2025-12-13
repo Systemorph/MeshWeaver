@@ -21,8 +21,6 @@ public static class BlazorHostingExtensions
                 .AddContentService()
                 .AddFluentUIComponents()
                 .AddScoped<PortalApplication>()
-                .Configure<RouteOptions>(options =>
-                    options.ConstraintMap.Add("addresstype", typeof(AddressTypeRouteConstraint)))
             )
             .ConfigureHub(hub => hub.AddBlazor(clientConfig));
 
@@ -32,10 +30,7 @@ public static class BlazorHostingExtensions
         app.UseMiddleware<UserContextMiddleware>();
 
         // Thumbnail preview stub (returns 501 until implemented)
-        app.MapGet("/layout-preview/{area}", (string area) =>
-        {
-            return Results.StatusCode(StatusCodes.Status501NotImplemented);
-        });
+        app.MapGet("/layout-preview/{area}", (string area) => Results.StatusCode(StatusCodes.Status501NotImplemented));
 
         //app.MapRazorComponents<ApplicationPage>();
     }

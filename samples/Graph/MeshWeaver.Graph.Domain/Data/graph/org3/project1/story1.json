@@ -1,0 +1,18 @@
+{
+  "path": "graph/org3/project1/story1",
+  "key": "graph/org3/project1/story1",
+  "name": "User Authentication",
+  "nodeType": "story",
+  "description": "Implement user login and registration",
+  "iconName": "Document",
+  "displayOrder": 10,
+  "isPersistent": true,
+  "content": {
+    "id": "story1",
+    "title": "User Authentication",
+    "description": "Implement user login and registration flow",
+    "status": "InProgress",
+    "points": 5,
+    "iconName": "Document"
+  }
+}

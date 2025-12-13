@@ -1,0 +1,17 @@
+{
+  "path": "graph/org4",
+  "key": "graph/org4",
+  "name": "Contoso Ltd",
+  "nodeType": "org",
+  "description": "Another sample organization",
+  "iconName": "Building",
+  "displayOrder": 20,
+  "isPersistent": true,
+  "content": {
+    "id": "org4",
+    "name": "Contoso Ltd",
+    "description": "Another sample organization",
+    "website": "https://contoso.example.com",
+    "iconName": "Building"
+  }
+}

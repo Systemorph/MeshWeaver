@@ -1,0 +1,18 @@
+{
+  "path": "graph/org3/project1/story2",
+  "key": "graph/org3/project1/story2",
+  "name": "Dashboard Design",
+  "nodeType": "story",
+  "description": "Design and implement the main dashboard",
+  "iconName": "Document",
+  "displayOrder": 20,
+  "isPersistent": true,
+  "content": {
+    "id": "story2",
+    "title": "Dashboard Design",
+    "description": "Design and implement the main dashboard with widgets",
+    "status": "Todo",
+    "points": 8,
+    "iconName": "Document"
+  }
+}

@@ -1,5 +1,6 @@
 ﻿using System.Collections.Concurrent;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Messages;
 using MeshWeaver.Messaging;
 using MeshWeaver.Utils;
 using Microsoft.Extensions.Logging;
@@ -56,7 +57,15 @@ public class MonolithRoutingService(IMessageHub hub, ILogger<MonolithRoutingServ
         {
             var hub = Mesh.GetHostedHub(address, node.HubConfiguration);
             if(hub is not null)
+            {
                 hub.RegisterForDisposal((_, _) => UnregisterStreamAsync(hub.Address));
+
+                // Send LoadGraphRequest for persistent nodes to trigger data loading
+                if (node.IsPersistent)
+                {
+                    hub.Post(new LoadGraphRequest(node));
+                }
+            }
             return hub!;
         }
         return null!;

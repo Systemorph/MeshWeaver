@@ -470,6 +470,14 @@ public class AutocompleteServiceTest
 
             return nodeSegments.Length;
         }
+
+        public Mesh.Services.IPersistenceService Persistence => throw new System.NotImplementedException();
+#pragma warning disable CS1998 // Async method lacks 'await' operators
+        public async System.Collections.Generic.IAsyncEnumerable<Mesh.MeshNode> QueryAsync(string? parentPath, string? query = null, int? maxResults = null, [System.Runtime.CompilerServices.EnumeratorCancellation] System.Threading.CancellationToken ct = default)
+#pragma warning restore CS1998
+        {
+            yield break;
+        }
     }
 
     #endregion

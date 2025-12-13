@@ -161,5 +161,53 @@ public static class PortalIcons
                 <line x1='85' y1='70' x2='102' y2='70' stroke='currentColor' stroke-width='2'/>
                 <line x1='85' y1='78' x2='102' y2='78' stroke='currentColor' stroke-width='2'/>
             </g>");
+
+        /// <summary>
+        /// Graph icon - hierarchical node structure representing mesh graph navigation.
+        /// </summary>
+        public sealed class Graph() : Icon("Graph", IconVariant.Regular, IconSize.Size24,
+            @"<g fill='none' stroke='currentColor' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'>
+                <!-- Root node -->
+                <circle cx='12' cy='4' r='2.5'/>
+                <!-- Level 1 nodes -->
+                <circle cx='5' cy='12' r='2.5'/>
+                <circle cx='19' cy='12' r='2.5'/>
+                <!-- Level 2 nodes -->
+                <circle cx='3' cy='20' r='2'/>
+                <circle cx='9' cy='20' r='2'/>
+                <circle cx='15' cy='20' r='2'/>
+                <circle cx='21' cy='20' r='2'/>
+                <!-- Connecting lines -->
+                <path d='M12 6.5 L5 9.5'/>
+                <path d='M12 6.5 L19 9.5'/>
+                <path d='M5 14.5 L3 18'/>
+                <path d='M5 14.5 L9 18'/>
+                <path d='M19 14.5 L15 18'/>
+                <path d='M19 14.5 L21 18'/>
+            </g>");
+
+        /// <summary>
+        /// Graph icon (active/filled state) - hierarchical node structure.
+        /// </summary>
+        public sealed class GraphActive() : Icon("GraphActive", IconVariant.Filled, IconSize.Size24,
+            @"<g stroke='currentColor' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'>
+                <!-- Root node -->
+                <circle cx='12' cy='4' r='2.5' fill='currentColor'/>
+                <!-- Level 1 nodes -->
+                <circle cx='5' cy='12' r='2.5' fill='currentColor'/>
+                <circle cx='19' cy='12' r='2.5' fill='currentColor'/>
+                <!-- Level 2 nodes -->
+                <circle cx='3' cy='20' r='2' fill='currentColor'/>
+                <circle cx='9' cy='20' r='2' fill='currentColor'/>
+                <circle cx='15' cy='20' r='2' fill='currentColor'/>
+                <circle cx='21' cy='20' r='2' fill='currentColor'/>
+                <!-- Connecting lines -->
+                <path d='M12 6.5 L5 9.5' fill='none'/>
+                <path d='M12 6.5 L19 9.5' fill='none'/>
+                <path d='M5 14.5 L3 18' fill='none'/>
+                <path d='M5 14.5 L9 18' fill='none'/>
+                <path d='M19 14.5 L15 18' fill='none'/>
+                <path d='M19 14.5 L21 18' fill='none'/>
+            </g>");
     }
 }

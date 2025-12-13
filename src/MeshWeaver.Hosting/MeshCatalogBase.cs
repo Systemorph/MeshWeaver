@@ -12,17 +12,23 @@ public abstract class MeshCatalogBase : IMeshCatalog
 {
     public MeshConfiguration Configuration { get; }
     public IUnifiedPathRegistry PathRegistry { get; }
+    public IPersistenceService Persistence { get; }
     private readonly IMemoryCache cache = new MemoryCache(new MemoryCacheOptions());
     private readonly MemoryCacheEntryOptions cacheOptions = new(){SlidingExpiration = TimeSpan.FromMinutes(5)};
-    private readonly IMessageHub persistence;
+    private readonly IMessageHub persistenceHub;
     private readonly ILogger<MeshCatalogBase> logger;
 
-    protected MeshCatalogBase(IMessageHub hub, MeshConfiguration configuration, IUnifiedPathRegistry pathRegistry)
+    protected MeshCatalogBase(
+        IMessageHub hub,
+        MeshConfiguration configuration,
+        IUnifiedPathRegistry pathRegistry,
+        IPersistenceService? persistenceService = null)
     {
         Configuration = configuration;
         PathRegistry = pathRegistry;
+        Persistence = persistenceService ?? new Hosting.Persistence.InMemoryPersistenceService();
         logger = hub.ServiceProvider.GetRequiredService<ILogger<MeshCatalogBase>>();
-        persistence = hub.GetHostedHub(AddressExtensions.CreatePersistenceAddress())!;
+        persistenceHub = hub.GetHostedHub(AddressExtensions.CreatePersistenceAddress())!;
         foreach (var node in Configuration.Nodes.Values)
                 UpdateNode(node);
     }
@@ -95,7 +101,7 @@ public abstract class MeshCatalogBase : IMeshCatalog
     private MeshNode UpdateNode(MeshNode node)
     {
         cache.Set(node.Key, node, cacheOptions);
-        persistence.InvokeAsync(_ => UpdateNodeAsync(node), ex =>
+        persistenceHub.InvokeAsync(_ => UpdateNodeAsync(node), ex =>
         {
             logger.LogError(ex, "unable to update mesh catalog");
             return Task.CompletedTask;
@@ -186,5 +192,32 @@ public abstract class MeshCatalogBase : IMeshCatalog
         }
 
         return nodeSegments.Length;
+    }
+
+    /// <inheritdoc />
+    public async IAsyncEnumerable<MeshNode> QueryAsync(string? parentPath, string? query = null, int? maxResults = null, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+    {
+        var children = await Persistence.GetChildrenAsync(parentPath, ct);
+
+        // Filter by query if provided
+        if (!string.IsNullOrWhiteSpace(query))
+        {
+            children = children.Where(n =>
+                (n.Name?.Contains(query, StringComparison.OrdinalIgnoreCase) ?? false) ||
+                (n.Description?.Contains(query, StringComparison.OrdinalIgnoreCase) ?? false) ||
+                n.Prefix.Contains(query, StringComparison.OrdinalIgnoreCase));
+        }
+
+        // Apply max results if provided
+        if (maxResults.HasValue && maxResults.Value > 0)
+        {
+            children = children.Take(maxResults.Value);
+        }
+
+        foreach (var child in children)
+        {
+            ct.ThrowIfCancellationRequested();
+            yield return child;
+        }
     }
 }

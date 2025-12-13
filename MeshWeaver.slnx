@@ -33,6 +33,9 @@
     <Project Path="samples/Todo/MeshWeaver.Todo.AI/MeshWeaver.Todo.AI.csproj" />
     <Project Path="samples/Todo/MeshWeaver.Todo/MeshWeaver.Todo.csproj" />
   </Folder>
+  <Folder Name="/samples/Graph/">
+    <Project Path="samples/Graph/MeshWeaver.Graph.Domain/MeshWeaver.Graph.Domain.csproj" />
+  </Folder>
   <Folder Name="/portal/">
     <File Path="portal/Directory.Build.props" />
     <Project Path="portal/MeshWeaver.Portal.AI/MeshWeaver.Portal.AI.csproj" />
@@ -61,8 +64,6 @@
     <Project Path="src/MeshWeaver.AI.AzureFoundry/MeshWeaver.AI.AzureFoundry.csproj" />
     <Project Path="src/MeshWeaver.AI.AzureOpenAI/MeshWeaver.AI.AzureOpenAI.csproj" />
     <Project Path="src/MeshWeaver.AI/MeshWeaver.AI.csproj" />
-    <Project Path="src/MeshWeaver.Graph.Contract/MeshWeaver.Graph.Contract.csproj" />
-    <Project Path="src/MeshWeaver.Graph/MeshWeaver.Graph.csproj" />
     <Project Path="src/MeshWeaver.Application.Styles/MeshWeaver.Application.Styles.csproj" />
     <Project Path="src/MeshWeaver.Blazor.Radzen/MeshWeaver.Blazor.Radzen.csproj" />
     <Project Path="src/MeshWeaver.Blazor.Chat/MeshWeaver.Blazor.Chat.csproj" />
@@ -86,6 +87,7 @@
     <Project Path="src/MeshWeaver.Domain/MeshWeaver.Domain.csproj" />
     <Project Path="src/MeshWeaver.Fixture/MeshWeaver.Fixture.csproj" />
     <Project Path="src/MeshWeaver.GoogleMaps/MeshWeaver.GoogleMaps.csproj" />
+    <Project Path="src/MeshWeaver.Graph/MeshWeaver.Graph.csproj" />
     <Project Path="src/MeshWeaver.GridModel/MeshWeaver.GridModel.csproj" />
     <Project Path="src/MeshWeaver.Hierarchies/MeshWeaver.Hierarchies.csproj" />
     <Project Path="src/MeshWeaver.Hosting.AzureBlob/MeshWeaver.Hosting.AzureBlob.csproj" />

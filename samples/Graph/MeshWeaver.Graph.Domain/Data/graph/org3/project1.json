@@ -1,0 +1,17 @@
+{
+  "path": "graph/org3/project1",
+  "key": "graph/org3/project1",
+  "name": "Web Platform",
+  "nodeType": "project",
+  "description": "Main web platform project",
+  "iconName": "Folder",
+  "displayOrder": 10,
+  "isPersistent": true,
+  "content": {
+    "id": "project1",
+    "name": "Web Platform",
+    "description": "Main web platform project",
+    "status": "Active",
+    "iconName": "Folder"
+  }
+}
