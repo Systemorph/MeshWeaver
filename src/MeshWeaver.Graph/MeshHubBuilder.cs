@@ -1,4 +1,5 @@
 ﻿using MeshWeaver.Data;
+using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
@@ -20,12 +21,13 @@ public class MeshHubBuilder
 
     /// <summary>
     /// Creates a new MeshHubBuilder for the given hub configuration.
-    /// Registers MeshNode as a data type by default.
+    /// MeshNode data type is registered automatically with persistence sync.
     /// </summary>
     public MeshHubBuilder(MessageHubConfiguration configuration)
     {
         _configuration = configuration;
-        _initializationFunc = DefaultInitializeAsync;
+        // No longer need DefaultInitializeAsync - MeshNodeTypeSource handles initialization
+        _initializationFunc = null;
     }
 
     /// <summary>
@@ -75,7 +77,25 @@ public class MeshHubBuilder
     {
         var config = _configuration;
 
-        // Register all data types
+        // Register MeshNode with custom TypeSource that syncs to persistence
+        config = config.AddData(data => data.AddSource(source =>
+        {
+            var persistence = source.Workspace.Hub.ServiceProvider.GetService<IPersistenceService>();
+            var hubPath = source.Workspace.Hub.Address.ToString();
+
+            if (persistence != null)
+            {
+                // Use MeshNodeTypeSource which handles init + update sync to persistence
+                return source.WithTypeSource(typeof(MeshNode),
+                    new MeshNodeTypeSource(source.Workspace, source.Id, persistence, hubPath)
+                        .WithKey(n => n.Prefix));
+            }
+
+            // Fallback: no persistence, just register type with key
+            return source.WithType<MeshNode>(ts => ts.WithKey(n => n.Prefix));
+        }));
+
+        // Register additional data type if specified
         if (DataType is not null)
         {
             config = config.AddData(data => data.AddSource(source => source.WithType(DataType)));
@@ -87,14 +107,13 @@ public class MeshHubBuilder
             config = config.AddMeshNavigation();
         }
 
-
         // Apply additional hub configurations
         foreach (var hubConfig in _hubConfigurations)
         {
             config = hubConfig(config);
         }
 
-        // Add initialization if configured
+        // Add custom initialization if configured
         if (_initializationFunc != null)
         {
             config = config.WithInitialization(hub =>
@@ -115,66 +134,6 @@ public class MeshHubBuilder
         }
 
         return config;
-    }
-
-
-    /// <summary>
-    /// Default initialization that loads data from IPersistenceService.
-    /// Loads all nodes from the persistence service for this hub's address partition
-    /// and initializes the corresponding data streams.
-    /// </summary>
-    private static async Task DefaultInitializeAsync(IMessageHub hub, CancellationToken ct)
-    {
-        var persistence = hub.ServiceProvider.GetService<IPersistenceService>();
-        if (persistence == null)
-            return;
-
-        var logger = hub.ServiceProvider.GetService<ILogger<MeshHubBuilder>>();
-        var parentPath = hub.Address.ToString();
-
-        logger?.LogDebug("Initializing mesh hub at {Address} from persistence", parentPath);
-
-        // Load children from persistence
-        var children = await persistence.GetChildrenAsync(parentPath, ct);
-        var childList = children.ToList();
-
-        if (childList.Count == 0)
-        {
-            logger?.LogDebug("No children found for {Address}", parentPath);
-            return;
-        }
-
-        logger?.LogDebug("Loaded {Count} children for {Address}", childList.Count, parentPath);
-
-        // Get workspace and initialize with loaded data
-        var workspace = hub.ServiceProvider.GetService<IWorkspace>();
-        if (workspace == null)
-        {
-            logger?.LogWarning("No workspace available for {Address}", parentPath);
-            return;
-        }
-
-        // Collect all instances to update
-        var allInstances = new List<object>();
-
-        // Add MeshNode instances
-        allInstances.AddRange(childList);
-
-        // Add content instances from nodes
-        var contentInstances = childList
-            .Where(n => n.Content != null)
-            .Select(n => n.Content!)
-            .ToList();
-        allInstances.AddRange(contentInstances);
-
-        if (allInstances.Count > 0)
-        {
-            logger?.LogDebug("Updating workspace with {Count} instances ({NodeCount} nodes, {ContentCount} content instances)",
-                allInstances.Count, childList.Count, contentInstances.Count);
-
-            // Use workspace's Update method to add all instances
-            workspace.Update(allInstances, null, null!);
-        }
     }
 }
 
