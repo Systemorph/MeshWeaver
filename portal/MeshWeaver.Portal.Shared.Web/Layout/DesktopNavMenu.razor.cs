@@ -88,4 +88,9 @@ public partial class DesktopNavMenu : ComponentBase
             ? new Icons.Filled.Size24.Money()
             : new Icons.Regular.Size24.Money();
 
+    public static Icon GraphIcon(bool active = false)
+        => active
+            ? new PortalIcons.Size24.GraphActive()
+            : new PortalIcons.Size24.Graph();
+
 }

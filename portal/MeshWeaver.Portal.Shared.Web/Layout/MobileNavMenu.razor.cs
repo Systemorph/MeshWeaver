@@ -32,7 +32,6 @@ public partial class MobileNavMenu : ComponentBase
             LinkMatchRegex: new Regex("^/articles")
         );
 
-
         yield return new MobileNavMenuEntry(
             "Todo Areas",
             () => NavigateToAsync("/app/Todo/LayoutAreas"),
@@ -70,8 +69,6 @@ public partial class MobileNavMenu : ComponentBase
             LinkMatchRegex: new Regex("^/app/Agents")
         );
 
-
-
         yield return new MobileNavMenuEntry(
             "Chat",
             () => NavigateToAsync("/chat"),
@@ -80,14 +77,22 @@ public partial class MobileNavMenu : ComponentBase
         );
 
         yield return new MobileNavMenuEntry(
-        "Settings",
-        LaunchSettingsAsync,
-        new Microsoft.FluentUI.AspNetCore.Components.Icons.Regular.Size24.Settings()
-    );
+            "Settings",
+            LaunchSettingsAsync,
+            new Microsoft.FluentUI.AspNetCore.Components.Icons.Regular.Size24.Settings()
+        );
+
         yield return new MobileNavMenuEntry(
             "Sign in",
             () => NavigateToAsync(LoginUrl(), true),
-                new Size24.PersonAccounts()
+            new Size24.PersonAccounts()
+        );
+
+        yield return new MobileNavMenuEntry(
+            "Graph",
+            () => NavigateToAsync("/graph/_Nodes"),
+            DesktopNavMenu.GraphIcon(),
+            LinkMatchRegex: new Regex("^/graph")
         );
     }
 
@@ -112,6 +117,5 @@ public partial class MobileNavMenu : ComponentBase
         var logoutPath = "/MicrosoftIdentity/Account/SignOut";
         NavigationManager.NavigateTo(logoutPath, forceLoad: true);
     }
-
 }
 

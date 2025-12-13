@@ -37,19 +37,45 @@ public record MessageLog(
 }
 /// <summary>
 /// Represents a node in the mesh that can handle requests.
-/// The Prefix defines the URL path pattern this node matches (e.g., "app/Northwind", "pricing").
-/// Score-based matching uses the number of segments in the prefix.
+/// The Path is the unique identifier for this node (e.g., "graph", "graph/org", "$template/graph/org/3").
+/// For template nodes, AddressSegments determines how many path segments are used for hub addressing.
+/// Score-based matching uses the Prefix (derived from Path) for pattern matching.
 /// </summary>
-public record MeshNode(string Prefix)
+public record MeshNode(string Path)
 {
+    /// <summary>
+    /// The prefix used for score-based path matching.
+    /// For regular nodes, this equals Path.
+    /// For template nodes (paths starting with $), this is extracted from the path.
+    /// </summary>
+    [JsonIgnore, NotMapped]
+    public string Prefix { get; init; } = ExtractPrefix(Path);
+
     /// <summary>
     /// The segments of the prefix, split by '/'.
     /// Used for score-based path matching.
     /// </summary>
     [JsonIgnore, NotMapped]
-    public string[] Segments { get; } = Prefix.Split('/', StringSplitOptions.RemoveEmptyEntries);
+    public string[] Segments => Prefix.Split('/', StringSplitOptions.RemoveEmptyEntries);
 
-    [Key] public string Key { get; init; } = Prefix;
+    [Key] public string Key { get; init; } = Path;
+
+    /// <summary>
+    /// Extracts the prefix from a path.
+    /// For template paths like "$template/graph/org/3", extracts "graph/org".
+    /// For regular paths, returns the path as-is.
+    /// </summary>
+    private static string ExtractPrefix(string path)
+    {
+        if (!path.StartsWith("$template/"))
+            return path;
+
+        // Format: $template/{prefix}/{segments}
+        // e.g., "$template/graph/org/3" -> "graph/org"
+        var withoutPrefix = path.Substring("$template/".Length);
+        var lastSlash = withoutPrefix.LastIndexOf('/');
+        return lastSlash > 0 ? withoutPrefix.Substring(0, lastSlash) : withoutPrefix;
+    }
     public const string MeshIn = nameof(MeshIn);
 
     /// <summary>
@@ -85,6 +111,34 @@ public record MeshNode(string Prefix)
     /// If not set (0), defaults to the number of segments in the Prefix.
     /// </summary>
     public int AddressSegments { get; init; }
+
+    /// <summary>
+    /// Indicates this node's data is persisted and should be loaded on startup.
+    /// When true, the hub will issue LoadGraphRequest to load children from IPersistenceService.
+    /// </summary>
+    public bool IsPersistent { get; init; }
+
+    /// <summary>
+    /// The data model content for this node.
+    /// The type depends on NodeType (e.g., Organization, Project, Story).
+    /// </summary>
+    public object? Content { get; init; }
+
+    /// <summary>
+    /// Gets the parent path for this node.
+    /// Returns null for root-level nodes.
+    /// </summary>
+    [JsonIgnore, NotMapped]
+    public string? ParentPath
+    {
+        get
+        {
+            var pathSegments = Path.Split('/', StringSplitOptions.RemoveEmptyEntries);
+            return pathSegments.Length <= 1
+                ? null
+                : string.Join("/", pathSegments.Take(pathSegments.Length - 1));
+        }
+    }
 
     public string? ThumbNail { get; init; }
     public string? StreamProvider { get; init; }

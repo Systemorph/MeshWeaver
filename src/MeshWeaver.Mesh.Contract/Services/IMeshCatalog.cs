@@ -24,6 +24,22 @@ public interface IMeshCatalog
     /// Score is the number of matching segments from the path start.
     /// </summary>
     AddressResolution? ResolvePath(string path);
+
+    /// <summary>
+    /// Gets the persistence service for graph operations.
+    /// </summary>
+    IPersistenceService Persistence { get; }
+
+    /// <summary>
+    /// Queries for child nodes under a parent path, filtered by query string.
+    /// Used for autocomplete and node discovery.
+    /// </summary>
+    /// <param name="parentPath">Parent path to search under (null or empty for root level)</param>
+    /// <param name="query">Optional search query to filter by name/description</param>
+    /// <param name="maxResults">Optional maximum number of results to return</param>
+    /// <param name="ct">Cancellation token</param>
+    /// <returns>Async enumerable of matching child nodes</returns>
+    IAsyncEnumerable<MeshNode> QueryAsync(string? parentPath, string? query = null, int? maxResults = null, CancellationToken ct = default);
 }
 
 

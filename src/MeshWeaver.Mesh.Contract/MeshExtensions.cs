@@ -1,5 +1,4 @@
-﻿using MeshWeaver.Domain;
-using MeshWeaver.Messaging;
+﻿using MeshWeaver.Messaging;
 
 namespace MeshWeaver.Mesh;
 
@@ -12,9 +11,4 @@ public static class MeshExtensions
         return config;
     }
 
-    /// <summary>
-    /// Creates an Address from type name and id.
-    /// </summary>
-    public static Address MapAddress(this ITypeRegistry _, string addressType, string id)
-        => new Address(addressType, id);
 }

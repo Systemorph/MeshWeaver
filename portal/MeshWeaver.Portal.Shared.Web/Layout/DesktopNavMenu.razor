@@ -1,4 +1,3 @@
-﻿
 @using MeshWeaver.ContentCollections
 @using Microsoft.AspNetCore.Components.Authorization
 
@@ -33,5 +32,8 @@
                 IconActive="CollectionsIcon(active: true)" Text="Collections" />
         </Authorized>
     </AuthorizeView>
+    <FluentDivider Style="width: 100%;" Role="DividerRole.Presentation"></FluentDivider>
+    <FluentAppBarItem Href="/graph/_Nodes" Match="NavLinkMatch.Prefix" IconRest="GraphIcon()"
+        IconActive="GraphIcon(true)" Text="Graph" />
 
 </FluentAppBar>

@@ -1,0 +1,18 @@
+{
+  "path": "graph/org3/project1/story3",
+  "key": "graph/org3/project1/story3",
+  "name": "API Integration",
+  "nodeType": "story",
+  "description": "Integrate with external APIs",
+  "iconName": "Document",
+  "displayOrder": 30,
+  "isPersistent": true,
+  "content": {
+    "id": "story3",
+    "title": "API Integration",
+    "description": "Integrate with third-party payment and notification APIs",
+    "status": "Todo",
+    "points": 13,
+    "iconName": "Document"
+  }
+}

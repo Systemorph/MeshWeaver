@@ -1,0 +1,17 @@
+{
+  "path": "graph/org3",
+  "key": "graph/org3",
+  "name": "Acme Corp",
+  "nodeType": "org",
+  "description": "A sample organization for development",
+  "iconName": "Building",
+  "displayOrder": 10,
+  "isPersistent": true,
+  "content": {
+    "id": "org3",
+    "name": "Acme Corp",
+    "description": "A sample organization for development",
+    "website": "https://acme.example.com",
+    "iconName": "Building"
+  }
+}

@@ -1,12 +1,16 @@
 <Project Sdk="Microsoft.NET.Sdk">
+
   <PropertyGroup>
-    <ProjectGuid>{b2c3d4e5-6789-abcd-ef01-234567890abc}</ProjectGuid>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
   </PropertyGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\MeshWeaver.ContentCollections\MeshWeaver.ContentCollections.csproj" />
-    <ProjectReference Include="..\MeshWeaver.Graph.Contract\MeshWeaver.Graph.Contract.csproj" />
+    <ProjectReference Include="..\MeshWeaver.Data\MeshWeaver.Data.csproj" />
+    <ProjectReference Include="..\MeshWeaver.Layout\MeshWeaver.Layout.csproj" />
     <ProjectReference Include="..\MeshWeaver.Mesh.Contract\MeshWeaver.Mesh.Contract.csproj" />
-    <ProjectReference Include="..\MeshWeaver.Messaging.Hub\MeshWeaver.Messaging.Hub.csproj" />
+    <ProjectReference Include="..\MeshWeaver.Hosting\MeshWeaver.Hosting.csproj" />
   </ItemGroup>
+
 </Project>

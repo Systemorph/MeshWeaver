@@ -1,12 +1,18 @@
 ﻿using System.Collections.Concurrent;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Hosting;
 
-public class InMemoryMeshCatalog(IMessageHub hub, MeshConfiguration configuration, IUnifiedPathRegistry pathRegistry) : MeshCatalogBase(hub, configuration, pathRegistry)
+public class InMemoryMeshCatalog(
+    IMessageHub hub,
+    MeshConfiguration configuration,
+    IUnifiedPathRegistry pathRegistry,
+    IPersistenceService? persistenceService = null)
+    : MeshCatalogBase(hub, configuration, pathRegistry, persistenceService)
 {
     private readonly ILogger<InMemoryMeshCatalog> logger = hub.ServiceProvider.GetRequiredService<ILogger<InMemoryMeshCatalog>>();
     private readonly ConcurrentDictionary<Address, MeshNode> meshNodes = new();
