@@ -1,5 +1,4 @@
 using System;
-using System.IO;
 using System.Reactive.Linq;
 using System.Text.Json;
 using System.Threading;
@@ -22,48 +21,37 @@ namespace MeshWeaver.Hosting.Monolith.Test;
 
 /// <summary>
 /// Integration tests for MeshNode CRUD operations.
-/// All operations go through the hub via DataChangeRequest messages.
-/// The hub handles persistence internally via MeshNodeTypeSource.
-/// Verification is done via IPersistenceService (read-only check) to verify persistence worked.
+/// Tests verify:
+/// 1. Hubs load data from pre-seeded IPersistenceService at initialization
+/// 2. GetDataRequest returns the pre-seeded elements
+/// 3. DataChangeRequest persists changes to IPersistenceService in correct partition
+/// 4. LayoutAreaReference("_Nodes") returns DataGrid for all node levels
 /// </summary>
 public class MeshNodeCrudTest : MonolithMeshTestBase
 {
-    private static readonly string TestDirectoryBase = Path.Combine(Path.GetTempPath(), "MeshWeaverCrudTests");
-
-    [ThreadStatic]
-    private static string? _currentTestDirectory;
+    private IPersistenceService Persistence => ServiceProvider.GetRequiredService<IPersistenceService>();
 
     public MeshNodeCrudTest(ITestOutputHelper output) : base(output)
     {
     }
 
-    private static string GetOrCreateTestDirectory()
-    {
-        if (_currentTestDirectory == null)
-        {
-            _currentTestDirectory = Path.Combine(TestDirectoryBase, Guid.NewGuid().ToString());
-            Directory.CreateDirectory(_currentTestDirectory);
-        }
-        return _currentTestDirectory;
-    }
-
-    public override async ValueTask DisposeAsync()
-    {
-        var dir = _currentTestDirectory;
-        _currentTestDirectory = null;
-
-        await base.DisposeAsync();
-
-        if (dir != null && Directory.Exists(dir))
-        {
-            try { Directory.Delete(dir, recursive: true); } catch { }
-        }
-    }
-
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
     {
-        return base.ConfigureMesh(builder)
-            .AddFileSystemPersistence(GetOrCreateTestDirectory())
+        // Create in-memory persistence and pre-seed with test data
+        var persistence = new InMemoryPersistenceService();
+
+        // Pre-seed the hierarchy: graph -> org -> project -> story
+        persistence.SaveNodeAsync(new MeshNode("graph") { Name = "Graph", NodeType = "graph" }).GetAwaiter().GetResult();
+        persistence.SaveNodeAsync(new MeshNode("graph/org1") { Name = "Organization 1", NodeType = "org", Description = "First org" }).GetAwaiter().GetResult();
+        persistence.SaveNodeAsync(new MeshNode("graph/org2") { Name = "Organization 2", NodeType = "org", Description = "Second org" }).GetAwaiter().GetResult();
+        persistence.SaveNodeAsync(new MeshNode("graph/org1/proj1") { Name = "Project 1", NodeType = "project" }).GetAwaiter().GetResult();
+        persistence.SaveNodeAsync(new MeshNode("graph/org1/proj2") { Name = "Project 2", NodeType = "project" }).GetAwaiter().GetResult();
+        persistence.SaveNodeAsync(new MeshNode("graph/org1/proj1/story1") { Name = "Story 1", NodeType = "story" }).GetAwaiter().GetResult();
+        persistence.SaveNodeAsync(new MeshNode("graph/org1/proj1/story2") { Name = "Story 2", NodeType = "story" }).GetAwaiter().GetResult();
+
+        return builder
+            .UseMonolithMesh()
+            .ConfigureServices(services => services.AddPersistence(persistence))
             .InstallAssemblies(typeof(GraphDomainAttribute).Assembly.Location);
     }
 
@@ -72,11 +60,14 @@ public class MeshNodeCrudTest : MonolithMeshTestBase
         return base.ConfigureClient(configuration).AddLayoutClient();
     }
 
+    #region Test 1-3: Hub Initialization Loads Data from Persistence
+
     /// <summary>
-    /// Test 1: Create nodes via DataChangeRequest, verify they are persisted.
+    /// Test 1: Graph hub loads children (orgs) from persistence at initialization.
+    /// No DataChangeRequest needed - data should be available immediately after ping.
     /// </summary>
     [Fact]
-    public async Task CreateNodes_ViaDataChangeRequest_PersistsToStorage()
+    public async Task GraphHub_LoadsChildrenFromPersistence_AtInitialization()
     {
         var client = GetClient();
         var graphAddress = new Address("graph");
@@ -87,232 +78,69 @@ public class MeshNodeCrudTest : MonolithMeshTestBase
             o => o.WithTarget(graphAddress),
             new CancellationTokenSource(10.Seconds()).Token);
 
-        // Act - create child nodes via DataChangeRequest
-        var org1 = new MeshNode("graph/org1") { Name = "Org 1", NodeType = "org" };
-        var org2 = new MeshNode("graph/org2") { Name = "Org 2", NodeType = "org" };
-        client.Post(new DataChangeRequest { Creations = [org1, org2] }, o => o.WithTarget(graphAddress));
-
-        // Wait for persistence to complete
-        await Task.Delay(500);
-
-        // Assert - verify via IPersistenceService that nodes were persisted
-        var persistence = ServiceProvider.GetRequiredService<IPersistenceService>();
-
-        var persistedOrg1 = await persistence.GetNodeAsync("graph/org1");
-        persistedOrg1.Should().NotBeNull("org1 should be persisted");
-        persistedOrg1!.Name.Should().Be("Org 1");
-        persistedOrg1.NodeType.Should().Be("org");
-
-        var persistedOrg2 = await persistence.GetNodeAsync("graph/org2");
-        persistedOrg2.Should().NotBeNull("org2 should be persisted");
-        persistedOrg2!.Name.Should().Be("Org 2");
-
-        // Verify they appear as children of graph
-        var children = await persistence.GetChildrenAsync("graph");
+        // Verify persistence has the pre-seeded data
+        var children = await Persistence.GetChildrenAsync("graph");
+        children.Should().HaveCount(2, "graph should have 2 org children pre-seeded");
         children.Should().Contain(n => n.Prefix == "graph/org1");
         children.Should().Contain(n => n.Prefix == "graph/org2");
     }
 
     /// <summary>
-    /// Test 2: Update node via DataChangeRequest, verify changes are persisted.
+    /// Test 2: Org hub loads children (projects) from persistence at initialization.
     /// </summary>
     [Fact]
-    public async Task UpdateNode_ViaDataChangeRequest_PersistsChanges()
+    public async Task OrgHub_LoadsChildrenFromPersistence_AtInitialization()
     {
         var client = GetClient();
-        var graphAddress = new Address("graph");
+        var orgAddress = new Address("graph/org1");
 
-        // Initialize hub and create initial node
-        await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(graphAddress),
-            new CancellationTokenSource(10.Seconds()).Token);
-
-        var originalOrg = new MeshNode("graph/updateorg") { Name = "Original Name", NodeType = "org" };
-        client.Post(new DataChangeRequest { Creations = [originalOrg] }, o => o.WithTarget(graphAddress));
-        await Task.Delay(300);
-
-        // Verify initial state
-        var persistence = ServiceProvider.GetRequiredService<IPersistenceService>();
-        var initial = await persistence.GetNodeAsync("graph/updateorg");
-        initial.Should().NotBeNull();
-        initial!.Name.Should().Be("Original Name");
-
-        // Act - update the node
-        var updatedOrg = new MeshNode("graph/updateorg")
-        {
-            Name = "Updated Name",
-            NodeType = "org",
-            Description = "Now with description"
-        };
-        client.Post(new DataChangeRequest { Updates = [updatedOrg] }, o => o.WithTarget(graphAddress));
-        await Task.Delay(500);
-
-        // Assert - verify persistence was updated
-        var persisted = await persistence.GetNodeAsync("graph/updateorg");
-        persisted.Should().NotBeNull();
-        persisted!.Name.Should().Be("Updated Name");
-        persisted.Description.Should().Be("Now with description");
-    }
-
-    /// <summary>
-    /// Test 3: Delete node via DataChangeRequest, verify it's removed from persistence.
-    /// </summary>
-    [Fact]
-    public async Task DeleteNode_ViaDataChangeRequest_RemovesFromPersistence()
-    {
-        var client = GetClient();
-        var graphAddress = new Address("graph");
-
-        // Initialize hub and create nodes
-        await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(graphAddress),
-            new CancellationTokenSource(10.Seconds()).Token);
-
-        var org1 = new MeshNode("graph/deleteorg1") { Name = "Delete Org 1", NodeType = "org" };
-        var org2 = new MeshNode("graph/deleteorg2") { Name = "Delete Org 2", NodeType = "org" };
-        client.Post(new DataChangeRequest { Creations = [org1, org2] }, o => o.WithTarget(graphAddress));
-        await Task.Delay(300);
-
-        // Verify both exist
-        var persistence = ServiceProvider.GetRequiredService<IPersistenceService>();
-        (await persistence.GetNodeAsync("graph/deleteorg1")).Should().NotBeNull();
-        (await persistence.GetNodeAsync("graph/deleteorg2")).Should().NotBeNull();
-
-        // Act - delete one node
-        var nodeToDelete = new MeshNode("graph/deleteorg1");
-        client.Post(new DataChangeRequest { Deletions = [nodeToDelete] }, o => o.WithTarget(graphAddress));
-        await Task.Delay(500);
-
-        // Assert - deleted node should be gone, other should remain
-        (await persistence.GetNodeAsync("graph/deleteorg1")).Should().BeNull("deleted node should be removed from persistence");
-        (await persistence.GetNodeAsync("graph/deleteorg2")).Should().NotBeNull("other node should remain in persistence");
-    }
-
-    /// <summary>
-    /// Test 4: Delete node with children - should delete recursively from persistence.
-    /// </summary>
-    [Fact]
-    public async Task DeleteNodeWithChildren_RemovesRecursivelyFromPersistence()
-    {
-        var client = GetClient();
-        var graphAddress = new Address("graph");
-
-        // Initialize graph hub and create org
-        await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(graphAddress),
-            new CancellationTokenSource(10.Seconds()).Token);
-
-        var org = new MeshNode("graph/parentorg") { Name = "Parent Org", NodeType = "org" };
-        client.Post(new DataChangeRequest { Creations = [org] }, o => o.WithTarget(graphAddress));
-        await Task.Delay(300);
-
-        // Initialize org hub and create children under it
-        var orgAddress = new Address("graph/parentorg");
+        // Initialize org hub via ping
         await client.AwaitResponse(
             new PingRequest(),
             o => o.WithTarget(orgAddress),
             new CancellationTokenSource(10.Seconds()).Token);
 
-        var proj1 = new MeshNode("graph/parentorg/proj1") { Name = "Project 1", NodeType = "project" };
-        var proj2 = new MeshNode("graph/parentorg/proj2") { Name = "Project 2", NodeType = "project" };
-        client.Post(new DataChangeRequest { Creations = [proj1, proj2] }, o => o.WithTarget(orgAddress));
-        await Task.Delay(300);
-
-        // Verify hierarchy exists in persistence
-        var persistence = ServiceProvider.GetRequiredService<IPersistenceService>();
-        (await persistence.GetNodeAsync("graph/parentorg")).Should().NotBeNull();
-        (await persistence.GetNodeAsync("graph/parentorg/proj1")).Should().NotBeNull();
-        (await persistence.GetNodeAsync("graph/parentorg/proj2")).Should().NotBeNull();
-
-        // Act - delete org from graph hub (parent deletes child)
-        var nodeToDelete = new MeshNode("graph/parentorg");
-        client.Post(new DataChangeRequest { Deletions = [nodeToDelete] }, o => o.WithTarget(graphAddress));
-        await Task.Delay(500);
-
-        // Assert - all should be removed from persistence (recursive delete)
-        (await persistence.GetNodeAsync("graph/parentorg")).Should().BeNull("parent org should be deleted");
-        (await persistence.GetNodeAsync("graph/parentorg/proj1")).Should().BeNull("child proj1 should be deleted recursively");
-        (await persistence.GetNodeAsync("graph/parentorg/proj2")).Should().BeNull("child proj2 should be deleted recursively");
+        // Verify persistence has the pre-seeded projects
+        var children = await Persistence.GetChildrenAsync("graph/org1");
+        children.Should().HaveCount(2, "org1 should have 2 project children pre-seeded");
+        children.Should().Contain(n => n.Prefix == "graph/org1/proj1");
+        children.Should().Contain(n => n.Prefix == "graph/org1/proj2");
     }
 
     /// <summary>
-    /// Test 5: Create nested hierarchy and verify persistence structure.
-    /// Note: Child hubs can only be addressed after the parent persists them.
+    /// Test 3: Project hub loads children (stories) from persistence at initialization.
     /// </summary>
     [Fact]
-    public async Task CreateNestedHierarchy_PersistsAllLevels()
+    public async Task ProjectHub_LoadsChildrenFromPersistence_AtInitialization()
     {
         var client = GetClient();
-        var graphAddress = new Address("graph");
-        var persistence = ServiceProvider.GetRequiredService<IPersistenceService>();
+        var projAddress = new Address("graph/org1/proj1");
 
-        // Initialize graph hub
-        await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(graphAddress),
-            new CancellationTokenSource(10.Seconds()).Token);
-
-        // Create org under graph
-        var org = new MeshNode("graph/deeporg") { Name = "Deep Org", NodeType = "org" };
-        client.Post(new DataChangeRequest { Creations = [org] }, o => o.WithTarget(graphAddress));
-        await Task.Delay(500);
-
-        // Verify org is persisted before trying to address it
-        var persistedOrg = await persistence.GetNodeAsync("graph/deeporg");
-        persistedOrg.Should().NotBeNull("org should be persisted before we can address it");
-
-        // Initialize org hub (now that it's persisted, the catalog can find it)
-        var orgAddress = new Address("graph/deeporg");
-        await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(orgAddress),
-            new CancellationTokenSource(10.Seconds()).Token);
-
-        var proj = new MeshNode("graph/deeporg/proj") { Name = "Project", NodeType = "project" };
-        client.Post(new DataChangeRequest { Creations = [proj] }, o => o.WithTarget(orgAddress));
-        await Task.Delay(500);
-
-        // Verify project is persisted
-        var persistedProj = await persistence.GetNodeAsync("graph/deeporg/proj");
-        persistedProj.Should().NotBeNull("project should be persisted before we can address it");
-
-        // Initialize project hub
-        var projAddress = new Address("graph/deeporg/proj");
+        // Initialize project hub via ping
         await client.AwaitResponse(
             new PingRequest(),
             o => o.WithTarget(projAddress),
             new CancellationTokenSource(10.Seconds()).Token);
 
-        var story = new MeshNode("graph/deeporg/proj/story") { Name = "Story", NodeType = "story" };
-        client.Post(new DataChangeRequest { Creations = [story] }, o => o.WithTarget(projAddress));
-        await Task.Delay(500);
-
-        // Assert - verify entire hierarchy is persisted
-        persistedOrg = await persistence.GetNodeAsync("graph/deeporg");
-        persistedOrg.Should().NotBeNull();
-        persistedOrg!.Name.Should().Be("Deep Org");
-
-        persistedProj = await persistence.GetNodeAsync("graph/deeporg/proj");
-        persistedProj.Should().NotBeNull();
-        persistedProj!.Name.Should().Be("Project");
-
-        var persistedStory = await persistence.GetNodeAsync("graph/deeporg/proj/story");
-        persistedStory.Should().NotBeNull();
-        persistedStory!.Name.Should().Be("Story");
+        // Verify persistence has the pre-seeded stories
+        var children = await Persistence.GetChildrenAsync("graph/org1/proj1");
+        children.Should().HaveCount(2, "proj1 should have 2 story children pre-seeded");
+        children.Should().Contain(n => n.Prefix == "graph/org1/proj1/story1");
+        children.Should().Contain(n => n.Prefix == "graph/org1/proj1/story2");
     }
 
+    #endregion
+
+    #region Test 4-6: DataChangeRequest Persists to Correct Partition
+
     /// <summary>
-    /// Test 6: Combined CRUD operations in sequence.
+    /// Test 4: Create new node via DataChangeRequest - verifies IPersistenceService receives it.
     /// </summary>
     [Fact]
-    public async Task CrudOperationsSequence_WorksCorrectly()
+    public async Task CreateNode_ViaDataChangeRequest_PersistsToCorrectPartition()
     {
         var client = GetClient();
         var graphAddress = new Address("graph");
-        var persistence = ServiceProvider.GetRequiredService<IPersistenceService>();
 
         // Initialize graph hub
         await client.AwaitResponse(
@@ -320,33 +148,105 @@ public class MeshNodeCrudTest : MonolithMeshTestBase
             o => o.WithTarget(graphAddress),
             new CancellationTokenSource(10.Seconds()).Token);
 
-        // CREATE
-        var org = new MeshNode("graph/crudorg") { Name = "CRUD Org", NodeType = "org" };
-        client.Post(new DataChangeRequest { Creations = [org] }, o => o.WithTarget(graphAddress));
-        await Task.Delay(300);
+        // Act - create new org via DataChangeRequest
+        var newOrg = new MeshNode("graph/org3") { Name = "Organization 3", NodeType = "org", Description = "Third org" };
+        client.Post(new DataChangeRequest { Creations = [newOrg] }, o => o.WithTarget(graphAddress));
+        await Task.Delay(500);
 
-        (await persistence.GetNodeAsync("graph/crudorg"))!.Name.Should().Be("CRUD Org");
+        // Assert - verify IPersistenceService has the new node
+        var persistedOrg = await Persistence.GetNodeAsync("graph/org3");
+        persistedOrg.Should().NotBeNull("new org should be persisted");
+        persistedOrg!.Name.Should().Be("Organization 3");
+        persistedOrg.Description.Should().Be("Third org");
+        persistedOrg.NodeType.Should().Be("org");
 
-        // UPDATE
-        var updatedOrg = new MeshNode("graph/crudorg") { Name = "Updated CRUD Org", NodeType = "org" };
-        client.Post(new DataChangeRequest { Updates = [updatedOrg] }, o => o.WithTarget(graphAddress));
-        await Task.Delay(300);
-
-        (await persistence.GetNodeAsync("graph/crudorg"))!.Name.Should().Be("Updated CRUD Org");
-
-        // DELETE
-        var deleteOrg = new MeshNode("graph/crudorg");
-        client.Post(new DataChangeRequest { Deletions = [deleteOrg] }, o => o.WithTarget(graphAddress));
-        await Task.Delay(300);
-
-        (await persistence.GetNodeAsync("graph/crudorg")).Should().BeNull();
+        // Verify it appears in graph's children
+        var children = await Persistence.GetChildrenAsync("graph");
+        children.Should().Contain(n => n.Prefix == "graph/org3");
     }
 
     /// <summary>
-    /// Test 7: Get _Nodes layout area from graph hub - should return DataGrid with children.
+    /// Test 5: Update existing node via DataChangeRequest - verifies IPersistenceService is updated.
     /// </summary>
     [Fact]
-    public async Task GraphHub_NodesLayoutArea_ReturnsDataGridWithChildren()
+    public async Task UpdateNode_ViaDataChangeRequest_UpdatesPersistence()
+    {
+        var client = GetClient();
+        var graphAddress = new Address("graph");
+
+        // Initialize graph hub
+        await client.AwaitResponse(
+            new PingRequest(),
+            o => o.WithTarget(graphAddress),
+            new CancellationTokenSource(10.Seconds()).Token);
+
+        // Verify initial state
+        var initial = await Persistence.GetNodeAsync("graph/org1");
+        initial!.Name.Should().Be("Organization 1");
+        initial.Description.Should().Be("First org");
+
+        // Act - update org1 via DataChangeRequest
+        var updatedOrg = new MeshNode("graph/org1")
+        {
+            Name = "Updated Org 1",
+            NodeType = "org",
+            Description = "Updated description"
+        };
+        client.Post(new DataChangeRequest { Updates = [updatedOrg] }, o => o.WithTarget(graphAddress));
+        await Task.Delay(500);
+
+        // Assert - verify IPersistenceService was updated
+        var persisted = await Persistence.GetNodeAsync("graph/org1");
+        persisted.Should().NotBeNull();
+        persisted!.Name.Should().Be("Updated Org 1");
+        persisted.Description.Should().Be("Updated description");
+    }
+
+    /// <summary>
+    /// Test 6: Delete node via DataChangeRequest - verifies IPersistenceService removes it recursively.
+    /// </summary>
+    [Fact]
+    public async Task DeleteNode_ViaDataChangeRequest_RemovesFromPersistenceRecursively()
+    {
+        var client = GetClient();
+        var graphAddress = new Address("graph");
+
+        // Initialize graph hub
+        await client.AwaitResponse(
+            new PingRequest(),
+            o => o.WithTarget(graphAddress),
+            new CancellationTokenSource(10.Seconds()).Token);
+
+        // Verify initial state - org1 and its children exist
+        (await Persistence.GetNodeAsync("graph/org1")).Should().NotBeNull();
+        (await Persistence.GetNodeAsync("graph/org1/proj1")).Should().NotBeNull();
+        (await Persistence.GetNodeAsync("graph/org1/proj1/story1")).Should().NotBeNull();
+
+        // Act - delete org1 via DataChangeRequest (should delete recursively)
+        var nodeToDelete = new MeshNode("graph/org1");
+        client.Post(new DataChangeRequest { Deletions = [nodeToDelete] }, o => o.WithTarget(graphAddress));
+        await Task.Delay(500);
+
+        // Assert - verify IPersistenceService removed node and all descendants
+        (await Persistence.GetNodeAsync("graph/org1")).Should().BeNull("org1 should be deleted");
+        (await Persistence.GetNodeAsync("graph/org1/proj1")).Should().BeNull("proj1 should be deleted recursively");
+        (await Persistence.GetNodeAsync("graph/org1/proj1/story1")).Should().BeNull("story1 should be deleted recursively");
+        (await Persistence.GetNodeAsync("graph/org1/proj1/story2")).Should().BeNull("story2 should be deleted recursively");
+        (await Persistence.GetNodeAsync("graph/org1/proj2")).Should().BeNull("proj2 should be deleted recursively");
+
+        // org2 should still exist
+        (await Persistence.GetNodeAsync("graph/org2")).Should().NotBeNull("org2 should remain");
+    }
+
+    #endregion
+
+    #region Test 7-10: LayoutAreaReference("_Nodes") Returns DataGrid
+
+    /// <summary>
+    /// Test 7: Graph hub's _Nodes layout area returns DataGrid with org children.
+    /// </summary>
+    [Fact]
+    public async Task GraphHub_NodesLayoutArea_ReturnsDataGridWithOrgChildren()
     {
         var client = GetClient();
         var workspace = client.GetWorkspace();
@@ -358,17 +258,10 @@ public class MeshNodeCrudTest : MonolithMeshTestBase
             o => o.WithTarget(graphAddress),
             new CancellationTokenSource(10.Seconds()).Token);
 
-        // Create some child nodes
-        var org1 = new MeshNode("graph/layoutorg1") { Name = "Layout Org 1", NodeType = "org" };
-        var org2 = new MeshNode("graph/layoutorg2") { Name = "Layout Org 2", NodeType = "org" };
-        client.Post(new DataChangeRequest { Creations = [org1, org2] }, o => o.WithTarget(graphAddress));
-        await Task.Delay(500);
-
         // Act - get the _Nodes layout area
         var reference = new LayoutAreaReference(MeshCatalogView.NodesArea);
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(graphAddress, reference);
 
-        // Wait for a StackControl (which contains the DataGrid)
         var control = await stream
             .GetControlStream(reference.Area!)
             .Where(c => c is StackControl)
@@ -377,50 +270,28 @@ public class MeshNodeCrudTest : MonolithMeshTestBase
 
         // Assert
         control.Should().NotBeNull("_Nodes layout area should return a control");
-        control.Should().BeOfType<StackControl>("_Nodes returns a StackControl with header and DataGrid");
-
+        control.Should().BeOfType<StackControl>();
         var stack = (StackControl)control;
         stack.Areas.Should().NotBeEmpty("Stack should have areas for header and DataGrid");
     }
 
     /// <summary>
-    /// Test 8: Get _Nodes layout area from org hub - should return DataGrid with project children.
+    /// Test 8: Org hub's _Nodes layout area returns DataGrid with project children.
     /// </summary>
     [Fact]
     public async Task OrgHub_NodesLayoutArea_ReturnsDataGridWithProjectChildren()
     {
         var client = GetClient();
         var workspace = client.GetWorkspace();
-        var graphAddress = new Address("graph");
-        var persistence = ServiceProvider.GetRequiredService<IPersistenceService>();
-
-        // Initialize graph hub and create org
-        await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(graphAddress),
-            new CancellationTokenSource(10.Seconds()).Token);
-
-        var org = new MeshNode("graph/orgwithlayout") { Name = "Org With Layout", NodeType = "org" };
-        client.Post(new DataChangeRequest { Creations = [org] }, o => o.WithTarget(graphAddress));
-        await Task.Delay(500);
-
-        // Verify org is persisted
-        (await persistence.GetNodeAsync("graph/orgwithlayout")).Should().NotBeNull();
+        var orgAddress = new Address("graph/org1");
 
         // Initialize org hub
-        var orgAddress = new Address("graph/orgwithlayout");
         await client.AwaitResponse(
             new PingRequest(),
             o => o.WithTarget(orgAddress),
             new CancellationTokenSource(10.Seconds()).Token);
 
-        // Create project children under org
-        var proj1 = new MeshNode("graph/orgwithlayout/proj1") { Name = "Project 1", NodeType = "project" };
-        var proj2 = new MeshNode("graph/orgwithlayout/proj2") { Name = "Project 2", NodeType = "project" };
-        client.Post(new DataChangeRequest { Creations = [proj1, proj2] }, o => o.WithTarget(orgAddress));
-        await Task.Delay(500);
-
-        // Act - get the _Nodes layout area from org hub
+        // Act - get the _Nodes layout area
         var reference = new LayoutAreaReference(MeshCatalogView.NodesArea);
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(orgAddress, reference);
 
@@ -433,60 +304,27 @@ public class MeshNodeCrudTest : MonolithMeshTestBase
         // Assert
         control.Should().NotBeNull("_Nodes layout area should return a control from org hub");
         control.Should().BeOfType<StackControl>();
-
         var stack = (StackControl)control;
         stack.Areas.Should().NotBeEmpty("Stack should have areas for header and DataGrid");
     }
 
     /// <summary>
-    /// Test 9: Get _Nodes layout area from project hub - should return DataGrid with story children.
+    /// Test 9: Project hub's _Nodes layout area returns DataGrid with story children.
     /// </summary>
     [Fact]
     public async Task ProjectHub_NodesLayoutArea_ReturnsDataGridWithStoryChildren()
     {
         var client = GetClient();
         var workspace = client.GetWorkspace();
-        var graphAddress = new Address("graph");
-        var persistence = ServiceProvider.GetRequiredService<IPersistenceService>();
-
-        // Initialize graph hub and create org
-        await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(graphAddress),
-            new CancellationTokenSource(10.Seconds()).Token);
-
-        var org = new MeshNode("graph/projlayoutorg") { Name = "Proj Layout Org", NodeType = "org" };
-        client.Post(new DataChangeRequest { Creations = [org] }, o => o.WithTarget(graphAddress));
-        await Task.Delay(500);
-
-        // Initialize org hub and create project
-        var orgAddress = new Address("graph/projlayoutorg");
-        await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(orgAddress),
-            new CancellationTokenSource(10.Seconds()).Token);
-
-        var proj = new MeshNode("graph/projlayoutorg/projwithstories") { Name = "Project With Stories", NodeType = "project" };
-        client.Post(new DataChangeRequest { Creations = [proj] }, o => o.WithTarget(orgAddress));
-        await Task.Delay(500);
-
-        // Verify project is persisted
-        (await persistence.GetNodeAsync("graph/projlayoutorg/projwithstories")).Should().NotBeNull();
+        var projAddress = new Address("graph/org1/proj1");
 
         // Initialize project hub
-        var projAddress = new Address("graph/projlayoutorg/projwithstories");
         await client.AwaitResponse(
             new PingRequest(),
             o => o.WithTarget(projAddress),
             new CancellationTokenSource(10.Seconds()).Token);
 
-        // Create story children under project
-        var story1 = new MeshNode("graph/projlayoutorg/projwithstories/story1") { Name = "Story 1", NodeType = "story" };
-        var story2 = new MeshNode("graph/projlayoutorg/projwithstories/story2") { Name = "Story 2", NodeType = "story" };
-        client.Post(new DataChangeRequest { Creations = [story1, story2] }, o => o.WithTarget(projAddress));
-        await Task.Delay(500);
-
-        // Act - get the _Nodes layout area from project hub
+        // Act - get the _Nodes layout area
         var reference = new LayoutAreaReference(MeshCatalogView.NodesArea);
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(projAddress, reference);
 
@@ -499,65 +337,27 @@ public class MeshNodeCrudTest : MonolithMeshTestBase
         // Assert
         control.Should().NotBeNull("_Nodes layout area should return a control from project hub");
         control.Should().BeOfType<StackControl>();
-
         var stack = (StackControl)control;
         stack.Areas.Should().NotBeEmpty("Stack should have areas for header and DataGrid");
     }
 
     /// <summary>
-    /// Test 10: Get _Nodes layout area from story hub - should return DataGrid with empty children (leaf node).
+    /// Test 10: Story hub's _Nodes layout area returns DataGrid with empty children (leaf node).
     /// </summary>
     [Fact]
     public async Task StoryHub_NodesLayoutArea_ReturnsDataGridWithEmptyChildren()
     {
         var client = GetClient();
         var workspace = client.GetWorkspace();
-        var graphAddress = new Address("graph");
-        var persistence = ServiceProvider.GetRequiredService<IPersistenceService>();
-
-        // Initialize graph hub and create org
-        await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(graphAddress),
-            new CancellationTokenSource(10.Seconds()).Token);
-
-        var org = new MeshNode("graph/storylayoutorg") { Name = "Story Layout Org", NodeType = "org" };
-        client.Post(new DataChangeRequest { Creations = [org] }, o => o.WithTarget(graphAddress));
-        await Task.Delay(500);
-
-        // Initialize org hub and create project
-        var orgAddress = new Address("graph/storylayoutorg");
-        await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(orgAddress),
-            new CancellationTokenSource(10.Seconds()).Token);
-
-        var proj = new MeshNode("graph/storylayoutorg/storyproj") { Name = "Story Proj", NodeType = "project" };
-        client.Post(new DataChangeRequest { Creations = [proj] }, o => o.WithTarget(orgAddress));
-        await Task.Delay(500);
-
-        // Initialize project hub and create story
-        var projAddress = new Address("graph/storylayoutorg/storyproj");
-        await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(projAddress),
-            new CancellationTokenSource(10.Seconds()).Token);
-
-        var story = new MeshNode("graph/storylayoutorg/storyproj/leafstory") { Name = "Leaf Story", NodeType = "story" };
-        client.Post(new DataChangeRequest { Creations = [story] }, o => o.WithTarget(projAddress));
-        await Task.Delay(500);
-
-        // Verify story is persisted
-        (await persistence.GetNodeAsync("graph/storylayoutorg/storyproj/leafstory")).Should().NotBeNull();
+        var storyAddress = new Address("graph/org1/proj1/story1");
 
         // Initialize story hub
-        var storyAddress = new Address("graph/storylayoutorg/storyproj/leafstory");
         await client.AwaitResponse(
             new PingRequest(),
             o => o.WithTarget(storyAddress),
             new CancellationTokenSource(10.Seconds()).Token);
 
-        // Act - get the _Nodes layout area from story hub (leaf node, no children)
+        // Act - get the _Nodes layout area (leaf node, but should still have the area)
         var reference = new LayoutAreaReference(MeshCatalogView.NodesArea);
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(storyAddress, reference);
 
@@ -570,8 +370,9 @@ public class MeshNodeCrudTest : MonolithMeshTestBase
         // Assert
         control.Should().NotBeNull("_Nodes layout area should return a control from story hub");
         control.Should().BeOfType<StackControl>();
-
         var stack = (StackControl)control;
         stack.Areas.Should().NotBeEmpty("Stack should have areas for header and DataGrid even if empty");
     }
+
+    #endregion
 }

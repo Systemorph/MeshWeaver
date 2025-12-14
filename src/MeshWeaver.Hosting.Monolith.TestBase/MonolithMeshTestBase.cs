@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Threading;
 using System.Threading.Tasks;
+using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
@@ -15,6 +16,7 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
     protected virtual MeshBuilder ConfigureMesh(MeshBuilder builder)
         => builder
             .UseMonolithMesh()
+            .AddInMemoryPersistence()
     ; protected MonolithMeshTestBase(ITestOutputHelper output) : base(output)
     {
         var builder = ConfigureMesh(
