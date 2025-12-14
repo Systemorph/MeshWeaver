@@ -23,6 +23,17 @@ public static class PersistenceExtensions
     }
 
     /// <summary>
+    /// Adds file system persistence to the mesh builder.
+    /// Alias for AddFileSystemPersistence using the "With" naming convention.
+    /// </summary>
+    /// <param name="builder">The mesh builder</param>
+    /// <param name="basePath">The base path for storing JSON files</param>
+    /// <returns>The mesh builder for chaining</returns>
+    public static TBuilder WithFileSystemPersistence<TBuilder>(this TBuilder builder, string basePath)
+        where TBuilder : MeshBuilder
+        => builder.AddFileSystemPersistence(basePath);
+
+    /// <summary>
     /// Adds in-memory persistence to the mesh builder (no file system backing).
     /// </summary>
     /// <param name="builder">The mesh builder</param>
@@ -33,6 +44,16 @@ public static class PersistenceExtensions
         builder.ConfigureServices(services => services.AddInMemoryPersistence());
         return builder;
     }
+
+    /// <summary>
+    /// Adds in-memory persistence to the mesh builder (no file system backing).
+    /// Alias for AddInMemoryPersistence using the "With" naming convention.
+    /// </summary>
+    /// <param name="builder">The mesh builder</param>
+    /// <returns>The mesh builder for chaining</returns>
+    public static TBuilder WithInMemoryPersistence<TBuilder>(this TBuilder builder)
+        where TBuilder : MeshBuilder
+        => builder.AddInMemoryPersistence();
 
     /// <summary>
     /// Adds an in-memory persistence service (no file system backing).

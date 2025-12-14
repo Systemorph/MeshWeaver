@@ -119,18 +119,50 @@ public abstract class MeshCatalogBase : IMeshCatalog
 
         var segments = path.Split('/');
 
-        // Find best matching node by score (number of matching segments)
-        var bestMatch = Configuration.Nodes.Values
+        // 1. Try configuration first (existing behavior)
+        var configMatch = Configuration.Nodes.Values
             .Select(node => (Node: node, Score: ScoreMatch(node, segments)))
             .Where(m => m.Score > 0)
             .OrderByDescending(m => m.Score)
             .FirstOrDefault();
 
-        if (bestMatch.Node == null)
-            return null;
+        if (configMatch.Node != null)
+        {
+            return ResolveFromConfigNode(configMatch.Node, segments, path);
+        }
 
-        var matchedNode = bestMatch.Node;
+        // 2. Try IPersistenceService - walk UP the path hierarchy to find best match
+        var persistenceMatch = FindBestPersistenceMatch(segments);
+        if (persistenceMatch != null)
+        {
+            // For persisted nodes, the full matched path IS the address
+            var matchedPath = string.Join("/", segments.Take(persistenceMatch.Segments.Length));
+            var remainder = persistenceMatch.Segments.Length < segments.Length
+                ? string.Join("/", segments.Skip(persistenceMatch.Segments.Length))
+                : null;
+            return new AddressResolution(matchedPath, remainder);
+        }
 
+        return null;
+    }
+
+    private MeshNode? FindBestPersistenceMatch(string[] segments)
+    {
+        // Walk from full path down to single segment, finding deepest existing node
+        for (int depth = segments.Length; depth >= 1; depth--)
+        {
+            var testPath = string.Join("/", segments.Take(depth));
+            // Use synchronous check - ExistsAsync is lightweight
+            if (Persistence.ExistsAsync(testPath).GetAwaiter().GetResult())
+            {
+                return Persistence.GetNodeAsync(testPath).GetAwaiter().GetResult();
+            }
+        }
+        return null;
+    }
+
+    private AddressResolution ResolveFromConfigNode(MeshNode matchedNode, string[] segments, string path)
+    {
         // For graph-style nodes (where the path IS the address), use all segments as address
         // This is determined by checking if there are NodeTypeConfigurations registered
         // (which means the node supports dynamic children via persistence)
@@ -138,8 +170,23 @@ public abstract class MeshCatalogBase : IMeshCatalog
             matchedNode.Segments.Length > 0 &&
             segments[0].Equals(matchedNode.Segments[0], StringComparison.OrdinalIgnoreCase))
         {
-            // Use the full path as the address (the path IS the address for graph nodes)
-            return new AddressResolution(path, null);
+            // For graph-style nodes, find the deepest existing node in persistence
+            // This allows proper remainder handling when path goes beyond existing nodes
+            var persistenceMatch = FindBestPersistenceMatch(segments);
+            if (persistenceMatch != null)
+            {
+                var matchedPath = string.Join("/", segments.Take(persistenceMatch.Segments.Length));
+                var persistenceRemainder = persistenceMatch.Segments.Length < segments.Length
+                    ? string.Join("/", segments.Skip(persistenceMatch.Segments.Length))
+                    : null;
+                return new AddressResolution(matchedPath, persistenceRemainder);
+            }
+
+            // Fallback to using just the config node prefix if nothing in persistence
+            var configRemainder = segments.Length > matchedNode.Segments.Length
+                ? string.Join("/", segments.Skip(matchedNode.Segments.Length))
+                : null;
+            return new AddressResolution(matchedNode.Prefix, configRemainder);
         }
 
         // Legacy behavior for nodes with AddressSegments
