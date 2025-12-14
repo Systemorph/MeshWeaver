@@ -20,16 +20,18 @@ using Xunit;
 namespace MeshWeaver.Hosting.Monolith.Test;
 
 /// <summary>
-/// Integration tests for MeshNode CRUD operations.
+/// Integration tests for MeshNode CRUD operations and path resolution.
 /// Tests verify:
 /// 1. Hubs load data from pre-seeded IPersistenceService at initialization
 /// 2. GetDataRequest returns the pre-seeded elements
 /// 3. DataChangeRequest persists changes to IPersistenceService in correct partition
 /// 4. LayoutAreaReference("_Nodes") returns DataGrid for all node levels
+/// 5. ResolvePath correctly resolves paths to addresses with remainders
 /// </summary>
 public class MeshNodeCrudTest : MonolithMeshTestBase
 {
     private IPersistenceService Persistence => ServiceProvider.GetRequiredService<IPersistenceService>();
+    private IMeshCatalog MeshCatalog => ServiceProvider.GetRequiredService<IMeshCatalog>();
 
     public MeshNodeCrudTest(ITestOutputHelper output) : base(output)
     {
@@ -240,10 +242,103 @@ public class MeshNodeCrudTest : MonolithMeshTestBase
 
     #endregion
 
-    #region Test 7-10: LayoutAreaReference("_Nodes") Returns DataGrid
+    #region Test 7-11: ResolvePath Tests
 
     /// <summary>
-    /// Test 7: Graph hub's _Nodes layout area returns DataGrid with org children.
+    /// Test 7: ResolvePath finds persisted node that is NOT in configuration.
+    /// </summary>
+    [Fact]
+    public void ResolvePath_FindsPersistedNode_NotInConfig()
+    {
+        // Act
+        var resolution = MeshCatalog.ResolvePath("graph/org1");
+
+        // Assert
+        resolution.Should().NotBeNull("persistence has graph/org1");
+        resolution!.Prefix.Should().Be("graph/org1");
+        resolution.Remainder.Should().BeNull();
+    }
+
+    /// <summary>
+    /// Test 8: ResolvePath walks UP hierarchy to find best match when path doesn't exist.
+    /// </summary>
+    [Fact]
+    public void ResolvePath_WalksUpHierarchy_FindsBestMatch()
+    {
+        // Act: resolve path that goes deeper than persisted (nonexistent/deep doesn't exist)
+        var resolution = MeshCatalog.ResolvePath("graph/org1/proj1/nonexistent/deep");
+
+        // Assert: should match graph/org1/proj1 with remainder
+        resolution.Should().NotBeNull();
+        resolution!.Prefix.Should().Be("graph/org1/proj1");
+        resolution.Remainder.Should().Be("nonexistent/deep");
+    }
+
+    /// <summary>
+    /// Test 9: ResolvePath returns exact match when full path exists.
+    /// </summary>
+    [Fact]
+    public void ResolvePath_ReturnsExactMatch_WhenFullPathExists()
+    {
+        // Act
+        var resolution = MeshCatalog.ResolvePath("graph/org1/proj1/story1");
+
+        // Assert
+        resolution.Should().NotBeNull();
+        resolution!.Prefix.Should().Be("graph/org1/proj1/story1");
+        resolution.Remainder.Should().BeNull();
+    }
+
+    /// <summary>
+    /// Test 10: ResolvePath with remainder returns correct prefix and remainder.
+    /// </summary>
+    [Fact]
+    public void ResolvePath_WithRemainder_ReturnsCorrectParts()
+    {
+        // Act: resolve path with additional segments beyond existing node
+        var resolution = MeshCatalog.ResolvePath("graph/org1/proj1/story1/Overview");
+
+        // Assert
+        resolution.Should().NotBeNull();
+        resolution!.Prefix.Should().Be("graph/org1/proj1/story1");
+        resolution.Remainder.Should().Be("Overview");
+    }
+
+    /// <summary>
+    /// Test 11: ResolvePath returns null when no match found in persistence or config.
+    /// </summary>
+    [Fact]
+    public void ResolvePath_ReturnsNull_WhenNoMatchFound()
+    {
+        // Act: resolve path that doesn't exist anywhere
+        var resolution = MeshCatalog.ResolvePath("nonexistent/path/here");
+
+        // Assert
+        resolution.Should().BeNull();
+    }
+
+    /// <summary>
+    /// Test 12: ResolvePath correctly parses underscore-prefixed segments as remainder.
+    /// e.g., "graph/_Nodes" should resolve to address="graph", remainder="_Nodes"
+    /// </summary>
+    [Fact]
+    public void ResolvePath_UnderscorePrefixedSegment_ParsesAsRemainder()
+    {
+        // Act: resolve path with underscore-prefixed segment (layout area)
+        var resolution = MeshCatalog.ResolvePath("graph/_Nodes");
+
+        // Assert: "graph" is the address, "_Nodes" is the remainder (layout area)
+        resolution.Should().NotBeNull();
+        resolution!.Prefix.Should().Be("graph");
+        resolution.Remainder.Should().Be("_Nodes");
+    }
+
+    #endregion
+
+    #region Test 13-16: LayoutAreaReference("_Nodes") Returns DataGrid
+
+    /// <summary>
+    /// Test 13: Graph hub's _Nodes layout area returns DataGrid with org children.
     /// </summary>
     [Fact]
     public async Task GraphHub_NodesLayoutArea_ReturnsDataGridWithOrgChildren()
@@ -276,7 +371,7 @@ public class MeshNodeCrudTest : MonolithMeshTestBase
     }
 
     /// <summary>
-    /// Test 8: Org hub's _Nodes layout area returns DataGrid with project children.
+    /// Test 14: Org hub's _Nodes layout area returns DataGrid with project children.
     /// </summary>
     [Fact]
     public async Task OrgHub_NodesLayoutArea_ReturnsDataGridWithProjectChildren()
@@ -309,7 +404,7 @@ public class MeshNodeCrudTest : MonolithMeshTestBase
     }
 
     /// <summary>
-    /// Test 9: Project hub's _Nodes layout area returns DataGrid with story children.
+    /// Test 15: Project hub's _Nodes layout area returns DataGrid with story children.
     /// </summary>
     [Fact]
     public async Task ProjectHub_NodesLayoutArea_ReturnsDataGridWithStoryChildren()
@@ -342,7 +437,7 @@ public class MeshNodeCrudTest : MonolithMeshTestBase
     }
 
     /// <summary>
-    /// Test 10: Story hub's _Nodes layout area returns DataGrid with empty children (leaf node).
+    /// Test 16: Story hub's _Nodes layout area returns DataGrid with empty children (leaf node).
     /// </summary>
     [Fact]
     public async Task StoryHub_NodesLayoutArea_ReturnsDataGridWithEmptyChildren()
