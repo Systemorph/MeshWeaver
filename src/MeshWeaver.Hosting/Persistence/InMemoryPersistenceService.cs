@@ -12,6 +12,7 @@ namespace MeshWeaver.Hosting.Persistence;
 public class InMemoryPersistenceService : IPersistenceService
 {
     private readonly ConcurrentDictionary<string, MeshNode> _nodes = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, Comment> _comments = new(StringComparer.OrdinalIgnoreCase);
     private readonly IStorageAdapter? _storageAdapter;
     private bool _initialized;
 
@@ -200,4 +201,43 @@ public class InMemoryPersistenceService : IPersistenceService
 
     private static string NormalizePath(string? path) =>
         path?.Trim('/').ToLowerInvariant() ?? "";
+
+    #region Comments
+
+    public Task<IEnumerable<Comment>> GetCommentsAsync(string nodePath, CancellationToken ct = default)
+    {
+        var normalizedPath = NormalizePath(nodePath);
+        var comments = _comments.Values
+            .Where(c => NormalizePath(c.NodePath) == normalizedPath)
+            .OrderBy(c => c.CreatedAt)
+            .ToList();
+
+        return Task.FromResult<IEnumerable<Comment>>(comments);
+    }
+
+    public Task<Comment> AddCommentAsync(Comment comment, CancellationToken ct = default)
+    {
+        var savedComment = comment with
+        {
+            Id = string.IsNullOrEmpty(comment.Id) ? Guid.NewGuid().ToString() : comment.Id,
+            CreatedAt = comment.CreatedAt == default ? DateTimeOffset.UtcNow : comment.CreatedAt
+        };
+
+        _comments[savedComment.Id] = savedComment;
+        return Task.FromResult(savedComment);
+    }
+
+    public Task DeleteCommentAsync(string commentId, CancellationToken ct = default)
+    {
+        _comments.TryRemove(commentId, out _);
+        return Task.CompletedTask;
+    }
+
+    public Task<Comment?> GetCommentAsync(string commentId, CancellationToken ct = default)
+    {
+        _comments.TryGetValue(commentId, out var comment);
+        return Task.FromResult(comment);
+    }
+
+    #endregion
 }

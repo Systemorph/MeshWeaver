@@ -69,4 +69,39 @@ public interface IPersistenceService
     /// </summary>
     /// <param name="ct">Cancellation token</param>
     Task InitializeAsync(CancellationToken ct = default);
+
+    #region Comments
+
+    /// <summary>
+    /// Gets all comments for a node.
+    /// </summary>
+    /// <param name="nodePath">Path of the node</param>
+    /// <param name="ct">Cancellation token</param>
+    /// <returns>Collection of comments for the node</returns>
+    Task<IEnumerable<Comment>> GetCommentsAsync(string nodePath, CancellationToken ct = default);
+
+    /// <summary>
+    /// Adds a comment to a node.
+    /// </summary>
+    /// <param name="comment">The comment to add</param>
+    /// <param name="ct">Cancellation token</param>
+    /// <returns>The saved comment</returns>
+    Task<Comment> AddCommentAsync(Comment comment, CancellationToken ct = default);
+
+    /// <summary>
+    /// Deletes a comment by ID.
+    /// </summary>
+    /// <param name="commentId">The comment ID to delete</param>
+    /// <param name="ct">Cancellation token</param>
+    Task DeleteCommentAsync(string commentId, CancellationToken ct = default);
+
+    /// <summary>
+    /// Gets a single comment by ID.
+    /// </summary>
+    /// <param name="commentId">The comment ID</param>
+    /// <param name="ct">Cancellation token</param>
+    /// <returns>The comment or null if not found</returns>
+    Task<Comment?> GetCommentAsync(string commentId, CancellationToken ct = default);
+
+    #endregion
 }
