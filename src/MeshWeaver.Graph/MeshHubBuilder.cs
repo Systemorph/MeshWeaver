@@ -95,10 +95,16 @@ public class MeshHubBuilder
             return source.WithType<MeshNode>(ts => ts.WithKey(n => n.Prefix));
         }));
 
-        // Register additional data type if specified
+        // Register additional data type if specified, otherwise use NodeDescription as default
         if (DataType is not null)
         {
             config = config.AddData(data => data.AddSource(source => source.WithType(DataType)));
+        }
+        else
+        {
+            // Register NodeDescription as the default entity type for generic nodes
+            config = config.AddData(data => data.AddSource(source =>
+                source.WithType<NodeDescription>(ts => ts.WithKey(n => n.Id))));
         }
 
         // Add mesh navigation (autocomplete + catalog view)

@@ -359,19 +359,19 @@ public class MeshNodeCrudTest : MonolithMeshTestBase
 
         var control = await stream
             .GetControlStream(reference.Area!)
-            .Where(c => c is StackControl)
+            .Where(c => c is TabsControl)
             .Timeout(10.Seconds())
             .FirstAsync();
 
         // Assert
         control.Should().NotBeNull("_Nodes layout area should return a control");
-        control.Should().BeOfType<StackControl>();
-        var stack = (StackControl)control;
-        stack.Areas.Should().NotBeEmpty("Stack should have areas for header and DataGrid");
+        control.Should().BeOfType<TabsControl>();
+        var tabs = (TabsControl)control;
+        tabs.Areas.Should().HaveCount(3, "Should have Overview, Nodes, and Comments tabs");
     }
 
     /// <summary>
-    /// Test 14: Org hub's _Nodes layout area returns DataGrid with project children.
+    /// Test 14: Org hub's _Nodes layout area returns TabsControl with project children.
     /// </summary>
     [Fact]
     public async Task OrgHub_NodesLayoutArea_ReturnsDataGridWithProjectChildren()
@@ -392,19 +392,19 @@ public class MeshNodeCrudTest : MonolithMeshTestBase
 
         var control = await stream
             .GetControlStream(reference.Area!)
-            .Where(c => c is StackControl)
+            .Where(c => c is TabsControl)
             .Timeout(10.Seconds())
             .FirstAsync();
 
         // Assert
         control.Should().NotBeNull("_Nodes layout area should return a control from org hub");
-        control.Should().BeOfType<StackControl>();
-        var stack = (StackControl)control;
-        stack.Areas.Should().NotBeEmpty("Stack should have areas for header and DataGrid");
+        control.Should().BeOfType<TabsControl>();
+        var tabs = (TabsControl)control;
+        tabs.Areas.Should().HaveCount(3, "Should have Overview, Nodes, and Comments tabs");
     }
 
     /// <summary>
-    /// Test 15: Project hub's _Nodes layout area returns DataGrid with story children.
+    /// Test 15: Project hub's _Nodes layout area returns TabsControl with story children.
     /// </summary>
     [Fact]
     public async Task ProjectHub_NodesLayoutArea_ReturnsDataGridWithStoryChildren()
@@ -425,19 +425,19 @@ public class MeshNodeCrudTest : MonolithMeshTestBase
 
         var control = await stream
             .GetControlStream(reference.Area!)
-            .Where(c => c is StackControl)
+            .Where(c => c is TabsControl)
             .Timeout(10.Seconds())
             .FirstAsync();
 
         // Assert
         control.Should().NotBeNull("_Nodes layout area should return a control from project hub");
-        control.Should().BeOfType<StackControl>();
-        var stack = (StackControl)control;
-        stack.Areas.Should().NotBeEmpty("Stack should have areas for header and DataGrid");
+        control.Should().BeOfType<TabsControl>();
+        var tabs = (TabsControl)control;
+        tabs.Areas.Should().HaveCount(3, "Should have Overview, Nodes, and Comments tabs");
     }
 
     /// <summary>
-    /// Test 16: Story hub's _Nodes layout area returns DataGrid with empty children (leaf node).
+    /// Test 16: Story hub's _Nodes layout area returns TabsControl (leaf node).
     /// </summary>
     [Fact]
     public async Task StoryHub_NodesLayoutArea_ReturnsDataGridWithEmptyChildren()
@@ -458,15 +458,15 @@ public class MeshNodeCrudTest : MonolithMeshTestBase
 
         var control = await stream
             .GetControlStream(reference.Area!)
-            .Where(c => c is StackControl)
+            .Where(c => c is TabsControl)
             .Timeout(10.Seconds())
             .FirstAsync();
 
         // Assert
         control.Should().NotBeNull("_Nodes layout area should return a control from story hub");
-        control.Should().BeOfType<StackControl>();
-        var stack = (StackControl)control;
-        stack.Areas.Should().NotBeEmpty("Stack should have areas for header and DataGrid even if empty");
+        control.Should().BeOfType<TabsControl>();
+        var tabs = (TabsControl)control;
+        tabs.Areas.Should().HaveCount(3, "Should have Overview, Nodes, and Comments tabs");
     }
 
     #endregion

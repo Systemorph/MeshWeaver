@@ -1,4 +1,4 @@
-﻿using MeshWeaver.AI;
+using MeshWeaver.AI;
 using MeshWeaver.Documentation.AI;
 using MeshWeaver.Insurance.AI;
 using MeshWeaver.Northwind.AI;
@@ -19,6 +19,7 @@ public static class PortalAIExtensions
     {
         return services
             .AddSingleton<IAgentDefinition, MeshNavigator>()
+            .AddSingleton<IAgentDefinition, MeshAgent>()
             .AddNorthwindAI()
             .AddTodoAI()
             .AddDocumentationAI()

@@ -1,0 +1,274 @@
+﻿using System.ComponentModel;
+using System.Text.Json;
+using MeshWeaver.Layout;
+using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Services;
+using MeshWeaver.Messaging;
+using Microsoft.Extensions.AI;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+
+namespace MeshWeaver.AI;
+
+/// <summary>
+/// Plugin providing mesh node operations for AI agents.
+/// Supports @ prefix shorthand for unified references (e.g., @graph/org1 -> graph/org1).
+/// </summary>
+public class MeshPlugin(IMessageHub hub, IAgentChat chat)
+{
+    private readonly ILogger<MeshPlugin> logger = hub.ServiceProvider.GetRequiredService<ILogger<MeshPlugin>>();
+    private readonly IMeshCatalog? meshCatalog = hub.ServiceProvider.GetService<IMeshCatalog>();
+
+    /// <summary>
+    /// Resolves @ prefix to full path. Example: @graph/org1 -> graph/org1
+    /// </summary>
+    private static string ResolvePath(string path)
+    {
+        if (path.StartsWith("@"))
+            return path[1..];
+        return path;
+    }
+
+    [Description("Gets a node by its path. Use @ prefix for shorthand (e.g., @graph/org1).")]
+    public async Task<string> GetNode(
+        [Description("Path to the node (e.g., @graph/org1 or graph/org1)")] string path)
+    {
+        logger.LogInformation("GetNode called with path={Path}", path);
+
+        if (meshCatalog?.Persistence == null)
+            return "Mesh catalog not available.";
+
+        var resolvedPath = ResolvePath(path);
+        var node = await meshCatalog.Persistence.GetNodeAsync(resolvedPath);
+
+        if (node == null)
+            return $"Node not found at path: {resolvedPath}";
+
+        return JsonSerializer.Serialize(node, hub.JsonSerializerOptions);
+    }
+
+    [Description("Lists child nodes under a parent path. Use @ prefix for shorthand.")]
+    public async Task<string> GetChildren(
+        [Description("Parent path (e.g., @graph or graph). Empty for root.")] string? parentPath = null)
+    {
+        logger.LogInformation("GetChildren called with parentPath={ParentPath}", parentPath);
+
+        if (meshCatalog?.Persistence == null)
+            return "Mesh catalog not available.";
+
+        var resolvedPath = parentPath != null ? ResolvePath(parentPath) : null;
+        var children = await meshCatalog.Persistence.GetChildrenAsync(resolvedPath);
+
+        var result = children.Select(n => new
+        {
+            n.Prefix,
+            n.Name,
+            n.NodeType,
+            n.Description
+        });
+
+        return JsonSerializer.Serialize(result, hub.JsonSerializerOptions);
+    }
+
+    [Description("Creates a new node at the specified path.")]
+    public async Task<string> CreateNode(
+        [Description("Full path for the new node (e.g., @graph/neworg)")] string path,
+        [Description("Display name for the node")] string name,
+        [Description("Description of the node (markdown supported)")] string? description = null,
+        [Description("Type of the node (e.g., Organization, Project)")] string? nodeType = null)
+    {
+        logger.LogInformation("CreateNode called with path={Path}, name={Name}", path, name);
+
+        if (meshCatalog?.Persistence == null)
+            return "Mesh catalog not available.";
+
+        var resolvedPath = ResolvePath(path);
+
+        // Check if node already exists
+        if (await meshCatalog.Persistence.ExistsAsync(resolvedPath))
+            return $"Node already exists at path: {resolvedPath}";
+
+        var node = new MeshNode(resolvedPath)
+        {
+            Name = name,
+            Description = description,
+            NodeType = nodeType,
+            Content = new NodeDescription
+            {
+                Id = resolvedPath,
+                Description = description ?? string.Empty
+            }
+        };
+
+        await meshCatalog.Persistence.SaveNodeAsync(node);
+        return $"Node created successfully at: {resolvedPath}";
+    }
+
+    [Description("Updates an existing node at the specified path.")]
+    public async Task<string> UpdateNode(
+        [Description("Path to the node to update (e.g., @graph/org1)")] string path,
+        [Description("New display name (optional)")] string? name = null,
+        [Description("New description (optional, markdown supported)")] string? description = null,
+        [Description("New node type (optional)")] string? nodeType = null)
+    {
+        logger.LogInformation("UpdateNode called with path={Path}", path);
+
+        if (meshCatalog?.Persistence == null)
+            return "Mesh catalog not available.";
+
+        var resolvedPath = ResolvePath(path);
+        var existingNode = await meshCatalog.Persistence.GetNodeAsync(resolvedPath);
+
+        if (existingNode == null)
+            return $"Node not found at path: {resolvedPath}";
+
+        var updatedNode = existingNode with
+        {
+            Name = name ?? existingNode.Name,
+            Description = description ?? existingNode.Description,
+            NodeType = nodeType ?? existingNode.NodeType,
+            Content = description != null
+                ? new NodeDescription { Id = resolvedPath, Description = description }
+                : existingNode.Content
+        };
+
+        await meshCatalog.Persistence.SaveNodeAsync(updatedNode);
+        return $"Node updated successfully at: {resolvedPath}";
+    }
+
+    [Description("Deletes a node at the specified path.")]
+    public async Task<string> DeleteNode(
+        [Description("Path to the node to delete (e.g., @graph/org1)")] string path,
+        [Description("If true, also deletes all child nodes recursively")] bool recursive = false)
+    {
+        logger.LogInformation("DeleteNode called with path={Path}, recursive={Recursive}", path, recursive);
+
+        if (meshCatalog?.Persistence == null)
+            return "Mesh catalog not available.";
+
+        var resolvedPath = ResolvePath(path);
+
+        if (!await meshCatalog.Persistence.ExistsAsync(resolvedPath))
+            return $"Node not found at path: {resolvedPath}";
+
+        await meshCatalog.Persistence.DeleteNodeAsync(resolvedPath, recursive);
+        return $"Node deleted successfully at: {resolvedPath}" + (recursive ? " (including all children)" : "");
+    }
+
+    private const string NodesArea = "_Nodes";
+
+    [Description("Navigates to a node in the UI. Displays the node's tabbed view.")]
+    public string NavigateTo(
+        [Description("Path to navigate to (e.g., @graph/org1)")] string path)
+    {
+        logger.LogInformation("NavigateTo called with path={Path}", path);
+
+        var resolvedPath = ResolvePath(path);
+        var address = new Address(resolvedPath);
+        var layoutControl = Controls.LayoutArea(address, NodesArea);
+
+        chat.DisplayLayoutArea(layoutControl);
+        return $"Navigating to: {resolvedPath}";
+    }
+
+    [Description("Searches for nodes matching a query.")]
+    public async Task<string> SearchNodes(
+        [Description("Search query to match against name, description, or content")] string query,
+        [Description("Optional parent path to search under (e.g., @graph)")] string? parentPath = null)
+    {
+        logger.LogInformation("SearchNodes called with query={Query}, parentPath={ParentPath}", query, parentPath);
+
+        if (meshCatalog?.Persistence == null)
+            return "Mesh catalog not available.";
+
+        var resolvedParent = parentPath != null ? ResolvePath(parentPath) : null;
+        var results = await meshCatalog.Persistence.SearchAsync(resolvedParent, query);
+
+        var result = results.Select(n => new
+        {
+            n.Prefix,
+            n.Name,
+            n.NodeType,
+            n.Description
+        });
+
+        return JsonSerializer.Serialize(result, hub.JsonSerializerOptions);
+    }
+
+    #region Comments
+
+    [Description("Gets all comments for a node.")]
+    public async Task<string> GetComments(
+        [Description("Path to the node (e.g., @graph/org1)")] string path)
+    {
+        logger.LogInformation("GetComments called with path={Path}", path);
+
+        if (meshCatalog?.Persistence == null)
+            return "Mesh catalog not available.";
+
+        var resolvedPath = ResolvePath(path);
+        var comments = await meshCatalog.Persistence.GetCommentsAsync(resolvedPath);
+
+        return JsonSerializer.Serialize(comments, hub.JsonSerializerOptions);
+    }
+
+    [Description("Adds a comment to a node.")]
+    public async Task<string> AddComment(
+        [Description("Path to the node (e.g., @graph/org1)")] string path,
+        [Description("Comment text (markdown supported)")] string text,
+        [Description("Author name (optional)")] string? author = null)
+    {
+        logger.LogInformation("AddComment called with path={Path}", path);
+
+        if (meshCatalog?.Persistence == null)
+            return "Mesh catalog not available.";
+
+        var resolvedPath = ResolvePath(path);
+
+        var comment = new Comment
+        {
+            NodePath = resolvedPath,
+            Author = author ?? "AI Agent",
+            Text = text,
+            CreatedAt = DateTimeOffset.UtcNow
+        };
+
+        var saved = await meshCatalog.Persistence.AddCommentAsync(comment);
+        return $"Comment added successfully with ID: {saved.Id}";
+    }
+
+    [Description("Deletes a comment by its ID.")]
+    public async Task<string> DeleteComment(
+        [Description("The comment ID to delete")] string commentId)
+    {
+        logger.LogInformation("DeleteComment called with commentId={CommentId}", commentId);
+
+        if (meshCatalog?.Persistence == null)
+            return "Mesh catalog not available.";
+
+        await meshCatalog.Persistence.DeleteCommentAsync(commentId);
+        return $"Comment deleted successfully: {commentId}";
+    }
+
+    #endregion
+
+    /// <summary>
+    /// Creates all tools for this plugin.
+    /// </summary>
+    public IList<AITool> CreateTools()
+    {
+        return
+        [
+            AIFunctionFactory.Create(GetNode),
+            AIFunctionFactory.Create(GetChildren),
+            AIFunctionFactory.Create(CreateNode),
+            AIFunctionFactory.Create(UpdateNode),
+            AIFunctionFactory.Create(DeleteNode),
+            AIFunctionFactory.Create(NavigateTo),
+            AIFunctionFactory.Create(SearchNodes),
+            AIFunctionFactory.Create(GetComments),
+            AIFunctionFactory.Create(AddComment),
+            AIFunctionFactory.Create(DeleteComment)
+        ];
+    }
+}

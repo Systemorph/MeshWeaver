@@ -1,4 +1,4 @@
-﻿using System.Reactive.Linq;
+using System.Reactive.Linq;
 using MeshWeaver.Data;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
@@ -12,35 +12,56 @@ using Microsoft.Extensions.DependencyInjection;
 namespace MeshWeaver.Graph;
 
 /// <summary>
-/// Layout view for displaying a catalog of MeshNode children.
-/// Shows metadata like Name, NodeType, Description in a DataGrid.
+/// Layout view for displaying mesh node content in a tabbed interface.
+/// Tab 1: Overview - Main entity display (NodeDescription or custom type)
+/// Tab 2: Nodes - Child nodes DataGrid
+/// Tab 3: Comments - Comments section
 /// </summary>
 public static class MeshCatalogView
 {
 
     /// <summary>
     /// Adds the mesh catalog view to the hub's layout.
-    /// This enables browsing child mesh nodes in a DataGrid.
+    /// This enables browsing child mesh nodes in a tabbed interface.
     /// </summary>
     public static MessageHubConfiguration AddMeshCatalogView(this MessageHubConfiguration configuration)
-        => configuration.AddLayout(layout => layout
-            .WithView(NodesArea, MeshCatalogView.Nodes));
+        => configuration
+            .AddMeshNodeView() // Add Overview and Comments views
+            .AddLayout(layout => layout
+                .WithView(NodesArea, MeshCatalogView.Nodes));
 
     public const string NodesArea = $"_{nameof(Nodes)}";
 
     /// <summary>
-    /// Renders the catalog of child mesh nodes for the current hub address.
+    /// Renders the tabbed view for mesh nodes.
+    /// Tab 1: Overview - Node content from MeshNodeView.Overview
+    /// Tab 2: Nodes - Child nodes DataGrid
+    /// Tab 3: Comments - Comments from MeshNodeView.Comments
     /// </summary>
-    public static IObservable<UiControl> Nodes(LayoutAreaHost host, RenderingContext _)
+    public static IObservable<UiControl> Nodes(LayoutAreaHost host, RenderingContext ctx)
+    {
+        return Observable.Return(Controls.Tabs
+            .WithView(BuildOverviewTab(host, ctx), tab => tab.WithLabel("Overview"))
+            .WithView(BuildNodesTab(host), tab => tab.WithLabel("Nodes"))
+            .WithView(BuildCommentsTab(host, ctx), tab => tab.WithLabel("Comments")));
+    }
+
+    private static UiControl BuildOverviewTab(LayoutAreaHost host, RenderingContext ctx)
+    {
+        // Use the LayoutArea control to render the Overview area
+        return Controls.LayoutArea(host.Hub.Address, MeshNodeView.OverviewArea);
+    }
+
+    private static UiControl BuildNodesTab(LayoutAreaHost host)
     {
         var meshCatalog = host.Hub.ServiceProvider.GetService<IMeshCatalog>();
         var parentPath = host.Hub.Address.ToString();
 
         if (meshCatalog == null)
         {
-            return Observable.Return(Controls.Stack
+            return Controls.Stack
                 .WithView(Controls.Html($"<h2>Browse {parentPath}</h2>"))
-                .WithView(Controls.Html("<p>Mesh catalog not available.</p>")));
+                .WithView(Controls.Html("<p>Mesh catalog not available.</p>"));
         }
 
         // Stream the children from the mesh catalog
@@ -52,9 +73,15 @@ public static class MeshCatalogView
             .Select(nodes => nodes.Select(n => new MeshNodeViewModel(n)).ToList())
             .Subscribe(x => host.UpdateData(id, x)));
 
-        return Observable.Return(Controls.Stack
+        return Controls.Stack
             .WithView(Controls.Html($"<h2>Browse {parentPath}</h2>"))
-            .WithView(CreateDataGrid(id)));
+            .WithView(CreateDataGrid(id));
+    }
+
+    private static UiControl BuildCommentsTab(LayoutAreaHost host, RenderingContext ctx)
+    {
+        // Use the LayoutArea control to render the Comments area
+        return Controls.LayoutArea(host.Hub.Address, MeshNodeView.CommentsArea);
     }
 
     private static DataGridControl CreateDataGrid(string dataId)
