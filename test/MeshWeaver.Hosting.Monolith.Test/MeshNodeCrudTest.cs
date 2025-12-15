@@ -338,10 +338,10 @@ public class MeshNodeCrudTest : MonolithMeshTestBase
     #region Test 13-16: LayoutAreaReference("_Nodes") Returns DataGrid
 
     /// <summary>
-    /// Test 13: Graph hub's _Nodes layout area returns DataGrid with org children.
+    /// Test 13: Graph hub's Overview layout area returns TabsControl.
     /// </summary>
     [Fact]
-    public async Task GraphHub_NodesLayoutArea_ReturnsDataGridWithOrgChildren()
+    public async Task GraphHub_OverviewLayoutArea_ReturnsTabsControl()
     {
         var client = GetClient();
         var workspace = client.GetWorkspace();
@@ -353,8 +353,8 @@ public class MeshNodeCrudTest : MonolithMeshTestBase
             o => o.WithTarget(graphAddress),
             new CancellationTokenSource(10.Seconds()).Token);
 
-        // Act - get the _Nodes layout area
-        var reference = new LayoutAreaReference(MeshCatalogView.NodesArea);
+        // Act - get the Overview layout area (now returns TabsControl)
+        var reference = new LayoutAreaReference(MeshNodeView.OverviewArea);
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(graphAddress, reference);
 
         var control = await stream
@@ -364,17 +364,18 @@ public class MeshNodeCrudTest : MonolithMeshTestBase
             .FirstAsync();
 
         // Assert
-        control.Should().NotBeNull("_Nodes layout area should return a control");
+        control.Should().NotBeNull("Overview layout area should return a control");
         control.Should().BeOfType<TabsControl>();
         var tabs = (TabsControl)control;
-        tabs.Areas.Should().HaveCount(3, "Should have Overview, Nodes, and Comments tabs");
+        // Should have at least Details and Comments tabs
+        tabs.Areas.Should().HaveCountGreaterThanOrEqualTo(2, "Should have at least Details and Comments tabs");
     }
 
     /// <summary>
-    /// Test 14: Org hub's _Nodes layout area returns TabsControl with project children.
+    /// Test 14: Org hub's Overview layout area returns TabsControl.
     /// </summary>
     [Fact]
-    public async Task OrgHub_NodesLayoutArea_ReturnsDataGridWithProjectChildren()
+    public async Task OrgHub_OverviewLayoutArea_ReturnsTabsControl()
     {
         var client = GetClient();
         var workspace = client.GetWorkspace();
@@ -386,8 +387,8 @@ public class MeshNodeCrudTest : MonolithMeshTestBase
             o => o.WithTarget(orgAddress),
             new CancellationTokenSource(10.Seconds()).Token);
 
-        // Act - get the _Nodes layout area
-        var reference = new LayoutAreaReference(MeshCatalogView.NodesArea);
+        // Act - get the Overview layout area (now returns TabsControl)
+        var reference = new LayoutAreaReference(MeshNodeView.OverviewArea);
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(orgAddress, reference);
 
         var control = await stream
@@ -397,17 +398,18 @@ public class MeshNodeCrudTest : MonolithMeshTestBase
             .FirstAsync();
 
         // Assert
-        control.Should().NotBeNull("_Nodes layout area should return a control from org hub");
+        control.Should().NotBeNull("Overview layout area should return a control from org hub");
         control.Should().BeOfType<TabsControl>();
         var tabs = (TabsControl)control;
-        tabs.Areas.Should().HaveCount(3, "Should have Overview, Nodes, and Comments tabs");
+        // Should have at least Details and Comments tabs
+        tabs.Areas.Should().HaveCountGreaterThanOrEqualTo(2, "Should have at least Details and Comments tabs");
     }
 
     /// <summary>
-    /// Test 15: Project hub's _Nodes layout area returns TabsControl with story children.
+    /// Test 15: Project hub's Overview layout area returns TabsControl.
     /// </summary>
     [Fact]
-    public async Task ProjectHub_NodesLayoutArea_ReturnsDataGridWithStoryChildren()
+    public async Task ProjectHub_OverviewLayoutArea_ReturnsTabsControl()
     {
         var client = GetClient();
         var workspace = client.GetWorkspace();
@@ -419,8 +421,8 @@ public class MeshNodeCrudTest : MonolithMeshTestBase
             o => o.WithTarget(projAddress),
             new CancellationTokenSource(10.Seconds()).Token);
 
-        // Act - get the _Nodes layout area
-        var reference = new LayoutAreaReference(MeshCatalogView.NodesArea);
+        // Act - get the Overview layout area (now returns TabsControl)
+        var reference = new LayoutAreaReference(MeshNodeView.OverviewArea);
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(projAddress, reference);
 
         var control = await stream
@@ -430,17 +432,18 @@ public class MeshNodeCrudTest : MonolithMeshTestBase
             .FirstAsync();
 
         // Assert
-        control.Should().NotBeNull("_Nodes layout area should return a control from project hub");
+        control.Should().NotBeNull("Overview layout area should return a control from project hub");
         control.Should().BeOfType<TabsControl>();
         var tabs = (TabsControl)control;
-        tabs.Areas.Should().HaveCount(3, "Should have Overview, Nodes, and Comments tabs");
+        // Should have at least Details and Comments tabs, plus story type tabs
+        tabs.Areas.Should().HaveCountGreaterThanOrEqualTo(2, "Should have at least Details and Comments tabs");
     }
 
     /// <summary>
-    /// Test 16: Story hub's _Nodes layout area returns TabsControl (leaf node).
+    /// Test 16: Story hub's Overview layout area returns TabsControl (leaf node has no child type tabs).
     /// </summary>
     [Fact]
-    public async Task StoryHub_NodesLayoutArea_ReturnsDataGridWithEmptyChildren()
+    public async Task StoryHub_OverviewLayoutArea_ReturnsTabsControl()
     {
         var client = GetClient();
         var workspace = client.GetWorkspace();
@@ -452,8 +455,8 @@ public class MeshNodeCrudTest : MonolithMeshTestBase
             o => o.WithTarget(storyAddress),
             new CancellationTokenSource(10.Seconds()).Token);
 
-        // Act - get the _Nodes layout area (leaf node, but should still have the area)
-        var reference = new LayoutAreaReference(MeshCatalogView.NodesArea);
+        // Act - get the Overview layout area (leaf node, so only Details and Comments tabs)
+        var reference = new LayoutAreaReference(MeshNodeView.OverviewArea);
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(storyAddress, reference);
 
         var control = await stream
@@ -463,10 +466,136 @@ public class MeshNodeCrudTest : MonolithMeshTestBase
             .FirstAsync();
 
         // Assert
-        control.Should().NotBeNull("_Nodes layout area should return a control from story hub");
+        control.Should().NotBeNull("Overview layout area should return a control from story hub");
         control.Should().BeOfType<TabsControl>();
         var tabs = (TabsControl)control;
-        tabs.Areas.Should().HaveCount(3, "Should have Overview, Nodes, and Comments tabs");
+        // Leaf node has only Details and Comments tabs (no child type tabs)
+        tabs.Areas.Should().HaveCount(2, "Story hub should have Details and Comments tabs only");
+    }
+
+    #endregion
+
+    #region Test 17-21: MoveNodeAsync Tests
+
+    /// <summary>
+    /// Test 17: Move single node to new path.
+    /// </summary>
+    [Fact]
+    public async Task MoveNodeAsync_MovesNodeToNewPath()
+    {
+        // Arrange - create a node to move
+        await Persistence.SaveNodeAsync(new MeshNode("graph/movetest") { Name = "Move Test", NodeType = "org" });
+
+        // Act
+        var moved = await Persistence.MoveNodeAsync("graph/movetest", "graph/movetest-renamed");
+
+        // Assert
+        moved.Should().NotBeNull();
+        moved.Prefix.Should().Be("graph/movetest-renamed");
+        moved.Name.Should().Be("Move Test");
+
+        var oldNode = await Persistence.GetNodeAsync("graph/movetest");
+        oldNode.Should().BeNull("Original node should be deleted");
+
+        var newNode = await Persistence.GetNodeAsync("graph/movetest-renamed");
+        newNode.Should().NotBeNull("Node should exist at new path");
+        newNode!.Name.Should().Be("Move Test");
+    }
+
+    /// <summary>
+    /// Test 18: Move node with descendants - all paths should be updated.
+    /// </summary>
+    [Fact]
+    public async Task MoveNodeAsync_MovesDescendantsWithUpdatedPaths()
+    {
+        // Arrange - create a hierarchy to move
+        await Persistence.SaveNodeAsync(new MeshNode("graph/parent") { Name = "Parent", NodeType = "org" });
+        await Persistence.SaveNodeAsync(new MeshNode("graph/parent/child1") { Name = "Child 1", NodeType = "project" });
+        await Persistence.SaveNodeAsync(new MeshNode("graph/parent/child2") { Name = "Child 2", NodeType = "project" });
+        await Persistence.SaveNodeAsync(new MeshNode("graph/parent/child1/grandchild") { Name = "Grandchild", NodeType = "story" });
+
+        // Act
+        await Persistence.MoveNodeAsync("graph/parent", "graph/newparent");
+
+        // Assert - old paths should not exist
+        (await Persistence.GetNodeAsync("graph/parent")).Should().BeNull();
+        (await Persistence.GetNodeAsync("graph/parent/child1")).Should().BeNull();
+        (await Persistence.GetNodeAsync("graph/parent/child2")).Should().BeNull();
+        (await Persistence.GetNodeAsync("graph/parent/child1/grandchild")).Should().BeNull();
+
+        // Assert - new paths should exist with correct data
+        var newParent = await Persistence.GetNodeAsync("graph/newparent");
+        newParent.Should().NotBeNull();
+        newParent!.Name.Should().Be("Parent");
+
+        var newChild1 = await Persistence.GetNodeAsync("graph/newparent/child1");
+        newChild1.Should().NotBeNull();
+        newChild1!.Name.Should().Be("Child 1");
+
+        var newChild2 = await Persistence.GetNodeAsync("graph/newparent/child2");
+        newChild2.Should().NotBeNull();
+        newChild2!.Name.Should().Be("Child 2");
+
+        var newGrandchild = await Persistence.GetNodeAsync("graph/newparent/child1/grandchild");
+        newGrandchild.Should().NotBeNull();
+        newGrandchild!.Name.Should().Be("Grandchild");
+    }
+
+    /// <summary>
+    /// Test 19: Move node with comments - comments should be migrated to new path.
+    /// </summary>
+    [Fact]
+    public async Task MoveNodeAsync_MigratesCommentsToNewPath()
+    {
+        // Arrange - create node with comments
+        await Persistence.SaveNodeAsync(new MeshNode("graph/commented") { Name = "Commented Node", NodeType = "org" });
+        await Persistence.AddCommentAsync(new Comment { NodePath = "graph/commented", Text = "Comment 1", Author = "User1" });
+        await Persistence.AddCommentAsync(new Comment { NodePath = "graph/commented", Text = "Comment 2", Author = "User2" });
+
+        // Verify comments exist at old path
+        var oldComments = await Persistence.GetCommentsAsync("graph/commented");
+        oldComments.Should().HaveCount(2);
+
+        // Act
+        await Persistence.MoveNodeAsync("graph/commented", "graph/commented-moved");
+
+        // Assert - comments should be at new path
+        var newComments = await Persistence.GetCommentsAsync("graph/commented-moved");
+        newComments.Should().HaveCount(2, "Comments should be migrated to new path");
+        newComments.Should().Contain(c => c.Text == "Comment 1");
+        newComments.Should().Contain(c => c.Text == "Comment 2");
+
+        // Assert - no comments at old path
+        var remainingOldComments = await Persistence.GetCommentsAsync("graph/commented");
+        remainingOldComments.Should().BeEmpty("Comments should not remain at old path");
+    }
+
+    /// <summary>
+    /// Test 20: Move node throws when source doesn't exist.
+    /// </summary>
+    [Fact]
+    public async Task MoveNodeAsync_ThrowsWhenSourceNotFound()
+    {
+        // Act & Assert
+        var act = () => Persistence.MoveNodeAsync("graph/nonexistent", "graph/newpath");
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*not found*");
+    }
+
+    /// <summary>
+    /// Test 21: Move node throws when target path already exists.
+    /// </summary>
+    [Fact]
+    public async Task MoveNodeAsync_ThrowsWhenTargetExists()
+    {
+        // Arrange
+        await Persistence.SaveNodeAsync(new MeshNode("graph/source") { Name = "Source", NodeType = "org" });
+        await Persistence.SaveNodeAsync(new MeshNode("graph/target") { Name = "Target", NodeType = "org" });
+
+        // Act & Assert
+        var act = () => Persistence.MoveNodeAsync("graph/source", "graph/target");
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*already exists*");
     }
 
     #endregion

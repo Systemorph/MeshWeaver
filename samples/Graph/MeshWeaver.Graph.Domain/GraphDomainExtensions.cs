@@ -1,4 +1,5 @@
-﻿using MeshWeaver.Graph.Domain.Models;
+﻿using MeshWeaver.ContentCollections;
+using MeshWeaver.Graph.Domain.Models;
 using MeshWeaver.Messaging;
 
 namespace MeshWeaver.Graph.Domain;
@@ -62,6 +63,17 @@ public static class GraphDomainExtensions
             => configuration
                 .ConfigureMeshHub()
                 .WithDataType<Story>()
+                .Build();
+
+        /// <summary>
+        /// Configures an article hub.
+        /// Shows the article details with YAML frontmatter support.
+        /// Data is loaded automatically from IPersistenceService.
+        /// </summary>
+        public MessageHubConfiguration ConfigureArticleHub()
+            => configuration
+                .ConfigureMeshHub()
+                .WithDataType<Article>()
                 .Build();
     }
 }

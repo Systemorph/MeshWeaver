@@ -1,3 +1,4 @@
+using MeshWeaver.ContentCollections;
 using MeshWeaver.Graph.Domain.Models;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
@@ -32,6 +33,12 @@ public class GraphDomainAttribute : MeshNodeAttribute
     /// Story node type identifier.
     /// </summary>
     public const string StoryType = "story";
+
+    /// <summary>
+    /// Article node type identifier.
+    /// </summary>
+    public const string ArticleType = "article";
+
     /// <summary>
     /// Graph root address type.
     /// </summary>
@@ -107,6 +114,16 @@ public class GraphDomainAttribute : MeshNodeAttribute
             IconName = "Document",
             Description = "A user story or task",
             DisplayOrder = 30
+        },
+        new NodeTypeConfiguration
+        {
+            NodeType = ArticleType,
+            DataType = typeof(Article),
+            HubConfiguration = GraphDomainExtensions.ConfigureArticleHub,
+            DisplayName = "Article",
+            IconName = "DocumentText",
+            Description = "A content article with YAML frontmatter",
+            DisplayOrder = 35
         }
     ];
 }

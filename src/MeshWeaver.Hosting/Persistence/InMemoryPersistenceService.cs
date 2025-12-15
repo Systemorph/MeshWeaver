@@ -157,6 +157,121 @@ public class InMemoryPersistenceService : IPersistenceService
         }
     }
 
+    public async Task<MeshNode> MoveNodeAsync(string sourcePath, string targetPath, CancellationToken ct = default)
+    {
+        var normalizedSource = NormalizePath(sourcePath);
+        var normalizedTarget = NormalizePath(targetPath);
+
+        // Validate source exists
+        if (!_nodes.TryGetValue(normalizedSource, out var sourceNode))
+            throw new InvalidOperationException($"Source node not found: {sourcePath}");
+
+        // Validate target doesn't exist
+        if (_nodes.ContainsKey(normalizedTarget))
+            throw new InvalidOperationException($"Target path already exists: {targetPath}");
+
+        // Get all descendants
+        var descendants = _nodes.Keys
+            .Where(k => k.StartsWith(normalizedSource + "/", StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+        // Move the main node - need to create new MeshNode to ensure Prefix is updated
+        var movedNode = new MeshNode(targetPath)
+        {
+            Key = normalizedTarget,
+            Name = sourceNode.Name,
+            NodeType = sourceNode.NodeType,
+            Description = sourceNode.Description,
+            IconName = sourceNode.IconName,
+            DisplayOrder = sourceNode.DisplayOrder,
+            AddressSegments = sourceNode.AddressSegments,
+            IsPersistent = sourceNode.IsPersistent,
+            Content = sourceNode.Content,
+            ThumbNail = sourceNode.ThumbNail,
+            StreamProvider = sourceNode.StreamProvider,
+            AssemblyLocation = sourceNode.AssemblyLocation,
+            HubConfiguration = sourceNode.HubConfiguration,
+            StartupScript = sourceNode.StartupScript,
+            RoutingType = sourceNode.RoutingType,
+            InstantiationType = sourceNode.InstantiationType,
+            GlobalServiceConfigurations = sourceNode.GlobalServiceConfigurations,
+            AutocompleteAddress = sourceNode.AutocompleteAddress
+        };
+        await SaveNodeAsync(movedNode, ct);
+
+        // Move descendants with updated paths
+        foreach (var descendantPath in descendants)
+        {
+            if (_nodes.TryGetValue(descendantPath, out var descendantNode))
+            {
+                // Calculate new path by replacing the source prefix with target
+                var relativePath = descendantPath.Substring(normalizedSource.Length);
+                var newPath = normalizedTarget + relativePath;
+
+                // Create new MeshNode to ensure Prefix is updated
+                var movedDescendant = new MeshNode(newPath)
+                {
+                    Key = newPath,
+                    Name = descendantNode.Name,
+                    NodeType = descendantNode.NodeType,
+                    Description = descendantNode.Description,
+                    IconName = descendantNode.IconName,
+                    DisplayOrder = descendantNode.DisplayOrder,
+                    AddressSegments = descendantNode.AddressSegments,
+                    IsPersistent = descendantNode.IsPersistent,
+                    Content = descendantNode.Content,
+                    ThumbNail = descendantNode.ThumbNail,
+                    StreamProvider = descendantNode.StreamProvider,
+                    AssemblyLocation = descendantNode.AssemblyLocation,
+                    HubConfiguration = descendantNode.HubConfiguration,
+                    StartupScript = descendantNode.StartupScript,
+                    RoutingType = descendantNode.RoutingType,
+                    InstantiationType = descendantNode.InstantiationType,
+                    GlobalServiceConfigurations = descendantNode.GlobalServiceConfigurations,
+                    AutocompleteAddress = descendantNode.AutocompleteAddress
+                };
+                await SaveNodeAsync(movedDescendant, ct);
+            }
+        }
+
+        // Migrate comments - update NodePath for all comments on moved nodes
+        var allOldPaths = new[] { normalizedSource }.Concat(descendants).ToList();
+        foreach (var oldPath in allOldPaths)
+        {
+            var newPath = oldPath == normalizedSource
+                ? normalizedTarget
+                : normalizedTarget + oldPath.Substring(normalizedSource.Length);
+
+            var commentsToMigrate = _comments.Values
+                .Where(c => NormalizePath(c.NodePath).Equals(oldPath, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+
+            foreach (var comment in commentsToMigrate)
+            {
+                var migratedComment = comment with { NodePath = newPath };
+                _comments[comment.Id] = migratedComment;
+            }
+        }
+
+        // Delete originals (the main node and all descendants)
+        _nodes.TryRemove(normalizedSource, out _);
+        if (_storageAdapter != null)
+        {
+            await _storageAdapter.DeleteAsync(normalizedSource, ct);
+        }
+
+        foreach (var descendantPath in descendants)
+        {
+            _nodes.TryRemove(descendantPath, out _);
+            if (_storageAdapter != null)
+            {
+                await _storageAdapter.DeleteAsync(descendantPath, ct);
+            }
+        }
+
+        return movedNode;
+    }
+
     public Task<IEnumerable<MeshNode>> SearchAsync(string? parentPath, string query, CancellationToken ct = default)
     {
         var normalizedParent = NormalizePath(parentPath);
