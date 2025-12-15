@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk.Razor">
+    <PropertyGroup>
+        <Nullable>enable</Nullable>
+        <StaticWebAssetBasePath>_content/MeshWeaver.Blazor.Graph</StaticWebAssetBasePath>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <SupportedPlatform Include="browser" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <PackageReference Include="Microsoft.AspNetCore.Components.Web" />
+        <PackageReference Include="Microsoft.FluentUI.AspNetCore.Components" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <ProjectReference Include="..\MeshWeaver.Blazor\MeshWeaver.Blazor.csproj" />
+        <ProjectReference Include="..\MeshWeaver.Blazor.Monaco\MeshWeaver.Blazor.Monaco.csproj" />
+        <ProjectReference Include="..\MeshWeaver.Graph\MeshWeaver.Graph.csproj" />
+        <ProjectReference Include="..\MeshWeaver.Mesh.Contract\MeshWeaver.Mesh.Contract.csproj" />
+        <ProjectReference Include="..\MeshWeaver.ContentCollections\MeshWeaver.ContentCollections.csproj" />
+    </ItemGroup>
+</Project>

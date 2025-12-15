@@ -1,6 +1,8 @@
 using System.Text.Json;
+using MeshWeaver.Domain;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Messaging.Serialization;
 
 namespace MeshWeaver.Hosting.Persistence;
 
@@ -12,16 +14,34 @@ namespace MeshWeaver.Hosting.Persistence;
 public class FileSystemStorageAdapter : IStorageAdapter
 {
     private readonly string _baseDirectory;
-    private static readonly JsonSerializerOptions JsonOptions = new()
-    {
-        WriteIndented = true,
-        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-        PropertyNameCaseInsensitive = true
-    };
+    private readonly Func<ITypeRegistry?>? _typeRegistryFactory;
+    private JsonSerializerOptions? _jsonOptions;
 
-    public FileSystemStorageAdapter(string baseDirectory)
+    private JsonSerializerOptions JsonOptions => _jsonOptions ??= CreateJsonOptions();
+
+    private JsonSerializerOptions CreateJsonOptions()
+    {
+        var options = new JsonSerializerOptions
+        {
+            WriteIndented = true,
+            PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+            PropertyNameCaseInsensitive = true
+        };
+
+        // Add polymorphic converter if type registry is available
+        var typeRegistry = _typeRegistryFactory?.Invoke();
+        if (typeRegistry != null)
+        {
+            options.Converters.Add(new ObjectPolymorphicConverter(typeRegistry));
+        }
+
+        return options;
+    }
+
+    public FileSystemStorageAdapter(string baseDirectory, Func<ITypeRegistry?>? typeRegistryFactory = null)
     {
         _baseDirectory = baseDirectory;
+        _typeRegistryFactory = typeRegistryFactory;
         Directory.CreateDirectory(baseDirectory);
     }
 

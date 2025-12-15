@@ -1,5 +1,6 @@
 ﻿using System.ComponentModel;
 using System.Text.Json;
+using MeshWeaver.Data;
 using MeshWeaver.Layout;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
@@ -70,38 +71,126 @@ public class MeshPlugin(IMessageHub hub, IAgentChat chat)
         return JsonSerializer.Serialize(result, hub.JsonSerializerOptions);
     }
 
-    [Description("Creates a new node at the specified path.")]
+    [Description("Lists all available node types that can be used when creating nodes. " +
+                 "Each node type has an associated data schema that defines the Content structure.")]
+    public string GetNodeTypes()
+    {
+        logger.LogInformation("GetNodeTypes called");
+
+        if (meshCatalog == null)
+            return "Mesh catalog not available.";
+
+        var nodeTypes = meshCatalog.GetNodeTypes();
+
+        return JsonSerializer.Serialize(nodeTypes, hub.JsonSerializerOptions);
+    }
+
+    [Description("Gets the JSON schema for a node type's Content structure. " +
+                 "Use this to understand what fields are required when creating or updating nodes of this type.")]
+    public async Task<string> GetSchema(
+        [Description("The node type to get the schema for (from GetNodeTypes)")] string nodeType)
+    {
+        logger.LogInformation("GetSchema called with nodeType={NodeType}", nodeType);
+
+        if (meshCatalog == null)
+            return "Mesh catalog not available.";
+
+        var config = meshCatalog.GetNodeTypeConfiguration(nodeType);
+        if (config == null)
+        {
+            var availableTypes = string.Join(", ", meshCatalog.GetNodeTypes().Select(t => t.NodeType));
+            return $"Unknown node type: {nodeType}. Available types: {availableTypes}";
+        }
+
+        try
+        {
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            var response = await hub.AwaitResponse(
+                new GetSchemaRequest(config.DataType.Name),
+                o => o.WithTarget(hub.Address),
+                cts.Token);
+            return response.Message.Schema;
+        }
+        catch (OperationCanceledException)
+        {
+            return "Operation was cancelled and could not be completed.";
+        }
+        catch (Exception ex)
+        {
+            return $"Error getting schema for type {nodeType}: {ex.Message}";
+        }
+    }
+
+    [Description("Creates a new node at the specified path. " +
+                 "Use GetNodeTypes to see available types and GetSchema to get the Content structure for a type.")]
     public async Task<string> CreateNode(
         [Description("Full path for the new node (e.g., @graph/neworg)")] string path,
         [Description("Display name for the node")] string name,
-        [Description("Description of the node (markdown supported)")] string? description = null,
-        [Description("Type of the node (e.g., Organization, Project)")] string? nodeType = null)
+        [Description("Type of the node - must be a valid type from GetNodeTypes")] string nodeType,
+        [Description("JSON content matching the schema for the node type (from GetSchema). " +
+                     "If not provided, a default content object will be created.")] string? contentJson = null,
+        [Description("Description of the node (markdown supported)")] string? description = null)
     {
-        logger.LogInformation("CreateNode called with path={Path}, name={Name}", path, name);
+        logger.LogInformation("CreateNode called with path={Path}, name={Name}, nodeType={NodeType}", path, name, nodeType);
 
         if (meshCatalog?.Persistence == null)
             return "Mesh catalog not available.";
 
         var resolvedPath = ResolvePath(path);
 
+        // Validate node type exists
+        var config = meshCatalog.GetNodeTypeConfiguration(nodeType);
+        if (config == null)
+        {
+            var availableTypes = string.Join(", ", meshCatalog.GetNodeTypes().Select(t => t.NodeType));
+            return $"Invalid node type: {nodeType}. Available types: {availableTypes}. " +
+                   $"Use GetNodeTypes to see available types and GetSchema to get the Content structure.";
+        }
+
         // Check if node already exists
         if (await meshCatalog.Persistence.ExistsAsync(resolvedPath))
             return $"Node already exists at path: {resolvedPath}";
+
+        // Parse and validate content if provided
+        object? content = null;
+        if (!string.IsNullOrWhiteSpace(contentJson))
+        {
+            try
+            {
+                content = JsonSerializer.Deserialize(contentJson, config.DataType, hub.JsonSerializerOptions);
+                if (content == null)
+                {
+                    return $"Failed to parse content JSON. Please ensure it matches the schema for type '{nodeType}'. " +
+                           $"Use GetSchema(\"{nodeType}\") to see the required structure.";
+                }
+            }
+            catch (JsonException ex)
+            {
+                return $"Invalid JSON content: {ex.Message}. " +
+                       $"Please ensure the content matches the schema for type '{nodeType}'. " +
+                       $"Use GetSchema(\"{nodeType}\") to see the required structure.";
+            }
+        }
+        else
+        {
+            // Create default content with minimal required fields
+            content = new NodeDescription
+            {
+                Id = resolvedPath,
+                Description = description ?? string.Empty
+            };
+        }
 
         var node = new MeshNode(resolvedPath)
         {
             Name = name,
             Description = description,
             NodeType = nodeType,
-            Content = new NodeDescription
-            {
-                Id = resolvedPath,
-                Description = description ?? string.Empty
-            }
+            Content = content
         };
 
         await meshCatalog.Persistence.SaveNodeAsync(node);
-        return $"Node created successfully at: {resolvedPath}";
+        return $"Node created successfully at: {resolvedPath} with type: {nodeType}";
     }
 
     [Description("Updates an existing node at the specified path.")]
@@ -261,6 +350,8 @@ public class MeshPlugin(IMessageHub hub, IAgentChat chat)
         [
             AIFunctionFactory.Create(GetNode),
             AIFunctionFactory.Create(GetChildren),
+            AIFunctionFactory.Create(GetNodeTypes),
+            AIFunctionFactory.Create(GetSchema),
             AIFunctionFactory.Create(CreateNode),
             AIFunctionFactory.Create(UpdateNode),
             AIFunctionFactory.Create(DeleteNode),

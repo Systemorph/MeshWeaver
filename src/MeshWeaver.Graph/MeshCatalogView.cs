@@ -12,76 +12,81 @@ using Microsoft.Extensions.DependencyInjection;
 namespace MeshWeaver.Graph;
 
 /// <summary>
-/// Layout view for displaying mesh node content in a tabbed interface.
-/// Tab 1: Overview - Main entity display (NodeDescription or custom type)
-/// Tab 2: Nodes - Child nodes DataGrid
-/// Tab 3: Comments - Comments section
+/// Layout view for displaying mesh node children filtered by type.
+/// - _Nodes: All child nodes
+/// - _Nodes/{nodeType}: Child nodes filtered by type
+/// - _Editor: Node editor with back button
 /// </summary>
 public static class MeshCatalogView
 {
+    public const string NodesArea = "_Nodes";
+    public const string EditorArea = "_Editor";
 
     /// <summary>
     /// Adds the mesh catalog view to the hub's layout.
-    /// This enables browsing child mesh nodes in a tabbed interface.
+    /// This enables browsing child mesh nodes and editing.
     /// </summary>
     public static MessageHubConfiguration AddMeshCatalogView(this MessageHubConfiguration configuration)
         => configuration
-            .AddMeshNodeView() // Add Overview and Comments views
+            .AddMeshNodeView() // Add Overview, Details, and Comments views
             .AddLayout(layout => layout
-                .WithView(NodesArea, MeshCatalogView.Nodes));
-
-    public const string NodesArea = $"_{nameof(Nodes)}";
+                .WithView(NodesArea, Nodes)
+                .WithView(EditorArea, Editor));
 
     /// <summary>
-    /// Renders the tabbed view for mesh nodes.
-    /// Tab 1: Overview - Node content from MeshNodeView.Overview
-    /// Tab 2: Nodes - Child nodes DataGrid
-    /// Tab 3: Comments - Comments from MeshNodeView.Comments
+    /// Renders a DataGrid of child nodes, optionally filtered by node type.
+    /// The area reference ID can contain the node type filter (e.g., "_Nodes/story").
     /// </summary>
     public static IObservable<UiControl> Nodes(LayoutAreaHost host, RenderingContext ctx)
-    {
-        return Observable.Return(Controls.Tabs
-            .WithView(BuildOverviewTab(host, ctx), tab => tab.WithLabel("Overview"))
-            .WithView(BuildNodesTab(host), tab => tab.WithLabel("Nodes"))
-            .WithView(BuildCommentsTab(host, ctx), tab => tab.WithLabel("Comments")));
-    }
-
-    private static UiControl BuildOverviewTab(LayoutAreaHost host, RenderingContext ctx)
-    {
-        // Use the LayoutArea control to render the Overview area
-        return Controls.LayoutArea(host.Hub.Address, MeshNodeView.OverviewArea);
-    }
-
-    private static UiControl BuildNodesTab(LayoutAreaHost host)
     {
         var meshCatalog = host.Hub.ServiceProvider.GetService<IMeshCatalog>();
         var parentPath = host.Hub.Address.ToString();
 
         if (meshCatalog == null)
         {
-            return Controls.Stack
+            return Observable.Return(Controls.Stack
+                .WithWidth("100%")
                 .WithView(Controls.Html($"<h2>Browse {parentPath}</h2>"))
-                .WithView(Controls.Html("<p>Mesh catalog not available.</p>"));
+                .WithView(Controls.Html("<p>Mesh catalog not available.</p>")));
         }
 
-        // Stream the children from the mesh catalog
-        var stream = Observable.FromAsync(async ct =>
-            await meshCatalog.Persistence.GetChildrenAsync(parentPath, ct));
+        // Extract node type filter from the area reference ID if present
+        // The ID format is "nodeType" when accessing _Nodes/nodeType
+        var nodeTypeFilter = host.Reference?.Id as string;
 
-        var id = Guid.NewGuid().AsString();
-        host.RegisterForDisposal(stream
-            .Select(nodes => nodes.Select(n => new MeshNodeViewModel(n)).ToList())
-            .Subscribe(x => host.UpdateData(id, x)));
+        return Observable.FromAsync(async ct =>
+        {
+            var children = await meshCatalog.Persistence.GetChildrenAsync(parentPath, ct);
 
-        return Controls.Stack
-            .WithView(Controls.Html($"<h2>Browse {parentPath}</h2>"))
-            .WithView(CreateDataGrid(id));
+            // Filter by node type if specified
+            if (!string.IsNullOrEmpty(nodeTypeFilter))
+            {
+                children = children.Where(n =>
+                    string.Equals(n.NodeType, nodeTypeFilter, StringComparison.OrdinalIgnoreCase));
+            }
+
+            return BuildNodesView(host, parentPath, nodeTypeFilter, children);
+        });
     }
 
-    private static UiControl BuildCommentsTab(LayoutAreaHost host, RenderingContext ctx)
+    private static UiControl BuildNodesView(LayoutAreaHost host, string parentPath, string? nodeTypeFilter, IEnumerable<MeshNode> children)
     {
-        // Use the LayoutArea control to render the Comments area
-        return Controls.LayoutArea(host.Hub.Address, MeshNodeView.CommentsArea);
+        var stack = Controls.Stack.WithWidth("100%");
+
+        // Title
+        var title = string.IsNullOrEmpty(nodeTypeFilter)
+            ? $"All Children of {parentPath}"
+            : $"{char.ToUpper(nodeTypeFilter[0])}{nodeTypeFilter.Substring(1)}s";
+        stack = stack.WithView(Controls.Html($"<h2>{title}</h2>"));
+
+        // Create data grid with children
+        var dataId = Guid.NewGuid().AsString();
+        var viewModels = children.Select(n => new MeshNodeViewModel(n)).ToList();
+        host.UpdateData(dataId, viewModels);
+
+        stack = stack.WithView(CreateDataGrid(dataId));
+
+        return stack;
     }
 
     private static DataGridControl CreateDataGrid(string dataId)
@@ -97,10 +102,45 @@ public static class MeshCatalogView
     {
         if (context.Payload is DataGridCellClick { Item: MeshNodeViewModel node })
         {
-            // Navigate to child node's Mesh view
+            // Navigate to child node's Overview
             context.Host.UpdateArea(context.Area,
-                new RedirectControl($"/{node.Path}/{NodesArea}"));
+                new RedirectControl($"/{node.Path}/{MeshNodeView.OverviewArea}"));
         }
+    }
+
+    /// <summary>
+    /// Renders the mesh node editor view for editing node metadata and content.
+    /// Includes a back button to return to Overview.
+    /// </summary>
+    public static IObservable<UiControl> Editor(LayoutAreaHost host, RenderingContext ctx)
+    {
+        var nodePath = host.Hub.Address.ToString();
+        var persistence = host.Hub.ServiceProvider.GetService<IPersistenceService>();
+
+        return Observable.FromAsync(async ct =>
+        {
+            var node = await persistence?.GetNodeAsync(nodePath, ct)!;
+
+            // Wrap editor control with a back button
+            var stack = Controls.Stack.WithWidth("100%");
+
+            // Back button
+            var overviewHref = $"/{nodePath}/{MeshNodeView.OverviewArea}";
+            stack = stack.WithView(
+                Controls.Stack
+                    .WithOrientation(Orientation.Horizontal)
+                    .WithView(Controls.Button("← Back to Overview")
+                        .WithClickAction(c => c.Host.UpdateArea(c.Area, new RedirectControl(overviewHref)))));
+
+            // Editor control
+            stack = stack.WithView(new MeshNodeEditorControl
+            {
+                NodePath = nodePath,
+                NodeType = node?.NodeType
+            });
+
+            return (UiControl)stack;
+        });
     }
 }
 

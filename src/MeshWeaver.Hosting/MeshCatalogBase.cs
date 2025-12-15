@@ -257,4 +257,25 @@ public abstract class MeshCatalogBase : IMeshCatalog
             yield return child;
         }
     }
+
+    /// <inheritdoc />
+    public IEnumerable<NodeTypeInfo> GetNodeTypes()
+    {
+        return Configuration.NodeTypeConfigurations.Values
+            .Select(config => new NodeTypeInfo(
+                config.NodeType,
+                config.DisplayName,
+                config.Description,
+                config.IconName,
+                config.DataType.Name,
+                config.DisplayOrder))
+            .OrderBy(t => t.DisplayOrder)
+            .ThenBy(t => t.NodeType);
+    }
+
+    /// <inheritdoc />
+    public NodeTypeConfiguration? GetNodeTypeConfiguration(string nodeType)
+    {
+        return Configuration.GetNodeTypeConfiguration(nodeType);
+    }
 }

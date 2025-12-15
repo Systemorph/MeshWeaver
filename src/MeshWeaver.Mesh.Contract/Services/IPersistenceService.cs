@@ -48,6 +48,17 @@ public interface IPersistenceService
     Task DeleteNodeAsync(string path, bool recursive = false, CancellationToken ct = default);
 
     /// <summary>
+    /// Moves a node and all its descendants to a new path.
+    /// Comments associated with moved nodes are also migrated.
+    /// </summary>
+    /// <param name="sourcePath">The current node path</param>
+    /// <param name="targetPath">The new node path</param>
+    /// <param name="ct">Cancellation token</param>
+    /// <returns>The moved node at the new path</returns>
+    /// <exception cref="InvalidOperationException">If source doesn't exist or target already exists</exception>
+    Task<MeshNode> MoveNodeAsync(string sourcePath, string targetPath, CancellationToken ct = default);
+
+    /// <summary>
     /// Searches nodes by query text within their Name, Description, or Content.
     /// </summary>
     /// <param name="parentPath">Parent path to search under (null for all)</param>

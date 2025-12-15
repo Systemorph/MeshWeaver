@@ -6,6 +6,7 @@ using MeshWeaver.AI.AzureOpenAI;
 using MeshWeaver.AI.Persistence;
 using MeshWeaver.Blazor.Chat;
 using MeshWeaver.Blazor.GoogleMaps;
+using MeshWeaver.Blazor.Graph;
 using MeshWeaver.Blazor.Infrastructure;
 using MeshWeaver.Blazor.Pages;
 using MeshWeaver.Blazor.Radzen;
@@ -149,6 +150,7 @@ public static class SharedPortalConfiguration
                     .AddRadzenDataGrid()
                     .AddRadzenCharts()
                     .AddGoogleMaps()
+                    .AddGraphViews()
                 )
                 .AddBlazor(layoutClient => layoutClient
                     .WithPortalConfiguration(c =>
@@ -216,7 +218,8 @@ public static class SharedPortalConfiguration
             .AddAdditionalAssemblies(
                 typeof(ApplicationPage).Assembly,
                 typeof(Blazor.Chat.AgentChatView).Assembly,
-                typeof(RadzenPivotGridView).Assembly)
+                typeof(RadzenPivotGridView).Assembly,
+                typeof(MeshNodeEditorView).Assembly)
             .AddInteractiveServerRenderMode();
 
         app.Run();

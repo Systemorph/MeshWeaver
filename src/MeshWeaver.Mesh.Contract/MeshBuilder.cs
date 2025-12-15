@@ -29,7 +29,23 @@ public record MeshBuilder
         MeshNodes.AddRange(attributes.SelectMany(a => InstallServices(a.Nodes)));
 
         // Collect node type configurations from attributes
-        NodeTypeConfigs.AddRange(attributes.SelectMany(a => a.NodeTypeConfigurations));
+        var nodeTypeConfigs = attributes.SelectMany(a => a.NodeTypeConfigurations).ToArray();
+        NodeTypeConfigs.AddRange(nodeTypeConfigs);
+
+        // Register DataTypes from node type configurations for serialization
+        var dataTypes = nodeTypeConfigs
+            .Select(c => c.DataType)
+            .Where(t => t != null && t != typeof(object))
+            .Distinct()
+            .ToArray();
+        if (dataTypes.Length > 0)
+        {
+            ConfigureHub(config =>
+            {
+                config.TypeRegistry.WithTypes(dataTypes);
+                return config;
+            });
+        }
 
         // Register address types from attributes
         var addressTypes = attributes.SelectMany(a => a.AddressTypes).ToArray();

@@ -26,6 +26,12 @@ public record Story
     public string? Description { get; init; }
 
     /// <summary>
+    /// Rich markdown text content for the story details.
+    /// Edited with Monaco editor.
+    /// </summary>
+    public string? Text { get; init; }
+
+    /// <summary>
     /// Current status of the story.
     /// </summary>
     public StoryStatus Status { get; init; } = StoryStatus.Todo;
