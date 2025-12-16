@@ -12,7 +12,8 @@ namespace MeshWeaver.Graph.Domain;
 /// Actual node instances come from the file system via IPersistenceService.
 ///
 /// Path structure (simplified - no type markers between segments):
-/// - graph → Root hub (lists organizations)
+/// - graph → Root hub (lists organizations and users)
+/// - graph/{personId} → Person hub (e.g., graph/alice)
 /// - graph/{orgId} → Organization hub (e.g., graph/org3)
 /// - graph/{orgId}/{projectId} → Project hub (e.g., graph/org3/project1)
 /// - graph/{orgId}/{projectId}/{storyId} → Story hub (e.g., graph/org3/project1/story2)
@@ -38,6 +39,11 @@ public class GraphDomainAttribute : MeshNodeAttribute
     /// Article node type identifier.
     /// </summary>
     public const string ArticleType = "article";
+
+    /// <summary>
+    /// Person node type identifier.
+    /// </summary>
+    public const string PersonType = "person";
 
     /// <summary>
     /// Graph root address type.
@@ -124,6 +130,16 @@ public class GraphDomainAttribute : MeshNodeAttribute
             IconName = "DocumentText",
             Description = "A content article with YAML frontmatter",
             DisplayOrder = 35
+        },
+        new NodeTypeConfiguration
+        {
+            NodeType = PersonType,
+            DataType = typeof(Person),
+            HubConfiguration = GraphDomainExtensions.ConfigurePersonHub,
+            DisplayName = "Person",
+            IconName = "Person",
+            Description = "A person with profile and avatar",
+            DisplayOrder = 5
         }
     ];
 }

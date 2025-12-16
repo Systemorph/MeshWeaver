@@ -8,6 +8,7 @@ using FluentAssertions.Extensions;
 using MeshWeaver.Data;
 using MeshWeaver.Graph;
 using MeshWeaver.Graph.Domain;
+using MeshWeaver.Graph.Domain.Models;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Layout;
@@ -335,13 +336,13 @@ public class MeshNodeCrudTest : MonolithMeshTestBase
 
     #endregion
 
-    #region Test 13-16: LayoutAreaReference("_Nodes") Returns DataGrid
+    #region Test 13-16: Details Layout Area Returns StackControl
 
     /// <summary>
-    /// Test 13: Graph hub's Overview layout area returns TabsControl.
+    /// Test 13: Graph hub's Details layout area returns StackControl.
     /// </summary>
     [Fact]
-    public async Task GraphHub_OverviewLayoutArea_ReturnsTabsControl()
+    public async Task GraphHub_DetailsLayoutArea_ReturnsStackControl()
     {
         var client = GetClient();
         var workspace = client.GetWorkspace();
@@ -353,29 +354,29 @@ public class MeshNodeCrudTest : MonolithMeshTestBase
             o => o.WithTarget(graphAddress),
             new CancellationTokenSource(10.Seconds()).Token);
 
-        // Act - get the Overview layout area (now returns TabsControl)
-        var reference = new LayoutAreaReference(MeshNodeView.OverviewArea);
+        // Act - get the Details layout area (returns StackControl with header and content)
+        var reference = new LayoutAreaReference(MeshNodeView.DetailsArea);
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(graphAddress, reference);
 
         var control = await stream
             .GetControlStream(reference.Area!)
-            .Where(c => c is TabsControl)
+            .Where(c => c is StackControl)
             .Timeout(10.Seconds())
             .FirstAsync();
 
         // Assert
-        control.Should().NotBeNull("Overview layout area should return a control");
-        control.Should().BeOfType<TabsControl>();
-        var tabs = (TabsControl)control;
-        // Should have at least Details and Comments tabs
-        tabs.Areas.Should().HaveCountGreaterThanOrEqualTo(2, "Should have at least Details and Comments tabs");
+        control.Should().NotBeNull("Details layout area should return a control");
+        control.Should().BeOfType<StackControl>();
+        var stack = (StackControl)control;
+        // Should have at least header and content areas
+        stack.Areas.Should().HaveCountGreaterThanOrEqualTo(2, "Should have header and content areas");
     }
 
     /// <summary>
-    /// Test 14: Org hub's Overview layout area returns TabsControl.
+    /// Test 14: Org hub's Details layout area returns StackControl.
     /// </summary>
     [Fact]
-    public async Task OrgHub_OverviewLayoutArea_ReturnsTabsControl()
+    public async Task OrgHub_DetailsLayoutArea_ReturnsStackControl()
     {
         var client = GetClient();
         var workspace = client.GetWorkspace();
@@ -387,29 +388,29 @@ public class MeshNodeCrudTest : MonolithMeshTestBase
             o => o.WithTarget(orgAddress),
             new CancellationTokenSource(10.Seconds()).Token);
 
-        // Act - get the Overview layout area (now returns TabsControl)
-        var reference = new LayoutAreaReference(MeshNodeView.OverviewArea);
+        // Act - get the Details layout area (returns StackControl with header and content)
+        var reference = new LayoutAreaReference(MeshNodeView.DetailsArea);
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(orgAddress, reference);
 
         var control = await stream
             .GetControlStream(reference.Area!)
-            .Where(c => c is TabsControl)
+            .Where(c => c is StackControl)
             .Timeout(10.Seconds())
             .FirstAsync();
 
         // Assert
-        control.Should().NotBeNull("Overview layout area should return a control from org hub");
-        control.Should().BeOfType<TabsControl>();
-        var tabs = (TabsControl)control;
-        // Should have at least Details and Comments tabs
-        tabs.Areas.Should().HaveCountGreaterThanOrEqualTo(2, "Should have at least Details and Comments tabs");
+        control.Should().NotBeNull("Details layout area should return a control from org hub");
+        control.Should().BeOfType<StackControl>();
+        var stack = (StackControl)control;
+        // Should have at least header and content areas
+        stack.Areas.Should().HaveCountGreaterThanOrEqualTo(2, "Should have header and content areas");
     }
 
     /// <summary>
-    /// Test 15: Project hub's Overview layout area returns TabsControl.
+    /// Test 15: Project hub's Details layout area returns StackControl.
     /// </summary>
     [Fact]
-    public async Task ProjectHub_OverviewLayoutArea_ReturnsTabsControl()
+    public async Task ProjectHub_DetailsLayoutArea_ReturnsStackControl()
     {
         var client = GetClient();
         var workspace = client.GetWorkspace();
@@ -421,29 +422,29 @@ public class MeshNodeCrudTest : MonolithMeshTestBase
             o => o.WithTarget(projAddress),
             new CancellationTokenSource(10.Seconds()).Token);
 
-        // Act - get the Overview layout area (now returns TabsControl)
-        var reference = new LayoutAreaReference(MeshNodeView.OverviewArea);
+        // Act - get the Details layout area (returns StackControl with header and content)
+        var reference = new LayoutAreaReference(MeshNodeView.DetailsArea);
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(projAddress, reference);
 
         var control = await stream
             .GetControlStream(reference.Area!)
-            .Where(c => c is TabsControl)
+            .Where(c => c is StackControl)
             .Timeout(10.Seconds())
             .FirstAsync();
 
         // Assert
-        control.Should().NotBeNull("Overview layout area should return a control from project hub");
-        control.Should().BeOfType<TabsControl>();
-        var tabs = (TabsControl)control;
-        // Should have at least Details and Comments tabs, plus story type tabs
-        tabs.Areas.Should().HaveCountGreaterThanOrEqualTo(2, "Should have at least Details and Comments tabs");
+        control.Should().NotBeNull("Details layout area should return a control from project hub");
+        control.Should().BeOfType<StackControl>();
+        var stack = (StackControl)control;
+        // Should have at least header and content areas
+        stack.Areas.Should().HaveCountGreaterThanOrEqualTo(2, "Should have header and content areas");
     }
 
     /// <summary>
-    /// Test 16: Story hub's Overview layout area returns TabsControl (leaf node has no child type tabs).
+    /// Test 16: Story hub's Details layout area returns StackControl.
     /// </summary>
     [Fact]
-    public async Task StoryHub_OverviewLayoutArea_ReturnsTabsControl()
+    public async Task StoryHub_DetailsLayoutArea_ReturnsStackControl()
     {
         var client = GetClient();
         var workspace = client.GetWorkspace();
@@ -455,22 +456,22 @@ public class MeshNodeCrudTest : MonolithMeshTestBase
             o => o.WithTarget(storyAddress),
             new CancellationTokenSource(10.Seconds()).Token);
 
-        // Act - get the Overview layout area (leaf node, so only Details and Comments tabs)
-        var reference = new LayoutAreaReference(MeshNodeView.OverviewArea);
+        // Act - get the Details layout area (returns StackControl with header and content)
+        var reference = new LayoutAreaReference(MeshNodeView.DetailsArea);
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(storyAddress, reference);
 
         var control = await stream
             .GetControlStream(reference.Area!)
-            .Where(c => c is TabsControl)
+            .Where(c => c is StackControl)
             .Timeout(10.Seconds())
             .FirstAsync();
 
         // Assert
-        control.Should().NotBeNull("Overview layout area should return a control from story hub");
-        control.Should().BeOfType<TabsControl>();
-        var tabs = (TabsControl)control;
-        // Leaf node has only Details and Comments tabs (no child type tabs)
-        tabs.Areas.Should().HaveCount(2, "Story hub should have Details and Comments tabs only");
+        control.Should().NotBeNull("Details layout area should return a control from story hub");
+        control.Should().BeOfType<StackControl>();
+        var stack = (StackControl)control;
+        // Should have at least header and content areas
+        stack.Areas.Should().HaveCountGreaterThanOrEqualTo(2, "Should have header and content areas");
     }
 
     #endregion
@@ -596,6 +597,373 @@ public class MeshNodeCrudTest : MonolithMeshTestBase
         var act = () => Persistence.MoveNodeAsync("graph/source", "graph/target");
         await act.Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("*already exists*");
+    }
+
+    #endregion
+
+    #region Test 22-27: MeshNode Update with Inner Entity (Story)
+
+    /// <summary>
+    /// Test 22: Pre-seed MeshNode with Story content, verify GetDataRequest returns the Story.
+    /// </summary>
+    [Fact]
+    public async Task MeshNodeWithStory_GetDataRequest_ReturnsStoryContent()
+    {
+        // Arrange - Pre-seed a story node with Story content
+        var storyContent = new Story
+        {
+            Id = "story-content-test",
+            Title = "Test Story",
+            Description = "A test story for content verification",
+            Text = "# Story Content\n\nThis is the story markdown text.",
+            Status = StoryStatus.Todo,
+            Points = 5
+        };
+
+        await Persistence.SaveNodeAsync(new MeshNode("graph/org1/proj1/story-content")
+        {
+            Name = "Story Content Test",
+            NodeType = "story",
+            Description = "Test story with content",
+            Content = storyContent
+        });
+
+        var client = GetClient();
+        var storyAddress = new Address("graph/org1/proj1/story-content");
+
+        // Initialize the story hub
+        await client.AwaitResponse(
+            new PingRequest(),
+            o => o.WithTarget(storyAddress),
+            new CancellationTokenSource(10.Seconds()).Token);
+
+        // Act - Request the Story via GetDataRequest
+        var response = await client.AwaitResponse(
+            new GetDataRequest(new EntityReference(typeof(Story).Name, "story-content-test")),
+            o => o.WithTarget(storyAddress),
+            new CancellationTokenSource(10.Seconds()).Token);
+
+        // Assert
+        response.Message.Error.Should().BeNull("GetDataRequest should succeed");
+        response.Message.Data.Should().NotBeNull("Story should be returned");
+        var story = response.Message.Data.Should().BeOfType<Story>().Subject;
+        story.Title.Should().Be("Test Story");
+        story.Text.Should().Be("# Story Content\n\nThis is the story markdown text.");
+    }
+
+    /// <summary>
+    /// Test 23: Update just the Story entity via DataChangeRequest, verify GetDataRequest returns updated data.
+    /// This tests case A: submitting just the inner entity (Story).
+    /// </summary>
+    [Fact]
+    public async Task UpdateStoryEntity_ViaDataChangeRequest_GetDataRequestReturnsUpdatedStory()
+    {
+        // Arrange - Pre-seed a story node with Story content
+        var originalStory = new Story
+        {
+            Id = "story-update-entity",
+            Title = "Original Title",
+            Description = "Original description",
+            Text = "Original text content",
+            Status = StoryStatus.Todo,
+            Points = 3
+        };
+
+        await Persistence.SaveNodeAsync(new MeshNode("graph/org1/proj1/story-update-entity")
+        {
+            Name = "Story Update Entity Test",
+            NodeType = "story",
+            Description = "Test story for entity update",
+            Content = originalStory
+        });
+
+        var client = GetClient();
+        var storyAddress = new Address("graph/org1/proj1/story-update-entity");
+
+        // Initialize the story hub
+        await client.AwaitResponse(
+            new PingRequest(),
+            o => o.WithTarget(storyAddress),
+            new CancellationTokenSource(10.Seconds()).Token);
+
+        // Act - Update just the Story entity
+        var updatedStory = originalStory with
+        {
+            Title = "Updated Title",
+            Text = "Updated text content via entity update",
+            Status = StoryStatus.InProgress
+        };
+
+        await client.AwaitResponse(
+            DataChangeRequest.Update([updatedStory]),
+            o => o.WithTarget(storyAddress),
+            new CancellationTokenSource(10.Seconds()).Token);
+
+        await Task.Delay(500); // Allow time for update to propagate
+
+        // Assert - Verify GetDataRequest returns updated Story
+        var response = await client.AwaitResponse(
+            new GetDataRequest(new EntityReference(typeof(Story).Name, "story-update-entity")),
+            o => o.WithTarget(storyAddress),
+            new CancellationTokenSource(10.Seconds()).Token);
+
+        response.Message.Error.Should().BeNull();
+        var story = response.Message.Data.Should().BeOfType<Story>().Subject;
+        story.Title.Should().Be("Updated Title", "Story title should be updated");
+        story.Text.Should().Be("Updated text content via entity update", "Story text should be updated");
+        story.Status.Should().Be(StoryStatus.InProgress, "Story status should be updated");
+    }
+
+    /// <summary>
+    /// Test 24: Update just the Story entity via DataChangeRequest, verify IPersistenceService has saved changes.
+    /// This is the critical test for the bug - updating Story should persist to MeshNode.Content.
+    /// </summary>
+    [Fact]
+    public async Task UpdateStoryEntity_ViaDataChangeRequest_PersistenceHasUpdatedContent()
+    {
+        // Arrange - Pre-seed a story node with Story content
+        var originalStory = new Story
+        {
+            Id = "story-persist-entity",
+            Title = "Original Persist Title",
+            Text = "Original text for persistence test",
+            Status = StoryStatus.Todo
+        };
+
+        await Persistence.SaveNodeAsync(new MeshNode("graph/org1/proj1/story-persist-entity")
+        {
+            Name = "Story Persist Entity Test",
+            NodeType = "story",
+            Content = originalStory
+        });
+
+        var client = GetClient();
+        var storyAddress = new Address("graph/org1/proj1/story-persist-entity");
+
+        // Initialize the story hub
+        await client.AwaitResponse(
+            new PingRequest(),
+            o => o.WithTarget(storyAddress),
+            new CancellationTokenSource(10.Seconds()).Token);
+
+        // Act - Update just the Story entity
+        var updatedStory = originalStory with
+        {
+            Title = "Persisted Updated Title",
+            Text = "This text should be persisted to MeshNode.Content"
+        };
+
+        await client.AwaitResponse(
+            DataChangeRequest.Update([updatedStory]),
+            o => o.WithTarget(storyAddress),
+            new CancellationTokenSource(10.Seconds()).Token);
+
+        await Task.Delay(500); // Allow time for persistence sync
+
+        // Assert - Verify IPersistenceService has the updated content
+        var persistedNode = await Persistence.GetNodeAsync("graph/org1/proj1/story-persist-entity");
+        persistedNode.Should().NotBeNull("Node should exist in persistence");
+        persistedNode!.Content.Should().NotBeNull("Content should be persisted");
+        var persistedStory = persistedNode.Content.Should().BeOfType<Story>().Subject;
+        persistedStory.Title.Should().Be("Persisted Updated Title", "Persisted Story title should be updated");
+        persistedStory.Text.Should().Be("This text should be persisted to MeshNode.Content", "Persisted Story text should be updated");
+    }
+
+    /// <summary>
+    /// Test 25: Update the entire MeshNode via DataChangeRequest, verify GetDataRequest returns updated data.
+    /// This tests case B: submitting the entire MeshNode.
+    /// </summary>
+    [Fact]
+    public async Task UpdateMeshNode_ViaDataChangeRequest_GetDataRequestReturnsUpdatedStory()
+    {
+        // Arrange - Pre-seed a story node with Story content
+        var originalStory = new Story
+        {
+            Id = "story-meshnode-update",
+            Title = "Original MeshNode Title",
+            Text = "Original text via MeshNode",
+            Status = StoryStatus.Todo
+        };
+
+        var originalNode = new MeshNode("graph/org1/proj1/story-meshnode-update")
+        {
+            Name = "MeshNode Update Test",
+            NodeType = "story",
+            Description = "Test story for MeshNode update",
+            Content = originalStory
+        };
+        await Persistence.SaveNodeAsync(originalNode);
+
+        var client = GetClient();
+        var storyAddress = new Address("graph/org1/proj1/story-meshnode-update");
+
+        // Initialize the story hub
+        await client.AwaitResponse(
+            new PingRequest(),
+            o => o.WithTarget(storyAddress),
+            new CancellationTokenSource(10.Seconds()).Token);
+
+        // Act - Update the entire MeshNode with updated Story content
+        var updatedStory = originalStory with
+        {
+            Title = "Updated via MeshNode",
+            Text = "Text updated by submitting entire MeshNode",
+            Status = StoryStatus.Done
+        };
+
+        var updatedNode = originalNode with
+        {
+            Name = "Updated MeshNode Name",
+            Description = "Updated description",
+            Content = updatedStory
+        };
+
+        await client.AwaitResponse(
+            DataChangeRequest.Update([updatedNode]),
+            o => o.WithTarget(storyAddress),
+            new CancellationTokenSource(10.Seconds()).Token);
+
+        await Task.Delay(500); // Allow time for update to propagate
+
+        // Assert - Verify GetDataRequest returns updated Story
+        var response = await client.AwaitResponse(
+            new GetDataRequest(new EntityReference(typeof(Story).Name, "story-meshnode-update")),
+            o => o.WithTarget(storyAddress),
+            new CancellationTokenSource(10.Seconds()).Token);
+
+        response.Message.Error.Should().BeNull();
+        var story = response.Message.Data.Should().BeOfType<Story>().Subject;
+        story.Title.Should().Be("Updated via MeshNode", "Story title should be updated via MeshNode");
+        story.Text.Should().Be("Text updated by submitting entire MeshNode", "Story text should be updated via MeshNode");
+        story.Status.Should().Be(StoryStatus.Done, "Story status should be updated via MeshNode");
+    }
+
+    /// <summary>
+    /// Test 26: Update the entire MeshNode via DataChangeRequest, verify IPersistenceService has saved changes.
+    /// </summary>
+    [Fact]
+    public async Task UpdateMeshNode_ViaDataChangeRequest_PersistenceHasUpdatedContent()
+    {
+        // Arrange - Pre-seed a story node with Story content
+        var originalStory = new Story
+        {
+            Id = "story-meshnode-persist",
+            Title = "Original for MeshNode Persist",
+            Text = "Original text for MeshNode persistence test"
+        };
+
+        var originalNode = new MeshNode("graph/org1/proj1/story-meshnode-persist")
+        {
+            Name = "MeshNode Persist Test",
+            NodeType = "story",
+            Content = originalStory
+        };
+        await Persistence.SaveNodeAsync(originalNode);
+
+        var client = GetClient();
+        var storyAddress = new Address("graph/org1/proj1/story-meshnode-persist");
+
+        // Initialize the story hub
+        await client.AwaitResponse(
+            new PingRequest(),
+            o => o.WithTarget(storyAddress),
+            new CancellationTokenSource(10.Seconds()).Token);
+
+        // Act - Update the entire MeshNode with updated Story content
+        var updatedStory = originalStory with
+        {
+            Title = "MeshNode Persisted Title",
+            Text = "MeshNode text persisted to storage"
+        };
+
+        var updatedNode = originalNode with
+        {
+            Name = "Persisted MeshNode Name",
+            Content = updatedStory
+        };
+
+        await client.AwaitResponse(
+            DataChangeRequest.Update([updatedNode]),
+            o => o.WithTarget(storyAddress),
+            new CancellationTokenSource(10.Seconds()).Token);
+
+        await Task.Delay(500); // Allow time for persistence sync
+
+        // Assert - Verify IPersistenceService has the updated content
+        var persistedNode = await Persistence.GetNodeAsync("graph/org1/proj1/story-meshnode-persist");
+        persistedNode.Should().NotBeNull("Node should exist in persistence");
+        persistedNode!.Name.Should().Be("Persisted MeshNode Name", "MeshNode name should be updated");
+        persistedNode.Content.Should().NotBeNull("Content should be persisted");
+        var persistedStory = persistedNode.Content.Should().BeOfType<Story>().Subject;
+        persistedStory.Title.Should().Be("MeshNode Persisted Title", "Persisted Story title should be updated");
+        persistedStory.Text.Should().Be("MeshNode text persisted to storage", "Persisted Story text should be updated");
+    }
+
+    /// <summary>
+    /// Test 27: Update Story entity, verify both Story data source and MeshNode are in sync.
+    /// This tests that updating Story also updates MeshNode.Content and vice versa.
+    /// </summary>
+    [Fact]
+    public async Task UpdateStoryEntity_MeshNodeAndStory_AreInSync()
+    {
+        // Arrange - Pre-seed a story node with Story content
+        var originalStory = new Story
+        {
+            Id = "story-sync-test",
+            Title = "Sync Test Original",
+            Text = "Original text for sync test"
+        };
+
+        await Persistence.SaveNodeAsync(new MeshNode("graph/org1/proj1/story-sync-test")
+        {
+            Name = "Story Sync Test",
+            NodeType = "story",
+            Content = originalStory
+        });
+
+        var client = GetClient();
+        var storyAddress = new Address("graph/org1/proj1/story-sync-test");
+
+        // Initialize the story hub
+        await client.AwaitResponse(
+            new PingRequest(),
+            o => o.WithTarget(storyAddress),
+            new CancellationTokenSource(10.Seconds()).Token);
+
+        // Act - Update via Story entity
+        var updatedStory = originalStory with
+        {
+            Title = "Sync Test Updated",
+            Text = "Updated via Story entity - should sync to MeshNode"
+        };
+
+        await client.AwaitResponse(
+            DataChangeRequest.Update([updatedStory]),
+            o => o.WithTarget(storyAddress),
+            new CancellationTokenSource(10.Seconds()).Token);
+
+        await Task.Delay(500);
+
+        // Assert - Verify Story from GetDataRequest
+        var storyResponse = await client.AwaitResponse(
+            new GetDataRequest(new EntityReference(typeof(Story).Name, "story-sync-test")),
+            o => o.WithTarget(storyAddress),
+            new CancellationTokenSource(10.Seconds()).Token);
+
+        var storyData = storyResponse.Message.Data.Should().BeOfType<Story>().Subject;
+        storyData.Title.Should().Be("Sync Test Updated");
+
+        // Assert - Verify MeshNode from GetDataRequest
+        var nodeResponse = await client.AwaitResponse(
+            new GetDataRequest(new EntityReference(typeof(MeshNode).Name, "graph/org1/proj1/story-sync-test")),
+            o => o.WithTarget(storyAddress),
+            new CancellationTokenSource(10.Seconds()).Token);
+
+        var nodeData = nodeResponse.Message.Data.Should().BeOfType<MeshNode>().Subject;
+        nodeData.Content.Should().NotBeNull("MeshNode.Content should be in sync with Story");
+        var nodeStory = nodeData.Content.Should().BeOfType<Story>().Subject;
+        nodeStory.Title.Should().Be("Sync Test Updated", "MeshNode.Content.Title should match Story");
+        nodeStory.Text.Should().Be("Updated via Story entity - should sync to MeshNode", "MeshNode.Content.Text should match Story");
     }
 
     #endregion

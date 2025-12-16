@@ -25,6 +25,13 @@ public partial class MobileNavMenu : ComponentBase
     private IEnumerable<MobileNavMenuEntry> GetMobileNavMenuEntries()
     {
         yield return new MobileNavMenuEntry(
+            "Graph",
+            () => NavigateToAsync("/app/graph"),
+            DesktopNavMenu.GraphIcon(),
+            LinkMatchRegex: new Regex("^/app/graph")
+        );
+
+        yield return new MobileNavMenuEntry(
             "Blog",
             () => NavigateToAsync("/app/Todo/Articles"),
             DesktopNavMenu.BlogIcon(),

@@ -112,17 +112,35 @@ public sealed record DataContext : IDisposable
         logger.LogDebug("Starting initialization of DataContext for {Address}", Hub.Address);
         DataSourcesById = DataSourceBuilders.Select(x => x.Invoke(Hub)).ToImmutableDictionary(x => x.Id);
 
-        DataSourcesByType = DataSourcesById.Values
-            .SelectMany(ds => ds.MappedTypes.Select(t => new KeyValuePair<Type, IDataSource>(t, ds))).ToDictionary();
-        DataSourcesByCollection = DataSourcesByType.Select(kvp => new KeyValuePair<string, IDataSource>(TypeRegistry.GetCollectionName(kvp.Key)!, kvp.Value)).ToDictionary();
+        // Build TypeSources first to get collection names
         TypeSources = DataSourcesById
             .Values
             .SelectMany(ds => ds.TypeSources)
             .ToDictionary(x => x.CollectionName);
         TypeSourcesByType = DataSourcesById.Values.SelectMany(ds => ds.TypeSources).ToDictionary(ts => ts.TypeDefinition.Type);
 
+        // Register types with TypeRegistry BEFORE creating DataSourcesByCollection
+        // This ensures GetCollectionName returns the correct collection name
         foreach (var typeSource in TypeSources.Values)
+        {
+            logger.LogWarning("DataContext: Registering type {Type} with collection name {CollectionName}",
+                typeSource.TypeDefinition.Type.Name, typeSource.TypeDefinition.CollectionName);
             TypeRegistry.WithType(typeSource.TypeDefinition.Type, typeSource.TypeDefinition.CollectionName);
+        }
+
+        DataSourcesByType = DataSourcesById.Values
+            .SelectMany(ds => ds.MappedTypes.Select(t => new KeyValuePair<Type, IDataSource>(t, ds))).ToDictionary();
+        logger.LogWarning("DataContext: DataSourcesByType has {Count} entries: {Types}",
+            DataSourcesByType.Count, string.Join(", ", DataSourcesByType.Keys.Select(t => t.Name)));
+        DataSourcesByCollection = DataSourcesByType.Select(kvp =>
+        {
+            var collectionName = TypeRegistry.GetCollectionName(kvp.Key);
+            logger.LogWarning("DataContext: Type {Type} -> CollectionName {CollectionName}",
+                kvp.Key.Name, collectionName ?? "NULL");
+            return new KeyValuePair<string, IDataSource>(collectionName!, kvp.Value);
+        }).ToDictionary();
+        logger.LogWarning("DataContext: DataSourcesByCollection has {Count} entries: {Collections}",
+            DataSourcesByCollection.Count, string.Join(", ", DataSourcesByCollection.Keys));
 
         // Initialize each data source
         foreach (var dataSource in DataSourcesById.Values)

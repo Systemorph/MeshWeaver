@@ -1,0 +1,19 @@
+{
+  "path": "graph/alice",
+  "key": "graph/alice",
+  "name": "Alice Chen",
+  "nodeType": "person",
+  "description": "Senior Software Engineer",
+  "iconName": "Person",
+  "displayOrder": 1,
+  "isPersistent": true,
+  "content": {
+    "id": "alice",
+    "name": "Alice Chen",
+    "email": "alice.chen@example.com",
+    "avatar": "https://ui-avatars.com/api/?name=Alice+Chen&background=0D8ABC&color=fff&size=128",
+    "bio": "Full-stack developer passionate about clean code and design patterns.",
+    "role": "Senior Software Engineer",
+    "iconName": "Person"
+  }
+}
