@@ -1,0 +1,19 @@
+{
+  "path": "graph/david",
+  "key": "graph/david",
+  "name": "David Kim",
+  "nodeType": "person",
+  "description": "DevOps Engineer",
+  "iconName": "Person",
+  "displayOrder": 4,
+  "isPersistent": true,
+  "content": {
+    "id": "david",
+    "name": "David Kim",
+    "email": "david.kim@example.com",
+    "avatar": "https://ui-avatars.com/api/?name=David+Kim&background=FF6F00&color=fff&size=128",
+    "bio": "DevOps engineer specializing in CI/CD pipelines and cloud infrastructure.",
+    "role": "DevOps Engineer",
+    "iconName": "Person"
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "path": "graph/bob",
+  "key": "graph/bob",
+  "name": "Bob Wilson",
+  "nodeType": "person",
+  "description": "Product Manager",
+  "iconName": "Person",
+  "displayOrder": 2,
+  "isPersistent": true,
+  "content": {
+    "id": "bob",
+    "name": "Bob Wilson",
+    "email": "bob.wilson@example.com",
+    "avatar": "https://ui-avatars.com/api/?name=Bob+Wilson&background=2E7D32&color=fff&size=128",
+    "bio": "Product manager with 10 years of experience in agile methodologies.",
+    "role": "Product Manager",
+    "iconName": "Person"
+  }
+}

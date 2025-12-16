@@ -1,0 +1,19 @@
+{
+  "path": "graph/carol",
+  "key": "graph/carol",
+  "name": "Carol Martinez",
+  "nodeType": "person",
+  "description": "UX Designer",
+  "iconName": "Person",
+  "displayOrder": 3,
+  "isPersistent": true,
+  "content": {
+    "id": "carol",
+    "name": "Carol Martinez",
+    "email": "carol.martinez@example.com",
+    "avatar": "https://ui-avatars.com/api/?name=Carol+Martinez&background=C2185B&color=fff&size=128",
+    "bio": "UX designer focused on creating intuitive and accessible user experiences.",
+    "role": "UX Designer",
+    "iconName": "Person"
+  }
+}

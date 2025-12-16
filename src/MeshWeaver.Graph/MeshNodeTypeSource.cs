@@ -7,16 +7,19 @@ namespace MeshWeaver.Graph;
 /// <summary>
 /// TypeSource for MeshNode that syncs to IPersistenceService.
 /// Loads own node + children on init, syncs adds/updates/deletes to persistence.
+/// Also propagates Content changes to the content data source.
 /// </summary>
 public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSource>
 {
     private readonly IPersistenceService _persistence;
     private readonly string _hubPath;  // e.g., "graph/org1"
+    private readonly IWorkspace _workspace;
     private InstanceCollection _lastSaved = new();
 
     public MeshNodeTypeSource(IWorkspace workspace, object dataSource, IPersistenceService persistence, string hubPath)
         : base(workspace, dataSource)
     {
+        _workspace = workspace;
         _persistence = persistence;
         _hubPath = hubPath;
     }
@@ -52,8 +55,49 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
         foreach (var node in deletes)
             _ = _persistence.DeleteNodeAsync(node.Prefix, recursive: true);
 
+        // Propagate Content changes to the content data source
+        PropagateContentChanges(updates);
+
         _lastSaved = instances;
         return instances;
+    }
+
+    private void PropagateContentChanges(MeshNode[] updates)
+    {
+        foreach (var node in updates)
+        {
+            if (node.Prefix != _hubPath || node.Content == null)
+                continue;
+
+            // Get the previous node to check if content changed
+            if (!_lastSaved.Instances.TryGetValue(node.Key, out var previousObj))
+                continue;
+
+            var previousNode = (MeshNode)previousObj;
+            if (previousNode.Content?.Equals(node.Content) == true)
+                continue;
+
+            // Content has changed, update the content data source
+            var contentType = node.Content.GetType();
+            try
+            {
+                // Check if there's a data source for this content type
+                var dataContext = _workspace.DataContext;
+                if (!dataContext.DataSourcesByCollection.ContainsKey(contentType.Name))
+                    continue;
+
+                // Update the content data source
+                _workspace.RequestChange(
+                    DataChangeRequest.Update([node.Content]),
+                    null,
+                    null
+                );
+            }
+            catch
+            {
+                // Content type not registered, ignore
+            }
+        }
     }
 
     protected override async Task<InstanceCollection> InitializeAsync(

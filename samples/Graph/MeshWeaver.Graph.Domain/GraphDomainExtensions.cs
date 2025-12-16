@@ -9,7 +9,8 @@ namespace MeshWeaver.Graph.Domain;
 /// Uses the generic MeshHubBuilder from MeshWeaver.Graph with domain-specific data types.
 ///
 /// Path structure (simplified - no type markers between segments):
-/// - graph → Root hub (lists organizations)
+/// - graph → Root hub (lists organizations and users)
+/// - graph/{personId} → Person hub (e.g., graph/alice)
 /// - graph/{orgId} → Organization hub (e.g., graph/org3)
 /// - graph/{orgId}/{projectId} → Project hub (e.g., graph/org3/project1)
 /// - graph/{orgId}/{projectId}/{storyId} → Story hub (e.g., graph/org3/project1/story2)
@@ -30,6 +31,17 @@ public static class GraphDomainExtensions
         public MessageHubConfiguration ConfigureGraphHub()
             => configuration
                 .ConfigureMeshHub()
+                .Build();
+
+        /// <summary>
+        /// Configures a person hub at graph/{personId}.
+        /// Shows person profile with avatar.
+        /// Data is loaded automatically from IPersistenceService.
+        /// </summary>
+        public MessageHubConfiguration ConfigurePersonHub()
+            => configuration
+                .ConfigureMeshHub()
+                .WithDataType<Person>()
                 .Build();
 
         /// <summary>

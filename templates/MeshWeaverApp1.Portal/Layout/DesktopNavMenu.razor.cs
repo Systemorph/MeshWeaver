@@ -41,6 +41,11 @@ public partial class DesktopNavMenu : ComponentBase
             ? new Icons.Filled.Size24.Chat()
             : new Icons.Regular.Size24.Chat();
 
+    public static Icon GraphIcon(bool active = false)
+        => active
+            ? new Icons.Filled.Size24.Organization()
+            : new Icons.Regular.Size24.Organization();
+
     public static string LayoutAreas(string app)
         => $"app/{app}/{LayoutAreaCatalogArea.LayoutAreas}";
 }

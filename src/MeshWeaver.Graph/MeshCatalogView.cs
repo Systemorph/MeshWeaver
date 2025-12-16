@@ -102,15 +102,15 @@ public static class MeshCatalogView
     {
         if (context.Payload is DataGridCellClick { Item: MeshNodeViewModel node })
         {
-            // Navigate to child node's Overview
+            // Navigate to child node's Details (main content view)
             context.Host.UpdateArea(context.Area,
-                new RedirectControl($"/{node.Path}/{MeshNodeView.OverviewArea}"));
+                new RedirectControl($"/{node.Path}/{MeshNodeView.DetailsArea}"));
         }
     }
 
     /// <summary>
     /// Renders the mesh node editor view for editing node metadata and content.
-    /// Includes a back button to return to Overview.
+    /// Includes a back button to return to Details.
     /// </summary>
     public static IObservable<UiControl> Editor(LayoutAreaHost host, RenderingContext ctx)
     {
@@ -125,12 +125,12 @@ public static class MeshCatalogView
             var stack = Controls.Stack.WithWidth("100%");
 
             // Back button
-            var overviewHref = $"/{nodePath}/{MeshNodeView.OverviewArea}";
+            var detailsHref = $"/{nodePath}/{MeshNodeView.DetailsArea}";
             stack = stack.WithView(
                 Controls.Stack
                     .WithOrientation(Orientation.Horizontal)
-                    .WithView(Controls.Button("← Back to Overview")
-                        .WithClickAction(c => c.Host.UpdateArea(c.Area, new RedirectControl(overviewHref)))));
+                    .WithView(Controls.Button("← Back to Content")
+                        .WithClickAction(c => c.Host.UpdateArea(c.Area, new RedirectControl(detailsHref)))));
 
             // Editor control
             stack = stack.WithView(new MeshNodeEditorControl
