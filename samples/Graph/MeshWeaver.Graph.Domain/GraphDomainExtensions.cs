@@ -1,6 +1,10 @@
 ﻿using MeshWeaver.ContentCollections;
 using MeshWeaver.Graph.Domain.Models;
+using MeshWeaver.Hosting.Persistence;
+using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.Graph.Domain;
 
@@ -27,11 +31,31 @@ public static class GraphDomainExtensions
         /// Configures the root graph hub at graph address.
         /// Lists all organizations (direct children of graph/).
         /// Data is loaded automatically from IPersistenceService.
+        /// Registers the 'persons' content collection for avatar images.
         /// </summary>
         public MessageHubConfiguration ConfigureGraphHub()
             => configuration
                 .ConfigureMeshHub()
-                .Build();
+                .Build()
+                .AddFileSystemContentCollection("persons", sp => GetContentPath(sp, "persons"))
+                .AddFileSystemContentCollection("logos", sp => GetContentPath(sp, "logos"));
+
+        /// <summary>
+        /// Gets the content path for a collection from IConfiguration.
+        /// Configuration key: Graph:{collectionName}Path (e.g., Graph:personsPath)
+        /// Falls back to Data/{collectionName} relative to current directory.
+        /// </summary>
+        private static string GetContentPath(IServiceProvider sp, string collectionName)
+        {
+            // Get path from IConfiguration (e.g., Graph:personsPath)
+            var config = sp.GetRequiredService<IConfiguration>();
+            var configPath = config.GetSection("Graph")[collectionName + "Path"];
+            if (!string.IsNullOrEmpty(configPath))
+                return configPath;
+
+            // Default fallback - not recommended for production
+            return Path.Combine(Directory.GetCurrentDirectory(), "Data", collectionName);
+        }
 
         /// <summary>
         /// Configures a person hub at graph/{personId}.

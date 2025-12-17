@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+  <defs>
+    <linearGradient id="contoso-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#0F172A"/>
+      <stop offset="100%" style="stop-color:#334155"/>
+    </linearGradient>
+    <pattern id="contoso-pattern" patternUnits="userSpaceOnUse" width="20" height="20" patternTransform="rotate(45)">
+      <rect width="20" height="20" fill="url(#contoso-grad)"/>
+      <circle cx="10" cy="10" r="1" fill="#10B981" opacity="0.4"/>
+    </pattern>
+  </defs>
+  <!-- Background -->
+  <rect width="128" height="128" rx="16" fill="url(#contoso-pattern)"/>
+  <!-- Abstract "C" made of circles -->
+  <g transform="translate(64,56)">
+    <!-- Main arc -->
+    <path d="M 20,-30 A 35,35 0 1,0 20,30" fill="none" stroke="#10B981" stroke-width="8" stroke-linecap="round"/>
+    <!-- Accent dots -->
+    <circle cx="20" cy="-30" r="6" fill="#34D399"/>
+    <circle cx="20" cy="30" r="6" fill="#34D399"/>
+    <!-- Inner element -->
+    <circle cx="-5" cy="0" r="12" fill="none" stroke="#6EE7B7" stroke-width="3"/>
+    <circle cx="-5" cy="0" r="4" fill="#6EE7B7"/>
+  </g>
+  <!-- Company name -->
+  <text x="64" y="115" font-family="Arial, sans-serif" font-size="12" font-weight="bold" fill="white" text-anchor="middle" letter-spacing="2">CONTOSO</text>
+</svg>

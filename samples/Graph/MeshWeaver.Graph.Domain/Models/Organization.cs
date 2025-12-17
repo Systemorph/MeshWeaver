@@ -31,6 +31,12 @@ public record Organization
     public string? Website { get; init; }
 
     /// <summary>
+    /// Path to the organization's logo image.
+    /// Can be a relative path to a content file or a URL.
+    /// </summary>
+    public string? Logo { get; init; }
+
+    /// <summary>
     /// Icon name for display in UI.
     /// </summary>
     public string IconName { get; init; } = "Building";

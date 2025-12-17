@@ -11,7 +11,7 @@
     "id": "david",
     "name": "David Kim",
     "email": "david.kim@example.com",
-    "avatar": "https://ui-avatars.com/api/?name=David+Kim&background=FF6F00&color=fff&size=128",
+    "avatar": "/static/graph/persons/david.svg",
     "bio": "DevOps engineer specializing in CI/CD pipelines and cloud infrastructure.",
     "role": "DevOps Engineer",
     "iconName": "Person"

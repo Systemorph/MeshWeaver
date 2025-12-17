@@ -11,7 +11,7 @@
     "id": "carol",
     "name": "Carol Martinez",
     "email": "carol.martinez@example.com",
-    "avatar": "https://ui-avatars.com/api/?name=Carol+Martinez&background=C2185B&color=fff&size=128",
+    "avatar": "/static/graph/persons/carol.svg",
     "bio": "UX designer focused on creating intuitive and accessible user experiences.",
     "role": "UX Designer",
     "iconName": "Person"

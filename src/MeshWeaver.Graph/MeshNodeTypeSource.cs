@@ -1,6 +1,8 @@
 using MeshWeaver.Data;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Graph;
 
@@ -14,6 +16,7 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
     private readonly IPersistenceService _persistence;
     private readonly string _hubPath;  // e.g., "graph/org1"
     private readonly IWorkspace _workspace;
+    private readonly ILogger? _logger;
     private InstanceCollection _lastSaved = new();
 
     public MeshNodeTypeSource(IWorkspace workspace, object dataSource, IPersistenceService persistence, string hubPath)
@@ -22,10 +25,15 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
         _workspace = workspace;
         _persistence = persistence;
         _hubPath = hubPath;
+        _logger = workspace.Hub.ServiceProvider.GetService<ILogger<MeshNodeTypeSource>>();
+        _logger?.LogWarning("MeshNodeTypeSource: Created for hubPath={HubPath}", hubPath);
     }
 
     protected override InstanceCollection UpdateImpl(InstanceCollection instances)
     {
+        _logger?.LogWarning("MeshNodeTypeSource.UpdateImpl: Called with {Count} instances, _lastSaved has {LastSavedCount}",
+            instances.Instances.Count, _lastSaved.Instances.Count);
+
         // Detect adds (new nodes)
         var adds = instances.Instances
             .Where(x => !_lastSaved.Instances.ContainsKey(x.Key))
@@ -45,12 +53,19 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
             .Select(x => (MeshNode)x.Value)
             .ToArray();
 
+        _logger?.LogWarning("MeshNodeTypeSource.UpdateImpl: adds={Adds}, updates={Updates}, deletes={Deletes}",
+            adds.Length, updates.Length, deletes.Length);
+
         // Sync to persistence
         // IPersistenceService handles partition automatically based on node.Prefix:
         // - Own node (Prefix == _hubPath) → saved to parent partition (file: parentPath/nodeName.json)
         // - Child nodes (Prefix starts with _hubPath/) → saved to own partition (file: _hubPath/childName.json)
         foreach (var node in adds.Concat(updates))
+        {
+            _logger?.LogWarning("MeshNodeTypeSource.UpdateImpl: Saving node {Prefix} to persistence, Content={ContentType}",
+                node.Prefix, node.Content?.GetType().Name ?? "null");
             _ = _persistence.SaveNodeAsync(node);
+        }
 
         foreach (var node in deletes)
             _ = _persistence.DeleteNodeAsync(node.Prefix, recursive: true);

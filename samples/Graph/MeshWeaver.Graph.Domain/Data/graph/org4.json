@@ -12,6 +12,7 @@
     "name": "Contoso Ltd",
     "description": "Another sample organization",
     "website": "https://contoso.example.com",
+    "logo": "/static/graph/logos/contoso.svg",
     "iconName": "Building"
   }
 }

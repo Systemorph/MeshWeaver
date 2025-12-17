@@ -11,7 +11,7 @@
     "id": "bob",
     "name": "Bob Wilson",
     "email": "bob.wilson@example.com",
-    "avatar": "https://ui-avatars.com/api/?name=Bob+Wilson&background=2E7D32&color=fff&size=128",
+    "avatar": "/static/graph/persons/bob.svg",
     "bio": "Product manager with 10 years of experience in agile methodologies.",
     "role": "Product Manager",
     "iconName": "Person"
