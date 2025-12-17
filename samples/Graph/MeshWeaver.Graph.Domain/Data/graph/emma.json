@@ -11,7 +11,7 @@
     "id": "emma",
     "name": "Emma Johnson",
     "email": "emma.johnson@example.com",
-    "avatar": "https://ui-avatars.com/api/?name=Emma+Johnson&background=7B1FA2&color=fff&size=128",
+    "avatar": "/static/graph/persons/emma.svg",
     "bio": "Tech lead with expertise in distributed systems and microservices architecture.",
     "role": "Tech Lead",
     "iconName": "Person"

@@ -4,6 +4,8 @@ using MeshWeaver.Data;
 using MeshWeaver.Domain;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Graph;
 
@@ -17,6 +19,7 @@ public record ContentTypeSource<T> : TypeSourceWithType<T, ContentTypeSource<T>>
     private readonly IPersistenceService _persistence;
     private readonly string _hubPath;
     private readonly IWorkspace _workspace;
+    private readonly ILogger? _logger;
     private InstanceCollection _lastSaved = new();
 
     public ContentTypeSource(IWorkspace workspace, object dataSource, IPersistenceService persistence, string hubPath)
@@ -25,6 +28,8 @@ public record ContentTypeSource<T> : TypeSourceWithType<T, ContentTypeSource<T>>
         _workspace = workspace;
         _persistence = persistence;
         _hubPath = hubPath;
+        _logger = workspace.Hub.ServiceProvider.GetService<ILogger<ContentTypeSource<T>>>();
+        _logger?.LogWarning("ContentTypeSource<{Type}>: Created for hubPath={HubPath}", typeof(T).Name, hubPath);
 
         // Auto-configure key function from [Key] attribute
         var keyProperty = typeof(T).GetProperties()
@@ -35,18 +40,24 @@ public record ContentTypeSource<T> : TypeSourceWithType<T, ContentTypeSource<T>>
             TypeDefinition = workspace.Hub.TypeRegistry.WithKeyFunction(
                 TypeDefinition.CollectionName,
                 new KeyFunction(o => keyProperty.GetValue(o)!, keyProperty.PropertyType));
+            _logger?.LogWarning("ContentTypeSource<{Type}>: Configured key from property {KeyProperty}", typeof(T).Name, keyProperty.Name);
         }
     }
 
     protected override InstanceCollection UpdateImpl(InstanceCollection instances)
     {
+        _logger?.LogWarning("ContentTypeSource<{Type}>.UpdateImpl: Called with {Count} instances, _lastSaved has {LastSavedCount}",
+            typeof(T).Name, instances.Instances.Count, _lastSaved.Instances.Count);
+
         // Detect changes: adds, updates, deletes
         var hasChanges = !_lastSaved.Instances.SequenceEqual(instances.Instances);
+        _logger?.LogWarning("ContentTypeSource<{Type}>.UpdateImpl: hasChanges={HasChanges}", typeof(T).Name, hasChanges);
 
         if (hasChanges && instances.Instances.Count > 0)
         {
             // Get the content entity (there should be exactly one for a node's content)
             var contentEntity = instances.Instances.Values.FirstOrDefault();
+            _logger?.LogWarning("ContentTypeSource<{Type}>.UpdateImpl: contentEntity={ContentEntity}", typeof(T).Name, contentEntity);
 
             if (contentEntity != null)
             {
@@ -61,47 +72,74 @@ public record ContentTypeSource<T> : TypeSourceWithType<T, ContentTypeSource<T>>
 
     private void SyncToMeshNode(object contentEntity)
     {
-        // Get current MeshNode from the workspace's MeshNode stream
-        var meshNodeStream = _workspace.GetStream(typeof(MeshNode));
-        var currentStore = meshNodeStream.Current?.Value;
+        _logger?.LogWarning("ContentTypeSource<{Type}>.SyncToMeshNode: Called for hubPath={HubPath}", typeof(T).Name, _hubPath);
 
-        if (currentStore == null) return;
+        // Read current MeshNode directly from persistence and update it synchronously
+        // Using GetAwaiter().GetResult() to avoid async issues crossing test boundaries
+        try
+        {
+            var meshNode = _persistence.GetNodeAsync(_hubPath).GetAwaiter().GetResult();
 
-        var meshNodeCollection = currentStore.Reduce(new CollectionReference(typeof(MeshNode).Name));
-        var meshNode = meshNodeCollection.Instances.Values
-            .Cast<MeshNode>()
-            .FirstOrDefault(n => n.Prefix == _hubPath);
+            if (meshNode == null)
+            {
+                _logger?.LogWarning("ContentTypeSource<{Type}>.SyncToMeshNode: No MeshNode found at path {HubPath}", typeof(T).Name, _hubPath);
+                return;
+            }
 
-        if (meshNode == null) return;
+            _logger?.LogWarning("ContentTypeSource<{Type}>.SyncToMeshNode: Found MeshNode Prefix={Prefix}, Content type={ContentType}",
+                typeof(T).Name, meshNode.Prefix, meshNode.Content?.GetType().Name ?? "null");
 
-        // Check if content actually changed
-        if (meshNode.Content?.Equals(contentEntity) == true) return;
+            // Check if content actually changed
+            if (meshNode.Content?.Equals(contentEntity) == true)
+            {
+                _logger?.LogWarning("ContentTypeSource<{Type}>.SyncToMeshNode: Content is already equal, skipping update", typeof(T).Name);
+                return;
+            }
 
-        // Update MeshNode with new content
-        var updatedNode = meshNode with { Content = contentEntity };
+            // Update MeshNode with new content
+            var updatedNode = meshNode with { Content = contentEntity };
 
-        // Post update to MeshNode stream (MeshNodeTypeSource will handle persistence)
-        _workspace.RequestChange(
-            DataChangeRequest.Update([updatedNode]),
-            null, // no activity tracking needed for internal sync
-            null  // no request to respond to
-        );
+            // Save to persistence synchronously
+            _logger?.LogWarning("ContentTypeSource<{Type}>.SyncToMeshNode: Saving MeshNode to persistence with new content", typeof(T).Name);
+            _persistence.SaveNodeAsync(updatedNode).GetAwaiter().GetResult();
+            _logger?.LogWarning("ContentTypeSource<{Type}>.SyncToMeshNode: Persistence save complete", typeof(T).Name);
+
+            // Also update the in-memory MeshNode data stream via RequestChange
+            // This ensures GetDataRequest for MeshNode returns the updated content
+            _logger?.LogWarning("ContentTypeSource<{Type}>.SyncToMeshNode: Posting MeshNode update to data stream", typeof(T).Name);
+            _workspace.RequestChange(
+                DataChangeRequest.Update([updatedNode]),
+                null,
+                null
+            );
+            _logger?.LogWarning("ContentTypeSource<{Type}>.SyncToMeshNode: Data stream update posted", typeof(T).Name);
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogError(ex, "ContentTypeSource<{Type}>.SyncToMeshNode: Error syncing to MeshNode", typeof(T).Name);
+        }
     }
 
     protected override async Task<InstanceCollection> InitializeAsync(
         WorkspaceReference<InstanceCollection> reference,
         CancellationToken ct)
     {
+        _logger?.LogWarning("ContentTypeSource<{Type}>.InitializeAsync: Loading MeshNode from hubPath={HubPath}", typeof(T).Name, _hubPath);
+
         // Load the MeshNode from persistence to get the content
         var meshNode = await _persistence.GetNodeAsync(_hubPath, ct);
+        _logger?.LogWarning("ContentTypeSource<{Type}>.InitializeAsync: meshNode={MeshNode}, Content type={ContentType}",
+            typeof(T).Name, meshNode?.Prefix ?? "null", meshNode?.Content?.GetType().Name ?? "null");
 
         if (meshNode?.Content is T content)
         {
+            _logger?.LogWarning("ContentTypeSource<{Type}>.InitializeAsync: Found content, returning it", typeof(T).Name);
             // Return the content as the initial data
             _lastSaved = new InstanceCollection([content], TypeDefinition.GetKey);
             return _lastSaved;
         }
 
+        _logger?.LogWarning("ContentTypeSource<{Type}>.InitializeAsync: No content found, returning empty", typeof(T).Name);
         // No content found, return empty collection
         _lastSaved = new InstanceCollection();
         return _lastSaved;

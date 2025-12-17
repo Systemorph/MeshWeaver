@@ -1,0 +1,107 @@
+@inherits BlazorView<MeshNodeThumbnailControl, MeshNodeThumbnailView>
+@inject NavigationManager NavigationManager
+
+<FluentCard Class="mesh-node-thumbnail" Style="min-width: 280px; cursor: pointer;" @onclick="Navigate">
+    <div class="mesh-node-thumbnail-content">
+        @if (!string.IsNullOrEmpty(ImageUrl))
+        {
+            <img src="@ImageUrl" alt="@Title" class="mesh-node-thumbnail-image" />
+        }
+        else
+        {
+            <div class="mesh-node-thumbnail-placeholder">
+                <span>@Initial</span>
+            </div>
+        }
+        <div class="mesh-node-thumbnail-text">
+            <FluentLabel Typo="Microsoft.FluentUI.AspNetCore.Components.Typography.Body" Weight="Microsoft.FluentUI.AspNetCore.Components.FontWeight.Bold">@Title</FluentLabel>
+            @if (!string.IsNullOrEmpty(Description))
+            {
+                <FluentLabel Typo="Microsoft.FluentUI.AspNetCore.Components.Typography.Body" Class="mesh-node-thumbnail-description">@TruncatedDescription</FluentLabel>
+            }
+        </div>
+    </div>
+</FluentCard>
+
+<style>
+    .mesh-node-thumbnail {
+        padding: var(--design-unit) calc(var(--design-unit) * 3);
+        transition: box-shadow 0.2s ease;
+    }
+
+    .mesh-node-thumbnail:hover {
+        box-shadow: var(--elevation-shadow-card-active);
+    }
+
+    .mesh-node-thumbnail-content {
+        display: flex;
+        flex-direction: row;
+        align-items: center;
+        gap: 12px;
+        min-height: 60px;
+    }
+
+    .mesh-node-thumbnail-image {
+        width: 48px;
+        height: 48px;
+        border-radius: 8px;
+        object-fit: cover;
+        flex-shrink: 0;
+    }
+
+    .mesh-node-thumbnail-placeholder {
+        width: 48px;
+        height: 48px;
+        border-radius: 8px;
+        background: var(--accent-fill-rest);
+        color: var(--foreground-on-accent-rest);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-weight: bold;
+        font-size: 18px;
+        flex-shrink: 0;
+    }
+
+    .mesh-node-thumbnail-text {
+        flex: 1;
+        min-width: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+    }
+
+    .mesh-node-thumbnail-description {
+        color: var(--neutral-foreground-hint);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+</style>
+
+@code {
+    private string? Title { get; set; }
+    private string? Description { get; set; }
+    private string? ImageUrl { get; set; }
+    private string NodePath { get; set; } = string.Empty;
+
+    private string Initial => !string.IsNullOrEmpty(Title) ? Title[0].ToString().ToUpper() : "?";
+
+    private string TruncatedDescription => Description?.Length > 60
+        ? Description.Substring(0, 57) + "..."
+        : Description ?? string.Empty;
+
+    protected override void BindData()
+    {
+        base.BindData();
+        Title = ViewModel.Title;
+        Description = ViewModel.Description;
+        ImageUrl = ViewModel.ImageUrl;
+        NodePath = ViewModel.NodePath;
+    }
+
+    private void Navigate()
+    {
+        NavigationManager.NavigateTo($"/{NodePath}");
+    }
+}

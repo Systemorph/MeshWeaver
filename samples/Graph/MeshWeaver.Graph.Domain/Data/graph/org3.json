@@ -12,6 +12,7 @@
     "name": "Acme Corp",
     "description": "A sample organization for development",
     "website": "https://acme.example.com",
+    "logo": "/static/graph/logos/acme.svg",
     "iconName": "Building"
   }
 }

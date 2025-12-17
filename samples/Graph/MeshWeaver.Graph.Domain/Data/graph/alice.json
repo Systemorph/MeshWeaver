@@ -11,7 +11,7 @@
     "id": "alice",
     "name": "Alice Chen",
     "email": "alice.chen@example.com",
-    "avatar": "https://ui-avatars.com/api/?name=Alice+Chen&background=0D8ABC&color=fff&size=128",
+    "avatar": "/static/graph/persons/alice.svg",
     "bio": "Full-stack developer passionate about clean code and design patterns.",
     "role": "Senior Software Engineer",
     "iconName": "Person"

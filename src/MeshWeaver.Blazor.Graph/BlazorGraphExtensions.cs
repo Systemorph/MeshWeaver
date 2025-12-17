@@ -1,3 +1,4 @@
+using MeshWeaver.Blazor.Components;
 using MeshWeaver.Graph;
 using MeshWeaver.Layout;
 using MeshWeaver.Messaging;
@@ -10,12 +11,14 @@ namespace MeshWeaver.Blazor.Graph;
 public static class BlazorGraphExtensions
 {
     /// <summary>
-    /// Adds the Graph Blazor views (MeshNodeEditorView) to the configuration.
+    /// Adds the Graph Blazor views (MeshNodeEditorView, MeshNodeThumbnailView) to the configuration.
     /// </summary>
     public static MessageHubConfiguration AddGraphViews(this MessageHubConfiguration configuration)
     {
         return configuration
-            .WithTypes(typeof(MeshNodeEditorControl))
-            .AddViews(registry => registry.WithView<MeshNodeEditorControl, MeshNodeEditorView>());
+            .WithTypes(typeof(MeshNodeEditorControl), typeof(MeshNodeThumbnailControl))
+            .AddViews(registry => registry
+                .WithView<MeshNodeEditorControl, MeshNodeEditorView>()
+                .WithView<MeshNodeThumbnailControl, MeshNodeThumbnailView>());
     }
 }

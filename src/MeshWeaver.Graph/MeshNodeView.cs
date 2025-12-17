@@ -93,16 +93,49 @@ public static class MeshNodeView
             stack = stack.WithView(new MarkdownControl(content));
         }
 
-        // Child node sections (one per type, showing ~10 most recent)
+        // Child node sections using a unified grid
         var childTypes = children
             .Where(c => !string.IsNullOrEmpty(c.NodeType))
             .GroupBy(c => c.NodeType!)
             .OrderBy(g => g.Key)
             .ToList();
 
-        foreach (var group in childTypes)
+        if (childTypes.Count > 0)
         {
-            stack = stack.WithView(BuildChildTypeSection(host, nodePath, group.Key, group.ToList()));
+            // Single unified grid for all child types
+            var grid = Controls.LayoutGrid.WithSkin(s => s.WithSpacing(2));
+
+            foreach (var group in childTypes)
+            {
+                var recentNodes = group.Take(10).ToList();
+                var displayName = GetNodeTypeDisplayName(group.Key, group.Count());
+
+                // Section header spans full width
+                grid = grid.WithView(
+                    Controls.Html($"<h3 style=\"margin: 24px 0 8px 0;\">{displayName}</h3>"),
+                    itemSkin => itemSkin.WithXs(12));
+
+                // Thumbnails in grid: xs=12, sm=6, md=4, lg=3
+                foreach (var child in recentNodes)
+                {
+                    grid = grid.WithView(
+                        BuildThumbnailContent(child, child.Prefix),
+                        itemSkin => itemSkin.WithXs(12).WithSm(6).WithMd(4).WithLg(3));
+                }
+
+                // "Show more" button if there are more than 10
+                if (group.Count() > 10)
+                {
+                    var showMoreHref = $"/{nodePath}/{MeshCatalogView.NodesArea}/{group.Key}";
+                    grid = grid.WithView(
+                        Controls.Button($"Show all {group.Count()}")
+                            .WithAppearance(Appearance.Lightweight)
+                            .WithClickAction(ctx => ctx.Host.UpdateArea(ctx.Area, new RedirectControl(showMoreHref))),
+                        itemSkin => itemSkin.WithXs(12));
+                }
+            }
+
+            stack = stack.WithView(grid);
         }
 
         // Comments section at the bottom
@@ -144,46 +177,6 @@ public static class MeshNodeView
     }
 
     /// <summary>
-    /// Builds a section showing child nodes of a specific type using thumbnails in a grid layout.
-    /// Shows title, up to 10 most recent items, and a "Show more" button.
-    /// </summary>
-    private static UiControl BuildChildTypeSection(LayoutAreaHost host, string nodePath, string nodeType, List<MeshNode> nodes)
-    {
-        var section = Controls.Stack.WithWidth("100%").WithStyle("margin-top: 24px;");
-
-        // Section title
-        var displayName = GetNodeTypeDisplayName(nodeType, nodes.Count);
-        section = section.WithView(Controls.Html($"<h3>{displayName}</h3>"));
-
-        // Show up to 10 most recent using thumbnail views in a grid
-        var recentNodes = nodes.Take(10).ToList();
-
-        // Use LayoutGrid for consistent thumbnail widths
-        // xs=12 (full width on mobile), sm=6 (2 columns), md=4 (3 columns), lg=3 (4 columns)
-        var grid = Controls.LayoutGrid.WithSkin(s => s.WithSpacing(2));
-        foreach (var child in recentNodes)
-        {
-            grid = grid.WithView(
-                Controls.LayoutArea(new Address(child.Prefix), ThumbnailArea),
-                itemSkin => itemSkin.WithXs(12).WithSm(6).WithMd(4).WithLg(3));
-        }
-        section = section.WithView(grid);
-
-        // "Show more" button if there are more than 10
-        if (nodes.Count > 10)
-        {
-            var showMoreHref = $"/{nodePath}/{MeshCatalogView.NodesArea}/{nodeType}";
-            section = section.WithView(
-                Controls.Button($"Show all {nodes.Count}")
-                    .WithAppearance(Appearance.Lightweight)
-                    .WithStyle("margin-top: 8px;")
-                    .WithClickAction(ctx => ctx.Host.UpdateArea(ctx.Area, new RedirectControl(showMoreHref))));
-        }
-
-        return section;
-    }
-
-    /// <summary>
     /// Renders a compact thumbnail/card view of a node for use in catalogs and lists.
     /// </summary>
     public static IObservable<UiControl> Thumbnail(LayoutAreaHost host, RenderingContext _)
@@ -205,46 +198,7 @@ public static class MeshNodeView
 
     private static UiControl BuildThumbnailContent(MeshNode? node, string hubPath)
     {
-        var nodePath = node?.Prefix ?? hubPath;
-        var detailsHref = $"/{nodePath}/{DetailsArea}";
-
-        // Card with fixed height for consistency in grid layout
-        var card = Controls.Stack
-            .WithWidth("100%")
-            .WithStyle("padding: 12px; border: 1px solid #e0e0e0; border-radius: 8px; cursor: pointer; transition: background-color 0.2s; min-height: 80px; box-sizing: border-box;")
-            .WithClickAction(ctx => ctx.Host.UpdateArea(ctx.Area, new RedirectControl(detailsHref)));
-
-        // Title row with type badge
-        var titleRow = Controls.Stack
-            .WithOrientation(Orientation.Horizontal)
-            .WithStyle("align-items: center; gap: 8px; flex-wrap: wrap;");
-
-        var title = node?.Name ?? hubPath;
-        titleRow = titleRow.WithView(Controls.Html($"<strong style=\"font-size: 1.1em;\">{title}</strong>"));
-
-        if (!string.IsNullOrEmpty(node?.NodeType))
-        {
-            titleRow = titleRow.WithView(
-                Controls.Html($"<span style=\"background: #e8e8e8; padding: 2px 8px; border-radius: 4px; font-size: 0.75em; color: #666;\">{node.NodeType}</span>"));
-        }
-
-        card = card.WithView(titleRow);
-
-        // Description (truncated)
-        if (!string.IsNullOrWhiteSpace(node?.Description))
-        {
-            card = card.WithView(
-                Controls.Html($"<p style=\"margin: 8px 0 0 0; color: #666; font-size: 0.9em; overflow: hidden; text-overflow: ellipsis;\">{TruncateText(node.Description, 100)}</p>"));
-        }
-
-        return card;
-    }
-
-    private static string TruncateText(string text, int maxLength)
-    {
-        if (string.IsNullOrEmpty(text) || text.Length <= maxLength)
-            return text;
-        return text.Substring(0, maxLength - 3) + "...";
+        return MeshNodeThumbnailControl.FromNode(node, hubPath);
     }
 
     /// <summary>

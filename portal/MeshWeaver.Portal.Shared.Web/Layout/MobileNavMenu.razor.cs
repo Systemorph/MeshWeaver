@@ -90,7 +90,7 @@ public partial class MobileNavMenu : ComponentBase
 
         yield return new MobileNavMenuEntry(
             "Graph",
-            () => NavigateToAsync("/graph/_Nodes"),
+            () => NavigateToAsync("/graph"),
             DesktopNavMenu.GraphIcon(),
             LinkMatchRegex: new Regex("^/graph")
         );

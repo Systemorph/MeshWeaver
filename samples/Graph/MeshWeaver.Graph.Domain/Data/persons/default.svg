@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+  <defs>
+    <pattern id="default-person-pattern" patternUnits="userSpaceOnUse" width="10" height="10">
+      <rect width="10" height="10" fill="#6B7280"/>
+      <circle cx="5" cy="5" r="2" fill="#9CA3AF"/>
+    </pattern>
+    <clipPath id="default-person-clip">
+      <circle cx="64" cy="64" r="60"/>
+    </clipPath>
+  </defs>
+  <circle cx="64" cy="64" r="60" fill="url(#default-person-pattern)"/>
+  <g clip-path="url(#default-person-clip)">
+    <!-- Generic avatar silhouette -->
+    <!-- Head -->
+    <circle cx="64" cy="42" r="20" fill="#D1D5DB"/>
+    <!-- Face -->
+    <circle cx="64" cy="44" r="18" fill="#E5E7EB"/>
+    <!-- Eyes placeholder -->
+    <circle cx="57" cy="42" r="2" fill="#9CA3AF"/>
+    <circle cx="71" cy="42" r="2" fill="#9CA3AF"/>
+    <!-- Body/Shoulders -->
+    <ellipse cx="64" cy="95" rx="32" ry="28" fill="#D1D5DB"/>
+  </g>
+  <circle cx="64" cy="64" r="60" fill="none" stroke="#6B7280" stroke-width="4"/>
+</svg>

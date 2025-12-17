@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+  <defs>
+    <pattern id="alice-pattern" patternUnits="userSpaceOnUse" width="12" height="12" patternTransform="rotate(45)">
+      <rect width="12" height="12" fill="#4F46E5"/>
+      <circle cx="6" cy="6" r="3" fill="#818CF8"/>
+    </pattern>
+    <clipPath id="alice-clip">
+      <circle cx="64" cy="64" r="60"/>
+    </clipPath>
+  </defs>
+  <circle cx="64" cy="64" r="60" fill="url(#alice-pattern)"/>
+  <g clip-path="url(#alice-clip)">
+    <!-- Head -->
+    <circle cx="64" cy="42" r="20" fill="#FCD5CE"/>
+    <!-- Hair -->
+    <ellipse cx="64" cy="32" rx="22" ry="14" fill="#6B4423"/>
+    <ellipse cx="50" cy="40" rx="5" ry="12" fill="#6B4423"/>
+    <ellipse cx="78" cy="40" rx="5" ry="12" fill="#6B4423"/>
+    <!-- Face -->
+    <circle cx="64" cy="44" r="18" fill="#FCD5CE"/>
+    <!-- Eyes -->
+    <circle cx="57" cy="42" r="2.5" fill="#1F2937"/>
+    <circle cx="71" cy="42" r="2.5" fill="#1F2937"/>
+    <!-- Smile -->
+    <path d="M58 50 Q64 56 70 50" stroke="#1F2937" stroke-width="2" fill="none" stroke-linecap="round"/>
+    <!-- Body/Shoulders -->
+    <ellipse cx="64" cy="95" rx="32" ry="28" fill="#C7D2FE"/>
+    <!-- Collar -->
+    <path d="M48 80 L64 90 L80 80" stroke="#4F46E5" stroke-width="3" fill="none"/>
+  </g>
+  <circle cx="64" cy="64" r="60" fill="none" stroke="#4F46E5" stroke-width="4"/>
+</svg>

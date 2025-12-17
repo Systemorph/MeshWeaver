@@ -5,6 +5,7 @@ using MeshWeaver.Blazor.Articles;
 using MeshWeaver.Data;
 using Microsoft.DotNet.Interactive.Formatting;
 using MeshWeaver.Domain;
+using MeshWeaver.Graph;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Client;
 using MeshWeaver.Layout.DataGrid;
@@ -27,7 +28,7 @@ public static class BlazorViewRegistry
         Func<LayoutClientConfiguration, LayoutClientConfiguration>? configuration = null
     ) => config
         .AddData()
-        .AddLayoutClient(c => 
+        .AddLayoutClient(c =>
             (configuration ?? (x => x))
             .Invoke(c.WithView((i,s,a) => DefaultFormatting(c.Hub, i, s, a))))
         .AddMeshTypes()
