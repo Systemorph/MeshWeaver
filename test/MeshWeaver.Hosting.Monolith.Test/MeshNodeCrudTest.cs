@@ -29,6 +29,10 @@ namespace MeshWeaver.Hosting.Monolith.Test;
 /// 4. LayoutAreaReference("_Nodes") returns DataGrid for all node levels
 /// 5. ResolvePath correctly resolves paths to addresses with remainders
 /// </summary>
+/// <remarks>
+/// Tests run serially to avoid test isolation issues with shared mesh infrastructure.
+/// </remarks>
+[Collection("MeshNodeCrudTests")]
 public class MeshNodeCrudTest : MonolithMeshTestBase
 {
     private IPersistenceService Persistence => ServiceProvider.GetRequiredService<IPersistenceService>();
@@ -967,4 +971,13 @@ public class MeshNodeCrudTest : MonolithMeshTestBase
     }
 
     #endregion
+}
+
+/// <summary>
+/// Collection definition for MeshNodeCrudTests.
+/// Ensures tests in this collection run serially to avoid test isolation issues.
+/// </summary>
+[CollectionDefinition("MeshNodeCrudTests", DisableParallelization = true)]
+public class MeshNodeCrudTestsCollection
+{
 }

@@ -33,6 +33,7 @@ public record MeshBuilder
         NodeTypeConfigs.AddRange(nodeTypeConfigs);
 
         // Register DataTypes from node type configurations for serialization
+        // Use short names (Type.Name) for consistency with TypeSource registrations
         var dataTypes = nodeTypeConfigs
             .Select(c => c.DataType)
             .Where(t => t != null && t != typeof(object))
@@ -42,7 +43,8 @@ public record MeshBuilder
         {
             ConfigureHub(config =>
             {
-                config.TypeRegistry.WithTypes(dataTypes);
+                foreach (var dataType in dataTypes)
+                    config.TypeRegistry.WithType(dataType, dataType.Name);
                 return config;
             });
         }
