@@ -478,6 +478,9 @@ public class AutocompleteServiceTest
         {
             yield break;
         }
+
+        public System.Collections.Generic.IEnumerable<Mesh.Services.NodeTypeInfo> GetNodeTypes() => [];
+        public Mesh.NodeTypeConfiguration? GetNodeTypeConfiguration(string nodeType) => null;
     }
 
     #endregion

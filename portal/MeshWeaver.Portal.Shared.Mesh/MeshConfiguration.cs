@@ -1,6 +1,5 @@
 using MeshWeaver.AI.Application;
 using MeshWeaver.Documentation;
-using MeshWeaver.Graph.Domain;
 using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Insurance.Domain;
 using MeshWeaver.Kernel.Hub;
@@ -15,9 +14,9 @@ public static  class SharedMeshConfiguration
     public static TBuilder ConfigurePortalMesh<TBuilder>(this TBuilder builder)
     where TBuilder:MeshBuilder
     {
-        // Get the data directory from Graph.Domain assembly location
-        var graphDomainAssembly = typeof(GraphDomainAttribute).Assembly;
-        var assemblyDir = Path.GetDirectoryName(graphDomainAssembly.Location)!;
+        // Get the data directory from Documentation assembly location
+        var documentationAssembly = typeof(DocumentationApplicationAttribute).Assembly;
+        var assemblyDir = Path.GetDirectoryName(documentationAssembly.Location)!;
         var dataDirectory = Path.Combine(assemblyDir, "Data");
 
         return (TBuilder)builder
@@ -27,7 +26,6 @@ public static  class SharedMeshConfiguration
             .InstallAssemblies(typeof(AgentsApplicationAttribute).Assembly.Location)
             .InstallAssemblies(typeof(TodoApplicationAttribute).Assembly.Location)
             .InstallAssemblies(typeof(InsuranceApplicationAttribute).Assembly.Location)
-            .InstallAssemblies(typeof(GraphDomainAttribute).Assembly.Location)
             .AddKernel();
     }
 

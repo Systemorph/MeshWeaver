@@ -1,0 +1,30 @@
+{
+  "profiles": {
+    "Monolith": {
+      "commandName": "Project",
+      "commandLineArgs": "--mode monolith",
+      "dotnetRunMessages": true,
+      "launchBrowser": true,
+      "applicationUrl": "https://localhost:17200",
+      "environmentVariables": {
+        "ASPNETCORE_ENVIRONMENT": "Development",
+        "DOTNET_ENVIRONMENT": "Development",
+        "DOTNET_DASHBOARD_OTLP_ENDPOINT_URL": "https://localhost:21200",
+        "DOTNET_RESOURCE_SERVICE_ENDPOINT_URL": "https://localhost:22200"
+      }
+    },
+    "Orleans": {
+      "commandName": "Project",
+      "commandLineArgs": "--mode orleans",
+      "dotnetRunMessages": true,
+      "launchBrowser": true,
+      "applicationUrl": "https://localhost:17200",
+      "environmentVariables": {
+        "ASPNETCORE_ENVIRONMENT": "Development",
+        "DOTNET_ENVIRONMENT": "Development",
+        "DOTNET_DASHBOARD_OTLP_ENDPOINT_URL": "https://localhost:21200",
+        "DOTNET_RESOURCE_SERVICE_ENDPOINT_URL": "https://localhost:22200"
+      }
+    }
+  }
+}

@@ -24,15 +24,21 @@ public class BrowserDimensionWatcher : ComponentBase
     {
         if (firstRender)
         {
-            var viewportSize = await JS.InvokeAsync<ViewportSize>("window.getWindowDimensions");
-            DimensionManager.InvokeOnViewportSizeChanged(viewportSize)
-                ;
-            ViewportInformation = ViewportInformation.GetViewportInformation(viewportSize);
-            DimensionManager.InvokeOnViewportInformationChanged(ViewportInformation);
+            try
+            {
+                var viewportSize = await JS.InvokeAsync<ViewportSize>("window.getWindowDimensions");
+                DimensionManager.InvokeOnViewportSizeChanged(viewportSize);
+                ViewportInformation = ViewportInformation.GetViewportInformation(viewportSize);
+                DimensionManager.InvokeOnViewportInformationChanged(ViewportInformation);
 
-            await ViewportInformationChanged.InvokeAsync(ViewportInformation);
+                await ViewportInformationChanged.InvokeAsync(ViewportInformation);
 
-            await JS.InvokeVoidAsync("window.listenToWindowResize", DotNetObjectReference.Create(this));
+                await JS.InvokeVoidAsync("window.listenToWindowResize", DotNetObjectReference.Create(this));
+            }
+            catch (JSDisconnectedException)
+            {
+                // Circuit disconnected during prerender or navigation - this is expected
+            }
         }
 
         await base.OnAfterRenderAsync(firstRender);
