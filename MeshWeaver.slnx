@@ -36,6 +36,15 @@
   <Folder Name="/samples/Graph/">
     <Project Path="samples/Graph/MeshWeaver.Graph.Domain/MeshWeaver.Graph.Domain.csproj" />
   </Folder>
+  <Folder Name="/loom/">
+    <Project Path="loom/Loom.Portal.Shared/Loom.Portal.Shared.csproj" />
+    <Project Path="loom/Loom.Portal.Monolith/Loom.Portal.Monolith.csproj" />
+  </Folder>
+  <Folder Name="/loom/aspire/">
+    <Project Path="loom/aspire/Loom.AppHost/Loom.AppHost.csproj" />
+    <Project Path="loom/aspire/Loom.Portal.Orleans/Loom.Portal.Orleans.csproj" />
+    <Project Path="loom/aspire/Loom.Portal.ServiceDefaults/Loom.Portal.ServiceDefaults.csproj" />
+  </Folder>
   <Folder Name="/portal/">
     <File Path="portal/Directory.Build.props" />
     <Project Path="portal/MeshWeaver.Portal.AI/MeshWeaver.Portal.AI.csproj" />

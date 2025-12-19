@@ -1,0 +1,47 @@
+@page "/"
+
+<PageTitle>Loom Portal</PageTitle>
+
+<div class="loom-welcome">
+    <h1>Welcome to Loom Portal</h1>
+    <p>A Graph-focused portal built on MeshWeaver.</p>
+
+    <div class="quick-links" style="margin-top: 2rem;">
+        <h2>Quick Links</h2>
+        <ul style="list-style: none; padding: 0;">
+            <li style="margin: 1rem 0;">
+                <FluentAnchor Href="/graph" Appearance="Appearance.Hypertext">
+                    <FluentIcon Value="@(new Icons.Regular.Size20.BranchFork())" Style="margin-right: 8px;" />
+                    Browse Graph
+                </FluentAnchor>
+            </li>
+            <li style="margin: 1rem 0;">
+                <FluentAnchor Href="/graph/_Nodes/org" Appearance="Appearance.Hypertext">
+                    <FluentIcon Value="@(new Icons.Regular.Size20.Building())" Style="margin-right: 8px;" />
+                    View Organizations
+                </FluentAnchor>
+            </li>
+            <li style="margin: 1rem 0;">
+                <FluentAnchor Href="/graph/_Nodes/person" Appearance="Appearance.Hypertext">
+                    <FluentIcon Value="@(new Icons.Regular.Size20.Person())" Style="margin-right: 8px;" />
+                    View People
+                </FluentAnchor>
+            </li>
+        </ul>
+    </div>
+</div>
+
+@code {
+    private static class Icons
+    {
+        public static class Regular
+        {
+            public static class Size20
+            {
+                public class BranchFork : Microsoft.FluentUI.AspNetCore.Components.Icons.Regular.Size20.BranchFork { }
+                public class Building : Microsoft.FluentUI.AspNetCore.Components.Icons.Regular.Size20.Building { }
+                public class Person : Microsoft.FluentUI.AspNetCore.Components.Icons.Regular.Size20.Person { }
+            }
+        }
+    }
+}

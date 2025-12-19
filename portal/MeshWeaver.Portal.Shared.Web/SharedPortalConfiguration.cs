@@ -6,7 +6,6 @@ using MeshWeaver.AI.AzureOpenAI;
 using MeshWeaver.AI.Persistence;
 using MeshWeaver.Blazor.Chat;
 using MeshWeaver.Blazor.GoogleMaps;
-using MeshWeaver.Blazor.Graph;
 using MeshWeaver.Blazor.Infrastructure;
 using MeshWeaver.Blazor.Pages;
 using MeshWeaver.Blazor.Radzen;
@@ -18,8 +17,8 @@ using MeshWeaver.Insurance.Domain;
 using MeshWeaver.Insurance.Domain.Services;
 using MeshWeaver.Mesh;
 using MeshWeaver.Portal.AI;
+using MeshWeaver.Blazor.Portal;
 using MeshWeaver.Blazor.Portal.Infrastructure;
-using MeshWeaver.Blazor.Portal.Resize;
 using Microsoft.AspNetCore.Authentication.OpenIdConnect;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.Extensions.Configuration;
@@ -56,7 +55,7 @@ public static class SharedPortalConfiguration
             {
                 opt.DisableImplicitFromServicesParameters = true;
             })
-            .AddChatWindowState();
+            .AddBlazorPortalServices();
 
         // Configure Radzen
         services.AddRadzenServices();
@@ -88,9 +87,6 @@ public static class SharedPortalConfiguration
         // setting up google maps configuration
         services.Configure<GoogleMapsConfiguration>(builder.Configuration.GetSection("GoogleMaps"));
 
-        services.AddScoped<CacheStorageAccessor>();
-        services.AddSingleton<IAppVersionService, AppVersionService>();
-        services.AddSingleton<DimensionManager>();
         services.AddSingleton<IPricingService, InMemoryPricingService>();
 
         services.AddHttpContextAccessor();
@@ -150,7 +146,6 @@ public static class SharedPortalConfiguration
                     .AddRadzenDataGrid()
                     .AddRadzenCharts()
                     .AddGoogleMaps()
-                    .AddGraphViews()
                 )
                 .AddBlazor(layoutClient => layoutClient
                     .WithPortalConfiguration(c =>
@@ -218,8 +213,7 @@ public static class SharedPortalConfiguration
             .AddAdditionalAssemblies(
                 typeof(ApplicationPage).Assembly,
                 typeof(Blazor.Chat.AgentChatView).Assembly,
-                typeof(RadzenPivotGridView).Assembly,
-                typeof(MeshNodeEditorView).Assembly)
+                typeof(RadzenPivotGridView).Assembly)
             .AddInteractiveServerRenderMode();
 
         app.Run();

@@ -87,13 +87,6 @@ public partial class MobileNavMenu : ComponentBase
             () => NavigateToAsync(LoginUrl(), true),
             new Size24.PersonAccounts()
         );
-
-        yield return new MobileNavMenuEntry(
-            "Graph",
-            () => NavigateToAsync("/graph"),
-            DesktopNavMenu.GraphIcon(),
-            LinkMatchRegex: new Regex("^/graph")
-        );
     }
 
     private static Regex GetNonIndexPageRegex(string pageRelativeBasePath)

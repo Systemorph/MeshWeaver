@@ -55,7 +55,7 @@
       "Bash(where python python3 powershell pwsh)",
       "Bash(git grep:*)",
       "Bash(xargs:*)",
-      "WebFetch(domain:raw.githubusercontent.com)"
+      "Bash(taskkill:*)"
     ],
     "deny": []
   }

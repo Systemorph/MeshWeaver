@@ -1,4 +1,5 @@
 ﻿using MeshWeaver.ContentCollections;
+using MeshWeaver.Graph;
 using MeshWeaver.Graph.Domain.Models;
 using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Mesh.Services;
@@ -37,6 +38,7 @@ public static class GraphDomainExtensions
             => configuration
                 .ConfigureMeshHub()
                 .Build()
+                .AddDynamicNodeTypeAreas()
                 .AddFileSystemContentCollection("persons", sp => GetContentPath(sp, "persons"))
                 .AddFileSystemContentCollection("logos", sp => GetContentPath(sp, "logos"));
 
@@ -66,7 +68,8 @@ public static class GraphDomainExtensions
             => configuration
                 .ConfigureMeshHub()
                 .WithDataType<Person>()
-                .Build();
+                .Build()
+                .AddDynamicNodeTypeAreas();
 
         /// <summary>
         /// Configures an organization hub at graph/{orgId}.
@@ -77,7 +80,8 @@ public static class GraphDomainExtensions
             => configuration
                 .ConfigureMeshHub()
                 .WithDataType<Organization>()
-                .Build();
+                .Build()
+                .AddDynamicNodeTypeAreas();
 
         /// <summary>
         /// Configures a project hub at graph/{orgId}/{projectId}.
@@ -88,7 +92,8 @@ public static class GraphDomainExtensions
             => configuration
                 .ConfigureMeshHub()
                 .WithDataType<Project>()
-                .Build();
+                .Build()
+                .AddDynamicNodeTypeAreas();
 
         /// <summary>
         /// Configures a story hub at graph/{orgId}/{projectId}/{storyId}.
@@ -99,7 +104,8 @@ public static class GraphDomainExtensions
             => configuration
                 .ConfigureMeshHub()
                 .WithDataType<Story>()
-                .Build();
+                .Build()
+                .AddDynamicNodeTypeAreas();
 
         /// <summary>
         /// Configures an article hub.
@@ -110,6 +116,7 @@ public static class GraphDomainExtensions
             => configuration
                 .ConfigureMeshHub()
                 .WithDataType<Article>()
-                .Build();
+                .Build()
+                .AddDynamicNodeTypeAreas();
     }
 }
