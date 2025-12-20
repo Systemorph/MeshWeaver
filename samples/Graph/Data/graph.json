@@ -2,8 +2,17 @@
   "path": "graph",
   "key": "graph",
   "name": "Graph",
-  "description": "Root of hierarchical graph",
   "nodeType": "graph",
+  "description": "Root of hierarchical graph",
   "iconName": "Diagram",
-  "displayOrder": 1
+  "displayOrder": 1,
+  "addressSegments": 0,
+  "isPersistent": false,
+  "content": null,
+  "thumbNail": null,
+  "streamProvider": null,
+  "assemblyLocation": null,
+  "startupScript": null,
+  "routingType": 0,
+  "instantiationType": 0
 }

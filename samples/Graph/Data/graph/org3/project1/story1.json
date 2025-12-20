@@ -6,6 +6,7 @@
   "description": "Implement user login and registration",
   "iconName": "Document",
   "displayOrder": 10,
+  "addressSegments": 0,
   "isPersistent": true,
   "content": {
     "id": "story1",
@@ -14,5 +15,11 @@
     "status": "InProgress",
     "points": 5,
     "iconName": "Document"
-  }
+  },
+  "thumbNail": null,
+  "streamProvider": null,
+  "assemblyLocation": null,
+  "startupScript": null,
+  "routingType": 0,
+  "instantiationType": 0
 }

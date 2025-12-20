@@ -41,8 +41,7 @@ app.UseAntiforgery();
 app.MapStaticAssets();
 app.MapControllers();
 app.MapRazorComponents<Loom.Portal.Shared.App>()
-    .AddAdditionalAssemblies(
-        typeof(MeshWeaver.Blazor.Graph.MeshNodeEditorView).Assembly)
+    .AddMeshViews()
     .AddInteractiveServerRenderMode();
 
 app.Run();
