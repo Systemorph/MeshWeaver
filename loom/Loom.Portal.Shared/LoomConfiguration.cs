@@ -1,13 +1,16 @@
 using Microsoft.AspNetCore.Components;
+using MeshWeaver.Blazor.GoogleMaps;
 using MeshWeaver.Blazor.Graph;
 using MeshWeaver.Blazor.Pages;
 using MeshWeaver.Blazor.Portal;
 using MeshWeaver.Blazor.Radzen;
+using MeshWeaver.GoogleMaps;
 using MeshWeaver.Graph.Domain;
 using MeshWeaver.Hosting.Blazor;
 using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Mesh;
 using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -37,6 +40,9 @@ public static class LoomConfiguration
         // Configure Radzen
         services.AddRadzenServices();
 
+        // Configure GoogleMaps
+        services.Configure<GoogleMapsConfiguration>(builder.Configuration.GetSection("GoogleMaps"));
+
         services.AddHttpContextAccessor();
         services.AddSignalR();
         services.AddControllers();
@@ -57,6 +63,9 @@ public static class LoomConfiguration
 
         // Configure Radzen
         services.AddRadzenServices();
+
+        // Configure GoogleMaps
+        services.Configure<GoogleMapsConfiguration>(builder.Configuration.GetSection("GoogleMaps"));
 
         services.AddHttpContextAccessor();
         services.AddSignalR();
@@ -139,13 +148,15 @@ public static class LoomConfiguration
     }
 
     /// <summary>
-    /// Configures the portal with Graph views only.
+    /// Configures the portal with Graph views, Charts, GoogleMaps, and Radzen.
     /// </summary>
     public static TBuilder ConfigureLoomPortal<TBuilder>(this TBuilder builder)
         where TBuilder : MeshBuilder
         => (TBuilder)builder
             .ConfigureHub(mesh => mesh
                 .AddRadzenDataGrid()
+                .AddRadzenCharts()
+                .AddGoogleMaps()
                 .AddGraphViews()
             )
             .AddBlazor(layoutClient => layoutClient
@@ -174,7 +185,7 @@ public static class LoomConfiguration
 
         app.MapStaticAssets();
         app.MapRazorComponents<TApp>()
-            .AddAdditionalAssemblies(typeof(MeshWeaver.Blazor.Graph.MeshNodeEditorView).Assembly)
+            .AddMeshViews()
             .AddInteractiveServerRenderMode();
 
         app.Run();
@@ -182,6 +193,18 @@ public static class LoomConfiguration
         logger.LogInformation("Started Loom portal on PID: {PID}", Environment.ProcessId);
 #pragma warning restore CA1416
     }
+
+    /// <summary>
+    /// Adds all MeshWeaver view assemblies (Blazor, Graph, Radzen, GoogleMaps) to the Razor components endpoint.
+    /// </summary>
+    public static RazorComponentsEndpointConventionBuilder AddMeshViews(
+        this RazorComponentsEndpointConventionBuilder builder)
+        => builder.AddAdditionalAssemblies(
+            typeof(ApplicationPage).Assembly,              // MeshWeaver.Blazor (includes ApplicationPage with catch-all route)
+            typeof(MeshNodeEditorView).Assembly,           // MeshWeaver.Blazor.Graph
+            typeof(RadzenChartView).Assembly,              // MeshWeaver.Blazor.Radzen
+            typeof(GoogleMapView).Assembly                 // MeshWeaver.Blazor.GoogleMaps
+        );
 }
 
 public class StylesConfiguration

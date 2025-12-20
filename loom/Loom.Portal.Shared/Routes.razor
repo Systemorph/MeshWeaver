@@ -1,5 +1,6 @@
 @using MeshWeaver.Blazor.Portal.Resize
 @using MeshWeaver.Blazor.Graph
+@using MeshWeaver.Blazor.Pages
 @using Loom.Portal.Shared.Layout
 @using Microsoft.AspNetCore.Components.Authorization
 
@@ -14,7 +15,7 @@
 <CascadingAuthenticationState>
 <CascadingValue Value="@ViewportInformation">
     <Router AppAssembly="@typeof(Routes).Assembly"
-            AdditionalAssemblies="@(new[] { typeof(MeshNodeEditorView).Assembly })">
+            AdditionalAssemblies="@(new[] { typeof(ApplicationPage).Assembly, typeof(MeshNodeEditorView).Assembly })">
         <Found Context="routeData">
             <RouteView RouteData="@routeData" DefaultLayout="@typeof(MainLayout)" />
             <FocusOnNavigate RouteData="@routeData" Selector="h1" />

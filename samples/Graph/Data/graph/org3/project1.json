@@ -6,6 +6,7 @@
   "description": "Main web platform project",
   "iconName": "Folder",
   "displayOrder": 10,
+  "addressSegments": 0,
   "isPersistent": true,
   "content": {
     "id": "project1",
@@ -13,5 +14,11 @@
     "description": "Main web platform project",
     "status": "Active",
     "iconName": "Folder"
-  }
+  },
+  "thumbNail": null,
+  "streamProvider": null,
+  "assemblyLocation": null,
+  "startupScript": null,
+  "routingType": 0,
+  "instantiationType": 0
 }
