@@ -17,8 +17,6 @@
     <ProjectReference Include="..\..\src\MeshWeaver.Hosting.Blazor\MeshWeaver.Hosting.Blazor.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Hosting\MeshWeaver.Hosting.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Graph\MeshWeaver.Graph.csproj" />
-    <!-- Graph Domain -->
-    <ProjectReference Include="..\..\samples\Graph\MeshWeaver.Graph.Domain\MeshWeaver.Graph.Domain.csproj" />
   </ItemGroup>
 
   <ItemGroup>

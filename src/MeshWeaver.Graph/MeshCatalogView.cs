@@ -56,13 +56,16 @@ public static class MeshCatalogView
 
         return Observable.FromAsync(async ct =>
         {
-            var children = await meshCatalog.Persistence.GetChildrenAsync(parentPath, ct);
-
-            // Filter by node type if specified
-            if (!string.IsNullOrEmpty(nodeTypeFilter))
+            var children = new List<MeshNode>();
+            await foreach (var child in meshCatalog.Persistence.GetChildrenAsync(parentPath).WithCancellation(ct))
             {
-                children = children.Where(n =>
-                    string.Equals(n.NodeType, nodeTypeFilter, StringComparison.OrdinalIgnoreCase));
+                // Filter by node type if specified
+                if (!string.IsNullOrEmpty(nodeTypeFilter))
+                {
+                    if (!string.Equals(child.NodeType, nodeTypeFilter, StringComparison.OrdinalIgnoreCase))
+                        continue;
+                }
+                children.Add(child);
             }
 
             return BuildNodesView(host, parentPath, nodeTypeFilter, children);

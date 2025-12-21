@@ -58,15 +58,17 @@ public class MeshPlugin(IMessageHub hub, IAgentChat chat)
             return "Mesh catalog not available.";
 
         var resolvedPath = parentPath != null ? ResolvePath(parentPath) : null;
-        var children = await meshCatalog.Persistence.GetChildrenAsync(resolvedPath);
-
-        var result = children.Select(n => new
+        var result = new List<object>();
+        await foreach (var n in meshCatalog.Persistence.GetChildrenAsync(resolvedPath))
         {
-            n.Prefix,
-            n.Name,
-            n.NodeType,
-            n.Description
-        });
+            result.Add(new
+            {
+                n.Prefix,
+                n.Name,
+                n.NodeType,
+                n.Description
+            });
+        }
 
         return JsonSerializer.Serialize(result, hub.JsonSerializerOptions);
     }
@@ -271,15 +273,17 @@ public class MeshPlugin(IMessageHub hub, IAgentChat chat)
             return "Mesh catalog not available.";
 
         var resolvedParent = parentPath != null ? ResolvePath(parentPath) : null;
-        var results = await meshCatalog.Persistence.SearchAsync(resolvedParent, query);
-
-        var result = results.Select(n => new
+        var result = new List<object>();
+        await foreach (var n in meshCatalog.Persistence.SearchAsync(resolvedParent, query))
         {
-            n.Prefix,
-            n.Name,
-            n.NodeType,
-            n.Description
-        });
+            result.Add(new
+            {
+                n.Prefix,
+                n.Name,
+                n.NodeType,
+                n.Description
+            });
+        }
 
         return JsonSerializer.Serialize(result, hub.JsonSerializerOptions);
     }
@@ -296,7 +300,9 @@ public class MeshPlugin(IMessageHub hub, IAgentChat chat)
             return "Mesh catalog not available.";
 
         var resolvedPath = ResolvePath(path);
-        var comments = await meshCatalog.Persistence.GetCommentsAsync(resolvedPath);
+        var comments = new List<Comment>();
+        await foreach (var comment in meshCatalog.Persistence.GetCommentsAsync(resolvedPath))
+            comments.Add(comment);
 
         return JsonSerializer.Serialize(comments, hub.JsonSerializerOptions);
     }

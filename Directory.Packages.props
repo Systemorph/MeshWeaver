@@ -100,7 +100,8 @@
     <PackageVersion Include="System.Net.Http" Version="4.3.4" />
     <PackageVersion Include="System.Text.Encodings.Web" Version="9.0.9" />
     <PackageVersion Include="System.Text.Json" Version="9.0.9" />
-    <PackageVersion Include="Microsoft.DotNet.Interactive.AspNetCore" Version="1.0.0-beta.25177.1" />
+    <PackageVersion Include="Microsoft.CodeAnalysis.CSharp" Version="5.0.0" />
+    <PackageVersion Include="Microsoft.DotNet.Interactive.AspNetCore" Version="1.0.0-beta.25323.1" />
     <PackageVersion Include="Microsoft.DotNet.Interactive" Version="1.0.0-beta.25323.1" />
     <PackageVersion Include="Microsoft.DotNet.Interactive.CSharp" Version="1.0.0-beta.25323.1" />
     <PackageVersion Include="Microsoft.DotNet.Interactive.Formatting" Version="1.0.0-beta.25323.1" />

@@ -93,6 +93,20 @@ namespace MeshWeaver.Hosting
             CancellationToken cancellationToken
         )
         {
+            // Use ResolvePath to find the deepest matching node in persistence
+            var resolution = MeshCatalog.ResolvePath(address.ToString());
+            if (resolution != null)
+            {
+                // Route to the resolved prefix address
+                address = new Address(resolution.Prefix);
+
+                // If there's a remainder, store it in the delivery context for the hub to use
+                if (!string.IsNullOrEmpty(resolution.Remainder))
+                {
+                    delivery = delivery.WithProperty("UnifiedPath", resolution.Remainder);
+                }
+            }
+
             var node = await MeshCatalog.GetNodeAsync(address);
 
             if (!string.IsNullOrWhiteSpace(node?.StartupScript))

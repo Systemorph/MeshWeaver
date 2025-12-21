@@ -19,17 +19,15 @@ public interface IPersistenceService
     /// Gets all child nodes at the specified parent path.
     /// </summary>
     /// <param name="parentPath">Parent path (empty or null for root level)</param>
-    /// <param name="ct">Cancellation token</param>
-    /// <returns>Collection of child nodes</returns>
-    Task<IEnumerable<MeshNode>> GetChildrenAsync(string? parentPath, CancellationToken ct = default);
+    /// <returns>Async enumerable of child nodes</returns>
+    IAsyncEnumerable<MeshNode> GetChildrenAsync(string? parentPath);
 
     /// <summary>
     /// Gets all descendant nodes under the specified path.
     /// </summary>
     /// <param name="parentPath">Parent path</param>
-    /// <param name="ct">Cancellation token</param>
-    /// <returns>Collection of all descendant nodes</returns>
-    Task<IEnumerable<MeshNode>> GetDescendantsAsync(string? parentPath, CancellationToken ct = default);
+    /// <returns>Async enumerable of all descendant nodes</returns>
+    IAsyncEnumerable<MeshNode> GetDescendantsAsync(string? parentPath);
 
     /// <summary>
     /// Creates or updates a node.
@@ -63,9 +61,8 @@ public interface IPersistenceService
     /// </summary>
     /// <param name="parentPath">Parent path to search under (null for all)</param>
     /// <param name="query">Search query</param>
-    /// <param name="ct">Cancellation token</param>
-    /// <returns>Matching nodes</returns>
-    Task<IEnumerable<MeshNode>> SearchAsync(string? parentPath, string query, CancellationToken ct = default);
+    /// <returns>Async enumerable of matching nodes</returns>
+    IAsyncEnumerable<MeshNode> SearchAsync(string? parentPath, string query);
 
     /// <summary>
     /// Checks if a node exists at the given path.
@@ -87,9 +84,8 @@ public interface IPersistenceService
     /// Gets all comments for a node.
     /// </summary>
     /// <param name="nodePath">Path of the node</param>
-    /// <param name="ct">Cancellation token</param>
-    /// <returns>Collection of comments for the node</returns>
-    Task<IEnumerable<Comment>> GetCommentsAsync(string nodePath, CancellationToken ct = default);
+    /// <returns>Async enumerable of comments for the node</returns>
+    IAsyncEnumerable<Comment> GetCommentsAsync(string nodePath);
 
     /// <summary>
     /// Adds a comment to a node.

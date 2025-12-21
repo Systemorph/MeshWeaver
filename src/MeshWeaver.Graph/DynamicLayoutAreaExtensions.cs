@@ -73,11 +73,13 @@ public static class DynamicLayoutAreaExtensions
 
         return Observable.FromAsync(async ct =>
         {
-            var children = await meshCatalog.Persistence.GetChildrenAsync(parentPath, ct);
-
-            // Filter by node type
-            var filtered = children.Where(n =>
-                string.Equals(n.NodeType, nodeType, StringComparison.OrdinalIgnoreCase));
+            var filtered = new List<MeshNode>();
+            await foreach (var child in meshCatalog.Persistence.GetChildrenAsync(parentPath).WithCancellation(ct))
+            {
+                // Filter by node type
+                if (string.Equals(child.NodeType, nodeType, StringComparison.OrdinalIgnoreCase))
+                    filtered.Add(child);
+            }
 
             return BuildTypeCatalogView(host, parentPath, displayName, filtered);
         });

@@ -24,7 +24,6 @@
         <ProjectReference Include="..\..\src\MeshWeaver.Kernel.Hub\MeshWeaver.Kernel.Hub.csproj" />
         <ProjectReference Include="..\..\src\MeshWeaver.Mesh.Contract\MeshWeaver.Mesh.Contract.csproj" />
         <ProjectReference Include="..\..\src\MeshWeaver.Hosting.Monolith.TestBase\MeshWeaver.Hosting.Monolith.TestBase.csproj" />
-        <ProjectReference Include="..\..\samples\Graph\MeshWeaver.Graph.Domain\MeshWeaver.Graph.Domain.csproj" />
     </ItemGroup>
 
 </Project>

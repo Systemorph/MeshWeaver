@@ -55,7 +55,9 @@
       "Bash(where python python3 powershell pwsh)",
       "Bash(git grep:*)",
       "Bash(xargs:*)",
-      "Bash(taskkill:*)"
+      "Bash(taskkill:*)",
+      "WebFetch(domain:www.nuget.org)",
+      "Bash(curl:*)"
     ],
     "deny": []
   }
