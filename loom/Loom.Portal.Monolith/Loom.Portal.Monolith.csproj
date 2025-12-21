@@ -5,10 +5,12 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <BlazorDisableThrowNavigationException>true</BlazorDisableThrowNavigationException>
+    <RequiresAspNetWebAssets>true</RequiresAspNetWebAssets>
   </PropertyGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\MeshWeaver.Hosting.Monolith\MeshWeaver.Hosting.Monolith.csproj" />
+    <ProjectReference Include="..\aspire\Loom.Portal.ServiceDefaults\Loom.Portal.ServiceDefaults.csproj" />
     <ProjectReference Include="..\Loom.Portal.Shared\Loom.Portal.Shared.csproj" />
   </ItemGroup>
 
