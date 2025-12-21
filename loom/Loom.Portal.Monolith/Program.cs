@@ -1,16 +1,16 @@
-﻿using Loom.Portal.Shared;
+﻿using Loom.Portal.ServiceDefaults;
+using Loom.Portal.Shared;
 using MeshWeaver.Hosting;
 using MeshWeaver.Hosting.Monolith;
 using MeshWeaver.Messaging;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// Add Blazor (from template)
-builder.Services.AddRazorComponents()
-    .AddInteractiveServerComponents();
+// Configure Loom services (pattern from MeshWeaver.Portal's ConfigureWebPortalServices)
+builder.ConfigureLoomServices();
 
-// Add Loom additional services (Radzen, SignalR, etc.)
-builder.AddLoomAdditionalServices();
+// Add Aspire service defaults (health checks, OpenTelemetry, service discovery)
+builder.AddServiceDefaults();
 
 // Configure MeshWeaver mesh
 builder.UseMeshWeaver(
@@ -23,25 +23,8 @@ builder.UseMeshWeaver(
 
 var app = builder.Build();
 
-// Configure the HTTP request pipeline.
-if (!app.Environment.IsDevelopment())
-{
-    app.UseExceptionHandler("/Error", createScopeForErrors: true);
-    app.UseHsts();
-}
+// Map Aspire default endpoints (health checks)
+app.MapDefaultEndpoints();
 
-app.UseHttpsRedirection();
-
-// Static files middleware must run before routing to serve _content/* paths from RCLs
-app.UseStaticFiles();
-
-app.UseRouting();
-app.UseAntiforgery();
-
-app.MapStaticAssets();
-app.MapControllers();
-app.MapRazorComponents<Loom.Portal.Shared.App>()
-    .AddMeshViews()
-    .AddInteractiveServerRenderMode();
-
-app.Run();
+// Start the Loom portal application (pattern from MeshWeaver.Portal's StartPortalApplication)
+app.StartLoomApplication<Loom.Portal.Shared.App>();

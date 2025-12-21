@@ -15,7 +15,9 @@
     <link href="_content/MeshWeaver.Blazor/fonts.css" rel="stylesheet" />
     <link href="_content/MeshWeaver.Blazor/standard-page-layout.css" rel="stylesheet" />
     <link href="_content/Radzen.Blazor/css/material-base.css" rel="stylesheet" />
+    <ImportMap />
     <link rel="icon" type="image/png" href="favicon.ico" />
+    <script src="_content/Radzen.Blazor/Radzen.Blazor.js"></script>
     <HeadOutlet @rendermode="RenderMode.InteractiveServer" />
     <PageTitle>Loom Portal</PageTitle>
 </head>
@@ -25,9 +27,8 @@
         <ThemeSync @bind-Mode="@Mode" @rendermode="RenderMode.InteractiveServer" />
         <Routes @rendermode="RenderMode.InteractiveServer" />
     </CascadingValue>
-    <script src="_framework/blazor.web.js"></script>
-    <script src="_content/Radzen.Blazor/Radzen.Blazor.js"></script>
     <script src="_content/MeshWeaver.Blazor.Portal/Layout/PortalLayoutBase.razor.js" type="module"></script>
+    <script src="_framework/blazor.web.js"></script>
 </body>
 
 </html>

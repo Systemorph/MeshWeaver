@@ -1,7 +1,9 @@
 using MeshWeaver.Blazor.Chat;
+using MeshWeaver.Blazor.Infrastructure;
 using MeshWeaver.Blazor.Portal.Infrastructure;
 using MeshWeaver.Blazor.Portal.Resize;
 using Microsoft.AspNetCore.Components.Server;
+using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.Blazor.Portal;
@@ -11,11 +13,13 @@ public static class BlazorPortalExtensions
     /// <summary>
     /// Adds portal services including DimensionManager, CacheStorageAccessor, AppVersionService,
     /// and ChatWindowStateService with persistent state support.
+    /// Also registers the "nonfile" route constraint used by ApplicationPage and AreaPage.
     /// Call this on the IServerSideBlazorBuilder returned by AddInteractiveServerComponents().
     /// </summary>
     public static IServerSideBlazorBuilder AddBlazorPortalServices(this IServerSideBlazorBuilder builder)
     {
         builder.Services.AddBlazorPortalCoreServices();
+        builder.Services.AddNonfileRouteConstraint();
         builder.AddChatWindowState();
         return builder;
     }

@@ -1,7 +1,9 @@
 ﻿using MeshWeaver.Blazor.GoogleMaps;
 using MeshWeaver.Blazor.Graph;
+using MeshWeaver.Blazor.Infrastructure;
 using MeshWeaver.Blazor.Pages;
 using MeshWeaver.Blazor.Portal;
+using MeshWeaver.Blazor.Portal.Infrastructure;
 using MeshWeaver.Blazor.Radzen;
 using MeshWeaver.GoogleMaps;
 using MeshWeaver.Graph.Configuration;
@@ -20,14 +22,20 @@ namespace Loom.Portal.Shared;
 public static class LoomConfiguration
 {
     /// <summary>
-    /// Configures web portal services - stripped down for Graph-only portal.
-    /// No AI, GoogleMaps, Insurance, or Chat services.
+    /// Configures web portal services for Loom.
+    /// Pattern taken from MeshWeaver.Portal's SharedPortalConfiguration.
     /// </summary>
     public static void ConfigureLoomServices(this WebApplicationBuilder builder)
     {
+        builder.Configuration.AddJsonFile("appsettings.json", optional: false, reloadOnChange: true)
+            .AddJsonFile($"appsettings.{builder.Environment.EnvironmentName}.json", optional: true,
+                reloadOnChange: true)
+            .AddEnvironmentVariables();
+
         var services = builder.Services;
 
         services.AddRazorPages();
+
         services.AddRazorComponents()
             .AddInteractiveServerComponents()
             .AddHubOptions(opt =>
@@ -46,48 +54,7 @@ public static class LoomConfiguration
         services.AddSignalR();
         services.AddControllers();
 
-        builder.Services.Configure<StylesConfiguration>(
-            builder.Configuration.GetSection("Styles"));
-    }
-
-    /// <summary>
-    /// Adds additional Loom services without calling AddRazorComponents.
-    /// Use this when App.razor is in the web project and AddRazorComponents is already called.
-    /// </summary>
-    public static void AddLoomAdditionalServices(this WebApplicationBuilder builder)
-    {
-        var services = builder.Services;
-
-        services.AddRazorPages();
-
-        // Configure Radzen
-        services.AddRadzenServices();
-
-        // Configure GoogleMaps
-        services.Configure<GoogleMapsConfiguration>(builder.Configuration.GetSection("GoogleMaps"));
-
-        services.AddHttpContextAccessor();
-        services.AddSignalR();
-        services.AddControllers();
-
-        // Add portal services (DimensionManager, CacheStorageAccessor, AppVersionService)
-        services.AddBlazorPortalCoreServices();
-
-        // Add ChatWindowStateService (required by PortalLayoutBase)
-        services.AddScoped<MeshWeaver.Blazor.Chat.ChatWindowStateService>();
-
-        // Add basic authentication/authorization services (required by CascadingAuthenticationState in Routes.razor)
-        services.AddAuthentication();
-        services.AddAuthorization();
-
-        // Add EntraId authentication only if configured
-        var entraIdConfig = builder.Configuration.GetSection("EntraId");
-        if (entraIdConfig.GetChildren().Any())
-        {
-            services.AddCascadingAuthenticationState();
-        }
-
-        builder.Services.Configure<StylesConfiguration>(
+        services.Configure<StylesConfiguration>(
             builder.Configuration.GetSection("Styles"));
     }
 
@@ -165,6 +132,7 @@ public static class LoomConfiguration
 
     /// <summary>
     /// Starts the Loom portal application with the specified App component type.
+    /// Pattern taken from MeshWeaver.Portal's StartPortalApplication.
     /// </summary>
     public static void StartLoomApplication<TApp>(this WebApplication app) where TApp : IComponent
     {
@@ -177,13 +145,24 @@ public static class LoomConfiguration
         if (!app.Environment.IsDevelopment())
         {
             app.UseExceptionHandler("/Error", createScopeForErrors: true);
+            // The default HSTS value is 30 days. You may want to change this for production scenarios, see https://aka.ms/aspnetcore-hsts.
             app.UseHsts();
         }
 
+        // Static files middleware must run before routing to serve _content/* paths from RCLs
+        app.UseStaticFiles();
+
         app.UseRouting();
         app.UseAntiforgery();
+        app.UseCookiePolicy();
 
+        //app.MapMeshWeaverSignalRHubs();
+
+        app.MapMeshWeaver();
+        app.UseMiddleware<UserContextMiddleware>();
+        app.UseHttpsRedirection();
         app.MapStaticAssets();
+        app.MapControllers();
         app.MapRazorComponents<TApp>()
             .AddMeshViews()
             .AddInteractiveServerRenderMode();
