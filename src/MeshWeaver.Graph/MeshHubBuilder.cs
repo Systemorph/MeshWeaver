@@ -39,6 +39,15 @@ public class MeshHubBuilder
         return this;
     }
 
+    /// <summary>
+    /// Registers a data type for this hub using a runtime Type.
+    /// Use this for dynamically compiled types.
+    /// </summary>
+    public MeshHubBuilder WithDataType(Type dataType)
+    {
+        DataType = dataType;
+        return this;
+    }
 
     /// <summary>
     /// Adds additional hub configuration.
