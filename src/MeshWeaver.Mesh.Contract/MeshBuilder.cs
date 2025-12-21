@@ -157,4 +157,34 @@ public record MeshBuilder
         MeshNodes.AddRange(nodes);
         return this;
     }
+
+    /// <summary>
+    /// Adds node type configurations dynamically.
+    /// Used for JSON-based configuration where configurations are loaded at runtime.
+    /// </summary>
+    public MeshBuilder AddNodeTypeConfigurations(params IEnumerable<NodeTypeConfiguration> configurations)
+    {
+        var configList = configurations.ToList();
+        NodeTypeConfigs.AddRange(configList);
+
+        // Register DataTypes from node type configurations for serialization
+        // Use short names (Type.Name) for consistency with TypeSource registrations
+        var dataTypes = configList
+            .Select(c => c.DataType)
+            .Where(t => t != null && t != typeof(object))
+            .Distinct()
+            .ToArray();
+
+        if (dataTypes.Length > 0)
+        {
+            ConfigureHub(config =>
+            {
+                foreach (var dataType in dataTypes)
+                    config.TypeRegistry.WithType(dataType, dataType.Name);
+                return config;
+            });
+        }
+
+        return this;
+    }
 }

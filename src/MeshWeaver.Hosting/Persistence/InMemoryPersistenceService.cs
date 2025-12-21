@@ -57,7 +57,7 @@ public class InMemoryPersistenceService : IPersistenceService
         return Task.FromResult(node);
     }
 
-    public Task<IEnumerable<MeshNode>> GetChildrenAsync(string? parentPath, CancellationToken ct = default)
+    public async IAsyncEnumerable<MeshNode> GetChildrenAsync(string? parentPath)
     {
         var normalizedParent = NormalizePath(parentPath);
         var parentSegments = string.IsNullOrEmpty(normalizedParent)
@@ -84,20 +84,23 @@ public class InMemoryPersistenceService : IPersistenceService
                 return true;
             })
             .OrderBy(n => n.DisplayOrder)
-            .ThenBy(n => n.Name)
-            .ToList();
+            .ThenBy(n => n.Name);
 
-        return Task.FromResult<IEnumerable<MeshNode>>(children);
+        foreach (var child in children)
+        {
+            yield return child;
+        }
+        await Task.CompletedTask; // Keep async signature
     }
 
-    public Task<IEnumerable<MeshNode>> GetDescendantsAsync(string? parentPath, CancellationToken ct = default)
+    public async IAsyncEnumerable<MeshNode> GetDescendantsAsync(string? parentPath)
     {
         var normalizedParent = NormalizePath(parentPath);
 
         IEnumerable<MeshNode> descendants;
         if (string.IsNullOrEmpty(normalizedParent))
         {
-            descendants = _nodes.Values.ToList();
+            descendants = _nodes.Values;
         }
         else
         {
@@ -106,11 +109,14 @@ public class InMemoryPersistenceService : IPersistenceService
                 {
                     var nodePath = NormalizePath(n.Prefix);
                     return nodePath.StartsWith(normalizedParent + "/", StringComparison.OrdinalIgnoreCase);
-                })
-                .ToList();
+                });
         }
 
-        return Task.FromResult<IEnumerable<MeshNode>>(descendants.OrderBy(n => n.Prefix));
+        foreach (var descendant in descendants.OrderBy(n => n.Prefix))
+        {
+            yield return descendant;
+        }
+        await Task.CompletedTask; // Keep async signature
     }
 
     public async Task<MeshNode> SaveNodeAsync(MeshNode node, CancellationToken ct = default)
@@ -272,10 +278,9 @@ public class InMemoryPersistenceService : IPersistenceService
         return movedNode;
     }
 
-    public Task<IEnumerable<MeshNode>> SearchAsync(string? parentPath, string query, CancellationToken ct = default)
+    public async IAsyncEnumerable<MeshNode> SearchAsync(string? parentPath, string query)
     {
         var normalizedParent = NormalizePath(parentPath);
-        var queryLower = query.ToLowerInvariant();
 
         var results = _nodes.Values
             .Where(n =>
@@ -302,10 +307,13 @@ public class InMemoryPersistenceService : IPersistenceService
                 return false;
             })
             .OrderBy(n => n.DisplayOrder)
-            .ThenBy(n => n.Name)
-            .ToList();
+            .ThenBy(n => n.Name);
 
-        return Task.FromResult<IEnumerable<MeshNode>>(results);
+        foreach (var result in results)
+        {
+            yield return result;
+        }
+        await Task.CompletedTask; // Keep async signature
     }
 
     public Task<bool> ExistsAsync(string path, CancellationToken ct = default)
@@ -319,15 +327,18 @@ public class InMemoryPersistenceService : IPersistenceService
 
     #region Comments
 
-    public Task<IEnumerable<Comment>> GetCommentsAsync(string nodePath, CancellationToken ct = default)
+    public async IAsyncEnumerable<Comment> GetCommentsAsync(string nodePath)
     {
         var normalizedPath = NormalizePath(nodePath);
         var comments = _comments.Values
             .Where(c => NormalizePath(c.NodePath) == normalizedPath)
-            .OrderBy(c => c.CreatedAt)
-            .ToList();
+            .OrderBy(c => c.CreatedAt);
 
-        return Task.FromResult<IEnumerable<Comment>>(comments);
+        foreach (var comment in comments)
+        {
+            yield return comment;
+        }
+        await Task.CompletedTask; // Keep async signature
     }
 
     public Task<Comment> AddCommentAsync(Comment comment, CancellationToken ct = default)

@@ -125,11 +125,10 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
 
         // Load children from own partition
         // File location: _hubPath/*.json (e.g., "graph/org1/*.json")
-        var children = await _persistence.GetChildrenAsync(_hubPath, ct);
-
         var allNodes = new List<MeshNode>();
         if (ownNode != null) allNodes.Add(ownNode);
-        allNodes.AddRange(children);
+        await foreach (var child in _persistence.GetChildrenAsync(_hubPath).WithCancellation(ct))
+            allNodes.Add(child);
 
         _lastSaved = new InstanceCollection(allNodes, TypeDefinition.GetKey);
         return _lastSaved;

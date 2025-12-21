@@ -142,7 +142,7 @@ public class FileSystemPersistenceTest : IDisposable
         await _persistence.SaveNodeAsync(new MeshNode("graph/org1/project1") { Name = "Project 1" });
 
         // Act
-        var children = await _persistence.GetChildrenAsync("graph");
+        var children = await _persistence.GetChildrenAsync("graph").ToListAsync(TestContext.Current.CancellationToken);
 
         // Assert
         children.Should().HaveCount(2);
@@ -160,7 +160,7 @@ public class FileSystemPersistenceTest : IDisposable
         await _persistence.SaveNodeAsync(new MeshNode("graph/org2") { Name = "Org 2" });
 
         // Act
-        var descendants = await _persistence.GetDescendantsAsync("graph/org1");
+        var descendants = await _persistence.GetDescendantsAsync("graph/org1").ToListAsync(TestContext.Current.CancellationToken);
 
         // Assert
         descendants.Should().HaveCount(2);
@@ -188,7 +188,7 @@ public class FileSystemPersistenceTest : IDisposable
         await _persistence.SaveNodeAsync(new MeshNode("graph/fabrikam") { Name = "Fabrikam Inc", Description = "Hardware manufacturer" });
 
         // Act
-        var results = await _persistence.SearchAsync(null, "software");
+        var results = await _persistence.SearchAsync(null, "software").ToListAsync(TestContext.Current.CancellationToken);
 
         // Assert
         results.Should().HaveCount(1);
@@ -240,7 +240,7 @@ public class FileSystemPersistenceTest : IDisposable
         await _persistence.SaveNodeAsync(new MeshNode("graph/org2") { Name = "Second", DisplayOrder = 10 });
 
         // Act
-        var children = await _persistence.GetChildrenAsync("graph");
+        var children = await _persistence.GetChildrenAsync("graph").ToListAsync(TestContext.Current.CancellationToken);
 
         // Assert - should be ordered by DisplayOrder
         children.Should().HaveCount(2);
@@ -369,7 +369,7 @@ public class FileSystemPersistenceTest : IDisposable
         await newPersistence.InitializeAsync();
 
         // Assert
-        var children = await newPersistence.GetChildrenAsync("graph");
+        var children = await newPersistence.GetChildrenAsync("graph").ToListAsync(TestContext.Current.CancellationToken);
         children.Should().HaveCount(2);
         children.Select(c => c.Name).Should().Contain(new[] { "Loaded Org 1", "Loaded Org 2" });
     }
@@ -424,7 +424,7 @@ public class FileSystemPersistenceTest : IDisposable
         (await newPersistence.GetNodeAsync("graph/org1/project1")).Should().NotBeNull();
         (await newPersistence.GetNodeAsync("graph/org1/project1/story1")).Should().NotBeNull();
 
-        var org1Children = await newPersistence.GetChildrenAsync("graph/org1");
+        var org1Children = await newPersistence.GetChildrenAsync("graph/org1").ToListAsync(TestContext.Current.CancellationToken);
         org1Children.Should().HaveCount(1);
         org1Children.First().Name.Should().Be("Project 1");
     }
@@ -441,7 +441,7 @@ public class FileSystemPersistenceTest : IDisposable
         await newPersistence.InitializeAsync();
 
         // Assert
-        var children = await newPersistence.GetChildrenAsync(null);
+        var children = await newPersistence.GetChildrenAsync(null).ToListAsync(TestContext.Current.CancellationToken);
         children.Should().BeEmpty();
     }
 
@@ -482,7 +482,7 @@ public class FileSystemPersistenceTest : IDisposable
     {
         // Act
         var node = await _persistence.GetNodeAsync("");
-        var children = await _persistence.GetChildrenAsync("");
+        var children = await _persistence.GetChildrenAsync("").ToListAsync(TestContext.Current.CancellationToken);
 
         // Assert
         node.Should().BeNull();

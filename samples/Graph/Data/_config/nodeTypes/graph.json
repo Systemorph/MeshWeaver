@@ -1,0 +1,6 @@
+{
+  "$type": "NodeTypeConfig",
+  "nodeType": "graph",
+  "dataModelId": "graph",
+  "hubFeatureId": "graph"
+}

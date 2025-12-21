@@ -1,0 +1,5 @@
+{
+  "$type": "NodeTypeConfig",
+  "nodeType": "story",
+  "dataModelId": "story"
+}

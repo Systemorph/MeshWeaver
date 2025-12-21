@@ -62,9 +62,12 @@ public static class MeshNodeView
         return Observable.FromAsync(async ct =>
         {
             var node = await persistence.GetNodeAsync(hubPath, ct);
-            IEnumerable<MeshNode> children = [];
+            var children = new List<MeshNode>();
             if (meshCatalog != null)
-                children = await meshCatalog.Persistence.GetChildrenAsync(hubPath, ct);
+            {
+                await foreach (var child in meshCatalog.Persistence.GetChildrenAsync(hubPath).WithCancellation(ct))
+                    children.Add(child);
+            }
 
             return BuildDetailsContent(host, node, children);
         });
@@ -342,8 +345,10 @@ public static class MeshNodeView
 
         return Observable.FromAsync(async ct =>
         {
-            var comments = await persistence.GetCommentsAsync(nodePath, ct);
-            return BuildFacebookStyleComments(host, comments.ToList(), nodePath);
+            var comments = new List<Comment>();
+            await foreach (var comment in persistence.GetCommentsAsync(nodePath).WithCancellation(ct))
+                comments.Add(comment);
+            return BuildFacebookStyleComments(host, comments, nodePath);
         });
     }
 

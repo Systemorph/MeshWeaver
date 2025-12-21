@@ -1,16 +1,15 @@
-using Microsoft.AspNetCore.Components;
-using MeshWeaver.Blazor.GoogleMaps;
+﻿using MeshWeaver.Blazor.GoogleMaps;
 using MeshWeaver.Blazor.Graph;
 using MeshWeaver.Blazor.Pages;
 using MeshWeaver.Blazor.Portal;
 using MeshWeaver.Blazor.Radzen;
 using MeshWeaver.GoogleMaps;
-using MeshWeaver.Graph.Domain;
+using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Blazor;
 using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Mesh;
 using Microsoft.AspNetCore.Builder;
-using Microsoft.AspNetCore.Routing;
+using Microsoft.AspNetCore.Components;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -143,7 +142,8 @@ public static class LoomConfiguration
 
             return (TBuilder)builder
                 .AddFileSystemPersistence(dataDirectory)
-                .InstallAssemblies(typeof(GraphDomainAttribute).Assembly.Location);
+                .AddJsonGraphConfiguration(dataDirectory, configuration)
+                ;
         }
     }
 

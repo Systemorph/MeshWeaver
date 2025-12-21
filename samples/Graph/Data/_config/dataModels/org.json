@@ -1,0 +1,9 @@
+{
+  "$type": "DataModel",
+  "id": "org",
+  "displayName": "Organization",
+  "iconName": "Building",
+  "description": "An organization containing projects",
+  "displayOrder": 10,
+  "typeSource": "public record Organization\n{\n    [Key]\n    public string Id { get; init; } = string.Empty;\n\n    [Required]\n    public string Name { get; init; } = string.Empty;\n\n    public string? Description { get; init; }\n\n    public string? Website { get; init; }\n\n    public string? Logo { get; init; }\n\n    public string IconName { get; init; } = \"Building\";\n\n    public DateTimeOffset CreatedAt { get; init; } = DateTimeOffset.UtcNow;\n}"
+}

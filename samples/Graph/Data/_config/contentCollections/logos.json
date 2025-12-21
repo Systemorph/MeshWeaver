@@ -1,0 +1,7 @@
+{
+  "$type": "ContentCollectionConfig",
+  "id": "logos",
+  "name": "logos",
+  "sourceType": "FileSystem",
+  "configurationKey": "logosPath"
+}

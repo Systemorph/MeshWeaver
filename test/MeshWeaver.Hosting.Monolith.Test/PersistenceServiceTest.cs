@@ -25,7 +25,7 @@ public class PersistenceServiceTest
         await persistence.SaveNodeAsync(new MeshNode("org/acme/project/web") { Name = "Web Project" });
 
         // Act
-        var children = await persistence.GetChildrenAsync("org");
+        var children = await persistence.GetChildrenAsync("org").ToListAsync(TestContext.Current.CancellationToken);
 
         // Assert
         children.Should().HaveCount(2);
@@ -42,7 +42,7 @@ public class PersistenceServiceTest
         await persistence.SaveNodeAsync(new MeshNode("org/acme") { Name = "Acme" });
 
         // Act
-        var children = await persistence.GetChildrenAsync(null);
+        var children = await persistence.GetChildrenAsync(null).ToListAsync(TestContext.Current.CancellationToken);
 
         // Assert
         children.Should().HaveCount(2);
@@ -57,7 +57,7 @@ public class PersistenceServiceTest
         await persistence.SaveNodeAsync(new MeshNode("org/acme") { Name = "Acme" });
 
         // Act
-        var children = await persistence.GetChildrenAsync("nonexistent");
+        var children = await persistence.GetChildrenAsync("nonexistent").ToListAsync(TestContext.Current.CancellationToken);
 
         // Assert
         children.Should().BeEmpty();
@@ -122,7 +122,7 @@ public class PersistenceServiceTest
         await persistence.SaveNodeAsync(new MeshNode("org/contoso") { Name = "Contoso Ltd" });
 
         // Act
-        var results = await persistence.SearchAsync(null, "Acme");
+        var results = await persistence.SearchAsync(null, "Acme").ToListAsync(TestContext.Current.CancellationToken);
 
         // Assert
         results.Should().HaveCount(1);
@@ -152,7 +152,7 @@ public class PersistenceServiceTest
         await persistence.SaveNodeAsync(new MeshNode("org/contoso") { Name = "Contoso" });
 
         // Act
-        var descendants = await persistence.GetDescendantsAsync("org/acme");
+        var descendants = await persistence.GetDescendantsAsync("org/acme").ToListAsync(TestContext.Current.CancellationToken);
 
         // Assert
         descendants.Should().HaveCount(2);
@@ -188,7 +188,7 @@ public class MeshCatalogQueryTest
         await persistence.SaveNodeAsync(new MeshNode("org/fabrikam") { Name = "Fabrikam Inc", Description = "Hardware manufacturer" });
 
         // Act - simulate QueryAsync filtering
-        var children = await persistence.GetChildrenAsync("org");
+        var children = await persistence.GetChildrenAsync("org").ToListAsync(TestContext.Current.CancellationToken);
         var filtered = children.Where(n =>
             (n.Name?.Contains("soft", StringComparison.OrdinalIgnoreCase) ?? false) ||
             (n.Description?.Contains("soft", StringComparison.OrdinalIgnoreCase) ?? false) ||
@@ -210,7 +210,7 @@ public class MeshCatalogQueryTest
         }
 
         // Act - simulate QueryAsync with maxResults
-        var children = await persistence.GetChildrenAsync("org");
+        var children = await persistence.GetChildrenAsync("org").ToListAsync(TestContext.Current.CancellationToken);
         var limited = children.Take(3).ToList();
 
         // Assert
@@ -226,7 +226,7 @@ public class MeshCatalogQueryTest
         await persistence.SaveNodeAsync(new MeshNode("org/contoso") { Name = "Contoso" });
 
         // Act - simulate QueryAsync without filter
-        var children = await persistence.GetChildrenAsync("org");
+        var children = await persistence.GetChildrenAsync("org").ToListAsync(TestContext.Current.CancellationToken);
 
         // Assert
         children.Should().HaveCount(2);
@@ -241,7 +241,7 @@ public class MeshCatalogQueryTest
         await persistence.SaveNodeAsync(new MeshNode("org/acme-corp") { Name = "Acme Corp" });
 
         // Act - simulate QueryAsync with prefix filter
-        var children = await persistence.GetChildrenAsync("org");
+        var children = await persistence.GetChildrenAsync("org").ToListAsync(TestContext.Current.CancellationToken);
         var filtered = children.Where(n =>
             (n.Name?.Contains("acme-", StringComparison.OrdinalIgnoreCase) ?? false) ||
             (n.Description?.Contains("acme-", StringComparison.OrdinalIgnoreCase) ?? false) ||

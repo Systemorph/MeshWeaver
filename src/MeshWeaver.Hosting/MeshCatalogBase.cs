@@ -234,27 +234,28 @@ public abstract class MeshCatalogBase : IMeshCatalog
     /// <inheritdoc />
     public async IAsyncEnumerable<MeshNode> QueryAsync(string? parentPath, string? query = null, int? maxResults = null, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
     {
-        var children = await Persistence.GetChildrenAsync(parentPath, ct);
-
-        // Filter by query if provided
-        if (!string.IsNullOrWhiteSpace(query))
+        var count = 0;
+        await foreach (var child in Persistence.GetChildrenAsync(parentPath).WithCancellation(ct))
         {
-            children = children.Where(n =>
-                (n.Name?.Contains(query, StringComparison.OrdinalIgnoreCase) ?? false) ||
-                (n.Description?.Contains(query, StringComparison.OrdinalIgnoreCase) ?? false) ||
-                n.Prefix.Contains(query, StringComparison.OrdinalIgnoreCase));
-        }
+            // Filter by query if provided
+            if (!string.IsNullOrWhiteSpace(query))
+            {
+                if (!(child.Name?.Contains(query, StringComparison.OrdinalIgnoreCase) ?? false) &&
+                    !(child.Description?.Contains(query, StringComparison.OrdinalIgnoreCase) ?? false) &&
+                    !child.Prefix.Contains(query, StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+            }
 
-        // Apply max results if provided
-        if (maxResults.HasValue && maxResults.Value > 0)
-        {
-            children = children.Take(maxResults.Value);
-        }
-
-        foreach (var child in children)
-        {
-            ct.ThrowIfCancellationRequested();
             yield return child;
+            count++;
+
+            // Apply max results if provided
+            if (maxResults.HasValue && maxResults.Value > 0 && count >= maxResults.Value)
+            {
+                yield break;
+            }
         }
     }
 
