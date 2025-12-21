@@ -57,7 +57,9 @@
       "Bash(xargs:*)",
       "Bash(taskkill:*)",
       "WebFetch(domain:www.nuget.org)",
-      "Bash(curl:*)"
+      "Bash(curl:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)"
     ],
     "deny": []
   }
