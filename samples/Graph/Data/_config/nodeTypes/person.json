@@ -1,5 +1,8 @@
 {
   "$type": "NodeTypeConfig",
   "nodeType": "person",
-  "dataModelId": "person"
+  "dataModelId": "person",
+  "contentCollections": [
+    { "name": "avatar", "baseCollection": "graph", "subPath": "persons" }
+  ]
 }
