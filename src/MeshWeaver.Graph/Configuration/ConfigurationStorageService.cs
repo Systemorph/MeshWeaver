@@ -159,6 +159,58 @@ public class ConfigurationStorageService : IConfigurationStorageService
         return Task.CompletedTask;
     }
 
+    /// <summary>
+    /// Loads a specific configuration item by type and ID.
+    /// </summary>
+    public async Task<T?> LoadByIdAsync<T>(string id, CancellationToken ct = default) where T : class
+    {
+        var partition = GetPartitionForType<T>();
+        var filePath = GetFilePath(partition, id);
+
+        if (!File.Exists(filePath))
+            return null;
+
+        try
+        {
+            var json = await File.ReadAllTextAsync(filePath, ct);
+            return JsonSerializer.Deserialize<T>(json, JsonOptions);
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Loads all configuration items of a specific type.
+    /// </summary>
+    public async Task<IReadOnlyList<T>> LoadAllAsync<T>(CancellationToken ct = default) where T : class
+    {
+        var partition = GetPartitionForType<T>();
+        var partitionPath = GetPartitionPath(partition);
+        var results = new List<T>();
+
+        if (!Directory.Exists(partitionPath))
+            return results;
+
+        foreach (var filePath in Directory.GetFiles(partitionPath, "*.json"))
+        {
+            try
+            {
+                var json = await File.ReadAllTextAsync(filePath, ct);
+                var item = JsonSerializer.Deserialize<T>(json, JsonOptions);
+                if (item != null)
+                    results.Add(item);
+            }
+            catch (JsonException)
+            {
+                // Skip invalid files
+            }
+        }
+
+        return results;
+    }
+
     private static string GetPartitionForType<T>()
     {
         return typeof(T).Name switch

@@ -4,16 +4,16 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using Json.Patch;
 using Json.Pointer;
-using Microsoft.Extensions.DependencyInjection;
 using MeshWeaver.Data;
 using MeshWeaver.Data.Completion;
 using MeshWeaver.Layout.Client;
 using MeshWeaver.Layout.Completion;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Layout.DataGrid;
-using MeshWeaver.Messaging;
-using MeshWeaver.Layout.Views;
 using MeshWeaver.Layout.Serialization;
+using MeshWeaver.Layout.Views;
+using MeshWeaver.Messaging;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Layout;
@@ -40,8 +40,7 @@ public static class LayoutExtensions
                     // This handles paths like "area:areaName" or "area:areaName/areaId" or "area:areaName?queryParams"
                     if (!data.UnifiedReferenceResolvers.ContainsKey("area"))
                     {
-                        data = data.WithUnifiedReference("area", (workspace, path) =>
-                            CreateAreaPathStream(workspace, path));
+                        data = data.WithUnifiedReference("area", CreateAreaPathStream);
                     }
                     return data.Configure(reduction => reduction
                         .AddWorkspaceReferenceStream<EntityStore>((workspace, reference, configuration) =>
@@ -104,7 +103,7 @@ public static class LayoutExtensions
                             (typeof(IUiControl).IsAssignableFrom(t)
                              || typeof(Skin).IsAssignableFrom(t)
                              || typeof(StreamMessage).IsAssignableFrom(t))
-                        //&& !t.IsAbstract
+                    //&& !t.IsAbstract
                     )
             )
             .WithTypes(
@@ -254,11 +253,11 @@ public static class LayoutExtensions
     public static async Task<TData> GetDataAsync<TData>(
         this ISynchronizationStream<EntityStore>? synchronizationItems,
         string id
-    ) 
+    )
     {
         if (synchronizationItems == null)
             throw new ArgumentNullException(nameof(synchronizationItems));
-        
+
         return await synchronizationItems.GetDataStream<TData>(id).FirstAsync(x => x != null);
     }
 
@@ -343,8 +342,8 @@ public static class LayoutExtensions
                 x.Value.ValueKind == JsonValueKind.Undefined
                     ? default!
                     : x.Value.Deserialize<T>(stream.Hub.JsonSerializerOptions)!
-            ); 
-    
+            );
+
     public static MessageHubConfiguration AddLayoutClient(
         this MessageHubConfiguration config,
         Func<LayoutClientConfiguration, LayoutClientConfiguration>? configuration = null
@@ -367,7 +366,7 @@ public static class LayoutExtensions
     public static MessageHubConfiguration AddViews(
         this MessageHubConfiguration config,
         Func<LayoutClientConfiguration, LayoutClientConfiguration>? configuration) =>
-        config.Set(config.GetConfigurationFunctions().Add(configuration ?? 
+        config.Set(config.GetConfigurationFunctions().Add(configuration ??
                                                           (x => x)));
 
     internal static ImmutableList<

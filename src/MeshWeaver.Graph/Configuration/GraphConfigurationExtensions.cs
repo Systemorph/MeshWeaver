@@ -67,6 +67,7 @@ public static class GraphConfigurationExtensions
         // Register services at the hub level where ITypeRegistry is available
         config = config
             .AddMeshCatalogView()
+            .AddDynamicViews() // Enable dynamic view compilation and rendering
             .WithServices(services =>
         {
             services.AddSingleton<ITypeCompilationService>(sp =>

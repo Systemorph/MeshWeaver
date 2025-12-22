@@ -41,6 +41,9 @@
     public string Placeholder { get; set; } = "Type your message...";
 
     [Parameter]
+    public string Language { get; set; } = "plaintext";
+
+    [Parameter]
     public string Height { get; set; } = "80px";
 
     [Parameter]
@@ -65,7 +68,7 @@
         return new StandaloneEditorConstructionOptions
         {
             Value = Value ?? "",
-            Language = "plaintext",
+            Language = Language,
             Theme = GetMonacoTheme(),
             AutomaticLayout = true,
             LineNumbers = "off",

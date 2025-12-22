@@ -1,0 +1,47 @@
+@using MeshWeaver.Layout
+@using MeshWeaver.Blazor.Monaco
+
+<MonacoEditorView @ref="editorRef"
+                  Value="@GetValue()"
+                  Language="@GetLanguage()"
+                  Height="@GetHeight()"
+                  IsDisabled="@GetReadonly()"
+                  Placeholder="@GetPlaceholder()"
+                  ValueChanged="@OnValueChanged" />
+
+@code {
+    private MonacoEditorView? editorRef;
+
+    [Parameter]
+    public CodeEditorControl? ViewModel { get; set; }
+
+    [Parameter]
+    public EventCallback<string> OnContentChanged { get; set; }
+
+    private string GetValue() => ViewModel?.Value?.ToString() ?? "";
+    private string GetLanguage() => ViewModel?.Language?.ToString() ?? "plaintext";
+    private string GetHeight() => ViewModel?.Height?.ToString() ?? "300px";
+    private bool GetReadonly() => ViewModel?.Readonly is bool b && b;
+    private string GetPlaceholder() => ViewModel?.Placeholder?.ToString() ?? "";
+
+    private async Task OnValueChanged(string value)
+    {
+        if (OnContentChanged.HasDelegate)
+        {
+            await OnContentChanged.InvokeAsync(value);
+        }
+    }
+
+    public async ValueTask<string> GetValueAsync()
+    {
+        return editorRef != null ? await editorRef.GetValueAsync() : string.Empty;
+    }
+
+    public async Task SetValueAsync(string value)
+    {
+        if (editorRef != null)
+        {
+            await editorRef.SetValueAsync(value);
+        }
+    }
+}
