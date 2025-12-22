@@ -2,6 +2,5 @@
   "$type": "HubFeatureConfig",
   "id": "graph",
   "enableMeshNavigation": true,
-  "enableDynamicNodeTypeAreas": true,
-  "contentCollections": ["persons", "logos"]
+  "enableDynamicNodeTypeAreas": true
 }

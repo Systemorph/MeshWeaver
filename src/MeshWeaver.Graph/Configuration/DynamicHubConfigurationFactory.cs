@@ -96,15 +96,58 @@ public class DynamicHubConfigurationFactory
         MessageHubConfiguration config,
         ContentCollectionConfig collection)
     {
-        if (collection.SourceType != "FileSystem")
+        return collection.SourceType switch
         {
-            // TODO: Support other source types (AzureBlob, etc.)
-            return config;
+            "FileSystem" => config.AddFileSystemContentCollection(
+                collection.Name,
+                sp => GetContentPath(sp, collection)),
+
+            "AzureBlob" => AddAzureBlobContentCollection(config, collection),
+
+            _ => config // Unknown source type, skip
+        };
+    }
+
+    private MessageHubConfiguration AddAzureBlobContentCollection(
+        MessageHubConfiguration config,
+        ContentCollectionConfig collection)
+    {
+        // Use AddContentCollection with a factory that resolves Azure settings at runtime
+        return config.AddContentCollection(sp =>
+        {
+            var containerName = GetContainerName(sp, collection);
+            var clientName = collection.ClientName ?? "default";
+
+            return new MeshWeaver.ContentCollections.ContentCollectionConfig
+            {
+                Name = collection.Name,
+                SourceType = "AzureBlob",
+                Settings = new Dictionary<string, string>
+                {
+                    ["ContainerName"] = containerName,
+                    ["ClientName"] = clientName
+                }
+            };
+        });
+    }
+
+    private string GetContainerName(IServiceProvider sp, ContentCollectionConfig collection)
+    {
+        // First try configuration key if specified
+        if (!string.IsNullOrEmpty(collection.ConfigurationKey))
+        {
+            var appConfig = sp.GetRequiredService<IConfiguration>();
+            var containerName = appConfig.GetSection("Graph")[collection.ConfigurationKey];
+            if (!string.IsNullOrEmpty(containerName))
+                return containerName;
         }
 
-        return config.AddFileSystemContentCollection(
-            collection.Name,
-            sp => GetContentPath(sp, collection));
+        // Then try direct ContainerName
+        if (!string.IsNullOrEmpty(collection.ContainerName))
+            return collection.ContainerName;
+
+        // Default to collection name
+        return collection.Name;
     }
 
     private string GetContentPath(IServiceProvider sp, ContentCollectionConfig collection)
@@ -112,8 +155,8 @@ public class DynamicHubConfigurationFactory
         // First try configuration key if specified
         if (!string.IsNullOrEmpty(collection.ConfigurationKey))
         {
-            var config = sp.GetRequiredService<IConfiguration>();
-            var configPath = config.GetSection("Graph")[collection.ConfigurationKey];
+            var appConfig = sp.GetRequiredService<IConfiguration>();
+            var configPath = appConfig.GetSection("Graph")[collection.ConfigurationKey];
             if (!string.IsNullOrEmpty(configPath))
                 return configPath;
         }

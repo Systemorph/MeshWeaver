@@ -1,4 +1,5 @@
-﻿using MeshWeaver.Domain;
+﻿using MeshWeaver.ContentCollections;
+using MeshWeaver.Domain;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.Configuration;
@@ -57,6 +58,12 @@ public static class GraphConfigurationExtensions
     }
 
     /// <summary>
+    /// Default sub-collections to configure for the graph hub.
+    /// Each sub-collection maps to a subdirectory within the data directory.
+    /// </summary>
+    private static readonly string[] DefaultSubCollections = ["logos", "persons"];
+
+    /// <summary>
     /// Configures a graph hub with async initialization for loading configuration,
     /// compiling types, and initializing services.
     /// </summary>
@@ -65,6 +72,47 @@ public static class GraphConfigurationExtensions
         string dataDirectory)
     {
         // Register services at the hub level where ITypeRegistry is available
+        config = config
+            .AddMeshCatalogView();
+
+        // Add content sub-collections (logos, persons, etc.) using the data directory as base
+        foreach (var subCollection in DefaultSubCollections)
+        {
+            var subPath = subCollection; // Capture for closure
+            config = config.AddContentCollection(sp =>
+            {
+                var appConfig = sp.GetService<IConfiguration>();
+                var storageProvider = appConfig?.GetSection("Graph")["StorageProvider"] ?? "FileSystem";
+
+                if (storageProvider.Equals("AzureBlob", StringComparison.OrdinalIgnoreCase))
+                {
+                    // For Azure Blob: use the sub-collection name as container or prefix
+                    var containerName = appConfig?.GetSection("Graph")["ContainerName"] ?? "graph";
+                    return new ContentCollections.ContentCollectionConfig
+                    {
+                        Name = subPath,
+                        SourceType = "AzureBlob",
+                        BasePath = subPath, // Blob prefix
+                        Settings = new Dictionary<string, string>
+                        {
+                            ["ContainerName"] = containerName,
+                            ["ClientName"] = "default"
+                        }
+                    };
+                }
+                else
+                {
+                    // For FileSystem: use dataDirectory + subPath
+                    return new ContentCollections.ContentCollectionConfig
+                    {
+                        Name = subPath,
+                        SourceType = "FileSystem",
+                        BasePath = Path.Combine(dataDirectory, subPath)
+                    };
+                }
+            });
+        }
+
         config = config.WithServices(services =>
         {
             services.AddSingleton<ITypeCompilationService>(sp =>

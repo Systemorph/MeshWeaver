@@ -6,6 +6,7 @@
   "description": "Another sample organization",
   "iconName": "Building",
   "displayOrder": 20,
+  "addressSegments": 0,
   "isPersistent": true,
   "content": {
     "id": "org4",
@@ -14,5 +15,11 @@
     "website": "https://contoso.example.com",
     "logo": "/static/graph/logos/contoso.svg",
     "iconName": "Building"
-  }
+  },
+  "thumbNail": null,
+  "streamProvider": null,
+  "assemblyLocation": null,
+  "startupScript": null,
+  "routingType": 0,
+  "instantiationType": 0
 }
