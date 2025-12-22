@@ -16,6 +16,11 @@ public class ConfigurationStorageService : IConfigurationStorageService
     private readonly ITypeRegistry _typeRegistry;
     private JsonSerializerOptions? _jsonOptions;
 
+    /// <summary>
+    /// The base data directory for content collections and persistence.
+    /// </summary>
+    public string DataDirectory => _baseDirectory;
+
     private const string ConfigPrefix = "_config";
     private const string DataModelsPath = "dataModels";
     private const string LayoutAreasPath = "layoutAreas";
@@ -47,6 +52,7 @@ public class ConfigurationStorageService : IConfigurationStorageService
         _typeRegistry.WithType<DataModel>();
         _typeRegistry.WithType<LayoutAreaConfig>();
         _typeRegistry.WithType<ContentCollectionConfig>();
+        _typeRegistry.WithType<ContentCollectionMapping>();
         _typeRegistry.WithType<HubFeatureConfig>();
         _typeRegistry.WithType<NodeTypeConfig>();
     }

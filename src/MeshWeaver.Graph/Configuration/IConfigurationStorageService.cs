@@ -9,6 +9,10 @@ namespace MeshWeaver.Graph.Configuration;
 public interface IConfigurationStorageService
 {
     /// <summary>
+    /// The base data directory for content collections and persistence.
+    /// </summary>
+    string DataDirectory { get; }
+    /// <summary>
     /// Loads all configuration objects from _config/ partition.
     /// Returns DataModel, LayoutAreaConfig, ContentCollectionConfig, HubFeatureConfig, NodeTypeConfig objects.
     /// </summary>

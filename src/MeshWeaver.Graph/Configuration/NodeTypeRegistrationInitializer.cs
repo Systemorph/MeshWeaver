@@ -1,5 +1,7 @@
+using MeshWeaver.ContentCollections;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -17,6 +19,7 @@ public class NodeTypeRegistrationInitializer : IConfigurationInitializer
     {
         var logger = hub.ServiceProvider.GetService<ILogger<NodeTypeRegistrationInitializer>>();
         var meshConfig = hub.ServiceProvider.GetService<MeshConfiguration>();
+        var storageService = hub.ServiceProvider.GetService<IConfigurationStorageService>();
 
         if (meshConfig == null)
         {
@@ -26,12 +29,16 @@ public class NodeTypeRegistrationInitializer : IConfigurationInitializer
 
         var nodeTypes = configObjects.OfType<NodeTypeConfig>().ToList();
         var dataModels = configObjects.OfType<DataModel>().ToDictionary(m => m.Id);
+        var hubFeatures = configObjects.OfType<HubFeatureConfig>().ToDictionary(f => f.Id);
 
         if (nodeTypes.Count == 0)
         {
             logger?.LogDebug("No node types to register");
             return Task.CompletedTask;
         }
+
+        // Get the data directory from the storage service
+        var dataDirectory = storageService?.DataDirectory ?? Directory.GetCurrentDirectory();
 
         logger?.LogInformation("Registering {Count} node type configurations...", nodeTypes.Count);
 
@@ -54,12 +61,17 @@ public class NodeTypeRegistrationInitializer : IConfigurationInitializer
                     continue;
                 }
 
-                // Create NodeTypeConfiguration
+                // Get hub features if specified
+                var features = nodeType.HubFeatureId != null
+                    ? hubFeatures.GetValueOrDefault(nodeType.HubFeatureId)
+                    : null;
+
+                // Create NodeTypeConfiguration with HubConfiguration that includes content collections
                 var config = new NodeTypeConfiguration
                 {
                     NodeType = nodeType.NodeType,
                     DataType = dataModel.CompiledType,
-                    HubConfiguration = c => c, // Default hub configuration (identity)
+                    HubConfiguration = hubConfig => ConfigureHub(hubConfig, dataModel, features, nodeType.ContentCollections, dataDirectory),
                     DisplayName = nodeType.DisplayName ?? dataModel.DisplayName ?? nodeType.NodeType,
                     Description = nodeType.Description ?? dataModel.Description,
                     IconName = nodeType.IconName ?? dataModel.IconName,
@@ -81,5 +93,92 @@ public class NodeTypeRegistrationInitializer : IConfigurationInitializer
             meshConfig.NodeTypeConfigurations.Count);
 
         return Task.CompletedTask;
+    }
+
+    /// <summary>
+    /// Configures a hub for a node type, including content collections and features.
+    /// </summary>
+    private static MessageHubConfiguration ConfigureHub(
+        MessageHubConfiguration config,
+        DataModel dataModel,
+        HubFeatureConfig? hubFeatures,
+        List<ContentCollectionMapping>? contentCollections,
+        string dataDirectory)
+    {
+        var builder = config.ConfigureMeshHub();
+
+        // Set data type if available
+        if (dataModel.CompiledType != null)
+        {
+            builder = builder.WithDataType(dataModel.CompiledType);
+        }
+
+        var result = builder.Build();
+
+        // Add dynamic node type areas if enabled (default: true)
+        if (hubFeatures?.EnableDynamicNodeTypeAreas ?? true)
+        {
+            result = result.AddDynamicNodeTypeAreas();
+        }
+
+        // Add content collections from node type configuration
+        if (contentCollections != null)
+        {
+            foreach (var mapping in contentCollections)
+            {
+                result = AddContentCollectionMapping(result, mapping, dataDirectory);
+            }
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// Adds a content collection based on ContentCollectionMapping from NodeTypeConfig.
+    /// The SubPath can include {id} placeholder which will be replaced with the node's address id.
+    /// </summary>
+    private static MessageHubConfiguration AddContentCollectionMapping(
+        MessageHubConfiguration config,
+        ContentCollectionMapping mapping,
+        string dataDirectory)
+    {
+        // Capture the address id from the hub config for path resolution
+        var addressId = config.Address.Id;
+
+        return config.AddContentCollection(sp =>
+        {
+            var appConfig = sp.GetService<IConfiguration>();
+            var storageProvider = appConfig?.GetSection("Graph")["StorageProvider"] ?? "FileSystem";
+
+            // Resolve the sub-path, replacing {id} placeholder with the node's address id
+            var resolvedSubPath = mapping.SubPath.Replace("{id}", addressId);
+
+            if (storageProvider.Equals("AzureBlob", StringComparison.OrdinalIgnoreCase))
+            {
+                // For Azure Blob: use container + blob prefix
+                var containerName = appConfig?.GetSection("Graph")["ContainerName"] ?? "graph";
+                return new ContentCollections.ContentCollectionConfig
+                {
+                    Name = mapping.Name,
+                    SourceType = "AzureBlob",
+                    BasePath = resolvedSubPath, // Blob prefix
+                    Settings = new Dictionary<string, string>
+                    {
+                        ["ContainerName"] = containerName,
+                        ["ClientName"] = "default"
+                    }
+                };
+            }
+            else
+            {
+                // For FileSystem: use dataDirectory + subPath
+                return new ContentCollections.ContentCollectionConfig
+                {
+                    Name = mapping.Name,
+                    SourceType = "FileSystem",
+                    BasePath = Path.Combine(dataDirectory, resolvedSubPath)
+                };
+            }
+        });
     }
 }
