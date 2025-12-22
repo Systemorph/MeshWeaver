@@ -36,4 +36,20 @@ public record ContentCollectionConfig
     /// Additional settings specific to the source type.
     /// </summary>
     public Dictionary<string, string>? Settings { get; init; }
+
+    /// <summary>
+    /// For AzureBlob: container name. Can also use ConfigurationKey to read from IConfiguration.
+    /// </summary>
+    public string? ContainerName { get; init; }
+
+    /// <summary>
+    /// For AzureBlob: Azure client name for IAzureClientFactory (default: "default").
+    /// </summary>
+    public string? ClientName { get; init; }
+
+    /// <summary>
+    /// For AzureBlob: connection string configuration key (e.g., "ConnectionString").
+    /// Reads from Graph:{ConnectionStringKey} section.
+    /// </summary>
+    public string? ConnectionStringKey { get; init; }
 }

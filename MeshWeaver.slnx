@@ -33,7 +33,6 @@
     <Project Path="samples/Todo/MeshWeaver.Todo.AI/MeshWeaver.Todo.AI.csproj" />
     <Project Path="samples/Todo/MeshWeaver.Todo/MeshWeaver.Todo.csproj" />
   </Folder>
-  <Folder Name="/samples/Graph/" />
   <Folder Name="/loom/">
     <Project Path="loom/Loom.Portal.Shared/Loom.Portal.Shared.csproj" />
     <Project Path="loom/Loom.Portal.Monolith/Loom.Portal.Monolith.csproj" />

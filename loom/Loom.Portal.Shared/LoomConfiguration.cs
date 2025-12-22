@@ -7,6 +7,7 @@ using MeshWeaver.Blazor.Portal.Infrastructure;
 using MeshWeaver.Blazor.Radzen;
 using MeshWeaver.GoogleMaps;
 using MeshWeaver.Graph.Configuration;
+using MeshWeaver.Hosting.AzureBlob;
 using MeshWeaver.Hosting.Blazor;
 using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Mesh;
@@ -64,19 +65,19 @@ public static class LoomConfiguration
     ///
     /// For FileSystem (development):
     /// - Graph:StorageProvider = "FileSystem"
-    /// - Graph:DataDirectory - path to the data directory for persistence
-    /// - Graph:personsPath - path to persons content collection (avatars)
-    /// - Graph:logosPath - path to logos content collection
+    /// - Graph:DataDirectory - path to the data directory for persistence and content collections
+    ///   Content sub-collections (logos, persons, etc.) are stored as subdirectories.
     ///
     /// For AzureBlob (production):
     /// - Graph:StorageProvider = "AzureBlob"
     /// - Graph:ConnectionString - Azure Storage connection string
-    /// - Graph:ContainerName - Azure Blob container name
+    /// - Graph:ContainerName - Azure Blob container name for content collections
+    ///   Content sub-collections use blob prefixes within the container.
     ///
     /// Can be overridden by Aspire via environment variables:
     /// - Graph__StorageProvider
     /// - Graph__DataDirectory / Graph__ConnectionString
-    /// - Graph__personsPath / Graph__ContainerName
+    /// - Graph__ContainerName
     /// </summary>
     public static TBuilder ConfigureLoomMesh<TBuilder>(this TBuilder builder, IConfiguration configuration)
         where TBuilder : MeshBuilder
@@ -110,6 +111,10 @@ public static class LoomConfiguration
             return (TBuilder)builder
                 .AddFileSystemPersistence(dataDirectory)
                 .AddJsonGraphConfiguration(dataDirectory, configuration)
+                // Register Azure Blob support for content collections.
+                // When IAzureClientFactory<BlobServiceClient> is registered (e.g., via Aspire),
+                // it will be used. Otherwise, falls back to Graph:ConnectionString configuration.
+                .ConfigureServices(services => services.AddAzureBlob())
                 ;
         }
     }

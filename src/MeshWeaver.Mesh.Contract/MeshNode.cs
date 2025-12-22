@@ -114,7 +114,7 @@ public record MeshNode(string Path)
 
     /// <summary>
     /// Indicates this node's data is persisted and should be loaded on startup.
-    /// When true, the hub will issue LoadGraphRequest to load children from IPersistenceService.
+    /// When true, the hub will load children from IPersistenceService via MeshNodeTypeSource.
     /// </summary>
     public bool IsPersistent { get; init; }
 
