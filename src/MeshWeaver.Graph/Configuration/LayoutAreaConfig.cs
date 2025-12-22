@@ -1,3 +1,8 @@
+using System.ComponentModel.DataAnnotations.Schema;
+using System.Text.Json.Serialization;
+using MeshWeaver.Layout;
+using MeshWeaver.Layout.Composition;
+
 namespace MeshWeaver.Graph.Configuration;
 
 /// <summary>
@@ -35,4 +40,23 @@ public record LayoutAreaConfig
     /// Whether the area is invisible in navigation.
     /// </summary>
     public bool IsInvisible { get; init; }
+
+    /// <summary>
+    /// Inline C# source code for the view function.
+    /// Expected signature: public static UiControl ViewName(LayoutAreaHost host, RenderingContext ctx)
+    /// Example:
+    /// <code>
+    /// public static UiControl MyView(LayoutAreaHost host, RenderingContext ctx)
+    /// {
+    ///     return Controls.Html("&lt;h1&gt;Hello World&lt;/h1&gt;");
+    /// }
+    /// </code>
+    /// </summary>
+    public string? ViewSource { get; init; }
+
+    /// <summary>
+    /// The compiled view delegate. Not serialized - populated at runtime after compilation.
+    /// </summary>
+    [JsonIgnore, NotMapped]
+    public Func<LayoutAreaHost, RenderingContext, UiControl>? CompiledView { get; set; }
 }

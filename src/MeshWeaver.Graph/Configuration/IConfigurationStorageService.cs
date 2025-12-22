@@ -27,4 +27,21 @@ public interface IConfigurationStorageService
     /// Deletes a configuration item by type and ID.
     /// </summary>
     Task DeleteAsync<T>(string id, CancellationToken ct = default);
+
+    /// <summary>
+    /// Loads a specific configuration item by type and ID.
+    /// </summary>
+    /// <typeparam name="T">The configuration type (DataModel, LayoutAreaConfig, etc.)</typeparam>
+    /// <param name="id">The configuration ID</param>
+    /// <param name="ct">Cancellation token</param>
+    /// <returns>The configuration item or null if not found</returns>
+    Task<T?> LoadByIdAsync<T>(string id, CancellationToken ct = default) where T : class;
+
+    /// <summary>
+    /// Loads all configuration items of a specific type.
+    /// </summary>
+    /// <typeparam name="T">The configuration type (DataModel, LayoutAreaConfig, etc.)</typeparam>
+    /// <param name="ct">Cancellation token</param>
+    /// <returns>List of all items of the specified type</returns>
+    Task<IReadOnlyList<T>> LoadAllAsync<T>(CancellationToken ct = default) where T : class;
 }

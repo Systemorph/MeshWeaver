@@ -1,4 +1,5 @@
 ﻿using MeshWeaver.Data;
+using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
@@ -104,6 +105,20 @@ public class MeshHubBuilder
                     new MeshNodeTypeSource(source.Workspace, source.Id, persistence, hubPath)
                         .WithKey(n => n.Prefix));
 
+                // Register DataModel and LayoutAreaConfig TypeSources if IConfigurationStorageService is available
+                var configStorage = source.Workspace.Hub.ServiceProvider.GetService<IConfigurationStorageService>();
+                if (configStorage != null)
+                {
+                    withMeshNode = withMeshNode
+                        .WithTypeSource(typeof(DataModel),
+                            new DataModelTypeSource(source.Workspace, source.Id, configStorage)
+                                .WithKey(m => m.Id))
+                        .WithTypeSource(typeof(LayoutAreaConfig),
+                            new LayoutAreaConfigTypeSource(source.Workspace, source.Id, configStorage)
+                                .WithKey(c => c.Id));
+                    logger?.LogDebug("MeshHubBuilder: Registered DataModel and LayoutAreaConfig TypeSources");
+                }
+
                 // Register additional data type if specified
                 if (dataType is not null)
                 {
@@ -133,15 +148,28 @@ public class MeshHubBuilder
             else
             {
                 // Fallback: no persistence, just register types without special type sources
-                var withMeshNode = source.WithType<MeshNode>(ts => ts.WithKey(n => n.Prefix));
+                var withTypes = source.WithType<MeshNode>(ts => ts.WithKey(n => n.Prefix));
+
+                // Register DataModel and LayoutAreaConfig TypeSources if IConfigurationStorageService is available
+                var configStorage = source.Workspace.Hub.ServiceProvider.GetService<IConfigurationStorageService>();
+                if (configStorage != null)
+                {
+                    withTypes = withTypes
+                        .WithTypeSource(typeof(DataModel),
+                            new DataModelTypeSource(source.Workspace, source.Id, configStorage)
+                                .WithKey(m => m.Id))
+                        .WithTypeSource(typeof(LayoutAreaConfig),
+                            new LayoutAreaConfigTypeSource(source.Workspace, source.Id, configStorage)
+                                .WithKey(c => c.Id));
+                }
 
                 if (dataType is not null)
                 {
-                    return withMeshNode.WithType(dataType, null);
+                    return withTypes.WithType(dataType, null);
                 }
                 else
                 {
-                    return withMeshNode.WithType<NodeDescription>(ts => ts.WithKey(n => n.Id));
+                    return withTypes.WithType<NodeDescription>(ts => ts.WithKey(n => n.Id));
                 }
             }
         }));
