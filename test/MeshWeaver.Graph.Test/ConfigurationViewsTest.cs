@@ -27,7 +27,6 @@ namespace MeshWeaver.Graph.Test;
 public class ConfigurationViewsTest : HubTestBase
 {
     private readonly string _testDataDirectory;
-    private IConfigurationStorageService? _storageService;
 
     public ConfigurationViewsTest(ITestOutputHelper output) : base(output)
     {
@@ -38,53 +37,66 @@ public class ConfigurationViewsTest : HubTestBase
 
     protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration configuration)
     {
+        // Use explicit AddData configuration with WithType pattern for proper persistence
+        var testDataDirectory = _testDataDirectory;
+
         return base.ConfigureHost(configuration)
             .WithServices(services =>
             {
-                services.AddSingleton<ITypeRegistry>(new TestTypeRegistry());
+                // Register the storage service
                 services.AddSingleton<IConfigurationStorageService>(sp =>
                 {
-                    var registry = sp.GetRequiredService<ITypeRegistry>();
-                    _storageService = new ConfigurationStorageService(_testDataDirectory, registry);
-                    return _storageService;
+                    var typeRegistry = sp.GetRequiredService<ITypeRegistry>();
+                    return new ConfigurationStorageService(testDataDirectory, typeRegistry);
                 });
                 return services;
             })
+            // Register types for serialization/deserialization with simple names
             .WithTypes(typeof(CodeEditorControl))
-            .AddLayout(layout => layout
-                .AddConfigurationViews())
+            .WithType<DataModel>(nameof(DataModel))
+            .WithType<LayoutAreaConfig>(nameof(LayoutAreaConfig))
             .AddData(data => data.AddSource(source =>
             {
-                var storage = source.Workspace.Hub.ServiceProvider.GetRequiredService<IConfigurationStorageService>();
+                // Get storage service from hub's service provider
+                var storageService = source.Workspace.Hub.ServiceProvider.GetRequiredService<IConfigurationStorageService>();
+
                 return source
-                    .WithType<DataModel>(ts => ts
-                        .WithKey(m => m.Id)
-                        .WithInitialData(async ct => await storage.LoadAllAsync<DataModel>(ct))
+                    .WithType<DataModel>((TypeSourceWithType<DataModel> t) => t
+                        .WithInitialData(async ct => await storageService.LoadAllAsync<DataModel>(ct))
                         .WithUpdate(SaveDataModels))
-                    .WithType<LayoutAreaConfig>(ts => ts
-                        .WithKey(c => c.Id)
-                        .WithInitialData(async ct => await storage.LoadAllAsync<LayoutAreaConfig>(ct))
+                    .WithType<LayoutAreaConfig>((TypeSourceWithType<LayoutAreaConfig> t) => t
+                        .WithInitialData(async ct => await storageService.LoadAllAsync<LayoutAreaConfig>(ct))
                         .WithUpdate(SaveLayoutAreaConfigs));
-            }));
-    }
 
-    private InstanceCollection SaveDataModels(InstanceCollection instances)
-    {
-        foreach (var kvp in instances.Instances)
-            _ = _storageService!.SaveAsync((DataModel)kvp.Value);
-        return instances;
-    }
+                InstanceCollection SaveDataModels(InstanceCollection instances)
+                {
+                    foreach (var item in instances.Instances.Values)
+                    {
+                        if (item is DataModel dm)
+                            _ = storageService.SaveAsync(dm);
+                    }
+                    return instances;
+                }
 
-    private InstanceCollection SaveLayoutAreaConfigs(InstanceCollection instances)
-    {
-        foreach (var kvp in instances.Instances)
-            _ = _storageService!.SaveAsync((LayoutAreaConfig)kvp.Value);
-        return instances;
+                InstanceCollection SaveLayoutAreaConfigs(InstanceCollection instances)
+                {
+                    foreach (var item in instances.Instances.Values)
+                    {
+                        if (item is LayoutAreaConfig lac)
+                            _ = storageService.SaveAsync(lac);
+                    }
+                    return instances;
+                }
+            }))
+            .AddLayout(layout => layout.AddConfigurationViews());
     }
 
     protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
         => base.ConfigureClient(configuration)
+            // Register types for serialization/deserialization with simple names to match host
             .WithTypes(typeof(CodeEditorControl))
+            .WithType<DataModel>(nameof(DataModel))
+            .WithType<LayoutAreaConfig>(nameof(LayoutAreaConfig))
             .AddLayoutClient(d => d)
             .AddData(data =>
                 data.AddHubSource(CreateHostAddress(), dataSource => dataSource
@@ -330,10 +342,11 @@ public class ConfigurationViewsTest : HubTestBase
             TypeSource = @"public record SaveTestModel { public string Data { get; init; } }"
         };
 
-        // Act - send DataChangeRequest via client to the HOST (where storage TypeSource is)
+        // Act - send DataChangeRequest to HOST (where storage TypeSource is)
+        // NOTE: changedBy must be non-null for the Synchronize filter to allow the update
         var response = await client.AwaitResponse(
-            DataChangeRequest.Update(new object[] { dataModel }),
-            o => o.WithTarget(CreateClientAddress()),
+            DataChangeRequest.Update(new object[] { dataModel }, changedBy: "test"),
+            o => o.WithTarget(CreateHostAddress()),
             CancellationTokenSource.CreateLinkedTokenSource(
                 TestContext.Current.CancellationToken,
                 new CancellationTokenSource(5.Seconds()).Token
@@ -372,10 +385,10 @@ public class ConfigurationViewsTest : HubTestBase
             ViewSource = @"public static UiControl View(LayoutAreaHost h, RenderingContext c) => Controls.Html(""Saved"");"
         };
 
-        // Act - send DataChangeRequest via client to the HOST (where storage TypeSource is)
+        // Act - send DataChangeRequest to HOST (where storage TypeSource is)
         var response = await client.AwaitResponse(
-            DataChangeRequest.Update(new object[] { layoutArea }),
-            o => o.WithTarget(CreateClientAddress()),
+            DataChangeRequest.Update(new object[] { layoutArea }, changedBy: "test"),
+            o => o.WithTarget(CreateHostAddress()),
             CancellationTokenSource.CreateLinkedTokenSource(
                 TestContext.Current.CancellationToken,
                 new CancellationTokenSource(5.Seconds()).Token
@@ -415,8 +428,8 @@ public class ConfigurationViewsTest : HubTestBase
 
         // Create the original model via DataChangeRequest to HOST
         var createResponse = await client.AwaitResponse(
-            DataChangeRequest.Update(new object[] { originalModel }),
-            o => o.WithTarget(CreateClientAddress()),
+            DataChangeRequest.Update(new object[] { originalModel }, changedBy: "test"),
+            o => o.WithTarget(CreateHostAddress()),
             CancellationTokenSource.CreateLinkedTokenSource(
                 TestContext.Current.CancellationToken,
                 new CancellationTokenSource(5.Seconds()).Token
@@ -433,8 +446,8 @@ public class ConfigurationViewsTest : HubTestBase
         };
 
         var updateResponse = await client.AwaitResponse(
-            DataChangeRequest.Update(new object[] { updatedModel }),
-            o => o.WithTarget(CreateClientAddress()),
+            DataChangeRequest.Update(new object[] { updatedModel }, changedBy: "test"),
+            o => o.WithTarget(CreateHostAddress()),
             CancellationTokenSource.CreateLinkedTokenSource(
                 TestContext.Current.CancellationToken,
                 new CancellationTokenSource(5.Seconds()).Token
@@ -479,8 +492,8 @@ public class ConfigurationViewsTest : HubTestBase
 
         // Create initial model via DataChangeRequest
         var createResponse = await client.AwaitResponse(
-            DataChangeRequest.Update(new object[] { initialModel }),
-            o => o.WithTarget(CreateClientAddress()),
+            DataChangeRequest.Update(new object[] { initialModel }, changedBy: "test"),
+            o => o.WithTarget(CreateHostAddress()),
             CancellationTokenSource.CreateLinkedTokenSource(
                 TestContext.Current.CancellationToken,
                 new CancellationTokenSource(5.Seconds()).Token
@@ -522,8 +535,8 @@ public class ConfigurationViewsTest : HubTestBase
         };
 
         var updateResponse = await client.AwaitResponse(
-            DataChangeRequest.Update(new object[] { updatedModel }),
-            o => o.WithTarget(CreateClientAddress()),
+            DataChangeRequest.Update(new object[] { updatedModel }, changedBy: "test"),
+            o => o.WithTarget(CreateHostAddress()),
             CancellationTokenSource.CreateLinkedTokenSource(
                 TestContext.Current.CancellationToken,
                 new CancellationTokenSource(5.Seconds()).Token
@@ -564,8 +577,8 @@ public class ConfigurationViewsTest : HubTestBase
 
         // Create initial config via DataChangeRequest
         var createResponse = await client.AwaitResponse(
-            DataChangeRequest.Update(new object[] { initialConfig }),
-            o => o.WithTarget(CreateClientAddress()),
+            DataChangeRequest.Update(new object[] { initialConfig }, changedBy: "test"),
+            o => o.WithTarget(CreateHostAddress()),
             CancellationTokenSource.CreateLinkedTokenSource(
                 TestContext.Current.CancellationToken,
                 new CancellationTokenSource(5.Seconds()).Token
@@ -607,8 +620,8 @@ public class ConfigurationViewsTest : HubTestBase
         };
 
         var updateResponse = await client.AwaitResponse(
-            DataChangeRequest.Update(new object[] { updatedConfig }),
-            o => o.WithTarget(CreateClientAddress()),
+            DataChangeRequest.Update(new object[] { updatedConfig }, changedBy: "test"),
+            o => o.WithTarget(CreateHostAddress()),
             CancellationTokenSource.CreateLinkedTokenSource(
                 TestContext.Current.CancellationToken,
                 new CancellationTokenSource(5.Seconds()).Token

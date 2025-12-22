@@ -49,12 +49,14 @@ public class ConfigurationStorageService : IConfigurationStorageService
 
     private void RegisterConfigTypes()
     {
-        _typeRegistry.WithType<DataModel>();
-        _typeRegistry.WithType<LayoutAreaConfig>();
-        _typeRegistry.WithType<ContentCollectionConfig>();
-        _typeRegistry.WithType<ContentCollectionMapping>();
-        _typeRegistry.WithType<HubFeatureConfig>();
-        _typeRegistry.WithType<NodeTypeConfig>();
+        // Register types with simple names to ensure consistent collection names
+        // between host and client configurations
+        _typeRegistry.WithType<DataModel>(nameof(DataModel));
+        _typeRegistry.WithType<LayoutAreaConfig>(nameof(LayoutAreaConfig));
+        _typeRegistry.WithType<ContentCollectionConfig>(nameof(ContentCollectionConfig));
+        _typeRegistry.WithType<ContentCollectionMapping>(nameof(ContentCollectionMapping));
+        _typeRegistry.WithType<HubFeatureConfig>(nameof(HubFeatureConfig));
+        _typeRegistry.WithType<NodeTypeConfig>(nameof(NodeTypeConfig));
     }
 
     private JsonSerializerOptions CreateJsonOptions()
