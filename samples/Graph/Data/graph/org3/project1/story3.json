@@ -2,7 +2,7 @@
   "path": "graph/org3/project1/story3",
   "key": "graph/org3/project1/story3",
   "name": "API Integration",
-  "nodeType": "story",
+  "nodeType": "type/story",
   "description": "Integrate with external APIs",
   "iconName": "Document",
   "displayOrder": 30,

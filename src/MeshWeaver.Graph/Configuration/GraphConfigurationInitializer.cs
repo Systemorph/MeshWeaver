@@ -66,9 +66,10 @@ public class GraphConfigurationInitializer(
             if (node.Content is NodeTypeDefinition ntd)
             {
                 // Create a NodeTypeConfig for compatibility with existing initializers
+                // NodeType uses the full path (e.g., "type/story") so nodes can reference it explicitly
                 var config = new NodeTypeConfig
                 {
-                    NodeType = ntd.Id,
+                    NodeType = node.Prefix,
                     DataModelId = ntd.Id, // By convention, DataModel.Id matches NodeType.Id
                     DisplayName = ntd.DisplayName,
                     IconName = ntd.IconName,

@@ -2,7 +2,7 @@
   "path": "graph/org3/project1/story1",
   "key": "graph/org3/project1/story1",
   "name": "User Authentication",
-  "nodeType": "story",
+  "nodeType": "type/story",
   "description": "Implement user login and registration",
   "iconName": "Document",
   "displayOrder": 10,

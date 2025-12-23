@@ -3,19 +3,12 @@ using System.Collections.Generic;
 using System.ComponentModel.DataAnnotations;
 using System.IO;
 using System.Linq;
-using System.Reactive.Linq;
-using System.Text.Json;
 using System.Threading.Tasks;
 using FluentAssertions;
-using FluentAssertions.Extensions;
-using MeshWeaver.Data;
-using MeshWeaver.Domain;
-using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Monolith;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Hosting.Persistence;
-using MeshWeaver.Layout;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
@@ -68,17 +61,9 @@ public class DataContextIntegrationTest : MonolithMeshTestBase
     {
     }
 
-    private static void SetupTestConfiguration(string testDataDirectory)
+    private static void SetupTestConfiguration(InMemoryPersistenceService persistence)
     {
-        // Create _config directories
-        var configDir = Path.Combine(testDataDirectory, "_config");
-        Directory.CreateDirectory(Path.Combine(configDir, "dataModels"));
-        Directory.CreateDirectory(Path.Combine(configDir, "nodeTypes"));
-        Directory.CreateDirectory(Path.Combine(configDir, "hubFeatures"));
-        Directory.CreateDirectory(Path.Combine(configDir, "contentCollections"));
-        Directory.CreateDirectory(Path.Combine(configDir, "layoutAreas"));
-
-        // Create a simple Story data model (we'll use TestStory which is pre-compiled)
+        // Create Story type at type/story (NodeType = "NodeType")
         var storyDataModel = new DataModel
         {
             Id = "story",
@@ -86,18 +71,30 @@ public class DataContextIntegrationTest : MonolithMeshTestBase
             IconName = "Document",
             Description = "A user story or task",
             DisplayOrder = 30,
-            TypeSource = @"
-public record Story
-{
-    [Key]
-    public string Id { get; init; } = string.Empty;
-    public string Title { get; init; } = string.Empty;
-    public string? Description { get; init; }
-    public int Points { get; init; }
-}"
+            TypeSource = "public record Story { [Key] public string Id { get; init; } }"
         };
 
-        // Create Graph data model
+        var storyTypeNode = new MeshNode("type/story")
+        {
+            Name = "Story",
+            NodeType = "NodeType",
+            Description = "A user story or task",
+            IconName = "Document",
+            DisplayOrder = 30,
+            IsPersistent = true,
+            Content = new NodeTypeDefinition
+            {
+                Id = "story",
+                DisplayName = "Story",
+                IconName = "Document",
+                Description = "A user story or task",
+                DisplayOrder = 30
+            }
+        };
+        persistence.SaveNodeAsync(storyTypeNode).GetAwaiter().GetResult();
+        persistence.SavePartitionObjectsAsync("type/story", null, [storyDataModel]).GetAwaiter().GetResult();
+
+        // Create Graph type at type/graph (NodeType = "NodeType")
         var graphDataModel = new DataModel
         {
             Id = "graph",
@@ -105,78 +102,52 @@ public record Story
             IconName = "Diagram",
             Description = "The graph root",
             DisplayOrder = 0,
-            TypeSource = @"
-public record Graph
-{
-    [Key]
-    public string Id { get; init; } = string.Empty;
-    public string Name { get; init; } = string.Empty;
-}"
+            TypeSource = "public record GraphRoot { [Key] public string Id { get; init; } }"
         };
 
-        // Write data models
-        WriteJsonConfig(configDir, "dataModels", "story.json", storyDataModel);
-        WriteJsonConfig(configDir, "dataModels", "graph.json", graphDataModel);
-
-        // Create node types
-        var storyNodeType = new NodeTypeConfig { NodeType = "story", DataModelId = "story", DisplayName = "Story" };
-        var graphNodeType = new NodeTypeConfig { NodeType = "graph", DataModelId = "graph", DisplayName = "Graph" };
-
-        WriteJsonConfig(configDir, "nodeTypes", "story.json", storyNodeType);
-        WriteJsonConfig(configDir, "nodeTypes", "graph.json", graphNodeType);
-
-        // Create hub feature
-        var hubFeature = new HubFeatureConfig
+        var graphTypeNode = new MeshNode("type/graph")
         {
-            Id = "graph",
-            EnableMeshNavigation = true,
-            EnableDynamicNodeTypeAreas = true
+            Name = "Graph",
+            NodeType = "NodeType",
+            Description = "The graph root",
+            IconName = "Diagram",
+            DisplayOrder = 0,
+            IsPersistent = true,
+            Content = new NodeTypeDefinition
+            {
+                Id = "graph",
+                DisplayName = "Graph",
+                IconName = "Diagram",
+                Description = "The graph root",
+                DisplayOrder = 0
+            }
         };
-        WriteJsonConfig(configDir, "hubFeatures", "graph.json", hubFeature);
-
-        // Create layout area config
-        var layoutArea = new LayoutAreaConfig
-        {
-            Id = "Details",
-            Area = "Details",
-            Title = "Details View",
-            Group = "Main",
-            Order = 1
-        };
-        WriteJsonConfig(configDir, "layoutAreas", "details.json", layoutArea);
-    }
-
-    private static void WriteJsonConfig<T>(string configDir, string subDir, string fileName, T config)
-    {
-        var filePath = Path.Combine(configDir, subDir, fileName);
-        var json = JsonSerializer.Serialize(config, new JsonSerializerOptions
-        {
-            PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-            WriteIndented = true
-        });
-        File.WriteAllText(filePath, json);
+        persistence.SaveNodeAsync(graphTypeNode).GetAwaiter().GetResult();
+        persistence.SavePartitionObjectsAsync("type/graph", null, [graphDataModel]).GetAwaiter().GetResult();
     }
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
     {
         var testDataDirectory = GetOrCreateTestDirectory();
-        SetupTestConfiguration(testDataDirectory);
 
         // Create in-memory persistence and pre-seed with test data including Content
         var persistence = new InMemoryPersistenceService();
+
+        // Setup NodeType configurations using "type/" prefix
+        SetupTestConfiguration(persistence);
 
         // Pre-seed the hierarchy with Content
         persistence.SaveNodeAsync(new MeshNode("graph")
         {
             Name = "Graph",
-            NodeType = "graph"
+            NodeType = "type/graph"
         }).GetAwaiter().GetResult();
 
         // Pre-seed story nodes WITH Content containing TestStory data
         persistence.SaveNodeAsync(new MeshNode("graph/story1")
         {
             Name = "Story 1",
-            NodeType = "story",
+            NodeType = "type/story",
             Content = new TestStory
             {
                 Id = "story1",
@@ -189,7 +160,7 @@ public record Graph
         persistence.SaveNodeAsync(new MeshNode("graph/story2")
         {
             Name = "Story 2",
-            NodeType = "story",
+            NodeType = "type/story",
             Content = new TestStory
             {
                 Id = "story2",
@@ -211,11 +182,6 @@ public record Graph
             .UseMonolithMesh()
             .ConfigureServices(services => services.AddPersistence(persistence))
             .AddJsonGraphConfiguration(testDataDirectory, configuration);
-    }
-
-    protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
-    {
-        return base.ConfigureClient(configuration).AddLayoutClient();
     }
 
     public override async ValueTask DisposeAsync()
@@ -253,11 +219,11 @@ public record Graph
             o => o.WithTarget(graphAddress),
             TestContext.Current.CancellationToken);
 
-        // Verify graph node exists in persistence
+        // Verify graph node exists in persistence with correct NodeType
+        // (Name comes from persistence, NodeType references type/graph definition)
         var graphNode = await Persistence.GetNodeAsync("graph", TestContext.Current.CancellationToken);
         graphNode.Should().NotBeNull("Graph node should exist in persistence");
-        graphNode!.Name.Should().Be("Graph");
-        graphNode.NodeType.Should().Be("graph");
+        graphNode!.NodeType.Should().Be("type/graph");
     }
 
     [Fact(Timeout = 90000)]
@@ -319,7 +285,7 @@ public record Graph
         var newStory = new MeshNode("graph/story3")
         {
             Name = "Story 3",
-            NodeType = "story",
+            NodeType = "type/story",
             Content = new TestStory
             {
                 Id = "story3",
@@ -334,7 +300,7 @@ public record Graph
         var persistedNode = await Persistence.GetNodeAsync("graph/story3", TestContext.Current.CancellationToken);
         persistedNode.Should().NotBeNull("New story should be persisted");
         persistedNode!.Name.Should().Be("Story 3");
-        persistedNode.NodeType.Should().Be("story");
+        persistedNode.NodeType.Should().Be("type/story");
         persistedNode.Content.Should().NotBeNull("Content should be persisted");
         persistedNode.Content.Should().BeOfType<TestStory>();
 

@@ -2,7 +2,7 @@
   "path": "graph/org4",
   "key": "graph/org4",
   "name": "Contoso Ltd",
-  "nodeType": "org",
+  "nodeType": "type/org",
   "description": "Another sample organization",
   "iconName": "Building",
   "displayOrder": 20,
