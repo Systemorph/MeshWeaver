@@ -37,58 +37,28 @@ public class ConfigurationViewsTest : HubTestBase
 
     protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration configuration)
     {
-        // Use explicit AddData configuration with WithType pattern for proper persistence
+        // Use MeshHubBuilder which automatically registers DataModel and LayoutAreaConfig
+        // with persistence when IConfigurationStorageService is available
         var testDataDirectory = _testDataDirectory;
 
-        return base.ConfigureHost(configuration)
-            .WithServices(services =>
-            {
-                // Register the storage service
-                services.AddSingleton<IConfigurationStorageService>(sp =>
+        return new MeshHubBuilder(base.ConfigureHost(configuration)
+                .WithServices(services =>
                 {
-                    var typeRegistry = sp.GetRequiredService<ITypeRegistry>();
-                    return new ConfigurationStorageService(testDataDirectory, typeRegistry);
-                });
-                return services;
-            })
-            // Register types for serialization/deserialization with simple names
-            .WithTypes(typeof(CodeEditorControl))
-            .WithType<DataModel>(nameof(DataModel))
-            .WithType<LayoutAreaConfig>(nameof(LayoutAreaConfig))
-            .AddData(data => data.AddSource(source =>
-            {
-                // Get storage service from hub's service provider
-                var storageService = source.Workspace.Hub.ServiceProvider.GetRequiredService<IConfigurationStorageService>();
-
-                return source
-                    .WithType<DataModel>((TypeSourceWithType<DataModel> t) => t
-                        .WithInitialData(async ct => await storageService.LoadAllAsync<DataModel>(ct))
-                        .WithUpdate(SaveDataModels))
-                    .WithType<LayoutAreaConfig>((TypeSourceWithType<LayoutAreaConfig> t) => t
-                        .WithInitialData(async ct => await storageService.LoadAllAsync<LayoutAreaConfig>(ct))
-                        .WithUpdate(SaveLayoutAreaConfigs));
-
-                InstanceCollection SaveDataModels(InstanceCollection instances)
-                {
-                    foreach (var item in instances.Instances.Values)
+                    // Register the storage service - MeshHubBuilder will use it for DataModel/LayoutAreaConfig persistence
+                    services.AddSingleton<IConfigurationStorageService>(sp =>
                     {
-                        if (item is DataModel dm)
-                            _ = storageService.SaveAsync(dm);
-                    }
-                    return instances;
-                }
-
-                InstanceCollection SaveLayoutAreaConfigs(InstanceCollection instances)
-                {
-                    foreach (var item in instances.Instances.Values)
-                    {
-                        if (item is LayoutAreaConfig lac)
-                            _ = storageService.SaveAsync(lac);
-                    }
-                    return instances;
-                }
-            }))
-            .AddLayout(layout => layout.AddConfigurationViews());
+                        var typeRegistry = sp.GetRequiredService<ITypeRegistry>();
+                        return new ConfigurationStorageService(testDataDirectory, typeRegistry);
+                    });
+                    return services;
+                })
+                // Register types for serialization/deserialization with simple names
+                .WithTypes(typeof(CodeEditorControl))
+                .WithType<DataModel>(nameof(DataModel))
+                .WithType<LayoutAreaConfig>(nameof(LayoutAreaConfig)))
+            .WithMeshNavigation(false) // Don't need mesh navigation for these tests
+            .WithHubConfiguration(config => config.AddLayout(layout => layout.AddConfigurationViews()))
+            .Build();
     }
 
     protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)

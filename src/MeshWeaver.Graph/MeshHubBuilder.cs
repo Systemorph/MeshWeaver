@@ -1,4 +1,5 @@
-﻿using MeshWeaver.Data;
+﻿using System.Threading.Tasks.Dataflow;
+using MeshWeaver.Data;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
@@ -105,19 +106,8 @@ public class MeshHubBuilder
                     new MeshNodeTypeSource(source.Workspace, source.Id, persistence, hubPath)
                         .WithKey(n => n.Prefix));
 
-                // Register DataModel and LayoutAreaConfig TypeSources if IConfigurationStorageService is available
-                var configStorage = source.Workspace.Hub.ServiceProvider.GetService<IConfigurationStorageService>();
-                if (configStorage != null)
-                {
-                    withMeshNode = withMeshNode
-                        .WithTypeSource(typeof(DataModel),
-                            new DataModelTypeSource(source.Workspace, source.Id, configStorage)
-                                .WithKey(m => m.Id))
-                        .WithTypeSource(typeof(LayoutAreaConfig),
-                            new LayoutAreaConfigTypeSource(source.Workspace, source.Id, configStorage)
-                                .WithKey(c => c.Id));
-                    logger?.LogDebug("MeshHubBuilder: Registered DataModel and LayoutAreaConfig TypeSources");
-                }
+                // Register DataModel and LayoutAreaConfig with WithType pattern if IConfigurationStorageService is available
+                withMeshNode = AddConfigurationTypes(withMeshNode, source.Workspace.Hub.ServiceProvider, logger);
 
                 // Register additional data type if specified
                 if (dataType is not null)
@@ -150,18 +140,8 @@ public class MeshHubBuilder
                 // Fallback: no persistence, just register types without special type sources
                 var withTypes = source.WithType<MeshNode>(ts => ts.WithKey(n => n.Prefix));
 
-                // Register DataModel and LayoutAreaConfig TypeSources if IConfigurationStorageService is available
-                var configStorage = source.Workspace.Hub.ServiceProvider.GetService<IConfigurationStorageService>();
-                if (configStorage != null)
-                {
-                    withTypes = withTypes
-                        .WithTypeSource(typeof(DataModel),
-                            new DataModelTypeSource(source.Workspace, source.Id, configStorage)
-                                .WithKey(m => m.Id))
-                        .WithTypeSource(typeof(LayoutAreaConfig),
-                            new LayoutAreaConfigTypeSource(source.Workspace, source.Id, configStorage)
-                                .WithKey(c => c.Id));
-                }
+                // Register DataModel and LayoutAreaConfig with WithType pattern if IConfigurationStorageService is available
+                withTypes = AddConfigurationTypes(withTypes, source.Workspace.Hub.ServiceProvider, logger);
 
                 if (dataType is not null)
                 {
@@ -207,6 +187,73 @@ public class MeshHubBuilder
         }
 
         return config;
+    }
+
+    /// <summary>
+    /// Adds DataModel and LayoutAreaConfig types with persistence to the data source.
+    /// Uses WithType pattern with WithInitialData and WithUpdate for proper persistence.
+    /// Uses TPL Dataflow for batched async saves.
+    /// </summary>
+    private static GenericUnpartitionedDataSource AddConfigurationTypes(
+        GenericUnpartitionedDataSource source,
+        IServiceProvider serviceProvider,
+        ILogger? logger)
+    {
+        var configStorage = serviceProvider.GetService<IConfigurationStorageService>();
+        if (configStorage == null)
+            return source;
+
+        logger?.LogDebug("MeshHubBuilder: Registering DataModel and LayoutAreaConfig with WithType pattern");
+
+        // Create a single dataflow pipeline for all configuration saves
+        // BufferBlock receives batches of items, ActionBlock processes them
+        var saveBuffer = new BufferBlock<IReadOnlyList<object>>();
+        var saveAction = new ActionBlock<IReadOnlyList<object>>(
+            async batch =>
+            {
+                foreach (var item in batch)
+                {
+                    try
+                    {
+                        await configStorage.SaveAsync(item);
+                    }
+                    catch (Exception ex)
+                    {
+                        logger?.LogError(ex, "Failed to save configuration item {Type}", item.GetType().Name);
+                    }
+                }
+            },
+            new ExecutionDataflowBlockOptions { MaxDegreeOfParallelism = 1 });
+        saveBuffer.LinkTo(saveAction, new DataflowLinkOptions { PropagateCompletion = true });
+
+        return source
+            .WithType<DataModel>((TypeSourceWithType<DataModel> t) => t
+                .WithInitialData(async ct => await configStorage.LoadAllAsync<DataModel>(ct))
+                .WithUpdate(instances => PostBatchToSave<DataModel>(instances, saveBuffer)))
+            .WithType<LayoutAreaConfig>((TypeSourceWithType<LayoutAreaConfig> t) => t
+                .WithInitialData(async ct => await configStorage.LoadAllAsync<LayoutAreaConfig>(ct))
+                .WithUpdate(instances => PostBatchToSave<LayoutAreaConfig>(instances, saveBuffer)));
+    }
+
+    /// <summary>
+    /// Collects all instances of the specified type and posts them as a batch to the save buffer.
+    /// </summary>
+    private static InstanceCollection PostBatchToSave<T>(
+        InstanceCollection instances,
+        BufferBlock<IReadOnlyList<object>> saveBuffer)
+        where T : class
+    {
+        var items = new List<object>();
+        foreach (var item in instances.Instances.Values)
+        {
+            if (item is T)
+                items.Add(item);
+        }
+
+        if (items.Count > 0)
+            saveBuffer.Post(items);
+
+        return instances;
     }
 
     /// <summary>

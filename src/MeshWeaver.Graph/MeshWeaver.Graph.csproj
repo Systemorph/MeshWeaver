@@ -9,6 +9,7 @@
   <ItemGroup>
     <PackageReference Include="Microsoft.CodeAnalysis.CSharp" />
     <PackageReference Include="Microsoft.CodeAnalysis.CSharp.Features" />
+    <PackageReference Include="System.Threading.Tasks.Dataflow" />
   </ItemGroup>
 
   <ItemGroup>
