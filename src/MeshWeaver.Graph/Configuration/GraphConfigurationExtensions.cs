@@ -1,4 +1,4 @@
-using MeshWeaver.Domain;
+﻿using MeshWeaver.Domain;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
@@ -16,11 +16,14 @@ public static class GraphConfigurationExtensions
     /// <summary>
     /// Loads graph configuration from JSON files in the data directory.
     ///
-    /// Configuration is loaded from NodeType MeshNodes stored under _types/:
+    /// Configuration is loaded from NodeType MeshNodes stored under type/:
     /// - Each NodeType node has a partition folder containing:
     ///   - dataModel.json - Data type definition with inline C# source
     ///   - layoutAreas/*.json - Layout area configurations
     ///   - hubFeatures.json - Hub feature configuration (optional)
+    ///
+    /// The graph root node is loaded from persistence (graph.json) and its
+    /// type definition comes from type/graph.
     ///
     /// Content collections are configured per node type via NodeTypeDefinition.ContentCollections.
     /// All configuration loading, type compilation, and service initialization
@@ -50,13 +53,14 @@ public static class GraphConfigurationExtensions
 
             return services;
         });
+
+        // Register the graph node for bootstrapping.
+        // The node's NodeType is "type/graph" which explicitly references the type definition at that path.
+        // The type definition (DataModel, LayoutAreas, etc.) is loaded from type/graph during initialization.
+        // Only the HubConfiguration is set here for bootstrap - it runs initialization that loads all types.
         var graphNode = new MeshNode("graph")
         {
-            Name = "Graph",
-            NodeType = "graph",
-            Description = "Root of hierarchical graph",
-            IconName = "Diagram",
-            DisplayOrder = 1,
+            NodeType = "type/graph", // Explicit reference to type definition at type/graph
             HubConfiguration = hubConfig => ConfigureGraphHub(hubConfig, dataDirectory)
         };
 

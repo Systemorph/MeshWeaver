@@ -2,7 +2,7 @@
   "path": "graph/org3/project1/story2",
   "key": "graph/org3/project1/story2",
   "name": "Dashboard Design",
-  "nodeType": "story",
+  "nodeType": "type/story",
   "description": "Design and implement the main dashboard",
   "iconName": "Document",
   "displayOrder": 20,

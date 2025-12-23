@@ -2,7 +2,7 @@
   "path": "graph/org3",
   "key": "graph/org3",
   "name": "Acme Corp",
-  "nodeType": "org",
+  "nodeType": "type/org",
   "description": "A sample organization for development",
   "iconName": "Building",
   "displayOrder": 10,

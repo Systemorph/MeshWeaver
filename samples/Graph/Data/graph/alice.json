@@ -2,7 +2,7 @@
   "path": "graph/alice",
   "key": "graph/alice",
   "name": "Alice Chen",
-  "nodeType": "person",
+  "nodeType": "type/person",
   "description": "Senior Software Engineer",
   "iconName": "Person",
   "displayOrder": 1,

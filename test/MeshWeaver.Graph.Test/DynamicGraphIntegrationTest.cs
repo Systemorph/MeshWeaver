@@ -233,13 +233,14 @@ public record Graph
         SetupTestConfiguration(persistence);
 
         // Pre-seed the hierarchy: graph -> org -> project -> story
-        persistence.SaveNodeAsync(new MeshNode("graph") { Name = "Graph", NodeType = "graph" }).GetAwaiter().GetResult();
-        persistence.SaveNodeAsync(new MeshNode("graph/org1") { Name = "Organization 1", NodeType = "org", Description = "First org" }).GetAwaiter().GetResult();
-        persistence.SaveNodeAsync(new MeshNode("graph/org2") { Name = "Organization 2", NodeType = "org", Description = "Second org" }).GetAwaiter().GetResult();
-        persistence.SaveNodeAsync(new MeshNode("graph/org1/proj1") { Name = "Project 1", NodeType = "project" }).GetAwaiter().GetResult();
-        persistence.SaveNodeAsync(new MeshNode("graph/org1/proj2") { Name = "Project 2", NodeType = "project" }).GetAwaiter().GetResult();
-        persistence.SaveNodeAsync(new MeshNode("graph/org1/proj1/story1") { Name = "Story 1", NodeType = "story" }).GetAwaiter().GetResult();
-        persistence.SaveNodeAsync(new MeshNode("graph/org1/proj1/story2") { Name = "Story 2", NodeType = "story" }).GetAwaiter().GetResult();
+        // NodeType uses full path to type definition (e.g., "type/graph", "type/org")
+        persistence.SaveNodeAsync(new MeshNode("graph") { Name = "Graph", NodeType = "type/graph" }).GetAwaiter().GetResult();
+        persistence.SaveNodeAsync(new MeshNode("graph/org1") { Name = "Organization 1", NodeType = "type/org", Description = "First org" }).GetAwaiter().GetResult();
+        persistence.SaveNodeAsync(new MeshNode("graph/org2") { Name = "Organization 2", NodeType = "type/org", Description = "Second org" }).GetAwaiter().GetResult();
+        persistence.SaveNodeAsync(new MeshNode("graph/org1/proj1") { Name = "Project 1", NodeType = "type/project" }).GetAwaiter().GetResult();
+        persistence.SaveNodeAsync(new MeshNode("graph/org1/proj2") { Name = "Project 2", NodeType = "type/project" }).GetAwaiter().GetResult();
+        persistence.SaveNodeAsync(new MeshNode("graph/org1/proj1/story1") { Name = "Story 1", NodeType = "type/story" }).GetAwaiter().GetResult();
+        persistence.SaveNodeAsync(new MeshNode("graph/org1/proj1/story2") { Name = "Story 2", NodeType = "type/story" }).GetAwaiter().GetResult();
 
         // Build configuration
         var configBuilder = new ConfigurationBuilder();
@@ -488,7 +489,7 @@ public record Graph
     public async Task MoveNodeAsync_MovesNodeToNewPath()
     {
         // Arrange - create a node to move
-        await Persistence.SaveNodeAsync(new MeshNode("graph/movetest") { Name = "Move Test", NodeType = "org" });
+        await Persistence.SaveNodeAsync(new MeshNode("graph/movetest") { Name = "Move Test", NodeType = "type/org" });
 
         // Act
         var moved = await Persistence.MoveNodeAsync("graph/movetest", "graph/movetest-renamed");
@@ -513,10 +514,10 @@ public record Graph
     public async Task MoveNodeAsync_MovesDescendantsWithUpdatedPaths()
     {
         // Arrange - create a hierarchy to move
-        await Persistence.SaveNodeAsync(new MeshNode("graph/parent") { Name = "Parent", NodeType = "org" });
-        await Persistence.SaveNodeAsync(new MeshNode("graph/parent/child1") { Name = "Child 1", NodeType = "project" });
-        await Persistence.SaveNodeAsync(new MeshNode("graph/parent/child2") { Name = "Child 2", NodeType = "project" });
-        await Persistence.SaveNodeAsync(new MeshNode("graph/parent/child1/grandchild") { Name = "Grandchild", NodeType = "story" });
+        await Persistence.SaveNodeAsync(new MeshNode("graph/parent") { Name = "Parent", NodeType = "type/org" });
+        await Persistence.SaveNodeAsync(new MeshNode("graph/parent/child1") { Name = "Child 1", NodeType = "type/project" });
+        await Persistence.SaveNodeAsync(new MeshNode("graph/parent/child2") { Name = "Child 2", NodeType = "type/project" });
+        await Persistence.SaveNodeAsync(new MeshNode("graph/parent/child1/grandchild") { Name = "Grandchild", NodeType = "type/story" });
 
         // Act
         await Persistence.MoveNodeAsync("graph/parent", "graph/newparent");
@@ -552,7 +553,7 @@ public record Graph
     public async Task MoveNodeAsync_MigratesCommentsToNewPath()
     {
         // Arrange - create node with comments
-        await Persistence.SaveNodeAsync(new MeshNode("graph/commented") { Name = "Commented Node", NodeType = "org" });
+        await Persistence.SaveNodeAsync(new MeshNode("graph/commented") { Name = "Commented Node", NodeType = "type/org" });
         await Persistence.AddCommentAsync(new Comment { NodePath = "graph/commented", Text = "Comment 1", Author = "User1" });
         await Persistence.AddCommentAsync(new Comment { NodePath = "graph/commented", Text = "Comment 2", Author = "User2" });
 
@@ -593,8 +594,8 @@ public record Graph
     public async Task MoveNodeAsync_ThrowsWhenTargetExists()
     {
         // Arrange
-        await Persistence.SaveNodeAsync(new MeshNode("graph/source") { Name = "Source", NodeType = "org" });
-        await Persistence.SaveNodeAsync(new MeshNode("graph/target") { Name = "Target", NodeType = "org" });
+        await Persistence.SaveNodeAsync(new MeshNode("graph/source") { Name = "Source", NodeType = "type/org" });
+        await Persistence.SaveNodeAsync(new MeshNode("graph/target") { Name = "Target", NodeType = "type/org" });
 
         // Act & Assert
         var act = () => Persistence.MoveNodeAsync("graph/source", "graph/target");

@@ -2,7 +2,7 @@
   "path": "graph/org3/project2",
   "key": "graph/org3/project2",
   "name": "Mobile App",
-  "nodeType": "project",
+  "nodeType": "type/project",
   "description": "Mobile application project",
   "iconName": "Folder",
   "displayOrder": 20,
