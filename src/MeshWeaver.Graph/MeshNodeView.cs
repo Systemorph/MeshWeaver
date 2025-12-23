@@ -19,6 +19,7 @@ namespace MeshWeaver.Graph;
 /// - Details: Main content display with action menu (readonly content + navigation)
 /// - Thumbnail: Compact card view for use in catalogs and lists
 /// - Metadata: Node metadata display (name, type, description, path)
+/// - Settings: Node settings with NodeType link navigation
 /// - Comments: Comments section (Facebook-style)
 /// </summary>
 public static class MeshNodeView
@@ -26,10 +27,11 @@ public static class MeshNodeView
     public const string DetailsArea = "Details";
     public const string ThumbnailArea = "Thumbnail";
     public const string MetadataArea = "Metadata";
+    public const string SettingsArea = "Settings";
     public const string CommentsArea = "Comments";
 
     /// <summary>
-    /// Adds the mesh node views (Details, Thumbnail, Metadata, Comments) to the hub's layout.
+    /// Adds the mesh node views (Details, Thumbnail, Metadata, Settings, Comments) to the hub's layout.
     /// Details is set as the default area for empty path requests.
     /// </summary>
     public static MessageHubConfiguration AddMeshNodeView(this MessageHubConfiguration configuration)
@@ -38,6 +40,7 @@ public static class MeshNodeView
             .WithView(DetailsArea, Details)
             .WithView(ThumbnailArea, Thumbnail)
             .WithView(MetadataArea, Metadata)
+            .WithView(SettingsArea, Settings)
             .WithView(CommentsArea, Comments));
 
     /// <summary>
@@ -148,7 +151,7 @@ public static class MeshNodeView
     }
 
     /// <summary>
-    /// Builds icon-only action buttons for Edit and Metadata.
+    /// Builds icon-only action buttons for Edit, Metadata, and Settings.
     /// </summary>
     private static UiControl BuildActionButtons(LayoutAreaHost host, MeshNode? node)
     {
@@ -167,6 +170,14 @@ public static class MeshNodeView
                     .WithAppearance(Appearance.Stealth)
                     .WithClickAction(ctx => ctx.Host.UpdateArea(ctx.Area, new RedirectControl(editHref))));
         }
+
+        // Settings button (icon only) - navigates to node settings with NodeType link
+        var settingsHref = $"/{nodePath}/{SettingsArea}";
+        buttons = buttons.WithView(
+            Controls.Button("")
+                .WithIconStart(FluentIcons.Settings(IconSize.Size16))
+                .WithAppearance(Appearance.Stealth)
+                .WithClickAction(ctx => ctx.Host.UpdateArea(ctx.Area, new RedirectControl(settingsHref))));
 
         // Metadata button (icon only)
         var metadataHref = $"/{nodePath}/{MetadataArea}";
@@ -294,6 +305,128 @@ public static class MeshNodeView
         }
 
         return stack;
+    }
+
+    /// <summary>
+    /// Renders the Settings area showing node properties with navigatable NodeType link.
+    /// Provides read-only view of node metadata with ability to navigate to type definition.
+    /// </summary>
+    public static IObservable<UiControl> Settings(LayoutAreaHost host, RenderingContext _)
+    {
+        var hubPath = host.Hub.Address.ToString();
+        var persistence = host.Hub.ServiceProvider.GetService<IPersistenceService>();
+
+        if (persistence == null)
+        {
+            return Observable.Return(Controls.Stack
+                .WithWidth("100%")
+                .WithView(Controls.Html("<h2>Settings</h2>"))
+                .WithView(Controls.Html("<p>Persistence service not available.</p>")));
+        }
+
+        return Observable.FromAsync(async ct =>
+        {
+            var node = await persistence.GetNodeAsync(hubPath, ct);
+            return BuildSettingsContent(host, node);
+        });
+    }
+
+    private static UiControl BuildSettingsContent(LayoutAreaHost host, MeshNode? node)
+    {
+        var stack = Controls.Stack.WithWidth("100%");
+
+        // Header with back link
+        var nodePath = node?.Prefix ?? host.Hub.Address.ToString();
+        var backHref = $"/{nodePath}/{DetailsArea}";
+        stack = stack.WithView(Controls.Stack
+            .WithOrientation(Orientation.Horizontal)
+            .WithStyle("align-items: center; justify-content: space-between; margin-bottom: 24px;")
+            .WithView(Controls.Html("<h2 style=\"margin: 0;\">Node Settings</h2>"))
+            .WithView(Controls.Button("Back to Content")
+                .WithAppearance(Appearance.Outline)
+                .WithClickAction(ctx => ctx.Host.UpdateArea(ctx.Area, new RedirectControl(backHref)))));
+
+        if (node == null)
+        {
+            stack = stack.WithView(Controls.Html("<p><em>Node not found.</em></p>"));
+            return stack;
+        }
+
+        // Settings card
+        var card = Controls.Stack
+            .WithStyle("background: #f8f9fa; border-radius: 8px; padding: 20px;");
+
+        // Name
+        card = card.WithView(BuildSettingsRow("Name", node.Name ?? "<no name>"));
+
+        // Path
+        card = card.WithView(BuildSettingsRow("Path", node.Prefix));
+
+        // NodeType with navigatable link
+        if (!string.IsNullOrEmpty(node.NodeType))
+        {
+            var typeHref = $"/type/{node.NodeType}";
+            var typeLink = Controls.Stack
+                .WithOrientation(Orientation.Horizontal)
+                .WithStyle("align-items: center; gap: 8px;")
+                .WithView(Controls.Html($"<span>{node.NodeType}</span>"))
+                .WithView(Controls.Button("View Type Definition")
+                    .WithAppearance(Appearance.Lightweight)
+                    .WithIconStart(FluentIcons.Open(IconSize.Size16))
+                    .WithClickAction(ctx => ctx.Host.UpdateArea(ctx.Area, new RedirectControl(typeHref))));
+
+            card = card.WithView(Controls.Stack
+                .WithOrientation(Orientation.Horizontal)
+                .WithStyle("padding: 12px 0; border-bottom: 1px solid #e0e0e0;")
+                .WithView(Controls.Html("<strong style=\"width: 150px; flex-shrink: 0;\">Node Type:</strong>"))
+                .WithView(typeLink));
+        }
+
+        // Description
+        if (!string.IsNullOrWhiteSpace(node.Description))
+        {
+            card = card.WithView(BuildSettingsRow("Description", node.Description));
+        }
+
+        // Icon
+        if (!string.IsNullOrWhiteSpace(node.IconName))
+        {
+            card = card.WithView(BuildSettingsRow("Icon", node.IconName));
+        }
+
+        // Display Order
+        card = card.WithView(BuildSettingsRow("Display Order", node.DisplayOrder.ToString()));
+
+        // Is Persistent
+        card = card.WithView(BuildSettingsRow("Persistent", node.IsPersistent ? "Yes" : "No"));
+
+        // Parent Path
+        if (!string.IsNullOrEmpty(node.ParentPath))
+        {
+            var parentHref = $"/{node.ParentPath}/{DetailsArea}";
+            var parentLink = Controls.Button(node.ParentPath)
+                .WithAppearance(Appearance.Lightweight)
+                .WithClickAction(ctx => ctx.Host.UpdateArea(ctx.Area, new RedirectControl(parentHref)));
+
+            card = card.WithView(Controls.Stack
+                .WithOrientation(Orientation.Horizontal)
+                .WithStyle("padding: 12px 0; border-bottom: 1px solid #e0e0e0;")
+                .WithView(Controls.Html("<strong style=\"width: 150px; flex-shrink: 0;\">Parent:</strong>"))
+                .WithView(parentLink));
+        }
+
+        stack = stack.WithView(card);
+
+        return stack;
+    }
+
+    private static UiControl BuildSettingsRow(string label, string value)
+    {
+        return Controls.Stack
+            .WithOrientation(Orientation.Horizontal)
+            .WithStyle("padding: 12px 0; border-bottom: 1px solid #e0e0e0;")
+            .WithView(Controls.Html($"<strong style=\"width: 150px; flex-shrink: 0;\">{label}:</strong>"))
+            .WithView(Controls.Html($"<span>{value}</span>"));
     }
 
     private static string GetNodeContent(MeshNode? node)

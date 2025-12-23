@@ -1,0 +1,17 @@
+{
+  "path": "type/graph",
+  "name": "Graph",
+  "nodeType": "NodeType",
+  "description": "Root of hierarchical graph",
+  "iconName": "Diagram",
+  "displayOrder": 1,
+  "isPersistent": true,
+  "content": {
+    "$type": "NodeTypeDefinition",
+    "id": "graph",
+    "displayName": "Graph",
+    "iconName": "Diagram",
+    "description": "Root of hierarchical graph",
+    "displayOrder": 1
+  }
+}

@@ -111,4 +111,35 @@ public interface IPersistenceService
     Task<Comment?> GetCommentAsync(string commentId, CancellationToken ct = default);
 
     #endregion
+
+    #region Partition Storage
+
+    /// <summary>
+    /// Gets all objects from a node's partition folder.
+    /// Objects are stored as separate JSON files with $type discriminators.
+    /// </summary>
+    /// <param name="nodePath">The node path (e.g., "_types/story")</param>
+    /// <param name="subPath">Optional sub-path within partition (e.g., "layoutAreas")</param>
+    /// <returns>Async enumerable of deserialized objects</returns>
+    IAsyncEnumerable<object> GetPartitionObjectsAsync(string nodePath, string? subPath = null);
+
+    /// <summary>
+    /// Saves objects to a node's partition folder.
+    /// Each object is stored as a separate JSON file with $type discriminator.
+    /// </summary>
+    /// <param name="nodePath">The node path</param>
+    /// <param name="subPath">Optional sub-path within partition</param>
+    /// <param name="objects">Objects to save</param>
+    /// <param name="ct">Cancellation token</param>
+    Task SavePartitionObjectsAsync(string nodePath, string? subPath, IReadOnlyCollection<object> objects, CancellationToken ct = default);
+
+    /// <summary>
+    /// Deletes all objects from a node's partition folder (or sub-path).
+    /// </summary>
+    /// <param name="nodePath">The node path</param>
+    /// <param name="subPath">Optional sub-path within partition</param>
+    /// <param name="ct">Cancellation token</param>
+    Task DeletePartitionObjectsAsync(string nodePath, string? subPath = null, CancellationToken ct = default);
+
+    #endregion
 }

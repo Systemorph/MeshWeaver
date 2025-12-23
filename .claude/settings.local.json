@@ -59,7 +59,10 @@
       "WebFetch(domain:www.nuget.org)",
       "Bash(curl:*)",
       "Bash(git add:*)",
-      "Bash(git commit:*)"
+      "Bash(git commit:*)",
+      "Bash(for f in *.json)",
+      "Bash(do sed -i 's/\"\"path\"\": \"\"_types\\\\//\"\"path\"\": \"\"type\\\\//g' \"$f\")",
+      "Bash(done)"
     ],
     "deny": []
   }

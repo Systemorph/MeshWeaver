@@ -43,4 +43,37 @@ public interface IStorageAdapter
     /// <param name="ct">Cancellation token</param>
     /// <returns>True if the node exists</returns>
     Task<bool> ExistsAsync(string path, CancellationToken ct = default);
+
+    #region Partition Storage
+
+    /// <summary>
+    /// Loads all objects from a node's partition folder.
+    /// Objects are deserialized using $type discriminators for polymorphic serialization.
+    /// </summary>
+    /// <param name="nodePath">The node path (e.g., "_types/story")</param>
+    /// <param name="subPath">Optional sub-path within partition (e.g., "layoutAreas")</param>
+    /// <param name="ct">Cancellation token</param>
+    /// <returns>Async enumerable of deserialized objects</returns>
+    IAsyncEnumerable<object> GetPartitionObjectsAsync(string nodePath, string? subPath = null, CancellationToken ct = default);
+
+    /// <summary>
+    /// Saves objects to a node's partition folder.
+    /// Each object is stored as a separate JSON file with $type discriminator.
+    /// File names are derived from the object's Id property if available.
+    /// </summary>
+    /// <param name="nodePath">The node path</param>
+    /// <param name="subPath">Optional sub-path within partition</param>
+    /// <param name="objects">Objects to save</param>
+    /// <param name="ct">Cancellation token</param>
+    Task SavePartitionObjectsAsync(string nodePath, string? subPath, IReadOnlyCollection<object> objects, CancellationToken ct = default);
+
+    /// <summary>
+    /// Deletes all objects from a node's partition folder (or sub-path).
+    /// </summary>
+    /// <param name="nodePath">The node path</param>
+    /// <param name="subPath">Optional sub-path within partition</param>
+    /// <param name="ct">Cancellation token</param>
+    Task DeletePartitionObjectsAsync(string nodePath, string? subPath = null, CancellationToken ct = default);
+
+    #endregion
 }

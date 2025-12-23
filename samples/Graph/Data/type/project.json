@@ -1,0 +1,17 @@
+{
+  "path": "type/project",
+  "name": "Project",
+  "nodeType": "NodeType",
+  "description": "A project containing stories",
+  "iconName": "Folder",
+  "displayOrder": 20,
+  "isPersistent": true,
+  "content": {
+    "$type": "NodeTypeDefinition",
+    "id": "project",
+    "displayName": "Project",
+    "iconName": "Folder",
+    "description": "A project containing stories",
+    "displayOrder": 20
+  }
+}

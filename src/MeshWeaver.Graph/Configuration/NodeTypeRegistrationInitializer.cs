@@ -19,13 +19,16 @@ public class NodeTypeRegistrationInitializer : IConfigurationInitializer
     {
         var logger = hub.ServiceProvider.GetService<ILogger<NodeTypeRegistrationInitializer>>();
         var meshConfig = hub.ServiceProvider.GetService<MeshConfiguration>();
-        var storageService = hub.ServiceProvider.GetService<IConfigurationStorageService>();
+        var configuration = hub.ServiceProvider.GetService<IConfiguration>();
 
         if (meshConfig == null)
         {
             logger?.LogWarning("MeshConfiguration not available - cannot register node types");
             return Task.CompletedTask;
         }
+
+        // Register built-in NodeType configuration for nodes that define types
+        RegisterBuiltInNodeTypeConfiguration(meshConfig, logger);
 
         var nodeTypes = configObjects.OfType<NodeTypeConfig>().ToList();
         var dataModels = configObjects.OfType<DataModel>().ToDictionary(m => m.Id);
@@ -37,8 +40,12 @@ public class NodeTypeRegistrationInitializer : IConfigurationInitializer
             return Task.CompletedTask;
         }
 
-        // Get the data directory from the storage service
-        var dataDirectory = storageService?.DataDirectory ?? Directory.GetCurrentDirectory();
+        // Get the data directory from configuration
+        var graphSection = configuration?.GetSection("Graph");
+        var dataDirectoryConfig = graphSection?["DataDirectory"] ?? "Data";
+        var dataDirectory = Path.IsPathRooted(dataDirectoryConfig)
+            ? dataDirectoryConfig
+            : Path.GetFullPath(Path.Combine(Directory.GetCurrentDirectory(), dataDirectoryConfig));
 
         logger?.LogInformation("Registering {Count} node type configurations...", nodeTypes.Count);
 
@@ -93,6 +100,40 @@ public class NodeTypeRegistrationInitializer : IConfigurationInitializer
             meshConfig.NodeTypeConfigurations.Count);
 
         return Task.CompletedTask;
+    }
+
+    /// <summary>
+    /// Registers the built-in NodeType configuration for nodes that define other types.
+    /// These are nodes with NodeType="NodeType" that store type definitions.
+    /// </summary>
+    private static void RegisterBuiltInNodeTypeConfiguration(
+        MeshConfiguration meshConfig,
+        ILogger<NodeTypeRegistrationInitializer>? logger)
+    {
+        const string nodeTypeName = "NodeType";
+
+        // Check if already registered
+        if (meshConfig.NodeTypeConfigurations.ContainsKey(nodeTypeName))
+        {
+            logger?.LogDebug("NodeType configuration already registered");
+            return;
+        }
+
+        var config = new NodeTypeConfiguration
+        {
+            NodeType = nodeTypeName,
+            DataType = typeof(NodeTypeDefinition),
+            HubConfiguration = hubConfig => hubConfig
+                .AddMeshCatalogView() // Include standard node views
+                .AddNodeTypeView(), // Add NodeType-specific views
+            DisplayName = "Node Type",
+            Description = "Defines a node type with data model and layout areas",
+            IconName = "DocumentSettings",
+            DisplayOrder = -100 // Show at top of type lists
+        };
+
+        meshConfig.RegisterNodeTypeConfiguration(config);
+        logger?.LogDebug("Registered built-in NodeType configuration");
     }
 
     /// <summary>

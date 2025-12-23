@@ -366,4 +366,85 @@ public class InMemoryPersistenceService : IPersistenceService
     }
 
     #endregion
+
+    #region Partition Storage
+
+    private readonly ConcurrentDictionary<string, List<object>> _partitionData = new(StringComparer.OrdinalIgnoreCase);
+
+    private static string GetPartitionKey(string nodePath, string? subPath)
+    {
+        var key = nodePath.Trim('/').ToLowerInvariant();
+        if (!string.IsNullOrEmpty(subPath))
+        {
+            key = $"{key}/{subPath.Trim('/').ToLowerInvariant()}";
+        }
+        return key;
+    }
+
+    public async IAsyncEnumerable<object> GetPartitionObjectsAsync(
+        string nodePath,
+        string? subPath = null)
+    {
+        var key = GetPartitionKey(nodePath, subPath);
+
+        // If we have cached data, return it
+        if (_partitionData.TryGetValue(key, out var cached))
+        {
+            foreach (var obj in cached)
+            {
+                yield return obj;
+            }
+            yield break;
+        }
+
+        // Otherwise, load from storage adapter if available
+        if (_storageAdapter != null)
+        {
+            var objects = new List<object>();
+            await foreach (var obj in _storageAdapter.GetPartitionObjectsAsync(nodePath, subPath))
+            {
+                objects.Add(obj);
+                yield return obj;
+            }
+            // Cache the loaded objects
+            _partitionData[key] = objects;
+        }
+    }
+
+    public async Task SavePartitionObjectsAsync(
+        string nodePath,
+        string? subPath,
+        IReadOnlyCollection<object> objects,
+        CancellationToken ct = default)
+    {
+        var key = GetPartitionKey(nodePath, subPath);
+
+        // Update in-memory cache
+        _partitionData[key] = objects.ToList();
+
+        // Persist to storage adapter if available
+        if (_storageAdapter != null)
+        {
+            await _storageAdapter.SavePartitionObjectsAsync(nodePath, subPath, objects, ct);
+        }
+    }
+
+    public async Task DeletePartitionObjectsAsync(
+        string nodePath,
+        string? subPath = null,
+        CancellationToken ct = default)
+    {
+        var key = GetPartitionKey(nodePath, subPath);
+
+        // Remove from in-memory cache
+        _partitionData.TryRemove(key, out _);
+
+        // Delete from storage adapter if available
+        if (_storageAdapter != null)
+        {
+            await _storageAdapter.DeletePartitionObjectsAsync(nodePath, subPath, ct);
+        }
+    }
+
+    #endregion
 }

@@ -1,8 +1,0 @@
-{
-  "$type": "NodeTypeConfig",
-  "nodeType": "org",
-  "dataModelId": "org",
-  "contentCollections": [
-    { "name": "logos", "baseCollection": "graph", "subPath": "logos" }
-  ]
-}
