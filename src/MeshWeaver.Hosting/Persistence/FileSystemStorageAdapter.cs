@@ -146,6 +146,109 @@ public class FileSystemStorageAdapter : IStorageAdapter
         return Task.FromResult(File.Exists(filePath));
     }
 
+    #region Partition Storage
+
+    public async IAsyncEnumerable<object> GetPartitionObjectsAsync(
+        string nodePath,
+        string? subPath = null,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+    {
+        var partitionDir = GetPartitionDirectory(nodePath, subPath);
+        if (!Directory.Exists(partitionDir))
+            yield break;
+
+        foreach (var file in Directory.GetFiles(partitionDir, "*.json"))
+        {
+            object? obj = null;
+            try
+            {
+                var json = await File.ReadAllTextAsync(file, ct);
+                obj = JsonSerializer.Deserialize<object>(json, JsonOptions);
+            }
+            catch (JsonException)
+            {
+                // Skip malformed files
+            }
+
+            if (obj != null)
+                yield return obj;
+        }
+    }
+
+    public async Task SavePartitionObjectsAsync(
+        string nodePath,
+        string? subPath,
+        IReadOnlyCollection<object> objects,
+        CancellationToken ct = default)
+    {
+        var partitionDir = GetPartitionDirectory(nodePath, subPath);
+        Directory.CreateDirectory(partitionDir);
+
+        foreach (var obj in objects)
+        {
+            var fileName = GetObjectFileName(obj);
+            var filePath = Path.Combine(partitionDir, fileName);
+            var json = JsonSerializer.Serialize(obj, obj.GetType(), JsonOptions);
+            await File.WriteAllTextAsync(filePath, json, ct);
+        }
+    }
+
+    public Task DeletePartitionObjectsAsync(
+        string nodePath,
+        string? subPath = null,
+        CancellationToken ct = default)
+    {
+        var partitionDir = GetPartitionDirectory(nodePath, subPath);
+        if (Directory.Exists(partitionDir))
+        {
+            foreach (var file in Directory.GetFiles(partitionDir, "*.json"))
+            {
+                File.Delete(file);
+            }
+
+            // Clean up empty directories
+            if (!Directory.EnumerateFileSystemEntries(partitionDir).Any())
+            {
+                Directory.Delete(partitionDir);
+            }
+        }
+
+        return Task.CompletedTask;
+    }
+
+    private string GetPartitionDirectory(string nodePath, string? subPath)
+    {
+        var normalizedPath = nodePath.Trim('/').Replace('/', Path.DirectorySeparatorChar);
+        var partitionDir = Path.Combine(_baseDirectory, normalizedPath);
+
+        if (!string.IsNullOrEmpty(subPath))
+        {
+            var normalizedSubPath = subPath.Trim('/').Replace('/', Path.DirectorySeparatorChar);
+            partitionDir = Path.Combine(partitionDir, normalizedSubPath);
+        }
+
+        return partitionDir;
+    }
+
+    private static string GetObjectFileName(object obj)
+    {
+        // Try to get an Id property for the file name
+        var idProperty = obj.GetType().GetProperty("Id");
+        if (idProperty?.GetValue(obj) is string id && !string.IsNullOrEmpty(id))
+        {
+            // Escape slashes in ID for file system safety
+            var escapedId = id.Replace("/", "__").Replace("\\", "__");
+            return escapedId + ".json";
+        }
+
+        // Fallback to type name + hash
+        var typeName = obj.GetType().Name;
+        var hash = obj.GetHashCode().ToString("X8");
+        return $"{typeName}_{hash}.json";
+    }
+
+    #endregion
+
     private string GetFilePath(string path)
     {
         var normalizedPath = path.Trim('/');

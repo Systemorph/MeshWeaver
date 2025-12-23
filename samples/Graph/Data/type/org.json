@@ -1,0 +1,20 @@
+{
+  "path": "type/org",
+  "name": "Organization",
+  "nodeType": "NodeType",
+  "description": "An organization containing projects",
+  "iconName": "Building",
+  "displayOrder": 10,
+  "isPersistent": true,
+  "content": {
+    "$type": "NodeTypeDefinition",
+    "id": "org",
+    "displayName": "Organization",
+    "iconName": "Building",
+    "description": "An organization containing projects",
+    "displayOrder": 10,
+    "contentCollections": [
+      { "name": "logos", "baseCollection": "graph", "subPath": "logos" }
+    ]
+  }
+}

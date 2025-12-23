@@ -2,19 +2,13 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using System.Reactive.Linq;
-using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
-using FluentAssertions.Extensions;
-using MeshWeaver.Data;
-using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Monolith;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Hosting.Persistence;
-using MeshWeaver.Layout;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
@@ -63,16 +57,9 @@ public class DynamicGraphIntegrationTest : MonolithMeshTestBase
     {
     }
 
-    private static void SetupTestConfiguration(string testDataDirectory)
+    private static void SetupTestConfiguration(InMemoryPersistenceService persistence)
     {
-        // Create _config directories
-        var configDir = Path.Combine(testDataDirectory, "_config");
-        Directory.CreateDirectory(Path.Combine(configDir, "dataModels"));
-        Directory.CreateDirectory(Path.Combine(configDir, "nodeTypes"));
-        Directory.CreateDirectory(Path.Combine(configDir, "hubFeatures"));
-        Directory.CreateDirectory(Path.Combine(configDir, "contentCollections"));
-
-        // Create a simple Story data model
+        // Create Story type using "type/" prefix for global types
         var storyDataModel = new DataModel
         {
             Id = "story",
@@ -101,7 +88,27 @@ public enum StoryStatus
 }"
         };
 
-        // Create Organization data model
+        var storyNode = new MeshNode("type/story")
+        {
+            Name = "Story",
+            NodeType = "NodeType",
+            Description = "A user story or task",
+            IconName = "Document",
+            DisplayOrder = 30,
+            IsPersistent = true,
+            Content = new NodeTypeDefinition
+            {
+                Id = "story",
+                DisplayName = "Story",
+                IconName = "Document",
+                Description = "A user story or task",
+                DisplayOrder = 30
+            }
+        };
+        persistence.SaveNodeAsync(storyNode).GetAwaiter().GetResult();
+        persistence.SavePartitionObjectsAsync("type/story", null, [storyDataModel]).GetAwaiter().GetResult();
+
+        // Create Organization type
         var orgDataModel = new DataModel
         {
             Id = "org",
@@ -119,7 +126,27 @@ public record Organization
 }"
         };
 
-        // Create Project data model
+        var orgNode = new MeshNode("type/org")
+        {
+            Name = "Organization",
+            NodeType = "NodeType",
+            Description = "An organization",
+            IconName = "Building",
+            DisplayOrder = 10,
+            IsPersistent = true,
+            Content = new NodeTypeDefinition
+            {
+                Id = "org",
+                DisplayName = "Organization",
+                IconName = "Building",
+                Description = "An organization",
+                DisplayOrder = 10
+            }
+        };
+        persistence.SaveNodeAsync(orgNode).GetAwaiter().GetResult();
+        persistence.SavePartitionObjectsAsync("type/org", null, [orgDataModel]).GetAwaiter().GetResult();
+
+        // Create Project type
         var projectDataModel = new DataModel
         {
             Id = "project",
@@ -137,7 +164,27 @@ public record Project
 }"
         };
 
-        // Create Graph data model
+        var projectNode = new MeshNode("type/project")
+        {
+            Name = "Project",
+            NodeType = "NodeType",
+            Description = "A project",
+            IconName = "Folder",
+            DisplayOrder = 20,
+            IsPersistent = true,
+            Content = new NodeTypeDefinition
+            {
+                Id = "project",
+                DisplayName = "Project",
+                IconName = "Folder",
+                Description = "A project",
+                DisplayOrder = 20
+            }
+        };
+        persistence.SaveNodeAsync(projectNode).GetAwaiter().GetResult();
+        persistence.SavePartitionObjectsAsync("type/project", null, [projectDataModel]).GetAwaiter().GetResult();
+
+        // Create Graph type
         var graphDataModel = new DataModel
         {
             Id = "graph",
@@ -154,51 +201,36 @@ public record Graph
 }"
         };
 
-        // Write data models
-        WriteJsonConfig(configDir, "dataModels", "story.json", storyDataModel);
-        WriteJsonConfig(configDir, "dataModels", "org.json", orgDataModel);
-        WriteJsonConfig(configDir, "dataModels", "project.json", projectDataModel);
-        WriteJsonConfig(configDir, "dataModels", "graph.json", graphDataModel);
-
-        // Create node types
-        var storyNodeType = new NodeTypeConfig { NodeType = "story", DataModelId = "story", DisplayName = "Story" };
-        var orgNodeType = new NodeTypeConfig { NodeType = "org", DataModelId = "org", DisplayName = "Organization" };
-        var projectNodeType = new NodeTypeConfig { NodeType = "project", DataModelId = "project", DisplayName = "Project" };
-        var graphNodeType = new NodeTypeConfig { NodeType = "graph", DataModelId = "graph", DisplayName = "Graph" };
-
-        WriteJsonConfig(configDir, "nodeTypes", "story.json", storyNodeType);
-        WriteJsonConfig(configDir, "nodeTypes", "org.json", orgNodeType);
-        WriteJsonConfig(configDir, "nodeTypes", "project.json", projectNodeType);
-        WriteJsonConfig(configDir, "nodeTypes", "graph.json", graphNodeType);
-
-        // Create hub feature
-        var hubFeature = new HubFeatureConfig
+        var graphTypeNode = new MeshNode("type/graph")
         {
-            Id = "graph",
-            EnableMeshNavigation = true,
-            EnableDynamicNodeTypeAreas = true
+            Name = "Graph",
+            NodeType = "NodeType",
+            Description = "The graph root",
+            IconName = "Diagram",
+            DisplayOrder = 0,
+            IsPersistent = true,
+            Content = new NodeTypeDefinition
+            {
+                Id = "graph",
+                DisplayName = "Graph",
+                IconName = "Diagram",
+                Description = "The graph root",
+                DisplayOrder = 0
+            }
         };
-        WriteJsonConfig(configDir, "hubFeatures", "graph.json", hubFeature);
-    }
-
-    private static void WriteJsonConfig<T>(string configDir, string subDir, string fileName, T config)
-    {
-        var filePath = Path.Combine(configDir, subDir, fileName);
-        var json = JsonSerializer.Serialize(config, new JsonSerializerOptions
-        {
-            PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-            WriteIndented = true
-        });
-        File.WriteAllText(filePath, json);
+        persistence.SaveNodeAsync(graphTypeNode).GetAwaiter().GetResult();
+        persistence.SavePartitionObjectsAsync("type/graph", null, [graphDataModel]).GetAwaiter().GetResult();
     }
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
     {
         var testDataDirectory = GetOrCreateTestDirectory();
-        SetupTestConfiguration(testDataDirectory);
 
         // Create in-memory persistence and pre-seed with test data
         var persistence = new InMemoryPersistenceService();
+
+        // Setup NodeType configurations using "type/" prefix
+        SetupTestConfiguration(persistence);
 
         // Pre-seed the hierarchy: graph -> org -> project -> story
         persistence.SaveNodeAsync(new MeshNode("graph") { Name = "Graph", NodeType = "graph" }).GetAwaiter().GetResult();
@@ -221,11 +253,6 @@ public record Graph
             .UseMonolithMesh()
             .ConfigureServices(services => services.AddPersistence(persistence))
             .AddJsonGraphConfiguration(testDataDirectory, configuration);
-    }
-
-    protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
-    {
-        return base.ConfigureClient(configuration).AddLayoutClient();
     }
 
     public override async ValueTask DisposeAsync()
@@ -274,7 +301,14 @@ public record Graph
     public async Task OrgHub_LoadsChildrenFromPersistence_AtInitialization()
     {
         var client = GetClient();
+        var graphAddress = new Address("graph");
         var orgAddress = new Address("graph/org1");
+
+        // Initialize graph hub first (required for routing to child hubs)
+        await client.AwaitResponse(
+            new PingRequest(),
+            o => o.WithTarget(graphAddress),
+            TestContext.Current.CancellationToken);
 
         // Initialize org hub via ping
         await client.AwaitResponse(
@@ -293,7 +327,14 @@ public record Graph
     public async Task ProjectHub_LoadsChildrenFromPersistence_AtInitialization()
     {
         var client = GetClient();
+        var graphAddress = new Address("graph");
         var projAddress = new Address("graph/org1/proj1");
+
+        // Initialize graph hub first (required for routing to child hubs)
+        await client.AwaitResponse(
+            new PingRequest(),
+            o => o.WithTarget(graphAddress),
+            TestContext.Current.CancellationToken);
 
         // Initialize project hub via ping
         await client.AwaitResponse(
@@ -306,104 +347,6 @@ public record Graph
         children.Should().HaveCount(2, "proj1 should have 2 story children pre-seeded");
         children.Should().Contain(n => n.Prefix == "graph/org1/proj1/story1");
         children.Should().Contain(n => n.Prefix == "graph/org1/proj1/story2");
-    }
-
-    #endregion
-
-    #region DataChangeRequest Tests
-
-    [Fact(Timeout = 90000, Skip = "Requires DataChangeRequest handler infrastructure for MeshNode type")]
-    public async Task CreateNode_ViaDataChangeRequest_PersistsToCorrectPartition()
-    {
-        var client = GetClient();
-        var graphAddress = new Address("graph");
-
-        // Initialize graph hub
-        await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(graphAddress),
-            new CancellationTokenSource(10.Seconds()).Token);
-
-        // Act - create new org via DataChangeRequest
-        var newOrg = new MeshNode("graph/org3") { Name = "Organization 3", NodeType = "org", Description = "Third org" };
-        client.Post(new DataChangeRequest { Creations = [newOrg] }, o => o.WithTarget(graphAddress));
-        await Task.Delay(500);
-
-        // Assert - verify IPersistenceService has the new node
-        var persistedOrg = await Persistence.GetNodeAsync("graph/org3");
-        persistedOrg.Should().NotBeNull("new org should be persisted");
-        persistedOrg!.Name.Should().Be("Organization 3");
-        persistedOrg.Description.Should().Be("Third org");
-        persistedOrg.NodeType.Should().Be("org");
-
-        // Verify it appears in graph's children
-        var children = await Persistence.GetChildrenAsync("graph").ToListAsync(TestContext.Current.CancellationToken);
-        children.Should().Contain(n => n.Prefix == "graph/org3");
-    }
-
-    [Fact(Timeout = 90000, Skip = "Requires DataChangeRequest handler infrastructure for MeshNode type")]
-    public async Task UpdateNode_ViaDataChangeRequest_UpdatesPersistence()
-    {
-        var client = GetClient();
-        var graphAddress = new Address("graph");
-
-        // Initialize graph hub
-        await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(graphAddress),
-            new CancellationTokenSource(10.Seconds()).Token);
-
-        // Verify initial state
-        var initial = await Persistence.GetNodeAsync("graph/org1");
-        initial!.Name.Should().Be("Organization 1");
-        initial.Description.Should().Be("First org");
-
-        // Act - update org1 via DataChangeRequest
-        var updatedOrg = new MeshNode("graph/org1")
-        {
-            Name = "Updated Org 1",
-            NodeType = "org",
-            Description = "Updated description"
-        };
-        client.Post(new DataChangeRequest { Updates = [updatedOrg] }, o => o.WithTarget(graphAddress));
-        await Task.Delay(500);
-
-        // Assert - verify IPersistenceService was updated
-        var persisted = await Persistence.GetNodeAsync("graph/org1");
-        persisted.Should().NotBeNull();
-        persisted!.Name.Should().Be("Updated Org 1");
-        persisted.Description.Should().Be("Updated description");
-    }
-
-    [Fact(Timeout = 90000, Skip = "Requires DataChangeRequest handler infrastructure for MeshNode type")]
-    public async Task DeleteNode_ViaDataChangeRequest_RemovesFromPersistenceRecursively()
-    {
-        var client = GetClient();
-        var graphAddress = new Address("graph");
-
-        // Initialize graph hub
-        await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(graphAddress),
-            new CancellationTokenSource(10.Seconds()).Token);
-
-        // Verify initial state - org1 and its children exist
-        (await Persistence.GetNodeAsync("graph/org1")).Should().NotBeNull();
-        (await Persistence.GetNodeAsync("graph/org1/proj1")).Should().NotBeNull();
-        (await Persistence.GetNodeAsync("graph/org1/proj1/story1")).Should().NotBeNull();
-
-        // Act - delete org1 via DataChangeRequest (should delete recursively)
-        var nodeToDelete = new MeshNode("graph/org1");
-        client.Post(new DataChangeRequest { Deletions = [nodeToDelete] }, o => o.WithTarget(graphAddress));
-        await Task.Delay(500);
-
-        // Assert - verify IPersistenceService removed node and all descendants
-        (await Persistence.GetNodeAsync("graph/org1")).Should().BeNull("org1 should be deleted");
-        (await Persistence.GetNodeAsync("graph/org1/proj1")).Should().BeNull("proj1 should be deleted recursively");
-        (await Persistence.GetNodeAsync("graph/org1/proj1/story1")).Should().BeNull("story1 should be deleted recursively");
-
-        // org2 should still exist
-        (await Persistence.GetNodeAsync("graph/org2")).Should().NotBeNull("org2 should remain");
     }
 
     #endregion
@@ -532,177 +475,6 @@ public record Graph
         resolution.Should().NotBeNull();
         resolution!.Prefix.Should().Be("graph");
         resolution.Remainder.Should().Be("_Nodes");
-    }
-
-    #endregion
-
-    #region Details Layout Area Tests
-
-    [Fact(Timeout = 90000, Skip = "Requires layout area registration infrastructure")]
-    public async Task GraphHub_DetailsLayoutArea_ReturnsStackControl()
-    {
-        var client = GetClient();
-        var workspace = client.GetWorkspace();
-        var graphAddress = new Address("graph");
-
-        // Initialize graph hub
-        await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(graphAddress),
-            new CancellationTokenSource(10.Seconds()).Token);
-
-        // Act - get the Details layout area (returns StackControl with header and content)
-        var reference = new LayoutAreaReference(MeshNodeView.DetailsArea);
-        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(graphAddress, reference);
-
-        var control = await stream
-            .GetControlStream(reference.Area!)
-            .Where(c => c is StackControl)
-            .Timeout(10.Seconds())
-            .FirstAsync();
-
-        // Assert
-        control.Should().NotBeNull("Details layout area should return a control");
-        control.Should().BeOfType<StackControl>();
-        var stack = (StackControl)control;
-        // Should have at least header and content areas
-        stack.Areas.Should().HaveCountGreaterThanOrEqualTo(2, "Should have header and content areas");
-    }
-
-    [Fact(Timeout = 90000, Skip = "Requires layout area registration infrastructure")]
-    public async Task OrgHub_DetailsLayoutArea_ReturnsStackControl()
-    {
-        var client = GetClient();
-        var workspace = client.GetWorkspace();
-        var orgAddress = new Address("graph/org1");
-
-        // Initialize org hub
-        await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(orgAddress),
-            new CancellationTokenSource(10.Seconds()).Token);
-
-        // Act - get the Details layout area
-        var reference = new LayoutAreaReference(MeshNodeView.DetailsArea);
-        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(orgAddress, reference);
-
-        var control = await stream
-            .GetControlStream(reference.Area!)
-            .Where(c => c is StackControl)
-            .Timeout(10.Seconds())
-            .FirstAsync();
-
-        // Assert
-        control.Should().NotBeNull("Details layout area should return a control from org hub");
-        control.Should().BeOfType<StackControl>();
-    }
-
-    #endregion
-
-    #region Dynamic Type Tests
-
-    [Fact(Timeout = 30000, Skip = "Integration test - requires kernel initialization")]
-    public async Task DynamicType_CompiledFromJson_CanBeUsedWithMeshNode()
-    {
-        var client = GetClient();
-        var storyAddress = new Address("graph/org1/proj1/story1");
-
-        // Initialize story hub
-        await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(storyAddress),
-            TestContext.Current.CancellationToken);
-
-        // Get the compiled Story type
-        var storyType = TypeCompiler.GetCompiledType("story");
-        storyType.Should().NotBeNull("Story type should be compiled from JSON config");
-        storyType!.Name.Should().Be("Story");
-
-        // Create an instance of the dynamic type
-        var story = Activator.CreateInstance(storyType);
-        story.Should().NotBeNull();
-
-        // Set properties via reflection
-        var titleProp = storyType.GetProperty("Title");
-        titleProp.Should().NotBeNull();
-        titleProp!.SetValue(story, "Dynamic Story Title");
-
-        var idProp = storyType.GetProperty("Id");
-        idProp!.SetValue(story, "dynamic-story-1");
-
-        // Verify the values
-        titleProp.GetValue(story).Should().Be("Dynamic Story Title");
-        idProp.GetValue(story).Should().Be("dynamic-story-1");
-    }
-
-    #endregion
-
-    #region Additional DetailsLayoutArea Tests
-
-    /// <summary>
-    /// Project hub's Details layout area returns StackControl.
-    /// </summary>
-    [Fact(Timeout = 90000, Skip = "Requires layout area registration infrastructure")]
-    public async Task ProjectHub_DetailsLayoutArea_ReturnsStackControl()
-    {
-        var client = GetClient();
-        var workspace = client.GetWorkspace();
-        var projAddress = new Address("graph/org1/proj1");
-
-        // Initialize project hub
-        await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(projAddress),
-            TestContext.Current.CancellationToken);
-
-        // Act - get the Details layout area
-        var reference = new LayoutAreaReference(MeshNodeView.DetailsArea);
-        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(projAddress, reference);
-
-        var control = await stream
-            .GetControlStream(reference.Area!)
-            .Where(c => c is StackControl)
-            .Timeout(10.Seconds())
-            .FirstAsync();
-
-        // Assert
-        control.Should().NotBeNull("Details layout area should return a control from project hub");
-        control.Should().BeOfType<StackControl>();
-        var stack = (StackControl)control;
-        stack.Areas.Should().HaveCountGreaterThanOrEqualTo(2, "Should have header and content areas");
-    }
-
-    /// <summary>
-    /// Story hub's Details layout area returns StackControl.
-    /// </summary>
-    [Fact(Timeout = 90000, Skip = "Requires layout area registration infrastructure")]
-    public async Task StoryHub_DetailsLayoutArea_ReturnsStackControl()
-    {
-        var client = GetClient();
-        var workspace = client.GetWorkspace();
-        var storyAddress = new Address("graph/org1/proj1/story1");
-
-        // Initialize story hub
-        await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(storyAddress),
-            TestContext.Current.CancellationToken);
-
-        // Act - get the Details layout area
-        var reference = new LayoutAreaReference(MeshNodeView.DetailsArea);
-        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(storyAddress, reference);
-
-        var control = await stream
-            .GetControlStream(reference.Area!)
-            .Where(c => c is StackControl)
-            .Timeout(10.Seconds())
-            .FirstAsync();
-
-        // Assert
-        control.Should().NotBeNull("Details layout area should return a control from story hub");
-        control.Should().BeOfType<StackControl>();
-        var stack = (StackControl)control;
-        stack.Areas.Should().HaveCountGreaterThanOrEqualTo(2, "Should have header and content areas");
     }
 
     #endregion

@@ -1,4 +1,3 @@
-﻿using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.Logging;
 
@@ -7,24 +6,25 @@ namespace MeshWeaver.Graph.Configuration;
 /// <summary>
 /// Main initializer that orchestrates loading configuration and calling type-specific initializers.
 /// Used within hub initialization via WithInitialization.
+/// Loads configuration from INodeTypeService using partition-based storage.
 /// </summary>
 public class GraphConfigurationInitializer(
-    IConfigurationStorageService configStorage,
+    INodeTypeService nodeTypeService,
     IEnumerable<IConfigurationInitializer> initializers,
     ILogger logger)
 {
     /// <summary>
     /// Loads all configuration and runs initializers.
-    /// Pattern: Load all using ToArrayAsync(), then call InitializeAsync(loadedObjects).
+    /// Uses INodeTypeService for partition-based storage.
     /// </summary>
     public async Task InitializeAsync(IMessageHub hub, CancellationToken ct = default)
     {
-        var meshNode = new MeshNode(hub.Address.ToString());
+        var nodePath = hub.Address.ToString();
 
-        logger?.LogInformation("Loading configuration for node {NodePath}...", meshNode.Path);
+        logger?.LogInformation("Loading configuration for node {NodePath}...", nodePath);
 
-        // Load all configuration objects at once
-        var configObjects = await configStorage.LoadAllAsync(meshNode, ct).ToArrayAsync(ct);
+        // Load configuration objects from INodeTypeService
+        var configObjects = await LoadConfigurationObjectsAsync(ct);
 
         logger?.LogInformation("Loaded {Count} configuration objects", configObjects.Length);
 
@@ -44,6 +44,43 @@ public class GraphConfigurationInitializer(
             }
         }
 
-        logger?.LogInformation("Graph configuration initialized for {NodePath}", meshNode.Path);
+        logger?.LogInformation("Graph configuration initialized for {NodePath}", nodePath);
+    }
+
+    /// <summary>
+    /// Loads configuration objects from INodeTypeService.
+    /// </summary>
+    private async Task<object[]> LoadConfigurationObjectsAsync(CancellationToken ct)
+    {
+        var objects = new List<object>();
+
+        var dataModels = await nodeTypeService.GetAllDataModelsAsync(ct);
+        var layoutAreas = await nodeTypeService.GetAllLayoutAreasAsync(ct);
+
+        objects.AddRange(dataModels);
+        objects.AddRange(layoutAreas);
+
+        // Also add NodeTypeDefinitions from NodeType nodes
+        await foreach (var node in nodeTypeService.GetAllNodeTypeNodesAsync())
+        {
+            if (node.Content is NodeTypeDefinition ntd)
+            {
+                // Create a NodeTypeConfig for compatibility with existing initializers
+                var config = new NodeTypeConfig
+                {
+                    NodeType = ntd.Id,
+                    DataModelId = ntd.Id, // By convention, DataModel.Id matches NodeType.Id
+                    DisplayName = ntd.DisplayName,
+                    IconName = ntd.IconName,
+                    Description = ntd.Description,
+                    DisplayOrder = ntd.DisplayOrder,
+                    ContentCollections = ntd.ContentCollections
+                };
+                objects.Add(config);
+            }
+        }
+
+        logger?.LogDebug("Loaded {Count} objects from INodeTypeService", objects.Count);
+        return objects.ToArray();
     }
 }

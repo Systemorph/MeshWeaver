@@ -44,13 +44,14 @@ public static class ConfigurationViews
         if (string.IsNullOrEmpty(dataModelId))
             return Observable.Return(RenderError("DataModel ID not specified. Use: DataModelSource/{id}"));
 
-        var configStorage = host.Hub.ServiceProvider.GetService<IConfigurationStorageService>();
-        if (configStorage == null)
-            return Observable.Return(RenderError("Configuration storage service not available."));
+        var nodeTypeService = host.Hub.ServiceProvider.GetService<INodeTypeService>();
+        if (nodeTypeService == null)
+            return Observable.Return(RenderError("NodeType service not available."));
 
+        var contextPath = host.Hub.Address.ToString();
         return Observable.FromAsync(async ct =>
         {
-            var dataModel = await configStorage.LoadByIdAsync<DataModel>(dataModelId, ct);
+            var dataModel = await nodeTypeService.GetDataModelAsync(dataModelId, contextPath, ct);
             if (dataModel == null)
                 return RenderError($"DataModel '{dataModelId}' not found.");
 
@@ -73,13 +74,14 @@ public static class ConfigurationViews
         if (string.IsNullOrEmpty(dataModelId))
             return Observable.Return(RenderError("DataModel ID not specified. Use: DataModelEditor/{id}"));
 
-        var configStorage = host.Hub.ServiceProvider.GetService<IConfigurationStorageService>();
-        if (configStorage == null)
-            return Observable.Return(RenderError("Configuration storage service not available."));
+        var nodeTypeService = host.Hub.ServiceProvider.GetService<INodeTypeService>();
+        if (nodeTypeService == null)
+            return Observable.Return(RenderError("NodeType service not available."));
 
+        var contextPath = host.Hub.Address.ToString();
         return Observable.FromAsync(async ct =>
         {
-            var dataModel = await configStorage.LoadByIdAsync<DataModel>(dataModelId, ct);
+            var dataModel = await nodeTypeService.GetDataModelAsync(dataModelId, contextPath, ct);
             if (dataModel == null)
                 return RenderError($"DataModel '{dataModelId}' not found.");
 
@@ -106,13 +108,17 @@ public static class ConfigurationViews
         if (string.IsNullOrEmpty(layoutAreaId))
             return Observable.Return(RenderError("LayoutArea ID not specified. Use: LayoutAreaSource/{id}"));
 
-        var configStorage = host.Hub.ServiceProvider.GetService<IConfigurationStorageService>();
-        if (configStorage == null)
-            return Observable.Return(RenderError("Configuration storage service not available."));
+        var nodeTypeService = host.Hub.ServiceProvider.GetService<INodeTypeService>();
+        if (nodeTypeService == null)
+            return Observable.Return(RenderError("NodeType service not available."));
 
         return Observable.FromAsync(async ct =>
         {
-            var layoutArea = await configStorage.LoadByIdAsync<LayoutAreaConfig>(layoutAreaId, ct);
+            // Parse the layout area ID to get nodeType and area
+            // Convention: layoutAreaId is "{nodeType}-{area}" or just the area name
+            var allLayouts = await nodeTypeService.GetAllLayoutAreasAsync(ct);
+            var layoutArea = allLayouts.FirstOrDefault(la => la.Id == layoutAreaId);
+
             if (layoutArea == null)
                 return RenderError($"LayoutAreaConfig '{layoutAreaId}' not found.");
 
@@ -136,13 +142,15 @@ public static class ConfigurationViews
         if (string.IsNullOrEmpty(layoutAreaId))
             return Observable.Return(RenderError("LayoutArea ID not specified. Use: LayoutAreaEditor/{id}"));
 
-        var configStorage = host.Hub.ServiceProvider.GetService<IConfigurationStorageService>();
-        if (configStorage == null)
-            return Observable.Return(RenderError("Configuration storage service not available."));
+        var nodeTypeService = host.Hub.ServiceProvider.GetService<INodeTypeService>();
+        if (nodeTypeService == null)
+            return Observable.Return(RenderError("NodeType service not available."));
 
         return Observable.FromAsync(async ct =>
         {
-            var layoutArea = await configStorage.LoadByIdAsync<LayoutAreaConfig>(layoutAreaId, ct);
+            var allLayouts = await nodeTypeService.GetAllLayoutAreasAsync(ct);
+            var layoutArea = allLayouts.FirstOrDefault(la => la.Id == layoutAreaId);
+
             if (layoutArea == null)
                 return RenderError($"LayoutAreaConfig '{layoutAreaId}' not found.");
 
@@ -164,7 +172,7 @@ public static class ConfigurationViews
     /// Renders a read-only code block with header and edit button.
     /// </summary>
     private static UiControl RenderCodeBlock(
-        string code,
+        string? code,
         string title,
         Address hubAddress,
         string configId,
@@ -188,7 +196,7 @@ public static class ConfigurationViews
         stack = stack.WithView(header);
 
         // Code block in markdown
-        var markdown = $"```csharp\n{code}\n```";
+        var markdown = $"```csharp\n{code ?? "// No source defined"}\n```";
         stack = stack.WithView(new MarkdownControl(markdown));
 
         return stack;
@@ -200,7 +208,7 @@ public static class ConfigurationViews
     private static UiControl RenderCodeEditor<TConfig>(
         LayoutAreaHost host,
         RenderingContext ctx,
-        string initialCode,
+        string? initialCode,
         string title,
         Address hubAddress,
         string configId,
@@ -212,7 +220,7 @@ public static class ConfigurationViews
         var dataId = Guid.NewGuid().AsString();
 
         // Store initial code in data stream
-        host.UpdateData(dataId, initialCode);
+        host.UpdateData(dataId, initialCode ?? "");
 
         // Header with title
         stack = stack.WithView(Controls.Html($"<h3 style=\"margin-bottom: 8px;\">{title}</h3>"));

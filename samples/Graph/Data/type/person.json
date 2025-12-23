@@ -1,0 +1,20 @@
+{
+  "path": "type/person",
+  "name": "Person",
+  "nodeType": "NodeType",
+  "description": "A person with profile and avatar",
+  "iconName": "Person",
+  "displayOrder": 5,
+  "isPersistent": true,
+  "content": {
+    "$type": "NodeTypeDefinition",
+    "id": "person",
+    "displayName": "Person",
+    "iconName": "Person",
+    "description": "A person with profile and avatar",
+    "displayOrder": 5,
+    "contentCollections": [
+      { "name": "avatar", "baseCollection": "graph", "subPath": "persons" }
+    ]
+  }
+}

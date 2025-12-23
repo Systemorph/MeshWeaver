@@ -1,5 +1,6 @@
-﻿using MeshWeaver.Domain;
+using MeshWeaver.Domain;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -15,17 +16,18 @@ public static class GraphConfigurationExtensions
     /// <summary>
     /// Loads graph configuration from JSON files in the data directory.
     ///
-    /// Configuration is loaded from _config/ subdirectories:
-    /// - _config/dataModels/ - Data type definitions with inline C# source
-    /// - _config/nodeTypes/ - Node type to data model mappings (including content collection mappings)
-    /// - _config/hubFeatures/ - Hub feature configurations
+    /// Configuration is loaded from NodeType MeshNodes stored under _types/:
+    /// - Each NodeType node has a partition folder containing:
+    ///   - dataModel.json - Data type definition with inline C# source
+    ///   - layoutAreas/*.json - Layout area configurations
+    ///   - hubFeatures.json - Hub feature configuration (optional)
     ///
-    /// Content collections are configured per node type via contentCollections in nodeTypes/*.json.
+    /// Content collections are configured per node type via NodeTypeDefinition.ContentCollections.
     /// All configuration loading, type compilation, and service initialization
     /// happens asynchronously during hub initialization via WithInitialization.
     /// </summary>
     /// <param name="builder">The mesh builder</param>
-    /// <param name="dataDirectory">The base data directory containing _config/ folder</param>
+    /// <param name="dataDirectory">The base data directory</param>
     /// <param name="configuration">The application configuration</param>
     public static TBuilder AddJsonGraphConfiguration<TBuilder>(
         this TBuilder builder,
@@ -38,6 +40,13 @@ public static class GraphConfigurationExtensions
         {
             // Register layout area initializer (doesn't need ITypeRegistry)
             services.AddSingleton<IConfigurationInitializer, LayoutAreaInitializer>();
+
+            // Register INodeTypeService (uses IPersistenceService which is registered elsewhere)
+            services.AddSingleton<INodeTypeService>(sp =>
+            {
+                var persistence = sp.GetRequiredService<IPersistenceService>();
+                return new NodeTypeService(persistence);
+            });
 
             return services;
         });
@@ -58,7 +67,7 @@ public static class GraphConfigurationExtensions
     /// <summary>
     /// Configures a graph hub with async initialization for loading configuration,
     /// compiling types, and initializing services.
-    /// Content collections are configured per node type via NodeTypeConfig.ContentCollections.
+    /// Content collections are configured per node type via NodeTypeDefinition.ContentCollections.
     /// </summary>
     private static MessageHubConfiguration ConfigureGraphHub(
         MessageHubConfiguration config,
@@ -78,12 +87,6 @@ public static class GraphConfigurationExtensions
                     sp.GetService<ILogger<TypeCompilationService>>());
             });
 
-            services.AddSingleton<IConfigurationStorageService>(sp =>
-            {
-                var registry = sp.GetRequiredService<ITypeRegistry>();
-                return new ConfigurationStorageService(dataDirectory, registry);
-            });
-
             // Register DataModel initializer for type compilation
             services.AddSingleton<IConfigurationInitializer>(sp =>
                 new DataModelInitializer(sp.GetRequiredService<ITypeCompilationService>()));
@@ -94,7 +97,7 @@ public static class GraphConfigurationExtensions
             // Register the main initializer
             services.AddSingleton<GraphConfigurationInitializer>(sp =>
                 new GraphConfigurationInitializer(
-                    sp.GetRequiredService<IConfigurationStorageService>(),
+                    sp.GetRequiredService<INodeTypeService>(),
                     sp.GetServices<IConfigurationInitializer>(),
                     sp.GetRequiredService<ILoggerFactory>().CreateLogger<GraphConfigurationInitializer>()));
 
