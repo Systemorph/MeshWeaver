@@ -40,6 +40,11 @@ internal interface ICompilationCacheService
     string GetSourcePath(string nodeName);
 
     /// <summary>
+    /// Gets the path to the XML documentation file for a node.
+    /// </summary>
+    string GetXmlDocPath(string nodeName);
+
+    /// <summary>
     /// Invalidates (deletes) the cache for a node.
     /// Unloads the associated AssemblyLoadContext if one exists.
     /// </summary>
@@ -168,26 +173,20 @@ internal sealed class NodeAssemblyLoadContext : AssemblyLoadContext, IDisposable
 /// Handles cache validation, path generation, cache invalidation,
 /// and AssemblyLoadContext management for dynamic assembly loading/unloading.
 /// </summary>
-internal class CompilationCacheService : ICompilationCacheService, IDisposable
+internal class CompilationCacheService(
+    IOptions<CompilationCacheOptions> options,
+    ILogger<CompilationCacheService> logger)
+    : ICompilationCacheService, IDisposable
 {
-    private readonly CompilationCacheOptions _options;
-    private readonly ILogger<CompilationCacheService>? _logger;
-    private readonly string _absoluteCacheDirectory;
+    private readonly CompilationCacheOptions _options = options.Value ?? new CompilationCacheOptions();
     private readonly ConcurrentDictionary<string, NodeAssemblyLoadContext> _loadContexts = new();
+    private readonly string _absoluteCacheDirectory = ResolveAbsolutePath(options.Value?.CacheDirectory ?? ".mesh-cache");
     private bool _disposed;
 
-    public CompilationCacheService(
-        IOptions<CompilationCacheOptions> options,
-        ILogger<CompilationCacheService>? logger = null)
-    {
-        _options = options.Value;
-        _logger = logger;
-
-        // Resolve absolute path
-        _absoluteCacheDirectory = Path.IsPathRooted(_options.CacheDirectory)
-            ? _options.CacheDirectory
-            : Path.GetFullPath(Path.Combine(Directory.GetCurrentDirectory(), _options.CacheDirectory));
-    }
+    private static string ResolveAbsolutePath(string cacheDirectory) =>
+        Path.IsPathRooted(cacheDirectory)
+            ? cacheDirectory
+            : Path.GetFullPath(Path.Combine(Directory.GetCurrentDirectory(), cacheDirectory));
 
     /// <inheritdoc />
     public string CacheDirectory => _absoluteCacheDirectory;
@@ -205,19 +204,19 @@ internal class CompilationCacheService : ICompilationCacheService, IDisposable
         // All files must exist
         if (!File.Exists(dllPath))
         {
-            _logger?.LogDebug("Cache miss for {NodeName}: DLL not found at {DllPath}", nodeName, dllPath);
+            logger.LogDebug("Cache miss for {NodeName}: DLL not found at {DllPath}", nodeName, dllPath);
             return false;
         }
 
         if (!File.Exists(pdbPath))
         {
-            _logger?.LogDebug("Cache miss for {NodeName}: PDB not found at {PdbPath}", nodeName, pdbPath);
+            logger.LogDebug("Cache miss for {NodeName}: PDB not found at {PdbPath}", nodeName, pdbPath);
             return false;
         }
 
         if (_options.EnableSourceDebugging && !File.Exists(sourcePath))
         {
-            _logger?.LogDebug("Cache miss for {NodeName}: Source not found at {SourcePath}", nodeName, sourcePath);
+            logger.LogDebug("Cache miss for {NodeName}: Source not found at {SourcePath}", nodeName, sourcePath);
             return false;
         }
 
@@ -227,13 +226,13 @@ internal class CompilationCacheService : ICompilationCacheService, IDisposable
 
         if (!isValid)
         {
-            _logger?.LogDebug(
+            logger.LogDebug(
                 "Cache stale for {NodeName}: DLL modified at {DllTime}, node modified at {NodeTime}",
                 nodeName, dllLastWrite, lastModified);
         }
         else
         {
-            _logger?.LogDebug("Cache hit for {NodeName}", nodeName);
+            logger.LogDebug("Cache hit for {NodeName}", nodeName);
         }
 
         return isValid;
@@ -252,9 +251,17 @@ internal class CompilationCacheService : ICompilationCacheService, IDisposable
         => Path.Combine(_absoluteCacheDirectory, $"{nodeName}.cs");
 
     /// <inheritdoc />
+    /// <remarks>
+    /// The XML file name uses the "DynamicNode_" prefix to match the assembly name,
+    /// which is required for Namotion.Reflection to find the documentation at runtime.
+    /// </remarks>
+    public string GetXmlDocPath(string nodeName)
+        => Path.Combine(_absoluteCacheDirectory, $"DynamicNode_{nodeName}.xml");
+
+    /// <inheritdoc />
     public void InvalidateCache(string nodeName)
     {
-        _logger?.LogDebug("Invalidating cache for {NodeName}", nodeName);
+        logger.LogDebug("Invalidating cache for {NodeName}", nodeName);
 
         // First, unload the AssemblyLoadContext to release the file lock
         UnloadContext(nodeName);
@@ -267,7 +274,8 @@ internal class CompilationCacheService : ICompilationCacheService, IDisposable
         {
             GetDllPath(nodeName),
             GetPdbPath(nodeName),
-            GetSourcePath(nodeName)
+            GetSourcePath(nodeName),
+            GetXmlDocPath(nodeName)
         };
 
         foreach (var file in filesToDelete)
@@ -277,12 +285,12 @@ internal class CompilationCacheService : ICompilationCacheService, IDisposable
                 if (File.Exists(file))
                 {
                     File.Delete(file);
-                    _logger?.LogDebug("Deleted cached file: {FilePath}", file);
+                    logger.LogDebug("Deleted cached file: {FilePath}", file);
                 }
             }
             catch (Exception ex)
             {
-                _logger?.LogWarning(ex, "Failed to delete cached file: {FilePath}", file);
+                logger.LogWarning(ex, "Failed to delete cached file: {FilePath}", file);
             }
         }
     }
@@ -302,7 +310,7 @@ internal class CompilationCacheService : ICompilationCacheService, IDisposable
         if (!Directory.Exists(_absoluteCacheDirectory))
         {
             Directory.CreateDirectory(_absoluteCacheDirectory);
-            _logger?.LogInformation("Created compilation cache directory: {CacheDirectory}", _absoluteCacheDirectory);
+            logger.LogInformation("Created compilation cache directory: {CacheDirectory}", _absoluteCacheDirectory);
         }
     }
 
@@ -343,8 +351,8 @@ internal class CompilationCacheService : ICompilationCacheService, IDisposable
         return _loadContexts.GetOrAdd(nodeName, name =>
         {
             var dllPath = GetDllPath(name);
-            _logger?.LogDebug("Creating new AssemblyLoadContext for {NodeName}", name);
-            return new NodeAssemblyLoadContext(name, dllPath, _logger);
+            logger.LogDebug("Creating new AssemblyLoadContext for {NodeName}", name);
+            return new NodeAssemblyLoadContext(name, dllPath, logger);
         });
     }
 
@@ -362,7 +370,7 @@ internal class CompilationCacheService : ICompilationCacheService, IDisposable
     {
         if (_loadContexts.TryRemove(nodeName, out var context))
         {
-            _logger?.LogDebug("Unloading AssemblyLoadContext for {NodeName}", nodeName);
+            logger.LogDebug("Unloading AssemblyLoadContext for {NodeName}", nodeName);
             context.Dispose();
         }
     }
@@ -377,7 +385,7 @@ internal class CompilationCacheService : ICompilationCacheService, IDisposable
 
         _disposed = true;
 
-        _logger?.LogDebug("Disposing CompilationCacheService, unloading all {Count} contexts", _loadContexts.Count);
+        logger.LogDebug("Disposing CompilationCacheService, unloading all {Count} contexts", _loadContexts.Count);
 
         foreach (var kvp in _loadContexts)
         {
@@ -387,7 +395,7 @@ internal class CompilationCacheService : ICompilationCacheService, IDisposable
             }
             catch (Exception ex)
             {
-                _logger?.LogWarning(ex, "Failed to dispose context for {NodeName}", kvp.Key);
+                logger.LogWarning(ex, "Failed to dispose context for {NodeName}", kvp.Key);
             }
         }
 

@@ -9,7 +9,9 @@ using FluentAssertions;
 using MeshWeaver.Domain;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Mesh;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
+using Namotion.Reflection;
 using Xunit;
 
 namespace MeshWeaver.Graph.Test;
@@ -23,6 +25,8 @@ public class MeshNodeCompilationServiceTest : IDisposable
     private readonly string _testCacheDir;
     private readonly ITypeRegistry _typeRegistry;
     private readonly IOptions<CompilationCacheOptions> _cacheOptions;
+    private readonly ICompilationCacheService _cacheService;
+    private readonly ITypeCompilationService _typeCompiler;
 
     public MeshNodeCompilationServiceTest()
     {
@@ -37,10 +41,16 @@ public class MeshNodeCompilationServiceTest : IDisposable
             EnableCompilationCache = true,
             EnableSourceDebugging = true
         });
+
+        _cacheService = new CompilationCacheService(_cacheOptions, NullLogger<CompilationCacheService>.Instance);
+        _typeCompiler = new TypeCompilationService(_typeRegistry, _cacheService, _cacheOptions, NullLogger<TypeCompilationService>.Instance);
     }
 
     public void Dispose()
     {
+        if (_cacheService is IDisposable disposable)
+            disposable.Dispose();
+
         if (Directory.Exists(_testCacheDir))
         {
             try
@@ -54,12 +64,15 @@ public class MeshNodeCompilationServiceTest : IDisposable
         }
     }
 
+    private MeshNodeCompilationService CreateService(TestNodeTypeService nodeTypeService) =>
+        new(nodeTypeService, _cacheService, _typeCompiler, NullLogger<MeshNodeCompilationService>.Instance);
+
     [Fact(Timeout = 15000)]
     public async Task GetAssemblyLocationAsync_ReturnsNull_WhenNodeTypeIsNull()
     {
         // Arrange
         var nodeTypeService = new TestNodeTypeService();
-        var service = new MeshNodeCompilationService(nodeTypeService, _typeRegistry, _cacheOptions);
+        var service = CreateService(nodeTypeService);
 
         var node = new MeshNode("test/no-type")
         {
@@ -80,7 +93,7 @@ public class MeshNodeCompilationServiceTest : IDisposable
     {
         // Arrange
         var nodeTypeService = new TestNodeTypeService(); // Empty - no data models
-        var service = new MeshNodeCompilationService(nodeTypeService, _typeRegistry, _cacheOptions);
+        var service = CreateService(nodeTypeService);
 
         var node = new MeshNode("test/unknown-type")
         {
@@ -115,7 +128,7 @@ public record StoryType
         var nodeTypeService = new TestNodeTypeService();
         nodeTypeService.AddDataModel("story", dataModel);
 
-        var service = new MeshNodeCompilationService(nodeTypeService, _typeRegistry, _cacheOptions);
+        var service = CreateService(nodeTypeService);
 
         var node = new MeshNode("org/stories/my-story")
         {
@@ -151,7 +164,7 @@ public record ProjectType
         var nodeTypeService = new TestNodeTypeService();
         nodeTypeService.AddDataModel("project", dataModel);
 
-        var service = new MeshNodeCompilationService(nodeTypeService, _typeRegistry, _cacheOptions);
+        var service = CreateService(nodeTypeService);
 
         var node = new MeshNode("org/projects/my-project")
         {
@@ -187,7 +200,7 @@ public record CachedItemType
         var nodeTypeService = new TestNodeTypeService();
         nodeTypeService.AddDataModel("cached-item", dataModel);
 
-        var service = new MeshNodeCompilationService(nodeTypeService, _typeRegistry, _cacheOptions);
+        var service = CreateService(nodeTypeService);
 
         var node = new MeshNode("org/items/cached")
         {
@@ -231,7 +244,7 @@ public record DebugItemType
         var nodeTypeService = new TestNodeTypeService();
         nodeTypeService.AddDataModel("debug-item", dataModel);
 
-        var service = new MeshNodeCompilationService(nodeTypeService, _typeRegistry, _cacheOptions);
+        var service = CreateService(nodeTypeService);
 
         var node = new MeshNode("debug/items/test")
         {
@@ -268,7 +281,7 @@ public record WidgetType
         var nodeTypeService = new TestNodeTypeService();
         nodeTypeService.AddDataModel("widget", dataModel);
 
-        var service = new MeshNodeCompilationService(nodeTypeService, _typeRegistry, _cacheOptions);
+        var service = CreateService(nodeTypeService);
 
         var node = new MeshNode("org/widgets/my-widget")
         {
@@ -311,7 +324,7 @@ public record ComponentType
         var nodeTypeService = new TestNodeTypeService();
         nodeTypeService.AddDataModel("component", dataModel);
 
-        var service = new MeshNodeCompilationService(nodeTypeService, _typeRegistry, _cacheOptions);
+        var service = CreateService(nodeTypeService);
 
         var node = new MeshNode("app/components/header")
         {
@@ -374,7 +387,7 @@ public record RecordType
         var nodeTypeService = new TestNodeTypeService();
         nodeTypeService.AddDataModel("record", dataModel);
 
-        var service = new MeshNodeCompilationService(nodeTypeService, _typeRegistry, _cacheOptions);
+        var service = CreateService(nodeTypeService);
 
         var node = new MeshNode("data/records/test")
         {
@@ -404,6 +417,121 @@ public record RecordType
         idProperty!.GetValue(instance).Should().Be("default-id");
         titleProperty!.GetValue(instance).Should().Be("Default Title");
         countProperty!.GetValue(instance).Should().Be(42);
+    }
+
+    [Fact(Timeout = 25000)]
+    public async Task GetAssemblyLocationAsync_GeneratesXmlDocumentation()
+    {
+        // Arrange - DataModel with XML documentation comments
+        var dataModel = new DataModel
+        {
+            Id = "documented-item",
+            DisplayName = "Documented Item",
+            TypeSource = @"
+/// <summary>
+/// This is a documented item type for testing XML documentation generation.
+/// </summary>
+public record DocumentedItemType
+{
+    /// <summary>
+    /// The unique identifier of the item.
+    /// </summary>
+    public string Id { get; init; } = string.Empty;
+
+    /// <summary>
+    /// The title or name of the item.
+    /// </summary>
+    public string Title { get; init; } = string.Empty;
+
+    /// <summary>
+    /// The count or quantity of items.
+    /// </summary>
+    public int Count { get; init; }
+}"
+        };
+
+        var nodeTypeService = new TestNodeTypeService();
+        nodeTypeService.AddDataModel("documented-item", dataModel);
+
+        var service = CreateService(nodeTypeService);
+
+        var node = new MeshNode("docs/items/test")
+        {
+            Name = "Test Documented Item",
+            NodeType = "documented-item",
+            LastModified = DateTimeOffset.UtcNow
+        };
+
+        // Act
+        var assemblyPath = await service.GetAssemblyLocationAsync(node);
+
+        // Assert - Verify XML documentation file exists
+        // The XML file uses "DynamicNode_" prefix to match the assembly name for Namotion.Reflection
+        assemblyPath.Should().NotBeNull();
+        var dllDir = Path.GetDirectoryName(assemblyPath)!;
+        var nodeName = Path.GetFileNameWithoutExtension(assemblyPath);
+        var xmlDocPath = Path.Combine(dllDir, $"DynamicNode_{nodeName}.xml");
+        File.Exists(xmlDocPath).Should().BeTrue("XML documentation file should be generated alongside DLL");
+
+        // Verify XML documentation content
+        var xmlContent = await File.ReadAllTextAsync(xmlDocPath);
+        xmlContent.Should().Contain("This is a documented item type");
+        xmlContent.Should().Contain("The unique identifier of the item");
+        xmlContent.Should().Contain("The title or name of the item");
+        xmlContent.Should().Contain("The count or quantity of items");
+    }
+
+    [Fact(Timeout = 25000)]
+    public async Task GetAssemblyLocationAsync_XmlDocs_CanBeReadByNamotionReflection()
+    {
+        // Arrange - DataModel with XML documentation comments
+        var dataModel = new DataModel
+        {
+            Id = "namotion-test",
+            DisplayName = "Namotion Test",
+            TypeSource = @"
+/// <summary>
+/// A type with XML documentation for Namotion.Reflection testing.
+/// </summary>
+public record NamotionTestType
+{
+    /// <summary>
+    /// The name property with documentation.
+    /// </summary>
+    public string Name { get; init; } = string.Empty;
+}"
+        };
+
+        var nodeTypeService = new TestNodeTypeService();
+        nodeTypeService.AddDataModel("namotion-test", dataModel);
+
+        var service = CreateService(nodeTypeService);
+
+        var node = new MeshNode("test/namotion/item")
+        {
+            Name = "Namotion Test Item",
+            NodeType = "namotion-test",
+            LastModified = DateTimeOffset.UtcNow
+        };
+
+        // Act
+        var assemblyPath = await service.GetAssemblyLocationAsync(node);
+
+        // Assert
+        assemblyPath.Should().NotBeNull();
+        var assembly = Assembly.LoadFrom(assemblyPath!);
+
+        var namotionTestType = assembly.GetType("MeshWeaver.Graph.Dynamic.NamotionTestType");
+        namotionTestType.Should().NotBeNull();
+
+        // Get XML documentation using Namotion.Reflection
+        var typeSummary = namotionTestType!.GetXmlDocsSummary();
+        typeSummary.Should().Contain("A type with XML documentation");
+
+        var nameProperty = namotionTestType.GetProperty("Name");
+        nameProperty.Should().NotBeNull();
+        var propertySummary = nameProperty!.GetXmlDocsSummary();
+        propertySummary.Should().Contain("The name property with documentation");
     }
 }
 

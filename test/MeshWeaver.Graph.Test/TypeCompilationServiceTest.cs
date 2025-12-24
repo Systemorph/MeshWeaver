@@ -9,6 +9,8 @@ using FluentAssertions;
 using MeshWeaver.Domain;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Mesh;
+using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 using Xunit;
 
 namespace MeshWeaver.Graph.Test;
@@ -25,7 +27,9 @@ public class TypeCompilationServiceTest
     public TypeCompilationServiceTest()
     {
         _typeRegistry = new TestTypeRegistry();
-        _service = new TypeCompilationService(_typeRegistry);
+        var cacheOptions = Options.Create(new CompilationCacheOptions());
+        var cacheService = new CompilationCacheService(cacheOptions, NullLogger<CompilationCacheService>.Instance);
+        _service = new TypeCompilationService(_typeRegistry, cacheService, cacheOptions, NullLogger<TypeCompilationService>.Instance);
     }
 
     [Fact(Timeout = 10000)]
@@ -341,8 +345,8 @@ public class TypeCompilationServiceCacheTest : IDisposable
             EnableSourceDebugging = true
         });
 
-        _cacheService = new CompilationCacheService(cacheOptions);
-        _service = new TypeCompilationService(_typeRegistry, null, _cacheService, cacheOptions);
+        _cacheService = new CompilationCacheService(cacheOptions, NullLogger<CompilationCacheService>.Instance);
+        _service = new TypeCompilationService(_typeRegistry, _cacheService, cacheOptions, NullLogger<TypeCompilationService>.Instance);
     }
 
     public void Dispose()
@@ -725,12 +729,13 @@ public class TypeCompilationServiceCacheDisabledTest
     {
         _typeRegistry = new TestTypeRegistry();
 
-        var cacheOptions = Microsoft.Extensions.Options.Options.Create(new CompilationCacheOptions
+        var cacheOptions = Options.Create(new CompilationCacheOptions
         {
             EnableCompilationCache = false
         });
 
-        _service = new TypeCompilationService(_typeRegistry, null, null, cacheOptions);
+        var cacheService = new CompilationCacheService(cacheOptions, NullLogger<CompilationCacheService>.Instance);
+        _service = new TypeCompilationService(_typeRegistry, cacheService, cacheOptions, NullLogger<TypeCompilationService>.Instance);
     }
 
     [Fact(Timeout = 10000)]

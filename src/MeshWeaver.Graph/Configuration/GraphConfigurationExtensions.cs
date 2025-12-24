@@ -90,29 +90,13 @@ public static class GraphConfigurationExtensions
             services.AddSingleton<ICompilationCacheService, CompilationCacheService>();
 
             // Register type compilation service with caching support
-            services.AddSingleton<ITypeCompilationService>(sp =>
-            {
-                var registry = sp.GetRequiredService<ITypeRegistry>();
-                var cacheService = sp.GetService<ICompilationCacheService>();
-                var cacheOptions = sp.GetService<Microsoft.Extensions.Options.IOptions<CompilationCacheOptions>>();
-                return new TypeCompilationService(
-                    registry,
-                    sp.GetService<ILogger<TypeCompilationService>>(),
-                    cacheService,
-                    cacheOptions);
-            });
+            services.AddSingleton<ITypeCompilationService, TypeCompilationService>();
 
             // Register on-demand compilation service for lazy loading of node assemblies
-            services.AddSingleton<IMeshNodeCompilationService>(sp =>
-                new MeshNodeCompilationService(
-                    sp.GetRequiredService<INodeTypeService>(),
-                    sp.GetRequiredService<ITypeRegistry>(),
-                    sp.GetService<Microsoft.Extensions.Options.IOptions<CompilationCacheOptions>>(),
-                    sp.GetService<ILogger<MeshNodeCompilationService>>()));
+            services.AddSingleton<IMeshNodeCompilationService, MeshNodeCompilationService>();
 
             // Register DataModel initializer for type compilation
-            services.AddSingleton<IConfigurationInitializer>(sp =>
-                new DataModelInitializer(sp.GetRequiredService<ITypeCompilationService>()));
+            services.AddSingleton<IConfigurationInitializer, DataModelInitializer>();
 
             // Register NodeType initializer to register NodeTypeConfigurations
             services.AddSingleton<IConfigurationInitializer, NodeTypeRegistrationInitializer>();

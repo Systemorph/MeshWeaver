@@ -3,6 +3,7 @@ using System.IO;
 using System.Linq;
 using FluentAssertions;
 using MeshWeaver.Graph.Configuration;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Xunit;
 
@@ -29,7 +30,7 @@ public class CompilationCacheServiceTest : IDisposable
             EnableSourceDebugging = true
         });
 
-        _service = new CompilationCacheService(options);
+        _service = new CompilationCacheService(options, NullLogger<CompilationCacheService>.Instance);
     }
 
     public void Dispose()
@@ -268,7 +269,7 @@ public class CompilationCacheServiceTest : IDisposable
         // Arrange
         var emptyDir = Path.Combine(Path.GetTempPath(), $"empty-cache-{Guid.NewGuid():N}");
         var options = Options.Create(new CompilationCacheOptions { CacheDirectory = emptyDir });
-        var service = new CompilationCacheService(options);
+        var service = new CompilationCacheService(options, NullLogger<CompilationCacheService>.Instance);
 
         // Act
         var paths = service.GetAllCachedAssemblyPaths();
@@ -283,7 +284,7 @@ public class CompilationCacheServiceTest : IDisposable
         // Arrange
         var newDir = Path.Combine(Path.GetTempPath(), $"new-cache-{Guid.NewGuid():N}");
         var options = Options.Create(new CompilationCacheOptions { CacheDirectory = newDir });
-        var service = new CompilationCacheService(options);
+        var service = new CompilationCacheService(options, NullLogger<CompilationCacheService>.Instance);
 
         try
         {
@@ -314,7 +315,7 @@ public class CompilationCacheServiceDisabledTest
         {
             EnableCompilationCache = false
         });
-        var service = new CompilationCacheService(options);
+        var service = new CompilationCacheService(options, NullLogger<CompilationCacheService>.Instance);
 
         // Act
         var isValid = service.IsCacheValid("any_node", DateTimeOffset.UtcNow);
@@ -344,7 +345,7 @@ public class CompilationCacheServiceLoadContextTest : IDisposable
             EnableSourceDebugging = true
         });
 
-        _service = new CompilationCacheService(options);
+        _service = new CompilationCacheService(options, NullLogger<CompilationCacheService>.Instance);
     }
 
     public void Dispose()
