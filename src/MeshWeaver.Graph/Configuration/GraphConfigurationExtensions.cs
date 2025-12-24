@@ -83,13 +83,32 @@ public static class GraphConfigurationExtensions
             .AddDynamicViews() // Enable dynamic view compilation and rendering
             .WithServices(services =>
         {
+            // Register compilation cache options (can be configured via IConfiguration)
+            services.AddOptions<CompilationCacheOptions>();
+
+            // Register compilation cache service
+            services.AddSingleton<ICompilationCacheService, CompilationCacheService>();
+
+            // Register type compilation service with caching support
             services.AddSingleton<ITypeCompilationService>(sp =>
             {
                 var registry = sp.GetRequiredService<ITypeRegistry>();
+                var cacheService = sp.GetService<ICompilationCacheService>();
+                var cacheOptions = sp.GetService<Microsoft.Extensions.Options.IOptions<CompilationCacheOptions>>();
                 return new TypeCompilationService(
                     registry,
-                    sp.GetService<ILogger<TypeCompilationService>>());
+                    sp.GetService<ILogger<TypeCompilationService>>(),
+                    cacheService,
+                    cacheOptions);
             });
+
+            // Register on-demand compilation service for lazy loading of node assemblies
+            services.AddSingleton<IMeshNodeCompilationService>(sp =>
+                new MeshNodeCompilationService(
+                    sp.GetRequiredService<INodeTypeService>(),
+                    sp.GetRequiredService<ITypeRegistry>(),
+                    sp.GetService<Microsoft.Extensions.Options.IOptions<CompilationCacheOptions>>(),
+                    sp.GetService<ILogger<MeshNodeCompilationService>>()));
 
             // Register DataModel initializer for type compilation
             services.AddSingleton<IConfigurationInitializer>(sp =>

@@ -9,7 +9,7 @@ namespace MeshWeaver.Graph.Configuration;
 /// Creates hub configurations dynamically from JSON-based configuration.
 /// Replaces the static methods in GraphDomainExtensions.
 /// </summary>
-public class DynamicHubConfigurationFactory
+internal class DynamicHubConfigurationFactory
 {
     private readonly ITypeCompilationService _typeCompiler;
     private readonly IConfiguration _appConfig;

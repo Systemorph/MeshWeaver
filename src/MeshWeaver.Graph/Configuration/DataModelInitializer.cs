@@ -12,7 +12,7 @@ namespace MeshWeaver.Graph.Configuration;
 /// Compiles types from DataModel configs, registers them with the hub's data context,
 /// and loads data from persistence for each node type.
 /// </summary>
-public class DataModelInitializer(ITypeCompilationService typeCompiler) : IConfigurationInitializer
+internal class DataModelInitializer(ITypeCompilationService typeCompiler) : IConfigurationInitializer
 {
     public int Priority => 100; // Run early - types needed for other initializers
 

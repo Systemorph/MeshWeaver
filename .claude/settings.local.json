@@ -62,7 +62,8 @@
       "Bash(git commit:*)",
       "Bash(for f in *.json)",
       "Bash(do sed -i 's/\"\"path\"\": \"\"_types\\\\//\"\"path\"\": \"\"type\\\\//g' \"$f\")",
-      "Bash(done)"
+      "Bash(done)",
+      "Bash(tree:*)"
     ],
     "deny": []
   }

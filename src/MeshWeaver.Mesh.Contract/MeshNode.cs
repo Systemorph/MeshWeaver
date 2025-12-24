@@ -119,6 +119,13 @@ public record MeshNode(string Path)
     public bool IsPersistent { get; init; }
 
     /// <summary>
+    /// Timestamp when this node was last modified.
+    /// Used for cache invalidation of dynamically compiled assemblies.
+    /// Automatically set to UtcNow when creating new nodes.
+    /// </summary>
+    public DateTimeOffset LastModified { get; init; } = DateTimeOffset.UtcNow;
+
+    /// <summary>
     /// The data model content for this node.
     /// The type depends on NodeType (e.g., Organization, Project, Story).
     /// </summary>

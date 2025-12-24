@@ -1,10 +1,12 @@
+using MeshWeaver.Mesh;
+
 namespace MeshWeaver.Graph.Configuration;
 
 /// <summary>
-/// Service for compiling C# type definitions at runtime.
-/// Uses Microsoft.DotNet.Interactive for dynamic compilation.
+/// Internal service for compiling C# type definitions at runtime.
+/// Supports disk-based caching with PDB generation for debugging.
 /// </summary>
-public interface ITypeCompilationService
+internal interface ITypeCompilationService
 {
     /// <summary>
     /// Compiles the TypeSource from a DataModel and returns the compiled Type.
@@ -14,6 +16,23 @@ public interface ITypeCompilationService
     /// <param name="ct">Cancellation token</param>
     /// <returns>The compiled Type</returns>
     Task<Type> CompileTypeAsync(DataModel model, CancellationToken ct = default);
+
+    /// <summary>
+    /// Compiles a DataModel with caching support using MeshNode.LastModified for cache validation.
+    /// Generates a MeshNodeAttribute in the assembly for registration via InstallAssemblies.
+    /// </summary>
+    /// <param name="model">The DataModel containing the type source</param>
+    /// <param name="node">The MeshNode (provides LastModified for cache validation)</param>
+    /// <param name="nodeTypeConfig">Optional NodeTypeConfig for additional settings</param>
+    /// <param name="hubFeatures">Optional HubFeatureConfig for hub configuration</param>
+    /// <param name="ct">Cancellation token</param>
+    /// <returns>The compiled Type</returns>
+    Task<Type> CompileTypeWithCacheAsync(
+        DataModel model,
+        MeshNode node,
+        NodeTypeConfig? nodeTypeConfig,
+        HubFeatureConfig? hubFeatures,
+        CancellationToken ct = default);
 
     /// <summary>
     /// Compiles all DataModels and registers their types.
