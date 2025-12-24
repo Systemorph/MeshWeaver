@@ -1,4 +1,4 @@
-using System.Collections.Concurrent;
+﻿using System.Collections.Concurrent;
 using System.Reflection;
 using System.Text.RegularExpressions;
 using MeshWeaver.Domain;
@@ -15,31 +15,19 @@ namespace MeshWeaver.Graph.Configuration;
 /// Compiles C# type definitions at runtime using Roslyn CSharpCompilation.
 /// Supports disk-based caching with PDB generation for debugging.
 /// </summary>
-internal class TypeCompilationService : ITypeCompilationService
+internal class TypeCompilationService(
+    ITypeRegistry typeRegistry,
+    ICompilationCacheService cacheService,
+    IOptions<CompilationCacheOptions> cacheOptions,
+    ILogger<TypeCompilationService> logger)
+    : ITypeCompilationService
 {
-    private readonly ITypeRegistry _typeRegistry;
-    private readonly ILogger<TypeCompilationService>? _logger;
-    private readonly ICompilationCacheService? _cacheService;
-    private readonly DynamicMeshNodeAttributeGenerator _attributeGenerator;
-    private readonly CompilationCacheOptions _cacheOptions;
+    private readonly DynamicMeshNodeAttributeGenerator _attributeGenerator = new();
+    private readonly CompilationCacheOptions _cacheOptions = cacheOptions.Value ?? new CompilationCacheOptions();
     private readonly ConcurrentDictionary<string, Type> _compiledTypes = new();
-    private readonly List<MetadataReference> _references;
+    private readonly List<MetadataReference> _references = GetDefaultReferences();
 
     private const string DynamicNamespace = "MeshWeaver.Graph.Dynamic";
-
-    public TypeCompilationService(
-        ITypeRegistry typeRegistry,
-        ILogger<TypeCompilationService>? logger = null,
-        ICompilationCacheService? cacheService = null,
-        IOptions<CompilationCacheOptions>? cacheOptions = null)
-    {
-        _typeRegistry = typeRegistry;
-        _logger = logger;
-        _cacheService = cacheService;
-        _cacheOptions = cacheOptions?.Value ?? new CompilationCacheOptions();
-        _attributeGenerator = new DynamicMeshNodeAttributeGenerator();
-        _references = GetDefaultReferences();
-    }
 
     private static List<MetadataReference> GetDefaultReferences()
     {
@@ -115,7 +103,7 @@ namespace {DynamicNamespace}
     {model.TypeSource}
 }}";
 
-        _logger?.LogDebug("Compiling type for {Id}", model.Id);
+        logger.LogDebug("Compiling type for {Id}", model.Id);
 
         var syntaxTree = CSharpSyntaxTree.ParseText(code, cancellationToken: ct);
 
@@ -140,7 +128,7 @@ namespace {DynamicNamespace}
                 .ToList();
 
             var errorMessage = $"Type compilation failed for '{model.Id}':\n{string.Join('\n', errors)}";
-            _logger?.LogError("{ErrorMessage}", errorMessage);
+            logger.LogError("{ErrorMessage}", errorMessage);
             throw new TypeCompilationException(model.Id, errorMessage);
         }
 
@@ -161,13 +149,13 @@ namespace {DynamicNamespace}
         }
 
         // Register in type registry with short name
-        _typeRegistry.WithType(compiledType, typeName);
+        typeRegistry.WithType(compiledType, typeName);
 
         // Cache the type
         _compiledTypes[model.Id] = compiledType;
         model.CompiledType = compiledType;
 
-        _logger?.LogInformation("Successfully compiled type {TypeName} for DataModel {Id}", typeName, model.Id);
+        logger.LogInformation("Successfully compiled type {TypeName} for DataModel {Id}", typeName, model.Id);
 
         return Task.FromResult(compiledType);
     }
@@ -180,12 +168,12 @@ namespace {DynamicNamespace}
         CancellationToken ct = default)
     {
         // If caching is disabled or cache service not available, fall back to in-memory compilation
-        if (!_cacheOptions.EnableCompilationCache || _cacheService == null)
+        if (!_cacheOptions.EnableCompilationCache)
         {
             return await CompileTypeAsync(model, ct);
         }
 
-        var nodeName = _cacheService.SanitizeNodeName(node.Path);
+        var nodeName = cacheService.SanitizeNodeName(node.Path);
 
         // Check if we have it in memory cache
         if (_compiledTypes.TryGetValue(model.Id, out var existingType))
@@ -195,14 +183,14 @@ namespace {DynamicNamespace}
         }
 
         // Check if disk cache is valid
-        if (_cacheService.IsCacheValid(nodeName, node.LastModified))
+        if (cacheService.IsCacheValid(nodeName, node.LastModified))
         {
-            _logger?.LogDebug("Using cached assembly for {NodeName}", nodeName);
+            logger.LogDebug("Using cached assembly for {NodeName}", nodeName);
 
             try
             {
                 // Load assembly using the cache service's isolated load context
-                var cachedAssembly = _cacheService.LoadAssembly(nodeName);
+                var cachedAssembly = cacheService.LoadAssembly(nodeName);
                 if (cachedAssembly != null)
                 {
                     var typeName = _attributeGenerator.ExtractTypeName(model.TypeSource);
@@ -212,26 +200,26 @@ namespace {DynamicNamespace}
                     if (compiledType != null)
                     {
                         // Register in type registry
-                        _typeRegistry.WithType(compiledType, typeName);
+                        typeRegistry.WithType(compiledType, typeName);
                         _compiledTypes[model.Id] = compiledType;
                         model.CompiledType = compiledType;
 
-                        _logger?.LogInformation("Loaded cached type {TypeName} for DataModel {Id}", typeName, model.Id);
+                        logger.LogInformation("Loaded cached type {TypeName} for DataModel {Id}", typeName, model.Id);
                         return compiledType;
                     }
 
-                    _logger?.LogWarning("Cached assembly exists but type {FullTypeName} not found, recompiling", fullTypeName);
+                    logger.LogWarning("Cached assembly exists but type {FullTypeName} not found, recompiling", fullTypeName);
                 }
             }
             catch (Exception ex)
             {
-                _logger?.LogWarning(ex, "Failed to load cached assembly for {NodeName}, recompiling", nodeName);
+                logger.LogWarning(ex, "Failed to load cached assembly for {NodeName}, recompiling", nodeName);
             }
         }
 
         // Invalidate old cache and recompile
-        _cacheService.InvalidateCache(nodeName);
-        _cacheService.EnsureCacheDirectoryExists();
+        cacheService.InvalidateCache(nodeName);
+        cacheService.EnsureCacheDirectoryExists();
 
         ct.ThrowIfCancellationRequested();
 
@@ -239,20 +227,23 @@ namespace {DynamicNamespace}
         var source = _attributeGenerator.GenerateAttributeSource(node, model, nodeTypeConfig, hubFeatures);
 
         // Write source file for debugging
-        var sourcePath = _cacheService.GetSourcePath(nodeName);
+        var sourcePath = cacheService.GetSourcePath(nodeName);
         if (_cacheOptions.EnableSourceDebugging)
         {
             await File.WriteAllTextAsync(sourcePath, source, ct);
-            _logger?.LogDebug("Wrote source file for debugging: {SourcePath}", sourcePath);
+            logger.LogDebug("Wrote source file for debugging: {SourcePath}", sourcePath);
         }
 
-        _logger?.LogInformation("Compiling assembly for {NodeName} (cache miss or stale)", nodeName);
+        logger.LogInformation("Compiling assembly for {NodeName} (cache miss or stale)", nodeName);
 
         // Parse with source path and encoding embedded (critical for PDB source linking)
         // SourceText with encoding is REQUIRED for debug information emission
+        // DocumentationMode.Diagnose enables XML documentation generation
         var sourceText = Microsoft.CodeAnalysis.Text.SourceText.From(source, System.Text.Encoding.UTF8);
+        var parseOptions = new CSharpParseOptions(documentationMode: DocumentationMode.Diagnose);
         var syntaxTree = CSharpSyntaxTree.ParseText(
             sourceText,
+            parseOptions,
             path: _cacheOptions.EnableSourceDebugging ? sourcePath : "",
             cancellationToken: ct);
 
@@ -266,23 +257,25 @@ namespace {DynamicNamespace}
                 .WithOptimizationLevel(OptimizationLevel.Debug) // Debug for PDB
                 .WithPlatform(Platform.AnyCpu));
 
-        // Emit DLL and PDB to disk
-        var dllPath = _cacheService.GetDllPath(nodeName);
-        var pdbPath = _cacheService.GetPdbPath(nodeName);
+        // Emit DLL, PDB, and XML documentation to disk
+        var dllPath = cacheService.GetDllPath(nodeName);
+        var pdbPath = cacheService.GetPdbPath(nodeName);
+        var xmlDocPath = cacheService.GetXmlDocPath(nodeName);
 
         await using var dllStream = File.Create(dllPath);
         await using var pdbStream = File.Create(pdbPath);
+        await using var xmlDocStream = File.Create(xmlDocPath);
 
         var emitOptions = new EmitOptions(
             debugInformationFormat: DebugInformationFormat.PortablePdb,
             pdbFilePath: pdbPath);
 
-        var emitResult = compilation.Emit(dllStream, pdbStream, options: emitOptions, cancellationToken: ct);
+        var emitResult = compilation.Emit(dllStream, pdbStream, xmlDocumentationStream: xmlDocStream, options: emitOptions, cancellationToken: ct);
 
         if (!emitResult.Success)
         {
             // Clean up failed artifacts
-            _cacheService.InvalidateCache(nodeName);
+            cacheService.InvalidateCache(nodeName);
 
             var errors = emitResult.Diagnostics
                 .Where(d => d.Severity == DiagnosticSeverity.Error)
@@ -290,16 +283,17 @@ namespace {DynamicNamespace}
                 .ToList();
 
             var errorMessage = $"Type compilation failed for '{model.Id}':\n{string.Join('\n', errors)}";
-            _logger?.LogError("{ErrorMessage}", errorMessage);
+            logger.LogError("{ErrorMessage}", errorMessage);
             throw new TypeCompilationException(model.Id, errorMessage);
         }
 
         // Close streams before loading
         await dllStream.DisposeAsync();
         await pdbStream.DisposeAsync();
+        await xmlDocStream.DisposeAsync();
 
         // Load using the cache service's isolated load context (required for debugger to find PDB)
-        var assembly = _cacheService.LoadAssembly(nodeName);
+        var assembly = cacheService.LoadAssembly(nodeName);
         if (assembly == null)
         {
             throw new TypeCompilationException(model.Id, $"Failed to load compiled assembly from {dllPath}");
@@ -319,11 +313,11 @@ namespace {DynamicNamespace}
         }
 
         // Register in type registry
-        _typeRegistry.WithType(resultType, extractedTypeName);
+        typeRegistry.WithType(resultType, extractedTypeName);
         _compiledTypes[model.Id] = resultType;
         model.CompiledType = resultType;
 
-        _logger?.LogInformation("Successfully compiled and cached type {TypeName} for DataModel {Id} at {DllPath}",
+        logger.LogInformation("Successfully compiled and cached type {TypeName} for DataModel {Id} at {DllPath}",
             extractedTypeName, model.Id, dllPath);
 
         return resultType;
@@ -349,7 +343,7 @@ namespace {DynamicNamespace}
             }
             catch (Exception ex)
             {
-                _logger?.LogWarning(ex, "Failed to compile type for {Id}, skipping. Error: {Message}", model.Id, ex.Message);
+                logger.LogWarning(ex, "Failed to compile type for {Id}, skipping. Error: {Message}", model.Id, ex.Message);
                 // Continue with other types instead of failing completely
             }
         }
