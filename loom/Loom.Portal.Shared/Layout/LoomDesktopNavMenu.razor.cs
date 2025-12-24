@@ -11,7 +11,7 @@ public partial class LoomDesktopNavMenu : ComponentBase
             ? new Icons.Filled.Size24.Home()
             : new Icons.Regular.Size24.Home();
 
-    public static Icon GraphIcon(bool active = false)
+    public static Icon RootIcon(bool active = false)
         => active
             ? new Icons.Filled.Size24.BranchFork()
             : new Icons.Regular.Size24.BranchFork();

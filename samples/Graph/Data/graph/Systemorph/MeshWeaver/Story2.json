@@ -1,0 +1,20 @@
+{
+  "path": "graph/Systemorph/MeshWeaver/Story2",
+  "key": "graph/Systemorph/MeshWeaver/Story2",
+  "name": "Dashboard Design",
+  "nodeType": "Systemorph/type/Project/Story",
+  "description": "Create the main dashboard layout",
+  "iconName": "Document",
+  "displayOrder": 20,
+  "addressSegments": 0,
+  "isPersistent": true,
+  "content": {
+    "id": "Story2",
+    "title": "Dashboard Design",
+    "description": "Create the main dashboard layout and components",
+    "status": "Todo",
+    "points": 8,
+    "priority": 2,
+    "iconName": "Document"
+  }
+}

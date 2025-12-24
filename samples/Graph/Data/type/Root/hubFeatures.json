@@ -1,6 +1,6 @@
 {
   "$type": "HubFeatureConfig",
-  "id": "graph",
+  "id": "Root",
   "enableMeshNavigation": true,
   "enableDynamicNodeTypeAreas": true
 }

@@ -1,5 +1,5 @@
 {
-  "path": "type/person",
+  "path": "type/Person",
   "name": "Person",
   "nodeType": "NodeType",
   "description": "A person with profile and avatar",
@@ -8,7 +8,7 @@
   "isPersistent": true,
   "content": {
     "$type": "NodeTypeDefinition",
-    "id": "person",
+    "id": "Person",
     "displayName": "Person",
     "iconName": "Person",
     "description": "A person with profile and avatar",

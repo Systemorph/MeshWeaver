@@ -1,6 +1,6 @@
 {
   "$type": "DataModel",
-  "id": "article",
+  "id": "Article",
   "displayName": "Article",
   "iconName": "DocumentText",
   "description": "A content article with YAML frontmatter",

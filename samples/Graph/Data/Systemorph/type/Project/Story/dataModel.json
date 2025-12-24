@@ -1,6 +1,6 @@
 {
   "$type": "DataModel",
-  "id": "story",
+  "id": "Story",
   "displayName": "Story",
   "iconName": "Document",
   "description": "A user story or task",

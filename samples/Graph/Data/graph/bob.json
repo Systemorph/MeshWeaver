@@ -2,7 +2,7 @@
   "path": "graph/bob",
   "key": "graph/bob",
   "name": "Bob Wilson",
-  "nodeType": "type/person",
+  "nodeType": "type/Person",
   "description": "Product Manager",
   "iconName": "Person",
   "displayOrder": 2,

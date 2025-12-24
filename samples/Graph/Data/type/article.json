@@ -1,5 +1,5 @@
 {
-  "path": "type/article",
+  "path": "type/Article",
   "name": "Article",
   "nodeType": "NodeType",
   "description": "A content article with YAML frontmatter",
@@ -8,7 +8,7 @@
   "isPersistent": true,
   "content": {
     "$type": "NodeTypeDefinition",
-    "id": "article",
+    "id": "Article",
     "displayName": "Article",
     "iconName": "DocumentText",
     "description": "A content article with YAML frontmatter",

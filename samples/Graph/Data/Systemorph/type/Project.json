@@ -1,5 +1,5 @@
 {
-  "path": "type/project",
+  "path": "Systemorph/type/Project",
   "name": "Project",
   "nodeType": "NodeType",
   "description": "A project containing stories",
@@ -8,7 +8,7 @@
   "isPersistent": true,
   "content": {
     "$type": "NodeTypeDefinition",
-    "id": "project",
+    "id": "Project",
     "displayName": "Project",
     "iconName": "Folder",
     "description": "A project containing stories",

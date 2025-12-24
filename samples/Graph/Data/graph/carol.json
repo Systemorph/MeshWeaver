@@ -2,7 +2,7 @@
   "path": "graph/carol",
   "key": "graph/carol",
   "name": "Carol Martinez",
-  "nodeType": "type/person",
+  "nodeType": "type/Person",
   "description": "UX Designer",
   "iconName": "Person",
   "displayOrder": 3,

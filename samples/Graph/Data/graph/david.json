@@ -2,7 +2,7 @@
   "path": "graph/david",
   "key": "graph/david",
   "name": "David Kim",
-  "nodeType": "type/person",
+  "nodeType": "type/Person",
   "description": "DevOps Engineer",
   "iconName": "Person",
   "displayOrder": 4,
