@@ -107,7 +107,7 @@ public abstract class MeshCatalogBase : IMeshCatalog
     protected abstract Task UpdateNodeAsync(MeshNode node);
 
     /// <inheritdoc />
-    public AddressResolution? ResolvePath(string path)
+    public async Task<AddressResolution?> ResolvePathAsync(string path)
     {
         if (string.IsNullOrEmpty(path))
             return null;
@@ -128,17 +128,17 @@ public abstract class MeshCatalogBase : IMeshCatalog
 
         if (configMatch.Node != null)
         {
-            return ResolveFromConfigNode(configMatch.Node, segments, path);
+            return await ResolveFromConfigNodeAsync(configMatch.Node, segments, path);
         }
 
         // 2. Try IPersistenceService - walk UP the path hierarchy to find best match
-        var persistenceMatch = FindBestPersistenceMatch(segments);
+        var (persistenceMatch, matchedSegmentCount) = await FindBestPersistenceMatchAsync(segments);
         if (persistenceMatch != null)
         {
-            // For persisted nodes, the full matched path IS the address
-            var matchedPath = string.Join("/", segments.Take(persistenceMatch.Segments.Length));
-            var remainder = persistenceMatch.Segments.Length < segments.Length
-                ? string.Join("/", segments.Skip(persistenceMatch.Segments.Length))
+            // Use the node's actual prefix as the address (handles Root namespace mapping)
+            var matchedPath = persistenceMatch.Prefix;
+            var remainder = matchedSegmentCount < segments.Length
+                ? string.Join("/", segments.Skip(matchedSegmentCount))
                 : null;
             return new AddressResolution(matchedPath, remainder);
         }
@@ -146,22 +146,31 @@ public abstract class MeshCatalogBase : IMeshCatalog
         return null;
     }
 
-    private MeshNode? FindBestPersistenceMatch(string[] segments)
+    private async Task<(MeshNode? Node, int MatchedSegments)> FindBestPersistenceMatchAsync(string[] segments)
     {
         // Walk from full path down to single segment, finding deepest existing node
         for (int depth = segments.Length; depth >= 1; depth--)
         {
             var testPath = string.Join("/", segments.Take(depth));
-            // Use synchronous check - ExistsAsync is lightweight
-            if (Persistence.ExistsAsync(testPath).GetAwaiter().GetResult())
-            {
-                return Persistence.GetNodeAsync(testPath).GetAwaiter().GetResult();
-            }
+
+            // Try direct path first
+            var node = await Persistence.GetNodeAsync(testPath);
+            if (node != null)
+                return (node, depth);
+
+            // Also check in Root namespace at each depth level
+            // This allows /Organizations to resolve to Root/Organizations
+            // and /Systemorph/MeshWeaver to resolve to Root/Systemorph/MeshWeaver
+            var rootPath = "Root/" + testPath;
+            node = await Persistence.GetNodeAsync(rootPath);
+            if (node != null)
+                return (node, depth);
         }
-        return null;
+
+        return (null, 0);
     }
 
-    private AddressResolution ResolveFromConfigNode(MeshNode matchedNode, string[] segments, string path)
+    private async Task<AddressResolution> ResolveFromConfigNodeAsync(MeshNode matchedNode, string[] segments, string path)
     {
         // For graph-style nodes (where the path IS the address), use all segments as address
         // This is determined by checking if there are NodeTypeConfigurations registered
@@ -172,12 +181,12 @@ public abstract class MeshCatalogBase : IMeshCatalog
         {
             // For graph-style nodes, find the deepest existing node in persistence
             // This allows proper remainder handling when path goes beyond existing nodes
-            var persistenceMatch = FindBestPersistenceMatch(segments);
+            var (persistenceMatch, matchedSegmentCount) = await FindBestPersistenceMatchAsync(segments);
             if (persistenceMatch != null)
             {
-                var matchedPath = string.Join("/", segments.Take(persistenceMatch.Segments.Length));
-                var persistenceRemainder = persistenceMatch.Segments.Length < segments.Length
-                    ? string.Join("/", segments.Skip(persistenceMatch.Segments.Length))
+                var matchedPath = persistenceMatch.Prefix;
+                var persistenceRemainder = matchedSegmentCount < segments.Length
+                    ? string.Join("/", segments.Skip(matchedSegmentCount))
                     : null;
                 return new AddressResolution(matchedPath, persistenceRemainder);
             }

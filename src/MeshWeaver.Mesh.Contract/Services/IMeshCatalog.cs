@@ -23,7 +23,7 @@ public interface IMeshCatalog
     /// Returns the best matching node's address and the remaining path segments.
     /// Score is the number of matching segments from the path start.
     /// </summary>
-    AddressResolution? ResolvePath(string path);
+    Task<AddressResolution?> ResolvePathAsync(string path);
 
     /// <summary>
     /// Gets the persistence service for graph operations.

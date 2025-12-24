@@ -37,19 +37,28 @@ public record MessageLog(
 }
 /// <summary>
 /// Represents a node in the mesh that can handle requests.
-/// The Path is the unique identifier for this node (e.g., "graph", "graph/org", "$template/graph/org/3").
+/// The Id is the local identifier within a namespace (e.g., "Root", "Alice", "Story1").
+/// The Namespace is the container path (e.g., "type", "Systemorph/type/Project").
+/// Path is derived as {Namespace}/{Id} and serves as the unique identifier.
 /// For template nodes, AddressSegments determines how many path segments are used for hub addressing.
 /// Score-based matching uses the Prefix (derived from Path) for pattern matching.
 /// </summary>
-public record MeshNode(string Path)
+public record MeshNode(string Id, string? Namespace = null)
 {
+    /// <summary>
+    /// The full path derived from Namespace and Id.
+    /// For nodes without a namespace, this equals Id.
+    /// </summary>
+    [JsonIgnore, NotMapped]
+    public string Path => string.IsNullOrEmpty(Namespace) ? Id : $"{Namespace}/{Id}";
+
     /// <summary>
     /// The prefix used for score-based path matching.
     /// For regular nodes, this equals Path.
     /// For template nodes (paths starting with $), this is extracted from the path.
     /// </summary>
     [JsonIgnore, NotMapped]
-    public string Prefix { get; init; } = ExtractPrefix(Path);
+    public string Prefix { get; init; } = ExtractPrefix(string.IsNullOrEmpty(Namespace) ? Id : $"{Namespace}/{Id}");
 
     /// <summary>
     /// The segments of the prefix, split by '/'.
@@ -58,7 +67,7 @@ public record MeshNode(string Path)
     [JsonIgnore, NotMapped]
     public string[] Segments => Prefix.Split('/', StringSplitOptions.RemoveEmptyEntries);
 
-    [Key] public string Key { get; init; } = Path;
+    [Key] public string Key { get; init; } = string.IsNullOrEmpty(Namespace) ? Id : $"{Namespace}/{Id}";
 
     /// <summary>
     /// Extracts the prefix from a path.
@@ -76,6 +85,25 @@ public record MeshNode(string Path)
         var lastSlash = withoutPrefix.LastIndexOf('/');
         return lastSlash > 0 ? withoutPrefix.Substring(0, lastSlash) : withoutPrefix;
     }
+
+    /// <summary>
+    /// Creates a MeshNode from a full path by extracting Id and Namespace.
+    /// E.g., "type/Root" becomes Id="Root", Namespace="type".
+    /// </summary>
+    public static MeshNode FromPath(string path)
+    {
+        if (string.IsNullOrEmpty(path))
+            throw new ArgumentException("Path cannot be null or empty", nameof(path));
+
+        var lastSlash = path.LastIndexOf('/');
+        if (lastSlash < 0)
+            return new MeshNode(path);
+
+        var ns = path.Substring(0, lastSlash);
+        var id = path.Substring(lastSlash + 1);
+        return new MeshNode(id, ns);
+    }
+
     public const string MeshIn = nameof(MeshIn);
 
     /// <summary>

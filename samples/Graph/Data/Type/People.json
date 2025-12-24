@@ -1,0 +1,19 @@
+{
+  "id": "People",
+  "namespace": "Type",
+  "name": "People",
+  "nodeType": "NodeType",
+  "description": "Catalog of persons",
+  "iconName": "People",
+  "displayOrder": 4,
+  "isPersistent": true,
+  "content": {
+    "$type": "NodeTypeDefinition",
+    "id": "People",
+    "namespace": "Type",
+    "displayName": "People",
+    "iconName": "People",
+    "description": "Catalog of persons",
+    "displayOrder": 4
+  }
+}

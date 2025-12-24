@@ -1,0 +1,10 @@
+{
+  "id": "People",
+  "name": "People",
+  "nodeType": "Type/People",
+  "description": "Catalog of persons",
+  "iconName": "People",
+  "displayOrder": 5,
+  "isPersistent": true,
+  "content": {}
+}

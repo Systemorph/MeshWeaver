@@ -112,7 +112,7 @@ public static class BlazorHostingExtensions
             {
                 // Resolve address from path using score-based matching
                 var meshCatalog = mainHub.ServiceProvider.GetRequiredService<IMeshCatalog>();
-                var resolution = meshCatalog.ResolvePath(path);
+                var resolution = await meshCatalog.ResolvePathAsync(path);
 
                 if (resolution == null)
                 {

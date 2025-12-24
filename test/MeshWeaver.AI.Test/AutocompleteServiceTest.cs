@@ -430,6 +430,8 @@ public class AutocompleteServiceTest
         public Task<Mesh.MeshNode?> GetNodeAsync(Messaging.Address address) => Task.FromResult<Mesh.MeshNode?>(null);
         public Task UpdateAsync(Mesh.MeshNode node) => Task.CompletedTask;
         public Task<Mesh.Services.StreamInfo> GetStreamInfoAsync(Messaging.Address address) => throw new System.NotImplementedException();
+        public Task<Mesh.Services.AddressResolution?> ResolvePathAsync(string path) => Task.FromResult(ResolvePath(path));
+
         public Mesh.Services.AddressResolution? ResolvePath(string path)
         {
             if (string.IsNullOrEmpty(path))

@@ -1,0 +1,22 @@
+{
+  "id": "Organization",
+  "namespace": "Systemorph/Type",
+  "name": "Organization",
+  "nodeType": "NodeType",
+  "description": "An organization containing projects",
+  "iconName": "Building",
+  "displayOrder": 10,
+  "isPersistent": true,
+  "content": {
+    "$type": "NodeTypeDefinition",
+    "id": "Organization",
+    "namespace": "Systemorph/Type",
+    "displayName": "Organization",
+    "iconName": "Building",
+    "description": "An organization containing projects",
+    "displayOrder": 10,
+    "contentCollections": [
+      { "name": "logos", "baseCollection": "graph", "subPath": "logos" }
+    ]
+  }
+}

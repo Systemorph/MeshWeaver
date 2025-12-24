@@ -32,15 +32,15 @@ public partial class AreaPage : ComponentBase
     private Address? Address => Resolution != null ? (Address)Resolution.Prefix : null;
 
     private LayoutAreaReference Reference { get; set; } = null!;
-    protected override Task OnParametersSetAsync()
+    protected override async Task OnParametersSetAsync()
     {
         // Resolve the entire path using pattern matching
-        Resolution = MeshCatalog.ResolvePath(Path ?? "");
+        Resolution = await MeshCatalog.ResolvePathAsync(Path ?? "");
 
         if (Resolution is null)
         {
             PageTitle = $"Page Not Found";
-            return Task.CompletedTask;
+            return;
         }
 
         // Parse remainder into area and id
@@ -67,8 +67,6 @@ public partial class AreaPage : ComponentBase
 
         // Reset content ready state when parameters change
         IsContentReady = false;
-
-        return Task.CompletedTask;
     }
 
     private static (string? Area, string? Id) ParseRemainder(string? remainder)

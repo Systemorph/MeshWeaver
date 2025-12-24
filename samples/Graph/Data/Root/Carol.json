@@ -1,0 +1,18 @@
+{
+  "id": "Carol",
+  "name": "Carol Martinez",
+  "nodeType": "Type/Person",
+  "description": "UX Designer",
+  "iconName": "Person",
+  "displayOrder": 3,
+  "isPersistent": true,
+  "content": {
+    "id": "Carol",
+    "name": "Carol Martinez",
+    "email": "carol.martinez@example.com",
+    "avatar": "/static/graph/persons/carol.svg",
+    "bio": "UX designer focused on creating intuitive and accessible user experiences.",
+    "role": "UX Designer",
+    "iconName": "Person"
+  }
+}

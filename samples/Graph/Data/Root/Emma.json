@@ -1,0 +1,18 @@
+{
+  "id": "Emma",
+  "name": "Emma Johnson",
+  "nodeType": "Type/Person",
+  "description": "Tech Lead",
+  "iconName": "Person",
+  "displayOrder": 5,
+  "isPersistent": true,
+  "content": {
+    "id": "Emma",
+    "name": "Emma Johnson",
+    "email": "emma.johnson@example.com",
+    "avatar": "/static/graph/persons/emma.svg",
+    "bio": "Tech lead with expertise in distributed systems and microservices architecture.",
+    "role": "Tech Lead",
+    "iconName": "Person"
+  }
+}

@@ -47,19 +47,22 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
 
     /// <summary>
     /// Ensures the node's assembly is compiled and loaded if on-demand compilation is available.
-    /// Uses IOnDemandCompilationService if registered in DI.
+    /// Uses IMeshNodeCompilationService if registered in DI.
     /// </summary>
     private async Task EnsureNodeAssemblyAsync(MeshNode node, CancellationToken ct)
     {
         // Try to get the on-demand compilation service (optional - from MeshWeaver.Graph)
         // This service compiles DataModel types and generates MeshNodeAttribute for dynamic nodes
-        var compilationService = meshHub.ServiceProvider.GetService<IOnDemandCompilationService>();
+        var compilationService = meshHub.ServiceProvider.GetService<IMeshNodeCompilationService>();
         if (compilationService != null)
         {
             try
             {
-                await compilationService.EnsureNodeAssemblyAsync(node, ct);
-                logger.LogDebug("On-demand compilation ensured for node {NodePath}", node.Path);
+                var assemblyLocation = await compilationService.GetAssemblyLocationAsync(node, ct);
+                if (assemblyLocation != null)
+                {
+                    logger.LogDebug("On-demand compilation ensured for node {NodePath} at {AssemblyLocation}", node.Path, assemblyLocation);
+                }
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {

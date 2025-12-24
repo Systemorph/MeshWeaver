@@ -103,54 +103,58 @@ public class FileSystemStorageAdapter : IStorageAdapter
         return Task.CompletedTask;
     }
 
-    public Task<IEnumerable<string>> ListChildPathsAsync(string? parentPath, CancellationToken ct = default)
+    public Task<(IEnumerable<string> NodePaths, IEnumerable<string> DirectoryPaths)> ListChildPathsAsync(string? parentPath, CancellationToken ct = default)
     {
         var directoryPath = string.IsNullOrEmpty(parentPath)
             ? _baseDirectory
             : Path.Combine(_baseDirectory, parentPath.Replace('/', Path.DirectorySeparatorChar));
 
         if (!Directory.Exists(directoryPath))
-            return Task.FromResult(Enumerable.Empty<string>());
+            return Task.FromResult<(IEnumerable<string>, IEnumerable<string>)>(([], []));
 
-        var paths = new List<string>();
+        var nodePaths = new List<string>();
+        var directoryPaths = new List<string>();
 
-        // Get JSON files (direct children)
+        // Get JSON files (direct children) - these are nodes
         foreach (var file in Directory.GetFiles(directoryPath, "*.json"))
         {
             var name = Path.GetFileNameWithoutExtension(file);
             var childPath = string.IsNullOrEmpty(parentPath) ? name : $"{parentPath}/{name}";
-            paths.Add(childPath);
+            nodePaths.Add(childPath);
         }
 
-        // Get subdirectories that contain JSON files (nested children)
+        // Get subdirectories that contain JSON files
         foreach (var dir in Directory.GetDirectories(directoryPath))
         {
             var name = Path.GetFileName(dir);
             var childPath = string.IsNullOrEmpty(parentPath) ? name : $"{parentPath}/{name}";
 
-            // Check if there's an index.json or a JSON file with the same name
-            var indexFile = Path.Combine(dir, "index.json");
+            // Check if there's a JSON file with the same name (node already added above)
             var namedFile = Path.Combine(directoryPath, $"{name}.json");
-
             if (File.Exists(namedFile))
             {
-                // Already added as a file
+                // Already added as a node file, will be scanned recursively
                 continue;
             }
 
             // Check if directory has any JSON content
             if (Directory.EnumerateFiles(dir, "*.json", SearchOption.AllDirectories).Any())
             {
-                // Directory represents a path segment, but not necessarily a node
-                // Only add if there's an index.json representing this node
+                // Check if there's an index.json representing this as a node
+                var indexFile = Path.Combine(dir, "index.json");
                 if (File.Exists(indexFile))
                 {
-                    paths.Add(childPath);
+                    nodePaths.Add(childPath);
+                }
+                else
+                {
+                    // Directory has content but no node - add as directory to scan
+                    directoryPaths.Add(childPath);
                 }
             }
         }
 
-        return Task.FromResult<IEnumerable<string>>(paths);
+        return Task.FromResult<(IEnumerable<string>, IEnumerable<string>)>((nodePaths, directoryPaths));
     }
 
     public Task<bool> ExistsAsync(string path, CancellationToken ct = default)

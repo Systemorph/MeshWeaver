@@ -1,0 +1,10 @@
+{
+  "$type": "DataModel",
+  "id": "People",
+  "namespace": "Type",
+  "displayName": "People",
+  "iconName": "People",
+  "description": "Catalog of persons",
+  "displayOrder": 4,
+  "typeSource": "public record People { }"
+}

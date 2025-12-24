@@ -1,0 +1,22 @@
+{
+  "id": "Person",
+  "namespace": "Type",
+  "name": "Person",
+  "nodeType": "NodeType",
+  "description": "A person with profile and avatar",
+  "iconName": "Person",
+  "displayOrder": 5,
+  "isPersistent": true,
+  "content": {
+    "$type": "NodeTypeDefinition",
+    "id": "Person",
+    "namespace": "Type",
+    "displayName": "Person",
+    "iconName": "Person",
+    "description": "A person with profile and avatar",
+    "displayOrder": 5,
+    "contentCollections": [
+      { "name": "avatar", "baseCollection": "graph", "subPath": "persons" }
+    ]
+  }
+}

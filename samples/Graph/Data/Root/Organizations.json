@@ -1,0 +1,10 @@
+{
+  "id": "Organizations",
+  "name": "Organizations",
+  "nodeType": "Type/Organizations",
+  "description": "Catalog of organizations",
+  "iconName": "Building",
+  "displayOrder": 10,
+  "isPersistent": true,
+  "content": {}
+}
