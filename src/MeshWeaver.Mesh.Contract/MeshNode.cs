@@ -154,6 +154,12 @@ public record MeshNode(string Id, string? Namespace = null)
     public DateTimeOffset LastModified { get; init; }
 
     /// <summary>
+    /// The hub version when this node was last saved.
+    /// Used to restore hub version on restart.
+    /// </summary>
+    public long Version { get; init; }
+
+    /// <summary>
     /// The data model content for this node.
     /// The type depends on NodeType (e.g., Organization, Project, Story).
     /// </summary>

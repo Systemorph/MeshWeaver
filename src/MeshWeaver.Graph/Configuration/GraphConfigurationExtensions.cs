@@ -1,4 +1,5 @@
 ﻿using MeshWeaver.Domain;
+using MeshWeaver.Hosting;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
@@ -69,7 +70,9 @@ public static class GraphConfigurationExtensions
             return services;
         });
 
-        // Configure mesh hub with views, hub-level services, and initialization
+        // Configure mesh hub with views and hub-level services
+        // Note: GraphConfigurationInitializer is NOT run here - the mesh hub has its own config.
+        // Child nodes without their own config will have initialization run via MeshCatalog.
         builder.ConfigureHub(config => config
             .AddMeshCatalogView()
             .AddDynamicViews()
@@ -80,14 +83,9 @@ public static class GraphConfigurationExtensions
                 services.AddSingleton<IMeshNodeCompilationService, MeshNodeCompilationService>();
                 services.AddSingleton<IConfigurationInitializer, DataModelInitializer>();
                 services.AddSingleton<IConfigurationInitializer, NodeTypeRegistrationInitializer>();
-                services.AddSingleton<GraphConfigurationInitializer>();
+                // Register as IMeshCatalogInitializer so MeshCatalogBase can find and run it
+                services.AddSingleton<IMeshCatalogInitializer, GraphConfigurationInitializer>();
                 return services;
-            })
-            .WithInitialization(hub =>
-            {
-                // Run graph configuration initialization synchronously at mesh startup
-                var initializer = hub.ServiceProvider.GetRequiredService<GraphConfigurationInitializer>();
-                initializer.InitializeAsync(hub, CancellationToken.None).GetAwaiter().GetResult();
             }));
 
         return builder;

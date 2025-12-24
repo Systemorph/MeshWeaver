@@ -1,3 +1,4 @@
+using MeshWeaver.Hosting;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.Logging;
 
@@ -5,13 +6,14 @@ namespace MeshWeaver.Graph.Configuration;
 
 /// <summary>
 /// Main initializer that orchestrates loading configuration and calling type-specific initializers.
-/// Used within hub initialization via WithInitialization.
+/// Implements IMeshCatalogInitializer so it runs when the mesh catalog is created.
 /// Loads configuration from INodeTypeService using partition-based storage.
 /// </summary>
 public class GraphConfigurationInitializer(
     INodeTypeService nodeTypeService,
     IEnumerable<IConfigurationInitializer> initializers,
     ILogger<GraphConfigurationInitializer> logger)
+    : IMeshCatalogInitializer
 {
     /// <summary>
     /// Loads all configuration and runs initializers.

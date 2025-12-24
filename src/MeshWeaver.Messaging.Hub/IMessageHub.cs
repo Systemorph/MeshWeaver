@@ -7,6 +7,13 @@ public interface IMessageHub : IMessageHandlerRegistry, IDisposable
 {
     MessageHubConfiguration Configuration { get; }
     long Version { get; }
+
+    /// <summary>
+    /// Sets the initial version for the hub. Only callable during initialization
+    /// before any messages are processed.
+    /// </summary>
+    void SetInitialVersion(long version);
+
     Task Started { get; }
     IMessageDelivery<TMessage>? Post<TMessage>(TMessage message, Func<PostOptions, PostOptions>? options = null);
     IMessageDelivery DeliverMessage(IMessageDelivery delivery);

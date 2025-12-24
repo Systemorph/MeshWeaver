@@ -96,11 +96,12 @@ public record ContentTypeSource<T> : TypeSourceWithType<T, ContentTypeSource<T>>
                 return;
             }
 
-            // Update MeshNode with new content
-            var updatedNode = meshNode with { Content = contentEntity };
+            // Update MeshNode with new content and current hub version
+            var hubVersion = _workspace.Hub.Version;
+            var updatedNode = meshNode with { Content = contentEntity, Version = hubVersion };
 
             // Save to persistence synchronously
-            _logger?.LogWarning("ContentTypeSource<{Type}>.SyncToMeshNode: Saving MeshNode to persistence with new content", typeof(T).Name);
+            _logger?.LogWarning("ContentTypeSource<{Type}>.SyncToMeshNode: Saving MeshNode to persistence with new content, Version={Version}", typeof(T).Name, hubVersion);
             _persistence.SaveNodeAsync(updatedNode).GetAwaiter().GetResult();
             _logger?.LogWarning("ContentTypeSource<{Type}>.SyncToMeshNode: Persistence save complete", typeof(T).Name);
 
