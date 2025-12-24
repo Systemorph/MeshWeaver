@@ -1,9 +1,9 @@
 {
   "$type": "DataModel",
-  "id": "graph",
-  "displayName": "Graph",
+  "id": "Root",
+  "displayName": "Root",
   "iconName": "Diagram",
   "description": "Root of hierarchical graph",
   "displayOrder": 1,
-  "typeSource": "public record GraphRoot { }"
+  "typeSource": "public record Root { }"
 }

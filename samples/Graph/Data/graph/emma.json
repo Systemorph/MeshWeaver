@@ -2,7 +2,7 @@
   "path": "graph/emma",
   "key": "graph/emma",
   "name": "Emma Johnson",
-  "nodeType": "type/person",
+  "nodeType": "type/Person",
   "description": "Tech Lead",
   "iconName": "Person",
   "displayOrder": 5,

@@ -1,6 +1,6 @@
 {
   "$type": "DataModel",
-  "id": "org",
+  "id": "Organization",
   "displayName": "Organization",
   "iconName": "Building",
   "description": "An organization containing projects",

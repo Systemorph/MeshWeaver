@@ -1,6 +1,6 @@
 {
-  "path": "type/graph",
-  "name": "Graph",
+  "path": "type/Root",
+  "name": "Root",
   "nodeType": "NodeType",
   "description": "Root of hierarchical graph",
   "iconName": "Diagram",
@@ -8,8 +8,8 @@
   "isPersistent": true,
   "content": {
     "$type": "NodeTypeDefinition",
-    "id": "graph",
-    "displayName": "Graph",
+    "id": "Root",
+    "displayName": "Root",
     "iconName": "Diagram",
     "description": "Root of hierarchical graph",
     "displayOrder": 1

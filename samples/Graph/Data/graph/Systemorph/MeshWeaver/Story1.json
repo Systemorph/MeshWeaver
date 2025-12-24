@@ -1,25 +1,20 @@
 {
-  "path": "graph/org3/project1/story1",
-  "key": "graph/org3/project1/story1",
+  "path": "graph/Systemorph/MeshWeaver/Story1",
+  "key": "graph/Systemorph/MeshWeaver/Story1",
   "name": "User Authentication",
-  "nodeType": "type/story",
+  "nodeType": "Systemorph/type/Project/Story",
   "description": "Implement user login and registration",
   "iconName": "Document",
   "displayOrder": 10,
   "addressSegments": 0,
   "isPersistent": true,
   "content": {
-    "id": "story1",
+    "id": "Story1",
     "title": "User Authentication",
     "description": "Implement user login and registration flow",
     "status": "InProgress",
     "points": 5,
+    "priority": 1,
     "iconName": "Document"
-  },
-  "thumbNail": null,
-  "streamProvider": null,
-  "assemblyLocation": null,
-  "startupScript": null,
-  "routingType": 0,
-  "instantiationType": 0
+  }
 }

@@ -30,9 +30,9 @@ public partial class LoomMobileNavMenu : ComponentBase
         );
 
         yield return new MobileNavMenuEntry(
-            "Graph",
+            "Root",
             () => NavigateToAsync("/graph"),
-            LoomDesktopNavMenu.GraphIcon(),
+            LoomDesktopNavMenu.RootIcon(),
             LinkMatchRegex: new Regex("^/graph")
         );
 
