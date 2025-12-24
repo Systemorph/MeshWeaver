@@ -14,6 +14,18 @@ namespace MeshWeaver.Graph.Configuration;
 public static class GraphConfigurationExtensions
 {
     /// <summary>
+    /// Adds default views to a node type hub:
+    /// - DefaultViews: Details (markdown property view), Edit (standard editor)
+    /// - MeshNodeView: Thumbnail, Metadata, Settings, Comments
+    /// Details is set as the default view for empty path requests.
+    /// This should be called for every node type to ensure consistent view availability.
+    /// </summary>
+    public static MessageHubConfiguration WithDefaultNodeViews(this MessageHubConfiguration config)
+        => config
+            .AddDefaultViews()
+            .AddMeshNodeView();
+
+    /// <summary>
     /// Loads graph configuration from JSON files in the data directory.
     ///
     /// Configuration is loaded from NodeType MeshNodes stored under type/:

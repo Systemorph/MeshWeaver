@@ -1,7 +1,7 @@
 {
   "$type": "DataModel",
   "id": "Organization",
-  "namespace": "Systemorph/Type",
+  "namespace": "Type",
   "displayName": "Organization",
   "iconName": "Building",
   "description": "An organization containing projects",

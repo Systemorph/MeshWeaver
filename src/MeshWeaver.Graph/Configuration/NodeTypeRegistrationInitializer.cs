@@ -124,8 +124,9 @@ public class NodeTypeRegistrationInitializer : IConfigurationInitializer
             NodeType = nodeTypeName,
             DataType = typeof(NodeTypeDefinition),
             HubConfiguration = hubConfig => hubConfig
-                .AddMeshCatalogView() // Include standard node views
-                .AddNodeTypeView(), // Add NodeType-specific views
+                .AddMeshCatalogView()
+                .WithDefaultNodeViews()
+                .AddNodeTypeView(), // NodeType-specific views for editing type definitions
             DisplayName = "Node Type",
             Description = "Defines a node type with data model and layout areas",
             IconName = "DocumentSettings",
@@ -155,6 +156,9 @@ public class NodeTypeRegistrationInitializer : IConfigurationInitializer
         }
 
         var result = builder.Build();
+
+        // Add default views (Details, Thumbnail, Metadata, Settings, Comments) with Details as default
+        result = result.WithDefaultNodeViews();
 
         // Add dynamic node type areas if enabled (default: true)
         if (hubFeatures?.EnableDynamicNodeTypeAreas ?? true)

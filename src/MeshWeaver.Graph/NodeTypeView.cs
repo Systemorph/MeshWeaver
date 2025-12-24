@@ -1,11 +1,10 @@
-using System.Reactive.Linq;
+﻿using System.Reactive.Linq;
 using MeshWeaver.Application.Styles;
 using MeshWeaver.Blazor.Monaco;
 using MeshWeaver.Data;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
-using MeshWeaver.Layout.DataBinding;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
@@ -25,9 +24,9 @@ namespace MeshWeaver.Graph;
 public static class NodeTypeView
 {
     public const string DetailsArea = "Details";
-    public const string DataModelViewArea = "DataModelView";
+    public const string DataModelViewArea = "DataModel";
     public const string DataModelEditArea = "DataModelEdit";
-    public const string LayoutAreaViewArea = "LayoutAreaView";
+    public const string LayoutAreaViewArea = "LayoutArea";
     public const string LayoutAreaEditArea = "LayoutAreaEdit";
     public const string AddDataModelArea = "AddDataModel";
     public const string AddLayoutAreaArea = "AddLayoutArea";
@@ -303,7 +302,8 @@ public static class NodeTypeView
             .WithLineNumbers(true)
             .WithMinimap(false)
             .WithWordWrap(true)
-            with { DataContext = LayoutAreaReference.GetDataPointer(dataId), Value = new JsonPointerReference("") };
+            with
+        { DataContext = LayoutAreaReference.GetDataPointer(dataId), Value = new JsonPointerReference("") };
 
         stack = stack.WithView(editor);
 
@@ -475,7 +475,8 @@ public static class NodeTypeView
             .WithLineNumbers(true)
             .WithMinimap(false)
             .WithWordWrap(true)
-            with { DataContext = LayoutAreaReference.GetDataPointer(dataId), Value = new JsonPointerReference("") };
+            with
+        { DataContext = LayoutAreaReference.GetDataPointer(dataId), Value = new JsonPointerReference("") };
 
         stack = stack.WithView(editor);
 
@@ -564,7 +565,8 @@ public static class NodeTypeView
             .WithLineNumbers(true)
             .WithMinimap(false)
             .WithWordWrap(true)
-            with { DataContext = LayoutAreaReference.GetDataPointer(dataId), Value = new JsonPointerReference("") };
+            with
+        { DataContext = LayoutAreaReference.GetDataPointer(dataId), Value = new JsonPointerReference("") };
 
         stack = stack.WithView(editor);
 
@@ -656,7 +658,8 @@ public static class NodeTypeView
         // Area name input
         stack = stack.WithView(Controls.Html("<label style=\"font-weight: bold; display: block; margin-bottom: 8px;\">Area Name:</label>"));
         stack = stack.WithView(Controls.Text(new JsonPointerReference(""))
-            with { DataContext = LayoutAreaReference.GetDataPointer(areaNameId) });
+            with
+        { DataContext = LayoutAreaReference.GetDataPointer(areaNameId) });
 
         stack = stack.WithView(Controls.Html("<div style=\"height: 16px;\"></div>"));
 
@@ -668,7 +671,8 @@ public static class NodeTypeView
             .WithLineNumbers(true)
             .WithMinimap(false)
             .WithWordWrap(true)
-            with { DataContext = LayoutAreaReference.GetDataPointer(dataId), Value = new JsonPointerReference("") };
+            with
+        { DataContext = LayoutAreaReference.GetDataPointer(dataId), Value = new JsonPointerReference("") };
 
         stack = stack.WithView(editor);
 
