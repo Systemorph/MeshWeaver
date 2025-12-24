@@ -1,4 +1,4 @@
-﻿using System.Collections.Immutable;
+using System.Collections.Immutable;
 using System.Reflection;
 using MeshWeaver.Connection.Orleans;
 using MeshWeaver.Mesh;
@@ -31,6 +31,10 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
             throw new MeshException(
                 $"Cannot instantiate Node {streamId}. Neither a {nameof(MeshNode.StartupScript)} nor a {nameof(MeshNode.HubConfiguration)}  are specified.");
 
+        // Ensure on-demand compilation of dynamic node assemblies if service is available
+        // This compiles/caches the node's DataModel type and generates MeshNodeAttribute
+        await EnsureNodeAssemblyAsync(node, cancellationToken);
+
         Hub = node.InstantiationType switch
         {
             InstantiationType.HubConfiguration => InstantiateFromHubConfiguration(address, node),
@@ -39,6 +43,30 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
 
         //var route = await routingService.RegisterStreamAsync(Hub.Address, Hub.DeliverMessage);
         //Hub.RegisterForDisposal(async (_, _) => await route.DisposeAsync());
+    }
+
+    /// <summary>
+    /// Ensures the node's assembly is compiled and loaded if on-demand compilation is available.
+    /// Uses IOnDemandCompilationService if registered in DI.
+    /// </summary>
+    private async Task EnsureNodeAssemblyAsync(MeshNode node, CancellationToken ct)
+    {
+        // Try to get the on-demand compilation service (optional - from MeshWeaver.Graph)
+        // This service compiles DataModel types and generates MeshNodeAttribute for dynamic nodes
+        var compilationService = meshHub.ServiceProvider.GetService<IOnDemandCompilationService>();
+        if (compilationService != null)
+        {
+            try
+            {
+                await compilationService.EnsureNodeAssemblyAsync(node, ct);
+                logger.LogDebug("On-demand compilation ensured for node {NodePath}", node.Path);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                logger.LogWarning(ex, "Failed to ensure on-demand compilation for node {NodePath}", node.Path);
+                // Continue - the node may still work if already configured
+            }
+        }
     }
 
     private IMessageHub InstantiateFromHubConfiguration(Address address, MeshNode node)
