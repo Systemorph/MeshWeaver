@@ -421,4 +421,28 @@ public record Story
         source.Should().Contain("AssemblyLocation = typeof(");
         source.Should().Contain(").Assembly.Location");
     }
+
+    [Fact]
+    public void GenerateAttributeSource_IncludesDefaultNodeViews()
+    {
+        // Arrange
+        var node = new MeshNode("test")
+        {
+            NodeType = "test",
+            LastModified = DateTimeOffset.UtcNow
+        };
+
+        var dataModel = new DataModel
+        {
+            Id = "test",
+            TypeSource = "public record TestType { }"
+        };
+
+        // Act
+        var source = _generator.GenerateAttributeSource(node, dataModel, null, null);
+
+        // Assert - must include default views for Details, Edit, etc.
+        source.Should().Contain("WithDefaultNodeViews()",
+            "Generated code must include default views (Details, Edit, Thumbnail, Metadata, Settings, Comments)");
+    }
 }

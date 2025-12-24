@@ -11,7 +11,7 @@ namespace MeshWeaver.Graph.Configuration;
 public class GraphConfigurationInitializer(
     INodeTypeService nodeTypeService,
     IEnumerable<IConfigurationInitializer> initializers,
-    ILogger logger)
+    ILogger<GraphConfigurationInitializer> logger)
 {
     /// <summary>
     /// Loads all configuration and runs initializers.

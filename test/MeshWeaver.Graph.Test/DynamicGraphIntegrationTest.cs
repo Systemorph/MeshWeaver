@@ -4,8 +4,13 @@ using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Reactive.Linq;
+using System.Text.Json;
 using FluentAssertions;
+using MeshWeaver.Data;
+using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
+using MeshWeaver.Layout;
 using MeshWeaver.Hosting.Monolith;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Hosting.Persistence;
@@ -684,7 +689,310 @@ public record Graph
     }
 
     #endregion
+
+    #region Default Layout Area Tests
+
+    /// <summary>
+    /// Tests that requesting the default layout area for an Organization node
+    /// returns successfully without hanging.
+    /// This validates that default views are properly configured for dynamically compiled node types.
+    /// </summary>
+    [Fact(Timeout = 10000)]
+    public async Task Organization_GetDefaultLayoutArea_DoesNotHang()
+    {
+        var graphAddress = new Address("graph");
+        var orgAddress = new Address("graph/org1");
+
+        // Get a client with data services configured
+        var client = GetClient(c => c.AddData(data => data));
+
+        // Initialize graph hub first (required for routing)
+        await client.AwaitResponse(
+            new PingRequest(),
+            o => o.WithTarget(graphAddress),
+            TestContext.Current.CancellationToken);
+
+        // Initialize org hub - this should also set up default views
+        await client.AwaitResponse(
+            new PingRequest(),
+            o => o.WithTarget(orgAddress),
+            TestContext.Current.CancellationToken);
+
+        // Act: Request the default layout area (Details) using stream
+        // This should not hang if default views are properly configured
+        var workspace = client.GetWorkspace();
+        var reference = new LayoutAreaReference(DefaultViews.DetailsArea);
+        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(orgAddress, reference);
+
+        // Wait for the stream to emit a value (with timeout from test attribute)
+        var value = await stream.FirstAsync();
+
+        // Assert
+        value.Should().NotBe(default(JsonElement), "Default layout area should return content");
+    }
+
+    /// <summary>
+    /// Tests that requesting an empty area (default view) for an Organization node works.
+    /// When area is empty/null, the default view should be returned (Details).
+    /// This matches the pattern used in LayoutTest.
+    /// </summary>
+    [Fact(Timeout = 10000)]
+    public async Task Organization_GetEmptyArea_ReturnsDefaultView()
+    {
+        var graphAddress = new Address("graph");
+        var orgAddress = new Address("graph/org1");
+
+        // Get a client with data services configured
+        var client = GetClient(c => c.AddData(data => data));
+
+        // Initialize graph hub first (required for routing)
+        await client.AwaitResponse(
+            new PingRequest(),
+            o => o.WithTarget(graphAddress),
+            TestContext.Current.CancellationToken);
+
+        // Initialize org hub - this should also set up default views
+        await client.AwaitResponse(
+            new PingRequest(),
+            o => o.WithTarget(orgAddress),
+            TestContext.Current.CancellationToken);
+
+        // Act: Request empty area - should return default view (Details)
+        var workspace = client.GetWorkspace();
+        var reference = new LayoutAreaReference(string.Empty);
+        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(orgAddress, reference);
+
+        // Wait for the stream to emit a value (with timeout from test attribute)
+        var value = await stream.FirstAsync();
+
+        // Assert
+        value.Should().NotBe(default(JsonElement), "Empty area should return default view content");
+    }
+
+    #endregion
 }
+
+/// <summary>
+/// Tests that replicate the exact structure from samples/Graph/Data:
+/// - Node "Organizations" in Root namespace (no namespace)
+/// - NodeType = "Type/Organizations"
+/// - Type definition at Type/Organizations with DataModel
+/// </summary>
+[Collection("OrganizationsLayoutTests")]
+public class OrganizationsLayoutTest : MonolithMeshTestBase
+{
+    private static readonly string TestDirectoryBase = Path.Combine(Path.GetTempPath(), "MeshWeaverOrganizationsTests");
+
+    [ThreadStatic]
+    private static string? _currentTestDirectory;
+
+    private static string GetOrCreateTestDirectory()
+    {
+        if (_currentTestDirectory == null)
+        {
+            _currentTestDirectory = Path.Combine(TestDirectoryBase, Guid.NewGuid().ToString());
+            Directory.CreateDirectory(_currentTestDirectory);
+        }
+        return _currentTestDirectory;
+    }
+
+    public OrganizationsLayoutTest(ITestOutputHelper output) : base(output) { }
+
+    /// <summary>
+    /// Sets up the exact structure from samples/Graph/Data:
+    /// - Type/Organizations (NodeType definition)
+    /// - Type/Organizations/dataModel.json
+    /// - Root/Organizations.json (instance with nodeType: "Type/Organizations")
+    /// </summary>
+    private static void SetupOrganizationsStructure(InMemoryPersistenceService persistence)
+    {
+        // 1. Create Type/Organizations - the NodeType definition
+        var organizationsTypeNode = new MeshNode("Organizations", "Type")
+        {
+            Name = "Organizations",
+            NodeType = "NodeType",
+            Description = "Catalog of organizations",
+            IconName = "Building",
+            DisplayOrder = 8,
+            IsPersistent = true,
+            Content = new NodeTypeDefinition
+            {
+                Id = "Organizations",
+                DisplayName = "Organizations",
+                IconName = "Building",
+                Description = "Catalog of organizations",
+                DisplayOrder = 8
+            }
+        };
+        persistence.SaveNodeAsync(organizationsTypeNode).GetAwaiter().GetResult();
+
+        // 2. Create the DataModel for Type/Organizations
+        var organizationsDataModel = new DataModel
+        {
+            Id = "Organizations",
+            DisplayName = "Organizations",
+            IconName = "Building",
+            Description = "Catalog of organizations",
+            DisplayOrder = 8,
+            TypeSource = "public record Organizations { }"
+        };
+        persistence.SavePartitionObjectsAsync("Type/Organizations", null, [organizationsDataModel]).GetAwaiter().GetResult();
+
+        // 3. Create Organizations instance node in Root namespace (no namespace)
+        // This matches samples/Graph/Data/Root/Organizations.json
+        var organizationsInstance = new MeshNode("Organizations") // No namespace = Root
+        {
+            Name = "Organizations",
+            NodeType = "Type/Organizations", // Points to Type/Organizations
+            Description = "Catalog of organizations",
+            IconName = "Building",
+            DisplayOrder = 10,
+            IsPersistent = true
+        };
+        persistence.SaveNodeAsync(organizationsInstance).GetAwaiter().GetResult();
+
+        // 4. Create the graph root node (needed for initialization)
+        var graphNode = new MeshNode("graph")
+        {
+            Name = "Graph",
+            NodeType = "type/graph",
+            IsPersistent = true
+        };
+        persistence.SaveNodeAsync(graphNode).GetAwaiter().GetResult();
+
+        // 5. Create type/graph type definition
+        var graphTypeNode = new MeshNode("graph", "type")
+        {
+            Name = "Graph",
+            NodeType = "NodeType",
+            IsPersistent = true,
+            Content = new NodeTypeDefinition
+            {
+                Id = "graph",
+                DisplayName = "Graph"
+            }
+        };
+        persistence.SaveNodeAsync(graphTypeNode).GetAwaiter().GetResult();
+
+        var graphDataModel = new DataModel
+        {
+            Id = "graph",
+            DisplayName = "Graph",
+            TypeSource = "public record Graph { }"
+        };
+        persistence.SavePartitionObjectsAsync("type/graph", null, [graphDataModel]).GetAwaiter().GetResult();
+    }
+
+    protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
+    {
+        var testDataDirectory = GetOrCreateTestDirectory();
+        var persistence = new InMemoryPersistenceService();
+
+        // Setup the exact structure from samples
+        SetupOrganizationsStructure(persistence);
+
+        var configBuilder = new ConfigurationBuilder();
+        configBuilder.AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["Graph:DataDirectory"] = testDataDirectory
+        });
+        var configuration = configBuilder.Build();
+
+        return builder
+            .UseMonolithMesh()
+            .ConfigureServices(services => services.AddPersistence(persistence))
+            .AddJsonGraphConfiguration(testDataDirectory, configuration);
+    }
+
+    public override async ValueTask DisposeAsync()
+    {
+        var dir = _currentTestDirectory;
+        _currentTestDirectory = null;
+
+        await base.DisposeAsync();
+
+        if (dir != null && Directory.Exists(dir))
+        {
+            try { Directory.Delete(dir, recursive: true); }
+            catch { /* Ignore cleanup errors */ }
+        }
+    }
+
+    /// <summary>
+    /// Test that exactly replicates the sample data structure.
+    /// Address "Organizations" should be reachable and return default layout area.
+    /// </summary>
+    [Fact(Timeout = 15000)]
+    public async Task Organizations_InRootNamespace_GetDefaultLayoutArea()
+    {
+        // Address is just "Organizations" since it has no namespace (Root)
+        var graphAddress = new Address("graph");
+        var organizationsAddress = new Address("Organizations");
+
+        // Get a client with data services configured
+        var client = GetClient(c => c.AddData(data => data));
+
+        // IMPORTANT: Initialize the graph hub first to trigger NodeTypeRegistrationInitializer
+        // This registers all NodeTypeConfigurations including "Type/Organizations"
+        await client.AwaitResponse(
+            new PingRequest(),
+            o => o.WithTarget(graphAddress),
+            TestContext.Current.CancellationToken);
+
+        // Now initialize the Organizations hub - it should find the NodeTypeConfiguration
+        await client.AwaitResponse(
+            new PingRequest(),
+            o => o.WithTarget(organizationsAddress),
+            TestContext.Current.CancellationToken);
+
+        // Act: Request the default layout area (empty = default view)
+        var workspace = client.GetWorkspace();
+        var reference = new LayoutAreaReference(string.Empty);
+        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(organizationsAddress, reference);
+
+        // Wait for the stream to emit a value
+        var value = await stream.FirstAsync();
+
+        // Assert
+        value.Should().NotBe(default(JsonElement),
+            "Organizations node should return default layout area content");
+    }
+
+    /// <summary>
+    /// Test that the Organizations node can be resolved via path.
+    /// </summary>
+    [Fact(Timeout = 10000)]
+    public async Task Organizations_CanBeResolved()
+    {
+        var meshCatalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
+
+        // Act
+        var resolution = await meshCatalog.ResolvePathAsync("Organizations");
+
+        // Assert
+        resolution.Should().NotBeNull("Organizations should be resolvable");
+        resolution!.Prefix.Should().Be("Organizations");
+    }
+
+    /// <summary>
+    /// Test that the Type/Organizations NodeType can be resolved.
+    /// </summary>
+    [Fact(Timeout = 10000)]
+    public async Task TypeOrganizations_CanBeResolved()
+    {
+        var meshCatalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
+
+        // Act
+        var resolution = await meshCatalog.ResolvePathAsync("Type/Organizations");
+
+        // Assert
+        resolution.Should().NotBeNull("Type/Organizations should be resolvable");
+        resolution!.Prefix.Should().Be("Type/Organizations");
+    }
+}
+
+[CollectionDefinition("OrganizationsLayoutTests", DisableParallelization = true)]
+public class OrganizationsLayoutTestsCollection { }
 
 /// <summary>
 /// Collection definition for DynamicGraphIntegrationTests.

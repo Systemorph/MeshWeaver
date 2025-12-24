@@ -28,18 +28,15 @@ public static class GraphConfigurationExtensions
     /// <summary>
     /// Loads graph configuration from JSON files in the data directory.
     ///
-    /// Configuration is loaded from NodeType MeshNodes stored under type/:
+    /// Configuration is loaded from NodeType MeshNodes stored under Type/:
     /// - Each NodeType node has a partition folder containing:
     ///   - dataModel.json - Data type definition with inline C# source
     ///   - layoutAreas/*.json - Layout area configurations
     ///   - hubFeatures.json - Hub feature configuration (optional)
     ///
-    /// The graph root node is loaded from persistence (graph.json) and its
-    /// type definition comes from type/graph.
-    ///
     /// Content collections are configured per node type via NodeTypeDefinition.ContentCollections.
     /// All configuration loading, type compilation, and service initialization
-    /// happens asynchronously during hub initialization via WithInitialization.
+    /// happens at mesh startup.
     /// </summary>
     /// <param name="builder">The mesh builder</param>
     /// <param name="dataDirectory">The base data directory</param>
@@ -50,84 +47,50 @@ public static class GraphConfigurationExtensions
         IConfiguration configuration)
         where TBuilder : MeshBuilder
     {
-        // Register services at the mesh level that don't depend on ITypeRegistry
+        // Register services that don't need hub-level dependencies at the mesh level
         builder.ConfigureServices(services =>
         {
-            // Register layout area initializer (doesn't need ITypeRegistry)
+            // Register layout area initializer
             services.AddSingleton<IConfigurationInitializer, LayoutAreaInitializer>();
 
-            // Register INodeTypeService (uses IPersistenceService which is registered elsewhere)
+            // Register INodeTypeService
             services.AddSingleton<INodeTypeService>(sp =>
             {
                 var persistence = sp.GetRequiredService<IPersistenceService>();
                 return new NodeTypeService(persistence);
             });
 
-            return services;
-        });
-
-        // Register the graph node for bootstrapping the hub with services and initialization.
-        // The node's NodeType is "type/graph" which explicitly references the type definition at that path.
-        // The type definition (DataModel, LayoutAreas, etc.) is loaded from type/graph during initialization.
-        // Only the HubConfiguration is set here for bootstrap - it runs initialization that loads all types.
-        var graphNode = new MeshNode("graph")
-        {
-            NodeType = "type/graph", // Explicit reference to type definition at type/graph
-            HubConfiguration = hubConfig => ConfigureGraphHub(hubConfig, dataDirectory)
-        };
-
-        builder.AddMeshNodes([graphNode]);
-        return builder;
-    }
-
-    /// <summary>
-    /// Configures a graph hub with async initialization for loading configuration,
-    /// compiling types, and initializing services.
-    /// Content collections are configured per node type via NodeTypeDefinition.ContentCollections.
-    /// </summary>
-    private static MessageHubConfiguration ConfigureGraphHub(
-        MessageHubConfiguration config,
-        string dataDirectory)
-    {
-        // Register services at the hub level where ITypeRegistry is available
-        config = config
-            .AddMeshCatalogView()
-            .AddDynamicViews() // Enable dynamic view compilation and rendering
-            .WithServices(services =>
-        {
-            // Register compilation cache options (can be configured via IConfiguration)
+            // Register compilation cache options
             services.AddOptions<CompilationCacheOptions>();
 
             // Register compilation cache service
             services.AddSingleton<ICompilationCacheService, CompilationCacheService>();
 
-            // Register type compilation service with caching support
-            services.AddSingleton<ITypeCompilationService, TypeCompilationService>();
-
-            // Register on-demand compilation service for lazy loading of node assemblies
-            services.AddSingleton<IMeshNodeCompilationService, MeshNodeCompilationService>();
-
-            // Register DataModel initializer for type compilation
-            services.AddSingleton<IConfigurationInitializer, DataModelInitializer>();
-
-            // Register NodeType initializer to register NodeTypeConfigurations
-            services.AddSingleton<IConfigurationInitializer, NodeTypeRegistrationInitializer>();
-
-            // Register the main initializer
-            services.AddSingleton<GraphConfigurationInitializer>(sp =>
-                new GraphConfigurationInitializer(
-                    sp.GetRequiredService<INodeTypeService>(),
-                    sp.GetServices<IConfigurationInitializer>(),
-                    sp.GetRequiredService<ILoggerFactory>().CreateLogger<GraphConfigurationInitializer>()));
-
             return services;
         });
 
-        return config.WithInitialization(async (hub, ct) =>
-        {
-            var initializer = hub.ServiceProvider.GetRequiredService<GraphConfigurationInitializer>();
-            await initializer.InitializeAsync(hub, ct);
-        });
+        // Configure mesh hub with views, hub-level services, and initialization
+        builder.ConfigureHub(config => config
+            .AddMeshCatalogView()
+            .AddDynamicViews()
+            .WithServices(services =>
+            {
+                // These services need ITypeRegistry which is only available at hub level
+                services.AddSingleton<ITypeCompilationService, TypeCompilationService>();
+                services.AddSingleton<IMeshNodeCompilationService, MeshNodeCompilationService>();
+                services.AddSingleton<IConfigurationInitializer, DataModelInitializer>();
+                services.AddSingleton<IConfigurationInitializer, NodeTypeRegistrationInitializer>();
+                services.AddSingleton<GraphConfigurationInitializer>();
+                return services;
+            })
+            .WithInitialization(hub =>
+            {
+                // Run graph configuration initialization synchronously at mesh startup
+                var initializer = hub.ServiceProvider.GetRequiredService<GraphConfigurationInitializer>();
+                initializer.InitializeAsync(hub, CancellationToken.None).GetAwaiter().GetResult();
+            }));
+
+        return builder;
     }
 
     /// <summary>
