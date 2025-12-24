@@ -32,6 +32,16 @@ public sealed class MessageHub : IMessageHub
     private readonly HostedHubsCollection hostedHubs;
 
     public long Version { get; private set; }
+
+    /// <summary>
+    /// Sets the initial version for the hub. Only callable during initialization
+    /// before any messages are processed.
+    /// </summary>
+    public void SetInitialVersion(long version)
+    {
+        Version = version;
+    }
+
     public MessageHubRunLevel RunLevel { get; private set; }
     private readonly IMessageService messageService;
     public ITypeRegistry TypeRegistry { get; }

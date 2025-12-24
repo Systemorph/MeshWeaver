@@ -16,7 +16,10 @@ public abstract class MeshCatalogBase : IMeshCatalog
     private readonly IMemoryCache cache = new MemoryCache(new MemoryCacheOptions());
     private readonly MemoryCacheEntryOptions cacheOptions = new(){SlidingExpiration = TimeSpan.FromMinutes(5)};
     private readonly IMessageHub persistenceHub;
+    private readonly IMessageHub meshHub;
     private readonly ILogger<MeshCatalogBase> logger;
+    private bool _initialized;
+    private readonly object _initLock = new();
 
     protected MeshCatalogBase(
         IMessageHub hub,
@@ -27,10 +30,32 @@ public abstract class MeshCatalogBase : IMeshCatalog
         Configuration = configuration;
         PathRegistry = pathRegistry;
         Persistence = persistenceService;
+        meshHub = hub;
         logger = hub.ServiceProvider.GetRequiredService<ILogger<MeshCatalogBase>>();
+
         persistenceHub = hub.GetHostedHub(AddressExtensions.CreatePersistenceAddress())!;
         foreach (var node in Configuration.Nodes.Values)
                 UpdateNode(node);
+    }
+
+    /// <summary>
+    /// Ensures initialization has run. Called lazily when first child node is accessed.
+    /// </summary>
+    private async Task EnsureInitializedAsync(CancellationToken ct)
+    {
+        if (_initialized) return;
+
+        lock (_initLock)
+        {
+            if (_initialized) return;
+            _initialized = true;
+        }
+
+        var initializer = meshHub.ServiceProvider.GetService<IMeshCatalogInitializer>();
+        if (initializer != null)
+        {
+            await initializer.InitializeAsync(meshHub, ct);
+        }
     }
 
     public async Task<MeshNode?> GetNodeAsync(Address address)
@@ -53,6 +78,10 @@ public abstract class MeshCatalogBase : IMeshCatalog
 
         if (persistedNode != null)
         {
+            // Ensure initialization has run before looking up NodeTypeConfiguration
+            // This runs lazily on first child node access, not for the mesh hub
+            await EnsureInitializedAsync(CancellationToken.None);
+
             // Look up NodeTypeConfiguration based on the persisted node's NodeType
             var nodeTypeConfig = Configuration.GetNodeTypeConfiguration(persistedNode.NodeType);
             if (nodeTypeConfig != null)

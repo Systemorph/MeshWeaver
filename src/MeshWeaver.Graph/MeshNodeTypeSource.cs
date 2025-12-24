@@ -60,11 +60,14 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
         // IPersistenceService handles partition automatically based on node.Prefix:
         // - Own node (Prefix == _hubPath) → saved to parent partition (file: parentPath/nodeName.json)
         // - Child nodes (Prefix starts with _hubPath/) → saved to own partition (file: _hubPath/childName.json)
+        var hubVersion = _workspace.Hub.Version;
         foreach (var node in adds.Concat(updates))
         {
-            _logger?.LogWarning("MeshNodeTypeSource.UpdateImpl: Saving node {Prefix} to persistence, Content={ContentType}",
-                node.Prefix, node.Content?.GetType().Name ?? "null");
-            _ = _persistence.SaveNodeAsync(node);
+            // Capture hub version when saving
+            var nodeWithVersion = node with { Version = hubVersion };
+            _logger?.LogWarning("MeshNodeTypeSource.UpdateImpl: Saving node {Prefix} to persistence, Content={ContentType}, Version={Version}",
+                nodeWithVersion.Prefix, nodeWithVersion.Content?.GetType().Name ?? "null", nodeWithVersion.Version);
+            _ = _persistence.SaveNodeAsync(nodeWithVersion);
         }
 
         foreach (var node in deletes)
@@ -122,6 +125,14 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
         // Load own MeshNode doc (stored in parent's partition)
         // File location: parentPath/ownNodeName.json (e.g., "graph/org1.json")
         var ownNode = await _persistence.GetNodeAsync(_hubPath, ct);
+
+        // Restore hub version from persisted MeshNode
+        if (ownNode != null && ownNode.Version > 0)
+        {
+            _logger?.LogInformation("MeshNodeTypeSource: Restoring hub {Address} to version {Version}",
+                _workspace.Hub.Address, ownNode.Version);
+            _workspace.Hub.SetInitialVersion(ownNode.Version);
+        }
 
         // Load children from own partition
         // File location: _hubPath/*.json (e.g., "graph/org1/*.json")
