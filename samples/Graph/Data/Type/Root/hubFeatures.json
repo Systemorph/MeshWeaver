@@ -1,7 +1,0 @@
-{
-  "$type": "HubFeatureConfig",
-  "id": "Root",
-  "namespace": "Type",
-  "enableMeshNavigation": true,
-  "enableDynamicNodeTypeAreas": true
-}

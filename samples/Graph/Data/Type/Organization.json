@@ -1,6 +1,6 @@
 {
   "id": "Organization",
-  "namespace": "Systemorph/Type",
+  "namespace": "Type",
   "name": "Organization",
   "nodeType": "NodeType",
   "description": "An organization containing projects",
@@ -10,7 +10,7 @@
   "content": {
     "$type": "NodeTypeDefinition",
     "id": "Organization",
-    "namespace": "Systemorph/Type",
+    "namespace": "Type",
     "displayName": "Organization",
     "iconName": "Building",
     "description": "An organization containing projects",
