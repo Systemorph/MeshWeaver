@@ -121,9 +121,9 @@ public record MeshNode(string Path)
     /// <summary>
     /// Timestamp when this node was last modified.
     /// Used for cache invalidation of dynamically compiled assemblies.
-    /// Automatically set to UtcNow when creating new nodes.
+    /// When reading from file system, defaults to file's last modified time if not specified in JSON.
     /// </summary>
-    public DateTimeOffset LastModified { get; init; } = DateTimeOffset.UtcNow;
+    public DateTimeOffset LastModified { get; init; }
 
     /// <summary>
     /// The data model content for this node.

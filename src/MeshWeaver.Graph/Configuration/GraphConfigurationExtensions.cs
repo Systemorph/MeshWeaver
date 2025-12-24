@@ -54,7 +54,7 @@ public static class GraphConfigurationExtensions
             return services;
         });
 
-        // Register the graph node for bootstrapping.
+        // Register the graph node for bootstrapping the hub with services and initialization.
         // The node's NodeType is "type/graph" which explicitly references the type definition at that path.
         // The type definition (DataModel, LayoutAreas, etc.) is loaded from type/graph during initialization.
         // Only the HubConfiguration is set here for bootstrap - it runs initialization that loads all types.

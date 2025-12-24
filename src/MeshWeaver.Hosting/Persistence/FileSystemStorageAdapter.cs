@@ -52,7 +52,20 @@ public class FileSystemStorageAdapter : IStorageAdapter
             return null;
 
         var json = await File.ReadAllTextAsync(filePath, ct);
-        return JsonSerializer.Deserialize<MeshNode>(json, JsonOptions);
+        var node = JsonSerializer.Deserialize<MeshNode>(json, JsonOptions);
+
+        if (node == null)
+            return null;
+
+        // Use file system last modified time if not specified in JSON
+        // Check if LastModified is the default value (indicates it wasn't in the JSON)
+        if (node.LastModified == default)
+        {
+            var fileInfo = new FileInfo(filePath);
+            node = node with { LastModified = new DateTimeOffset(fileInfo.LastWriteTimeUtc, TimeSpan.Zero) };
+        }
+
+        return node;
     }
 
     public async Task WriteAsync(MeshNode node, CancellationToken ct = default)

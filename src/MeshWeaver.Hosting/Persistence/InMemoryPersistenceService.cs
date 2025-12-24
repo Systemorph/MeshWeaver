@@ -122,7 +122,14 @@ public class InMemoryPersistenceService : IPersistenceService
     public async Task<MeshNode> SaveNodeAsync(MeshNode node, CancellationToken ct = default)
     {
         var normalizedPath = NormalizePath(node.Prefix);
-        var savedNode = node with { Key = normalizedPath };
+
+        // Set LastModified to UtcNow if not specified (for in-memory case without file system)
+        var savedNode = node with
+        {
+            Key = normalizedPath,
+            LastModified = node.LastModified == default ? DateTimeOffset.UtcNow : node.LastModified
+        };
+
         _nodes[normalizedPath] = savedNode;
 
         if (_storageAdapter != null)

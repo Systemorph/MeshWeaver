@@ -480,6 +480,86 @@ public record Graph
 
     #endregion
 
+    #region Type Node Navigation Tests
+
+    /// <summary>
+    /// Navigating to type/graph should resolve to the type/graph node.
+    /// The type node has NodeType = "NodeType" and contains the type definition.
+    /// </summary>
+    [Fact(Timeout = 10000)]
+    public void ResolvePath_TypeGraph_ResolvesToTypeGraphNode()
+    {
+        // Arrange
+        var meshCatalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
+
+        // Act
+        var resolution = meshCatalog.ResolvePath("type/graph");
+
+        // Assert
+        resolution.Should().NotBeNull("type/graph should be resolvable");
+        resolution!.Prefix.Should().Be("type/graph");
+        resolution.Remainder.Should().BeNull();
+    }
+
+    /// <summary>
+    /// GetNodeAsync for type/graph should return the NodeType definition node.
+    /// </summary>
+    [Fact(Timeout = 10000)]
+    public async Task GetNodeAsync_TypeGraph_ReturnsNodeTypeDefinition()
+    {
+        // Arrange
+        var meshCatalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
+
+        // Act
+        var node = await meshCatalog.GetNodeAsync(new Address("type", "graph"));
+
+        // Assert
+        node.Should().NotBeNull("type/graph node should exist");
+        node!.Path.Should().Be("type/graph");
+        node.NodeType.Should().Be("NodeType");
+        node.Content.Should().BeOfType<NodeTypeDefinition>();
+    }
+
+    /// <summary>
+    /// Navigating to type/* paths should work for all type definitions.
+    /// </summary>
+    [Theory]
+    [InlineData("type/graph")]
+    [InlineData("type/org")]
+    [InlineData("type/project")]
+    [InlineData("type/story")]
+    public void ResolvePath_TypePaths_ResolveCorrectly(string typePath)
+    {
+        // Arrange
+        var meshCatalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
+
+        // Act
+        var resolution = meshCatalog.ResolvePath(typePath);
+
+        // Assert
+        resolution.Should().NotBeNull($"{typePath} should be resolvable");
+        resolution!.Prefix.Should().Be(typePath);
+        resolution.Remainder.Should().BeNull();
+    }
+
+    /// <summary>
+    /// Type nodes should exist in persistence and be retrievable.
+    /// </summary>
+    [Fact(Timeout = 10000)]
+    public async Task TypeNodes_ExistInPersistence()
+    {
+        // Assert that type nodes exist
+        var graphType = await Persistence.GetNodeAsync("type/graph");
+        graphType.Should().NotBeNull("type/graph should exist in persistence");
+        graphType!.NodeType.Should().Be("NodeType");
+
+        var orgType = await Persistence.GetNodeAsync("type/org");
+        orgType.Should().NotBeNull("type/org should exist in persistence");
+        orgType!.NodeType.Should().Be("NodeType");
+    }
+
+    #endregion
+
     #region MoveNodeAsync Tests
 
     /// <summary>
