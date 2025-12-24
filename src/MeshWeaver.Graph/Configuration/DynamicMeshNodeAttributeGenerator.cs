@@ -46,6 +46,7 @@ internal class DynamicMeshNodeAttributeGenerator
         sb.AppendLine("using System.Text.Json.Serialization;");
         sb.AppendLine("using MeshWeaver.Mesh;");
         sb.AppendLine("using MeshWeaver.Messaging;");
+        sb.AppendLine("using MeshWeaver.Graph;");
         sb.AppendLine("using MeshWeaver.Graph.Configuration;");
         sb.AppendLine("using MeshWeaver.ContentCollections;");
         sb.AppendLine("using Microsoft.Extensions.DependencyInjection;");
@@ -117,6 +118,9 @@ internal class DynamicMeshNodeAttributeGenerator
         sb.AppendLine("            var builder = config.ConfigureMeshHub();");
         sb.AppendLine($"            builder = builder.WithDataType(typeof(MeshWeaver.Graph.Dynamic.{typeName}));");
         sb.AppendLine("            var result = builder.Build();");
+        sb.AppendLine();
+        sb.AppendLine("            // Add default views (Details, Edit, Thumbnail, Metadata, Settings, Comments)");
+        sb.AppendLine("            result = result.WithDefaultNodeViews();");
         sb.AppendLine();
 
         if (enableDynamicAreas)
