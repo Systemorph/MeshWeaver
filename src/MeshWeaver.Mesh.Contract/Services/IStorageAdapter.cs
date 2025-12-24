@@ -30,11 +30,12 @@ public interface IStorageAdapter
 
     /// <summary>
     /// Lists child paths under a parent path.
+    /// Returns both node paths (JSON files) and directory paths (folders without nodes but with content).
     /// </summary>
     /// <param name="parentPath">Parent path (empty for root level)</param>
     /// <param name="ct">Cancellation token</param>
-    /// <returns>Collection of child paths</returns>
-    Task<IEnumerable<string>> ListChildPathsAsync(string? parentPath, CancellationToken ct = default);
+    /// <returns>Tuple of (nodePaths, directoryPaths) - nodePaths are paths with JSON files, directoryPaths are folders to scan recursively</returns>
+    Task<(IEnumerable<string> NodePaths, IEnumerable<string> DirectoryPaths)> ListChildPathsAsync(string? parentPath, CancellationToken ct = default);
 
     /// <summary>
     /// Checks if a node exists at the given path.

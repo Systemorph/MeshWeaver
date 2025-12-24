@@ -1,0 +1,18 @@
+{
+  "id": "Bob",
+  "name": "Bob Wilson",
+  "nodeType": "Type/Person",
+  "description": "Product Manager",
+  "iconName": "Person",
+  "displayOrder": 2,
+  "isPersistent": true,
+  "content": {
+    "id": "Bob",
+    "name": "Bob Wilson",
+    "email": "bob.wilson@example.com",
+    "avatar": "/static/graph/persons/bob.svg",
+    "bio": "Product manager with 10 years of experience in agile methodologies.",
+    "role": "Product Manager",
+    "iconName": "Person"
+  }
+}

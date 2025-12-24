@@ -367,7 +367,7 @@ public record Graph
             TestContext.Current.CancellationToken);
 
         // Act
-        var resolution = MeshCatalog.ResolvePath("graph/org1");
+        var resolution = await MeshCatalog.ResolvePathAsync("graph/org1");
 
         // Assert
         resolution.Should().NotBeNull("persistence has graph/org1");
@@ -388,7 +388,7 @@ public record Graph
             TestContext.Current.CancellationToken);
 
         // Act: resolve path that goes deeper than persisted (nonexistent/deep doesn't exist)
-        var resolution = MeshCatalog.ResolvePath("graph/org1/proj1/nonexistent/deep");
+        var resolution = await MeshCatalog.ResolvePathAsync("graph/org1/proj1/nonexistent/deep");
 
         // Assert: should match graph/org1/proj1 with remainder
         resolution.Should().NotBeNull();
@@ -409,7 +409,7 @@ public record Graph
             TestContext.Current.CancellationToken);
 
         // Act
-        var resolution = MeshCatalog.ResolvePath("graph/org1/proj1/story1");
+        var resolution = await MeshCatalog.ResolvePathAsync("graph/org1/proj1/story1");
 
         // Assert
         resolution.Should().NotBeNull();
@@ -430,7 +430,7 @@ public record Graph
             TestContext.Current.CancellationToken);
 
         // Act: resolve path with additional segments beyond existing node
-        var resolution = MeshCatalog.ResolvePath("graph/org1/proj1/story1/Overview");
+        var resolution = await MeshCatalog.ResolvePathAsync("graph/org1/proj1/story1/Overview");
 
         // Assert
         resolution.Should().NotBeNull();
@@ -451,7 +451,7 @@ public record Graph
             TestContext.Current.CancellationToken);
 
         // Act: resolve path that doesn't exist anywhere
-        var resolution = MeshCatalog.ResolvePath("nonexistent/path/here");
+        var resolution = await MeshCatalog.ResolvePathAsync("nonexistent/path/here");
 
         // Assert
         resolution.Should().BeNull();
@@ -470,7 +470,7 @@ public record Graph
             TestContext.Current.CancellationToken);
 
         // Act: resolve path with underscore-prefixed segment (layout area)
-        var resolution = MeshCatalog.ResolvePath("graph/_Nodes");
+        var resolution = await MeshCatalog.ResolvePathAsync("graph/_Nodes");
 
         // Assert: "graph" is the address, "_Nodes" is the remainder (layout area)
         resolution.Should().NotBeNull();
@@ -487,13 +487,13 @@ public record Graph
     /// The type node has NodeType = "NodeType" and contains the type definition.
     /// </summary>
     [Fact(Timeout = 10000)]
-    public void ResolvePath_TypeGraph_ResolvesToTypeGraphNode()
+    public async Task ResolvePath_TypeGraph_ResolvesToTypeGraphNode()
     {
         // Arrange
         var meshCatalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
 
         // Act
-        var resolution = meshCatalog.ResolvePath("type/graph");
+        var resolution = await meshCatalog.ResolvePathAsync("type/graph");
 
         // Assert
         resolution.Should().NotBeNull("type/graph should be resolvable");
@@ -528,13 +528,13 @@ public record Graph
     [InlineData("type/org")]
     [InlineData("type/project")]
     [InlineData("type/story")]
-    public void ResolvePath_TypePaths_ResolveCorrectly(string typePath)
+    public async Task ResolvePath_TypePaths_ResolveCorrectly(string typePath)
     {
         // Arrange
         var meshCatalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
 
         // Act
-        var resolution = meshCatalog.ResolvePath(typePath);
+        var resolution = await meshCatalog.ResolvePathAsync(typePath);
 
         // Assert
         resolution.Should().NotBeNull($"{typePath} should be resolvable");

@@ -94,7 +94,7 @@ namespace MeshWeaver.Hosting
         )
         {
             // Use ResolvePath to find the deepest matching node in persistence
-            var resolution = MeshCatalog.ResolvePath(address.ToString());
+            var resolution = await MeshCatalog.ResolvePathAsync(address.ToString());
             if (resolution != null)
             {
                 // Route to the resolved prefix address

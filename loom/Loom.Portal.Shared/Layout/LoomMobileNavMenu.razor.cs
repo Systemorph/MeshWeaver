@@ -38,16 +38,16 @@ public partial class LoomMobileNavMenu : ComponentBase
 
         yield return new MobileNavMenuEntry(
             "Organizations",
-            () => NavigateToAsync("/graph/_Nodes/org"),
+            () => NavigateToAsync("/Organizations"),
             LoomDesktopNavMenu.OrganizationIcon(),
-            LinkMatchRegex: new Regex("^/graph/_Nodes/org")
+            LinkMatchRegex: new Regex("^/Organizations")
         );
 
         yield return new MobileNavMenuEntry(
             "People",
-            () => NavigateToAsync("/graph/_Nodes/person"),
+            () => NavigateToAsync("/People"),
             LoomDesktopNavMenu.PersonIcon(),
-            LinkMatchRegex: new Regex("^/graph/_Nodes/person")
+            LinkMatchRegex: new Regex("^/People")
         );
 
         yield return new MobileNavMenuEntry(

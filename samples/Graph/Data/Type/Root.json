@@ -1,0 +1,19 @@
+{
+  "id": "Root",
+  "namespace": "Type",
+  "name": "Root",
+  "nodeType": "NodeType",
+  "description": "Root of hierarchical graph",
+  "iconName": "Diagram",
+  "displayOrder": 1,
+  "isPersistent": true,
+  "content": {
+    "$type": "NodeTypeDefinition",
+    "id": "Root",
+    "namespace": "Type",
+    "displayName": "Root",
+    "iconName": "Diagram",
+    "description": "Root of hierarchical graph",
+    "displayOrder": 1
+  }
+}

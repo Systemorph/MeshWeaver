@@ -1,0 +1,19 @@
+{
+  "id": "Project",
+  "namespace": "Systemorph/Type",
+  "name": "Project",
+  "nodeType": "NodeType",
+  "description": "A project containing stories",
+  "iconName": "Folder",
+  "displayOrder": 20,
+  "isPersistent": true,
+  "content": {
+    "$type": "NodeTypeDefinition",
+    "id": "Project",
+    "namespace": "Systemorph/Type",
+    "displayName": "Project",
+    "iconName": "Folder",
+    "description": "A project containing stories",
+    "displayOrder": 20
+  }
+}

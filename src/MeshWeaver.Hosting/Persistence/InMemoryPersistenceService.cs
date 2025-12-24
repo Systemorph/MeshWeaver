@@ -36,17 +36,25 @@ public class InMemoryPersistenceService : IPersistenceService
 
     private async Task LoadFromStorageAsync(string parentPath, CancellationToken ct)
     {
-        var childPaths = await _storageAdapter!.ListChildPathsAsync(parentPath, ct);
-        foreach (var path in childPaths)
+        var (nodePaths, directoryPaths) = await _storageAdapter!.ListChildPathsAsync(parentPath, ct);
+
+        // Load nodes from JSON files
+        foreach (var path in nodePaths)
         {
             var node = await _storageAdapter.ReadAsync(path, ct);
             if (node != null)
             {
                 var normalizedPath = NormalizePath(path);
                 _nodes[normalizedPath] = node;
-                // Recursively load children
+                // Recursively load children under this node
                 await LoadFromStorageAsync(path, ct);
             }
+        }
+
+        // Also recursively scan directories that don't have nodes (like Root/)
+        foreach (var dirPath in directoryPaths)
+        {
+            await LoadFromStorageAsync(dirPath, ct);
         }
     }
 
@@ -189,7 +197,7 @@ public class InMemoryPersistenceService : IPersistenceService
             .ToList();
 
         // Move the main node - need to create new MeshNode to ensure Prefix is updated
-        var movedNode = new MeshNode(targetPath)
+        var movedNode = MeshNode.FromPath(targetPath) with
         {
             Key = normalizedTarget,
             Name = sourceNode.Name,
@@ -222,7 +230,7 @@ public class InMemoryPersistenceService : IPersistenceService
                 var newPath = normalizedTarget + relativePath;
 
                 // Create new MeshNode to ensure Prefix is updated
-                var movedDescendant = new MeshNode(newPath)
+                var movedDescendant = MeshNode.FromPath(newPath) with
                 {
                     Key = newPath,
                     Name = descendantNode.Name,

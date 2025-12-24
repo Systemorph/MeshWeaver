@@ -1,5 +1,6 @@
 {
-  "path": "graph",
+  "id": "graph",
+  "namespace": null,
   "key": "graph",
   "name": null,
   "nodeType": "type/graph",
@@ -8,7 +9,7 @@
   "displayOrder": 0,
   "addressSegments": 0,
   "isPersistent": false,
-  "lastModified": "2025-12-24T13:42:34.4837618+00:00",
+  "lastModified": "2025-12-24T19:18:57.3800001+00:00",
   "content": null,
   "thumbNail": null,
   "streamProvider": null,

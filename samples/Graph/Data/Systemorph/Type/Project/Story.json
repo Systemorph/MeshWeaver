@@ -1,0 +1,19 @@
+{
+  "id": "Story",
+  "namespace": "Systemorph/Type/Project",
+  "name": "Story",
+  "nodeType": "NodeType",
+  "description": "A user story or task",
+  "iconName": "Document",
+  "displayOrder": 30,
+  "isPersistent": true,
+  "content": {
+    "$type": "NodeTypeDefinition",
+    "id": "Story",
+    "namespace": "Systemorph/Type/Project",
+    "displayName": "Story",
+    "iconName": "Document",
+    "description": "A user story or task",
+    "displayOrder": 30
+  }
+}

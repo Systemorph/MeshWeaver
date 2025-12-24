@@ -1,0 +1,18 @@
+{
+  "id": "Systemorph",
+  "name": "Systemorph",
+  "nodeType": "Systemorph/Type/Organization",
+  "description": "The company behind MeshWeaver",
+  "iconName": "Building",
+  "displayOrder": 1,
+  "addressSegments": 0,
+  "isPersistent": true,
+  "content": {
+    "id": "Systemorph",
+    "name": "Systemorph",
+    "description": "The company behind MeshWeaver",
+    "website": "https://systemorph.com",
+    "logo": "/static/graph/logos/Systemorph.png",
+    "iconName": "Building"
+  }
+}

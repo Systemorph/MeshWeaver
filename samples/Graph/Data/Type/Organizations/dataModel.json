@@ -1,0 +1,10 @@
+{
+  "$type": "DataModel",
+  "id": "Organizations",
+  "namespace": "Type",
+  "displayName": "Organizations",
+  "iconName": "Building",
+  "description": "Catalog of organizations",
+  "displayOrder": 8,
+  "typeSource": "public record Organizations { }"
+}

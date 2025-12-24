@@ -46,14 +46,14 @@ public class AddressResolutionTest(ITestOutputHelper output) : MonolithMeshTestB
     #region ResolvePath Score-Based Tests
 
     [Fact]
-    public void ResolvePath_SingleSegmentNode_MatchesAndReturnsRemainder()
+    public async Task ResolvePath_SingleSegmentNode_MatchesAndReturnsRemainder()
     {
         // Arrange
         var meshCatalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
 
         // Act - pricing/Microsoft/2026/Overview/details
         // Node "pricing" has score 1, remainder is "Microsoft/2026/Overview/details"
-        var resolution = meshCatalog.ResolvePath("pricing/Microsoft/2026/Overview/details");
+        var resolution = await meshCatalog.ResolvePathAsync("pricing/Microsoft/2026/Overview/details");
 
         // Assert
         resolution.Should().NotBeNull();
@@ -62,14 +62,14 @@ public class AddressResolutionTest(ITestOutputHelper output) : MonolithMeshTestB
     }
 
     [Fact]
-    public void ResolvePath_AppPath_ReturnsPrefixAndRemainder()
+    public async Task ResolvePath_AppPath_ReturnsPrefixAndRemainder()
     {
         // Arrange
         var meshCatalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
 
         // Act - app/Todo/Dashboard/123
         // Node "app" has score 1, remainder is "Todo/Dashboard/123"
-        var resolution = meshCatalog.ResolvePath("app/Todo/Dashboard/123");
+        var resolution = await meshCatalog.ResolvePathAsync("app/Todo/Dashboard/123");
 
         // Assert
         resolution.Should().NotBeNull();
@@ -78,13 +78,13 @@ public class AddressResolutionTest(ITestOutputHelper output) : MonolithMeshTestB
     }
 
     [Fact]
-    public void ResolvePath_ExactMatch_ReturnsNullRemainder()
+    public async Task ResolvePath_ExactMatch_ReturnsNullRemainder()
     {
         // Arrange
         var meshCatalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
 
         // Act - exact match with node "pricing"
-        var resolution = meshCatalog.ResolvePath("pricing");
+        var resolution = await meshCatalog.ResolvePathAsync("pricing");
 
         // Assert
         resolution.Should().NotBeNull();
@@ -93,13 +93,13 @@ public class AddressResolutionTest(ITestOutputHelper output) : MonolithMeshTestB
     }
 
     [Fact]
-    public void ResolvePath_WithLeadingSlash_ParsesCorrectly()
+    public async Task ResolvePath_WithLeadingSlash_ParsesCorrectly()
     {
         // Arrange
         var meshCatalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
 
         // Act - leading slash should be stripped
-        var resolution = meshCatalog.ResolvePath("/pricing/Microsoft/2026");
+        var resolution = await meshCatalog.ResolvePathAsync("/pricing/Microsoft/2026");
 
         // Assert
         resolution.Should().NotBeNull();
@@ -108,13 +108,13 @@ public class AddressResolutionTest(ITestOutputHelper output) : MonolithMeshTestB
     }
 
     [Fact]
-    public void ResolvePath_UnknownPath_ReturnsNull()
+    public async Task ResolvePath_UnknownPath_ReturnsNull()
     {
         // Arrange
         var meshCatalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
 
         // Act - no node matches "unknown"
-        var resolution = meshCatalog.ResolvePath("unknown/test/path");
+        var resolution = await meshCatalog.ResolvePathAsync("unknown/test/path");
 
         // Assert
         resolution.Should().BeNull();
@@ -128,14 +128,14 @@ public class AddressResolutionTest(ITestOutputHelper output) : MonolithMeshTestB
     [InlineData("app", "app", null)]
     [InlineData("app/Insurance", "app", "Insurance")]
     [InlineData("app/Insurance/Dashboard", "app", "Insurance/Dashboard")]
-    public void ResolvePath_VariousPaths_ReturnsCorrectPrefixAndRemainder(
+    public async Task ResolvePath_VariousPaths_ReturnsCorrectPrefixAndRemainder(
         string path, string expectedPrefix, string? expectedRemainder)
     {
         // Arrange
         var meshCatalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
 
         // Act
-        var resolution = meshCatalog.ResolvePath(path);
+        var resolution = await meshCatalog.ResolvePathAsync(path);
 
         // Assert
         resolution.Should().NotBeNull();
@@ -144,26 +144,26 @@ public class AddressResolutionTest(ITestOutputHelper output) : MonolithMeshTestB
     }
 
     [Fact]
-    public void ResolvePath_EmptyPath_ReturnsNull()
+    public async Task ResolvePath_EmptyPath_ReturnsNull()
     {
         // Arrange
         var meshCatalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
 
         // Act
-        var resolution = meshCatalog.ResolvePath("");
+        var resolution = await meshCatalog.ResolvePathAsync("");
 
         // Assert
         resolution.Should().BeNull();
     }
 
     [Fact]
-    public void ResolvePath_NullPath_ReturnsNull()
+    public async Task ResolvePath_NullPath_ReturnsNull()
     {
         // Arrange
         var meshCatalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
 
         // Act
-        var resolution = meshCatalog.ResolvePath(null!);
+        var resolution = await meshCatalog.ResolvePathAsync(null!);
 
         // Assert
         resolution.Should().BeNull();
@@ -174,7 +174,7 @@ public class AddressResolutionTest(ITestOutputHelper output) : MonolithMeshTestB
     #region Score-Based Matching Priority Tests
 
     [Fact]
-    public void ResolvePath_MultipleNodes_HighestScoreWins()
+    public async Task ResolvePath_MultipleNodes_HighestScoreWins()
     {
         // This test requires registering additional nodes with different segment depths
         // The test infrastructure registers only single-segment nodes,
@@ -182,7 +182,7 @@ public class AddressResolutionTest(ITestOutputHelper output) : MonolithMeshTestB
         var meshCatalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
 
         // With only "pricing" registered, it should match and have remainder
-        var resolution = meshCatalog.ResolvePath("pricing/Microsoft/2026");
+        var resolution = await meshCatalog.ResolvePathAsync("pricing/Microsoft/2026");
 
         resolution.Should().NotBeNull();
         resolution!.Prefix.Should().Be("pricing");
@@ -190,13 +190,13 @@ public class AddressResolutionTest(ITestOutputHelper output) : MonolithMeshTestB
     }
 
     [Fact]
-    public void ResolvePath_CaseInsensitive_MatchesCorrectly()
+    public async Task ResolvePath_CaseInsensitive_MatchesCorrectly()
     {
         // Arrange
         var meshCatalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
 
         // Act - case-insensitive matching
-        var resolution = meshCatalog.ResolvePath("PRICING/Microsoft/2026");
+        var resolution = await meshCatalog.ResolvePathAsync("PRICING/Microsoft/2026");
 
         // Assert
         resolution.Should().NotBeNull();
@@ -232,14 +232,14 @@ public class AddressSegmentsTest(ITestOutputHelper output) : MonolithMeshTestBas
     }
 
     [Fact]
-    public void ResolvePath_WithAddressSegments_ExpandsAddress()
+    public async Task ResolvePath_WithAddressSegments_ExpandsAddress()
     {
         // Arrange
         var meshCatalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
 
         // Act - pricing/Microsoft/2026/Overview
         // Node "pricing" with AddressSegments=3 means address is "pricing/Microsoft/2026"
-        var resolution = meshCatalog.ResolvePath("pricing/Microsoft/2026/Overview");
+        var resolution = await meshCatalog.ResolvePathAsync("pricing/Microsoft/2026/Overview");
 
         // Assert
         resolution.Should().NotBeNull();
@@ -248,13 +248,13 @@ public class AddressSegmentsTest(ITestOutputHelper output) : MonolithMeshTestBas
     }
 
     [Fact]
-    public void ResolvePath_WithAddressSegments_ExactMatch_ReturnsNullRemainder()
+    public async Task ResolvePath_WithAddressSegments_ExactMatch_ReturnsNullRemainder()
     {
         // Arrange
         var meshCatalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
 
         // Act - exact match with AddressSegments=3
-        var resolution = meshCatalog.ResolvePath("pricing/Microsoft/2026");
+        var resolution = await meshCatalog.ResolvePathAsync("pricing/Microsoft/2026");
 
         // Assert
         resolution.Should().NotBeNull();
@@ -263,13 +263,13 @@ public class AddressSegmentsTest(ITestOutputHelper output) : MonolithMeshTestBas
     }
 
     [Fact]
-    public void ResolvePath_WithAddressSegments_FewerSegmentsThanRequired_UsesAvailableSegments()
+    public async Task ResolvePath_WithAddressSegments_FewerSegmentsThanRequired_UsesAvailableSegments()
     {
         // Arrange
         var meshCatalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
 
         // Act - only 2 segments when AddressSegments=3
-        var resolution = meshCatalog.ResolvePath("pricing/Microsoft");
+        var resolution = await meshCatalog.ResolvePathAsync("pricing/Microsoft");
 
         // Assert
         resolution.Should().NotBeNull();
@@ -282,14 +282,14 @@ public class AddressSegmentsTest(ITestOutputHelper output) : MonolithMeshTestBas
     [InlineData("pricing/Microsoft/2026/Overview", "pricing/Microsoft/2026", "Overview")]
     [InlineData("pricing/Microsoft/2026/Overview/details", "pricing/Microsoft/2026", "Overview/details")]
     [InlineData("pricing/Acme/2025/Reports/Q1/summary", "pricing/Acme/2025", "Reports/Q1/summary")]
-    public void ResolvePath_WithAddressSegments_VariousPaths_ReturnsCorrectPrefixAndRemainder(
+    public async Task ResolvePath_WithAddressSegments_VariousPaths_ReturnsCorrectPrefixAndRemainder(
         string path, string expectedPrefix, string? expectedRemainder)
     {
         // Arrange
         var meshCatalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
 
         // Act
-        var resolution = meshCatalog.ResolvePath(path);
+        var resolution = await meshCatalog.ResolvePathAsync(path);
 
         // Assert
         resolution.Should().NotBeNull();
@@ -298,13 +298,13 @@ public class AddressSegmentsTest(ITestOutputHelper output) : MonolithMeshTestBas
     }
 
     [Fact]
-    public void ResolvePath_WithAddressSegments_CaseInsensitive_PreservesOriginalCase()
+    public async Task ResolvePath_WithAddressSegments_CaseInsensitive_PreservesOriginalCase()
     {
         // Arrange
         var meshCatalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
 
         // Act - case-insensitive matching for prefix, preserves path case for additional segments
-        var resolution = meshCatalog.ResolvePath("PRICING/Microsoft/2026/Overview");
+        var resolution = await meshCatalog.ResolvePathAsync("PRICING/Microsoft/2026/Overview");
 
         // Assert
         resolution.Should().NotBeNull();
