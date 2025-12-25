@@ -87,7 +87,7 @@ public record ContentTypeSource<T> : TypeSourceWithType<T, ContentTypeSource<T>>
             }
 
             _logger?.LogWarning("ContentTypeSource<{Type}>.SyncToMeshNode: Found MeshNode Prefix={Prefix}, Content type={ContentType}",
-                typeof(T).Name, meshNode.Prefix, meshNode.Content?.GetType().Name ?? "null");
+                typeof(T).Name, meshNode.Path, meshNode.Content?.GetType().Name ?? "null");
 
             // Check if content actually changed
             if (meshNode.Content?.Equals(contentEntity) == true)
@@ -130,7 +130,7 @@ public record ContentTypeSource<T> : TypeSourceWithType<T, ContentTypeSource<T>>
         // Load the MeshNode from persistence to get the content
         var meshNode = await _persistence.GetNodeAsync(_hubPath, ct);
         _logger?.LogWarning("ContentTypeSource<{Type}>.InitializeAsync: meshNode={MeshNode}, Content type={ContentType}",
-            typeof(T).Name, meshNode?.Prefix ?? "null", meshNode?.Content?.GetType().Name ?? "null");
+            typeof(T).Name, meshNode?.Path ?? "null", meshNode?.Content?.GetType().Name ?? "null");
 
         if (meshNode?.Content is T content)
         {

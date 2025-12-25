@@ -28,7 +28,7 @@ public class NodeTypeServiceTest
     public async Task GetNodeTypeNodesAsync_ReturnsGlobalTypes_WhenContextPathIsEmpty()
     {
         // Arrange - create global NodeType
-        var storyNode = new MeshNode("type/story")
+        var storyNode = MeshNode.FromPath("type/story") with
         {
             Name = "Story",
             NodeType = "NodeType",
@@ -40,14 +40,14 @@ public class NodeTypeServiceTest
         var nodes = await _service.GetNodeTypeNodesAsync("").ToListAsync();
 
         // Assert
-        nodes.Should().Contain(n => n.Prefix == "type/story");
+        nodes.Should().Contain(n => n.Path == "type/story");
     }
 
     [Fact]
     public async Task GetNodeTypeNodesAsync_WalksUpHierarchy_ReturnsLocalOverrideOnly()
     {
         // Arrange - create global type and local type with same Id
-        var globalStory = new MeshNode("type/story")
+        var globalStory = MeshNode.FromPath("type/story") with
         {
             Name = "Story",
             NodeType = "NodeType",
@@ -56,7 +56,7 @@ public class NodeTypeServiceTest
         await _persistence.SaveNodeAsync(globalStory);
 
         // Local type override at project level (same Id shadows global)
-        var localStory = new MeshNode("graph/org1/proj1/story")
+        var localStory = MeshNode.FromPath("graph/org1/proj1/story") with
         {
             Name = "Project Story",
             NodeType = "NodeType",
@@ -65,7 +65,7 @@ public class NodeTypeServiceTest
         await _persistence.SaveNodeAsync(localStory);
 
         // A different type at global level
-        var globalOrg = new MeshNode("type/org")
+        var globalOrg = MeshNode.FromPath("type/org") with
         {
             Name = "Organization",
             NodeType = "NodeType",
@@ -82,7 +82,7 @@ public class NodeTypeServiceTest
         // Local story should be returned, not global
         var storyNode = nodes.FirstOrDefault(n => ((NodeTypeDefinition)n.Content!).Id == "story");
         storyNode.Should().NotBeNull();
-        storyNode!.Prefix.Should().Be("graph/org1/proj1/story");
+        storyNode!.Path.Should().Be("graph/org1/proj1/story");
         storyNode.Name.Should().Be("Project Story"); // Local version
 
         // Global org should be returned
@@ -97,7 +97,7 @@ public class NodeTypeServiceTest
     public async Task GetNodeTypeNodeAsync_ReturnsGlobalType_WhenNoLocalOverride()
     {
         // Arrange
-        var storyNode = new MeshNode("type/story")
+        var storyNode = MeshNode.FromPath("type/story") with
         {
             Name = "Story",
             NodeType = "NodeType",
@@ -110,14 +110,14 @@ public class NodeTypeServiceTest
 
         // Assert
         result.Should().NotBeNull();
-        result!.Prefix.Should().Be("type/story");
+        result!.Path.Should().Be("type/story");
     }
 
     [Fact]
     public async Task GetNodeTypeNodeAsync_ReturnsLocalType_WhenOverrideExists()
     {
         // Arrange - global and local
-        var globalStory = new MeshNode("type/story")
+        var globalStory = MeshNode.FromPath("type/story") with
         {
             Name = "Story",
             NodeType = "NodeType",
@@ -125,7 +125,7 @@ public class NodeTypeServiceTest
         };
         await _persistence.SaveNodeAsync(globalStory);
 
-        var localStory = new MeshNode("graph/org1/story")
+        var localStory = MeshNode.FromPath("graph/org1/story") with
         {
             Name = "Org Story",
             NodeType = "NodeType",
@@ -138,7 +138,7 @@ public class NodeTypeServiceTest
 
         // Assert - should get the local override at org level
         result.Should().NotBeNull();
-        result!.Prefix.Should().Be("graph/org1/story");
+        result!.Path.Should().Be("graph/org1/story");
     }
 
     [Fact]
@@ -159,7 +159,7 @@ public class NodeTypeServiceTest
     public async Task GetCodeConfigurationAsync_ReturnsCodeConfiguration_FromPartition()
     {
         // Arrange
-        var storyNode = new MeshNode("type/story")
+        var storyNode = MeshNode.FromPath("type/story") with
         {
             Name = "Story",
             NodeType = "NodeType",
@@ -185,7 +185,7 @@ public class NodeTypeServiceTest
     public async Task GetCodeConfigurationAsync_ReturnsNull_WhenNoCodeConfiguration()
     {
         // Arrange - NodeType without CodeConfiguration
-        var storyNode = new MeshNode("type/story")
+        var storyNode = MeshNode.FromPath("type/story") with
         {
             Name = "Story",
             NodeType = "NodeType",
@@ -208,7 +208,7 @@ public class NodeTypeServiceTest
     public async Task SaveCodeConfigurationAsync_PersistsCodeConfiguration_ToPartition()
     {
         // Arrange
-        var storyNode = new MeshNode("type/story")
+        var storyNode = MeshNode.FromPath("type/story") with
         {
             Name = "Story",
             NodeType = "NodeType",
@@ -238,10 +238,10 @@ public class NodeTypeServiceTest
     public async Task GetAllNodeTypeNodesAsync_ReturnsAllNodeTypes()
     {
         // Arrange
-        await _persistence.SaveNodeAsync(new MeshNode("type/story") { Name = "Story", NodeType = "NodeType" });
-        await _persistence.SaveNodeAsync(new MeshNode("type/org") { Name = "Org", NodeType = "NodeType" });
-        await _persistence.SaveNodeAsync(new MeshNode("graph/proj1/task") { Name = "Task", NodeType = "NodeType" });
-        await _persistence.SaveNodeAsync(new MeshNode("graph/org1") { Name = "Org 1", NodeType = "org" }); // Not a NodeType
+        await _persistence.SaveNodeAsync(MeshNode.FromPath("type/story") with { Name = "Story", NodeType = "NodeType" });
+        await _persistence.SaveNodeAsync(MeshNode.FromPath("type/org") with { Name = "Org", NodeType = "NodeType" });
+        await _persistence.SaveNodeAsync(MeshNode.FromPath("graph/proj1/task") with { Name = "Task", NodeType = "NodeType" });
+        await _persistence.SaveNodeAsync(MeshNode.FromPath("graph/org1") with { Name = "Org 1", NodeType = "org" }); // Not a NodeType
 
         // Act
         var nodes = await _service.GetAllNodeTypeNodesAsync().ToListAsync();
@@ -259,8 +259,8 @@ public class NodeTypeServiceTest
     public async Task GetAllCodeConfigurationsAsync_ReturnsAllCodeConfigurations()
     {
         // Arrange
-        await _persistence.SaveNodeAsync(new MeshNode("type/story") { Name = "Story", NodeType = "NodeType" });
-        await _persistence.SaveNodeAsync(new MeshNode("type/org") { Name = "Org", NodeType = "NodeType" });
+        await _persistence.SaveNodeAsync(MeshNode.FromPath("type/story") with { Name = "Story", NodeType = "NodeType" });
+        await _persistence.SaveNodeAsync(MeshNode.FromPath("type/org") with { Name = "Org", NodeType = "NodeType" });
 
         var storyConfig = new CodeConfiguration { Code = "public record Story { }" };
         var orgConfig = new CodeConfiguration { Code = "public record Organization { }" };

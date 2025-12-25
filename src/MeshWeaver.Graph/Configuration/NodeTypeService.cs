@@ -1,4 +1,4 @@
-using MeshWeaver.Mesh;
+﻿using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using Microsoft.Extensions.Logging;
 
@@ -37,26 +37,22 @@ public class NodeTypeService : INodeTypeService
     /// </summary>
     private static IEnumerable<string> GetSearchPaths(string contextPath)
     {
-        if (string.IsNullOrEmpty(contextPath))
+        if (!string.IsNullOrEmpty(contextPath))
         {
-            yield return "";
-            yield return INodeTypeService.GlobalTypesPrefix;
-            yield break;
-        }
-
-        var path = contextPath;
-        while (!string.IsNullOrEmpty(path))
-        {
-            yield return path;
-            var lastSlash = path.LastIndexOf('/');
-            path = lastSlash >= 0 ? path.Substring(0, lastSlash) : "";
+            var path = contextPath;
+            while (!string.IsNullOrEmpty(path))
+            {
+                yield return path;
+                var lastSlash = path.LastIndexOf('/');
+                path = lastSlash >= 0 ? path.Substring(0, lastSlash) : "";
+            }
         }
 
         // Root level
         yield return "";
 
-        // Global types prefix
-        yield return INodeTypeService.GlobalTypesPrefix;
+        // Global types namespace
+        yield return "type";
     }
 
     /// <inheritdoc/>
@@ -94,7 +90,7 @@ public class NodeTypeService : INodeTypeService
                 if (node.NodeType == NodeTypeNodeType && node.Content is NodeTypeDefinition ntd)
                 {
                     // Match either by full path or by short Id
-                    if (node.Prefix == nodeType || ntd.Id == nodeType)
+                    if (node.Path == nodeType || ntd.Id == nodeType)
                     {
                         return node;
                     }
@@ -104,7 +100,7 @@ public class NodeTypeService : INodeTypeService
 
         // If nodeType contains a path separator (e.g., "Type/Organizations"),
         // also search in its parent path. This handles cases where the nodeType
-        // path doesn't match the GlobalTypesPrefix (e.g., "Type" vs "type").
+        // path doesn't match the GlobalTypesNamespace (e.g., "Type" vs "type").
         if (nodeType.Contains('/'))
         {
             var lastSlash = nodeType.LastIndexOf('/');
@@ -116,7 +112,7 @@ public class NodeTypeService : INodeTypeService
             {
                 if (node.NodeType == NodeTypeNodeType && node.Content is NodeTypeDefinition ntd)
                 {
-                    if (node.Prefix == nodeType || ntd.Id == nodeType)
+                    if (node.Path == nodeType || ntd.Id == nodeType)
                     {
                         return node;
                     }
@@ -177,7 +173,7 @@ public class NodeTypeService : INodeTypeService
             return null;
 
         // Get NodeTypeData via messaging
-        var nodeTypeData = await GetNodeTypeDataAsync(nodeTypeNode.Prefix, ct);
+        var nodeTypeData = await GetNodeTypeDataAsync(nodeTypeNode.Path, ct);
         return nodeTypeData?.Code;
     }
 
@@ -218,7 +214,7 @@ public class NodeTypeService : INodeTypeService
         await foreach (var nodeTypeNode in GetAllNodeTypeNodesAsync())
         {
             // Get CodeConfiguration from partition
-            var nodeTypeData = await GetNodeTypeDataAsync(nodeTypeNode.Prefix, ct);
+            var nodeTypeData = await GetNodeTypeDataAsync(nodeTypeNode.Path, ct);
             if (nodeTypeData?.Code != null)
             {
                 configurations.Add(nodeTypeData.Code);

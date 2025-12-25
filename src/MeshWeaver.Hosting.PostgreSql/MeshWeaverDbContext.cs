@@ -94,7 +94,7 @@ public class MeshWeaverDbContext(DbContextOptions<MeshWeaverDbContext> options)
         {
             entity.HasKey(e => e.Key);
             entity.Property(e => e.Key).IsRequired();
-            entity.Property(e => e.Prefix).IsRequired();
+            entity.Property(e => e.Namespace).IsRequired();
             entity.Property(e => e.Name);
             entity.Property(e => e.NodeType);
 

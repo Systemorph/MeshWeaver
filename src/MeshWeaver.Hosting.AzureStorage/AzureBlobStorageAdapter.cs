@@ -67,7 +67,7 @@ public class AzureBlobStorageAdapter : IStorageAdapter
 
     public async Task WriteAsync(MeshNode node, CancellationToken ct = default)
     {
-        var key = NormalizePath(node.Prefix);
+        var key = NormalizePath(node.Path);
         var nodeToSave = node with
         {
             Key = key,

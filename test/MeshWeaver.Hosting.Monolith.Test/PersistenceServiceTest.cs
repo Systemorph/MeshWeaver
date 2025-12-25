@@ -20,9 +20,9 @@ public class PersistenceServiceTest
     {
         // Arrange
         var persistence = new InMemoryPersistenceService();
-        await persistence.SaveNodeAsync(new MeshNode("org/acme") { Name = "Acme Corp" });
-        await persistence.SaveNodeAsync(new MeshNode("org/contoso") { Name = "Contoso" });
-        await persistence.SaveNodeAsync(new MeshNode("org/acme/project/web") { Name = "Web Project" });
+        await persistence.SaveNodeAsync(MeshNode.FromPath("org/acme") with { Name = "Acme Corp" });
+        await persistence.SaveNodeAsync(MeshNode.FromPath("org/contoso") with { Name = "Contoso" });
+        await persistence.SaveNodeAsync(MeshNode.FromPath("org/acme/project/web") with { Name = "Web Project" });
 
         // Act
         var children = await persistence.GetChildrenAsync("org").ToListAsync(TestContext.Current.CancellationToken);
@@ -39,7 +39,7 @@ public class PersistenceServiceTest
         var persistence = new InMemoryPersistenceService();
         await persistence.SaveNodeAsync(new MeshNode("org") { Name = "Organizations" });
         await persistence.SaveNodeAsync(new MeshNode("system") { Name = "System" });
-        await persistence.SaveNodeAsync(new MeshNode("org/acme") { Name = "Acme" });
+        await persistence.SaveNodeAsync(MeshNode.FromPath("org/acme") with { Name = "Acme" });
 
         // Act
         var children = await persistence.GetChildrenAsync(null).ToListAsync(TestContext.Current.CancellationToken);
@@ -54,7 +54,7 @@ public class PersistenceServiceTest
     {
         // Arrange
         var persistence = new InMemoryPersistenceService();
-        await persistence.SaveNodeAsync(new MeshNode("org/acme") { Name = "Acme" });
+        await persistence.SaveNodeAsync(MeshNode.FromPath("org/acme") with { Name = "Acme" });
 
         // Act
         var children = await persistence.GetChildrenAsync("nonexistent").ToListAsync(TestContext.Current.CancellationToken);
@@ -70,7 +70,7 @@ public class PersistenceServiceTest
         var persistence = new InMemoryPersistenceService();
 
         // Act
-        await persistence.SaveNodeAsync(new MeshNode("ORG/Acme") { Name = "Acme" });
+        await persistence.SaveNodeAsync(MeshNode.FromPath("ORG/Acme") with { Name = "Acme" });
         var node = await persistence.GetNodeAsync("org/acme");
 
         // Assert
@@ -83,7 +83,7 @@ public class PersistenceServiceTest
     {
         // Arrange
         var persistence = new InMemoryPersistenceService();
-        await persistence.SaveNodeAsync(new MeshNode("org/acme") { Name = "Acme" });
+        await persistence.SaveNodeAsync(MeshNode.FromPath("org/acme") with { Name = "Acme" });
 
         // Act
         await persistence.DeleteNodeAsync("org/acme");
@@ -98,10 +98,10 @@ public class PersistenceServiceTest
     {
         // Arrange
         var persistence = new InMemoryPersistenceService();
-        await persistence.SaveNodeAsync(new MeshNode("org/acme") { Name = "Acme" });
-        await persistence.SaveNodeAsync(new MeshNode("org/acme/project/web") { Name = "Web" });
-        await persistence.SaveNodeAsync(new MeshNode("org/acme/project/mobile") { Name = "Mobile" });
-        await persistence.SaveNodeAsync(new MeshNode("org/contoso") { Name = "Contoso" });
+        await persistence.SaveNodeAsync(MeshNode.FromPath("org/acme") with { Name = "Acme" });
+        await persistence.SaveNodeAsync(MeshNode.FromPath("org/acme/project/web") with { Name = "Web" });
+        await persistence.SaveNodeAsync(MeshNode.FromPath("org/acme/project/mobile") with { Name = "Mobile" });
+        await persistence.SaveNodeAsync(MeshNode.FromPath("org/contoso") with { Name = "Contoso" });
 
         // Act
         await persistence.DeleteNodeAsync("org/acme", recursive: true);
@@ -118,8 +118,8 @@ public class PersistenceServiceTest
     {
         // Arrange
         var persistence = new InMemoryPersistenceService();
-        await persistence.SaveNodeAsync(new MeshNode("org/acme") { Name = "Acme Corporation" });
-        await persistence.SaveNodeAsync(new MeshNode("org/contoso") { Name = "Contoso Ltd" });
+        await persistence.SaveNodeAsync(MeshNode.FromPath("org/acme") with { Name = "Acme Corporation" });
+        await persistence.SaveNodeAsync(MeshNode.FromPath("org/contoso") with { Name = "Contoso Ltd" });
 
         // Act
         var results = await persistence.SearchAsync(null, "Acme").ToListAsync(TestContext.Current.CancellationToken);
@@ -134,7 +134,7 @@ public class PersistenceServiceTest
     {
         // Arrange
         var persistence = new InMemoryPersistenceService();
-        await persistence.SaveNodeAsync(new MeshNode("org/acme") { Name = "Acme" });
+        await persistence.SaveNodeAsync(MeshNode.FromPath("org/acme") with { Name = "Acme" });
 
         // Act & Assert
         (await persistence.ExistsAsync("org/acme")).Should().BeTrue();
@@ -146,10 +146,10 @@ public class PersistenceServiceTest
     {
         // Arrange
         var persistence = new InMemoryPersistenceService();
-        await persistence.SaveNodeAsync(new MeshNode("org/acme") { Name = "Acme" });
-        await persistence.SaveNodeAsync(new MeshNode("org/acme/project/web") { Name = "Web" });
-        await persistence.SaveNodeAsync(new MeshNode("org/acme/project/mobile") { Name = "Mobile" });
-        await persistence.SaveNodeAsync(new MeshNode("org/contoso") { Name = "Contoso" });
+        await persistence.SaveNodeAsync(MeshNode.FromPath("org/acme") with { Name = "Acme" });
+        await persistence.SaveNodeAsync(MeshNode.FromPath("org/acme/project/web") with { Name = "Web" });
+        await persistence.SaveNodeAsync(MeshNode.FromPath("org/acme/project/mobile") with { Name = "Mobile" });
+        await persistence.SaveNodeAsync(MeshNode.FromPath("org/contoso") with { Name = "Contoso" });
 
         // Act
         var descendants = await persistence.GetDescendantsAsync("org/acme").ToListAsync(TestContext.Current.CancellationToken);
@@ -165,7 +165,7 @@ public class PersistenceServiceTest
         // Arrange
         var persistence = new InMemoryPersistenceService();
         var content = new { Id = "acme", Website = "https://acme.com" };
-        await persistence.SaveNodeAsync(new MeshNode("org/acme") { Name = "Acme", Content = content });
+        await persistence.SaveNodeAsync(MeshNode.FromPath("org/acme") with { Name = "Acme", Content = content });
 
         // Act
         var node = await persistence.GetNodeAsync("org/acme");
@@ -183,16 +183,16 @@ public class MeshCatalogQueryTest
     {
         // Arrange
         var persistence = new InMemoryPersistenceService();
-        await persistence.SaveNodeAsync(new MeshNode("org/acme") { Name = "Acme Corp", Description = "Technology company" });
-        await persistence.SaveNodeAsync(new MeshNode("org/contoso") { Name = "Contoso Ltd", Description = "Software company" });
-        await persistence.SaveNodeAsync(new MeshNode("org/fabrikam") { Name = "Fabrikam Inc", Description = "Hardware manufacturer" });
+        await persistence.SaveNodeAsync(MeshNode.FromPath("org/acme") with { Name = "Acme Corp", Description = "Technology company" });
+        await persistence.SaveNodeAsync(MeshNode.FromPath("org/contoso") with { Name = "Contoso Ltd", Description = "Software company" });
+        await persistence.SaveNodeAsync(MeshNode.FromPath("org/fabrikam") with { Name = "Fabrikam Inc", Description = "Hardware manufacturer" });
 
         // Act - simulate QueryAsync filtering
         var children = await persistence.GetChildrenAsync("org").ToListAsync(TestContext.Current.CancellationToken);
         var filtered = children.Where(n =>
             (n.Name?.Contains("soft", StringComparison.OrdinalIgnoreCase) ?? false) ||
             (n.Description?.Contains("soft", StringComparison.OrdinalIgnoreCase) ?? false) ||
-            n.Prefix.Contains("soft", StringComparison.OrdinalIgnoreCase)).ToList();
+            n.Path.Contains("soft", StringComparison.OrdinalIgnoreCase)).ToList();
 
         // Assert
         filtered.Should().HaveCount(1);
@@ -222,8 +222,8 @@ public class MeshCatalogQueryTest
     {
         // Arrange
         var persistence = new InMemoryPersistenceService();
-        await persistence.SaveNodeAsync(new MeshNode("org/acme") { Name = "Acme" });
-        await persistence.SaveNodeAsync(new MeshNode("org/contoso") { Name = "Contoso" });
+        await persistence.SaveNodeAsync(MeshNode.FromPath("org/acme") with { Name = "Acme" });
+        await persistence.SaveNodeAsync(MeshNode.FromPath("org/contoso") with { Name = "Contoso" });
 
         // Act - simulate QueryAsync without filter
         var children = await persistence.GetChildrenAsync("org").ToListAsync(TestContext.Current.CancellationToken);
@@ -237,15 +237,15 @@ public class MeshCatalogQueryTest
     {
         // Arrange
         var persistence = new InMemoryPersistenceService();
-        await persistence.SaveNodeAsync(new MeshNode("org/acme") { Name = "Acme" });
-        await persistence.SaveNodeAsync(new MeshNode("org/acme-corp") { Name = "Acme Corp" });
+        await persistence.SaveNodeAsync(MeshNode.FromPath("org/acme") with { Name = "Acme" });
+        await persistence.SaveNodeAsync(MeshNode.FromPath("org/acme-corp") with { Name = "Acme Corp" });
 
         // Act - simulate QueryAsync with prefix filter
         var children = await persistence.GetChildrenAsync("org").ToListAsync(TestContext.Current.CancellationToken);
         var filtered = children.Where(n =>
             (n.Name?.Contains("acme-", StringComparison.OrdinalIgnoreCase) ?? false) ||
             (n.Description?.Contains("acme-", StringComparison.OrdinalIgnoreCase) ?? false) ||
-            n.Prefix.Contains("acme-", StringComparison.OrdinalIgnoreCase)).ToList();
+            n.Path.Contains("acme-", StringComparison.OrdinalIgnoreCase)).ToList();
 
         // Assert
         filtered.Should().HaveCount(1);

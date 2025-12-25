@@ -67,7 +67,7 @@ public class DataContextIntegrationTest : MonolithMeshTestBase
             Code = "public record Story { [Key] public string Id { get; init; } }"
         };
 
-        var storyTypeNode = new MeshNode("type/story")
+        var storyTypeNode = MeshNode.FromPath("type/story") with
         {
             Name = "Story",
             NodeType = "NodeType",
@@ -93,7 +93,7 @@ public class DataContextIntegrationTest : MonolithMeshTestBase
             Code = "public record GraphRoot { [Key] public string Id { get; init; } }"
         };
 
-        var graphTypeNode = new MeshNode("type/graph")
+        var graphTypeNode = MeshNode.FromPath("type/graph") with
         {
             Name = "Graph",
             NodeType = "NodeType",
@@ -125,14 +125,14 @@ public class DataContextIntegrationTest : MonolithMeshTestBase
         SetupTestConfiguration(persistence);
 
         // Pre-seed the hierarchy with Content
-        persistence.SaveNodeAsync(new MeshNode("graph")
+        persistence.SaveNodeAsync(MeshNode.FromPath("graph") with
         {
             Name = "Graph",
             NodeType = "type/graph"
         }).GetAwaiter().GetResult();
 
         // Pre-seed story nodes WITH Content containing TestStory data
-        persistence.SaveNodeAsync(new MeshNode("graph/story1")
+        persistence.SaveNodeAsync(MeshNode.FromPath("graph/story1") with
         {
             Name = "Story 1",
             NodeType = "type/story",
@@ -145,7 +145,7 @@ public class DataContextIntegrationTest : MonolithMeshTestBase
             }
         }).GetAwaiter().GetResult();
 
-        persistence.SaveNodeAsync(new MeshNode("graph/story2")
+        persistence.SaveNodeAsync(MeshNode.FromPath("graph/story2") with
         {
             Name = "Story 2",
             NodeType = "type/story",
@@ -259,11 +259,11 @@ public class DataContextIntegrationTest : MonolithMeshTestBase
         // Assert - children should be available
         children.Should().NotBeNull("Children should be available in Persistence");
         children.Should().HaveCountGreaterThanOrEqualTo(2, "Should have story1 and story2 as children");
-        children.Should().Contain(n => n.Prefix == "graph/story1");
-        children.Should().Contain(n => n.Prefix == "graph/story2");
+        children.Should().Contain(n => n.Path == "graph/story1");
+        children.Should().Contain(n => n.Path == "graph/story2");
 
         // Verify content is preserved in children
-        var story1 = children.FirstOrDefault(n => n.Prefix == "graph/story1");
+        var story1 = children.FirstOrDefault(n => n.Path == "graph/story1");
         story1.Should().NotBeNull();
         story1!.Content.Should().NotBeNull();
         story1.Content.Should().BeOfType<TestStory>();
@@ -275,7 +275,7 @@ public class DataContextIntegrationTest : MonolithMeshTestBase
         // This test verifies that nodes with Content can be created via IPersistenceService
 
         // Act - create new node directly via persistence
-        var newStory = new MeshNode("graph/story3")
+        var newStory = MeshNode.FromPath("graph/story3") with
         {
             Name = "Story 3",
             NodeType = "type/story",

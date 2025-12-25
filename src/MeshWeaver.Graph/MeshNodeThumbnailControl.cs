@@ -20,7 +20,7 @@ public record MeshNodeThumbnailControl(
     /// </summary>
     public static MeshNodeThumbnailControl FromNode(MeshNode? node, string fallbackPath)
     {
-        var nodePath = node?.Prefix ?? fallbackPath;
+        var nodePath = node?.Path ?? fallbackPath;
         var title = node?.Name ?? fallbackPath;
         var description = node?.Description;
         var imageUrl = GetImageUrl(node);

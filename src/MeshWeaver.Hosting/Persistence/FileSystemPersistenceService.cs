@@ -57,7 +57,7 @@ public class FileSystemPersistenceService(IStorageAdapter storageAdapter) : IPer
             yield return child;
 
             // Recursively get descendants
-            await foreach (var descendant in GetDescendantsAsync(child.Prefix))
+            await foreach (var descendant in GetDescendantsAsync(child.Path))
             {
                 yield return descendant;
             }
@@ -74,7 +74,7 @@ public class FileSystemPersistenceService(IStorageAdapter storageAdapter) : IPer
         await storageAdapter.WriteAsync(savedNode, ct);
 
         // Update cache
-        var key = NormalizePath(savedNode.Prefix);
+        var key = NormalizePath(savedNode.Path);
         _cache.Set(key, savedNode, _cacheOptions);
 
         return savedNode;
@@ -248,7 +248,7 @@ public class FileSystemPersistenceService(IStorageAdapter storageAdapter) : IPer
         {
             await foreach (var descendant in GetDescendantsAsync(normalizedPath))
             {
-                var descendantPath = NormalizePath(descendant.Prefix);
+                var descendantPath = NormalizePath(descendant.Path);
 
                 // Evaluate the node itself
                 if (evaluator.Matches(descendant, parsedQuery))

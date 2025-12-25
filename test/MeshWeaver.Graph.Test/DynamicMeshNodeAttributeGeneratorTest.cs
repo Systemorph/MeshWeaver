@@ -57,7 +57,7 @@ public class DynamicMeshNodeAttributeGeneratorTest
     public void GenerateAttributeSource_IncludesCodeFromCodeConfiguration()
     {
         // Arrange
-        var node = new MeshNode("test/node")
+        var node = MeshNode.FromPath("test/node") with
         {
             Name = "Test Node",
             NodeType = "story",
@@ -81,7 +81,7 @@ public class DynamicMeshNodeAttributeGeneratorTest
     public void GenerateAttributeSource_IncludesMeshNodeProperties()
     {
         // Arrange
-        var node = new MeshNode("org/acme")
+        var node = MeshNode.FromPath("org/acme") with
         {
             Name = "Acme Corp",
             NodeType = "organization",
@@ -113,7 +113,7 @@ public class DynamicMeshNodeAttributeGeneratorTest
     public void GenerateAttributeSource_GeneratesValidClassName()
     {
         // Arrange
-        var node = new MeshNode("graph/org/project")
+        var node = MeshNode.FromPath("graph/org/project") with
         {
             NodeType = "project",
             LastModified = DateTimeOffset.UtcNow
@@ -214,7 +214,7 @@ public class DynamicMeshNodeAttributeGeneratorTest
     public void GenerateAttributeSource_IncludesGeneratedComment()
     {
         // Arrange
-        var node = new MeshNode("my/node")
+        var node = MeshNode.FromPath("my/node") with
         {
             NodeType = "test",
             LastModified = DateTimeOffset.UtcNow

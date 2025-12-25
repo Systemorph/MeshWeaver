@@ -57,21 +57,21 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
             adds.Length, updates.Length, deletes.Length);
 
         // Sync to persistence
-        // IPersistenceService handles partition automatically based on node.Prefix:
-        // - Own node (Prefix == _hubPath) → saved to parent partition (file: parentPath/nodeName.json)
-        // - Child nodes (Prefix starts with _hubPath/) → saved to own partition (file: _hubPath/childName.json)
+        // IPersistenceService handles partition automatically based on node.Path:
+        // - Own node (Namespace == _hubPath) → saved to parent partition (file: parentPath/nodeName.json)
+        // - Child nodes (Namespace starts with _hubPath/) → saved to own partition (file: _hubPath/childName.json)
         var hubVersion = _workspace.Hub.Version;
         foreach (var node in adds.Concat(updates))
         {
             // Capture hub version when saving
             var nodeWithVersion = node with { Version = hubVersion };
-            _logger?.LogWarning("MeshNodeTypeSource.UpdateImpl: Saving node {Prefix} to persistence, Content={ContentType}, Version={Version}",
-                nodeWithVersion.Prefix, nodeWithVersion.Content?.GetType().Name ?? "null", nodeWithVersion.Version);
+            _logger?.LogWarning("MeshNodeTypeSource.UpdateImpl: Saving node {Namespace} to persistence, Content={ContentType}, Version={Version}",
+                nodeWithVersion.Path, nodeWithVersion.Content?.GetType().Name ?? "null", nodeWithVersion.Version);
             _ = _persistence.SaveNodeAsync(nodeWithVersion);
         }
 
         foreach (var node in deletes)
-            _ = _persistence.DeleteNodeAsync(node.Prefix, recursive: true);
+            _ = _persistence.DeleteNodeAsync(node.Path, recursive: true);
 
         // Propagate Content changes to the content data source
         PropagateContentChanges(updates);
@@ -84,7 +84,7 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
     {
         foreach (var node in updates)
         {
-            if (node.Prefix != _hubPath || node.Content == null)
+            if (node.Path != _hubPath || node.Content == null)
                 continue;
 
             // Get the previous node to check if content changed

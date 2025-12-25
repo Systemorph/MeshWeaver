@@ -70,7 +70,7 @@ public class FileSystemStorageAdapter : IStorageAdapter
 
     public async Task WriteAsync(MeshNode node, CancellationToken ct = default)
     {
-        var filePath = GetFilePath(node.Prefix);
+        var filePath = GetFilePath(node.Path);
         var directory = Path.GetDirectoryName(filePath);
         if (!string.IsNullOrEmpty(directory))
         {

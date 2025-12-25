@@ -42,7 +42,7 @@ public class FileSystemPersistenceTest : IDisposable
     public async Task Create_SingleNode_PersistsToFileSystem()
     {
         // Arrange
-        var node = new MeshNode("graph/org1")
+        var node = MeshNode.FromPath("graph/org1") with
         {
             Name = "Organization 1",
             Description = "First organization",
@@ -70,9 +70,9 @@ public class FileSystemPersistenceTest : IDisposable
     public async Task Create_HierarchicalNodes_CreatesDirectoryStructure()
     {
         // Arrange & Act
-        await _persistence.SaveNodeAsync(new MeshNode("graph/org1") { Name = "Org 1" });
-        await _persistence.SaveNodeAsync(new MeshNode("graph/org1/project1") { Name = "Project 1" });
-        await _persistence.SaveNodeAsync(new MeshNode("graph/org1/project1/story1") { Name = "Story 1" });
+        await _persistence.SaveNodeAsync(MeshNode.FromPath("graph/org1") with { Name = "Org 1" });
+        await _persistence.SaveNodeAsync(MeshNode.FromPath("graph/org1/project1") with { Name = "Project 1" });
+        await _persistence.SaveNodeAsync(MeshNode.FromPath("graph/org1/project1/story1") with { Name = "Story 1" });
 
         // Assert - verify directory structure
         Directory.Exists(Path.Combine(_testDirectory, "graph")).Should().BeTrue();
@@ -88,7 +88,7 @@ public class FileSystemPersistenceTest : IDisposable
     {
         // Arrange
         var content = new TestOrganization { Id = "org1", Name = "Test Org", Website = "https://test.com" };
-        var node = new MeshNode("graph/org1")
+        var node = MeshNode.FromPath("graph/org1") with
         {
             Name = "Test Org",
             NodeType = "org",
@@ -112,7 +112,7 @@ public class FileSystemPersistenceTest : IDisposable
     public async Task Read_ExistingNode_ReturnsNode()
     {
         // Arrange
-        await _persistence.SaveNodeAsync(new MeshNode("graph/org1") { Name = "Org 1", Description = "Test org" });
+        await _persistence.SaveNodeAsync(MeshNode.FromPath("graph/org1") with { Name = "Org 1", Description = "Test org" });
 
         // Act
         var node = await _persistence.GetNodeAsync("graph/org1");
@@ -137,9 +137,9 @@ public class FileSystemPersistenceTest : IDisposable
     public async Task Read_GetChildren_ReturnsDirectChildrenOnly()
     {
         // Arrange
-        await _persistence.SaveNodeAsync(new MeshNode("graph/org1") { Name = "Org 1" });
-        await _persistence.SaveNodeAsync(new MeshNode("graph/org2") { Name = "Org 2" });
-        await _persistence.SaveNodeAsync(new MeshNode("graph/org1/project1") { Name = "Project 1" });
+        await _persistence.SaveNodeAsync(MeshNode.FromPath("graph/org1") with { Name = "Org 1" });
+        await _persistence.SaveNodeAsync(MeshNode.FromPath("graph/org2") with { Name = "Org 2" });
+        await _persistence.SaveNodeAsync(MeshNode.FromPath("graph/org1/project1") with { Name = "Project 1" });
 
         // Act
         var children = await _persistence.GetChildrenAsync("graph").ToListAsync(TestContext.Current.CancellationToken);
@@ -154,10 +154,10 @@ public class FileSystemPersistenceTest : IDisposable
     public async Task Read_GetDescendants_ReturnsAllDescendants()
     {
         // Arrange
-        await _persistence.SaveNodeAsync(new MeshNode("graph/org1") { Name = "Org 1" });
-        await _persistence.SaveNodeAsync(new MeshNode("graph/org1/project1") { Name = "Project 1" });
-        await _persistence.SaveNodeAsync(new MeshNode("graph/org1/project1/story1") { Name = "Story 1" });
-        await _persistence.SaveNodeAsync(new MeshNode("graph/org2") { Name = "Org 2" });
+        await _persistence.SaveNodeAsync(MeshNode.FromPath("graph/org1") with { Name = "Org 1" });
+        await _persistence.SaveNodeAsync(MeshNode.FromPath("graph/org1/project1") with { Name = "Project 1" });
+        await _persistence.SaveNodeAsync(MeshNode.FromPath("graph/org1/project1/story1") with { Name = "Story 1" });
+        await _persistence.SaveNodeAsync(MeshNode.FromPath("graph/org2") with { Name = "Org 2" });
 
         // Act
         var descendants = await _persistence.GetDescendantsAsync("graph/org1").ToListAsync(TestContext.Current.CancellationToken);
@@ -172,7 +172,7 @@ public class FileSystemPersistenceTest : IDisposable
     public async Task Read_Exists_ReturnsCorrectResult()
     {
         // Arrange
-        await _persistence.SaveNodeAsync(new MeshNode("graph/org1") { Name = "Org 1" });
+        await _persistence.SaveNodeAsync(MeshNode.FromPath("graph/org1") with { Name = "Org 1" });
 
         // Assert
         (await _persistence.ExistsAsync("graph/org1")).Should().BeTrue();
@@ -183,9 +183,9 @@ public class FileSystemPersistenceTest : IDisposable
     public async Task Read_Search_FindsMatchingNodes()
     {
         // Arrange
-        await _persistence.SaveNodeAsync(new MeshNode("graph/acme") { Name = "Acme Corporation", Description = "Tech company" });
-        await _persistence.SaveNodeAsync(new MeshNode("graph/contoso") { Name = "Contoso Ltd", Description = "Software company" });
-        await _persistence.SaveNodeAsync(new MeshNode("graph/fabrikam") { Name = "Fabrikam Inc", Description = "Hardware manufacturer" });
+        await _persistence.SaveNodeAsync(MeshNode.FromPath("graph/acme") with { Name = "Acme Corporation", Description = "Tech company" });
+        await _persistence.SaveNodeAsync(MeshNode.FromPath("graph/contoso") with { Name = "Contoso Ltd", Description = "Software company" });
+        await _persistence.SaveNodeAsync(MeshNode.FromPath("graph/fabrikam") with { Name = "Fabrikam Inc", Description = "Hardware manufacturer" });
 
         // Act
         var results = await _persistence.SearchAsync(null, "software").ToListAsync(TestContext.Current.CancellationToken);
@@ -203,10 +203,10 @@ public class FileSystemPersistenceTest : IDisposable
     public async Task Update_ExistingNode_UpdatesFile()
     {
         // Arrange
-        await _persistence.SaveNodeAsync(new MeshNode("graph/org1") { Name = "Original Name" });
+        await _persistence.SaveNodeAsync(MeshNode.FromPath("graph/org1") with { Name = "Original Name" });
 
         // Act
-        await _persistence.SaveNodeAsync(new MeshNode("graph/org1") { Name = "Updated Name", Description = "New description" });
+        await _persistence.SaveNodeAsync(MeshNode.FromPath("graph/org1") with { Name = "Updated Name", Description = "New description" });
 
         // Assert
         var node = await _persistence.GetNodeAsync("graph/org1");
@@ -220,11 +220,11 @@ public class FileSystemPersistenceTest : IDisposable
     {
         // Arrange
         var originalContent = new TestOrganization { Id = "org1", Name = "Original", Website = "https://original.com" };
-        await _persistence.SaveNodeAsync(new MeshNode("graph/org1") { Name = "Org 1", Content = originalContent });
+        await _persistence.SaveNodeAsync(MeshNode.FromPath("graph/org1") with { Name = "Org 1", Content = originalContent });
 
         // Act
         var updatedContent = new TestOrganization { Id = "org1", Name = "Updated", Website = "https://updated.com" };
-        await _persistence.SaveNodeAsync(new MeshNode("graph/org1") { Name = "Org 1", Content = updatedContent });
+        await _persistence.SaveNodeAsync(MeshNode.FromPath("graph/org1") with { Name = "Org 1", Content = updatedContent });
 
         // Assert
         var node = await _persistence.GetNodeAsync("graph/org1");
@@ -236,8 +236,8 @@ public class FileSystemPersistenceTest : IDisposable
     public async Task Update_NodeDisplayOrder_AffectsSortOrder()
     {
         // Arrange
-        await _persistence.SaveNodeAsync(new MeshNode("graph/org1") { Name = "First", DisplayOrder = 20 });
-        await _persistence.SaveNodeAsync(new MeshNode("graph/org2") { Name = "Second", DisplayOrder = 10 });
+        await _persistence.SaveNodeAsync(MeshNode.FromPath("graph/org1") with { Name = "First", DisplayOrder = 20 });
+        await _persistence.SaveNodeAsync(MeshNode.FromPath("graph/org2") with { Name = "Second", DisplayOrder = 10 });
 
         // Act
         var children = await _persistence.GetChildrenAsync("graph").ToListAsync(TestContext.Current.CancellationToken);
@@ -256,7 +256,7 @@ public class FileSystemPersistenceTest : IDisposable
     public async Task Delete_SingleNode_RemovesFromFileSystem()
     {
         // Arrange
-        await _persistence.SaveNodeAsync(new MeshNode("graph/org1") { Name = "Org 1" });
+        await _persistence.SaveNodeAsync(MeshNode.FromPath("graph/org1") with { Name = "Org 1" });
         var filePath = Path.Combine(_testDirectory, "graph", "org1.json");
         File.Exists(filePath).Should().BeTrue();
 
@@ -273,8 +273,8 @@ public class FileSystemPersistenceTest : IDisposable
     public async Task Delete_NonRecursive_LeavesChildren()
     {
         // Arrange
-        await _persistence.SaveNodeAsync(new MeshNode("graph/org1") { Name = "Org 1" });
-        await _persistence.SaveNodeAsync(new MeshNode("graph/org1/project1") { Name = "Project 1" });
+        await _persistence.SaveNodeAsync(MeshNode.FromPath("graph/org1") with { Name = "Org 1" });
+        await _persistence.SaveNodeAsync(MeshNode.FromPath("graph/org1/project1") with { Name = "Project 1" });
 
         // Act
         await _persistence.DeleteNodeAsync("graph/org1", recursive: false);
@@ -288,10 +288,10 @@ public class FileSystemPersistenceTest : IDisposable
     public async Task Delete_Recursive_RemovesAllDescendants()
     {
         // Arrange
-        await _persistence.SaveNodeAsync(new MeshNode("graph/org1") { Name = "Org 1" });
-        await _persistence.SaveNodeAsync(new MeshNode("graph/org1/project1") { Name = "Project 1" });
-        await _persistence.SaveNodeAsync(new MeshNode("graph/org1/project1/story1") { Name = "Story 1" });
-        await _persistence.SaveNodeAsync(new MeshNode("graph/org2") { Name = "Org 2" });
+        await _persistence.SaveNodeAsync(MeshNode.FromPath("graph/org1") with { Name = "Org 1" });
+        await _persistence.SaveNodeAsync(MeshNode.FromPath("graph/org1/project1") with { Name = "Project 1" });
+        await _persistence.SaveNodeAsync(MeshNode.FromPath("graph/org1/project1/story1") with { Name = "Story 1" });
+        await _persistence.SaveNodeAsync(MeshNode.FromPath("graph/org2") with { Name = "Org 2" });
 
         // Act
         await _persistence.DeleteNodeAsync("graph/org1", recursive: true);
@@ -307,7 +307,7 @@ public class FileSystemPersistenceTest : IDisposable
     public async Task Delete_CleansUpEmptyDirectories()
     {
         // Arrange
-        await _persistence.SaveNodeAsync(new MeshNode("graph/org1/project1/story1") { Name = "Story 1" });
+        await _persistence.SaveNodeAsync(MeshNode.FromPath("graph/org1/project1/story1") with { Name = "Story 1" });
         Directory.Exists(Path.Combine(_testDirectory, "graph", "org1", "project1")).Should().BeTrue();
 
         // Act
@@ -453,7 +453,7 @@ public class FileSystemPersistenceTest : IDisposable
     public async Task PathNormalization_CaseInsensitive()
     {
         // Arrange
-        await _persistence.SaveNodeAsync(new MeshNode("Graph/ORG1") { Name = "Org 1" });
+        await _persistence.SaveNodeAsync(MeshNode.FromPath("Graph/ORG1") with { Name = "Org 1" });
 
         // Act & Assert - should find regardless of case
         (await _persistence.GetNodeAsync("graph/org1")).Should().NotBeNull();
@@ -465,7 +465,7 @@ public class FileSystemPersistenceTest : IDisposable
     public async Task PathNormalization_TrimsSlashes()
     {
         // Arrange
-        await _persistence.SaveNodeAsync(new MeshNode("/graph/org1/") { Name = "Org 1" });
+        await _persistence.SaveNodeAsync(MeshNode.FromPath("/graph/org1/") with { Name = "Org 1" });
 
         // Act & Assert
         (await _persistence.GetNodeAsync("graph/org1")).Should().NotBeNull();
@@ -493,7 +493,7 @@ public class FileSystemPersistenceTest : IDisposable
     public async Task EdgeCase_SpecialCharactersInName_Preserved()
     {
         // Arrange
-        var node = new MeshNode("graph/org1")
+        var node = MeshNode.FromPath("graph/org1") with
         {
             Name = "Org with 'quotes' and \"double quotes\"",
             Description = "Contains <html> and & special chars"
@@ -514,7 +514,7 @@ public class FileSystemPersistenceTest : IDisposable
     {
         // Arrange
         var deepPath = "graph/a/b/c/d/e/f/g/h/i/j";
-        var node = new MeshNode(deepPath) { Name = "Deep Node" };
+        var node = MeshNode.FromPath(deepPath) with { Name = "Deep Node" };
 
         // Act
         await _persistence.SaveNodeAsync(node);

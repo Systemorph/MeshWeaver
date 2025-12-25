@@ -455,22 +455,22 @@ public class AutocompleteServiceTest
                 ? string.Join("/", segments.Skip(matchedSegments))
                 : null;
 
-            return new Mesh.Services.AddressResolution(bestMatch.Node.Prefix, remainder);
+            return new Mesh.Services.AddressResolution(bestMatch.Node.Path, remainder);
         }
 
         private static int ScoreMatch(Mesh.MeshNode node, string[] pathSegments)
         {
             var nodeSegments = node.Segments;
-            if (nodeSegments.Length > pathSegments.Length)
+            if (nodeSegments.Count > pathSegments.Length)
                 return 0;
 
-            for (int i = 0; i < nodeSegments.Length; i++)
+            for (int i = 0; i < nodeSegments.Count; i++)
             {
                 if (!nodeSegments[i].Equals(pathSegments[i], System.StringComparison.OrdinalIgnoreCase))
                     return 0;
             }
 
-            return nodeSegments.Length;
+            return nodeSegments.Count;
         }
 
         public Mesh.Services.IPersistenceService Persistence => throw new System.NotImplementedException();

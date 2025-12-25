@@ -43,7 +43,7 @@ public record MessageLog(
 /// For template nodes, AddressSegments determines how many path segments are used for hub addressing.
 /// Score-based matching uses the Prefix (derived from Path) for pattern matching.
 /// </summary>
-public record MeshNode(string Id, string? Namespace = null)
+public record MeshNode(string Id, string Namespace = "")
 {
     /// <summary>
     /// The full path derived from Namespace and Id.
@@ -52,20 +52,10 @@ public record MeshNode(string Id, string? Namespace = null)
     [JsonIgnore, NotMapped]
     public string Path => string.IsNullOrEmpty(Namespace) ? Id : $"{Namespace}/{Id}";
 
-    /// <summary>
-    /// The prefix used for score-based path matching.
-    /// For regular nodes, this equals Path.
-    /// For template nodes (paths starting with $), this is extracted from the path.
-    /// </summary>
-    [JsonIgnore, NotMapped]
-    public string Prefix { get; init; } = ExtractPrefix(string.IsNullOrEmpty(Namespace) ? Id : $"{Namespace}/{Id}");
-
-    /// <summary>
-    /// The segments of the prefix, split by '/'.
-    /// Used for score-based path matching.
-    /// </summary>
-    [JsonIgnore, NotMapped]
-    public string[] Segments => Prefix.Split('/', StringSplitOptions.RemoveEmptyEntries);
+    public readonly IReadOnlyList<string> Segments =
+        string.IsNullOrEmpty(Namespace)
+            ? (string.IsNullOrEmpty(Id) ? Array.Empty<string>() : new[] { Id })
+            : Namespace.Split('/').Append(Id).ToArray();
 
     [Key] public string Key { get; init; } = string.IsNullOrEmpty(Namespace) ? Id : $"{Namespace}/{Id}";
 
@@ -76,14 +66,11 @@ public record MeshNode(string Id, string? Namespace = null)
     /// </summary>
     private static string ExtractPrefix(string path)
     {
-        if (!path.StartsWith("$template/"))
-            return path;
 
         // Format: $template/{prefix}/{segments}
         // e.g., "$template/graph/org/3" -> "graph/org"
-        var withoutPrefix = path.Substring("$template/".Length);
-        var lastSlash = withoutPrefix.LastIndexOf('/');
-        return lastSlash > 0 ? withoutPrefix.Substring(0, lastSlash) : withoutPrefix;
+        var lastSlash = path.LastIndexOf('/');
+        return lastSlash > 0 ? path.Substring(0, lastSlash) : path;
     }
 
     /// <summary>

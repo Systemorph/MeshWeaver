@@ -163,7 +163,7 @@ public record MeshNodeViewModel
 
     public MeshNodeViewModel(MeshNode node)
     {
-        Path = node.Prefix;
+        Path = node.Path;
         Name = node.Name;
         NodeType = node.NodeType;
         Description = node.Description;

@@ -23,8 +23,8 @@ public class MeshNodeAutocompleteProvider(IMeshCatalog meshCatalog, IMessageHub 
         await foreach (var node in meshCatalog.QueryAsync(parentPath, query, DefaultMaxResults, ct))
         {
             items.Add(new AutocompleteItem(
-                Label: $"@{node.Prefix}/",
-                InsertText: $"@{node.Prefix}/",
+                Label: $"@{node.Path}/",
+                InsertText: $"@{node.Path}/",
                 Description: node.Name ?? node.Description ?? node.NodeType,
                 Category: node.NodeType ?? "Nodes",
                 Priority: 1000 - node.DisplayOrder,

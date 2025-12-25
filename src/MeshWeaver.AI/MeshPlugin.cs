@@ -63,7 +63,7 @@ public class MeshPlugin(IMessageHub hub, IAgentChat chat)
         {
             result.Add(new
             {
-                n.Prefix,
+                n.Path,
                 n.Name,
                 n.NodeType,
                 n.Description
@@ -278,7 +278,7 @@ public class MeshPlugin(IMessageHub hub, IAgentChat chat)
         {
             result.Add(new
             {
-                n.Prefix,
+                n.Path,
                 n.Name,
                 n.NodeType,
                 n.Description
