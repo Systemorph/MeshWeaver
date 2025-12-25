@@ -171,7 +171,7 @@ public class NodeTypeServiceTest
         {
             Code = "public record Story { [Key] public string Id { get; init; } }"
         };
-        await _persistence.SavePartitionObjectsAsync("type/story", "_config", [codeConfig]);
+        await _persistence.SavePartitionObjectsAsync("type/story", null, [codeConfig]);
 
         // Act
         var result = await _service.GetCodeConfigurationAsync("story", "graph/org1");
@@ -265,8 +265,8 @@ public class NodeTypeServiceTest
         var storyConfig = new CodeConfiguration { Code = "public record Story { }" };
         var orgConfig = new CodeConfiguration { Code = "public record Organization { }" };
 
-        await _persistence.SavePartitionObjectsAsync("type/story", "_config", [storyConfig]);
-        await _persistence.SavePartitionObjectsAsync("type/org", "_config", [orgConfig]);
+        await _persistence.SavePartitionObjectsAsync("type/story", null, [storyConfig]);
+        await _persistence.SavePartitionObjectsAsync("type/org", null, [orgConfig]);
 
         // Act
         var configs = await _service.GetAllCodeConfigurationsAsync();
