@@ -164,6 +164,7 @@ public static class DataExtensions
                 typeof(FileReference),
                 typeof(DataPathReference),
                 typeof(ContentWorkspaceReference),
+                typeof(NodeTypeReference),
                 typeof(UpdateUnifiedReferenceRequest),
                 typeof(UpdateUnifiedReferenceResponse),
                 typeof(DeleteUnifiedReferenceRequest),

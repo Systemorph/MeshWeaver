@@ -158,4 +158,15 @@ public record DataPathReference(string Path) : WorkspaceReference<object>
     public override string ToString() => $"data:{Path}";
 }
 
+/// <summary>
+/// Reference for accessing NodeType configuration data.
+/// Used by the "type" UnifiedPath handler.
+/// The node type is encoded in the hub address, so this reference is just a marker.
+/// Resolves to NodeTypeData which combines NodeTypeDefinition and CodeConfiguration.
+/// </summary>
+public record NodeTypeReference() : WorkspaceReference<object>
+{
+    public override string ToString() => "type";
+}
+
 

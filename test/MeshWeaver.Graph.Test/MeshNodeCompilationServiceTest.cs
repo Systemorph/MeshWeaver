@@ -452,6 +452,23 @@ internal class TestNodeTypeService : INodeTypeService
         return Task.FromResult<MeshNode?>(null);
     }
 
+    public Task<NodeTypeData?> GetNodeTypeDataAsync(string nodeTypePath, CancellationToken ct = default)
+    {
+        // Extract node type from path (e.g., "type/Person" -> "Person")
+        var nodeType = nodeTypePath.Contains('/') ? nodeTypePath.Split('/').Last() : nodeTypePath;
+        if (_nodeTypes.TryGetValue(nodeType, out var entry))
+        {
+            return Task.FromResult<NodeTypeData?>(new NodeTypeData
+            {
+                Id = entry.Definition.Id,
+                Definition = entry.Definition,
+                Code = entry.Code,
+                Path = nodeTypePath
+            });
+        }
+        return Task.FromResult<NodeTypeData?>(null);
+    }
+
     public Task<CodeConfiguration?> GetCodeConfigurationAsync(string nodeType, string contextPath, CancellationToken ct = default)
     {
         if (_nodeTypes.TryGetValue(nodeType, out var entry))
