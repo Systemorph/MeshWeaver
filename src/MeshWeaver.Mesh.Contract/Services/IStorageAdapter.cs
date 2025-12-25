@@ -76,5 +76,15 @@ public interface IStorageAdapter
     /// <param name="ct">Cancellation token</param>
     Task DeletePartitionObjectsAsync(string nodePath, string? subPath = null, CancellationToken ct = default);
 
+    /// <summary>
+    /// Gets the newest modification timestamp across all objects in a partition (or sub-path).
+    /// Used for cache invalidation.
+    /// </summary>
+    /// <param name="nodePath">The node path</param>
+    /// <param name="subPath">Optional sub-path within partition</param>
+    /// <param name="ct">Cancellation token</param>
+    /// <returns>The newest modification timestamp, or null if no objects exist</returns>
+    Task<DateTimeOffset?> GetPartitionMaxTimestampAsync(string nodePath, string? subPath = null, CancellationToken ct = default);
+
     #endregion
 }

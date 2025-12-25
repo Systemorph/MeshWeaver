@@ -129,7 +129,7 @@ public record Story
         };
 
         // Act
-        var source = _generator.GenerateAttributeSource(node, dataModel, null, null);
+        var source = _generator.GenerateAttributeSource(node, [dataModel], [], null, null);
 
         // Assert
         source.Should().Contain("public record Story");
@@ -159,7 +159,7 @@ public record Story
         };
 
         // Act
-        var source = _generator.GenerateAttributeSource(node, dataModel, null, null);
+        var source = _generator.GenerateAttributeSource(node, [dataModel], [], null, null);
 
         // Assert
         source.Should().Contain("Name = \"Acme Corp\"");
@@ -187,7 +187,7 @@ public record Story
         };
 
         // Act
-        var source = _generator.GenerateAttributeSource(node, dataModel, null, null);
+        var source = _generator.GenerateAttributeSource(node, [dataModel], [], null, null);
 
         // Assert
         source.Should().Contain("class graph_org_projectMeshNodeAttribute");
@@ -216,7 +216,7 @@ public record Story
         };
 
         // Act
-        var source = _generator.GenerateAttributeSource(node, dataModel, null, null);
+        var source = _generator.GenerateAttributeSource(node, [dataModel], [], null, null);
 
         // Assert
         source.Should().Contain("HubConfiguration = ConfigureHub");
@@ -248,7 +248,7 @@ public record Story
         };
 
         // Act
-        var source = _generator.GenerateAttributeSource(node, dataModel, null, hubFeatures);
+        var source = _generator.GenerateAttributeSource(node, [dataModel], [], null, hubFeatures);
 
         // Assert
         source.Should().Contain("AddDynamicNodeTypeAreas()");
@@ -277,7 +277,7 @@ public record Story
         };
 
         // Act
-        var source = _generator.GenerateAttributeSource(node, dataModel, null, hubFeatures);
+        var source = _generator.GenerateAttributeSource(node, [dataModel], [], null, hubFeatures);
 
         // Assert
         source.Should().Contain("// Dynamic areas disabled");
@@ -313,7 +313,7 @@ public record Story
         };
 
         // Act
-        var source = _generator.GenerateAttributeSource(node, dataModel, nodeTypeConfig, null);
+        var source = _generator.GenerateAttributeSource(node, [dataModel], [], nodeTypeConfig, null);
 
         // Assert
         source.Should().Contain("NodeTypeConfiguration");
@@ -341,7 +341,7 @@ public record Story
         };
 
         // Act
-        var source = _generator.GenerateAttributeSource(node, dataModel, null, null);
+        var source = _generator.GenerateAttributeSource(node, [dataModel], [], null, null);
 
         // Assert
         source.Should().Contain("\\\"quoted\\\"");
@@ -365,7 +365,7 @@ public record Story
         };
 
         // Act
-        var source = _generator.GenerateAttributeSource(node, dataModel, null, null);
+        var source = _generator.GenerateAttributeSource(node, [dataModel], [], null, null);
 
         // Assert
         source.Should().Contain("using System;");
@@ -391,7 +391,7 @@ public record Story
         };
 
         // Act
-        var source = _generator.GenerateAttributeSource(node, dataModel, null, null);
+        var source = _generator.GenerateAttributeSource(node, [dataModel], [], null, null);
 
         // Assert
         source.Should().Contain("// Auto-generated from MeshNode: my/node");
@@ -415,7 +415,7 @@ public record Story
         };
 
         // Act
-        var source = _generator.GenerateAttributeSource(node, dataModel, null, null);
+        var source = _generator.GenerateAttributeSource(node, [dataModel], [], null, null);
 
         // Assert
         source.Should().Contain("AssemblyLocation = typeof(");
@@ -439,10 +439,59 @@ public record Story
         };
 
         // Act
-        var source = _generator.GenerateAttributeSource(node, dataModel, null, null);
+        var source = _generator.GenerateAttributeSource(node, [dataModel], [], null, null);
 
         // Assert - must include default views for Details, Edit, etc.
         source.Should().Contain("WithDefaultNodeViews()",
             "Generated code must include default views (Details, Edit, Thumbnail, Metadata, Settings, Comments)");
+    }
+
+    [Fact]
+    public void GenerateAttributeSource_GeneratesDataContextConfig_WithLambda()
+    {
+        // Arrange
+        var node = new MeshNode("test")
+        {
+            NodeType = "story",
+            LastModified = DateTimeOffset.UtcNow
+        };
+
+        var dataModel = new DataModel
+        {
+            Id = "story",
+            TypeSource = "public record Story { public string Title { get; init; } }",
+            DataContextConfiguration = "data => data.AddSource(src => src.WithType<Story>())"
+        };
+
+        // Act
+        var source = _generator.GenerateAttributeSource(node, [dataModel], [], null, null);
+
+        // Assert
+        source.Should().Contain("ConfigureDataContext_story");
+        source.Should().Contain("data.AddSource(src => src.WithType<Story>())");
+    }
+
+    [Fact]
+    public void GenerateAttributeSource_NoDataContextConfig_WhenNotProvided()
+    {
+        // Arrange
+        var node = new MeshNode("test")
+        {
+            NodeType = "story",
+            LastModified = DateTimeOffset.UtcNow
+        };
+
+        var dataModel = new DataModel
+        {
+            Id = "story",
+            TypeSource = "public record Story { public string Title { get; init; } }"
+        };
+
+        // Act
+        var source = _generator.GenerateAttributeSource(node, [dataModel], [], null, null);
+
+        // Assert
+        source.Should().NotContain("ConfigureDataContext_story");
+        source.Should().NotContain("AddData(data =>");
     }
 }

@@ -35,11 +35,18 @@ public record DataModel
     public int DisplayOrder { get; init; }
 
     /// <summary>
-    /// Inline C# source code defining the type.
+    /// Inline C# source code defining the type(s).
     /// Example: "public record Story { [Key] public string Id { get; init; } ... }"
     /// Can include multiple types (e.g., record + enum) in a single source.
     /// </summary>
     public required string TypeSource { get; init; }
+
+    /// <summary>
+    /// Lambda expression for DataContext configuration.
+    /// Example: "data => data.AddSource(src => src.WithType&lt;Story&gt;())"
+    /// This allows configuring data sources, types with initialization, updates, etc.
+    /// </summary>
+    public string? DataContextConfiguration { get; init; }
 
     /// <summary>
     /// The compiled Type instance. Not serialized - populated at runtime after compilation.

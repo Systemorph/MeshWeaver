@@ -34,6 +34,15 @@ public static class MessageHubExtensions
     public static ITypeRegistry GetTypeRegistry(this IServiceProvider serviceProvider)
         => serviceProvider.GetRequiredService<ITypeRegistry>();
 
+    /// <summary>
+    /// Creates a new type registry that can be used at the mesh level.
+    /// Hub-level type registries will inherit from this registry if registered as ITypeRegistry.
+    /// </summary>
+    /// <param name="parent">Optional parent registry to inherit from</param>
+    /// <returns>A new type registry</returns>
+    public static ITypeRegistry CreateTypeRegistry(ITypeRegistry? parent = null)
+        => new TypeRegistry(parent);
+
     public static (string AddressType, string AddressId) GetAddressTypeAndId(object instance)
     {
         if (instance is JsonObject jObj)

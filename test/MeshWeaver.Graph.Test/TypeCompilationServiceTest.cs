@@ -387,11 +387,12 @@ public record CachedTestType
         };
 
         // Act
-        var compiledType = await _service.CompileTypeWithCacheAsync(dataModel, node, null, null);
+        var compiledTypes = await _service.CompileTypeWithCacheAsync([dataModel], [], node, null, null);
 
         // Assert
-        compiledType.Should().NotBeNull();
-        compiledType.Name.Should().Be("CachedTestType");
+        compiledTypes.Should().NotBeNull();
+        compiledTypes.Should().HaveCount(1);
+        compiledTypes[0].Name.Should().Be("CachedTestType");
 
         var sanitizedName = _cacheService.SanitizeNodeName(node.Path);
         var dllPath = _cacheService.GetDllPath(sanitizedName);
@@ -421,7 +422,7 @@ public record PdbTestType
         };
 
         // Act
-        await _service.CompileTypeWithCacheAsync(dataModel, node, null, null);
+        await _service.CompileTypeWithCacheAsync([dataModel], [], node, null, null);
 
         // Assert
         var sanitizedName = _cacheService.SanitizeNodeName(node.Path);
@@ -452,7 +453,7 @@ public record SourceTestType
         };
 
         // Act
-        await _service.CompileTypeWithCacheAsync(dataModel, node, null, null);
+        await _service.CompileTypeWithCacheAsync([dataModel], [], node, null, null);
 
         // Assert
         var sanitizedName = _cacheService.SanitizeNodeName(node.Path);
@@ -487,7 +488,7 @@ public record CacheHitType
         };
 
         // First compilation
-        var firstType = await _service.CompileTypeWithCacheAsync(dataModel, node, null, null);
+        var firstTypes = await _service.CompileTypeWithCacheAsync([dataModel], [], node, null, null);
 
         // Get file modification time after first compile
         var sanitizedName = _cacheService.SanitizeNodeName(node.Path);
@@ -498,10 +499,10 @@ public record CacheHitType
         await Task.Delay(100);
 
         // Act - Second compilation should use cache
-        var secondType = await _service.CompileTypeWithCacheAsync(dataModel, node, null, null);
+        var secondTypes = await _service.CompileTypeWithCacheAsync([dataModel], [], node, null, null);
 
         // Assert
-        secondType.Should().NotBeNull();
+        secondTypes.Should().NotBeNull();
         var secondModTime = File.GetLastWriteTimeUtc(dllPath);
         secondModTime.Should().Be(firstModTime, "DLL should not be recompiled (cache hit)");
     }
@@ -587,7 +588,7 @@ public record ProjectType
         };
 
         // Act
-        await _service.CompileTypeWithCacheAsync(dataModel, node, null, null);
+        await _service.CompileTypeWithCacheAsync([dataModel], [], node, null, null);
 
         // Assert
         var sanitizedName = _cacheService.SanitizeNodeName(node.Path);
@@ -625,7 +626,7 @@ public record HubConfigType
         };
 
         // Act
-        await _service.CompileTypeWithCacheAsync(dataModel, node, null, null);
+        await _service.CompileTypeWithCacheAsync([dataModel], [], node, null, null);
 
         // Assert
         var sanitizedName = _cacheService.SanitizeNodeName(node.Path);
@@ -666,7 +667,7 @@ public record DynamicAreasType
         };
 
         // Act
-        await _service.CompileTypeWithCacheAsync(dataModel, node, null, hubFeatures);
+        await _service.CompileTypeWithCacheAsync([dataModel], [], node, null, hubFeatures);
 
         // Assert
         var sanitizedName = _cacheService.SanitizeNodeName(node.Path);
@@ -705,7 +706,7 @@ public record NoDynamicAreasType
         };
 
         // Act
-        await _service.CompileTypeWithCacheAsync(dataModel, node, null, hubFeatures);
+        await _service.CompileTypeWithCacheAsync([dataModel], [], node, null, hubFeatures);
 
         // Assert
         var sanitizedName = _cacheService.SanitizeNodeName(node.Path);
@@ -761,10 +762,11 @@ public record NoCacheType
         };
 
         // Act
-        var compiledType = await _service.CompileTypeWithCacheAsync(dataModel, node, null, null);
+        var compiledTypes = await _service.CompileTypeWithCacheAsync([dataModel], [], node, null, null);
 
         // Assert
-        compiledType.Should().NotBeNull();
-        compiledType.Name.Should().Be("NoCacheType");
+        compiledTypes.Should().NotBeNull();
+        compiledTypes.Should().HaveCount(1);
+        compiledTypes[0].Name.Should().Be("NoCacheType");
     }
 }

@@ -6,7 +6,8 @@ namespace MeshWeaver.Graph.Configuration;
 
 /// <summary>
 /// Service that compiles and caches MeshNode assemblies on-demand.
-/// Returns the assembly location (DLL path) for nodes with DataModel types.
+/// Returns the assembly location (DLL path) for nodes with NodeType.
+/// Supports multiple DataModels and LayoutAreas per type node.
 /// Implements IMeshNodeCompilationService from MeshWeaver.Mesh.Contract.
 /// </summary>
 internal class MeshNodeCompilationService(
@@ -28,49 +29,52 @@ internal class MeshNodeCompilationService(
         var nodeName = cacheService.SanitizeNodeName(node.Path);
         var dllPath = cacheService.GetDllPath(nodeName);
 
-        // Check if cache is valid
-        if (cacheService.IsCacheValid(nodeName, node.LastModified))
+        // Get type node partition with ALL objects (DataModels, LayoutAreas, HubFeatures)
+        var partition = await nodeTypeService.GetTypeNodePartitionAsync(node.NodeType, node.Path, ct);
+        if (partition == null)
+        {
+            logger.LogDebug("No NodeType definition found for {NodeType}", node.NodeType);
+            return null;
+        }
+
+        // Check if cache is valid against the partition's newest timestamp
+        // (includes all DataModels, LayoutAreas, HubFeatures, and the node itself)
+        if (cacheService.IsCacheValid(nodeName, partition.NewestTimestamp))
         {
             logger.LogDebug("Using cached assembly for {NodePath}", node.Path);
             return dllPath;
         }
 
-        // Get DataModel for this node type (uses node.Path as context)
-        var dataModel = await nodeTypeService.GetDataModelAsync(node.NodeType, node.Path, ct);
-        if (dataModel == null)
-        {
-            logger.LogDebug("No DataModel found for NodeType {NodeType}", node.NodeType);
-            return null;
-        }
-
-        // Get HubFeatureConfig for hub configuration options
-        var hubFeatures = await nodeTypeService.GetHubFeaturesAsync(node.NodeType, node.Path, ct);
-
-        // Build NodeTypeConfig from node information
+        // Build NodeTypeConfig from node and first DataModel (if any)
+        var firstDataModel = partition.DataModels.FirstOrDefault();
         var nodeTypeConfig = new NodeTypeConfig
         {
             NodeType = node.NodeType,
-            DataModelId = dataModel.Id,
-            DisplayName = node.Name ?? dataModel.DisplayName,
-            IconName = node.IconName ?? dataModel.IconName,
-            Description = node.Description ?? dataModel.Description,
+            DataModelId = firstDataModel?.Id,
+            DisplayName = node.Name ?? firstDataModel?.DisplayName,
+            IconName = node.IconName ?? firstDataModel?.IconName,
+            Description = node.Description ?? firstDataModel?.Description,
             DisplayOrder = node.DisplayOrder
         };
 
         try
         {
-            // Compile (or load from cache) using the cached compilation method
+            // Compile using all partition objects
+            // Note: Compiles even without DataModels for HubConfiguration-only scenarios
             await typeCompiler.CompileTypeWithCacheAsync(
-                dataModel,
+                partition.DataModels,
+                partition.LayoutAreas,
                 node,
                 nodeTypeConfig,
-                hubFeatures,
+                partition.HubFeatures,
                 ct);
 
             // Return the DLL path if it exists
             if (File.Exists(dllPath))
             {
-                logger.LogInformation("Compiled assembly for node {NodePath} at {DllPath}", node.Path, dllPath);
+                logger.LogInformation(
+                    "Compiled assembly for node {NodePath} at {DllPath} with {DataModelCount} DataModels, {LayoutAreaCount} LayoutAreas",
+                    node.Path, dllPath, partition.DataModels.Count, partition.LayoutAreas.Count);
                 return dllPath;
             }
 

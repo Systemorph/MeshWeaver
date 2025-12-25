@@ -455,5 +455,20 @@ public class InMemoryPersistenceService(IStorageAdapter? storageAdapter = null) 
         }
     }
 
+    public Task<DateTimeOffset?> GetPartitionMaxTimestampAsync(
+        string nodePath,
+        string? subPath = null,
+        CancellationToken ct = default)
+    {
+        // Delegate to storage adapter if available
+        if (storageAdapter != null)
+        {
+            return storageAdapter.GetPartitionMaxTimestampAsync(nodePath, subPath, ct);
+        }
+
+        // For pure in-memory storage without adapter, return UtcNow as we can't track file timestamps
+        return Task.FromResult<DateTimeOffset?>(DateTimeOffset.UtcNow);
+    }
+
     #endregion
 }

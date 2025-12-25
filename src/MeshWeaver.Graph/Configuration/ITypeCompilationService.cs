@@ -18,17 +18,20 @@ internal interface ITypeCompilationService
     Task<Type> CompileTypeAsync(DataModel model, CancellationToken ct = default);
 
     /// <summary>
-    /// Compiles a DataModel with caching support using MeshNode.LastModified for cache validation.
+    /// Compiles multiple DataModels with caching support.
     /// Generates a MeshNodeAttribute in the assembly for registration via InstallAssemblies.
+    /// Supports HubConfiguration-only scenarios (empty DataModels list).
     /// </summary>
-    /// <param name="model">The DataModel containing the type source</param>
-    /// <param name="node">The MeshNode (provides LastModified for cache validation)</param>
+    /// <param name="dataModels">The DataModels containing type sources (can be empty)</param>
+    /// <param name="layoutAreas">The LayoutAreaConfigs for this type</param>
+    /// <param name="node">The MeshNode (provides path for cache key)</param>
     /// <param name="nodeTypeConfig">Optional NodeTypeConfig for additional settings</param>
     /// <param name="hubFeatures">Optional HubFeatureConfig for hub configuration</param>
     /// <param name="ct">Cancellation token</param>
-    /// <returns>The compiled Type</returns>
-    Task<Type> CompileTypeWithCacheAsync(
-        DataModel model,
+    /// <returns>The compiled Types (empty if no DataModels)</returns>
+    Task<IReadOnlyList<Type>> CompileTypeWithCacheAsync(
+        IReadOnlyList<DataModel> dataModels,
+        IReadOnlyList<LayoutAreaConfig> layoutAreas,
         MeshNode node,
         NodeTypeConfig? nodeTypeConfig,
         HubFeatureConfig? hubFeatures,

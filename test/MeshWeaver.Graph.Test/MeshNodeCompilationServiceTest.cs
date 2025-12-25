@@ -608,6 +608,36 @@ internal class TestNodeTypeService : INodeTypeService
         Task.FromResult<IReadOnlyList<LayoutAreaConfig>>(
             _layoutAreas.Values.SelectMany(x => x).ToList());
 
+    public Task<TypeNodePartition?> GetTypeNodePartitionAsync(string nodeType, string contextPath, CancellationToken ct = default)
+    {
+        // Get DataModel if exists
+        var dataModels = new List<DataModel>();
+        if (_dataModels.TryGetValue(nodeType, out var dataModel))
+        {
+            dataModels.Add(dataModel);
+        }
+
+        // Get LayoutAreas if exists
+        var layoutAreas = _layoutAreas.TryGetValue(nodeType, out var areas)
+            ? areas
+            : new List<LayoutAreaConfig>();
+
+        // Get HubFeatures if exists
+        _hubFeatures.TryGetValue(nodeType, out var hubFeatures);
+
+        // Return null if nothing found
+        if (dataModels.Count == 0 && layoutAreas.Count == 0 && hubFeatures == null)
+            return Task.FromResult<TypeNodePartition?>(null);
+
+        return Task.FromResult<TypeNodePartition?>(new TypeNodePartition
+        {
+            DataModels = dataModels,
+            LayoutAreas = layoutAreas,
+            HubFeatures = hubFeatures,
+            NewestTimestamp = DateTimeOffset.UtcNow
+        });
+    }
+
     private static async IAsyncEnumerable<T> EmptyAsyncEnumerable<T>()
     {
         await Task.CompletedTask;

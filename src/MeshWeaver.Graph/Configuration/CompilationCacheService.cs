@@ -18,11 +18,18 @@ internal interface ICompilationCacheService
 
     /// <summary>
     /// Checks if the cached assembly is valid (exists and is newer than lastModified).
+    /// Also checks that the cached DLL is newer than the MeshWeaver.Graph.dll framework DLL.
     /// </summary>
     /// <param name="nodeName">Sanitized node name used as the assembly base name.</param>
     /// <param name="lastModified">The last modified timestamp of the source MeshNode.</param>
     /// <returns>True if cache is valid and can be used, false if recompilation is needed.</returns>
     bool IsCacheValid(string nodeName, DateTimeOffset lastModified);
+
+    /// <summary>
+    /// Gets the modification timestamp of the MeshWeaver.Graph.dll framework assembly.
+    /// Used for cache invalidation when the framework is updated.
+    /// </summary>
+    DateTimeOffset GetFrameworkTimestamp();
 
     /// <summary>
     /// Gets the path to the DLL file for a node.
@@ -181,6 +188,7 @@ internal class CompilationCacheService(
     private readonly CompilationCacheOptions _options = options.Value ?? new CompilationCacheOptions();
     private readonly ConcurrentDictionary<string, NodeAssemblyLoadContext> _loadContexts = new();
     private readonly string _absoluteCacheDirectory = ResolveAbsolutePath(options.Value?.CacheDirectory ?? ".mesh-cache");
+    private readonly Lazy<DateTimeOffset> _frameworkTimestamp = new(ComputeFrameworkTimestamp);
     private bool _disposed;
 
     private static string ResolveAbsolutePath(string cacheDirectory) =>
@@ -188,8 +196,24 @@ internal class CompilationCacheService(
             ? cacheDirectory
             : Path.GetFullPath(Path.Combine(Directory.GetCurrentDirectory(), cacheDirectory));
 
+    private static DateTimeOffset ComputeFrameworkTimestamp()
+    {
+        var assemblyLocation = typeof(CompilationCacheService).Assembly.Location;
+        if (string.IsNullOrEmpty(assemblyLocation) || !File.Exists(assemblyLocation))
+        {
+            // Running in-memory (e.g., single-file deployment) - use current time
+            return DateTimeOffset.UtcNow;
+        }
+
+        var lastWrite = File.GetLastWriteTimeUtc(assemblyLocation);
+        return new DateTimeOffset(lastWrite, TimeSpan.Zero);
+    }
+
     /// <inheritdoc />
     public string CacheDirectory => _absoluteCacheDirectory;
+
+    /// <inheritdoc />
+    public DateTimeOffset GetFrameworkTimestamp() => _frameworkTimestamp.Value;
 
     /// <inheritdoc />
     public bool IsCacheValid(string nodeName, DateTimeOffset lastModified)
@@ -222,20 +246,28 @@ internal class CompilationCacheService(
 
         // Check if DLL is newer than the node's LastModified
         var dllLastWrite = new DateTimeOffset(File.GetLastWriteTimeUtc(dllPath), TimeSpan.Zero);
-        var isValid = dllLastWrite >= lastModified;
 
-        if (!isValid)
+        // Check 1: DLL must be newer than the partition's newest modification
+        if (dllLastWrite < lastModified)
         {
             logger.LogDebug(
-                "Cache stale for {NodeName}: DLL modified at {DllTime}, node modified at {NodeTime}",
+                "Cache stale for {NodeName}: DLL modified at {DllTime}, partition modified at {PartitionTime}",
                 nodeName, dllLastWrite, lastModified);
-        }
-        else
-        {
-            logger.LogDebug("Cache hit for {NodeName}", nodeName);
+            return false;
         }
 
-        return isValid;
+        // Check 2: DLL must be newer than the framework DLL (MeshWeaver.Graph.dll)
+        var frameworkTime = GetFrameworkTimestamp();
+        if (dllLastWrite < frameworkTime)
+        {
+            logger.LogDebug(
+                "Cache stale for {NodeName}: DLL modified at {DllTime}, framework modified at {FrameworkTime}",
+                nodeName, dllLastWrite, frameworkTime);
+            return false;
+        }
+
+        logger.LogDebug("Cache hit for {NodeName}", nodeName);
+        return true;
     }
 
     /// <inheritdoc />

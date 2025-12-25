@@ -8,26 +8,28 @@ namespace MeshWeaver.Graph.Configuration;
 /// Generates C# source code for dynamic MeshNodeAttribute classes.
 /// The generated attribute includes the DataModel type, MeshNode configuration,
 /// and HubConfiguration following the same pattern as NodeTypeRegistrationInitializer.
+/// Supports multiple DataModels and LayoutAreas per type node.
 /// </summary>
 internal class DynamicMeshNodeAttributeGenerator
 {
     /// <summary>
     /// Generates the complete C# source code for a dynamic node assembly.
-    /// Includes the DataModel type, MeshNodeAttribute, and HubConfiguration.
+    /// Supports multiple DataModels and LayoutAreas.
     /// </summary>
     /// <param name="node">The MeshNode being compiled.</param>
-    /// <param name="dataModel">The DataModel containing the TypeSource.</param>
+    /// <param name="dataModels">The DataModels containing type sources (can be empty).</param>
+    /// <param name="layoutAreas">The LayoutAreaConfigs for this type.</param>
     /// <param name="nodeTypeConfig">Optional NodeTypeConfig with additional settings.</param>
     /// <param name="hubFeatures">Optional HubFeatureConfig for hub configuration.</param>
     /// <returns>Complete C# source code ready for compilation.</returns>
     public string GenerateAttributeSource(
         MeshNode node,
-        DataModel dataModel,
+        IReadOnlyList<DataModel> dataModels,
+        IReadOnlyList<LayoutAreaConfig> layoutAreas,
         NodeTypeConfig? nodeTypeConfig,
         HubFeatureConfig? hubFeatures)
     {
         var safeClassName = SanitizeName(node.Path);
-        var typeName = ExtractTypeName(dataModel.TypeSource);
         var enableDynamicAreas = hubFeatures?.EnableDynamicNodeTypeAreas ?? true;
         var contentCollectionsCode = GenerateContentCollectionsCode(nodeTypeConfig?.ContentCollections);
 
@@ -36,6 +38,7 @@ internal class DynamicMeshNodeAttributeGenerator
         // Header comment
         sb.AppendLine($"// Auto-generated from MeshNode: {node.Path}");
         sb.AppendLine($"// Generated at: {DateTimeOffset.UtcNow:O}");
+        sb.AppendLine($"// DataModels: {dataModels.Count}, LayoutAreas: {layoutAreas.Count}");
         sb.AppendLine("// Source file for debugging support - do not edit manually");
         sb.AppendLine();
 
@@ -46,6 +49,7 @@ internal class DynamicMeshNodeAttributeGenerator
         sb.AppendLine("using System.Text.Json.Serialization;");
         sb.AppendLine("using MeshWeaver.Mesh;");
         sb.AppendLine("using MeshWeaver.Messaging;");
+        sb.AppendLine("using MeshWeaver.Data;");
         sb.AppendLine("using MeshWeaver.Graph;");
         sb.AppendLine("using MeshWeaver.Graph.Configuration;");
         sb.AppendLine("using MeshWeaver.ContentCollections;");
@@ -57,15 +61,21 @@ internal class DynamicMeshNodeAttributeGenerator
         sb.AppendLine($"[assembly: MeshWeaver.Graph.Generated.{safeClassName}MeshNode]");
         sb.AppendLine();
 
-        // DataModel type in Dynamic namespace
-        sb.AppendLine("namespace MeshWeaver.Graph.Dynamic");
-        sb.AppendLine("{");
-        sb.AppendLine("    // DataModel TypeSource");
-        // Indent the TypeSource
-        var indentedTypeSource = IndentCode(dataModel.TypeSource, "    ");
-        sb.AppendLine(indentedTypeSource);
-        sb.AppendLine("}");
-        sb.AppendLine();
+        // DataModel types in Dynamic namespace
+        if (dataModels.Count > 0)
+        {
+            sb.AppendLine("namespace MeshWeaver.Graph.Dynamic");
+            sb.AppendLine("{");
+            foreach (var dataModel in dataModels)
+            {
+                sb.AppendLine($"    // DataModel: {dataModel.Id}");
+                var indentedTypeSource = IndentCode(dataModel.TypeSource, "    ");
+                sb.AppendLine(indentedTypeSource);
+                sb.AppendLine();
+            }
+            sb.AppendLine("}");
+            sb.AppendLine();
+        }
 
         // Generated namespace
         sb.AppendLine("namespace MeshWeaver.Graph.Generated");
@@ -93,31 +103,71 @@ internal class DynamicMeshNodeAttributeGenerator
         sb.AppendLine("        ];");
         sb.AppendLine();
 
-        // NodeTypeConfigurations property
+        // NodeTypeConfigurations property - one per DataModel
         sb.AppendLine("        public override IEnumerable<NodeTypeConfiguration> NodeTypeConfigurations =>");
         sb.AppendLine("        [");
-        sb.AppendLine("            new NodeTypeConfiguration");
-        sb.AppendLine("            {");
-        sb.AppendLine($"                NodeType = \"{EscapeString(nodeTypeConfig?.NodeType ?? node.NodeType)}\",");
-        sb.AppendLine($"                DataType = typeof(MeshWeaver.Graph.Dynamic.{typeName}),");
-        sb.AppendLine("                HubConfiguration = ConfigureHub,");
-        sb.AppendLine($"                DisplayName = \"{EscapeString(nodeTypeConfig?.DisplayName ?? dataModel.DisplayName)}\",");
-        sb.AppendLine($"                Description = \"{EscapeString(nodeTypeConfig?.Description ?? dataModel.Description)}\",");
-        sb.AppendLine($"                IconName = \"{EscapeString(nodeTypeConfig?.IconName ?? dataModel.IconName)}\",");
-        sb.AppendLine($"                DisplayOrder = {nodeTypeConfig?.DisplayOrder ?? dataModel.DisplayOrder}");
-        sb.AppendLine("            }");
+        if (dataModels.Count > 0)
+        {
+            for (var i = 0; i < dataModels.Count; i++)
+            {
+                var dataModel = dataModels[i];
+                var typeName = ExtractTypeName(dataModel.TypeSource);
+                var isLast = i == dataModels.Count - 1;
+
+                sb.AppendLine("            new NodeTypeConfiguration");
+                sb.AppendLine("            {");
+                sb.AppendLine($"                NodeType = \"{EscapeString(nodeTypeConfig?.NodeType ?? node.NodeType)}\",");
+                sb.AppendLine($"                DataType = typeof(MeshWeaver.Graph.Dynamic.{typeName}),");
+                sb.AppendLine("                HubConfiguration = ConfigureHub,");
+                sb.AppendLine($"                DisplayName = \"{EscapeString(nodeTypeConfig?.DisplayName ?? dataModel.DisplayName)}\",");
+                sb.AppendLine($"                Description = \"{EscapeString(nodeTypeConfig?.Description ?? dataModel.Description)}\",");
+                sb.AppendLine($"                IconName = \"{EscapeString(nodeTypeConfig?.IconName ?? dataModel.IconName)}\",");
+                sb.AppendLine($"                DisplayOrder = {nodeTypeConfig?.DisplayOrder ?? dataModel.DisplayOrder}");
+                sb.AppendLine(isLast ? "            }" : "            },");
+            }
+        }
+        else
+        {
+            // Empty DataModels - generate placeholder configuration
+            sb.AppendLine("            new NodeTypeConfiguration");
+            sb.AppendLine("            {");
+            sb.AppendLine($"                NodeType = \"{EscapeString(nodeTypeConfig?.NodeType ?? node.NodeType)}\",");
+            sb.AppendLine("                DataType = typeof(object),");
+            sb.AppendLine("                HubConfiguration = ConfigureHub,");
+            sb.AppendLine($"                DisplayName = \"{EscapeString(nodeTypeConfig?.DisplayName ?? node.Name)}\",");
+            sb.AppendLine($"                Description = \"{EscapeString(nodeTypeConfig?.Description ?? node.Description)}\",");
+            sb.AppendLine($"                IconName = \"{EscapeString(nodeTypeConfig?.IconName ?? node.IconName)}\",");
+            sb.AppendLine($"                DisplayOrder = {nodeTypeConfig?.DisplayOrder ?? node.DisplayOrder}");
+            sb.AppendLine("            }");
+        }
         sb.AppendLine("        ];");
         sb.AppendLine();
 
         // ConfigureHub method
         sb.AppendLine("        /// <summary>");
-        sb.AppendLine("        /// Hub configuration - same pattern as NodeTypeRegistrationInitializer.ConfigureHub()");
+        sb.AppendLine("        /// Hub configuration - registers all DataModel types and adds data collections.");
         sb.AppendLine("        /// </summary>");
         sb.AppendLine("        private static MessageHubConfiguration ConfigureHub(MessageHubConfiguration config)");
         sb.AppendLine("        {");
-        sb.AppendLine("            var builder = config.ConfigureMeshHub();");
-        sb.AppendLine($"            builder = builder.WithDataType(typeof(MeshWeaver.Graph.Dynamic.{typeName}));");
-        sb.AppendLine("            var result = builder.Build();");
+
+        if (dataModels.Count > 0)
+        {
+            sb.AppendLine("            var builder = config.ConfigureMeshHub();");
+            sb.AppendLine();
+            sb.AppendLine("            // Register all DataModel types");
+            foreach (var dataModel in dataModels)
+            {
+                var typeName = ExtractTypeName(dataModel.TypeSource);
+                sb.AppendLine($"            builder = builder.WithDataType(typeof(MeshWeaver.Graph.Dynamic.{typeName}));");
+            }
+            sb.AppendLine();
+            sb.AppendLine("            var result = builder.Build();");
+        }
+        else
+        {
+            sb.AppendLine("            var result = config;");
+        }
+
         sb.AppendLine();
         sb.AppendLine("            // Add default views (Details, Edit, Thumbnail, Metadata, Settings, Comments)");
         sb.AppendLine("            result = result.WithDefaultNodeViews();");
@@ -133,10 +183,47 @@ internal class DynamicMeshNodeAttributeGenerator
         }
 
         sb.AppendLine();
+
+        // Generate .AddData() call if any DataModel has DataContextConfiguration
+        var dataModelsWithConfig = dataModels
+            .Where(dm => !string.IsNullOrWhiteSpace(dm.DataContextConfiguration))
+            .ToList();
+
+        if (dataModelsWithConfig.Count > 0)
+        {
+            sb.AppendLine("            // Apply DataContext configurations from DataModels");
+            sb.AppendLine("            result = result.AddData(data =>");
+            sb.AppendLine("            {");
+            foreach (var dataModel in dataModelsWithConfig)
+            {
+                var safeId = SanitizeName(dataModel.Id);
+                sb.AppendLine($"                data = ConfigureDataContext_{safeId}(data);");
+            }
+            sb.AppendLine("                return data;");
+            sb.AppendLine("            });");
+            sb.AppendLine();
+        }
+
         sb.AppendLine(contentCollectionsCode);
         sb.AppendLine();
         sb.AppendLine("            return result;");
         sb.AppendLine("        }");
+
+        // Generate DataContext configuration methods for each DataModel with DataContextConfiguration
+        foreach (var dataModel in dataModelsWithConfig)
+        {
+            var safeId = SanitizeName(dataModel.Id);
+            // Extract the lambda body (everything after "=>")
+            var lambdaBody = ExtractLambdaBody(dataModel.DataContextConfiguration!);
+            sb.AppendLine();
+            sb.AppendLine($"        /// <summary>");
+            sb.AppendLine($"        /// DataContext configuration from DataModel '{dataModel.Id}'.");
+            sb.AppendLine($"        /// </summary>");
+            sb.AppendLine($"        private static DataContext ConfigureDataContext_{safeId}(DataContext data)");
+            sb.AppendLine("        {");
+            sb.AppendLine($"            return {lambdaBody};");
+            sb.AppendLine("        }");
+        }
 
         sb.AppendLine("    }");
         sb.AppendLine("}");
@@ -189,6 +276,20 @@ internal class DynamicMeshNodeAttributeGenerator
             sb.AppendLine("            });");
         }
         return sb.ToString().TrimEnd();
+    }
+
+    /// <summary>
+    /// Extracts the body of a lambda expression (everything after "=>").
+    /// </summary>
+    /// <param name="lambda">The full lambda expression (e.g., "data => data.AddSource(...)").</param>
+    /// <returns>The lambda body (e.g., "data.AddSource(...)").</returns>
+    private static string ExtractLambdaBody(string lambda)
+    {
+        var arrowIndex = lambda.IndexOf("=>", StringComparison.Ordinal);
+        if (arrowIndex < 0)
+            return lambda;
+
+        return lambda.Substring(arrowIndex + 2).Trim();
     }
 
     /// <summary>
