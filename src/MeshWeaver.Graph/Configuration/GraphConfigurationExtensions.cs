@@ -29,16 +29,14 @@ public static class GraphConfigurationExtensions
     {
         /// <summary>
         /// Loads graph configuration from JSON files in the data directory.
-        /// 
+        ///
         /// Configuration is loaded from NodeType MeshNodes stored under Type/:
-        /// - Each NodeType node has a partition folder containing:
-        ///   - dataModel.json - Data type definition with inline C# source
-        ///   - layoutAreas/*.json - Layout area configurations
-        ///   - hubFeatures.json - Hub feature configuration (optional)
-        /// 
+        /// - Each NodeType node has:
+        ///   - NodeTypeDefinition content with HubConfiguration lambda
+        ///   - Optional CodeConfiguration in partition folder (_config/codeConfiguration.json)
+        ///
         /// Content collections are configured per node type via NodeTypeDefinition.ContentCollections.
-        /// All configuration loading, type compilation, and service initialization
-        /// happens at mesh startup.
+        /// All configuration loading and service initialization happens at mesh startup.
         /// </summary>
         /// <param name="dataDirectory">The base data directory</param>
         /// <param name="configuration">The application configuration</param>
@@ -55,10 +53,7 @@ public static class GraphConfigurationExtensions
                 if (typeRegistry != null)
                 {
                     typeRegistry.WithType(typeof(NodeTypeDefinition), nameof(NodeTypeDefinition));
-                    typeRegistry.WithType(typeof(DataModel), nameof(DataModel));
-                    typeRegistry.WithType(typeof(LayoutAreaConfig), nameof(LayoutAreaConfig));
-                    typeRegistry.WithType(typeof(HubFeatureConfig), nameof(HubFeatureConfig));
-                    typeRegistry.WithType(typeof(NodeTypeConfig), nameof(NodeTypeConfig));
+                    typeRegistry.WithType(typeof(CodeConfiguration), nameof(CodeConfiguration));
                 }
 
                 // Register INodeTypeService
@@ -85,8 +80,6 @@ public static class GraphConfigurationExtensions
                 .AddDynamicViews()
                 .WithServices(services =>
                 {
-                    // These services need ITypeRegistry which is only available at hub level
-                    services.AddSingleton<ITypeCompilationService, TypeCompilationService>();
                     services.AddSingleton<IMeshNodeCompilationService, MeshNodeCompilationService>();
                     return services;
                 }));

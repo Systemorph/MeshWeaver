@@ -47,12 +47,9 @@ public static class DynamicViewRendererExtensions
             .WithServices(services =>
             {
                 services.AddSingleton<IDynamicViewRegistry, DynamicViewRegistry>();
-                services.AddSingleton<IViewCompilationService>(sp =>
-                    new ViewCompilationService(sp.GetService<Microsoft.Extensions.Logging.ILogger<ViewCompilationService>>()));
                 return services;
             })
             .AddLayout(layout => layout
-                .AddDynamicViewRenderer()
-                .AddConfigurationViews());
+                .AddDynamicViewRenderer());
     }
 }
