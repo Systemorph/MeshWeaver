@@ -1,4 +1,4 @@
-using System.Collections.Concurrent;
+﻿using System.Collections.Concurrent;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 
@@ -9,24 +9,18 @@ namespace MeshWeaver.Hosting.Persistence;
 /// Suitable for development and testing.
 /// Optionally backs to an IStorageAdapter for file system persistence.
 /// </summary>
-public class InMemoryPersistenceService : IPersistenceService
+public class InMemoryPersistenceService(IStorageAdapter? storageAdapter = null) : IPersistenceService
 {
     private readonly ConcurrentDictionary<string, MeshNode> _nodes = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, Comment> _comments = new(StringComparer.OrdinalIgnoreCase);
-    private readonly IStorageAdapter? _storageAdapter;
     private bool _initialized;
-
-    public InMemoryPersistenceService(IStorageAdapter? storageAdapter = null)
-    {
-        _storageAdapter = storageAdapter;
-    }
 
     public async Task InitializeAsync(CancellationToken ct = default)
     {
         if (_initialized)
             return;
 
-        if (_storageAdapter != null)
+        if (storageAdapter != null)
         {
             await LoadFromStorageAsync("", ct);
         }
@@ -36,12 +30,12 @@ public class InMemoryPersistenceService : IPersistenceService
 
     private async Task LoadFromStorageAsync(string parentPath, CancellationToken ct)
     {
-        var (nodePaths, directoryPaths) = await _storageAdapter!.ListChildPathsAsync(parentPath, ct);
+        var (nodePaths, directoryPaths) = await storageAdapter!.ListChildPathsAsync(parentPath, ct);
 
         // Load nodes from JSON files
         foreach (var path in nodePaths)
         {
-            var node = await _storageAdapter.ReadAsync(path, ct);
+            var node = await storageAdapter.ReadAsync(path, ct);
             if (node != null)
             {
                 var normalizedPath = NormalizePath(path);
@@ -51,7 +45,7 @@ public class InMemoryPersistenceService : IPersistenceService
             }
         }
 
-        // Also recursively scan directories that don't have nodes (like Root/)
+        // Also recursively scan directories that don't have nodes
         foreach (var dirPath in directoryPaths)
         {
             await LoadFromStorageAsync(dirPath, ct);
@@ -140,9 +134,9 @@ public class InMemoryPersistenceService : IPersistenceService
 
         _nodes[normalizedPath] = savedNode;
 
-        if (_storageAdapter != null)
+        if (storageAdapter != null)
         {
-            await _storageAdapter.WriteAsync(savedNode, ct);
+            await storageAdapter.WriteAsync(savedNode, ct);
         }
 
         return savedNode;
@@ -162,18 +156,18 @@ public class InMemoryPersistenceService : IPersistenceService
             foreach (var key in toDelete)
             {
                 _nodes.TryRemove(key, out _);
-                if (_storageAdapter != null)
+                if (storageAdapter != null)
                 {
-                    await _storageAdapter.DeleteAsync(key, ct);
+                    await storageAdapter.DeleteAsync(key, ct);
                 }
             }
         }
         else
         {
             _nodes.TryRemove(normalizedPath, out _);
-            if (_storageAdapter != null)
+            if (storageAdapter != null)
             {
-                await _storageAdapter.DeleteAsync(normalizedPath, ct);
+                await storageAdapter.DeleteAsync(normalizedPath, ct);
             }
         }
     }
@@ -276,17 +270,17 @@ public class InMemoryPersistenceService : IPersistenceService
 
         // Delete originals (the main node and all descendants)
         _nodes.TryRemove(normalizedSource, out _);
-        if (_storageAdapter != null)
+        if (storageAdapter != null)
         {
-            await _storageAdapter.DeleteAsync(normalizedSource, ct);
+            await storageAdapter.DeleteAsync(normalizedSource, ct);
         }
 
         foreach (var descendantPath in descendants)
         {
             _nodes.TryRemove(descendantPath, out _);
-            if (_storageAdapter != null)
+            if (storageAdapter != null)
             {
-                await _storageAdapter.DeleteAsync(descendantPath, ct);
+                await storageAdapter.DeleteAsync(descendantPath, ct);
             }
         }
 
@@ -413,10 +407,10 @@ public class InMemoryPersistenceService : IPersistenceService
         }
 
         // Otherwise, load from storage adapter if available
-        if (_storageAdapter != null)
+        if (storageAdapter != null)
         {
             var objects = new List<object>();
-            await foreach (var obj in _storageAdapter.GetPartitionObjectsAsync(nodePath, subPath))
+            await foreach (var obj in storageAdapter.GetPartitionObjectsAsync(nodePath, subPath))
             {
                 objects.Add(obj);
                 yield return obj;
@@ -438,9 +432,9 @@ public class InMemoryPersistenceService : IPersistenceService
         _partitionData[key] = objects.ToList();
 
         // Persist to storage adapter if available
-        if (_storageAdapter != null)
+        if (storageAdapter != null)
         {
-            await _storageAdapter.SavePartitionObjectsAsync(nodePath, subPath, objects, ct);
+            await storageAdapter.SavePartitionObjectsAsync(nodePath, subPath, objects, ct);
         }
     }
 
@@ -455,9 +449,9 @@ public class InMemoryPersistenceService : IPersistenceService
         _partitionData.TryRemove(key, out _);
 
         // Delete from storage adapter if available
-        if (_storageAdapter != null)
+        if (storageAdapter != null)
         {
-            await _storageAdapter.DeletePartitionObjectsAsync(nodePath, subPath, ct);
+            await storageAdapter.DeletePartitionObjectsAsync(nodePath, subPath, ct);
         }
     }
 

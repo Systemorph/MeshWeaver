@@ -1,11 +1,8 @@
-﻿using MeshWeaver.Domain;
-using MeshWeaver.Hosting;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Graph.Configuration;
 
@@ -26,86 +23,76 @@ public static class GraphConfigurationExtensions
             .AddDefaultViews()
             .AddMeshNodeView();
 
-    /// <summary>
-    /// Loads graph configuration from JSON files in the data directory.
-    ///
-    /// Configuration is loaded from NodeType MeshNodes stored under Type/:
-    /// - Each NodeType node has a partition folder containing:
-    ///   - dataModel.json - Data type definition with inline C# source
-    ///   - layoutAreas/*.json - Layout area configurations
-    ///   - hubFeatures.json - Hub feature configuration (optional)
-    ///
-    /// Content collections are configured per node type via NodeTypeDefinition.ContentCollections.
-    /// All configuration loading, type compilation, and service initialization
-    /// happens at mesh startup.
-    /// </summary>
     /// <param name="builder">The mesh builder</param>
-    /// <param name="dataDirectory">The base data directory</param>
-    /// <param name="configuration">The application configuration</param>
-    public static TBuilder AddJsonGraphConfiguration<TBuilder>(
-        this TBuilder builder,
-        string dataDirectory,
-        IConfiguration configuration)
-        where TBuilder : MeshBuilder
+    extension<TBuilder>(TBuilder builder) where TBuilder : MeshBuilder
     {
-        // Register services that don't need hub-level dependencies at the mesh level
-        builder.ConfigureServices(services =>
+        /// <summary>
+        /// Loads graph configuration from JSON files in the data directory.
+        /// 
+        /// Configuration is loaded from NodeType MeshNodes stored under Type/:
+        /// - Each NodeType node has a partition folder containing:
+        ///   - dataModel.json - Data type definition with inline C# source
+        ///   - layoutAreas/*.json - Layout area configurations
+        ///   - hubFeatures.json - Hub feature configuration (optional)
+        /// 
+        /// Content collections are configured per node type via NodeTypeDefinition.ContentCollections.
+        /// All configuration loading, type compilation, and service initialization
+        /// happens at mesh startup.
+        /// </summary>
+        /// <param name="dataDirectory">The base data directory</param>
+        /// <param name="configuration">The application configuration</param>
+        public TBuilder AddJsonGraphConfiguration(string dataDirectory,
+            IConfiguration configuration)
         {
-            // Register layout area initializer
-            services.AddSingleton<IConfigurationInitializer, LayoutAreaInitializer>();
-
-            // Register INodeTypeService
-            services.AddSingleton<INodeTypeService>(sp =>
+            // Register services that don't need hub-level dependencies at the mesh level
+            builder.ConfigureServices(services =>
             {
-                var persistence = sp.GetRequiredService<IPersistenceService>();
-                return new NodeTypeService(persistence);
+                // Register INodeTypeService
+                services.AddSingleton<INodeTypeService>(sp =>
+                {
+                    var persistence = sp.GetRequiredService<IPersistenceService>();
+                    return new NodeTypeService(persistence);
+                });
+
+                // Register compilation cache options
+                services.AddOptions<CompilationCacheOptions>();
+
+                // Register compilation cache service
+                services.AddSingleton<ICompilationCacheService, CompilationCacheService>();
+
+                return services;
             });
 
-            // Register compilation cache options
-            services.AddOptions<CompilationCacheOptions>();
+            // Configure mesh hub with views and hub-level services
+            // Note: Node types are compiled on-demand via IMeshNodeCompilationService.
+            // MeshCatalog loads NodeTypeConfiguration from compiled assemblies when nodes are accessed.
+            builder.ConfigureHub(config => config
+                .AddMeshNodeView()
+                .AddDynamicViews()
+                .WithServices(services =>
+                {
+                    // These services need ITypeRegistry which is only available at hub level
+                    services.AddSingleton<ITypeCompilationService, TypeCompilationService>();
+                    services.AddSingleton<IMeshNodeCompilationService, MeshNodeCompilationService>();
+                    return services;
+                }));
 
-            // Register compilation cache service
-            services.AddSingleton<ICompilationCacheService, CompilationCacheService>();
+            return builder;
+        }
 
-            return services;
-        });
+        /// <summary>
+        /// Loads graph configuration from JSON files using the default data directory from configuration.
+        /// Reads the data directory from Graph:DataDirectory section.
+        /// </summary>
+        public TBuilder AddJsonGraphConfiguration(IConfiguration configuration)
+        {
+            var graphSection = configuration.GetSection("Graph");
+            var dataDirectoryConfig = graphSection["DataDirectory"] ?? "Data";
+            var dataDirectory = Path.IsPathRooted(dataDirectoryConfig)
+                ? dataDirectoryConfig
+                : Path.GetFullPath(Path.Combine(Directory.GetCurrentDirectory(), dataDirectoryConfig));
 
-        // Configure mesh hub with views and hub-level services
-        // Note: GraphConfigurationInitializer is NOT run here - the mesh hub has its own config.
-        // Child nodes without their own config will have initialization run via MeshCatalog.
-        builder.ConfigureHub(config => config
-            .AddMeshCatalogView()
-            .AddDynamicViews()
-            .WithServices(services =>
-            {
-                // These services need ITypeRegistry which is only available at hub level
-                services.AddSingleton<ITypeCompilationService, TypeCompilationService>();
-                services.AddSingleton<IMeshNodeCompilationService, MeshNodeCompilationService>();
-                services.AddSingleton<IConfigurationInitializer, DataModelInitializer>();
-                services.AddSingleton<IConfigurationInitializer, NodeTypeRegistrationInitializer>();
-                // Register as IMeshCatalogInitializer so MeshCatalogBase can find and run it
-                services.AddSingleton<IMeshCatalogInitializer, GraphConfigurationInitializer>();
-                return services;
-            }));
-
-        return builder;
-    }
-
-    /// <summary>
-    /// Loads graph configuration from JSON files using the default data directory from configuration.
-    /// Reads the data directory from Graph:DataDirectory section.
-    /// </summary>
-    public static TBuilder AddJsonGraphConfiguration<TBuilder>(
-        this TBuilder builder,
-        IConfiguration configuration)
-        where TBuilder : MeshBuilder
-    {
-        var graphSection = configuration.GetSection("Graph");
-        var dataDirectoryConfig = graphSection["DataDirectory"] ?? "Data";
-        var dataDirectory = Path.IsPathRooted(dataDirectoryConfig)
-            ? dataDirectoryConfig
-            : Path.GetFullPath(Path.Combine(Directory.GetCurrentDirectory(), dataDirectoryConfig));
-
-        return builder.AddJsonGraphConfiguration(dataDirectory, configuration);
+            return builder.AddJsonGraphConfiguration(dataDirectory, configuration);
+        }
     }
 }

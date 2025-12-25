@@ -8,7 +8,12 @@ using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Hosting;
 
-public abstract class MeshCatalogBase : IMeshCatalog
+/// <summary>
+/// Mesh catalog implementation that uses IPersistenceService for storage.
+/// Configure with AddFileSystemPersistence() for file-backed storage
+/// or AddInMemoryPersistence() for transient storage.
+/// </summary>
+public sealed class MeshCatalog : IMeshCatalog
 {
     public MeshConfiguration Configuration { get; }
     public IUnifiedPathRegistry PathRegistry { get; }
@@ -17,11 +22,31 @@ public abstract class MeshCatalogBase : IMeshCatalog
     private readonly MemoryCacheEntryOptions cacheOptions = new(){SlidingExpiration = TimeSpan.FromMinutes(5)};
     private readonly IMessageHub persistenceHub;
     private readonly IMessageHub meshHub;
-    private readonly ILogger<MeshCatalogBase> logger;
-    private bool _initialized;
-    private readonly object _initLock = new();
+    private readonly ILogger<MeshCatalog> logger;
 
-    protected MeshCatalogBase(
+    // Lazy-loaded because IMeshNodeCompilationService is registered at hub level
+    // and may not be available during MeshCatalog construction
+    private IMeshNodeCompilationService? _compilationService;
+    private bool _compilationServiceResolved;
+
+    private IMeshNodeCompilationService? CompilationService
+    {
+        get
+        {
+            if (!_compilationServiceResolved)
+            {
+                _compilationService = meshHub.ServiceProvider.GetService<IMeshNodeCompilationService>();
+                _compilationServiceResolved = true;
+                if (_compilationService == null)
+                {
+                    logger.LogWarning("IMeshNodeCompilationService not available. On-demand node type compilation disabled.");
+                }
+            }
+            return _compilationService;
+        }
+    }
+
+    public MeshCatalog(
         IMessageHub hub,
         MeshConfiguration configuration,
         IUnifiedPathRegistry pathRegistry,
@@ -31,31 +56,11 @@ public abstract class MeshCatalogBase : IMeshCatalog
         PathRegistry = pathRegistry;
         Persistence = persistenceService;
         meshHub = hub;
-        logger = hub.ServiceProvider.GetRequiredService<ILogger<MeshCatalogBase>>();
+        logger = hub.ServiceProvider.GetRequiredService<ILogger<MeshCatalog>>();
 
         persistenceHub = hub.GetHostedHub(AddressExtensions.CreatePersistenceAddress())!;
         foreach (var node in Configuration.Nodes.Values)
                 UpdateNode(node);
-    }
-
-    /// <summary>
-    /// Ensures initialization has run. Called lazily when first child node is accessed.
-    /// </summary>
-    private async Task EnsureInitializedAsync(CancellationToken ct)
-    {
-        if (_initialized) return;
-
-        lock (_initLock)
-        {
-            if (_initialized) return;
-            _initialized = true;
-        }
-
-        var initializer = meshHub.ServiceProvider.GetService<IMeshCatalogInitializer>();
-        if (initializer != null)
-        {
-            await initializer.InitializeAsync(meshHub, ct);
-        }
     }
 
     public async Task<MeshNode?> GetNodeAsync(Address address)
@@ -74,16 +79,33 @@ public abstract class MeshCatalogBase : IMeshCatalog
         }
 
         // Try loading from persistence
-        var persistedNode = await LoadMeshNode(address);
+        var persistedNode = await Persistence.GetNodeAsync(address.ToString());
 
         if (persistedNode != null)
         {
-            // Ensure initialization has run before looking up NodeTypeConfiguration
-            // This runs lazily on first child node access, not for the mesh hub
-            await EnsureInitializedAsync(CancellationToken.None);
-
-            // Look up NodeTypeConfiguration based on the persisted node's NodeType
+            // Look up NodeTypeConfiguration - may already be registered
             var nodeTypeConfig = Configuration.GetNodeTypeConfiguration(persistedNode.NodeType);
+            string? assemblyLocation = null;
+
+            // If not found and we have a compilation service, compile on-demand
+            if (nodeTypeConfig == null && CompilationService != null && !string.IsNullOrEmpty(persistedNode.NodeType))
+            {
+                var compilationResult = await CompilationService.CompileAndGetConfigurationsAsync(persistedNode);
+                if (compilationResult != null)
+                {
+                    assemblyLocation = compilationResult.AssemblyLocation;
+
+                    // Register all NodeTypeConfigurations from the compiled assembly
+                    foreach (var config in compilationResult.NodeTypeConfigurations)
+                    {
+                        Configuration.RegisterNodeTypeConfiguration(config);
+                        logger.LogDebug("Registered NodeTypeConfiguration for {NodeType}", config.NodeType);
+                    }
+
+                    nodeTypeConfig = Configuration.GetNodeTypeConfiguration(persistedNode.NodeType);
+                }
+            }
+
             if (nodeTypeConfig != null)
             {
                 // Merge node type configuration with persisted data
@@ -91,7 +113,8 @@ public abstract class MeshCatalogBase : IMeshCatalog
                 // Persisted provides: Name, Description, Content, IconName, DisplayOrder, etc.
                 node = persistedNode with
                 {
-                    HubConfiguration = nodeTypeConfig.HubConfiguration
+                    HubConfiguration = nodeTypeConfig.HubConfiguration,
+                    AssemblyLocation = assemblyLocation ?? persistedNode.AssemblyLocation
                 };
             }
             else
@@ -109,7 +132,7 @@ public abstract class MeshCatalogBase : IMeshCatalog
     private MeshNode UpdateNode(MeshNode node)
     {
         cache.Set(node.Key, node, cacheOptions);
-        persistenceHub.InvokeAsync(_ => UpdateNodeAsync(node), ex =>
+        persistenceHub.InvokeAsync(_ => Persistence.SaveNodeAsync(node), ex =>
         {
             logger.LogError(ex, "unable to update mesh catalog");
             return Task.CompletedTask;
@@ -117,10 +140,8 @@ public abstract class MeshCatalogBase : IMeshCatalog
         return node;
     }
 
-    protected abstract Task<MeshNode?> LoadMeshNode(Address address);
-
-
-    public abstract Task UpdateAsync(MeshNode node);
+    public Task UpdateAsync(MeshNode node) =>
+        Persistence.SaveNodeAsync(node);
 
     private readonly Dictionary<string, StreamInfo> channelTypes = new()
     {
@@ -131,9 +152,6 @@ public abstract class MeshCatalogBase : IMeshCatalog
     {
         return Task.FromResult(channelTypes.GetValueOrDefault(address.Type) ?? new StreamInfo(StreamType.Stream, StreamProviders.Memory, address.ToString()));
     }
-
-
-    protected abstract Task UpdateNodeAsync(MeshNode node);
 
     /// <inheritdoc />
     public async Task<AddressResolution?> ResolvePathAsync(string path)
@@ -182,16 +200,7 @@ public abstract class MeshCatalogBase : IMeshCatalog
         {
             var testPath = string.Join("/", segments.Take(depth));
 
-            // Try direct path first
             var node = await Persistence.GetNodeAsync(testPath);
-            if (node != null)
-                return (node, depth);
-
-            // Also check in Root namespace at each depth level
-            // This allows /Organizations to resolve to Root/Organizations
-            // and /Systemorph/MeshWeaver to resolve to Root/Systemorph/MeshWeaver
-            var rootPath = "Root/" + testPath;
-            node = await Persistence.GetNodeAsync(rootPath);
             if (node != null)
                 return (node, depth);
         }

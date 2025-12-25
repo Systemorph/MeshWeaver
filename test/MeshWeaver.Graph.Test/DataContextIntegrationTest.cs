@@ -41,20 +41,18 @@ public record TestStory
 public class DataContextIntegrationTest : MonolithMeshTestBase
 {
     private static readonly string TestDirectoryBase = Path.Combine(Path.GetTempPath(), "MeshWeaverDataContextTests");
-
-    [ThreadStatic]
-    private static string? _currentTestDirectory;
+    private string? _testDirectory;
 
     private IPersistenceService Persistence => ServiceProvider.GetRequiredService<IPersistenceService>();
 
-    private static string GetOrCreateTestDirectory()
+    private string GetOrCreateTestDirectory()
     {
-        if (_currentTestDirectory == null)
+        if (_testDirectory == null)
         {
-            _currentTestDirectory = Path.Combine(TestDirectoryBase, Guid.NewGuid().ToString());
-            Directory.CreateDirectory(_currentTestDirectory);
+            _testDirectory = Path.Combine(TestDirectoryBase, Guid.NewGuid().ToString());
+            Directory.CreateDirectory(_testDirectory);
         }
-        return _currentTestDirectory;
+        return _testDirectory;
     }
 
     public DataContextIntegrationTest(ITestOutputHelper output) : base(output)
@@ -178,25 +176,30 @@ public class DataContextIntegrationTest : MonolithMeshTestBase
         });
         var configuration = configBuilder.Build();
 
+        // Configure unique cache directory for test isolation
+        var cacheDirectory = Path.Combine(testDataDirectory, ".mesh-cache");
+
         return builder
             .UseMonolithMesh()
-            .ConfigureServices(services => services.AddPersistence(persistence))
+            .ConfigureServices(services =>
+            {
+                services.AddPersistence(persistence);
+                services.Configure<CompilationCacheOptions>(o => o.CacheDirectory = cacheDirectory);
+                return services;
+            })
             .AddJsonGraphConfiguration(testDataDirectory, configuration);
     }
 
     public override async ValueTask DisposeAsync()
     {
-        var dir = _currentTestDirectory;
-        _currentTestDirectory = null;
-
         await base.DisposeAsync();
 
         // Clean up test directory
-        if (dir != null && Directory.Exists(dir))
+        if (_testDirectory != null && Directory.Exists(_testDirectory))
         {
             try
             {
-                Directory.Delete(dir, recursive: true);
+                Directory.Delete(_testDirectory, recursive: true);
             }
             catch
             {

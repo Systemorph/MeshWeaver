@@ -83,4 +83,49 @@ internal class MeshNodeCompilationService(
             throw;
         }
     }
+
+    /// <inheritdoc />
+    public async Task<NodeCompilationResult?> CompileAndGetConfigurationsAsync(MeshNode node, CancellationToken ct = default)
+    {
+        var assemblyLocation = await GetAssemblyLocationAsync(node, ct);
+        if (string.IsNullOrEmpty(assemblyLocation))
+            return null;
+
+        var nodeName = cacheService.SanitizeNodeName(node.Path);
+
+        try
+        {
+            // Load assembly using isolated context
+            var assembly = cacheService.LoadAssembly(nodeName);
+            if (assembly == null)
+            {
+                logger.LogWarning("Failed to load assembly for {NodePath}", node.Path);
+                return new NodeCompilationResult(assemblyLocation, []);
+            }
+
+            // Extract NodeTypeConfigurations from MeshNodeAttribute
+            var configurations = new List<NodeTypeConfiguration>();
+            foreach (var type in assembly.GetTypes())
+            {
+                if (typeof(MeshNodeAttribute).IsAssignableFrom(type) && !type.IsAbstract)
+                {
+                    var attribute = (MeshNodeAttribute?)Activator.CreateInstance(type);
+                    if (attribute != null)
+                    {
+                        configurations.AddRange(attribute.NodeTypeConfigurations);
+                    }
+                }
+            }
+
+            logger.LogDebug("Extracted {Count} NodeTypeConfigurations from {AssemblyLocation}",
+                configurations.Count, assemblyLocation);
+
+            return new NodeCompilationResult(assemblyLocation, configurations);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Failed to extract NodeTypeConfigurations from {AssemblyLocation}", assemblyLocation);
+            return new NodeCompilationResult(assemblyLocation, []);
+        }
+    }
 }

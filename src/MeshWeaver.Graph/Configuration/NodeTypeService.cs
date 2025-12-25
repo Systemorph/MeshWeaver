@@ -95,9 +95,14 @@ public class NodeTypeService : INodeTypeService
             // Get all children at this level
             await foreach (var node in _persistence.GetChildrenAsync(searchPath))
             {
-                if (node.NodeType == NodeTypeNodeType && node.Content is NodeTypeDefinition ntd && ntd.Id == nodeType)
+                // Match by node path (e.g., "type/graph") or by NodeTypeDefinition.Id (e.g., "graph")
+                if (node.NodeType == NodeTypeNodeType && node.Content is NodeTypeDefinition ntd)
                 {
-                    return node;
+                    // Match either by full path or by short Id
+                    if (node.Prefix == nodeType || ntd.Id == nodeType)
+                    {
+                        return node;
+                    }
                 }
             }
         }

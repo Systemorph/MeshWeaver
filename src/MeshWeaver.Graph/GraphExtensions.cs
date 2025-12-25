@@ -26,7 +26,6 @@ public static class GraphExtensions
         /// </summary>
         public MessageHubConfiguration AddMeshNavigation()
             => configuration
-                .AddMeshNodeAutocomplete()
-                .AddMeshCatalogView();
+                .AddMeshNodeAutocomplete();
     }
 }
