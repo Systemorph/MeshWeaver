@@ -1,25 +1,23 @@
-using MeshWeaver.Data;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
-using MeshWeaver.Messaging;
 using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Graph.Configuration;
 
 /// <summary>
-/// Implementation of INodeTypeService using hub messaging for data operations.
+/// Implementation of INodeTypeService using IPersistenceService for storage.
 ///
 /// NodeTypes are scoped hierarchically - for a node at path "a/b/c", applicable NodeTypes
 /// are found by walking up the path: a/b/c/*, a/b/*, a/*, root level, and type/*.
 ///
 /// A NodeType node is identified by having NodeType = "NodeType".
-/// NodeTypeData is accessed via GetDataRequest/Response to the NodeType hub.
-/// CodeConfiguration is modified via DataChangeRequest to the NodeType hub.
+/// Its partition folder contains:
+/// - codeConfiguration.json: The CodeConfiguration with C# code
+/// HubConfiguration is stored as a property on the NodeTypeDefinition content.
 /// </summary>
 public class NodeTypeService : INodeTypeService
 {
     private readonly IPersistenceService _persistence;
-    private readonly IMessageHub _hub;
     private readonly ILogger<NodeTypeService>? _logger;
 
     /// <summary>
@@ -27,10 +25,9 @@ public class NodeTypeService : INodeTypeService
     /// </summary>
     public const string NodeTypeNodeType = "NodeType";
 
-    public NodeTypeService(IPersistenceService persistence, IMessageHub hub, ILogger<NodeTypeService>? logger = null)
+    public NodeTypeService(IPersistenceService persistence, ILogger<NodeTypeService>? logger = null)
     {
         _persistence = persistence;
-        _hub = hub;
         _logger = logger;
     }
 
@@ -135,20 +132,34 @@ public class NodeTypeService : INodeTypeService
     {
         try
         {
-            // Send GetDataRequest to the NodeType hub with NodeTypeReference
-            var response = await _hub.AwaitResponse(
-                new GetDataRequest(new NodeTypeReference()),
-                o => o.WithTarget(new Address(nodeTypePath)),
-                ct);
-
-            if (response.Message.Error != null)
+            // Get the MeshNode for this NodeType
+            var meshNode = await _persistence.GetNodeAsync(nodeTypePath);
+            if (meshNode == null)
             {
-                _logger?.LogWarning("GetNodeTypeDataAsync: Error getting data for {Path}: {Error}",
-                    nodeTypePath, response.Message.Error);
+                _logger?.LogDebug("GetNodeTypeDataAsync: NodeType at '{Path}' not found", nodeTypePath);
                 return null;
             }
 
-            return response.Message.Data as NodeTypeData;
+            var definition = meshNode.Content as NodeTypeDefinition;
+
+            // Get CodeConfiguration from the partition
+            CodeConfiguration? codeConfig = null;
+            await foreach (var obj in _persistence.GetPartitionObjectsAsync(nodeTypePath, null))
+            {
+                if (obj is CodeConfiguration cc)
+                {
+                    codeConfig = cc;
+                    break;
+                }
+            }
+
+            return new NodeTypeData
+            {
+                Id = definition?.Id ?? meshNode.Name ?? nodeTypePath,
+                Definition = definition,
+                Code = codeConfig,
+                Path = nodeTypePath
+            };
         }
         catch (Exception ex)
         {
@@ -173,25 +184,11 @@ public class NodeTypeService : INodeTypeService
     /// <inheritdoc/>
     public async Task SaveCodeConfigurationAsync(string nodeTypePath, CodeConfiguration config, CancellationToken ct = default)
     {
-        // Use DataChangeRequest to update CodeConfiguration on the NodeType hub
-        var request = new DataChangeRequest { Updates = [config] };
-
         try
         {
-            var response = await _hub.AwaitResponse(
-                request,
-                o => o.WithTarget(new Address(nodeTypePath)),
-                ct);
-
-            if (response.Message.Status != DataChangeStatus.Committed)
-            {
-                _logger?.LogWarning("SaveCodeConfigurationAsync: Failed to save to {Path}, status: {Status}",
-                    nodeTypePath, response.Message.Status);
-            }
-            else
-            {
-                _logger?.LogDebug("SaveCodeConfigurationAsync: Saved CodeConfiguration to {Path}", nodeTypePath);
-            }
+            // Save CodeConfiguration to the partition folder
+            await _persistence.SavePartitionObjectsAsync(nodeTypePath, null, new object[] { config });
+            _logger?.LogDebug("SaveCodeConfigurationAsync: Saved CodeConfiguration to {Path}", nodeTypePath);
         }
         catch (Exception ex)
         {
@@ -220,7 +217,7 @@ public class NodeTypeService : INodeTypeService
 
         await foreach (var nodeTypeNode in GetAllNodeTypeNodesAsync())
         {
-            // Get CodeConfiguration via messaging
+            // Get CodeConfiguration from partition
             var nodeTypeData = await GetNodeTypeDataAsync(nodeTypeNode.Prefix, ct);
             if (nodeTypeData?.Code != null)
             {

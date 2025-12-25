@@ -62,8 +62,7 @@ public static class GraphConfigurationExtensions
                 services.AddSingleton<INodeTypeService>(sp =>
                 {
                     var persistence = sp.GetRequiredService<IPersistenceService>();
-                    var hub = sp.GetRequiredService<IMessageHub>();
-                    return new NodeTypeService(persistence, hub);
+                    return new NodeTypeService(persistence);
                 });
 
                 // Register compilation cache options
