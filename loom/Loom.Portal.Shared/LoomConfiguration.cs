@@ -7,10 +7,12 @@ using MeshWeaver.Blazor.Portal.Infrastructure;
 using MeshWeaver.Blazor.Radzen;
 using MeshWeaver.GoogleMaps;
 using MeshWeaver.Graph.Configuration;
+using MeshWeaver.Hosting;
 using MeshWeaver.Hosting.AzureBlob;
 using MeshWeaver.Hosting.Blazor;
 using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Services;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Components;
 using Microsoft.Extensions.Configuration;
@@ -115,6 +117,12 @@ public static class LoomConfiguration
                 // When IAzureClientFactory<BlobServiceClient> is registered (e.g., via Aspire),
                 // it will be used. Otherwise, falls back to Graph:ConnectionString configuration.
                 .ConfigureServices(services => services.AddAzureBlob())
+                // Register the mesh catalog with file-system persistence
+                .ConfigureServices(services =>
+                {
+                    services.AddSingleton<IMeshCatalog, MeshCatalog>();
+                    return services;
+                })
                 ;
         }
     }

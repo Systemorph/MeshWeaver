@@ -4,6 +4,7 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
 using Orleans.Serialization;
 
@@ -38,6 +39,7 @@ public static class OrleansConnectionExtensions
     internal static void ConfigureMeshWeaver(this MeshBuilder builder)
     {
         builder.ConfigureServices(services =>
+        {
             services.AddSerializer(serializerBuilder =>
             {
                 serializerBuilder.AddJsonSerializer(
@@ -48,9 +50,11 @@ public static class OrleansConnectionExtensions
                             (o, hub) => o.SerializerOptions = hub.JsonSerializerOptions
                         )
                 );
-            })
-            .AddSingleton<IMeshCatalog, InMemoryMeshCatalog>()
-        );
+            });
+            // Use TryAdd so user can register their own catalog first
+            services.TryAddSingleton<IMeshCatalog, MeshCatalog>();
+            return services;
+        });
         builder.ConfigureHub(conf => conf
             .WithTypes(typeof(Article), typeof(StreamInfo))
             .AddMeshTypes()

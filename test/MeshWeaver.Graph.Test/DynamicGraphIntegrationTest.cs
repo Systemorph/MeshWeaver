@@ -1,16 +1,13 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using System.Threading;
-using System.Threading.Tasks;
 using System.Reactive.Linq;
 using System.Text.Json;
+using System.Threading.Tasks;
 using FluentAssertions;
 using MeshWeaver.Data;
-using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
-using MeshWeaver.Layout;
 using MeshWeaver.Hosting.Monolith;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Hosting.Persistence;
@@ -34,28 +31,25 @@ namespace MeshWeaver.Graph.Test;
 [Collection("DynamicGraphIntegrationTests")]
 public class DynamicGraphIntegrationTest : MonolithMeshTestBase
 {
-    // Static field to hold test directory - initialized before base constructor runs
+    // Each test instance gets its own unique directory
     private static readonly string TestDirectoryBase = Path.Combine(Path.GetTempPath(), "MeshWeaverDynamicGraphTests");
-
-    [ThreadStatic]
-    private static string? _currentTestDirectory;
+    private string? _testDirectory;
 
     private IPersistenceService Persistence => ServiceProvider.GetRequiredService<IPersistenceService>();
     private IMeshCatalog MeshCatalog => ServiceProvider.GetRequiredService<IMeshCatalog>();
     private ITypeCompilationService TypeCompiler => ServiceProvider.GetRequiredService<ITypeCompilationService>();
 
     /// <summary>
-    /// Gets or creates the test directory for this test instance.
-    /// Called during ConfigureMesh which runs during base constructor.
+    /// Gets the unique test directory for this test instance, creating it lazily.
     /// </summary>
-    private static string GetOrCreateTestDirectory()
+    private string GetOrCreateTestDirectory()
     {
-        if (_currentTestDirectory == null)
+        if (_testDirectory == null)
         {
-            _currentTestDirectory = Path.Combine(TestDirectoryBase, Guid.NewGuid().ToString());
-            Directory.CreateDirectory(_currentTestDirectory);
+            _testDirectory = Path.Combine(TestDirectoryBase, Guid.NewGuid().ToString());
+            Directory.CreateDirectory(_testDirectory);
         }
-        return _currentTestDirectory;
+        return _testDirectory;
     }
 
     public DynamicGraphIntegrationTest(ITestOutputHelper output) : base(output)
@@ -255,25 +249,30 @@ public record Graph
         });
         var configuration = configBuilder.Build();
 
+        // Configure unique cache directory for test isolation
+        var cacheDirectory = Path.Combine(testDataDirectory, ".mesh-cache");
+
         return builder
             .UseMonolithMesh()
-            .ConfigureServices(services => services.AddPersistence(persistence))
+            .ConfigureServices(services =>
+            {
+                services.AddPersistence(persistence);
+                services.Configure<CompilationCacheOptions>(o => o.CacheDirectory = cacheDirectory);
+                return services;
+            })
             .AddJsonGraphConfiguration(testDataDirectory, configuration);
     }
 
     public override async ValueTask DisposeAsync()
     {
-        var dir = _currentTestDirectory;
-        _currentTestDirectory = null;
-
         await base.DisposeAsync();
 
         // Clean up test directory
-        if (dir != null && Directory.Exists(dir))
+        if (_testDirectory != null && Directory.Exists(_testDirectory))
         {
             try
             {
-                Directory.Delete(dir, recursive: true);
+                Directory.Delete(_testDirectory, recursive: true);
             }
             catch
             {
@@ -721,7 +720,7 @@ public record Graph
         // Act: Request the default layout area (Details) using stream
         // This should not hang if default views are properly configured
         var workspace = client.GetWorkspace();
-        var reference = new LayoutAreaReference(DefaultViews.DetailsArea);
+        var reference = new LayoutAreaReference(MeshNodeView.DetailsArea);
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(orgAddress, reference);
 
         // Wait for the stream to emit a value (with timeout from test attribute)
@@ -782,21 +781,21 @@ public record Graph
 public class OrganizationsLayoutTest : MonolithMeshTestBase
 {
     private static readonly string TestDirectoryBase = Path.Combine(Path.GetTempPath(), "MeshWeaverOrganizationsTests");
+    private string? _testDirectory;
 
-    [ThreadStatic]
-    private static string? _currentTestDirectory;
-
-    private static string GetOrCreateTestDirectory()
+    private string GetOrCreateTestDirectory()
     {
-        if (_currentTestDirectory == null)
+        if (_testDirectory == null)
         {
-            _currentTestDirectory = Path.Combine(TestDirectoryBase, Guid.NewGuid().ToString());
-            Directory.CreateDirectory(_currentTestDirectory);
+            _testDirectory = Path.Combine(TestDirectoryBase, Guid.NewGuid().ToString());
+            Directory.CreateDirectory(_testDirectory);
         }
-        return _currentTestDirectory;
+        return _testDirectory;
     }
 
-    public OrganizationsLayoutTest(ITestOutputHelper output) : base(output) { }
+    public OrganizationsLayoutTest(ITestOutputHelper output) : base(output)
+    {
+    }
 
     /// <summary>
     /// Sets up the exact structure from samples/Graph/Data:
@@ -898,22 +897,27 @@ public class OrganizationsLayoutTest : MonolithMeshTestBase
         });
         var configuration = configBuilder.Build();
 
+        // Configure unique cache directory for test isolation
+        var cacheDirectory = Path.Combine(testDataDirectory, ".mesh-cache");
+
         return builder
             .UseMonolithMesh()
-            .ConfigureServices(services => services.AddPersistence(persistence))
+            .ConfigureServices(services =>
+            {
+                services.AddPersistence(persistence);
+                services.Configure<CompilationCacheOptions>(o => o.CacheDirectory = cacheDirectory);
+                return services;
+            })
             .AddJsonGraphConfiguration(testDataDirectory, configuration);
     }
 
     public override async ValueTask DisposeAsync()
     {
-        var dir = _currentTestDirectory;
-        _currentTestDirectory = null;
-
         await base.DisposeAsync();
 
-        if (dir != null && Directory.Exists(dir))
+        if (_testDirectory != null && Directory.Exists(_testDirectory))
         {
-            try { Directory.Delete(dir, recursive: true); }
+            try { Directory.Delete(_testDirectory, recursive: true); }
             catch { /* Ignore cleanup errors */ }
         }
     }
