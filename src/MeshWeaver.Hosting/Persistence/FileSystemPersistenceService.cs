@@ -1,4 +1,6 @@
+using MeshWeaver.Hosting.Persistence.Query;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Query;
 using MeshWeaver.Mesh.Services;
 using Microsoft.Extensions.Caching.Memory;
 
@@ -203,6 +205,109 @@ public class FileSystemPersistenceService(IStorageAdapter storageAdapter) : IPer
 
     public Task<DateTimeOffset?> GetPartitionMaxTimestampAsync(string nodePath, string? subPath = null, CancellationToken ct = default)
         => storageAdapter.GetPartitionMaxTimestampAsync(nodePath, subPath, ct);
+
+    #endregion
+
+    #region Query
+
+    public async IAsyncEnumerable<object> QueryAsync(string query, string path)
+    {
+        var parser = new RsqlParser();
+        var parsedQuery = parser.Parse(query);
+        var evaluator = new RsqlEvaluator();
+
+        var normalizedPath = NormalizePath(path);
+        var results = new List<(object Item, int Score)>();
+
+        // Determine paths to search based on scope
+        var pathsToSearch = GetPathsForScope(normalizedPath, parsedQuery.Scope);
+
+        foreach (var searchPath in pathsToSearch)
+        {
+            // Search MeshNodes at this path
+            var node = await GetNodeAsync(searchPath);
+            if (node != null && evaluator.Matches(node, parsedQuery))
+            {
+                var score = evaluator.GetFuzzyScore(node, parsedQuery.TextSearch);
+                results.Add((node, score));
+            }
+
+            // Search partition objects at this path
+            await foreach (var obj in GetPartitionObjectsAsync(searchPath))
+            {
+                if (evaluator.Matches(obj, parsedQuery))
+                {
+                    var score = evaluator.GetFuzzyScore(obj, parsedQuery.TextSearch);
+                    results.Add((obj, score));
+                }
+            }
+        }
+
+        // For Descendants and Hierarchy scopes, also search descendant paths
+        if (parsedQuery.Scope == QueryScope.Descendants || parsedQuery.Scope == QueryScope.Hierarchy)
+        {
+            await foreach (var descendant in GetDescendantsAsync(normalizedPath))
+            {
+                var descendantPath = NormalizePath(descendant.Prefix);
+
+                // Evaluate the node itself
+                if (evaluator.Matches(descendant, parsedQuery))
+                {
+                    var score = evaluator.GetFuzzyScore(descendant, parsedQuery.TextSearch);
+                    if (!results.Any(r => ReferenceEquals(r.Item, descendant)))
+                        results.Add((descendant, score));
+                }
+
+                // Search partition objects under descendant
+                await foreach (var obj in GetPartitionObjectsAsync(descendantPath))
+                {
+                    if (evaluator.Matches(obj, parsedQuery))
+                    {
+                        var score = evaluator.GetFuzzyScore(obj, parsedQuery.TextSearch);
+                        results.Add((obj, score));
+                    }
+                }
+            }
+        }
+
+        // Order by fuzzy score (higher first) for text searches
+        var orderedResults = !string.IsNullOrEmpty(parsedQuery.TextSearch)
+            ? results.OrderByDescending(r => r.Score)
+            : results.AsEnumerable();
+
+        foreach (var (item, _) in orderedResults)
+        {
+            yield return item;
+        }
+    }
+
+    private static List<string> GetPathsForScope(string basePath, QueryScope scope)
+    {
+        var paths = new List<string>();
+
+        if (scope != QueryScope.Descendants || string.IsNullOrEmpty(basePath))
+        {
+            paths.Add(basePath);
+        }
+
+        if (scope == QueryScope.Ancestors || scope == QueryScope.Hierarchy)
+        {
+            var segments = basePath.Split('/', StringSplitOptions.RemoveEmptyEntries);
+            for (int i = segments.Length - 1; i >= 0; i--)
+            {
+                var ancestorPath = string.Join("/", segments.Take(i));
+                if (!paths.Contains(ancestorPath, StringComparer.OrdinalIgnoreCase))
+                    paths.Add(ancestorPath);
+            }
+        }
+
+        if (scope == QueryScope.Descendants)
+        {
+            paths.Add(basePath);
+        }
+
+        return paths;
+    }
 
     #endregion
 }
