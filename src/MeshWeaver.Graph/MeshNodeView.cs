@@ -1,15 +1,13 @@
 ﻿using System.Reactive.Linq;
 using MeshWeaver.Application.Styles;
 using MeshWeaver.ContentCollections;
-using MeshWeaver.Data;
 using MeshWeaver.Domain;
+using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
-using MeshWeaver.Layout.DataGrid;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
-using MeshWeaver.ShortGuid;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.Graph;
@@ -68,15 +66,50 @@ public static class MeshNodeView
             var children = new List<MeshNode>();
             if (meshCatalog != null)
             {
-                await foreach (var child in meshCatalog.Persistence.GetChildrenAsync(hubPath).WithCancellation(ct))
-                    children.Add(child);
+                // Check if the node's type has a custom ChildrenQuery
+                var childrenQuery = await GetChildrenQueryAsync(persistence, node, ct);
+
+                if (!string.IsNullOrEmpty(childrenQuery))
+                {
+                    // Use QueryAsync with the configured query
+                    // Query from root ("") to search across all nodes
+                    await foreach (var obj in persistence.QueryAsync(childrenQuery, "").WithCancellation(ct))
+                    {
+                        if (obj is MeshNode childNode)
+                            children.Add(childNode);
+                    }
+                }
+                else
+                {
+                    // Default: get direct children
+                    await foreach (var child in meshCatalog.Persistence.GetChildrenAsync(hubPath).WithCancellation(ct))
+                        children.Add(child);
+                }
             }
 
             return BuildDetailsContent(host, node, children);
         });
     }
 
-    private static UiControl BuildDetailsContent(LayoutAreaHost host, MeshNode? node, IEnumerable<MeshNode> children)
+    /// <summary>
+    /// Gets the ChildrenQuery from the node's NodeTypeDefinition, if configured.
+    /// </summary>
+    private static async Task<string?> GetChildrenQueryAsync(this IPersistenceService persistence, MeshNode? node, CancellationToken ct)
+    {
+        if (node?.NodeType == null)
+            return null;
+
+        // Look up the NodeType node (e.g., "Type/Organizations")
+        var nodeTypeNode = await persistence.GetNodeAsync(node.NodeType, ct);
+        if (nodeTypeNode?.Content is NodeTypeDefinition nodeTypeDef)
+        {
+            return nodeTypeDef.ChildrenQuery;
+        }
+
+        return null;
+    }
+
+    private static UiControl BuildDetailsContent(this LayoutAreaHost host, MeshNode? node, IEnumerable<MeshNode> children)
     {
         var nodePath = node?.Prefix ?? host.Hub.Address.ToString();
         var stack = Controls.Stack.WithWidth("100%");

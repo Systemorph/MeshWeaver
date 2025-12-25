@@ -101,6 +101,8 @@
     <Project Path="src/MeshWeaver.Hosting.Blazor/MeshWeaver.Hosting.Blazor.csproj" />
     <Project Path="src/MeshWeaver.Hosting.Monolith/MeshWeaver.Hosting.Monolith.csproj" />
     <Project Path="src/MeshWeaver.Hosting.Orleans/MeshWeaver.Hosting.Orleans.csproj" />
+    <Project Path="src/MeshWeaver.Hosting.AzureStorage/MeshWeaver.Hosting.AzureStorage.csproj" />
+    <Project Path="src/MeshWeaver.Hosting.Cosmos/MeshWeaver.Hosting.Cosmos.csproj" />
     <Project Path="src/MeshWeaver.Hosting.PostgreSql/MeshWeaver.Hosting.PostgreSql.csproj" />
     <Project Path="src/MeshWeaver.Hosting/MeshWeaver.Hosting.csproj" />
     <Project Path="src/MeshWeaver.Import/MeshWeaver.Import.csproj" />

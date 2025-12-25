@@ -152,4 +152,24 @@ public interface IPersistenceService
     Task<DateTimeOffset?> GetPartitionMaxTimestampAsync(string nodePath, string? subPath = null, CancellationToken ct = default);
 
     #endregion
+
+    #region Query
+
+    /// <summary>
+    /// Queries both MeshNodes and partition objects using RSQL/FIQL query language.
+    /// </summary>
+    /// <param name="query">RSQL query with optional $search and $scope params.
+    /// Examples:
+    /// - "status==active;price=gt=100" - filter by properties
+    /// - "name=like=*laptop*" - wildcard matching
+    /// - "category=in=(Electronics,Computers)" - in list
+    /// - "$search=laptop gaming" - fuzzy text search
+    /// - "$scope=descendants" - search path and all children
+    /// - "status==active;$search=laptop;$scope=descendants" - combined
+    /// </param>
+    /// <param name="path">Base path to search from</param>
+    /// <returns>Matching objects (MeshNodes and partition objects)</returns>
+    IAsyncEnumerable<object> QueryAsync(string query, string path);
+
+    #endregion
 }
