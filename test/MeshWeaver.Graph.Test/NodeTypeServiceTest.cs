@@ -153,10 +153,10 @@ public class NodeTypeServiceTest
 
     #endregion
 
-    #region GetDataModelAsync Tests
+    #region GetCodeConfigurationAsync Tests
 
     [Fact]
-    public async Task GetDataModelAsync_ReturnsDataModel_FromPartition()
+    public async Task GetCodeConfigurationAsync_ReturnsCodeConfiguration_FromPartition()
     {
         // Arrange
         var storyNode = new MeshNode("type/story")
@@ -167,27 +167,24 @@ public class NodeTypeServiceTest
         };
         await _persistence.SaveNodeAsync(storyNode);
 
-        var dataModel = new DataModel
+        var codeConfig = new CodeConfiguration
         {
-            Id = "story",
-            DisplayName = "Story",
-            TypeSource = "public record Story { [Key] public string Id { get; init; } }"
+            Code = "public record Story { [Key] public string Id { get; init; } }"
         };
-        await _persistence.SavePartitionObjectsAsync("type/story", null, [dataModel]);
+        await _persistence.SavePartitionObjectsAsync("type/story", "_config", [codeConfig]);
 
         // Act
-        var result = await _service.GetDataModelAsync("story", "graph/org1");
+        var result = await _service.GetCodeConfigurationAsync("story", "graph/org1");
 
         // Assert
         result.Should().NotBeNull();
-        result!.Id.Should().Be("story");
-        result.TypeSource.Should().Contain("record Story");
+        result!.Code.Should().Contain("record Story");
     }
 
     [Fact]
-    public async Task GetDataModelAsync_ReturnsNull_WhenNoDataModel()
+    public async Task GetCodeConfigurationAsync_ReturnsNull_WhenNoCodeConfiguration()
     {
-        // Arrange - NodeType without DataModel
+        // Arrange - NodeType without CodeConfiguration
         var storyNode = new MeshNode("type/story")
         {
             Name = "Story",
@@ -197,7 +194,7 @@ public class NodeTypeServiceTest
         await _persistence.SaveNodeAsync(storyNode);
 
         // Act
-        var result = await _service.GetDataModelAsync("story", "graph/org1");
+        var result = await _service.GetCodeConfigurationAsync("story", "graph/org1");
 
         // Assert
         result.Should().BeNull();
@@ -205,10 +202,10 @@ public class NodeTypeServiceTest
 
     #endregion
 
-    #region GetLayoutAreasAsync Tests
+    #region SaveCodeConfigurationAsync Tests
 
     [Fact]
-    public async Task GetLayoutAreasAsync_ReturnsLayoutAreas_FromPartition()
+    public async Task SaveCodeConfigurationAsync_PersistsCodeConfiguration_ToPartition()
     {
         // Arrange
         var storyNode = new MeshNode("type/story")
@@ -219,94 +216,18 @@ public class NodeTypeServiceTest
         };
         await _persistence.SaveNodeAsync(storyNode);
 
-        var layout1 = new LayoutAreaConfig { Id = "story-details", Area = "Details", Title = "Details" };
-        var layout2 = new LayoutAreaConfig { Id = "story-thumbnail", Area = "Thumbnail", Title = "Thumbnail" };
-        await _persistence.SavePartitionObjectsAsync("type/story", "layoutAreas", [layout1, layout2]);
-
-        // Act
-        var result = await _service.GetLayoutAreasAsync("story", "graph/org1");
-
-        // Assert
-        result.Should().HaveCount(2);
-        result.Should().Contain(la => la.Area == "Details");
-        result.Should().Contain(la => la.Area == "Thumbnail");
-    }
-
-    [Fact]
-    public async Task GetLayoutAreasAsync_ReturnsEmpty_WhenNoLayoutAreas()
-    {
-        // Arrange
-        var storyNode = new MeshNode("type/story")
+        var codeConfig = new CodeConfiguration
         {
-            Name = "Story",
-            NodeType = "NodeType",
-            Content = new NodeTypeDefinition { Id = "story", DisplayName = "Story" }
-        };
-        await _persistence.SaveNodeAsync(storyNode);
-
-        // Act
-        var result = await _service.GetLayoutAreasAsync("story", "graph/org1");
-
-        // Assert
-        result.Should().BeEmpty();
-    }
-
-    #endregion
-
-    #region SaveDataModelAsync Tests
-
-    [Fact]
-    public async Task SaveDataModelAsync_PersistsDataModel_ToPartition()
-    {
-        // Arrange
-        var storyNode = new MeshNode("type/story")
-        {
-            Name = "Story",
-            NodeType = "NodeType",
-            Content = new NodeTypeDefinition { Id = "story", DisplayName = "Story" }
-        };
-        await _persistence.SaveNodeAsync(storyNode);
-
-        var dataModel = new DataModel
-        {
-            Id = "story",
-            DisplayName = "Story",
-            TypeSource = "public record Story { [Key] public string Id { get; init; } }"
+            Code = "public record Story { [Key] public string Id { get; init; } }"
         };
 
         // Act
-        await _service.SaveDataModelAsync("type/story", dataModel);
+        await _service.SaveCodeConfigurationAsync("type/story", codeConfig);
 
         // Assert
-        var loaded = await _service.GetDataModelAsync("story", "");
+        var loaded = await _service.GetCodeConfigurationAsync("story", "");
         loaded.Should().NotBeNull();
-        loaded!.TypeSource.Should().Contain("record Story");
-    }
-
-    #endregion
-
-    #region SaveLayoutAreaAsync Tests
-
-    [Fact]
-    public async Task SaveLayoutAreaAsync_PersistsLayoutArea_ToPartition()
-    {
-        // Arrange
-        var storyNode = new MeshNode("type/story")
-        {
-            Name = "Story",
-            NodeType = "NodeType",
-            Content = new NodeTypeDefinition { Id = "story", DisplayName = "Story" }
-        };
-        await _persistence.SaveNodeAsync(storyNode);
-
-        var layout = new LayoutAreaConfig { Id = "story-details", Area = "Details", Title = "Details View" };
-
-        // Act
-        await _service.SaveLayoutAreaAsync("type/story", layout);
-
-        // Assert
-        var loaded = await _service.GetLayoutAreasAsync("story", "");
-        loaded.Should().Contain(la => la.Area == "Details");
+        loaded!.Code.Should().Contain("record Story");
     }
 
     #endregion
@@ -332,53 +253,28 @@ public class NodeTypeServiceTest
 
     #endregion
 
-    #region GetAllDataModelsAsync Tests
+    #region GetAllCodeConfigurationsAsync Tests
 
     [Fact]
-    public async Task GetAllDataModelsAsync_ReturnsAllDataModels()
+    public async Task GetAllCodeConfigurationsAsync_ReturnsAllCodeConfigurations()
     {
         // Arrange
         await _persistence.SaveNodeAsync(new MeshNode("type/story") { Name = "Story", NodeType = "NodeType" });
         await _persistence.SaveNodeAsync(new MeshNode("type/org") { Name = "Org", NodeType = "NodeType" });
 
-        var storyModel = new DataModel { Id = "story", DisplayName = "Story", TypeSource = "public record Story { }" };
-        var orgModel = new DataModel { Id = "org", DisplayName = "Organization", TypeSource = "public record Organization { }" };
+        var storyConfig = new CodeConfiguration { Code = "public record Story { }" };
+        var orgConfig = new CodeConfiguration { Code = "public record Organization { }" };
 
-        await _persistence.SavePartitionObjectsAsync("type/story", null, [storyModel]);
-        await _persistence.SavePartitionObjectsAsync("type/org", null, [orgModel]);
-
-        // Act
-        var models = await _service.GetAllDataModelsAsync();
-
-        // Assert
-        models.Should().HaveCount(2);
-        models.Should().Contain(m => m.Id == "story");
-        models.Should().Contain(m => m.Id == "org");
-    }
-
-    #endregion
-
-    #region GetAllLayoutAreasAsync Tests
-
-    [Fact]
-    public async Task GetAllLayoutAreasAsync_ReturnsAllLayoutAreas()
-    {
-        // Arrange
-        await _persistence.SaveNodeAsync(new MeshNode("type/story") { Name = "Story", NodeType = "NodeType" });
-        await _persistence.SaveNodeAsync(new MeshNode("type/org") { Name = "Org", NodeType = "NodeType" });
-
-        var storyDetails = new LayoutAreaConfig { Id = "story-details", Area = "Details" };
-        var orgDetails = new LayoutAreaConfig { Id = "org-details", Area = "Details" };
-        var orgList = new LayoutAreaConfig { Id = "org-list", Area = "List" };
-
-        await _persistence.SavePartitionObjectsAsync("type/story", "layoutAreas", [storyDetails]);
-        await _persistence.SavePartitionObjectsAsync("type/org", "layoutAreas", [orgDetails, orgList]);
+        await _persistence.SavePartitionObjectsAsync("type/story", "_config", [storyConfig]);
+        await _persistence.SavePartitionObjectsAsync("type/org", "_config", [orgConfig]);
 
         // Act
-        var layouts = await _service.GetAllLayoutAreasAsync();
+        var configs = await _service.GetAllCodeConfigurationsAsync();
 
         // Assert
-        layouts.Should().HaveCount(3);
+        configs.Should().HaveCount(2);
+        configs.Should().Contain(c => c.Code!.Contains("Story"));
+        configs.Should().Contain(c => c.Code!.Contains("Organization"));
     }
 
     #endregion

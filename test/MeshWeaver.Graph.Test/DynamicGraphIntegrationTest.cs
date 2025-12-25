@@ -37,7 +37,6 @@ public class DynamicGraphIntegrationTest : MonolithMeshTestBase
 
     private IPersistenceService Persistence => ServiceProvider.GetRequiredService<IPersistenceService>();
     private IMeshCatalog MeshCatalog => ServiceProvider.GetRequiredService<IMeshCatalog>();
-    private ITypeCompilationService TypeCompiler => ServiceProvider.GetRequiredService<ITypeCompilationService>();
 
     /// <summary>
     /// Gets the unique test directory for this test instance, creating it lazily.
@@ -69,14 +68,9 @@ public class DynamicGraphIntegrationTest : MonolithMeshTestBase
     private static async Task SetupTestConfigurationAsync(IPersistenceService persistence)
     {
         // Create Story type using "type/" prefix for global types
-        var storyDataModel = new DataModel
+        var storyCodeConfig = new CodeConfiguration
         {
-            Id = "story",
-            DisplayName = "Story",
-            IconName = "Document",
-            Description = "A user story or task",
-            DisplayOrder = 30,
-            TypeSource = @"
+            Code = @"
 public record Story
 {
     [Key]
@@ -115,17 +109,12 @@ public enum StoryStatus
             }
         };
         await persistence.SaveNodeAsync(storyNode);
-        await persistence.SavePartitionObjectsAsync("type/story", null, [storyDataModel]);
+        await persistence.SavePartitionObjectsAsync("type/story", null, [storyCodeConfig]);
 
         // Create Organization type
-        var orgDataModel = new DataModel
+        var orgCodeConfig = new CodeConfiguration
         {
-            Id = "org",
-            DisplayName = "Organization",
-            IconName = "Building",
-            Description = "An organization",
-            DisplayOrder = 10,
-            TypeSource = @"
+            Code = @"
 public record Organization
 {
     [Key]
@@ -153,17 +142,12 @@ public record Organization
             }
         };
         await persistence.SaveNodeAsync(orgNode);
-        await persistence.SavePartitionObjectsAsync("type/org", null, [orgDataModel]);
+        await persistence.SavePartitionObjectsAsync("type/org", null, [orgCodeConfig]);
 
         // Create Project type
-        var projectDataModel = new DataModel
+        var projectCodeConfig = new CodeConfiguration
         {
-            Id = "project",
-            DisplayName = "Project",
-            IconName = "Folder",
-            Description = "A project",
-            DisplayOrder = 20,
-            TypeSource = @"
+            Code = @"
 public record Project
 {
     [Key]
@@ -191,17 +175,12 @@ public record Project
             }
         };
         await persistence.SaveNodeAsync(projectNode);
-        await persistence.SavePartitionObjectsAsync("type/project", null, [projectDataModel]);
+        await persistence.SavePartitionObjectsAsync("type/project", null, [projectCodeConfig]);
 
         // Create Graph type
-        var graphDataModel = new DataModel
+        var graphCodeConfig = new CodeConfiguration
         {
-            Id = "graph",
-            DisplayName = "Graph",
-            IconName = "Diagram",
-            Description = "The graph root",
-            DisplayOrder = 0,
-            TypeSource = @"
+            Code = @"
 public record Graph
 {
     [Key]
@@ -228,7 +207,7 @@ public record Graph
             }
         };
         await persistence.SaveNodeAsync(graphTypeNode);
-        await persistence.SavePartitionObjectsAsync("type/graph", null, [graphDataModel]);
+        await persistence.SavePartitionObjectsAsync("type/graph", null, [graphCodeConfig]);
     }
 
     private static async Task SeedHierarchyAsync(IPersistenceService persistence)
@@ -933,13 +912,11 @@ public class OrganizationsLayoutTest : MonolithMeshTestBase
         };
         await persistence.SaveNodeAsync(graphTypeNode);
 
-        var graphDataModel = new DataModel
+        var graphCodeConfig = new CodeConfiguration
         {
-            Id = "graph",
-            DisplayName = "Graph",
-            TypeSource = "public record Graph { }"
+            Code = "public record Graph { }"
         };
-        await persistence.SavePartitionObjectsAsync("type/graph", null, [graphDataModel]);
+        await persistence.SavePartitionObjectsAsync("type/graph", null, [graphCodeConfig]);
     }
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
@@ -1211,23 +1188,18 @@ public class FileSystemPersistenceTest : MonolithMeshTestBase
         """;
         File.WriteAllText(Path.Combine(typeDir, "Organizations.json"), organizationsTypeJson);
 
-        // 2. Create Type/Organizations/dataModel.json - the DataModel
+        // 2. Create Type/Organizations/_config/codeConfiguration.json - the CodeConfiguration
         var organizationsTypeDir = Path.Combine(typeDir, "Organizations");
-        Directory.CreateDirectory(organizationsTypeDir);
+        var organizationsConfigDir = Path.Combine(organizationsTypeDir, "_config");
+        Directory.CreateDirectory(organizationsConfigDir);
 
-        var dataModelJson = """
+        var codeConfigJson = """
         {
-          "$type": "DataModel",
-          "id": "Organizations",
-          "namespace": "Type",
-          "displayName": "Organizations",
-          "iconName": "Building",
-          "description": "Catalog of organizations",
-          "displayOrder": 8,
-          "typeSource": "public record Organizations { }"
+          "$type": "CodeConfiguration",
+          "code": "public record Organizations { }"
         }
         """;
-        File.WriteAllText(Path.Combine(organizationsTypeDir, "dataModel.json"), dataModelJson);
+        File.WriteAllText(Path.Combine(organizationsConfigDir, "codeConfiguration.json"), codeConfigJson);
 
         // 3. Create Organizations.json - the instance node in root namespace
         var organizationsInstanceJson = """
@@ -1276,17 +1248,16 @@ public class FileSystemPersistenceTest : MonolithMeshTestBase
         File.WriteAllText(Path.Combine(typeGraphDir, "graph.json"), graphTypeJson);
 
         var graphTypeDataDir = Path.Combine(typeGraphDir, "graph");
-        Directory.CreateDirectory(graphTypeDataDir);
+        var graphConfigDir = Path.Combine(graphTypeDataDir, "_config");
+        Directory.CreateDirectory(graphConfigDir);
 
-        var graphDataModelJson = """
+        var graphCodeConfigJson = """
         {
-          "$type": "DataModel",
-          "id": "graph",
-          "displayName": "Graph",
-          "typeSource": "public record Graph { }"
+          "$type": "CodeConfiguration",
+          "code": "public record Graph { }"
         }
         """;
-        File.WriteAllText(Path.Combine(graphTypeDataDir, "dataModel.json"), graphDataModelJson);
+        File.WriteAllText(Path.Combine(graphConfigDir, "codeConfiguration.json"), graphCodeConfigJson);
     }
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
@@ -1361,24 +1332,23 @@ public class FileSystemPersistenceTest : MonolithMeshTestBase
     }
 
     /// <summary>
-    /// Tests that DataModel can be loaded from disk partition files.
+    /// Tests that CodeConfiguration can be loaded from disk partition files.
     /// This validates that GetPartitionObjectsAsync properly deserializes objects with $type.
     /// </summary>
     [Fact(Timeout = 10000)]
-    public async Task FileSystem_NodeTypeService_FindsDataModel_FromDiskPartition()
+    public async Task FileSystem_NodeTypeService_FindsCodeConfiguration_FromDiskPartition()
     {
         // Arrange
         var nodeTypeService = Mesh.ServiceProvider.GetRequiredService<INodeTypeService>();
 
-        // Act - this reads dataModel.json from Type/Organizations/ folder
-        var dataModel = await nodeTypeService.GetDataModelAsync("Type/Organizations", "Organizations");
+        // Act - this reads codeConfiguration.json from Type/Organizations/ folder
+        var codeConfig = await nodeTypeService.GetCodeConfigurationAsync("Type/Organizations", "Organizations");
 
         // Assert
-        dataModel.Should().NotBeNull(
-            "DataModel should be loaded from Type/Organizations/dataModel.json. " +
+        codeConfig.Should().NotBeNull(
+            "CodeConfiguration should be loaded from Type/Organizations/codeConfiguration.json. " +
             "If null, the $type discriminator was not processed during JSON deserialization.");
-        dataModel!.Id.Should().Be("Organizations");
-        dataModel.TypeSource.Should().NotBeNullOrEmpty();
+        codeConfig!.Code.Should().NotBeNullOrEmpty();
     }
 
     /// <summary>
@@ -1398,7 +1368,7 @@ public class FileSystemPersistenceTest : MonolithMeshTestBase
         node.Should().NotBeNull("Organizations node should exist on disk");
         node!.HubConfiguration.Should().NotBeNull(
             "Organizations node should have HubConfiguration from the compiled assembly. " +
-            "If null, the on-demand compilation failed - likely because NodeTypeDefinition or DataModel " +
+            "If null, the on-demand compilation failed - likely because NodeTypeDefinition or CodeConfiguration " +
             "were not properly deserialized from JSON (returned as JsonElement instead).");
     }
 }

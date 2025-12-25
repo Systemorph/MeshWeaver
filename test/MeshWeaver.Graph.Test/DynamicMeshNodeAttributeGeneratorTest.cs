@@ -14,63 +14,6 @@ public class DynamicMeshNodeAttributeGeneratorTest
     private readonly DynamicMeshNodeAttributeGenerator _generator = new();
 
     [Fact]
-    public void ExtractTypeName_ExtractsRecordName()
-    {
-        // Arrange
-        var typeSource = @"
-public record Story
-{
-    public string Id { get; init; }
-    public string Title { get; init; }
-}";
-
-        // Act
-        var typeName = _generator.ExtractTypeName(typeSource);
-
-        // Assert
-        typeName.Should().Be("Story");
-    }
-
-    [Fact]
-    public void ExtractTypeName_ExtractsClassName()
-    {
-        // Arrange
-        var typeSource = "public class MyClass { }";
-
-        // Act
-        var typeName = _generator.ExtractTypeName(typeSource);
-
-        // Assert
-        typeName.Should().Be("MyClass");
-    }
-
-    [Fact]
-    public void ExtractTypeName_ExtractsSealedRecordName()
-    {
-        // Arrange
-        var typeSource = "public sealed record SealedRecord { }";
-
-        // Act
-        var typeName = _generator.ExtractTypeName(typeSource);
-
-        // Assert
-        typeName.Should().Be("SealedRecord");
-    }
-
-    [Fact]
-    public void ExtractTypeName_ReturnsDefaultForNoMatch()
-    {
-        // Arrange
-        var typeSource = "// No type definition here";
-
-        // Act
-        var typeName = _generator.ExtractTypeName(typeSource);
-
-        // Assert
-        typeName.Should().Be("DynamicType");
-    }
-
-    [Fact]
     public void SanitizeName_ReplacesSlashes()
     {
         // Arrange
@@ -111,7 +54,7 @@ public record Story
     }
 
     [Fact]
-    public void GenerateAttributeSource_IncludesDataModelTypeSource()
+    public void GenerateAttributeSource_IncludesCodeFromCodeConfiguration()
     {
         // Arrange
         var node = new MeshNode("test/node")
@@ -121,15 +64,13 @@ public record Story
             LastModified = DateTimeOffset.UtcNow
         };
 
-        var dataModel = new DataModel
+        var codeConfig = new CodeConfiguration
         {
-            Id = "story",
-            DisplayName = "Story",
-            TypeSource = "public record Story { public string Title { get; init; } }"
+            Code = "public record Story { public string Title { get; init; } }"
         };
 
         // Act
-        var source = _generator.GenerateAttributeSource(node, [dataModel], [], null, null);
+        var source = _generator.GenerateAttributeSource(node, codeConfig, null);
 
         // Assert
         source.Should().Contain("public record Story");
@@ -151,15 +92,13 @@ public record Story
             LastModified = DateTimeOffset.Parse("2024-01-15T10:30:00Z")
         };
 
-        var dataModel = new DataModel
+        var codeConfig = new CodeConfiguration
         {
-            Id = "organization",
-            DisplayName = "Organization",
-            TypeSource = "public record Organization { public string Name { get; init; } }"
+            Code = "public record Organization { public string Name { get; init; } }"
         };
 
         // Act
-        var source = _generator.GenerateAttributeSource(node, [dataModel], [], null, null);
+        var source = _generator.GenerateAttributeSource(node, codeConfig, null);
 
         // Assert
         source.Should().Contain("Name = \"Acme Corp\"");
@@ -180,14 +119,13 @@ public record Story
             LastModified = DateTimeOffset.UtcNow
         };
 
-        var dataModel = new DataModel
+        var codeConfig = new CodeConfiguration
         {
-            Id = "project",
-            TypeSource = "public record Project { }"
+            Code = "public record Project { }"
         };
 
         // Act
-        var source = _generator.GenerateAttributeSource(node, [dataModel], [], null, null);
+        var source = _generator.GenerateAttributeSource(node, codeConfig, null);
 
         // Assert
         source.Should().Contain("class graph_org_projectMeshNodeAttribute");
@@ -209,117 +147,17 @@ public record Story
             LastModified = DateTimeOffset.UtcNow
         };
 
-        var dataModel = new DataModel
+        var codeConfig = new CodeConfiguration
         {
-            Id = "test",
-            TypeSource = "public record TestType { }"
+            Code = "public record TestType { }"
         };
 
         // Act
-        var source = _generator.GenerateAttributeSource(node, [dataModel], [], null, null);
+        var source = _generator.GenerateAttributeSource(node, codeConfig, null);
 
         // Assert
         source.Should().Contain("HubConfiguration = ConfigureHub");
         source.Should().Contain("private static MessageHubConfiguration ConfigureHub");
-        source.Should().Contain("config.ConfigureMeshHub()");
-        source.Should().Contain("WithDataType(typeof(MeshWeaver.Graph.Dynamic.TestType))");
-    }
-
-    [Fact]
-    public void GenerateAttributeSource_IncludesDynamicAreas_WhenEnabled()
-    {
-        // Arrange
-        var node = new MeshNode("test")
-        {
-            NodeType = "test",
-            LastModified = DateTimeOffset.UtcNow
-        };
-
-        var dataModel = new DataModel
-        {
-            Id = "test",
-            TypeSource = "public record TestType { }"
-        };
-
-        var hubFeatures = new HubFeatureConfig
-        {
-            Id = "test-features",
-            EnableDynamicNodeTypeAreas = true
-        };
-
-        // Act
-        var source = _generator.GenerateAttributeSource(node, [dataModel], [], null, hubFeatures);
-
-        // Assert
-        source.Should().Contain("AddDynamicNodeTypeAreas()");
-    }
-
-    [Fact]
-    public void GenerateAttributeSource_ExcludesDynamicAreas_WhenDisabled()
-    {
-        // Arrange
-        var node = new MeshNode("test")
-        {
-            NodeType = "test",
-            LastModified = DateTimeOffset.UtcNow
-        };
-
-        var dataModel = new DataModel
-        {
-            Id = "test",
-            TypeSource = "public record TestType { }"
-        };
-
-        var hubFeatures = new HubFeatureConfig
-        {
-            Id = "test-features",
-            EnableDynamicNodeTypeAreas = false
-        };
-
-        // Act
-        var source = _generator.GenerateAttributeSource(node, [dataModel], [], null, hubFeatures);
-
-        // Assert
-        source.Should().Contain("// Dynamic areas disabled");
-        source.Should().NotContain("AddDynamicNodeTypeAreas()");
-    }
-
-    [Fact]
-    public void GenerateAttributeSource_IncludesNodeTypeConfiguration()
-    {
-        // Arrange
-        var node = new MeshNode("test")
-        {
-            NodeType = "story",
-            LastModified = DateTimeOffset.UtcNow
-        };
-
-        var dataModel = new DataModel
-        {
-            Id = "story",
-            DisplayName = "Story",
-            Description = "A story item",
-            IconName = "Document",
-            DisplayOrder = 5,
-            TypeSource = "public record Story { public string Title { get; init; } }"
-        };
-
-        var nodeTypeConfig = new NodeTypeConfig
-        {
-            NodeType = "story",
-            DataModelId = "story",
-            DisplayName = "Custom Story",
-            DisplayOrder = 10
-        };
-
-        // Act
-        var source = _generator.GenerateAttributeSource(node, [dataModel], [], nodeTypeConfig, null);
-
-        // Assert
-        source.Should().Contain("NodeTypeConfiguration");
-        source.Should().Contain("NodeType = \"story\"");
-        source.Should().Contain("DisplayName = \"Custom Story\""); // From NodeTypeConfig override
-        source.Should().Contain("DisplayOrder = 10"); // From NodeTypeConfig override
     }
 
     [Fact]
@@ -334,14 +172,13 @@ public record Story
             LastModified = DateTimeOffset.UtcNow
         };
 
-        var dataModel = new DataModel
+        var codeConfig = new CodeConfiguration
         {
-            Id = "test",
-            TypeSource = "public record TestType { }"
+            Code = "public record TestType { }"
         };
 
         // Act
-        var source = _generator.GenerateAttributeSource(node, [dataModel], [], null, null);
+        var source = _generator.GenerateAttributeSource(node, codeConfig, null);
 
         // Assert
         source.Should().Contain("\\\"quoted\\\"");
@@ -358,14 +195,13 @@ public record Story
             LastModified = DateTimeOffset.UtcNow
         };
 
-        var dataModel = new DataModel
+        var codeConfig = new CodeConfiguration
         {
-            Id = "test",
-            TypeSource = "public record TestType { }"
+            Code = "public record TestType { }"
         };
 
         // Act
-        var source = _generator.GenerateAttributeSource(node, [dataModel], [], null, null);
+        var source = _generator.GenerateAttributeSource(node, codeConfig, null);
 
         // Assert
         source.Should().Contain("using System;");
@@ -384,14 +220,13 @@ public record Story
             LastModified = DateTimeOffset.UtcNow
         };
 
-        var dataModel = new DataModel
+        var codeConfig = new CodeConfiguration
         {
-            Id = "test",
-            TypeSource = "public record TestType { }"
+            Code = "public record TestType { }"
         };
 
         // Act
-        var source = _generator.GenerateAttributeSource(node, [dataModel], [], null, null);
+        var source = _generator.GenerateAttributeSource(node, codeConfig, null);
 
         // Assert
         source.Should().Contain("// Auto-generated from MeshNode: my/node");
@@ -408,14 +243,13 @@ public record Story
             LastModified = DateTimeOffset.UtcNow
         };
 
-        var dataModel = new DataModel
+        var codeConfig = new CodeConfiguration
         {
-            Id = "test",
-            TypeSource = "public record TestType { }"
+            Code = "public record TestType { }"
         };
 
         // Act
-        var source = _generator.GenerateAttributeSource(node, [dataModel], [], null, null);
+        var source = _generator.GenerateAttributeSource(node, codeConfig, null);
 
         // Assert
         source.Should().Contain("AssemblyLocation = typeof(");
@@ -432,14 +266,13 @@ public record Story
             LastModified = DateTimeOffset.UtcNow
         };
 
-        var dataModel = new DataModel
+        var codeConfig = new CodeConfiguration
         {
-            Id = "test",
-            TypeSource = "public record TestType { }"
+            Code = "public record TestType { }"
         };
 
         // Act
-        var source = _generator.GenerateAttributeSource(node, [dataModel], [], null, null);
+        var source = _generator.GenerateAttributeSource(node, codeConfig, null);
 
         // Assert - must include default views for Details, Edit, etc.
         source.Should().Contain("WithDefaultNodeViews()",
@@ -447,51 +280,66 @@ public record Story
     }
 
     [Fact]
-    public void GenerateAttributeSource_GeneratesDataContextConfig_WithLambda()
+    public void GenerateAttributeSource_IncludesCustomHubConfiguration_WhenProvided()
     {
         // Arrange
         var node = new MeshNode("test")
         {
-            NodeType = "story",
+            NodeType = "test",
             LastModified = DateTimeOffset.UtcNow
         };
 
-        var dataModel = new DataModel
+        var codeConfig = new CodeConfiguration
         {
-            Id = "story",
-            TypeSource = "public record Story { public string Title { get; init; } }",
-            DataContextConfiguration = "data => data.AddSource(src => src.WithType<Story>())"
+            Code = "public record TestType { }"
         };
 
+        var hubConfiguration = "config => config.AddData(d => d.AddSource(s => s.WithType<TestType>()))";
+
         // Act
-        var source = _generator.GenerateAttributeSource(node, [dataModel], [], null, null);
+        var source = _generator.GenerateAttributeSource(node, codeConfig, hubConfiguration);
 
         // Assert
-        source.Should().Contain("ConfigureDataContext_story");
-        source.Should().Contain("data.AddSource(src => src.WithType<Story>())");
+        source.Should().Contain(hubConfiguration);
     }
 
     [Fact]
-    public void GenerateAttributeSource_NoDataContextConfig_WhenNotProvided()
+    public void GenerateAttributeSource_HandlesNullCodeConfiguration()
     {
         // Arrange
         var node = new MeshNode("test")
         {
-            NodeType = "story",
+            NodeType = "test",
             LastModified = DateTimeOffset.UtcNow
         };
 
-        var dataModel = new DataModel
+        // Act
+        var source = _generator.GenerateAttributeSource(node, null, null);
+
+        // Assert - should still generate valid code
+        source.Should().Contain("class testMeshNodeAttribute");
+        source.Should().Contain("HubConfiguration = ConfigureHub");
+    }
+
+    [Fact]
+    public void GenerateAttributeSource_HandlesEmptyCode()
+    {
+        // Arrange
+        var node = new MeshNode("test")
         {
-            Id = "story",
-            TypeSource = "public record Story { public string Title { get; init; } }"
+            NodeType = "test",
+            LastModified = DateTimeOffset.UtcNow
+        };
+
+        var codeConfig = new CodeConfiguration
+        {
+            Code = ""
         };
 
         // Act
-        var source = _generator.GenerateAttributeSource(node, [dataModel], [], null, null);
+        var source = _generator.GenerateAttributeSource(node, codeConfig, null);
 
-        // Assert
-        source.Should().NotContain("ConfigureDataContext_story");
-        source.Should().NotContain("AddData(data =>");
+        // Assert - should still generate valid code
+        source.Should().Contain("class testMeshNodeAttribute");
     }
 }

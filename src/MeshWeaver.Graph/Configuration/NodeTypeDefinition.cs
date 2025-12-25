@@ -55,4 +55,12 @@ public record NodeTypeDefinition
     /// If null, defaults to "$scope=children" (direct children only).
     /// </summary>
     public string? ChildrenQuery { get; init; }
+
+    /// <summary>
+    /// Lambda expression for configuring the message hub.
+    /// Signature: Func&lt;MessageHubConfiguration, MessageHubConfiguration&gt;
+    /// Example: "config => config.AddData(d => d.AddSource(s => s.WithType&lt;Person&gt;()))"
+    /// The lambda is applied after default behavior (WithDataType, WithDefaultNodeViews).
+    /// </summary>
+    public string? HubConfiguration { get; init; }
 }

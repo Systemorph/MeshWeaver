@@ -62,14 +62,9 @@ public class DataContextIntegrationTest : MonolithMeshTestBase
     private static void SetupTestConfiguration(InMemoryPersistenceService persistence)
     {
         // Create Story type at type/story (NodeType = "NodeType")
-        var storyDataModel = new DataModel
+        var storyCodeConfig = new CodeConfiguration
         {
-            Id = "story",
-            DisplayName = "Story",
-            IconName = "Document",
-            Description = "A user story or task",
-            DisplayOrder = 30,
-            TypeSource = "public record Story { [Key] public string Id { get; init; } }"
+            Code = "public record Story { [Key] public string Id { get; init; } }"
         };
 
         var storyTypeNode = new MeshNode("type/story")
@@ -90,17 +85,12 @@ public class DataContextIntegrationTest : MonolithMeshTestBase
             }
         };
         persistence.SaveNodeAsync(storyTypeNode).GetAwaiter().GetResult();
-        persistence.SavePartitionObjectsAsync("type/story", null, [storyDataModel]).GetAwaiter().GetResult();
+        persistence.SavePartitionObjectsAsync("type/story", null, [storyCodeConfig]).GetAwaiter().GetResult();
 
         // Create Graph type at type/graph (NodeType = "NodeType")
-        var graphDataModel = new DataModel
+        var graphCodeConfig = new CodeConfiguration
         {
-            Id = "graph",
-            DisplayName = "Graph",
-            IconName = "Diagram",
-            Description = "The graph root",
-            DisplayOrder = 0,
-            TypeSource = "public record GraphRoot { [Key] public string Id { get; init; } }"
+            Code = "public record GraphRoot { [Key] public string Id { get; init; } }"
         };
 
         var graphTypeNode = new MeshNode("type/graph")
@@ -121,7 +111,7 @@ public class DataContextIntegrationTest : MonolithMeshTestBase
             }
         };
         persistence.SaveNodeAsync(graphTypeNode).GetAwaiter().GetResult();
-        persistence.SavePartitionObjectsAsync("type/graph", null, [graphDataModel]).GetAwaiter().GetResult();
+        persistence.SavePartitionObjectsAsync("type/graph", null, [graphCodeConfig]).GetAwaiter().GetResult();
     }
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)

@@ -52,14 +52,9 @@ public class MeshNodeVersionSyncTest : MonolithMeshTestBase
     private static void SetupTestConfiguration(InMemoryPersistenceService persistence)
     {
         // Create Story type for testing content changes
-        var storyDataModel = new DataModel
+        var storyCodeConfig = new CodeConfiguration
         {
-            Id = "story",
-            DisplayName = "Story",
-            IconName = "Document",
-            Description = "A user story",
-            DisplayOrder = 30,
-            TypeSource = @"
+            Code = @"
 public record Story
 {
     [Key]
@@ -89,17 +84,12 @@ public record Story
             }
         };
         persistence.SaveNodeAsync(storyNode).GetAwaiter().GetResult();
-        persistence.SavePartitionObjectsAsync("type/story", null, [storyDataModel]).GetAwaiter().GetResult();
+        persistence.SavePartitionObjectsAsync("type/story", null, [storyCodeConfig]).GetAwaiter().GetResult();
 
         // Create Graph type
-        var graphDataModel = new DataModel
+        var graphCodeConfig = new CodeConfiguration
         {
-            Id = "graph",
-            DisplayName = "Graph",
-            IconName = "Diagram",
-            Description = "The graph root",
-            DisplayOrder = 0,
-            TypeSource = @"
+            Code = @"
 public record Graph
 {
     [Key]
@@ -127,7 +117,7 @@ public record Graph
             }
         };
         persistence.SaveNodeAsync(graphTypeNode).GetAwaiter().GetResult();
-        persistence.SavePartitionObjectsAsync("type/graph", null, [graphDataModel]).GetAwaiter().GetResult();
+        persistence.SavePartitionObjectsAsync("type/graph", null, [graphCodeConfig]).GetAwaiter().GetResult();
     }
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
