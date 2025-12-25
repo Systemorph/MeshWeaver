@@ -9,7 +9,7 @@ namespace MeshWeaver.Graph.Configuration;
 /// are found by walking up the path: a/b/c/*, a/b/*, a/*, and root level (including type/*).
 ///
 /// NodeType nodes have NodeType = "NodeType" and store their CodeConfiguration
-/// as a file in their partition folder (_config/codeConfiguration.json).
+/// as a file in their partition folder (codeConfiguration.json).
 /// HubConfiguration is stored as a property on the NodeTypeDefinition content.
 /// </summary>
 public interface INodeTypeService

@@ -3,7 +3,7 @@ namespace MeshWeaver.Graph.Configuration;
 /// <summary>
 /// Configuration containing C# source code for dynamic compilation.
 /// All code (types, views, etc.) is compiled together as a single unit.
-/// Stored as _config/codeConfiguration.json in the node type partition folder.
+/// Stored as codeConfiguration.json in the node type partition folder.
 /// </summary>
 public record CodeConfiguration
 {

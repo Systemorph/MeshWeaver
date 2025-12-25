@@ -12,7 +12,7 @@ namespace MeshWeaver.Graph.Configuration;
 ///
 /// A NodeType node is identified by having NodeType = "NodeType".
 /// Its partition folder contains:
-/// - _config/codeConfiguration.json: The CodeConfiguration (TypeSource + ViewSources)
+/// - codeConfiguration.json: The CodeConfiguration with C# code
 /// HubConfiguration is stored as a property on the NodeTypeDefinition content.
 /// </summary>
 public class NodeTypeService : INodeTypeService
@@ -25,10 +25,6 @@ public class NodeTypeService : INodeTypeService
     /// </summary>
     public const string NodeTypeNodeType = "NodeType";
 
-    /// <summary>
-    /// Sub-path for code configuration within a NodeType's partition.
-    /// </summary>
-    public const string ConfigSubPath = "_config";
 
     public NodeTypeService(IPersistenceService persistence, ILogger<NodeTypeService>? logger = null)
     {
@@ -145,7 +141,7 @@ public class NodeTypeService : INodeTypeService
     /// <inheritdoc/>
     public async Task SaveCodeConfigurationAsync(string nodeTypePath, CodeConfiguration config, CancellationToken ct = default)
     {
-        await _persistence.SavePartitionObjectsAsync(nodeTypePath, ConfigSubPath, [config], ct);
+        await _persistence.SavePartitionObjectsAsync(nodeTypePath, null, [config], ct);
         _logger?.LogDebug("Saved CodeConfiguration to partition {Path}", nodeTypePath);
     }
 
@@ -184,7 +180,7 @@ public class NodeTypeService : INodeTypeService
     /// </summary>
     private async Task<CodeConfiguration?> GetCodeConfigurationFromPartitionAsync(string nodeTypePath, CancellationToken ct)
     {
-        await foreach (var obj in _persistence.GetPartitionObjectsAsync(nodeTypePath, ConfigSubPath))
+        await foreach (var obj in _persistence.GetPartitionObjectsAsync(nodeTypePath, null))
         {
             if (obj is CodeConfiguration cc)
                 return cc;

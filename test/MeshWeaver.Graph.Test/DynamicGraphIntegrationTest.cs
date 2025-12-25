@@ -1188,10 +1188,9 @@ public class FileSystemPersistenceTest : MonolithMeshTestBase
         """;
         File.WriteAllText(Path.Combine(typeDir, "Organizations.json"), organizationsTypeJson);
 
-        // 2. Create Type/Organizations/_config/codeConfiguration.json - the CodeConfiguration
+        // 2. Create Type/Organizations/codeConfiguration.json - the CodeConfiguration
         var organizationsTypeDir = Path.Combine(typeDir, "Organizations");
-        var organizationsConfigDir = Path.Combine(organizationsTypeDir, "_config");
-        Directory.CreateDirectory(organizationsConfigDir);
+        Directory.CreateDirectory(organizationsTypeDir);
 
         var codeConfigJson = """
         {
@@ -1199,7 +1198,7 @@ public class FileSystemPersistenceTest : MonolithMeshTestBase
           "code": "public record Organizations { }"
         }
         """;
-        File.WriteAllText(Path.Combine(organizationsConfigDir, "codeConfiguration.json"), codeConfigJson);
+        File.WriteAllText(Path.Combine(organizationsTypeDir, "codeConfiguration.json"), codeConfigJson);
 
         // 3. Create Organizations.json - the instance node in root namespace
         var organizationsInstanceJson = """
@@ -1248,8 +1247,7 @@ public class FileSystemPersistenceTest : MonolithMeshTestBase
         File.WriteAllText(Path.Combine(typeGraphDir, "graph.json"), graphTypeJson);
 
         var graphTypeDataDir = Path.Combine(typeGraphDir, "graph");
-        var graphConfigDir = Path.Combine(graphTypeDataDir, "_config");
-        Directory.CreateDirectory(graphConfigDir);
+        Directory.CreateDirectory(graphTypeDataDir);
 
         var graphCodeConfigJson = """
         {
@@ -1257,7 +1255,7 @@ public class FileSystemPersistenceTest : MonolithMeshTestBase
           "code": "public record Graph { }"
         }
         """;
-        File.WriteAllText(Path.Combine(graphConfigDir, "codeConfiguration.json"), graphCodeConfigJson);
+        File.WriteAllText(Path.Combine(graphTypeDataDir, "codeConfiguration.json"), graphCodeConfigJson);
     }
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)

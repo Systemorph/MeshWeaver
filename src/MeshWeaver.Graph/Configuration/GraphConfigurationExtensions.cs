@@ -33,7 +33,7 @@ public static class GraphConfigurationExtensions
         /// Configuration is loaded from NodeType MeshNodes stored under Type/:
         /// - Each NodeType node has:
         ///   - NodeTypeDefinition content with HubConfiguration lambda
-        ///   - Optional CodeConfiguration in partition folder (_config/codeConfiguration.json)
+        ///   - Optional CodeConfiguration in partition folder (codeConfiguration.json)
         ///
         /// Content collections are configured per node type via NodeTypeDefinition.ContentCollections.
         /// All configuration loading and service initialization happens at mesh startup.
