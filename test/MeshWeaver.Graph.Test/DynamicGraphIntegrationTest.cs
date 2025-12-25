@@ -993,10 +993,345 @@ public class OrganizationsLayoutTest : MonolithMeshTestBase
         resolution.Should().NotBeNull("Type/Organizations should be resolvable");
         resolution!.Prefix.Should().Be("Type/Organizations");
     }
+
+    /// <summary>
+    /// Test that NodeTypeService can find the NodeType node for "Type/Organizations"
+    /// when searching from context "Organizations".
+    ///
+    /// The key fix: NodeTypeService now also searches in the parent path of the nodeType
+    /// when the nodeType contains a path separator (e.g., "Type/Organizations").
+    /// This ensures types in "Type/" folder are found even if GlobalTypesPrefix is "type".
+    /// </summary>
+    [Fact(Timeout = 10000)]
+    public async Task NodeTypeService_FindsNodeTypeNode_ForTypeOrganizations()
+    {
+        // Arrange
+        var nodeTypeService = Mesh.ServiceProvider.GetRequiredService<INodeTypeService>();
+
+        // Act - this should find Type/Organizations by searching in its parent path "Type"
+        var nodeTypeNode = await nodeTypeService.GetNodeTypeNodeAsync("Type/Organizations", "Organizations");
+
+        // Assert
+        nodeTypeNode.Should().NotBeNull(
+            "NodeTypeService should find the NodeType node for 'Type/Organizations'. " +
+            "The search now includes the parent path of the nodeType.");
+        nodeTypeNode!.Prefix.Should().Be("Type/Organizations");
+        nodeTypeNode.NodeType.Should().Be("NodeType");
+    }
+
+    /// <summary>
+    /// Test that NodeTypeService can find the DataModel for "Type/Organizations"
+    /// when searching from context "Organizations".
+    ///
+    /// This is the critical path: when initializing the Organizations hub,
+    /// we need to find the Type/Organizations NodeType definition to get
+    /// the DataModel and compile the HubConfiguration.
+    ///
+    /// The bug: GetSearchPaths("Organizations") returns ["Organizations", "", "_types"]
+    /// but Type/Organizations is a child of "Type" which is not in the search paths.
+    /// </summary>
+    [Fact(Timeout = 10000)]
+    public async Task NodeTypeService_FindsDataModel_ForTypeOrganizations()
+    {
+        // Arrange
+        var nodeTypeService = Mesh.ServiceProvider.GetRequiredService<INodeTypeService>();
+
+        // Act - this is what happens when compiling the Organizations node
+        // The nodeType is "Type/Organizations" and the context is "Organizations"
+        var dataModel = await nodeTypeService.GetDataModelAsync("Type/Organizations", "Organizations");
+
+        // Assert - this should find the DataModel from Type/Organizations/dataModel partition
+        dataModel.Should().NotBeNull(
+            "NodeTypeService should find the DataModel for 'Type/Organizations' " +
+            "even when searching from context 'Organizations'. " +
+            "The search paths should include 'Type' since 'Type/Organizations' is a child of 'Type'.");
+        dataModel!.Id.Should().Be("Organizations");
+        dataModel.TypeSource.Should().NotBeNullOrEmpty();
+    }
+
+    /// <summary>
+    /// Test that the Organizations node gets HubConfiguration from compiled assembly.
+    ///
+    /// When MeshCatalog.GetNodeAsync("Organizations") is called:
+    /// 1. It loads the Organizations node from persistence (nodeType = "Type/Organizations")
+    /// 2. It looks for NodeTypeConfiguration for "Type/Organizations" - not found initially
+    /// 3. It calls CompilationService.CompileAndGetConfigurationsAsync(organizationsNode)
+    /// 4. CompilationService calls NodeTypeService.GetDataModelAsync("Type/Organizations", "Organizations")
+    /// 5. This MUST find the DataModel to compile the type and generate HubConfiguration
+    /// 6. The compiled NodeTypeConfiguration is registered
+    /// 7. MeshCatalog sets HubConfiguration on the returned node
+    /// </summary>
+    [Fact(Timeout = 15000)]
+    public async Task Organizations_GetsHubConfiguration_FromCompiledAssembly()
+    {
+        // Arrange
+        var meshCatalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
+
+        // Act - get the Organizations node (this triggers on-demand compilation)
+        var node = await meshCatalog.GetNodeAsync(new Address("Organizations"));
+
+        // Assert
+        node.Should().NotBeNull("Organizations node should exist");
+        node!.HubConfiguration.Should().NotBeNull(
+            "Organizations node should have HubConfiguration from the compiled Type/Organizations assembly. " +
+            "If HubConfiguration is null, it means the on-demand compilation failed to find the DataModel.");
+    }
 }
 
 [CollectionDefinition("OrganizationsLayoutTests", DisableParallelization = true)]
 public class OrganizationsLayoutTestsCollection { }
+
+/// <summary>
+/// Tests that use FileSystemPersistenceService to validate JSON deserialization with $type discriminator.
+/// This replicates the exact production scenario where nodes and partition objects are read from disk.
+/// </summary>
+[Collection("FileSystemPersistenceTests")]
+public class FileSystemPersistenceTest : MonolithMeshTestBase
+{
+    private static readonly string TestDirectoryBase = Path.Combine(Path.GetTempPath(), "MeshWeaverFileSystemTests");
+    private string? _testDirectory;
+
+    private string GetOrCreateTestDirectory()
+    {
+        if (_testDirectory == null)
+        {
+            _testDirectory = Path.Combine(TestDirectoryBase, Guid.NewGuid().ToString());
+            Directory.CreateDirectory(_testDirectory);
+        }
+        return _testDirectory;
+    }
+
+    public FileSystemPersistenceTest(ITestOutputHelper output) : base(output)
+    {
+    }
+
+    /// <summary>
+    /// Creates the same structure as samples/Graph/Data on disk with actual JSON files.
+    /// This tests the real FileSystemPersistenceService path with JSON deserialization.
+    /// </summary>
+    private void SetupOrganizationsStructureOnDisk(string dataDirectory)
+    {
+        // 1. Create Type/Organizations.json - the NodeType definition
+        var typeDir = Path.Combine(dataDirectory, "Type");
+        Directory.CreateDirectory(typeDir);
+
+        var organizationsTypeJson = """
+        {
+          "id": "Organizations",
+          "namespace": "Type",
+          "name": "Organizations",
+          "nodeType": "NodeType",
+          "description": "Catalog of organizations",
+          "iconName": "Building",
+          "displayOrder": 8,
+          "isPersistent": true,
+          "content": {
+            "$type": "NodeTypeDefinition",
+            "id": "Organizations",
+            "namespace": "Type",
+            "displayName": "Organizations",
+            "iconName": "Building",
+            "description": "Catalog of organizations",
+            "displayOrder": 8
+          }
+        }
+        """;
+        File.WriteAllText(Path.Combine(typeDir, "Organizations.json"), organizationsTypeJson);
+
+        // 2. Create Type/Organizations/dataModel.json - the DataModel
+        var organizationsTypeDir = Path.Combine(typeDir, "Organizations");
+        Directory.CreateDirectory(organizationsTypeDir);
+
+        var dataModelJson = """
+        {
+          "$type": "DataModel",
+          "id": "Organizations",
+          "namespace": "Type",
+          "displayName": "Organizations",
+          "iconName": "Building",
+          "description": "Catalog of organizations",
+          "displayOrder": 8,
+          "typeSource": "public record Organizations { }"
+        }
+        """;
+        File.WriteAllText(Path.Combine(organizationsTypeDir, "dataModel.json"), dataModelJson);
+
+        // 3. Create Organizations.json - the instance node in root namespace
+        var organizationsInstanceJson = """
+        {
+          "id": "Organizations",
+          "name": "Organizations",
+          "nodeType": "Type/Organizations",
+          "description": "Catalog of organizations",
+          "iconName": "Building",
+          "displayOrder": 10,
+          "isPersistent": true,
+          "content": {}
+        }
+        """;
+        File.WriteAllText(Path.Combine(dataDirectory, "Organizations.json"), organizationsInstanceJson);
+
+        // 4. Create graph.json - the root node
+        var graphJson = """
+        {
+          "id": "graph",
+          "name": "Graph",
+          "nodeType": "type/graph",
+          "isPersistent": true
+        }
+        """;
+        File.WriteAllText(Path.Combine(dataDirectory, "graph.json"), graphJson);
+
+        // 5. Create type/graph - type definition for graph
+        var typeGraphDir = Path.Combine(dataDirectory, "type");
+        Directory.CreateDirectory(typeGraphDir);
+
+        var graphTypeJson = """
+        {
+          "id": "graph",
+          "namespace": "type",
+          "name": "Graph",
+          "nodeType": "NodeType",
+          "isPersistent": true,
+          "content": {
+            "$type": "NodeTypeDefinition",
+            "id": "graph",
+            "displayName": "Graph"
+          }
+        }
+        """;
+        File.WriteAllText(Path.Combine(typeGraphDir, "graph.json"), graphTypeJson);
+
+        var graphTypeDataDir = Path.Combine(typeGraphDir, "graph");
+        Directory.CreateDirectory(graphTypeDataDir);
+
+        var graphDataModelJson = """
+        {
+          "$type": "DataModel",
+          "id": "graph",
+          "displayName": "Graph",
+          "typeSource": "public record Graph { }"
+        }
+        """;
+        File.WriteAllText(Path.Combine(graphTypeDataDir, "dataModel.json"), graphDataModelJson);
+    }
+
+    protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
+    {
+        var testDataDirectory = GetOrCreateTestDirectory();
+
+        // Create actual JSON files on disk - this is the key difference from InMemoryPersistenceService tests
+        SetupOrganizationsStructureOnDisk(testDataDirectory);
+
+        var configBuilder = new ConfigurationBuilder();
+        configBuilder.AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["Graph:DataDirectory"] = testDataDirectory
+        });
+        var configuration = configBuilder.Build();
+
+        var cacheDirectory = Path.Combine(testDataDirectory, ".mesh-cache");
+
+        return builder
+            .UseMonolithMesh()
+            // Use FileSystemPersistence - this is the production path we're testing
+            .AddFileSystemPersistence(testDataDirectory)
+            .ConfigureServices(services =>
+            {
+                services.Configure<CompilationCacheOptions>(o => o.CacheDirectory = cacheDirectory);
+                return services;
+            })
+            .AddJsonGraphConfiguration(testDataDirectory, configuration);
+    }
+
+    public override async ValueTask DisposeAsync()
+    {
+        await base.DisposeAsync();
+
+        if (_testDirectory != null && Directory.Exists(_testDirectory))
+        {
+            try { Directory.Delete(_testDirectory, recursive: true); }
+            catch { /* Ignore cleanup errors */ }
+        }
+    }
+
+    /// <summary>
+    /// Tests that NodeTypeService can find the NodeType node when reading from disk.
+    /// The node.Content must be deserialized as NodeTypeDefinition (not JsonElement)
+    /// for the check `node.Content is NodeTypeDefinition` to succeed.
+    ///
+    /// This validates that:
+    /// 1. ITypeRegistry is available at mesh level
+    /// 2. ObjectPolymorphicConverter is properly added to FileSystemStorageAdapter
+    /// 3. $type discriminator is respected during JSON deserialization
+    /// </summary>
+    [Fact(Timeout = 10000)]
+    public async Task FileSystem_NodeTypeService_FindsNodeTypeNode_WithPolymorphicDeserialization()
+    {
+        // Arrange
+        var nodeTypeService = Mesh.ServiceProvider.GetRequiredService<INodeTypeService>();
+
+        // Act - this should find Type/Organizations by reading from disk
+        var nodeTypeNode = await nodeTypeService.GetNodeTypeNodeAsync("Type/Organizations", "Organizations");
+
+        // Assert
+        nodeTypeNode.Should().NotBeNull(
+            "NodeTypeService should find the NodeType node from disk. " +
+            "If null, the Content property was likely deserialized as JsonElement instead of NodeTypeDefinition.");
+        nodeTypeNode!.Prefix.Should().Be("Type/Organizations");
+        nodeTypeNode.NodeType.Should().Be("NodeType");
+
+        // Critical: Content must be NodeTypeDefinition, not JsonElement
+        nodeTypeNode.Content.Should().BeOfType<NodeTypeDefinition>(
+            "The $type discriminator in the JSON should cause Content to be deserialized as NodeTypeDefinition. " +
+            "If this fails, ITypeRegistry is not properly configured for FileSystemStorageAdapter.");
+    }
+
+    /// <summary>
+    /// Tests that DataModel can be loaded from disk partition files.
+    /// This validates that GetPartitionObjectsAsync properly deserializes objects with $type.
+    /// </summary>
+    [Fact(Timeout = 10000)]
+    public async Task FileSystem_NodeTypeService_FindsDataModel_FromDiskPartition()
+    {
+        // Arrange
+        var nodeTypeService = Mesh.ServiceProvider.GetRequiredService<INodeTypeService>();
+
+        // Act - this reads dataModel.json from Type/Organizations/ folder
+        var dataModel = await nodeTypeService.GetDataModelAsync("Type/Organizations", "Organizations");
+
+        // Assert
+        dataModel.Should().NotBeNull(
+            "DataModel should be loaded from Type/Organizations/dataModel.json. " +
+            "If null, the $type discriminator was not processed during JSON deserialization.");
+        dataModel!.Id.Should().Be("Organizations");
+        dataModel.TypeSource.Should().NotBeNullOrEmpty();
+    }
+
+    /// <summary>
+    /// Tests the complete flow: node loading, type compilation, and HubConfiguration setting.
+    /// This is the end-to-end test for the production scenario.
+    /// </summary>
+    [Fact(Timeout = 15000)]
+    public async Task FileSystem_Organizations_GetsHubConfiguration_FromCompiledAssembly()
+    {
+        // Arrange
+        var meshCatalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
+
+        // Act - get the Organizations node (triggers on-demand compilation from disk files)
+        var node = await meshCatalog.GetNodeAsync(new Address("Organizations"));
+
+        // Assert
+        node.Should().NotBeNull("Organizations node should exist on disk");
+        node!.HubConfiguration.Should().NotBeNull(
+            "Organizations node should have HubConfiguration from the compiled assembly. " +
+            "If null, the on-demand compilation failed - likely because NodeTypeDefinition or DataModel " +
+            "were not properly deserialized from JSON (returned as JsonElement instead).");
+    }
+}
+
+[CollectionDefinition("FileSystemPersistenceTests", DisableParallelization = true)]
+public class FileSystemPersistenceTestsCollection { }
 
 /// <summary>
 /// Collection definition for DynamicGraphIntegrationTests.

@@ -160,55 +160,81 @@ namespace {DynamicNamespace}
         return Task.FromResult(compiledType);
     }
 
-    public async Task<Type> CompileTypeWithCacheAsync(
-        DataModel model,
+    public async Task<IReadOnlyList<Type>> CompileTypeWithCacheAsync(
+        IReadOnlyList<DataModel> dataModels,
+        IReadOnlyList<LayoutAreaConfig> layoutAreas,
         MeshNode node,
         NodeTypeConfig? nodeTypeConfig,
         HubFeatureConfig? hubFeatures,
         CancellationToken ct = default)
     {
-        // If caching is disabled or cache service not available, fall back to in-memory compilation
-        if (!_cacheOptions.EnableCompilationCache)
-        {
-            return await CompileTypeAsync(model, ct);
-        }
-
         var nodeName = cacheService.SanitizeNodeName(node.Path);
 
-        // Check if we have it in memory cache
-        if (_compiledTypes.TryGetValue(model.Id, out var existingType))
+        // If caching is disabled, fall back to in-memory compilation for each DataModel
+        if (!_cacheOptions.EnableCompilationCache)
         {
-            model.CompiledType = existingType;
-            return existingType;
+            var results = new List<Type>();
+            foreach (var model in dataModels)
+            {
+                results.Add(await CompileTypeAsync(model, ct));
+            }
+            return results;
         }
 
-        // Check if disk cache is valid
-        if (cacheService.IsCacheValid(nodeName, node.LastModified))
+        // Check if all types are already in memory cache
+        var allCached = dataModels.Count > 0 && dataModels.All(m => _compiledTypes.ContainsKey(m.Id));
+        if (allCached)
         {
-            logger.LogDebug("Using cached assembly for {NodeName}", nodeName);
+            var cachedTypes = new List<Type>();
+            foreach (var model in dataModels)
+            {
+                var cachedType = _compiledTypes[model.Id];
+                model.CompiledType = cachedType;
+                cachedTypes.Add(cachedType);
+            }
+            return cachedTypes;
+        }
+
+        // Try to load from disk cache
+        var dllPath = cacheService.GetDllPath(nodeName);
+        if (File.Exists(dllPath))
+        {
+            logger.LogDebug("Attempting to load cached assembly for {NodeName}", nodeName);
 
             try
             {
-                // Load assembly using the cache service's isolated load context
                 var cachedAssembly = cacheService.LoadAssembly(nodeName);
                 if (cachedAssembly != null)
                 {
-                    var typeName = _attributeGenerator.ExtractTypeName(model.TypeSource);
-                    var fullTypeName = $"{DynamicNamespace}.{typeName}";
+                    var loadedTypes = new List<Type>();
+                    var allTypesFound = true;
 
-                    var compiledType = cachedAssembly.GetType(fullTypeName);
-                    if (compiledType != null)
+                    foreach (var model in dataModels)
                     {
-                        // Register in type registry
-                        typeRegistry.WithType(compiledType, typeName);
-                        _compiledTypes[model.Id] = compiledType;
-                        model.CompiledType = compiledType;
+                        var typeName = _attributeGenerator.ExtractTypeName(model.TypeSource);
+                        var fullTypeName = $"{DynamicNamespace}.{typeName}";
 
-                        logger.LogInformation("Loaded cached type {TypeName} for DataModel {Id}", typeName, model.Id);
-                        return compiledType;
+                        var compiledType = cachedAssembly.GetType(fullTypeName);
+                        if (compiledType != null)
+                        {
+                            typeRegistry.WithType(compiledType, typeName);
+                            _compiledTypes[model.Id] = compiledType;
+                            model.CompiledType = compiledType;
+                            loadedTypes.Add(compiledType);
+                        }
+                        else
+                        {
+                            logger.LogWarning("Cached assembly exists but type {FullTypeName} not found, recompiling", fullTypeName);
+                            allTypesFound = false;
+                            break;
+                        }
                     }
 
-                    logger.LogWarning("Cached assembly exists but type {FullTypeName} not found, recompiling", fullTypeName);
+                    if (allTypesFound)
+                    {
+                        logger.LogInformation("Loaded {Count} cached types for {NodeName}", loadedTypes.Count, nodeName);
+                        return loadedTypes;
+                    }
                 }
             }
             catch (Exception ex)
@@ -223,8 +249,8 @@ namespace {DynamicNamespace}
 
         ct.ThrowIfCancellationRequested();
 
-        // Generate full source with MeshNodeAttribute
-        var source = _attributeGenerator.GenerateAttributeSource(node, model, nodeTypeConfig, hubFeatures);
+        // Generate full source with MeshNodeAttribute for ALL DataModels and LayoutAreas
+        var source = _attributeGenerator.GenerateAttributeSource(node, dataModels, layoutAreas, nodeTypeConfig, hubFeatures);
 
         // Write source file for debugging
         var sourcePath = cacheService.GetSourcePath(nodeName);
@@ -234,11 +260,10 @@ namespace {DynamicNamespace}
             logger.LogDebug("Wrote source file for debugging: {SourcePath}", sourcePath);
         }
 
-        logger.LogInformation("Compiling assembly for {NodeName} (cache miss or stale)", nodeName);
+        logger.LogInformation("Compiling assembly for {NodeName} with {DataModelCount} DataModels (cache miss or stale)",
+            nodeName, dataModels.Count);
 
         // Parse with source path and encoding embedded (critical for PDB source linking)
-        // SourceText with encoding is REQUIRED for debug information emission
-        // DocumentationMode.Diagnose enables XML documentation generation
         var sourceText = Microsoft.CodeAnalysis.Text.SourceText.From(source, System.Text.Encoding.UTF8);
         var parseOptions = new CSharpParseOptions(documentationMode: DocumentationMode.Diagnose);
         var syntaxTree = CSharpSyntaxTree.ParseText(
@@ -254,11 +279,10 @@ namespace {DynamicNamespace}
             syntaxTrees: [syntaxTree],
             references: _references,
             options: new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary)
-                .WithOptimizationLevel(OptimizationLevel.Debug) // Debug for PDB
+                .WithOptimizationLevel(OptimizationLevel.Debug)
                 .WithPlatform(Platform.AnyCpu));
 
         // Emit DLL, PDB, and XML documentation to disk
-        var dllPath = cacheService.GetDllPath(nodeName);
         var pdbPath = cacheService.GetPdbPath(nodeName);
         var xmlDocPath = cacheService.GetXmlDocPath(nodeName);
 
@@ -274,7 +298,6 @@ namespace {DynamicNamespace}
 
         if (!emitResult.Success)
         {
-            // Clean up failed artifacts
             cacheService.InvalidateCache(nodeName);
 
             var errors = emitResult.Diagnostics
@@ -282,9 +305,10 @@ namespace {DynamicNamespace}
                 .Select(d => d.GetMessage())
                 .ToList();
 
-            var errorMessage = $"Type compilation failed for '{model.Id}':\n{string.Join('\n', errors)}";
+            var nodeId = dataModels.FirstOrDefault()?.Id ?? node.Path;
+            var errorMessage = $"Type compilation failed for '{nodeId}':\n{string.Join('\n', errors)}";
             logger.LogError("{ErrorMessage}", errorMessage);
-            throw new TypeCompilationException(model.Id, errorMessage);
+            throw new TypeCompilationException(nodeId, errorMessage);
         }
 
         // Close streams before loading
@@ -292,35 +316,39 @@ namespace {DynamicNamespace}
         await pdbStream.DisposeAsync();
         await xmlDocStream.DisposeAsync();
 
-        // Load using the cache service's isolated load context (required for debugger to find PDB)
+        // Load using the cache service's isolated load context
         var assembly = cacheService.LoadAssembly(nodeName);
         if (assembly == null)
         {
-            throw new TypeCompilationException(model.Id, $"Failed to load compiled assembly from {dllPath}");
+            var nodeId = dataModels.FirstOrDefault()?.Id ?? node.Path;
+            throw new TypeCompilationException(nodeId, $"Failed to load compiled assembly from {dllPath}");
         }
 
-        // Extract the type
-        var extractedTypeName = _attributeGenerator.ExtractTypeName(model.TypeSource);
-        var extractedFullTypeName = $"{DynamicNamespace}.{extractedTypeName}";
-
-        var resultType = assembly.GetType(extractedFullTypeName);
-
-        if (resultType == null)
+        // Extract and register all compiled types
+        var compiledTypes = new List<Type>();
+        foreach (var model in dataModels)
         {
-            var availableTypes = assembly.GetTypes().Select(t => t.FullName);
-            throw new TypeCompilationException(model.Id,
-                $"Type '{extractedFullTypeName}' not found in compiled assembly. Available types: {string.Join(", ", availableTypes)}");
+            var extractedTypeName = _attributeGenerator.ExtractTypeName(model.TypeSource);
+            var extractedFullTypeName = $"{DynamicNamespace}.{extractedTypeName}";
+
+            var resultType = assembly.GetType(extractedFullTypeName);
+            if (resultType == null)
+            {
+                var availableTypes = assembly.GetTypes().Select(t => t.FullName);
+                throw new TypeCompilationException(model.Id,
+                    $"Type '{extractedFullTypeName}' not found in compiled assembly. Available types: {string.Join(", ", availableTypes)}");
+            }
+
+            typeRegistry.WithType(resultType, extractedTypeName);
+            _compiledTypes[model.Id] = resultType;
+            model.CompiledType = resultType;
+            compiledTypes.Add(resultType);
         }
 
-        // Register in type registry
-        typeRegistry.WithType(resultType, extractedTypeName);
-        _compiledTypes[model.Id] = resultType;
-        model.CompiledType = resultType;
+        logger.LogInformation("Successfully compiled and cached {Count} types for {NodePath} at {DllPath}",
+            compiledTypes.Count, node.Path, dllPath);
 
-        logger.LogInformation("Successfully compiled and cached type {TypeName} for DataModel {Id} at {DllPath}",
-            extractedTypeName, model.Id, dllPath);
-
-        return resultType;
+        return compiledTypes;
     }
 
     public async Task<IReadOnlyDictionary<string, Type>> CompileAllAsync(

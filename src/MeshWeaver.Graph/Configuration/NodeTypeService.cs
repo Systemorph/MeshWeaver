@@ -90,6 +90,7 @@ public class NodeTypeService : INodeTypeService
     /// <inheritdoc/>
     public async Task<MeshNode?> GetNodeTypeNodeAsync(string nodeType, string contextPath, CancellationToken ct = default)
     {
+        // First, search in the context path hierarchy
         foreach (var searchPath in GetSearchPaths(contextPath))
         {
             // Get all children at this level
@@ -99,6 +100,28 @@ public class NodeTypeService : INodeTypeService
                 if (node.NodeType == NodeTypeNodeType && node.Content is NodeTypeDefinition ntd)
                 {
                     // Match either by full path or by short Id
+                    if (node.Prefix == nodeType || ntd.Id == nodeType)
+                    {
+                        return node;
+                    }
+                }
+            }
+        }
+
+        // If nodeType contains a path separator (e.g., "Type/Organizations"),
+        // also search in its parent path. This handles cases where the nodeType
+        // path doesn't match the GlobalTypesPrefix (e.g., "Type" vs "type").
+        if (nodeType.Contains('/'))
+        {
+            var lastSlash = nodeType.LastIndexOf('/');
+            var nodeTypeParent = nodeType.Substring(0, lastSlash);
+
+            // Only search if this parent wasn't already in the search paths
+            // (to avoid duplicate searches)
+            await foreach (var node in _persistence.GetChildrenAsync(nodeTypeParent))
+            {
+                if (node.NodeType == NodeTypeNodeType && node.Content is NodeTypeDefinition ntd)
+                {
                     if (node.Prefix == nodeType || ntd.Id == nodeType)
                     {
                         return node;
@@ -251,5 +274,55 @@ public class NodeTypeService : INodeTypeService
                 return hfc;
         }
         return null;
+    }
+
+    /// <inheritdoc/>
+    public async Task<TypeNodePartition?> GetTypeNodePartitionAsync(string nodeType, string contextPath, CancellationToken ct = default)
+    {
+        var nodeTypeNode = await GetNodeTypeNodeAsync(nodeType, contextPath, ct);
+        if (nodeTypeNode == null)
+            return null;
+
+        var path = nodeTypeNode.Prefix;
+
+        // Load all partition objects
+        var dataModels = new List<DataModel>();
+        HubFeatureConfig? hubFeatures = null;
+
+        await foreach (var obj in _persistence.GetPartitionObjectsAsync(path, null))
+        {
+            switch (obj)
+            {
+                case DataModel dm:
+                    dataModels.Add(dm);
+                    break;
+                case HubFeatureConfig hfc:
+                    hubFeatures = hfc;
+                    break;
+            }
+        }
+
+        var layoutAreas = await GetLayoutAreasFromPartitionAsync(path, ct);
+
+        // Get timestamps from both the main partition and layoutAreas sub-path
+        var mainTimestamp = await _persistence.GetPartitionMaxTimestampAsync(path, null, ct);
+        var layoutTimestamp = await _persistence.GetPartitionMaxTimestampAsync(path, LayoutAreasSubPath, ct);
+
+        // Also include the node's own LastModified (in case node.json was updated)
+        var newestTimestamp = nodeTypeNode.LastModified;
+
+        if (mainTimestamp.HasValue && mainTimestamp.Value > newestTimestamp)
+            newestTimestamp = mainTimestamp.Value;
+
+        if (layoutTimestamp.HasValue && layoutTimestamp.Value > newestTimestamp)
+            newestTimestamp = layoutTimestamp.Value;
+
+        return new TypeNodePartition
+        {
+            DataModels = dataModels,
+            LayoutAreas = layoutAreas,
+            HubFeatures = hubFeatures,
+            NewestTimestamp = newestTimestamp
+        };
     }
 }

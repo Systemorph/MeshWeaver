@@ -1,5 +1,6 @@
 ﻿using System.Reflection;
 using System.Runtime.CompilerServices;
+using MeshWeaver.Domain;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
@@ -117,11 +118,16 @@ public record MeshBuilder
         pathRegistry.Register("area", new AreaPathHandler());
         pathRegistry.Register("content", new ContentPathHandler());
 
+        // Create mesh-level type registry for polymorphic serialization
+        // Hub-level type registries will inherit from this via ParentServiceProvider
+        var meshTypeRegistry = MessageHubExtensions.CreateTypeRegistry();
+
         ConfigureServices(services => services
             .AddSingleton(_ => new MeshConfiguration(
                 MeshNodes.ToDictionary(x => x.Key),
                 NodeTypeConfigs.ToDictionary(x => x.NodeType)))
             .AddSingleton<IUnifiedPathRegistry>(_ => pathRegistry)
+            .AddSingleton<ITypeRegistry>(_ => meshTypeRegistry)
             .AddSingleton(BuildHub)
             .AddSingleton<AccessService>()
             );

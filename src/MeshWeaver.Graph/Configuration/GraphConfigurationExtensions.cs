@@ -1,3 +1,4 @@
+using MeshWeaver.Domain;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
@@ -47,6 +48,19 @@ public static class GraphConfigurationExtensions
             // Register services that don't need hub-level dependencies at the mesh level
             builder.ConfigureServices(services =>
             {
+                // Register Graph configuration types in the mesh-level ITypeRegistry
+                // for polymorphic JSON deserialization by FileSystemStorageAdapter.
+                // This must happen at mesh level so the types are available before any hub is created.
+                var typeRegistry = services.BuildServiceProvider().GetService<ITypeRegistry>();
+                if (typeRegistry != null)
+                {
+                    typeRegistry.WithType(typeof(NodeTypeDefinition), nameof(NodeTypeDefinition));
+                    typeRegistry.WithType(typeof(DataModel), nameof(DataModel));
+                    typeRegistry.WithType(typeof(LayoutAreaConfig), nameof(LayoutAreaConfig));
+                    typeRegistry.WithType(typeof(HubFeatureConfig), nameof(HubFeatureConfig));
+                    typeRegistry.WithType(typeof(NodeTypeConfig), nameof(NodeTypeConfig));
+                }
+
                 // Register INodeTypeService
                 services.AddSingleton<INodeTypeService>(sp =>
                 {

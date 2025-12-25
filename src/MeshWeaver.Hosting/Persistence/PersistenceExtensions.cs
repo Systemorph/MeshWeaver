@@ -69,17 +69,22 @@ public static class PersistenceExtensions
 
     /// <summary>
     /// Adds file system persistence that reads directly from disk.
+    /// Uses type registry for polymorphic JSON deserialization of Content and partition objects.
     /// </summary>
     /// <param name="services">The service collection</param>
     /// <param name="baseDirectory">The base directory for storing JSON files</param>
     /// <returns>The service collection for chaining</returns>
     public static IServiceCollection AddFileSystemPersistence(this IServiceCollection services, string baseDirectory)
     {
-        var storageAdapter = new FileSystemStorageAdapter(baseDirectory);
-        var persistenceService = new FileSystemPersistenceService(storageAdapter);
+        // Use factory registration to get ITypeRegistry from the resolved service provider
+        services.AddSingleton<IStorageAdapter>(sp =>
+            new FileSystemStorageAdapter(
+                baseDirectory,
+                typeRegistryFactory: () => sp.GetService<ITypeRegistry>()));
 
-        services.AddSingleton<IStorageAdapter>(storageAdapter);
-        services.AddSingleton<IPersistenceService>(persistenceService);
+        services.AddSingleton<IPersistenceService>(sp =>
+            new FileSystemPersistenceService(sp.GetRequiredService<IStorageAdapter>()));
+
         return services;
     }
 

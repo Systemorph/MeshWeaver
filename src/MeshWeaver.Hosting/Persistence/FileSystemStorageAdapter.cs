@@ -264,6 +264,26 @@ public class FileSystemStorageAdapter : IStorageAdapter
         return $"{typeName}_{hash}.json";
     }
 
+    public Task<DateTimeOffset?> GetPartitionMaxTimestampAsync(
+        string nodePath,
+        string? subPath = null,
+        CancellationToken ct = default)
+    {
+        var partitionDir = GetPartitionDirectory(nodePath, subPath);
+        if (!Directory.Exists(partitionDir))
+            return Task.FromResult<DateTimeOffset?>(null);
+
+        var files = Directory.GetFiles(partitionDir, "*.json");
+        if (files.Length == 0)
+            return Task.FromResult<DateTimeOffset?>(null);
+
+        var maxTime = files
+            .Select(f => new FileInfo(f).LastWriteTimeUtc)
+            .Max();
+
+        return Task.FromResult<DateTimeOffset?>(new DateTimeOffset(maxTime, TimeSpan.Zero));
+    }
+
     #endregion
 
     private string GetFilePath(string path)

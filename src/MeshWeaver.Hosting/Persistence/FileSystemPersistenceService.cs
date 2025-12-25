@@ -201,5 +201,8 @@ public class FileSystemPersistenceService(IStorageAdapter storageAdapter) : IPer
     public Task DeletePartitionObjectsAsync(string nodePath, string? subPath = null, CancellationToken ct = default)
         => storageAdapter.DeletePartitionObjectsAsync(nodePath, subPath, ct);
 
+    public Task<DateTimeOffset?> GetPartitionMaxTimestampAsync(string nodePath, string? subPath = null, CancellationToken ct = default)
+        => storageAdapter.GetPartitionMaxTimestampAsync(nodePath, subPath, ct);
+
     #endregion
 }

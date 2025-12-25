@@ -107,4 +107,14 @@ public interface INodeTypeService
     /// <param name="ct">Cancellation token</param>
     /// <returns>List of all LayoutAreaConfigs</returns>
     Task<IReadOnlyList<LayoutAreaConfig>> GetAllLayoutAreasAsync(CancellationToken ct = default);
+
+    /// <summary>
+    /// Gets all partition objects (DataModels, LayoutAreas, HubFeatures) for a node type.
+    /// This loads all objects from the partition with their timestamps for cache validation.
+    /// </summary>
+    /// <param name="nodeType">The node type identifier</param>
+    /// <param name="contextPath">The path context to resolve from</param>
+    /// <param name="ct">Cancellation token</param>
+    /// <returns>The TypeNodePartition with all objects and newest timestamp</returns>
+    Task<TypeNodePartition?> GetTypeNodePartitionAsync(string nodeType, string contextPath, CancellationToken ct = default);
 }

@@ -38,8 +38,9 @@ public record NodeTypeConfig
 
     /// <summary>
     /// Reference to the DataModel.Id that defines the content type.
+    /// Can be null for HubConfiguration-only scenarios without DataModels.
     /// </summary>
-    public required string DataModelId { get; init; }
+    public string? DataModelId { get; init; }
 
     /// <summary>
     /// Reference to the HubFeatureConfig.Id (optional).
