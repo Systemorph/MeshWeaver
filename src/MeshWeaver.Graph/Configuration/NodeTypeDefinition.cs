@@ -36,12 +36,6 @@ public record NodeTypeDefinition
     public int DisplayOrder { get; init; }
 
     /// <summary>
-    /// Content collection mappings for this node type.
-    /// Each mapping configures a content collection that will be available in the hub.
-    /// </summary>
-    public List<ContentCollectionMapping>? ContentCollections { get; init; }
-
-    /// <summary>
     /// Default values for initializing new instances of this type.
     /// Keys are property names, values are default values.
     /// </summary>
