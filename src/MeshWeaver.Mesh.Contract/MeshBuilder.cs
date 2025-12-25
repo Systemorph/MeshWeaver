@@ -117,6 +117,7 @@ public record MeshBuilder
         pathRegistry.Register("data", new DataPathHandler());
         pathRegistry.Register("area", new AreaPathHandler());
         pathRegistry.Register("content", new ContentPathHandler());
+        pathRegistry.Register("type", new TypePathHandler());
 
         // Create mesh-level type registry for polymorphic serialization
         // Hub-level type registries will inherit from this via ParentServiceProvider

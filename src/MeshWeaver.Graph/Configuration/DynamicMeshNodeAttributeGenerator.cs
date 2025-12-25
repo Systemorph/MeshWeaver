@@ -120,6 +120,24 @@ internal class DynamicMeshNodeAttributeGenerator
         sb.AppendLine("            result = result.AddDynamicNodeTypeAreas();");
         sb.AppendLine();
 
+        // For NodeType nodes, add CodeConfiguration as accessible data
+        if (node.NodeType == "NodeType")
+        {
+            sb.AppendLine("            // For NodeType nodes, add CodeConfiguration as accessible data");
+            sb.AppendLine("            result = result.AddData(data =>");
+            sb.AppendLine("            {");
+            sb.AppendLine("                var persistence = data.Workspace.Hub.ServiceProvider.GetService<MeshWeaver.Mesh.Services.IPersistenceService>();");
+            sb.AppendLine("                var hubPath = data.Workspace.Hub.Address.ToString();");
+            sb.AppendLine("                if (persistence != null)");
+            sb.AppendLine("                {");
+            sb.AppendLine("                    return data.AddSource(source => source.WithTypeSource(typeof(CodeConfiguration),");
+            sb.AppendLine("                        new CodeConfigurationTypeSource(data.Workspace, source.Id, persistence, hubPath)));");
+            sb.AppendLine("                }");
+            sb.AppendLine("                return data.AddSource(source => source.WithType<CodeConfiguration>(ts => ts.WithKey(_ => \"code\")));");
+            sb.AppendLine("            });");
+            sb.AppendLine();
+        }
+
         // Apply user's HubConfiguration lambda if provided
         if (!string.IsNullOrWhiteSpace(hubConfiguration))
         {

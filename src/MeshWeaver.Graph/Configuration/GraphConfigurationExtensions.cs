@@ -1,3 +1,4 @@
+using MeshWeaver.Data;
 using MeshWeaver.Domain;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
@@ -54,13 +55,15 @@ public static class GraphConfigurationExtensions
                 {
                     typeRegistry.WithType(typeof(NodeTypeDefinition), nameof(NodeTypeDefinition));
                     typeRegistry.WithType(typeof(CodeConfiguration), nameof(CodeConfiguration));
+                    typeRegistry.WithType(typeof(NodeTypeData), nameof(NodeTypeData));
                 }
 
                 // Register INodeTypeService
                 services.AddSingleton<INodeTypeService>(sp =>
                 {
                     var persistence = sp.GetRequiredService<IPersistenceService>();
-                    return new NodeTypeService(persistence);
+                    var hub = sp.GetRequiredService<IMessageHub>();
+                    return new NodeTypeService(persistence, hub);
                 });
 
                 // Register compilation cache options
@@ -82,7 +85,8 @@ public static class GraphConfigurationExtensions
                 {
                     services.AddSingleton<IMeshNodeCompilationService, MeshNodeCompilationService>();
                     return services;
-                }));
+                })
+                .WithHandler<GetDataRequest>(HandleNodeTypeRequest));
 
             return builder;
         }
@@ -100,6 +104,74 @@ public static class GraphConfigurationExtensions
                 : Path.GetFullPath(Path.Combine(Directory.GetCurrentDirectory(), dataDirectoryConfig));
 
             return builder.AddJsonGraphConfiguration(dataDirectory, configuration);
+        }
+    }
+
+    /// <summary>
+    /// Handles GetDataRequest for NodeTypeReference.
+    /// Returns NodeTypeData combining NodeTypeDefinition and CodeConfiguration.
+    /// The node type is encoded in the hub address.
+    /// </summary>
+    private static async Task<IMessageDelivery> HandleNodeTypeRequest(
+        IMessageHub hub,
+        IMessageDelivery<GetDataRequest> request,
+        CancellationToken ct)
+    {
+        // Only handle NodeTypeReference, let other references pass through
+        if (request.Message.Reference is not NodeTypeReference)
+            return request;
+
+        try
+        {
+            var persistence = hub.ServiceProvider.GetService<IPersistenceService>();
+            if (persistence == null)
+            {
+                hub.Post(new GetDataResponse(null, 0) { Error = "IPersistenceService not available" },
+                    o => o.ResponseFor(request));
+                return request.Processed();
+            }
+
+            // The node type path is the hub address (e.g., "type/Person")
+            var nodeTypePath = hub.Address.ToString();
+
+            // Get the MeshNode for this NodeType
+            var meshNode = await persistence.GetNodeAsync(nodeTypePath);
+            if (meshNode == null)
+            {
+                hub.Post(new GetDataResponse(null, 0) { Error = $"NodeType at '{nodeTypePath}' not found" },
+                    o => o.ResponseFor(request));
+                return request.Processed();
+            }
+
+            var definition = meshNode.Content as NodeTypeDefinition;
+
+            // Get CodeConfiguration from the partition
+            CodeConfiguration? codeConfig = null;
+            await foreach (var obj in persistence.GetPartitionObjectsAsync(nodeTypePath, null))
+            {
+                if (obj is CodeConfiguration cc)
+                {
+                    codeConfig = cc;
+                    break;
+                }
+            }
+
+            var nodeTypeData = new NodeTypeData
+            {
+                Id = definition?.Id ?? meshNode.Name ?? nodeTypePath,
+                Definition = definition,
+                Code = codeConfig,
+                Path = nodeTypePath
+            };
+
+            hub.Post(new GetDataResponse(nodeTypeData, hub.Version), o => o.ResponseFor(request));
+            return request.Processed();
+        }
+        catch (Exception ex)
+        {
+            hub.Post(new GetDataResponse(null, 0) { Error = ex.Message },
+                o => o.ResponseFor(request));
+            return request.Processed();
         }
     }
 }

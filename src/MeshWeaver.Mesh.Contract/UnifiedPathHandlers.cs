@@ -103,3 +103,20 @@ public class ContentPathHandler : IUnifiedPathHandler
         return (address, new FileReference(collectionPart, filePath));
     }
 }
+
+/// <summary>
+/// Handler for type keyword paths.
+/// Format: addressType/addressId/type
+/// The node type is encoded in the address (addressType/addressId).
+/// Returns NodeTypeReference as a marker to get the NodeTypeData.
+/// </summary>
+public class TypePathHandler : IUnifiedPathHandler
+{
+    /// <inheritdoc />
+    public (Address Address, WorkspaceReference Reference) Parse(string addressType, string addressId, string remainingPath)
+    {
+        var address = new Address(addressType, addressId);
+        // The node type is already in the address, NodeTypeReference is just a marker
+        return (address, new NodeTypeReference());
+    }
+}
