@@ -67,7 +67,7 @@ public class DynamicGraphIntegrationTest : MonolithMeshTestBase
 
     private static async Task SetupTestConfigurationAsync(IPersistenceService persistence)
     {
-        // Create Story type using "type/" prefix for global types
+        // Create Story type using "type/" Namespace for global types
         var storyCodeConfig = new CodeConfiguration
         {
             Code = @"
@@ -91,7 +91,7 @@ public enum StoryStatus
 }"
         };
 
-        var storyNode = new MeshNode("type/story")
+        var storyNode = MeshNode.FromPath("type/story") with
         {
             Name = "Story",
             NodeType = "NodeType",
@@ -124,7 +124,7 @@ public record Organization
 }"
         };
 
-        var orgNode = new MeshNode("type/org")
+        var orgNode = MeshNode.FromPath("type/org") with
         {
             Name = "Organization",
             NodeType = "NodeType",
@@ -157,7 +157,7 @@ public record Project
 }"
         };
 
-        var projectNode = new MeshNode("type/project")
+        var projectNode = MeshNode.FromPath("type/project") with
         {
             Name = "Project",
             NodeType = "NodeType",
@@ -189,7 +189,7 @@ public record Graph
 }"
         };
 
-        var graphTypeNode = new MeshNode("type/graph")
+        var graphTypeNode = MeshNode.FromPath("type/graph") with
         {
             Name = "Graph",
             NodeType = "NodeType",
@@ -214,13 +214,13 @@ public record Graph
     {
         // Pre-seed the hierarchy: graph -> org -> project -> story
         // NodeType uses full path to type definition (e.g., "type/graph", "type/org")
-        await persistence.SaveNodeAsync(new MeshNode("graph") { Name = "Graph", NodeType = "type/graph" });
-        await persistence.SaveNodeAsync(new MeshNode("graph/org1") { Name = "Organization 1", NodeType = "type/org", Description = "First org" });
-        await persistence.SaveNodeAsync(new MeshNode("graph/org2") { Name = "Organization 2", NodeType = "type/org", Description = "Second org" });
-        await persistence.SaveNodeAsync(new MeshNode("graph/org1/proj1") { Name = "Project 1", NodeType = "type/project" });
-        await persistence.SaveNodeAsync(new MeshNode("graph/org1/proj2") { Name = "Project 2", NodeType = "type/project" });
-        await persistence.SaveNodeAsync(new MeshNode("graph/org1/proj1/story1") { Name = "Story 1", NodeType = "type/story" });
-        await persistence.SaveNodeAsync(new MeshNode("graph/org1/proj1/story2") { Name = "Story 2", NodeType = "type/story" });
+        await persistence.SaveNodeAsync(MeshNode.FromPath("graph") with { Name = "Graph", NodeType = "type/graph" });
+        await persistence.SaveNodeAsync(MeshNode.FromPath("graph/org1") with { Name = "Organization 1", NodeType = "type/org", Description = "First org" });
+        await persistence.SaveNodeAsync(MeshNode.FromPath("graph/org2") with { Name = "Organization 2", NodeType = "type/org", Description = "Second org" });
+        await persistence.SaveNodeAsync(MeshNode.FromPath("graph/org1/proj1") with { Name = "Project 1", NodeType = "type/project" });
+        await persistence.SaveNodeAsync(MeshNode.FromPath("graph/org1/proj2") with { Name = "Project 2", NodeType = "type/project" });
+        await persistence.SaveNodeAsync(MeshNode.FromPath("graph/org1/proj1/story1") with { Name = "Story 1", NodeType = "type/story" });
+        await persistence.SaveNodeAsync(MeshNode.FromPath("graph/org1/proj1/story2") with { Name = "Story 2", NodeType = "type/story" });
     }
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
@@ -284,8 +284,8 @@ public record Graph
         // Verify persistence has the pre-seeded data
         var children = await Persistence.GetChildrenAsync("graph").ToListAsync(TestContext.Current.CancellationToken);
         children.Should().HaveCount(2, "graph should have 2 org children pre-seeded");
-        children.Should().Contain(n => n.Prefix == "graph/org1");
-        children.Should().Contain(n => n.Prefix == "graph/org2");
+        children.Should().Contain(n => n.Path == "graph/org1");
+        children.Should().Contain(n => n.Path == "graph/org2");
     }
 
     [Fact(Timeout = 90000)]
@@ -310,8 +310,8 @@ public record Graph
         // Verify persistence has the pre-seeded projects
         var children = await Persistence.GetChildrenAsync("graph/org1").ToListAsync(TestContext.Current.CancellationToken);
         children.Should().HaveCount(2, "org1 should have 2 project children pre-seeded");
-        children.Should().Contain(n => n.Prefix == "graph/org1/proj1");
-        children.Should().Contain(n => n.Prefix == "graph/org1/proj2");
+        children.Should().Contain(n => n.Path == "graph/org1/proj1");
+        children.Should().Contain(n => n.Path == "graph/org1/proj2");
     }
 
     [Fact(Timeout = 90000)]
@@ -336,8 +336,8 @@ public record Graph
         // Verify persistence has the pre-seeded stories
         var children = await Persistence.GetChildrenAsync("graph/org1/proj1").ToListAsync(TestContext.Current.CancellationToken);
         children.Should().HaveCount(2, "proj1 should have 2 story children pre-seeded");
-        children.Should().Contain(n => n.Prefix == "graph/org1/proj1/story1");
-        children.Should().Contain(n => n.Prefix == "graph/org1/proj1/story2");
+        children.Should().Contain(n => n.Path == "graph/org1/proj1/story1");
+        children.Should().Contain(n => n.Path == "graph/org1/proj1/story2");
     }
 
     #endregion
@@ -448,7 +448,7 @@ public record Graph
     }
 
     [Fact(Timeout = 90000)]
-    public async Task ResolvePath_UnderscorePrefixedSegment_ParsesAsRemainder()
+    public async Task ResolvePath_UnderscoreNamespaceedSegment_ParsesAsRemainder()
     {
         var client = GetClient();
         var graphAddress = new Address("graph");
@@ -459,7 +459,7 @@ public record Graph
             o => o.WithTarget(graphAddress),
             TestContext.Current.CancellationToken);
 
-        // Act: resolve path with underscore-prefixed segment (layout area)
+        // Act: resolve path with underscore-Namespaceed segment (layout area)
         var resolution = await MeshCatalog.ResolvePathAsync("graph/_Nodes");
 
         // Assert: "graph" is the address, "_Nodes" is the remainder (layout area)
@@ -559,14 +559,14 @@ public record Graph
     public async Task MoveNodeAsync_MovesNodeToNewPath()
     {
         // Arrange - create a node to move
-        await Persistence.SaveNodeAsync(new MeshNode("graph/movetest") { Name = "Move Test", NodeType = "type/org" });
+        await Persistence.SaveNodeAsync(MeshNode.FromPath("graph/movetest") with { Name = "Move Test", NodeType = "type/org" });
 
         // Act
         var moved = await Persistence.MoveNodeAsync("graph/movetest", "graph/movetest-renamed");
 
         // Assert
         moved.Should().NotBeNull();
-        moved.Prefix.Should().Be("graph/movetest-renamed");
+        moved.Path.Should().Be("graph/movetest-renamed");
         moved.Name.Should().Be("Move Test");
 
         var oldNode = await Persistence.GetNodeAsync("graph/movetest", TestContext.Current.CancellationToken);
@@ -584,10 +584,10 @@ public record Graph
     public async Task MoveNodeAsync_MovesDescendantsWithUpdatedPaths()
     {
         // Arrange - create a hierarchy to move
-        await Persistence.SaveNodeAsync(new MeshNode("graph/parent") { Name = "Parent", NodeType = "type/org" });
-        await Persistence.SaveNodeAsync(new MeshNode("graph/parent/child1") { Name = "Child 1", NodeType = "type/project" });
-        await Persistence.SaveNodeAsync(new MeshNode("graph/parent/child2") { Name = "Child 2", NodeType = "type/project" });
-        await Persistence.SaveNodeAsync(new MeshNode("graph/parent/child1/grandchild") { Name = "Grandchild", NodeType = "type/story" });
+        await Persistence.SaveNodeAsync(MeshNode.FromPath("graph/parent") with { Name = "Parent", NodeType = "type/org" });
+        await Persistence.SaveNodeAsync(MeshNode.FromPath("graph/parent/child1") with { Name = "Child 1", NodeType = "type/project" });
+        await Persistence.SaveNodeAsync(MeshNode.FromPath("graph/parent/child2") with { Name = "Child 2", NodeType = "type/project" });
+        await Persistence.SaveNodeAsync(MeshNode.FromPath("graph/parent/child1/grandchild") with { Name = "Grandchild", NodeType = "type/story" });
 
         // Act
         await Persistence.MoveNodeAsync("graph/parent", "graph/newparent");
@@ -623,7 +623,7 @@ public record Graph
     public async Task MoveNodeAsync_MigratesCommentsToNewPath()
     {
         // Arrange - create node with comments
-        await Persistence.SaveNodeAsync(new MeshNode("graph/commented") { Name = "Commented Node", NodeType = "type/org" });
+        await Persistence.SaveNodeAsync(MeshNode.FromPath("graph/commented") with { Name = "Commented Node", NodeType = "type/org" });
         await Persistence.AddCommentAsync(new Comment { NodePath = "graph/commented", Text = "Comment 1", Author = "User1" });
         await Persistence.AddCommentAsync(new Comment { NodePath = "graph/commented", Text = "Comment 2", Author = "User2" });
 
@@ -664,8 +664,8 @@ public record Graph
     public async Task MoveNodeAsync_ThrowsWhenTargetExists()
     {
         // Arrange
-        await Persistence.SaveNodeAsync(new MeshNode("graph/source") { Name = "Source", NodeType = "type/org" });
-        await Persistence.SaveNodeAsync(new MeshNode("graph/target") { Name = "Target", NodeType = "type/org" });
+        await Persistence.SaveNodeAsync(MeshNode.FromPath("graph/source") with { Name = "Source", NodeType = "type/org" });
+        await Persistence.SaveNodeAsync(MeshNode.FromPath("graph/target") with { Name = "Target", NodeType = "type/org" });
 
         // Act & Assert
         var act = () => Persistence.MoveNodeAsync("graph/source", "graph/target");
@@ -890,7 +890,7 @@ public class OrganizationsLayoutTest : MonolithMeshTestBase
         await persistence.SaveNodeAsync(fabrikam);
 
         // 5. Create the graph root node (needed for initialization)
-        var graphNode = new MeshNode("graph")
+        var graphNode = MeshNode.FromPath("graph") with
         {
             Name = "Graph",
             NodeType = "type/graph",
@@ -1033,7 +1033,7 @@ public class OrganizationsLayoutTest : MonolithMeshTestBase
     ///
     /// The key fix: NodeTypeService now also searches in the parent path of the nodeType
     /// when the nodeType contains a path separator (e.g., "Type/Organizations").
-    /// This ensures types in "Type/" folder are found even if GlobalTypesPrefix is "type".
+    /// This ensures types in "Type/" folder are found even if GlobalTypesNamespace is "type".
     /// </summary>
     [Fact(Timeout = 10000)]
     public async Task NodeTypeService_FindsNodeTypeNode_ForTypeOrganizations()
@@ -1048,7 +1048,7 @@ public class OrganizationsLayoutTest : MonolithMeshTestBase
         nodeTypeNode.Should().NotBeNull(
             "NodeTypeService should find the NodeType node for 'Type/Organizations'. " +
             "The search now includes the parent path of the nodeType.");
-        nodeTypeNode!.Prefix.Should().Be("Type/Organizations");
+        nodeTypeNode!.Path.Should().Be("Type/Organizations");
         nodeTypeNode.NodeType.Should().Be("NodeType");
     }
 
@@ -1320,7 +1320,7 @@ public class FileSystemPersistenceTest : MonolithMeshTestBase
         nodeTypeNode.Should().NotBeNull(
             "NodeTypeService should find the NodeType node from disk. " +
             "If null, the Content property was likely deserialized as JsonElement instead of NodeTypeDefinition.");
-        nodeTypeNode!.Prefix.Should().Be("Type/Organizations");
+        nodeTypeNode!.Path.Should().Be("Type/Organizations");
         nodeTypeNode.NodeType.Should().Be("NodeType");
 
         // Critical: Content must be NodeTypeDefinition, not JsonElement

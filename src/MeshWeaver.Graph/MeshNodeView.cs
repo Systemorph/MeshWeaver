@@ -111,7 +111,7 @@ public static class MeshNodeView
 
     private static UiControl BuildDetailsContent(this LayoutAreaHost host, MeshNode? node, IEnumerable<MeshNode> children)
     {
-        var nodePath = node?.Prefix ?? host.Hub.Address.ToString();
+        var nodePath = node?.Namespace ?? host.Hub.Address.ToString();
         var stack = Controls.Stack.WithWidth("100%");
 
         // Header: title on left, icon buttons on right
@@ -158,7 +158,7 @@ public static class MeshNodeView
                 foreach (var child in recentNodes)
                 {
                     grid = grid.WithView(
-                        BuildThumbnailContent(child, child.Prefix),
+                        BuildThumbnailContent(child, child.Namespace),
                         itemSkin => itemSkin.WithXs(12).WithSm(6).WithMd(4).WithLg(3));
                 }
 
@@ -188,7 +188,7 @@ public static class MeshNodeView
     /// </summary>
     private static UiControl BuildActionButtons(LayoutAreaHost host, MeshNode? node)
     {
-        var nodePath = node?.Prefix ?? host.Hub.Address.ToString();
+        var nodePath = node?.Namespace ?? host.Hub.Address.ToString();
         var buttons = Controls.Stack
             .WithOrientation(Orientation.Horizontal)
             .WithStyle("gap: 8px;");
@@ -196,7 +196,7 @@ public static class MeshNodeView
         // Edit button (icon only)
         if (node != null)
         {
-            var editHref = $"/{node.Prefix}/{MeshCatalogView.EditorArea}";
+            var editHref = $"/{node.Namespace}/{MeshCatalogView.EditorArea}";
             buttons = buttons.WithView(
                 Controls.Button("")
                     .WithIconStart(FluentIcons.Edit(IconSize.Size16))
@@ -299,7 +299,7 @@ public static class MeshNodeView
         var stack = Controls.Stack.WithWidth("100%");
 
         // Header with back link
-        var nodePath = node?.Prefix ?? host.Hub.Address.ToString();
+        var nodePath = node?.Namespace ?? host.Hub.Address.ToString();
         var backHref = $"/{nodePath}/{DetailsArea}";
         stack = stack.WithView(Controls.Stack
             .WithOrientation(Orientation.Horizontal)
@@ -315,7 +315,7 @@ public static class MeshNodeView
 
         // Display metadata fields
         stack = stack.WithView(Controls.Html($"<p><strong>Name:</strong> {node.Name}</p>"));
-        stack = stack.WithView(Controls.Html($"<p><strong>Path:</strong> {node.Prefix}</p>"));
+        stack = stack.WithView(Controls.Html($"<p><strong>Path:</strong> {node.Namespace}</p>"));
 
         if (!string.IsNullOrEmpty(node.NodeType))
         {
@@ -369,7 +369,7 @@ public static class MeshNodeView
         var stack = Controls.Stack.WithWidth("100%");
 
         // Header with back link
-        var nodePath = node?.Prefix ?? host.Hub.Address.ToString();
+        var nodePath = node?.Namespace ?? host.Hub.Address.ToString();
         var backHref = $"/{nodePath}/{DetailsArea}";
         stack = stack.WithView(Controls.Stack
             .WithOrientation(Orientation.Horizontal)
@@ -393,7 +393,7 @@ public static class MeshNodeView
         card = card.WithView(BuildSettingsRow("Name", node.Name ?? "<no name>"));
 
         // Path
-        card = card.WithView(BuildSettingsRow("Path", node.Prefix));
+        card = card.WithView(BuildSettingsRow("Path", node.Namespace));
 
         // NodeType with navigatable link
         if (!string.IsNullOrEmpty(node.NodeType))

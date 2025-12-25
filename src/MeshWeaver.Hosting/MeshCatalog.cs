@@ -1,4 +1,4 @@
-using MeshWeaver.Data;
+﻿using MeshWeaver.Data;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
@@ -19,7 +19,7 @@ public sealed class MeshCatalog : IMeshCatalog
     public IUnifiedPathRegistry PathRegistry { get; }
     public IPersistenceService Persistence { get; }
     private readonly IMemoryCache cache = new MemoryCache(new MemoryCacheOptions());
-    private readonly MemoryCacheEntryOptions cacheOptions = new(){SlidingExpiration = TimeSpan.FromMinutes(5)};
+    private readonly MemoryCacheEntryOptions cacheOptions = new() { SlidingExpiration = TimeSpan.FromMinutes(5) };
     private readonly IMessageHub persistenceHub;
     private readonly IMessageHub meshHub;
     private readonly ILogger<MeshCatalog> logger;
@@ -60,7 +60,7 @@ public sealed class MeshCatalog : IMeshCatalog
 
         persistenceHub = hub.GetHostedHub(AddressExtensions.CreatePersistenceAddress())!;
         foreach (var node in Configuration.Nodes.Values)
-                UpdateNode(node);
+            UpdateNode(node);
     }
 
     public async Task<MeshNode?> GetNodeAsync(Address address)
@@ -182,8 +182,8 @@ public sealed class MeshCatalog : IMeshCatalog
         var (persistenceMatch, matchedSegmentCount) = await FindBestPersistenceMatchAsync(segments);
         if (persistenceMatch != null)
         {
-            // Use the node's actual prefix as the address (handles Root namespace mapping)
-            var matchedPath = persistenceMatch.Prefix;
+            // Use the node's actual Path as the address
+            var matchedPath = persistenceMatch.Path;
             var remainder = matchedSegmentCount < segments.Length
                 ? string.Join("/", segments.Skip(matchedSegmentCount))
                 : null;
@@ -214,7 +214,7 @@ public sealed class MeshCatalog : IMeshCatalog
         // This is determined by checking if there are NodeTypeConfigurations registered
         // (which means the node supports dynamic children via persistence)
         if (Configuration.NodeTypeConfigurations.Count > 0 &&
-            matchedNode.Segments.Length > 0 &&
+            matchedNode.Segments.Count > 0 &&
             segments[0].Equals(matchedNode.Segments[0], StringComparison.OrdinalIgnoreCase))
         {
             // For graph-style nodes, find the deepest existing node in persistence
@@ -222,42 +222,42 @@ public sealed class MeshCatalog : IMeshCatalog
             var (persistenceMatch, matchedSegmentCount) = await FindBestPersistenceMatchAsync(segments);
             if (persistenceMatch != null)
             {
-                var matchedPath = persistenceMatch.Prefix;
+                var matchedPath = persistenceMatch.Path;
                 var persistenceRemainder = matchedSegmentCount < segments.Length
                     ? string.Join("/", segments.Skip(matchedSegmentCount))
                     : null;
                 return new AddressResolution(matchedPath, persistenceRemainder);
             }
 
-            // Fallback to using just the config node prefix if nothing in persistence
-            var configRemainder = segments.Length > matchedNode.Segments.Length
-                ? string.Join("/", segments.Skip(matchedNode.Segments.Length))
+            // Fallback to using just the config node Namespace if nothing in persistence
+            var configRemainder = segments.Length > matchedNode.Segments.Count
+                ? string.Join("/", segments.Skip(matchedNode.Segments.Count))
                 : null;
-            return new AddressResolution(matchedNode.Prefix, configRemainder);
+            return new AddressResolution(matchedNode.Path, configRemainder);
         }
 
         // Legacy behavior for nodes with AddressSegments
         var addressSegmentCount = matchedNode.AddressSegments > 0
             ? matchedNode.AddressSegments
-            : matchedNode.Segments.Length;
+            : matchedNode.Segments.Count;
 
-        // Build the full address: use node's prefix (preserves case) + additional segments from path
+        // Build the full address: use node's Namespace (preserves case) + additional segments from path
         var nodeSegments = matchedNode.Segments;
-        var addressParts = new List<string>(nodeSegments); // Start with node's prefix segments
+        var addressParts = new List<string>(nodeSegments); // Start with node's Namespace segments
 
-        // Add additional segments from path (beyond the prefix match)
-        for (int i = nodeSegments.Length; i < addressSegmentCount && i < segments.Length; i++)
+        // Add additional segments from path (beyond the Namespace match)
+        for (int i = nodeSegments.Count; i < addressSegmentCount && i < segments.Length; i++)
         {
             addressParts.Add(segments[i]);
         }
 
-        var addressPrefix = string.Join("/", addressParts);
+        var addressNamespace = string.Join("/", addressParts);
 
         var remainder = addressSegmentCount < segments.Length
             ? string.Join("/", segments.Skip(addressSegmentCount))
             : null;
 
-        return new AddressResolution(addressPrefix, remainder);
+        return new AddressResolution(addressNamespace, remainder);
     }
 
     private static int ScoreMatch(MeshNode node, string[] pathSegments)
@@ -266,16 +266,16 @@ public sealed class MeshCatalog : IMeshCatalog
 
         // Score = number of matching segments from start
         // Must match ALL node segments to count
-        if (nodeSegments.Length > pathSegments.Length)
+        if (nodeSegments.Count > pathSegments.Length)
             return 0;
 
-        for (int i = 0; i < nodeSegments.Length; i++)
+        for (int i = 0; i < nodeSegments.Count; i++)
         {
             if (!nodeSegments[i].Equals(pathSegments[i], StringComparison.OrdinalIgnoreCase))
                 return 0;
         }
 
-        return nodeSegments.Length;
+        return nodeSegments.Count;
     }
 
     /// <inheritdoc />
@@ -289,7 +289,7 @@ public sealed class MeshCatalog : IMeshCatalog
             {
                 if (!(child.Name?.Contains(query, StringComparison.OrdinalIgnoreCase) ?? false) &&
                     !(child.Description?.Contains(query, StringComparison.OrdinalIgnoreCase) ?? false) &&
-                    !child.Prefix.Contains(query, StringComparison.OrdinalIgnoreCase))
+                    !child.Namespace.Contains(query, StringComparison.OrdinalIgnoreCase))
                 {
                     continue;
                 }

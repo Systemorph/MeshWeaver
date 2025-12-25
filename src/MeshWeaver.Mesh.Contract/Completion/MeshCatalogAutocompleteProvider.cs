@@ -22,15 +22,15 @@ public class MeshCatalogAutocompleteProvider(IMeshCatalog? meshCatalog) : IAutoc
         if (meshCatalog != null)
         {
             var topLevelNodes = meshCatalog.Configuration.Nodes.Values
-                .Where(n => n.Segments.Length == 1)
+                .Where(n => n.Segments.Count == 1)
                 .OrderBy(n => n.DisplayOrder)
                 .ThenBy(n => n.Name);
 
             foreach (var node in topLevelNodes)
             {
                 items.Add(new AutocompleteItem(
-                    Label: $"@{node.Prefix}/",
-                    InsertText: $"@{node.Prefix}/",
+                    Label: $"@{node.Path}/",
+                    InsertText: $"@{node.Path}/",
                     Description: node.Description ?? node.Name,
                     Category: "Prefixes",
                     Priority: PrefixCategoryPriority - node.DisplayOrder,

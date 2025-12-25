@@ -103,7 +103,7 @@ public class MeshHubBuilder
                 // Use MeshNodeTypeSource which handles init + update sync to persistence
                 var withMeshNode = source.WithTypeSource(typeof(MeshNode),
                     new MeshNodeTypeSource(source.Workspace, source.Id, persistence, hubPath)
-                        .WithKey(n => n.Prefix));
+                        .WithKey(n => n.Path));
 
                 // Register additional data type if specified
                 if (dataType is not null)
@@ -134,7 +134,7 @@ public class MeshHubBuilder
             else
             {
                 // Fallback: no persistence, just register types without special type sources
-                var withTypes = source.WithType<MeshNode>(ts => ts.WithKey(n => n.Prefix));
+                var withTypes = source.WithType<MeshNode>(ts => ts.WithKey(n => n.Path));
 
                 if (dataType is not null)
                 {

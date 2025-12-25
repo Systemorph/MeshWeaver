@@ -74,7 +74,7 @@ public class InMemoryPersistenceService(IStorageAdapter? storageAdapter = null) 
             .Where(n =>
             {
                 var nodeSegments = n.Segments;
-                if (nodeSegments.Length != expectedDepth)
+                if (nodeSegments.Count != expectedDepth)
                     return false;
 
                 // Check if parent matches
@@ -112,12 +112,12 @@ public class InMemoryPersistenceService(IStorageAdapter? storageAdapter = null) 
             descendants = _nodes.Values
                 .Where(n =>
                 {
-                    var nodePath = NormalizePath(n.Prefix);
+                    var nodePath = NormalizePath(n.Path);
                     return nodePath.StartsWith(normalizedParent + "/", StringComparison.OrdinalIgnoreCase);
                 });
         }
 
-        foreach (var descendant in descendants.OrderBy(n => n.Prefix))
+        foreach (var descendant in descendants.OrderBy(n => n.Path))
         {
             yield return descendant;
         }
@@ -126,7 +126,7 @@ public class InMemoryPersistenceService(IStorageAdapter? storageAdapter = null) 
 
     public async Task<MeshNode> SaveNodeAsync(MeshNode node, CancellationToken ct = default)
     {
-        var normalizedPath = NormalizePath(node.Prefix);
+        var normalizedPath = NormalizePath(node.Path);
 
         // Set LastModified to UtcNow if not specified (for in-memory case without file system)
         var savedNode = node with
@@ -300,7 +300,7 @@ public class InMemoryPersistenceService(IStorageAdapter? storageAdapter = null) 
                 // Filter by parent path if specified
                 if (!string.IsNullOrEmpty(normalizedParent))
                 {
-                    var nodePath = NormalizePath(n.Prefix);
+                    var nodePath = NormalizePath(n.Path);
                     if (!nodePath.StartsWith(normalizedParent + "/", StringComparison.OrdinalIgnoreCase) &&
                         !nodePath.Equals(normalizedParent, StringComparison.OrdinalIgnoreCase))
                     {
@@ -520,7 +520,7 @@ public class InMemoryPersistenceService(IStorageAdapter? storageAdapter = null) 
         {
             await foreach (var descendant in GetDescendantsAsync(normalizedPath))
             {
-                var descendantPath = NormalizePath(descendant.Prefix);
+                var descendantPath = NormalizePath(descendant.Path);
 
                 // Evaluate the node itself
                 if (evaluator.Matches(descendant, parsedQuery))

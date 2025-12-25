@@ -69,7 +69,7 @@ public class MeshNodeCompilationServiceTest : IDisposable
         var nodeTypeService = new TestNodeTypeService();
         var service = CreateService(nodeTypeService);
 
-        var node = new MeshNode("test/no-type")
+        var node = MeshNode.FromPath("test/no-type") with
         {
             Name = "No Type Node",
             NodeType = null,
@@ -108,7 +108,7 @@ public record StoryType
 
         var service = CreateService(nodeTypeService);
 
-        var node = new MeshNode("org/stories/my-story")
+        var node = MeshNode.FromPath("org/stories/my-story") with
         {
             Name = "My Story",
             NodeType = "story",
@@ -148,7 +148,7 @@ public record ProjectType
 
         var service = CreateService(nodeTypeService);
 
-        var node = new MeshNode("org/projects/my-project")
+        var node = MeshNode.FromPath("org/projects/my-project") with
         {
             Name = "My Project",
             NodeType = "project",
@@ -188,7 +188,7 @@ public record CachedItemType
 
         var service = CreateService(nodeTypeService);
 
-        var node = new MeshNode("org/items/cached")
+        var node = MeshNode.FromPath("org/items/cached") with
         {
             Name = "Cached Item",
             NodeType = "cached-item",
@@ -236,7 +236,7 @@ public record DebugItemType
 
         var service = CreateService(nodeTypeService);
 
-        var node = new MeshNode("debug/items/test")
+        var node = MeshNode.FromPath("debug/items/test") with
         {
             Name = "Debug Item",
             NodeType = "debug-item",
@@ -277,7 +277,7 @@ public record WidgetType
 
         var service = CreateService(nodeTypeService);
 
-        var node = new MeshNode("org/widgets/my-widget")
+        var node = MeshNode.FromPath("org/widgets/my-widget") with
         {
             Name = "My Widget",
             NodeType = "widget",
@@ -324,7 +324,7 @@ public record ComponentType
 
         var service = CreateService(nodeTypeService);
 
-        var node = new MeshNode("app/components/header")
+        var node = MeshNode.FromPath("app/components/header") with
         {
             Name = "Header Component",
             NodeType = "component",
@@ -391,7 +391,7 @@ public record RecordType
 
         var service = CreateService(nodeTypeService);
 
-        var node = new MeshNode("data/records/test")
+        var node = MeshNode.FromPath("data/records/test") with
         {
             Name = "Test Record",
             NodeType = "record",
@@ -441,7 +441,7 @@ internal class TestNodeTypeService : INodeTypeService
     {
         if (_nodeTypes.TryGetValue(nodeType, out var entry))
         {
-            var node = new MeshNode($"type/{nodeType}")
+            var node = MeshNode.FromPath($"type/{nodeType}") with
             {
                 Name = entry.Definition.DisplayName ?? entry.Definition.Id,
                 NodeType = "NodeType",

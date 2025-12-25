@@ -256,7 +256,7 @@ public static class NodeTypeView
 
                 // Save via NodeTypeService
                 var nodeTypeSvc = actx.Host.Hub.ServiceProvider.GetService<INodeTypeService>();
-                await nodeTypeSvc!.SaveCodeConfigurationAsync(node.Prefix, updatedConfig);
+                await nodeTypeSvc!.SaveCodeConfigurationAsync(node.Path, updatedConfig);
 
                 // Navigate back to view
                 var viewHref = new LayoutAreaReference(CodeViewArea).ToHref(hubAddress);

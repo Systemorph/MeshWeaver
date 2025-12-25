@@ -109,7 +109,7 @@ public static class DynamicLayoutAreaExtensions
         foreach (var child in childList)
         {
             grid = grid.WithView(
-                MeshNodeThumbnailControl.FromNode(child, child.Prefix),
+                MeshNodeThumbnailControl.FromNode(child, child.Path),
                 itemSkin => itemSkin.WithXs(12).WithSm(6).WithMd(4).WithLg(3));
         }
 
