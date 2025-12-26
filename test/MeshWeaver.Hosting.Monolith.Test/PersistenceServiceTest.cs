@@ -206,7 +206,7 @@ public class MeshCatalogQueryTest
         var persistence = new InMemoryPersistenceService();
         for (int i = 0; i < 10; i++)
         {
-            await persistence.SaveNodeAsync(new MeshNode($"org/company{i}") { Name = $"Company {i}" });
+            await persistence.SaveNodeAsync(MeshNode.FromPath($"org/company{i}") with { Name = $"Company {i}" });
         }
 
         // Act - simulate QueryAsync with maxResults

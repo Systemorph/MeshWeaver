@@ -40,13 +40,7 @@ public class ArticlesBlobStorageTest : ArticlesTest
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
     {
-        return base.ConfigureMesh(builder)
-            .ConfigureHub(mesh => mesh.WithServices(services =>
-                services.AddSingleton<IAzureClientFactory<BlobServiceClient>>(serviceProvider =>
-            {
-                return new LazyBlobServiceClientFactory(() => azuriteConnectionString);
-            }))
-            );
+        return base.ConfigureMesh(builder);
     }
 
     public override async ValueTask InitializeAsync()
@@ -101,6 +95,9 @@ public class ArticlesBlobStorageTest : ArticlesTest
     protected override MessageHubConfiguration ConfigureContentCollections(MessageHubConfiguration hub)
     {
         return hub
+            .WithServices(services =>
+                services.AddSingleton<IAzureClientFactory<BlobServiceClient>>(
+                    _ => new LazyBlobServiceClientFactory(() => azuriteConnectionString)))
             .AddAzureBlob()
             .AddArticles(new ContentCollectionConfig()
             {
