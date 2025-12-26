@@ -18,21 +18,14 @@ public class CosmosStorageAdapter : IStorageAdapter, IAsyncDisposable
     private readonly Container _partitionsContainer;
     private readonly CosmosSqlGenerator _sqlGenerator = new();
     private readonly JsonSerializerOptions _jsonOptions;
-    private readonly JsonSerializerOptions _persistenceOptions;
 
     public CosmosStorageAdapter(
         Container nodesContainer,
-        Container partitionsContainer,
-        JsonSerializerOptions? jsonOptions = null)
+        Container partitionsContainer)
     {
         _nodesContainer = nodesContainer;
         _partitionsContainer = partitionsContainer;
-        _jsonOptions = jsonOptions ?? new JsonSerializerOptions
-        {
-            PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-            WriteIndented = false
-        };
-        _persistenceOptions = PersistenceJsonOptions.CreateForPersistence(_jsonOptions);
+        _jsonOptions = PersistenceJsonOptions.CreateForPersistence();
     }
 
     private static string NormalizePath(string? path) =>
@@ -66,7 +59,7 @@ public class CosmosStorageAdapter : IStorageAdapter, IAsyncDisposable
     public async Task WriteAsync(MeshNode node, CancellationToken ct = default)
     {
         // Serialize manually to apply NotMapped property exclusion
-        var json = JsonSerializer.Serialize(node, _persistenceOptions);
+        var json = JsonSerializer.Serialize(node, _jsonOptions);
         using var document = JsonDocument.Parse(json);
         await _nodesContainer.UpsertItemAsync(
             document.RootElement,

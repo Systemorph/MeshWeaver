@@ -2,7 +2,6 @@ using System.Text.Json;
 using MeshWeaver.Domain;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
-using MeshWeaver.Messaging.Serialization;
 
 namespace MeshWeaver.Hosting.Persistence;
 
@@ -16,29 +15,8 @@ public class FileSystemStorageAdapter : IStorageAdapter
     private readonly string _baseDirectory;
     private readonly Func<ITypeRegistry?>? _typeRegistryFactory;
     private JsonSerializerOptions? _jsonOptions;
-    private JsonSerializerOptions? _persistenceOptions;
 
-    private JsonSerializerOptions JsonOptions => _jsonOptions ??= CreateJsonOptions();
-    private JsonSerializerOptions PersistenceOptions => _persistenceOptions ??= PersistenceJsonOptions.CreateForPersistence(JsonOptions);
-
-    private JsonSerializerOptions CreateJsonOptions()
-    {
-        var options = new JsonSerializerOptions
-        {
-            WriteIndented = true,
-            PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-            PropertyNameCaseInsensitive = true
-        };
-
-        // Add polymorphic converter if type registry is available
-        var typeRegistry = _typeRegistryFactory?.Invoke();
-        if (typeRegistry != null)
-        {
-            options.Converters.Add(new ObjectPolymorphicConverter(typeRegistry));
-        }
-
-        return options;
-    }
+    private JsonSerializerOptions JsonOptions => _jsonOptions ??= PersistenceJsonOptions.CreateForPersistence(_typeRegistryFactory?.Invoke());
 
     public FileSystemStorageAdapter(string baseDirectory, Func<ITypeRegistry?>? typeRegistryFactory = null)
     {
@@ -79,7 +57,7 @@ public class FileSystemStorageAdapter : IStorageAdapter
             Directory.CreateDirectory(directory);
         }
 
-        var json = JsonSerializer.Serialize(node, PersistenceOptions);
+        var json = JsonSerializer.Serialize(node, JsonOptions);
         await File.WriteAllTextAsync(filePath, json, ct);
     }
 
