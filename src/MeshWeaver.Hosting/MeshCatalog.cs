@@ -208,7 +208,7 @@ public sealed class MeshCatalog : IMeshCatalog
         return (null, 0);
     }
 
-    private async Task<AddressResolution> ResolveFromConfigNodeAsync(MeshNode matchedNode, string[] segments, string path)
+    private async Task<AddressResolution> ResolveFromConfigNodeAsync(MeshNode matchedNode, string[] segments, string _)
     {
         // For graph-style nodes (where the path IS the address), use all segments as address
         // This is determined by checking if there are NodeTypeConfigurations registered

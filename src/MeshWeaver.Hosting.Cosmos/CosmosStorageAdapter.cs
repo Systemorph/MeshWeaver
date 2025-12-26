@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using System.Text.Json;
 using Microsoft.Azure.Cosmos;
 using MeshWeaver.Mesh;
@@ -130,7 +131,7 @@ public class CosmosStorageAdapter : IStorageAdapter, IAsyncDisposable
     public async IAsyncEnumerable<object> GetPartitionObjectsAsync(
         string nodePath,
         string? subPath = null,
-        CancellationToken ct = default)
+        [EnumeratorCancellation] CancellationToken ct = default)
     {
         var partitionKey = GetPartitionStorageKey(nodePath, subPath);
 
@@ -251,7 +252,7 @@ public class CosmosStorageAdapter : IStorageAdapter, IAsyncDisposable
     public async IAsyncEnumerable<MeshNode> QueryNodesAsync(
         ParsedQuery query,
         string? basePath = null,
-        CancellationToken ct = default)
+        [EnumeratorCancellation] CancellationToken ct = default)
     {
         var (sql, parameters) = _sqlGenerator.GenerateSelectQuery(query);
 

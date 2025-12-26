@@ -1,12 +1,9 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
-using System.Reflection;
 using System.Threading.Tasks;
 using FluentAssertions;
-using MeshWeaver.Data;
 using MeshWeaver.Graph.Configuration;
-using MeshWeaver.Hosting.Monolith;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Mesh;
@@ -139,18 +136,7 @@ public record Graph
         };
         persistence.SaveNodeAsync(graphNode).GetAwaiter().GetResult();
 
-        // Build configuration
-        var configBuilder = new ConfigurationBuilder();
-        configBuilder.AddInMemoryCollection(new Dictionary<string, string?>
-        {
-            ["Graph:DataDirectory"] = testDataDirectory
-        });
-        var configuration = configBuilder.Build();
-
-        return builder
-            .UseMonolithMesh()
-            .ConfigureServices(services => services.AddPersistence(persistence))
-            .AddJsonGraphConfiguration(testDataDirectory, configuration);
+        return builder.AddJsonGraphConfiguration(testDataDirectory);
     }
 
     public override async ValueTask DisposeAsync()

@@ -77,7 +77,7 @@ public class MeshNodeCompilationServiceTest : IDisposable
         };
 
         // Act
-        var result = await service.GetAssemblyLocationAsync(node);
+        var result = await service.GetAssemblyLocationAsync(node, TestContext.Current.CancellationToken);
 
         // Assert
         result.Should().BeNull("Node with no NodeType should not compile");
@@ -116,7 +116,7 @@ public record StoryType
         };
 
         // Act
-        var assemblyPath = await service.GetAssemblyLocationAsync(node);
+        var assemblyPath = await service.GetAssemblyLocationAsync(node, TestContext.Current.CancellationToken);
 
         // Assert
         assemblyPath.Should().NotBeNull("Assembly should be compiled");
@@ -156,7 +156,7 @@ public record ProjectType
         };
 
         // Act
-        var assemblyPath = await service.GetAssemblyLocationAsync(node);
+        var assemblyPath = await service.GetAssemblyLocationAsync(node, TestContext.Current.CancellationToken);
 
         // Assert
         assemblyPath.Should().NotBeNull();
@@ -196,14 +196,14 @@ public record CachedItemType
         };
 
         // First call compiles
-        var firstPath = await service.GetAssemblyLocationAsync(node);
+        var firstPath = await service.GetAssemblyLocationAsync(node, TestContext.Current.CancellationToken);
         firstPath.Should().NotBeNull();
 
         var firstWriteTime = File.GetLastWriteTimeUtc(firstPath!);
-        await Task.Delay(100);
+        await Task.Delay(100, TestContext.Current.CancellationToken);
 
         // Act - Second call should use cache
-        var secondPath = await service.GetAssemblyLocationAsync(node);
+        var secondPath = await service.GetAssemblyLocationAsync(node, TestContext.Current.CancellationToken);
 
         // Assert
         secondPath.Should().NotBeNull();
@@ -244,7 +244,7 @@ public record DebugItemType
         };
 
         // Act
-        var assemblyPath = await service.GetAssemblyLocationAsync(node);
+        var assemblyPath = await service.GetAssemblyLocationAsync(node, TestContext.Current.CancellationToken);
 
         // Assert - Source file should exist
         assemblyPath.Should().NotBeNull();
@@ -286,7 +286,7 @@ public record WidgetType
         };
 
         // Act
-        var assemblyPath = await service.GetAssemblyLocationAsync(node);
+        var assemblyPath = await service.GetAssemblyLocationAsync(node, TestContext.Current.CancellationToken);
 
         // Assert - Find MeshNodeAttribute in assembly
         assemblyPath.Should().NotBeNull();
@@ -335,7 +335,7 @@ public record ComponentType
         };
 
         // Act
-        var assemblyPath = await service.GetAssemblyLocationAsync(node);
+        var assemblyPath = await service.GetAssemblyLocationAsync(node, TestContext.Current.CancellationToken);
 
         // Assert - Get nodes from MeshNodeAttribute
         assemblyPath.Should().NotBeNull();
@@ -399,7 +399,7 @@ public record RecordType
         };
 
         // Act
-        var assemblyPath = await service.GetAssemblyLocationAsync(node);
+        var assemblyPath = await service.GetAssemblyLocationAsync(node, TestContext.Current.CancellationToken);
 
         // Assert - Instantiate the compiled data type
         assemblyPath.Should().NotBeNull();

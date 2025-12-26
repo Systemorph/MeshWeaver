@@ -178,7 +178,7 @@ public static class MeshNodeView
         }
 
         // Comments section at the bottom
-        stack = stack.WithView(BuildInlineCommentsSection(host, nodePath));
+        stack = stack.WithView(BuildInlineCommentsSection(host));
 
         return stack;
     }
@@ -251,7 +251,7 @@ public static class MeshNodeView
     /// <summary>
     /// Builds an inline comments section for the bottom of the page (Facebook-style).
     /// </summary>
-    private static UiControl BuildInlineCommentsSection(LayoutAreaHost host, string nodePath)
+    private static UiControl BuildInlineCommentsSection(LayoutAreaHost host)
     {
         var section = Controls.Stack.WithWidth("100%").WithStyle("margin-top: 32px; border-top: 1px solid #e0e0e0; padding-top: 16px;");
 
@@ -274,7 +274,7 @@ public static class MeshNodeView
     /// <summary>
     /// Renders the Metadata area showing node properties (name, type, description, path).
     /// </summary>
-    public static IObservable<UiControl> Metadata(LayoutAreaHost host, RenderingContext _)
+    public static IObservable<UiControl> Metadata(LayoutAreaHost host, RenderingContext _1)
     {
         var hubPath = host.Hub.Address.ToString();
         var persistence = host.Hub.ServiceProvider.GetService<IPersistenceService>();
@@ -518,7 +518,7 @@ public static class MeshNodeView
         });
     }
 
-    private static UiControl BuildFacebookStyleComments(LayoutAreaHost host, List<Comment> comments, string nodePath)
+    private static UiControl BuildFacebookStyleComments(LayoutAreaHost _1, List<Comment> comments, string _2)
     {
         var container = Controls.Stack.WithWidth("100%");
 
