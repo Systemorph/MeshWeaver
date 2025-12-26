@@ -93,12 +93,14 @@ namespace MeshWeaver.Hosting
             CancellationToken cancellationToken
         )
         {
+            var originalAddress = address;
+
             // Use ResolvePath to find the deepest matching node in persistence
             var resolution = await MeshCatalog.ResolvePathAsync(address.ToString());
             if (resolution != null)
             {
-                // Route to the resolved prefix address
-                address = new Address(resolution.Prefix);
+                // Route to the resolved prefix address, preserving segment structure
+                address = new Address(resolution.Prefix.Split('/'));
 
                 // If there's a remainder, store it in the delivery context for the hub to use
                 if (!string.IsNullOrEmpty(resolution.Remainder))

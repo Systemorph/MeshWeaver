@@ -131,7 +131,6 @@ public class InMemoryPersistenceService(IStorageAdapter? storageAdapter = null) 
         // Set LastModified to UtcNow if not specified (for in-memory case without file system)
         var savedNode = node with
         {
-            Key = normalizedPath,
             LastModified = node.LastModified == default ? DateTimeOffset.UtcNow : node.LastModified
         };
 
@@ -196,7 +195,6 @@ public class InMemoryPersistenceService(IStorageAdapter? storageAdapter = null) 
         // Move the main node - need to create new MeshNode to ensure Prefix is updated
         var movedNode = MeshNode.FromPath(targetPath) with
         {
-            Key = normalizedTarget,
             Name = sourceNode.Name,
             NodeType = sourceNode.NodeType,
             Description = sourceNode.Description,
@@ -229,7 +227,6 @@ public class InMemoryPersistenceService(IStorageAdapter? storageAdapter = null) 
                 // Create new MeshNode to ensure Prefix is updated
                 var movedDescendant = MeshNode.FromPath(newPath) with
                 {
-                    Key = newPath,
                     Name = descendantNode.Name,
                     NodeType = descendantNode.NodeType,
                     Description = descendantNode.Description,

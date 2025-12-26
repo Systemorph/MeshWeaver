@@ -37,15 +37,20 @@ public class CosmosStorageAdapter : IStorageAdapter, IAsyncDisposable
 
     public async Task<MeshNode?> ReadAsync(string path, CancellationToken ct = default)
     {
-        var key = NormalizePath(path);
-        if (string.IsNullOrEmpty(key))
+        var normalizedPath = NormalizePath(path);
+        if (string.IsNullOrEmpty(normalizedPath))
             return null;
+
+        // Extract namespace (all but last segment) and id (last segment)
+        var lastSlash = normalizedPath.LastIndexOf('/');
+        var ns = lastSlash > 0 ? normalizedPath[..lastSlash] : "";
+        var id = lastSlash > 0 ? normalizedPath[(lastSlash + 1)..] : normalizedPath;
 
         try
         {
             var response = await _nodesContainer.ReadItemAsync<MeshNode>(
-                key,
-                new PartitionKey(GetPartitionKey(key)),
+                id,
+                new PartitionKey(ns),
                 cancellationToken: ct);
             return response.Resource;
         }
@@ -57,26 +62,28 @@ public class CosmosStorageAdapter : IStorageAdapter, IAsyncDisposable
 
     public async Task WriteAsync(MeshNode node, CancellationToken ct = default)
     {
-        var key = NormalizePath(node.Path);
-        var nodeToSave = node with { Key = key };
-
         await _nodesContainer.UpsertItemAsync(
-            nodeToSave,
-            new PartitionKey(GetPartitionKey(key)),
+            node,
+            new PartitionKey(node.Namespace ?? ""),
             cancellationToken: ct);
     }
 
     public async Task DeleteAsync(string path, CancellationToken ct = default)
     {
-        var key = NormalizePath(path);
-        if (string.IsNullOrEmpty(key))
+        var normalizedPath = NormalizePath(path);
+        if (string.IsNullOrEmpty(normalizedPath))
             return;
+
+        // Extract namespace (all but last segment) and id (last segment)
+        var lastSlash = normalizedPath.LastIndexOf('/');
+        var ns = lastSlash > 0 ? normalizedPath[..lastSlash] : "";
+        var id = lastSlash > 0 ? normalizedPath[(lastSlash + 1)..] : normalizedPath;
 
         try
         {
             await _nodesContainer.DeleteItemAsync<MeshNode>(
-                key,
-                new PartitionKey(GetPartitionKey(key)),
+                id,
+                new PartitionKey(ns),
                 cancellationToken: ct);
         }
         catch (CosmosException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound)
@@ -94,15 +101,11 @@ public class CosmosStorageAdapter : IStorageAdapter, IAsyncDisposable
             ? 1
             : normalizedParent.Split('/').Length + 1;
 
-        var query = new QueryDefinition(
-            "SELECT c.key FROM c WHERE ARRAY_LENGTH(ARRAY_SLICE(StringSplit(c.key, '/'), 0, @depth)) = @depth" +
-            (string.IsNullOrEmpty(normalizedParent) ? "" : " AND STARTSWITH(c.key, @prefix)"))
-            .WithParameter("@depth", depth);
-
-        if (!string.IsNullOrEmpty(normalizedParent))
-        {
-            query = query.WithParameter("@prefix", normalizedParent + "/");
-        }
+        // Query for direct children of the parent path
+        var query = string.IsNullOrEmpty(normalizedParent)
+            ? new QueryDefinition("SELECT c.id, c.namespace FROM c WHERE c.namespace = ''")
+            : new QueryDefinition("SELECT c.id, c.namespace FROM c WHERE c.namespace = @parent")
+                .WithParameter("@parent", normalizedParent);
 
         var paths = new List<string>();
         using var iterator = _nodesContainer.GetItemQueryIterator<dynamic>(query);
@@ -112,7 +115,10 @@ public class CosmosStorageAdapter : IStorageAdapter, IAsyncDisposable
             var response = await iterator.ReadNextAsync(ct);
             foreach (var item in response)
             {
-                paths.Add((string)item.key);
+                var ns = (string?)item.@namespace ?? "";
+                var id = (string)item.id;
+                var path = string.IsNullOrEmpty(ns) ? id : $"{ns}/{id}";
+                paths.Add(path);
             }
         }
 
@@ -260,9 +266,9 @@ public class CosmosStorageAdapter : IStorageAdapter, IAsyncDisposable
         if (!string.IsNullOrEmpty(basePath))
         {
             var normalizedPath = NormalizePath(basePath);
-            sql = sql.Replace("WHERE", $"WHERE STARTSWITH(c.key, @basePath) AND");
+            sql = sql.Replace("WHERE", $"WHERE STARTSWITH(c.namespace, @basePath) AND");
             if (!sql.Contains("WHERE"))
-                sql += " WHERE STARTSWITH(c.key, @basePath)";
+                sql += " WHERE STARTSWITH(c.namespace, @basePath)";
             parameters["@basePath"] = normalizedPath;
         }
 
@@ -285,13 +291,6 @@ public class CosmosStorageAdapter : IStorageAdapter, IAsyncDisposable
     }
 
     #endregion
-
-    private static string GetPartitionKey(string key)
-    {
-        // Use first segment as partition key for distribution
-        var firstSlash = key.IndexOf('/');
-        return firstSlash > 0 ? key[..firstSlash] : key;
-    }
 
     private static string GetPartitionStorageKey(string nodePath, string? subPath)
     {

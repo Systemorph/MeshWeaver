@@ -335,8 +335,7 @@ public class FileSystemPersistenceTest : IDisposable
         // First create the graph root node so the loader can find and recurse into it
         await File.WriteAllTextAsync(graphPath, """
             {
-                "path": "graph",
-                "key": "graph",
+                "id": "graph",
                 "name": "Graph Root",
                 "nodeType": "graph",
                 "displayOrder": 1
@@ -345,8 +344,8 @@ public class FileSystemPersistenceTest : IDisposable
 
         await File.WriteAllTextAsync(org1Path, """
             {
-                "path": "graph/org1",
-                "key": "graph/org1",
+                "id": "org1",
+                "namespace": "graph",
                 "name": "Loaded Org 1",
                 "nodeType": "org",
                 "displayOrder": 10
@@ -355,8 +354,8 @@ public class FileSystemPersistenceTest : IDisposable
 
         await File.WriteAllTextAsync(org2Path, """
             {
-                "path": "graph/org2",
-                "key": "graph/org2",
+                "id": "org2",
+                "namespace": "graph",
                 "name": "Loaded Org 2",
                 "nodeType": "org",
                 "displayOrder": 20
@@ -388,28 +387,31 @@ public class FileSystemPersistenceTest : IDisposable
         // Root graph node
         await File.WriteAllTextAsync(Path.Combine(_testDirectory, "graph.json"), """
             {
-                "path": "graph",
+                "id": "graph",
                 "name": "Graph Root"
             }
             """);
 
         await File.WriteAllTextAsync(Path.Combine(graphDir, "org1.json"), """
             {
-                "path": "graph/org1",
+                "id": "org1",
+                "namespace": "graph",
                 "name": "Organization 1"
             }
             """);
 
         await File.WriteAllTextAsync(Path.Combine(org1Dir, "project1.json"), """
             {
-                "path": "graph/org1/project1",
+                "id": "project1",
+                "namespace": "graph/org1",
                 "name": "Project 1"
             }
             """);
 
         await File.WriteAllTextAsync(Path.Combine(project1Dir, "story1.json"), """
             {
-                "path": "graph/org1/project1/story1",
+                "id": "story1",
+                "namespace": "graph/org1/project1",
                 "name": "Story 1"
             }
             """);

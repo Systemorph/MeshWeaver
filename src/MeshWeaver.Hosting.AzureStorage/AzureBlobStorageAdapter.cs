@@ -70,7 +70,6 @@ public class AzureBlobStorageAdapter : IStorageAdapter
         var key = NormalizePath(node.Path);
         var nodeToSave = node with
         {
-            Key = key,
             LastModified = node.LastModified == default ? DateTimeOffset.UtcNow : node.LastModified
         };
 

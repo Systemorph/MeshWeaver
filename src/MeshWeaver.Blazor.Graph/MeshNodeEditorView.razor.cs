@@ -162,7 +162,6 @@ public partial class MeshNodeEditorView
             // Update metadata
             var updatedNode = MeshNode.FromPath(_node.Path) with
             {
-                Key = _node.Key,
                 Name = _name,
                 NodeType = _node.NodeType,
                 Description = _description,
@@ -250,7 +249,6 @@ public partial class MeshNodeEditorView
 
             var updatedNode = MeshNode.FromPath(_node.Path) with
             {
-                Key = _node.Key,
                 Name = _node.Name,
                 NodeType = _node.NodeType,
                 Description = _node.Description,

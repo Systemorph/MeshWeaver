@@ -6,8 +6,17 @@ namespace MeshWeaver.Messaging;
 /// Unified address consisting of path segments.
 /// Example: "pricing/Microsoft/2026" has segments ["pricing", "Microsoft", "2026"]
 /// </summary>
-public sealed record Address(params string[] Segments)
+public sealed record Address
 {
+    /// <summary>
+    /// Unified address consisting of path segments.
+    /// Example: "pricing/Microsoft/2026" has segments ["pricing", "Microsoft", "2026"]
+    /// </summary>
+    public Address(params string[] Segments)
+    {
+        this.Segments = Segments.Length == 1 ? Segments[0].Split('/', StringSplitOptions.RemoveEmptyEntries) : Segments;
+    }
+
     /// <summary>
     /// Gets the first segment (typically the type/namespace).
     /// </summary>
@@ -26,6 +35,8 @@ public sealed record Address(params string[] Segments)
     /// When set, ToFullString() returns "host@this" format.
     /// </summary>
     public Address? Host { get; init; }
+
+    public string[] Segments { get; init; }
 
     public sealed override string ToString() => string.Join("/", Segments);
 
@@ -81,6 +92,11 @@ public sealed record Address(params string[] Segments)
 
     private static Address Parse(string address) =>
         new(address.Split('/'));
+
+    public void Deconstruct(out string[] Segments)
+    {
+        Segments = this.Segments;
+    }
 }
 
 public static class AddressExtensions

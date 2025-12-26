@@ -125,7 +125,7 @@ public record MeshBuilder
 
         ConfigureServices(services => services
             .AddSingleton(_ => new MeshConfiguration(
-                MeshNodes.ToDictionary(x => x.Key),
+                MeshNodes.ToDictionary(x => x.Path),
                 NodeTypeConfigs.ToDictionary(x => x.NodeType)))
             .AddSingleton<IUnifiedPathRegistry>(_ => pathRegistry)
             .AddSingleton<ITypeRegistry>(_ => meshTypeRegistry)

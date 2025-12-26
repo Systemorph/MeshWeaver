@@ -74,7 +74,7 @@ public sealed class MeshCatalog : IMeshCatalog
         // Try exact match in configuration
         if (Configuration.Nodes.TryGetValue(addressKey, out var node))
         {
-            cache.Set(node.Key, node, cacheOptions);
+            cache.Set(node.Path, node, cacheOptions);
             return UpdateNode(node);
         }
 
@@ -122,7 +122,7 @@ public sealed class MeshCatalog : IMeshCatalog
                 node = persistedNode;
             }
 
-            cache.Set(node.Key, node, cacheOptions);
+            cache.Set(node.Path, node, cacheOptions);
             return UpdateNode(node);
         }
 
@@ -131,7 +131,7 @@ public sealed class MeshCatalog : IMeshCatalog
 
     private MeshNode UpdateNode(MeshNode node)
     {
-        cache.Set(node.Key, node, cacheOptions);
+        cache.Set(node.Path, node, cacheOptions);
         persistenceHub.InvokeAsync(_ => Persistence.SaveNodeAsync(node), ex =>
         {
             logger.LogError(ex, "unable to update mesh catalog");

@@ -92,9 +92,9 @@ public class MeshWeaverDbContext(DbContextOptions<MeshWeaverDbContext> options)
         // Configure MeshNode entity (using the existing MeshNode type from the library)
         modelBuilder.Entity<MeshNode>(entity =>
         {
-            entity.HasKey(e => e.Key);
-            entity.Property(e => e.Key).IsRequired();
-            entity.Property(e => e.Namespace).IsRequired();
+            entity.HasKey(e => new { e.Namespace, e.Id });
+            entity.Property(e => e.Id).IsRequired();
+            entity.Property(e => e.Namespace).HasDefaultValue("");
             entity.Property(e => e.Name);
             entity.Property(e => e.NodeType);
 

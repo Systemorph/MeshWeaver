@@ -112,7 +112,7 @@ public static class LoomConfiguration
 
             return (TBuilder)builder
                 .AddFileSystemPersistence(dataDirectory)
-                .AddJsonGraphConfiguration(dataDirectory, configuration)
+                .AddJsonGraphConfiguration(dataDirectory)
                 // Register Azure Blob support for content collections.
                 // When IAzureClientFactory<BlobServiceClient> is registered (e.g., via Aspire),
                 // it will be used. Otherwise, falls back to Graph:ConnectionString configuration.

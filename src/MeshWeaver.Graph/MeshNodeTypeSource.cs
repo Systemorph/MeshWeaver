@@ -88,7 +88,7 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
                 continue;
 
             // Get the previous node to check if content changed
-            if (!_lastSaved.Instances.TryGetValue(node.Key, out var previousObj))
+            if (!_lastSaved.Instances.TryGetValue(node.Path, out var previousObj))
                 continue;
 
             var previousNode = (MeshNode)previousObj;

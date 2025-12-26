@@ -424,7 +424,7 @@ public class AutocompleteServiceTest
 
     private class MockMeshCatalog(System.Collections.Generic.IReadOnlyList<Mesh.MeshNode> nodes) : Mesh.Services.IMeshCatalog
     {
-        public Mesh.MeshConfiguration Configuration => new(nodes.ToDictionary(n => n.Key), new System.Collections.Generic.Dictionary<string, Mesh.NodeTypeConfiguration>());
+        public Mesh.MeshConfiguration Configuration => new(nodes.ToDictionary(n => n.Path), new System.Collections.Generic.Dictionary<string, Mesh.NodeTypeConfiguration>());
         public Mesh.IUnifiedPathRegistry PathRegistry => throw new System.NotImplementedException();
 
         public Task<Mesh.MeshNode?> GetNodeAsync(Messaging.Address address) => Task.FromResult<Mesh.MeshNode?>(null);
