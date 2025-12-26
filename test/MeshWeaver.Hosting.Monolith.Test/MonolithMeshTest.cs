@@ -52,12 +52,12 @@ public class MonolithMeshTest(ITestOutputHelper output) : MonolithMeshTestBase(o
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder) =>
         base.ConfigureMesh(builder)
-            .AddMeshNodes(new MeshNode($"{AddressExtensions.AppType}/HubFactory")
+            .AddMeshNodes(MeshNode.FromPath($"{AddressExtensions.AppType}/HubFactory") with
             {
                 Name = "HubFactory",
                 HubConfiguration = x => x
             })
-                .AddMeshNodes(new MeshNode($"{AddressExtensions.AppType}/Kernel")
+                .AddMeshNodes(MeshNode.FromPath($"{AddressExtensions.AppType}/Kernel") with
                 {
                     Name = "Kernel",
                     StartupScript = @$"using MeshWeaver.Messaging; Mesh.ServiceProvider.CreateMessageHub(AddressExtensions.CreateAppAddress(""Kernel""))"
