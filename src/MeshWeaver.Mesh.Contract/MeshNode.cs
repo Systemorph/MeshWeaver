@@ -145,6 +145,13 @@ public record MeshNode([property: Key] string Id, string Namespace = "")
     public long Version { get; init; }
 
     /// <summary>
+    /// The lifecycle state of this node.
+    /// Transient nodes are awaiting hub confirmation.
+    /// Active nodes have been validated and persisted.
+    /// </summary>
+    public MeshNodeState State { get; init; } = MeshNodeState.Active;
+
+    /// <summary>
     /// The data model content for this node.
     /// The type depends on NodeType (e.g., Organization, Project, Story).
     /// </summary>

@@ -157,7 +157,8 @@ public record MeshBuilder
     private static MessageHubConfiguration AddMesh(MessageHubConfiguration configuration)
     {
         return configuration
-            .AddMeshTypes();
+            .AddMeshTypes()
+            .WithNodeOperationHandlers();
     }
     public MeshBuilder AddMeshNodes(params IEnumerable<MeshNode> nodes)
     {
