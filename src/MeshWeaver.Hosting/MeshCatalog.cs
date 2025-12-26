@@ -137,7 +137,67 @@ public sealed class MeshCatalog : IMeshCatalog
             return resultNode;
         }
 
+        // Try to find a template node that matches this address
+        var templateNode = FindTemplateNode(address);
+        if (templateNode != null)
+        {
+            // Create a virtual node based on the template with the requested address
+            // Virtual nodes are marked with IsVirtual=true so CreateTransientNodeAsync can skip them
+            var virtualNode = CreateVirtualNodeFromTemplate(templateNode, address);
+            cache.Set(virtualNode.Path, virtualNode, cacheOptions);
+            if (!await ValidateReadAsync(virtualNode))
+                return null;
+            return virtualNode;
+        }
+
         return null;
+    }
+
+    /// <summary>
+    /// Finds a template node that matches the given address based on AddressSegments.
+    /// </summary>
+    private MeshNode? FindTemplateNode(Address address)
+    {
+        var segments = address.Segments;
+        if (segments.Length == 0)
+            return null;
+
+        // Look for template nodes in Configuration.Nodes that match the first segment
+        // and have AddressSegments >= the address length
+        foreach (var configNode in Configuration.Nodes.Values)
+        {
+            if (configNode.AddressSegments > 0 &&
+                configNode.Segments.Count > 0 &&
+                segments[0].Equals(configNode.Segments[0], StringComparison.OrdinalIgnoreCase) &&
+                configNode.AddressSegments >= segments.Length)
+            {
+                return configNode;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Creates a virtual node from a template, inheriting key properties.
+    /// </summary>
+    private MeshNode CreateVirtualNodeFromTemplate(MeshNode template, Address address)
+    {
+        var segments = address.Segments;
+        var id = segments.Length > 0 ? segments[^1] : template.Id;
+        var ns = segments.Length > 1 ? string.Join("/", segments.Take(segments.Length - 1)) : "";
+
+        return new MeshNode(id, ns)
+        {
+            Name = template.Name,
+            Description = template.Description,
+            IconName = template.IconName,
+            DisplayOrder = template.DisplayOrder,
+            HubConfiguration = template.HubConfiguration,
+            AddressSegments = template.AddressSegments,
+            AssemblyLocation = template.AssemblyLocation,
+            IsVirtual = true
+        };
     }
 
     /// <summary>
@@ -208,8 +268,8 @@ public sealed class MeshCatalog : IMeshCatalog
     /// <inheritdoc />
     public async Task<MeshNode> CreateTransientNodeAsync(MeshNode node, string? createdBy = null, CancellationToken ct = default)
     {
-        // 1. Check if node already exists in cache
-        if (cache.TryGetValue(node.Path, out _))
+        // 1. Check if node already exists in cache (skip virtual nodes - they're just templates)
+        if (cache.TryGetValue(node.Path, out var cachedValue) && cachedValue is MeshNode cachedNode && !cachedNode.IsVirtual)
         {
             throw new InvalidOperationException($"Node already exists at path: {node.Path}");
         }

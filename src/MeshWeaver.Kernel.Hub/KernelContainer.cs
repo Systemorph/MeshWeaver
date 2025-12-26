@@ -106,7 +106,7 @@ public class KernelContainer(IServiceProvider serviceProvider)
                 return request.Processed();
             }
 
-            var innerAddress = request.Target;
+            var innerAddress = request.Target with { Host = null };
             var meshNode = await meshCatalog.GetNodeAsync(innerAddress);
             if (meshNode == null)
                 return DeliveryFailure(kernelHub, request, $"No mesh node was found for {innerAddress}");
@@ -127,10 +127,10 @@ public class KernelContainer(IServiceProvider serviceProvider)
             }
 
 
-            hub = kernelHub.GetHostedHub(innerAddress with { Host = null }, HostedHubCreation.Never);
+            hub = kernelHub.GetHostedHub(innerAddress, HostedHubCreation.Never);
             if (hub is not null)
             {
-                hub.DeliverMessage(request.ForwardTo(innerAddress with { Host = null }));
+                hub.DeliverMessage(request.ForwardTo(innerAddress));
                 return request.Processed();
             }
 

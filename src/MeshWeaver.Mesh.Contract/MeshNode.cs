@@ -152,6 +152,13 @@ public record MeshNode([property: Key] string Id, string Namespace = "")
     public MeshNodeState State { get; init; } = MeshNodeState.Active;
 
     /// <summary>
+    /// Indicates this is a virtual node created from a template, not persisted.
+    /// Virtual nodes are created on-demand when addressing template-based paths.
+    /// CreateNodeRequest should not consider virtual nodes as "existing" nodes.
+    /// </summary>
+    public bool IsVirtual { get; init; }
+
+    /// <summary>
     /// The data model content for this node.
     /// The type depends on NodeType (e.g., Organization, Project, Story).
     /// </summary>
