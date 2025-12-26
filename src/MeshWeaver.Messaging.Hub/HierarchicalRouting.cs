@@ -1,5 +1,5 @@
-﻿using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.DependencyInjection;
+﻿using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Messaging;
 
@@ -127,10 +127,20 @@ internal class HierarchicalRouting
 
         if (parentHub == null)
         {
+
+            var firstTarget = delivery.Target;
+            while (firstTarget.Host is not null)
+                firstTarget = firstTarget.Host;
+            var hosted = hub.GetHostedHub(firstTarget, create: HostedHubCreation.Never);
+            if (hosted is not null)
+            {
+                hosted.DeliverMessage(delivery);
+                return delivery.Forwarded(hosted.Address);
+            }
             var errorMessage = isDisposing
                 ? $"No route found for {delivery.Target} and hub {hub.Address} is disposing"
                 : $"No route found for host {delivery.Target}. Last tried in {hub.Address}";
-                
+
             logger.LogDebug(errorMessage);
             hub.Post(
                 new DeliveryFailure(delivery)
@@ -145,9 +155,9 @@ internal class HierarchicalRouting
         // Check if parent hub is also disposing before routing up
         if (parentHub.RunLevel >= MessageHubRunLevel.DisposeHostedHubs)
         {
-            logger.LogWarning("Cannot route to parent hub {ParentAddress} - parent is also disposing. Message: {MessageType}", 
+            logger.LogWarning("Cannot route to parent hub {ParentAddress} - parent is also disposing. Message: {MessageType}",
                 parentHub.Address, delivery.Message.GetType().Name);
-            
+
             hub.Post(
                 new DeliveryFailure(delivery)
                 {
@@ -157,7 +167,7 @@ internal class HierarchicalRouting
             );
             return delivery.Failed("Parent hub disposing");
         }
-        
+
         logger.LogDebug("Routing delivery {id} of type {type} to parent {target}", delivery.Id,
             delivery.Message.GetType().Name, parentHub.Address);
         if (parentHub.Address.Type != AddressExtensions.MeshType)

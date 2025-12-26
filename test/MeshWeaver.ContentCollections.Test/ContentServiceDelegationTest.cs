@@ -15,7 +15,7 @@ public class ContentServiceDelegationTest(ITestOutputHelper output) : HubTestBas
     private readonly string _parentPath = Path.Combine(AppContext.BaseDirectory, "Files", "Parent");
     private readonly string _childPath = Path.Combine(AppContext.BaseDirectory, "Files", "Child");
 
-    protected override MessageHubConfiguration ConfigureRouter(MessageHubConfiguration configuration)
+    protected override MessageHubConfiguration ConfigureMesh(MessageHubConfiguration configuration)
     {
         // Register ParentCollection at router level so both host and client can access it
         return configuration
@@ -34,7 +34,7 @@ public class ContentServiceDelegationTest(ITestOutputHelper output) : HubTestBas
     public async Task ContentService_ShouldDelegateToParent()
     {
         // Arrange
-        var parentHub = Router; // Use router as the top-level hub
+        var parentHub = Mesh; // Use router as the top-level hub
         var childHub = GetClient();
 
         Output.WriteLine($"Parent hub address: {parentHub.Address}");

@@ -52,7 +52,7 @@ public class RawJsonTest(ITestOutputHelper output) : HubTestBase(output)
         actualMessage.Should().HaveElement("$type").Which.Should().HaveValue(typeof(SubscribeRequest).FullName);
 
         // act
-        var deserialized = JsonSerializer.Deserialize<MessageDelivery<RawJson>>(serialized, Router.JsonSerializerOptions);
+        var deserialized = JsonSerializer.Deserialize<MessageDelivery<RawJson>>(serialized, Mesh.JsonSerializerOptions);
 
         // assert
         deserialized.Should().NotBeNull()
@@ -82,13 +82,13 @@ public class RawJsonTest(ITestOutputHelper output) : HubTestBase(output)
                 }
             );
         var entityStore = new EntityStore();
-        var entityStoreSerialized = JsonSerializer.Serialize(entityStore, Router.JsonSerializerOptions);
+        var entityStoreSerialized = JsonSerializer.Serialize(entityStore, Mesh.JsonSerializerOptions);
         var dataChanged = new DataChangedEvent("123", 10, new RawJson(entityStoreSerialized), ChangeType.Full, null);
-        var delivery = new MessageDelivery<DataChangedEvent>(dataChanged, postOptions, Router.JsonSerializerOptions);
+        var delivery = new MessageDelivery<DataChangedEvent>(dataChanged, postOptions, Mesh.JsonSerializerOptions);
         var packedDelivery = delivery.Package();
 
         // act
-        var serialized = JsonSerializer.Serialize(packedDelivery, Router.JsonSerializerOptions);
+        var serialized = JsonSerializer.Serialize(packedDelivery, Mesh.JsonSerializerOptions);
 
         // assert
         var actual = serialized.Should().NotBeNull().And.BeValidJson().Which;

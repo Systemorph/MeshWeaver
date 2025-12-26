@@ -18,10 +18,9 @@ public static class TestHubExtensions
     public static readonly MeshNode Node = new(nameof(Test), AddressExtensions.AppType)
     {
         Name = nameof(Test),
-        StartupScript = $"""
-                         #r "{typeof(TestHubExtensions).Namespace}"
-                         {typeof(TestHubExtensions).FullName}.{nameof(CreateTestHub)}(Mesh);
-                         """
+        HubConfiguration = config => config.AddLayout(layout =>
+            layout.WithView(ctx => ctx.Area == "Dashboard",
+                (_, ctx) => new LayoutGridControl()))
     };
     public static readonly string GetDashboardCommand =
         @$"

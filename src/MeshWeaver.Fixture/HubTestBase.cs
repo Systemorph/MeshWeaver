@@ -9,29 +9,29 @@ namespace MeshWeaver.Fixture;
 public class HubTestBase : TestBase
 {
 
-    protected const string RouterType = "router";
+    protected const string MeshType = AddressExtensions.MeshType;
     protected const string HostType = "host";
     protected const string ClientType = "client";
 
-    protected static Address CreateRouterAddress(string? id = null) => new(RouterType, id ?? "1");
+    protected static Address CreateMeshAddress(string? id = null) => new(MeshType, id ?? "1");
     protected static Address CreateHostAddress(string? id = null) => new(HostType, id ?? "1");
     protected static Address CreateClientAddress(string? id = null) => new(ClientType, id ?? "1");
 
     [Inject]
-    protected IMessageHub Router = null!;
+    protected IMessageHub Mesh = null!;
     [Inject]
     protected ILogger<HubTestBase> Logger = null!;
-    
+
     protected HubTestBase(ITestOutputHelper output)
         : base(output)
     {
 
         Services.AddSingleton(
-            sp => sp.CreateMessageHub(CreateRouterAddress(), ConfigureRouter)
+            sp => sp.CreateMessageHub(CreateMeshAddress(), ConfigureMesh)
         );
     }
 
-    protected virtual MessageHubConfiguration ConfigureRouter(MessageHubConfiguration conf)
+    protected virtual MessageHubConfiguration ConfigureMesh(MessageHubConfiguration conf)
     {
         return conf.WithRoutes(forward =>
             forward
@@ -50,21 +50,21 @@ public class HubTestBase : TestBase
 
     protected virtual IMessageHub GetHost(Func<MessageHubConfiguration, MessageHubConfiguration>? configuration = default)
     {
-        return Router.GetHostedHub(CreateHostAddress(), configuration ?? ConfigureHost);
+        return Mesh.GetHostedHub(CreateHostAddress(), configuration ?? ConfigureHost);
     }
 
     protected virtual IMessageHub GetClient(Func<MessageHubConfiguration, MessageHubConfiguration>? configuration = default)
     {
-        return Router.GetHostedHub(CreateClientAddress(), configuration ?? ConfigureClient);
+        return Mesh.GetHostedHub(CreateClientAddress(), configuration ?? ConfigureClient);
     }
     public override async ValueTask DisposeAsync()
     {
         // ReSharper disable once ConditionIsAlwaysTrueOrFalseAccordingToNullableAPIContract
-        if (Router is null)
+        if (Mesh is null)
             return;
         var disposalId = Guid.NewGuid().ToString("N")[..8];
 
-        Logger.LogInformation("[{DisposalId}] Starting disposal of router {RouterAddress}", disposalId, Router.Address);
+        Logger.LogInformation("[{DisposalId}] Starting disposal of router {RouterAddress}", disposalId, Mesh.Address);
 
         try
         {
@@ -73,29 +73,29 @@ public class HubTestBase : TestBase
             using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(timeoutSeconds));
 
             // Log which hubs exist before disposal
-            var hostedHubsProperty = Router.GetType().GetProperty("HostedHubs");
-            var hostedHubsValue = hostedHubsProperty?.GetValue(Router)?.ToString() ?? "unknown";
-            Logger.LogInformation("[{DisposalId}] Router has {HubCount} hosted hubs", disposalId, hostedHubsValue);
+            var hostedHubsProperty = Mesh.GetType().GetProperty("HostedHubs");
+            var hostedHubsValue = hostedHubsProperty?.GetValue(Mesh)?.ToString() ?? "unknown";
+            Logger.LogInformation("[{DisposalId}] Mesh has {HubCount} hosted hubs", disposalId, hostedHubsValue);
 
-            if (Router.Disposal is not null)
-                await Router.Disposal.WaitAsync(timeout.Token);
+            if (Mesh.Disposal is not null)
+                await Mesh.Disposal.WaitAsync(timeout.Token);
 
-            if (Router.Disposal is not null)
+            if (Mesh.Disposal is not null)
             {
-                Logger.LogInformation("[{DisposalId}] Router.Disposal exists, waiting for completion", disposalId);
-                await Router.Disposal.WaitAsync(timeout.Token);
-                Logger.LogInformation("[{DisposalId}] Router.Disposal completed", disposalId);
+                Logger.LogInformation("[{DisposalId}] Mesh.Disposal exists, waiting for completion", disposalId);
+                await Mesh.Disposal.WaitAsync(timeout.Token);
+                Logger.LogInformation("[{DisposalId}] Mesh.Disposal completed", disposalId);
             }
         }
         catch (OperationCanceledException)
         {
-            Logger.LogError("[{DisposalId}] HANG DETECTED: Router disposal timed out after {TimeoutSeconds}s", disposalId, 10);
-            Logger.LogError("[{DisposalId}] Router address: {Address}", disposalId, Router.Address);
-            var disposalState = Router.Disposal?.IsCompleted == true ? "Completed" : 
-                Router.Disposal?.IsFaulted == true ? "Faulted" : 
-                Router.Disposal == null ? "Null" : "Pending";
-            Logger.LogError("[{DisposalId}] Router.Disposal state: {State}", disposalId, disposalState);
-            
+            Logger.LogError("[{DisposalId}] HANG DETECTED: Mesh disposal timed out after {TimeoutSeconds}s", disposalId, 10);
+            Logger.LogError("[{DisposalId}] Mesh address: {Address}", disposalId, Mesh.Address);
+            var disposalState = Mesh.Disposal?.IsCompleted == true ? "Completed" :
+                Mesh.Disposal?.IsFaulted == true ? "Faulted" :
+                Mesh.Disposal == null ? "Null" : "Pending";
+            Logger.LogError("[{DisposalId}] Mesh.Disposal state: {State}", disposalId, disposalState);
+
             // Don't fight symptoms - let it timeout and provide diagnostic info
             throw;
         }
@@ -107,7 +107,7 @@ public class HubTestBase : TestBase
         finally
         {
             await base.DisposeAsync();
-            Router = null!;
+            Mesh = null!;
         }
     }
 }
