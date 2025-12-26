@@ -325,7 +325,7 @@ public class AddressSegmentsTest(ITestOutputHelper output) : MonolithMeshTestBas
 
         // Assert
         node.Should().NotBeNull();
-        node!.Key.Should().Be("pricing/Microsoft/2026");
+        node!.Path.Should().Be("pricing/Microsoft/2026");
         node.Name.Should().Be("Pricing"); // Inherited from template
         node.HubConfiguration.Should().NotBeNull(); // Inherited from template
     }
@@ -358,7 +358,7 @@ public class AddressSegmentsTest(ITestOutputHelper output) : MonolithMeshTestBas
 
         // Assert
         node.Should().NotBeNull();
-        node!.Key.Should().Be("pricing");
+        node!.Path.Should().Be("pricing");
         node.AddressSegments.Should().Be(3);
     }
 }

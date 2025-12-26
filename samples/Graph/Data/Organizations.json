@@ -1,7 +1,5 @@
 {
   "id": "Organizations",
-  "namespace": null,
-  "key": "Organizations",
   "name": "Organizations",
   "nodeType": "Type/Organizations",
   "description": "Catalog of organizations",

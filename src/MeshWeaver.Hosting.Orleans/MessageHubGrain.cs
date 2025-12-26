@@ -76,7 +76,7 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
     {
         if (node.AssemblyLocation is null)
             throw new ArgumentException(
-                $"Assembly location is not configured for node {node.Key}."
+                $"Assembly location is not configured for node {node.Path}."
             );
         var assembly = Assembly.LoadFrom(node.AssemblyLocation);
         if(assembly is null)
@@ -87,7 +87,7 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
 
         if(node.HubConfiguration is null)
             throw new ArgumentException(
-                $"No hub configuration is specified for {node.Key}."
+                $"No hub configuration is specified for {node.Path}."
             );
 
         return meshHub.GetHostedHub(address, node.HubConfiguration)!;

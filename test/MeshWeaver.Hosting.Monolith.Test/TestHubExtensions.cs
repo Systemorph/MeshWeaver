@@ -15,7 +15,7 @@ public static class TestHubExtensions
                 )
             )
         );
-    public static readonly MeshNode Node = new($"{AddressExtensions.AppType}/{nameof(Test)}")
+    public static readonly MeshNode Node = new(nameof(Test), AddressExtensions.AppType)
     {
         Name = nameof(Test),
         StartupScript = $"""
