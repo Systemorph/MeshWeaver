@@ -60,19 +60,12 @@ public static class MeshExtensions
             var createRequest = request.Message;
             var node = createRequest.Node;
 
-            // 1. Check if node already exists
-            var existingNode = await catalog.GetNodeAsync(new Address(node.Path));
-            if (existingNode != null)
-            {
-                hub.Post(
-                    CreateNodeResponse.Fail(
-                        $"Node already exists at path: {node.Path}",
-                        NodeCreationRejectionReason.NodeAlreadyExists),
-                    o => o.ResponseFor(request));
-                return request.Processed();
-            }
+            // Note: We don't check for existing nodes here via GetNodeAsync because:
+            // 1. GetNodeAsync now returns virtual nodes from templates
+            // 2. CreateTransientNodeAsync already checks cache + persistence directly
+            // The existence check happens in CreateTransientNodeAsync and throws InvalidOperationException
 
-            // 2. Validate NodeType if specified
+            // 1. Validate NodeType if specified
             if (!string.IsNullOrEmpty(node.NodeType))
             {
                 var nodeTypeConfig = catalog.GetNodeTypeConfiguration(node.NodeType);
@@ -129,8 +122,14 @@ public static class MeshExtensions
             }
 
             logger.LogWarning(ex, "Node creation failed for path {Path}", request.Message.Node.Path);
+
+            // Determine the appropriate rejection reason
+            var reason = ex.Message.Contains("already exists", StringComparison.OrdinalIgnoreCase)
+                ? NodeCreationRejectionReason.NodeAlreadyExists
+                : NodeCreationRejectionReason.ValidationFailed;
+
             hub.Post(
-                CreateNodeResponse.Fail(ex.Message, NodeCreationRejectionReason.ValidationFailed),
+                CreateNodeResponse.Fail(ex.Message, reason),
                 o => o.ResponseFor(request));
             return request.Processed();
         }
