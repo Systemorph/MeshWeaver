@@ -43,7 +43,7 @@ public record MessageLog(
 /// For template nodes, AddressSegments determines how many path segments are used for hub addressing.
 /// Score-based matching uses the Prefix (derived from Path) for pattern matching.
 /// </summary>
-public record MeshNode([property: Key] string Id, string Namespace = "")
+public record MeshNode([property: Key] string Id, string? Namespace = null)
 {
     /// <summary>
     /// The full path derived from Namespace and Id.
@@ -52,6 +52,10 @@ public record MeshNode([property: Key] string Id, string Namespace = "")
     [JsonIgnore, NotMapped]
     public string Path => string.IsNullOrEmpty(Namespace) ? (Id) : $"{Namespace}/{Id}";
 
+    /// <summary>
+    /// Single segments as used for matching and addressing.
+    /// </summary>
+    [JsonIgnore, NotMapped]
     public readonly IReadOnlyList<string> Segments =
         string.IsNullOrEmpty(Namespace)
             ? (string.IsNullOrEmpty(Id) ? Array.Empty<string>() : Id.Split('/'))
