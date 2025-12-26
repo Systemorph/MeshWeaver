@@ -12,7 +12,6 @@ using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
-using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
@@ -340,7 +339,7 @@ public record Graph
 
         // Assert
         resolution.Should().NotBeNull("persistence has graph/org1");
-        resolution!.Prefix.Should().Be("graph/org1");
+        resolution.Prefix.Should().Be("graph/org1");
         resolution.Remainder.Should().BeNull();
     }
 
@@ -361,7 +360,7 @@ public record Graph
 
         // Assert: should match graph/org1/proj1 with remainder
         resolution.Should().NotBeNull();
-        resolution!.Prefix.Should().Be("graph/org1/proj1");
+        resolution.Prefix.Should().Be("graph/org1/proj1");
         resolution.Remainder.Should().Be("nonexistent/deep");
     }
 
@@ -382,7 +381,7 @@ public record Graph
 
         // Assert
         resolution.Should().NotBeNull();
-        resolution!.Prefix.Should().Be("graph/org1/proj1/story1");
+        resolution.Prefix.Should().Be("graph/org1/proj1/story1");
         resolution.Remainder.Should().BeNull();
     }
 
@@ -403,7 +402,7 @@ public record Graph
 
         // Assert
         resolution.Should().NotBeNull();
-        resolution!.Prefix.Should().Be("graph/org1/proj1/story1");
+        resolution.Prefix.Should().Be("graph/org1/proj1/story1");
         resolution.Remainder.Should().Be("Overview");
     }
 
@@ -443,7 +442,7 @@ public record Graph
 
         // Assert: "graph" is the address, "_Nodes" is the remainder (layout area)
         resolution.Should().NotBeNull();
-        resolution!.Prefix.Should().Be("graph");
+        resolution.Prefix.Should().Be("graph");
         resolution.Remainder.Should().Be("_Nodes");
     }
 
@@ -466,7 +465,7 @@ public record Graph
 
         // Assert
         resolution.Should().NotBeNull("type/graph should be resolvable");
-        resolution!.Prefix.Should().Be("type/graph");
+        resolution.Prefix.Should().Be("type/graph");
         resolution.Remainder.Should().BeNull();
     }
 
@@ -484,7 +483,7 @@ public record Graph
 
         // Assert
         node.Should().NotBeNull("type/graph node should exist");
-        node!.Path.Should().Be("type/graph");
+        node.Path.Should().Be("type/graph");
         node.NodeType.Should().Be("NodeType");
         node.Content.Should().BeOfType<NodeTypeDefinition>();
     }
@@ -507,7 +506,7 @@ public record Graph
 
         // Assert
         resolution.Should().NotBeNull($"{typePath} should be resolvable");
-        resolution!.Prefix.Should().Be(typePath);
+        resolution.Prefix.Should().Be(typePath);
         resolution.Remainder.Should().BeNull();
     }
 
@@ -520,11 +519,11 @@ public record Graph
         // Assert that type nodes exist
         var graphType = await Persistence.GetNodeAsync("type/graph", TestContext.Current.CancellationToken);
         graphType.Should().NotBeNull("type/graph should exist in persistence");
-        graphType!.NodeType.Should().Be("NodeType");
+        graphType.NodeType.Should().Be("NodeType");
 
         var orgType = await Persistence.GetNodeAsync("type/org", TestContext.Current.CancellationToken);
         orgType.Should().NotBeNull("type/org should exist in persistence");
-        orgType!.NodeType.Should().Be("NodeType");
+        orgType.NodeType.Should().Be("NodeType");
     }
 
     #endregion
@@ -553,7 +552,7 @@ public record Graph
 
         var newNode = await Persistence.GetNodeAsync("graph/movetest-renamed", TestContext.Current.CancellationToken);
         newNode.Should().NotBeNull("Node should exist at new path");
-        newNode!.Name.Should().Be("Move Test");
+        newNode.Name.Should().Be("Move Test");
     }
 
     /// <summary>
@@ -580,19 +579,19 @@ public record Graph
         // Assert - new paths should exist with correct data
         var newParent = await Persistence.GetNodeAsync("graph/newparent", TestContext.Current.CancellationToken);
         newParent.Should().NotBeNull();
-        newParent!.Name.Should().Be("Parent");
+        newParent.Name.Should().Be("Parent");
 
         var newChild1 = await Persistence.GetNodeAsync("graph/newparent/child1", TestContext.Current.CancellationToken);
         newChild1.Should().NotBeNull();
-        newChild1!.Name.Should().Be("Child 1");
+        newChild1.Name.Should().Be("Child 1");
 
         var newChild2 = await Persistence.GetNodeAsync("graph/newparent/child2", TestContext.Current.CancellationToken);
         newChild2.Should().NotBeNull();
-        newChild2!.Name.Should().Be("Child 2");
+        newChild2.Name.Should().Be("Child 2");
 
         var newGrandchild = await Persistence.GetNodeAsync("graph/newparent/child1/grandchild", TestContext.Current.CancellationToken);
         newGrandchild.Should().NotBeNull();
-        newGrandchild!.Name.Should().Be("Grandchild");
+        newGrandchild.Name.Should().Be("Grandchild");
     }
 
     /// <summary>
@@ -969,7 +968,7 @@ public class OrganizationsLayoutTest : MonolithMeshTestBase
 
         // Assert
         resolution.Should().NotBeNull("Organizations should be resolvable");
-        resolution!.Prefix.Should().Be("Organizations");
+        resolution.Prefix.Should().Be("Organizations");
     }
 
     /// <summary>
@@ -985,7 +984,7 @@ public class OrganizationsLayoutTest : MonolithMeshTestBase
 
         // Assert
         resolution.Should().NotBeNull("Type/Organizations should be resolvable");
-        resolution!.Prefix.Should().Be("Type/Organizations");
+        resolution.Prefix.Should().Be("Type/Organizations");
     }
 
     /// <summary>
@@ -1009,7 +1008,7 @@ public class OrganizationsLayoutTest : MonolithMeshTestBase
         nodeTypeNode.Should().NotBeNull(
             "NodeTypeService should find the NodeType node for 'Type/Organizations'. " +
             "The search now includes the parent path of the nodeType.");
-        nodeTypeNode!.Path.Should().Be("Type/Organizations");
+        nodeTypeNode.Path.Should().Be("Type/Organizations");
         nodeTypeNode.NodeType.Should().Be("NodeType");
     }
 
@@ -1029,7 +1028,7 @@ public class OrganizationsLayoutTest : MonolithMeshTestBase
 
         // Assert
         nodeTypeNode.Should().NotBeNull("Type/Organizations should exist");
-        nodeTypeNode!.Content.Should().BeOfType<NodeTypeDefinition>();
+        nodeTypeNode.Content.Should().BeOfType<NodeTypeDefinition>();
 
         var nodeTypeDef = (NodeTypeDefinition)nodeTypeNode.Content!;
         nodeTypeDef.ChildrenQuery.Should().NotBeNullOrEmpty(
@@ -1263,7 +1262,7 @@ public class FileSystemPersistenceTest : MonolithMeshTestBase
         nodeTypeNode.Should().NotBeNull(
             "NodeTypeService should find the NodeType node from disk. " +
             "If null, the Content property was likely deserialized as JsonElement instead of NodeTypeDefinition.");
-        nodeTypeNode!.Path.Should().Be("Type/Organizations");
+        nodeTypeNode.Path.Should().Be("Type/Organizations");
         nodeTypeNode.NodeType.Should().Be("NodeType");
 
         // Critical: Content must be NodeTypeDefinition, not JsonElement
@@ -1289,7 +1288,7 @@ public class FileSystemPersistenceTest : MonolithMeshTestBase
         codeConfig.Should().NotBeNull(
             "CodeConfiguration should be loaded from Type/Organizations/codeConfiguration.json. " +
             "If null, the $type discriminator was not processed during JSON deserialization.");
-        codeConfig!.Code.Should().NotBeNullOrEmpty();
+        codeConfig.Code.Should().NotBeNullOrEmpty();
     }
 
     /// <summary>
@@ -1307,7 +1306,7 @@ public class FileSystemPersistenceTest : MonolithMeshTestBase
 
         // Assert
         node.Should().NotBeNull("Organizations node should exist on disk");
-        node!.HubConfiguration.Should().NotBeNull(
+        node.HubConfiguration.Should().NotBeNull(
             "Organizations node should have HubConfiguration from the compiled assembly. " +
             "If null, the on-demand compilation failed - likely because NodeTypeDefinition or CodeConfiguration " +
             "were not properly deserialized from JSON (returned as JsonElement instead).");
