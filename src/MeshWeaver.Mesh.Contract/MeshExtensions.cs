@@ -21,6 +21,9 @@ public static class MeshExtensions
         config.TypeRegistry.WithType(typeof(DeleteNodeRequest), nameof(DeleteNodeRequest));
         config.TypeRegistry.WithType(typeof(DeleteNodeResponse), nameof(DeleteNodeResponse));
         config.TypeRegistry.WithType(typeof(NodeDeletionRejectionReason), nameof(NodeDeletionRejectionReason));
+        config.TypeRegistry.WithType(typeof(UpdateNodeRequest), nameof(UpdateNodeRequest));
+        config.TypeRegistry.WithType(typeof(UpdateNodeResponse), nameof(UpdateNodeResponse));
+        config.TypeRegistry.WithType(typeof(NodeUpdateRejectionReason), nameof(NodeUpdateRejectionReason));
         return config;
     }
 
@@ -31,7 +34,8 @@ public static class MeshExtensions
     {
         return config
             .WithHandler<CreateNodeRequest>(HandleCreateNodeRequest)
-            .WithHandler<DeleteNodeRequest>(HandleDeleteNodeRequest);
+            .WithHandler<DeleteNodeRequest>(HandleDeleteNodeRequest)
+            .WithHandler<UpdateNodeRequest>(HandleUpdateNodeRequest);
     }
 
     private static async Task<IMessageDelivery> HandleCreateNodeRequest(
@@ -318,6 +322,141 @@ public static class MeshExtensions
                     if (validator != null)
                     {
                         var result = await validator.ValidateAsync(node, request, ct);
+                        if (!result.IsValid)
+                            return (result.ErrorMessage, result.Reason);
+                    }
+                }
+            }
+        }
+
+        return null; // All validators passed
+    }
+
+    private static async Task<IMessageDelivery> HandleUpdateNodeRequest(
+        IMessageHub hub,
+        IMessageDelivery<UpdateNodeRequest> request,
+        CancellationToken ct)
+    {
+        var logger = hub.ServiceProvider.GetRequiredService<ILogger<IMeshCatalog>>();
+        var catalog = hub.ServiceProvider.GetService<IMeshCatalog>();
+
+        if (catalog == null)
+        {
+            hub.Post(
+                UpdateNodeResponse.Fail("IMeshCatalog not available", NodeUpdateRejectionReason.Unknown),
+                o => o.ResponseFor(request));
+            return request.Processed();
+        }
+
+        try
+        {
+            var updateRequest = request.Message;
+            var updatedNode = updateRequest.Node;
+
+            // 1. Check if node exists
+            var existingNode = await catalog.GetNodeAsync(new Address(updatedNode.Path));
+            if (existingNode == null)
+            {
+                hub.Post(
+                    UpdateNodeResponse.Fail(
+                        $"Node not found at path: {updatedNode.Path}",
+                        NodeUpdateRejectionReason.NodeNotFound),
+                    o => o.ResponseFor(request));
+                return request.Processed();
+            }
+
+            // 2. Validate NodeType hasn't changed (if set)
+            if (!string.IsNullOrEmpty(existingNode.NodeType) &&
+                !string.IsNullOrEmpty(updatedNode.NodeType) &&
+                existingNode.NodeType != updatedNode.NodeType)
+            {
+                hub.Post(
+                    UpdateNodeResponse.Fail(
+                        $"Cannot change NodeType from '{existingNode.NodeType}' to '{updatedNode.NodeType}'",
+                        NodeUpdateRejectionReason.InvalidNodeType),
+                    o => o.ResponseFor(request));
+                return request.Processed();
+            }
+
+            // 3. Run validators (global + NodeType-specific)
+            var validationError = await RunUpdateValidatorsAsync(hub, catalog, existingNode, updatedNode, ct);
+            if (validationError != null)
+            {
+                logger.LogWarning("Validator rejected node update at {Path}: {Error}",
+                    updatedNode.Path, validationError.Value.ErrorMessage);
+
+                hub.Post(
+                    UpdateNodeResponse.Fail(
+                        validationError.Value.ErrorMessage ?? "Validation failed",
+                        validationError.Value.Reason),
+                    o => o.ResponseFor(request));
+                return request.Processed();
+            }
+
+            // 4. Update the node - preserve State and HubConfiguration from existing
+            var nodeToSave = updatedNode with
+            {
+                State = existingNode.State,
+                HubConfiguration = existingNode.HubConfiguration
+            };
+            await catalog.UpdateAsync(nodeToSave);
+
+            // 5. Return success response
+            hub.Post(UpdateNodeResponse.Ok(nodeToSave), o => o.ResponseFor(request));
+
+            logger.LogInformation("Node updated successfully at {Path} by {UpdatedBy}",
+                nodeToSave.Path, updateRequest.UpdatedBy ?? "system");
+            return request.Processed();
+        }
+        catch (InvalidOperationException ex)
+        {
+            logger.LogWarning(ex, "Node update failed for path {Path}", request.Message.Node.Path);
+            hub.Post(
+                UpdateNodeResponse.Fail(ex.Message, NodeUpdateRejectionReason.ValidationFailed),
+                o => o.ResponseFor(request));
+            return request.Processed();
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Unexpected error during node update at {Path}", request.Message.Node.Path);
+            hub.Post(
+                UpdateNodeResponse.Fail($"Unexpected error: {ex.Message}"),
+                o => o.ResponseFor(request));
+            return request.Processed();
+        }
+    }
+
+    /// <summary>
+    /// Runs all update validators: first global validators from DI, then NodeType-specific validators.
+    /// </summary>
+    private static async Task<(string? ErrorMessage, NodeUpdateRejectionReason Reason)?> RunUpdateValidatorsAsync(
+        IMessageHub hub,
+        IMeshCatalog catalog,
+        MeshNode existingNode,
+        MeshNode updatedNode,
+        CancellationToken ct)
+    {
+        // 1. Run global validators from DI
+        var globalValidators = hub.ServiceProvider.GetServices<INodeUpdateValidator>();
+        foreach (var validator in globalValidators)
+        {
+            var result = await validator.ValidateAsync(existingNode, updatedNode, ct);
+            if (!result.IsValid)
+                return (result.ErrorMessage, result.Reason);
+        }
+
+        // 2. Run NodeType-specific validators (use existing node's NodeType)
+        if (!string.IsNullOrEmpty(existingNode.NodeType))
+        {
+            var nodeTypeConfig = catalog.GetNodeTypeConfiguration(existingNode.NodeType);
+            if (nodeTypeConfig != null)
+            {
+                foreach (var validatorType in nodeTypeConfig.UpdateValidatorTypes)
+                {
+                    var validator = (INodeUpdateValidator?)ActivatorUtilities.CreateInstance(hub.ServiceProvider, validatorType);
+                    if (validator != null)
+                    {
+                        var result = await validator.ValidateAsync(existingNode, updatedNode, ct);
                         if (!result.IsValid)
                             return (result.ErrorMessage, result.Reason);
                     }

@@ -107,3 +107,54 @@ public enum NodeDeletionRejectionReason
     HasChildren,
     ValidationFailed
 }
+
+/// <summary>
+/// Request to update an existing MeshNode in the catalog.
+/// </summary>
+/// <param name="Node">The updated MeshNode data</param>
+public record UpdateNodeRequest(MeshNode Node) : IRequest<UpdateNodeResponse>
+{
+    /// <summary>
+    /// The user or system requesting the update.
+    /// </summary>
+    public string? UpdatedBy { get; init; }
+}
+
+/// <summary>
+/// Response for node update request.
+/// </summary>
+/// <param name="Node">The updated node or null if failed</param>
+public record UpdateNodeResponse(MeshNode? Node)
+{
+    /// <summary>
+    /// Error message if the update failed.
+    /// </summary>
+    public string? Error { get; init; }
+
+    /// <summary>
+    /// Indicates if the update was successful.
+    /// </summary>
+    public bool Success => Error == null && Node != null;
+
+    /// <summary>
+    /// The rejection reason if the node update was rejected.
+    /// </summary>
+    public NodeUpdateRejectionReason? RejectionReason { get; init; }
+
+    public static UpdateNodeResponse Ok(MeshNode node) => new(node);
+
+    public static UpdateNodeResponse Fail(string error, NodeUpdateRejectionReason reason = NodeUpdateRejectionReason.Unknown)
+        => new((MeshNode?)null) { Error = error, RejectionReason = reason };
+}
+
+/// <summary>
+/// Reasons why a node update request can be rejected.
+/// </summary>
+public enum NodeUpdateRejectionReason
+{
+    Unknown,
+    NodeNotFound,
+    ValidationFailed,
+    InvalidNodeType,
+    ConcurrencyConflict
+}

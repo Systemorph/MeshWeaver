@@ -27,16 +27,3 @@ public record NodeUpdateValidationResult(bool IsValid, string? ErrorMessage = nu
     public static NodeUpdateValidationResult Invalid(string error, NodeUpdateRejectionReason reason = NodeUpdateRejectionReason.ValidationFailed)
         => new(false, error, reason);
 }
-
-/// <summary>
-/// Reasons why a node update might be rejected.
-/// </summary>
-public enum NodeUpdateRejectionReason
-{
-    Unknown,
-    NodeNotFound,
-    ValidationFailed,
-    Unauthorized,
-    InvalidState,
-    ConcurrencyConflict
-}

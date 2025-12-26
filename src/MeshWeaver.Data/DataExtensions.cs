@@ -8,6 +8,7 @@ using MeshWeaver.AI.Completion;
 using MeshWeaver.Data.Completion;
 using MeshWeaver.Data.Persistence;
 using MeshWeaver.Data.Serialization;
+using MeshWeaver.Data.Validation;
 using MeshWeaver.Domain;
 using MeshWeaver.Messaging;
 using MeshWeaver.ShortGuid;
@@ -445,17 +446,38 @@ public static class DataExtensions
     }
 
 
-    private static IMessageDelivery HandleSubscribeRequest(IMessageHub hub, IMessageDelivery<SubscribeRequest> request)
+    private static async Task<IMessageDelivery> HandleSubscribeRequest(IMessageHub hub, IMessageDelivery<SubscribeRequest> request, CancellationToken ct)
     {
+        // Run read validators before subscribing
+        var validationResult = await RunReadValidatorsAsync(hub, request.Message.Reference, ct);
+        if (!validationResult.IsValid)
+        {
+            hub.Post(new GetDataResponse(null, 0) { Error = validationResult.ErrorMessage },
+                o => o.ResponseFor(request));
+            return request.Processed();
+        }
+
         hub.GetWorkspace().SubscribeToClient(request.Message with { Subscriber = request.Sender });
         return request.Processed();
     }
 
-    private static IMessageDelivery HandleDataChangeRequest(IMessageHub hub,
-        IMessageDelivery<DataChangeRequest> request)
+    private static async Task<IMessageDelivery> HandleDataChangeRequest(IMessageHub hub,
+        IMessageDelivery<DataChangeRequest> request, CancellationToken ct)
     {
+        var changeRequest = request.Message;
+
+        // Run validators for each type of operation
+        var validationResult = await RunChangeValidatorsAsync(hub, changeRequest, ct);
+        if (!validationResult.IsValid)
+        {
+            var failedLog = new ActivityLog(ActivityCategory.DataUpdate).Fail(validationResult.ErrorMessage ?? "Validation failed");
+            hub.Post(new DataChangeResponse(hub.Version, failedLog),
+                o => o.ResponseFor(request));
+            return request.Processed();
+        }
+
         var activity = hub.Address.Type == AddressExtensions.ActivityType ? null : new Activity(ActivityCategory.DataUpdate, hub);
-        hub.GetWorkspace().RequestChange(request.Message with { ChangedBy = request.Message.ChangedBy }, activity,
+        hub.GetWorkspace().RequestChange(changeRequest with { ChangedBy = changeRequest.ChangedBy }, activity,
             request);
         if (activity is null)
             hub.Post(new DataChangeResponse(hub.Version, new(ActivityCategory.DataUpdate) { Status = ActivityStatus.Succeeded }),
@@ -471,16 +493,30 @@ public static class DataExtensions
         return request.Processed();
     }
 
-    private static Task<IMessageDelivery> HandleGetDataRequest(IMessageHub hub, IMessageDelivery<GetDataRequest> request, CancellationToken ct)
+    private static async Task<IMessageDelivery> HandleGetDataRequest(IMessageHub hub, IMessageDelivery<GetDataRequest> request, CancellationToken ct)
     {
-        return HandleGetDataRequest(hub, (dynamic)request.Message.Reference, request, ct);
+        // Run read validators before getting data
+        var validationResult = await RunReadValidatorsAsync(hub, request.Message.Reference, ct);
+        if (!validationResult.IsValid)
+        {
+            hub.Post(new GetDataResponse(null, 0) { Error = validationResult.ErrorMessage },
+                o => o.ResponseFor(request));
+            return request.Processed();
+        }
+
+        return await HandleGetDataRequestCore(hub, (dynamic)request.Message.Reference, request, ct);
+    }
+
+    private static Task<IMessageDelivery> HandleGetDataRequestCore(IMessageHub hub, WorkspaceReference reference, IMessageDelivery<GetDataRequest> request, CancellationToken ct)
+    {
+        return HandleGetDataRequestCore(hub, (dynamic)reference, request, ct);
     }
 
     /// <summary>
     /// Handler for DataPathReference which resolves relative data paths.
     /// Supports local resolution, virtual paths, or forwarding to remote addresses.
     /// </summary>
-    private static async Task<IMessageDelivery> HandleGetDataRequest(
+    private static async Task<IMessageDelivery> HandleGetDataRequestCore(
         IMessageHub hub,
         DataPathReference reference,
         IMessageDelivery<GetDataRequest> request,
@@ -534,7 +570,7 @@ public static class DataExtensions
     /// <summary>
     /// Handler for FileReference which retrieves file content from a content collection.
     /// </summary>
-    private static async Task<IMessageDelivery> HandleGetDataRequest(
+    private static async Task<IMessageDelivery> HandleGetDataRequestCore(
         IMessageHub hub,
         FileReference reference,
         IMessageDelivery<GetDataRequest> request,
@@ -560,7 +596,7 @@ public static class DataExtensions
     /// <summary>
     /// Handler for ContentWorkspaceReference which retrieves file content from a content collection.
     /// </summary>
-    private static async Task<IMessageDelivery> HandleGetDataRequest(
+    private static async Task<IMessageDelivery> HandleGetDataRequestCore(
         IMessageHub hub,
         ContentWorkspaceReference reference,
         IMessageDelivery<GetDataRequest> request,
@@ -583,7 +619,7 @@ public static class DataExtensions
         return request.Processed();
     }
 
-    private static async Task<IMessageDelivery> HandleGetDataRequest<TReference>(IMessageHub hub,
+    private static async Task<IMessageDelivery> HandleGetDataRequestCore<TReference>(IMessageHub hub,
         WorkspaceReference<TReference> reference, IMessageDelivery<GetDataRequest> request, CancellationToken _)
     {
         try
@@ -608,7 +644,7 @@ public static class DataExtensions
     /// <summary>
     /// Handler for UnifiedReference which resolves paths locally or forwards to remote addresses.
     /// </summary>
-    private static async Task<IMessageDelivery> HandleGetDataRequest(
+    private static async Task<IMessageDelivery> HandleGetDataRequestCore(
         IMessageHub hub,
         UnifiedReference reference,
         IMessageDelivery<GetDataRequest> request,
@@ -1494,4 +1530,63 @@ public static class DataExtensions
         hub.Post(response, o => o.ResponseFor(request));
         return request.Processed();
     }
+
+    #region Data Validators
+
+    /// <summary>
+    /// Runs all registered read validators for the given reference.
+    /// </summary>
+    private static async Task<DataValidationResult> RunReadValidatorsAsync(
+        IMessageHub hub,
+        WorkspaceReference reference,
+        CancellationToken ct)
+    {
+        var validators = hub.ServiceProvider.GetServices<IDataReadValidator>();
+        foreach (var validator in validators)
+        {
+            var result = await validator.ValidateAsync(reference, ct);
+            if (!result.IsValid)
+                return result;
+        }
+        return DataValidationResult.Valid();
+    }
+
+    /// <summary>
+    /// Runs all registered read result validators for the given reference and data.
+    /// </summary>
+    private static async Task<DataValidationResult> RunReadResultValidatorsAsync(
+        IMessageHub hub,
+        WorkspaceReference reference,
+        object? data,
+        CancellationToken ct)
+    {
+        var validators = hub.ServiceProvider.GetServices<IDataReadResultValidator>();
+        foreach (var validator in validators)
+        {
+            var result = await validator.ValidateAsync(reference, data, ct);
+            if (!result.IsValid)
+                return result;
+        }
+        return DataValidationResult.Valid();
+    }
+
+    /// <summary>
+    /// Runs all registered change validators for the given data change request.
+    /// </summary>
+    private static async Task<DataValidationResult> RunChangeValidatorsAsync(
+        IMessageHub hub,
+        DataChangeRequest request,
+        CancellationToken ct)
+    {
+        var validators = hub.ServiceProvider.GetServices<IDataChangeValidator>();
+        foreach (var validator in validators)
+        {
+            var result = await validator.ValidateAsync(request, ct);
+            if (!result.IsValid)
+                return result;
+        }
+        return DataValidationResult.Valid();
+    }
+
+    #endregion
 }
