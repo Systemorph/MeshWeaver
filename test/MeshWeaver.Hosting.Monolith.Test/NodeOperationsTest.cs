@@ -1207,3 +1207,307 @@ public class NodeOperationsWithGlobalReadValidatorTest(ITestOutputHelper output)
         readNode!.Name.Should().Be("This is allowed");
     }
 }
+
+/// <summary>
+/// Content type for update validation tests.
+/// </summary>
+public record UpdatableContent(string Title, int Version);
+
+/// <summary>
+/// An update validator that prevents version downgrades.
+/// </summary>
+public class NoVersionDowngradeValidator : INodeUpdateValidator
+{
+    public Task<NodeUpdateValidationResult> ValidateAsync(MeshNode existingNode, MeshNode updatedNode, CancellationToken ct = default)
+    {
+        if (existingNode.Content is UpdatableContent existingContent &&
+            updatedNode.Content is UpdatableContent updatedContent)
+        {
+            if (updatedContent.Version < existingContent.Version)
+            {
+                return Task.FromResult(NodeUpdateValidationResult.Invalid(
+                    $"Cannot downgrade version from {existingContent.Version} to {updatedContent.Version}",
+                    NodeUpdateRejectionReason.ValidationFailed));
+            }
+        }
+        return Task.FromResult(NodeUpdateValidationResult.Valid());
+    }
+}
+
+/// <summary>
+/// Test class with update validators via NodeType configuration.
+/// </summary>
+public class NodeOperationsWithUpdateValidatorTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
+{
+    private const string UpdatableNodeType = "updatable";
+    private CancellationToken TestTimeout => new CancellationTokenSource(10.Seconds()).Token;
+
+    protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
+    {
+        // Register NodeType with NoVersionDowngradeValidator
+        var nodeTypeConfig = new NodeTypeConfiguration
+        {
+            NodeType = UpdatableNodeType,
+            DataType = typeof(UpdatableContent),
+            DisplayName = "Updatable",
+            HubConfiguration = hub => hub
+        }
+        .WithUpdateValidator<NoVersionDowngradeValidator>();
+
+        builder.AddNodeTypeConfigurations(nodeTypeConfig);
+
+        return base.ConfigureMesh(builder);
+    }
+
+    [Fact]
+    public async Task UpdateNode_VersionUpgrade_ShouldSucceed()
+    {
+        // Arrange - create a node with version 1
+        var client = GetClient();
+        var node = new MeshNode("VersionedNode", "update/validation")
+        {
+            Name = "Versioned Node",
+            NodeType = UpdatableNodeType,
+            Content = new UpdatableContent(Title: "Original", Version: 1)
+        };
+        var createResponse = await client.AwaitResponse(
+            new CreateNodeRequest(node),
+            o => o.WithTarget(Mesh.Address),
+            TestTimeout);
+        createResponse.Message.Success.Should().BeTrue();
+
+        // Act - update with version 2
+        var updatedNode = node with
+        {
+            Name = "Updated Node",
+            Content = new UpdatableContent(Title: "Updated", Version: 2)
+        };
+        var updateResponse = await client.AwaitResponse(
+            new UpdateNodeRequest(updatedNode),
+            o => o.WithTarget(Mesh.Address),
+            TestTimeout);
+
+        // Assert
+        updateResponse.Message.Success.Should().BeTrue();
+        updateResponse.Message.Node.Should().NotBeNull();
+        updateResponse.Message.Node!.Name.Should().Be("Updated Node");
+    }
+
+    [Fact]
+    public async Task UpdateNode_VersionDowngrade_ShouldFail()
+    {
+        // Arrange - create a node with version 5
+        var client = GetClient();
+        var node = new MeshNode("HighVersionNode", "update/validation")
+        {
+            Name = "High Version Node",
+            NodeType = UpdatableNodeType,
+            Content = new UpdatableContent(Title: "High Version", Version: 5)
+        };
+        var createResponse = await client.AwaitResponse(
+            new CreateNodeRequest(node),
+            o => o.WithTarget(Mesh.Address),
+            TestTimeout);
+        createResponse.Message.Success.Should().BeTrue();
+
+        // Act - try to downgrade to version 3
+        var downgradedNode = node with
+        {
+            Name = "Downgraded Node",
+            Content = new UpdatableContent(Title: "Downgraded", Version: 3)
+        };
+        var updateResponse = await client.AwaitResponse(
+            new UpdateNodeRequest(downgradedNode),
+            o => o.WithTarget(Mesh.Address),
+            TestTimeout);
+
+        // Assert
+        updateResponse.Message.Success.Should().BeFalse();
+        updateResponse.Message.RejectionReason.Should().Be(NodeUpdateRejectionReason.ValidationFailed);
+        updateResponse.Message.Error.Should().Contain("downgrade");
+    }
+
+    [Fact]
+    public async Task UpdateNode_SameVersion_ShouldSucceed()
+    {
+        // Arrange - create a node with version 1
+        var client = GetClient();
+        var node = new MeshNode("SameVersionNode", "update/validation")
+        {
+            Name = "Same Version Node",
+            NodeType = UpdatableNodeType,
+            Content = new UpdatableContent(Title: "Original", Version: 1)
+        };
+        var createResponse = await client.AwaitResponse(
+            new CreateNodeRequest(node),
+            o => o.WithTarget(Mesh.Address),
+            TestTimeout);
+        createResponse.Message.Success.Should().BeTrue();
+
+        // Act - update with same version (just change title)
+        var updatedNode = node with
+        {
+            Name = "Updated Same Version",
+            Content = new UpdatableContent(Title: "Updated", Version: 1)
+        };
+        var updateResponse = await client.AwaitResponse(
+            new UpdateNodeRequest(updatedNode),
+            o => o.WithTarget(Mesh.Address),
+            TestTimeout);
+
+        // Assert
+        updateResponse.Message.Success.Should().BeTrue();
+        updateResponse.Message.Node.Should().NotBeNull();
+    }
+
+    [Fact]
+    public async Task UpdateNode_NonExistentNode_ShouldFail()
+    {
+        // Arrange
+        var client = GetClient();
+        var node = new MeshNode("NonExistentNode", "update/validation")
+        {
+            Name = "Non Existent",
+            NodeType = UpdatableNodeType,
+            Content = new UpdatableContent(Title: "Ghost", Version: 1)
+        };
+
+        // Act - try to update a node that doesn't exist
+        var updateResponse = await client.AwaitResponse(
+            new UpdateNodeRequest(node),
+            o => o.WithTarget(Mesh.Address),
+            TestTimeout);
+
+        // Assert
+        updateResponse.Message.Success.Should().BeFalse();
+        updateResponse.Message.RejectionReason.Should().Be(NodeUpdateRejectionReason.NodeNotFound);
+    }
+
+    [Fact]
+    public async Task UpdateNode_NodeWithoutNodeType_ValidatorNotApplied()
+    {
+        // Arrange - create a node without NodeType
+        var client = GetClient();
+        var node = new MeshNode("NoTypeNode", "update/validation")
+        {
+            Name = "No Type Node",
+            // No NodeType - validator should NOT be applied
+            Content = new UpdatableContent(Title: "Original", Version: 5)
+        };
+        var createResponse = await client.AwaitResponse(
+            new CreateNodeRequest(node),
+            o => o.WithTarget(Mesh.Address),
+            TestTimeout);
+        createResponse.Message.Success.Should().BeTrue();
+
+        // Act - try to downgrade version (would fail with validator, but should succeed without)
+        var downgradedNode = node with
+        {
+            Name = "Downgraded No Type",
+            Content = new UpdatableContent(Title: "Downgraded", Version: 1)
+        };
+        var updateResponse = await client.AwaitResponse(
+            new UpdateNodeRequest(downgradedNode),
+            o => o.WithTarget(Mesh.Address),
+            TestTimeout);
+
+        // Assert - should succeed because validator doesn't apply
+        updateResponse.Message.Success.Should().BeTrue();
+    }
+}
+
+/// <summary>
+/// A global update validator that prevents changing the Name to contain "forbidden".
+/// </summary>
+public class ForbiddenNameUpdateValidator : INodeUpdateValidator
+{
+    public Task<NodeUpdateValidationResult> ValidateAsync(MeshNode existingNode, MeshNode updatedNode, CancellationToken ct = default)
+    {
+        if (updatedNode.Name?.Contains("forbidden", StringComparison.OrdinalIgnoreCase) == true)
+        {
+            return Task.FromResult(NodeUpdateValidationResult.Invalid(
+                "Cannot update node name to contain 'forbidden'",
+                NodeUpdateRejectionReason.ValidationFailed));
+        }
+        return Task.FromResult(NodeUpdateValidationResult.Valid());
+    }
+}
+
+/// <summary>
+/// Test class with global update validator via DI.
+/// </summary>
+public class NodeOperationsWithGlobalUpdateValidatorTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
+{
+    private CancellationToken TestTimeout => new CancellationTokenSource(10.Seconds()).Token;
+
+    protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
+    {
+        // Register global update validator via DI
+        builder.ConfigureServices(services =>
+            services.AddSingleton<INodeUpdateValidator, ForbiddenNameUpdateValidator>());
+
+        return base.ConfigureMesh(builder);
+    }
+
+    [Fact]
+    public async Task UpdateNode_ForbiddenName_ShouldFail()
+    {
+        // Arrange - create a node
+        var client = GetClient();
+        var node = new MeshNode("NormalNode", "global/update")
+        {
+            Name = "Normal Node"
+        };
+        var createResponse = await client.AwaitResponse(
+            new CreateNodeRequest(node),
+            o => o.WithTarget(Mesh.Address),
+            TestTimeout);
+        createResponse.Message.Success.Should().BeTrue();
+
+        // Act - try to update with forbidden name
+        var updatedNode = node with
+        {
+            Name = "This is forbidden by policy"
+        };
+        var updateResponse = await client.AwaitResponse(
+            new UpdateNodeRequest(updatedNode),
+            o => o.WithTarget(Mesh.Address),
+            TestTimeout);
+
+        // Assert
+        updateResponse.Message.Success.Should().BeFalse();
+        updateResponse.Message.RejectionReason.Should().Be(NodeUpdateRejectionReason.ValidationFailed);
+        updateResponse.Message.Error.Should().Contain("forbidden");
+    }
+
+    [Fact]
+    public async Task UpdateNode_AllowedName_ShouldSucceed()
+    {
+        // Arrange - create a node
+        var client = GetClient();
+        var node = new MeshNode("AllowedUpdateNode", "global/update")
+        {
+            Name = "Allowed Node"
+        };
+        var createResponse = await client.AwaitResponse(
+            new CreateNodeRequest(node),
+            o => o.WithTarget(Mesh.Address),
+            TestTimeout);
+        createResponse.Message.Success.Should().BeTrue();
+
+        // Act - update with allowed name
+        var updatedNode = node with
+        {
+            Name = "Updated Allowed Node"
+        };
+        var updateResponse = await client.AwaitResponse(
+            new UpdateNodeRequest(updatedNode),
+            o => o.WithTarget(Mesh.Address),
+            TestTimeout);
+
+        // Assert
+        updateResponse.Message.Success.Should().BeTrue();
+        updateResponse.Message.Node.Should().NotBeNull();
+        updateResponse.Message.Node!.Name.Should().Be("Updated Allowed Node");
+    }
+}
