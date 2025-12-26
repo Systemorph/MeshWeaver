@@ -1,30 +1,52 @@
 using System.ComponentModel.DataAnnotations.Schema;
 using System.Reflection;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Text.Json.Serialization.Metadata;
+using MeshWeaver.Domain;
+using MeshWeaver.Messaging.Serialization;
 
 namespace MeshWeaver.Hosting.Persistence;
 
 /// <summary>
-/// Helper for creating JSON serializer options that exclude [NotMapped] properties.
-/// Used by persistence adapters to ensure certain properties are not persisted
-/// while still being serializable for mesh communication.
+/// Helper for creating JSON serializer options for persistence.
+/// Uses the same base configuration as the hub's JsonSerializationOptions,
+/// but excludes [NotMapped] properties from serialization.
 /// </summary>
 public static class PersistenceJsonOptions
 {
     /// <summary>
-    /// Creates a copy of JsonSerializerOptions that excludes [NotMapped] properties.
+    /// Creates JsonSerializerOptions for persistence with the same base configuration
+    /// as the hub's JsonSerializationOptions, excluding [NotMapped] properties.
     /// </summary>
-    public static JsonSerializerOptions CreateForPersistence(JsonSerializerOptions source)
+    public static JsonSerializerOptions CreateForPersistence(ITypeRegistry? typeRegistry = null)
     {
-        var copy = new JsonSerializerOptions(source)
+        var options = new JsonSerializerOptions
         {
-            TypeInfoResolver = new DefaultJsonTypeInfoResolver
-            {
-                Modifiers = { ExcludeNotMappedProperties }
-            }
+            WriteIndented = true,
+            PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+            PropertyNameCaseInsensitive = true,
+            DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingDefault,
+            UnmappedMemberHandling = JsonUnmappedMemberHandling.Skip,
+            ReferenceHandler = null,
+            ReadCommentHandling = JsonCommentHandling.Skip,
+            AllowTrailingCommas = true,
+            IncludeFields = true
         };
-        return copy;
+
+        options.Converters.Add(new EnumMemberJsonStringEnumConverter());
+
+        if (typeRegistry != null)
+        {
+            options.Converters.Add(new ObjectPolymorphicConverter(typeRegistry));
+        }
+
+        options.TypeInfoResolver = new DefaultJsonTypeInfoResolver
+        {
+            Modifiers = { ExcludeNotMappedProperties }
+        };
+
+        return options;
     }
 
     private static void ExcludeNotMappedProperties(JsonTypeInfo typeInfo)
