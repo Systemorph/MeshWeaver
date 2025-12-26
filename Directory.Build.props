@@ -17,13 +17,4 @@
   <ItemGroup>
     <None Include="README.md" Pack="true" PackagePath="\" />
   </ItemGroup>
-
-  <!-- Copy dynamic compilation cache to output directory during build -->
-  <Target Name="CopyMeshCache" AfterTargets="Build" Condition="Exists('$(SolutionDir).mesh-cache')">
-    <ItemGroup>
-      <MeshCacheFiles Include="$(SolutionDir).mesh-cache\*.dll" />
-      <MeshCacheFiles Include="$(SolutionDir).mesh-cache\*.pdb" />
-    </ItemGroup>
-    <Copy SourceFiles="@(MeshCacheFiles)" DestinationFolder="$(OutputPath)" SkipUnchangedFiles="true" />
-  </Target>
 </Project>

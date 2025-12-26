@@ -355,6 +355,3 @@ ASALocalRun/
 
 # Template generation output
 dist/
-
-# Dynamic compilation cache (MeshWeaver.Graph)
-.mesh-cache/

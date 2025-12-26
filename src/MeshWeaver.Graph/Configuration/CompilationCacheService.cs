@@ -191,10 +191,19 @@ internal class CompilationCacheService(
     private readonly Lazy<DateTimeOffset> _frameworkTimestamp = new(ComputeFrameworkTimestamp);
     private bool _disposed;
 
-    private static string ResolveAbsolutePath(string cacheDirectory) =>
-        Path.IsPathRooted(cacheDirectory)
-            ? cacheDirectory
-            : Path.GetFullPath(Path.Combine(Directory.GetCurrentDirectory(), cacheDirectory));
+    private static string ResolveAbsolutePath(string cacheDirectory)
+    {
+        if (Path.IsPathRooted(cacheDirectory))
+            return cacheDirectory;
+
+        // Resolve relative to the executing assembly location (bin\Debug\...)
+        var assemblyLocation = typeof(CompilationCacheService).Assembly.Location;
+        var assemblyDirectory = string.IsNullOrEmpty(assemblyLocation)
+            ? Directory.GetCurrentDirectory()
+            : Path.GetDirectoryName(assemblyLocation) ?? Directory.GetCurrentDirectory();
+
+        return Path.GetFullPath(Path.Combine(assemblyDirectory, cacheDirectory));
+    }
 
     private static DateTimeOffset ComputeFrameworkTimestamp()
     {
