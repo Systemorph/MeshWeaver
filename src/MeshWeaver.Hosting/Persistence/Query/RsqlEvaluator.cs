@@ -1,4 +1,4 @@
-using System.Globalization;
+﻿using System.Globalization;
 using System.Reflection;
 using System.Text;
 using System.Text.Json;
@@ -333,6 +333,8 @@ public class RsqlEvaluator
         {
             try
             {
+                if (property.GetMethod?.GetParameters().Length > 0)
+                    continue; // Skip indexers
                 var value = property.GetValue(obj);
                 if (value is string s)
                 {
