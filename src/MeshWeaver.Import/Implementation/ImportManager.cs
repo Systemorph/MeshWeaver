@@ -65,6 +65,7 @@ public class ImportManager
                         : "Is the provided configuration correct?";
                     activity.LogWarning("Import {ImportId} for {RequestId} resulted in no objects to save. Did you omit specifying configuration or format?", activity.Id, request.Id);
                     activity.Complete();
+                    Hub.Post(new ImportResponse(Hub.Version, log), o => o.ResponseFor(request));
                     return;
                 }
                 Configuration.Workspace.RequestChange(
