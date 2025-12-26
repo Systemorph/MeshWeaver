@@ -38,7 +38,9 @@ public sealed record Address
 
     public string[] Segments { get; init; }
 
-    public sealed override string ToString() => string.Join("/", Segments);
+    public override string ToString() => Host is null
+        ? string.Join("/", Segments)
+        : string.Join("/", Segments) + '@' + Host;
 
     /// <summary>
     /// Returns full string representation including host if present.

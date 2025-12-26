@@ -20,10 +20,10 @@ namespace MeshWeaver.Import.Test;
 
 public class ImportTest(ITestOutputHelper output) : HubTestBase(output)
 {
-    protected override MessageHubConfiguration ConfigureRouter(
+    protected override MessageHubConfiguration ConfigureMesh(
         MessageHubConfiguration configuration)
     {
-        return base.ConfigureRouter(configuration).ConfigureImportRouter();
+        return base.ConfigureMesh(configuration).ConfigureImportRouter();
     }
 
 
@@ -50,7 +50,7 @@ public class ImportTest(ITestOutputHelper output) : HubTestBase(output)
         {
             Format = TestHubSetup.CashflowImportFormat,
         }
-        .WithTimeout(30.Seconds()); // Add timeout for bulk test scenarios
+        .WithTimeout(10.Seconds()); // Add timeout for bulk test scenarios
 
         // Add debug logging for hanging detection
         var testId = Guid.NewGuid().ToString("N")[..8];
@@ -73,7 +73,7 @@ public class ImportTest(ITestOutputHelper output) : HubTestBase(output)
 
         Logger.LogInformation("DistributedImportTest {TestId}: Getting transactional workspace", testId);
         var workspace = GetWorkspace(
-            Router.GetHostedHub(TransactionalDataAddress.Create(2024, "1"))
+            Mesh.GetHostedHub(TransactionalDataAddress.Create(2024, "1"))
         );
         var transactionalItems1 = await workspace
             .GetObservable<TransactionalData>()
@@ -83,7 +83,7 @@ public class ImportTest(ITestOutputHelper output) : HubTestBase(output)
 
         Logger.LogInformation("DistributedImportTest {TestId}: Getting computed workspace", testId);
         var computedItems1 = await (GetWorkspace(
-                Router.GetHostedHub(ComputedDataAddress.Create(2024, "1"))
+                Mesh.GetHostedHub(ComputedDataAddress.Create(2024, "1"))
             ))
             .GetObservable<ComputedData>()
             .Timeout(5.Seconds())
@@ -133,7 +133,7 @@ Id,Year,LoB,BusinessUnit,Value
         );
         importResponse.Message.Log.Status.Should().Be(ActivityStatus.Succeeded);
         var workspace = GetWorkspace(
-            Router.GetHostedHub(ReferenceDataAddress.Create(), null!)
+            Mesh.GetHostedHub(ReferenceDataAddress.Create(), null!)
         );
         var items = await workspace
             .GetObservable<LineOfBusiness>()
@@ -175,7 +175,7 @@ SystemName,DisplayName
             new CancellationTokenSource(5.Seconds()).Token
         ).Token);
         var workspace = GetWorkspace(
-            Router.GetHostedHub(ReferenceDataAddress.Create(), null!)
+            Mesh.GetHostedHub(ReferenceDataAddress.Create(), null!)
         );
         var actualLoBs = await workspace.GetObservable<LineOfBusiness>().FirstAsync(x => x.First().DisplayName.StartsWith("LoB"));
         var actualBUs = await workspace.GetObservable<BusinessUnit>().FirstAsync(x => x.Count > 2);

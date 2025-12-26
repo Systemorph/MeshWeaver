@@ -28,9 +28,9 @@ public class SnapshotImportTest(ITestOutputHelper output) : HubTestBase(output)
                 )
             );
 
-    protected override MessageHubConfiguration ConfigureRouter(MessageHubConfiguration configuration)
+    protected override MessageHubConfiguration ConfigureMesh(MessageHubConfiguration configuration)
     {
-        return base.ConfigureRouter(configuration)
+        return base.ConfigureMesh(configuration)
             .WithHostedHub(
                 TestDomain.TestImportAddress.Create(),
                 config =>
@@ -250,7 +250,7 @@ SystemName,DisplayName,Number
         TimeSpan? timeout = null)
     {
         timeout ??= 10.Seconds();
-        var hub = Router.GetHostedHub(address);
+        var hub = Mesh.GetHostedHub(address);
         var workspace = hub.ServiceProvider.GetRequiredService<IWorkspace>();
         return await workspace
             .GetObservable<TData>()

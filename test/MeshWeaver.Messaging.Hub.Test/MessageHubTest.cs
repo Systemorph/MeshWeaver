@@ -77,7 +77,7 @@ public class MessageHubTest(ITestOutputHelper output) : HubTestBase(output)
         );
 
         // Simulate a routing path that would create a cycle
-        var routerAddress = CreateRouterAddress();
+        var routerAddress = CreateMeshAddress();
         var hostAddress = CreateHostAddress();
 
         var deliveryWithPath = (MessageDelivery<SayHelloRequest>)delivery.AddToRoutingPath(routerAddress);
@@ -162,7 +162,7 @@ public class MessageHubTest(ITestOutputHelper output) : HubTestBase(output)
     public void RoutingCycleDetection_Integration_WithComplexPath()
     {
         // Test a more realistic scenario where a message gets routed through multiple hubs
-        var router = Router;
+        var router = Mesh;
         var host = GetHost();
         var client = GetClient();
 

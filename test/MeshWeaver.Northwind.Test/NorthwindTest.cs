@@ -22,10 +22,10 @@ public class NorthwindTest(ITestOutputHelper output) : HubTestBase(output)
 {
     private const string TestCategoryNameSuffix = " (Updated)";
 
-    protected override MessageHubConfiguration ConfigureRouter(
+    protected override MessageHubConfiguration ConfigureMesh(
         MessageHubConfiguration configuration)
     {
-        return base.ConfigureRouter(configuration)
+        return base.ConfigureMesh(configuration)
             .WithRoutes(forward =>
                 forward
                     .RouteAddressToHostedHub(NorthwindAddresses.ReferenceDataType, c =>

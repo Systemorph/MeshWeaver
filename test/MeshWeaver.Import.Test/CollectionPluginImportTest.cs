@@ -20,7 +20,7 @@ public class CollectionPluginImportTest(ITestOutputHelper output) : HubTestBase(
 {
     private readonly string _testFilesPath = Path.Combine(AppContext.BaseDirectory, "TestFiles", "CollectionPluginImport");
 
-    protected override MessageHubConfiguration ConfigureRouter(MessageHubConfiguration configuration)
+    protected override MessageHubConfiguration ConfigureMesh(MessageHubConfiguration configuration)
     {
         // Ensure test directory and file exist
         Directory.CreateDirectory(_testFilesPath);
@@ -31,7 +31,7 @@ SystemName,DisplayName
 3,LoB 3";
         File.WriteAllText(Path.Combine(_testFilesPath, "test-data.csv"), csvContent);
 
-        return base.ConfigureRouter(configuration)
+        return base.ConfigureMesh(configuration)
             .WithTypes(typeof(ImportRequest), typeof(CollectionSource))
             .AddContentCollections()
             .AddFileSystemContentCollection("TestCollection", _ => _testFilesPath)
@@ -57,7 +57,7 @@ SystemName,DisplayName
         result.Should().NotContain("Error", "there should be no errors");
 
         // Verify data was imported
-        var referenceDataHub = Router.GetHostedHub(ReferenceDataAddress.Create());
+        var referenceDataHub = Mesh.GetHostedHub(ReferenceDataAddress.Create());
         var workspace = referenceDataHub.ServiceProvider.GetRequiredService<IWorkspace>();
 
         var allData = await workspace.GetObservable<LineOfBusiness>()
@@ -161,7 +161,7 @@ SystemName,DisplayName
         result.Should().Contain("succeeded", "import should succeed with explicit format");
 
         // Verify data was imported
-        var referenceDataHub = Router.GetHostedHub(ReferenceDataAddress.Create());
+        var referenceDataHub = Mesh.GetHostedHub(ReferenceDataAddress.Create());
         var workspace = referenceDataHub.ServiceProvider.GetRequiredService<IWorkspace>();
 
         var allData = await workspace.GetObservable<LineOfBusiness>()
@@ -201,7 +201,7 @@ SystemName,DisplayName
         result.Should().NotContain("Unknown format", "should not try to resolve configuration as format");
 
         // Verify data was imported
-        var referenceDataHub = Router.GetHostedHub(ReferenceDataAddress.Create());
+        var referenceDataHub = Mesh.GetHostedHub(ReferenceDataAddress.Create());
         var workspace = referenceDataHub.ServiceProvider.GetRequiredService<IWorkspace>();
 
         var allData = await workspace.GetObservable<LineOfBusiness>()

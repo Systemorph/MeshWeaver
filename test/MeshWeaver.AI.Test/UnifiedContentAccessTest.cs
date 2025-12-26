@@ -510,7 +510,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
 
         currentTestDir = testDir;
         // Create a new configuration that includes file content provider
-        hostWithFileProvider = Router.GetHostedHub(CreateHostAddress(), ConfigureHostWithFileProvider(testDir));
+        hostWithFileProvider = Mesh.GetHostedHub(CreateHostAddress(), ConfigureHostWithFileProvider(testDir));
         return hostWithFileProvider;
     }
 

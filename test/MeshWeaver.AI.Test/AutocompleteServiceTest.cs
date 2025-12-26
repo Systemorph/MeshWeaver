@@ -1,9 +1,11 @@
 ﻿using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
 using MeshWeaver.AI.Completion;
 using MeshWeaver.Data;
 using MeshWeaver.Data.Completion;
+using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Completion;
 using Xunit;
 
@@ -429,6 +431,26 @@ public class AutocompleteServiceTest
 
         public Task<Mesh.MeshNode?> GetNodeAsync(Messaging.Address address) => Task.FromResult<Mesh.MeshNode?>(null);
         public Task UpdateAsync(Mesh.MeshNode node) => Task.CompletedTask;
+        public Task<MeshNode> CreateNodeAsync(MeshNode node, string? createdBy = null, CancellationToken ct = default)
+        {
+            throw new System.NotImplementedException();
+        }
+
+        public Task<MeshNode> CreateTransientNodeAsync(MeshNode node, string? createdBy = null, CancellationToken ct = default)
+        {
+            throw new System.NotImplementedException();
+        }
+
+        public Task<MeshNode> ConfirmNodeAsync(string path, CancellationToken ct = default)
+        {
+            throw new System.NotImplementedException();
+        }
+
+        public Task DeleteNodeAsync(string path, bool recursive = false, CancellationToken ct = default)
+        {
+            throw new System.NotImplementedException();
+        }
+
         public Task<Mesh.Services.StreamInfo> GetStreamInfoAsync(Messaging.Address address) => throw new System.NotImplementedException();
         public Task<Mesh.Services.AddressResolution?> ResolvePathAsync(string path) => Task.FromResult(ResolvePath(path));
 

@@ -29,9 +29,9 @@ public class ImportValidationTest(ITestOutputHelper output) : HubTestBase(output
             );
     }
 
-    protected override MessageHubConfiguration ConfigureRouter(MessageHubConfiguration conf)
+    protected override MessageHubConfiguration ConfigureMesh(MessageHubConfiguration conf)
     {
-        return base.ConfigureRouter(conf).WithHostedHub(
+        return base.ConfigureMesh(conf).WithHostedHub(
                 TestDomain.TestImportAddress.Create(),
                 config =>
                     config
