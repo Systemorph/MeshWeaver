@@ -5,15 +5,7 @@
   "description": "Catalog of organizations",
   "iconName": "Building",
   "displayOrder": 10,
-  "addressSegments": 0,
   "isPersistent": true,
   "lastModified": "2025-12-24T18:52:06.3027727+00:00",
-  "version": 0,
-  "content": {},
-  "thumbNail": null,
-  "streamProvider": null,
-  "assemblyLocation": null,
-  "startupScript": null,
-  "routingType": 0,
-  "instantiationType": 0
+  "state": "Active"
 }
