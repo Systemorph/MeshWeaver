@@ -2,6 +2,7 @@ using System.Runtime.CompilerServices;
 using System.Text.Json;
 using Azure.Storage.Blobs;
 using Azure.Storage.Blobs.Models;
+using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 
@@ -15,6 +16,7 @@ public class AzureBlobStorageAdapter : IStorageAdapter
 {
     private readonly BlobContainerClient _containerClient;
     private readonly JsonSerializerOptions _jsonOptions;
+    private readonly JsonSerializerOptions _persistenceOptions;
 
     public AzureBlobStorageAdapter(
         BlobContainerClient containerClient,
@@ -27,6 +29,7 @@ public class AzureBlobStorageAdapter : IStorageAdapter
             WriteIndented = true,
             PropertyNameCaseInsensitive = true
         };
+        _persistenceOptions = PersistenceJsonOptions.CreateForPersistence(_jsonOptions);
     }
 
     private static string NormalizePath(string? path) =>
@@ -76,7 +79,7 @@ public class AzureBlobStorageAdapter : IStorageAdapter
         var blobPath = GetBlobPath(key);
         var blobClient = _containerClient.GetBlobClient(blobPath);
 
-        var json = JsonSerializer.Serialize(nodeToSave, _jsonOptions);
+        var json = JsonSerializer.Serialize(nodeToSave, _persistenceOptions);
         await blobClient.UploadAsync(
             BinaryData.FromString(json),
             overwrite: true,

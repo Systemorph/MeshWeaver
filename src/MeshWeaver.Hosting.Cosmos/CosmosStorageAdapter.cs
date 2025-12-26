@@ -1,6 +1,7 @@
 using System.Runtime.CompilerServices;
 using System.Text.Json;
 using Microsoft.Azure.Cosmos;
+using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Query;
 using MeshWeaver.Mesh.Services;
@@ -17,6 +18,7 @@ public class CosmosStorageAdapter : IStorageAdapter, IAsyncDisposable
     private readonly Container _partitionsContainer;
     private readonly CosmosSqlGenerator _sqlGenerator = new();
     private readonly JsonSerializerOptions _jsonOptions;
+    private readonly JsonSerializerOptions _persistenceOptions;
 
     public CosmosStorageAdapter(
         Container nodesContainer,
@@ -30,6 +32,7 @@ public class CosmosStorageAdapter : IStorageAdapter, IAsyncDisposable
             PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
             WriteIndented = false
         };
+        _persistenceOptions = PersistenceJsonOptions.CreateForPersistence(_jsonOptions);
     }
 
     private static string NormalizePath(string? path) =>
@@ -62,8 +65,11 @@ public class CosmosStorageAdapter : IStorageAdapter, IAsyncDisposable
 
     public async Task WriteAsync(MeshNode node, CancellationToken ct = default)
     {
+        // Serialize manually to apply NotMapped property exclusion
+        var json = JsonSerializer.Serialize(node, _persistenceOptions);
+        using var document = JsonDocument.Parse(json);
         await _nodesContainer.UpsertItemAsync(
-            node,
+            document.RootElement,
             new PartitionKey(node.Namespace ?? ""),
             cancellationToken: ct);
     }

@@ -16,8 +16,10 @@ public class FileSystemStorageAdapter : IStorageAdapter
     private readonly string _baseDirectory;
     private readonly Func<ITypeRegistry?>? _typeRegistryFactory;
     private JsonSerializerOptions? _jsonOptions;
+    private JsonSerializerOptions? _persistenceOptions;
 
     private JsonSerializerOptions JsonOptions => _jsonOptions ??= CreateJsonOptions();
+    private JsonSerializerOptions PersistenceOptions => _persistenceOptions ??= PersistenceJsonOptions.CreateForPersistence(JsonOptions);
 
     private JsonSerializerOptions CreateJsonOptions()
     {
@@ -77,7 +79,7 @@ public class FileSystemStorageAdapter : IStorageAdapter
             Directory.CreateDirectory(directory);
         }
 
-        var json = JsonSerializer.Serialize(node, JsonOptions);
+        var json = JsonSerializer.Serialize(node, PersistenceOptions);
         await File.WriteAllTextAsync(filePath, json, ct);
     }
 
