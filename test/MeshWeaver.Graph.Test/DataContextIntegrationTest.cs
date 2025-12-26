@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.ComponentModel.DataAnnotations;
 using System.IO;
@@ -6,7 +6,6 @@ using System.Linq;
 using System.Threading.Tasks;
 using FluentAssertions;
 using MeshWeaver.Graph.Configuration;
-using MeshWeaver.Hosting.Monolith;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Mesh;
@@ -158,26 +157,7 @@ public class DataContextIntegrationTest : MonolithMeshTestBase
             }
         }).GetAwaiter().GetResult();
 
-        // Build configuration
-        var configBuilder = new ConfigurationBuilder();
-        configBuilder.AddInMemoryCollection(new Dictionary<string, string?>
-        {
-            ["Graph:DataDirectory"] = testDataDirectory
-        });
-        var configuration = configBuilder.Build();
-
-        // Configure unique cache directory for test isolation
-        var cacheDirectory = Path.Combine(testDataDirectory, ".mesh-cache");
-
-        return builder
-            .UseMonolithMesh()
-            .ConfigureServices(services =>
-            {
-                services.AddPersistence(persistence);
-                services.Configure<CompilationCacheOptions>(o => o.CacheDirectory = cacheDirectory);
-                return services;
-            })
-            .AddJsonGraphConfiguration(testDataDirectory, configuration);
+        return builder.AddJsonGraphConfiguration(testDataDirectory);
     }
 
     public override async ValueTask DisposeAsync()

@@ -1,9 +1,8 @@
-using MeshWeaver.Data;
+﻿using MeshWeaver.Data;
 using MeshWeaver.Domain;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
-using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.Graph.Configuration;
@@ -38,11 +37,8 @@ public static class GraphConfigurationExtensions
         ///
         /// Content collections are configured per node type via NodeTypeDefinition.ContentCollections.
         /// All configuration loading and service initialization happens at mesh startup.
-        /// </summary>
-        /// <param name="dataDirectory">The base data directory</param>
-        /// <param name="configuration">The application configuration</param>
-        public TBuilder AddJsonGraphConfiguration(string dataDirectory,
-            IConfiguration configuration)
+        /// </summary> 
+        public TBuilder AddJsonGraphConfiguration(string _)
         {
             // Register services that don't need hub-level dependencies at the mesh level
             builder.ConfigureServices(services =>
@@ -90,20 +86,6 @@ public static class GraphConfigurationExtensions
             return builder;
         }
 
-        /// <summary>
-        /// Loads graph configuration from JSON files using the default data directory from configuration.
-        /// Reads the data directory from Graph:DataDirectory section.
-        /// </summary>
-        public TBuilder AddJsonGraphConfiguration(IConfiguration configuration)
-        {
-            var graphSection = configuration.GetSection("Graph");
-            var dataDirectoryConfig = graphSection["DataDirectory"] ?? "Data";
-            var dataDirectory = Path.IsPathRooted(dataDirectoryConfig)
-                ? dataDirectoryConfig
-                : Path.GetFullPath(Path.Combine(Directory.GetCurrentDirectory(), dataDirectoryConfig));
-
-            return builder.AddJsonGraphConfiguration(dataDirectory, configuration);
-        }
     }
 
     /// <summary>
@@ -114,7 +96,7 @@ public static class GraphConfigurationExtensions
     private static async Task<IMessageDelivery> HandleNodeTypeRequest(
         IMessageHub hub,
         IMessageDelivery<GetDataRequest> request,
-        CancellationToken ct)
+        CancellationToken _)
     {
         // Only handle NodeTypeReference, let other references pass through
         if (request.Message.Reference is not NodeTypeReference)
@@ -146,7 +128,7 @@ public static class GraphConfigurationExtensions
 
             // Get CodeConfiguration from the partition
             CodeConfiguration? codeConfig = null;
-            await foreach (var obj in persistence.GetPartitionObjectsAsync(nodeTypePath, null))
+            await foreach (var obj in persistence.GetPartitionObjectsAsync(nodeTypePath, null).WithCancellation(_))
             {
                 if (obj is CodeConfiguration cc)
                 {

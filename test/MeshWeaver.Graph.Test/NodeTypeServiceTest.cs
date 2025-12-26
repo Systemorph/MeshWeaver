@@ -34,10 +34,10 @@ public class NodeTypeServiceTest
             NodeType = "NodeType",
             Content = new NodeTypeDefinition { Id = "story", DisplayName = "Story" }
         };
-        await _persistence.SaveNodeAsync(storyNode);
+        await _persistence.SaveNodeAsync(storyNode, TestContext.Current.CancellationToken);
 
         // Act
-        var nodes = await _service.GetNodeTypeNodesAsync("").ToListAsync();
+        var nodes = await _service.GetNodeTypeNodesAsync("").ToListAsync(TestContext.Current.CancellationToken);
 
         // Assert
         nodes.Should().Contain(n => n.Path == "type/story");
@@ -53,7 +53,7 @@ public class NodeTypeServiceTest
             NodeType = "NodeType",
             Content = new NodeTypeDefinition { Id = "story", DisplayName = "Story" }
         };
-        await _persistence.SaveNodeAsync(globalStory);
+        await _persistence.SaveNodeAsync(globalStory, TestContext.Current.CancellationToken);
 
         // Local type override at project level (same Id shadows global)
         var localStory = MeshNode.FromPath("graph/org1/proj1/story") with
@@ -62,7 +62,7 @@ public class NodeTypeServiceTest
             NodeType = "NodeType",
             Content = new NodeTypeDefinition { Id = "story", DisplayName = "Project Story" }
         };
-        await _persistence.SaveNodeAsync(localStory);
+        await _persistence.SaveNodeAsync(localStory, TestContext.Current.CancellationToken);
 
         // A different type at global level
         var globalOrg = MeshNode.FromPath("type/org") with
@@ -71,10 +71,10 @@ public class NodeTypeServiceTest
             NodeType = "NodeType",
             Content = new NodeTypeDefinition { Id = "org", DisplayName = "Organization" }
         };
-        await _persistence.SaveNodeAsync(globalOrg);
+        await _persistence.SaveNodeAsync(globalOrg, TestContext.Current.CancellationToken);
 
         // Act - resolve from deep path
-        var nodes = await _service.GetNodeTypeNodesAsync("graph/org1/proj1/task1").ToListAsync();
+        var nodes = await _service.GetNodeTypeNodesAsync("graph/org1/proj1/task1").ToListAsync(TestContext.Current.CancellationToken);
 
         // Assert - should find local story (shadows global) + global org
         nodes.Should().HaveCount(2);
@@ -103,10 +103,10 @@ public class NodeTypeServiceTest
             NodeType = "NodeType",
             Content = new NodeTypeDefinition { Id = "story", DisplayName = "Story" }
         };
-        await _persistence.SaveNodeAsync(storyNode);
+        await _persistence.SaveNodeAsync(storyNode, TestContext.Current.CancellationToken);
 
         // Act
-        var result = await _service.GetNodeTypeNodeAsync("story", "graph/org1/proj1");
+        var result = await _service.GetNodeTypeNodeAsync("story", "graph/org1/proj1", TestContext.Current.CancellationToken);
 
         // Assert
         result.Should().NotBeNull();
@@ -123,7 +123,7 @@ public class NodeTypeServiceTest
             NodeType = "NodeType",
             Content = new NodeTypeDefinition { Id = "story", DisplayName = "Story" }
         };
-        await _persistence.SaveNodeAsync(globalStory);
+        await _persistence.SaveNodeAsync(globalStory, TestContext.Current.CancellationToken);
 
         var localStory = MeshNode.FromPath("graph/org1/story") with
         {
@@ -131,10 +131,10 @@ public class NodeTypeServiceTest
             NodeType = "NodeType",
             Content = new NodeTypeDefinition { Id = "story", DisplayName = "Org Story" }
         };
-        await _persistence.SaveNodeAsync(localStory);
+        await _persistence.SaveNodeAsync(localStory, TestContext.Current.CancellationToken);
 
         // Act
-        var result = await _service.GetNodeTypeNodeAsync("story", "graph/org1/proj1");
+        var result = await _service.GetNodeTypeNodeAsync("story", "graph/org1/proj1", TestContext.Current.CancellationToken);
 
         // Assert - should get the local override at org level
         result.Should().NotBeNull();
@@ -145,7 +145,7 @@ public class NodeTypeServiceTest
     public async Task GetNodeTypeNodeAsync_ReturnsNull_WhenTypeNotFound()
     {
         // Act
-        var result = await _service.GetNodeTypeNodeAsync("nonexistent", "graph/org1");
+        var result = await _service.GetNodeTypeNodeAsync("nonexistent", "graph/org1", TestContext.Current.CancellationToken);
 
         // Assert
         result.Should().BeNull();
@@ -165,16 +165,16 @@ public class NodeTypeServiceTest
             NodeType = "NodeType",
             Content = new NodeTypeDefinition { Id = "story", DisplayName = "Story" }
         };
-        await _persistence.SaveNodeAsync(storyNode);
+        await _persistence.SaveNodeAsync(storyNode, TestContext.Current.CancellationToken);
 
         var codeConfig = new CodeConfiguration
         {
             Code = "public record Story { [Key] public string Id { get; init; } }"
         };
-        await _persistence.SavePartitionObjectsAsync("type/story", null, [codeConfig]);
+        await _persistence.SavePartitionObjectsAsync("type/story", null, [codeConfig], TestContext.Current.CancellationToken);
 
         // Act
-        var result = await _service.GetCodeConfigurationAsync("story", "graph/org1");
+        var result = await _service.GetCodeConfigurationAsync("story", "graph/org1", TestContext.Current.CancellationToken);
 
         // Assert
         result.Should().NotBeNull();
@@ -191,10 +191,10 @@ public class NodeTypeServiceTest
             NodeType = "NodeType",
             Content = new NodeTypeDefinition { Id = "story", DisplayName = "Story" }
         };
-        await _persistence.SaveNodeAsync(storyNode);
+        await _persistence.SaveNodeAsync(storyNode, TestContext.Current.CancellationToken);
 
         // Act
-        var result = await _service.GetCodeConfigurationAsync("story", "graph/org1");
+        var result = await _service.GetCodeConfigurationAsync("story", "graph/org1", TestContext.Current.CancellationToken);
 
         // Assert
         result.Should().BeNull();
@@ -214,7 +214,7 @@ public class NodeTypeServiceTest
             NodeType = "NodeType",
             Content = new NodeTypeDefinition { Id = "story", DisplayName = "Story" }
         };
-        await _persistence.SaveNodeAsync(storyNode);
+        await _persistence.SaveNodeAsync(storyNode, TestContext.Current.CancellationToken);
 
         var codeConfig = new CodeConfiguration
         {
@@ -222,10 +222,10 @@ public class NodeTypeServiceTest
         };
 
         // Act
-        await _service.SaveCodeConfigurationAsync("type/story", codeConfig);
+        await _service.SaveCodeConfigurationAsync("type/story", codeConfig, TestContext.Current.CancellationToken);
 
         // Assert
-        var loaded = await _service.GetCodeConfigurationAsync("story", "");
+        var loaded = await _service.GetCodeConfigurationAsync("story", "", TestContext.Current.CancellationToken);
         loaded.Should().NotBeNull();
         loaded!.Code.Should().Contain("record Story");
     }
@@ -238,13 +238,13 @@ public class NodeTypeServiceTest
     public async Task GetAllNodeTypeNodesAsync_ReturnsAllNodeTypes()
     {
         // Arrange
-        await _persistence.SaveNodeAsync(MeshNode.FromPath("type/story") with { Name = "Story", NodeType = "NodeType" });
-        await _persistence.SaveNodeAsync(MeshNode.FromPath("type/org") with { Name = "Org", NodeType = "NodeType" });
-        await _persistence.SaveNodeAsync(MeshNode.FromPath("graph/proj1/task") with { Name = "Task", NodeType = "NodeType" });
-        await _persistence.SaveNodeAsync(MeshNode.FromPath("graph/org1") with { Name = "Org 1", NodeType = "org" }); // Not a NodeType
+        await _persistence.SaveNodeAsync(MeshNode.FromPath("type/story") with { Name = "Story", NodeType = "NodeType" }, TestContext.Current.CancellationToken);
+        await _persistence.SaveNodeAsync(MeshNode.FromPath("type/org") with { Name = "Org", NodeType = "NodeType" }, TestContext.Current.CancellationToken);
+        await _persistence.SaveNodeAsync(MeshNode.FromPath("graph/proj1/task") with { Name = "Task", NodeType = "NodeType" }, TestContext.Current.CancellationToken);
+        await _persistence.SaveNodeAsync(MeshNode.FromPath("graph/org1") with { Name = "Org 1", NodeType = "org" }, TestContext.Current.CancellationToken); // Not a NodeType
 
         // Act
-        var nodes = await _service.GetAllNodeTypeNodesAsync().ToListAsync();
+        var nodes = await _service.GetAllNodeTypeNodesAsync().ToListAsync(TestContext.Current.CancellationToken);
 
         // Assert
         nodes.Should().HaveCount(3);
@@ -259,17 +259,17 @@ public class NodeTypeServiceTest
     public async Task GetAllCodeConfigurationsAsync_ReturnsAllCodeConfigurations()
     {
         // Arrange
-        await _persistence.SaveNodeAsync(MeshNode.FromPath("type/story") with { Name = "Story", NodeType = "NodeType" });
-        await _persistence.SaveNodeAsync(MeshNode.FromPath("type/org") with { Name = "Org", NodeType = "NodeType" });
+        await _persistence.SaveNodeAsync(MeshNode.FromPath("type/story") with { Name = "Story", NodeType = "NodeType" }, TestContext.Current.CancellationToken);
+        await _persistence.SaveNodeAsync(MeshNode.FromPath("type/org") with { Name = "Org", NodeType = "NodeType" }, TestContext.Current.CancellationToken);
 
         var storyConfig = new CodeConfiguration { Code = "public record Story { }" };
         var orgConfig = new CodeConfiguration { Code = "public record Organization { }" };
 
-        await _persistence.SavePartitionObjectsAsync("type/story", null, [storyConfig]);
-        await _persistence.SavePartitionObjectsAsync("type/org", null, [orgConfig]);
+        await _persistence.SavePartitionObjectsAsync("type/story", null, [storyConfig], TestContext.Current.CancellationToken);
+        await _persistence.SavePartitionObjectsAsync("type/org", null, [orgConfig], TestContext.Current.CancellationToken);
 
         // Act
-        var configs = await _service.GetAllCodeConfigurationsAsync();
+        var configs = await _service.GetAllCodeConfigurationsAsync(TestContext.Current.CancellationToken);
 
         // Assert
         configs.Should().HaveCount(2);
