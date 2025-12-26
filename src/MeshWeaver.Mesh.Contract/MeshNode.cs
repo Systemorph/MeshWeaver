@@ -175,6 +175,7 @@ public record MeshNode([property: Key] string Id, string Namespace = "")
 
     public string? ThumbNail { get; init; }
     public string? StreamProvider { get; init; }
+    [NotMapped]
     public string? AssemblyLocation { get; init; }
     [JsonIgnore, NotMapped]
     public Func<MessageHubConfiguration, MessageHubConfiguration>? HubConfiguration { get; init; }
