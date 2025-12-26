@@ -1,5 +1,6 @@
 ﻿using MeshWeaver.ContentCollections;
 using MeshWeaver.Hosting;
+using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
@@ -34,7 +35,12 @@ public static class OrleansConnectionExtensions
     }
 
     private static IServiceCollection AddOrleansMeshServices(this IServiceCollection services)
-        => services.AddSingleton<IRoutingService, OrleansRoutingService>();
+    {
+        // Register defaults - MeshCatalog requires IPersistenceService
+        services.TryAddSingleton<IPersistenceService>(new InMemoryPersistenceService());
+        services.TryAddSingleton<IRoutingService, OrleansRoutingService>();
+        return services;
+    }
 
     internal static void ConfigureMeshWeaver(this MeshBuilder builder)
     {
