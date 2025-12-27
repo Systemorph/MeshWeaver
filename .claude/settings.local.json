@@ -63,7 +63,9 @@
       "Bash(for f in *.json)",
       "Bash(do sed -i 's/\"\"path\"\": \"\"_types\\\\//\"\"path\"\": \"\"type\\\\//g' \"$f\")",
       "Bash(done)",
-      "Bash(tree:*)"
+      "Bash(tree:*)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "WebFetch(domain:www.fluentui-blazor.net)"
     ],
     "deny": []
   }

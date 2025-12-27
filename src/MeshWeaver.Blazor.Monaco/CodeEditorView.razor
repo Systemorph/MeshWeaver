@@ -1,17 +1,27 @@
 @using MeshWeaver.Layout
+@using MeshWeaver.Layout.Client
+@using MeshWeaver.Data
 @using MeshWeaver.Blazor.Monaco
 @using System.Text.Json
 
 <MonacoEditorView @ref="editorRef"
-                  Value="@GetValue()"
-                  Language="@GetLanguage()"
-                  Height="@GetHeight()"
-                  IsDisabled="@GetReadonly()"
-                  Placeholder="@GetPlaceholder()"
+                  Value="@BoundValue"
+                  Language="@BoundLanguage"
+                  Height="@BoundHeight"
+                  IsDisabled="@BoundReadonly"
+                  Placeholder="@BoundPlaceholder"
+                  ShowLineNumbers="true"
+                  ShowBorder="true"
                   ValueChanged="@OnValueChanged" />
 
 @code {
     private MonacoEditorView? editorRef;
+
+    private string BoundValue = "";
+    private string BoundLanguage = "plaintext";
+    private string BoundHeight = "300px";
+    private bool BoundReadonly = false;
+    private string BoundPlaceholder = "";
 
     /// <summary>
     /// The view model for this code editor.
@@ -23,7 +33,7 @@
     /// The synchronization stream (required by the view infrastructure).
     /// </summary>
     [Parameter]
-    public object? Stream { get; set; }
+    public ISynchronizationStream<JsonElement>? Stream { get; set; }
 
     /// <summary>
     /// The area name (required by the view infrastructure).
@@ -31,14 +41,67 @@
     [Parameter]
     public string? Area { get; set; }
 
-    private string GetValue() => ViewModel?.Value?.ToString() ?? "";
-    private string GetLanguage() => ViewModel?.Language?.ToString() ?? "plaintext";
-    private string GetHeight() => ViewModel?.Height?.ToString() ?? "300px";
-    private bool GetReadonly() => ViewModel?.Readonly is bool b && b;
-    private string GetPlaceholder() => ViewModel?.Placeholder?.ToString() ?? "";
+    /// <summary>
+    /// The data context for resolving data bindings.
+    /// </summary>
+    [CascadingParameter(Name = "DataContext")]
+    public string? DataContext { get; set; }
+
+    protected override void OnParametersSet()
+    {
+        base.OnParametersSet();
+        BindData();
+    }
+
+    private void BindData()
+    {
+        if (ViewModel == null)
+            return;
+
+        BoundValue = ResolveValue<string>(ViewModel.Value) ?? "";
+        BoundLanguage = ResolveValue<string>(ViewModel.Language) ?? "plaintext";
+        BoundHeight = ResolveValue<string>(ViewModel.Height) ?? "300px";
+        BoundReadonly = ResolveValue<bool?>(ViewModel.Readonly) ?? false;
+        BoundPlaceholder = ResolveValue<string>(ViewModel.Placeholder) ?? "";
+    }
+
+    private T? ResolveValue<T>(object? value)
+    {
+        if (value == null)
+            return default;
+
+        // If we have a stream, try to resolve data bindings
+        if (Stream != null)
+        {
+            return Stream.GetDataBoundValue<T>(value, DataContext ?? ViewModel?.DataContext);
+        }
+
+        // Fall back to direct conversion
+        if (value is T typedValue)
+            return typedValue;
+
+        if (value is JsonElement element)
+        {
+            try
+            {
+                return element.Deserialize<T>();
+            }
+            catch
+            {
+                return default;
+            }
+        }
+
+        // Try string conversion for simple types
+        if (typeof(T) == typeof(string))
+            return (T)(object)value.ToString()!;
+
+        return default;
+    }
 
     private async Task OnValueChanged(string value)
     {
+        BoundValue = value;
         // Value changed callback can be handled via data binding if needed
         await Task.CompletedTask;
     }

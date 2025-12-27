@@ -3,7 +3,7 @@
 @inject IJSRuntime JSRuntime
 @inject ILogger<MonacoEditorView> Logger
 
-<div class="monaco-editor-container" style="@ContainerStyle">
+<div class="monaco-editor-container @(ShowBorder ? "with-border" : "")" style="@ContainerStyle">
     <StandaloneCodeEditor @ref="editor"
                           Id="@EditorId"
                           ConstructionOptions="GetEditorOptions"
@@ -59,6 +59,18 @@
     [Parameter]
     public Func<string, Task<CompletionItem[]>>? AsyncCompletionCallback { get; set; }
 
+    /// <summary>
+    /// Show line numbers in the editor. Default is false (chat-style input).
+    /// </summary>
+    [Parameter]
+    public bool ShowLineNumbers { get; set; } = false;
+
+    /// <summary>
+    /// Show a border around the editor. Default is false.
+    /// </summary>
+    [Parameter]
+    public bool ShowBorder { get; set; } = false;
+
     private string ContainerStyle => $"height: {Height}; max-height: {MaxHeight}; min-height: 40px;";
 
     private string GetMonacoTheme() => isDarkMode ? "vs-dark" : "vs";
@@ -71,7 +83,7 @@
             Language = Language,
             Theme = GetMonacoTheme(),
             AutomaticLayout = true,
-            LineNumbers = "off",
+            LineNumbers = ShowLineNumbers ? "on" : "off",
             Minimap = new EditorMinimapOptions { Enabled = false },
             ScrollBeyondLastLine = false,
             WordWrap = "on",
@@ -97,8 +109,8 @@
             // Hide various UI elements
             Folding = false,
             GlyphMargin = false,
-            LineDecorationsWidth = 0,
-            LineNumbersMinChars = 0,
+            LineDecorationsWidth = ShowLineNumbers ? 10 : 0,
+            LineNumbersMinChars = ShowLineNumbers ? 3 : 0,
             RenderWhitespace = "none",
             Contextmenu = false
         };
