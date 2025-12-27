@@ -4,6 +4,7 @@ using System.IO;
 using System.Threading.Tasks;
 using FluentAssertions;
 using MeshWeaver.Graph.Configuration;
+using MeshWeaver.Hosting.Monolith;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Mesh;
@@ -30,7 +31,7 @@ public class MeshNodeVersionSyncTest : MonolithMeshTestBase
     [ThreadStatic]
     private static string? _currentTestDirectory;
 
-    private IPersistenceService Persistence => ServiceProvider.GetRequiredService<IPersistenceService>();
+    private IPersistenceService Persistence => Mesh.ServiceProvider.GetRequiredService<IPersistenceService>();
 
     private static string GetOrCreateTestDirectory()
     {
@@ -136,7 +137,10 @@ public record Graph
         };
         persistence.SaveNodeAsync(graphNode).GetAwaiter().GetResult();
 
-        return builder.AddJsonGraphConfiguration(testDataDirectory);
+        return builder
+            .UseMonolithMesh()
+            .ConfigureServices(services => services.AddPersistence(persistence))
+            .AddJsonGraphConfiguration(testDataDirectory);
     }
 
     public override async ValueTask DisposeAsync()
