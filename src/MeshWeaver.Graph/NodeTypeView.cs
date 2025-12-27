@@ -3,6 +3,7 @@ using Humanizer;
 using MeshWeaver.Application.Styles;
 using MeshWeaver.Blazor.Monaco;
 using MeshWeaver.Data;
+using MeshWeaver.Domain;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
@@ -160,7 +161,7 @@ public static class NodeTypeView
         host.UpdateData(selectionDataId, new NodeTypeViewSelection { SelectedFile = defaultFile, Section = "code" });
 
         return Controls.Splitter
-            .WithSkin(s => s.WithOrientation(Orientation.Horizontal).WithHeight("100%"))
+            .WithSkin(s => s.WithOrientation(Orientation.Horizontal).WithWidth("100%").WithHeight("100%"))
             .WithView(
                 BuildLeftMenu(host, content, codeConfig, selectionDataId),
                 skin => skin.WithSize("280px").WithMin("200px").WithMax("400px").WithCollapsible(true)
@@ -180,11 +181,11 @@ public static class NodeTypeView
         CodeConfiguration? codeConfig,
         string selectionDataId)
     {
-        var navMenu = Controls.NavMenu.WithSkin(s => s.WithWidth(280));
+        var navMenu = Controls.NavMenu.WithSkin(s => s.WithWidth(280).WithCollapsible(false));
 
-        // Code section
-        var codeGroup = new NavGroupControl("Code")
-            .WithIcon(FluentIcons.Code());
+        // DataModel section
+        var codeGroup = new NavGroupControl("DataModel")
+            .WithIcon(FluentIcons.Database());
 
         if (codeConfig?.Files != null && codeConfig.Files.Count > 0)
         {
@@ -192,9 +193,11 @@ public static class NodeTypeView
             {
                 var displayName = file.DisplayName ?? fileName;
                 var langLabel = file.Language != "csharp" ? $" ({file.Language})" : "";
+                var icon = GetLanguageIcon(file.Language);
 
                 codeGroup = codeGroup.WithView(
-                    Controls.MenuItem(displayName + langLabel, FluentIcons.Document())
+                    Controls.MenuItem(displayName + langLabel, icon)
+                        .WithStyle("text-align: left;")
                         .WithClickAction(actx =>
                         {
                             host.UpdateData(selectionDataId, new NodeTypeViewSelection { SelectedFile = fileName, Section = "code" });
@@ -206,7 +209,8 @@ public static class NodeTypeView
         {
             // Legacy single-file mode
             codeGroup = codeGroup.WithView(
-                Controls.MenuItem("Code", FluentIcons.Document())
+                Controls.MenuItem("Code", FluentIcons.NumberSymbol())
+                    .WithStyle("text-align: left;")
                     .WithClickAction(actx =>
                     {
                         host.UpdateData(selectionDataId, new NodeTypeViewSelection { SelectedFile = "code", Section = "code" });
@@ -230,6 +234,7 @@ public static class NodeTypeView
         {
             hubConfigGroup = hubConfigGroup.WithView(
                 Controls.MenuItem("Configuration Lambda", FluentIcons.CodeBlock())
+                    .WithStyle("text-align: left;")
                     .WithClickAction(actx =>
                     {
                         host.UpdateData(selectionDataId, new NodeTypeViewSelection { SelectedFile = null, Section = "hubconfig" });
@@ -704,6 +709,28 @@ public static class NodeTypeView
 
     private static UiControl RenderError(string message)
         => new MarkdownControl($"> [!CAUTION]\n> {message}\n");
+
+    /// <summary>
+    /// Gets an appropriate icon for the given programming language.
+    /// </summary>
+    private static Icon GetLanguageIcon(string language)
+    {
+        return language?.ToLowerInvariant() switch
+        {
+            "csharp" or "c#" or "cs" => FluentIcons.NumberSymbol(),
+            "javascript" or "js" => FluentIcons.BracesVariable(),
+            "typescript" or "ts" => FluentIcons.BracesVariable(),
+            "json" => FluentIcons.Braces(),
+            "python" or "py" => FluentIcons.Code(),
+            "sql" => FluentIcons.Database(),
+            "html" => FluentIcons.Globe(),
+            "css" => FluentIcons.DesignIdeas(),
+            "xml" => FluentIcons.Code(),
+            "yaml" or "yml" => FluentIcons.DocumentText(),
+            "markdown" or "md" => FluentIcons.Document(),
+            _ => FluentIcons.Document()
+        };
+    }
 }
 
 /// <summary>

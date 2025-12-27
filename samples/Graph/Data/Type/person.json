@@ -16,7 +16,7 @@
     "description": "A person with profile and avatar",
     "displayOrder": 5,
     "contentCollections": [
-      { "name": "avatar", "baseCollection": "graph", "subPath": "persons" }
+      { "name": "persons", "subPath": "persons" }
     ]
   }
 }

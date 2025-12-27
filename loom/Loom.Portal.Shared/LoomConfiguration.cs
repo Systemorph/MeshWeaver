@@ -1,9 +1,11 @@
-﻿using MeshWeaver.Blazor.GoogleMaps;
+﻿using System.IdentityModel.Tokens.Jwt;
+using MeshWeaver.Blazor.GoogleMaps;
 using MeshWeaver.Blazor.Graph;
 using MeshWeaver.Blazor.Infrastructure;
 using MeshWeaver.Blazor.Monaco;
 using MeshWeaver.Blazor.Pages;
 using MeshWeaver.Blazor.Portal;
+using MeshWeaver.Blazor.Portal.Authentication;
 using MeshWeaver.Blazor.Portal.Infrastructure;
 using MeshWeaver.Blazor.Radzen;
 using MeshWeaver.GoogleMaps;
@@ -14,12 +16,18 @@ using MeshWeaver.Hosting.Blazor;
 using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
+using Microsoft.AspNetCore.Authentication.Cookies;
+using Microsoft.AspNetCore.Authentication.OpenIdConnect;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Components;
+using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using Microsoft.AspNetCore.DataProtection;
+using Microsoft.Identity.Web;
+using Microsoft.Identity.Web.UI;
 
 namespace Loom.Portal.Shared;
 
@@ -55,11 +63,71 @@ public static class LoomConfiguration
         services.Configure<GoogleMapsConfiguration>(builder.Configuration.GetSection("GoogleMaps"));
 
         services.AddHttpContextAccessor();
+        services.AddHttpClient();
         services.AddSignalR();
         services.AddControllers();
 
         services.Configure<StylesConfiguration>(
             builder.Configuration.GetSection("Styles"));
+
+        // Configure authentication - based on Authentication:Provider or EntraId configuration
+        var authSection = builder.Configuration.GetSection(AuthenticationOptions.SectionName);
+        var entraIdConfig = builder.Configuration.GetSection("EntraId");
+
+        // Determine provider: explicit config > EntraId presence > Dev default
+        var provider = authSection["Provider"]
+            ?? (entraIdConfig.GetChildren().Any() ? AuthenticationProviders.MicrosoftIdentity : AuthenticationProviders.Dev);
+
+        // Register authentication navigation service
+        services.AddAuthenticationNavigation(options =>
+        {
+            options.Provider = provider;
+
+            // Allow custom paths from config
+            if (authSection["LoginPath"] is { } loginPath)
+                options.LoginPath = loginPath;
+            if (authSection["LogoutPath"] is { } logoutPath)
+                options.LogoutPath = logoutPath;
+        });
+
+        // Configure authentication middleware based on provider
+        switch (provider)
+        {
+            case AuthenticationProviders.MicrosoftIdentity:
+                JwtSecurityTokenHandler.DefaultMapInboundClaims = false;
+                services.AddAuthentication(OpenIdConnectDefaults.AuthenticationScheme)
+                    .AddMicrosoftIdentityWebApp(entraIdConfig);
+                services.AddControllersWithViews()
+                    .AddMicrosoftIdentityUI();
+                break;
+
+            case AuthenticationProviders.Dev:
+            default:
+                // Persist data protection keys so cookies survive app restarts
+                var keysPath = Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                    "Loom", "DataProtection-Keys");
+                Directory.CreateDirectory(keysPath);
+                services.AddDataProtection()
+                    .PersistKeysToFileSystem(new DirectoryInfo(keysPath))
+                    .SetApplicationName("LoomPortal");
+
+                services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationScheme)
+                    .AddCookie(options =>
+                    {
+                        options.LoginPath = "/dev/login";
+                        options.LogoutPath = "/dev/logout";
+                        options.ExpireTimeSpan = TimeSpan.FromDays(7);
+                        options.SlidingExpiration = true;
+                        options.Cookie.Name = "LoomDevAuth";
+                        options.Cookie.HttpOnly = true;
+                        options.Cookie.IsEssential = true;
+                        options.Cookie.SameSite = SameSiteMode.Lax;
+                    });
+                break;
+        }
+
+        services.AddAuthorization();
     }
 
     /// <summary>
@@ -168,6 +236,8 @@ public static class LoomConfiguration
         app.UseStaticFiles();
 
         app.UseRouting();
+        app.UseAuthentication();
+        app.UseAuthorization();
         app.UseAntiforgery();
         app.UseCookiePolicy();
 
