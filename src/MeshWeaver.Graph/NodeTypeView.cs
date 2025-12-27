@@ -480,7 +480,7 @@ public static class NodeTypeView
                 using var cts = new CancellationTokenSource(10.Seconds());
                 var response = await actx.Host.Hub.AwaitResponse<DataChangeResponse>(
                     new DataChangeRequest().WithUpdates(updatedConfig),
-                    o => o,
+                    o => o.WithTarget(hubAddress),
                     cts.Token);
 
                 if (response.Message.Log.Status != ActivityStatus.Succeeded)
@@ -631,7 +631,7 @@ public static class NodeTypeView
                 using var cts = new CancellationTokenSource(10.Seconds());
                 var response = await actx.Host.Hub.AwaitResponse<DataChangeResponse>(
                     new DataChangeRequest().WithUpdates(updatedDefinition),
-                    o => o,
+                    o => o.WithTarget(hubAddress),
                     cts.Token);
 
                 if (response.Message.Log.Status != ActivityStatus.Succeeded)

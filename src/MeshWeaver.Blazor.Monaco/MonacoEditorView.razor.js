@@ -114,7 +114,7 @@ function debounce(fn, delay) {
     document.head.appendChild(style);
 })();
 
-export function initEditor(editorId, placeholder, dotNetRef) {
+export function initEditor(editorId, placeholder, dotNetRef, codeEditMode = false) {
     const container = document.getElementById(editorId);
     if (!container) {
         console.error('Container not found:', editorId);
@@ -125,7 +125,8 @@ export function initEditor(editorId, placeholder, dotNetRef) {
     editorState.set(editorId, {
         dotNetRef: dotNetRef,
         completionConfig: null,
-        completionDisposable: null
+        completionDisposable: null,
+        codeEditMode: codeEditMode
     });
 
     // Add placeholder styling
@@ -140,36 +141,41 @@ export function initEditor(editorId, placeholder, dotNetRef) {
             updatePlaceholderVisibility(editorId, !value);
         });
 
-        // Handle Enter key for submit - use onKeyDown for direct control
-        editorInstance.onKeyDown(async (e) => {
-            // Check for Enter key without modifiers
-            if (e.keyCode === monaco.KeyCode.Enter && !e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey) {
-                // Check if suggest widget is visible
-                // States: 0=Hidden, 1=Loading, 2=Empty, 3=Open, 4=Frozen, 5=Details
-                // Use > 0 to handle undefined/null case (where !== 0 would wrongly be true)
-                const suggestController = editorInstance.getContribution('editor.contrib.suggestController');
-                const suggestState = suggestController?.model?.state;
-                const isSuggestVisible = typeof suggestState === 'number' && suggestState > 0;
+        // Handle Enter key - in code edit mode, Enter inserts newline; in chat mode, Enter submits
+        const state = editorState.get(editorId);
+        if (!state?.codeEditMode) {
+            // Chat input mode: Enter submits, Shift+Enter inserts newline
+            editorInstance.onKeyDown(async (e) => {
+                // Check for Enter key without modifiers
+                if (e.keyCode === monaco.KeyCode.Enter && !e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey) {
+                    // Check if suggest widget is visible
+                    // States: 0=Hidden, 1=Loading, 2=Empty, 3=Open, 4=Frozen, 5=Details
+                    // Use > 0 to handle undefined/null case (where !== 0 would wrongly be true)
+                    const suggestController = editorInstance.getContribution('editor.contrib.suggestController');
+                    const suggestState = suggestController?.model?.state;
+                    const isSuggestVisible = typeof suggestState === 'number' && suggestState > 0;
 
-                if (!isSuggestVisible) {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    const state = editorState.get(editorId);
-                    if (state?.dotNetRef) {
-                        try {
-                            await state.dotNetRef.invokeMethodAsync('HandleSubmit');
-                        } catch (err) {
-                            console.error('Error calling HandleSubmit:', err);
+                    if (!isSuggestVisible) {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        const currentState = editorState.get(editorId);
+                        if (currentState?.dotNetRef) {
+                            try {
+                                await currentState.dotNetRef.invokeMethodAsync('HandleSubmit');
+                            } catch (err) {
+                                console.error('Error calling HandleSubmit:', err);
+                            }
                         }
                     }
                 }
-            }
-        });
+            });
 
-        // Allow Shift+Enter for new line
-        editorInstance.addCommand(monaco.KeyMod.Shift | monaco.KeyCode.Enter, () => {
-            editorInstance.trigger('keyboard', 'type', { text: '\n' });
-        });
+            // Allow Shift+Enter for new line in chat mode
+            editorInstance.addCommand(monaco.KeyMod.Shift | monaco.KeyCode.Enter, () => {
+                editorInstance.trigger('keyboard', 'type', { text: '\n' });
+            });
+        }
+        // In code edit mode, Enter naturally inserts newlines (default Monaco behavior)
 
         // Force layout after initialization
         setTimeout(() => {
