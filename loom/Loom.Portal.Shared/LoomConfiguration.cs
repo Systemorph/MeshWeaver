@@ -1,6 +1,7 @@
 ﻿using MeshWeaver.Blazor.GoogleMaps;
 using MeshWeaver.Blazor.Graph;
 using MeshWeaver.Blazor.Infrastructure;
+using MeshWeaver.Blazor.Monaco;
 using MeshWeaver.Blazor.Pages;
 using MeshWeaver.Blazor.Portal;
 using MeshWeaver.Blazor.Portal.Infrastructure;
@@ -138,6 +139,7 @@ public static class LoomConfiguration
                 .AddRadzenCharts()
                 .AddGoogleMaps()
                 .AddGraphViews()
+                .AddMonacoViews()
             )
             .AddBlazor(layoutClient => layoutClient
                 .WithPortalConfiguration(c => c)

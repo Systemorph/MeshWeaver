@@ -1,5 +1,6 @@
 @using MeshWeaver.Layout
 @using MeshWeaver.Blazor.Monaco
+@using System.Text.Json
 
 <MonacoEditorView @ref="editorRef"
                   Value="@GetValue()"
@@ -12,11 +13,23 @@
 @code {
     private MonacoEditorView? editorRef;
 
+    /// <summary>
+    /// The view model for this code editor.
+    /// </summary>
     [Parameter]
     public CodeEditorControl? ViewModel { get; set; }
 
+    /// <summary>
+    /// The synchronization stream (required by the view infrastructure).
+    /// </summary>
     [Parameter]
-    public EventCallback<string> OnContentChanged { get; set; }
+    public object? Stream { get; set; }
+
+    /// <summary>
+    /// The area name (required by the view infrastructure).
+    /// </summary>
+    [Parameter]
+    public string? Area { get; set; }
 
     private string GetValue() => ViewModel?.Value?.ToString() ?? "";
     private string GetLanguage() => ViewModel?.Language?.ToString() ?? "plaintext";
@@ -26,10 +39,8 @@
 
     private async Task OnValueChanged(string value)
     {
-        if (OnContentChanged.HasDelegate)
-        {
-            await OnContentChanged.InvokeAsync(value);
-        }
+        // Value changed callback can be handled via data binding if needed
+        await Task.CompletedTask;
     }
 
     public async ValueTask<string> GetValueAsync()
