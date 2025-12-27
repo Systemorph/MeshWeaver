@@ -1,4 +1,4 @@
-using System.Reactive.Linq;
+﻿using System.Reactive.Linq;
 using Humanizer;
 using MeshWeaver.Application.Styles;
 using MeshWeaver.Blazor.Monaco;
@@ -470,34 +470,34 @@ public static class NodeTypeView
             .WithAppearance(Appearance.Accent)
             .WithIconStart(FluentIcons.Save())
             .WithClickAction(async actx =>
-            {
-                var currentCode = await host.Stream.GetDataStream<string>(dataId).FirstAsync();
-
-                // Update the code configuration
-                var updatedConfig = UpdateCodeConfiguration(codeConfig, fileName, currentCode ?? "", language);
-
-                // Update via workspace - CodeConfigurationTypeSource will sync to persistence
-                using var cts = new CancellationTokenSource(10.Seconds());
-                var response = await actx.Host.Hub.AwaitResponse<DataChangeResponse>(
-                    new DataChangeRequest().WithUpdates(updatedConfig),
-                    o => o.WithTarget(hubAddress),
-                    cts.Token);
-
-                if (response.Message.Log.Status != ActivityStatus.Succeeded)
                 {
-                    // Show error dialog
-                    var errorDialog = Controls.Dialog(
-                        Controls.Markdown($"**Error saving code:**\n\n{response.Message.Log}"),
-                        "Save Failed"
-                    ).WithSize("M");
-                    actx.Host.UpdateArea(DialogControl.DialogArea, errorDialog);
-                    return;
-                }
+                    var currentCode = await host.Stream.GetDataStream<string>(dataId).FirstAsync();
 
-                // Navigate back to view
-                var viewHref = new LayoutAreaReference(CodeViewArea).ToHref(hubAddress);
-                actx.Host.UpdateArea(actx.Area, new RedirectControl(viewHref));
-            }));
+                    // Update the code configuration
+                    var updatedConfig = UpdateCodeConfiguration(codeConfig, fileName, currentCode ?? "", language);
+
+                    // Update via workspace - CodeConfigurationTypeSource will sync to persistence
+                    using var cts = new CancellationTokenSource(10.Seconds());
+                    var response = await actx.Host.Hub.AwaitResponse<DataChangeResponse>(
+                        new DataChangeRequest().WithUpdates(updatedConfig),
+                        o => o.WithTarget(hubAddress),
+                        cts.Token);
+
+                    if (response.Message.Log.Status != ActivityStatus.Succeeded)
+                    {
+                        // Show error dialog
+                        var errorDialog = Controls.Dialog(
+                            Controls.Markdown($"**Error saving code:**\n\n{response.Message.Log}"),
+                            "Save Failed"
+                        ).WithSize("M");
+                        actx.Host.UpdateArea(DialogControl.DialogArea, errorDialog);
+                        return;
+                    }
+
+                    // Navigate back to view
+                    var viewHref = new LayoutAreaReference(CodeViewArea).ToHref(hubAddress);
+                    actx.Host.UpdateArea(actx.Area, new RedirectControl(viewHref));
+                }));
 
         // Cancel button
         var viewHref = new LayoutAreaReference(CodeViewArea).ToHref(hubAddress);

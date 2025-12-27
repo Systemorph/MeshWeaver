@@ -21,6 +21,7 @@
     private bool isDarkMode = false;
     private bool completionProviderRegistered = false;
     private int lastCompletionItemCount = 0;
+    private string? lastSetValue; // Track last value set to editor to detect external changes
 
     [CascadingParameter(Name = "ThemeMode")]
     public DesignThemeModes Mode { get; set; }
@@ -157,6 +158,7 @@
         Logger.LogDebug("OnEditorInit called. CompletionProvider={HasProvider}, Items={ItemCount}",
             CompletionProvider != null, CompletionProvider?.Items?.Count ?? 0);
         isInitialized = true;
+        lastSetValue = Value ?? ""; // Track initial value
         dotNetRef = DotNetObjectReference.Create(this);
 
         // Load custom JS module for placeholder and agent completion
@@ -244,6 +246,7 @@
             if (value != Value)
             {
                 Value = value;
+                lastSetValue = value; // Track user-typed value
                 await ValueChanged.InvokeAsync(value);
             }
         }
@@ -300,6 +303,7 @@
         {
             await editor.SetValue(value);
             Value = value;
+            lastSetValue = value;
         }
     }
 
@@ -359,6 +363,17 @@
                 ReadOnly = IsDisabled,
                 Theme = themeChanged ? GetMonacoTheme() : null
             });
+
+            // Check if Value changed from an external source (e.g., data binding)
+            var currentValue = Value ?? "";
+            if (currentValue != lastSetValue)
+            {
+                Logger.LogDebug("Value changed externally from '{OldValue}' to '{NewValue}'",
+                    lastSetValue?.Substring(0, Math.Min(50, lastSetValue?.Length ?? 0)),
+                    currentValue.Substring(0, Math.Min(50, currentValue.Length)));
+                lastSetValue = currentValue;
+                await editor.SetValue(currentValue);
+            }
 
             // Try to register completion provider (will skip if already registered with same items)
             await TryRegisterCompletionProvider();

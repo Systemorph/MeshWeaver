@@ -3,6 +3,8 @@
 @using MeshWeaver.Data
 @using MeshWeaver.Blazor.Monaco
 @using System.Text.Json
+@using System.Reactive.Linq
+@implements IDisposable
 
 <MonacoEditorView @ref="editorRef"
                   Value="@BoundValue"
@@ -17,12 +19,17 @@
 
 @code {
     private MonacoEditorView? editorRef;
+    private List<IDisposable> subscriptions = new();
+    private bool isUpdatingFromStream = false;
 
     private string BoundValue = "";
     private string BoundLanguage = "plaintext";
     private string BoundHeight = "300px";
     private bool BoundReadonly = false;
     private string BoundPlaceholder = "";
+
+    // Store the data pointer for two-way binding
+    private JsonPointerReference? ValuePointer;
 
     /// <summary>
     /// The view model for this code editor.
@@ -51,7 +58,22 @@
     protected override void OnParametersSet()
     {
         base.OnParametersSet();
+        DisposeSubscriptions();
         BindData();
+    }
+
+    private void DisposeSubscriptions()
+    {
+        foreach (var sub in subscriptions)
+        {
+            sub.Dispose();
+        }
+        subscriptions.Clear();
+    }
+
+    public void Dispose()
+    {
+        DisposeSubscriptions();
     }
 
     private void BindData()
@@ -59,11 +81,40 @@
         if (ViewModel == null)
             return;
 
+        // Store the value pointer for two-way binding
+        ValuePointer = ViewModel.Value as JsonPointerReference;
+
+        // First, get the initial value synchronously
         BoundValue = ResolveValue<string>(ViewModel.Value) ?? "";
+
+        // Then set up reactive subscription for Value changes if it's a pointer reference
+        if (Stream != null && ValuePointer != null)
+        {
+            var subscription = Stream
+                .DataBind<string>(ValuePointer, GetEffectiveDataContext())
+                .Subscribe(value =>
+                {
+                    if (value != null && value != BoundValue)
+                    {
+                        isUpdatingFromStream = true;
+                        BoundValue = value;
+                        InvokeAsync(StateHasChanged);
+                        isUpdatingFromStream = false;
+                    }
+                });
+            subscriptions.Add(subscription);
+        }
+
+        // Bind other properties (one-time, not reactive)
         BoundLanguage = ResolveValue<string>(ViewModel.Language) ?? "plaintext";
         BoundHeight = ResolveValue<string>(ViewModel.Height) ?? "300px";
         BoundReadonly = ResolveValue<bool?>(ViewModel.Readonly) ?? false;
         BoundPlaceholder = ResolveValue<string>(ViewModel.Placeholder) ?? "";
+    }
+
+    private string? GetEffectiveDataContext()
+    {
+        return DataContext ?? ViewModel?.DataContext;
     }
 
     private T? ResolveValue<T>(object? value)
@@ -74,7 +125,7 @@
         // If we have a stream, try to resolve data bindings
         if (Stream != null)
         {
-            return Stream.GetDataBoundValue<T>(value, DataContext ?? ViewModel?.DataContext);
+            return Stream.GetDataBoundValue<T>(value, GetEffectiveDataContext());
         }
 
         // Fall back to direct conversion
@@ -100,11 +151,25 @@
         return default;
     }
 
-    private async Task OnValueChanged(string value)
+    private Task OnValueChanged(string value)
     {
+        // Don't write back if this change came from the stream subscription
+        if (isUpdatingFromStream)
+            return Task.CompletedTask;
+
+        // Only update if value actually changed
+        if (BoundValue == value)
+            return Task.CompletedTask;
+
         BoundValue = value;
-        // Value changed callback can be handled via data binding if needed
-        await Task.CompletedTask;
+
+        // Write back to stream if we have a data pointer
+        if (Stream != null && ValuePointer != null)
+        {
+            Stream.UpdatePointer(value, GetEffectiveDataContext(), ValuePointer);
+        }
+
+        return Task.CompletedTask;
     }
 
     public async ValueTask<string> GetValueAsync()
