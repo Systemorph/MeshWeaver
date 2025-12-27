@@ -161,7 +161,7 @@ public static class NodeTypeView
         host.UpdateData(selectionDataId, new NodeTypeViewSelection { SelectedFile = defaultFile, Section = "code" });
 
         return Controls.Splitter
-            .WithSkin(s => s.WithOrientation(Orientation.Horizontal).WithWidth("100%").WithHeight("100%"))
+            .WithSkin(s => s.WithOrientation(Orientation.Horizontal).WithWidth("100%").WithHeight("calc(100vh - 100px)"))
             .WithView(
                 BuildLeftMenu(host, content, codeConfig, selectionDataId),
                 skin => skin.WithSize("280px").WithMin("200px").WithMax("400px").WithCollapsible(true)
@@ -183,9 +183,9 @@ public static class NodeTypeView
     {
         var navMenu = Controls.NavMenu.WithSkin(s => s.WithWidth(280).WithCollapsible(false));
 
-        // DataModel section
-        var codeGroup = new NavGroupControl("DataModel")
-            .WithIcon(FluentIcons.Database());
+        // Code section (Data Model)
+        var codeGroup = new NavGroupControl("Code")
+            .WithIcon(FluentIcons.Code());
 
         if (codeConfig?.Files != null && codeConfig.Files.Count > 0)
         {
@@ -196,8 +196,7 @@ public static class NodeTypeView
                 var icon = GetLanguageIcon(file.Language);
 
                 codeGroup = codeGroup.WithView(
-                    Controls.MenuItem(displayName + langLabel, icon)
-                        .WithStyle("text-align: left;")
+                    new NavLinkControl(displayName + langLabel, icon, null)
                         .WithClickAction(actx =>
                         {
                             host.UpdateData(selectionDataId, new NodeTypeViewSelection { SelectedFile = fileName, Section = "code" });
@@ -209,8 +208,7 @@ public static class NodeTypeView
         {
             // Legacy single-file mode
             codeGroup = codeGroup.WithView(
-                Controls.MenuItem("Code", FluentIcons.NumberSymbol())
-                    .WithStyle("text-align: left;")
+                new NavLinkControl("Data Model", CustomIcons.CSharp(), null)
                     .WithClickAction(actx =>
                     {
                         host.UpdateData(selectionDataId, new NodeTypeViewSelection { SelectedFile = "code", Section = "code" });
@@ -233,8 +231,7 @@ public static class NodeTypeView
         if (!string.IsNullOrEmpty(content.HubConfiguration))
         {
             hubConfigGroup = hubConfigGroup.WithView(
-                Controls.MenuItem("Configuration Lambda", FluentIcons.CodeBlock())
-                    .WithStyle("text-align: left;")
+                new NavLinkControl("Configuration Lambda", FluentIcons.CodeBlock(), null)
                     .WithClickAction(actx =>
                     {
                         host.UpdateData(selectionDataId, new NodeTypeViewSelection { SelectedFile = null, Section = "hubconfig" });
@@ -297,31 +294,34 @@ public static class NodeTypeView
         NodeTypeViewSelection? selection)
     {
         var hubAddress = host.Hub.Address;
-        var stack = Controls.Stack.WithWidth("100%").WithStyle("padding: 24px; height: 100%; overflow: auto;");
+        var stack = Controls.Stack.WithWidth("100%").WithStyle("padding: 24px; min-height: 100%; overflow: auto;");
 
         if (selection?.Section == "hubconfig")
         {
             // Show HubConfiguration
-            stack = stack.WithView(Controls.Html("<h2 style=\"margin: 0 0 16px 0;\">HubConfiguration</h2>"));
+            var editHref = new LayoutAreaReference(HubConfigEditArea).ToHref(hubAddress);
+            var headerRow = Controls.Stack
+                .WithOrientation(Orientation.Horizontal)
+                .WithStyle("justify-content: space-between; align-items: center; margin-bottom: 16px; width: 100%;")
+                .WithView(Controls.Html("<h2 style=\"margin: 0;\">HubConfiguration</h2>"));
+
+            if (!string.IsNullOrEmpty(content.HubConfiguration))
+            {
+                headerRow = headerRow.WithView(
+                    Controls.Button("")
+                        .WithIconStart(FluentIcons.Edit())
+                        .WithClickAction(actx => actx.Host.UpdateArea(actx.Area, new RedirectControl(editHref)))
+                );
+            }
+
+            stack = stack.WithView(headerRow);
 
             if (!string.IsNullOrEmpty(content.HubConfiguration))
             {
                 stack = stack.WithView(Controls.Html("<p style=\"color: #666; margin-bottom: 16px;\">Lambda expression for configuring the message hub.</p>"));
 
                 var markdown = $"```csharp\n{content.HubConfiguration}\n```";
-                stack = stack.WithView(new MarkdownControl(markdown));
-
-                // Edit button
-                var editHref = new LayoutAreaReference(HubConfigEditArea).ToHref(hubAddress);
-                stack = stack.WithView(
-                    Controls.Stack
-                        .WithOrientation(Orientation.Horizontal)
-                        .WithStyle("margin-top: 16px;")
-                        .WithView(Controls.Button("Edit")
-                            .WithAppearance(Appearance.Accent)
-                            .WithIconStart(FluentIcons.Edit())
-                            .WithClickAction(actx => actx.Host.UpdateArea(actx.Area, new RedirectControl(editHref))))
-                );
+                stack = stack.WithView(new MarkdownControl(markdown).WithStyle("width: 100%;"));
             }
             else
             {
@@ -334,7 +334,7 @@ public static class NodeTypeView
             var fileName = selection?.SelectedFile ?? "code";
             string? code = null;
             string language = "csharp";
-            string displayName = "Code";
+            string displayName = "Data Model";
 
             if (codeConfig?.Files != null && codeConfig.Files.TryGetValue(fileName, out var file))
             {
@@ -347,24 +347,28 @@ public static class NodeTypeView
                 code = codeConfig.Code;
             }
 
-            stack = stack.WithView(Controls.Html($"<h2 style=\"margin: 0 0 16px 0;\">{System.Web.HttpUtility.HtmlEncode(displayName)}</h2>"));
+            // Header row with title and edit button
+            var editHref = new LayoutAreaReference(CodeEditArea) { Id = $"file={Uri.EscapeDataString(fileName)}" }.ToHref(hubAddress);
+            var headerRow = Controls.Stack
+                .WithOrientation(Orientation.Horizontal)
+                .WithStyle("justify-content: space-between; align-items: center; margin-bottom: 16px; width: 100%;")
+                .WithView(Controls.Html($"<h2 style=\"margin: 0;\">{System.Web.HttpUtility.HtmlEncode(displayName)}</h2>"));
+
+            if (!string.IsNullOrEmpty(code))
+            {
+                headerRow = headerRow.WithView(
+                    Controls.Button("")
+                        .WithIconStart(FluentIcons.Edit())
+                        .WithClickAction(actx => actx.Host.UpdateArea(actx.Area, new RedirectControl(editHref)))
+                );
+            }
+
+            stack = stack.WithView(headerRow);
 
             if (!string.IsNullOrEmpty(code))
             {
                 var markdown = $"```{language}\n{code}\n```";
-                stack = stack.WithView(new MarkdownControl(markdown));
-
-                // Edit button
-                var editHref = new LayoutAreaReference(CodeEditArea) { Id = $"file={Uri.EscapeDataString(fileName)}" }.ToHref(hubAddress);
-                stack = stack.WithView(
-                    Controls.Stack
-                        .WithOrientation(Orientation.Horizontal)
-                        .WithStyle("margin-top: 16px;")
-                        .WithView(Controls.Button("Edit")
-                            .WithAppearance(Appearance.Accent)
-                            .WithIconStart(FluentIcons.Edit())
-                            .WithClickAction(actx => actx.Host.UpdateArea(actx.Area, new RedirectControl(editHref))))
-                );
+                stack = stack.WithView(new MarkdownControl(markdown).WithStyle("width: 100%;"));
             }
             else
             {
@@ -717,7 +721,7 @@ public static class NodeTypeView
     {
         return language?.ToLowerInvariant() switch
         {
-            "csharp" or "c#" or "cs" => FluentIcons.NumberSymbol(),
+            "csharp" or "c#" or "cs" => CustomIcons.CSharp(),
             "javascript" or "js" => FluentIcons.BracesVariable(),
             "typescript" or "ts" => FluentIcons.BracesVariable(),
             "json" => FluentIcons.Braces(),
