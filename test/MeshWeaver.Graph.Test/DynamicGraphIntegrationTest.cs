@@ -8,7 +8,9 @@ using System.Threading.Tasks;
 using FluentAssertions;
 using MeshWeaver.Data;
 using MeshWeaver.Graph.Configuration;
+using MeshWeaver.Hosting.Monolith;
 using MeshWeaver.Hosting.Monolith.TestBase;
+using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
@@ -32,8 +34,8 @@ public class DynamicGraphIntegrationTest : MonolithMeshTestBase
     private static readonly string TestDirectoryBase = Path.Combine(Path.GetTempPath(), "MeshWeaverDynamicGraphTests");
     private string? _testDirectory;
 
-    private IPersistenceService Persistence => ServiceProvider.GetRequiredService<IPersistenceService>();
-    private IMeshCatalog MeshCatalog => ServiceProvider.GetRequiredService<IMeshCatalog>();
+    private IPersistenceService Persistence => Mesh.ServiceProvider.GetRequiredService<IPersistenceService>();
+    private IMeshCatalog MeshCatalog => Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
 
     /// <summary>
     /// Gets the unique test directory for this test instance, creating it lazily.
@@ -57,7 +59,7 @@ public class DynamicGraphIntegrationTest : MonolithMeshTestBase
         await base.InitializeAsync();
 
         // Seed test data using async methods
-        var persistence = ServiceProvider.GetRequiredService<IPersistenceService>();
+        var persistence = Mesh.ServiceProvider.GetRequiredService<IPersistenceService>();
         await SetupTestConfigurationAsync(persistence);
         await SeedHierarchyAsync(persistence);
     }
@@ -224,7 +226,10 @@ public record Graph
     {
         var testDataDirectory = GetOrCreateTestDirectory();
 
-        return builder.AddJsonGraphConfiguration(testDataDirectory);
+        return builder
+            .UseMonolithMesh()
+            .AddInMemoryPersistence()
+            .AddJsonGraphConfiguration(testDataDirectory);
     }
 
     public override async ValueTask DisposeAsync()
@@ -766,7 +771,7 @@ public class OrganizationsLayoutTest : MonolithMeshTestBase
         await base.InitializeAsync();
 
         // Seed test data using async methods
-        var persistence = ServiceProvider.GetRequiredService<IPersistenceService>();
+        var persistence = Mesh.ServiceProvider.GetRequiredService<IPersistenceService>();
         await SetupOrganizationsStructureAsync(persistence);
     }
 
@@ -901,7 +906,10 @@ public class OrganizationsLayoutTest : MonolithMeshTestBase
     {
         var testDataDirectory = GetOrCreateTestDirectory();
 
-        return builder.AddJsonGraphConfiguration(testDataDirectory);
+        return builder
+            .UseMonolithMesh()
+            .AddInMemoryPersistence()
+            .AddJsonGraphConfiguration(testDataDirectory);
     }
 
     public override async ValueTask DisposeAsync()
@@ -1225,7 +1233,10 @@ public class FileSystemPersistenceTest : MonolithMeshTestBase
         // Create actual JSON files on disk - this is the key difference from InMemoryPersistenceService tests
         SetupOrganizationsStructureOnDisk(testDataDirectory);
 
-        return builder.AddJsonGraphConfiguration(testDataDirectory);
+        return builder
+            .UseMonolithMesh()
+            .AddFileSystemPersistence(testDataDirectory)
+            .AddJsonGraphConfiguration(testDataDirectory);
     }
 
     public override async ValueTask DisposeAsync()

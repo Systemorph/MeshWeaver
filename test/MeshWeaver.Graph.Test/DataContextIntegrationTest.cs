@@ -6,6 +6,7 @@ using System.Linq;
 using System.Threading.Tasks;
 using FluentAssertions;
 using MeshWeaver.Graph.Configuration;
+using MeshWeaver.Hosting.Monolith;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Mesh;
@@ -42,7 +43,7 @@ public class DataContextIntegrationTest : MonolithMeshTestBase
     private static readonly string TestDirectoryBase = Path.Combine(Path.GetTempPath(), "MeshWeaverDataContextTests");
     private string? _testDirectory;
 
-    private IPersistenceService Persistence => ServiceProvider.GetRequiredService<IPersistenceService>();
+    private IPersistenceService Persistence => Mesh.ServiceProvider.GetRequiredService<IPersistenceService>();
 
     private string GetOrCreateTestDirectory()
     {
@@ -157,7 +158,10 @@ public class DataContextIntegrationTest : MonolithMeshTestBase
             }
         }).GetAwaiter().GetResult();
 
-        return builder.AddJsonGraphConfiguration(testDataDirectory);
+        return builder
+            .UseMonolithMesh()
+            .ConfigureServices(services => services.AddPersistence(persistence))
+            .AddJsonGraphConfiguration(testDataDirectory);
     }
 
     public override async ValueTask DisposeAsync()
