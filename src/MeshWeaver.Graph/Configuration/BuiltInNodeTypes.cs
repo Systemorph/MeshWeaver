@@ -34,8 +34,7 @@ public static class BuiltInNodeTypes
             DisplayName = "Node Type",
             Description = "A node type definition",
             IconName = "Code",
-            DisplayOrder = 0,
-            HubConfiguration = "config => config.AddNodeTypeView()"
+            DisplayOrder = 0
         };
 
         var node = MeshNode.FromPath("type/NodeType") with
@@ -45,7 +44,8 @@ public static class BuiltInNodeTypes
             Description = "A node type definition",
             IconName = "Code",
             DisplayOrder = 0,
-            Content = definition
+            Content = definition,
+            HubConfiguration = config => config.AddNodeTypeView()
         };
 
         NodeTypeRegistry.Register(new NodeTypeRegistration

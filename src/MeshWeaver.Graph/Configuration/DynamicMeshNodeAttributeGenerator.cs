@@ -115,9 +115,15 @@ internal class DynamicMeshNodeAttributeGenerator
         sb.AppendLine("        {");
         sb.AppendLine("            var result = config;");
         sb.AppendLine();
-        sb.AppendLine("            // Add default views (Details, Edit, Thumbnail, Metadata, Settings, Comments)");
-        sb.AppendLine("            result = result.WithDefaultNodeViews();");
-        sb.AppendLine();
+
+        // Only add default views for non-NodeType nodes
+        // NodeType nodes get their views from BuiltInNodeTypes.cs (AddNodeTypeView)
+        if (node.NodeType != BuiltInNodeTypes.NodeTypeId)
+        {
+            sb.AppendLine("            // Add default views (Details, Edit, Thumbnail, Metadata, Settings, Comments)");
+            sb.AppendLine("            result = result.WithDefaultViews();");
+            sb.AppendLine();
+        }
         sb.AppendLine("            // Add dynamic node type areas");
         sb.AppendLine("            result = result.AddDynamicNodeTypeAreas();");
         sb.AppendLine();

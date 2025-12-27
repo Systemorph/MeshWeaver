@@ -160,9 +160,11 @@ public class DataContextIntegrationTest : MonolithMeshTestBase
             }
         }).GetAwaiter().GetResult();
 
+        var cacheDirectory = Path.Combine(testDataDirectory, ".mesh-cache");
+
         return builder
             .UseMonolithMesh()
-            .ConfigureServices(services => services.AddPersistence(persistence))
+            .ConfigureServices(services => services.AddPersistence(persistence).Configure<CompilationCacheOptions>(o => o.CacheDirectory = cacheDirectory))
             .AddJsonGraphConfiguration(testDataDirectory);
     }
 

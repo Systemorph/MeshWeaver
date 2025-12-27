@@ -257,12 +257,12 @@ public class DynamicMeshNodeAttributeGeneratorTest
     }
 
     [Fact]
-    public void GenerateAttributeSource_IncludesDefaultNodeViews()
+    public void GenerateAttributeSource_IncludesDefaultViews_ForNonNodeTypeNodes()
     {
         // Arrange
         var node = new MeshNode("test")
         {
-            NodeType = "test",
+            NodeType = "test", // not "NodeType"
             LastModified = DateTimeOffset.UtcNow
         };
 
@@ -274,9 +274,32 @@ public class DynamicMeshNodeAttributeGeneratorTest
         // Act
         var source = _generator.GenerateAttributeSource(node, codeConfig, null);
 
-        // Assert - must include default views for Details, Edit, etc.
-        source.Should().Contain("WithDefaultNodeViews()",
-            "Generated code must include default views (Details, Edit, Thumbnail, Metadata, Settings, Comments)");
+        // Assert - WithDefaultViews() is injected automatically for non-NodeType nodes
+        source.Should().Contain("WithDefaultViews()",
+            "Generated code must include WithDefaultViews() for non-NodeType nodes");
+    }
+
+    [Fact]
+    public void GenerateAttributeSource_ExcludesDefaultViews_ForNodeTypeNodes()
+    {
+        // Arrange
+        var node = new MeshNode("Type/Test")
+        {
+            NodeType = "NodeType", // this is a NodeType node
+            LastModified = DateTimeOffset.UtcNow
+        };
+
+        var codeConfig = new CodeConfiguration
+        {
+            Code = "public record TestType { }"
+        };
+
+        // Act
+        var source = _generator.GenerateAttributeSource(node, codeConfig, null);
+
+        // Assert - NodeType nodes should NOT get WithDefaultViews() (they use AddNodeTypeView)
+        source.Should().NotContain("WithDefaultViews()",
+            "Generated code must NOT include WithDefaultViews() for NodeType nodes");
     }
 
     [Fact]

@@ -59,7 +59,7 @@ public record NodeTypeDefinition
     /// Lambda expression for configuring the message hub.
     /// Signature: Func&lt;MessageHubConfiguration, MessageHubConfiguration&gt;
     /// Example: "config => config.AddData(d => d.AddSource(s => s.WithType&lt;Person&gt;()))"
-    /// The lambda is applied after default behavior (WithDataType, WithDefaultNodeViews).
+    /// Should call WithDefaultViews() to add standard views (Details, Edit, Thumbnail, etc).
     /// </summary>
     public string? HubConfiguration { get; init; }
 
