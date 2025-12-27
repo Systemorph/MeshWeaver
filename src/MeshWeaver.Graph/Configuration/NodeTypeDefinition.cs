@@ -62,4 +62,12 @@ public record NodeTypeDefinition
     /// The lambda is applied after default behavior (WithDataType, WithDefaultNodeViews).
     /// </summary>
     public string? HubConfiguration { get; init; }
+
+    /// <summary>
+    /// Lambda expression source code for hub configuration.
+    /// Signature: Func&lt;MessageHubConfiguration, MessageHubConfiguration&gt;
+    /// Example: "config => config.AddData(d => d.AddSource(...))"
+    /// This is compiled at runtime and assigned to HubConfiguration.
+    /// </summary>
+    public string? Configuration { get; init; }
 }

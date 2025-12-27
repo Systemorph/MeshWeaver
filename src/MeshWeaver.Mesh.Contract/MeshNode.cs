@@ -194,6 +194,7 @@ public record MeshNode([property: Key] string Id, string? Namespace = null)
     {
         get; init;
     }
+
     public RoutingType RoutingType { get; init; }
     public InstantiationType InstantiationType { get; set; }
 

@@ -14,6 +14,7 @@
     "displayName": "Article",
     "iconName": "DocumentText",
     "description": "A content article with YAML frontmatter",
-    "displayOrder": 35
+    "displayOrder": 35,
+    "configuration": "config => config.WithContentType<Article>()"
   }
 }
