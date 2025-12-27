@@ -98,18 +98,19 @@ internal class MeshNodeCompilationService(
         // Get CodeConfiguration from the NodeType's partition
         var codeConfig = await nodeTypeService.GetCodeConfigurationAsync(node.NodeType, node.Path, ct);
 
-        // Get HubConfiguration from the NodeTypeDefinition content
-        string? hubConfiguration = null;
+        // Get Configuration from the NodeTypeDefinition content
+        // Configuration is the source code that gets compiled into HubConfiguration
+        string? configuration = null;
         var nodeTypeNode = await nodeTypeService.GetNodeTypeNodeAsync(node.NodeType, node.Path, ct);
         if (nodeTypeNode?.Content is NodeTypeDefinition ntd)
         {
-            hubConfiguration = ntd.HubConfiguration;
+            configuration = ntd.Configuration;
         }
 
         try
         {
-            // Compile using CodeConfiguration and HubConfiguration
-            await CompileAsync(codeConfig, hubConfiguration, node, ct);
+            // Compile using CodeConfiguration and Configuration
+            await CompileAsync(codeConfig, configuration, node, ct);
 
             // Return the DLL path if it exists
             if (File.Exists(dllPath))

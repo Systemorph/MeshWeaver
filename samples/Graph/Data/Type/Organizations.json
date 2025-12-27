@@ -16,6 +16,7 @@
     "displayName": "Organizations",
     "iconName": "Building",
     "description": "Catalog of organizations",
-    "displayOrder": 8
+    "displayOrder": 8,
+    "configuration": "config => config"
   }
 }

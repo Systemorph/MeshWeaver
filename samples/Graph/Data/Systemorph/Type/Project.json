@@ -14,6 +14,7 @@
     "displayName": "Project",
     "iconName": "Folder",
     "description": "A project containing stories",
-    "displayOrder": 20
+    "displayOrder": 20,
+    "configuration": "config => config.WithContentType<Project>()"
   }
 }

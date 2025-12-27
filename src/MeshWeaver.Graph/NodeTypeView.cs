@@ -100,7 +100,7 @@ public static class NodeTypeView
 
         var hasCode = codeConfig?.Code != null || (codeConfig?.Files?.Count > 0);
         infoCard = infoCard.WithView(BuildInfoRow("Has Code", hasCode ? "Yes" : "No"));
-        infoCard = infoCard.WithView(BuildInfoRow("Has HubConfiguration", !string.IsNullOrEmpty(content.HubConfiguration) ? "Yes" : "No"));
+        infoCard = infoCard.WithView(BuildInfoRow("Has Configuration", !string.IsNullOrEmpty(content.Configuration) ? "Yes" : "No"));
 
         stack = stack.WithView(infoCard);
 
@@ -153,12 +153,11 @@ public static class NodeTypeView
     {
         var hubAddress = host.Hub.Address;
 
-        // Initialize selection state - default to first file or "code"
-        var defaultFile = codeConfig?.Files?.Keys.FirstOrDefault() ?? "code";
+        // Initialize selection state - default to configuration view
         var selectionDataId = $"nodeTypeSelection_{content.Id}";
 
-        // Initialize selection if not already set
-        host.UpdateData(selectionDataId, new NodeTypeViewSelection { SelectedFile = defaultFile, Section = "code" });
+        // Initialize selection to configuration view
+        host.UpdateData(selectionDataId, new NodeTypeViewSelection { SelectedFile = null, Section = "configuration" });
 
         return Controls.Splitter
             .WithSkin(s => s.WithOrientation(Orientation.Horizontal).WithWidth("100%").WithHeight("calc(100vh - 100px)"))
@@ -173,7 +172,7 @@ public static class NodeTypeView
     }
 
     /// <summary>
-    /// Builds the left navigation menu with collapsible sections.
+    /// Builds the left navigation menu with a single Configuration entry at top.
     /// </summary>
     private static UiControl BuildLeftMenu(
         LayoutAreaHost host,
@@ -183,71 +182,19 @@ public static class NodeTypeView
     {
         var navMenu = Controls.NavMenu.WithSkin(s => s.WithWidth(280).WithCollapsible(false));
 
-        // Code section (Data Model)
-        var codeGroup = new NavGroupControl("Code")
-            .WithIcon(FluentIcons.Code());
+        // Single Configuration entry at top - shows all code and config in one view
+        var hasConfiguration = !string.IsNullOrEmpty(content.Configuration)
+                               || !string.IsNullOrEmpty(content.HubConfiguration);
 
-        if (codeConfig?.Files != null && codeConfig.Files.Count > 0)
-        {
-            foreach (var (fileName, file) in codeConfig.Files)
-            {
-                var displayName = file.DisplayName ?? fileName;
-                var langLabel = file.Language != "csharp" ? $" ({file.Language})" : "";
-                var icon = GetLanguageIcon(file.Language);
+        navMenu = navMenu.WithView(
+            new NavLinkControl("Configuration", FluentIcons.Settings(), null)
+                .WithClickAction(actx =>
+                {
+                    host.UpdateData(selectionDataId, new NodeTypeViewSelection { SelectedFile = null, Section = "configuration" });
+                })
+        );
 
-                codeGroup = codeGroup.WithView(
-                    new NavLinkControl(displayName + langLabel, icon, null)
-                        .WithClickAction(actx =>
-                        {
-                            host.UpdateData(selectionDataId, new NodeTypeViewSelection { SelectedFile = fileName, Section = "code" });
-                        })
-                );
-            }
-        }
-        else if (!string.IsNullOrEmpty(codeConfig?.Code))
-        {
-            // Legacy single-file mode
-            codeGroup = codeGroup.WithView(
-                new NavLinkControl("Data Model", CustomIcons.CSharp(), null)
-                    .WithClickAction(actx =>
-                    {
-                        host.UpdateData(selectionDataId, new NodeTypeViewSelection { SelectedFile = "code", Section = "code" });
-                    })
-            );
-        }
-        else
-        {
-            codeGroup = codeGroup.WithView(
-                Controls.Html("<span style=\"padding: 8px 16px; color: #888; font-style: italic;\">No code defined</span>")
-            );
-        }
-
-        navMenu = navMenu.WithNavGroup(codeGroup);
-
-        // HubConfiguration section
-        var hubConfigGroup = new NavGroupControl("HubConfiguration")
-            .WithIcon(FluentIcons.Settings());
-
-        if (!string.IsNullOrEmpty(content.HubConfiguration))
-        {
-            hubConfigGroup = hubConfigGroup.WithView(
-                new NavLinkControl("Configuration Lambda", FluentIcons.CodeBlock(), null)
-                    .WithClickAction(actx =>
-                    {
-                        host.UpdateData(selectionDataId, new NodeTypeViewSelection { SelectedFile = null, Section = "hubconfig" });
-                    })
-            );
-        }
-        else
-        {
-            hubConfigGroup = hubConfigGroup.WithView(
-                Controls.Html("<span style=\"padding: 8px 16px; color: #888; font-style: italic;\">No configuration defined</span>")
-            );
-        }
-
-        navMenu = navMenu.WithNavGroup(hubConfigGroup);
-
-        // Dependencies section (if any)
+        // Dependencies section (if any) - kept as collapsible for reference
         if (codeConfig?.Dependencies != null && codeConfig.Dependencies.Count > 0)
         {
             var depsGroup = new NavGroupControl("Dependencies")
@@ -296,84 +243,34 @@ public static class NodeTypeView
         var hubAddress = host.Hub.Address;
         var stack = Controls.Stack.WithWidth("100%").WithStyle("padding: 24px; min-height: 100%; overflow: auto;");
 
-        if (selection?.Section == "hubconfig")
+        // Show Configuration (the lambda expression for hub configuration)
+        var editHref = new LayoutAreaReference(HubConfigEditArea).ToHref(hubAddress);
+        var headerRow = Controls.Stack
+            .WithOrientation(Orientation.Horizontal)
+            .WithStyle("justify-content: space-between; align-items: center; margin-bottom: 16px; width: 100%;")
+            .WithView(Controls.Html("<h2 style=\"margin: 0;\">Configuration</h2>"));
+
+        if (!string.IsNullOrEmpty(content.Configuration))
         {
-            // Show HubConfiguration
-            var editHref = new LayoutAreaReference(HubConfigEditArea).ToHref(hubAddress);
-            var headerRow = Controls.Stack
-                .WithOrientation(Orientation.Horizontal)
-                .WithStyle("justify-content: space-between; align-items: center; margin-bottom: 16px; width: 100%;")
-                .WithView(Controls.Html("<h2 style=\"margin: 0;\">HubConfiguration</h2>"));
+            headerRow = headerRow.WithView(
+                Controls.Button("")
+                    .WithIconStart(FluentIcons.Edit())
+                    .WithClickAction(actx => actx.Host.UpdateArea(actx.Area, new RedirectControl(editHref)))
+            );
+        }
 
-            if (!string.IsNullOrEmpty(content.HubConfiguration))
-            {
-                headerRow = headerRow.WithView(
-                    Controls.Button("")
-                        .WithIconStart(FluentIcons.Edit())
-                        .WithClickAction(actx => actx.Host.UpdateArea(actx.Area, new RedirectControl(editHref)))
-                );
-            }
+        stack = stack.WithView(headerRow);
 
-            stack = stack.WithView(headerRow);
+        if (!string.IsNullOrEmpty(content.Configuration))
+        {
+            stack = stack.WithView(Controls.Html("<p style=\"color: #666; margin-bottom: 16px;\">Lambda expression for configuring the message hub.</p>"));
 
-            if (!string.IsNullOrEmpty(content.HubConfiguration))
-            {
-                stack = stack.WithView(Controls.Html("<p style=\"color: #666; margin-bottom: 16px;\">Lambda expression for configuring the message hub.</p>"));
-
-                var markdown = $"```csharp\n{content.HubConfiguration}\n```";
-                stack = stack.WithView(new MarkdownControl(markdown).WithStyle("width: 100%;"));
-            }
-            else
-            {
-                stack = stack.WithView(Controls.Html("<p style=\"color: #888;\">No HubConfiguration defined.</p>"));
-            }
+            var markdown = $"```csharp\n{content.Configuration}\n```";
+            stack = stack.WithView(new MarkdownControl(markdown).WithStyle("width: 100%;"));
         }
         else
         {
-            // Show code file
-            var fileName = selection?.SelectedFile ?? "code";
-            string? code = null;
-            string language = "csharp";
-            string displayName = "Data Model";
-
-            if (codeConfig?.Files != null && codeConfig.Files.TryGetValue(fileName, out var file))
-            {
-                code = file.Code;
-                language = file.Language;
-                displayName = file.DisplayName ?? fileName;
-            }
-            else if (fileName == "code" && !string.IsNullOrEmpty(codeConfig?.Code))
-            {
-                code = codeConfig.Code;
-            }
-
-            // Header row with title and edit button
-            var editHref = new LayoutAreaReference(CodeEditArea) { Id = $"file={Uri.EscapeDataString(fileName)}" }.ToHref(hubAddress);
-            var headerRow = Controls.Stack
-                .WithOrientation(Orientation.Horizontal)
-                .WithStyle("justify-content: space-between; align-items: center; margin-bottom: 16px; width: 100%;")
-                .WithView(Controls.Html($"<h2 style=\"margin: 0;\">{System.Web.HttpUtility.HtmlEncode(displayName)}</h2>"));
-
-            if (!string.IsNullOrEmpty(code))
-            {
-                headerRow = headerRow.WithView(
-                    Controls.Button("")
-                        .WithIconStart(FluentIcons.Edit())
-                        .WithClickAction(actx => actx.Host.UpdateArea(actx.Area, new RedirectControl(editHref)))
-                );
-            }
-
-            stack = stack.WithView(headerRow);
-
-            if (!string.IsNullOrEmpty(code))
-            {
-                var markdown = $"```{language}\n{code}\n```";
-                stack = stack.WithView(new MarkdownControl(markdown).WithStyle("width: 100%;"));
-            }
-            else
-            {
-                stack = stack.WithView(Controls.Html("<p style=\"color: #888;\">No code defined.</p>"));
-            }
+            stack = stack.WithView(Controls.Html("<p style=\"color: #888;\">No configuration defined.</p>"));
         }
 
         return stack;
@@ -511,7 +408,7 @@ public static class NodeTypeView
     }
 
     /// <summary>
-    /// Renders the view for HubConfiguration.
+    /// Renders the view for Configuration.
     /// </summary>
     public static IObservable<UiControl> HubConfigView(LayoutAreaHost host, RenderingContext ctx)
     {
@@ -532,12 +429,12 @@ public static class NodeTypeView
         var hubAddress = host.Hub.Address;
         var stack = Controls.Stack.WithWidth("100%").WithStyle("padding: 24px;");
 
-        stack = stack.WithView(Controls.Html("<h2 style=\"margin-bottom: 16px;\">HubConfiguration</h2>"));
+        stack = stack.WithView(Controls.Html("<h2 style=\"margin-bottom: 16px;\">Configuration</h2>"));
         stack = stack.WithView(Controls.Html("<p style=\"color: #666; margin-bottom: 16px;\">Lambda expression: <code>Func&lt;MessageHubConfiguration, MessageHubConfiguration&gt;</code></p>"));
 
-        if (!string.IsNullOrEmpty(content.HubConfiguration))
+        if (!string.IsNullOrEmpty(content.Configuration))
         {
-            var markdown = $"```csharp\n{content.HubConfiguration}\n```";
+            var markdown = $"```csharp\n{content.Configuration}\n```";
             stack = stack.WithView(new MarkdownControl(markdown));
 
             // Edit button
@@ -554,7 +451,7 @@ public static class NodeTypeView
         }
         else
         {
-            stack = stack.WithView(Controls.Html("<p style=\"color: #888;\">No HubConfiguration defined.</p>"));
+            stack = stack.WithView(Controls.Html("<p style=\"color: #888;\">No Configuration defined.</p>"));
         }
 
         // Back button
@@ -568,44 +465,67 @@ public static class NodeTypeView
     }
 
     /// <summary>
-    /// Renders the Monaco editor for editing HubConfiguration.
+    /// Renders the Monaco editor for editing Configuration.
+    /// Includes all code files from CodeConfiguration for autocomplete.
     /// </summary>
     public static IObservable<UiControl> HubConfigEdit(LayoutAreaHost host, RenderingContext ctx)
     {
-        // Get NodeTypeDefinition from MeshNode.Content
+        var nodeTypeService = host.Hub.ServiceProvider.GetService<INodeTypeService>();
+
+        // Get NodeTypeDefinition and CodeConfiguration
         var definitionStream = host.Workspace.GetNodeContent<NodeTypeDefinition>();
+        var codeConfigStream = host.Workspace.GetSingle<CodeConfiguration>();
 
-        return definitionStream.Select(content =>
-        {
-            if (content == null)
-                return RenderError("NodeType not found.");
+        return definitionStream
+            .CombineLatest(codeConfigStream)
+            .SelectMany(async tuple =>
+            {
+                var content = tuple.First;
+                var codeConfig = tuple.Second;
 
-            return BuildHubConfigEditContent(host, content);
-        });
+                if (content == null)
+                    return RenderError("NodeType not found.");
+
+                // Get all code for autocomplete: combined code from files + dependencies
+                var allCode = codeConfig?.GetCombinedCode() ?? "";
+                if (nodeTypeService != null && codeConfig?.Dependencies != null && codeConfig.Dependencies.Count > 0)
+                {
+                    var dependencyCode = await nodeTypeService.GetDependencyCodeAsync(codeConfig.Dependencies);
+                    allCode = allCode + "\n\n" + dependencyCode;
+                }
+
+                return BuildHubConfigEditContent(host, content, allCode);
+            });
     }
 
-    private static UiControl BuildHubConfigEditContent(LayoutAreaHost host, NodeTypeDefinition content)
+    private static UiControl BuildHubConfigEditContent(LayoutAreaHost host, NodeTypeDefinition content, string allCodeForAutocomplete)
     {
         var hubAddress = host.Hub.Address;
         var stack = Controls.Stack.WithWidth("100%").WithStyle("padding: 24px;");
         var dataId = Guid.NewGuid().AsString();
 
-        var initialValue = content.HubConfiguration ?? "config => config";
+        var initialValue = content.Configuration ?? "config => config";
         host.UpdateData(dataId, initialValue);
 
         // Header
-        stack = stack.WithView(Controls.Html("<h2 style=\"margin-bottom: 16px;\">Edit HubConfiguration</h2>"));
+        stack = stack.WithView(Controls.Html("<h2 style=\"margin-bottom: 16px;\">Edit Configuration</h2>"));
         stack = stack.WithView(Controls.Html("<p style=\"color: #666; margin-bottom: 16px;\">Enter a lambda expression: <code>config => config.AddData(...)</code></p>"));
 
-        // Monaco editor
+        // Monaco editor with all code files for autocomplete
         var editor = new CodeEditorControl()
             .WithLanguage("csharp")
             .WithHeight("300px")
             .WithLineNumbers(true)
             .WithMinimap(false)
             .WithWordWrap(true)
-            .WithPlaceholder("config => config")
-            with
+            .WithPlaceholder("config => config");
+
+        if (!string.IsNullOrEmpty(allCodeForAutocomplete))
+        {
+            editor = editor.WithExtraTypeDefinitions(allCodeForAutocomplete);
+        }
+
+        editor = editor with
         {
             DataContext = LayoutAreaReference.GetDataPointer(dataId),
             Value = new JsonPointerReference("")
@@ -624,10 +544,10 @@ public static class NodeTypeView
             .WithIconStart(FluentIcons.Save())
             .WithClickAction(async actx =>
             {
-                var newHubConfig = await host.Stream.GetDataStream<string>(dataId).FirstAsync();
+                var newConfiguration = await host.Stream.GetDataStream<string>(dataId).FirstAsync();
 
-                // Update the NodeTypeDefinition with new HubConfiguration via workspace
-                var updatedDefinition = content with { HubConfiguration = newHubConfig };
+                // Update the NodeTypeDefinition with new Configuration via workspace
+                var updatedDefinition = content with { Configuration = newConfiguration };
                 using var cts = new CancellationTokenSource(10.Seconds());
                 var response = await actx.Host.Hub.AwaitResponse<DataChangeResponse>(
                     new DataChangeRequest().WithUpdates(updatedDefinition),
@@ -638,7 +558,7 @@ public static class NodeTypeView
                 {
                     // Show error dialog
                     var errorDialog = Controls.Dialog(
-                        Controls.Markdown($"**Error saving HubConfiguration:**\n\n{response.Message.Log}"),
+                        Controls.Markdown($"**Error saving Configuration:**\n\n{response.Message.Log}"),
                         "Save Failed"
                     ).WithSize("M");
                     actx.Host.UpdateArea(DialogControl.DialogArea, errorDialog);

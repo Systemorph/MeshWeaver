@@ -14,6 +14,7 @@
     "displayName": "Story",
     "iconName": "Document",
     "description": "A user story or task",
-    "displayOrder": 30
+    "displayOrder": 30,
+    "configuration": "config => config.WithContentType<Story>()"
   }
 }
