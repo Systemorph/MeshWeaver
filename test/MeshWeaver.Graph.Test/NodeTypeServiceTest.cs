@@ -32,7 +32,7 @@ public class NodeTypeServiceTest
         {
             Name = "Story",
             NodeType = "NodeType",
-            Content = new NodeTypeDefinition { Id = "story", DisplayName = "Story" }
+            Content = new NodeTypeDefinition { Id = "story", Namespace = "Type", DisplayName = "Story" }
         };
         await _persistence.SaveNodeAsync(storyNode, TestContext.Current.CancellationToken);
 
@@ -51,7 +51,7 @@ public class NodeTypeServiceTest
         {
             Name = "Story",
             NodeType = "NodeType",
-            Content = new NodeTypeDefinition { Id = "story", DisplayName = "Story" }
+            Content = new NodeTypeDefinition { Id = "story", Namespace = "Type", DisplayName = "Story" }
         };
         await _persistence.SaveNodeAsync(globalStory, TestContext.Current.CancellationToken);
 
@@ -60,7 +60,7 @@ public class NodeTypeServiceTest
         {
             Name = "Project Story",
             NodeType = "NodeType",
-            Content = new NodeTypeDefinition { Id = "story", DisplayName = "Project Story" }
+            Content = new NodeTypeDefinition { Id = "story", Namespace = "Type", DisplayName = "Project Story" }
         };
         await _persistence.SaveNodeAsync(localStory, TestContext.Current.CancellationToken);
 
@@ -69,7 +69,7 @@ public class NodeTypeServiceTest
         {
             Name = "Organization",
             NodeType = "NodeType",
-            Content = new NodeTypeDefinition { Id = "org", DisplayName = "Organization" }
+            Content = new NodeTypeDefinition { Id = "org", Namespace = "Type", DisplayName = "Organization" }
         };
         await _persistence.SaveNodeAsync(globalOrg, TestContext.Current.CancellationToken);
 
@@ -101,7 +101,7 @@ public class NodeTypeServiceTest
         {
             Name = "Story",
             NodeType = "NodeType",
-            Content = new NodeTypeDefinition { Id = "story", DisplayName = "Story" }
+            Content = new NodeTypeDefinition { Id = "story", Namespace = "Type", DisplayName = "Story" }
         };
         await _persistence.SaveNodeAsync(storyNode, TestContext.Current.CancellationToken);
 
@@ -121,7 +121,7 @@ public class NodeTypeServiceTest
         {
             Name = "Story",
             NodeType = "NodeType",
-            Content = new NodeTypeDefinition { Id = "story", DisplayName = "Story" }
+            Content = new NodeTypeDefinition { Id = "story", Namespace = "Type", DisplayName = "Story" }
         };
         await _persistence.SaveNodeAsync(globalStory, TestContext.Current.CancellationToken);
 
@@ -129,7 +129,7 @@ public class NodeTypeServiceTest
         {
             Name = "Org Story",
             NodeType = "NodeType",
-            Content = new NodeTypeDefinition { Id = "story", DisplayName = "Org Story" }
+            Content = new NodeTypeDefinition { Id = "story", Namespace = "Type", DisplayName = "Org Story" }
         };
         await _persistence.SaveNodeAsync(localStory, TestContext.Current.CancellationToken);
 
@@ -163,7 +163,7 @@ public class NodeTypeServiceTest
         {
             Name = "Story",
             NodeType = "NodeType",
-            Content = new NodeTypeDefinition { Id = "story", DisplayName = "Story" }
+            Content = new NodeTypeDefinition { Id = "story", Namespace = "Type", DisplayName = "Story" }
         };
         await _persistence.SaveNodeAsync(storyNode, TestContext.Current.CancellationToken);
 
@@ -189,7 +189,7 @@ public class NodeTypeServiceTest
         {
             Name = "Story",
             NodeType = "NodeType",
-            Content = new NodeTypeDefinition { Id = "story", DisplayName = "Story" }
+            Content = new NodeTypeDefinition { Id = "story", Namespace = "Type", DisplayName = "Story" }
         };
         await _persistence.SaveNodeAsync(storyNode, TestContext.Current.CancellationToken);
 
@@ -212,7 +212,7 @@ public class NodeTypeServiceTest
         {
             Name = "Story",
             NodeType = "NodeType",
-            Content = new NodeTypeDefinition { Id = "story", DisplayName = "Story" }
+            Content = new NodeTypeDefinition { Id = "story", Namespace = "Type", DisplayName = "Story" }
         };
         await _persistence.SaveNodeAsync(storyNode, TestContext.Current.CancellationToken);
 

@@ -77,4 +77,13 @@ public interface INodeTypeService
     /// <param name="ct">Cancellation token</param>
     /// <returns>List of all CodeConfigurations</returns>
     Task<IReadOnlyList<CodeConfiguration>> GetAllCodeConfigurationsAsync(CancellationToken ct = default);
+
+    /// <summary>
+    /// Gets combined code from all dependencies of a NodeType.
+    /// Used for Monaco autocomplete to include types from dependent configurations.
+    /// </summary>
+    /// <param name="dependencyPaths">List of NodeType paths to include (e.g., ["type/Person"])</param>
+    /// <param name="ct">Cancellation token</param>
+    /// <returns>Combined source code from all dependencies</returns>
+    Task<string> GetDependencyCodeAsync(IEnumerable<string> dependencyPaths, CancellationToken ct = default);
 }

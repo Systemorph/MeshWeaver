@@ -74,7 +74,7 @@ public record Story
             IsPersistent = true,
             Content = new NodeTypeDefinition
             {
-                Id = "story",
+                Id = "story", Namespace = "Type",
                 DisplayName = "Story",
                 IconName = "Document",
                 Description = "A user story",
@@ -107,7 +107,7 @@ public record Graph
             IsPersistent = true,
             Content = new NodeTypeDefinition
             {
-                Id = "graph",
+                Id = "graph", Namespace = "Type",
                 DisplayName = "Graph",
                 IconName = "Diagram",
                 Description = "The graph root",

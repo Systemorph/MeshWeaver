@@ -52,6 +52,13 @@ public record CodeEditorControl() : UiControl<CodeEditorControl>("MeshWeaver.Bla
     /// </summary>
     public object? Placeholder { get; init; }
 
+    /// <summary>
+    /// Extra type definitions to include for autocomplete.
+    /// For C#, this is additional source code that provides type information
+    /// from dependencies, enabling Monaco to suggest types from other modules.
+    /// </summary>
+    public object? ExtraTypeDefinitions { get; init; }
+
     public CodeEditorControl WithValue(string value) => this with { Value = value };
     public CodeEditorControl WithLanguage(string language) => this with { Language = language };
     public CodeEditorControl WithTheme(string theme) => this with { Theme = theme };
@@ -61,4 +68,5 @@ public record CodeEditorControl() : UiControl<CodeEditorControl>("MeshWeaver.Bla
     public CodeEditorControl WithMinimap(bool enabled) => this with { Minimap = enabled };
     public CodeEditorControl WithWordWrap(bool enabled) => this with { WordWrap = enabled };
     public CodeEditorControl WithPlaceholder(string placeholder) => this with { Placeholder = placeholder };
+    public CodeEditorControl WithExtraTypeDefinitions(string definitions) => this with { ExtraTypeDefinitions = definitions };
 }
