@@ -10,11 +10,6 @@ namespace MeshWeaver.Graph.Configuration;
 /// NodeTypes are scoped hierarchically - for a node at path "a/b/c", applicable NodeTypes
 /// are found by walking up the path: a/b/c/*, a/b/*, a/*, root level, and type/*.
 ///
-/// A NodeType node is identified by having NodeType = "NodeType".
-/// Its partition folder contains:
-/// - codeConfiguration.json: The CodeConfiguration with C# code
-/// HubConfiguration is stored as a property on the NodeTypeDefinition content.
-///
 /// Statically registered types (via NodeTypeRegistry) take precedence over persistence.
 /// </summary>
 public class NodeTypeService : INodeTypeService
@@ -58,36 +53,6 @@ public class NodeTypeService : INodeTypeService
 
         // Global types namespace
         yield return "type";
-    }
-
-    /// <inheritdoc/>
-    public async IAsyncEnumerable<MeshNode> GetNodeTypeNodesAsync(string contextPath)
-    {
-        var seenTypes = new HashSet<string>();
-
-        // First, yield all statically registered types
-        foreach (var registration in NodeTypeRegistry.GetAll())
-        {
-            seenTypes.Add(registration.Definition.Id);
-            yield return registration.Node;
-        }
-
-        // Then search persistence for additional types
-        foreach (var searchPath in GetSearchPaths(contextPath))
-        {
-            // Get all children at this level
-            await foreach (var node in _persistence.GetChildrenAsync(searchPath))
-            {
-                if (node.NodeType == NodeTypeNodeType && node.Content is NodeTypeDefinition ntd)
-                {
-                    // Only yield if we haven't seen this type identifier yet (most local wins)
-                    if (seenTypes.Add(ntd.Id))
-                    {
-                        yield return node;
-                    }
-                }
-            }
-        }
     }
 
     /// <inheritdoc/>
@@ -142,8 +107,10 @@ public class NodeTypeService : INodeTypeService
         return null;
     }
 
-    /// <inheritdoc/>
-    public async Task<NodeTypeData?> GetNodeTypeDataAsync(string nodeTypePath, CancellationToken ct = default)
+    /// <summary>
+    /// Gets the NodeTypeData for a node type path.
+    /// </summary>
+    private async Task<NodeTypeData?> GetNodeTypeDataAsync(string nodeTypePath, CancellationToken ct = default)
     {
         // Check static registry first (by path or ID)
         if (NodeTypeRegistry.TryGetByPath(nodeTypePath, out var registration) && registration != null)
@@ -197,65 +164,9 @@ public class NodeTypeService : INodeTypeService
         if (nodeTypeNode == null)
             return null;
 
-        // Get NodeTypeData via messaging
+        // Get NodeTypeData
         var nodeTypeData = await GetNodeTypeDataAsync(nodeTypeNode.Path, ct);
         return nodeTypeData?.Code;
-    }
-
-    /// <inheritdoc/>
-    public async Task SaveCodeConfigurationAsync(string nodeTypePath, CodeConfiguration config, CancellationToken ct = default)
-    {
-        try
-        {
-            // Save CodeConfiguration to the partition folder
-            await _persistence.SavePartitionObjectsAsync(nodeTypePath, null, new object[] { config });
-            _logger?.LogDebug("SaveCodeConfigurationAsync: Saved CodeConfiguration to {Path}", nodeTypePath);
-        }
-        catch (Exception ex)
-        {
-            _logger?.LogError(ex, "SaveCodeConfigurationAsync: Failed to save to {Path}", nodeTypePath);
-            throw;
-        }
-    }
-
-    /// <inheritdoc/>
-    public async IAsyncEnumerable<MeshNode> GetAllNodeTypeNodesAsync()
-    {
-        var seenPaths = new HashSet<string>();
-
-        // First, yield all statically registered types
-        foreach (var registration in NodeTypeRegistry.GetAll())
-        {
-            seenPaths.Add(registration.Node.Path);
-            yield return registration.Node;
-        }
-
-        // Then search persistence for additional types
-        await foreach (var node in _persistence.GetDescendantsAsync(null))
-        {
-            if (node.NodeType == NodeTypeNodeType && !seenPaths.Contains(node.Path))
-            {
-                yield return node;
-            }
-        }
-    }
-
-    /// <inheritdoc/>
-    public async Task<IReadOnlyList<CodeConfiguration>> GetAllCodeConfigurationsAsync(CancellationToken ct = default)
-    {
-        var configurations = new List<CodeConfiguration>();
-
-        await foreach (var nodeTypeNode in GetAllNodeTypeNodesAsync())
-        {
-            // Get CodeConfiguration from partition
-            var nodeTypeData = await GetNodeTypeDataAsync(nodeTypeNode.Path, ct);
-            if (nodeTypeData?.Code != null)
-            {
-                configurations.Add(nodeTypeData.Code);
-            }
-        }
-
-        return configurations;
     }
 
     /// <inheritdoc/>

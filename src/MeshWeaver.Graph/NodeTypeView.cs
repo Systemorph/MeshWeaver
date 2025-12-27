@@ -50,25 +50,20 @@ public static class NodeTypeView
     /// </summary>
     public static IObservable<UiControl> Details(LayoutAreaHost host, RenderingContext ctx)
     {
-        // Get NodeTypeDefinition from workspace stream
-        var definitionStream = host.Workspace.GetStream<NodeTypeDefinition>();
-        var codeConfigStream = host.Workspace.GetStream<CodeConfiguration>();
-
-        if (definitionStream == null)
-            return Observable.Return(RenderError("NodeTypeDefinition stream not available."));
+        // Get NodeTypeDefinition from MeshNode.Content and CodeConfiguration from workspace stream
+        var definitionStream = host.Workspace.GetNodeContent<NodeTypeDefinition>();
+        var codeConfigStream = host.Workspace.GetSingle<CodeConfiguration>();
 
         return definitionStream
-            .CombineLatest(codeConfigStream ?? Observable.Return<IEnumerable<CodeConfiguration>?>(null))
+            .CombineLatest(codeConfigStream)
             .Select(tuple =>
             {
-                var definitions = tuple.First;
-                var codeConfigs = tuple.Second;
+                var content = tuple.First;
+                var codeConfig = tuple.Second;
 
-                var content = definitions?.FirstOrDefault();
                 if (content == null)
                     return RenderError("No NodeType definition found.");
 
-                var codeConfig = codeConfigs?.FirstOrDefault();
                 return BuildDetailsLayout(host, content, codeConfig);
             });
     }
@@ -129,25 +124,20 @@ public static class NodeTypeView
     /// </summary>
     public static IObservable<UiControl> CodeView(LayoutAreaHost host, RenderingContext ctx)
     {
-        // Get data from workspace streams
-        var definitionStream = host.Workspace.GetStream<NodeTypeDefinition>();
-        var codeConfigStream = host.Workspace.GetStream<CodeConfiguration>();
-
-        if (definitionStream == null)
-            return Observable.Return(RenderError("NodeTypeDefinition stream not available."));
+        // Get NodeTypeDefinition from MeshNode.Content and CodeConfiguration from workspace stream
+        var definitionStream = host.Workspace.GetNodeContent<NodeTypeDefinition>();
+        var codeConfigStream = host.Workspace.GetSingle<CodeConfiguration>();
 
         return definitionStream
-            .CombineLatest(codeConfigStream ?? Observable.Return<IEnumerable<CodeConfiguration>?>(null))
+            .CombineLatest(codeConfigStream)
             .Select(tuple =>
             {
-                var definitions = tuple.First;
-                var codeConfigs = tuple.Second;
+                var content = tuple.First;
+                var codeConfig = tuple.Second;
 
-                var content = definitions?.FirstOrDefault();
                 if (content == null)
                     return RenderError("NodeType not found.");
 
-                var codeConfig = codeConfigs?.FirstOrDefault();
                 return BuildSplitView(host, content, codeConfig);
             });
     }
@@ -387,21 +377,16 @@ public static class NodeTypeView
     {
         var nodeTypeService = host.Hub.ServiceProvider.GetService<INodeTypeService>();
 
-        // Get data from workspace streams
-        var codeConfigStream = host.Workspace.GetStream<CodeConfiguration>();
+        // Get CodeConfiguration from workspace stream
+        var codeConfigStream = host.Workspace.GetSingle<CodeConfiguration>();
 
         // Parse file parameter from area reference
         var areaRef = new LayoutAreaReference(ctx.Area) { Id = ctx.Area };
         var fileName = areaRef.GetParameterValue("file") ?? "code";
 
-        if (codeConfigStream == null)
-            return Observable.Return(RenderError("CodeConfiguration stream not available."));
-
         return codeConfigStream
-            .SelectMany(async codeConfigs =>
+            .SelectMany(async codeConfig =>
             {
-                var codeConfig = codeConfigs?.FirstOrDefault();
-
                 // Get dependency code for autocomplete (still need service for cross-type dependencies)
                 var dependencyCode = "";
                 if (nodeTypeService != null && codeConfig?.Dependencies != null && codeConfig.Dependencies.Count > 0)
@@ -521,15 +506,11 @@ public static class NodeTypeView
     /// </summary>
     public static IObservable<UiControl> HubConfigView(LayoutAreaHost host, RenderingContext ctx)
     {
-        // Get NodeTypeDefinition from workspace stream
-        var definitionStream = host.Workspace.GetStream<NodeTypeDefinition>();
+        // Get NodeTypeDefinition from MeshNode.Content
+        var definitionStream = host.Workspace.GetNodeContent<NodeTypeDefinition>();
 
-        if (definitionStream == null)
-            return Observable.Return(RenderError("NodeTypeDefinition stream not available."));
-
-        return definitionStream.Select(definitions =>
+        return definitionStream.Select(content =>
         {
-            var content = definitions?.FirstOrDefault();
             if (content == null)
                 return RenderError("NodeType not found.");
 
@@ -582,15 +563,11 @@ public static class NodeTypeView
     /// </summary>
     public static IObservable<UiControl> HubConfigEdit(LayoutAreaHost host, RenderingContext ctx)
     {
-        // Get NodeTypeDefinition from workspace stream
-        var definitionStream = host.Workspace.GetStream<NodeTypeDefinition>();
+        // Get NodeTypeDefinition from MeshNode.Content
+        var definitionStream = host.Workspace.GetNodeContent<NodeTypeDefinition>();
 
-        if (definitionStream == null)
-            return Observable.Return(RenderError("NodeTypeDefinition stream not available."));
-
-        return definitionStream.Select(definitions =>
+        return definitionStream.Select(content =>
         {
-            var content = definitions?.FirstOrDefault();
             if (content == null)
                 return RenderError("NodeType not found.");
 
