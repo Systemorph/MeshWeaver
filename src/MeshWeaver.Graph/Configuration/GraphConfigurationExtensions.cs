@@ -19,7 +19,7 @@ public static class GraphConfigurationExtensions
     /// Details is set as the default view for empty path requests.
     /// This should be called for every node type to ensure consistent view availability.
     /// </summary>
-    public static MessageHubConfiguration WithDefaultNodeViews(this MessageHubConfiguration config)
+    public static MessageHubConfiguration WithDefaultViews(this MessageHubConfiguration config)
         => config
             .AddDefaultViews()
             .AddMeshNodeView();

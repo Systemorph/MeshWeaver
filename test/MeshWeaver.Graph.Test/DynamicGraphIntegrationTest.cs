@@ -225,10 +225,12 @@ public record Graph
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
     {
         var testDataDirectory = GetOrCreateTestDirectory();
+        var cacheDirectory = Path.Combine(testDataDirectory, ".mesh-cache");
 
         return builder
             .UseMonolithMesh()
             .AddInMemoryPersistence()
+            .ConfigureServices(services => services.Configure<CompilationCacheOptions>(o => o.CacheDirectory = cacheDirectory))
             .AddJsonGraphConfiguration(testDataDirectory);
     }
 
@@ -905,10 +907,12 @@ public class OrganizationsLayoutTest : MonolithMeshTestBase
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
     {
         var testDataDirectory = GetOrCreateTestDirectory();
+        var cacheDirectory = Path.Combine(testDataDirectory, ".mesh-cache");
 
         return builder
             .UseMonolithMesh()
             .AddInMemoryPersistence()
+            .ConfigureServices(services => services.Configure<CompilationCacheOptions>(o => o.CacheDirectory = cacheDirectory))
             .AddJsonGraphConfiguration(testDataDirectory);
     }
 
@@ -1208,7 +1212,9 @@ public class FileSystemPersistenceTest : MonolithMeshTestBase
           "content": {
             "$type": "NodeTypeDefinition",
             "id": "graph",
-            "displayName": "Graph"
+            "namespace": "type",
+            "displayName": "Graph",
+            "configuration": "config => config"
           }
         }
         """;
@@ -1233,9 +1239,12 @@ public class FileSystemPersistenceTest : MonolithMeshTestBase
         // Create actual JSON files on disk - this is the key difference from InMemoryPersistenceService tests
         SetupOrganizationsStructureOnDisk(testDataDirectory);
 
+        var cacheDirectory = Path.Combine(testDataDirectory, ".mesh-cache");
+
         return builder
             .UseMonolithMesh()
             .AddFileSystemPersistence(testDataDirectory)
+            .ConfigureServices(services => services.Configure<CompilationCacheOptions>(o => o.CacheDirectory = cacheDirectory))
             .AddJsonGraphConfiguration(testDataDirectory);
     }
 
