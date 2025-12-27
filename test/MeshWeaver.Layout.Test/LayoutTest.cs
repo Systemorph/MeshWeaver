@@ -14,6 +14,7 @@ using Json.Pointer;
 using MeshWeaver.Data;
 using MeshWeaver.Data.Serialization;
 using MeshWeaver.Fixture;
+using MeshWeaver.Layout.Client;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Layout.DataGrid;
 using MeshWeaver.Messaging;
@@ -1088,4 +1089,173 @@ public record LabelAndBool(string Label, bool Value);
 public record DataRecord([property: Key] string SystemName, string DisplayName)
 {
     public static readonly DataRecord[] InitialData = [new("Hello", "Hello"), new("World", "World")];
+}
+
+/// <summary>
+/// Tests for CodeEditor-style data binding with JsonPointerReference.
+/// Simulates the pattern used by CodeEditorView where DataContext points to a data location
+/// and Value is an empty JsonPointerReference to bind to the root of that data.
+/// </summary>
+public class CodeEditorDataBindingTest(ITestOutputHelper output) : HubTestBase(output)
+{
+    private const string CodeEditorView = nameof(CodeEditorView);
+    private const string InitialCode = "// Initial code content";
+    private const string UpdatedCode = "// Updated code content";
+    private const string CodeDataId = "codeData";
+
+    protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration configuration)
+    {
+        return base.ConfigureHost(configuration)
+            .WithRoutes(r =>
+                r.RouteAddress(ClientType, (_, d) => d.Package())
+            )
+            .AddLayout(layout =>
+                layout
+                    .WithView(CodeEditorView, BuildCodeEditorView)
+            );
+    }
+
+    /// <summary>
+    /// Build a view that simulates CodeEditorView's data binding pattern:
+    /// - Store code in data section with UpdateData
+    /// - Bind to it using DataContext + empty JsonPointerReference
+    /// </summary>
+    private static UiControl BuildCodeEditorView(LayoutAreaHost host, RenderingContext ctx)
+    {
+        // Initialize the code data (like NodeTypeView does)
+        host.UpdateData(CodeDataId, InitialCode);
+
+        // Create a control that binds to the data using the CodeEditor pattern:
+        // - DataContext points to the data location
+        // - Data (or Value) is an empty JsonPointerReference to bind to root
+        var editor = new TextFieldControl(new JsonPointerReference(""))
+        {
+            DataContext = LayoutAreaReference.GetDataPointer(CodeDataId)
+        };
+
+        return Controls.Stack
+            .WithView(editor, "Editor")
+            .WithView(
+                Controls.Button("Save")
+                    .WithClickAction(async actx =>
+                    {
+                        // Read the current value from the stream (this is what Save button does)
+                        var currentValue = await host.Stream.GetDataStream<string>(CodeDataId).FirstAsync();
+                        // Store in a separate location so we can verify what was read
+                        host.UpdateData("savedValue", currentValue ?? "null");
+                    }),
+                "SaveButton"
+            );
+    }
+
+    protected override MessageHubConfiguration ConfigureClient(
+        MessageHubConfiguration configuration
+    ) => base.ConfigureClient(configuration)
+        .AddLayoutClient(d => d);
+
+    /// <summary>
+    /// Test that simulates what CodeEditorView does:
+    /// 1. View initializes data with UpdateData
+    /// 2. Client updates the data via UpdatePointer (simulating user editing)
+    /// 3. Save button reads the data back
+    /// 4. Verify the updated value is saved, not the initial value
+    /// </summary>
+    [HubFact]
+    public async Task CodeEditor_UpdatePointer_SavesUpdatedValue()
+    {
+        var reference = new LayoutAreaReference(CodeEditorView);
+
+        var hub = GetClient();
+        var workspace = hub.GetWorkspace();
+        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
+            CreateHostAddress(),
+            reference
+        );
+
+        // Wait for the editor control to be rendered
+        var editorArea = $"{reference.Area}/Editor";
+        var editorControl = await stream.GetControlStream(editorArea)
+            .Timeout(10.Seconds())
+            .FirstAsync(x => x != null);
+
+        var textField = editorControl.Should().BeOfType<TextFieldControl>().Which;
+        textField.DataContext.Should().Be(LayoutAreaReference.GetDataPointer(CodeDataId));
+        var valuePointer = textField.Data.Should().BeOfType<JsonPointerReference>().Which;
+        valuePointer.Pointer.Should().Be("");
+
+        // Verify initial value is loaded
+        var initialValue = await stream
+            .GetDataStream<string>(new JsonPointerReference(textField.DataContext!))
+            .Timeout(5.Seconds())
+            .FirstAsync();
+        initialValue.Should().Be(InitialCode);
+
+        // Now simulate what CodeEditorView.OnValueChanged does:
+        // Update the data using UpdatePointer with the same pattern
+        stream.UpdatePointer(UpdatedCode, textField.DataContext, valuePointer);
+
+        // Wait for the update to be applied
+        await Task.Delay(500);
+
+        // Verify the value was updated in the stream
+        var updatedValue = await stream
+            .GetDataStream<string>(new JsonPointerReference(textField.DataContext!))
+            .Timeout(5.Seconds())
+            .FirstAsync();
+
+        // THIS IS THE KEY ASSERTION - the value should be updated, not still initial
+        updatedValue.Should().Be(UpdatedCode,
+            "UpdatePointer should have updated the value at the data location");
+    }
+
+    /// <summary>
+    /// Test the GetPointer helper to verify the path construction.
+    /// </summary>
+    [HubFact]
+    public async Task CodeEditor_EmptyPointer_ResolvesToCorrectPath()
+    {
+        var reference = new LayoutAreaReference(CodeEditorView);
+
+        var hub = GetClient();
+        var workspace = hub.GetWorkspace();
+        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
+            CreateHostAddress(),
+            reference
+        );
+
+        // Wait for the editor control
+        var editorArea = $"{reference.Area}/Editor";
+        await stream.GetControlStream(editorArea)
+            .Timeout(10.Seconds())
+            .FirstAsync(x => x != null);
+
+        // Get the data context pointer
+        var dataContext = LayoutAreaReference.GetDataPointer(CodeDataId);
+        Output.WriteLine($"DataContext: {dataContext}");
+
+        // Test reading with empty pointer - should resolve to the data itself
+        var valuePointer = new JsonPointerReference("");
+
+        // Read using DataBind (the observable way)
+        var valueFromBind = await stream
+            .DataBind<string>(valuePointer, dataContext)
+            .Timeout(5.Seconds())
+            .FirstAsync();
+
+        valueFromBind.Should().Be(InitialCode,
+            "DataBind with empty pointer should read the value at DataContext");
+
+        // Now update using UpdatePointer with empty pointer
+        stream.UpdatePointer("New Value", dataContext, valuePointer);
+        await Task.Delay(500);
+
+        // Read again
+        var valueAfterUpdate = await stream
+            .DataBind<string>(valuePointer, dataContext)
+            .Timeout(5.Seconds())
+            .FirstAsync();
+
+        valueAfterUpdate.Should().Be("New Value",
+            "UpdatePointer with empty pointer should update the value at DataContext");
+    }
 }
