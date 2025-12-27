@@ -135,7 +135,10 @@ public static class LayoutClientExtensions
         if (pointer.StartsWith('/'))
             return pointer.TrimEnd('/');
         if (string.IsNullOrWhiteSpace(dataContext))
-            return $"/{pointer}";
+            return string.IsNullOrEmpty(pointer) ? "/" : $"/{pointer}";
+        // Handle empty pointer - bind to the dataContext itself without trailing slash
+        if (string.IsNullOrEmpty(pointer))
+            return dataContext.TrimEnd('/');
         return $"{dataContext}/{pointer.TrimEnd('/')}";
     }
 
