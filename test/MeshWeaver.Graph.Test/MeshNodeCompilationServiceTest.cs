@@ -434,9 +434,6 @@ internal class TestNodeTypeService : INodeTypeService
         _nodeTypes[nodeType] = (definition, codeConfig);
     }
 
-    public IAsyncEnumerable<MeshNode> GetNodeTypeNodesAsync(string contextPath) =>
-        EmptyAsyncEnumerable<MeshNode>();
-
     public Task<MeshNode?> GetNodeTypeNodeAsync(string nodeType, string contextPath, CancellationToken ct = default)
     {
         if (_nodeTypes.TryGetValue(nodeType, out var entry))
@@ -452,23 +449,6 @@ internal class TestNodeTypeService : INodeTypeService
         return Task.FromResult<MeshNode?>(null);
     }
 
-    public Task<NodeTypeData?> GetNodeTypeDataAsync(string nodeTypePath, CancellationToken ct = default)
-    {
-        // Extract node type from path (e.g., "type/Person" -> "Person")
-        var nodeType = nodeTypePath.Contains('/') ? nodeTypePath.Split('/').Last() : nodeTypePath;
-        if (_nodeTypes.TryGetValue(nodeType, out var entry))
-        {
-            return Task.FromResult<NodeTypeData?>(new NodeTypeData
-            {
-                Id = entry.Definition.Id,
-                Definition = entry.Definition,
-                Code = entry.Code,
-                Path = nodeTypePath
-            });
-        }
-        return Task.FromResult<NodeTypeData?>(null);
-    }
-
     public Task<CodeConfiguration?> GetCodeConfigurationAsync(string nodeType, string contextPath, CancellationToken ct = default)
     {
         if (_nodeTypes.TryGetValue(nodeType, out var entry))
@@ -478,22 +458,6 @@ internal class TestNodeTypeService : INodeTypeService
         return Task.FromResult<CodeConfiguration?>(null);
     }
 
-    public Task SaveCodeConfigurationAsync(string nodeTypePath, CodeConfiguration config, CancellationToken ct = default) =>
-        Task.CompletedTask;
-
-    public IAsyncEnumerable<MeshNode> GetAllNodeTypeNodesAsync() =>
-        EmptyAsyncEnumerable<MeshNode>();
-
-    public Task<IReadOnlyList<CodeConfiguration>> GetAllCodeConfigurationsAsync(CancellationToken ct = default) =>
-        Task.FromResult<IReadOnlyList<CodeConfiguration>>(
-            _nodeTypes.Values.Where(x => x.Code != null).Select(x => x.Code!).ToList());
-
     public Task<string> GetDependencyCodeAsync(IEnumerable<string> dependencyPaths, CancellationToken ct = default) =>
         Task.FromResult(string.Empty);
-
-    private static async IAsyncEnumerable<T> EmptyAsyncEnumerable<T>()
-    {
-        await Task.CompletedTask;
-        yield break;
-    }
 }

@@ -1,5 +1,4 @@
-using System.Reflection;
-using MeshWeaver.Mesh;
+﻿using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
@@ -14,27 +13,16 @@ namespace MeshWeaver.Graph.Configuration;
 /// Combines code generation (via DynamicMeshNodeAttributeGenerator) with Roslyn compilation.
 /// Implements IMeshNodeCompilationService from MeshWeaver.Mesh.Contract.
 /// </summary>
-internal class MeshNodeCompilationService : IMeshNodeCompilationService
+internal class MeshNodeCompilationService(
+    INodeTypeService nodeTypeService,
+    ICompilationCacheService cacheService,
+    IOptions<CompilationCacheOptions> cacheOptions,
+    ILogger<MeshNodeCompilationService> logger)
+    : IMeshNodeCompilationService
 {
-    private readonly INodeTypeService _nodeTypeService;
-    private readonly ICompilationCacheService _cacheService;
-    private readonly ILogger<MeshNodeCompilationService> _logger;
-    private readonly CompilationCacheOptions _cacheOptions;
+    private readonly CompilationCacheOptions _cacheOptions = cacheOptions.Value ?? new CompilationCacheOptions();
     private readonly DynamicMeshNodeAttributeGenerator _attributeGenerator = new();
-    private readonly List<MetadataReference> _references;
-
-    public MeshNodeCompilationService(
-        INodeTypeService nodeTypeService,
-        ICompilationCacheService cacheService,
-        IOptions<CompilationCacheOptions> cacheOptions,
-        ILogger<MeshNodeCompilationService> logger)
-    {
-        _nodeTypeService = nodeTypeService;
-        _cacheService = cacheService;
-        _logger = logger;
-        _cacheOptions = cacheOptions.Value ?? new CompilationCacheOptions();
-        _references = GetDefaultReferences();
-    }
+    private readonly List<MetadataReference> _references = GetDefaultReferences();
 
     private static List<MetadataReference> GetDefaultReferences()
     {
@@ -93,26 +81,26 @@ internal class MeshNodeCompilationService : IMeshNodeCompilationService
     {
         if (string.IsNullOrEmpty(node.NodeType))
         {
-            _logger.LogDebug("Node {NodePath} has no NodeType, skipping assembly compilation", node.Path);
+            logger.LogDebug("Node {NodePath} has no NodeType, skipping assembly compilation", node.Path);
             return null;
         }
 
-        var nodeName = _cacheService.SanitizeNodeName(node.Path);
-        var dllPath = _cacheService.GetDllPath(nodeName);
+        var nodeName = cacheService.SanitizeNodeName(node.Path);
+        var dllPath = cacheService.GetDllPath(nodeName);
 
         // Check cache validity first
-        if (_cacheService.IsCacheValid(nodeName, node.LastModified))
+        if (cacheService.IsCacheValid(nodeName, node.LastModified))
         {
-            _logger.LogDebug("Using cached assembly for {NodePath}", node.Path);
+            logger.LogDebug("Using cached assembly for {NodePath}", node.Path);
             return dllPath;
         }
 
         // Get CodeConfiguration from the NodeType's partition
-        var codeConfig = await _nodeTypeService.GetCodeConfigurationAsync(node.NodeType, node.Path, ct);
+        var codeConfig = await nodeTypeService.GetCodeConfigurationAsync(node.NodeType, node.Path, ct);
 
         // Get HubConfiguration from the NodeTypeDefinition content
         string? hubConfiguration = null;
-        var nodeTypeNode = await _nodeTypeService.GetNodeTypeNodeAsync(node.NodeType, node.Path, ct);
+        var nodeTypeNode = await nodeTypeService.GetNodeTypeNodeAsync(node.NodeType, node.Path, ct);
         if (nodeTypeNode?.Content is NodeTypeDefinition ntd)
         {
             hubConfiguration = ntd.HubConfiguration;
@@ -126,18 +114,18 @@ internal class MeshNodeCompilationService : IMeshNodeCompilationService
             // Return the DLL path if it exists
             if (File.Exists(dllPath))
             {
-                _logger.LogInformation(
+                logger.LogInformation(
                     "Compiled assembly for node {NodePath} at {DllPath}",
                     node.Path, dllPath);
                 return dllPath;
             }
 
-            _logger.LogWarning("Assembly compilation succeeded but DLL not found at {DllPath}", dllPath);
+            logger.LogWarning("Assembly compilation succeeded but DLL not found at {DllPath}", dllPath);
             return null;
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            _logger.LogError(ex, "Failed to compile assembly for node {NodePath}", node.Path);
+            logger.LogError(ex, "Failed to compile assembly for node {NodePath}", node.Path);
             throw;
         }
     }
@@ -149,15 +137,15 @@ internal class MeshNodeCompilationService : IMeshNodeCompilationService
         if (string.IsNullOrEmpty(assemblyLocation))
             return null;
 
-        var nodeName = _cacheService.SanitizeNodeName(node.Path);
+        var nodeName = cacheService.SanitizeNodeName(node.Path);
 
         try
         {
             // Load assembly using isolated context
-            var assembly = _cacheService.LoadAssembly(nodeName);
+            var assembly = cacheService.LoadAssembly(nodeName);
             if (assembly == null)
             {
-                _logger.LogWarning("Failed to load assembly for {NodePath}", node.Path);
+                logger.LogWarning("Failed to load assembly for {NodePath}", node.Path);
                 return new NodeCompilationResult(assemblyLocation, []);
             }
 
@@ -175,14 +163,14 @@ internal class MeshNodeCompilationService : IMeshNodeCompilationService
                 }
             }
 
-            _logger.LogDebug("Extracted {Count} NodeTypeConfigurations from {AssemblyLocation}",
+            logger.LogDebug("Extracted {Count} NodeTypeConfigurations from {AssemblyLocation}",
                 configurations.Count, assemblyLocation);
 
             return new NodeCompilationResult(assemblyLocation, configurations);
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Failed to extract NodeTypeConfigurations from {AssemblyLocation}", assemblyLocation);
+            logger.LogWarning(ex, "Failed to extract NodeTypeConfigurations from {AssemblyLocation}", assemblyLocation);
             return new NodeCompilationResult(assemblyLocation, []);
         }
     }
@@ -196,11 +184,11 @@ internal class MeshNodeCompilationService : IMeshNodeCompilationService
         MeshNode node,
         CancellationToken ct)
     {
-        var nodeName = _cacheService.SanitizeNodeName(node.Path);
+        var nodeName = cacheService.SanitizeNodeName(node.Path);
 
         // Invalidate old cache and prepare for recompilation
-        _cacheService.InvalidateCache(nodeName);
-        _cacheService.EnsureCacheDirectoryExists();
+        cacheService.InvalidateCache(nodeName);
+        cacheService.EnsureCacheDirectoryExists();
 
         ct.ThrowIfCancellationRequested();
 
@@ -208,14 +196,14 @@ internal class MeshNodeCompilationService : IMeshNodeCompilationService
         var source = _attributeGenerator.GenerateAttributeSource(node, codeConfig, hubConfiguration);
 
         // Write source file for debugging
-        var sourcePath = _cacheService.GetSourcePath(nodeName);
+        var sourcePath = cacheService.GetSourcePath(nodeName);
         if (_cacheOptions.EnableSourceDebugging)
         {
             await File.WriteAllTextAsync(sourcePath, source, ct);
-            _logger.LogDebug("Wrote source file for debugging: {SourcePath}", sourcePath);
+            logger.LogDebug("Wrote source file for debugging: {SourcePath}", sourcePath);
         }
 
-        _logger.LogInformation("Compiling assembly for {NodeName}", nodeName);
+        logger.LogInformation("Compiling assembly for {NodeName}", nodeName);
 
         // Parse with source path and encoding embedded (critical for PDB source linking)
         var sourceText = Microsoft.CodeAnalysis.Text.SourceText.From(source, System.Text.Encoding.UTF8);
@@ -237,9 +225,9 @@ internal class MeshNodeCompilationService : IMeshNodeCompilationService
                 .WithPlatform(Platform.AnyCpu));
 
         // Emit DLL, PDB, and XML documentation to disk
-        var dllPath = _cacheService.GetDllPath(nodeName);
-        var pdbPath = _cacheService.GetPdbPath(nodeName);
-        var xmlDocPath = _cacheService.GetXmlDocPath(nodeName);
+        var dllPath = cacheService.GetDllPath(nodeName);
+        var pdbPath = cacheService.GetPdbPath(nodeName);
+        var xmlDocPath = cacheService.GetXmlDocPath(nodeName);
 
         await using var dllStream = File.Create(dllPath);
         await using var pdbStream = File.Create(pdbPath);
@@ -253,7 +241,7 @@ internal class MeshNodeCompilationService : IMeshNodeCompilationService
 
         if (!emitResult.Success)
         {
-            _cacheService.InvalidateCache(nodeName);
+            cacheService.InvalidateCache(nodeName);
 
             var errors = emitResult.Diagnostics
                 .Where(d => d.Severity == DiagnosticSeverity.Error)
@@ -261,7 +249,7 @@ internal class MeshNodeCompilationService : IMeshNodeCompilationService
                 .ToList();
 
             var errorMessage = $"Compilation failed for '{node.Path}':\n{string.Join('\n', errors)}";
-            _logger.LogError("{ErrorMessage}", errorMessage);
+            logger.LogError("{ErrorMessage}", errorMessage);
             throw new CompilationException(node.Path, errorMessage);
         }
 
@@ -270,7 +258,7 @@ internal class MeshNodeCompilationService : IMeshNodeCompilationService
         await pdbStream.DisposeAsync();
         await xmlDocStream.DisposeAsync();
 
-        _logger.LogInformation("Successfully compiled assembly for {NodePath} at {DllPath}", node.Path, dllPath);
+        logger.LogInformation("Successfully compiled assembly for {NodePath} at {DllPath}", node.Path, dllPath);
     }
 }
 
