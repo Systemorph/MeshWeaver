@@ -1,4 +1,4 @@
-using System.ComponentModel.DataAnnotations;
+﻿using System.ComponentModel.DataAnnotations;
 
 namespace MeshWeaver.Graph.Configuration;
 
@@ -14,6 +14,11 @@ public record NodeTypeDefinition
     /// </summary>
     [Key]
     public required string Id { get; init; }
+
+    /// <summary>
+    /// The namespace in which the type is defined (is also partition)
+    /// </summary>
+    public required string Namespace { get; init; }
 
     /// <summary>
     /// Display name for the type in UI.
