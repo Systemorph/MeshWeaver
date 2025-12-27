@@ -100,7 +100,7 @@ public enum StoryStatus
             IsPersistent = true,
             Content = new NodeTypeDefinition
             {
-                Id = "story",
+                Id = "story", Namespace = "Type",
                 DisplayName = "Story",
                 IconName = "Document",
                 Description = "A user story or task",
@@ -133,7 +133,7 @@ public record Organization
             IsPersistent = true,
             Content = new NodeTypeDefinition
             {
-                Id = "org",
+                Id = "org", Namespace = "Type",
                 DisplayName = "Organization",
                 IconName = "Building",
                 Description = "An organization",
@@ -166,7 +166,7 @@ public record Project
             IsPersistent = true,
             Content = new NodeTypeDefinition
             {
-                Id = "project",
+                Id = "project", Namespace = "Type",
                 DisplayName = "Project",
                 IconName = "Folder",
                 Description = "A project",
@@ -198,7 +198,7 @@ public record Graph
             IsPersistent = true,
             Content = new NodeTypeDefinition
             {
-                Id = "graph",
+                Id = "graph", Namespace = "Type",
                 DisplayName = "Graph",
                 IconName = "Diagram",
                 Description = "The graph root",
@@ -798,7 +798,7 @@ public class OrganizationsLayoutTest : MonolithMeshTestBase
             IsPersistent = true,
             Content = new NodeTypeDefinition
             {
-                Id = "Organizations",
+                Id = "Organizations", Namespace = "Type",
                 DisplayName = "Organizations",
                 IconName = "Building",
                 Description = "Catalog of organizations",
@@ -820,7 +820,7 @@ public class OrganizationsLayoutTest : MonolithMeshTestBase
             IsPersistent = true,
             Content = new NodeTypeDefinition
             {
-                Id = "Organization",
+                Id = "Organization", Namespace = "Type",
                 DisplayName = "Organization",
                 IconName = "Building",
                 Description = "An individual organization",
@@ -889,7 +889,7 @@ public class OrganizationsLayoutTest : MonolithMeshTestBase
             IsPersistent = true,
             Content = new NodeTypeDefinition
             {
-                Id = "graph",
+                Id = "graph", Namespace = "Type",
                 DisplayName = "Graph"
             }
         };

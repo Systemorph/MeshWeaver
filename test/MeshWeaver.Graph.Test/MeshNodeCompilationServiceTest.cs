@@ -99,7 +99,7 @@ public record StoryType
 
         var nodeTypeDefinition = new NodeTypeDefinition
         {
-            Id = "story",
+            Id = "story", Namespace = "Type",
             DisplayName = "Story"
         };
 
@@ -139,7 +139,7 @@ public record ProjectType
 
         var nodeTypeDefinition = new NodeTypeDefinition
         {
-            Id = "project",
+            Id = "project", Namespace = "Type",
             DisplayName = "Project"
         };
 
@@ -179,7 +179,7 @@ public record CachedItemType
 
         var nodeTypeDefinition = new NodeTypeDefinition
         {
-            Id = "cached-item",
+            Id = "cached-item", Namespace = "Type",
             DisplayName = "Cached Item"
         };
 
@@ -227,7 +227,7 @@ public record DebugItemType
 
         var nodeTypeDefinition = new NodeTypeDefinition
         {
-            Id = "debug-item",
+            Id = "debug-item", Namespace = "Type",
             DisplayName = "Debug Item"
         };
 
@@ -268,7 +268,7 @@ public record WidgetType
 
         var nodeTypeDefinition = new NodeTypeDefinition
         {
-            Id = "widget",
+            Id = "widget", Namespace = "Type",
             DisplayName = "Widget"
         };
 
@@ -315,7 +315,7 @@ public record ComponentType
 
         var nodeTypeDefinition = new NodeTypeDefinition
         {
-            Id = "component",
+            Id = "component", Namespace = "Type",
             DisplayName = "Component"
         };
 
@@ -382,7 +382,7 @@ public record RecordType
 
         var nodeTypeDefinition = new NodeTypeDefinition
         {
-            Id = "record",
+            Id = "record", Namespace = "Type",
             DisplayName = "Record"
         };
 
@@ -487,6 +487,9 @@ internal class TestNodeTypeService : INodeTypeService
     public Task<IReadOnlyList<CodeConfiguration>> GetAllCodeConfigurationsAsync(CancellationToken ct = default) =>
         Task.FromResult<IReadOnlyList<CodeConfiguration>>(
             _nodeTypes.Values.Where(x => x.Code != null).Select(x => x.Code!).ToList());
+
+    public Task<string> GetDependencyCodeAsync(IEnumerable<string> dependencyPaths, CancellationToken ct = default) =>
+        Task.FromResult(string.Empty);
 
     private static async IAsyncEnumerable<T> EmptyAsyncEnumerable<T>()
     {

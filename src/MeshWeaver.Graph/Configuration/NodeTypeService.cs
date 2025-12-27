@@ -14,6 +14,8 @@ namespace MeshWeaver.Graph.Configuration;
 /// Its partition folder contains:
 /// - codeConfiguration.json: The CodeConfiguration with C# code
 /// HubConfiguration is stored as a property on the NodeTypeDefinition content.
+///
+/// Statically registered types (via NodeTypeRegistry) take precedence over persistence.
 /// </summary>
 public class NodeTypeService : INodeTypeService
 {
@@ -29,6 +31,9 @@ public class NodeTypeService : INodeTypeService
     {
         _persistence = persistence;
         _logger = logger;
+
+        // Ensure built-in types are registered
+        BuiltInNodeTypes.EnsureRegistered();
     }
 
     /// <summary>
@@ -60,6 +65,14 @@ public class NodeTypeService : INodeTypeService
     {
         var seenTypes = new HashSet<string>();
 
+        // First, yield all statically registered types
+        foreach (var registration in NodeTypeRegistry.GetAll())
+        {
+            seenTypes.Add(registration.Definition.Id);
+            yield return registration.Node;
+        }
+
+        // Then search persistence for additional types
         foreach (var searchPath in GetSearchPaths(contextPath))
         {
             // Get all children at this level
@@ -80,7 +93,13 @@ public class NodeTypeService : INodeTypeService
     /// <inheritdoc/>
     public async Task<MeshNode?> GetNodeTypeNodeAsync(string nodeType, string contextPath, CancellationToken ct = default)
     {
-        // First, search in the context path hierarchy
+        // Check static registry first (by ID or path)
+        if (NodeTypeRegistry.TryGetById(nodeType, out var registration) && registration != null)
+            return registration.Node;
+        if (NodeTypeRegistry.TryGetByPath(nodeType, out registration) && registration != null)
+            return registration.Node;
+
+        // Search in the context path hierarchy
         foreach (var searchPath in GetSearchPaths(contextPath))
         {
             // Get all children at this level
@@ -126,10 +145,16 @@ public class NodeTypeService : INodeTypeService
     /// <inheritdoc/>
     public async Task<NodeTypeData?> GetNodeTypeDataAsync(string nodeTypePath, CancellationToken ct = default)
     {
+        // Check static registry first (by path or ID)
+        if (NodeTypeRegistry.TryGetByPath(nodeTypePath, out var registration) && registration != null)
+            return registration.ToNodeTypeData();
+        if (NodeTypeRegistry.TryGetById(nodeTypePath, out registration) && registration != null)
+            return registration.ToNodeTypeData();
+
         try
         {
             // Get the MeshNode for this NodeType
-            var meshNode = await _persistence.GetNodeAsync(nodeTypePath);
+            var meshNode = await _persistence.GetNodeAsync(nodeTypePath, ct);
             if (meshNode == null)
             {
                 _logger?.LogDebug("GetNodeTypeDataAsync: NodeType at '{Path}' not found", nodeTypePath);
@@ -140,7 +165,7 @@ public class NodeTypeService : INodeTypeService
 
             // Get CodeConfiguration from the partition
             CodeConfiguration? codeConfig = null;
-            await foreach (var obj in _persistence.GetPartitionObjectsAsync(nodeTypePath, null))
+            await foreach (var obj in _persistence.GetPartitionObjectsAsync(nodeTypePath, null).WithCancellation(ct))
             {
                 if (obj is CodeConfiguration cc)
                 {
@@ -196,10 +221,19 @@ public class NodeTypeService : INodeTypeService
     /// <inheritdoc/>
     public async IAsyncEnumerable<MeshNode> GetAllNodeTypeNodesAsync()
     {
-        // Search all nodes for NodeType = "NodeType"
+        var seenPaths = new HashSet<string>();
+
+        // First, yield all statically registered types
+        foreach (var registration in NodeTypeRegistry.GetAll())
+        {
+            seenPaths.Add(registration.Node.Path);
+            yield return registration.Node;
+        }
+
+        // Then search persistence for additional types
         await foreach (var node in _persistence.GetDescendantsAsync(null))
         {
-            if (node.NodeType == NodeTypeNodeType)
+            if (node.NodeType == NodeTypeNodeType && !seenPaths.Contains(node.Path))
             {
                 yield return node;
             }
@@ -222,5 +256,40 @@ public class NodeTypeService : INodeTypeService
         }
 
         return configurations;
+    }
+
+    /// <inheritdoc/>
+    public async Task<string> GetDependencyCodeAsync(IEnumerable<string> dependencyPaths, CancellationToken ct = default)
+    {
+        if (dependencyPaths == null)
+            return string.Empty;
+
+        var sb = new System.Text.StringBuilder();
+        sb.AppendLine("// Dependency types for autocomplete");
+        sb.AppendLine();
+
+        foreach (var depPath in dependencyPaths)
+        {
+            try
+            {
+                var nodeTypeData = await GetNodeTypeDataAsync(depPath, ct);
+                if (nodeTypeData?.Code != null)
+                {
+                    var code = nodeTypeData.Code.GetCombinedCode();
+                    if (!string.IsNullOrWhiteSpace(code))
+                    {
+                        sb.AppendLine($"// From dependency: {depPath}");
+                        sb.AppendLine(code);
+                        sb.AppendLine();
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger?.LogWarning(ex, "GetDependencyCodeAsync: Failed to get code from {Path}", depPath);
+            }
+        }
+
+        return sb.ToString();
     }
 }

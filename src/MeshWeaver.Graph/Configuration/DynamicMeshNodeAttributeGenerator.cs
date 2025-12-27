@@ -23,7 +23,9 @@ internal class DynamicMeshNodeAttributeGenerator
         string? hubConfiguration)
     {
         var safeClassName = SanitizeName(node.Path);
-        var hasCode = !string.IsNullOrWhiteSpace(codeConfig?.Code);
+        // Use GetCombinedCode() for multi-file support
+        var combinedCode = codeConfig?.GetCombinedCode();
+        var hasCode = !string.IsNullOrWhiteSpace(combinedCode);
 
         var sb = new StringBuilder();
 
@@ -57,7 +59,7 @@ internal class DynamicMeshNodeAttributeGenerator
         {
             sb.AppendLine("namespace MeshWeaver.Graph.Dynamic");
             sb.AppendLine("{");
-            var indentedCode = IndentCode(codeConfig!.Code!, "    ");
+            var indentedCode = IndentCode(combinedCode!, "    ");
             sb.AppendLine(indentedCode);
             sb.AppendLine("}");
             sb.AppendLine();
