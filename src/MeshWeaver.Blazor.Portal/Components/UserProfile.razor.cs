@@ -2,6 +2,7 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 
 using System.Security.Claims;
+using MeshWeaver.Blazor.Portal.Authentication;
 using Microsoft.AspNetCore.Components;
 using Microsoft.AspNetCore.Components.Authorization;
 using Microsoft.Extensions.Logging;
@@ -15,6 +16,9 @@ public partial class UserProfile : ComponentBase
 
     [Inject]
     public required ILogger<UserProfile> Logger { get; init; }
+
+    [Inject]
+    public required IAuthenticationNavigationService AuthNavigation { get; init; }
 
     [CascadingParameter]
     public required Task<AuthenticationState> AuthenticationState { get; set; }
@@ -68,20 +72,18 @@ public partial class UserProfile : ComponentBase
         // The name contained two or more words. Return the initials from the first and last.
         return $"{char.ToUpperInvariant(s[0])}{char.ToUpperInvariant(s[lastSpaceIndex + 1])}";
     }
+
     private void Login()
     {
-        // For Blazor Server, we directly use the ASP.NET Core Identity endpoints
-        var loginPath = "/MicrosoftIdentity/Account/SignIn";
-
-        // Add a redirect URL to return to the current page
         var returnUrl = Navigation.Uri;
-        Navigation.NavigateTo($"{loginPath}?returnUrl={Uri.EscapeDataString(returnUrl)}", forceLoad: true);
+        var loginUrl = AuthNavigation.GetLoginUrl(returnUrl);
+        Navigation.NavigateTo(loginUrl, forceLoad: true);
     }
 
     private void Logout()
     {
-        var logoutPath = "/MicrosoftIdentity/Account/SignOut";
-        Navigation.NavigateTo(logoutPath, forceLoad: true);
+        var logoutUrl = AuthNavigation.GetLogoutUrl();
+        Navigation.NavigateTo(logoutUrl, forceLoad: true);
     }
 
 }
