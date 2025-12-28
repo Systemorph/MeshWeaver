@@ -37,7 +37,7 @@ public record MeshBuilder
         // Use short names (Type.Name) for consistency with TypeSource registrations
         var dataTypes = nodeTypeConfigs
             .Select(c => c.DataType)
-            .Where(t => t != null && t != typeof(object))
+            .Where(t => t != typeof(object))
             .Distinct()
             .ToArray();
         if (dataTypes.Length > 0)

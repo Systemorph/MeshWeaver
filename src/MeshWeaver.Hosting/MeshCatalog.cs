@@ -1,5 +1,4 @@
-﻿using MeshWeaver.Data;
-using MeshWeaver.Mesh;
+﻿using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.Caching.Memory;
@@ -26,23 +25,23 @@ public sealed class MeshCatalog : IMeshCatalog
 
     // Lazy-loaded because IMeshNodeCompilationService is registered at hub level
     // and may not be available during MeshCatalog construction
-    private IMeshNodeCompilationService? _compilationService;
-    private bool _compilationServiceResolved;
+    private IMeshNodeCompilationService? compilationService;
+    private bool compilationServiceResolved;
 
     private IMeshNodeCompilationService? CompilationService
     {
         get
         {
-            if (!_compilationServiceResolved)
+            if (!compilationServiceResolved)
             {
-                _compilationService = meshHub.ServiceProvider.GetService<IMeshNodeCompilationService>();
-                _compilationServiceResolved = true;
-                if (_compilationService == null)
+                compilationService = meshHub.ServiceProvider.GetService<IMeshNodeCompilationService>();
+                compilationServiceResolved = true;
+                if (compilationService == null)
                 {
                     logger.LogWarning("IMeshNodeCompilationService not available. On-demand node type compilation disabled.");
                 }
             }
-            return _compilationService;
+            return compilationService;
         }
     }
 
