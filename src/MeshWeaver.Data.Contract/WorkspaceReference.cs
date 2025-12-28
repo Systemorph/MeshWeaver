@@ -162,7 +162,7 @@ public record DataPathReference(string Path) : WorkspaceReference<object>
 /// Reference for accessing NodeType configuration data.
 /// Used by the "type" UnifiedPath handler.
 /// The node type is encoded in the hub address, so this reference is just a marker.
-/// Resolves to NodeTypeData which combines NodeTypeDefinition and CodeConfiguration.
+/// Resolves to CodeFile from the node's partition.
 /// </summary>
 public record NodeTypeReference() : WorkspaceReference<object>
 {

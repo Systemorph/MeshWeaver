@@ -87,7 +87,7 @@ public class MeshNodeCompilationServiceTest : IDisposable
     public async Task GetAssemblyLocationAsync_ReturnsPathToCompiledDll()
     {
         // Arrange
-        var codeConfig = new CodeConfiguration
+        var codeConfig = new CodeFile
         {
             Code = @"
 public record StoryType
@@ -128,7 +128,7 @@ public record StoryType
     public async Task GetAssemblyLocationAsync_AssemblyContainsCompiledType()
     {
         // Arrange
-        var codeConfig = new CodeConfiguration
+        var codeConfig = new CodeFile
         {
             Code = @"
 public record ProjectType
@@ -168,7 +168,7 @@ public record ProjectType
     public async Task GetAssemblyLocationAsync_UsesCachedAssembly()
     {
         // Arrange
-        var codeConfig = new CodeConfiguration
+        var codeConfig = new CodeFile
         {
             Code = @"
 public record CachedItemType
@@ -216,7 +216,7 @@ public record CachedItemType
     public async Task GetAssemblyLocationAsync_GeneratesSourceFileForDebugging()
     {
         // Arrange
-        var codeConfig = new CodeConfiguration
+        var codeConfig = new CodeFile
         {
             Code = @"
 public record DebugItemType
@@ -256,7 +256,7 @@ public record DebugItemType
     public async Task GetAssemblyLocationAsync_AssemblyContainsMeshNodeAttribute()
     {
         // Arrange
-        var codeConfig = new CodeConfiguration
+        var codeConfig = new CodeFile
         {
             Code = @"
 public record WidgetType
@@ -303,7 +303,7 @@ public record WidgetType
     public async Task GetAssemblyLocationAsync_MeshNodeAttribute_ReturnsNodes()
     {
         // Arrange
-        var codeConfig = new CodeConfiguration
+        var codeConfig = new CodeFile
         {
             Code = @"
 public record ComponentType
@@ -369,7 +369,7 @@ public record ComponentType
     public async Task GetAssemblyLocationAsync_CompiledDataType_CanBeInstantiated()
     {
         // Arrange
-        var codeConfig = new CodeConfiguration
+        var codeConfig = new CodeFile
         {
             Code = @"
 public record RecordType
@@ -427,11 +427,11 @@ public record RecordType
 /// </summary>
 internal class TestNodeTypeService : INodeTypeService
 {
-    private readonly Dictionary<string, (NodeTypeDefinition Definition, CodeConfiguration? Code)> _nodeTypes = new();
+    private readonly Dictionary<string, (NodeTypeDefinition Definition, CodeFile? Code)> _nodeTypes = new();
 
-    public void AddNodeType(string nodeType, NodeTypeDefinition definition, CodeConfiguration? codeConfig = null)
+    public void AddNodeType(string nodeType, NodeTypeDefinition definition, CodeFile? codeFile = null)
     {
-        _nodeTypes[nodeType] = (definition, codeConfig);
+        _nodeTypes[nodeType] = (definition, codeFile);
     }
 
     public Task<MeshNode?> GetNodeTypeNodeAsync(string nodeType, string contextPath, CancellationToken ct = default)
@@ -449,13 +449,13 @@ internal class TestNodeTypeService : INodeTypeService
         return Task.FromResult<MeshNode?>(null);
     }
 
-    public Task<CodeConfiguration?> GetCodeConfigurationAsync(string nodeType, string contextPath, CancellationToken ct = default)
+    public Task<CodeFile?> GetCodeFileAsync(string nodeType, string contextPath, CancellationToken ct = default)
     {
         if (_nodeTypes.TryGetValue(nodeType, out var entry))
         {
             return Task.FromResult(entry.Code);
         }
-        return Task.FromResult<CodeConfiguration?>(null);
+        return Task.FromResult<CodeFile?>(null);
     }
 
     public Task<string> GetDependencyCodeAsync(IEnumerable<string> dependencyPaths, CancellationToken ct = default) =>

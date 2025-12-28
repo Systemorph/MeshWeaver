@@ -70,18 +70,7 @@ public record NodeTypeRegistration
     public required MeshNode Node { get; init; }
 
     /// <summary>
-    /// Optional code configuration for types with compiled code.
+    /// Optional code file for types with compiled code.
     /// </summary>
-    public CodeConfiguration? Code { get; init; }
-
-    /// <summary>
-    /// Creates a NodeTypeData from this registration.
-    /// </summary>
-    public NodeTypeData ToNodeTypeData() => new()
-    {
-        Id = Definition.Id,
-        Definition = Definition,
-        Code = Code,
-        Path = Node.Path
-    };
+    public CodeFile? Code { get; init; }
 }

@@ -99,10 +99,10 @@ public class NodeTypeServiceTest
 
     #endregion
 
-    #region GetCodeConfigurationAsync Tests
+    #region GetCodeFileAsync Tests
 
     [Fact]
-    public async Task GetCodeConfigurationAsync_ReturnsCodeConfiguration_FromPartition()
+    public async Task GetCodeFileAsync_ReturnsCodeFile_FromPartition()
     {
         // Arrange
         var storyNode = MeshNode.FromPath("type/story") with
@@ -113,14 +113,14 @@ public class NodeTypeServiceTest
         };
         await _persistence.SaveNodeAsync(storyNode, TestContext.Current.CancellationToken);
 
-        var codeConfig = new CodeConfiguration
+        var codeConfig = new CodeFile
         {
             Code = "public record Story { [Key] public string Id { get; init; } }"
         };
         await _persistence.SavePartitionObjectsAsync("type/story", null, [codeConfig], TestContext.Current.CancellationToken);
 
         // Act
-        var result = await _service.GetCodeConfigurationAsync("story", "graph/org1", TestContext.Current.CancellationToken);
+        var result = await _service.GetCodeFileAsync("story", "graph/org1", TestContext.Current.CancellationToken);
 
         // Assert
         result.Should().NotBeNull();
@@ -128,9 +128,9 @@ public class NodeTypeServiceTest
     }
 
     [Fact]
-    public async Task GetCodeConfigurationAsync_ReturnsNull_WhenNoCodeConfiguration()
+    public async Task GetCodeFileAsync_ReturnsNull_WhenNoCodeFile()
     {
-        // Arrange - NodeType without CodeConfiguration
+        // Arrange - NodeType without CodeFile
         var storyNode = MeshNode.FromPath("type/story") with
         {
             Name = "Story",
@@ -140,7 +140,7 @@ public class NodeTypeServiceTest
         await _persistence.SaveNodeAsync(storyNode, TestContext.Current.CancellationToken);
 
         // Act
-        var result = await _service.GetCodeConfigurationAsync("story", "graph/org1", TestContext.Current.CancellationToken);
+        var result = await _service.GetCodeFileAsync("story", "graph/org1", TestContext.Current.CancellationToken);
 
         // Assert
         result.Should().BeNull();
@@ -162,7 +162,7 @@ public class NodeTypeServiceTest
         };
         await _persistence.SaveNodeAsync(personNode, TestContext.Current.CancellationToken);
 
-        var personCode = new CodeConfiguration { Code = "public record Person { public string Name { get; init; } }" };
+        var personCode = new CodeFile { Code = "public record Person { public string Name { get; init; } }" };
         await _persistence.SavePartitionObjectsAsync("type/person", null, [personCode], TestContext.Current.CancellationToken);
 
         var orgNode = MeshNode.FromPath("type/organization") with
@@ -173,7 +173,7 @@ public class NodeTypeServiceTest
         };
         await _persistence.SaveNodeAsync(orgNode, TestContext.Current.CancellationToken);
 
-        var orgCode = new CodeConfiguration { Code = "public record Organization { public string Title { get; init; } }" };
+        var orgCode = new CodeFile { Code = "public record Organization { public string Title { get; init; } }" };
         await _persistence.SavePartitionObjectsAsync("type/organization", null, [orgCode], TestContext.Current.CancellationToken);
 
         // Act

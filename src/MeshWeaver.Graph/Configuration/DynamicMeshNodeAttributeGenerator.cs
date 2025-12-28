@@ -1,4 +1,4 @@
-using System.Text;
+﻿using System.Text;
 using System.Text.RegularExpressions;
 using MeshWeaver.Mesh;
 
@@ -14,18 +14,17 @@ internal class DynamicMeshNodeAttributeGenerator
     /// Generates the complete C# source code for a dynamic node assembly.
     /// </summary>
     /// <param name="node">The MeshNode being compiled.</param>
-    /// <param name="codeConfig">The CodeConfiguration containing user code.</param>
+    /// <param name="codeFile">The CodeFile containing user code.</param>
     /// <param name="hubConfiguration">The HubConfiguration lambda expression (from NodeTypeDefinition).</param>
     /// <returns>Complete C# source code ready for compilation.</returns>
     public string GenerateAttributeSource(
         MeshNode node,
-        CodeConfiguration? codeConfig,
+        CodeFile? codeFile,
         string? hubConfiguration)
     {
         var safeClassName = SanitizeName(node.Path);
-        // Use GetCombinedCode() for multi-file support
-        var combinedCode = codeConfig?.GetCombinedCode();
-        var hasCode = !string.IsNullOrWhiteSpace(combinedCode);
+        var code = codeFile?.Code;
+        var hasCode = !string.IsNullOrWhiteSpace(code);
 
         var sb = new StringBuilder();
 
@@ -59,7 +58,7 @@ internal class DynamicMeshNodeAttributeGenerator
         {
             sb.AppendLine("namespace MeshWeaver.Graph.Dynamic");
             sb.AppendLine("{");
-            var indentedCode = IndentCode(combinedCode!, "    ");
+            var indentedCode = IndentCode(code!, "    ");
             sb.AppendLine(indentedCode);
             sb.AppendLine("}");
             sb.AppendLine();
@@ -116,33 +115,19 @@ internal class DynamicMeshNodeAttributeGenerator
         sb.AppendLine("            var result = config;");
         sb.AppendLine();
 
-        // Only add default views for non-NodeType nodes
-        // NodeType nodes get their views from BuiltInNodeTypes.cs (AddNodeTypeView)
-        if (node.NodeType != BuiltInNodeTypes.NodeTypeId)
-        {
-            sb.AppendLine("            // Add default views (Details, Edit, Thumbnail, Metadata, Settings, Comments)");
-            sb.AppendLine("            result = result.WithDefaultViews();");
-            sb.AppendLine();
-        }
-        sb.AppendLine("            // Add dynamic node type areas");
-        sb.AppendLine("            result = result.AddDynamicNodeTypeAreas();");
-        sb.AppendLine();
 
-        // For NodeType nodes, add CodeConfiguration as accessible data
+        // For NodeType nodes, add CodeFile as accessible data
         if (node.NodeType == "NodeType")
         {
-            sb.AppendLine("            // For NodeType nodes, add CodeConfiguration as accessible data");
-            sb.AppendLine("            result = result.AddData(data =>");
-            sb.AppendLine("            {");
-            sb.AppendLine("                var persistence = data.Workspace.Hub.ServiceProvider.GetService<MeshWeaver.Mesh.Services.IPersistenceService>();");
-            sb.AppendLine("                var hubPath = data.Workspace.Hub.Address.ToString();");
-            sb.AppendLine("                if (persistence != null)");
-            sb.AppendLine("                {");
-            sb.AppendLine("                    return data.AddSource(source => source.WithTypeSource(typeof(CodeConfiguration),");
-            sb.AppendLine("                        new CodeConfigurationTypeSource(data.Workspace, source.Id, persistence, hubPath)));");
-            sb.AppendLine("                }");
-            sb.AppendLine("                return data.AddSource(source => source.WithType<CodeConfiguration>(ts => ts.WithKey(_ => \"code\")));");
-            sb.AppendLine("            });");
+            sb.AppendLine("            // For NodeType nodes, add CodeFile as accessible data");
+            sb.AppendLine("            result = result.AddData(data => data.AddSource(source => source.WithType<CodeFile>()));");
+            sb.AppendLine();
+        }
+        else
+        {
+            // For non-NodeType nodes, inject WithDefaultViews()
+            sb.AppendLine("            // For non-NodeType nodes, add default views");
+            sb.AppendLine("            result = result.WithDefaultViews();");
             sb.AppendLine();
         }
 

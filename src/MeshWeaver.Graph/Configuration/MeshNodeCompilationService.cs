@@ -95,8 +95,8 @@ internal class MeshNodeCompilationService(
             return dllPath;
         }
 
-        // Get CodeConfiguration from the NodeType's partition
-        var codeConfig = await nodeTypeService.GetCodeConfigurationAsync(node.NodeType, node.Path, ct);
+        // Get CodeFile from the NodeType's partition
+        var codeFile = await nodeTypeService.GetCodeFileAsync(node.NodeType, node.Path, ct);
 
         // Get Configuration from the NodeTypeDefinition content
         // Configuration is the source code that gets compiled into HubConfiguration
@@ -109,8 +109,8 @@ internal class MeshNodeCompilationService(
 
         try
         {
-            // Compile using CodeConfiguration and Configuration
-            await CompileAsync(codeConfig, configuration, node, ct);
+            // Compile using CodeFile and Configuration
+            await CompileAsync(codeFile, configuration, node, ct);
 
             // Return the DLL path if it exists
             if (File.Exists(dllPath))
@@ -177,10 +177,10 @@ internal class MeshNodeCompilationService(
     }
 
     /// <summary>
-    /// Compiles CodeConfiguration into an assembly using Roslyn.
+    /// Compiles CodeFile into an assembly using Roslyn.
     /// </summary>
     private async Task CompileAsync(
-        CodeConfiguration? codeConfig,
+        CodeFile? codeFile,
         string? hubConfiguration,
         MeshNode node,
         CancellationToken ct)
@@ -194,7 +194,7 @@ internal class MeshNodeCompilationService(
         ct.ThrowIfCancellationRequested();
 
         // Generate full source with MeshNodeAttribute
-        var source = _attributeGenerator.GenerateAttributeSource(node, codeConfig, hubConfiguration);
+        var source = _attributeGenerator.GenerateAttributeSource(node, codeFile, hubConfiguration);
 
         // Write source file for debugging
         var sourcePath = cacheService.GetSourcePath(nodeName);
