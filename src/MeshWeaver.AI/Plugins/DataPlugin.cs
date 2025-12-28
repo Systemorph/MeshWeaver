@@ -151,8 +151,15 @@ public class DataPlugin(
         try
         {
             using var cts = new CancellationTokenSource(10.Seconds());
-            var response = await hub.AwaitResponse(new GetSchemaRequest(type), o => o.WithTarget(address), cts.Token);
-            return response.Message.Schema;
+            var response = await hub.AwaitResponse(
+                new GetDataRequest(new SchemaReference(type)),
+                o => o.WithTarget(address),
+                cts.Token);
+
+            if (response.Message.Data is SchemaInfo schemaInfo)
+                return schemaInfo.Schema;
+
+            return response.Message.Data?.ToString() ?? "{}";
         }
         catch (OperationCanceledException)
         {

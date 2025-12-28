@@ -235,9 +235,9 @@ public class SlipImportAgent(IMessageHub hub) : IInitializableAgent, IAgentWithT
         try
         {
             var resp = await hub.AwaitResponse(
-                new GetSchemaRequest(nameof(Pricing)),
+                new GetDataRequest(new SchemaReference(nameof(Pricing))),
                 o => o.WithTarget(pricingAddress));
-            pricingSchema = resp?.Message?.Schema;
+            pricingSchema = (resp?.Message?.Data as SchemaInfo)?.Schema;
         }
         catch
         {
@@ -247,9 +247,9 @@ public class SlipImportAgent(IMessageHub hub) : IInitializableAgent, IAgentWithT
         try
         {
             var resp = await hub.AwaitResponse(
-                new GetSchemaRequest(nameof(ReinsuranceAcceptance)),
+                new GetDataRequest(new SchemaReference(nameof(ReinsuranceAcceptance))),
                 o => o.WithTarget(pricingAddress));
-            acceptanceSchema = resp?.Message?.Schema;
+            acceptanceSchema = (resp?.Message?.Data as SchemaInfo)?.Schema;
         }
         catch
         {
@@ -259,9 +259,9 @@ public class SlipImportAgent(IMessageHub hub) : IInitializableAgent, IAgentWithT
         try
         {
             var resp = await hub.AwaitResponse(
-                new GetSchemaRequest(nameof(ReinsuranceSection)),
+                new GetDataRequest(new SchemaReference(nameof(ReinsuranceSection))),
                 o => o.WithTarget(pricingAddress));
-            sectionSchema = resp?.Message?.Schema;
+            sectionSchema = (resp?.Message?.Data as SchemaInfo)?.Schema;
         }
         catch
         {

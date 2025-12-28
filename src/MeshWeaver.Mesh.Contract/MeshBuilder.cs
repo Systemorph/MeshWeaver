@@ -118,6 +118,8 @@ public record MeshBuilder
         pathRegistry.Register("area", new AreaPathHandler());
         pathRegistry.Register("content", new ContentPathHandler());
         pathRegistry.Register("type", new TypePathHandler());
+        pathRegistry.Register("schema", new SchemaPathHandler());
+        pathRegistry.Register("model", new ModelPathHandler());
 
         // Add the default Type/NodeType node - this is the built-in type for all type definitions
         MeshNodes.Add(MeshNode.FromPath(MeshNode.NodeTypePath) with

@@ -120,3 +120,34 @@ public class TypePathHandler : IUnifiedPathHandler
         return (address, new NodeTypeReference());
     }
 }
+
+/// <summary>
+/// Handler for schema keyword paths.
+/// Format: addressType/addressId/schema[/TypeName]
+/// If no type name is specified, returns schema for the hub's default type.
+/// </summary>
+public class SchemaPathHandler : IUnifiedPathHandler
+{
+    /// <inheritdoc />
+    public (Address Address, WorkspaceReference Reference) Parse(string addressType, string addressId, string remainingPath)
+    {
+        var address = new Address(addressType, addressId);
+        // remainingPath is the type name (can be null/empty for default type)
+        return (address, new SchemaReference(remainingPath));
+    }
+}
+
+/// <summary>
+/// Handler for model keyword paths.
+/// Format: addressType/addressId/model
+/// Returns all data types available in the hub.
+/// </summary>
+public class ModelPathHandler : IUnifiedPathHandler
+{
+    /// <inheritdoc />
+    public (Address Address, WorkspaceReference Reference) Parse(string addressType, string addressId, string remainingPath)
+    {
+        var address = new Address(addressType, addressId);
+        return (address, new DataModelReference());
+    }
+}

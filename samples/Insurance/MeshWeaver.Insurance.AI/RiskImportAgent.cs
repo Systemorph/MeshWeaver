@@ -226,11 +226,11 @@ public class RiskImportAgent(IMessageHub hub) : IInitializableAgent, IAgentWithT
         try
         {
             var resp = await hub.AwaitResponse(
-                new GetSchemaRequest("ExcelImportConfiguration"),
+                new GetDataRequest(new SchemaReference("ExcelImportConfiguration")),
                 o => o.WithTarget(new Address(InsuranceApplicationAttribute.PricingType, "default", "2024")));
 
             // Hard-code TypeName to "PropertyRisk" in the schema
-            var schema = resp?.Message?.Schema;
+            var schema = (resp?.Message?.Data as SchemaInfo)?.Schema;
             if (!string.IsNullOrEmpty(schema))
             {
                 // Parse the schema as JSON to modify it
@@ -264,9 +264,9 @@ public class RiskImportAgent(IMessageHub hub) : IInitializableAgent, IAgentWithT
         try
         {
             var resp = await hub.AwaitResponse(
-                new GetSchemaRequest(nameof(PropertyRisk)),
+                new GetDataRequest(new SchemaReference(nameof(PropertyRisk))),
                 o => o.WithTarget(new Address(InsuranceApplicationAttribute.PricingType, "default", "2024")));
-            propertyRiskSchema = resp?.Message?.Schema;
+            propertyRiskSchema = (resp?.Message?.Data as SchemaInfo)?.Schema;
         }
         catch
         {

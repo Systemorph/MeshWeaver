@@ -108,10 +108,14 @@ public class MeshPlugin(IMessageHub hub, IAgentChat chat)
         {
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
             var response = await hub.AwaitResponse(
-                new GetSchemaRequest(config.DataType.Name),
+                new GetDataRequest(new SchemaReference(config.DataType.Name)),
                 o => o.WithTarget(hub.Address),
                 cts.Token);
-            return response.Message.Schema;
+
+            if (response.Message.Data is SchemaInfo schemaInfo)
+                return schemaInfo.Schema;
+
+            return response.Message.Data?.ToString() ?? "{}";
         }
         catch (OperationCanceledException)
         {

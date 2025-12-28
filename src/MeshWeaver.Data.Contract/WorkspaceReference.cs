@@ -169,4 +169,26 @@ public record NodeTypeReference() : WorkspaceReference<object>
     public override string ToString() => "type";
 }
 
+/// <summary>
+/// Reference for accessing JSON schema for a specific type.
+/// Used by the "schema" UnifiedPath handler.
+/// Path format: schema[/TypeName]
+/// If TypeName is empty/null, returns schema for the hub's default type.
+/// </summary>
+/// <param name="Type">The type name to get schema for, or null/empty for default type</param>
+public record SchemaReference(string? Type = null) : WorkspaceReference<object>
+{
+    public override string ToString() => string.IsNullOrEmpty(Type) ? "schema" : $"schema/{Type}";
+}
+
+/// <summary>
+/// Reference for accessing all data types available in a hub.
+/// Used by the "model" UnifiedPath handler.
+/// Returns type descriptions (name, display name, description) for all registered types.
+/// Path format: model
+/// </summary>
+public record DataModelReference() : WorkspaceReference<object>
+{
+    public override string ToString() => "model";
+}
 

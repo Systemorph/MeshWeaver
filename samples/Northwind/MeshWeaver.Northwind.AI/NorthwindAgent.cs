@@ -117,11 +117,11 @@ public class NorthwindAgent(IMessageHub hub) : IInitializableAgent, IAgentWithTo
                 try
                 {
                     var schemaResponse = await hub.AwaitResponse(
-                        new GetSchemaRequest(typeName),
+                        new GetDataRequest(new SchemaReference(typeName)),
                         o => o.WithTarget(NorthwindAddress));
-                    if (schemaResponse?.Message?.Schema != null)
+                    if (schemaResponse?.Message?.Data is SchemaInfo schemaInfo)
                     {
-                        schemaMap[typeName] = schemaResponse.Message.Schema;
+                        schemaMap[typeName] = schemaInfo.Schema;
                     }
                 }
                 catch
