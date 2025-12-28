@@ -4,73 +4,37 @@ using MeshWeaver.Mesh;
 namespace MeshWeaver.Graph.Configuration;
 
 /// <summary>
-/// Static registry for NodeType definitions that are compiled into assemblies.
-/// Types registered here take precedence over persistence-based definitions.
+/// Static registry for built-in MeshNodes by path.
+/// Nodes registered here take precedence over persistence-based nodes.
 /// </summary>
 public static class NodeTypeRegistry
 {
-    private static readonly ConcurrentDictionary<string, NodeTypeRegistration> ById = new();
-    private static readonly ConcurrentDictionary<string, NodeTypeRegistration> ByPath = new();
+    private static readonly ConcurrentDictionary<string, MeshNode> Nodes = new();
 
     /// <summary>
-    /// Registers a NodeType definition statically.
+    /// Registers a MeshNode by its Path.
     /// </summary>
-    /// <param name="registration">The registration containing definition, node, and optional code configuration.</param>
-    public static void Register(NodeTypeRegistration registration)
-    {
-        ById[registration.Definition.Id] = registration;
-        ByPath[registration.Node.Path] = registration;
-    }
+    public static void Register(MeshNode node)
+        => Nodes[node.Path] = node;
 
     /// <summary>
-    /// Tries to get a registration by type ID (e.g., "NodeType", "story").
+    /// Tries to get a node by path.
     /// </summary>
-    public static bool TryGetById(string typeId, out NodeTypeRegistration? registration)
-        => ById.TryGetValue(typeId, out registration);
+    public static bool TryGet(string path, out MeshNode? node)
+        => Nodes.TryGetValue(path, out node);
 
     /// <summary>
-    /// Tries to get a registration by path (e.g., "type/NodeType", "type/story").
+    /// Gets all registered nodes.
     /// </summary>
-    public static bool TryGetByPath(string path, out NodeTypeRegistration? registration)
-        => ByPath.TryGetValue(path, out registration);
+    public static IEnumerable<MeshNode> GetAll() => Nodes.Values;
 
     /// <summary>
-    /// Gets all registered NodeTypes.
+    /// Checks if a path is registered.
     /// </summary>
-    public static IEnumerable<NodeTypeRegistration> GetAll() => ById.Values;
-
-    /// <summary>
-    /// Checks if a type ID is registered.
-    /// </summary>
-    public static bool IsRegistered(string typeId) => ById.ContainsKey(typeId);
+    public static bool IsRegistered(string path) => Nodes.ContainsKey(path);
 
     /// <summary>
     /// Clears all registrations. Primarily for testing.
     /// </summary>
-    public static void Clear()
-    {
-        ById.Clear();
-        ByPath.Clear();
-    }
-}
-
-/// <summary>
-/// A registration entry for a statically defined NodeType.
-/// </summary>
-public record NodeTypeRegistration
-{
-    /// <summary>
-    /// The NodeType definition.
-    /// </summary>
-    public required NodeTypeDefinition Definition { get; init; }
-
-    /// <summary>
-    /// The MeshNode representing this NodeType.
-    /// </summary>
-    public required MeshNode Node { get; init; }
-
-    /// <summary>
-    /// Optional code file for types with compiled code.
-    /// </summary>
-    public CodeFile? Code { get; init; }
+    public static void Clear() => Nodes.Clear();
 }
