@@ -1,4 +1,4 @@
-using MeshWeaver.Data;
+﻿using MeshWeaver.Data;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using Microsoft.Extensions.DependencyInjection;
@@ -127,7 +127,7 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
         var ownNode = await _persistence.GetNodeAsync(_hubPath, ct);
 
         // Restore hub version from persisted MeshNode
-        if (ownNode != null && ownNode.Version > 0)
+        if (ownNode is { Version: > 0 })
         {
             _logger?.LogInformation("MeshNodeTypeSource: Restoring hub {Address} to version {Version}",
                 _workspace.Hub.Address, ownNode.Version);

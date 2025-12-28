@@ -58,25 +58,19 @@ public class NodeTypeService : INodeTypeService
     /// <inheritdoc/>
     public async Task<MeshNode?> GetNodeTypeNodeAsync(string nodeType, string contextPath, CancellationToken ct = default)
     {
-        // Check static registry first (by ID or path)
-        if (NodeTypeRegistry.TryGetById(nodeType, out var registration) && registration != null)
-            return registration.Node;
-        if (NodeTypeRegistry.TryGetByPath(nodeType, out registration) && registration != null)
-            return registration.Node;
-
         // Search in the context path hierarchy
         foreach (var searchPath in GetSearchPaths(contextPath))
         {
             // Get all children at this level
-            await foreach (var node in _persistence.GetChildrenAsync(searchPath))
+            await foreach (var child in _persistence.GetChildrenAsync(searchPath))
             {
                 // Match by node path (e.g., "type/graph") or by NodeTypeDefinition.Id (e.g., "graph")
-                if (node.NodeType == NodeTypeNodeType && node.Content is NodeTypeDefinition ntd)
+                if (child.NodeType == NodeTypeNodeType && child.Content is NodeTypeDefinition ntd)
                 {
                     // Match either by full path or by short Id
-                    if (node.Path == nodeType || ntd.Id == nodeType)
+                    if (child.Path == nodeType || ntd.Id == nodeType)
                     {
-                        return node;
+                        return child;
                     }
                 }
             }
@@ -92,13 +86,13 @@ public class NodeTypeService : INodeTypeService
 
             // Only search if this parent wasn't already in the search paths
             // (to avoid duplicate searches)
-            await foreach (var node in _persistence.GetChildrenAsync(nodeTypeParent))
+            await foreach (var child in _persistence.GetChildrenAsync(nodeTypeParent))
             {
-                if (node.NodeType == NodeTypeNodeType && node.Content is NodeTypeDefinition ntd)
+                if (child.NodeType == NodeTypeNodeType && child.Content is NodeTypeDefinition ntd)
                 {
-                    if (node.Path == nodeType || ntd.Id == nodeType)
+                    if (child.Path == nodeType || ntd.Id == nodeType)
                     {
-                        return node;
+                        return child;
                     }
                 }
             }
@@ -112,12 +106,6 @@ public class NodeTypeService : INodeTypeService
     /// </summary>
     private async Task<CodeFile?> GetCodeFileAsync(string nodeTypePath, CancellationToken ct = default)
     {
-        // Check static registry first (by path or ID)
-        if (NodeTypeRegistry.TryGetByPath(nodeTypePath, out var registration) && registration != null)
-            return registration.Code;
-        if (NodeTypeRegistry.TryGetById(nodeTypePath, out registration) && registration != null)
-            return registration.Code;
-
         try
         {
             // Get CodeFile from the partition

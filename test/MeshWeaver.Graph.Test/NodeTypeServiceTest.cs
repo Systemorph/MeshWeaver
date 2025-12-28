@@ -82,21 +82,6 @@ public class NodeTypeServiceTest
         result.Should().BeNull();
     }
 
-    [Fact]
-    public async Task GetNodeTypeNodeAsync_ReturnsStaticRegistryType_First()
-    {
-        // Arrange - NodeType is registered in the static registry via BuiltInNodeTypes
-        // (EnsureRegistered is called in NodeTypeService constructor)
-
-        // Act - look for the built-in NodeType
-        var result = await _service.GetNodeTypeNodeAsync("NodeType", "", TestContext.Current.CancellationToken);
-
-        // Assert - should find the built-in type from registry
-        result.Should().NotBeNull();
-        result!.Path.Should().Be("type/NodeType");
-        result.Content.Should().BeOfType<NodeTypeDefinition>();
-    }
-
     #endregion
 
     #region GetCodeFileAsync Tests

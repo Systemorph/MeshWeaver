@@ -51,11 +51,6 @@ public static class BuiltInNodeTypes
                 .AddData(data => data.AddSource(source => source.WithType<CodeFile>()))
         };
 
-        NodeTypeRegistry.Register(new NodeTypeRegistration
-        {
-            Definition = definition,
-            Node = node,
-            Code = null
-        });
+        NodeTypeRegistry.Register(node);
     }
 }
