@@ -337,7 +337,7 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
 
         // act
         var response = await client.AwaitResponse(
-            new GetSchemaRequest(typeName),
+            new GetDataRequest(new SchemaReference(typeName)),
             o => o.WithTarget(CreateClientAddress()),
             CancellationTokenSource.CreateLinkedTokenSource(
                 TestContext.Current.CancellationToken,
@@ -346,12 +346,14 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
         );
 
         // assert
-        var schemaResponse = response.Message.Should().BeOfType<SchemaResponse>().Which;
-        schemaResponse.Type.Should().Be(typeName); schemaResponse.Schema.Should().NotBeNullOrEmpty();
-        schemaResponse.Schema.Should().NotBe("{}");
+        response.Message.Should().BeOfType<GetDataResponse>();
+        var schemaInfo = response.Message.Data.Should().BeOfType<SchemaInfo>().Which;
+        schemaInfo.Type.Should().Be(typeName);
+        schemaInfo.Schema.Should().NotBeNullOrEmpty();
+        schemaInfo.Schema.Should().NotBe("{}");
 
         // Verify it's valid JSON
-        var schemaJson = JsonDocument.Parse(schemaResponse.Schema);
+        var schemaJson = JsonDocument.Parse(schemaInfo.Schema);
         schemaJson.Should().NotBeNull();
 
         // Verify it represents an object type (most likely)
@@ -362,10 +364,10 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
     }
 
     /// <summary>
-    /// Tests that GetSchemaRequest returns empty schema for unknown types
+    /// Tests that SchemaReference returns empty schema for unknown types
     /// </summary>
     [Fact]
-    public async Task GetSchemaRequest_ForUnknownType_ShouldReturnEmptySchema()
+    public async Task SchemaReference_ForUnknownType_ShouldReturnEmptySchema()
     {
         // arrange
         var client = GetClient();
@@ -373,7 +375,7 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
 
         // act
         var response = await client.AwaitResponse(
-            new GetSchemaRequest(unknownTypeName),
+            new GetDataRequest(new SchemaReference(unknownTypeName)),
             o => o.WithTarget(CreateClientAddress()),
             CancellationTokenSource.CreateLinkedTokenSource(
                 TestContext.Current.CancellationToken,
@@ -382,9 +384,10 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
         );
 
         // assert
-        var schemaResponse = response.Message.Should().BeOfType<SchemaResponse>().Which;
-        schemaResponse.Type.Should().Be(unknownTypeName);
-        schemaResponse.Schema.Should().Be("{}");
+        response.Message.Should().BeOfType<GetDataResponse>();
+        var schemaInfo = response.Message.Data.Should().BeOfType<SchemaInfo>().Which;
+        schemaInfo.Type.Should().Be(unknownTypeName);
+        schemaInfo.Schema.Should().Be("{}");
     }
 
     /// <summary>
@@ -572,17 +575,17 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
     }
 
     /// <summary>
-    /// Tests schema request behavior with null or empty type parameters
+    /// Tests schema request behavior with null or empty type parameters - returns default type schema
     /// </summary>
     [Fact]
-    public async Task SchemaRequest_WithNullOrEmptyType_ShouldReturnEmptySchema()
+    public async Task SchemaReference_WithNullOrEmptyType_ShouldReturnDefaultTypeSchema()
     {
         // arrange
         var client = GetClient();
 
-        // act & assert for null
+        // act & assert for null - with new implementation, null type returns the first registered type's schema
         var responseNull = await client.AwaitResponse(
-            new GetSchemaRequest(null!),
+            new GetDataRequest(new SchemaReference(null)),
             o => o.WithTarget(CreateClientAddress()),
             CancellationTokenSource.CreateLinkedTokenSource(
                 TestContext.Current.CancellationToken,
@@ -590,12 +593,13 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
             ).Token
         );
 
-        var schemaResponseNull = responseNull.Message.Should().BeOfType<SchemaResponse>().Which;
-        schemaResponseNull.Schema.Should().Be("{}");
+        responseNull.Message.Should().BeOfType<GetDataResponse>();
+        var schemaInfoNull = responseNull.Message.Data.Should().BeOfType<SchemaInfo>().Which;
+        schemaInfoNull.Schema.Should().NotBeNullOrEmpty();
 
         // act & assert for empty string
         var responseEmpty = await client.AwaitResponse(
-            new GetSchemaRequest(""),
+            new GetDataRequest(new SchemaReference("")),
             o => o.WithTarget(CreateClientAddress()),
             CancellationTokenSource.CreateLinkedTokenSource(
                 TestContext.Current.CancellationToken,
@@ -603,8 +607,9 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
             ).Token
         );
 
-        var schemaResponseEmpty = responseEmpty.Message.Should().BeOfType<SchemaResponse>().Which;
-        schemaResponseEmpty.Schema.Should().Be("{}");
+        responseEmpty.Message.Should().BeOfType<GetDataResponse>();
+        var schemaInfoEmpty = responseEmpty.Message.Data.Should().BeOfType<SchemaInfo>().Which;
+        schemaInfoEmpty.Schema.Should().NotBeNullOrEmpty();
     }
 
     /// <summary>

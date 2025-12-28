@@ -131,7 +131,8 @@ public static class DataExtensions
                         options.Converters.Insert(
                             0,
                             new InstanceCollectionConverter(
-                                serialization.Hub.ServiceProvider.GetRequiredService<ITypeRegistry>()
+                                serialization.Hub.ServiceProvider.GetRequiredService<ITypeRegistry>(),
+                                serialization.Hub.ServiceProvider.GetService<ILogger<InstanceCollectionConverter>>()
                             )
                         );
                 })).WithTypes(
@@ -153,11 +154,12 @@ public static class DataExtensions
                 typeof(DataChangeResponse),
                 typeof(SubscribeRequest),
                 typeof(UnsubscribeRequest),
-                typeof(GetSchemaRequest),
-                typeof(SchemaResponse),
                 typeof(GetDomainTypesRequest),
                 typeof(DomainTypesResponse),
                 typeof(TypeDescription),
+                typeof(SchemaInfo),
+                typeof(SchemaReference),
+                typeof(DataModelReference),
                 typeof(PatchDataChangeRequest),
                 typeof(GetDataRequest),
                 typeof(GetDataResponse),
@@ -422,7 +424,6 @@ public static class DataExtensions
         configuration
             .WithHandler<DataChangeRequest>(HandleDataChangeRequest)
             .WithHandler<SubscribeRequest>(HandleSubscribeRequest)
-            .WithHandler<GetSchemaRequest>(HandleGetSchemaRequest)
             .WithHandler<GetDomainTypesRequest>(HandleGetDomainTypesRequest)
             .WithHandler<GetDataRequest>(HandleGetDataRequest)
             .WithHandler<UpdateUnifiedReferenceRequest>(HandleUpdateUnifiedReferenceRequest)
@@ -433,15 +434,6 @@ public static class DataExtensions
     {
         var types = GetDomainTypes(hub);
         hub.Post(new DomainTypesResponse(types), o => o.ResponseFor(request));
-        return request.Processed();
-    }
-
-    private static IMessageDelivery HandleGetSchemaRequest(IMessageHub hub, IMessageDelivery<GetSchemaRequest> request)
-    {
-        var schema = string.IsNullOrWhiteSpace(request.Message.Type)
-            ? "{}"
-            : GenerateJsonSchema(hub, request.Message.Type);
-        hub.Post(new SchemaResponse(request.Message.Type, schema), o => o.ResponseFor(request));
         return request.Processed();
     }
 
@@ -617,6 +609,70 @@ public static class DataExtensions
         }
 
         return request.Processed();
+    }
+
+    /// <summary>
+    /// Handler for SchemaReference which returns JSON schema for a type.
+    /// If Type is null/empty, returns schema for the hub's primary type (first registered TypeSource).
+    /// </summary>
+    private static Task<IMessageDelivery> HandleGetDataRequestCore(
+        IMessageHub hub,
+        SchemaReference reference,
+        IMessageDelivery<GetDataRequest> request,
+        CancellationToken ct)
+    {
+        try
+        {
+            var typeName = reference.Type;
+
+            // If no type specified, try to get default type from first TypeSource
+            if (string.IsNullOrWhiteSpace(typeName))
+            {
+                var workspace = hub.GetWorkspace();
+                var firstTypeSource = workspace.DataContext.TypeSources.Values.FirstOrDefault();
+                if (firstTypeSource != null)
+                {
+                    typeName = firstTypeSource.TypeDefinition.CollectionName;
+                }
+                else
+                {
+                    // No types registered
+                    hub.Post(new GetDataResponse(new SchemaInfo("", "{}"), hub.Version), o => o.ResponseFor(request));
+                    return Task.FromResult(request.Processed());
+                }
+            }
+
+            var schema = GenerateJsonSchema(hub, typeName);
+            hub.Post(new GetDataResponse(new SchemaInfo(typeName, schema), hub.Version), o => o.ResponseFor(request));
+        }
+        catch (Exception ex)
+        {
+            hub.Post(new GetDataResponse(null, 0) { Error = ex.Message }, o => o.ResponseFor(request));
+        }
+
+        return Task.FromResult(request.Processed());
+    }
+
+    /// <summary>
+    /// Handler for DataModelReference which returns all available data types.
+    /// </summary>
+    private static Task<IMessageDelivery> HandleGetDataRequestCore(
+        IMessageHub hub,
+        DataModelReference reference,
+        IMessageDelivery<GetDataRequest> request,
+        CancellationToken ct)
+    {
+        try
+        {
+            var types = GetDomainTypes(hub).ToList();
+            hub.Post(new GetDataResponse(types, hub.Version), o => o.ResponseFor(request));
+        }
+        catch (Exception ex)
+        {
+            hub.Post(new GetDataResponse(null, 0) { Error = ex.Message }, o => o.ResponseFor(request));
+        }
+
+        return Task.FromResult(request.Processed());
     }
 
     private static async Task<IMessageDelivery> HandleGetDataRequestCore<TReference>(IMessageHub hub,

@@ -1317,25 +1317,25 @@ public class FileSystemPersistenceTest : MonolithMeshTestBase
         var workspace = client.GetWorkspace();
 
         // Act - get CodeConfiguration stream from the Type/Organizations hub
-        // CodeConfiguration is registered with collection name "Code"
-        var stream = workspace.GetRemoteStream<EntityStore, CollectionReference>(
+        // CollectionReference returns InstanceCollection (not EntityStore)
+        // because CollectionReference : WorkspaceReference<InstanceCollection>
+        var stream = workspace.GetRemoteStream<InstanceCollection, CollectionReference>(
             organizationsAddress,
             new CollectionReference("Code"));
 
-        // Wait for data and log what we receive
-        var entityStore = await stream
+        // Wait for data
+        var instanceCollection = await stream
             .Where(x => x.Value != null)
             .Timeout(TimeSpan.FromSeconds(20))
             .Select(x => x.Value!)
             .FirstAsync();
 
         // Assert
-        entityStore.Should().NotBeNull("EntityStore should not be null");
-        entityStore.Collections.Should().ContainKey("Code",
-            "EntityStore should have 'Code' collection. Available: " +
-            string.Join(", ", entityStore.Collections.Keys));
+        instanceCollection.Should().NotBeNull("InstanceCollection should not be null");
+        instanceCollection.Instances.Should().NotBeEmpty(
+            "InstanceCollection should contain CodeConfiguration instances");
 
-        var codeConfigs = entityStore.GetData<CodeConfiguration>();
+        var codeConfigs = instanceCollection.Get<CodeConfiguration>().ToList();
         codeConfigs.Should().NotBeNullOrEmpty(
             "CodeConfiguration should be loaded from Type/Organizations/Code partition via messaging.");
         codeConfigs.First().Code.Should().NotBeNullOrEmpty(

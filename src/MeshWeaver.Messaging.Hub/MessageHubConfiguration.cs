@@ -265,7 +265,9 @@ public record MessageHubConfiguration
 
     public MessageHubConfiguration WithType<T>(string? name = null)
     {
-        TypeRegistry.WithType(typeof(T), name ?? typeof(T).FullName!);
+        var typeName = name ?? typeof(T).FullName!;
+        System.Diagnostics.Debug.WriteLine($"MessageHubConfiguration.WithType<{typeof(T).Name}>({typeName}): TypeRegistry hashCode={TypeRegistry.GetHashCode()}");
+        TypeRegistry.WithType(typeof(T), typeName);
         return this;
     }
     public MessageHubConfiguration WithType(Type type, string? name = null)

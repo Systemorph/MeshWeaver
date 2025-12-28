@@ -5,10 +5,11 @@ using System.Text.Json.Serialization;
 using Json.More;
 using MeshWeaver.Domain;
 using MeshWeaver.Messaging.Serialization;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Data.Serialization;
 
-public class InstanceCollectionConverter(ITypeRegistry typeRegistry)
+public class InstanceCollectionConverter(ITypeRegistry typeRegistry, ILogger<InstanceCollectionConverter>? logger = null)
     : JsonConverter<InstanceCollection>
 {
     public const string CollectionProperty = "$type";
@@ -17,10 +18,43 @@ public class InstanceCollectionConverter(ITypeRegistry typeRegistry)
     {
         return new JsonObject(
             instances.Instances.Select(x => new KeyValuePair<string, JsonNode?>(
-                JsonSerializer.Serialize(x.Key, options),
+                ConvertKeyToString(x.Key, options),
                 JsonSerializer.SerializeToNode(x.Value, options)
             ))
         );
+    }
+
+    /// <summary>
+    /// Converts a key object to a string for use as a JSON property name.
+    /// For simple types (string, numbers), just use ToString().
+    /// For complex types (tuples), serialize as JSON.
+    /// </summary>
+    private static string ConvertKeyToString(object key, JsonSerializerOptions options)
+    {
+        if (key is string s) return s;
+        if (key is int or long or short or byte or uint or ulong or ushort or sbyte or Guid or decimal or float or double)
+            return key.ToString()!;
+        // For complex keys (e.g., tuples), use JSON serialization
+        return JsonSerializer.Serialize(key, options);
+    }
+
+    /// <summary>
+    /// Converts a JSON property name string back to a key object.
+    /// For simple types (string, numbers), parse directly.
+    /// For complex types (tuples), deserialize from JSON.
+    /// </summary>
+    private static object ConvertStringToKey(string keyString, Type keyType, JsonSerializerOptions options)
+    {
+        if (keyType == typeof(string) || keyType == typeof(object))
+            return keyString;
+        if (keyType == typeof(int)) return int.Parse(keyString);
+        if (keyType == typeof(long)) return long.Parse(keyString);
+        if (keyType == typeof(Guid)) return Guid.Parse(keyString);
+        if (keyType == typeof(decimal)) return decimal.Parse(keyString);
+        if (keyType == typeof(double)) return double.Parse(keyString);
+        if (keyType == typeof(float)) return float.Parse(keyString);
+        // For complex keys (e.g., tuples), use JSON deserialization
+        return JsonSerializer.Deserialize(keyString, keyType, options) ?? keyString;
     }
 
     public override InstanceCollection? Read(
@@ -34,17 +68,30 @@ public class InstanceCollectionConverter(ITypeRegistry typeRegistry)
         if (obj == null)
             return null;
         var collection = obj[CollectionProperty]?.ToString();
-        var type = collection == null 
-            ? typeof(object)
-            : typeRegistry.GetKeyFunction(collection)?.KeyType 
-              ?? typeof(object);
+        var keyFunction = collection == null ? null : typeRegistry.GetKeyFunction(collection);
+        var type = keyFunction?.KeyType ?? typeof(string);  // Default to string, not object
+
+        logger?.LogDebug("InstanceCollectionConverter.Read: collection={Collection}, keyFunction={KeyFunction}, keyType={KeyType}",
+            collection, keyFunction != null ? "found" : "null", type.Name);
+
         return new InstanceCollection
         {
-            Instances = obj.Where(i => i.Key != CollectionProperty )
-                .Select(i => new KeyValuePair<object, object>(
-                    JsonSerializer.Deserialize(i.Key, type, options) ?? i.Key,
-                    i.Value.Deserialize<object>(options) ?? new object()
-                ))
+            Instances = obj.Where(i => i.Key != CollectionProperty)
+                .Select(i =>
+                {
+                    try
+                    {
+                        var deserializedKey = ConvertStringToKey(i.Key, type, options);
+                        var deserializedValue = i.Value.Deserialize<object>(options) ?? new object();
+                        return new KeyValuePair<object, object>(deserializedKey, deserializedValue);
+                    }
+                    catch (Exception ex)
+                    {
+                        logger?.LogError(ex, "InstanceCollectionConverter.Read: Failed to deserialize key={Key} as type={Type}. Raw key: '{RawKey}'",
+                            i.Key, type.Name, i.Key);
+                        throw;
+                    }
+                })
                 .ToImmutableDictionary()
         };
     }
