@@ -51,9 +51,9 @@ public static class NodeTypeView
     /// </summary>
     public static IObservable<UiControl> Details(LayoutAreaHost host, RenderingContext ctx)
     {
-        // Get NodeTypeDefinition from MeshNode.Content and CodeFile from workspace stream
+        // Get NodeTypeDefinition from MeshNode.Content and CodeConfiguration from workspace stream
         var definitionStream = host.Workspace.GetNodeContent<NodeTypeDefinition>();
-        var codeFileStream = host.Workspace.GetSingle<CodeFile>();
+        var codeFileStream = host.Workspace.GetSingle<CodeConfiguration>();
 
         return definitionStream
             .CombineLatest(codeFileStream)
@@ -75,7 +75,7 @@ public static class NodeTypeView
     private static UiControl BuildDetailsLayout(
         LayoutAreaHost host,
         NodeTypeDefinition content,
-        CodeFile? codeFile)
+        CodeConfiguration? codeFile)
     {
         var hubAddress = host.Hub.Address;
         var stack = Controls.Stack.WithWidth("100%").WithStyle("padding: 24px;");
@@ -125,9 +125,9 @@ public static class NodeTypeView
     /// </summary>
     public static IObservable<UiControl> CodeView(LayoutAreaHost host, RenderingContext ctx)
     {
-        // Get NodeTypeDefinition from MeshNode.Content and CodeFile from workspace stream
+        // Get NodeTypeDefinition from MeshNode.Content and CodeConfiguration from workspace stream
         var definitionStream = host.Workspace.GetNodeContent<NodeTypeDefinition>();
-        var codeFileStream = host.Workspace.GetSingle<CodeFile>();
+        var codeFileStream = host.Workspace.GetSingle<CodeConfiguration>();
 
         return definitionStream
             .CombineLatest(codeFileStream)
@@ -149,7 +149,7 @@ public static class NodeTypeView
     private static UiControl BuildSplitView(
         LayoutAreaHost host,
         NodeTypeDefinition content,
-        CodeFile? codeFile)
+        CodeConfiguration? codeFile)
     {
         var hubAddress = host.Hub.Address;
 
@@ -177,7 +177,7 @@ public static class NodeTypeView
     private static UiControl BuildLeftMenu(
         LayoutAreaHost host,
         NodeTypeDefinition content,
-        CodeFile? codeFile,
+        CodeConfiguration? _,
         string selectionDataId)
     {
         var navMenu = Controls.NavMenu.WithSkin(s => s.WithWidth(280).WithCollapsible(false));
@@ -218,9 +218,9 @@ public static class NodeTypeView
     /// Builds the main content pane that reacts to menu selection.
     /// </summary>
     private static UiControl BuildMainPane(
-        LayoutAreaHost host,
+        LayoutAreaHost _,
         NodeTypeDefinition content,
-        CodeFile? codeFile,
+        CodeConfiguration? codeFile,
         string selectionDataId)
     {
         // Create a reactive view that updates based on selection
@@ -237,8 +237,8 @@ public static class NodeTypeView
     private static UiControl BuildMainPaneContent(
         LayoutAreaHost host,
         NodeTypeDefinition content,
-        CodeFile? codeFile,
-        NodeTypeViewSelection? selection)
+        CodeConfiguration? _1,
+        NodeTypeViewSelection? _2)
     {
         var hubAddress = host.Hub.Address;
         var stack = Controls.Stack.WithWidth("100%").WithStyle("padding: 24px; min-height: 100%; overflow: auto;");
@@ -281,33 +281,23 @@ public static class NodeTypeView
     /// </summary>
     public static IObservable<UiControl> CodeEdit(LayoutAreaHost host, RenderingContext ctx)
     {
-        var nodeTypeService = host.Hub.ServiceProvider.GetService<INodeTypeService>();
-
-        // Get CodeFile and NodeTypeDefinition from workspace stream
-        var codeFileStream = host.Workspace.GetSingle<CodeFile>();
+        // Get CodeConfiguration and NodeTypeDefinition from workspace stream
+        var codeFileStream = host.Workspace.GetSingle<CodeConfiguration>();
         var definitionStream = host.Workspace.GetNodeContent<NodeTypeDefinition>();
 
         return codeFileStream
             .CombineLatest(definitionStream)
-            .SelectMany(async tuple =>
+            .Select(tuple =>
             {
                 var codeFile = tuple.First;
-                var content = tuple.Second;
-
-                // Get dependency code for autocomplete (still need service for cross-type dependencies)
-                var dependencyCode = "";
-                if (nodeTypeService != null && content?.Dependencies != null && content.Dependencies.Count > 0)
-                {
-                    dependencyCode = await nodeTypeService.GetDependencyCodeAsync(content.Dependencies);
-                }
-
-                return BuildCodeEditContent(host, codeFile, dependencyCode);
+                // Dependencies would need to be loaded via workspace if needed
+                return BuildCodeEditContent(host, codeFile, "");
             });
     }
 
     private static UiControl BuildCodeEditContent(
         LayoutAreaHost host,
-        CodeFile? codeFile,
+        CodeConfiguration? codeFile,
         string dependencyCode)
     {
         var hubAddress = host.Hub.Address;
@@ -359,8 +349,8 @@ public static class NodeTypeView
                 {
                     var currentCode = await host.Stream.GetDataStream<string>(dataId).FirstAsync();
 
-                    // Update the CodeFile
-                    var updatedCodeFile = (codeFile ?? new CodeFile()) with
+                    // Update the CodeConfiguration
+                    var updatedCodeConfiguration = (codeFile ?? new CodeConfiguration()) with
                     {
                         Code = currentCode,
                         Language = language
@@ -369,7 +359,7 @@ public static class NodeTypeView
                     // Update via workspace - will sync to persistence
                     using var cts = new CancellationTokenSource(10.Seconds());
                     var response = await actx.Host.Hub.AwaitResponse<DataChangeResponse>(
-                        new DataChangeRequest().WithUpdates(updatedCodeFile),
+                        new DataChangeRequest().WithUpdates(updatedCodeConfiguration),
                         o => o.WithTarget(hubAddress),
                         cts.Token);
 
@@ -459,19 +449,17 @@ public static class NodeTypeView
 
     /// <summary>
     /// Renders the Monaco editor for editing Configuration.
-    /// Includes CodeFile code for autocomplete.
+    /// Includes CodeConfiguration code for autocomplete.
     /// </summary>
     public static IObservable<UiControl> HubConfigEdit(LayoutAreaHost host, RenderingContext ctx)
     {
-        var nodeTypeService = host.Hub.ServiceProvider.GetService<INodeTypeService>();
-
-        // Get NodeTypeDefinition and CodeFile
+        // Get NodeTypeDefinition and CodeConfiguration from workspace
         var definitionStream = host.Workspace.GetNodeContent<NodeTypeDefinition>();
-        var codeFileStream = host.Workspace.GetSingle<CodeFile>();
+        var codeFileStream = host.Workspace.GetSingle<CodeConfiguration>();
 
         return definitionStream
             .CombineLatest(codeFileStream)
-            .SelectMany(async tuple =>
+            .Select(tuple =>
             {
                 var content = tuple.First;
                 var codeFile = tuple.Second;
@@ -479,14 +467,8 @@ public static class NodeTypeView
                 if (content == null)
                     return RenderError("NodeType not found.");
 
-                // Get all code for autocomplete: code from CodeFile + dependencies
+                // Use code from CodeConfiguration for autocomplete
                 var allCode = codeFile?.Code ?? "";
-                if (nodeTypeService != null && content?.Dependencies != null && content.Dependencies.Count > 0)
-                {
-                    var dependencyCode = await nodeTypeService.GetDependencyCodeAsync(content.Dependencies);
-                    allCode = allCode + "\n\n" + dependencyCode;
-                }
-
                 return BuildHubConfigEditContent(host, content, allCode);
             });
     }

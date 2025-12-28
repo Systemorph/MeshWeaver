@@ -1,4 +1,4 @@
 {
-  "$type": "CodeFile",
+  "$type": "CodeConfiguration",
   "code": "public record Organizations { }"
 }

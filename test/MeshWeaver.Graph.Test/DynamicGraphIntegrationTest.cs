@@ -67,7 +67,7 @@ public class DynamicGraphIntegrationTest : MonolithMeshTestBase
     private static async Task SetupTestConfigurationAsync(IPersistenceService persistence)
     {
         // Create Story type using "type/" Namespace for global types
-        var storyCodeConfig = new CodeFile
+        var storyCodeConfig = new CodeConfiguration
         {
             Code = @"
 public record Story
@@ -111,7 +111,7 @@ public enum StoryStatus
         await persistence.SavePartitionObjectsAsync("type/story", null, [storyCodeConfig]);
 
         // Create Organization type
-        var orgCodeConfig = new CodeFile
+        var orgCodeConfig = new CodeConfiguration
         {
             Code = @"
 public record Organization
@@ -144,7 +144,7 @@ public record Organization
         await persistence.SavePartitionObjectsAsync("type/org", null, [orgCodeConfig]);
 
         // Create Project type
-        var projectCodeConfig = new CodeFile
+        var projectCodeConfig = new CodeConfiguration
         {
             Code = @"
 public record Project
@@ -177,7 +177,7 @@ public record Project
         await persistence.SavePartitionObjectsAsync("type/project", null, [projectCodeConfig]);
 
         // Create Graph type
-        var graphCodeConfig = new CodeFile
+        var graphCodeConfig = new CodeConfiguration
         {
             Code = @"
 public record Graph
@@ -897,7 +897,7 @@ public class OrganizationsLayoutTest : MonolithMeshTestBase
         };
         await persistence.SaveNodeAsync(graphTypeNode);
 
-        var graphCodeConfig = new CodeFile
+        var graphCodeConfig = new CodeConfiguration
         {
             Code = "public record Graph { }"
         };
@@ -1008,18 +1008,17 @@ public class OrganizationsLayoutTest : MonolithMeshTestBase
     /// This ensures types in "Type/" folder are found even if GlobalTypesNamespace is "type".
     /// </summary>
     [Fact(Timeout = 10000)]
-    public async Task NodeTypeService_FindsNodeTypeNode_ForTypeOrganizations()
+    public async Task PersistenceService_FindsNodeTypeNode_ForTypeOrganizations()
     {
         // Arrange
-        var nodeTypeService = Mesh.ServiceProvider.GetRequiredService<INodeTypeService>();
+        var persistence = Mesh.ServiceProvider.GetRequiredService<IPersistenceService>();
 
-        // Act - this should find Type/Organizations by searching in its parent path "Type"
-        var nodeTypeNode = await nodeTypeService.GetNodeTypeNodeAsync("Type/Organizations", "Organizations", TestContext.Current.CancellationToken);
+        // Act - get the Type/Organizations node directly from persistence
+        var nodeTypeNode = await persistence.GetNodeAsync("Type/Organizations", TestContext.Current.CancellationToken);
 
         // Assert
         nodeTypeNode.Should().NotBeNull(
-            "NodeTypeService should find the NodeType node for 'Type/Organizations'. " +
-            "The search now includes the parent path of the nodeType.");
+            "PersistenceService should find the NodeType node for 'Type/Organizations'.");
         nodeTypeNode.Path.Should().Be("Type/Organizations");
         nodeTypeNode.NodeType.Should().Be("NodeType");
     }
@@ -1160,17 +1159,19 @@ public class FileSystemPersistenceTest : MonolithMeshTestBase
         """;
         File.WriteAllText(Path.Combine(typeDir, "Organizations.json"), organizationsTypeJson);
 
-        // 2. Create Type/Organizations/codeConfiguration.json - the CodeFile
+        // 2. Create Type/Organizations/Code/codeConfiguration.json - the CodeConfiguration
+        // CodeConfiguration is stored in the "Code" sub-partition for NodeType hubs
         var organizationsTypeDir = Path.Combine(typeDir, "Organizations");
-        Directory.CreateDirectory(organizationsTypeDir);
+        var codeDir = Path.Combine(organizationsTypeDir, "Code");
+        Directory.CreateDirectory(codeDir);
 
         var codeConfigJson = """
         {
-          "$type": "CodeFile",
+          "$type": "CodeConfiguration",
           "code": "public record Organizations { }"
         }
         """;
-        File.WriteAllText(Path.Combine(organizationsTypeDir, "codeConfiguration.json"), codeConfigJson);
+        File.WriteAllText(Path.Combine(codeDir, "codeConfiguration.json"), codeConfigJson);
 
         // 3. Create Organizations.json - the instance node in root namespace
         var organizationsInstanceJson = """
@@ -1225,7 +1226,7 @@ public class FileSystemPersistenceTest : MonolithMeshTestBase
 
         var graphCodeConfigJson = """
         {
-          "$type": "CodeFile",
+          "$type": "CodeConfiguration",
           "code": "public record Graph { }"
         }
         """;
@@ -1270,17 +1271,17 @@ public class FileSystemPersistenceTest : MonolithMeshTestBase
     /// 3. $type discriminator is respected during JSON deserialization
     /// </summary>
     [Fact(Timeout = 10000)]
-    public async Task FileSystem_NodeTypeService_FindsNodeTypeNode_WithPolymorphicDeserialization()
+    public async Task FileSystem_PersistenceService_FindsNodeTypeNode_WithPolymorphicDeserialization()
     {
         // Arrange
-        var nodeTypeService = Mesh.ServiceProvider.GetRequiredService<INodeTypeService>();
+        var persistence = Mesh.ServiceProvider.GetRequiredService<IPersistenceService>();
 
         // Act - this should find Type/Organizations by reading from disk
-        var nodeTypeNode = await nodeTypeService.GetNodeTypeNodeAsync("Type/Organizations", "Organizations", TestContext.Current.CancellationToken);
+        var nodeTypeNode = await persistence.GetNodeAsync("Type/Organizations", TestContext.Current.CancellationToken);
 
         // Assert
         nodeTypeNode.Should().NotBeNull(
-            "NodeTypeService should find the NodeType node from disk. " +
+            "PersistenceService should find the NodeType node from disk. " +
             "If null, the Content property was likely deserialized as JsonElement instead of NodeTypeDefinition.");
         nodeTypeNode.Path.Should().Be("Type/Organizations");
         nodeTypeNode.NodeType.Should().Be("NodeType");
@@ -1292,23 +1293,53 @@ public class FileSystemPersistenceTest : MonolithMeshTestBase
     }
 
     /// <summary>
-    /// Tests that CodeFile can be loaded from disk partition files.
-    /// This validates that GetPartitionObjectsAsync properly deserializes objects with $type.
+    /// Tests that CodeConfiguration can be loaded from the Code sub-partition via messaging.
+    /// This validates that PartitionTypeSource properly loads CodeConfiguration from the hub.
     /// </summary>
-    [Fact(Timeout = 10000)]
-    public async Task FileSystem_NodeTypeService_FindsCodeFile_FromDiskPartition()
+    [Fact(Timeout = 30000)]
+    public async Task FileSystem_CodeConfiguration_LoadedFromCodeSubPartition()
     {
-        // Arrange
-        var nodeTypeService = Mesh.ServiceProvider.GetRequiredService<INodeTypeService>();
+        // Arrange - first trigger compilation so the hub is configured
+        var meshCatalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
+        var organizationsAddress = new Address("Type/Organizations");
 
-        // Act - this reads codeConfiguration.json from Type/Organizations/ folder
-        var codeConfig = await nodeTypeService.GetCodeFileAsync("Type/Organizations", "Organizations", TestContext.Current.CancellationToken);
+        // This triggers compilation and hub creation with CodeConfiguration support
+        var node = await meshCatalog.GetNodeAsync(organizationsAddress);
+        node.Should().NotBeNull("Type/Organizations node should exist");
+        node.HubConfiguration.Should().NotBeNull("Node should have HubConfiguration from compiled assembly");
+
+        // Create a client that can query the hub
+        // Register CodeConfiguration with collection name "Code" matching the hub's registration
+        // Using generic WithType<T> to properly set up key function from [Key] attribute
+        var client = GetClient(c => c
+            .AddData(data => data)
+            .WithType<CodeConfiguration>("Code"));
+        var workspace = client.GetWorkspace();
+
+        // Act - get CodeConfiguration stream from the Type/Organizations hub
+        // CodeConfiguration is registered with collection name "Code"
+        var stream = workspace.GetRemoteStream<EntityStore, CollectionReference>(
+            organizationsAddress,
+            new CollectionReference("Code"));
+
+        // Wait for data and log what we receive
+        var entityStore = await stream
+            .Where(x => x.Value != null)
+            .Timeout(TimeSpan.FromSeconds(20))
+            .Select(x => x.Value!)
+            .FirstAsync();
 
         // Assert
-        codeConfig.Should().NotBeNull(
-            "CodeFile should be loaded from Type/Organizations/codeConfiguration.json. " +
-            "If null, the $type discriminator was not processed during JSON deserialization.");
-        codeConfig.Code.Should().NotBeNullOrEmpty();
+        entityStore.Should().NotBeNull("EntityStore should not be null");
+        entityStore.Collections.Should().ContainKey("Code",
+            "EntityStore should have 'Code' collection. Available: " +
+            string.Join(", ", entityStore.Collections.Keys));
+
+        var codeConfigs = entityStore.GetData<CodeConfiguration>();
+        codeConfigs.Should().NotBeNullOrEmpty(
+            "CodeConfiguration should be loaded from Type/Organizations/Code partition via messaging.");
+        codeConfigs.First().Code.Should().NotBeNullOrEmpty(
+            "CodeConfiguration.Code should contain C# source code.");
     }
 
     /// <summary>
@@ -1328,7 +1359,7 @@ public class FileSystemPersistenceTest : MonolithMeshTestBase
         node.Should().NotBeNull("Organizations node should exist on disk");
         node.HubConfiguration.Should().NotBeNull(
             "Organizations node should have HubConfiguration from the compiled assembly. " +
-            "If null, the on-demand compilation failed - likely because NodeTypeDefinition or CodeFile " +
+            "If null, the on-demand compilation failed - likely because NodeTypeDefinition or CodeConfiguration " +
             "were not properly deserialized from JSON (returned as JsonElement instead).");
     }
 }

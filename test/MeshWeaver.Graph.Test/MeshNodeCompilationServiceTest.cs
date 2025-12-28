@@ -8,7 +8,9 @@ using System.Threading.Tasks;
 using FluentAssertions;
 using MeshWeaver.Domain;
 using MeshWeaver.Graph.Configuration;
+using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Services;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Namotion.Reflection;
@@ -59,15 +61,31 @@ public class MeshNodeCompilationServiceTest : IDisposable
         }
     }
 
-    private MeshNodeCompilationService CreateService(TestNodeTypeService nodeTypeService) =>
-        new(nodeTypeService, _cacheService, _cacheOptions, NullLogger<MeshNodeCompilationService>.Instance);
+    private MeshNodeCompilationService CreateService(IPersistenceService persistence) =>
+        new(persistence, _cacheService, _cacheOptions, NullLogger<MeshNodeCompilationService>.Instance);
+
+    private async Task SetupNodeType(InMemoryPersistenceService persistence, string nodeType, NodeTypeDefinition definition, CodeConfiguration? codeFile = null)
+    {
+        var node = MeshNode.FromPath($"type/{nodeType}") with
+        {
+            Name = definition.DisplayName ?? definition.Id,
+            NodeType = MeshNode.NodeTypePath,
+            Content = definition
+        };
+        await persistence.SaveNodeAsync(node);
+
+        if (codeFile != null)
+        {
+            await persistence.SavePartitionObjectsAsync($"type/{nodeType}", null, [codeFile]);
+        }
+    }
 
     [Fact(Timeout = 15000)]
     public async Task GetAssemblyLocationAsync_ReturnsNull_WhenNodeTypeIsNull()
     {
         // Arrange
-        var nodeTypeService = new TestNodeTypeService();
-        var service = CreateService(nodeTypeService);
+        var persistence = new InMemoryPersistenceService();
+        var service = CreateService(persistence);
 
         var node = MeshNode.FromPath("test/no-type") with
         {
@@ -87,7 +105,8 @@ public class MeshNodeCompilationServiceTest : IDisposable
     public async Task GetAssemblyLocationAsync_ReturnsPathToCompiledDll()
     {
         // Arrange
-        var codeConfig = new CodeFile
+        var persistence = new InMemoryPersistenceService();
+        var codeConfig = new CodeConfiguration
         {
             Code = @"
 public record StoryType
@@ -103,15 +122,14 @@ public record StoryType
             DisplayName = "Story"
         };
 
-        var nodeTypeService = new TestNodeTypeService();
-        nodeTypeService.AddNodeType("story", nodeTypeDefinition, codeConfig);
+        await SetupNodeType(persistence, "story", nodeTypeDefinition, codeConfig);
 
-        var service = CreateService(nodeTypeService);
+        var service = CreateService(persistence);
 
         var node = MeshNode.FromPath("org/stories/my-story") with
         {
             Name = "My Story",
-            NodeType = "story",
+            NodeType = "type/story",
             LastModified = DateTimeOffset.UtcNow
         };
 
@@ -128,7 +146,8 @@ public record StoryType
     public async Task GetAssemblyLocationAsync_AssemblyContainsCompiledType()
     {
         // Arrange
-        var codeConfig = new CodeFile
+        var persistence = new InMemoryPersistenceService();
+        var codeConfig = new CodeConfiguration
         {
             Code = @"
 public record ProjectType
@@ -143,15 +162,14 @@ public record ProjectType
             DisplayName = "Project"
         };
 
-        var nodeTypeService = new TestNodeTypeService();
-        nodeTypeService.AddNodeType("project", nodeTypeDefinition, codeConfig);
+        await SetupNodeType(persistence, "project", nodeTypeDefinition, codeConfig);
 
-        var service = CreateService(nodeTypeService);
+        var service = CreateService(persistence);
 
         var node = MeshNode.FromPath("org/projects/my-project") with
         {
             Name = "My Project",
-            NodeType = "project",
+            NodeType = "type/project",
             LastModified = DateTimeOffset.UtcNow
         };
 
@@ -168,7 +186,8 @@ public record ProjectType
     public async Task GetAssemblyLocationAsync_UsesCachedAssembly()
     {
         // Arrange
-        var codeConfig = new CodeFile
+        var persistence = new InMemoryPersistenceService();
+        var codeConfig = new CodeConfiguration
         {
             Code = @"
 public record CachedItemType
@@ -183,15 +202,14 @@ public record CachedItemType
             DisplayName = "Cached Item"
         };
 
-        var nodeTypeService = new TestNodeTypeService();
-        nodeTypeService.AddNodeType("cached-item", nodeTypeDefinition, codeConfig);
+        await SetupNodeType(persistence, "cached-item", nodeTypeDefinition, codeConfig);
 
-        var service = CreateService(nodeTypeService);
+        var service = CreateService(persistence);
 
         var node = MeshNode.FromPath("org/items/cached") with
         {
             Name = "Cached Item",
-            NodeType = "cached-item",
+            NodeType = "type/cached-item",
             LastModified = DateTimeOffset.UtcNow.AddMinutes(-5) // Old modification time
         };
 
@@ -216,7 +234,8 @@ public record CachedItemType
     public async Task GetAssemblyLocationAsync_GeneratesSourceFileForDebugging()
     {
         // Arrange
-        var codeConfig = new CodeFile
+        var persistence = new InMemoryPersistenceService();
+        var codeConfig = new CodeConfiguration
         {
             Code = @"
 public record DebugItemType
@@ -231,15 +250,14 @@ public record DebugItemType
             DisplayName = "Debug Item"
         };
 
-        var nodeTypeService = new TestNodeTypeService();
-        nodeTypeService.AddNodeType("debug-item", nodeTypeDefinition, codeConfig);
+        await SetupNodeType(persistence, "debug-item", nodeTypeDefinition, codeConfig);
 
-        var service = CreateService(nodeTypeService);
+        var service = CreateService(persistence);
 
         var node = MeshNode.FromPath("debug/items/test") with
         {
             Name = "Debug Item",
-            NodeType = "debug-item",
+            NodeType = "type/debug-item",
             LastModified = DateTimeOffset.UtcNow
         };
 
@@ -256,7 +274,8 @@ public record DebugItemType
     public async Task GetAssemblyLocationAsync_AssemblyContainsMeshNodeAttribute()
     {
         // Arrange
-        var codeConfig = new CodeFile
+        var persistence = new InMemoryPersistenceService();
+        var codeConfig = new CodeConfiguration
         {
             Code = @"
 public record WidgetType
@@ -272,15 +291,14 @@ public record WidgetType
             DisplayName = "Widget"
         };
 
-        var nodeTypeService = new TestNodeTypeService();
-        nodeTypeService.AddNodeType("widget", nodeTypeDefinition, codeConfig);
+        await SetupNodeType(persistence, "widget", nodeTypeDefinition, codeConfig);
 
-        var service = CreateService(nodeTypeService);
+        var service = CreateService(persistence);
 
         var node = MeshNode.FromPath("org/widgets/my-widget") with
         {
             Name = "My Widget",
-            NodeType = "widget",
+            NodeType = "type/widget",
             Description = "A test widget",
             LastModified = DateTimeOffset.UtcNow
         };
@@ -303,7 +321,8 @@ public record WidgetType
     public async Task GetAssemblyLocationAsync_MeshNodeAttribute_ReturnsNodes()
     {
         // Arrange
-        var codeConfig = new CodeFile
+        var persistence = new InMemoryPersistenceService();
+        var codeConfig = new CodeConfiguration
         {
             Code = @"
 public record ComponentType
@@ -319,15 +338,14 @@ public record ComponentType
             DisplayName = "Component"
         };
 
-        var nodeTypeService = new TestNodeTypeService();
-        nodeTypeService.AddNodeType("component", nodeTypeDefinition, codeConfig);
+        await SetupNodeType(persistence, "component", nodeTypeDefinition, codeConfig);
 
-        var service = CreateService(nodeTypeService);
+        var service = CreateService(persistence);
 
         var node = MeshNode.FromPath("app/components/header") with
         {
             Name = "Header Component",
-            NodeType = "component",
+            NodeType = "type/component",
             Description = "The main header",
             IconName = "Header",
             DisplayOrder = 1,
@@ -359,7 +377,7 @@ public record ComponentType
         var loadedNode = nodesList[0];
         loadedNode.Path.Should().Be("app/components/header");
         loadedNode.Name.Should().Be("Header Component");
-        loadedNode.NodeType.Should().Be("component");
+        loadedNode.NodeType.Should().Be("type/component");
         loadedNode.Description.Should().Be("The main header");
         loadedNode.IconName.Should().Be("Header");
         loadedNode.DisplayOrder.Should().Be(1);
@@ -369,7 +387,8 @@ public record ComponentType
     public async Task GetAssemblyLocationAsync_CompiledDataType_CanBeInstantiated()
     {
         // Arrange
-        var codeConfig = new CodeFile
+        var persistence = new InMemoryPersistenceService();
+        var codeConfig = new CodeConfiguration
         {
             Code = @"
 public record RecordType
@@ -386,15 +405,14 @@ public record RecordType
             DisplayName = "Record"
         };
 
-        var nodeTypeService = new TestNodeTypeService();
-        nodeTypeService.AddNodeType("record", nodeTypeDefinition, codeConfig);
+        await SetupNodeType(persistence, "record", nodeTypeDefinition, codeConfig);
 
-        var service = CreateService(nodeTypeService);
+        var service = CreateService(persistence);
 
         var node = MeshNode.FromPath("data/records/test") with
         {
             Name = "Test Record",
-            NodeType = "record",
+            NodeType = "type/record",
             LastModified = DateTimeOffset.UtcNow
         };
 
@@ -420,44 +438,4 @@ public record RecordType
         titleProperty!.GetValue(instance).Should().Be("Default Title");
         countProperty!.GetValue(instance).Should().Be(42);
     }
-}
-
-/// <summary>
-/// Test implementation of INodeTypeService for unit testing.
-/// </summary>
-internal class TestNodeTypeService : INodeTypeService
-{
-    private readonly Dictionary<string, (NodeTypeDefinition Definition, CodeFile? Code)> _nodeTypes = new();
-
-    public void AddNodeType(string nodeType, NodeTypeDefinition definition, CodeFile? codeFile = null)
-    {
-        _nodeTypes[nodeType] = (definition, codeFile);
-    }
-
-    public Task<MeshNode?> GetNodeTypeNodeAsync(string nodeType, string contextPath, CancellationToken ct = default)
-    {
-        if (_nodeTypes.TryGetValue(nodeType, out var entry))
-        {
-            var node = MeshNode.FromPath($"type/{nodeType}") with
-            {
-                Name = entry.Definition.DisplayName ?? entry.Definition.Id,
-                NodeType = "NodeType",
-                Content = entry.Definition
-            };
-            return Task.FromResult<MeshNode?>(node);
-        }
-        return Task.FromResult<MeshNode?>(null);
-    }
-
-    public Task<CodeFile?> GetCodeFileAsync(string nodeType, string contextPath, CancellationToken ct = default)
-    {
-        if (_nodeTypes.TryGetValue(nodeType, out var entry))
-        {
-            return Task.FromResult(entry.Code);
-        }
-        return Task.FromResult<CodeFile?>(null);
-    }
-
-    public Task<string> GetDependencyCodeAsync(IEnumerable<string> dependencyPaths, CancellationToken ct = default) =>
-        Task.FromResult(string.Empty);
 }

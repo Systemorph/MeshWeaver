@@ -158,7 +158,7 @@ public static class MeshNodeView
                 foreach (var child in recentNodes)
                 {
                     grid = grid.WithView(
-                        BuildThumbnailContent(child, child.Namespace),
+                        BuildThumbnailContent(child, child.Namespace ?? ""),
                         itemSkin => itemSkin.WithXs(12).WithSm(6).WithMd(4).WithLg(3));
                 }
 
@@ -393,7 +393,7 @@ public static class MeshNodeView
         card = card.WithView(BuildSettingsRow("Name", node.Name ?? "<no name>"));
 
         // Path
-        card = card.WithView(BuildSettingsRow("Path", node.Namespace));
+        card = card.WithView(BuildSettingsRow("Path", node.Namespace ?? ""));
 
         // NodeType with navigatable link
         if (!string.IsNullOrEmpty(node.NodeType))

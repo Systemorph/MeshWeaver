@@ -50,7 +50,7 @@ public class MeshNodeVersionSyncTest : MonolithMeshTestBase
     private static void SetupTestConfiguration(InMemoryPersistenceService persistence)
     {
         // Create Story type for testing content changes
-        var storyCodeConfig = new CodeFile
+        var storyCodeConfig = new CodeConfiguration
         {
             Code = @"
 public record Story
@@ -85,7 +85,7 @@ public record Story
         persistence.SavePartitionObjectsAsync("type/story", null, [storyCodeConfig]).GetAwaiter().GetResult();
 
         // Create Graph type
-        var graphCodeConfig = new CodeFile
+        var graphCodeConfig = new CodeConfiguration
         {
             Code = @"
 public record Graph

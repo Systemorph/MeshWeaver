@@ -46,6 +46,12 @@ public record MessageLog(
 public record MeshNode([property: Key] string Id, string? Namespace = null)
 {
     /// <summary>
+    /// The path for the built-in NodeType type definition node.
+    /// Nodes with NodeType = NodeTypePath are type definitions.
+    /// </summary>
+    public const string NodeTypePath = "NodeType";
+
+    /// <summary>
     /// The full path derived from Namespace and Id.
     /// For nodes without a namespace, this equals Id.
     /// </summary>
