@@ -51,21 +51,21 @@ public static class NodeTypeView
     /// </summary>
     public static IObservable<UiControl> Details(LayoutAreaHost host, RenderingContext ctx)
     {
-        // Get NodeTypeDefinition from MeshNode.Content and CodeConfiguration from workspace stream
+        // Get NodeTypeDefinition from MeshNode.Content and CodeFile from workspace stream
         var definitionStream = host.Workspace.GetNodeContent<NodeTypeDefinition>();
-        var codeConfigStream = host.Workspace.GetSingle<CodeConfiguration>();
+        var codeFileStream = host.Workspace.GetSingle<CodeFile>();
 
         return definitionStream
-            .CombineLatest(codeConfigStream)
+            .CombineLatest(codeFileStream)
             .Select(tuple =>
             {
                 var content = tuple.First;
-                var codeConfig = tuple.Second;
+                var codeFile = tuple.Second;
 
                 if (content == null)
                     return RenderError("No NodeType definition found.");
 
-                return BuildDetailsLayout(host, content, codeConfig);
+                return BuildDetailsLayout(host, content, codeFile);
             });
     }
 
@@ -75,7 +75,7 @@ public static class NodeTypeView
     private static UiControl BuildDetailsLayout(
         LayoutAreaHost host,
         NodeTypeDefinition content,
-        CodeConfiguration? codeConfig)
+        CodeFile? codeFile)
     {
         var hubAddress = host.Hub.Address;
         var stack = Controls.Stack.WithWidth("100%").WithStyle("padding: 24px;");
@@ -98,7 +98,7 @@ public static class NodeTypeView
             infoCard = infoCard.WithView(BuildInfoRow("Icon", content.IconName));
         infoCard = infoCard.WithView(BuildInfoRow("Display Order", content.DisplayOrder.ToString()));
 
-        var hasCode = codeConfig?.Code != null || (codeConfig?.Files?.Count > 0);
+        var hasCode = !string.IsNullOrEmpty(codeFile?.Code);
         infoCard = infoCard.WithView(BuildInfoRow("Has Code", hasCode ? "Yes" : "No"));
         infoCard = infoCard.WithView(BuildInfoRow("Has Configuration", !string.IsNullOrEmpty(content.Configuration) ? "Yes" : "No"));
 
@@ -125,21 +125,21 @@ public static class NodeTypeView
     /// </summary>
     public static IObservable<UiControl> CodeView(LayoutAreaHost host, RenderingContext ctx)
     {
-        // Get NodeTypeDefinition from MeshNode.Content and CodeConfiguration from workspace stream
+        // Get NodeTypeDefinition from MeshNode.Content and CodeFile from workspace stream
         var definitionStream = host.Workspace.GetNodeContent<NodeTypeDefinition>();
-        var codeConfigStream = host.Workspace.GetSingle<CodeConfiguration>();
+        var codeFileStream = host.Workspace.GetSingle<CodeFile>();
 
         return definitionStream
-            .CombineLatest(codeConfigStream)
+            .CombineLatest(codeFileStream)
             .Select(tuple =>
             {
                 var content = tuple.First;
-                var codeConfig = tuple.Second;
+                var codeFile = tuple.Second;
 
                 if (content == null)
                     return RenderError("NodeType not found.");
 
-                return BuildSplitView(host, content, codeConfig);
+                return BuildSplitView(host, content, codeFile);
             });
     }
 
@@ -149,7 +149,7 @@ public static class NodeTypeView
     private static UiControl BuildSplitView(
         LayoutAreaHost host,
         NodeTypeDefinition content,
-        CodeConfiguration? codeConfig)
+        CodeFile? codeFile)
     {
         var hubAddress = host.Hub.Address;
 
@@ -162,11 +162,11 @@ public static class NodeTypeView
         return Controls.Splitter
             .WithSkin(s => s.WithOrientation(Orientation.Horizontal).WithWidth("100%").WithHeight("calc(100vh - 100px)"))
             .WithView(
-                BuildLeftMenu(host, content, codeConfig, selectionDataId),
+                BuildLeftMenu(host, content, codeFile, selectionDataId),
                 skin => skin.WithSize("280px").WithMin("200px").WithMax("400px").WithCollapsible(true)
             )
             .WithView(
-                BuildMainPane(host, content, codeConfig, selectionDataId),
+                BuildMainPane(host, content, codeFile, selectionDataId),
                 skin => skin.WithSize("*")
             );
     }
@@ -177,7 +177,7 @@ public static class NodeTypeView
     private static UiControl BuildLeftMenu(
         LayoutAreaHost host,
         NodeTypeDefinition content,
-        CodeConfiguration? codeConfig,
+        CodeFile? codeFile,
         string selectionDataId)
     {
         var navMenu = Controls.NavMenu.WithSkin(s => s.WithWidth(280).WithCollapsible(false));
@@ -194,14 +194,14 @@ public static class NodeTypeView
                 })
         );
 
-        // Dependencies section (if any) - kept as collapsible for reference
-        if (codeConfig?.Dependencies != null && codeConfig.Dependencies.Count > 0)
+        // Dependencies section (if any) - now from NodeTypeDefinition
+        if (content.Dependencies != null && content.Dependencies.Count > 0)
         {
             var depsGroup = new NavGroupControl("Dependencies")
                 .WithIcon(FluentIcons.Link())
                 .WithSkin(s => s.WithExpanded(false));
 
-            foreach (var dep in codeConfig.Dependencies)
+            foreach (var dep in content.Dependencies)
             {
                 depsGroup = depsGroup.WithView(
                     Controls.Html($"<span style=\"padding: 4px 16px; display: block;\">{System.Web.HttpUtility.HtmlEncode(dep)}</span>")
@@ -220,7 +220,7 @@ public static class NodeTypeView
     private static UiControl BuildMainPane(
         LayoutAreaHost host,
         NodeTypeDefinition content,
-        CodeConfiguration? codeConfig,
+        CodeFile? codeFile,
         string selectionDataId)
     {
         // Create a reactive view that updates based on selection
@@ -230,14 +230,14 @@ public static class NodeTypeView
             .WithView<UiControl>((h, ctx) =>
             {
                 return h.Stream.GetDataStream<NodeTypeViewSelection>(selectionDataId)
-                    .Select(selection => BuildMainPaneContent(h, content, codeConfig, selection));
+                    .Select(selection => BuildMainPaneContent(h, content, codeFile, selection));
             });
     }
 
     private static UiControl BuildMainPaneContent(
         LayoutAreaHost host,
         NodeTypeDefinition content,
-        CodeConfiguration? codeConfig,
+        CodeFile? codeFile,
         NodeTypeViewSelection? selection)
     {
         var hubAddress = host.Hub.Address;
@@ -283,31 +283,31 @@ public static class NodeTypeView
     {
         var nodeTypeService = host.Hub.ServiceProvider.GetService<INodeTypeService>();
 
-        // Get CodeConfiguration from workspace stream
-        var codeConfigStream = host.Workspace.GetSingle<CodeConfiguration>();
+        // Get CodeFile and NodeTypeDefinition from workspace stream
+        var codeFileStream = host.Workspace.GetSingle<CodeFile>();
+        var definitionStream = host.Workspace.GetNodeContent<NodeTypeDefinition>();
 
-        // Parse file parameter from area reference
-        var areaRef = new LayoutAreaReference(ctx.Area) { Id = ctx.Area };
-        var fileName = areaRef.GetParameterValue("file") ?? "code";
-
-        return codeConfigStream
-            .SelectMany(async codeConfig =>
+        return codeFileStream
+            .CombineLatest(definitionStream)
+            .SelectMany(async tuple =>
             {
+                var codeFile = tuple.First;
+                var content = tuple.Second;
+
                 // Get dependency code for autocomplete (still need service for cross-type dependencies)
                 var dependencyCode = "";
-                if (nodeTypeService != null && codeConfig?.Dependencies != null && codeConfig.Dependencies.Count > 0)
+                if (nodeTypeService != null && content?.Dependencies != null && content.Dependencies.Count > 0)
                 {
-                    dependencyCode = await nodeTypeService.GetDependencyCodeAsync(codeConfig.Dependencies);
+                    dependencyCode = await nodeTypeService.GetDependencyCodeAsync(content.Dependencies);
                 }
 
-                return BuildCodeEditContent(host, codeConfig, fileName, dependencyCode);
+                return BuildCodeEditContent(host, codeFile, dependencyCode);
             });
     }
 
     private static UiControl BuildCodeEditContent(
         LayoutAreaHost host,
-        CodeConfiguration? codeConfig,
-        string fileName,
+        CodeFile? codeFile,
         string dependencyCode)
     {
         var hubAddress = host.Hub.Address;
@@ -316,20 +316,9 @@ public static class NodeTypeView
         var dataId = Guid.NewGuid().AsString();
 
         // Get initial code and language
-        string initialCode = "";
-        string language = "csharp";
-        string displayName = fileName;
-
-        if (codeConfig?.Files != null && codeConfig.Files.TryGetValue(fileName, out var file))
-        {
-            initialCode = file.Code ?? "";
-            language = file.Language;
-            displayName = file.DisplayName ?? fileName;
-        }
-        else if (fileName == "code")
-        {
-            initialCode = codeConfig?.Code ?? "";
-        }
+        string initialCode = codeFile?.Code ?? "";
+        string language = codeFile?.Language ?? "csharp";
+        string displayName = codeFile?.DisplayName ?? "Code";
 
         host.UpdateData(dataId, initialCode);
 
@@ -362,7 +351,7 @@ public static class NodeTypeView
             .WithOrientation(Orientation.Horizontal)
             .WithStyle("gap: 8px; margin-top: 16px;");
 
-        // Save button - update workspace stream which will sync via CodeConfigurationTypeSource
+        // Save button - update workspace stream which will sync to persistence
         buttonRow = buttonRow.WithView(Controls.Button("Save")
             .WithAppearance(Appearance.Accent)
             .WithIconStart(FluentIcons.Save())
@@ -370,13 +359,17 @@ public static class NodeTypeView
                 {
                     var currentCode = await host.Stream.GetDataStream<string>(dataId).FirstAsync();
 
-                    // Update the code configuration
-                    var updatedConfig = UpdateCodeConfiguration(codeConfig, fileName, currentCode ?? "", language);
+                    // Update the CodeFile
+                    var updatedCodeFile = (codeFile ?? new CodeFile()) with
+                    {
+                        Code = currentCode,
+                        Language = language
+                    };
 
-                    // Update via workspace - CodeConfigurationTypeSource will sync to persistence
+                    // Update via workspace - will sync to persistence
                     using var cts = new CancellationTokenSource(10.Seconds());
                     var response = await actx.Host.Hub.AwaitResponse<DataChangeResponse>(
-                        new DataChangeRequest().WithUpdates(updatedConfig),
+                        new DataChangeRequest().WithUpdates(updatedCodeFile),
                         o => o.WithTarget(hubAddress),
                         cts.Token);
 
@@ -466,31 +459,31 @@ public static class NodeTypeView
 
     /// <summary>
     /// Renders the Monaco editor for editing Configuration.
-    /// Includes all code files from CodeConfiguration for autocomplete.
+    /// Includes CodeFile code for autocomplete.
     /// </summary>
     public static IObservable<UiControl> HubConfigEdit(LayoutAreaHost host, RenderingContext ctx)
     {
         var nodeTypeService = host.Hub.ServiceProvider.GetService<INodeTypeService>();
 
-        // Get NodeTypeDefinition and CodeConfiguration
+        // Get NodeTypeDefinition and CodeFile
         var definitionStream = host.Workspace.GetNodeContent<NodeTypeDefinition>();
-        var codeConfigStream = host.Workspace.GetSingle<CodeConfiguration>();
+        var codeFileStream = host.Workspace.GetSingle<CodeFile>();
 
         return definitionStream
-            .CombineLatest(codeConfigStream)
+            .CombineLatest(codeFileStream)
             .SelectMany(async tuple =>
             {
                 var content = tuple.First;
-                var codeConfig = tuple.Second;
+                var codeFile = tuple.Second;
 
                 if (content == null)
                     return RenderError("NodeType not found.");
 
-                // Get all code for autocomplete: combined code from files + dependencies
-                var allCode = codeConfig?.GetCombinedCode() ?? "";
-                if (nodeTypeService != null && codeConfig?.Dependencies != null && codeConfig.Dependencies.Count > 0)
+                // Get all code for autocomplete: code from CodeFile + dependencies
+                var allCode = codeFile?.Code ?? "";
+                if (nodeTypeService != null && content?.Dependencies != null && content.Dependencies.Count > 0)
                 {
-                    var dependencyCode = await nodeTypeService.GetDependencyCodeAsync(codeConfig.Dependencies);
+                    var dependencyCode = await nodeTypeService.GetDependencyCodeAsync(content.Dependencies);
                     allCode = allCode + "\n\n" + dependencyCode;
                 }
 
@@ -579,47 +572,6 @@ public static class NodeTypeView
         stack = stack.WithView(buttonRow);
 
         return stack;
-    }
-
-    /// <summary>
-    /// Updates the CodeConfiguration with new code for a specific file.
-    /// </summary>
-    private static CodeConfiguration UpdateCodeConfiguration(
-        CodeConfiguration? current,
-        string fileName,
-        string newCode,
-        string language)
-    {
-        if (fileName == "code" && (current?.Files == null || current.Files.Count == 0))
-        {
-            // Legacy single-file mode
-            return new CodeConfiguration
-            {
-                Code = newCode,
-                Dependencies = current?.Dependencies
-            };
-        }
-
-        // Multi-file mode
-        var files = current?.Files != null
-            ? new Dictionary<string, CodeFile>(current.Files)
-            : new Dictionary<string, CodeFile>();
-
-        if (files.TryGetValue(fileName, out var existingFile))
-        {
-            files[fileName] = existingFile with { Code = newCode };
-        }
-        else
-        {
-            files[fileName] = new CodeFile { Code = newCode, Language = language };
-        }
-
-        return new CodeConfiguration
-        {
-            Code = current?.Code,
-            Files = files,
-            Dependencies = current?.Dependencies
-        };
     }
 
     private static UiControl BuildInfoRow(string label, string value)

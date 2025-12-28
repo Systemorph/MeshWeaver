@@ -67,7 +67,7 @@ public class DynamicGraphIntegrationTest : MonolithMeshTestBase
     private static async Task SetupTestConfigurationAsync(IPersistenceService persistence)
     {
         // Create Story type using "type/" Namespace for global types
-        var storyCodeConfig = new CodeConfiguration
+        var storyCodeConfig = new CodeFile
         {
             Code = @"
 public record Story
@@ -111,7 +111,7 @@ public enum StoryStatus
         await persistence.SavePartitionObjectsAsync("type/story", null, [storyCodeConfig]);
 
         // Create Organization type
-        var orgCodeConfig = new CodeConfiguration
+        var orgCodeConfig = new CodeFile
         {
             Code = @"
 public record Organization
@@ -144,7 +144,7 @@ public record Organization
         await persistence.SavePartitionObjectsAsync("type/org", null, [orgCodeConfig]);
 
         // Create Project type
-        var projectCodeConfig = new CodeConfiguration
+        var projectCodeConfig = new CodeFile
         {
             Code = @"
 public record Project
@@ -177,7 +177,7 @@ public record Project
         await persistence.SavePartitionObjectsAsync("type/project", null, [projectCodeConfig]);
 
         // Create Graph type
-        var graphCodeConfig = new CodeConfiguration
+        var graphCodeConfig = new CodeFile
         {
             Code = @"
 public record Graph
@@ -897,7 +897,7 @@ public class OrganizationsLayoutTest : MonolithMeshTestBase
         };
         await persistence.SaveNodeAsync(graphTypeNode);
 
-        var graphCodeConfig = new CodeConfiguration
+        var graphCodeConfig = new CodeFile
         {
             Code = "public record Graph { }"
         };
@@ -1160,13 +1160,13 @@ public class FileSystemPersistenceTest : MonolithMeshTestBase
         """;
         File.WriteAllText(Path.Combine(typeDir, "Organizations.json"), organizationsTypeJson);
 
-        // 2. Create Type/Organizations/codeConfiguration.json - the CodeConfiguration
+        // 2. Create Type/Organizations/codeConfiguration.json - the CodeFile
         var organizationsTypeDir = Path.Combine(typeDir, "Organizations");
         Directory.CreateDirectory(organizationsTypeDir);
 
         var codeConfigJson = """
         {
-          "$type": "CodeConfiguration",
+          "$type": "CodeFile",
           "code": "public record Organizations { }"
         }
         """;
@@ -1225,7 +1225,7 @@ public class FileSystemPersistenceTest : MonolithMeshTestBase
 
         var graphCodeConfigJson = """
         {
-          "$type": "CodeConfiguration",
+          "$type": "CodeFile",
           "code": "public record Graph { }"
         }
         """;
@@ -1292,21 +1292,21 @@ public class FileSystemPersistenceTest : MonolithMeshTestBase
     }
 
     /// <summary>
-    /// Tests that CodeConfiguration can be loaded from disk partition files.
+    /// Tests that CodeFile can be loaded from disk partition files.
     /// This validates that GetPartitionObjectsAsync properly deserializes objects with $type.
     /// </summary>
     [Fact(Timeout = 10000)]
-    public async Task FileSystem_NodeTypeService_FindsCodeConfiguration_FromDiskPartition()
+    public async Task FileSystem_NodeTypeService_FindsCodeFile_FromDiskPartition()
     {
         // Arrange
         var nodeTypeService = Mesh.ServiceProvider.GetRequiredService<INodeTypeService>();
 
         // Act - this reads codeConfiguration.json from Type/Organizations/ folder
-        var codeConfig = await nodeTypeService.GetCodeConfigurationAsync("Type/Organizations", "Organizations", TestContext.Current.CancellationToken);
+        var codeConfig = await nodeTypeService.GetCodeFileAsync("Type/Organizations", "Organizations", TestContext.Current.CancellationToken);
 
         // Assert
         codeConfig.Should().NotBeNull(
-            "CodeConfiguration should be loaded from Type/Organizations/codeConfiguration.json. " +
+            "CodeFile should be loaded from Type/Organizations/codeConfiguration.json. " +
             "If null, the $type discriminator was not processed during JSON deserialization.");
         codeConfig.Code.Should().NotBeNullOrEmpty();
     }
@@ -1328,7 +1328,7 @@ public class FileSystemPersistenceTest : MonolithMeshTestBase
         node.Should().NotBeNull("Organizations node should exist on disk");
         node.HubConfiguration.Should().NotBeNull(
             "Organizations node should have HubConfiguration from the compiled assembly. " +
-            "If null, the on-demand compilation failed - likely because NodeTypeDefinition or CodeConfiguration " +
+            "If null, the on-demand compilation failed - likely because NodeTypeDefinition or CodeFile " +
             "were not properly deserialized from JSON (returned as JsonElement instead).");
     }
 }

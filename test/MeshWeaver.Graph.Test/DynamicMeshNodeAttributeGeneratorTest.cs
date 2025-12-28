@@ -54,7 +54,7 @@ public class DynamicMeshNodeAttributeGeneratorTest
     }
 
     [Fact]
-    public void GenerateAttributeSource_IncludesCodeFromCodeConfiguration()
+    public void GenerateAttributeSource_IncludesCodeFromCodeFile()
     {
         // Arrange
         var node = MeshNode.FromPath("test/node") with
@@ -64,7 +64,7 @@ public class DynamicMeshNodeAttributeGeneratorTest
             LastModified = DateTimeOffset.UtcNow
         };
 
-        var codeConfig = new CodeConfiguration
+        var codeConfig = new CodeFile
         {
             Code = "public record Story { public string Title { get; init; } }"
         };
@@ -92,7 +92,7 @@ public class DynamicMeshNodeAttributeGeneratorTest
             LastModified = DateTimeOffset.Parse("2024-01-15T10:30:00Z")
         };
 
-        var codeConfig = new CodeConfiguration
+        var codeConfig = new CodeFile
         {
             Code = "public record Organization { public string Name { get; init; } }"
         };
@@ -119,7 +119,7 @@ public class DynamicMeshNodeAttributeGeneratorTest
             LastModified = DateTimeOffset.UtcNow
         };
 
-        var codeConfig = new CodeConfiguration
+        var codeConfig = new CodeFile
         {
             Code = "public record Project { }"
         };
@@ -147,7 +147,7 @@ public class DynamicMeshNodeAttributeGeneratorTest
             LastModified = DateTimeOffset.UtcNow
         };
 
-        var codeConfig = new CodeConfiguration
+        var codeConfig = new CodeFile
         {
             Code = "public record TestType { }"
         };
@@ -172,7 +172,7 @@ public class DynamicMeshNodeAttributeGeneratorTest
             LastModified = DateTimeOffset.UtcNow
         };
 
-        var codeConfig = new CodeConfiguration
+        var codeConfig = new CodeFile
         {
             Code = "public record TestType { }"
         };
@@ -195,7 +195,7 @@ public class DynamicMeshNodeAttributeGeneratorTest
             LastModified = DateTimeOffset.UtcNow
         };
 
-        var codeConfig = new CodeConfiguration
+        var codeConfig = new CodeFile
         {
             Code = "public record TestType { }"
         };
@@ -220,7 +220,7 @@ public class DynamicMeshNodeAttributeGeneratorTest
             LastModified = DateTimeOffset.UtcNow
         };
 
-        var codeConfig = new CodeConfiguration
+        var codeConfig = new CodeFile
         {
             Code = "public record TestType { }"
         };
@@ -243,7 +243,7 @@ public class DynamicMeshNodeAttributeGeneratorTest
             LastModified = DateTimeOffset.UtcNow
         };
 
-        var codeConfig = new CodeConfiguration
+        var codeConfig = new CodeFile
         {
             Code = "public record TestType { }"
         };
@@ -266,7 +266,7 @@ public class DynamicMeshNodeAttributeGeneratorTest
             LastModified = DateTimeOffset.UtcNow
         };
 
-        var codeConfig = new CodeConfiguration
+        var codeConfig = new CodeFile
         {
             Code = "public record TestType { }"
         };
@@ -289,7 +289,7 @@ public class DynamicMeshNodeAttributeGeneratorTest
             LastModified = DateTimeOffset.UtcNow
         };
 
-        var codeConfig = new CodeConfiguration
+        var codeConfig = new CodeFile
         {
             Code = "public record TestType { }"
         };
@@ -312,7 +312,7 @@ public class DynamicMeshNodeAttributeGeneratorTest
             LastModified = DateTimeOffset.UtcNow
         };
 
-        var codeConfig = new CodeConfiguration
+        var codeConfig = new CodeFile
         {
             Code = "public record TestType { }"
         };
@@ -327,7 +327,7 @@ public class DynamicMeshNodeAttributeGeneratorTest
     }
 
     [Fact]
-    public void GenerateAttributeSource_HandlesNullCodeConfiguration()
+    public void GenerateAttributeSource_HandlesNullCodeFile()
     {
         // Arrange
         var node = new MeshNode("test")
@@ -354,7 +354,7 @@ public class DynamicMeshNodeAttributeGeneratorTest
             LastModified = DateTimeOffset.UtcNow
         };
 
-        var codeConfig = new CodeConfiguration
+        var codeConfig = new CodeFile
         {
             Code = ""
         };

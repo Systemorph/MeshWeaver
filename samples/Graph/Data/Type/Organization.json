@@ -7,6 +7,8 @@
   "iconName": "Building",
   "displayOrder": 10,
   "isPersistent": true,
+  "lastModified": "2025-12-27T22:43:18.5377224+00:00",
+  "state": "Active",
   "content": {
     "$type": "NodeTypeDefinition",
     "id": "Organization",
@@ -15,9 +17,6 @@
     "iconName": "Building",
     "description": "An organization containing projects",
     "displayOrder": 10,
-    "configuration": "config => config.WithContentType<Organization>()",
-    "contentCollections": [
-      { "name": "logos", "baseCollection": "graph", "subPath": "logos" }
-    ]
+    "configuration": "config =\u003E config.WithContentType\u003COrganization\u003E()"
   }
 }

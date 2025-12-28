@@ -108,65 +108,44 @@ public class NodeTypeService : INodeTypeService
     }
 
     /// <summary>
-    /// Gets the NodeTypeData for a node type path.
+    /// Gets the CodeFile for a node type path.
     /// </summary>
-    private async Task<NodeTypeData?> GetNodeTypeDataAsync(string nodeTypePath, CancellationToken ct = default)
+    private async Task<CodeFile?> GetCodeFileAsync(string nodeTypePath, CancellationToken ct = default)
     {
         // Check static registry first (by path or ID)
         if (NodeTypeRegistry.TryGetByPath(nodeTypePath, out var registration) && registration != null)
-            return registration.ToNodeTypeData();
+            return registration.Code;
         if (NodeTypeRegistry.TryGetById(nodeTypePath, out registration) && registration != null)
-            return registration.ToNodeTypeData();
+            return registration.Code;
 
         try
         {
-            // Get the MeshNode for this NodeType
-            var meshNode = await _persistence.GetNodeAsync(nodeTypePath, ct);
-            if (meshNode == null)
-            {
-                _logger?.LogDebug("GetNodeTypeDataAsync: NodeType at '{Path}' not found", nodeTypePath);
-                return null;
-            }
-
-            var definition = meshNode.Content as NodeTypeDefinition;
-
-            // Get CodeConfiguration from the partition
-            CodeConfiguration? codeConfig = null;
+            // Get CodeFile from the partition
             await foreach (var obj in _persistence.GetPartitionObjectsAsync(nodeTypePath, null).WithCancellation(ct))
             {
-                if (obj is CodeConfiguration cc)
-                {
-                    codeConfig = cc;
-                    break;
-                }
+                if (obj is CodeFile cf)
+                    return cf;
             }
 
-            return new NodeTypeData
-            {
-                Id = definition?.Id ?? meshNode.Name ?? nodeTypePath,
-                Definition = definition,
-                Code = codeConfig,
-                Path = nodeTypePath
-            };
+            _logger?.LogDebug("GetCodeFileAsync: CodeFile at '{Path}' not found", nodeTypePath);
+            return null;
         }
         catch (Exception ex)
         {
-            _logger?.LogError(ex, "GetNodeTypeDataAsync: Failed to get data for {Path}", nodeTypePath);
+            _logger?.LogError(ex, "GetCodeFileAsync: Failed to get CodeFile for {Path}", nodeTypePath);
             return null;
         }
     }
 
     /// <inheritdoc/>
-    public async Task<CodeConfiguration?> GetCodeConfigurationAsync(string nodeType, string contextPath, CancellationToken ct = default)
+    public async Task<CodeFile?> GetCodeFileAsync(string nodeType, string contextPath, CancellationToken ct = default)
     {
         // First find the NodeType node to get its path
         var nodeTypeNode = await GetNodeTypeNodeAsync(nodeType, contextPath, ct);
         if (nodeTypeNode == null)
             return null;
 
-        // Get NodeTypeData
-        var nodeTypeData = await GetNodeTypeDataAsync(nodeTypeNode.Path, ct);
-        return nodeTypeData?.Code;
+        return await GetCodeFileAsync(nodeTypeNode.Path, ct);
     }
 
     /// <inheritdoc/>
@@ -183,16 +162,12 @@ public class NodeTypeService : INodeTypeService
         {
             try
             {
-                var nodeTypeData = await GetNodeTypeDataAsync(depPath, ct);
-                if (nodeTypeData?.Code != null)
+                var codeFile = await GetCodeFileAsync(depPath, ct);
+                if (!string.IsNullOrWhiteSpace(codeFile?.Code))
                 {
-                    var code = nodeTypeData.Code.GetCombinedCode();
-                    if (!string.IsNullOrWhiteSpace(code))
-                    {
-                        sb.AppendLine($"// From dependency: {depPath}");
-                        sb.AppendLine(code);
-                        sb.AppendLine();
-                    }
+                    sb.AppendLine($"// From dependency: {depPath}");
+                    sb.AppendLine(codeFile.Code);
+                    sb.AppendLine();
                 }
             }
             catch (Exception ex)

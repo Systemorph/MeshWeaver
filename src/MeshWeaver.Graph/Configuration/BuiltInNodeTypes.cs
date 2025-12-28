@@ -1,3 +1,4 @@
+﻿using MeshWeaver.Data;
 using MeshWeaver.Mesh;
 
 namespace MeshWeaver.Graph.Configuration;
@@ -45,7 +46,9 @@ public static class BuiltInNodeTypes
             IconName = "Code",
             DisplayOrder = 0,
             Content = definition,
-            HubConfiguration = config => config.AddNodeTypeView()
+            HubConfiguration = config => config
+                .AddNodeTypeView()
+                .AddData(data => data.AddSource(source => source.WithType<CodeFile>()))
         };
 
         NodeTypeRegistry.Register(new NodeTypeRegistration

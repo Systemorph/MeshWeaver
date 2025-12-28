@@ -23,13 +23,13 @@ public interface INodeTypeService
     Task<MeshNode?> GetNodeTypeNodeAsync(string nodeType, string contextPath, CancellationToken ct = default);
 
     /// <summary>
-    /// Gets the CodeConfiguration for a node type, resolved for a context path.
+    /// Gets the CodeFile for a node type, resolved for a context path.
     /// </summary>
     /// <param name="nodeType">The node type identifier</param>
     /// <param name="contextPath">The path context to resolve from</param>
     /// <param name="ct">Cancellation token</param>
-    /// <returns>The CodeConfiguration or null if not found</returns>
-    Task<CodeConfiguration?> GetCodeConfigurationAsync(string nodeType, string contextPath, CancellationToken ct = default);
+    /// <returns>The CodeFile or null if not found</returns>
+    Task<CodeFile?> GetCodeFileAsync(string nodeType, string contextPath, CancellationToken ct = default);
 
     /// <summary>
     /// Gets combined code from all dependencies of a NodeType.

@@ -70,4 +70,11 @@ public record NodeTypeDefinition
     /// This is compiled at runtime and assigned to HubConfiguration.
     /// </summary>
     public string? Configuration { get; init; }
+
+    /// <summary>
+    /// List of NodeType paths this type depends on.
+    /// Used for Monaco autocomplete to include types from dependencies.
+    /// Example: ["type/Person", "type/Organization"]
+    /// </summary>
+    public List<string>? Dependencies { get; init; }
 }

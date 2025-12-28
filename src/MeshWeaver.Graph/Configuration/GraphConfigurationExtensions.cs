@@ -32,8 +32,8 @@ public static class GraphConfigurationExtensions
         ///
         /// Configuration is loaded from NodeType MeshNodes stored under Type/:
         /// - Each NodeType node has:
-        ///   - NodeTypeDefinition content with HubConfiguration lambda
-        ///   - Optional CodeConfiguration in partition folder (codeConfiguration.json)
+        ///   - NodeTypeDefinition content with Configuration lambda
+        ///   - Optional CodeFile in partition folder (codeFile.json)
         ///
         /// Content collections are configured per node type via NodeTypeDefinition.ContentCollections.
         /// All configuration loading and service initialization happens at mesh startup.
@@ -50,8 +50,7 @@ public static class GraphConfigurationExtensions
                 if (typeRegistry != null)
                 {
                     typeRegistry.WithType(typeof(NodeTypeDefinition), nameof(NodeTypeDefinition));
-                    typeRegistry.WithType(typeof(CodeConfiguration), nameof(CodeConfiguration));
-                    typeRegistry.WithType(typeof(NodeTypeData), nameof(NodeTypeData));
+                    typeRegistry.WithType(typeof(CodeFile), nameof(CodeFile));
                 }
 
                 // Register INodeTypeService
@@ -75,7 +74,6 @@ public static class GraphConfigurationExtensions
             // MeshCatalog loads NodeTypeConfiguration from compiled assemblies when nodes are accessed.
             builder.ConfigureHub(config => config
                 .AddMeshNodeView()
-                .AddDynamicViews()
                 .WithServices(services =>
                 {
                     services.AddSingleton<IMeshNodeCompilationService, MeshNodeCompilationService>();
@@ -90,13 +88,13 @@ public static class GraphConfigurationExtensions
 
     /// <summary>
     /// Handles GetDataRequest for NodeTypeReference.
-    /// Returns NodeTypeData combining NodeTypeDefinition and CodeConfiguration.
+    /// Returns CodeFile from the node's partition.
     /// The node type is encoded in the hub address.
     /// </summary>
     private static async Task<IMessageDelivery> HandleNodeTypeRequest(
         IMessageHub hub,
         IMessageDelivery<GetDataRequest> request,
-        CancellationToken _)
+        CancellationToken ct)
     {
         // Only handle NodeTypeReference, let other references pass through
         if (request.Message.Reference is not NodeTypeReference)
@@ -115,37 +113,18 @@ public static class GraphConfigurationExtensions
             // The node type path is the hub address (e.g., "type/Person")
             var nodeTypePath = hub.Address.ToString();
 
-            // Get the MeshNode for this NodeType
-            var meshNode = await persistence.GetNodeAsync(nodeTypePath);
-            if (meshNode == null)
+            // Get CodeFile from the partition
+            CodeFile? codeFile = null;
+            await foreach (var obj in persistence.GetPartitionObjectsAsync(nodeTypePath, null).WithCancellation(ct))
             {
-                hub.Post(new GetDataResponse(null, 0) { Error = $"NodeType at '{nodeTypePath}' not found" },
-                    o => o.ResponseFor(request));
-                return request.Processed();
-            }
-
-            var definition = meshNode.Content as NodeTypeDefinition;
-
-            // Get CodeConfiguration from the partition
-            CodeConfiguration? codeConfig = null;
-            await foreach (var obj in persistence.GetPartitionObjectsAsync(nodeTypePath, null).WithCancellation(_))
-            {
-                if (obj is CodeConfiguration cc)
+                if (obj is CodeFile cf)
                 {
-                    codeConfig = cc;
+                    codeFile = cf;
                     break;
                 }
             }
 
-            var nodeTypeData = new NodeTypeData
-            {
-                Id = definition?.Id ?? meshNode.Name ?? nodeTypePath,
-                Definition = definition,
-                Code = codeConfig,
-                Path = nodeTypePath
-            };
-
-            hub.Post(new GetDataResponse(nodeTypeData, hub.Version), o => o.ResponseFor(request));
+            hub.Post(new GetDataResponse(codeFile, hub.Version), o => o.ResponseFor(request));
             return request.Processed();
         }
         catch (Exception ex)
