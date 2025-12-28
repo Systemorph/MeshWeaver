@@ -23,25 +23,21 @@ public sealed class MeshCatalog : IMeshCatalog
     private readonly IMessageHub meshHub;
     private readonly ILogger<MeshCatalog> logger;
 
-    // Lazy-loaded because IMeshNodeCompilationService is registered at hub level
+    // Lazy-loaded because INodeTypeService is registered at hub level
     // and may not be available during MeshCatalog construction
-    private IMeshNodeCompilationService? compilationService;
-    private bool compilationServiceResolved;
+    private INodeTypeService? nodeTypeService;
+    private bool nodeTypeServiceResolved;
 
-    private IMeshNodeCompilationService? CompilationService
+    private INodeTypeService? NodeTypeService
     {
         get
         {
-            if (!compilationServiceResolved)
+            if (!nodeTypeServiceResolved)
             {
-                compilationService = meshHub.ServiceProvider.GetService<IMeshNodeCompilationService>();
-                compilationServiceResolved = true;
-                if (compilationService == null)
-                {
-                    logger.LogWarning("IMeshNodeCompilationService not available. On-demand node type compilation disabled.");
-                }
+                nodeTypeService = meshHub.ServiceProvider.GetService<INodeTypeService>();
+                nodeTypeServiceResolved = true;
             }
-            return compilationService;
+            return nodeTypeService;
         }
     }
 
@@ -86,54 +82,21 @@ public sealed class MeshCatalog : IMeshCatalog
         }
 
         // Try loading from persistence
-        var persistedNode = await Persistence.GetNodeAsync(address.ToString());
-
-        if (persistedNode != null)
+        var persistenceNode = await Persistence.GetNodeAsync(address.ToString());
+        if (persistenceNode != null)
         {
-            // Look up NodeTypeConfiguration - may already be registered
-            var nodeTypeConfig = Configuration.GetNodeTypeConfiguration(persistedNode.NodeType);
-            string? assemblyLocation = null;
-
-            // If not found and we have a compilation service, compile on-demand
-            if (nodeTypeConfig == null && CompilationService != null && !string.IsNullOrEmpty(persistedNode.NodeType))
+            // Enrich with HubConfiguration based on NodeType (NOT the address - that would cause circular dependency)
+            // EnrichWithNodeType looks up HubConfiguration from compiled NodeType configs
+            if (NodeTypeService != null)
             {
-                var compilationResult = await CompilationService.CompileAndGetConfigurationsAsync(persistedNode);
-                if (compilationResult != null)
-                {
-                    assemblyLocation = compilationResult.AssemblyLocation;
-
-                    // Register all NodeTypeConfigurations from the compiled assembly
-                    foreach (var config in compilationResult.NodeTypeConfigurations)
-                    {
-                        Configuration.RegisterNodeTypeConfiguration(config);
-                        logger.LogDebug("Registered NodeTypeConfiguration for {NodeType}", config.NodeType);
-                    }
-
-                    nodeTypeConfig = Configuration.GetNodeTypeConfiguration(persistedNode.NodeType);
-                }
+                persistenceNode = NodeTypeService.EnrichWithNodeType(persistenceNode);
             }
 
-            if (nodeTypeConfig != null)
-            {
-                // Merge node type configuration with persisted data
-                // NodeTypeConfig provides: HubConfiguration
-                // Persisted provides: Name, Description, Content, IconName, DisplayOrder, etc.
-                node = persistedNode with
-                {
-                    HubConfiguration = nodeTypeConfig.HubConfiguration,
-                    AssemblyLocation = assemblyLocation ?? persistedNode.AssemblyLocation
-                };
-            }
-            else
-            {
-                node = persistedNode;
-            }
-
-            cache.Set(node.Path, node, cacheOptions);
-            var resultNode = UpdateNode(node);
-            if (!await ValidateReadAsync(resultNode))
+            cache.Set(persistenceNode.Path, persistenceNode, cacheOptions);
+            var updatedPersistenceNode = UpdateNode(persistenceNode);
+            if (!await ValidateReadAsync(updatedPersistenceNode))
                 return null;
-            return resultNode;
+            return updatedPersistenceNode;
         }
 
         // Try to find a template node that matches this address

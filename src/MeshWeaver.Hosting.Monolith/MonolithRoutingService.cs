@@ -1,4 +1,5 @@
 ﻿using System.Collections.Concurrent;
+using System.Reactive.Linq;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 using MeshWeaver.Utils;
@@ -36,7 +37,7 @@ public class MonolithRoutingService(IMessageHub hub, ILogger<MonolithRoutingServ
         if (streams.TryGetValue(address, out var stream))
             return await stream.Invoke(delivery, cancellationToken);
 
-        var hub = CreateHub(node, address);
+        var hub = await CreateHubAsync(node, address);
         if (hub is null)
         {
             logger.LogWarning("No node found for address {Address}", address);
@@ -47,12 +48,17 @@ public class MonolithRoutingService(IMessageHub hub, ILogger<MonolithRoutingServ
         return delivery.Forwarded(hub.Address);
     }
 
-    private IMessageHub? CreateHub(MeshNode? node, Address address)
+    private async Task<IMessageHub?> CreateHubAsync(MeshNode? node, Address address)
     {
-        var hubConfig = node?.HubConfiguration ?? GetTemplateHubConfiguration(address);
+        var hubConfigObservable = node?.HubConfiguration ?? GetTemplateHubConfiguration(address);
 
-        if (hubConfig is not null)
+        if (hubConfigObservable is not null)
         {
+            // Subscribe to get the HubConfiguration - this is where we actually need the config
+            var hubConfig = await hubConfigObservable.FirstOrDefaultAsync();
+            if (hubConfig is null)
+                return null;
+
             var hub = Mesh.GetHostedHub(address, hubConfig);
             if(hub is not null)
             {
@@ -64,10 +70,10 @@ public class MonolithRoutingService(IMessageHub hub, ILogger<MonolithRoutingServ
     }
 
     /// <summary>
-    /// Finds a template node's HubConfiguration by walking up the address path.
+    /// Finds a template node's HubConfiguration Observable by walking up the address path.
     /// Template nodes registered via AddMeshNodes() have HubConfiguration and AddressSegments > 0.
     /// </summary>
-    private Func<MessageHubConfiguration, MessageHubConfiguration>? GetTemplateHubConfiguration(Address address)
+    private IObservable<Func<MessageHubConfiguration, MessageHubConfiguration>?>? GetTemplateHubConfiguration(Address address)
     {
         var segments = address.Segments;
 

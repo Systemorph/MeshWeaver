@@ -1,6 +1,7 @@
 ﻿using System.Collections.Immutable;
 using System.ComponentModel.DataAnnotations;
 using System.ComponentModel.DataAnnotations.Schema;
+using System.Reactive.Linq;
 using System.Text.Json.Serialization;
 using MeshWeaver.Data;
 using MeshWeaver.Messaging;
@@ -194,8 +195,13 @@ public record MeshNode([property: Key] string Id, string? Namespace = null)
     public string? StreamProvider { get; init; }
     [NotMapped]
     public string? AssemblyLocation { get; init; }
+    /// <summary>
+    /// Observable that emits the hub configuration function.
+    /// Stored as IObservable to avoid blocking - only subscribe when actually creating the hub.
+    /// Use FirstOrDefaultAsync() to get the value.
+    /// </summary>
     [JsonIgnore, NotMapped]
-    public Func<MessageHubConfiguration, MessageHubConfiguration>? HubConfiguration { get; init; }
+    public IObservable<Func<MessageHubConfiguration, MessageHubConfiguration>?>? HubConfiguration { get; init; }
     public string? StartupScript
     {
         get; init;

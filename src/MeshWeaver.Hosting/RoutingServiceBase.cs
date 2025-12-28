@@ -11,11 +11,41 @@ namespace MeshWeaver.Hosting
         protected readonly ITypeRegistry TypeRegistry = hub.ServiceProvider.GetRequiredService<ITypeRegistry>();
         protected readonly IMessageHub Mesh = hub;
         protected readonly IMeshCatalog MeshCatalog = hub.ServiceProvider.GetRequiredService<IMeshCatalog>();
-        public async Task<IMessageDelivery> DeliverMessageAsync(IMessageDelivery delivery, CancellationToken cancellationToken)
+        public Task<IMessageDelivery> DeliverMessageAsync(IMessageDelivery delivery, CancellationToken cancellationToken)
+        {
+            if (delivery.Target == null)
+                return Task.FromResult(delivery);
+
+            // Fire-and-forget routing to avoid deadlocks
+            RouteInMesh(delivery, cancellationToken);
+            return Task.FromResult(delivery.Forwarded(delivery.Target));
+        }
+
+
+        public abstract Task<IAsyncDisposable> RegisterStreamAsync(Address address, AsyncDelivery callback);
+
+
+
+        private async void RouteInMesh(
+            IMessageDelivery delivery,
+            CancellationToken cancellationToken
+            )
         {
             try
             {
-                return await RouteInMesh(delivery, cancellationToken);
+                var address = GetHostAddress(delivery.Target!);
+
+                // if we have created the hub ==> route through us.
+                var hostedHub = Mesh.GetHostedHub(address, HostedHubCreation.Never);
+                if (hostedHub is not null)
+                {
+                    hostedHub.DeliverMessage(delivery);
+                    return;
+                }
+
+                var hostAddress = GetHostAddress(address);
+
+                await RouteMessageAsync(delivery, hostAddress, cancellationToken);
             }
             catch (Exception e)
             {
@@ -26,46 +56,7 @@ namespace MeshWeaver.Hosting
                     StackTrace = e.StackTrace!
                 },
                     o => o.ResponseFor(delivery));
-                return delivery.Failed(e.Message);
             }
-        }
-
-
-        public abstract Task<IAsyncDisposable> RegisterStreamAsync(Address address, AsyncDelivery callback);
-
-
-
-        private async Task<IMessageDelivery> RouteInMesh(
-            IMessageDelivery delivery,
-            CancellationToken cancellationToken
-            )
-        {
-            if (delivery.Target == null)
-                return delivery;
-
-            if (delivery.Target.Type == AddressExtensions.MeshType)
-            {
-                Mesh.DeliverMessage(delivery);
-                return delivery.Forwarded(Mesh.Address);
-            }
-
-            if (delivery.Target is { Host.Type: AddressExtensions.MeshType })
-                delivery = delivery.WithTarget(delivery.Target with { Host = null });
-
-            var address = GetHostAddress(delivery.Target!);
-
-            // if we have created the hub ==> route through us.
-            var hostedHub = Mesh.GetHostedHub(address, HostedHubCreation.Never);
-            if (hostedHub is not null)
-            {
-                hostedHub.DeliverMessage(delivery);
-                return delivery.Forwarded(hostedHub.Address);
-            }
-
-
-            var hostAddress = GetHostAddress(address);
-
-            return await RouteMessageAsync(delivery, hostAddress, cancellationToken);
         }
 
         protected virtual Task<IMessageDelivery> RouteToKernel(IMessageDelivery delivery, MeshNode node, Address address, CancellationToken ct)
@@ -73,7 +64,8 @@ namespace MeshWeaver.Hosting
             var kernelId = GetKernelId(delivery, node, address);
             var kernelAddress = AddressExtensions.CreateKernelAddress(kernelId);
             delivery = delivery.WithTarget(delivery.Target!.WithHost(kernelAddress));
-            return RouteInMesh(delivery, ct);
+            RouteInMesh(delivery, ct);
+            return Task.FromResult(delivery.Forwarded(kernelAddress));
         }
 
         protected virtual string GetKernelId(IMessageDelivery delivery, MeshNode node, Address address)
@@ -93,8 +85,6 @@ namespace MeshWeaver.Hosting
             CancellationToken cancellationToken
         )
         {
-            var originalAddress = address;
-
             // Use ResolvePath to find the deepest matching node in persistence
             var resolution = await MeshCatalog.ResolvePathAsync(address.ToString());
             if (resolution != null)
@@ -109,12 +99,11 @@ namespace MeshWeaver.Hosting
                 }
             }
 
+            // Get node - HubConfiguration is now an IObservable so no deadlock
             var node = await MeshCatalog.GetNodeAsync(address);
 
             if (!string.IsNullOrWhiteSpace(node?.StartupScript))
                 return await RouteToKernel(delivery, node, address, cancellationToken);
-
-
 
             return await RouteImplAsync(delivery, node, address, cancellationToken);
         }

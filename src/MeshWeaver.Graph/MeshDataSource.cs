@@ -16,13 +16,23 @@ public static class MeshDataSourceExtensions
 {
     /// <summary>
     /// Adds a MeshDataSource to the data context, configured via the provided function.
+    /// MeshNodes are always included automatically (own node only, not children).
     /// </summary>
     public static MessageHubConfiguration AddMeshDataSource(
         this MessageHubConfiguration config,
         Func<MeshDataSource, MeshDataSource> configuration)
     {
         return config.AddData(data => data.WithDataSource(_ =>
-            configuration(new MeshDataSource(Guid.NewGuid().AsString(), data.Workspace))));
+            configuration(new MeshDataSource(Guid.NewGuid().AsString(), data.Workspace).WithMeshNodes())));
+    }
+
+    /// <summary>
+    /// Adds a MeshDataSource with default configuration (MeshNodes only).
+    /// </summary>
+    public static MessageHubConfiguration AddMeshDataSource(this MessageHubConfiguration config)
+    {
+        return config.AddData(data => data.WithDataSource(_ =>
+            new MeshDataSource(Guid.NewGuid().AsString(), data.Workspace).WithMeshNodes()));
     }
 }
 
@@ -49,9 +59,14 @@ public record MeshDataSource : GenericUnpartitionedDataSource<MeshDataSource>
 
     /// <summary>
     /// Adds MeshNode type source with persistence sync.
+    /// Idempotent - if MeshNode is already registered, returns this unchanged.
     /// </summary>
     public MeshDataSource WithMeshNodes()
     {
+        // Check if MeshNode is already registered to avoid duplicates
+        if (TypeSources.ContainsKey(typeof(MeshNode)))
+            return this;
+
         if (_persistence == null)
         {
             _logger?.LogWarning("MeshDataSource: No persistence service, using basic MeshNode type source");

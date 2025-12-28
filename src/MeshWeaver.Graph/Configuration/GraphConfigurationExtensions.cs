@@ -17,7 +17,7 @@ public static class GraphConfigurationExtensions
     /// - DefaultViews: Details (markdown property view), Edit (standard editor)
     /// - MeshNodeView: Thumbnail, Metadata, Settings, Comments
     /// Details is set as the default view for empty path requests.
-    /// This should be called for every node type to ensure consistent view availability.
+    /// Note: MeshDataSource is added automatically via NodeTypeService.
     /// </summary>
     public static MessageHubConfiguration WithDefaultViews(this MessageHubConfiguration config)
         => config
@@ -63,13 +63,15 @@ public static class GraphConfigurationExtensions
             });
 
             // Configure mesh hub with views and hub-level services
-            // Note: Node types are compiled on-demand via IMeshNodeCompilationService.
+            // Note: MeshDataSource is added automatically via NodeTypeService.WrapWithMeshDataSource
+            // Node types are compiled on-demand via IMeshNodeCompilationService.
             // MeshCatalog loads NodeTypeConfiguration from compiled assemblies when nodes are accessed.
             builder.ConfigureHub(config => config
                 .AddMeshNodeView()
                 .WithServices(services =>
                 {
                     services.AddSingleton<IMeshNodeCompilationService, MeshNodeCompilationService>();
+                    services.AddSingleton<INodeTypeService, NodeTypeService>();
                     return services;
                 })
                 .WithHandler<GetDataRequest>(HandleNodeTypeRequest));

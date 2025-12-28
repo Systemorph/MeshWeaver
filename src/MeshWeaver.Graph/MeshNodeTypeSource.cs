@@ -128,8 +128,9 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
         WorkspaceReference<InstanceCollection> reference,
         CancellationToken ct)
     {
-        // Load own MeshNode doc (stored in parent's partition)
+        // Load own MeshNode doc only (stored in parent's partition)
         // File location: parentPath/ownNodeName.json (e.g., "graph/org1.json")
+        // Note: Children are NOT loaded here - they are accessed via their own hubs
         var ownNode = await _persistence.GetNodeAsync(_hubPath, ct);
 
         // Restore hub version from persisted MeshNode
@@ -140,17 +141,9 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
             _workspace.Hub.SetInitialVersion(ownNode.Version);
         }
 
-        // Load children from own partition
-        // File location: _hubPath/*.json (e.g., "graph/org1/*.json")
         var allNodes = new List<MeshNode>();
         if (ownNode != null && !string.IsNullOrEmpty(ownNode.Path))
             allNodes.Add(ownNode);
-
-        await foreach (var child in _persistence.GetChildrenAsync(_hubPath).WithCancellation(ct))
-        {
-            if (!string.IsNullOrEmpty(child.Path))
-                allNodes.Add(child);
-        }
 
         _lastSaved = new InstanceCollection(allNodes, node => ((MeshNode)node).Path);
         return _lastSaved;

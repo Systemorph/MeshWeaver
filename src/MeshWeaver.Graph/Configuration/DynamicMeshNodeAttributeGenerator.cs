@@ -38,6 +38,7 @@ internal class DynamicMeshNodeAttributeGenerator
         sb.AppendLine("using System;");
         sb.AppendLine("using System.Collections.Generic;");
         sb.AppendLine("using System.ComponentModel.DataAnnotations;");
+        sb.AppendLine("using System.Reactive.Linq;");
         sb.AppendLine("using System.Text.Json.Serialization;");
         sb.AppendLine("using MeshWeaver.Mesh;");
         sb.AppendLine("using MeshWeaver.Messaging;");
@@ -85,7 +86,7 @@ internal class DynamicMeshNodeAttributeGenerator
         sb.AppendLine($"                IsPersistent = {node.IsPersistent.ToString().ToLowerInvariant()},");
         sb.AppendLine($"                LastModified = DateTimeOffset.Parse(\"{node.LastModified:O}\"),");
         sb.AppendLine($"                AssemblyLocation = typeof({safeClassName}MeshNodeAttribute).Assembly.Location,");
-        sb.AppendLine("                HubConfiguration = ConfigureHub");
+        sb.AppendLine("                HubConfiguration = Observable.Return<Func<MessageHubConfiguration, MessageHubConfiguration>?>(ConfigureHub)");
         sb.AppendLine("            }");
         sb.AppendLine("        ];");
         sb.AppendLine();
