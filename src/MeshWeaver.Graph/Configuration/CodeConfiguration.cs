@@ -4,10 +4,11 @@ using MeshWeaver.ShortGuid;
 namespace MeshWeaver.Graph.Configuration;
 
 /// <summary>
-/// Represents a code file with C# source code for dynamic compilation.
-/// Stored as codeConfiguration.json in the node type partition folder.
+/// Represents a code configuration with C# source code for dynamic compilation.
+/// Stored in the Code sub-partition of NodeType hubs.
+/// Registered with collection name "Code" in the workspace.
 /// </summary>
-public record CodeFile
+public record CodeConfiguration
 {
     /// <summary>
     /// Unique identifier for this code file.

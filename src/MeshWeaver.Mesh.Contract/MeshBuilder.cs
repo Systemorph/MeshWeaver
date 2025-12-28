@@ -119,6 +119,16 @@ public record MeshBuilder
         pathRegistry.Register("content", new ContentPathHandler());
         pathRegistry.Register("type", new TypePathHandler());
 
+        // Add the default Type/NodeType node - this is the built-in type for all type definitions
+        MeshNodes.Add(MeshNode.FromPath(MeshNode.NodeTypePath) with
+        {
+            Name = "Node Type",
+            NodeType = MeshNode.NodeTypePath,
+            Description = "A node type definition",
+            IconName = "Code",
+            DisplayOrder = 0
+        });
+
         // Create mesh-level type registry for polymorphic serialization
         // Hub-level type registries will inherit from this via ParentServiceProvider
         var meshTypeRegistry = MessageHubExtensions.CreateTypeRegistry();

@@ -1,7 +1,5 @@
 ﻿using MeshWeaver.Data;
-using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Mesh;
-using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -18,6 +16,7 @@ public class MeshHubBuilder
     private readonly List<Func<MessageHubConfiguration, MessageHubConfiguration>> _hubConfigurations = new();
     private Func<IMessageHub, CancellationToken, Task>? _initializationFunc;
     private bool _addMeshNavigation = true;
+    private bool _includeCodeConfiguration;
     private Type? DataType { get; set; }
 
     /// <summary>
@@ -47,6 +46,17 @@ public class MeshHubBuilder
     public MeshHubBuilder WithDataType(Type dataType)
     {
         DataType = dataType;
+        return this;
+    }
+
+    /// <summary>
+    /// Includes CodeConfiguration in the data source for this hub.
+    /// CodeConfigurations are loaded from the hub's persistence partition.
+    /// Use this for NodeType hubs that need to access code files.
+    /// </summary>
+    public MeshHubBuilder WithCodeConfiguration()
+    {
+        _includeCodeConfiguration = true;
         return this;
     }
 
@@ -87,65 +97,41 @@ public class MeshHubBuilder
     {
         var config = _configuration;
         var dataType = DataType; // Capture for lambda
+        var includeCodeConfiguration = _includeCodeConfiguration; // Capture for lambda
 
-        // Register all types in a single data source to avoid ID conflicts
-        config = config.AddData(data => data.AddSource(source =>
+        // Configure data source with MeshNode and optional CodeConfiguration
+        config = config.AddMeshDataSource(source =>
         {
-            var persistence = source.Workspace.Hub.ServiceProvider.GetService<IPersistenceService>();
-            var hubPath = source.Workspace.Hub.Address.ToString();
             var logger = source.Workspace.Hub.ServiceProvider.GetService<ILogger<MeshHubBuilder>>();
-            logger?.LogWarning("MeshHubBuilder: Building data source for {HubPath}, persistence={HasPersistence}, dataType={DataType}",
-                hubPath, persistence != null, dataType?.Name ?? "null");
 
-            // Register MeshNode with custom TypeSource that syncs to persistence
-            if (persistence != null)
+            logger?.LogDebug("MeshHubBuilder: Building data source for {HubPath}, dataType={DataType}, includeCodeConfiguration={IncludeCodeConfiguration}",
+                source.Workspace.Hub.Address, dataType?.Name ?? "null", includeCodeConfiguration);
+
+            // Add MeshNode with persistence sync
+            var result = source.WithMeshNodes();
+
+            // Add CodeConfiguration if requested (for NodeType hubs only)
+            // CodeConfiguration is stored in the "Code" sub-partition (e.g., "Type/Organizations/Code")
+            // Registered with collection name "Code" (not "CodeConfiguration")
+            if (includeCodeConfiguration)
             {
-                // Use MeshNodeTypeSource which handles init + update sync to persistence
-                var withMeshNode = source.WithTypeSource(typeof(MeshNode),
-                    new MeshNodeTypeSource(source.Workspace, source.Id, persistence, hubPath)
-                        .WithKey(n => n.Path));
+                result = result.WithCodeConfiguration();
+            }
 
-                // Register additional data type if specified
-                if (dataType is not null)
-                {
-                    // Use ContentTypeSource which handles init + update sync to persistence
-                    logger?.LogWarning("MeshHubBuilder: Creating ContentTypeSource for {DataType}", dataType.Name);
-                    try
-                    {
-                        var contentTypeSource = CreateContentTypeSource(
-                            dataType, source.Workspace, source.Id, persistence, hubPath);
-                        logger?.LogWarning("MeshHubBuilder: ContentTypeSource created, adding to data source");
-                        var result = withMeshNode.WithTypeSource(dataType, contentTypeSource);
-                        logger?.LogWarning("MeshHubBuilder: Data source now has {MappedTypes} mapped types", result.MappedTypes.Count);
-                        return result;
-                    }
-                    catch (Exception ex)
-                    {
-                        logger?.LogError(ex, "MeshHubBuilder: Failed to create ContentTypeSource for {DataType}", dataType.Name);
-                        throw;
-                    }
-                }
-                else
-                {
-                    // Register NodeDescription as the default entity type for generic nodes
-                    return withMeshNode.WithType<NodeDescription>(ts => ts.WithKey(n => n.Id));
-                }
+            // Add content type if specified
+            if (dataType is not null)
+            {
+                logger?.LogDebug("MeshHubBuilder: Adding ContentTypeSource for {DataType}", dataType.Name);
+                result = result.WithContentType(dataType);
             }
             else
             {
-                // Fallback: no persistence, just register types without special type sources
-                var withTypes = source.WithType<MeshNode>(ts => ts.WithKey(n => n.Path));
-
-                if (dataType is not null)
-                {
-                    return withTypes.WithType(dataType, null);
-                }
-                else
-                {
-                    return withTypes.WithType<NodeDescription>(ts => ts.WithKey(n => n.Id));
-                }
+                // Register NodeDescription as the default entity type for generic nodes
+                result = result.WithType<NodeDescription>(ts => ts.WithKey(n => n.Id));
             }
-        }));
+
+            return result;
+        });
 
         // Add mesh navigation (autocomplete + catalog view)
         if (_addMeshNavigation)
@@ -180,31 +166,6 @@ public class MeshHubBuilder
         }
 
         return config;
-    }
-
-    /// <summary>
-    /// Creates a ContentTypeSource for the specified data type using reflection.
-    /// </summary>
-    private static ITypeSource CreateContentTypeSource(
-        Type dataType,
-        IWorkspace workspace,
-        object dataSource,
-        IPersistenceService persistence,
-        string hubPath)
-    {
-        // Create ContentTypeSource<T> using reflection
-        var contentTypeSourceType = typeof(ContentTypeSource<>).MakeGenericType(dataType);
-        var constructor = contentTypeSourceType.GetConstructor([
-            typeof(IWorkspace),
-            typeof(object),
-            typeof(IPersistenceService),
-            typeof(string)
-        ]);
-
-        if (constructor == null)
-            throw new InvalidOperationException($"Could not find constructor for ContentTypeSource<{dataType.Name}>");
-
-        return (ITypeSource)constructor.Invoke([workspace, dataSource, persistence, hubPath]);
     }
 }
 

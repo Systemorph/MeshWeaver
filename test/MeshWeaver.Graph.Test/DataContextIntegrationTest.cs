@@ -62,7 +62,7 @@ public class DataContextIntegrationTest : MonolithMeshTestBase
     private static void SetupTestConfiguration(InMemoryPersistenceService persistence)
     {
         // Create Story type at type/story (NodeType = "NodeType")
-        var storyCodeConfig = new CodeFile
+        var storyCodeConfig = new CodeConfiguration
         {
             Code = "public record Story { [Key] public string Id { get; init; } }"
         };
@@ -89,7 +89,7 @@ public class DataContextIntegrationTest : MonolithMeshTestBase
         persistence.SavePartitionObjectsAsync("type/story", null, [storyCodeConfig]).GetAwaiter().GetResult();
 
         // Create Graph type at type/graph (NodeType = "NodeType")
-        var graphCodeConfig = new CodeFile
+        var graphCodeConfig = new CodeConfiguration
         {
             Code = "public record GraphRoot { [Key] public string Id { get; init; } }"
         };

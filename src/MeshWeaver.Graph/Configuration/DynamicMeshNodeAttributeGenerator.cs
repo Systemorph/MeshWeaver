@@ -14,12 +14,12 @@ internal class DynamicMeshNodeAttributeGenerator
     /// Generates the complete C# source code for a dynamic node assembly.
     /// </summary>
     /// <param name="node">The MeshNode being compiled.</param>
-    /// <param name="codeFile">The CodeFile containing user code.</param>
+    /// <param name="codeFile">The CodeConfiguration containing user code.</param>
     /// <param name="hubConfiguration">The HubConfiguration lambda expression (from NodeTypeDefinition).</param>
     /// <returns>Complete C# source code ready for compilation.</returns>
     public string GenerateAttributeSource(
         MeshNode node,
-        CodeFile? codeFile,
+        CodeConfiguration? codeFile,
         string? hubConfiguration)
     {
         var safeClassName = SanitizeName(node.Path);
@@ -116,11 +116,11 @@ internal class DynamicMeshNodeAttributeGenerator
         sb.AppendLine();
 
 
-        // For NodeType nodes, add CodeFile as accessible data
-        if (node.NodeType == "NodeType")
+        // For NodeType nodes, use MeshHubBuilder with CodeConfiguration
+        if (node.NodeType == MeshNode.NodeTypePath)
         {
-            sb.AppendLine("            // For NodeType nodes, add CodeFile as accessible data");
-            sb.AppendLine("            result = result.AddData(data => data.AddSource(source => source.WithType<CodeFile>()));");
+            sb.AppendLine("            // For NodeType nodes, use MeshDataSource with CodeConfiguration");
+            sb.AppendLine("            result = result.ConfigureMeshHub().WithCodeConfiguration().Build();");
             sb.AppendLine();
         }
         else

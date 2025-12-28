@@ -14,7 +14,7 @@ namespace MeshWeaver.Graph.Configuration;
 /// Implements IMeshNodeCompilationService from MeshWeaver.Mesh.Contract.
 /// </summary>
 internal class MeshNodeCompilationService(
-    INodeTypeService nodeTypeService,
+    IPersistenceService persistence,
     ICompilationCacheService cacheService,
     IOptions<CompilationCacheOptions> cacheOptions,
     ILogger<MeshNodeCompilationService> logger)
@@ -95,13 +95,23 @@ internal class MeshNodeCompilationService(
             return dllPath;
         }
 
-        // Get CodeFile from the NodeType's partition
-        var codeFile = await nodeTypeService.GetCodeFileAsync(node.NodeType, node.Path, ct);
+        // Get CodeConfiguration from the NodeType's Code sub-partition
+        // CodeConfiguration is stored in <nodeType>/Code partition (e.g., "Type/Organizations/Code")
+        CodeConfiguration? codeFile = null;
+        var codePartition = $"{node.NodeType}/Code";
+        await foreach (var obj in persistence.GetPartitionObjectsAsync(codePartition).WithCancellation(ct))
+        {
+            if (obj is CodeConfiguration cf)
+            {
+                codeFile = cf;
+                break;
+            }
+        }
 
         // Get Configuration from the NodeTypeDefinition content
         // Configuration is the source code that gets compiled into HubConfiguration
         string? configuration = null;
-        var nodeTypeNode = await nodeTypeService.GetNodeTypeNodeAsync(node.NodeType, node.Path, ct);
+        var nodeTypeNode = await persistence.GetNodeAsync(node.NodeType, ct);
         if (nodeTypeNode?.Content is NodeTypeDefinition ntd)
         {
             configuration = ntd.Configuration;
@@ -109,7 +119,7 @@ internal class MeshNodeCompilationService(
 
         try
         {
-            // Compile using CodeFile and Configuration
+            // Compile using CodeConfiguration and Configuration
             await CompileAsync(codeFile, configuration, node, ct);
 
             // Return the DLL path if it exists
@@ -177,10 +187,10 @@ internal class MeshNodeCompilationService(
     }
 
     /// <summary>
-    /// Compiles CodeFile into an assembly using Roslyn.
+    /// Compiles CodeConfiguration into an assembly using Roslyn.
     /// </summary>
     private async Task CompileAsync(
-        CodeFile? codeFile,
+        CodeConfiguration? codeFile,
         string? hubConfiguration,
         MeshNode node,
         CancellationToken ct)

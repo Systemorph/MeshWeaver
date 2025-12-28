@@ -33,7 +33,7 @@ public static class GraphConfigurationExtensions
         /// Configuration is loaded from NodeType MeshNodes stored under Type/:
         /// - Each NodeType node has:
         ///   - NodeTypeDefinition content with Configuration lambda
-        ///   - Optional CodeFile in partition folder (codeFile.json)
+        ///   - Optional CodeConfiguration in partition folder (codeFile.json)
         ///
         /// Content collections are configured per node type via NodeTypeDefinition.ContentCollections.
         /// All configuration loading and service initialization happens at mesh startup.
@@ -50,15 +50,8 @@ public static class GraphConfigurationExtensions
                 if (typeRegistry != null)
                 {
                     typeRegistry.WithType(typeof(NodeTypeDefinition), nameof(NodeTypeDefinition));
-                    typeRegistry.WithType(typeof(CodeFile), nameof(CodeFile));
+                    typeRegistry.WithType(typeof(CodeConfiguration), nameof(CodeConfiguration));
                 }
-
-                // Register INodeTypeService
-                services.AddSingleton<INodeTypeService>(sp =>
-                {
-                    var persistence = sp.GetRequiredService<IPersistenceService>();
-                    return new NodeTypeService(persistence);
-                });
 
                 // Register compilation cache options
                 services.AddOptions<CompilationCacheOptions>();
@@ -88,7 +81,7 @@ public static class GraphConfigurationExtensions
 
     /// <summary>
     /// Handles GetDataRequest for NodeTypeReference.
-    /// Returns CodeFile from the node's partition.
+    /// Returns CodeConfiguration from the node's partition.
     /// The node type is encoded in the hub address.
     /// </summary>
     private static async Task<IMessageDelivery> HandleNodeTypeRequest(
@@ -113,11 +106,11 @@ public static class GraphConfigurationExtensions
             // The node type path is the hub address (e.g., "type/Person")
             var nodeTypePath = hub.Address.ToString();
 
-            // Get CodeFile from the partition
-            CodeFile? codeFile = null;
+            // Get CodeConfiguration from the partition
+            CodeConfiguration? codeFile = null;
             await foreach (var obj in persistence.GetPartitionObjectsAsync(nodeTypePath, null).WithCancellation(ct))
             {
-                if (obj is CodeFile cf)
+                if (obj is CodeConfiguration cf)
                 {
                     codeFile = cf;
                     break;

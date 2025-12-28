@@ -527,7 +527,7 @@ public sealed class MeshCatalog : IMeshCatalog
             {
                 if (!(child.Name?.Contains(query, StringComparison.OrdinalIgnoreCase) ?? false) &&
                     !(child.Description?.Contains(query, StringComparison.OrdinalIgnoreCase) ?? false) &&
-                    !child.Namespace.Contains(query, StringComparison.OrdinalIgnoreCase))
+                    !(child.Namespace?.Contains(query, StringComparison.OrdinalIgnoreCase) ?? false))
                 {
                     continue;
                 }

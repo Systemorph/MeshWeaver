@@ -1,4 +1,4 @@
 {
-  "$type": "CodeFile",
+  "$type": "CodeConfiguration",
   "code": "public record Person\n{\n    [Key]\n    public string Id { get; init; } = string.Empty;\n\n    [Required]\n    public string Name { get; init; } = string.Empty;\n\n    public string? Email { get; init; }\n\n    public string? Avatar { get; init; }\n\n    public string? Bio { get; init; }\n\n    public string? Role { get; init; }\n\n    public string IconName { get; init; } = \"Person\";\n\n    public DateTimeOffset CreatedAt { get; init; } = DateTimeOffset.UtcNow;\n\n    public DateTimeOffset? LastActiveAt { get; init; }\n}"
 }

@@ -1,4 +1,5 @@
 ﻿using MeshWeaver.Data;
+using MeshWeaver.Domain;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using Microsoft.Extensions.DependencyInjection;
@@ -27,6 +28,11 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
         _hubPath = hubPath;
         _logger = workspace.Hub.ServiceProvider.GetService<ILogger<MeshNodeTypeSource>>();
         _logger?.LogWarning("MeshNodeTypeSource: Created for hubPath={HubPath}", hubPath);
+
+        // Register key function for MeshNode using Path as the key
+        TypeDefinition = workspace.Hub.TypeRegistry.WithKeyFunction(
+            TypeDefinition.CollectionName,
+            new KeyFunction(o => ((MeshNode)o).Path, typeof(string)));
     }
 
     protected override InstanceCollection UpdateImpl(InstanceCollection instances)
@@ -137,11 +143,16 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
         // Load children from own partition
         // File location: _hubPath/*.json (e.g., "graph/org1/*.json")
         var allNodes = new List<MeshNode>();
-        if (ownNode != null) allNodes.Add(ownNode);
-        await foreach (var child in _persistence.GetChildrenAsync(_hubPath).WithCancellation(ct))
-            allNodes.Add(child);
+        if (ownNode != null && !string.IsNullOrEmpty(ownNode.Path))
+            allNodes.Add(ownNode);
 
-        _lastSaved = new InstanceCollection(allNodes, TypeDefinition.GetKey);
+        await foreach (var child in _persistence.GetChildrenAsync(_hubPath).WithCancellation(ct))
+        {
+            if (!string.IsNullOrEmpty(child.Path))
+                allNodes.Add(child);
+        }
+
+        _lastSaved = new InstanceCollection(allNodes, node => ((MeshNode)node).Path);
         return _lastSaved;
     }
 }
