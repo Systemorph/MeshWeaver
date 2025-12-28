@@ -31,74 +31,17 @@ public class NodeTypeService : INodeTypeService
         BuiltInNodeTypes.EnsureRegistered();
     }
 
-    /// <summary>
-    /// Gets the path segments to search for NodeTypes, from most local to most global.
-    /// For "a/b/c": returns ["a/b/c", "a/b", "a", "", "type"]
-    /// </summary>
-    private static IEnumerable<string> GetSearchPaths(string contextPath)
-    {
-        if (!string.IsNullOrEmpty(contextPath))
-        {
-            var path = contextPath;
-            while (!string.IsNullOrEmpty(path))
-            {
-                yield return path;
-                var lastSlash = path.LastIndexOf('/');
-                path = lastSlash >= 0 ? path.Substring(0, lastSlash) : "";
-            }
-        }
-
-        // Root level
-        yield return "";
-
-        // Global types namespace
-        yield return "type";
-    }
-
     /// <inheritdoc/>
-    public async Task<MeshNode?> GetNodeTypeNodeAsync(string nodeType, string contextPath, CancellationToken ct = default)
+    public async Task<MeshNode?> GetNodeTypeNodeAsync(string nodeTypePath, string contextPath, CancellationToken ct = default)
     {
-        // Search in the context path hierarchy
-        foreach (var searchPath in GetSearchPaths(contextPath))
-        {
-            // Get all children at this level
-            await foreach (var child in _persistence.GetChildrenAsync(searchPath))
-            {
-                // Match by node path (e.g., "type/graph") or by NodeTypeDefinition.Id (e.g., "graph")
-                if (child.NodeType == NodeTypeNodeType && child.Content is NodeTypeDefinition ntd)
-                {
-                    // Match either by full path or by short Id
-                    if (child.Path == nodeType || ntd.Id == nodeType)
-                    {
-                        return child;
-                    }
-                }
-            }
-        }
+        var node = await _persistence.GetNodeAsync(nodeTypePath, ct);
+        if (node == null)
+            return null;
 
-        // If nodeType contains a path separator (e.g., "Type/Organizations"),
-        // also search in its parent path. This handles cases where the nodeType
-        // path doesn't match the GlobalTypesNamespace (e.g., "Type" vs "type").
-        if (nodeType.Contains('/'))
-        {
-            var lastSlash = nodeType.LastIndexOf('/');
-            var nodeTypeParent = nodeType.Substring(0, lastSlash);
+        if (node.NodeType != NodeTypeNodeType)
+            throw new InvalidOperationException($"Node at '{nodeTypePath}' is not a NodeType (got '{node.NodeType}')");
 
-            // Only search if this parent wasn't already in the search paths
-            // (to avoid duplicate searches)
-            await foreach (var child in _persistence.GetChildrenAsync(nodeTypeParent))
-            {
-                if (child.NodeType == NodeTypeNodeType && child.Content is NodeTypeDefinition ntd)
-                {
-                    if (child.Path == nodeType || ntd.Id == nodeType)
-                    {
-                        return child;
-                    }
-                }
-            }
-        }
-
-        return null;
+        return node;
     }
 
     /// <summary>

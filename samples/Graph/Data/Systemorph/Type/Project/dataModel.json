@@ -1,4 +1,4 @@
 {
-  "$type": "CodeConfiguration",
+  "$type": "CodeFile",
   "code": "public record Project\n{\n    [Key]\n    public string Id { get; init; } = string.Empty;\n\n    [Required]\n    public string Name { get; init; } = string.Empty;\n\n    public string? Description { get; init; }\n\n    public ProjectStatus Status { get; init; } = ProjectStatus.Active;\n\n    public string IconName { get; init; } = \"Folder\";\n\n    public DateTimeOffset CreatedAt { get; init; } = DateTimeOffset.UtcNow;\n}\n\npublic enum ProjectStatus\n{\n    Planning,\n    Active,\n    OnHold,\n    Completed,\n    Archived\n}"
 }

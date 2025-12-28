@@ -31,14 +31,14 @@ public static class BuiltInNodeTypes
         var definition = new NodeTypeDefinition
         {
             Id = NodeTypeId,
-            Namespace = "",
+            Namespace = "Type",
             DisplayName = "Node Type",
             Description = "A node type definition",
             IconName = "Code",
             DisplayOrder = 0
         };
 
-        var node = MeshNode.FromPath("type/NodeType") with
+        var node = MeshNode.FromPath("Type/NodeType") with
         {
             Name = "Node Type",
             NodeType = NodeTypeId,

@@ -1,3 +1,4 @@
+using System;
 using System.Linq;
 using System.Threading.Tasks;
 using FluentAssertions;
@@ -25,10 +26,10 @@ public class NodeTypeServiceTest
     #region GetNodeTypeNodeAsync Tests
 
     [Fact]
-    public async Task GetNodeTypeNodeAsync_ReturnsGlobalType_WhenNoLocalOverride()
+    public async Task GetNodeTypeNodeAsync_ReturnsNodeByPath()
     {
         // Arrange
-        var storyNode = MeshNode.FromPath("type/story") with
+        var storyNode = MeshNode.FromPath("Type/story") with
         {
             Name = "Story",
             NodeType = "NodeType",
@@ -36,50 +37,39 @@ public class NodeTypeServiceTest
         };
         await _persistence.SaveNodeAsync(storyNode, TestContext.Current.CancellationToken);
 
-        // Act
-        var result = await _service.GetNodeTypeNodeAsync("story", "graph/org1/proj1", TestContext.Current.CancellationToken);
+        // Act - pass the full path
+        var result = await _service.GetNodeTypeNodeAsync("Type/story", "", TestContext.Current.CancellationToken);
 
         // Assert
         result.Should().NotBeNull();
-        result!.Path.Should().Be("type/story");
+        result!.Path.Should().Be("Type/story");
     }
 
     [Fact]
-    public async Task GetNodeTypeNodeAsync_ReturnsLocalType_WhenOverrideExists()
-    {
-        // Arrange - global and local
-        var globalStory = MeshNode.FromPath("type/story") with
-        {
-            Name = "Story",
-            NodeType = "NodeType",
-            Content = new NodeTypeDefinition { Id = "story", Namespace = "Type", DisplayName = "Story" }
-        };
-        await _persistence.SaveNodeAsync(globalStory, TestContext.Current.CancellationToken);
-
-        var localStory = MeshNode.FromPath("graph/org1/story") with
-        {
-            Name = "Org Story",
-            NodeType = "NodeType",
-            Content = new NodeTypeDefinition { Id = "story", Namespace = "Type", DisplayName = "Org Story" }
-        };
-        await _persistence.SaveNodeAsync(localStory, TestContext.Current.CancellationToken);
-
-        // Act
-        var result = await _service.GetNodeTypeNodeAsync("story", "graph/org1/proj1", TestContext.Current.CancellationToken);
-
-        // Assert - should get the local override at org level
-        result.Should().NotBeNull();
-        result!.Path.Should().Be("graph/org1/story");
-    }
-
-    [Fact]
-    public async Task GetNodeTypeNodeAsync_ReturnsNull_WhenTypeNotFound()
+    public async Task GetNodeTypeNodeAsync_ReturnsNull_WhenNotFound()
     {
         // Act
-        var result = await _service.GetNodeTypeNodeAsync("nonexistent", "graph/org1", TestContext.Current.CancellationToken);
+        var result = await _service.GetNodeTypeNodeAsync("Type/nonexistent", "", TestContext.Current.CancellationToken);
 
         // Assert
         result.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task GetNodeTypeNodeAsync_ThrowsWhenNotNodeType()
+    {
+        // Arrange - a node that is not a NodeType
+        var regularNode = MeshNode.FromPath("graph/org1") with
+        {
+            Name = "Org1",
+            NodeType = "Organization"
+        };
+        await _persistence.SaveNodeAsync(regularNode, TestContext.Current.CancellationToken);
+
+        // Act & Assert
+        var act = () => _service.GetNodeTypeNodeAsync("graph/org1", "", TestContext.Current.CancellationToken);
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*not a NodeType*");
     }
 
     #endregion
@@ -90,7 +80,7 @@ public class NodeTypeServiceTest
     public async Task GetCodeFileAsync_ReturnsCodeFile_FromPartition()
     {
         // Arrange
-        var storyNode = MeshNode.FromPath("type/story") with
+        var storyNode = MeshNode.FromPath("Type/story") with
         {
             Name = "Story",
             NodeType = "NodeType",
@@ -98,14 +88,14 @@ public class NodeTypeServiceTest
         };
         await _persistence.SaveNodeAsync(storyNode, TestContext.Current.CancellationToken);
 
-        var codeConfig = new CodeFile
+        var codeFile = new CodeFile
         {
             Code = "public record Story { [Key] public string Id { get; init; } }"
         };
-        await _persistence.SavePartitionObjectsAsync("type/story", null, [codeConfig], TestContext.Current.CancellationToken);
+        await _persistence.SavePartitionObjectsAsync("Type/story", null, [codeFile], TestContext.Current.CancellationToken);
 
-        // Act
-        var result = await _service.GetCodeFileAsync("story", "graph/org1", TestContext.Current.CancellationToken);
+        // Act - pass full path
+        var result = await _service.GetCodeFileAsync("Type/story", "", TestContext.Current.CancellationToken);
 
         // Assert
         result.Should().NotBeNull();
@@ -116,7 +106,7 @@ public class NodeTypeServiceTest
     public async Task GetCodeFileAsync_ReturnsNull_WhenNoCodeFile()
     {
         // Arrange - NodeType without CodeFile
-        var storyNode = MeshNode.FromPath("type/story") with
+        var storyNode = MeshNode.FromPath("Type/story") with
         {
             Name = "Story",
             NodeType = "NodeType",
@@ -124,8 +114,8 @@ public class NodeTypeServiceTest
         };
         await _persistence.SaveNodeAsync(storyNode, TestContext.Current.CancellationToken);
 
-        // Act
-        var result = await _service.GetCodeFileAsync("story", "graph/org1", TestContext.Current.CancellationToken);
+        // Act - pass full path
+        var result = await _service.GetCodeFileAsync("Type/story", "", TestContext.Current.CancellationToken);
 
         // Assert
         result.Should().BeNull();
@@ -139,7 +129,7 @@ public class NodeTypeServiceTest
     public async Task GetDependencyCodeAsync_ReturnsCombinedCode_FromDependencies()
     {
         // Arrange
-        var personNode = MeshNode.FromPath("type/person") with
+        var personNode = MeshNode.FromPath("Type/person") with
         {
             Name = "Person",
             NodeType = "NodeType",
@@ -148,9 +138,9 @@ public class NodeTypeServiceTest
         await _persistence.SaveNodeAsync(personNode, TestContext.Current.CancellationToken);
 
         var personCode = new CodeFile { Code = "public record Person { public string Name { get; init; } }" };
-        await _persistence.SavePartitionObjectsAsync("type/person", null, [personCode], TestContext.Current.CancellationToken);
+        await _persistence.SavePartitionObjectsAsync("Type/person", null, [personCode], TestContext.Current.CancellationToken);
 
-        var orgNode = MeshNode.FromPath("type/organization") with
+        var orgNode = MeshNode.FromPath("Type/organization") with
         {
             Name = "Organization",
             NodeType = "NodeType",
@@ -159,10 +149,10 @@ public class NodeTypeServiceTest
         await _persistence.SaveNodeAsync(orgNode, TestContext.Current.CancellationToken);
 
         var orgCode = new CodeFile { Code = "public record Organization { public string Title { get; init; } }" };
-        await _persistence.SavePartitionObjectsAsync("type/organization", null, [orgCode], TestContext.Current.CancellationToken);
+        await _persistence.SavePartitionObjectsAsync("Type/organization", null, [orgCode], TestContext.Current.CancellationToken);
 
         // Act
-        var result = await _service.GetDependencyCodeAsync(["type/person", "type/organization"], TestContext.Current.CancellationToken);
+        var result = await _service.GetDependencyCodeAsync(["Type/person", "Type/organization"], TestContext.Current.CancellationToken);
 
         // Assert
         result.Should().Contain("Person");
