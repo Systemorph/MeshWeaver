@@ -2,13 +2,11 @@
 using MeshWeaver.Application.Styles;
 using MeshWeaver.ContentCollections;
 using MeshWeaver.Domain;
-using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
+using MeshWeaver.Layout.Domain;
 using MeshWeaver.Mesh;
-using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
-using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.Graph;
 
@@ -30,83 +28,37 @@ public static class MeshNodeView
 
     /// <summary>
     /// Adds the mesh node views (Details, Thumbnail, Metadata, Settings, Comments) to the hub's layout.
+    /// Requires AddMeshDataSource() to be called first to enable GetStream&lt;MeshNode&gt;() in views.
     /// Details is set as the default area for empty path requests.
     /// </summary>
     public static MessageHubConfiguration AddMeshNodeView(this MessageHubConfiguration configuration)
-        => configuration.AddLayout(layout => layout
-            .WithDefaultArea(DetailsArea)
-            .WithView(DetailsArea, Details)
-            .WithView(ThumbnailArea, Thumbnail)
-            .WithView(MetadataArea, Metadata)
-            .WithView(SettingsArea, Settings)
-            .WithView(CommentsArea, Comments));
+        => configuration
+            .AddLayout(layout => layout
+                .WithDefaultArea(DetailsArea)
+                .WithView(DetailsArea, Details)
+                .WithView(ThumbnailArea, Thumbnail)
+                .WithView(MetadataArea, Metadata)
+                .WithView(SettingsArea, Settings)
+                .WithView(CommentsArea, Comments));
 
     /// <summary>
     /// Renders the Details area showing the node's main content with action menu.
     /// This is the default view for a node, showing content and providing navigation.
+    /// Uses GetStream for reactive data binding instead of direct persistence access.
     /// </summary>
-    public static IObservable<UiControl> Details(LayoutAreaHost host, RenderingContext _)
+    public static IObservable<UiControl?> Details(LayoutAreaHost host, RenderingContext _)
     {
         var hubPath = host.Hub.Address.ToString();
-        var persistence = host.Hub.ServiceProvider.GetService<IPersistenceService>();
-        var meshCatalog = host.Hub.ServiceProvider.GetService<IMeshCatalog>();
 
-        if (persistence == null)
-        {
-            return Observable.Return(Controls.Stack
-                .WithWidth("100%")
-                .WithView(Controls.Html($"<h2>{hubPath}</h2>"))
-                .WithView(Controls.Html("<p>Persistence service not available.</p>")));
-        }
-
-        // Load node and children data asynchronously
-        return Observable.FromAsync(async ct =>
-        {
-            var node = await persistence.GetNodeAsync(hubPath, ct);
-            var children = new List<MeshNode>();
-            if (meshCatalog != null)
+        // Use GetStream<MeshNode> to get node data reactively from MeshDataSource
+        return host.StreamView<MeshNode>(
+            (nodes, h) =>
             {
-                // Check if the node's type has a custom ChildrenQuery
-                var childrenQuery = await GetChildrenQueryAsync(persistence, node, ct);
-
-                if (!string.IsNullOrEmpty(childrenQuery))
-                {
-                    // Use QueryAsync with the configured query
-                    // Query from root ("") to search across all nodes
-                    await foreach (var obj in persistence.QueryAsync(childrenQuery, "").WithCancellation(ct))
-                    {
-                        if (obj is MeshNode childNode)
-                            children.Add(childNode);
-                    }
-                }
-                else
-                {
-                    // Default: get direct children
-                    await foreach (var child in meshCatalog.Persistence.GetChildrenAsync(hubPath).WithCancellation(ct))
-                        children.Add(child);
-                }
-            }
-
-            return BuildDetailsContent(host, node, children);
-        });
-    }
-
-    /// <summary>
-    /// Gets the ChildrenQuery from the node's NodeTypeDefinition, if configured.
-    /// </summary>
-    private static async Task<string?> GetChildrenQueryAsync(this IPersistenceService persistence, MeshNode? node, CancellationToken ct)
-    {
-        if (node?.NodeType == null)
-            return null;
-
-        // Look up the NodeType node (e.g., "Type/Organizations")
-        var nodeTypeNode = await persistence.GetNodeAsync(node.NodeType, ct);
-        if (nodeTypeNode?.Content is NodeTypeDefinition nodeTypeDef)
-        {
-            return nodeTypeDef.ChildrenQuery;
-        }
-
-        return null;
+                var node = nodes.FirstOrDefault(n => n.Path == hubPath);
+                var children = nodes.Where(n => n.ParentPath == hubPath).ToList();
+                return BuildDetailsContent(h, node, children);
+            },
+            hubPath);
     }
 
     private static UiControl BuildDetailsContent(this LayoutAreaHost host, MeshNode? node, IEnumerable<MeshNode> children)
@@ -225,22 +177,20 @@ public static class MeshNodeView
 
     /// <summary>
     /// Renders a compact thumbnail/card view of a node for use in catalogs and lists.
+    /// Uses GetStream for reactive data binding instead of direct persistence access.
     /// </summary>
-    public static IObservable<UiControl> Thumbnail(LayoutAreaHost host, RenderingContext _)
+    public static IObservable<UiControl?> Thumbnail(LayoutAreaHost host, RenderingContext _)
     {
         var hubPath = host.Hub.Address.ToString();
-        var persistence = host.Hub.ServiceProvider.GetService<IPersistenceService>();
 
-        if (persistence == null)
-        {
-            return Observable.Return(Controls.Html($"<div>{hubPath}</div>"));
-        }
-
-        return Observable.FromAsync(async ct =>
-        {
-            var node = await persistence.GetNodeAsync(hubPath, ct);
-            return BuildThumbnailContent(node, hubPath);
-        });
+        // Use GetStream<MeshNode> to get node data reactively from MeshDataSource
+        return host.StreamView<MeshNode>(
+            (nodes, _) =>
+            {
+                var node = nodes.FirstOrDefault(n => n.Path == hubPath);
+                return BuildThumbnailContent(node, hubPath);
+            },
+            hubPath);
     }
 
     private static UiControl BuildThumbnailContent(MeshNode? node, string hubPath)
@@ -273,25 +223,20 @@ public static class MeshNodeView
 
     /// <summary>
     /// Renders the Metadata area showing node properties (name, type, description, path).
+    /// Uses GetStream for reactive data binding instead of direct persistence access.
     /// </summary>
-    public static IObservable<UiControl> Metadata(LayoutAreaHost host, RenderingContext _1)
+    public static IObservable<UiControl?> Metadata(LayoutAreaHost host, RenderingContext _1)
     {
         var hubPath = host.Hub.Address.ToString();
-        var persistence = host.Hub.ServiceProvider.GetService<IPersistenceService>();
 
-        if (persistence == null)
-        {
-            return Observable.Return(Controls.Stack
-                .WithWidth("100%")
-                .WithView(Controls.Html("<h2>Metadata</h2>"))
-                .WithView(Controls.Html("<p>Persistence service not available.</p>")));
-        }
-
-        return Observable.FromAsync(async ct =>
-        {
-            var node = await persistence.GetNodeAsync(hubPath, ct);
-            return BuildMetadataContent(host, node);
-        });
+        // Use GetStream<MeshNode> to get node data reactively from MeshDataSource
+        return host.StreamView<MeshNode>(
+            (nodes, h) =>
+            {
+                var node = nodes.FirstOrDefault(n => n.Path == hubPath);
+                return BuildMetadataContent(h, node);
+            },
+            "Metadata");
     }
 
     private static UiControl BuildMetadataContent(LayoutAreaHost host, MeshNode? node)
@@ -343,25 +288,20 @@ public static class MeshNodeView
     /// <summary>
     /// Renders the Settings area showing node properties with navigatable NodeType link.
     /// Provides read-only view of node metadata with ability to navigate to type definition.
+    /// Uses GetStream for reactive data binding instead of direct persistence access.
     /// </summary>
-    public static IObservable<UiControl> Settings(LayoutAreaHost host, RenderingContext _)
+    public static IObservable<UiControl?> Settings(LayoutAreaHost host, RenderingContext _)
     {
         var hubPath = host.Hub.Address.ToString();
-        var persistence = host.Hub.ServiceProvider.GetService<IPersistenceService>();
 
-        if (persistence == null)
-        {
-            return Observable.Return(Controls.Stack
-                .WithWidth("100%")
-                .WithView(Controls.Html("<h2>Settings</h2>"))
-                .WithView(Controls.Html("<p>Persistence service not available.</p>")));
-        }
-
-        return Observable.FromAsync(async ct =>
-        {
-            var node = await persistence.GetNodeAsync(hubPath, ct);
-            return BuildSettingsContent(host, node);
-        });
+        // Use GetStream<MeshNode> to get node data reactively from MeshDataSource
+        return host.StreamView<MeshNode>(
+            (nodes, h) =>
+            {
+                var node = nodes.FirstOrDefault(n => n.Path == hubPath);
+                return BuildSettingsContent(h, node);
+            },
+            "Node Settings");
     }
 
     private static UiControl BuildSettingsContent(LayoutAreaHost host, MeshNode? node)
@@ -498,24 +438,16 @@ public static class MeshNodeView
     /// <summary>
     /// Renders the Comments area showing comments for the node (Facebook-style).
     /// Shows 10 most recent with "Load more" functionality.
+    /// Uses GetStream for reactive data binding when Comment is registered as mapped type.
     /// </summary>
-    public static IObservable<UiControl> Comments(LayoutAreaHost host, RenderingContext _)
+    public static IObservable<UiControl?> Comments(LayoutAreaHost host, RenderingContext _)
     {
         var nodePath = host.Hub.Address.ToString();
-        var persistence = host.Hub.ServiceProvider.GetService<IPersistenceService>();
 
-        if (persistence == null)
-        {
-            return Observable.Return(Controls.Html("<p style=\"color: #888;\">Comments not available.</p>"));
-        }
-
-        return Observable.FromAsync(async ct =>
-        {
-            var comments = new List<Comment>();
-            await foreach (var comment in persistence.GetCommentsAsync(nodePath).WithCancellation(ct))
-                comments.Add(comment);
-            return BuildFacebookStyleComments(host, comments, nodePath);
-        });
+        // Use GetStream<Comment> to get comment data reactively from MeshDataSource
+        return host.StreamView<Comment>(
+            (comments, _) => BuildFacebookStyleComments(host, comments.ToList(), nodePath),
+            "Comments");
     }
 
     private static UiControl BuildFacebookStyleComments(LayoutAreaHost _1, List<Comment> comments, string _2)

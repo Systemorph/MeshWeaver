@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Reactive.Linq;
 using System.Reflection;
 using MeshWeaver.Connection.Orleans;
 using MeshWeaver.Mesh;
@@ -37,7 +38,7 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
 
         Hub = node.InstantiationType switch
         {
-            InstantiationType.HubConfiguration => InstantiateFromHubConfiguration(address, node),
+            InstantiationType.HubConfiguration => await InstantiateFromHubConfiguration(address, node),
             _ => throw new NotSupportedException()
         };
 
@@ -72,7 +73,7 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
         }
     }
 
-    private IMessageHub InstantiateFromHubConfiguration(Address address, MeshNode node)
+    private async Task<IMessageHub> InstantiateFromHubConfiguration(Address address, MeshNode node)
     {
         if (node.AssemblyLocation is null)
             throw new ArgumentException(
@@ -90,7 +91,14 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
                 $"No hub configuration is specified for {node.Path}."
             );
 
-        return meshHub.GetHostedHub(address, node.HubConfiguration)!;
+        // Subscribe to get the HubConfiguration - this is where we actually need the config
+        var hubConfig = await node.HubConfiguration.FirstOrDefaultAsync();
+        if (hubConfig is null)
+            throw new ArgumentException(
+                $"HubConfiguration resolved to null for {node.Path}."
+            );
+
+        return meshHub.GetHostedHub(address, hubConfig)!;
     }
 
 

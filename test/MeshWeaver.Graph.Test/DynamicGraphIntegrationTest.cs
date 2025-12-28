@@ -1375,3 +1375,180 @@ public class FileSystemPersistenceTestsCollection { }
 public class DynamicGraphIntegrationTestsCollection
 {
 }
+
+/// <summary>
+/// Tests that use the actual samples/Graph/Data directory to test deadlock scenarios.
+/// This replicates the exact production scenario with real sample data.
+/// </summary>
+[Collection("SamplesGraphDataTests")]
+public class SamplesGraphDataTest : MonolithMeshTestBase
+{
+    // Use the actual samples directory
+    private static readonly string SamplesDataDirectory = Path.GetFullPath(
+        Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "samples", "Graph", "Data"));
+
+    private readonly string _cacheDirectory;
+
+    public SamplesGraphDataTest(ITestOutputHelper output) : base(output)
+    {
+        _cacheDirectory = Path.Combine(Path.GetTempPath(), "MeshWeaverSamplesTests", Guid.NewGuid().ToString());
+        Directory.CreateDirectory(_cacheDirectory);
+    }
+
+    protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
+    {
+        return builder
+            .UseMonolithMesh()
+            .AddFileSystemPersistence(SamplesDataDirectory)
+            .ConfigureServices(services => services.Configure<CompilationCacheOptions>(o => o.CacheDirectory = _cacheDirectory))
+            .AddJsonGraphConfiguration(SamplesDataDirectory);
+    }
+
+    public override async ValueTask DisposeAsync()
+    {
+        await base.DisposeAsync();
+
+        if (Directory.Exists(_cacheDirectory))
+        {
+            try { Directory.Delete(_cacheDirectory, recursive: true); }
+            catch { /* Ignore cleanup errors */ }
+        }
+    }
+
+    /// <summary>
+    /// Test that tries to get the default layout from Type/Organizations.
+    /// This test is expected to deadlock if the NodeTypeService implementation has issues.
+    /// </summary>
+    [Fact(Timeout = 30000)]
+    public async Task TypeOrganizations_GetDefaultLayout_ShouldNotDeadlock()
+    {
+        // Arrange
+        var typeOrganizationsAddress = new Address("Type", "Organizations");
+
+        // Get a client with data services configured
+        var client = GetClient(c => c.AddData(data => data));
+
+        Output.WriteLine($"Samples data directory: {SamplesDataDirectory}");
+        Output.WriteLine($"Directory exists: {Directory.Exists(SamplesDataDirectory)}");
+
+        // Act: Request the default layout area (empty = default view)
+        var workspace = client.GetWorkspace();
+        var reference = new LayoutAreaReference(string.Empty);
+
+        Output.WriteLine("Getting remote stream for Type/Organizations...");
+        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(typeOrganizationsAddress, reference);
+
+        Output.WriteLine("Waiting for first value from stream...");
+        // Wait for the stream to emit a value - this is where deadlock would occur
+        var value = await stream.FirstAsync();
+
+        Output.WriteLine($"Received value: {value}");
+
+        // Assert
+        value.Should().NotBe(default(JsonElement),
+            "Type/Organizations node should return default layout area content");
+    }
+
+    /// <summary>
+    /// Test that verifies the samples directory exists and has the expected structure.
+    /// </summary>
+    [Fact]
+    public void SamplesDirectory_Exists_WithExpectedStructure()
+    {
+        Output.WriteLine($"Checking samples directory: {SamplesDataDirectory}");
+
+        Directory.Exists(SamplesDataDirectory).Should().BeTrue(
+            $"Samples directory should exist at {SamplesDataDirectory}");
+
+        var typeOrganizationsPath = Path.Combine(SamplesDataDirectory, "Type", "Organizations.json");
+        File.Exists(typeOrganizationsPath).Should().BeTrue(
+            $"Type/Organizations.json should exist at {typeOrganizationsPath}");
+
+        var codeConfigPath = Path.Combine(SamplesDataDirectory, "Type", "Organizations", "Code", "dataModel.json");
+        File.Exists(codeConfigPath).Should().BeTrue(
+            $"Type/Organizations/Code/dataModel.json should exist at {codeConfigPath}");
+    }
+
+    /// <summary>
+    /// Test that the MeshCatalog can resolve Type/Organizations path.
+    /// </summary>
+    [Fact(Timeout = 10000)]
+    public async Task TypeOrganizations_CanBeResolved_FromSamples()
+    {
+        var meshCatalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
+
+        Output.WriteLine("Resolving Type/Organizations path...");
+        var resolution = await meshCatalog.ResolvePathAsync("Type/Organizations");
+
+        resolution.Should().NotBeNull("Type/Organizations should be resolvable from samples");
+        resolution.Prefix.Should().Be("Type/Organizations");
+        Output.WriteLine($"Resolved: Prefix={resolution.Prefix}, Remainder={resolution.Remainder}");
+    }
+
+    /// <summary>
+    /// Test that GetNodeAsync works for Type/Organizations.
+    /// </summary>
+    [Fact(Timeout = 15000)]
+    public async Task TypeOrganizations_GetNodeAsync_FromSamples()
+    {
+        var meshCatalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
+
+        Output.WriteLine("Getting node for Type/Organizations...");
+        var node = await meshCatalog.GetNodeAsync(new Address("Type", "Organizations"));
+
+        node.Should().NotBeNull("Type/Organizations node should exist in samples");
+        Output.WriteLine($"Node: Path={node.Path}, NodeType={node.NodeType}, HubConfiguration={node.HubConfiguration != null}");
+
+        node.Path.Should().Be("Type/Organizations");
+        node.NodeType.Should().Be("NodeType");
+    }
+
+    /// <summary>
+    /// Test that verifies the node's HubConfiguration is set for NodeType nodes.
+    /// Nodes with nodeType=NodeType compile their own code to get HubConfiguration.
+    /// </summary>
+    [Fact(Timeout = 15000)]
+    public async Task TypeOrganizations_HubConfiguration_IsSetForNodeType()
+    {
+        var meshCatalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
+        var node = await meshCatalog.GetNodeAsync(new Address("Type", "Organizations"));
+
+        node.Should().NotBeNull();
+        node.NodeType.Should().Be("NodeType");
+
+        // NodeType nodes compile their OWN code (at their path) to get HubConfiguration
+        Output.WriteLine($"Node.HubConfiguration is null: {node.HubConfiguration == null}");
+        node.HubConfiguration.Should().NotBeNull(
+            "NodeType nodes should have HubConfiguration from their own code");
+
+        // Verify we can get the actual HubConfiguration function
+        var hubConfig = await node.HubConfiguration.FirstAsync();
+        hubConfig.Should().NotBeNull("Should be able to get HubConfiguration from Observable");
+        Output.WriteLine("Successfully obtained HubConfiguration from Observable");
+    }
+
+    /// <summary>
+    /// Test that sends a PingRequest to Type/Organizations hub.
+    /// This triggers hub creation which may cause deadlock.
+    /// </summary>
+    [Fact(Timeout = 30000)]
+    public async Task TypeOrganizations_PingRequest_ShouldNotDeadlock()
+    {
+        var typeOrganizationsAddress = new Address("Type", "Organizations");
+        var client = GetClient();
+
+        Output.WriteLine("Sending PingRequest to Type/Organizations...");
+
+        // This triggers hub creation - may deadlock here
+        var response = await client.AwaitResponse(
+            new PingRequest(),
+            o => o.WithTarget(typeOrganizationsAddress),
+            TestContext.Current.CancellationToken);
+
+        Output.WriteLine($"Received response: {response}");
+        response.Should().NotBeNull("Should receive ping response");
+    }
+}
+
+[CollectionDefinition("SamplesGraphDataTests", DisableParallelization = true)]
+public class SamplesGraphDataTestsCollection { }
