@@ -1548,6 +1548,94 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
         Output.WriteLine($"Received response: {response}");
         response.Should().NotBeNull("Should receive ping response");
     }
+
+    /// <summary>
+    /// Test that CodeView for Type/Organizations returns non-empty content.
+    /// The view may emit an empty EntityStore first, then populate with actual content.
+    /// Specifically waits for the "areas" collection to have entries (the rendered UI controls).
+    /// </summary>
+    [Fact(Timeout = 30000)]
+    public async Task TypeOrganizations_CodeView_ReturnsNonEmptyContent()
+    {
+        var typeOrganizationsAddress = new Address("Type", "Organizations");
+        var client = GetClient(c => c
+            .AddData(data => data)
+            .WithType<CodeConfiguration>("Code"));
+        var workspace = client.GetWorkspace();
+
+        // Request the Code view area
+        var reference = new LayoutAreaReference("Code");
+
+        Output.WriteLine("Getting CodeView for Type/Organizations...");
+        var stream = workspace.GetRemoteStream<EntityStore, LayoutAreaReference>(typeOrganizationsAddress, reference);
+
+        // Wait for the "areas" collection specifically to have instances
+        // The "data" collection may populate first, but we need the rendered UI controls
+        var entityStore = await stream
+            .Where(x => x.Value != null &&
+                        x.Value.Collections.TryGetValue(LayoutAreaReference.Areas, out var areas) &&
+                        areas.Instances.Any())
+            .Timeout(TimeSpan.FromSeconds(20))
+            .Select(x => x.Value!)
+            .FirstAsync();
+
+        Output.WriteLine($"Received EntityStore with {entityStore.Collections.Count} collections");
+
+        foreach (var collection in entityStore.Collections)
+        {
+            Output.WriteLine($"Collection: {collection.Key}, Instances: {collection.Value.Instances.Count}");
+            foreach (var instance in collection.Value.Instances.Take(5))
+            {
+                var json = System.Text.Json.JsonSerializer.Serialize(instance.Value);
+                Output.WriteLine($"  Instance {instance.Key}: {json.Substring(0, Math.Min(500, json.Length))}");
+            }
+        }
+
+        entityStore.Collections.Should().NotBeEmpty("CodeView should have rendered content");
+        entityStore.Collections.Should().ContainKey(LayoutAreaReference.Areas);
+        entityStore.Collections[LayoutAreaReference.Areas].Instances.Should().NotBeEmpty(
+            "CodeView should render UI controls to the areas collection");
+    }
+
+    /// <summary>
+    /// Test that CodeConfiguration stream for Type/Organizations is not empty.
+    /// </summary>
+    [Fact(Timeout = 30000)]
+    public async Task TypeOrganizations_CodeConfigurationStream_IsNotEmpty()
+    {
+        var typeOrganizationsAddress = new Address("Type", "Organizations");
+        var client = GetClient(c => c
+            .AddData(data => data)
+            .WithType<CodeConfiguration>("Code"));
+        var workspace = client.GetWorkspace();
+
+        Output.WriteLine("Getting Code collection stream for Type/Organizations...");
+        var stream = workspace.GetRemoteStream<InstanceCollection, CollectionReference>(
+            typeOrganizationsAddress,
+            new CollectionReference("Code"));
+
+        var instanceCollection = await stream
+            .Where(x => x.Value != null)
+            .Timeout(TimeSpan.FromSeconds(20))
+            .Select(x => x.Value!)
+            .FirstAsync();
+
+        Output.WriteLine($"Received InstanceCollection with {instanceCollection.Instances.Count} instances");
+
+        instanceCollection.Should().NotBeNull();
+        instanceCollection.Instances.Should().NotBeEmpty("Code collection should have CodeConfiguration instances");
+
+        var codeConfigs = instanceCollection.Get<CodeConfiguration>().ToList();
+        Output.WriteLine($"Found {codeConfigs.Count} CodeConfiguration(s)");
+
+        foreach (var config in codeConfigs)
+        {
+            Output.WriteLine($"CodeConfiguration.Code: {config.Code?.Substring(0, Math.Min(100, config.Code?.Length ?? 0))}...");
+        }
+
+        codeConfigs.Should().NotBeEmpty("Should have CodeConfiguration instances");
+        codeConfigs.First().Code.Should().NotBeNullOrEmpty("CodeConfiguration.Code should have content");
+    }
 }
 
 [CollectionDefinition("SamplesGraphDataTests", DisableParallelization = true)]
