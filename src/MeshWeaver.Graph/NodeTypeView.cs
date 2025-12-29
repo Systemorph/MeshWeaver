@@ -9,7 +9,6 @@ using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Messaging;
 using MeshWeaver.ShortGuid;
-using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.Graph;
 
@@ -127,7 +126,7 @@ public static class NodeTypeView
     {
         // Get NodeTypeDefinition from MeshNode.Content and CodeConfiguration from workspace stream
         var definitionStream = host.Workspace.GetNodeContent<NodeTypeDefinition>();
-        var codeFileStream = host.Workspace.GetSingle<CodeConfiguration>();
+        var codeFileStream = host.Workspace.GetStream<CodeConfiguration>();
 
         return definitionStream
             .CombineLatest(codeFileStream)
@@ -149,7 +148,7 @@ public static class NodeTypeView
     private static UiControl BuildSplitView(
         LayoutAreaHost host,
         NodeTypeDefinition content,
-        CodeConfiguration? codeFile)
+        IReadOnlyCollection<CodeConfiguration> codeFile)
     {
         var hubAddress = host.Hub.Address;
 
@@ -177,7 +176,7 @@ public static class NodeTypeView
     private static UiControl BuildLeftMenu(
         LayoutAreaHost host,
         NodeTypeDefinition content,
-        CodeConfiguration? _,
+        IEnumerable<CodeConfiguration> _,
         string selectionDataId)
     {
         var navMenu = Controls.NavMenu.WithSkin(s => s.WithWidth(280).WithCollapsible(false));
@@ -220,7 +219,7 @@ public static class NodeTypeView
     private static UiControl BuildMainPane(
         LayoutAreaHost _,
         NodeTypeDefinition content,
-        CodeConfiguration? codeFile,
+        IEnumerable<CodeConfiguration> codeFile,
         string selectionDataId)
     {
         // Create a reactive view that updates based on selection
@@ -237,7 +236,7 @@ public static class NodeTypeView
     private static UiControl BuildMainPaneContent(
         LayoutAreaHost host,
         NodeTypeDefinition content,
-        CodeConfiguration? _1,
+        IEnumerable<CodeConfiguration> _1,
         NodeTypeViewSelection? _2)
     {
         var hubAddress = host.Hub.Address;

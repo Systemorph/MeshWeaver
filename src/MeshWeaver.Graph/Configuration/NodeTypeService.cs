@@ -1,7 +1,6 @@
-using System.Collections.Concurrent;
+﻿using System.Collections.Concurrent;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
-using System.Reactive.Threading.Tasks;
 using MeshWeaver.Data;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
@@ -16,12 +15,13 @@ namespace MeshWeaver.Graph.Configuration;
 /// CRITICAL: Caches Tasks, NOT awaited results, to prevent deadlocks.
 /// Uses ConcurrentDictionary.GetOrAdd pattern for thread-safe lazy initialization.
 /// </summary>
-internal class NodeTypeService(
-    IMessageHub meshHub,
-    ILogger<NodeTypeService> logger,
-    IMeshNodeCompilationService? compilationService = null)
-    : INodeTypeService, IDisposable
+internal class NodeTypeService : INodeTypeService, IDisposable
 {
+    private readonly IMessageHub meshHub;
+    private readonly ILogger<NodeTypeService> logger;
+    private readonly IMeshNodeCompilationService? compilationService;
+    private readonly MeshConfiguration meshConfiguration;
+
     // CRITICAL: Cache Tasks, not results. Awaiting would cause deadlocks.
     private readonly ConcurrentDictionary<string, Task<NodeTypeCacheEntry?>> _cache = new();
 
@@ -30,6 +30,48 @@ internal class NodeTypeService(
 
     // Cached HubConfiguration functions for fast synchronous access
     private readonly ConcurrentDictionary<string, Func<MessageHubConfiguration, MessageHubConfiguration>> _hubConfigurations = new();
+
+    public NodeTypeService(
+        IMessageHub meshHub,
+        MeshConfiguration meshConfiguration,
+        ILogger<NodeTypeService> logger,
+        IMeshNodeCompilationService? compilationService = null)
+    {
+        this.meshHub = meshHub;
+        this.meshConfiguration = meshConfiguration;
+        this.logger = logger;
+        this.compilationService = compilationService;
+
+        // Initialize cache from pre-registered nodes in MeshConfiguration
+        InitializeFromMeshConfiguration();
+    }
+
+    /// <summary>
+    /// Initializes the HubConfiguration cache from pre-registered mesh nodes.
+    /// Subscribes to HubConfiguration observables and caches the results.
+    /// </summary>
+    private void InitializeFromMeshConfiguration()
+    {
+        foreach (var node in meshConfiguration.Nodes.Values)
+        {
+            if (node.HubConfiguration == null)
+                continue;
+
+            var path = node.Path;
+            var subscription = node.HubConfiguration.Subscribe(
+                hubConfig =>
+                {
+                    if (hubConfig != null)
+                    {
+                        _hubConfigurations[path] = hubConfig;
+                        logger.LogDebug("Cached HubConfiguration from MeshConfiguration for {Path}", path);
+                    }
+                },
+                ex => logger.LogError(ex, "Error subscribing to HubConfiguration for {Path}", path));
+
+            _subscriptions[path] = subscription;
+        }
+    }
 
     /// <inheritdoc />
     public Task<string?> GetAssemblyPathAsync(string nodeTypePath, CancellationToken ct = default)
@@ -85,38 +127,20 @@ internal class NodeTypeService(
     /// <inheritdoc />
     public MeshNode EnrichWithNodeType(MeshNode node)
     {
-        if (string.IsNullOrEmpty(node.NodeType))
+        // Skip if no NodeType or HubConfiguration is already set
+        if (string.IsNullOrEmpty(node.NodeType) || node.HubConfiguration != null)
             return node;
 
         var nodeType = node.NodeType;
 
-        // Special case: "NodeType" nodes (type definitions) need to compile THEMSELVES
-        // to extract their Configuration lambda from NodeTypeDefinition.Configuration.
-        // The path to compile is the node's own path, not "NodeType".
-        if (nodeType == MeshNode.NodeTypePath)
-        {
-            // The node IS a type definition - compile it by its path to get its HubConfiguration
-            var nodePath = node.Path;
-
-            // Check if already cached
-            var cachedConfig = GetCachedHubConfiguration(nodePath);
-            if (cachedConfig != null)
-            {
-                return node with { HubConfiguration = Observable.Return<Func<MessageHubConfiguration, MessageHubConfiguration>?>(cachedConfig) };
-            }
-
-            // Compile the type definition node itself
-            return node with { HubConfiguration = GetHubConfigurationForNodeType(nodePath) };
-        }
-
-        // 1. Try cached HubConfiguration (sync fast path) - wrap in Observable.Return
+        // Try cached HubConfiguration (sync fast path) - wrap in Observable.Return
         var cachedHubConfig = GetCachedHubConfiguration(nodeType);
         if (cachedHubConfig != null)
         {
             return node with { HubConfiguration = Observable.Return<Func<MessageHubConfiguration, MessageHubConfiguration>?>(cachedHubConfig) };
         }
 
-        // 2. Not cached - return node with Observable that will emit when compiled
+        // Not cached - return node with Observable that will emit when compiled
         // The caller will subscribe only when actually creating the hub
         return node with { HubConfiguration = GetHubConfigurationForNodeType(nodeType) };
     }
