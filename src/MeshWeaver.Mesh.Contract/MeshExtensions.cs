@@ -1,4 +1,5 @@
-﻿using MeshWeaver.Mesh.Services;
+﻿using MeshWeaver.Mesh.Security;
+using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -251,7 +252,7 @@ public static class MeshExtensions
     }
 
     /// <summary>
-    /// Runs all creation validators from DI.
+    /// Runs all creation validators from DI using the unified INodeValidator interface.
     /// </summary>
     private static async Task<(string? ErrorMessage, NodeCreationRejectionReason Reason)?> RunCreationValidatorsAsync(
         IMessageHub hub,
@@ -260,20 +261,46 @@ public static class MeshExtensions
         CreateNodeRequest request,
         CancellationToken ct)
     {
-        // Run global validators from DI
-        var globalValidators = hub.ServiceProvider.GetServices<INodeCreationValidator>();
-        foreach (var validator in globalValidators)
+        var accessService = hub.ServiceProvider.GetService<AccessService>();
+        var context = new NodeValidationContext
         {
-            var result = await validator.ValidateAsync(node, request, ct);
+            Operation = NodeOperation.Create,
+            Node = node,
+            Request = request,
+            AccessContext = accessService?.Context
+        };
+
+        // Run unified validators from DI
+        var validators = hub.ServiceProvider.GetServices<INodeValidator>();
+        foreach (var validator in validators)
+        {
+            // Check if validator handles Create operations
+            if (validator.SupportedOperations.Count > 0 &&
+                !validator.SupportedOperations.Contains(NodeOperation.Create))
+            {
+                continue;
+            }
+
+            var result = await validator.ValidateAsync(context, ct);
             if (!result.IsValid)
-                return (result.ErrorMessage, result.Reason);
+            {
+                var reason = result.Reason switch
+                {
+                    NodeRejectionReason.NodeAlreadyExists => NodeCreationRejectionReason.NodeAlreadyExists,
+                    NodeRejectionReason.InvalidNodeType => NodeCreationRejectionReason.InvalidNodeType,
+                    NodeRejectionReason.InvalidPath => NodeCreationRejectionReason.InvalidPath,
+                    NodeRejectionReason.Unauthorized => NodeCreationRejectionReason.ValidationFailed,
+                    _ => NodeCreationRejectionReason.ValidationFailed
+                };
+                return (result.ErrorMessage, reason);
+            }
         }
 
         return null; // All validators passed
     }
 
     /// <summary>
-    /// Runs all deletion validators from DI.
+    /// Runs all deletion validators from DI using the unified INodeValidator interface.
     /// </summary>
     private static async Task<(string? ErrorMessage, NodeDeletionRejectionReason Reason)?> RunDeletionValidatorsAsync(
         IMessageHub hub,
@@ -282,13 +309,38 @@ public static class MeshExtensions
         DeleteNodeRequest request,
         CancellationToken ct)
     {
-        // Run global validators from DI
-        var globalValidators = hub.ServiceProvider.GetServices<INodeDeletionValidator>();
-        foreach (var validator in globalValidators)
+        var accessService = hub.ServiceProvider.GetService<AccessService>();
+        var context = new NodeValidationContext
         {
-            var result = await validator.ValidateAsync(node, request, ct);
+            Operation = NodeOperation.Delete,
+            Node = node,
+            Request = request,
+            AccessContext = accessService?.Context
+        };
+
+        // Run unified validators from DI
+        var validators = hub.ServiceProvider.GetServices<INodeValidator>();
+        foreach (var validator in validators)
+        {
+            // Check if validator handles Delete operations
+            if (validator.SupportedOperations.Count > 0 &&
+                !validator.SupportedOperations.Contains(NodeOperation.Delete))
+            {
+                continue;
+            }
+
+            var result = await validator.ValidateAsync(context, ct);
             if (!result.IsValid)
-                return (result.ErrorMessage, result.Reason);
+            {
+                var reason = result.Reason switch
+                {
+                    NodeRejectionReason.NodeNotFound => NodeDeletionRejectionReason.NodeNotFound,
+                    NodeRejectionReason.HasChildren => NodeDeletionRejectionReason.HasChildren,
+                    NodeRejectionReason.Unauthorized => NodeDeletionRejectionReason.ValidationFailed,
+                    _ => NodeDeletionRejectionReason.ValidationFailed
+                };
+                return (result.ErrorMessage, reason);
+            }
         }
 
         return null; // All validators passed
@@ -341,7 +393,7 @@ public static class MeshExtensions
             }
 
             // 3. Run validators (global + NodeType-specific)
-            var validationError = await RunUpdateValidatorsAsync(hub, catalog, existingNode, updatedNode, ct);
+            var validationError = await RunUpdateValidatorsAsync(hub, catalog, existingNode, updatedNode, updateRequest, ct);
             if (validationError != null)
             {
                 logger.LogWarning("Validator rejected node update at {Path}: {Error}",
@@ -388,22 +440,50 @@ public static class MeshExtensions
     }
 
     /// <summary>
-    /// Runs all update validators from DI.
+    /// Runs all update validators from DI using the unified INodeValidator interface.
     /// </summary>
     private static async Task<(string? ErrorMessage, NodeUpdateRejectionReason Reason)?> RunUpdateValidatorsAsync(
         IMessageHub hub,
         IMeshCatalog _,
         MeshNode existingNode,
         MeshNode updatedNode,
+        UpdateNodeRequest request,
         CancellationToken ct)
     {
-        // Run global validators from DI
-        var globalValidators = hub.ServiceProvider.GetServices<INodeUpdateValidator>();
-        foreach (var validator in globalValidators)
+        var accessService = hub.ServiceProvider.GetService<AccessService>();
+        var context = new NodeValidationContext
         {
-            var result = await validator.ValidateAsync(existingNode, updatedNode, ct);
+            Operation = NodeOperation.Update,
+            Node = updatedNode,
+            ExistingNode = existingNode,
+            Request = request,
+            AccessContext = accessService?.Context
+        };
+
+        // Run unified validators from DI
+        var validators = hub.ServiceProvider.GetServices<INodeValidator>();
+        foreach (var validator in validators)
+        {
+            // Check if validator handles Update operations
+            if (validator.SupportedOperations.Count > 0 &&
+                !validator.SupportedOperations.Contains(NodeOperation.Update))
+            {
+                continue;
+            }
+
+            var result = await validator.ValidateAsync(context, ct);
             if (!result.IsValid)
-                return (result.ErrorMessage, result.Reason);
+            {
+                var reason = result.Reason switch
+                {
+                    NodeRejectionReason.NodeNotFound => NodeUpdateRejectionReason.NodeNotFound,
+                    NodeRejectionReason.InvalidNodeType => NodeUpdateRejectionReason.InvalidNodeType,
+                    NodeRejectionReason.ConcurrencyConflict => NodeUpdateRejectionReason.ConcurrencyConflict,
+                    NodeRejectionReason.Unauthorized => NodeUpdateRejectionReason.ValidationFailed,
+                    _ => NodeUpdateRejectionReason.ValidationFailed
+                };
+                return (result.ErrorMessage, reason);
+            }
         }
 
         return null; // All validators passed

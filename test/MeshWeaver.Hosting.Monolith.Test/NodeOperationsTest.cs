@@ -1,10 +1,12 @@
 ﻿using System;
+using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
 using FluentAssertions.Extensions;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
@@ -13,38 +15,42 @@ using Xunit;
 namespace MeshWeaver.Hosting.Monolith.Test;
 
 /// <summary>
-/// A validator that rejects nodes with "rejected" in their name.
+/// A validator that rejects nodes with "rejected" in their name during creation.
 /// </summary>
-public class RejectingNodeValidator : INodeCreationValidator
+public class RejectingNodeValidator : INodeValidator
 {
-    public Task<NodeValidationResult> ValidateAsync(MeshNode node, CreateNodeRequest request, CancellationToken ct = default)
+    public IReadOnlyCollection<NodeOperation> SupportedOperations => [NodeOperation.Create];
+
+    public Task<NodeValidationResult> ValidateAsync(NodeValidationContext context, CancellationToken ct = default)
     {
-        if (node.Name?.Contains("rejected", StringComparison.OrdinalIgnoreCase) == true)
+        if (context.Node.Name?.Contains("rejected", StringComparison.OrdinalIgnoreCase) == true)
         {
             return Task.FromResult(NodeValidationResult.Invalid(
-                $"Node name '{node.Name}' is not allowed by hub policy",
-                NodeCreationRejectionReason.ValidationFailed));
+                $"Node name '{context.Node.Name}' is not allowed by hub policy",
+                NodeRejectionReason.ValidationFailed));
         }
         return Task.FromResult(NodeValidationResult.Valid());
     }
 }
 
 /// <summary>
-/// A validator that requires Content to be set on nodes of specific type.
+/// A validator that requires Content to be set on nodes of specific type during creation.
 /// </summary>
-public class RequireContentValidator(string nodeType) : INodeCreationValidator
+public class RequireContentValidator(string nodeType) : INodeValidator
 {
-    public Task<NodeValidationResult> ValidateAsync(MeshNode node, CreateNodeRequest request, CancellationToken ct = default)
+    public IReadOnlyCollection<NodeOperation> SupportedOperations => [NodeOperation.Create];
+
+    public Task<NodeValidationResult> ValidateAsync(NodeValidationContext context, CancellationToken ct = default)
     {
         // Only validate nodes of the specific type
-        if (node.NodeType != nodeType)
+        if (context.Node.NodeType != nodeType)
             return Task.FromResult(NodeValidationResult.Valid());
 
-        if (node.Content == null)
+        if (context.Node.Content == null)
         {
             return Task.FromResult(NodeValidationResult.Invalid(
                 "Node must have Content set",
-                NodeCreationRejectionReason.ValidationFailed));
+                NodeRejectionReason.ValidationFailed));
         }
         return Task.FromResult(NodeValidationResult.Valid());
     }
@@ -53,18 +59,20 @@ public class RequireContentValidator(string nodeType) : INodeCreationValidator
 /// <summary>
 /// A validator that prevents deletion of nodes marked as protected (via Content).
 /// </summary>
-public class ProtectedNodeDeletionValidator : INodeDeletionValidator
+public class ProtectedNodeDeletionValidator : INodeValidator
 {
-    public Task<NodeDeletionValidationResult> ValidateAsync(MeshNode node, DeleteNodeRequest request, CancellationToken ct = default)
+    public IReadOnlyCollection<NodeOperation> SupportedOperations => [NodeOperation.Delete];
+
+    public Task<NodeValidationResult> ValidateAsync(NodeValidationContext context, CancellationToken ct = default)
     {
         // Check if Content contains a protected flag
-        if (node.Content is ProtectedContent { IsProtected: true })
+        if (context.Node.Content is ProtectedContent { IsProtected: true })
         {
-            return Task.FromResult(NodeDeletionValidationResult.Invalid(
-                $"Node '{node.Path}' is protected and cannot be deleted",
-                NodeDeletionRejectionReason.ValidationFailed));
+            return Task.FromResult(NodeValidationResult.Invalid(
+                $"Node '{context.Node.Path}' is protected and cannot be deleted",
+                NodeRejectionReason.ValidationFailed));
         }
-        return Task.FromResult(NodeDeletionValidationResult.Valid());
+        return Task.FromResult(NodeValidationResult.Valid());
     }
 }
 
@@ -368,7 +376,7 @@ public class NodeOperationsWithValidatorTest(ITestOutputHelper output) : Monolit
     {
         // Register the rejecting validator
         builder.ConfigureServices(services =>
-            services.AddSingleton<INodeCreationValidator, RejectingNodeValidator>());
+            services.AddSingleton<INodeValidator, RejectingNodeValidator>());
 
         return base.ConfigureMesh(builder);
     }
@@ -473,7 +481,7 @@ public class NodeOperationsWithContentValidatorTest(ITestOutputHelper output) : 
 
         // Register RequireContentValidator globally for the specific NodeType
         builder.ConfigureServices(services =>
-            services.AddSingleton<INodeCreationValidator>(new RequireContentValidator(ContentRequiredNodeType)));
+            services.AddSingleton<INodeValidator>(new RequireContentValidator(ContentRequiredNodeType)));
 
         return base.ConfigureMesh(builder);
     }
@@ -571,7 +579,7 @@ public class NodeOperationsWithDeletionValidatorTest(ITestOutputHelper output) :
     {
         // Register validator that prevents deletion of protected nodes
         builder.ConfigureServices(services =>
-            services.AddSingleton<INodeDeletionValidator, ProtectedNodeDeletionValidator>());
+            services.AddSingleton<INodeValidator, ProtectedNodeDeletionValidator>());
 
         return base.ConfigureMesh(builder);
     }
@@ -687,21 +695,23 @@ public record ValidatedContent(string Title, string? Description = null);
 /// A NodeType-specific creation validator that requires Title to be non-empty.
 /// Only applies to nodes with NodeType="validated" or "combined".
 /// </summary>
-public class RequireTitleValidator : INodeCreationValidator
+public class RequireTitleValidator : INodeValidator
 {
     private static readonly string[] ApplicableNodeTypes = ["validated", "combined"];
 
-    public Task<NodeValidationResult> ValidateAsync(MeshNode node, CreateNodeRequest request, CancellationToken ct = default)
+    public IReadOnlyCollection<NodeOperation> SupportedOperations => [NodeOperation.Create];
+
+    public Task<NodeValidationResult> ValidateAsync(NodeValidationContext context, CancellationToken ct = default)
     {
         // Only apply to specific NodeTypes
-        if (!ApplicableNodeTypes.Contains(node.NodeType))
+        if (!ApplicableNodeTypes.Contains(context.Node.NodeType))
             return Task.FromResult(NodeValidationResult.Valid());
 
-        if (node.Content is ValidatedContent content && string.IsNullOrWhiteSpace(content.Title))
+        if (context.Node.Content is ValidatedContent content && string.IsNullOrWhiteSpace(content.Title))
         {
             return Task.FromResult(NodeValidationResult.Invalid(
                 "ValidatedContent must have a non-empty Title",
-                NodeCreationRejectionReason.ValidationFailed));
+                NodeRejectionReason.ValidationFailed));
         }
         return Task.FromResult(NodeValidationResult.Valid());
     }
@@ -710,17 +720,19 @@ public class RequireTitleValidator : INodeCreationValidator
 /// <summary>
 /// A NodeType-specific deletion validator that prevents deletion if Description is "locked".
 /// </summary>
-public class PreventLockedDeletionValidator : INodeDeletionValidator
+public class PreventLockedDeletionValidator : INodeValidator
 {
-    public Task<NodeDeletionValidationResult> ValidateAsync(MeshNode node, DeleteNodeRequest request, CancellationToken ct = default)
+    public IReadOnlyCollection<NodeOperation> SupportedOperations => [NodeOperation.Delete];
+
+    public Task<NodeValidationResult> ValidateAsync(NodeValidationContext context, CancellationToken ct = default)
     {
-        if (node.Content is ValidatedContent { Description: "locked" })
+        if (context.Node.Content is ValidatedContent { Description: "locked" })
         {
-            return Task.FromResult(NodeDeletionValidationResult.Invalid(
+            return Task.FromResult(NodeValidationResult.Invalid(
                 "Cannot delete node with locked description",
-                NodeDeletionRejectionReason.ValidationFailed));
+                NodeRejectionReason.ValidationFailed));
         }
-        return Task.FromResult(NodeDeletionValidationResult.Valid());
+        return Task.FromResult(NodeValidationResult.Valid());
     }
 }
 
@@ -740,8 +752,8 @@ public class NodeOperationsWithNodeTypeValidatorsTest(ITestOutputHelper output) 
         // Register validators globally - they check Content type, so they only apply to ValidatedContent nodes
         builder.ConfigureServices(services =>
         {
-            services.AddSingleton<INodeCreationValidator, RequireTitleValidator>();
-            services.AddSingleton<INodeDeletionValidator, PreventLockedDeletionValidator>();
+            services.AddSingleton<INodeValidator, RequireTitleValidator>();
+            services.AddSingleton<INodeValidator, PreventLockedDeletionValidator>();
             return services;
         });
 
@@ -915,8 +927,8 @@ public class NodeOperationsWithCombinedValidatorsTest(ITestOutputHelper output) 
         // RequireTitleValidator checks ValidatedContent has non-empty Title
         builder.ConfigureServices(services =>
         {
-            services.AddSingleton<INodeCreationValidator, RejectingNodeValidator>();
-            services.AddSingleton<INodeCreationValidator, RequireTitleValidator>();
+            services.AddSingleton<INodeValidator, RejectingNodeValidator>();
+            services.AddSingleton<INodeValidator, RequireTitleValidator>();
             return services;
         });
 
@@ -1007,23 +1019,26 @@ public record ReadableContent(string Title, bool IsHidden = false);
 /// <summary>
 /// A read validator that hides nodes with IsHidden=true in Content.
 /// </summary>
-public class HiddenNodeReadValidator : INodeReadValidator
+public class HiddenNodeReadValidator : INodeValidator
 {
     private const string ReadableNodeType = "readable";
 
-    public Task<NodeReadValidationResult> ValidateAsync(MeshNode node, CancellationToken ct = default)
+    public IReadOnlyCollection<NodeOperation> SupportedOperations => [NodeOperation.Read];
+
+    public Task<NodeValidationResult> ValidateAsync(NodeValidationContext context, CancellationToken ct = default)
     {
         // Only apply to nodes with the readable NodeType
-        if (node.NodeType != ReadableNodeType)
-            return Task.FromResult(NodeReadValidationResult.Valid());
+        if (context.Node.NodeType != ReadableNodeType)
+            return Task.FromResult(NodeValidationResult.Valid());
 
-        if (node.Content is ReadableContent { IsHidden: true })
+        if (context.Node.Content is ReadableContent { IsHidden: true })
         {
-            return Task.FromResult(NodeReadValidationResult.Invalid(
-                $"Node '{node.Path}' is hidden",
-                NodeReadRejectionReason.NodeHidden));
+            return Task.FromResult(new NodeValidationResult(
+                false,
+                $"Node '{context.Node.Path}' is hidden",
+                NodeRejectionReason.NodeHidden));
         }
-        return Task.FromResult(NodeReadValidationResult.Valid());
+        return Task.FromResult(NodeValidationResult.Valid());
     }
 }
 
@@ -1042,7 +1057,7 @@ public class NodeOperationsWithReadValidatorTest(ITestOutputHelper output) : Mon
 
         // Register HiddenNodeReadValidator globally - it checks Content type, so only applies to ReadableContent nodes
         builder.ConfigureServices(services =>
-            services.AddSingleton<INodeReadValidator, HiddenNodeReadValidator>());
+            services.AddSingleton<INodeValidator, HiddenNodeReadValidator>());
 
         return base.ConfigureMesh(builder);
     }
@@ -1130,17 +1145,20 @@ public class NodeOperationsWithReadValidatorTest(ITestOutputHelper output) : Mon
 /// <summary>
 /// A global read validator that blocks all nodes with "blocked" in their name.
 /// </summary>
-public class BlockedNodeReadValidator : INodeReadValidator
+public class BlockedNodeReadValidator : INodeValidator
 {
-    public Task<NodeReadValidationResult> ValidateAsync(MeshNode node, CancellationToken ct = default)
+    public IReadOnlyCollection<NodeOperation> SupportedOperations => [NodeOperation.Read];
+
+    public Task<NodeValidationResult> ValidateAsync(NodeValidationContext context, CancellationToken ct = default)
     {
-        if (node.Name?.Contains("blocked", StringComparison.OrdinalIgnoreCase) == true)
+        if (context.Node.Name?.Contains("blocked", StringComparison.OrdinalIgnoreCase) == true)
         {
-            return Task.FromResult(NodeReadValidationResult.Invalid(
-                $"Node '{node.Path}' is blocked by global policy",
-                NodeReadRejectionReason.Unauthorized));
+            return Task.FromResult(new NodeValidationResult(
+                false,
+                $"Node '{context.Node.Path}' is blocked by global policy",
+                NodeRejectionReason.Unauthorized));
         }
-        return Task.FromResult(NodeReadValidationResult.Valid());
+        return Task.FromResult(NodeValidationResult.Valid());
     }
 }
 
@@ -1155,7 +1173,7 @@ public class NodeOperationsWithGlobalReadValidatorTest(ITestOutputHelper output)
     {
         // Register global read validator via DI
         builder.ConfigureServices(services =>
-            services.AddSingleton<INodeReadValidator, BlockedNodeReadValidator>());
+            services.AddSingleton<INodeValidator, BlockedNodeReadValidator>());
 
         return base.ConfigureMesh(builder);
     }
@@ -1218,27 +1236,34 @@ public record UpdatableContent(string Title, int Version);
 /// <summary>
 /// An update validator that prevents version downgrades.
 /// </summary>
-public class NoVersionDowngradeValidator : INodeUpdateValidator
+public class NoVersionDowngradeValidator : INodeValidator
 {
     private const string UpdatableNodeType = "updatable";
 
-    public Task<NodeUpdateValidationResult> ValidateAsync(MeshNode existingNode, MeshNode updatedNode, CancellationToken ct = default)
-    {
-        // Only apply to nodes with the updatable NodeType
-        if (existingNode.NodeType != UpdatableNodeType)
-            return Task.FromResult(NodeUpdateValidationResult.Valid());
+    public IReadOnlyCollection<NodeOperation> SupportedOperations => [NodeOperation.Update];
 
-        if (existingNode.Content is UpdatableContent existingContent &&
-            updatedNode.Content is UpdatableContent updatedContent)
+    public Task<NodeValidationResult> ValidateAsync(NodeValidationContext context, CancellationToken ct = default)
+    {
+        // Only apply to Update operations with existing node
+        if (context.ExistingNode == null)
+            return Task.FromResult(NodeValidationResult.Valid());
+
+        // Only apply to nodes with the updatable NodeType
+        if (context.ExistingNode.NodeType != UpdatableNodeType)
+            return Task.FromResult(NodeValidationResult.Valid());
+
+        if (context.ExistingNode.Content is UpdatableContent existingContent &&
+            context.Node.Content is UpdatableContent updatedContent)
         {
             if (updatedContent.Version < existingContent.Version)
             {
-                return Task.FromResult(NodeUpdateValidationResult.Invalid(
+                return Task.FromResult(new NodeValidationResult(
+                    false,
                     $"Cannot downgrade version from {existingContent.Version} to {updatedContent.Version}",
-                    NodeUpdateRejectionReason.ValidationFailed));
+                    NodeRejectionReason.ValidationFailed));
             }
         }
-        return Task.FromResult(NodeUpdateValidationResult.Valid());
+        return Task.FromResult(NodeValidationResult.Valid());
     }
 }
 
@@ -1257,7 +1282,7 @@ public class NodeOperationsWithUpdateValidatorTest(ITestOutputHelper output) : M
 
         // Register NoVersionDowngradeValidator globally - it checks Content type, so only applies to UpdatableContent nodes
         builder.ConfigureServices(services =>
-            services.AddSingleton<INodeUpdateValidator, NoVersionDowngradeValidator>());
+            services.AddSingleton<INodeValidator, NoVersionDowngradeValidator>());
 
         return base.ConfigureMesh(builder);
     }
@@ -1422,17 +1447,20 @@ public class NodeOperationsWithUpdateValidatorTest(ITestOutputHelper output) : M
 /// <summary>
 /// A global update validator that prevents changing the Name to contain "forbidden".
 /// </summary>
-public class ForbiddenNameUpdateValidator : INodeUpdateValidator
+public class ForbiddenNameUpdateValidator : INodeValidator
 {
-    public Task<NodeUpdateValidationResult> ValidateAsync(MeshNode existingNode, MeshNode updatedNode, CancellationToken ct = default)
+    public IReadOnlyCollection<NodeOperation> SupportedOperations => [NodeOperation.Update];
+
+    public Task<NodeValidationResult> ValidateAsync(NodeValidationContext context, CancellationToken ct = default)
     {
-        if (updatedNode.Name?.Contains("forbidden", StringComparison.OrdinalIgnoreCase) == true)
+        if (context.Node.Name?.Contains("forbidden", StringComparison.OrdinalIgnoreCase) == true)
         {
-            return Task.FromResult(NodeUpdateValidationResult.Invalid(
+            return Task.FromResult(new NodeValidationResult(
+                false,
                 "Cannot update node name to contain 'forbidden'",
-                NodeUpdateRejectionReason.ValidationFailed));
+                NodeRejectionReason.ValidationFailed));
         }
-        return Task.FromResult(NodeUpdateValidationResult.Valid());
+        return Task.FromResult(NodeValidationResult.Valid());
     }
 }
 
@@ -1447,7 +1475,7 @@ public class NodeOperationsWithGlobalUpdateValidatorTest(ITestOutputHelper outpu
     {
         // Register global update validator via DI
         builder.ConfigureServices(services =>
-            services.AddSingleton<INodeUpdateValidator, ForbiddenNameUpdateValidator>());
+            services.AddSingleton<INodeValidator, ForbiddenNameUpdateValidator>());
 
         return base.ConfigureMesh(builder);
     }
