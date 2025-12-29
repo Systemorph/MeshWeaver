@@ -17,6 +17,6 @@
     "iconName": "Person",
     "description": "A person with profile and avatar",
     "displayOrder": 5,
-    "configuration": "config =\u003E config.WithContentType\u003CPerson\u003E()"
+    "configuration": "config =\u003E config.WithContentType\u003CPerson\u003E().AddNodeTypeView()"
   }
 }

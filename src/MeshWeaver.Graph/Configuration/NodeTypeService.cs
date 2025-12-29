@@ -91,28 +91,38 @@ internal class NodeTypeService(
 
         var nodeType = node.NodeType;
 
-        // "NodeType" is the base type for all node type definitions.
-        // Nodes with nodeType = "NodeType" ARE type definitions themselves -
-        // their configuration comes from their OWN content/code (at node.Path), not from an external "NodeType" hub.
-        // Use the node's own path as the compilation target instead of "NodeType".
-        if (nodeType == "NodeType")
+        // Special case: "NodeType" nodes (type definitions) need to compile THEMSELVES
+        // to extract their Configuration lambda from NodeTypeDefinition.Configuration.
+        // The path to compile is the node's own path, not "NodeType".
+        if (nodeType == MeshNode.NodeTypePath)
         {
-            // For NodeType definitions, compile the node's own path (e.g., "Type/Organizations")
-            nodeType = node.Path;
+            // The node IS a type definition - compile it by its path to get its HubConfiguration
+            var nodePath = node.Path;
+
+            // Check if already cached
+            var cachedHubConfig = GetCachedHubConfiguration(nodePath);
+            if (cachedHubConfig != null)
+            {
+                return node with { HubConfiguration = Observable.Return<Func<MessageHubConfiguration, MessageHubConfiguration>?>(cachedHubConfig) };
+            }
+
+            // Compile the type definition node itself
+            return node with { HubConfiguration = GetHubConfigurationForNodeType(nodePath) };
         }
 
         // 1. Try MeshConfiguration (already registered) - wrap in Observable.Return
+        // Skip if HubConfiguration is null (metadata-only registration like "NodeType")
         var existingConfig = meshConfiguration.GetNodeTypeConfiguration(nodeType);
-        if (existingConfig != null)
+        if (existingConfig?.HubConfiguration != null)
         {
             return node with { HubConfiguration = Observable.Return<Func<MessageHubConfiguration, MessageHubConfiguration>?>(existingConfig.HubConfiguration) };
         }
 
         // 2. Try cached HubConfiguration (sync fast path) - wrap in Observable.Return
-        var cachedHubConfig = GetCachedHubConfiguration(nodeType);
-        if (cachedHubConfig != null)
+        var cachedHubConfig2 = GetCachedHubConfiguration(nodeType);
+        if (cachedHubConfig2 != null)
         {
-            return node with { HubConfiguration = Observable.Return<Func<MessageHubConfiguration, MessageHubConfiguration>?>(cachedHubConfig) };
+            return node with { HubConfiguration = Observable.Return<Func<MessageHubConfiguration, MessageHubConfiguration>?>(cachedHubConfig2) };
         }
 
         // 3. Not cached - return node with Observable that will emit when compiled
@@ -345,15 +355,14 @@ internal class NodeTypeService(
                     assemblyPath = compilationResult.AssemblyLocation;
 
                     // Cache the HubConfiguration functions for fast synchronous access
-                    // Wrap each HubConfiguration to ensure AddMeshDataSource() is always called first
+                    // Note: AddMeshDataSource is already added by the generator for NodeTypeDefinition content
+                    // via ConfigureMeshHub().WithCodeConfiguration().Build()
                     foreach (var config in compilationResult.NodeTypeConfigurations)
                     {
-                        var wrappedConfig = WrapWithMeshDataSource(config.HubConfiguration);
-                        _hubConfigurations[config.NodeType] = wrappedConfig;
+                        _hubConfigurations[config.NodeType] = config.HubConfiguration;
 
-                        // Also register in MeshConfiguration with wrapped config
-                        var wrappedNodeTypeConfig = config with { HubConfiguration = wrappedConfig };
-                        meshConfiguration.RegisterNodeTypeConfiguration(wrappedNodeTypeConfig);
+                        // Also register in MeshConfiguration
+                        meshConfiguration.RegisterNodeTypeConfiguration(config);
 
                         logger.LogDebug("Cached HubConfiguration for {NodeType}", config.NodeType);
                     }
@@ -372,16 +381,6 @@ internal class NodeTypeService(
             logger.LogError(ex, "Failed to fetch NodeType data for {NodeTypePath}", nodeTypePath);
             return null;
         }
-    }
-
-    /// <summary>
-    /// Wraps a HubConfiguration function to ensure AddMeshDataSource() is called first.
-    /// Since WithMeshNodes() is idempotent, it's safe to call even if already added.
-    /// </summary>
-    private static Func<MessageHubConfiguration, MessageHubConfiguration> WrapWithMeshDataSource(
-        Func<MessageHubConfiguration, MessageHubConfiguration> originalConfig)
-    {
-        return config => originalConfig(config.AddMeshDataSource());
     }
 
     /// <summary>

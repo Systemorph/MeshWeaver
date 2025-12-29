@@ -15,6 +15,6 @@
     "iconName": "DocumentText",
     "description": "A content article with YAML frontmatter",
     "displayOrder": 35,
-    "configuration": "config => config.WithContentType<Article>()"
+    "configuration": "config => config.WithContentType<Article>().AddNodeTypeView()"
   }
 }

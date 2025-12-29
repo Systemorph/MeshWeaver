@@ -17,6 +17,6 @@
     "iconName": "Building",
     "description": "An organization containing projects",
     "displayOrder": 10,
-    "configuration": "config =\u003E config.WithContentType\u003COrganization\u003E()"
+    "configuration": "config =\u003E config.WithContentType\u003COrganization\u003E().AddNodeTypeView()"
   }
 }

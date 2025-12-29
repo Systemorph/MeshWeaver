@@ -37,9 +37,26 @@ public static class GraphConfigurationExtensions
         ///
         /// Content collections are configured per node type via NodeTypeDefinition.ContentCollections.
         /// All configuration loading and service initialization happens at mesh startup.
-        /// </summary> 
+        /// </summary>
         public TBuilder AddJsonGraphConfiguration(string _)
         {
+            // Register the built-in "NodeType" metadata configuration
+            // HubConfiguration is identity (config => config) because each Type definition node
+            // (with nodeType="NodeType") is compiled individually to apply its specific
+            // Configuration lambda from NodeTypeDefinition.Configuration.
+            // The DynamicMeshNodeAttributeGenerator adds .ConfigureMeshHub().WithCodeConfiguration().Build()
+            // automatically for nodes with NodeTypeDefinition content, then applies the user's lambda.
+            // This registration is for metadata only (DataType, DisplayName, etc.)
+            builder.AddNodeTypeConfigurations(new NodeTypeConfiguration
+            {
+                NodeType = MeshNode.NodeTypePath,
+                DataType = typeof(NodeTypeDefinition),
+                DisplayName = "Node Type",
+                Description = "Definition for a node type",
+                IconName = "Code",
+                HubConfiguration = config => config // Identity - actual config comes from compiled nodes
+            });
+
             // Register services that don't need hub-level dependencies at the mesh level
             builder.ConfigureServices(services =>
             {

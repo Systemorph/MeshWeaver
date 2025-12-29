@@ -17,6 +17,6 @@
     "iconName": "Building",
     "description": "Catalog of organizations",
     "displayOrder": 8,
-    "configuration": "config =\u003E config"
+    "configuration": "config =\u003E config.AddNodeTypeView()"
   }
 }

@@ -117,18 +117,20 @@ internal class DynamicMeshNodeAttributeGenerator
         sb.AppendLine();
 
 
-        // For NodeType nodes, use MeshHubBuilder with CodeConfiguration
-        if (node.NodeType == MeshNode.NodeTypePath)
+        // For NodeType definitions (content is NodeTypeDefinition), use MeshHubBuilder with CodeConfiguration
+        // Check Content type, not NodeType property, because NodeType is set to the path for the generated config
+        // Always add WithDefaultViews() so instances of this type get standard views (Details, Thumbnail, etc.)
+        if (node.Content is NodeTypeDefinition)
         {
-            sb.AppendLine("            // For NodeType nodes, use MeshDataSource with CodeConfiguration");
-            sb.AppendLine("            result = result.ConfigureMeshHub().WithCodeConfiguration().Build();");
+            sb.AppendLine("            // For NodeType definitions, use MeshDataSource with CodeConfiguration + default views");
+            sb.AppendLine("            result = result.ConfigureMeshHub().WithCodeConfiguration().Build().WithDefaultViews();");
             sb.AppendLine();
         }
         else
         {
-            // For non-NodeType nodes, inject WithDefaultViews()
-            sb.AppendLine("            // For non-NodeType nodes, add default views");
-            sb.AppendLine("            result = result.WithDefaultViews();");
+            // For non-NodeType nodes (instance nodes), add MeshDataSource and default views
+            sb.AppendLine("            // For non-NodeType nodes, add data source and default views");
+            sb.AppendLine("            result = result.AddMeshDataSource().WithDefaultViews();");
             sb.AppendLine();
         }
 
