@@ -126,7 +126,7 @@ public static class NodeTypeView
     {
         // Get NodeTypeDefinition from MeshNode.Content and CodeConfiguration from workspace stream
         var definitionStream = host.Workspace.GetNodeContent<NodeTypeDefinition>();
-        var codeFileStream = host.Workspace.GetStream<CodeConfiguration>();
+        var codeFileStream = host.Workspace.GetStream<CodeConfiguration>()!;
 
         return definitionStream
             .CombineLatest(codeFileStream)
@@ -138,7 +138,7 @@ public static class NodeTypeView
                 if (content == null)
                     return RenderError("NodeType not found.");
 
-                return BuildSplitView(host, content, codeFile);
+                return BuildSplitView(host, content, codeFile!);
             });
     }
 
@@ -214,23 +214,16 @@ public static class NodeTypeView
     }
 
     /// <summary>
-    /// Builds the main content pane that reacts to menu selection.
+    /// Builds the main content pane - shows configuration content directly.
     /// </summary>
     private static UiControl BuildMainPane(
-        LayoutAreaHost _,
+        LayoutAreaHost host,
         NodeTypeDefinition content,
         IEnumerable<CodeConfiguration> codeFile,
         string selectionDataId)
     {
-        // Create a reactive view that updates based on selection
-        return Controls.Stack
-            .WithWidth("100%")
-            .WithStyle("height: 100%;")
-            .WithView<UiControl>((h, ctx) =>
-            {
-                return h.Stream.GetDataStream<NodeTypeViewSelection>(selectionDataId)
-                    .Select(selection => BuildMainPaneContent(h, content, codeFile, selection));
-            });
+        // Render configuration content directly without reactive state
+        return BuildMainPaneContent(host, content, codeFile, null);
     }
 
     private static UiControl BuildMainPaneContent(
