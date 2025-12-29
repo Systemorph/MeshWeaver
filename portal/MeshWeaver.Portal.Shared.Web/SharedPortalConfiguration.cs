@@ -4,21 +4,20 @@ using MeshWeaver.AI;
 using MeshWeaver.AI.AzureFoundry;
 using MeshWeaver.AI.AzureOpenAI;
 using MeshWeaver.AI.Persistence;
-using MeshWeaver.Blazor.Chat;
 using MeshWeaver.Blazor.GoogleMaps;
 using MeshWeaver.Blazor.Infrastructure;
 using MeshWeaver.Blazor.Pages;
+using MeshWeaver.Blazor.Portal;
+using MeshWeaver.Blazor.Portal.Authentication;
+using MeshWeaver.Blazor.Portal.Infrastructure;
 using MeshWeaver.Blazor.Radzen;
 using MeshWeaver.ContentCollections;
 using MeshWeaver.GoogleMaps;
 using MeshWeaver.Hosting.Blazor;
-using MeshWeaver.Messaging;
-using MeshWeaver.Insurance.Domain;
 using MeshWeaver.Insurance.Domain.Services;
 using MeshWeaver.Mesh;
+using MeshWeaver.Messaging;
 using MeshWeaver.Portal.AI;
-using MeshWeaver.Blazor.Portal;
-using MeshWeaver.Blazor.Portal.Infrastructure;
 using Microsoft.AspNetCore.Authentication.OpenIdConnect;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.Extensions.Configuration;
@@ -97,6 +96,16 @@ public static class SharedPortalConfiguration
         {
             builder.Services.AddAuthentication(OpenIdConnectDefaults.AuthenticationScheme)
                 .AddMicrosoftIdentityWebApp(entraIdConfig);       // In ConfigureWebPortalServices in SharedPortalConfiguration.cs
+            services.AddAuthenticationNavigation(options =>
+            {
+                options.Provider = AuthenticationProviders.MicrosoftIdentity;
+
+                // Allow custom paths from config
+                //if (authSection["LoginPath"] is { } loginPath)
+                //    options.LoginPath = loginPath;
+                //if (authSection["LogoutPath"] is { } logoutPath)
+                //    options.LogoutPath = logoutPath;
+            });
             builder.Services.Configure<OpenIdConnectOptions>(OpenIdConnectDefaults.AuthenticationScheme, options =>
             {
                 var roleMappings = builder.Configuration
@@ -127,7 +136,24 @@ public static class SharedPortalConfiguration
 
             builder.Services.AddAuthorization();
         }
+        else
+        {
+            var authSection = builder.Configuration.GetSection(AuthenticationOptions.SectionName);
+            var provider = authSection["Provider"]
+                           ?? (entraIdConfig.GetChildren().Any() ? AuthenticationProviders.MicrosoftIdentity : AuthenticationProviders.Dev);
 
+            services.AddAuthenticationNavigation(options =>
+            {
+                options.Provider = provider;
+
+                // Allow custom paths from config
+                if (authSection["LoginPath"] is { } loginPath)
+                    options.LoginPath = loginPath;
+                if (authSection["LogoutPath"] is { } logoutPath)
+                    options.LogoutPath = logoutPath;
+            });
+
+        }
 
 
         builder.Services.AddSignalR();

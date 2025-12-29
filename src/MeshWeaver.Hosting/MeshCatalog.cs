@@ -62,6 +62,11 @@ public sealed class MeshCatalog(
         // Try exact match in configuration
         if (Configuration.Nodes.TryGetValue(addressKey, out var node))
         {
+            // Enrich with HubConfiguration based on NodeType (if not already set)
+            if (node.HubConfiguration == null && NodeTypeService != null)
+            {
+                node = NodeTypeService.EnrichWithNodeType(node);
+            }
             cache.Set(node.Path, node, cacheOptions);
             if (!await ValidateReadAsync(node))
                 return null;
