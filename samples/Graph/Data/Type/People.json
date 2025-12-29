@@ -15,6 +15,6 @@
     "iconName": "People",
     "description": "Catalog of persons",
     "displayOrder": 4,
-    "configuration": "config => config"
+    "configuration": "config => config.AddNodeTypeView()"
   }
 }

@@ -76,7 +76,8 @@ public class MeshNodeCompilationServiceTest : IDisposable
 
         if (codeFile != null)
         {
-            await persistence.SavePartitionObjectsAsync($"type/{nodeType}", null, [codeFile]);
+            // CodeConfiguration is stored in the "Code" sub-partition (e.g., "type/project/Code")
+            await persistence.SavePartitionObjectsAsync($"type/{nodeType}", "Code", [codeFile]);
         }
     }
 
