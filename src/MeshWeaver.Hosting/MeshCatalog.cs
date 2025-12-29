@@ -12,16 +12,20 @@ namespace MeshWeaver.Hosting;
 /// Configure with AddFileSystemPersistence() for file-backed storage
 /// or AddInMemoryPersistence() for transient storage.
 /// </summary>
-public sealed class MeshCatalog : IMeshCatalog
+public sealed class MeshCatalog(
+    IMessageHub hub,
+    MeshConfiguration configuration,
+    IUnifiedPathRegistry pathRegistry,
+    IPersistenceService persistenceService)
+    : IMeshCatalog
 {
-    public MeshConfiguration Configuration { get; }
-    public IUnifiedPathRegistry PathRegistry { get; }
-    public IPersistenceService Persistence { get; }
+    public MeshConfiguration Configuration { get; } = configuration;
+    public IUnifiedPathRegistry PathRegistry { get; } = pathRegistry;
+    public IPersistenceService Persistence { get; } = persistenceService;
     private readonly IMemoryCache cache = new MemoryCache(new MemoryCacheOptions());
     private readonly MemoryCacheEntryOptions cacheOptions = new() { SlidingExpiration = TimeSpan.FromMinutes(5) };
-    private readonly IMessageHub persistenceHub;
-    private readonly IMessageHub meshHub;
-    private readonly ILogger<MeshCatalog> logger;
+    private readonly IMessageHub persistenceHub = hub.GetHostedHub(AddressExtensions.CreatePersistenceAddress())!;
+    private readonly ILogger<MeshCatalog> logger = hub.ServiceProvider.GetRequiredService<ILogger<MeshCatalog>>();
 
     // Lazy-loaded because INodeTypeService is registered at hub level
     // and may not be available during MeshCatalog construction
@@ -34,28 +38,11 @@ public sealed class MeshCatalog : IMeshCatalog
         {
             if (!nodeTypeServiceResolved)
             {
-                nodeTypeService = meshHub.ServiceProvider.GetService<INodeTypeService>();
+                nodeTypeService = hub.ServiceProvider.GetService<INodeTypeService>();
                 nodeTypeServiceResolved = true;
             }
             return nodeTypeService;
         }
-    }
-
-    public MeshCatalog(
-        IMessageHub hub,
-        MeshConfiguration configuration,
-        IUnifiedPathRegistry pathRegistry,
-        IPersistenceService persistenceService)
-    {
-        Configuration = configuration;
-        PathRegistry = pathRegistry;
-        Persistence = persistenceService;
-        meshHub = hub;
-        logger = hub.ServiceProvider.GetRequiredService<ILogger<MeshCatalog>>();
-
-        persistenceHub = hub.GetHostedHub(AddressExtensions.CreatePersistenceAddress())!;
-        foreach (var node in Configuration.Nodes.Values)
-            UpdateNode(node);
     }
 
     public async Task<MeshNode?> GetNodeAsync(Address address)
@@ -75,10 +62,9 @@ public sealed class MeshCatalog : IMeshCatalog
         if (Configuration.Nodes.TryGetValue(addressKey, out var node))
         {
             cache.Set(node.Path, node, cacheOptions);
-            var updatedNode = UpdateNode(node);
-            if (!await ValidateReadAsync(updatedNode))
+            if (!await ValidateReadAsync(node))
                 return null;
-            return updatedNode;
+            return node;
         }
 
         // Try loading from persistence
@@ -93,10 +79,9 @@ public sealed class MeshCatalog : IMeshCatalog
             }
 
             cache.Set(persistenceNode.Path, persistenceNode, cacheOptions);
-            var updatedPersistenceNode = UpdateNode(persistenceNode);
-            if (!await ValidateReadAsync(updatedPersistenceNode))
+            if (!await ValidateReadAsync(persistenceNode))
                 return null;
-            return updatedPersistenceNode;
+            return persistenceNode;
         }
 
         // Try to find a template node that matches this address
@@ -169,7 +154,7 @@ public sealed class MeshCatalog : IMeshCatalog
     private async Task<bool> ValidateReadAsync(MeshNode node, CancellationToken ct = default)
     {
         // Run global validators from DI
-        var globalValidators = meshHub.ServiceProvider.GetServices<INodeReadValidator>();
+        var globalValidators = hub.ServiceProvider.GetServices<INodeReadValidator>();
         foreach (var validator in globalValidators)
         {
             var result = await validator.ValidateAsync(node, ct);
@@ -183,16 +168,6 @@ public sealed class MeshCatalog : IMeshCatalog
         return true;
     }
 
-    private MeshNode UpdateNode(MeshNode node)
-    {
-        cache.Set(node.Path, node, cacheOptions);
-        persistenceHub.InvokeAsync(_ => Persistence.SaveNodeAsync(node), ex =>
-        {
-            logger.LogError(ex, "unable to update mesh catalog");
-            return Task.CompletedTask;
-        });
-        return node;
-    }
 
     public Task UpdateAsync(MeshNode node) =>
         Persistence.SaveNodeAsync(node);

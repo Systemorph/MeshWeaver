@@ -361,7 +361,6 @@ public static class MeshExtensions
                 State = existingNode.State,
                 HubConfiguration = existingNode.HubConfiguration
             };
-            await catalog.UpdateAsync(nodeToSave);
 
             // 5. Return success response
             hub.Post(UpdateNodeResponse.Ok(nodeToSave), o => o.ResponseFor(request));

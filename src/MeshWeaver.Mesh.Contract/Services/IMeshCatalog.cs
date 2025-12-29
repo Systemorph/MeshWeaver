@@ -8,8 +8,6 @@ public interface IMeshCatalog
     MeshConfiguration Configuration { get; }
     Task<MeshNode?> GetNodeAsync(Address address);
 
-    Task UpdateAsync(MeshNode node);
-
     /// <summary>
     /// Creates a new node in the catalog with validation.
     /// The node is created in Transient state, validated, and then confirmed.
@@ -87,13 +85,13 @@ public interface IMeshCatalog
 
 public record StreamInfo(
     StreamType Type,
-    string Provider, 
+    string Provider,
     string Namespace);
-public enum StreamType{Stream, Channel}
+public enum StreamType { Stream, Channel }
 public record StorageInfo(
-    string Id, 
-    string BaseDirectory, 
-    string AssemblyLocation, 
+    string Id,
+    string BaseDirectory,
+    string AssemblyLocation,
     string AddressType);
 
 
