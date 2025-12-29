@@ -81,32 +81,7 @@ public interface IMeshCatalog
     /// <returns>Async enumerable of matching child nodes</returns>
     IAsyncEnumerable<MeshNode> QueryAsync(string? parentPath, string? query = null, int? maxResults = null, CancellationToken ct = default);
 
-    /// <summary>
-    /// Gets all available node type configurations.
-    /// Returns information about each registered node type including its name, data type, and description.
-    /// </summary>
-    /// <returns>Collection of node type information</returns>
-    IEnumerable<NodeTypeInfo> GetNodeTypes();
-
-    /// <summary>
-    /// Gets the node type configuration for a specific node type.
-    /// </summary>
-    /// <param name="nodeType">The node type identifier</param>
-    /// <returns>The configuration or null if not found</returns>
-    NodeTypeConfiguration? GetNodeTypeConfiguration(string nodeType);
 }
-
-/// <summary>
-/// Information about a node type for display and schema generation.
-/// </summary>
-public record NodeTypeInfo(
-    string NodeType,
-    string? DisplayName,
-    string? Description,
-    string? IconName,
-    string DataTypeName,
-    int DisplayOrder
-);
 
 
 

@@ -10,12 +10,6 @@ public abstract class MeshNodeAttribute : Attribute
     public virtual IEnumerable<MeshNode> Nodes => [];
 
     /// <summary>
-    /// Gets the node type configurations that map NodeType strings to their DataType and HubConfiguration.
-    /// Used to determine how to serialize/deserialize Content and configure hubs for each node type.
-    /// </summary>
-    public virtual IEnumerable<NodeTypeConfiguration> NodeTypeConfigurations => [];
-
-    /// <summary>
     /// Gets the address types to register with the mesh hub.
     /// Key is the short type name (e.g., "story"), Value is the address type.
     /// </summary>

@@ -30,12 +30,16 @@ public class RejectingNodeValidator : INodeCreationValidator
 }
 
 /// <summary>
-/// A validator that requires Content to be set on the node.
+/// A validator that requires Content to be set on nodes of specific type.
 /// </summary>
-public class RequireContentValidator : INodeCreationValidator
+public class RequireContentValidator(string nodeType) : INodeCreationValidator
 {
     public Task<NodeValidationResult> ValidateAsync(MeshNode node, CreateNodeRequest request, CancellationToken ct = default)
     {
+        // Only validate nodes of the specific type
+        if (node.NodeType != nodeType)
+            return Task.FromResult(NodeValidationResult.Valid());
+
         if (node.Content == null)
         {
             return Task.FromResult(NodeValidationResult.Invalid(
@@ -464,17 +468,12 @@ public class NodeOperationsWithContentValidatorTest(ITestOutputHelper output) : 
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
     {
-        // Register NodeType with RequireContentValidator
-        var nodeTypeConfig = new NodeTypeConfiguration
-        {
-            NodeType = ContentRequiredNodeType,
-            DataType = typeof(object),
-            DisplayName = "Content Required",
-            HubConfiguration = hub => hub
-        }
-        .WithCreationValidator<RequireContentValidator>();
+        // Register the NodeType as a MeshNode so it passes NodeType validation
+        builder.AddMeshNodes(new MeshNode(ContentRequiredNodeType) { Name = "Content Required" });
 
-        builder.AddNodeTypeConfigurations(nodeTypeConfig);
+        // Register RequireContentValidator globally for the specific NodeType
+        builder.ConfigureServices(services =>
+            services.AddSingleton<INodeCreationValidator>(new RequireContentValidator(ContentRequiredNodeType)));
 
         return base.ConfigureMesh(builder);
     }
@@ -686,11 +685,18 @@ public record ValidatedContent(string Title, string? Description = null);
 
 /// <summary>
 /// A NodeType-specific creation validator that requires Title to be non-empty.
+/// Only applies to nodes with NodeType="validated" or "combined".
 /// </summary>
 public class RequireTitleValidator : INodeCreationValidator
 {
+    private static readonly string[] ApplicableNodeTypes = ["validated", "combined"];
+
     public Task<NodeValidationResult> ValidateAsync(MeshNode node, CreateNodeRequest request, CancellationToken ct = default)
     {
+        // Only apply to specific NodeTypes
+        if (!ApplicableNodeTypes.Contains(node.NodeType))
+            return Task.FromResult(NodeValidationResult.Valid());
+
         if (node.Content is ValidatedContent content && string.IsNullOrWhiteSpace(content.Title))
         {
             return Task.FromResult(NodeValidationResult.Invalid(
@@ -728,18 +734,16 @@ public class NodeOperationsWithNodeTypeValidatorsTest(ITestOutputHelper output) 
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
     {
-        // Register a NodeType with specific validators
-        var nodeTypeConfig = new NodeTypeConfiguration
-        {
-            NodeType = ValidatedNodeType,
-            DataType = typeof(ValidatedContent),
-            DisplayName = "Validated",
-            HubConfiguration = hub => hub
-        }
-        .WithCreationValidator<RequireTitleValidator>()
-        .WithDeletionValidator<PreventLockedDeletionValidator>();
+        // Register the NodeType as a MeshNode so it passes NodeType validation
+        builder.AddMeshNodes(new MeshNode(ValidatedNodeType) { Name = "Validated" });
 
-        builder.AddNodeTypeConfigurations(nodeTypeConfig);
+        // Register validators globally - they check Content type, so they only apply to ValidatedContent nodes
+        builder.ConfigureServices(services =>
+        {
+            services.AddSingleton<INodeCreationValidator, RequireTitleValidator>();
+            services.AddSingleton<INodeDeletionValidator, PreventLockedDeletionValidator>();
+            return services;
+        });
 
         return base.ConfigureMesh(builder);
     }
@@ -903,21 +907,18 @@ public class NodeOperationsWithCombinedValidatorsTest(ITestOutputHelper output) 
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
     {
-        // Register global validator via DI
+        // Register the NodeType as a MeshNode so it passes NodeType validation
+        builder.AddMeshNodes(new MeshNode(ValidatedNodeType) { Name = "Combined" });
+
+        // Register validators globally via DI
+        // RejectingNodeValidator rejects names containing "rejected"
+        // RequireTitleValidator checks ValidatedContent has non-empty Title
         builder.ConfigureServices(services =>
-            services.AddSingleton<INodeCreationValidator, RejectingNodeValidator>());
-
-        // Register NodeType with specific validator
-        var nodeTypeConfig = new NodeTypeConfiguration
         {
-            NodeType = ValidatedNodeType,
-            DataType = typeof(ValidatedContent),
-            DisplayName = "Combined",
-            HubConfiguration = hub => hub
-        }
-        .WithCreationValidator<RequireTitleValidator>();
-
-        builder.AddNodeTypeConfigurations(nodeTypeConfig);
+            services.AddSingleton<INodeCreationValidator, RejectingNodeValidator>();
+            services.AddSingleton<INodeCreationValidator, RequireTitleValidator>();
+            return services;
+        });
 
         return base.ConfigureMesh(builder);
     }
@@ -1008,8 +1009,14 @@ public record ReadableContent(string Title, bool IsHidden = false);
 /// </summary>
 public class HiddenNodeReadValidator : INodeReadValidator
 {
+    private const string ReadableNodeType = "readable";
+
     public Task<NodeReadValidationResult> ValidateAsync(MeshNode node, CancellationToken ct = default)
     {
+        // Only apply to nodes with the readable NodeType
+        if (node.NodeType != ReadableNodeType)
+            return Task.FromResult(NodeReadValidationResult.Valid());
+
         if (node.Content is ReadableContent { IsHidden: true })
         {
             return Task.FromResult(NodeReadValidationResult.Invalid(
@@ -1030,17 +1037,12 @@ public class NodeOperationsWithReadValidatorTest(ITestOutputHelper output) : Mon
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
     {
-        // Register NodeType with HiddenNodeReadValidator
-        var nodeTypeConfig = new NodeTypeConfiguration
-        {
-            NodeType = ReadableNodeType,
-            DataType = typeof(ReadableContent),
-            DisplayName = "Readable",
-            HubConfiguration = hub => hub
-        }
-        .WithReadValidator<HiddenNodeReadValidator>();
+        // Register the NodeType as a MeshNode so it passes NodeType validation
+        builder.AddMeshNodes(new MeshNode(ReadableNodeType) { Name = "Readable" });
 
-        builder.AddNodeTypeConfigurations(nodeTypeConfig);
+        // Register HiddenNodeReadValidator globally - it checks Content type, so only applies to ReadableContent nodes
+        builder.ConfigureServices(services =>
+            services.AddSingleton<INodeReadValidator, HiddenNodeReadValidator>());
 
         return base.ConfigureMesh(builder);
     }
@@ -1218,8 +1220,14 @@ public record UpdatableContent(string Title, int Version);
 /// </summary>
 public class NoVersionDowngradeValidator : INodeUpdateValidator
 {
+    private const string UpdatableNodeType = "updatable";
+
     public Task<NodeUpdateValidationResult> ValidateAsync(MeshNode existingNode, MeshNode updatedNode, CancellationToken ct = default)
     {
+        // Only apply to nodes with the updatable NodeType
+        if (existingNode.NodeType != UpdatableNodeType)
+            return Task.FromResult(NodeUpdateValidationResult.Valid());
+
         if (existingNode.Content is UpdatableContent existingContent &&
             updatedNode.Content is UpdatableContent updatedContent)
         {
@@ -1244,17 +1252,12 @@ public class NodeOperationsWithUpdateValidatorTest(ITestOutputHelper output) : M
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
     {
-        // Register NodeType with NoVersionDowngradeValidator
-        var nodeTypeConfig = new NodeTypeConfiguration
-        {
-            NodeType = UpdatableNodeType,
-            DataType = typeof(UpdatableContent),
-            DisplayName = "Updatable",
-            HubConfiguration = hub => hub
-        }
-        .WithUpdateValidator<NoVersionDowngradeValidator>();
+        // Register the NodeType as a MeshNode so it passes NodeType validation
+        builder.AddMeshNodes(new MeshNode(UpdatableNodeType) { Name = "Updatable" });
 
-        builder.AddNodeTypeConfigurations(nodeTypeConfig);
+        // Register NoVersionDowngradeValidator globally - it checks Content type, so only applies to UpdatableContent nodes
+        builder.ConfigureServices(services =>
+            services.AddSingleton<INodeUpdateValidator, NoVersionDowngradeValidator>());
 
         return base.ConfigureMesh(builder);
     }

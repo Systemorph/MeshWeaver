@@ -163,12 +163,12 @@ public sealed class MeshCatalog : IMeshCatalog
     }
 
     /// <summary>
-    /// Validates a node read operation using global and NodeType-specific validators.
+    /// Validates a node read operation using global validators.
     /// </summary>
     /// <returns>True if valid, false if read should be rejected</returns>
     private async Task<bool> ValidateReadAsync(MeshNode node, CancellationToken ct = default)
     {
-        // 1. Run global validators from DI
+        // Run global validators from DI
         var globalValidators = meshHub.ServiceProvider.GetServices<INodeReadValidator>();
         foreach (var validator in globalValidators)
         {
@@ -177,28 +177,6 @@ public sealed class MeshCatalog : IMeshCatalog
             {
                 logger.LogDebug("Global read validator rejected node {Path}: {Error}", node.Path, result.ErrorMessage);
                 return false;
-            }
-        }
-
-        // 2. Run NodeType-specific validators
-        if (!string.IsNullOrEmpty(node.NodeType))
-        {
-            var nodeTypeConfig = Configuration.GetNodeTypeConfiguration(node.NodeType);
-            if (nodeTypeConfig != null)
-            {
-                foreach (var validatorType in nodeTypeConfig.ReadValidatorTypes)
-                {
-                    var validator = (INodeReadValidator?)ActivatorUtilities.CreateInstance(meshHub.ServiceProvider, validatorType);
-                    if (validator != null)
-                    {
-                        var result = await validator.ValidateAsync(node, ct);
-                        if (!result.IsValid)
-                        {
-                            logger.LogDebug("NodeType read validator rejected node {Path}: {Error}", node.Path, result.ErrorMessage);
-                            return false;
-                        }
-                    }
-                }
             }
         }
 
@@ -242,11 +220,13 @@ public sealed class MeshCatalog : IMeshCatalog
             throw new InvalidOperationException($"Node already exists at path: {node.Path}");
         }
 
-        // 3. Validate NodeType exists (if specified)
+        // 3. Validate NodeType exists (if specified) - check in MeshNodes or persistence
         if (!string.IsNullOrEmpty(node.NodeType))
         {
-            var nodeTypeConfig = Configuration.GetNodeTypeConfiguration(node.NodeType);
-            if (nodeTypeConfig == null)
+            // NodeType is valid if it exists in Configuration.Nodes or in persistence
+            var nodeTypeExists = Configuration.Nodes.ContainsKey(node.NodeType)
+                || await Persistence.ExistsAsync(node.NodeType, ct);
+            if (!nodeTypeExists)
             {
                 throw new InvalidOperationException($"NodeType '{node.NodeType}' is not registered");
             }
@@ -411,9 +391,9 @@ public sealed class MeshCatalog : IMeshCatalog
     private async Task<AddressResolution> ResolveFromConfigNodeAsync(MeshNode matchedNode, string[] segments, string _)
     {
         // For graph-style nodes (where the path IS the address), use all segments as address
-        // This is determined by checking if there are NodeTypeConfigurations registered
+        // This is determined by checking if NodeTypeService is available
         // (which means the node supports dynamic children via persistence)
-        if (Configuration.NodeTypeConfigurations.Count > 0 &&
+        if (NodeTypeService != null &&
             matchedNode.Segments.Count > 0 &&
             segments[0].Equals(matchedNode.Segments[0], StringComparison.OrdinalIgnoreCase))
         {
@@ -506,24 +486,4 @@ public sealed class MeshCatalog : IMeshCatalog
         }
     }
 
-    /// <inheritdoc />
-    public IEnumerable<NodeTypeInfo> GetNodeTypes()
-    {
-        return Configuration.NodeTypeConfigurations.Values
-            .Select(config => new NodeTypeInfo(
-                config.NodeType,
-                config.DisplayName,
-                config.Description,
-                config.IconName,
-                config.DataType.Name,
-                config.DisplayOrder))
-            .OrderBy(t => t.DisplayOrder)
-            .ThenBy(t => t.NodeType);
-    }
-
-    /// <inheritdoc />
-    public NodeTypeConfiguration? GetNodeTypeConfiguration(string nodeType)
-    {
-        return Configuration.GetNodeTypeConfiguration(nodeType);
-    }
 }
