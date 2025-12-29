@@ -172,4 +172,55 @@ public interface IPersistenceService
     IAsyncEnumerable<object> QueryAsync(string query, string path);
 
     #endregion
+
+    #region Secure Operations
+
+    /// <summary>
+    /// Gets a node by path, applying security filtering.
+    /// Returns null if the user doesn't have read permission.
+    /// Default implementation delegates to GetNodeAsync (no security filtering).
+    /// Use SecurePersistenceServiceDecorator to add security.
+    /// </summary>
+    /// <param name="path">The node path</param>
+    /// <param name="userId">The user's ObjectId (null for anonymous)</param>
+    /// <param name="ct">Cancellation token</param>
+    /// <returns>The node or null if not found or not authorized</returns>
+    Task<MeshNode?> GetNodeSecureAsync(string path, string? userId, CancellationToken ct = default)
+        => GetNodeAsync(path, ct);
+
+    /// <summary>
+    /// Gets child nodes, filtering out those the user cannot read.
+    /// Default implementation delegates to GetChildrenAsync (no security filtering).
+    /// Use SecurePersistenceServiceDecorator to add security.
+    /// </summary>
+    /// <param name="parentPath">Parent path (empty or null for root level)</param>
+    /// <param name="userId">The user's ObjectId (null for anonymous)</param>
+    /// <returns>Async enumerable of accessible child nodes</returns>
+    IAsyncEnumerable<MeshNode> GetChildrenSecureAsync(string? parentPath, string? userId)
+        => GetChildrenAsync(parentPath);
+
+    /// <summary>
+    /// Gets descendant nodes, filtering out those the user cannot read.
+    /// Default implementation delegates to GetDescendantsAsync (no security filtering).
+    /// Use SecurePersistenceServiceDecorator to add security.
+    /// </summary>
+    /// <param name="parentPath">Parent path</param>
+    /// <param name="userId">The user's ObjectId (null for anonymous)</param>
+    /// <returns>Async enumerable of accessible descendant nodes</returns>
+    IAsyncEnumerable<MeshNode> GetDescendantsSecureAsync(string? parentPath, string? userId)
+        => GetDescendantsAsync(parentPath);
+
+    /// <summary>
+    /// Queries nodes with security filtering applied.
+    /// Default implementation delegates to QueryAsync (no security filtering).
+    /// Use SecurePersistenceServiceDecorator to add security.
+    /// </summary>
+    /// <param name="query">RSQL query string</param>
+    /// <param name="path">Base path to search from</param>
+    /// <param name="userId">The user's ObjectId (null for anonymous)</param>
+    /// <returns>Async enumerable of accessible matching objects</returns>
+    IAsyncEnumerable<object> QuerySecureAsync(string query, string path, string? userId)
+        => QueryAsync(query, path);
+
+    #endregion
 }

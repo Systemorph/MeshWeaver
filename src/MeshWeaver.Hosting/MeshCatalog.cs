@@ -1,4 +1,5 @@
 ﻿using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.Caching.Memory;
@@ -148,19 +149,35 @@ public sealed class MeshCatalog(
     }
 
     /// <summary>
-    /// Validates a node read operation using global validators.
+    /// Validates a node read operation using unified validators.
     /// </summary>
     /// <returns>True if valid, false if read should be rejected</returns>
     private async Task<bool> ValidateReadAsync(MeshNode node, CancellationToken ct = default)
     {
-        // Run global validators from DI
-        var globalValidators = hub.ServiceProvider.GetServices<INodeReadValidator>();
-        foreach (var validator in globalValidators)
+        var accessService = hub.ServiceProvider.GetService<AccessService>();
+        var context = new NodeValidationContext
         {
-            var result = await validator.ValidateAsync(node, ct);
+            Operation = NodeOperation.Read,
+            Node = node,
+            AccessContext = accessService?.Context
+        };
+
+        // Run unified validators from DI
+        var validators = hub.ServiceProvider.GetServices<INodeValidator>();
+        foreach (var validator in validators)
+        {
+            // Check if validator handles Read operations
+            if (validator.SupportedOperations.Count > 0 &&
+                !validator.SupportedOperations.Contains(NodeOperation.Read))
+            {
+                continue;
+            }
+
+            var result = await validator.ValidateAsync(context, ct);
             if (!result.IsValid)
             {
-                logger.LogDebug("Global read validator rejected node {Path}: {Error}", node.Path, result.ErrorMessage);
+                logger.LogDebug("Validator {Validator} rejected read on node {Path}: {Error}",
+                    validator.GetType().Name, node.Path, result.ErrorMessage);
                 return false;
             }
         }
