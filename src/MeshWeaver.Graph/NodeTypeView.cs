@@ -1,4 +1,4 @@
-﻿using System.Reactive.Linq;
+using System.Reactive.Linq;
 using Humanizer;
 using MeshWeaver.Application.Styles;
 using MeshWeaver.Blazor.Monaco;
@@ -28,9 +28,11 @@ public static class NodeTypeView
     public const string HubConfigViewArea = "HubConfig";
     public const string HubConfigEditArea = "HubConfigEdit";
 
-    // Data keys for selection state
-    private const string SelectedFileKey = "selectedFile";
-    private const string SelectedSectionKey = "selectedSection";
+    // Data keys for data section
+    private const string DefinitionDataId = "definition";
+    private const string CodeFilesDataId = "codeFiles";
+    private const string CodeFileDataId = "codeFile";
+    private const string SelectionDataId = "selection";
 
     /// <summary>
     /// Adds the NodeType views to the hub's layout for NodeType nodes.
@@ -47,25 +49,29 @@ public static class NodeTypeView
     /// <summary>
     /// Renders the main Details area for a NodeType.
     /// Shows an overview of the NodeType configuration.
+    /// Returns static structure with data-bound dynamic parts.
     /// </summary>
-    public static IObservable<UiControl> Details(LayoutAreaHost host, RenderingContext ctx)
+    public static UiControl Details(LayoutAreaHost host, RenderingContext ctx)
     {
-        // Get NodeTypeDefinition from MeshNode.Content and CodeConfiguration from workspace stream
-        var definitionStream = host.Workspace.GetNodeContent<NodeTypeDefinition>();
-        var codeFileStream = host.Workspace.GetSingle<CodeConfiguration>();
+        // Subscribe to data streams - data will be stored in data section
+        host.SubscribeToDataStream(DefinitionDataId, host.Workspace.GetNodeContent<NodeTypeDefinition>());
+        host.SubscribeToDataStream(CodeFileDataId, host.Workspace.GetSingle<CodeConfiguration>());
 
-        return definitionStream
-            .CombineLatest(codeFileStream)
-            .Select(tuple =>
-            {
-                var content = tuple.First;
-                var codeFile = tuple.Second;
-
-                if (content == null)
-                    return RenderError("No NodeType definition found.");
-
-                return BuildDetailsLayout(host, content, codeFile);
-            });
+        // Return static structure with nested observable view for content
+        return Controls.Stack
+            .WithWidth("100%")
+            .WithView(
+                (h, c) => h.GetDataStream<NodeTypeDefinition>(DefinitionDataId)
+                    .CombineLatest(h.GetDataStream<CodeConfiguration>(CodeFileDataId))
+                    .Select(tuple =>
+                    {
+                        var (definition, codeFile) = tuple;
+                        if (definition == null)
+                            return RenderLoading("Loading NodeType definition...");
+                        return BuildDetailsLayout(host, definition, codeFile);
+                    }),
+                "Content"
+            );
     }
 
     /// <summary>
@@ -121,79 +127,55 @@ public static class NodeTypeView
 
     /// <summary>
     /// Renders the split view with left menu and code/config display.
+    /// Returns static Splitter structure with data-bound content panes.
     /// </summary>
-    public static IObservable<UiControl> CodeView(LayoutAreaHost host, RenderingContext ctx)
+    public static UiControl CodeView(LayoutAreaHost host, RenderingContext ctx)
     {
-        // Get NodeTypeDefinition from MeshNode.Content and CodeConfiguration from workspace stream
-        var definitionStream = host.Workspace.GetNodeContent<NodeTypeDefinition>();
-        var codeFileStream = host.Workspace.GetStream<CodeConfiguration>()!;
+        // Subscribe to data streams - data will be stored in data section
+        host.SubscribeToDataStream(DefinitionDataId, host.Workspace.GetNodeContent<NodeTypeDefinition>());
+        host.SubscribeToDataStream(CodeFilesDataId, host.Workspace.GetStream<CodeConfiguration>()!);
 
-        return definitionStream
-            .CombineLatest(codeFileStream)
-            .Select(tuple =>
-            {
-                var content = tuple.First;
-                var codeFile = tuple.Second;
+        // Initialize selection state
+        host.UpdateData(SelectionDataId, new NodeTypeViewSelection { Section = "configuration" });
 
-                if (content == null)
-                    return RenderError("NodeType not found.");
-
-                return BuildSplitView(host, content, codeFile!);
-            });
-    }
-
-    /// <summary>
-    /// Builds the split view with left menu and main content pane.
-    /// </summary>
-    private static UiControl BuildSplitView(
-        LayoutAreaHost host,
-        NodeTypeDefinition content,
-        IReadOnlyCollection<CodeConfiguration> codeFile)
-    {
-        var hubAddress = host.Hub.Address;
-
-        // Initialize selection state - default to configuration view
-        var selectionDataId = $"nodeTypeSelection_{content.Id}";
-
-        // Initialize selection to configuration view
-        host.UpdateData(selectionDataId, new NodeTypeViewSelection { SelectedFile = null, Section = "configuration" });
-
+        // Return static Splitter structure with observable nested views
         return Controls.Splitter
             .WithSkin(s => s.WithOrientation(Orientation.Horizontal).WithWidth("100%").WithHeight("calc(100vh - 100px)"))
             .WithView(
-                BuildLeftMenu(host, content, codeFile, selectionDataId),
+                // Left menu - observable, updates when definition loads
+                (h, c) => h.GetDataStream<NodeTypeDefinition>(DefinitionDataId)
+                    .Select(definition => definition == null
+                        ? RenderLoading("Loading...")
+                        : BuildLeftMenu(host, definition)),
                 skin => skin.WithSize("280px").WithMin("200px").WithMax("400px").WithCollapsible(true)
             )
             .WithView(
-                BuildMainPane(host, content, codeFile, selectionDataId),
+                // Main pane - observable, updates when definition loads
+                (h, c) => h.GetDataStream<NodeTypeDefinition>(DefinitionDataId)
+                    .Select(definition => definition == null
+                        ? RenderLoading("Loading configuration...")
+                        : BuildMainPaneContent(host, definition)),
                 skin => skin.WithSize("*")
             );
     }
 
     /// <summary>
-    /// Builds the left navigation menu with a single Configuration entry at top.
+    /// Builds the left navigation menu with Configuration entry.
     /// </summary>
-    private static UiControl BuildLeftMenu(
-        LayoutAreaHost host,
-        NodeTypeDefinition content,
-        IEnumerable<CodeConfiguration> _,
-        string selectionDataId)
+    private static UiControl BuildLeftMenu(LayoutAreaHost host, NodeTypeDefinition content)
     {
         var navMenu = Controls.NavMenu.WithSkin(s => s.WithWidth(280).WithCollapsible(false));
 
-        // Single Configuration entry at top - shows all code and config in one view
-        var hasConfiguration = !string.IsNullOrEmpty(content.Configuration)
-                               || !string.IsNullOrEmpty(content.HubConfiguration);
-
+        // Configuration entry
         navMenu = navMenu.WithView(
             new NavLinkControl("Configuration", FluentIcons.Settings(), null)
                 .WithClickAction(actx =>
                 {
-                    host.UpdateData(selectionDataId, new NodeTypeViewSelection { SelectedFile = null, Section = "configuration" });
+                    host.UpdateData(SelectionDataId, new NodeTypeViewSelection { Section = "configuration" });
                 })
         );
 
-        // Dependencies section (if any) - now from NodeTypeDefinition
+        // Dependencies section (if any)
         if (content.Dependencies != null && content.Dependencies.Count > 0)
         {
             var depsGroup = new NavGroupControl("Dependencies")
@@ -214,23 +196,9 @@ public static class NodeTypeView
     }
 
     /// <summary>
-    /// Builds the main content pane - shows configuration content directly.
+    /// Builds the main content pane showing configuration.
     /// </summary>
-    private static UiControl BuildMainPane(
-        LayoutAreaHost host,
-        NodeTypeDefinition content,
-        IEnumerable<CodeConfiguration> codeFile,
-        string selectionDataId)
-    {
-        // Render configuration content directly without reactive state
-        return BuildMainPaneContent(host, content, codeFile, null);
-    }
-
-    private static UiControl BuildMainPaneContent(
-        LayoutAreaHost host,
-        NodeTypeDefinition content,
-        IEnumerable<CodeConfiguration> _1,
-        NodeTypeViewSelection? _2)
+    private static UiControl BuildMainPaneContent(LayoutAreaHost host, NodeTypeDefinition content)
     {
         var hubAddress = host.Hub.Address;
         var stack = Controls.Stack.WithWidth("100%").WithStyle("padding: 24px; min-height: 100%; overflow: auto;");
@@ -270,21 +238,22 @@ public static class NodeTypeView
 
     /// <summary>
     /// Renders the Monaco editor for editing code files.
+    /// Returns static structure with data-bound editor.
     /// </summary>
-    public static IObservable<UiControl> CodeEdit(LayoutAreaHost host, RenderingContext ctx)
+    public static UiControl CodeEdit(LayoutAreaHost host, RenderingContext ctx)
     {
-        // Get CodeConfiguration and NodeTypeDefinition from workspace stream
-        var codeFileStream = host.Workspace.GetSingle<CodeConfiguration>();
-        var definitionStream = host.Workspace.GetNodeContent<NodeTypeDefinition>();
+        // Subscribe to data streams
+        host.SubscribeToDataStream(CodeFileDataId, host.Workspace.GetSingle<CodeConfiguration>());
+        host.SubscribeToDataStream(DefinitionDataId, host.Workspace.GetNodeContent<NodeTypeDefinition>());
 
-        return codeFileStream
-            .CombineLatest(definitionStream)
-            .Select(tuple =>
-            {
-                var codeFile = tuple.First;
-                // Dependencies would need to be loaded via workspace if needed
-                return BuildCodeEditContent(host, codeFile, "");
-            });
+        // Return structure with nested observable view for editor
+        return Controls.Stack
+            .WithWidth("100%")
+            .WithView(
+                (h, c) => h.GetDataStream<CodeConfiguration>(CodeFileDataId)
+                    .Select(codeFile => BuildCodeEditContent(host, codeFile, "")),
+                "Editor"
+            );
     }
 
     private static UiControl BuildCodeEditContent(
@@ -293,7 +262,6 @@ public static class NodeTypeView
         string dependencyCode)
     {
         var hubAddress = host.Hub.Address;
-        var hubPath = hubAddress.ToString();
         var stack = Controls.Stack.WithWidth("100%").WithStyle("padding: 24px;");
         var dataId = Guid.NewGuid().AsString();
 
@@ -384,19 +352,23 @@ public static class NodeTypeView
 
     /// <summary>
     /// Renders the view for Configuration.
+    /// Returns static structure with data-bound content.
     /// </summary>
-    public static IObservable<UiControl> HubConfigView(LayoutAreaHost host, RenderingContext ctx)
+    public static UiControl HubConfigView(LayoutAreaHost host, RenderingContext ctx)
     {
-        // Get NodeTypeDefinition from MeshNode.Content
-        var definitionStream = host.Workspace.GetNodeContent<NodeTypeDefinition>();
+        // Subscribe to data stream
+        host.SubscribeToDataStream(DefinitionDataId, host.Workspace.GetNodeContent<NodeTypeDefinition>());
 
-        return definitionStream.Select(content =>
-        {
-            if (content == null)
-                return RenderError("NodeType not found.");
-
-            return BuildHubConfigViewContent(host, content);
-        });
+        // Return structure with nested observable view
+        return Controls.Stack
+            .WithWidth("100%")
+            .WithView(
+                (h, c) => h.GetDataStream<NodeTypeDefinition>(DefinitionDataId)
+                    .Select(content => content == null
+                        ? RenderLoading("Loading...")
+                        : BuildHubConfigViewContent(host, content)),
+                "Content"
+            );
     }
 
     private static UiControl BuildHubConfigViewContent(LayoutAreaHost host, NodeTypeDefinition content)
@@ -441,28 +413,30 @@ public static class NodeTypeView
 
     /// <summary>
     /// Renders the Monaco editor for editing Configuration.
-    /// Includes CodeConfiguration code for autocomplete.
+    /// Returns static structure with data-bound editor.
     /// </summary>
-    public static IObservable<UiControl> HubConfigEdit(LayoutAreaHost host, RenderingContext ctx)
+    public static UiControl HubConfigEdit(LayoutAreaHost host, RenderingContext ctx)
     {
-        // Get NodeTypeDefinition and CodeConfiguration from workspace
-        var definitionStream = host.Workspace.GetNodeContent<NodeTypeDefinition>();
-        var codeFileStream = host.Workspace.GetSingle<CodeConfiguration>();
+        // Subscribe to data streams
+        host.SubscribeToDataStream(DefinitionDataId, host.Workspace.GetNodeContent<NodeTypeDefinition>());
+        host.SubscribeToDataStream(CodeFileDataId, host.Workspace.GetSingle<CodeConfiguration>());
 
-        return definitionStream
-            .CombineLatest(codeFileStream)
-            .Select(tuple =>
-            {
-                var content = tuple.First;
-                var codeFile = tuple.Second;
-
-                if (content == null)
-                    return RenderError("NodeType not found.");
-
-                // Use code from CodeConfiguration for autocomplete
-                var allCode = codeFile?.Code ?? "";
-                return BuildHubConfigEditContent(host, content, allCode);
-            });
+        // Return structure with nested observable view
+        return Controls.Stack
+            .WithWidth("100%")
+            .WithView(
+                (h, c) => h.GetDataStream<NodeTypeDefinition>(DefinitionDataId)
+                    .CombineLatest(h.GetDataStream<CodeConfiguration>(CodeFileDataId))
+                    .Select(tuple =>
+                    {
+                        var (content, codeFile) = tuple;
+                        if (content == null)
+                            return RenderLoading("Loading...");
+                        var allCode = codeFile?.Code ?? "";
+                        return BuildHubConfigEditContent(host, content, allCode);
+                    }),
+                "Editor"
+            );
     }
 
     private static UiControl BuildHubConfigEditContent(LayoutAreaHost host, NodeTypeDefinition content, string allCodeForAutocomplete)
@@ -557,30 +531,13 @@ public static class NodeTypeView
             .WithView(Controls.Html($"<span>{System.Web.HttpUtility.HtmlEncode(value)}</span>"));
     }
 
+    private static UiControl RenderLoading(string message)
+        => Controls.Stack
+            .WithStyle("padding: 24px; display: flex; align-items: center; justify-content: center;")
+            .WithView(Controls.Progress(message, 0));
+
     private static UiControl RenderError(string message)
         => new MarkdownControl($"> [!CAUTION]\n> {message}\n");
-
-    /// <summary>
-    /// Gets an appropriate icon for the given programming language.
-    /// </summary>
-    private static Icon GetLanguageIcon(string language)
-    {
-        return language?.ToLowerInvariant() switch
-        {
-            "csharp" or "c#" or "cs" => CustomIcons.CSharp(),
-            "javascript" or "js" => FluentIcons.BracesVariable(),
-            "typescript" or "ts" => FluentIcons.BracesVariable(),
-            "json" => FluentIcons.Braces(),
-            "python" or "py" => FluentIcons.Code(),
-            "sql" => FluentIcons.Database(),
-            "html" => FluentIcons.Globe(),
-            "css" => FluentIcons.DesignIdeas(),
-            "xml" => FluentIcons.Code(),
-            "yaml" or "yml" => FluentIcons.DocumentText(),
-            "markdown" or "md" => FluentIcons.Document(),
-            _ => FluentIcons.Document()
-        };
-    }
 }
 
 /// <summary>
