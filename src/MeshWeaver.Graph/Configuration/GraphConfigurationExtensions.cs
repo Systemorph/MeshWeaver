@@ -42,17 +42,18 @@ public static class GraphConfigurationExtensions
         public TBuilder AddJsonGraphConfiguration(string _)
         {
             // Register the built-in "NodeType" MeshNode
-            // Each Type definition node (with nodeType="NodeType") is compiled individually to apply its specific
-            // Configuration lambda from NodeTypeDefinition.Configuration.
-            // The DynamicMeshNodeAttributeGenerator adds .ConfigureMeshHub().WithCodeConfiguration().Build()
-            // automatically for nodes with NodeTypeDefinition content, then applies the user's lambda.
+            // This provides HubConfiguration for nodes with nodeType="NodeType" (type definition nodes).
             builder.AddMeshNodes(new MeshNode(MeshNode.NodeTypePath)
             {
                 Name = "Node Type",
                 Description = "Definition for a node type",
                 IconName = "Code",
                 HubConfiguration = Observable.Return<Func<MessageHubConfiguration, MessageHubConfiguration>?>(
-                    config => config.AddNodeTypeView())
+                    config => config
+                        .AddMeshDataSource(source => source
+                            .WithContentType<NodeTypeDefinition>()
+                            .WithType<CodeConfiguration>("Code"))
+                        .AddNodeTypeView())
             });
 
             // Register services that don't need hub-level dependencies at the mesh level
