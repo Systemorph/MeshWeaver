@@ -1,4 +1,5 @@
-﻿using MeshWeaver.Mesh;
+﻿using System.Reactive.Linq;
+using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 
 [assembly: MeshWeaver.Insurance.Domain.InsuranceApplication]
@@ -38,7 +39,7 @@ public class InsuranceApplicationAttribute : MeshNodeAttribute
             IconName = "Calculator",
             DisplayOrder = 100,
             AddressSegments = 3, // pricing/company/year
-            HubConfiguration = InsuranceApplicationExtensions.ConfigureSinglePricingApplication,
+            HubConfiguration = Observable.Return<Func<MessageHubConfiguration, MessageHubConfiguration>?>(InsuranceApplicationExtensions.ConfigureSinglePricingApplication),
             AutocompleteAddress = _ => Address
         }
     ];

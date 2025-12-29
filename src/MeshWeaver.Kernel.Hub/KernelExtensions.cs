@@ -1,3 +1,4 @@
+using System.Reactive.Linq;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 
@@ -15,7 +16,7 @@ public static class KernelExtensions
             {
                 Name = "Kernel",
                 AssemblyLocation = typeof(KernelExtensions).Assembly.Location,
-                HubConfiguration = ConfigureHub,
+                HubConfiguration = Observable.Return<Func<MessageHubConfiguration, MessageHubConfiguration>?>(ConfigureHub),
                 Description = "Jupyter kernel for code execution",
                 AddressSegments = 2 // "kernel/{id}" enables dynamic child nodes
             }
