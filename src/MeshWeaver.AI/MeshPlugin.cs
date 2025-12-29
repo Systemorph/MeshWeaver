@@ -75,14 +75,25 @@ public class MeshPlugin(IMessageHub hub, IAgentChat chat)
 
     [Description("Lists all available node types that can be used when creating nodes. " +
                  "Each node type has an associated data schema that defines the Content structure.")]
-    public string GetNodeTypes()
+    public async Task<string> GetNodeTypes()
     {
         logger.LogInformation("GetNodeTypes called");
 
-        if (meshCatalog == null)
+        if (meshCatalog?.Persistence == null)
             return "Mesh catalog not available.";
 
-        var nodeTypes = meshCatalog.GetNodeTypes();
+        // Query children of "Type" path to get all NodeType definitions
+        var nodeTypes = new List<object>();
+        await foreach (var node in meshCatalog.Persistence.GetChildrenAsync(MeshNode.NodeTypePath))
+        {
+            nodeTypes.Add(new
+            {
+                NodeType = node.Path,
+                DisplayName = node.Name,
+                node.Description,
+                node.IconName
+            });
+        }
 
         return JsonSerializer.Serialize(nodeTypes, hub.JsonSerializerOptions);
     }
@@ -94,21 +105,25 @@ public class MeshPlugin(IMessageHub hub, IAgentChat chat)
     {
         logger.LogInformation("GetSchema called with nodeType={NodeType}", nodeType);
 
-        if (meshCatalog == null)
+        if (meshCatalog?.Persistence == null)
             return "Mesh catalog not available.";
 
-        var config = meshCatalog.GetNodeTypeConfiguration(nodeType);
-        if (config == null)
+        // Check if NodeType exists in persistence
+        var nodeTypeNode = await meshCatalog.Persistence.GetNodeAsync(nodeType);
+        if (nodeTypeNode == null)
         {
-            var availableTypes = string.Join(", ", meshCatalog.GetNodeTypes().Select(t => t.NodeType));
-            return $"Unknown node type: {nodeType}. Available types: {availableTypes}";
+            var availableTypes = new List<string>();
+            await foreach (var n in meshCatalog.Persistence.GetChildrenAsync(MeshNode.NodeTypePath))
+                availableTypes.Add(n.Path);
+            return $"Unknown node type: {nodeType}. Available types: {string.Join(", ", availableTypes)}";
         }
 
         try
         {
+            // Get schema using the NodeType path via schema reference
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
             var response = await hub.AwaitResponse(
-                new GetDataRequest(new SchemaReference(config.DataType.Name)),
+                new GetDataRequest(new SchemaReference(nodeType)),
                 o => o.WithTarget(hub.Address),
                 cts.Token);
 
@@ -144,12 +159,14 @@ public class MeshPlugin(IMessageHub hub, IAgentChat chat)
 
         var resolvedPath = ResolvePath(path);
 
-        // Validate node type exists
-        var config = meshCatalog.GetNodeTypeConfiguration(nodeType);
-        if (config == null)
+        // Validate node type exists by checking persistence
+        var nodeTypeNode = await meshCatalog.Persistence.GetNodeAsync(nodeType);
+        if (nodeTypeNode == null)
         {
-            var availableTypes = string.Join(", ", meshCatalog.GetNodeTypes().Select(t => t.NodeType));
-            return $"Invalid node type: {nodeType}. Available types: {availableTypes}. " +
+            var availableTypes = new List<string>();
+            await foreach (var n in meshCatalog.Persistence.GetChildrenAsync(MeshNode.NodeTypePath))
+                availableTypes.Add(n.Path);
+            return $"Invalid node type: {nodeType}. Available types: {string.Join(", ", availableTypes)}. " +
                    $"Use GetNodeTypes to see available types and GetSchema to get the Content structure.";
         }
 
@@ -157,18 +174,13 @@ public class MeshPlugin(IMessageHub hub, IAgentChat chat)
         if (await meshCatalog.Persistence.ExistsAsync(resolvedPath))
             return $"Node already exists at path: {resolvedPath}";
 
-        // Parse and validate content if provided
+        // Parse content if provided (use dynamic JSON deserialization)
         object? content = null;
         if (!string.IsNullOrWhiteSpace(contentJson))
         {
             try
             {
-                content = JsonSerializer.Deserialize(contentJson, config.DataType, hub.JsonSerializerOptions);
-                if (content == null)
-                {
-                    return $"Failed to parse content JSON. Please ensure it matches the schema for type '{nodeType}'. " +
-                           $"Use GetSchema(\"{nodeType}\") to see the required structure.";
-                }
+                content = JsonSerializer.Deserialize<JsonElement>(contentJson, hub.JsonSerializerOptions);
             }
             catch (JsonException ex)
             {

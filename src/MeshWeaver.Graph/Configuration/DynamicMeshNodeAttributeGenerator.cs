@@ -91,22 +91,6 @@ internal class DynamicMeshNodeAttributeGenerator
         sb.AppendLine("        ];");
         sb.AppendLine();
 
-        // NodeTypeConfigurations property
-        sb.AppendLine("        public override IEnumerable<NodeTypeConfiguration> NodeTypeConfigurations =>");
-        sb.AppendLine("        [");
-        sb.AppendLine("            new NodeTypeConfiguration");
-        sb.AppendLine("            {");
-        sb.AppendLine($"                NodeType = \"{EscapeString(node.NodeType)}\",");
-        sb.AppendLine("                DataType = typeof(object),");
-        sb.AppendLine("                HubConfiguration = ConfigureHub,");
-        sb.AppendLine($"                DisplayName = \"{EscapeString(node.Name)}\",");
-        sb.AppendLine($"                Description = \"{EscapeString(node.Description)}\",");
-        sb.AppendLine($"                IconName = \"{EscapeString(node.IconName)}\",");
-        sb.AppendLine($"                DisplayOrder = {node.DisplayOrder}");
-        sb.AppendLine("            }");
-        sb.AppendLine("        ];");
-        sb.AppendLine();
-
         // ConfigureHub method
         sb.AppendLine("        /// <summary>");
         sb.AppendLine("        /// Hub configuration - applies default views, then applies user's HubConfiguration.");

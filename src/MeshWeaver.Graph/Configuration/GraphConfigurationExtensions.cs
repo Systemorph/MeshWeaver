@@ -1,4 +1,5 @@
-﻿using MeshWeaver.Data;
+﻿using System.Reactive.Linq;
+using MeshWeaver.Data;
 using MeshWeaver.Domain;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
@@ -40,21 +41,18 @@ public static class GraphConfigurationExtensions
         /// </summary>
         public TBuilder AddJsonGraphConfiguration(string _)
         {
-            // Register the built-in "NodeType" metadata configuration
-            // HubConfiguration is identity (config => config) because each Type definition node
-            // (with nodeType="NodeType") is compiled individually to apply its specific
+            // Register the built-in "NodeType" MeshNode
+            // Each Type definition node (with nodeType="NodeType") is compiled individually to apply its specific
             // Configuration lambda from NodeTypeDefinition.Configuration.
             // The DynamicMeshNodeAttributeGenerator adds .ConfigureMeshHub().WithCodeConfiguration().Build()
             // automatically for nodes with NodeTypeDefinition content, then applies the user's lambda.
-            // This registration is for metadata only (DataType, DisplayName, etc.)
-            builder.AddNodeTypeConfigurations(new NodeTypeConfiguration
+            builder.AddMeshNodes(new MeshNode(MeshNode.NodeTypePath)
             {
-                NodeType = MeshNode.NodeTypePath,
-                DataType = typeof(NodeTypeDefinition),
-                DisplayName = "Node Type",
+                Name = "Node Type",
                 Description = "Definition for a node type",
                 IconName = "Code",
-                HubConfiguration = config => config // Identity - actual config comes from compiled nodes
+                HubConfiguration = Observable.Return<Func<MessageHubConfiguration, MessageHubConfiguration>?>(
+                    config => config.AddNodeTypeView())
             });
 
             // Register services that don't need hub-level dependencies at the mesh level

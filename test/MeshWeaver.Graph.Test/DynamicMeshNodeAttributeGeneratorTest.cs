@@ -156,7 +156,7 @@ public class DynamicMeshNodeAttributeGeneratorTest
         var source = _generator.GenerateAttributeSource(node, codeConfig, null);
 
         // Assert
-        source.Should().Contain("HubConfiguration = ConfigureHub");
+        source.Should().Contain("HubConfiguration = Observable.Return<Func<MessageHubConfiguration, MessageHubConfiguration>?>(ConfigureHub)");
         source.Should().Contain("private static MessageHubConfiguration ConfigureHub");
     }
 
@@ -343,7 +343,7 @@ public class DynamicMeshNodeAttributeGeneratorTest
 
         // Assert - should still generate valid code
         source.Should().Contain("class testMeshNodeAttribute");
-        source.Should().Contain("HubConfiguration = ConfigureHub");
+        source.Should().Contain("HubConfiguration = Observable.Return<Func<MessageHubConfiguration, MessageHubConfiguration>?>(ConfigureHub)");
     }
 
     [Fact]

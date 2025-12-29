@@ -18,7 +18,6 @@ public record MeshBuilder
     }
 
     private List<MeshNode> MeshNodes { get; } = new();
-    private List<NodeTypeConfiguration> NodeTypeConfigs { get; } = new();
     private readonly UnifiedPathRegistry pathRegistry = new();
 
     public MeshBuilder InstallAssemblies(params string[] assemblyLocations)
@@ -28,27 +27,6 @@ public record MeshBuilder
             .SelectMany(a => a.GetCustomAttributes<MeshNodeAttribute>())
             .ToArray();
         MeshNodes.AddRange(attributes.SelectMany(a => InstallServices(a.Nodes)));
-
-        // Collect node type configurations from attributes
-        var nodeTypeConfigs = attributes.SelectMany(a => a.NodeTypeConfigurations).ToArray();
-        NodeTypeConfigs.AddRange(nodeTypeConfigs);
-
-        // Register DataTypes from node type configurations for serialization
-        // Use short names (Type.Name) for consistency with TypeSource registrations
-        var dataTypes = nodeTypeConfigs
-            .Select(c => c.DataType)
-            .Where(t => t != typeof(object))
-            .Distinct()
-            .ToArray();
-        if (dataTypes.Length > 0)
-        {
-            ConfigureHub(config =>
-            {
-                foreach (var dataType in dataTypes)
-                    config.TypeRegistry.WithType(dataType, dataType.Name);
-                return config;
-            });
-        }
 
         // Register address types from attributes
         var addressTypes = attributes.SelectMany(a => a.AddressTypes).ToArray();
@@ -126,9 +104,7 @@ public record MeshBuilder
         var meshTypeRegistry = MessageHubExtensions.CreateTypeRegistry();
 
         ConfigureServices(services => services
-            .AddSingleton(_ => new MeshConfiguration(
-                MeshNodes.ToDictionary(x => x.Path),
-                NodeTypeConfigs.ToDictionary(x => x.NodeType)))
+            .AddSingleton(_ => new MeshConfiguration(MeshNodes.ToDictionary(x => x.Path)))
             .AddSingleton<IUnifiedPathRegistry>(_ => pathRegistry)
             .AddSingleton<ITypeRegistry>(_ => meshTypeRegistry)
             .AddSingleton(BuildHub)
@@ -149,7 +125,6 @@ public record MeshBuilder
                 }))
             .Set(meshConfig)
         );
-
     }
 
     public virtual IMessageHub BuildHub(IServiceProvider sp)
@@ -165,36 +140,6 @@ public record MeshBuilder
     public MeshBuilder AddMeshNodes(params IEnumerable<MeshNode> nodes)
     {
         MeshNodes.AddRange(nodes);
-        return this;
-    }
-
-    /// <summary>
-    /// Adds node type configurations dynamically.
-    /// Used for JSON-based configuration where configurations are loaded at runtime.
-    /// </summary>
-    public MeshBuilder AddNodeTypeConfigurations(params IEnumerable<NodeTypeConfiguration> configurations)
-    {
-        var configList = configurations.ToList();
-        NodeTypeConfigs.AddRange(configList);
-
-        // Register DataTypes from node type configurations for serialization
-        // Use short names (Type.Name) for consistency with TypeSource registrations
-        var dataTypes = configList
-            .Select(c => c.DataType)
-            .Where(t => t != null && t != typeof(object))
-            .Distinct()
-            .ToArray();
-
-        if (dataTypes.Length > 0)
-        {
-            ConfigureHub(config =>
-            {
-                foreach (var dataType in dataTypes)
-                    config.TypeRegistry.WithType(dataType, dataType.Name);
-                return config;
-            });
-        }
-
         return this;
     }
 }

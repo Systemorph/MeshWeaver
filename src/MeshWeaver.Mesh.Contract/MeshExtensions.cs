@@ -65,11 +65,12 @@ public static class MeshExtensions
             // 2. CreateTransientNodeAsync already checks cache + persistence directly
             // The existence check happens in CreateTransientNodeAsync and throws InvalidOperationException
 
-            // 1. Validate NodeType if specified
+            // 1. Validate NodeType if specified - check if it exists as a MeshNode
             if (!string.IsNullOrEmpty(node.NodeType))
             {
-                var nodeTypeConfig = catalog.GetNodeTypeConfiguration(node.NodeType);
-                if (nodeTypeConfig == null)
+                var nodeTypeExists = catalog.Configuration.Nodes.ContainsKey(node.NodeType)
+                    || await catalog.Persistence.ExistsAsync(node.NodeType, ct);
+                if (!nodeTypeExists)
                 {
                     hub.Post(
                         CreateNodeResponse.Fail(
@@ -250,16 +251,16 @@ public static class MeshExtensions
     }
 
     /// <summary>
-    /// Runs all creation validators: first global validators from DI, then NodeType-specific validators.
+    /// Runs all creation validators from DI.
     /// </summary>
     private static async Task<(string? ErrorMessage, NodeCreationRejectionReason Reason)?> RunCreationValidatorsAsync(
         IMessageHub hub,
-        IMeshCatalog catalog,
+        IMeshCatalog _,
         MeshNode node,
         CreateNodeRequest request,
         CancellationToken ct)
     {
-        // 1. Run global validators from DI
+        // Run global validators from DI
         var globalValidators = hub.ServiceProvider.GetServices<INodeCreationValidator>();
         foreach (var validator in globalValidators)
         {
@@ -268,64 +269,26 @@ public static class MeshExtensions
                 return (result.ErrorMessage, result.Reason);
         }
 
-        // 2. Run NodeType-specific validators
-        if (!string.IsNullOrEmpty(node.NodeType))
-        {
-            var nodeTypeConfig = catalog.GetNodeTypeConfiguration(node.NodeType);
-            if (nodeTypeConfig != null)
-            {
-                foreach (var validatorType in nodeTypeConfig.CreationValidatorTypes)
-                {
-                    var validator = (INodeCreationValidator?)ActivatorUtilities.CreateInstance(hub.ServiceProvider, validatorType);
-                    if (validator != null)
-                    {
-                        var result = await validator.ValidateAsync(node, request, ct);
-                        if (!result.IsValid)
-                            return (result.ErrorMessage, result.Reason);
-                    }
-                }
-            }
-        }
-
         return null; // All validators passed
     }
 
     /// <summary>
-    /// Runs all deletion validators: first global validators from DI, then NodeType-specific validators.
+    /// Runs all deletion validators from DI.
     /// </summary>
     private static async Task<(string? ErrorMessage, NodeDeletionRejectionReason Reason)?> RunDeletionValidatorsAsync(
         IMessageHub hub,
-        IMeshCatalog catalog,
+        IMeshCatalog _,
         MeshNode node,
         DeleteNodeRequest request,
         CancellationToken ct)
     {
-        // 1. Run global validators from DI
+        // Run global validators from DI
         var globalValidators = hub.ServiceProvider.GetServices<INodeDeletionValidator>();
         foreach (var validator in globalValidators)
         {
             var result = await validator.ValidateAsync(node, request, ct);
             if (!result.IsValid)
                 return (result.ErrorMessage, result.Reason);
-        }
-
-        // 2. Run NodeType-specific validators
-        if (!string.IsNullOrEmpty(node.NodeType))
-        {
-            var nodeTypeConfig = catalog.GetNodeTypeConfiguration(node.NodeType);
-            if (nodeTypeConfig != null)
-            {
-                foreach (var validatorType in nodeTypeConfig.DeletionValidatorTypes)
-                {
-                    var validator = (INodeDeletionValidator?)ActivatorUtilities.CreateInstance(hub.ServiceProvider, validatorType);
-                    if (validator != null)
-                    {
-                        var result = await validator.ValidateAsync(node, request, ct);
-                        if (!result.IsValid)
-                            return (result.ErrorMessage, result.Reason);
-                    }
-                }
-            }
         }
 
         return null; // All validators passed
@@ -426,41 +389,22 @@ public static class MeshExtensions
     }
 
     /// <summary>
-    /// Runs all update validators: first global validators from DI, then NodeType-specific validators.
+    /// Runs all update validators from DI.
     /// </summary>
     private static async Task<(string? ErrorMessage, NodeUpdateRejectionReason Reason)?> RunUpdateValidatorsAsync(
         IMessageHub hub,
-        IMeshCatalog catalog,
+        IMeshCatalog _,
         MeshNode existingNode,
         MeshNode updatedNode,
         CancellationToken ct)
     {
-        // 1. Run global validators from DI
+        // Run global validators from DI
         var globalValidators = hub.ServiceProvider.GetServices<INodeUpdateValidator>();
         foreach (var validator in globalValidators)
         {
             var result = await validator.ValidateAsync(existingNode, updatedNode, ct);
             if (!result.IsValid)
                 return (result.ErrorMessage, result.Reason);
-        }
-
-        // 2. Run NodeType-specific validators (use existing node's NodeType)
-        if (!string.IsNullOrEmpty(existingNode.NodeType))
-        {
-            var nodeTypeConfig = catalog.GetNodeTypeConfiguration(existingNode.NodeType);
-            if (nodeTypeConfig != null)
-            {
-                foreach (var validatorType in nodeTypeConfig.UpdateValidatorTypes)
-                {
-                    var validator = (INodeUpdateValidator?)ActivatorUtilities.CreateInstance(hub.ServiceProvider, validatorType);
-                    if (validator != null)
-                    {
-                        var result = await validator.ValidateAsync(existingNode, updatedNode, ct);
-                        if (!result.IsValid)
-                            return (result.ErrorMessage, result.Reason);
-                    }
-                }
-            }
         }
 
         return null; // All validators passed

@@ -1,4 +1,4 @@
-﻿using System.Runtime.CompilerServices;
+using System.Runtime.CompilerServices;
 
 [assembly: InternalsVisibleTo("MeshWeaver.Connection.Orleans")]
 [assembly: InternalsVisibleTo("MeshWeaver.Hosting.Monolith")]
@@ -6,37 +6,13 @@
 namespace MeshWeaver.Mesh;
 
 /// <summary>
-/// Configuration for the mesh including registered nodes and node type configurations.
+/// Configuration for the mesh including registered nodes.
+/// Types are treated as mesh nodes with nodeType="NodeType".
 /// </summary>
-public class MeshConfiguration(
-    IReadOnlyDictionary<string, MeshNode> meshNodes,
-    IReadOnlyDictionary<string, NodeTypeConfiguration> nodeTypeConfigurations)
+public class MeshConfiguration(IReadOnlyDictionary<string, MeshNode> meshNodes)
 {
-    private readonly Dictionary<string, NodeTypeConfiguration> _nodeTypeConfigurations = new(nodeTypeConfigurations);
-
     /// <summary>
     /// Registered mesh nodes by their key/path.
     /// </summary>
     public IReadOnlyDictionary<string, MeshNode> Nodes { get; } = meshNodes;
-
-    /// <summary>
-    /// Node type configurations that map NodeType strings to HubConfiguration and DataType.
-    /// Used to configure hubs for persisted nodes based on their NodeType.
-    /// </summary>
-    public IReadOnlyDictionary<string, NodeTypeConfiguration> NodeTypeConfigurations => _nodeTypeConfigurations;
-
-    /// <summary>
-    /// Gets the node type configuration for a given node type.
-    /// </summary>
-    public NodeTypeConfiguration? GetNodeTypeConfiguration(string? nodeType)
-        => nodeType != null && _nodeTypeConfigurations.TryGetValue(nodeType, out var config) ? config : null;
-
-    /// <summary>
-    /// Registers a node type configuration dynamically (e.g., from JSON config).
-    /// </summary>
-    public MeshConfiguration RegisterNodeTypeConfiguration(NodeTypeConfiguration config)
-    {
-        _nodeTypeConfigurations[config.NodeType] = config;
-        return this;
-    }
 }

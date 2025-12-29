@@ -1,5 +1,6 @@
 ﻿using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Messaging;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.Emit;
@@ -160,7 +161,7 @@ internal class MeshNodeCompilationService(
                 return new NodeCompilationResult(assemblyLocation, []);
             }
 
-            // Extract NodeTypeConfigurations from MeshNodeAttribute
+            // Extract NodeTypeConfigurations from MeshNodeAttribute.Nodes
             var configurations = new List<NodeTypeConfiguration>();
             foreach (var type in assembly.GetTypes())
             {
@@ -169,7 +170,30 @@ internal class MeshNodeCompilationService(
                     var attribute = (MeshNodeAttribute?)Activator.CreateInstance(type);
                     if (attribute != null)
                     {
-                        configurations.AddRange(attribute.NodeTypeConfigurations);
+                        // Extract configurations from Nodes property
+                        foreach (var meshNode in attribute.Nodes)
+                        {
+                            // Get HubConfiguration by subscribing to Observable (it emits immediately via Observable.Return)
+                            Func<MessageHubConfiguration, MessageHubConfiguration>? hubConfig = null;
+                            if (meshNode.HubConfiguration != null)
+                            {
+                                meshNode.HubConfiguration.Subscribe(config => hubConfig = config);
+                            }
+
+                            if (hubConfig != null)
+                            {
+                                configurations.Add(new NodeTypeConfiguration
+                                {
+                                    NodeType = meshNode.NodeType ?? meshNode.Path,
+                                    DataType = typeof(object),
+                                    HubConfiguration = hubConfig,
+                                    DisplayName = meshNode.Name,
+                                    Description = meshNode.Description,
+                                    IconName = meshNode.IconName,
+                                    DisplayOrder = meshNode.DisplayOrder
+                                });
+                            }
+                        }
                     }
                 }
             }

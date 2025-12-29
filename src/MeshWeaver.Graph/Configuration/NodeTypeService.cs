@@ -18,7 +18,6 @@ namespace MeshWeaver.Graph.Configuration;
 /// </summary>
 internal class NodeTypeService(
     IMessageHub meshHub,
-    MeshConfiguration meshConfiguration,
     ILogger<NodeTypeService> logger,
     IMeshNodeCompilationService? compilationService = null)
     : INodeTypeService, IDisposable
@@ -100,32 +99,24 @@ internal class NodeTypeService(
             var nodePath = node.Path;
 
             // Check if already cached
-            var cachedHubConfig = GetCachedHubConfiguration(nodePath);
-            if (cachedHubConfig != null)
+            var cachedConfig = GetCachedHubConfiguration(nodePath);
+            if (cachedConfig != null)
             {
-                return node with { HubConfiguration = Observable.Return<Func<MessageHubConfiguration, MessageHubConfiguration>?>(cachedHubConfig) };
+                return node with { HubConfiguration = Observable.Return<Func<MessageHubConfiguration, MessageHubConfiguration>?>(cachedConfig) };
             }
 
             // Compile the type definition node itself
             return node with { HubConfiguration = GetHubConfigurationForNodeType(nodePath) };
         }
 
-        // 1. Try MeshConfiguration (already registered) - wrap in Observable.Return
-        // Skip if HubConfiguration is null (metadata-only registration like "NodeType")
-        var existingConfig = meshConfiguration.GetNodeTypeConfiguration(nodeType);
-        if (existingConfig?.HubConfiguration != null)
+        // 1. Try cached HubConfiguration (sync fast path) - wrap in Observable.Return
+        var cachedHubConfig = GetCachedHubConfiguration(nodeType);
+        if (cachedHubConfig != null)
         {
-            return node with { HubConfiguration = Observable.Return<Func<MessageHubConfiguration, MessageHubConfiguration>?>(existingConfig.HubConfiguration) };
+            return node with { HubConfiguration = Observable.Return<Func<MessageHubConfiguration, MessageHubConfiguration>?>(cachedHubConfig) };
         }
 
-        // 2. Try cached HubConfiguration (sync fast path) - wrap in Observable.Return
-        var cachedHubConfig2 = GetCachedHubConfiguration(nodeType);
-        if (cachedHubConfig2 != null)
-        {
-            return node with { HubConfiguration = Observable.Return<Func<MessageHubConfiguration, MessageHubConfiguration>?>(cachedHubConfig2) };
-        }
-
-        // 3. Not cached - return node with Observable that will emit when compiled
+        // 2. Not cached - return node with Observable that will emit when compiled
         // The caller will subscribe only when actually creating the hub
         return node with { HubConfiguration = GetHubConfigurationForNodeType(nodeType) };
     }
@@ -239,15 +230,7 @@ internal class NodeTypeService(
             return null;
         }
 
-        // 1. Try MeshConfiguration (already registered)
-        var existingConfig = meshConfiguration.GetNodeTypeConfiguration(node.NodeType);
-        if (existingConfig != null)
-        {
-            logger.LogDebug("Found existing HubConfiguration for {NodeType}", node.NodeType);
-            return existingConfig.HubConfiguration;
-        }
-
-        // 2. Try cached HubConfiguration
+        // 1. Try cached HubConfiguration
         var cachedHubConfig = GetCachedHubConfiguration(node.NodeType);
         if (cachedHubConfig != null)
         {
@@ -255,7 +238,7 @@ internal class NodeTypeService(
             return cachedHubConfig;
         }
 
-        // 3. Trigger compilation via GetAssemblyPathAsync (which populates _hubConfigurations)
+        // 2. Trigger compilation via GetAssemblyPathAsync (which populates _hubConfigurations)
         await GetAssemblyPathAsync(node.NodeType);
 
         // Now check cache again
@@ -360,10 +343,6 @@ internal class NodeTypeService(
                     foreach (var config in compilationResult.NodeTypeConfigurations)
                     {
                         _hubConfigurations[config.NodeType] = config.HubConfiguration;
-
-                        // Also register in MeshConfiguration
-                        meshConfiguration.RegisterNodeTypeConfiguration(config);
-
                         logger.LogDebug("Cached HubConfiguration for {NodeType}", config.NodeType);
                     }
                 }
