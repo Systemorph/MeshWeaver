@@ -227,15 +227,8 @@ public static class DataExtensions
                 CreateDataPathStream(workspace, path, null));
         }
 
-        // Register the collection: prefix resolver for UnifiedReference
-        // This handles paths like "collection:collectionName" or just "collection"
-        if (!data.UnifiedReferenceResolvers.ContainsKey("collection"))
-        {
-            data = data.WithUnifiedReference("collection", (workspace, path) =>
-                CreateCollectionConfigStream(workspace, path));
-        }
-
-        // Then register the built-in stream factories for DataPathReference, UnifiedReference, and CollectionConfigReference
+        // Then register the built-in stream factories for DataPathReference and UnifiedReference
+        // Note: CollectionConfigReference is handled by ContentCollectionsExtensions.AddContentCollections
         return data.Configure(reduction => reduction
             .AddWorkspaceReferenceStream<object>((workspace, reference, configuration) =>
                 reference is not DataPathReference dataPathRef
@@ -245,43 +238,7 @@ public static class DataExtensions
                 reference is not UnifiedReference unifiedRef
                     ? null
                     : CreateUnifiedReferenceStream(workspace, unifiedRef, configuration))
-            .AddWorkspaceReferenceStream<object>((workspace, reference, configuration) =>
-                reference is not CollectionConfigReference
-                    ? null
-                    : CreateCollectionConfigReferenceStream(workspace, reference, configuration))
         );
-    }
-
-    /// <summary>
-    /// Creates a stream for collection: unified reference paths.
-    /// Path format: collection or collection/name1,name2
-    /// </summary>
-    private static ISynchronizationStream<object>? CreateCollectionConfigStream(
-        IWorkspace workspace,
-        string? remainingPath)
-    {
-        // Parse collection names from path (comma-separated if multiple)
-        string[]? collectionNames = null;
-        if (!string.IsNullOrEmpty(remainingPath))
-        {
-            collectionNames = remainingPath.Split(',', StringSplitOptions.RemoveEmptyEntries);
-        }
-
-        return workspace.GetStream(new CollectionConfigReference(collectionNames), null);
-    }
-
-    /// <summary>
-    /// Creates a stream for a CollectionConfigReference.
-    /// Returns an empty stream - actual handling is done by the GetDataRequest handler in ContentCollections.
-    /// </summary>
-    private static ISynchronizationStream<object>? CreateCollectionConfigReferenceStream(
-        IWorkspace workspace,
-        WorkspaceReference reference,
-        Func<StreamConfiguration<object>, StreamConfiguration<object>>? configuration)
-    {
-        // CollectionConfigReference is handled by GetDataRequest handler, not via streams
-        // Return null to let the request pass through to the handler
-        return null;
     }
 
 

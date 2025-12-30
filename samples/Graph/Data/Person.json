@@ -17,7 +17,7 @@
     "iconName": "Person",
     "description": "A person with profile and avatar",
     "displayOrder": 5,
-    "configuration": "config => config.WithContentType<Person>().AddNodeTypeView().AddContentCollections(new ContentCollectionConfig { Name = \"avatars\", SourceType = \"FileSystem\", BasePath = \"../persons\" })",
+    "configuration": "config => config.WithContentType<Person>().AddNodeTypeView().AddStorageCollection(\"avatars\", \"persons\")",
     "childrenQuery": "$source=activity;nodeType==Person;$orderBy=lastAccessedAt:desc;$limit=20"
   }
 }

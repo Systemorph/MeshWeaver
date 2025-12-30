@@ -9,6 +9,7 @@ using MeshWeaver.Data.Serialization;
 using MeshWeaver.Layout;
 using MeshWeaver.Markdown;
 using MeshWeaver.Messaging;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.ContentCollections;
@@ -77,11 +78,23 @@ public static class ContentCollectionsExtensions
                         CreateContentPathStream(workspace, path));
                 }
 
+                // Register the collection: prefix resolver for UnifiedReference
+                // This handles paths like "collection:collectionName" or just "collection"
+                if (!data.UnifiedReferenceResolvers.ContainsKey("collection"))
+                {
+                    data = data.WithUnifiedReference("collection", (workspace, path) =>
+                        CreateCollectionConfigStream(workspace, path));
+                }
+
                 return data.Configure(reduction => reduction
                     .AddWorkspaceReferenceStream<object>((workspace, reference, configuration) =>
                         reference is not FileReference fileRef
                             ? null
-                            : CreateFileReferenceStream(workspace, fileRef, configuration)));
+                            : CreateFileReferenceStream(workspace, fileRef, configuration))
+                    .AddWorkspaceReferenceStream<object>((workspace, reference, configuration) =>
+                        reference is not CollectionConfigReference
+                            ? null
+                            : CreateCollectionConfigReferenceStream(workspace, reference, configuration)));
                 })
             .AddLayout(layout => layout
                 .WithView(nameof(ContentLayoutArea.Content), ContentLayoutArea.Content)
@@ -89,6 +102,38 @@ public static class ContentCollectionsExtensions
                 .WithView(nameof(FileBrowserLayoutAreas.FileBrowser), FileBrowserLayoutAreas.FileBrowser)
                 .WithView(nameof(CollectionLayoutArea.Collection), CollectionLayoutArea.Collection))
             .WithHandler<GetDataRequest>(HandleCollectionConfigRequest);
+    }
+
+    /// <summary>
+    /// Creates a stream for collection: unified reference paths.
+    /// Path format: collection or collection/name1,name2
+    /// </summary>
+    private static ISynchronizationStream<object>? CreateCollectionConfigStream(
+        IWorkspace workspace,
+        string? remainingPath)
+    {
+        // Parse collection names from path (comma-separated if multiple)
+        string[]? collectionNames = null;
+        if (!string.IsNullOrEmpty(remainingPath))
+        {
+            collectionNames = remainingPath.Split(',', StringSplitOptions.RemoveEmptyEntries);
+        }
+
+        return workspace.GetStream(new CollectionConfigReference(collectionNames), null);
+    }
+
+    /// <summary>
+    /// Creates a stream for a CollectionConfigReference.
+    /// Returns null - actual handling is done by the GetDataRequest handler.
+    /// </summary>
+    private static ISynchronizationStream<object>? CreateCollectionConfigReferenceStream(
+        IWorkspace workspace,
+        WorkspaceReference reference,
+        Func<StreamConfiguration<object>, StreamConfiguration<object>>? configuration)
+    {
+        // CollectionConfigReference is handled by GetDataRequest handler, not via streams
+        // Return null to let the request pass through to the handler
+        return null;
     }
 
     /// <summary>
@@ -534,6 +579,68 @@ public static class ContentCollectionsExtensions
 
                 return services;
             });
+
+    /// <summary>
+    /// Configures a FileSystem content collection for this hub with the specified parameters.
+    /// </summary>
+    /// <param name="configuration">The message hub configuration</param>
+    /// <param name="collectionName">The name of the collection</param>
+    /// <param name="basePath">The base path for the file system collection</param>
+    /// <returns>The configured message hub configuration</returns>
+    public static MessageHubConfiguration AddContentCollection(
+        this MessageHubConfiguration configuration,
+        string collectionName,
+        string basePath)
+        => configuration.AddContentCollections(new ContentCollectionConfig
+        {
+            Name = collectionName,
+            SourceType = "FileSystem",
+            BasePath = basePath
+        });
+
+    /// <summary>
+    /// Configures a content collection from the Graph:Storage configuration section.
+    /// The subdirectory is relative to the Storage.BasePath.
+    /// </summary>
+    /// <param name="configuration">The message hub configuration</param>
+    /// <param name="collectionName">The name of the collection (e.g., "avatars")</param>
+    /// <param name="subdirectory">The subdirectory within storage (e.g., "persons")</param>
+    /// <returns>The configured message hub configuration</returns>
+    public static MessageHubConfiguration AddStorageCollection(
+        this MessageHubConfiguration configuration,
+        string collectionName,
+        string subdirectory)
+        => configuration.AddContentCollection(sp =>
+        {
+            var conf = sp.GetRequiredService<IConfiguration>();
+
+            // Get the global Graph:Storage configuration from appsettings
+            var storageConfig = conf.GetSection("Graph:Storage").Get<ContentCollectionConfig>();
+
+            // If no configuration exists, create a default FileSystem-based collection
+            if (storageConfig == null)
+            {
+                // Default to current directory
+                var defaultBasePath = Directory.GetCurrentDirectory();
+                storageConfig = new ContentCollectionConfig
+                {
+                    SourceType = FileSystemStreamProvider.SourceType,
+                    Name = collectionName,
+                    BasePath = defaultBasePath
+                };
+            }
+
+            // Create localized config with collection name and combined path
+            var fullPath = string.IsNullOrEmpty(subdirectory)
+                ? storageConfig.BasePath ?? ""
+                : Path.Combine(storageConfig.BasePath ?? "", subdirectory);
+
+            return storageConfig with
+            {
+                Name = collectionName,
+                BasePath = fullPath
+            };
+        });
 
 }
 
