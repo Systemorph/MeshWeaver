@@ -1,0 +1,71 @@
+using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Services;
+using MeshWeaver.Messaging;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Logging;
+
+namespace MeshWeaver.Hosting.Activity;
+
+/// <summary>
+/// Extension methods for configuring activity tracking.
+/// </summary>
+public static class ActivityTrackingExtensions
+{
+    /// <summary>
+    /// Adds user activity tracking to the persistence service.
+    /// Tracks all read/write operations per user to _activity/{userId} partition.
+    /// </summary>
+    public static MeshBuilder AddActivityTracking(this MeshBuilder builder)
+    {
+        return builder.ConfigureServices(services =>
+        {
+            // Use the decorator pattern manually: wrap the existing IPersistenceService
+            // with ActivityTrackingPersistenceDecorator
+            var descriptor = services.FirstOrDefault(d => d.ServiceType == typeof(IPersistenceService));
+            if (descriptor != null)
+            {
+                services.Remove(descriptor);
+
+                // Re-register the original implementation
+                if (descriptor.ImplementationType != null)
+                {
+                    services.Add(new ServiceDescriptor(
+                        descriptor.ImplementationType,
+                        descriptor.ImplementationType,
+                        descriptor.Lifetime));
+                }
+                else if (descriptor.ImplementationFactory != null)
+                {
+                    services.Add(new ServiceDescriptor(
+                        typeof(IPersistenceService),
+                        sp =>
+                        {
+                            var inner = (IPersistenceService)descriptor.ImplementationFactory(sp);
+                            var accessService = sp.GetRequiredService<AccessService>();
+                            var logger = sp.GetRequiredService<ILogger<ActivityTrackingPersistenceDecorator>>();
+                            return new ActivityTrackingPersistenceDecorator(inner, accessService, logger);
+                        },
+                        descriptor.Lifetime));
+                    return services;
+                }
+
+                // Register the decorator
+                services.Add(new ServiceDescriptor(
+                    typeof(IPersistenceService),
+                    sp =>
+                    {
+                        var inner = descriptor.ImplementationType != null
+                            ? (IPersistenceService)sp.GetRequiredService(descriptor.ImplementationType)
+                            : (IPersistenceService)descriptor.ImplementationInstance!;
+                        var accessService = sp.GetRequiredService<AccessService>();
+                        var logger = sp.GetRequiredService<ILogger<ActivityTrackingPersistenceDecorator>>();
+                        return new ActivityTrackingPersistenceDecorator(inner, accessService, logger);
+                    },
+                    descriptor.Lifetime));
+            }
+
+            return services;
+        });
+    }
+}

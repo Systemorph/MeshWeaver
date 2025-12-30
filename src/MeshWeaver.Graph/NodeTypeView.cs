@@ -6,13 +6,18 @@ using MeshWeaver.Data;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
+using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Activity;
+using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using MeshWeaver.ShortGuid;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.Graph;
 
 /// <summary>
 /// Layout views for NodeType definition nodes.
+/// - Catalog: Default view showing instances of this type as thumbnails
 /// - Details: Overview of the NodeType
 /// - CodeView: Split view with left menu and code display
 /// - CodeEdit: Monaco editor for code editing
@@ -21,6 +26,7 @@ namespace MeshWeaver.Graph;
 /// </summary>
 public static class NodeTypeView
 {
+    public const string CatalogArea = "Catalog";
     public const string DetailsArea = "Details";
     public const string CodeViewArea = "Code";
     public const string CodeEditArea = "CodeEdit";
@@ -35,15 +41,125 @@ public static class NodeTypeView
 
     /// <summary>
     /// Adds the NodeType views to the hub's layout for NodeType nodes.
+    /// Catalog is the default view showing instances of this type as thumbnails.
     /// </summary>
     public static MessageHubConfiguration AddNodeTypeView(this MessageHubConfiguration configuration)
         => configuration.AddLayout(layout => layout
-            .WithDefaultArea(CodeViewArea)
+            .WithDefaultArea(CatalogArea)
+            .WithView(CatalogArea, Catalog)
             .WithView(DetailsArea, Details)
             .WithView(CodeViewArea, CodeView)
             .WithView(CodeEditArea, CodeEdit)
             .WithView(HubConfigViewArea, HubConfigView)
             .WithView(HubConfigEditArea, HubConfigEdit));
+
+    /// <summary>
+    /// Renders the Catalog view showing instances of this NodeType as thumbnails.
+    /// Uses ChildrenQuery from NodeTypeDefinition or defaults to activity-based query.
+    /// </summary>
+    public static UiControl Catalog(LayoutAreaHost host, RenderingContext ctx)
+    {
+        var hubAddress = host.Hub.Address;
+        var persistence = host.Hub.ServiceProvider.GetService<IPersistenceService>();
+
+        // Subscribe to definition stream
+        host.SubscribeToDataStream(DefinitionDataId, host.Workspace.GetNodeContent<NodeTypeDefinition>());
+
+        return Controls.Stack
+            .WithWidth("100%")
+            .WithView(
+                (h, c) => h.GetDataStream<NodeTypeDefinition>(DefinitionDataId)
+                    .SelectMany(async definition =>
+                    {
+                        if (definition == null)
+                            return RenderLoading("Loading...");
+
+                        return await BuildCatalogViewAsync(host, hubAddress, definition, persistence);
+                    }),
+                "Content");
+    }
+
+    private static async Task<UiControl> BuildCatalogViewAsync(
+        LayoutAreaHost host,
+        object hubAddress,
+        NodeTypeDefinition definition,
+        IPersistenceService? persistence)
+    {
+        var stack = Controls.Stack.WithWidth("100%").WithStyle("padding: 24px;");
+
+        // Header with title and Settings button
+        var title = definition.DisplayName ?? definition.Id;
+        var headerRow = Controls.Stack
+            .WithOrientation(Orientation.Horizontal)
+            .WithStyle("justify-content: space-between; align-items: center; margin-bottom: 24px;")
+            .WithView(Controls.Html($"<h1 style=\"margin: 0;\">{System.Web.HttpUtility.HtmlEncode(title)}s</h1>"))
+            .WithView(Controls.Button("")
+                .WithIconStart(FluentIcons.Settings())
+                .WithAppearance(Appearance.Stealth)
+                .WithClickAction(actx =>
+                {
+                    var codeHref = new LayoutAreaReference(CodeViewArea).ToHref(hubAddress);
+                    actx.Host.UpdateArea(actx.Area, new RedirectControl(codeHref));
+                }));
+
+        stack = stack.WithView(headerRow);
+
+        // Subtitle showing namespace context
+        stack = stack.WithView(Controls.Html($"<p style=\"color: #666; margin-bottom: 16px;\">Showing recent {System.Web.HttpUtility.HtmlEncode(title)}s in {System.Web.HttpUtility.HtmlEncode(definition.Namespace)}</p>"));
+
+        if (persistence == null)
+        {
+            stack = stack.WithView(Controls.Html("<p style=\"color: #888;\">Persistence service not available.</p>"));
+            return stack;
+        }
+
+        // Query for instances of this type
+        var nodeTypePath = $"{definition.Namespace}/{definition.Id}";
+        var query = definition.ChildrenQuery
+            ?? $"$source=activity;nodeType=={nodeTypePath};$orderBy=lastAccessedAt:desc;$limit=20";
+
+        var nodes = new List<MeshNode>();
+        try
+        {
+            await foreach (var item in persistence.QueryAsync(query, definition.Namespace))
+            {
+                if (item is UserActivityRecord activity)
+                {
+                    // Load the actual MeshNode for the activity record
+                    var node = await persistence.GetNodeAsync(activity.NodePath);
+                    if (node != null)
+                        nodes.Add(node);
+                }
+                else if (item is MeshNode mn)
+                {
+                    nodes.Add(mn);
+                }
+            }
+        }
+        catch
+        {
+            // Query may fail if no activity data yet - that's ok
+        }
+
+        // Thumbnail grid
+        if (nodes.Count == 0)
+        {
+            stack = stack.WithView(Controls.Html("<p style=\"color: #888;\">No items found. Start browsing to populate your activity history.</p>"));
+        }
+        else
+        {
+            var grid = Controls.LayoutGrid.WithSkin(s => s.WithSpacing(2));
+            foreach (var node in nodes)
+            {
+                grid = grid.WithView(
+                    MeshNodeThumbnailControl.FromNode(node, node.Path),
+                    itemSkin => itemSkin.WithXs(12).WithSm(6).WithMd(4).WithLg(3));
+            }
+            stack = stack.WithView(grid);
+        }
+
+        return stack;
+    }
 
     /// <summary>
     /// Renders the main Details area for a NodeType.
@@ -182,7 +298,14 @@ public static class NodeTypeView
     {
         var navMenu = Controls.NavMenu.WithSkin(s => s.WithWidth(280).WithCollapsible(false));
 
-        // Node type definition entry first - switches main view to configuration
+        // Back to Catalog link
+        var catalogHref = new LayoutAreaReference(CatalogArea).ToHref(hubAddress);
+        navMenu = navMenu.WithView(
+            new NavLinkControl("← Back to Catalog", FluentIcons.ArrowLeft(), null)
+                .WithClickAction(actx => actx.Host.UpdateArea(actx.Area, new RedirectControl(catalogHref)))
+        );
+
+        // Node type definition entry - switches main view to configuration
         navMenu = navMenu.WithView(
             new NavLinkControl(content.DisplayName ?? content.Id, FluentIcons.Settings(), null)
                 .WithClickAction(actx => host.UpdateData(SelectionDataId, "configuration"))

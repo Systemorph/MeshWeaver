@@ -15,6 +15,7 @@
     "iconName": "People",
     "description": "Catalog of persons",
     "displayOrder": 4,
-    "configuration": "config => config.AddNodeTypeView()"
+    "configuration": "config => config.AddNodeTypeView()",
+    "childrenQuery": "$source=activity;nodeType==Type/Person;$orderBy=lastAccessedAt:desc;$limit=20"
   }
 }
