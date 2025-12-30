@@ -130,49 +130,88 @@ public static class NodeTypeView
     /// </summary>
     public static UiControl CodeView(LayoutAreaHost host, RenderingContext ctx)
     {
-        // Subscribe to data streams - data will be stored in data section
-        host.SubscribeToDataStream(DefinitionDataId, host.Workspace.GetNodeContent<NodeTypeDefinition>());
-        host.SubscribeToDataStream(CodeFilesDataId, host.Workspace.GetStream<CodeConfiguration>()!);
+        var hubAddress = host.Hub.Address;
 
-        // Initialize selection state
-        host.UpdateData(SelectionDataId, new NodeTypeViewSelection { Section = "configuration" });
+        // Get data streams directly
+        var definitionStream = host.Workspace.GetNodeContent<NodeTypeDefinition>();
+        var codeFilesStream = host.Workspace.GetStream<CodeConfiguration>()!;
+        var selectionStream = host.Stream.GetDataStream<string?>(SelectionDataId);
+
+        // Initialize selection to "configuration" (show node type definition by default)
+        host.UpdateData(SelectionDataId, "configuration");
 
         // Return static Splitter structure with observable nested views
         return Controls.Splitter
             .WithSkin(s => s.WithOrientation(Orientation.Horizontal).WithWidth("100%").WithHeight("calc(100vh - 100px)"))
             .WithView(
-                // Left menu - observable, updates when definition loads
-                (h, c) => h.GetDataStream<NodeTypeDefinition>(DefinitionDataId)
-                    .Select(definition => definition == null
-                        ? RenderLoading("Loading...")
-                        : BuildLeftMenu(host, definition)),
+                // Left menu - observable, updates when definition or code files load
+                (h, c) => definitionStream
+                    .CombineLatest(codeFilesStream)
+                    .Select(tuple =>
+                    {
+                        var (definition, codeFiles) = tuple;
+                        if (definition == null)
+                            return RenderLoading("Loading...");
+                        return BuildLeftMenu(host, hubAddress, definition, codeFiles);
+                    }),
                 skin => skin.WithSize("280px").WithMin("200px").WithMax("400px").WithCollapsible(true)
             )
             .WithView(
-                // Main pane - observable, updates when definition loads
-                (h, c) => h.GetDataStream<NodeTypeDefinition>(DefinitionDataId)
-                    .Select(definition => definition == null
-                        ? RenderLoading("Loading configuration...")
-                        : BuildMainPaneContent(host, definition)),
+                // Main pane - reacts to selection
+                (h, c) => definitionStream
+                    .CombineLatest(codeFilesStream, selectionStream)
+                    .Select(tuple =>
+                    {
+                        var (definition, codeFiles, selection) = tuple;
+                        if (definition == null)
+                            return RenderLoading("Loading...");
+                        return BuildMainPane(host, hubAddress, definition, codeFiles, selection);
+                    }),
                 skin => skin.WithSize("*")
             );
     }
 
     /// <summary>
-    /// Builds the left navigation menu with Configuration entry.
+    /// Builds the left navigation menu with Configuration and Code files entries.
     /// </summary>
-    private static UiControl BuildLeftMenu(LayoutAreaHost host, NodeTypeDefinition content)
+    private static UiControl BuildLeftMenu(
+        LayoutAreaHost host,
+        object hubAddress,
+        NodeTypeDefinition content,
+        IReadOnlyCollection<CodeConfiguration>? codeFiles)
     {
         var navMenu = Controls.NavMenu.WithSkin(s => s.WithWidth(280).WithCollapsible(false));
 
-        // Configuration entry
+        // Node type definition entry first - switches main view to configuration
         navMenu = navMenu.WithView(
-            new NavLinkControl("Configuration", FluentIcons.Settings(), null)
-                .WithClickAction(actx =>
-                {
-                    host.UpdateData(SelectionDataId, new NodeTypeViewSelection { Section = "configuration" });
-                })
+            new NavLinkControl(content.DisplayName ?? content.Id, FluentIcons.Settings(), null)
+                .WithClickAction(actx => host.UpdateData(SelectionDataId, "configuration"))
         );
+
+        // Code section
+        var codeGroup = new NavGroupControl("Code")
+            .WithIcon(FluentIcons.Code())
+            .WithSkin(s => s.WithExpanded(true));
+
+        if (codeFiles != null && codeFiles.Count > 0)
+        {
+            foreach (var file in codeFiles)
+            {
+                var fileId = file.Id;
+                codeGroup = codeGroup.WithView(
+                    new NavLinkControl(file.DisplayName ?? file.Id, CustomIcons.CSharp(), null)
+                        .WithClickAction(actx => host.UpdateData(SelectionDataId, fileId))
+                );
+            }
+        }
+        else
+        {
+            codeGroup = codeGroup.WithView(
+                Controls.Html("<span style=\"padding: 4px 16px; display: block; color: #888;\">No code files</span>")
+            );
+        }
+
+        navMenu = navMenu.WithNavGroup(codeGroup);
 
         // Dependencies section (if any)
         if (content.Dependencies != null && content.Dependencies.Count > 0)
@@ -195,21 +234,110 @@ public static class NodeTypeView
     }
 
     /// <summary>
-    /// Builds the main content pane showing configuration.
+    /// Builds the main content pane based on selection.
+    /// Shows either configuration or a code file.
     /// </summary>
-    private static UiControl BuildMainPaneContent(LayoutAreaHost host, NodeTypeDefinition content)
+    private static UiControl BuildMainPane(
+        LayoutAreaHost host,
+        object hubAddress,
+        NodeTypeDefinition definition,
+        IReadOnlyCollection<CodeConfiguration>? codeFiles,
+        string? selection)
     {
-        var hubAddress = host.Hub.Address;
-        var stack = Controls.Stack.WithWidth("100%").WithStyle("padding: 24px; min-height: 100%; overflow: auto;");
+        var stack = Controls.Stack
+            .WithWidth("100%")
+            .WithStyle("padding: 24px; min-height: 100%; overflow: auto;");
 
-        // Show Configuration (the lambda expression for hub configuration)
+        // Show configuration
+        if (selection == "configuration")
+        {
+            return BuildConfigurationPane(stack, hubAddress, definition);
+        }
+
+        // Show selected code file or first one
+        var codeFile = codeFiles?.FirstOrDefault(f => f.Id == selection)
+            ?? codeFiles?.FirstOrDefault();
+
+        if (codeFile == null)
+        {
+            return stack.WithView(Controls.Html("<p style=\"color: #888;\">No code files available.</p>"));
+        }
+
+        return BuildCodeFilePane(stack, hubAddress, codeFile);
+    }
+
+    /// <summary>
+    /// Builds the read-only view of NodeTypeDefinition in the main pane.
+    /// Shows all properties with Configuration as one of them.
+    /// </summary>
+    private static UiControl BuildConfigurationPane(StackControl stack, object hubAddress, NodeTypeDefinition definition)
+    {
         var editHref = new LayoutAreaReference(HubConfigEditArea).ToHref(hubAddress);
+
+        // Header with edit button
         var headerRow = Controls.Stack
             .WithOrientation(Orientation.Horizontal)
-            .WithStyle("justify-content: space-between; align-items: center; margin-bottom: 16px; width: 100%;")
-            .WithView(Controls.Html("<h2 style=\"margin: 0;\">Configuration</h2>"));
+            .WithStyle("justify-content: space-between; align-items: center; margin-bottom: 16px;")
+            .WithView(Controls.Html($"<h2 style=\"margin: 0;\">{System.Web.HttpUtility.HtmlEncode(definition.DisplayName ?? definition.Id)}</h2>"))
+            .WithView(
+                Controls.Button("")
+                    .WithIconStart(FluentIcons.Edit())
+                    .WithClickAction(actx => actx.Host.UpdateArea(actx.Area, new RedirectControl(editHref)))
+            );
 
-        if (!string.IsNullOrEmpty(content.Configuration))
+        stack = stack.WithView(headerRow);
+
+        // Properties card
+        var propsCard = Controls.Stack
+            .WithStyle("background: var(--neutral-layer-2); border-radius: 8px; padding: 20px; margin-bottom: 24px;");
+
+        propsCard = propsCard.WithView(BuildInfoRow("ID", definition.Id));
+        propsCard = propsCard.WithView(BuildInfoRow("Namespace", definition.Namespace));
+
+        if (!string.IsNullOrEmpty(definition.DisplayName))
+            propsCard = propsCard.WithView(BuildInfoRow("Display Name", definition.DisplayName));
+
+        if (!string.IsNullOrEmpty(definition.Description))
+            propsCard = propsCard.WithView(BuildInfoRow("Description", definition.Description));
+
+        if (!string.IsNullOrEmpty(definition.IconName))
+            propsCard = propsCard.WithView(BuildInfoRow("Icon", definition.IconName));
+
+        propsCard = propsCard.WithView(BuildInfoRow("Display Order", definition.DisplayOrder.ToString()));
+
+        if (!string.IsNullOrEmpty(definition.ChildrenQuery))
+            propsCard = propsCard.WithView(BuildInfoRow("Children Query", definition.ChildrenQuery));
+
+        if (definition.Dependencies != null && definition.Dependencies.Count > 0)
+            propsCard = propsCard.WithView(BuildInfoRow("Dependencies", string.Join(", ", definition.Dependencies)));
+
+        stack = stack.WithView(propsCard);
+
+        // Configuration section (lambda expression)
+        if (!string.IsNullOrEmpty(definition.Configuration))
+        {
+            stack = stack.WithView(Controls.Html("<h3 style=\"margin: 16px 0 8px 0;\">Configuration</h3>"));
+            stack = stack.WithView(Controls.Html("<p style=\"color: #666; margin-bottom: 8px;\">Lambda expression for configuring the message hub:</p>"));
+            var markdown = $"```csharp\n{definition.Configuration}\n```";
+            stack = stack.WithView(new MarkdownControl(markdown).WithStyle("width: 100%;"));
+        }
+
+        return stack;
+    }
+
+    /// <summary>
+    /// Builds a code file view in the main pane.
+    /// </summary>
+    private static UiControl BuildCodeFilePane(StackControl stack, object hubAddress, CodeConfiguration codeFile)
+    {
+        var editHref = new LayoutAreaReference(CodeEditArea).ToHref(hubAddress);
+
+        var headerRow = Controls.Stack
+            .WithOrientation(Orientation.Horizontal)
+            .WithStyle("justify-content: space-between; align-items: center; margin-bottom: 16px;")
+            .WithView(Controls.Html($"<h2 style=\"margin: 0;\">{System.Web.HttpUtility.HtmlEncode(codeFile.DisplayName ?? codeFile.Id)}</h2>"));
+
+        if (!string.IsNullOrEmpty(codeFile.Code))
         {
             headerRow = headerRow.WithView(
                 Controls.Button("")
@@ -220,16 +348,14 @@ public static class NodeTypeView
 
         stack = stack.WithView(headerRow);
 
-        if (!string.IsNullOrEmpty(content.Configuration))
+        if (!string.IsNullOrEmpty(codeFile.Code))
         {
-            stack = stack.WithView(Controls.Html("<p style=\"color: #666; margin-bottom: 16px;\">Lambda expression for configuring the message hub.</p>"));
-
-            var markdown = $"```csharp\n{content.Configuration}\n```";
+            var markdown = $"```{codeFile.Language}\n{codeFile.Code}\n```";
             stack = stack.WithView(new MarkdownControl(markdown).WithStyle("width: 100%;"));
         }
         else
         {
-            stack = stack.WithView(Controls.Html("<p style=\"color: #888;\">No configuration defined.</p>"));
+            stack = stack.WithView(Controls.Html("<p style=\"color: #888;\">No code defined.</p>"));
         }
 
         return stack;
@@ -262,17 +388,28 @@ public static class NodeTypeView
     {
         var hubAddress = host.Hub.Address;
         var stack = Controls.Stack.WithWidth("100%").WithStyle("padding: 24px;");
-        var dataId = Guid.NewGuid().AsString();
+        var codeDataId = Guid.NewGuid().AsString();
+        var displayNameDataId = Guid.NewGuid().AsString();
 
         // Get initial code and language
         string initialCode = codeFile?.Code ?? "";
         string language = codeFile?.Language ?? "csharp";
-        string displayName = codeFile?.DisplayName ?? "Code";
+        string displayName = codeFile?.DisplayName ?? "";
 
-        host.UpdateData(dataId, initialCode);
+        host.UpdateData(codeDataId, initialCode);
+        host.UpdateData(displayNameDataId, displayName);
 
-        // Header
-        stack = stack.WithView(Controls.Html($"<h2 style=\"margin-bottom: 16px;\">Edit: {System.Web.HttpUtility.HtmlEncode(displayName)}</h2>"));
+        // DisplayName editor at top
+        var displayNameRow = Controls.Stack
+            .WithOrientation(Orientation.Horizontal)
+            .WithStyle("gap: 12px; align-items: center; margin-bottom: 16px;")
+            .WithView(Controls.Html("<label style=\"font-weight: 500;\">Display Name:</label>"))
+            .WithView(new TextFieldControl(new JsonPointerReference(""))
+                .WithPlaceholder("Enter display name...")
+                .WithStyle("flex: 1; max-width: 400px;")
+                .WithImmediate(true) with { DataContext = LayoutAreaReference.GetDataPointer(displayNameDataId) });
+
+        stack = stack.WithView(displayNameRow);
 
         // Monaco editor bound to the data stream with autocomplete support
         var editor = new CodeEditorControl()
@@ -289,7 +426,7 @@ public static class NodeTypeView
 
         editor = editor with
         {
-            DataContext = LayoutAreaReference.GetDataPointer(dataId),
+            DataContext = LayoutAreaReference.GetDataPointer(codeDataId),
             Value = new JsonPointerReference("")
         };
 
@@ -306,13 +443,15 @@ public static class NodeTypeView
             .WithIconStart(FluentIcons.Save())
             .WithClickAction(async actx =>
                 {
-                    var currentCode = await host.Stream.GetDataStream<string>(dataId).FirstAsync();
+                    var currentCode = await host.Stream.GetDataStream<string>(codeDataId).FirstAsync();
+                    var currentDisplayName = await host.Stream.GetDataStream<string>(displayNameDataId).FirstAsync();
 
                     // Update the CodeConfiguration
                     var updatedCodeConfiguration = (codeFile ?? new CodeConfiguration()) with
                     {
                         Code = currentCode,
-                        Language = language
+                        Language = language,
+                        DisplayName = string.IsNullOrWhiteSpace(currentDisplayName) ? null : currentDisplayName
                     };
 
                     // Update via workspace - will sync to persistence
@@ -442,19 +581,86 @@ public static class NodeTypeView
     {
         var hubAddress = host.Hub.Address;
         var stack = Controls.Stack.WithWidth("100%").WithStyle("padding: 24px;");
-        var dataId = Guid.NewGuid().AsString();
 
-        var initialValue = content.Configuration ?? "config => config";
-        host.UpdateData(dataId, initialValue);
+        // Data IDs for each editable field
+        var displayNameDataId = Guid.NewGuid().AsString();
+        var descriptionDataId = Guid.NewGuid().AsString();
+        var iconNameDataId = Guid.NewGuid().AsString();
+        var displayOrderDataId = Guid.NewGuid().AsString();
+        var childrenQueryDataId = Guid.NewGuid().AsString();
+        var dependenciesDataId = Guid.NewGuid().AsString();
+        var configurationDataId = Guid.NewGuid().AsString();
+
+        // Initialize data streams
+        host.UpdateData(displayNameDataId, content.DisplayName ?? "");
+        host.UpdateData(descriptionDataId, content.Description ?? "");
+        host.UpdateData(iconNameDataId, content.IconName ?? "");
+        host.UpdateData(displayOrderDataId, content.DisplayOrder.ToString());
+        host.UpdateData(childrenQueryDataId, content.ChildrenQuery ?? "");
+        host.UpdateData(dependenciesDataId, content.Dependencies != null ? string.Join(", ", content.Dependencies) : "");
+        host.UpdateData(configurationDataId, content.Configuration ?? "config => config");
 
         // Header
-        stack = stack.WithView(Controls.Html("<h2 style=\"margin-bottom: 16px;\">Edit Configuration</h2>"));
-        stack = stack.WithView(Controls.Html("<p style=\"color: #666; margin-bottom: 16px;\">Enter a lambda expression: <code>config => config.AddData(...)</code></p>"));
+        stack = stack.WithView(Controls.Html($"<h2 style=\"margin-bottom: 16px;\">Edit: {System.Web.HttpUtility.HtmlEncode(content.DisplayName ?? content.Id)}</h2>"));
 
-        // Monaco editor with all code files for autocomplete
+        // Form fields
+        var formStyle = "display: grid; grid-template-columns: 150px 1fr; gap: 12px; align-items: center; margin-bottom: 12px;";
+
+        // Display Name
+        stack = stack.WithView(Controls.Stack
+            .WithStyle(formStyle)
+            .WithView(Controls.Html("<label style=\"font-weight: 500;\">Display Name:</label>"))
+            .WithView(new TextFieldControl(new JsonPointerReference(""))
+                .WithPlaceholder("Enter display name...")
+                .WithImmediate(true) with { DataContext = LayoutAreaReference.GetDataPointer(displayNameDataId) }));
+
+        // Description
+        stack = stack.WithView(Controls.Stack
+            .WithStyle(formStyle)
+            .WithView(Controls.Html("<label style=\"font-weight: 500;\">Description:</label>"))
+            .WithView(new TextAreaControl(new JsonPointerReference(""))
+                .WithPlaceholder("Enter description...")
+                .WithImmediate(true) with { DataContext = LayoutAreaReference.GetDataPointer(descriptionDataId) }));
+
+        // Icon Name
+        stack = stack.WithView(Controls.Stack
+            .WithStyle(formStyle)
+            .WithView(Controls.Html("<label style=\"font-weight: 500;\">Icon Name:</label>"))
+            .WithView(new TextFieldControl(new JsonPointerReference(""))
+                .WithPlaceholder("e.g., Document, Folder...")
+                .WithImmediate(true) with { DataContext = LayoutAreaReference.GetDataPointer(iconNameDataId) }));
+
+        // Display Order
+        stack = stack.WithView(Controls.Stack
+            .WithStyle(formStyle)
+            .WithView(Controls.Html("<label style=\"font-weight: 500;\">Display Order:</label>"))
+            .WithView(new TextFieldControl(new JsonPointerReference(""))
+                .WithPlaceholder("0")
+                .WithImmediate(true) with { DataContext = LayoutAreaReference.GetDataPointer(displayOrderDataId) }));
+
+        // Children Query
+        stack = stack.WithView(Controls.Stack
+            .WithStyle(formStyle)
+            .WithView(Controls.Html("<label style=\"font-weight: 500;\">Children Query:</label>"))
+            .WithView(new TextFieldControl(new JsonPointerReference(""))
+                .WithPlaceholder("RSQL query for children...")
+                .WithImmediate(true) with { DataContext = LayoutAreaReference.GetDataPointer(childrenQueryDataId) }));
+
+        // Dependencies
+        stack = stack.WithView(Controls.Stack
+            .WithStyle(formStyle)
+            .WithView(Controls.Html("<label style=\"font-weight: 500;\">Dependencies:</label>"))
+            .WithView(new TextFieldControl(new JsonPointerReference(""))
+                .WithPlaceholder("Comma-separated node type paths...")
+                .WithImmediate(true) with { DataContext = LayoutAreaReference.GetDataPointer(dependenciesDataId) }));
+
+        // Configuration (code editor)
+        stack = stack.WithView(Controls.Html("<h3 style=\"margin: 24px 0 8px 0;\">Configuration</h3>"));
+        stack = stack.WithView(Controls.Html("<p style=\"color: #666; margin-bottom: 8px;\">Lambda expression: <code>config => config.AddData(...)</code></p>"));
+
         var editor = new CodeEditorControl()
             .WithLanguage("csharp")
-            .WithHeight("300px")
+            .WithHeight("250px")
             .WithLineNumbers(true)
             .WithMinimap(false)
             .WithWordWrap(true)
@@ -467,7 +673,7 @@ public static class NodeTypeView
 
         editor = editor with
         {
-            DataContext = LayoutAreaReference.GetDataPointer(dataId),
+            DataContext = LayoutAreaReference.GetDataPointer(configurationDataId),
             Value = new JsonPointerReference("")
         };
 
@@ -484,10 +690,40 @@ public static class NodeTypeView
             .WithIconStart(FluentIcons.Save())
             .WithClickAction(async actx =>
             {
-                var newConfiguration = await host.Stream.GetDataStream<string>(dataId).FirstAsync();
+                // Get all field values
+                var displayName = await host.Stream.GetDataStream<string>(displayNameDataId).FirstAsync();
+                var description = await host.Stream.GetDataStream<string>(descriptionDataId).FirstAsync();
+                var iconName = await host.Stream.GetDataStream<string>(iconNameDataId).FirstAsync();
+                var displayOrderStr = await host.Stream.GetDataStream<string>(displayOrderDataId).FirstAsync();
+                var childrenQuery = await host.Stream.GetDataStream<string>(childrenQueryDataId).FirstAsync();
+                var dependenciesStr = await host.Stream.GetDataStream<string>(dependenciesDataId).FirstAsync();
+                var configuration = await host.Stream.GetDataStream<string>(configurationDataId).FirstAsync();
 
-                // Update the NodeTypeDefinition with new Configuration via workspace
-                var updatedDefinition = content with { Configuration = newConfiguration };
+                // Parse display order
+                if (!int.TryParse(displayOrderStr, out var displayOrder))
+                    displayOrder = 0;
+
+                // Parse dependencies
+                List<string>? dependencies = null;
+                if (!string.IsNullOrWhiteSpace(dependenciesStr))
+                {
+                    dependencies = dependenciesStr.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
+                    if (dependencies.Count == 0)
+                        dependencies = null;
+                }
+
+                // Update the NodeTypeDefinition with all properties
+                var updatedDefinition = content with
+                {
+                    DisplayName = string.IsNullOrWhiteSpace(displayName) ? null : displayName,
+                    Description = string.IsNullOrWhiteSpace(description) ? null : description,
+                    IconName = string.IsNullOrWhiteSpace(iconName) ? null : iconName,
+                    DisplayOrder = displayOrder,
+                    ChildrenQuery = string.IsNullOrWhiteSpace(childrenQuery) ? null : childrenQuery,
+                    Dependencies = dependencies,
+                    Configuration = string.IsNullOrWhiteSpace(configuration) ? null : configuration
+                };
+
                 using var cts = new CancellationTokenSource(10.Seconds());
                 var response = await actx.Host.Hub.AwaitResponse<DataChangeResponse>(
                     new DataChangeRequest().WithUpdates(updatedDefinition),
@@ -496,9 +732,8 @@ public static class NodeTypeView
 
                 if (response.Message.Log.Status != ActivityStatus.Succeeded)
                 {
-                    // Show error dialog
                     var errorDialog = Controls.Dialog(
-                        Controls.Markdown($"**Error saving Configuration:**\n\n{response.Message.Log}"),
+                        Controls.Markdown($"**Error saving:**\n\n{response.Message.Log}"),
                         "Save Failed"
                     ).WithSize("M");
                     actx.Host.UpdateArea(DialogControl.DialogArea, errorDialog);
@@ -537,13 +772,4 @@ public static class NodeTypeView
 
     private static UiControl RenderError(string message)
         => new MarkdownControl($"> [!CAUTION]\n> {message}\n");
-}
-
-/// <summary>
-/// Selection state for the NodeType view.
-/// </summary>
-internal record NodeTypeViewSelection
-{
-    public string? SelectedFile { get; init; }
-    public string? Section { get; init; } = "code";
 }

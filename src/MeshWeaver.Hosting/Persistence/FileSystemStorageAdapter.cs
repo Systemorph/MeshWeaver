@@ -161,6 +161,15 @@ public class FileSystemStorageAdapter : IStorageAdapter
             {
                 var json = await File.ReadAllTextAsync(file, ct);
                 obj = JsonSerializer.Deserialize<object>(json, JsonOptions);
+
+                // Set Id from file name if the object has an Id property
+                if (obj != null)
+                {
+                    var fileName = Path.GetFileNameWithoutExtension(file);
+                    // Unescape file name (reverse of GetObjectFileName escaping)
+                    var id = fileName.Replace("__", "/");
+                    obj = SetObjectId(obj, id);
+                }
             }
             catch (JsonException)
             {
@@ -170,6 +179,52 @@ public class FileSystemStorageAdapter : IStorageAdapter
             if (obj != null)
                 yield return obj;
         }
+    }
+
+    /// <summary>
+    /// Sets the Id property of an object using the file name.
+    /// For record types, creates a new instance with the updated Id.
+    /// </summary>
+    private static object SetObjectId(object obj, string id)
+    {
+        var type = obj.GetType();
+        var idProperty = type.GetProperty("Id");
+        if (idProperty == null || !idProperty.CanWrite && !type.IsValueType)
+        {
+            // For records, try to use the 'with' pattern via reflection
+            // Check if there's a constructor that takes all properties
+            var constructor = type.GetConstructors()
+                .FirstOrDefault(c => c.GetParameters().Any(p => p.Name?.Equals("Id", StringComparison.OrdinalIgnoreCase) == true));
+
+            if (constructor != null)
+            {
+                // For records, create new instance with updated Id
+                var parameters = constructor.GetParameters();
+                var args = new object?[parameters.Length];
+
+                for (int i = 0; i < parameters.Length; i++)
+                {
+                    var param = parameters[i];
+                    if (param.Name?.Equals("Id", StringComparison.OrdinalIgnoreCase) == true)
+                    {
+                        args[i] = id;
+                    }
+                    else
+                    {
+                        var prop = type.GetProperty(param.Name!, System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.IgnoreCase);
+                        args[i] = prop?.GetValue(obj) ?? param.DefaultValue;
+                    }
+                }
+
+                return constructor.Invoke(args);
+            }
+        }
+        else if (idProperty.CanWrite)
+        {
+            idProperty.SetValue(obj, id);
+        }
+
+        return obj;
     }
 
     public async Task SavePartitionObjectsAsync(
