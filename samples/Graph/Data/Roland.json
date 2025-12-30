@@ -10,7 +10,7 @@
     "id": "Roland",
     "name": "Roland Bürgi",
     "email": "rbuergi@systemorph.com",
-    "avatar": "/static/graph/persons/roland.svg",
+    "avatar": "/static/Person/avatars/roland.svg",
     "bio": "Founder and CEO of Systemorph, building MeshWeaver.",
     "role": "CEO",
     "iconName": "Person"

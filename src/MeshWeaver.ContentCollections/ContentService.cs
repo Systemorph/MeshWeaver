@@ -131,6 +131,27 @@ public class ContentService : IContentService
         return null;
     }
 
+    public IReadOnlyCollection<ContentCollectionConfig> GetAllCollectionConfigs()
+    {
+        // Get local configs
+        var configs = collectionConfigs.Values.ToList();
+
+        // Add parent configs that aren't overridden locally
+        if (parentContentService is not null)
+        {
+            var parentConfigs = parentContentService.GetAllCollectionConfigs();
+            foreach (var parentConfig in parentConfigs)
+            {
+                if (!collectionConfigs.ContainsKey(parentConfig.Name))
+                {
+                    configs.Add(parentConfig);
+                }
+            }
+        }
+
+        return configs;
+    }
+
     public void AddConfiguration(ContentCollectionConfig contentCollectionConfig)
     {
         this.collectionConfigs[contentCollectionConfig.Name] = contentCollectionConfig;

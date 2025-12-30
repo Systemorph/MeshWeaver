@@ -1,4 +1,5 @@
 ﻿using System.ComponentModel.DataAnnotations;
+using MeshWeaver.ContentCollections;
 
 namespace MeshWeaver.Graph.Configuration;
 
@@ -77,4 +78,11 @@ public record NodeTypeDefinition
     /// Example: ["type/Person", "type/Organization"]
     /// </summary>
     public List<string>? Dependencies { get; init; }
+
+    /// <summary>
+    /// Content collections to register for this node type.
+    /// Each collection can be FileSystem, EmbeddedResource, or Hub-based.
+    /// The collections are registered via extension methods in the generated hub configuration.
+    /// </summary>
+    public List<ContentCollectionConfig>? ContentCollections { get; init; }
 }

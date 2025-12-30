@@ -1,3 +1,4 @@
+using MeshWeaver.Data;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -18,14 +19,16 @@ public class HubStreamProviderFactory(IMessageHub hub) : IStreamProviderFactory
 
         var collectionName = config.Settings?.GetValueOrDefault("CollectionName") ?? config.Name;
 
-        // Query the remote hub for the collection configuration (now properly async)
+        // Query the remote hub for the collection configuration using GetDataRequest with CollectionConfigReference
         var response = await hub.AwaitResponse(
-            new GetContentCollectionRequest([collectionName]),
+            new GetDataRequest(new CollectionConfigReference([collectionName])),
             o => o.WithTarget(config.Address),
             cancellationToken
         );
 
-        var remoteConfig = response.Message.Collections.FirstOrDefault();
+        // Response data contains collection configurations
+        var configs = response.Message.Data as IReadOnlyCollection<ContentCollectionConfig>;
+        var remoteConfig = configs?.FirstOrDefault();
         if (remoteConfig == null)
             throw new InvalidOperationException($"Collection '{collectionName}' not found at address '{config.Address}'");
 

@@ -1,5 +1,6 @@
 ﻿using System.Text;
 using System.Text.RegularExpressions;
+using MeshWeaver.ContentCollections;
 using MeshWeaver.Mesh;
 
 namespace MeshWeaver.Graph.Configuration;
@@ -16,11 +17,13 @@ internal class DynamicMeshNodeAttributeGenerator
     /// <param name="node">The MeshNode being compiled.</param>
     /// <param name="codeFile">The CodeConfiguration containing user code.</param>
     /// <param name="hubConfiguration">The HubConfiguration lambda expression (from NodeTypeDefinition).</param>
+    /// <param name="contentCollections">Content collections to register for this node type.</param>
     /// <returns>Complete C# source code ready for compilation.</returns>
     public string GenerateAttributeSource(
         MeshNode node,
         CodeConfiguration? codeFile,
-        string? hubConfiguration)
+        string? hubConfiguration,
+        IReadOnlyList<ContentCollectionConfig>? contentCollections = null)
     {
         var safeClassName = SanitizeName(node.Path);
         var code = codeFile?.Code;
@@ -115,6 +118,49 @@ internal class DynamicMeshNodeAttributeGenerator
             // For non-NodeType nodes (instance nodes), add MeshDataSource and default views
             sb.AppendLine("            // For non-NodeType nodes, add data source and default views");
             sb.AppendLine("            result = result.AddMeshDataSource().WithDefaultViews();");
+            sb.AppendLine();
+        }
+
+        // Add content collections if configured
+        if (contentCollections is { Count: > 0 })
+        {
+            sb.AppendLine("            // Register content collections");
+            sb.AppendLine("            result = result.AddContentCollections(");
+
+            for (var i = 0; i < contentCollections.Count; i++)
+            {
+                var collection = contentCollections[i];
+                var comma = i < contentCollections.Count - 1 ? "," : "";
+
+                sb.AppendLine($"                new ContentCollectionConfig");
+                sb.AppendLine("                {");
+                sb.AppendLine($"                    Name = \"{EscapeString(collection.Name)}\",");
+                sb.AppendLine($"                    SourceType = \"{EscapeString(collection.SourceType)}\",");
+
+                if (!string.IsNullOrEmpty(collection.DisplayName))
+                    sb.AppendLine($"                    DisplayName = \"{EscapeString(collection.DisplayName)}\",");
+
+                if (!string.IsNullOrEmpty(collection.BasePath))
+                    sb.AppendLine($"                    BasePath = \"{EscapeString(collection.BasePath)}\",");
+
+                if (collection.Order != 0)
+                    sb.AppendLine($"                    Order = {collection.Order},");
+
+                if (collection.Settings is { Count: > 0 })
+                {
+                    sb.AppendLine("                    Settings = new Dictionary<string, string>");
+                    sb.AppendLine("                    {");
+                    foreach (var kvp in collection.Settings)
+                    {
+                        sb.AppendLine($"                        [\"{EscapeString(kvp.Key)}\"] = \"{EscapeString(kvp.Value)}\",");
+                    }
+                    sb.AppendLine("                    },");
+                }
+
+                sb.AppendLine($"                }}{comma}");
+            }
+
+            sb.AppendLine("            );");
             sb.AppendLine();
         }
 

@@ -1,5 +1,7 @@
 using System;
+using System.Collections.Generic;
 using FluentAssertions;
+using MeshWeaver.ContentCollections;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Mesh;
 using Xunit;
@@ -366,5 +368,139 @@ public class DynamicMeshNodeAttributeGeneratorTest
 
         // Assert - should still generate valid code
         source.Should().Contain("class testMeshNodeAttribute");
+    }
+
+    [Fact]
+    public void GenerateAttributeSource_IncludesContentCollections_WhenProvided()
+    {
+        // Arrange
+        var node = new MeshNode("test")
+        {
+            NodeType = "test",
+            LastModified = DateTimeOffset.UtcNow
+        };
+
+        var contentCollections = new List<ContentCollectionConfig>
+        {
+            new()
+            {
+                Name = "docs",
+                SourceType = "FileSystem",
+                BasePath = "/data/docs"
+            }
+        };
+
+        // Act
+        var source = _generator.GenerateAttributeSource(node, null, null, contentCollections);
+
+        // Assert
+        source.Should().Contain("AddContentCollections(");
+        source.Should().Contain("new ContentCollectionConfig");
+        source.Should().Contain("Name = \"docs\"");
+        source.Should().Contain("SourceType = \"FileSystem\"");
+        source.Should().Contain("BasePath = \"/data/docs\"");
+    }
+
+    [Fact]
+    public void GenerateAttributeSource_IncludesMultipleContentCollections()
+    {
+        // Arrange
+        var node = new MeshNode("test")
+        {
+            NodeType = "test",
+            LastModified = DateTimeOffset.UtcNow
+        };
+
+        var contentCollections = new List<ContentCollectionConfig>
+        {
+            new()
+            {
+                Name = "docs",
+                SourceType = "FileSystem",
+                BasePath = "/data/docs"
+            },
+            new()
+            {
+                Name = "assets",
+                SourceType = "FileSystem",
+                BasePath = "/data/assets",
+                DisplayName = "Assets Collection"
+            }
+        };
+
+        // Act
+        var source = _generator.GenerateAttributeSource(node, null, null, contentCollections);
+
+        // Assert
+        source.Should().Contain("Name = \"docs\"");
+        source.Should().Contain("Name = \"assets\"");
+        source.Should().Contain("DisplayName = \"Assets Collection\"");
+    }
+
+    [Fact]
+    public void GenerateAttributeSource_IncludesContentCollectionSettings()
+    {
+        // Arrange
+        var node = new MeshNode("test")
+        {
+            NodeType = "test",
+            LastModified = DateTimeOffset.UtcNow
+        };
+
+        var contentCollections = new List<ContentCollectionConfig>
+        {
+            new()
+            {
+                Name = "embedded",
+                SourceType = "EmbeddedResource",
+                Settings = new Dictionary<string, string>
+                {
+                    ["AssemblyName"] = "MyApp.Resources",
+                    ["ResourcePrefix"] = "MyApp.Resources.Content"
+                }
+            }
+        };
+
+        // Act
+        var source = _generator.GenerateAttributeSource(node, null, null, contentCollections);
+
+        // Assert
+        source.Should().Contain("Settings = new Dictionary<string, string>");
+        source.Should().Contain("[\"AssemblyName\"] = \"MyApp.Resources\"");
+        source.Should().Contain("[\"ResourcePrefix\"] = \"MyApp.Resources.Content\"");
+    }
+
+    [Fact]
+    public void GenerateAttributeSource_SkipsContentCollections_WhenNull()
+    {
+        // Arrange
+        var node = new MeshNode("test")
+        {
+            NodeType = "test",
+            LastModified = DateTimeOffset.UtcNow
+        };
+
+        // Act
+        var source = _generator.GenerateAttributeSource(node, null, null, null);
+
+        // Assert
+        source.Should().NotContain("AddContentCollections(");
+    }
+
+    [Fact]
+    public void GenerateAttributeSource_SkipsContentCollections_WhenEmpty()
+    {
+        // Arrange
+        var node = new MeshNode("test")
+        {
+            NodeType = "test",
+            LastModified = DateTimeOffset.UtcNow
+        };
+
+        // Act
+        var source = _generator.GenerateAttributeSource(node, null, null, new List<ContentCollectionConfig>());
+
+        // Assert
+        source.Should().NotContain("AddContentCollections(");
     }
 }
