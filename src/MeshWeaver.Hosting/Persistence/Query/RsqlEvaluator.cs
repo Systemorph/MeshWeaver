@@ -99,7 +99,7 @@ public class RsqlEvaluator
     /// <summary>
     /// Gets a property value from an object, supporting nested properties (e.g., "address.city").
     /// </summary>
-    private object? GetPropertyValue(object obj, string selector)
+    public object? GetPropertyValue(object obj, string selector)
     {
         var current = obj;
         var parts = selector.Split('.');
@@ -375,5 +375,59 @@ public class RsqlEvaluator
                 }
                 break;
         }
+    }
+
+    /// <summary>
+    /// Orders results by a property.
+    /// </summary>
+    /// <param name="results">The results to order</param>
+    /// <param name="orderBy">The ordering clause (null means no ordering)</param>
+    /// <returns>Ordered results</returns>
+    public IEnumerable<T> OrderResults<T>(IEnumerable<T> results, OrderByClause? orderBy) where T : notnull
+    {
+        if (orderBy == null)
+            return results;
+
+        return orderBy.Descending
+            ? results.OrderByDescending(x => GetComparableValue(GetPropertyValue(x, orderBy.Property)))
+            : results.OrderBy(x => GetComparableValue(GetPropertyValue(x, orderBy.Property)));
+    }
+
+    /// <summary>
+    /// Converts a property value to a comparable form for sorting.
+    /// </summary>
+    private static object? GetComparableValue(object? value)
+    {
+        if (value == null)
+            return null;
+
+        // Handle DateTimeOffset specially for proper sorting
+        if (value is DateTimeOffset dto)
+            return dto.UtcTicks;
+
+        if (value is DateTime dt)
+            return dt.Ticks;
+
+        // For strings, return as-is for case-insensitive comparison
+        if (value is string)
+            return value;
+
+        // For numbers, return as-is
+        if (value is int or long or double or decimal or float)
+            return value;
+
+        // Default: convert to string
+        return value.ToString();
+    }
+
+    /// <summary>
+    /// Applies limit to results.
+    /// </summary>
+    /// <param name="results">The results to limit</param>
+    /// <param name="limit">Maximum number of results (null means no limit)</param>
+    /// <returns>Limited results</returns>
+    public IEnumerable<T> LimitResults<T>(IEnumerable<T> results, int? limit)
+    {
+        return limit.HasValue && limit.Value > 0 ? results.Take(limit.Value) : results;
     }
 }

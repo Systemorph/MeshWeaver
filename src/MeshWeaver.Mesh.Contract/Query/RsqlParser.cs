@@ -33,7 +33,7 @@ public partial class RsqlParser
             return ParsedQuery.Empty;
 
         // Extract reserved parameters first
-        var (rsqlPart, textSearch, scope) = ExtractReservedParams(query);
+        var (rsqlPart, textSearch, scope, orderBy, limit, source) = ExtractReservedParams(query);
 
         // Parse the RSQL filter expression
         RsqlNode? filter = null;
@@ -44,16 +44,19 @@ public partial class RsqlParser
             filter = ParseOr(tokens, ref position);
         }
 
-        return new ParsedQuery(filter, textSearch, scope);
+        return new ParsedQuery(filter, textSearch, scope, orderBy, limit, source);
     }
 
     /// <summary>
-    /// Extracts $search and $scope parameters from the query, returning the remaining RSQL.
+    /// Extracts reserved parameters ($search, $scope, $orderBy, $limit, $source) from the query.
     /// </summary>
-    private (string RsqlPart, string? TextSearch, QueryScope Scope) ExtractReservedParams(string query)
+    private (string RsqlPart, string? TextSearch, QueryScope Scope, OrderByClause? OrderBy, int? Limit, QuerySource Source) ExtractReservedParams(string query)
     {
         string? textSearch = null;
         var scope = QueryScope.Exact;
+        OrderByClause? orderBy = null;
+        int? limit = null;
+        var source = QuerySource.Default;
         var parts = new List<string>();
 
         // Split by semicolon to find reserved params
@@ -75,13 +78,43 @@ public partial class RsqlParser
                     _ => QueryScope.Exact
                 };
             }
+            else if (trimmed.StartsWith("$orderBy=", StringComparison.OrdinalIgnoreCase))
+            {
+                // Format: $orderBy=property or $orderBy=property:desc
+                var orderValue = trimmed[9..];
+                var colonIdx = orderValue.IndexOf(':');
+                if (colonIdx > 0)
+                {
+                    var prop = orderValue[..colonIdx];
+                    var dir = orderValue[(colonIdx + 1)..];
+                    orderBy = new OrderByClause(prop, dir.Equals("desc", StringComparison.OrdinalIgnoreCase));
+                }
+                else
+                {
+                    orderBy = new OrderByClause(orderValue, false);
+                }
+            }
+            else if (trimmed.StartsWith("$limit=", StringComparison.OrdinalIgnoreCase))
+            {
+                if (int.TryParse(trimmed[7..], out var limitValue))
+                    limit = limitValue;
+            }
+            else if (trimmed.StartsWith("$source=", StringComparison.OrdinalIgnoreCase))
+            {
+                var sourceValue = trimmed[8..].ToLowerInvariant();
+                source = sourceValue switch
+                {
+                    "activity" => QuerySource.Activity,
+                    _ => QuerySource.Default
+                };
+            }
             else if (!string.IsNullOrWhiteSpace(trimmed))
             {
                 parts.Add(trimmed);
             }
         }
 
-        return (string.Join(";", parts), textSearch, scope);
+        return (string.Join(";", parts), textSearch, scope, orderBy, limit, source);
     }
 
     /// <summary>

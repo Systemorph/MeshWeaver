@@ -378,4 +378,158 @@ public class RsqlParserTests
     }
 
     #endregion
+
+    #region OrderBy Parameter
+
+    [Fact]
+    public void Parse_OrderByAscending_ParsesCorrectly()
+    {
+        var result = _parser.Parse("$orderBy=name");
+
+        result.OrderBy.Should().NotBeNull();
+        result.OrderBy!.Property.Should().Be("name");
+        result.OrderBy.Descending.Should().BeFalse();
+        result.Filter.Should().BeNull();
+    }
+
+    [Fact]
+    public void Parse_OrderByDescending_ParsesCorrectly()
+    {
+        var result = _parser.Parse("$orderBy=lastAccessedAt:desc");
+
+        result.OrderBy.Should().NotBeNull();
+        result.OrderBy!.Property.Should().Be("lastAccessedAt");
+        result.OrderBy.Descending.Should().BeTrue();
+    }
+
+    [Fact]
+    public void Parse_OrderByAsc_ParsesCorrectly()
+    {
+        var result = _parser.Parse("$orderBy=createdAt:asc");
+
+        result.OrderBy.Should().NotBeNull();
+        result.OrderBy!.Property.Should().Be("createdAt");
+        result.OrderBy.Descending.Should().BeFalse();
+    }
+
+    [Fact]
+    public void Parse_OrderByWithFilter_ParsesBoth()
+    {
+        var result = _parser.Parse("status==active;$orderBy=name:desc");
+
+        result.OrderBy.Should().NotBeNull();
+        result.OrderBy!.Property.Should().Be("name");
+        result.OrderBy.Descending.Should().BeTrue();
+        result.Filter.Should().BeOfType<RsqlComparison>();
+    }
+
+    #endregion
+
+    #region Limit Parameter
+
+    [Fact]
+    public void Parse_Limit_ParsesCorrectly()
+    {
+        var result = _parser.Parse("$limit=20");
+
+        result.Limit.Should().Be(20);
+        result.Filter.Should().BeNull();
+    }
+
+    [Fact]
+    public void Parse_LimitWithFilter_ParsesBoth()
+    {
+        var result = _parser.Parse("status==active;$limit=10");
+
+        result.Limit.Should().Be(10);
+        result.Filter.Should().BeOfType<RsqlComparison>();
+    }
+
+    [Fact]
+    public void Parse_LimitInvalidValue_ReturnsNull()
+    {
+        var result = _parser.Parse("$limit=invalid");
+
+        result.Limit.Should().BeNull();
+    }
+
+    #endregion
+
+    #region Source Parameter
+
+    [Fact]
+    public void Parse_SourceActivity_ParsesCorrectly()
+    {
+        var result = _parser.Parse("$source=activity");
+
+        result.Source.Should().Be(QuerySource.Activity);
+        result.Filter.Should().BeNull();
+    }
+
+    [Fact]
+    public void Parse_SourceDefault_ParsesCorrectly()
+    {
+        var result = _parser.Parse("$source=default");
+
+        result.Source.Should().Be(QuerySource.Default);
+    }
+
+    [Fact]
+    public void Parse_SourceUnknown_DefaultsToDefault()
+    {
+        var result = _parser.Parse("$source=unknown");
+
+        result.Source.Should().Be(QuerySource.Default);
+    }
+
+    [Fact]
+    public void Parse_SourceWithOtherParams_ParsesAll()
+    {
+        var result = _parser.Parse("$source=activity;nodeType==Story;$orderBy=lastAccessedAt:desc;$limit=20");
+
+        result.Source.Should().Be(QuerySource.Activity);
+        result.OrderBy.Should().NotBeNull();
+        result.OrderBy!.Property.Should().Be("lastAccessedAt");
+        result.OrderBy.Descending.Should().BeTrue();
+        result.Limit.Should().Be(20);
+        result.Filter.Should().BeOfType<RsqlComparison>();
+    }
+
+    #endregion
+
+    #region Combined Parameters
+
+    [Fact]
+    public void Parse_AllNewParameters_ParsesCorrectly()
+    {
+        var result = _parser.Parse("status==active;$search=laptop;$scope=descendants;$orderBy=price:desc;$limit=50;$source=default");
+
+        result.TextSearch.Should().Be("laptop");
+        result.Scope.Should().Be(QueryScope.Descendants);
+        result.OrderBy.Should().NotBeNull();
+        result.OrderBy!.Property.Should().Be("price");
+        result.OrderBy.Descending.Should().BeTrue();
+        result.Limit.Should().Be(50);
+        result.Source.Should().Be(QuerySource.Default);
+        result.Filter.Should().BeOfType<RsqlComparison>();
+    }
+
+    [Fact]
+    public void Parse_ActivityQueryPattern_ParsesCorrectly()
+    {
+        // This is the typical query pattern for activity-based catalog
+        var result = _parser.Parse("$source=activity;nodeType==type/Story;$orderBy=lastAccessedAt:desc;$limit=20");
+
+        result.Source.Should().Be(QuerySource.Activity);
+        result.OrderBy.Should().NotBeNull();
+        result.OrderBy!.Property.Should().Be("lastAccessedAt");
+        result.OrderBy.Descending.Should().BeTrue();
+        result.Limit.Should().Be(20);
+        result.Filter.Should().BeOfType<RsqlComparison>();
+        var comparison = (RsqlComparison)result.Filter!;
+        comparison.Condition.Selector.Should().Be("nodeType");
+        comparison.Condition.Value.Should().Be("type/Story");
+    }
+
+    #endregion
 }
