@@ -88,12 +88,41 @@ public static class ContentCollectionsExtensions
                 .WithView(ContentAreaName, ContentLayoutArea.UnifiedContent)
                 .WithView(nameof(FileBrowserLayoutAreas.FileBrowser), FileBrowserLayoutAreas.FileBrowser)
                 .WithView(nameof(CollectionLayoutArea.Collection), CollectionLayoutArea.Collection))
-            .WithHandler<GetContentCollectionRequest>((hub, request) =>
-            {
-                var response = GetContentCollectionResponse(hub, request);
-                hub.Post(response, o => o.ResponseFor(request));
-                return request.Processed();
-            });
+            .WithHandler<GetDataRequest>(HandleCollectionConfigRequest);
+    }
+
+    /// <summary>
+    /// Handles GetDataRequest for CollectionConfigReference.
+    /// Returns collection configurations via GetDataResponse.
+    /// </summary>
+    private static IMessageDelivery HandleCollectionConfigRequest(
+        IMessageHub hub,
+        IMessageDelivery<GetDataRequest> request)
+    {
+        // Only handle CollectionConfigReference, let other references pass through
+        if (request.Message.Reference is not CollectionConfigReference collectionRef)
+            return request;
+
+        var contentService = hub.GetContentService();
+        var collectionNames = collectionRef.CollectionNames;
+
+        IReadOnlyCollection<ContentCollectionConfig> configs;
+        if (collectionNames is null || collectionNames.Count == 0)
+        {
+            // Return all collection configurations
+            configs = contentService.GetAllCollectionConfigs();
+        }
+        else
+        {
+            // Return specific collection configurations
+            configs = collectionNames
+                .Select(contentService.GetCollectionConfig)
+                .OfType<ContentCollectionConfig>()
+                .ToArray();
+        }
+
+        hub.Post(new GetDataResponse(configs, hub.Version), o => o.ResponseFor(request));
+        return request.Processed();
     }
 
     /// <summary>
@@ -198,30 +227,6 @@ public static class ContentCollectionsExtensions
 
     internal static IContentService GetContentService(this IMessageHub hub)
         => hub.ServiceProvider.GetRequiredService<IContentService>();
-
-
-    private static GetContentCollectionResponse GetContentCollectionResponse(
-        IMessageHub hub,
-        IMessageDelivery<GetContentCollectionRequest> delivery)
-    {
-        var contentService = hub.GetContentService();
-
-        if (delivery.Message.CollectionNames is null || delivery.Message.CollectionNames.Count == 0)
-            return new();
-
-        var configs = delivery.Message.CollectionNames
-            .Select(c => contentService.GetCollectionConfig(c))
-            .OfType<ContentCollectionConfig>()
-            .ToArray();
-
-        return new GetContentCollectionResponse
-        {
-            Collections = configs
-        };
-    }
-
-
-
 
     public static string ConvertToMarkdown(this Article article)
     {

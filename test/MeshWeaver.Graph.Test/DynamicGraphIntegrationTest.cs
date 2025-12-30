@@ -1025,7 +1025,7 @@ public class DynamicGraphIntegrationTestsCollection
 }
 
 /// <summary>
-/// Tests that use the actual samples/Graph/Data directory to test deadlock scenarios.
+/// Tests that use the actual samples/Graph/Data directory to test real sample data.
 /// This replicates the exact production scenario with real sample data.
 /// </summary>
 [Collection("SamplesGraphDataTests")]
@@ -1064,14 +1064,14 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
     }
 
     /// <summary>
-    /// Test that tries to get the default layout from Type/Organizations.
+    /// Test that tries to get the default layout from Organization.
     /// This test is expected to deadlock if the NodeTypeService implementation has issues.
     /// </summary>
     [Fact(Timeout = 30000)]
-    public async Task TypeOrganizations_GetDefaultLayout_ShouldNotDeadlock()
+    public async Task Organization_GetDefaultLayout_ShouldNotDeadlock()
     {
-        // Arrange
-        var typeOrganizationsAddress = new Address("Type", "Organizations");
+        // Arrange - Organization is now at root level
+        var organizationAddress = new Address("Organization");
 
         // Get a client with data services configured
         var client = GetClient(c => c.AddData(data => data));
@@ -1083,8 +1083,8 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
         var workspace = client.GetWorkspace();
         var reference = new LayoutAreaReference(string.Empty);
 
-        Output.WriteLine("Getting remote stream for Type/Organizations...");
-        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(typeOrganizationsAddress, reference);
+        Output.WriteLine("Getting remote stream for Organization...");
+        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(organizationAddress, reference);
 
         Output.WriteLine("Waiting for first value from stream...");
         // Wait for the stream to emit a value - this is where deadlock would occur
@@ -1094,11 +1094,12 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
 
         // Assert
         value.Should().NotBe(default(JsonElement),
-            "Type/Organizations node should return default layout area content");
+            "Organization node should return default layout area content");
     }
 
     /// <summary>
     /// Test that verifies the samples directory exists and has the expected structure.
+    /// Organization is now at root level with Organization.json and Organization/ folder for code.
     /// </summary>
     [Fact]
     public void SamplesDirectory_Exists_WithExpectedStructure()
@@ -1108,46 +1109,46 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
         Directory.Exists(SamplesDataDirectory).Should().BeTrue(
             $"Samples directory should exist at {SamplesDataDirectory}");
 
-        var typeOrganizationsPath = Path.Combine(SamplesDataDirectory, "Type", "Organizations.json");
-        File.Exists(typeOrganizationsPath).Should().BeTrue(
-            $"Type/Organizations.json should exist at {typeOrganizationsPath}");
+        var organizationPath = Path.Combine(SamplesDataDirectory, "Organization.json");
+        File.Exists(organizationPath).Should().BeTrue(
+            $"Organization.json should exist at {organizationPath}");
 
-        var codeConfigPath = Path.Combine(SamplesDataDirectory, "Type", "Organizations", "Code", "dataModel.json");
+        var codeConfigPath = Path.Combine(SamplesDataDirectory, "Organization", "Code", "dataModel.json");
         File.Exists(codeConfigPath).Should().BeTrue(
-            $"Type/Organizations/Code/dataModel.json should exist at {codeConfigPath}");
+            $"Organization/Code/dataModel.json should exist at {codeConfigPath}");
     }
 
     /// <summary>
-    /// Test that the MeshCatalog can resolve Type/Organizations path.
+    /// Test that the MeshCatalog can resolve Organization path.
     /// </summary>
     [Fact(Timeout = 10000)]
-    public async Task TypeOrganizations_CanBeResolved_FromSamples()
+    public async Task Organization_CanBeResolved_FromSamples()
     {
         var meshCatalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
 
-        Output.WriteLine("Resolving Type/Organizations path...");
-        var resolution = await meshCatalog.ResolvePathAsync("Type/Organizations");
+        Output.WriteLine("Resolving Organization path...");
+        var resolution = await meshCatalog.ResolvePathAsync("Organization");
 
-        resolution.Should().NotBeNull("Type/Organizations should be resolvable from samples");
-        resolution.Prefix.Should().Be("Type/Organizations");
+        resolution.Should().NotBeNull("Organization should be resolvable from samples");
+        resolution.Prefix.Should().Be("Organization");
         Output.WriteLine($"Resolved: Prefix={resolution.Prefix}, Remainder={resolution.Remainder}");
     }
 
     /// <summary>
-    /// Test that GetNodeAsync works for Type/Organizations.
+    /// Test that GetNodeAsync works for Organization.
     /// </summary>
     [Fact(Timeout = 15000)]
-    public async Task TypeOrganizations_GetNodeAsync_FromSamples()
+    public async Task Organization_GetNodeAsync_FromSamples()
     {
         var meshCatalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
 
-        Output.WriteLine("Getting node for Type/Organizations...");
-        var node = await meshCatalog.GetNodeAsync(new Address("Type", "Organizations"));
+        Output.WriteLine("Getting node for Organization...");
+        var node = await meshCatalog.GetNodeAsync(new Address("Organization"));
 
-        node.Should().NotBeNull("Type/Organizations node should exist in samples");
+        node.Should().NotBeNull("Organization node should exist in samples");
         Output.WriteLine($"Node: Path={node.Path}, NodeType={node.NodeType}, HubConfiguration={node.HubConfiguration != null}");
 
-        node.Path.Should().Be("Type/Organizations");
+        node.Path.Should().Be("Organization");
         node.NodeType.Should().Be("NodeType");
     }
 
@@ -1156,10 +1157,10 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
     /// Nodes with nodeType=NodeType compile their own code to get HubConfiguration.
     /// </summary>
     [Fact(Timeout = 15000)]
-    public async Task TypeOrganizations_HubConfiguration_IsSetForNodeType()
+    public async Task Organization_HubConfiguration_IsSetForNodeType()
     {
         var meshCatalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
-        var node = await meshCatalog.GetNodeAsync(new Address("Type", "Organizations"));
+        var node = await meshCatalog.GetNodeAsync(new Address("Organization"));
 
         node.Should().NotBeNull();
         node.NodeType.Should().Be("NodeType");
@@ -1176,21 +1177,21 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
     }
 
     /// <summary>
-    /// Test that sends a PingRequest to Type/Organizations hub.
+    /// Test that sends a PingRequest to Organization hub.
     /// This triggers hub creation which may cause deadlock.
     /// </summary>
     [Fact(Timeout = 30000)]
-    public async Task TypeOrganizations_PingRequest_ShouldNotDeadlock()
+    public async Task Organization_PingRequest_ShouldNotDeadlock()
     {
-        var typeOrganizationsAddress = new Address("Type", "Organizations");
+        var organizationAddress = new Address("Organization");
         var client = GetClient();
 
-        Output.WriteLine("Sending PingRequest to Type/Organizations...");
+        Output.WriteLine("Sending PingRequest to Organization...");
 
         // This triggers hub creation - may deadlock here
         var response = await client.AwaitResponse(
             new PingRequest(),
-            o => o.WithTarget(typeOrganizationsAddress),
+            o => o.WithTarget(organizationAddress),
             TestContext.Current.CancellationToken);
 
         Output.WriteLine($"Received response: {response}");
@@ -1198,13 +1199,13 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
     }
 
     /// <summary>
-    /// Test that CodeView for Type/Organizations returns non-empty content.
+    /// Test that CodeView for Organization returns non-empty content.
     /// Uses JsonElement and GetControlStream to verify the Code area renders a control.
     /// </summary>
     [Fact(Timeout = 30000)]
-    public async Task TypeOrganizations_CodeView_ReturnsNonEmptyContent()
+    public async Task Organization_CodeView_ReturnsNonEmptyContent()
     {
-        var typeOrganizationsAddress = new Address("Type", "Organizations");
+        var organizationAddress = new Address("Organization");
         var client = GetClient(c => c
             .WithInitialization((h, _) => RoutingService.RegisterStreamAsync(h))
             .AddLayoutClient(cc => cc)
@@ -1215,8 +1216,8 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
         // Request the Code view area
         var reference = new LayoutAreaReference("Code");
 
-        Output.WriteLine("Getting CodeView for Type/Organizations...");
-        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(typeOrganizationsAddress, reference);
+        Output.WriteLine("Getting CodeView for Organization...");
+        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(organizationAddress, reference);
 
         // Use GetControlStream to get the Code area control
         var control = await stream
@@ -1230,20 +1231,20 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
     }
 
     /// <summary>
-    /// Test that CodeConfiguration stream for Type/Organizations is not empty.
+    /// Test that CodeConfiguration stream for Organization is not empty.
     /// </summary>
     [Fact(Timeout = 30000)]
-    public async Task TypeOrganizations_CodeConfigurationStream_IsNotEmpty()
+    public async Task Organization_CodeConfigurationStream_IsNotEmpty()
     {
-        var typeOrganizationsAddress = new Address("Type", "Organizations");
+        var organizationAddress = new Address("Organization");
         var client = GetClient(c => c
             .AddData(data => data)
             .WithType<CodeConfiguration>("Code"));
         var workspace = client.GetWorkspace();
 
-        Output.WriteLine("Getting Code collection stream for Type/Organizations...");
+        Output.WriteLine("Getting Code collection stream for Organization...");
         var stream = workspace.GetRemoteStream<InstanceCollection, CollectionReference>(
-            typeOrganizationsAddress,
+            organizationAddress,
             new CollectionReference("Code"));
 
         var instanceCollection = await stream
@@ -1274,9 +1275,9 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
     /// Uses JsonElement and GetControlStream for cleaner control access.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public async Task TypeOrganizations_CodeView_WithLayoutClient_ReturnsSplitter()
+    public async Task Organization_CodeView_WithLayoutClient_ReturnsSplitter()
     {
-        var typeOrganizationsAddress = new Address("Type", "Organizations");
+        var organizationAddress = new Address("Organization");
 
         // Configure client with AddLayoutClient for proper control deserialization
         var client = GetClient(c => c
@@ -1291,7 +1292,7 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
         var reference = new LayoutAreaReference("Code");
         Output.WriteLine($"Requesting layout area: {reference.Area}");
 
-        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(typeOrganizationsAddress, reference);
+        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(organizationAddress, reference);
 
         // Use GetControlStream to get the Code area control
         Output.WriteLine("Waiting for 'Code' control via GetControlStream...");
@@ -1319,9 +1320,9 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
     /// Debug test: Collect control updates and log them to understand the sequence of events.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public async Task TypeOrganizations_CodeView_DebugUpdateSequence()
+    public async Task Organization_CodeView_DebugUpdateSequence()
     {
-        var typeOrganizationsAddress = new Address("Type", "Organizations");
+        var organizationAddress = new Address("Organization");
 
         var client = GetClient(c => c
             .WithInitialization((h, _) => RoutingService.RegisterStreamAsync(h))
@@ -1334,11 +1335,11 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
         // Initialize hub
         await client.AwaitResponse(
             new PingRequest(),
-            o => o.WithTarget(typeOrganizationsAddress),
+            o => o.WithTarget(organizationAddress),
             TestContext.Current.CancellationToken);
 
         var reference = new LayoutAreaReference("Code");
-        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(typeOrganizationsAddress, reference);
+        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(organizationAddress, reference);
 
         Output.WriteLine("Collecting updates for 20 seconds...\n");
 
@@ -1389,9 +1390,9 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
     /// Test using GetControlStream to get properly typed controls.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public async Task TypeOrganizations_CodeView_GetControlStream_Test()
+    public async Task Organization_CodeView_GetControlStream_Test()
     {
-        var typeOrganizationsAddress = new Address("Type", "Organizations");
+        var organizationAddress = new Address("Organization");
 
         var client = GetClient(c => c
             .WithInitialization((h, _) => RoutingService.RegisterStreamAsync(h))
@@ -1404,11 +1405,11 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
         // Initialize hub
         await client.AwaitResponse(
             new PingRequest(),
-            o => o.WithTarget(typeOrganizationsAddress),
+            o => o.WithTarget(organizationAddress),
             TestContext.Current.CancellationToken);
 
         var reference = new LayoutAreaReference("Code");
-        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(typeOrganizationsAddress, reference);
+        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(organizationAddress, reference);
 
         Output.WriteLine("Getting control for 'Code' area...");
 

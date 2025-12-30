@@ -1,4 +1,5 @@
-﻿using MeshWeaver.Mesh;
+﻿using MeshWeaver.ContentCollections;
+using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.CodeAnalysis;
@@ -96,10 +97,13 @@ internal class MeshNodeCompilationService(
             return dllPath;
         }
 
-        // Get CodeConfiguration from the NodeType's Code sub-partition
-        // CodeConfiguration is stored in <nodeType>/Code partition (e.g., "Type/Organizations/Code")
+        // Get CodeConfiguration from the Code sub-partition
+        // For NodeType nodes (where Content is NodeTypeDefinition), use the node's own path
+        // For instance nodes, use the NodeType's path (e.g., "Person/Code" for Alice with NodeType="Person")
         CodeConfiguration? codeFile = null;
-        var codePartition = $"{node.NodeType}/Code";
+        var codePartition = node.Content is NodeTypeDefinition
+            ? $"{node.Path}/Code"    // NodeType node - use its own Code partition
+            : $"{node.NodeType}/Code"; // Instance node - use NodeType's Code partition
         await foreach (var obj in persistence.GetPartitionObjectsAsync(codePartition).WithCancellation(ct))
         {
             if (obj is CodeConfiguration cf)
@@ -109,19 +113,33 @@ internal class MeshNodeCompilationService(
             }
         }
 
-        // Get Configuration from the NodeTypeDefinition content
+        // Get Configuration and ContentCollections from the NodeTypeDefinition content
         // Configuration is the source code that gets compiled into HubConfiguration
+        // For NodeType nodes (where node.Content is NodeTypeDefinition), use the node's own content
+        // For instance nodes, look up the NodeType node to get its Configuration
         string? configuration = null;
-        var nodeTypeNode = await persistence.GetNodeAsync(node.NodeType, ct);
-        if (nodeTypeNode?.Content is NodeTypeDefinition ntd)
+        List<ContentCollectionConfig>? contentCollections = null;
+        if (node.Content is NodeTypeDefinition selfDef)
         {
-            configuration = ntd.Configuration;
+            // Node is itself a NodeType definition - use its own Configuration
+            configuration = selfDef.Configuration;
+            contentCollections = selfDef.ContentCollections;
+        }
+        else
+        {
+            // Instance node - look up the NodeType to get its Configuration
+            var nodeTypeNode = await persistence.GetNodeAsync(node.NodeType, ct);
+            if (nodeTypeNode?.Content is NodeTypeDefinition ntd)
+            {
+                configuration = ntd.Configuration;
+                contentCollections = ntd.ContentCollections;
+            }
         }
 
         try
         {
-            // Compile using CodeConfiguration and Configuration
-            await CompileAsync(codeFile, configuration, node, ct);
+            // Compile using CodeConfiguration, Configuration, and ContentCollections
+            await CompileAsync(codeFile, configuration, contentCollections, node, ct);
 
             // Return the DLL path if it exists
             if (File.Exists(dllPath))
@@ -216,6 +234,7 @@ internal class MeshNodeCompilationService(
     private async Task CompileAsync(
         CodeConfiguration? codeFile,
         string? hubConfiguration,
+        IReadOnlyList<ContentCollectionConfig>? contentCollections,
         MeshNode node,
         CancellationToken ct)
     {
@@ -227,8 +246,8 @@ internal class MeshNodeCompilationService(
 
         ct.ThrowIfCancellationRequested();
 
-        // Generate full source with MeshNodeAttribute
-        var source = _attributeGenerator.GenerateAttributeSource(node, codeFile, hubConfiguration);
+        // Generate full source with MeshNodeAttribute (including content collections)
+        var source = _attributeGenerator.GenerateAttributeSource(node, codeFile, hubConfiguration, contentCollections);
 
         // Write source file for debugging
         var sourcePath = cacheService.GetSourcePath(nodeName);

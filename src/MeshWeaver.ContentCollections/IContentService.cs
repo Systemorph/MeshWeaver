@@ -10,5 +10,6 @@ public interface IContentService
     Task<ContentCollection?> GetCollectionAsync(string collectionName, CancellationToken ct = default);
 
     ContentCollectionConfig? GetCollectionConfig(string collection);
+    IReadOnlyCollection<ContentCollectionConfig> GetAllCollectionConfigs();
     void AddConfiguration(ContentCollectionConfig contentCollectionConfig);
 }

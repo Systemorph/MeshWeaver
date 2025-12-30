@@ -1,6 +1,7 @@
 ﻿using MeshWeaver.Blazor;
 using MeshWeaver.Blazor.Infrastructure;
 using MeshWeaver.ContentCollections;
+using MeshWeaver.Data;
 using MeshWeaver.Layout.Client;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
@@ -93,7 +94,7 @@ public static class BlazorHostingExtensions
     /// Example: /static/app/Northwind/Northwind/thumbnails/logo.png
     /// The path is resolved via IMeshCatalog.ResolvePath to get the prefix and remainder.
     /// First segment of remainder is collection name, rest is file path.
-    /// Uses GetContentCollectionRequest to obtain collection configuration from the target hub.
+    /// Uses GetDataRequest with CollectionConfigReference to obtain collection configuration from the target hub.
     /// </summary>
     private static void MapStaticContent(this IEndpointRouteBuilder app, IMessageHub mainHub)
     {
@@ -146,13 +147,14 @@ public static class BlazorHostingExtensions
                 // Get or fetch collection configuration
                 if (!collectionCache.TryGetValue(cacheKey, out var collectionConfig))
                 {
-                    // Request collection configuration from the target hub
+                    // Request collection configuration from the target hub using GetDataRequest with CollectionConfigReference
                     var collectionResponse = await mainHub.AwaitResponse(
-                        new GetContentCollectionRequest([collectionName]),
+                        new GetDataRequest(new CollectionConfigReference([collectionName])),
                         o => o.WithTarget(targetAddress),
                         context.RequestAborted);
 
-                    collectionConfig = collectionResponse?.Message?.Collections?.FirstOrDefault(c => c.Name == collectionName);
+                    var configs = collectionResponse?.Message?.Data as IReadOnlyCollection<ContentCollectionConfig>;
+                    collectionConfig = configs?.FirstOrDefault(c => c.Name == collectionName);
 
                     if (collectionConfig == null)
                     {
