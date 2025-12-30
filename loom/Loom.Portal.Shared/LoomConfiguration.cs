@@ -11,6 +11,7 @@ using MeshWeaver.Blazor.Radzen;
 using MeshWeaver.GoogleMaps;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting;
+using MeshWeaver.Hosting.Activity;
 using MeshWeaver.Hosting.AzureBlob;
 using MeshWeaver.Hosting.Blazor;
 using MeshWeaver.Hosting.Persistence;
@@ -192,6 +193,8 @@ public static class LoomConfiguration
                     services.AddSingleton<IMeshCatalog, MeshCatalog>();
                     return services;
                 })
+                // Add activity tracking to record user access patterns
+                .AddActivityTracking()
                 ;
         }
     }

@@ -541,11 +541,27 @@ public class InMemoryPersistenceService(IStorageAdapter? storageAdapter = null) 
         }
 
         // Order by fuzzy score (higher first) for text searches, otherwise preserve order
-        var orderedResults = !string.IsNullOrEmpty(parsedQuery.TextSearch)
-            ? results.OrderByDescending(r => r.Score)
-            : results.AsEnumerable();
+        IEnumerable<object> orderedResults;
+        if (!string.IsNullOrEmpty(parsedQuery.TextSearch))
+        {
+            orderedResults = results.OrderByDescending(r => r.Score).Select(r => r.Item);
+        }
+        else if (parsedQuery.OrderBy != null)
+        {
+            orderedResults = evaluator.OrderResults(results.Select(r => r.Item), parsedQuery.OrderBy);
+        }
+        else
+        {
+            orderedResults = results.Select(r => r.Item);
+        }
 
-        foreach (var (item, _) in orderedResults)
+        // Apply limit
+        if (parsedQuery.Limit.HasValue && parsedQuery.Limit.Value > 0)
+        {
+            orderedResults = evaluator.LimitResults(orderedResults, parsedQuery.Limit);
+        }
+
+        foreach (var item in orderedResults)
         {
             yield return item;
         }
