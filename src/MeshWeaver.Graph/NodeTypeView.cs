@@ -151,7 +151,9 @@ public static class NodeTypeView
         }
 
         // Build query - combine base query with user search
-        var nodeTypePath = $"{definition.Namespace}/{definition.Id}";
+        var nodeTypePath = string.IsNullOrEmpty(definition.Namespace)
+            ? definition.Id
+            : $"{definition.Namespace}/{definition.Id}";
         var baseQuery = definition.ChildrenQuery
             ?? $"$source=activity;nodeType=={nodeTypePath};$orderBy=lastAccessedAt:desc";
 

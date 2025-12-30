@@ -1,7 +1,7 @@
 {
   "id": "Emma",
   "name": "Emma Johnson",
-  "nodeType": "Type/Person",
+  "nodeType": "Person",
   "description": "Tech Lead",
   "iconName": "Person",
   "displayOrder": 5,

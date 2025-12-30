@@ -1,7 +1,7 @@
 {
   "id": "Alice",
   "name": "Alice Chen",
-  "nodeType": "Type/Person",
+  "nodeType": "Person",
   "description": "Senior Software Engineer",
   "iconName": "Person",
   "displayOrder": 1,

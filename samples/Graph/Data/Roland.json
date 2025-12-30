@@ -1,7 +1,7 @@
 {
   "id": "Roland",
   "name": "Roland Bürgi",
-  "nodeType": "Type/Person",
+  "nodeType": "Person",
   "description": "Founder & CEO at Systemorph",
   "iconName": "Person",
   "displayOrder": 0,
