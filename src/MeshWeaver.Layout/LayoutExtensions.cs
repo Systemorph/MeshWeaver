@@ -134,7 +134,10 @@ public static class LayoutExtensions
         var collection = referencePointer.First();
         var idString = referencePointer.Skip(1).FirstOrDefault();
         // Deserialize the id as string directly to ensure consistent comparison
-        var id = idString == null ? null : JsonSerializer.Deserialize<string>(idString, stream.Hub.JsonSerializerOptions);
+        var id =
+            idString == null ? null :
+                idString == string.Empty ? string.Empty
+                : JsonSerializer.Deserialize<string>(idString, stream.Hub.JsonSerializerOptions);
 
         return stream
             .Synchronize() // Ensure thread-safety for the 'first' closure variable
