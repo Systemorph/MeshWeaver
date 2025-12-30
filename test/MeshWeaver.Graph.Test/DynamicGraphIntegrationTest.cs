@@ -1221,7 +1221,7 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
         // Use GetControlStream to get the Code area control
         var control = await stream
             .GetControlStream("Code")
-            .Timeout(TimeSpan.FromSeconds(2000))
+            .Timeout(TimeSpan.FromSeconds(20))
             .FirstAsync(x => x != null);
 
         Output.WriteLine($"Received control type: {control?.GetType().FullName}");
