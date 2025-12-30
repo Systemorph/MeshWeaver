@@ -1,7 +1,7 @@
 {
   "id": "Bob",
   "name": "Bob Wilson",
-  "nodeType": "Type/Person",
+  "nodeType": "Person",
   "description": "Product Manager",
   "iconName": "Person",
   "displayOrder": 2,

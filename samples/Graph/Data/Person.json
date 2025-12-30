@@ -1,6 +1,6 @@
 {
   "id": "Person",
-  "namespace": "Type",
+  "namespace": "",
   "name": "Person",
   "nodeType": "NodeType",
   "description": "A person with profile and avatar",
@@ -12,12 +12,12 @@
   "content": {
     "$type": "NodeTypeDefinition",
     "id": "Person",
-    "namespace": "Type",
+    "namespace": "",
     "displayName": "Person",
     "iconName": "Person",
     "description": "A person with profile and avatar",
     "displayOrder": 5,
-    "configuration": "config =\u003E config.WithContentType\u003CPerson\u003E().AddNodeTypeView()",
-    "childrenQuery": "$source=activity;nodeType==Type/Person;$orderBy=lastAccessedAt:desc;$limit=20"
+    "configuration": "config => config.WithContentType<Person>().AddNodeTypeView()",
+    "childrenQuery": "$source=activity;nodeType==Person;$orderBy=lastAccessedAt:desc;$limit=20"
   }
 }
