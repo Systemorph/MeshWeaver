@@ -106,7 +106,8 @@ public enum StoryStatus
                 DisplayName = "Story",
                 IconName = "Document",
                 Description = "A user story or task",
-                DisplayOrder = 30
+                DisplayOrder = 30,
+                Configuration = "config => config"
             }
         };
         await persistence.SaveNodeAsync(storyNode);
@@ -140,7 +141,8 @@ public record Organization
                 DisplayName = "Organization",
                 IconName = "Building",
                 Description = "An organization",
-                DisplayOrder = 10
+                DisplayOrder = 10,
+                Configuration = "config => config"
             }
         };
         await persistence.SaveNodeAsync(orgNode);
@@ -174,7 +176,8 @@ public record Project
                 DisplayName = "Project",
                 IconName = "Folder",
                 Description = "A project",
-                DisplayOrder = 20
+                DisplayOrder = 20,
+                Configuration = "config => config"
             }
         };
         await persistence.SaveNodeAsync(projectNode);
@@ -207,7 +210,8 @@ public record Graph
                 DisplayName = "Graph",
                 IconName = "Diagram",
                 Description = "The graph root",
-                DisplayOrder = 0
+                DisplayOrder = 0,
+                Configuration = "config => config"
             }
         };
         await persistence.SaveNodeAsync(graphTypeNode);

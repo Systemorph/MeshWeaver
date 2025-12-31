@@ -95,7 +95,7 @@ public static class ContentCollectionsExtensions
                         reference is not CollectionConfigReference
                             ? null
                             : CreateCollectionConfigReferenceStream(workspace, reference, configuration)));
-                })
+            })
             .AddLayout(layout => layout
                 .WithView(nameof(ContentLayoutArea.Content), ContentLayoutArea.Content)
                 .WithView(ContentAreaName, ContentLayoutArea.UnifiedContent)
@@ -137,19 +137,37 @@ public static class ContentCollectionsExtensions
     }
 
     /// <summary>
-    /// Handles GetDataRequest for CollectionConfigReference.
+    /// Handles GetDataRequest for CollectionConfigReference or UnifiedReference with "collection:" prefix.
     /// Returns collection configurations via GetDataResponse.
     /// </summary>
     private static IMessageDelivery HandleCollectionConfigRequest(
         IMessageHub hub,
         IMessageDelivery<GetDataRequest> request)
     {
-        // Only handle CollectionConfigReference, let other references pass through
-        if (request.Message.Reference is not CollectionConfigReference collectionRef)
+        // Handle both CollectionConfigReference and UnifiedReference with "collection:" prefix
+        IReadOnlyCollection<string>? collectionNames = null;
+
+        if (request.Message.Reference is CollectionConfigReference collectionRef)
+        {
+            collectionNames = collectionRef.CollectionNames;
+        }
+        else if (request.Message.Reference is UnifiedReference unifiedRef &&
+                 unifiedRef.Path.StartsWith("collection:", StringComparison.OrdinalIgnoreCase))
+        {
+            // Parse collection names from "collection:name1,name2" format
+            var remainingPath = unifiedRef.Path["collection:".Length..];
+            if (!string.IsNullOrEmpty(remainingPath))
+            {
+                collectionNames = remainingPath.Split(',', StringSplitOptions.RemoveEmptyEntries);
+            }
+        }
+        else
+        {
+            // Not a collection config request, let other handlers process it
             return request;
+        }
 
         var contentService = hub.GetContentService();
-        var collectionNames = collectionRef.CollectionNames;
 
         IReadOnlyCollection<ContentCollectionConfig> configs;
         if (collectionNames is null || collectionNames.Count == 0)
@@ -198,7 +216,7 @@ public static class ContentCollectionsExtensions
         {
             var collection = collectionPart[..atIndex];
             var partition = collectionPart[(atIndex + 1)..];
-            return workspace.GetStream(new FileReference(collection, filePath, partition), null);
+            return workspace.GetStream(new FileReference(collection, filePath, partition));
         }
 
         return workspace.GetStream(new FileReference(collectionPart, filePath), null);
@@ -580,42 +598,28 @@ public static class ContentCollectionsExtensions
                 return services;
             });
 
-    /// <summary>
-    /// Configures a FileSystem content collection for this hub with the specified parameters.
-    /// </summary>
-    /// <param name="configuration">The message hub configuration</param>
-    /// <param name="collectionName">The name of the collection</param>
-    /// <param name="basePath">The base path for the file system collection</param>
-    /// <returns>The configured message hub configuration</returns>
-    public static MessageHubConfiguration AddContentCollection(
-        this MessageHubConfiguration configuration,
-        string collectionName,
-        string basePath)
-        => configuration.AddContentCollections(new ContentCollectionConfig
-        {
-            Name = collectionName,
-            SourceType = "FileSystem",
-            BasePath = basePath
-        });
 
     /// <summary>
-    /// Configures a content collection from the Graph:Storage configuration section.
-    /// The subdirectory is relative to the Storage.BasePath.
+    /// Maps a content collection from a source configuration section to a subdirectory path.
+    /// The subdirectory is relative to the source collection's BasePath.
+    /// Supports string interpolation for dynamic paths (e.g., $"persons/{config.Address.Segments.Last()}").
     /// </summary>
     /// <param name="configuration">The message hub configuration</param>
-    /// <param name="collectionName">The name of the collection (e.g., "avatars")</param>
-    /// <param name="subdirectory">The subdirectory within storage (e.g., "persons")</param>
+    /// <param name="targetCollectionName">The name of the mapped collection (e.g., "avatars")</param>
+    /// <param name="sourceCollectionName">The configuration section name to read source config from (e.g., "Graph:Storage")</param>
+    /// <param name="subdirectory">The subdirectory within storage (e.g., "persons" or dynamic path)</param>
     /// <returns>The configured message hub configuration</returns>
-    public static MessageHubConfiguration AddStorageCollection(
+    public static MessageHubConfiguration MapContentCollection(
         this MessageHubConfiguration configuration,
-        string collectionName,
+        string targetCollectionName,
+        string sourceCollectionName,
         string subdirectory)
         => configuration.AddContentCollection(sp =>
         {
             var conf = sp.GetRequiredService<IConfiguration>();
 
             // Get the global Graph:Storage configuration from appsettings
-            var storageConfig = conf.GetSection("Graph:Storage").Get<ContentCollectionConfig>();
+            var storageConfig = conf.GetSection(sourceCollectionName).Get<ContentCollectionConfig>();
 
             // If no configuration exists, create a default FileSystem-based collection
             if (storageConfig == null)
@@ -625,7 +629,7 @@ public static class ContentCollectionsExtensions
                 storageConfig = new ContentCollectionConfig
                 {
                     SourceType = FileSystemStreamProvider.SourceType,
-                    Name = collectionName,
+                    Name = targetCollectionName,
                     BasePath = defaultBasePath
                 };
             }
@@ -637,7 +641,7 @@ public static class ContentCollectionsExtensions
 
             return storageConfig with
             {
-                Name = collectionName,
+                Name = targetCollectionName,
                 BasePath = fullPath
             };
         });

@@ -15,7 +15,7 @@
     "iconName": "Document",
     "description": "A user story or task",
     "displayOrder": 30,
-    "configuration": "config => config.WithContentType<Story>().AddNodeTypeView()",
+    "configuration": "config => config.WithContentType<MeshWeaver.Graph.Dynamic.Story>().AddNodeTypeView()",
     "childrenQuery": "$source=activity;nodeType==Systemorph/Type/Project/Story;$orderBy=lastAccessedAt:desc;$limit=20"
   }
 }

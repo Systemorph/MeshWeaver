@@ -4,7 +4,6 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Schema;
 using Json.Patch;
-using MeshWeaver.AI.Completion;
 using MeshWeaver.Data.Completion;
 using MeshWeaver.Data.Persistence;
 using MeshWeaver.Data.Serialization;
@@ -1518,7 +1517,7 @@ public static class DataExtensions
     private static ISynchronizationStream<object>? GetStreamDynamic(
         IWorkspace workspace,
         WorkspaceReference targetRef,
-        Func<Serialization.StreamConfiguration<object>, Serialization.StreamConfiguration<object>>? configuration)
+        Func<StreamConfiguration<object>, StreamConfiguration<object>>? configuration)
     {
         // Use dynamic dispatch to call the correct GetStream<T> method
         return GetStreamDynamicCore(workspace, (dynamic)targetRef, configuration);

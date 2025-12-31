@@ -10,7 +10,7 @@
     "id": "Carol",
     "name": "Carol Martinez",
     "email": "carol.martinez@example.com",
-    "avatar": "/static/Person/avatars/carol.svg",
+    "avatar": "/static/Carol/avatars/avatar.svg",
     "bio": "UX designer focused on creating intuitive and accessible user experiences.",
     "role": "UX Designer",
     "iconName": "Person"

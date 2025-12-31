@@ -34,6 +34,16 @@ public static class MeshDataSourceExtensions
         return config.AddData(data => data.WithDataSource(_ =>
             new MeshDataSource(Guid.NewGuid().AsString(), data.Workspace).WithMeshNodes()));
     }
+
+    /// <summary>
+    /// Adds a content type to the MeshDataSource. This only adds the content type,
+    /// not MeshNodes - use when MeshNodes are already registered via AddMeshDataSource().
+    /// </summary>
+    public static MessageHubConfiguration WithContentType<T>(this MessageHubConfiguration config) where T : class
+    {
+        return config.AddData(data => data.WithDataSource(_ =>
+            new MeshDataSource(Guid.NewGuid().AsString(), data.Workspace).WithContentType<T>()));
+    }
 }
 
 /// <summary>
