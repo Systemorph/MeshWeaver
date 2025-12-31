@@ -10,7 +10,7 @@
     "id": "Alice",
     "name": "Alice Chen",
     "email": "alice.chen@example.com",
-    "avatar": "/static/Person/avatars/alice.svg",
+    "avatar": "/static/Alice/avatars/avatar.svg",
     "bio": "Full-stack developer passionate about clean code and design patterns.",
     "role": "Senior Software Engineer",
     "iconName": "Person"

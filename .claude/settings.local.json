@@ -67,7 +67,8 @@
       "WebFetch(domain:raw.githubusercontent.com)",
       "WebFetch(domain:www.fluentui-blazor.net)",
       "Bash(for f in \"C:/dev/MeshWeaver/samples/Graph/Data/Type/Person/Code/dataModel.json\" \"C:/dev/MeshWeaver/samples/Graph/Data/Type/Organizations/Code/dataModel.json\" \"C:/dev/MeshWeaver/samples/Graph/Data/Type/Article/Code/dataModel.json\" \"C:/dev/MeshWeaver/samples/Graph/Data/Type/People/Code/dataModel.json\" \"C:/dev/MeshWeaver/samples/Graph/Data/Type/Organization/Code/dataModel.json\" \"C:/dev/MeshWeaver/samples/Graph/Data/Systemorph/Type/Project/Code/dataModel.json\" \"C:/dev/MeshWeaver/samples/Graph/Data/Systemorph/Type/Project/Story/Code/dataModel.json\")",
-      "Bash(do sed -i 's/CodeFile/CodeConfiguration/g' \"$f\")"
+      "Bash(do sed -i 's/CodeFile/CodeConfiguration/g' \"$f\")",
+      "Bash(/dev/null -exec cat {} ;)"
     ],
     "deny": []
   }

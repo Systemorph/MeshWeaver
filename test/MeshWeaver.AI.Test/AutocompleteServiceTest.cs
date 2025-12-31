@@ -1,10 +1,13 @@
-﻿using System.Linq;
+﻿using System.Collections.Generic;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
 using MeshWeaver.AI.Completion;
+using MeshWeaver.AI.Services;
 using MeshWeaver.Data;
 using MeshWeaver.Data.Completion;
+using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Completion;
 using Xunit;
@@ -183,11 +186,12 @@ public class AutocompleteServiceTest
     public async Task AutocompleteService_GetCompletions_AggregatesProviders()
     {
         // arrange - create service with agent provider
-        var agents = new IAgentDefinition[]
+        var agents = new AgentConfiguration[]
         {
-            new MockAgentDefinition { Name = "Agent1", Description = "First agent" }
+            new() { Id = "Agent1", Description = "First agent" }
         };
-        var agentProvider = new AgentAutocompleteProvider(agents);
+        var agentResolver = new MockAgentResolver(agents);
+        var agentProvider = new AgentAutocompleteProvider(agentResolver);
         var fuzzyScorer = new FuzzyScorer();
         var service = new AutocompleteService(fuzzyScorer, [agentProvider]);
 
@@ -217,11 +221,12 @@ public class AutocompleteServiceTest
     public async Task AutocompleteService_GetCompletions_FuzzyMatches()
     {
         // arrange
-        var agents = new IAgentDefinition[]
+        var agents = new AgentConfiguration[]
         {
-            new MockAgentDefinition { Name = "TestAgent", Description = "A test agent" }
+            new() { Id = "TestAgent", Description = "A test agent" }
         };
-        var agentProvider = new AgentAutocompleteProvider(agents);
+        var agentResolver = new MockAgentResolver(agents);
+        var agentProvider = new AgentAutocompleteProvider(agentResolver);
         var fuzzyScorer = new FuzzyScorer();
         var service = new AutocompleteService(fuzzyScorer, [agentProvider]);
 
@@ -236,11 +241,12 @@ public class AutocompleteServiceTest
     public async Task AutocompleteService_GetCompletions_MultipleProviders()
     {
         // arrange
-        var agents = new IAgentDefinition[]
+        var agents = new AgentConfiguration[]
         {
-            new MockAgentDefinition { Name = "TestAgent", Description = "A test agent" }
+            new() { Id = "TestAgent", Description = "A test agent" }
         };
-        var agentProvider = new AgentAutocompleteProvider(agents);
+        var agentResolver = new MockAgentResolver(agents);
+        var agentProvider = new AgentAutocompleteProvider(agentResolver);
         var modelProvider = new ModelAutocompleteProvider();
         modelProvider.SetAvailableModels(["claude-opus"]);
 
@@ -263,11 +269,12 @@ public class AutocompleteServiceTest
     public async Task AutocompleteService_GetCompletionsAsync_Request_ReturnsResponse()
     {
         // arrange
-        var agents = new IAgentDefinition[]
+        var agents = new AgentConfiguration[]
         {
-            new MockAgentDefinition { Name = "Agent1", Description = "First agent" }
+            new() { Id = "Agent1", Description = "First agent" }
         };
-        var agentProvider = new AgentAutocompleteProvider(agents);
+        var agentResolver = new MockAgentResolver(agents);
+        var agentProvider = new AgentAutocompleteProvider(agentResolver);
         var fuzzyScorer = new FuzzyScorer();
         var service = new AutocompleteService(fuzzyScorer, [agentProvider]);
         var request = new AutocompleteRequest("@agent/", null);
@@ -362,12 +369,13 @@ public class AutocompleteServiceTest
     public async Task AgentAutocompleteProvider_GetItems_ReturnsAgents()
     {
         // arrange
-        var agents = new IAgentDefinition[]
+        var agents = new AgentConfiguration[]
         {
-            new MockAgentDefinition { Name = "Agent1", Description = "First agent", GroupName = "Group1" },
-            new MockAgentDefinition { Name = "Agent2", Description = "Second agent", GroupName = "Group2" }
+            new() { Id = "Agent1", Description = "First agent", GroupName = "Group1" },
+            new() { Id = "Agent2", Description = "Second agent", GroupName = "Group2" }
         };
-        var provider = new AgentAutocompleteProvider(agents);
+        var agentResolver = new MockAgentResolver(agents);
+        var provider = new AgentAutocompleteProvider(agentResolver);
 
         // act
         var items = (await provider.GetItemsAsync("", TestContext.Current.CancellationToken)).ToList();
@@ -414,14 +422,22 @@ public class AutocompleteServiceTest
 
     #region Helper Classes
 
-    private class MockAgentDefinition : IAgentDefinition
+    private class MockAgentResolver(IReadOnlyList<AgentConfiguration> agents) : IAgentResolver
     {
-        public required string Name { get; init; }
-        public string Description { get; init; } = "";
-        public string? GroupName { get; init; }
-        public int DisplayOrder { get; init; }
-        public string? IconName { get; init; }
-        public string Instructions { get; init; } = "";
+        public Task<IReadOnlyList<AgentConfiguration>> GetAgentsForContextAsync(string? contextPath, CancellationToken ct = default)
+            => Task.FromResult(agents);
+
+        public Task<AgentConfiguration?> GetAgentAsync(string agentPath, string? contextPath = null, CancellationToken ct = default)
+            => Task.FromResult(agents.FirstOrDefault(a => a.Id == agentPath || agentPath.EndsWith("/" + a.Id)));
+
+        public Task<AgentConfiguration?> GetDefaultAgentAsync(string? contextPath = null, CancellationToken ct = default)
+            => Task.FromResult(agents.FirstOrDefault(a => a.IsDefault));
+
+        public Task<IReadOnlyList<AgentConfiguration>> GetExposedAgentsAsync(string? contextPath = null, CancellationToken ct = default)
+            => Task.FromResult<IReadOnlyList<AgentConfiguration>>(agents.Where(a => a.ExposedInNavigator).ToList());
+
+        public Task<IReadOnlyList<AgentConfiguration>> FindMatchingAgentsAsync(AgentContext context, string? contextPath = null, CancellationToken ct = default)
+            => Task.FromResult<IReadOnlyList<AgentConfiguration>>(agents.Where(a => !string.IsNullOrEmpty(a.ContextMatchPattern)).ToList());
     }
 
     private class MockMeshCatalog(System.Collections.Generic.IReadOnlyList<Mesh.MeshNode> nodes) : Mesh.Services.IMeshCatalog

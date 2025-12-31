@@ -15,7 +15,7 @@
     "iconName": "Folder",
     "description": "A project containing stories",
     "displayOrder": 20,
-    "configuration": "config => config.WithContentType<Project>().AddNodeTypeView()",
+    "configuration": "config => config.WithContentType<MeshWeaver.Graph.Dynamic.Project>().AddNodeTypeView()",
     "childrenQuery": "$source=activity;nodeType==Systemorph/Type/Project;$orderBy=lastAccessedAt:desc;$limit=20"
   }
 }

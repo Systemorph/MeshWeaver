@@ -25,9 +25,7 @@ public static class GraphConfigurationExtensions
     /// Note: MeshDataSource is added automatically via NodeTypeService.
     /// </summary>
     public static MessageHubConfiguration WithDefaultViews(this MessageHubConfiguration config)
-        => config
-            .AddDefaultViews()
-            .AddMeshNodeView();
+        => MeshNodeView.AddDefaultViews(DefaultViews.AddEditView(config));
 
     /// <param name="builder">The mesh builder</param>
     extension<TBuilder>(TBuilder builder) where TBuilder : MeshBuilder
@@ -102,8 +100,7 @@ public static class GraphConfigurationExtensions
             // Note: MeshDataSource is added automatically via NodeTypeService.WrapWithMeshDataSource
             // Node types are compiled on-demand via IMeshNodeCompilationService.
             // MeshCatalog loads NodeTypeConfiguration from compiled assemblies when nodes are accessed.
-            builder.ConfigureHub(config => config
-                .AddMeshNodeView()
+            builder.ConfigureHub(config => MeshNodeView.AddDefaultViews(config)
                 .WithServices(services =>
                 {
                     services.AddSingleton<IMeshNodeCompilationService, MeshNodeCompilationService>();

@@ -31,7 +31,7 @@ public static class MeshNodeView
     /// Requires AddMeshDataSource() to be called first to enable GetStream&lt;MeshNode&gt;() in views.
     /// Details is set as the default area for empty path requests.
     /// </summary>
-    public static MessageHubConfiguration AddMeshNodeView(this MessageHubConfiguration configuration)
+    public static MessageHubConfiguration AddDefaultViews(this MessageHubConfiguration configuration)
         => configuration
             .AddLayout(layout => layout
                 .WithDefaultArea(DetailsArea)

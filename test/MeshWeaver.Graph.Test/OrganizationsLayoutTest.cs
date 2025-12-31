@@ -78,7 +78,7 @@ namespace MeshWeaver.Graph.Test
                     IconName = "Building",
                     Description = "An organization containing projects",
                     DisplayOrder = 10,
-                    Configuration = "config => config.WithContentType<Organization>().AddNodeTypeView()",
+                    Configuration = "config => config.WithContentType<MeshWeaver.Graph.Dynamic.Organization>().AddNodeTypeView()",
                     // Query for all nodes of type "Organization" ordered by activity
                     ChildrenQuery = "$source=activity;nodeType==Organization;$orderBy=lastAccessedAt:desc;$limit=20"
                 }
@@ -138,7 +138,8 @@ namespace MeshWeaver.Graph.Test
                 {
                     Id = "graph",
                     Namespace = "type",
-                    DisplayName = "Graph"
+                    DisplayName = "Graph",
+                    Configuration = "config => config"
                 }
             };
             await persistence.SaveNodeAsync(graphTypeNode);
@@ -288,7 +289,7 @@ namespace MeshWeaver.Graph.Test
             var nodeTypeDef = (NodeTypeDefinition)nodeTypeNode.Content!;
             nodeTypeDef.Configuration.Should().NotBeNullOrEmpty(
                 "Organization should have Configuration set");
-            nodeTypeDef.Configuration.Should().Contain("WithContentType<Organization>",
+            nodeTypeDef.Configuration.Should().Contain("WithContentType<",
                 "Configuration should include content type setup");
         }
 

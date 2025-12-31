@@ -10,7 +10,7 @@
     "id": "David",
     "name": "David Kim",
     "email": "david.kim@example.com",
-    "avatar": "/static/Person/avatars/david.svg",
+    "avatar": "/static/David/avatars/avatar.svg",
     "bio": "DevOps engineer specializing in CI/CD pipelines and cloud infrastructure.",
     "role": "DevOps Engineer",
     "iconName": "Person"

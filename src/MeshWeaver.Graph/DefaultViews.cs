@@ -17,10 +17,9 @@ public static class DefaultViews
     public const string EditArea = "Edit";
 
     /// <summary>
-    /// Adds the default views (Details, Edit) to the hub's layout.
-    /// Details is set as the default area for empty path requests.
+    /// Adds the Edit view to the hub's layout.
     /// </summary>
-    public static MessageHubConfiguration AddDefaultViews(this MessageHubConfiguration configuration)
+    public static MessageHubConfiguration AddEditView(this MessageHubConfiguration configuration)
         => configuration.AddLayout(layout => layout
             .WithView(EditArea, Edit));
 
