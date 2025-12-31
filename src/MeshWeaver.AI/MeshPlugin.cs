@@ -1,4 +1,4 @@
-﻿using System.ComponentModel;
+using System.ComponentModel;
 using System.Text.Json;
 using MeshWeaver.Data;
 using MeshWeaver.Layout;
@@ -12,13 +12,16 @@ using Microsoft.Extensions.Logging;
 namespace MeshWeaver.AI;
 
 /// <summary>
-/// Plugin providing mesh node operations for AI agents.
-/// Supports @ prefix shorthand for unified references (e.g., @graph/org1 -> graph/org1).
+/// Simplified plugin providing mesh operations for AI agents.
+/// Uses unified paths with GetDataRequest/DataChangeRequest.
+/// Supports @ prefix shorthand (e.g., @graph/org1 -> graph/org1).
 /// </summary>
 public class MeshPlugin(IMessageHub hub, IAgentChat chat)
 {
     private readonly ILogger<MeshPlugin> logger = hub.ServiceProvider.GetRequiredService<ILogger<MeshPlugin>>();
-    private readonly IMeshCatalog? meshCatalog = hub.ServiceProvider.GetService<IMeshCatalog>();
+    private readonly IPersistenceService? persistence = hub.ServiceProvider.GetService<IMeshCatalog>()?.Persistence;
+
+    private const string NodesArea = "_Nodes";
 
     /// <summary>
     /// Resolves @ prefix to full path. Example: @graph/org1 -> graph/org1
@@ -30,241 +33,120 @@ public class MeshPlugin(IMessageHub hub, IAgentChat chat)
         return path;
     }
 
-    [Description("Gets a node by its path. Use @ prefix for shorthand (e.g., @graph/org1).")]
-    public async Task<string> GetNode(
-        [Description("Path to the node (e.g., @graph/org1 or graph/org1)")] string path)
+    [Description("Gets data from the mesh by path. Returns JSON. " +
+                 "Use @ prefix for shorthand (e.g., @graph/org1). " +
+                 "Add /* suffix to get children (e.g., @graph/*).")]
+    public async Task<string> Get(
+        [Description("Path to data (e.g., @graph/org1, @pricing/MS-2024, @NodeType/*)")] string path)
     {
-        logger.LogInformation("GetNode called with path={Path}", path);
+        logger.LogInformation("Get called with path={Path}", path);
 
-        if (meshCatalog?.Persistence == null)
-            return "Mesh catalog not available.";
+        if (persistence == null)
+            return "Persistence service not available.";
 
         var resolvedPath = ResolvePath(path);
-        var node = await meshCatalog.Persistence.GetNodeAsync(resolvedPath);
-
-        if (node == null)
-            return $"Node not found at path: {resolvedPath}";
-
-        return JsonSerializer.Serialize(node, hub.JsonSerializerOptions);
-    }
-
-    [Description("Lists child nodes under a parent path. Use @ prefix for shorthand.")]
-    public async Task<string> GetChildren(
-        [Description("Parent path (e.g., @graph or graph). Empty for root.")] string? parentPath = null)
-    {
-        logger.LogInformation("GetChildren called with parentPath={ParentPath}", parentPath);
-
-        if (meshCatalog?.Persistence == null)
-            return "Mesh catalog not available.";
-
-        var resolvedPath = parentPath != null ? ResolvePath(parentPath) : null;
-        var result = new List<object>();
-        await foreach (var n in meshCatalog.Persistence.GetChildrenAsync(resolvedPath))
-        {
-            result.Add(new
-            {
-                n.Path,
-                n.Name,
-                n.NodeType,
-                n.Description
-            });
-        }
-
-        return JsonSerializer.Serialize(result, hub.JsonSerializerOptions);
-    }
-
-    [Description("Lists all available node types that can be used when creating nodes. " +
-                 "Each node type has an associated data schema that defines the Content structure.")]
-    public async Task<string> GetNodeTypes()
-    {
-        logger.LogInformation("GetNodeTypes called");
-
-        if (meshCatalog?.Persistence == null)
-            return "Mesh catalog not available.";
-
-        // Query children of "Type" path to get all NodeType definitions
-        var nodeTypes = new List<object>();
-        await foreach (var node in meshCatalog.Persistence.GetChildrenAsync(MeshNode.NodeTypePath))
-        {
-            nodeTypes.Add(new
-            {
-                NodeType = node.Path,
-                DisplayName = node.Name,
-                node.Description,
-                node.IconName
-            });
-        }
-
-        return JsonSerializer.Serialize(nodeTypes, hub.JsonSerializerOptions);
-    }
-
-    [Description("Gets the JSON schema for a node type's Content structure. " +
-                 "Use this to understand what fields are required when creating or updating nodes of this type.")]
-    public async Task<string> GetSchema(
-        [Description("The node type to get the schema for (from GetNodeTypes)")] string nodeType)
-    {
-        logger.LogInformation("GetSchema called with nodeType={NodeType}", nodeType);
-
-        if (meshCatalog?.Persistence == null)
-            return "Mesh catalog not available.";
-
-        // Check if NodeType exists in persistence
-        var nodeTypeNode = await meshCatalog.Persistence.GetNodeAsync(nodeType);
-        if (nodeTypeNode == null)
-        {
-            var availableTypes = new List<string>();
-            await foreach (var n in meshCatalog.Persistence.GetChildrenAsync(MeshNode.NodeTypePath))
-                availableTypes.Add(n.Path);
-            return $"Unknown node type: {nodeType}. Available types: {string.Join(", ", availableTypes)}";
-        }
 
         try
         {
-            // Get schema using the NodeType path via schema reference
-            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-            var response = await hub.AwaitResponse(
-                new GetDataRequest(new SchemaReference(nodeType)),
-                o => o.WithTarget(hub.Address),
-                cts.Token);
+            // Handle children query (path/*)
+            if (resolvedPath.EndsWith("/*"))
+            {
+                var parentPath = resolvedPath[..^2];
+                var result = new List<object>();
+                await foreach (var node in persistence.GetChildrenAsync(parentPath))
+                {
+                    result.Add(new
+                    {
+                        node.Path,
+                        node.Name,
+                        node.NodeType,
+                        node.Description,
+                        node.IconName
+                    });
+                }
+                return JsonSerializer.Serialize(result, hub.JsonSerializerOptions);
+            }
 
-            if (response.Message.Data is SchemaInfo schemaInfo)
-                return schemaInfo.Schema;
+            // Get single node
+            var meshNode = await persistence.GetNodeAsync(resolvedPath);
+            if (meshNode == null)
+                return $"Not found: {resolvedPath}";
 
-            return response.Message.Data?.ToString() ?? "{}";
-        }
-        catch (OperationCanceledException)
-        {
-            return "Operation was cancelled and could not be completed.";
+            return JsonSerializer.Serialize(meshNode, hub.JsonSerializerOptions);
         }
         catch (Exception ex)
         {
-            return $"Error getting schema for type {nodeType}: {ex.Message}";
+            logger.LogWarning(ex, "Error getting data at path {Path}", resolvedPath);
+            return $"Error: {ex.Message}";
         }
     }
 
-    [Description("Creates a new node at the specified path. " +
-                 "Use GetNodeTypes to see available types and GetSchema to get the Content structure for a type.")]
-    public async Task<string> CreateNode(
-        [Description("Full path for the new node (e.g., @graph/neworg)")] string path,
-        [Description("Display name for the node")] string name,
-        [Description("Type of the node - must be a valid type from GetNodeTypes")] string nodeType,
-        [Description("JSON content matching the schema for the node type (from GetSchema). " +
-                     "If not provided, a default content object will be created.")] string? contentJson = null,
-        [Description("Description of the node (markdown supported)")] string? description = null)
+    [Description("Updates or creates data at the specified path. " +
+                 "Provide a JSON object with the fields to update. " +
+                 "For nodes: {\"name\": \"...\", \"description\": \"...\", \"nodeType\": \"...\", \"content\": {...}}")]
+    public async Task<string> Update(
+        [Description("Path to update (e.g., @graph/neworg)")] string path,
+        [Description("JSON object with fields to update")] string json)
     {
-        logger.LogInformation("CreateNode called with path={Path}, name={Name}, nodeType={NodeType}", path, name, nodeType);
+        logger.LogInformation("Update called with path={Path}", path);
 
-        if (meshCatalog?.Persistence == null)
-            return "Mesh catalog not available.";
+        if (persistence == null)
+            return "Persistence service not available.";
 
         var resolvedPath = ResolvePath(path);
 
-        // Validate node type exists by checking persistence
-        var nodeTypeNode = await meshCatalog.Persistence.GetNodeAsync(nodeType);
-        if (nodeTypeNode == null)
+        try
         {
-            var availableTypes = new List<string>();
-            await foreach (var n in meshCatalog.Persistence.GetChildrenAsync(MeshNode.NodeTypePath))
-                availableTypes.Add(n.Path);
-            return $"Invalid node type: {nodeType}. Available types: {string.Join(", ", availableTypes)}. " +
-                   $"Use GetNodeTypes to see available types and GetSchema to get the Content structure.";
-        }
+            // Parse the update JSON
+            var updates = JsonSerializer.Deserialize<JsonElement>(json, hub.JsonSerializerOptions);
 
-        // Check if node already exists
-        if (await meshCatalog.Persistence.ExistsAsync(resolvedPath))
-            return $"Node already exists at path: {resolvedPath}";
+            // Get existing node or create new one
+            var existingNode = await persistence.GetNodeAsync(resolvedPath);
+            var isCreate = existingNode == null;
 
-        // Parse content if provided (use dynamic JSON deserialization)
-        object? content = null;
-        if (!string.IsNullOrWhiteSpace(contentJson))
-        {
-            try
+            // Build the node from updates
+            var node = MeshNode.FromPath(resolvedPath);
+
+            // Apply updates from JSON
+            string? name = null;
+            string? description = null;
+            string? nodeType = null;
+            object? content = null;
+
+            if (updates.TryGetProperty("name", out var nameProp))
+                name = nameProp.GetString();
+            if (updates.TryGetProperty("description", out var descProp))
+                description = descProp.GetString();
+            if (updates.TryGetProperty("nodeType", out var typeProp))
+                nodeType = typeProp.GetString();
+            if (updates.TryGetProperty("content", out var contentProp))
+                content = contentProp;
+
+            node = node with
             {
-                content = JsonSerializer.Deserialize<JsonElement>(contentJson, hub.JsonSerializerOptions);
-            }
-            catch (JsonException ex)
-            {
-                return $"Invalid JSON content: {ex.Message}. " +
-                       $"Please ensure the content matches the schema for type '{nodeType}'. " +
-                       $"Use GetSchema(\"{nodeType}\") to see the required structure.";
-            }
-        }
-        else
-        {
-            // Create default content with minimal required fields
-            content = new NodeDescription
-            {
-                Id = resolvedPath,
-                Description = description ?? string.Empty
+                Name = name ?? existingNode?.Name ?? node.Id,
+                Description = description ?? existingNode?.Description,
+                NodeType = nodeType ?? existingNode?.NodeType,
+                Content = content ?? existingNode?.Content
             };
+
+            await persistence.SaveNodeAsync(node);
+            return isCreate
+                ? $"Created: {resolvedPath}"
+                : $"Updated: {resolvedPath}";
         }
-
-        var node = new MeshNode(resolvedPath)
+        catch (JsonException ex)
         {
-            Name = name,
-            Description = description,
-            NodeType = nodeType,
-            Content = content
-        };
-
-        await meshCatalog.Persistence.SaveNodeAsync(node);
-        return $"Node created successfully at: {resolvedPath} with type: {nodeType}";
-    }
-
-    [Description("Updates an existing node at the specified path.")]
-    public async Task<string> UpdateNode(
-        [Description("Path to the node to update (e.g., @graph/org1)")] string path,
-        [Description("New display name (optional)")] string? name = null,
-        [Description("New description (optional, markdown supported)")] string? description = null,
-        [Description("New node type (optional)")] string? nodeType = null)
-    {
-        logger.LogInformation("UpdateNode called with path={Path}", path);
-
-        if (meshCatalog?.Persistence == null)
-            return "Mesh catalog not available.";
-
-        var resolvedPath = ResolvePath(path);
-        var existingNode = await meshCatalog.Persistence.GetNodeAsync(resolvedPath);
-
-        if (existingNode == null)
-            return $"Node not found at path: {resolvedPath}";
-
-        var updatedNode = existingNode with
+            return $"Invalid JSON: {ex.Message}";
+        }
+        catch (Exception ex)
         {
-            Name = name ?? existingNode.Name,
-            Description = description ?? existingNode.Description,
-            NodeType = nodeType ?? existingNode.NodeType,
-            Content = description != null
-                ? new NodeDescription { Id = resolvedPath, Description = description }
-                : existingNode.Content
-        };
-
-        await meshCatalog.Persistence.SaveNodeAsync(updatedNode);
-        return $"Node updated successfully at: {resolvedPath}";
+            logger.LogWarning(ex, "Error updating data at path {Path}", resolvedPath);
+            return $"Error: {ex.Message}";
+        }
     }
 
-    [Description("Deletes a node at the specified path.")]
-    public async Task<string> DeleteNode(
-        [Description("Path to the node to delete (e.g., @graph/org1)")] string path,
-        [Description("If true, also deletes all child nodes recursively")] bool recursive = false)
-    {
-        logger.LogInformation("DeleteNode called with path={Path}, recursive={Recursive}", path, recursive);
-
-        if (meshCatalog?.Persistence == null)
-            return "Mesh catalog not available.";
-
-        var resolvedPath = ResolvePath(path);
-
-        if (!await meshCatalog.Persistence.ExistsAsync(resolvedPath))
-            return $"Node not found at path: {resolvedPath}";
-
-        await meshCatalog.Persistence.DeleteNodeAsync(resolvedPath, recursive);
-        return $"Node deleted successfully at: {resolvedPath}" + (recursive ? " (including all children)" : "");
-    }
-
-    private const string NodesArea = "_Nodes";
-
-    [Description("Navigates to a node in the UI. Displays the node's tabbed view.")]
+    [Description("Navigates to a path in the UI. Displays the node's view.")]
     public string NavigateTo(
         [Description("Path to navigate to (e.g., @graph/org1)")] string path)
     {
@@ -278,90 +160,79 @@ public class MeshPlugin(IMessageHub hub, IAgentChat chat)
         return $"Navigating to: {resolvedPath}";
     }
 
-    [Description("Searches for nodes matching a query.")]
-    public async Task<string> SearchNodes(
-        [Description("Search query to match against name, description, or content")] string query,
-        [Description("Optional parent path to search under (e.g., @graph)")] string? parentPath = null)
+    [Description("Searches the mesh using RSQL query or text search. " +
+                 "RSQL examples: 'nodeType==Organization', 'name=like=*acme*', 'status==active;price=gt=100'. " +
+                 "Use $search=text for fuzzy search, $scope=descendants to include children.")]
+    public async Task<string> Search(
+        [Description("RSQL query or search text (e.g., 'nodeType==Agent', '$search=laptop')")] string query,
+        [Description("Base path to search from (e.g., @graph). Empty for all.")] string? basePath = null)
     {
-        logger.LogInformation("SearchNodes called with query={Query}, parentPath={ParentPath}", query, parentPath);
+        logger.LogInformation("Search called with query={Query}, basePath={BasePath}", query, basePath);
 
-        if (meshCatalog?.Persistence == null)
-            return "Mesh catalog not available.";
+        if (persistence == null)
+            return "Persistence service not available.";
 
-        var resolvedParent = parentPath != null ? ResolvePath(parentPath) : null;
-        var result = new List<object>();
-        await foreach (var n in meshCatalog.Persistence.SearchAsync(resolvedParent, query))
+        var resolvedBase = basePath != null ? ResolvePath(basePath) : "";
+
+        try
         {
-            result.Add(new
+            var results = new List<object>();
+            await foreach (var item in persistence.QueryAsync(query, resolvedBase))
             {
-                n.Path,
-                n.Name,
-                n.NodeType,
-                n.Description
-            });
+                if (item is MeshNode node)
+                {
+                    results.Add(new
+                    {
+                        node.Path,
+                        node.Name,
+                        node.NodeType,
+                        node.Description
+                    });
+                }
+                else
+                {
+                    results.Add(item);
+                }
+
+                if (results.Count >= 50)
+                    break; // Limit results
+            }
+
+            return JsonSerializer.Serialize(results, hub.JsonSerializerOptions);
         }
-
-        return JsonSerializer.Serialize(result, hub.JsonSerializerOptions);
-    }
-
-    #region Comments
-
-    [Description("Gets all comments for a node.")]
-    public async Task<string> GetComments(
-        [Description("Path to the node (e.g., @graph/org1)")] string path)
-    {
-        logger.LogInformation("GetComments called with path={Path}", path);
-
-        if (meshCatalog?.Persistence == null)
-            return "Mesh catalog not available.";
-
-        var resolvedPath = ResolvePath(path);
-        var comments = new List<Comment>();
-        await foreach (var comment in meshCatalog.Persistence.GetCommentsAsync(resolvedPath))
-            comments.Add(comment);
-
-        return JsonSerializer.Serialize(comments, hub.JsonSerializerOptions);
-    }
-
-    [Description("Adds a comment to a node.")]
-    public async Task<string> AddComment(
-        [Description("Path to the node (e.g., @graph/org1)")] string path,
-        [Description("Comment text (markdown supported)")] string text,
-        [Description("Author name (optional)")] string? author = null)
-    {
-        logger.LogInformation("AddComment called with path={Path}", path);
-
-        if (meshCatalog?.Persistence == null)
-            return "Mesh catalog not available.";
-
-        var resolvedPath = ResolvePath(path);
-
-        var comment = new Comment
+        catch (Exception ex)
         {
-            NodePath = resolvedPath,
-            Author = author ?? "AI Agent",
-            Text = text,
-            CreatedAt = DateTimeOffset.UtcNow
-        };
-
-        var saved = await meshCatalog.Persistence.AddCommentAsync(comment);
-        return $"Comment added successfully with ID: {saved.Id}";
+            logger.LogWarning(ex, "Error searching with query {Query}", query);
+            return $"Error: {ex.Message}";
+        }
     }
 
-    [Description("Deletes a comment by its ID.")]
-    public async Task<string> DeleteComment(
-        [Description("The comment ID to delete")] string commentId)
+    [Description("Deletes a node at the specified path.")]
+    public async Task<string> Delete(
+        [Description("Path to delete (e.g., @graph/org1)")] string path,
+        [Description("If true, also deletes all child nodes")] bool recursive = false)
     {
-        logger.LogInformation("DeleteComment called with commentId={CommentId}", commentId);
+        logger.LogInformation("Delete called with path={Path}, recursive={Recursive}", path, recursive);
 
-        if (meshCatalog?.Persistence == null)
-            return "Mesh catalog not available.";
+        if (persistence == null)
+            return "Persistence service not available.";
 
-        await meshCatalog.Persistence.DeleteCommentAsync(commentId);
-        return $"Comment deleted successfully: {commentId}";
+        var resolvedPath = ResolvePath(path);
+
+        try
+        {
+            if (!await persistence.ExistsAsync(resolvedPath))
+                return $"Not found: {resolvedPath}";
+
+            await persistence.DeleteNodeAsync(resolvedPath, recursive);
+            return $"Deleted: {resolvedPath}" + (recursive ? " (including children)" : "");
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Error deleting at path {Path}", resolvedPath);
+            return $"Error: {ex.Message}";
+        }
     }
-
-    #endregion
 
     /// <summary>
     /// Creates all tools for this plugin.
@@ -370,18 +241,11 @@ public class MeshPlugin(IMessageHub hub, IAgentChat chat)
     {
         return
         [
-            AIFunctionFactory.Create(GetNode),
-            AIFunctionFactory.Create(GetChildren),
-            AIFunctionFactory.Create(GetNodeTypes),
-            AIFunctionFactory.Create(GetSchema),
-            AIFunctionFactory.Create(CreateNode),
-            AIFunctionFactory.Create(UpdateNode),
-            AIFunctionFactory.Create(DeleteNode),
+            AIFunctionFactory.Create(Get),
+            AIFunctionFactory.Create(Update),
             AIFunctionFactory.Create(NavigateTo),
-            AIFunctionFactory.Create(SearchNodes),
-            AIFunctionFactory.Create(GetComments),
-            AIFunctionFactory.Create(AddComment),
-            AIFunctionFactory.Create(DeleteComment)
+            AIFunctionFactory.Create(Search),
+            AIFunctionFactory.Create(Delete)
         ];
     }
 }

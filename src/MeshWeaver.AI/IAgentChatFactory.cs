@@ -1,4 +1,5 @@
-﻿using MeshWeaver.AI.Persistence;
+using MeshWeaver.AI.Persistence;
+using MeshWeaver.Graph.Configuration;
 
 namespace MeshWeaver.AI;
 
@@ -29,7 +30,16 @@ public interface IAgentChatFactory
     /// </summary>
     Task<IAgentChat> CreateAsync(string modelName);
 
+    /// <summary>
+    /// Creates a chat using the specified model and context path for hierarchical agent resolution
+    /// </summary>
+    Task<IAgentChat> CreateAsync(string modelName, string? contextPath);
+
     Task DeleteThreadAsync(string threadId);
     Task<IAgentChat> ResumeAsync(ChatConversation messages);
-    Task<IReadOnlyDictionary<string, IAgentDefinition>> GetAgentsAsync();
+
+    /// <summary>
+    /// Gets available agents for the specified context path using hierarchical resolution
+    /// </summary>
+    Task<IReadOnlyList<AgentConfiguration>> GetAgentsAsync(string? contextPath = null);
 }

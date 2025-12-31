@@ -1,0 +1,16 @@
+{
+  "id": "ACME",
+  "name": "ACME Corporation",
+  "nodeType": "Organization",
+  "description": "ACME Corporation - A sample organization containing AI agents",
+  "iconName": "Building",
+  "displayOrder": 2,
+  "isPersistent": true,
+  "content": {
+    "id": "ACME",
+    "name": "ACME Corporation",
+    "description": "ACME Corporation - A sample organization containing AI agents",
+    "website": "https://acme.example.com",
+    "iconName": "Building"
+  }
+}

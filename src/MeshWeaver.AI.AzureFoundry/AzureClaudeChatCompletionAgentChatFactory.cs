@@ -1,3 +1,5 @@
+using MeshWeaver.AI.Services;
+using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -10,10 +12,10 @@ namespace MeshWeaver.AI.AzureFoundry;
 /// </summary>
 public class AzureClaudeChatCompletionAgentChatFactory(
     IMessageHub hub,
-    IEnumerable<IAgentDefinition> agentDefinitions,
+    IAgentResolver agentResolver,
     IOptions<AzureClaudeConfiguration> options,
     ILogger<AzureClaudeChatCompletionAgentChatFactory> logger)
-    : ChatCompletionAgentChatFactory(hub, agentDefinitions)
+    : ChatCompletionAgentChatFactory(hub, agentResolver)
 {
     private readonly AzureClaudeConfiguration configuration = options.Value ?? throw new ArgumentNullException(nameof(options));
 
@@ -23,7 +25,7 @@ public class AzureClaudeChatCompletionAgentChatFactory(
 
     public override int DisplayOrder => configuration.DisplayOrder;
 
-    protected override IChatClient CreateChatClient(IAgentDefinition agentDefinition)
+    protected override IChatClient CreateChatClient(AgentConfiguration agentConfig)
     {
         if (string.IsNullOrEmpty(configuration.Endpoint))
             throw new InvalidOperationException("Endpoint is required in AzureClaudeConfiguration");
@@ -31,14 +33,17 @@ public class AzureClaudeChatCompletionAgentChatFactory(
         if (string.IsNullOrEmpty(configuration.ApiKey))
             throw new InvalidOperationException("ApiKey is required in AzureClaudeConfiguration");
 
-        // Use CurrentModelName if set, otherwise fall back to first model
-        var modelName = !string.IsNullOrEmpty(CurrentModelName) ? CurrentModelName : configuration.Models.FirstOrDefault();
+        // Use CurrentModelName if set, fall back to agent's preferred model, otherwise use first configured model
+        var modelName = !string.IsNullOrEmpty(CurrentModelName) ? CurrentModelName
+            : !string.IsNullOrEmpty(agentConfig.PreferredModel) ? agentConfig.PreferredModel
+            : configuration.Models.FirstOrDefault();
+
         if (string.IsNullOrEmpty(modelName))
             throw new InvalidOperationException("At least one model must be configured in AzureClaudeConfiguration.Models");
 
         logger.LogInformation(
             "Creating Azure Claude chat client for agent {AgentName} using model {ModelName} at endpoint {Endpoint}",
-            agentDefinition.Name, modelName, configuration.Endpoint);
+            agentConfig.Id, modelName, configuration.Endpoint);
 
         try
         {
@@ -49,15 +54,15 @@ public class AzureClaudeChatCompletionAgentChatFactory(
 
             logger.LogInformation(
                 "Successfully configured Azure Claude chat client for agent {AgentName}",
-                agentDefinition.Name);
+                agentConfig.Id);
 
             return chatClient;
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "Failed to create Azure Claude chat client for agent {AgentName}", agentDefinition.Name);
+            logger.LogError(ex, "Failed to create Azure Claude chat client for agent {AgentName}", agentConfig.Id);
             throw new InvalidOperationException(
-                $"Failed to create Azure Claude chat client for agent {agentDefinition.Name}: {ex.Message}", ex);
+                $"Failed to create Azure Claude chat client for agent {agentConfig.Id}: {ex.Message}", ex);
         }
     }
 }

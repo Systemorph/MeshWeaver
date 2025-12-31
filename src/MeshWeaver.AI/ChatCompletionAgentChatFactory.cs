@@ -1,4 +1,6 @@
-﻿using MeshWeaver.Messaging;
+using MeshWeaver.AI.Services;
+using MeshWeaver.Graph.Configuration;
+using MeshWeaver.Messaging;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.Logging;
 
@@ -10,8 +12,8 @@ namespace MeshWeaver.AI;
 /// </summary>
 public abstract class ChatCompletionAgentChatFactory(
     IMessageHub hub,
-    IEnumerable<IAgentDefinition> agentDefinitions)
-    : AgentChatFactoryBase(hub, agentDefinitions)
+    IAgentResolver agentResolver)
+    : AgentChatFactoryBase(hub, agentResolver)
 {
     protected override Task<IEnumerable<ChatClientAgent>> GetExistingAgentsAsync()
     {
@@ -25,16 +27,6 @@ public abstract class ChatCompletionAgentChatFactory(
         return agent.Name!;
     }
 
-
-    protected override async Task UploadFileAsync(ChatClientAgent assistant, AgentFileInfo file)
-    {
-        // ChatClientAgent doesn't support file uploads in the same way as persistent assistants
-        // Files would need to be handled differently, potentially through the conversation context
-        // This is a no-op for now, but could be extended to handle file content in messages
-        await Task.CompletedTask;
-        Logger.LogInformation("File upload not directly supported for ChatClientAgent: {FileName}", file.FileName);
-    }
-
     public override async Task DeleteThreadAsync(string threadId)
     {
         // ChatCompletionAgent doesn't have persistent threads to delete
@@ -44,22 +36,27 @@ public abstract class ChatCompletionAgentChatFactory(
     }
 
     protected override Task<ChatClientAgent> CreateOrUpdateAgentAsync(
-        IAgentDefinition agentDefinition,
+        AgentConfiguration agentConfig,
         ChatClientAgent? existingAgent,
         IAgentChat chat,
         IReadOnlyDictionary<string, ChatClientAgent> allAgents)
     {
         // Since ChatClientAgent doesn't persist, we always create new agents
-        var name = agentDefinition.Name;
-        var description = agentDefinition.Description;
-        var instructions = GetAgentInstructions(agentDefinition);
+        var name = agentConfig.Id;
+        var description = agentConfig.Description ?? string.Empty;
+        var instructions = GetAgentInstructions(agentConfig);
 
         // Create a chat client for this agent using the derived class implementation
-        var chatClient = CreateChatClient(agentDefinition);
+        var chatClient = CreateChatClient(agentConfig);
 
         // Get tools for this agent, passing the chat instance so plugins can access context
-        // Method will filter delegation tools based on [DefaultAgent] attribute
-        var tools = GetToolsForAgent(agentDefinition, chat, allAgents).ToArray();
+        // Get standard tools + delegation tools
+        var tools = GetToolsForAgent(agentConfig, chat, allAgents).ToArray();
+
+        // Add MeshPlugin tools for agents that need mesh operations
+        // This replaces the IAgentWithTools pattern
+        var meshPlugin = new MeshPlugin(Hub, chat);
+        tools = tools.Concat(meshPlugin.CreateTools()).ToArray();
 
         // Create ChatClientAgent with all parameters
         var agent = new ChatClientAgent(
@@ -74,5 +71,4 @@ public abstract class ChatCompletionAgentChatFactory(
 
         return Task.FromResult(agent);
     }
-
 }

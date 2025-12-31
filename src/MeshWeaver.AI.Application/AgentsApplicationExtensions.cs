@@ -1,5 +1,6 @@
 using MeshWeaver.AI.Application.Layout;
 using MeshWeaver.AI.Completion;
+using MeshWeaver.AI.Services;
 using MeshWeaver.Data.Completion;
 using MeshWeaver.Mesh.Completion;
 using MeshWeaver.Mesh.Services;
@@ -28,8 +29,11 @@ public static class AgentsApplicationExtensions
                     var factoryProvider = sp.GetService<IAgentChatFactoryProvider>();
                     if (factoryProvider != null)
                         return new AgentAutocompleteProvider(factoryProvider);
-                    var agentDefinitions = sp.GetServices<IAgentDefinition>();
-                    return new AgentAutocompleteProvider(agentDefinitions);
+                    var agentResolver = sp.GetService<IAgentResolver>();
+                    if (agentResolver != null)
+                        return new AgentAutocompleteProvider(agentResolver);
+                    // Return an empty provider if neither is available
+                    return new EmptyAutocompleteProvider();
                 })
                 // Model provider - uses factory provider if available
                 .AddScoped<IAutocompleteProvider>(sp =>
@@ -74,5 +78,14 @@ public static class AgentsApplicationExtensions
         var response = new AutocompleteResponse(allItems);
         hub.Post(response, o => o.ResponseFor(request));
         return request.Processed();
+    }
+
+    /// <summary>
+    /// Empty provider when no agent source is available
+    /// </summary>
+    private class EmptyAutocompleteProvider : IAutocompleteProvider
+    {
+        public Task<IEnumerable<AutocompleteItem>> GetItemsAsync(string query, CancellationToken ct = default)
+            => Task.FromResult(Enumerable.Empty<AutocompleteItem>());
     }
 }

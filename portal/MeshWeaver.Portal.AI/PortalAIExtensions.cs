@@ -1,8 +1,4 @@
 using MeshWeaver.AI;
-using MeshWeaver.Documentation.AI;
-using MeshWeaver.Insurance.AI;
-using MeshWeaver.Northwind.AI;
-using MeshWeaver.Todo.AI;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.Portal.AI;
@@ -13,16 +9,13 @@ namespace MeshWeaver.Portal.AI;
 public static class PortalAIExtensions
 {
     /// <summary>
-    /// Adds Portal AI services including the MeshNavigator agent and Azure AI Foundry integration
+    /// Adds Portal AI services including the AgentResolver for graph-based agent resolution.
+    /// Agents are now loaded from the graph (MeshNode with nodeType="Agent") instead of DI.
     /// </summary>
     public static IServiceCollection AddPortalAI(this IServiceCollection services)
     {
-        return services
-            .AddSingleton<IAgentDefinition, MeshNavigator>()
-            .AddSingleton<IAgentDefinition, MeshAgent>()
-            .AddNorthwindAI()
-            .AddTodoAI()
-            .AddDocumentationAI()
-            .AddInsuranceAI();
+        // AgentResolver is registered in AddAgentChatFactoryProvider
+        // No individual agent registrations needed - agents come from the graph
+        return services;
     }
 }

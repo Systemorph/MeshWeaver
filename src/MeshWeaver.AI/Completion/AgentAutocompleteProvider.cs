@@ -1,41 +1,42 @@
 #nullable enable
 
+using MeshWeaver.AI.Services;
 using MeshWeaver.Data.Completion;
+using MeshWeaver.Graph.Configuration;
 
 namespace MeshWeaver.AI.Completion;
 
 /// <summary>
 /// Provides autocomplete items for agents.
-/// Gets agents from IAgentChatFactoryProvider when available, or IEnumerable&lt;IAgentDefinition&gt;.
+/// Gets agents from IAgentChatFactoryProvider or IAgentResolver.
 /// </summary>
 public class AgentAutocompleteProvider : IAutocompleteProvider
 {
     private readonly IAgentChatFactoryProvider? _factoryProvider;
-    private readonly IEnumerable<IAgentDefinition>? _agentDefinitions;
+    private readonly IAgentResolver? _agentResolver;
 
     public AgentAutocompleteProvider(IAgentChatFactoryProvider factoryProvider)
     {
         _factoryProvider = factoryProvider;
     }
 
-    public AgentAutocompleteProvider(IEnumerable<IAgentDefinition> agentDefinitions)
+    public AgentAutocompleteProvider(IAgentResolver agentResolver)
     {
-        _agentDefinitions = agentDefinitions;
+        _agentResolver = agentResolver;
     }
 
     /// <inheritdoc />
     public async Task<IEnumerable<AutocompleteItem>> GetItemsAsync(string query, CancellationToken ct = default)
     {
-        IEnumerable<IAgentDefinition> agents;
+        IReadOnlyList<AgentConfiguration> agents;
 
         if (_factoryProvider != null)
         {
-            var agentDict = await _factoryProvider.GetAgentsAsync();
-            agents = agentDict.Values;
+            agents = await _factoryProvider.GetAgentsAsync();
         }
-        else if (_agentDefinitions != null)
+        else if (_agentResolver != null)
         {
-            agents = _agentDefinitions;
+            agents = await _agentResolver.GetAgentsForContextAsync(null, ct);
         }
         else
         {
@@ -44,9 +45,9 @@ public class AgentAutocompleteProvider : IAutocompleteProvider
 
         var items = agents
             .Select(agent => new AutocompleteItem(
-                Label: $"@agent/{agent.Name}",
-                InsertText: $"@agent/{agent.Name} ",
-                Description: agent.Description,
+                Label: $"@agent/{agent.Id}",
+                InsertText: $"@agent/{agent.Id} ",
+                Description: agent.Description ?? string.Empty,
                 Category: agent.GroupName ?? "Agents",
                 Priority: agent.DisplayOrder,
                 Kind: AutocompleteKind.Agent

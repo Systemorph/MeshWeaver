@@ -1,3 +1,5 @@
+using MeshWeaver.Graph.Configuration;
+
 namespace MeshWeaver.AI;
 
 /// <summary>
@@ -62,13 +64,13 @@ public class AgentChatFactoryProvider : IAgentChatFactoryProvider
         return factory.CreateAsync();
     }
 
-    public async Task<IReadOnlyDictionary<string, IAgentDefinition>> GetAgentsAsync()
+    public async Task<IReadOnlyList<AgentConfiguration>> GetAgentsAsync(string? contextPath = null)
     {
-        // Get agents from the first factory (all factories share the same agent definitions)
+        // Get agents from the first factory (all factories share the same agent resolver)
         if (_factories.Count == 0)
-            return new Dictionary<string, IAgentDefinition>();
+            return new List<AgentConfiguration>();
 
-        return await _factories[0].GetAgentsAsync();
+        return await _factories[0].GetAgentsAsync(contextPath);
     }
 
     public string GetPreferredModelForAgent(string agentName)
@@ -89,55 +91,49 @@ public class AgentChatFactoryProvider : IAgentChatFactoryProvider
         _agentModelPreferences[agentName] = modelName;
     }
 
-    public async Task InitializeAgentPreferencesAsync()
+    public async Task InitializeAgentPreferencesAsync(string? contextPath = null)
     {
         if (_preferencesInitialized)
             return;
 
-        var agents = await GetAgentsAsync();
+        var agents = await GetAgentsAsync(contextPath);
         var defaultModel = _allModels.FirstOrDefault() ?? string.Empty;
 
-        foreach (var (agentName, agentDefinition) in agents)
+        foreach (var agentConfig in agents)
         {
-            if (agentDefinition is IAgentWithModelPreference preferenceAgent)
+            // Use PreferredModel from configuration if set and valid
+            if (!string.IsNullOrEmpty(agentConfig.PreferredModel) &&
+                _modelToFactory.ContainsKey(agentConfig.PreferredModel))
             {
-                var preferredModel = preferenceAgent.GetPreferredModel(_allModels);
-                if (!string.IsNullOrEmpty(preferredModel) && _modelToFactory.ContainsKey(preferredModel))
-                {
-                    _agentModelPreferences[agentName] = preferredModel;
-                }
-                else
-                {
-                    _agentModelPreferences[agentName] = defaultModel;
-                }
+                _agentModelPreferences[agentConfig.Id] = agentConfig.PreferredModel;
             }
             else
             {
                 // Default model for agents without preference
-                _agentModelPreferences[agentName] = defaultModel;
+                _agentModelPreferences[agentConfig.Id] = defaultModel;
             }
         }
 
         _preferencesInitialized = true;
     }
 
-    public async Task<IReadOnlyList<AgentDisplayInfo>> GetAgentsWithDisplayInfoAsync()
+    public async Task<IReadOnlyList<AgentDisplayInfo>> GetAgentsWithDisplayInfoAsync(string? contextPath = null)
     {
-        var agents = await GetAgentsAsync();
+        var agents = await GetAgentsAsync(contextPath);
         var indentLevels = CalculateIndentLevels(agents);
 
         // Build display info dictionary
-        var displayInfos = agents.Values
+        var displayInfos = agents
             .Select(a => new AgentDisplayInfo
             {
-                Name = a.Name,
-                Description = a.Description,
+                Name = a.Id,
+                Description = a.Description ?? string.Empty,
                 GroupName = a.GroupName,
                 DisplayOrder = a.DisplayOrder,
-                IndentLevel = indentLevels.GetValueOrDefault(a.Name, 0),
+                IndentLevel = indentLevels.GetValueOrDefault(a.Id, 0),
                 IconName = a.IconName,
                 CustomIconSvg = a.CustomIconSvg,
-                AgentDefinition = a
+                AgentConfiguration = a
             })
             .ToDictionary(a => a.Name);
 
@@ -150,19 +146,22 @@ public class AgentChatFactoryProvider : IAgentChatFactoryProvider
     /// Root agents are ordered by DisplayOrder, children appear indented below their parent.
     /// </summary>
     private List<AgentDisplayInfo> BuildHierarchicalOrder(
-        IReadOnlyDictionary<string, IAgentDefinition> agents,
+        IReadOnlyList<AgentConfiguration> agents,
         Dictionary<string, AgentDisplayInfo> displayInfos)
     {
         var result = new List<AgentDisplayInfo>();
         var visited = new HashSet<string>();
+        var agentsById = agents.ToDictionary(a => a.Id);
 
         // Find root agents (not delegated to by any other agent)
         var delegatedTo = new HashSet<string>();
-        foreach (var agent in agents.Values.OfType<IAgentWithHandoffs>())
+        foreach (var agent in agents.Where(a => a.Delegations is { Count: > 0 }))
         {
-            foreach (var delegation in agent.Delegations)
+            foreach (var delegation in agent.Delegations!)
             {
-                delegatedTo.Add(delegation.AgentName);
+                // Extract agent ID from path
+                var targetId = delegation.AgentPath.Split('/').Last();
+                delegatedTo.Add(targetId);
             }
         }
 
@@ -177,7 +176,7 @@ public class AgentChatFactoryProvider : IAgentChatFactoryProvider
         // Depth-first traversal from each root
         foreach (var root in rootAgents)
         {
-            AddAgentWithChildren(root.Name, agents, displayInfos, result, visited);
+            AddAgentWithChildren(root.Name, agentsById, displayInfos, result, visited);
         }
 
         // Add any remaining agents that weren't reachable (orphans)
@@ -198,7 +197,7 @@ public class AgentChatFactoryProvider : IAgentChatFactoryProvider
     /// </summary>
     private void AddAgentWithChildren(
         string agentName,
-        IReadOnlyDictionary<string, IAgentDefinition> agents,
+        Dictionary<string, AgentConfiguration> agents,
         Dictionary<string, AgentDisplayInfo> displayInfos,
         List<AgentDisplayInfo> result,
         HashSet<string> visited)
@@ -210,11 +209,12 @@ public class AgentChatFactoryProvider : IAgentChatFactoryProvider
         result.Add(agentInfo);
 
         // Add children (delegations) directly after parent
-        if (agents.TryGetValue(agentName, out var agent) && agent is IAgentWithHandoffs handoffs)
+        if (agents.TryGetValue(agentName, out var agent) && agent.Delegations is { Count: > 0 })
         {
-            var children = handoffs.Delegations
-                .Where(d => displayInfos.ContainsKey(d.AgentName))
-                .Select(d => displayInfos[d.AgentName])
+            var children = agent.Delegations
+                .Select(d => d.AgentPath.Split('/').Last())
+                .Where(id => displayInfos.ContainsKey(id))
+                .Select(id => displayInfos[id])
                 .OrderBy(c => c.DisplayOrder)
                 .ThenBy(c => c.Name)
                 .ToList();
@@ -243,26 +243,28 @@ public class AgentChatFactoryProvider : IAgentChatFactoryProvider
     /// Agents that are NOT delegated to by any other agent = indent 0 (root agents).
     /// Agents that ARE delegated to = indent based on depth.
     /// </summary>
-    private Dictionary<string, int> CalculateIndentLevels(IReadOnlyDictionary<string, IAgentDefinition> agents)
+    private Dictionary<string, int> CalculateIndentLevels(IReadOnlyList<AgentConfiguration> agents)
     {
         var indentLevels = new Dictionary<string, int>();
         var delegatedTo = new HashSet<string>();
+        var agentsById = agents.ToDictionary(a => a.Id);
 
         // Find all agents that are delegated to
-        foreach (var agent in agents.Values.OfType<IAgentWithHandoffs>())
+        foreach (var agent in agents.Where(a => a.Delegations is { Count: > 0 }))
         {
-            foreach (var delegation in agent.Delegations)
+            foreach (var delegation in agent.Delegations!)
             {
-                delegatedTo.Add(delegation.AgentName);
+                var targetId = delegation.AgentPath.Split('/').Last();
+                delegatedTo.Add(targetId);
             }
         }
 
         // Root agents (not delegated to) get indent 0
-        foreach (var agentName in agents.Keys)
+        foreach (var agent in agents)
         {
-            if (!delegatedTo.Contains(agentName))
+            if (!delegatedTo.Contains(agent.Id))
             {
-                indentLevels[agentName] = 0;
+                indentLevels[agent.Id] = 0;
             }
         }
 
@@ -277,26 +279,26 @@ public class AgentChatFactoryProvider : IAgentChatFactoryProvider
         {
             var (agentName, depth) = queue.Dequeue();
 
-            if (agents.TryGetValue(agentName, out var agent) && agent is IAgentWithHandoffs handoffs)
+            if (agentsById.TryGetValue(agentName, out var agent) && agent.Delegations is { Count: > 0 })
             {
-                foreach (var delegation in handoffs.Delegations)
+                foreach (var delegation in agent.Delegations)
                 {
-                    var childName = delegation.AgentName;
-                    if (!indentLevels.ContainsKey(childName) || indentLevels[childName] > depth + 1)
+                    var childId = delegation.AgentPath.Split('/').Last();
+                    if (!indentLevels.ContainsKey(childId) || indentLevels[childId] > depth + 1)
                     {
-                        indentLevels[childName] = depth + 1;
-                        queue.Enqueue((childName, depth + 1));
+                        indentLevels[childId] = depth + 1;
+                        queue.Enqueue((childId, depth + 1));
                     }
                 }
             }
         }
 
         // Any remaining agents without indent get 0
-        foreach (var agentName in agents.Keys)
+        foreach (var agent in agents)
         {
-            if (!indentLevels.ContainsKey(agentName))
+            if (!indentLevels.ContainsKey(agent.Id))
             {
-                indentLevels[agentName] = 0;
+                indentLevels[agent.Id] = 0;
             }
         }
 

@@ -1,8 +1,10 @@
-﻿using System.Runtime.CompilerServices;
+using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using MeshWeaver.AI.Persistence;
+using MeshWeaver.AI.Services;
+using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Layout;
 using MeshWeaver.Messaging;
 using MeshWeaver.ShortGuid;
@@ -15,7 +17,8 @@ using TextContent = Microsoft.Extensions.AI.TextContent;
 namespace MeshWeaver.AI;
 
 public class AgentChatClient(
-    IReadOnlyDictionary<string, IAgentDefinition> agentDefinitions,
+    IReadOnlyList<AgentConfiguration> agentConfigurations,
+    IAgentResolver agentResolver,
     IServiceProvider serviceProvider)
     : IAgentChat
 {
@@ -23,6 +26,7 @@ public class AgentChatClient(
     private readonly ILogger<AgentChatClient> logger = serviceProvider.GetRequiredService<ILogger<AgentChatClient>>();
     private readonly IChatPersistenceService persistenceService = serviceProvider.GetRequiredService<IChatPersistenceService>();
     private readonly Dictionary<string, AIAgent> agents = new();
+    private readonly Dictionary<string, AgentConfiguration> agentConfigsById = agentConfigurations.ToDictionary(a => a.Id);
     private readonly Queue<ChatLayoutAreaContent> queuedLayoutAreaContent = new();
     private string currentThreadId = Guid.NewGuid().AsString();
     private string? currentAgentName;
@@ -339,8 +343,8 @@ public class AgentChatClient(
     {
         logger.LogDebug("SelectAgent called. Current context: {Context}", Context != null ? $"Address={Context.Address}, LayoutArea={Context.LayoutArea?.Area}" : "null");
         logger.LogDebug("Available agents: {Agents}", string.Join(", ", agents.Keys));
-        logger.LogDebug("Agent definitions with IAgentWithContext: {AgentDefinitions}",
-            string.Join(", ", agentDefinitions.Values.OfType<IAgentWithContext>().Select(a => a.Name)));
+        logger.LogDebug("Agent configurations with ContextMatchPattern: {AgentConfigs}",
+            string.Join(", ", agentConfigurations.Where(a => !string.IsNullOrEmpty(a.ContextMatchPattern)).Select(a => a.Id)));
 
         // Check for explicit agent mention using @agent/Name format
         if (lastMessage != null)
@@ -376,28 +380,22 @@ public class AgentChatClient(
 
         if (shouldReselectAgent)
         {
-            // Try to find an agent that matches the context
+            // Try to find an agent that matches the context using ContextMatchPattern
             if (Context != null)
             {
-                var agentsWithContext = agentDefinitions.Values.OfType<IAgentWithContext>().ToList();
-                logger.LogDebug("Checking {Count} agents with context", agentsWithContext.Count);
+                var matchingAgents = agentResolver.FindMatchingAgentsAsync(Context, null).GetAwaiter().GetResult();
+                logger.LogDebug("Found {Count} agents matching context", matchingAgents.Count);
 
-                foreach (var agentDef in agentsWithContext)
+                foreach (var agentConfig in matchingAgents)
                 {
-                    var matches = agentDef.Matches(Context);
-                    logger.LogDebug("Agent {AgentName} matches context: {Matches}", agentDef.Name, matches);
-
-                    if (matches)
+                    if (agents.TryGetValue(agentConfig.Id, out var agent))
                     {
-                        if (agents.TryGetValue(agentDef.Name, out var agent))
-                        {
-                            logger.LogDebug("Selected agent by context match: {AgentName}", agentDef.Name);
-                            return agent;
-                        }
-                        else
-                        {
-                            logger.LogWarning("Agent {AgentName} matches context but not found in agents dictionary", agentDef.Name);
-                        }
+                        logger.LogDebug("Selected agent by context match: {AgentName}", agentConfig.Id);
+                        return agent;
+                    }
+                    else
+                    {
+                        logger.LogWarning("Agent {AgentName} matches context but not found in agents dictionary", agentConfig.Id);
                     }
                 }
 
@@ -412,13 +410,12 @@ public class AgentChatClient(
             return currentAgent;
         }
 
-        // Find default agent
-        var defaultAgentDefinition = agentDefinitions.Values
-            .FirstOrDefault(a => a.GetType().GetCustomAttributes(typeof(DefaultAgentAttribute), false).Any());
+        // Find default agent (using IsDefault property)
+        var defaultAgentConfig = agentConfigurations.FirstOrDefault(a => a.IsDefault);
 
-        if (defaultAgentDefinition != null && agents.TryGetValue(defaultAgentDefinition.Name, out var defaultAgent))
+        if (defaultAgentConfig != null && agents.TryGetValue(defaultAgentConfig.Id, out var defaultAgent))
         {
-            logger.LogDebug("Selected default agent: {AgentName}", defaultAgentDefinition.Name);
+            logger.LogDebug("Selected default agent: {AgentName}", defaultAgentConfig.Id);
             return defaultAgent;
         }
 

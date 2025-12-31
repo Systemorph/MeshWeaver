@@ -1,5 +1,7 @@
 using Azure;
 using Azure.AI.Inference;
+using MeshWeaver.AI.Services;
+using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -12,10 +14,10 @@ namespace MeshWeaver.AI.AzureFoundry;
 /// </summary>
 public class AzureFoundryChatCompletionAgentChatFactory(
     IMessageHub hub,
-    IEnumerable<IAgentDefinition> agentDefinitions,
+    IAgentResolver agentResolver,
     IOptions<AzureFoundryConfiguration> options,
     ILogger<AzureFoundryChatCompletionAgentChatFactory> logger)
-    : ChatCompletionAgentChatFactory(hub, agentDefinitions)
+    : ChatCompletionAgentChatFactory(hub, agentResolver)
 {
     private readonly AzureFoundryConfiguration configuration = options.Value ?? throw new ArgumentNullException(nameof(options));
 
@@ -25,7 +27,7 @@ public class AzureFoundryChatCompletionAgentChatFactory(
 
     public override int DisplayOrder => configuration.DisplayOrder;
 
-    protected override IChatClient CreateChatClient(IAgentDefinition agentDefinition)
+    protected override IChatClient CreateChatClient(AgentConfiguration agentConfig)
     {
         if (string.IsNullOrEmpty(configuration.Endpoint))
             throw new InvalidOperationException("Endpoint is required in AzureFoundryConfiguration");
@@ -33,14 +35,17 @@ public class AzureFoundryChatCompletionAgentChatFactory(
         if (string.IsNullOrEmpty(configuration.ApiKey))
             throw new InvalidOperationException("ApiKey is required in AzureFoundryConfiguration");
 
-        // Use CurrentModelName if set, otherwise fall back to first model
-        var modelName = !string.IsNullOrEmpty(CurrentModelName) ? CurrentModelName : configuration.Models.FirstOrDefault();
+        // Use CurrentModelName if set, fall back to agent's preferred model, otherwise use first configured model
+        var modelName = !string.IsNullOrEmpty(CurrentModelName) ? CurrentModelName
+            : !string.IsNullOrEmpty(agentConfig.PreferredModel) ? agentConfig.PreferredModel
+            : configuration.Models.FirstOrDefault();
+
         if (string.IsNullOrEmpty(modelName))
             throw new InvalidOperationException("At least one model must be configured in AzureFoundryConfiguration.Models");
 
         logger.LogInformation(
             "Creating Azure Foundry chat client for agent {AgentName} using model {ModelName}",
-            agentDefinition.Name, modelName);
+            agentConfig.Id, modelName);
 
         try
         {
@@ -52,15 +57,15 @@ public class AzureFoundryChatCompletionAgentChatFactory(
 
             logger.LogInformation(
                 "Successfully configured Azure Foundry chat client for agent {AgentName} with endpoint {Endpoint} and model {ModelName}",
-                agentDefinition.Name, configuration.Endpoint, modelName);
+                agentConfig.Id, configuration.Endpoint, modelName);
 
             return chatClient;
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "Failed to create Azure Foundry chat client for agent {AgentName}", agentDefinition.Name);
+            logger.LogError(ex, "Failed to create Azure Foundry chat client for agent {AgentName}", agentConfig.Id);
             throw new InvalidOperationException(
-                $"Failed to create Azure Foundry chat client for agent {agentDefinition.Name}: {ex.Message}", ex);
+                $"Failed to create Azure Foundry chat client for agent {agentConfig.Id}: {ex.Message}", ex);
         }
     }
 }

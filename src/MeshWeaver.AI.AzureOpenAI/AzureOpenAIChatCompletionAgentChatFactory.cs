@@ -1,6 +1,7 @@
-﻿using Azure;
+using Azure;
 using Azure.AI.OpenAI;
-using Azure.Core;
+using MeshWeaver.AI.Services;
+using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Options;
@@ -13,9 +14,9 @@ namespace MeshWeaver.AI.AzureOpenAI;
 /// </summary>
 public class AzureOpenAIChatCompletionAgentChatFactory(
     IMessageHub hub,
-    IEnumerable<IAgentDefinition> agentDefinitions,
+    IAgentResolver agentResolver,
     IOptions<AzureOpenAIConfiguration> options)
-    : ChatCompletionAgentChatFactory(hub, agentDefinitions)
+    : ChatCompletionAgentChatFactory(hub, agentResolver)
 {
     private readonly AzureOpenAIConfiguration credentials = options.Value ?? throw new ArgumentNullException(nameof(options));
 
@@ -25,7 +26,7 @@ public class AzureOpenAIChatCompletionAgentChatFactory(
 
     public override int DisplayOrder => credentials.DisplayOrder;
 
-    protected override IChatClient CreateChatClient(IAgentDefinition agentDefinition)
+    protected override IChatClient CreateChatClient(AgentConfiguration agentConfig)
     {
         // Validate credentials
         if (string.IsNullOrEmpty(credentials.Endpoint))
@@ -33,8 +34,11 @@ public class AzureOpenAIChatCompletionAgentChatFactory(
         if (string.IsNullOrEmpty(credentials.ApiKey))
             throw new InvalidOperationException("Azure OpenAI API key is required in AI configuration");
 
-        // Use CurrentModelName if set, otherwise fall back to first model
-        var modelName = !string.IsNullOrEmpty(CurrentModelName) ? CurrentModelName : credentials.Models.FirstOrDefault();
+        // Use CurrentModelName if set, fall back to agent's preferred model, otherwise use first configured model
+        var modelName = !string.IsNullOrEmpty(CurrentModelName) ? CurrentModelName
+            : !string.IsNullOrEmpty(agentConfig.PreferredModel) ? agentConfig.PreferredModel
+            : credentials.Models.FirstOrDefault();
+
         if (string.IsNullOrEmpty(modelName))
             throw new InvalidOperationException("No model configured for Azure OpenAI");
 

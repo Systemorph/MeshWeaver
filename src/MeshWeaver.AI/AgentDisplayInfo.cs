@@ -1,5 +1,7 @@
 #nullable enable
 
+using MeshWeaver.Graph.Configuration;
+
 namespace MeshWeaver.AI;
 
 /// <summary>
@@ -8,7 +10,7 @@ namespace MeshWeaver.AI;
 public record AgentDisplayInfo
 {
     /// <summary>
-    /// The agent name
+    /// The agent name (ID)
     /// </summary>
     public required string Name { get; init; }
 
@@ -43,7 +45,7 @@ public record AgentDisplayInfo
     public string? CustomIconSvg { get; init; }
 
     /// <summary>
-    /// Reference to the original agent definition
+    /// Reference to the agent configuration
     /// </summary>
-    public required IAgentDefinition AgentDefinition { get; init; }
+    public required AgentConfiguration AgentConfiguration { get; init; }
 }

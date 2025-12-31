@@ -14,6 +14,10 @@ namespace MeshWeaver.Graph.Configuration;
 public static class GraphConfigurationExtensions
 {
     /// <summary>
+    /// The NodeType value used to identify agent nodes.
+    /// </summary>
+    public const string AgentNodeType = "Agent";
+    /// <summary>
     /// Adds default views to a node type hub:
     /// - DefaultViews: Details (markdown property view), Edit (standard editor)
     /// - MeshNodeView: Thumbnail, Metadata, Settings, Comments
@@ -56,6 +60,20 @@ public static class GraphConfigurationExtensions
                         .AddNodeTypeView())
             });
 
+            // Register the built-in "Agent" MeshNode
+            // This provides HubConfiguration for nodes with nodeType="Agent" (AI agent configurations).
+            builder.AddMeshNodes(new MeshNode(AgentNodeType)
+            {
+                Name = "Agent",
+                Description = "AI Agent configuration",
+                IconName = "Bot",
+                HubConfiguration = Observable.Return<Func<MessageHubConfiguration, MessageHubConfiguration>?>(
+                    config => config
+                        .AddMeshDataSource(source => source
+                            .WithContentType<AgentConfiguration>())
+                        .AddAgentView())
+            });
+
             // Register services that don't need hub-level dependencies at the mesh level
             builder.ConfigureServices(services =>
             {
@@ -67,6 +85,8 @@ public static class GraphConfigurationExtensions
                 {
                     typeRegistry.WithType(typeof(NodeTypeDefinition), nameof(NodeTypeDefinition));
                     typeRegistry.WithType(typeof(CodeConfiguration), nameof(CodeConfiguration));
+                    typeRegistry.WithType(typeof(AgentConfiguration), nameof(AgentConfiguration));
+                    typeRegistry.WithType(typeof(AgentDelegation), nameof(AgentDelegation));
                 }
 
                 // Register compilation cache options

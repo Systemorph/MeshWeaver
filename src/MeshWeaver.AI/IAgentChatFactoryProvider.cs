@@ -1,3 +1,5 @@
+using MeshWeaver.Graph.Configuration;
+
 namespace MeshWeaver.AI;
 
 /// <summary>
@@ -31,14 +33,13 @@ public interface IAgentChatFactoryProvider
     Task<IAgentChat> CreateAsync();
 
     /// <summary>
-    /// Get all agent definitions (from all factories, deduplicated)
+    /// Get all agent configurations for the specified context path
     /// </summary>
-    Task<IReadOnlyDictionary<string, IAgentDefinition>> GetAgentsAsync();
+    Task<IReadOnlyList<AgentConfiguration>> GetAgentsAsync(string? contextPath = null);
 
     /// <summary>
     /// Gets the preferred model for a specific agent.
-    /// Returns the agent's preference if it implements IAgentWithModelPreference,
-    /// or the user-overridden preference, or the default model.
+    /// Returns the agent's PreferredModel if set, or the user-overridden preference, or the default model.
     /// </summary>
     string GetPreferredModelForAgent(string agentName);
 
@@ -54,14 +55,14 @@ public interface IAgentChatFactoryProvider
     IReadOnlyDictionary<string, string> AgentModelPreferences { get; }
 
     /// <summary>
-    /// Initialize agent preferences based on IAgentWithModelPreference implementations.
+    /// Initialize agent preferences based on AgentConfiguration.PreferredModel.
     /// Call this after agents are loaded.
     /// </summary>
-    Task InitializeAgentPreferencesAsync();
+    Task InitializeAgentPreferencesAsync(string? contextPath = null);
 
     /// <summary>
     /// Gets agents with display info including auto-calculated indent levels
-    /// based on IAgentWithHandoffs delegation hierarchy.
+    /// based on delegation hierarchy.
     /// </summary>
-    Task<IReadOnlyList<AgentDisplayInfo>> GetAgentsWithDisplayInfoAsync();
+    Task<IReadOnlyList<AgentDisplayInfo>> GetAgentsWithDisplayInfoAsync(string? contextPath = null);
 }
