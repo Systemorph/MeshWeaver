@@ -14,6 +14,7 @@ using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.JSInterop;
+using AgentConfiguration = MeshWeaver.Graph.Configuration.AgentConfiguration;
 using TextContent = Microsoft.Extensions.AI.TextContent;
 
 namespace MeshWeaver.Blazor.Chat;
@@ -208,7 +209,7 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
     }
 
     /// <summary>
-    /// Selects an agent based on the current context using IAgentWithContext.Matches().
+    /// Selects an agent based on the current context using ContextMatchPattern.
     /// </summary>
     private AgentDisplayInfo? SelectAgentByContext()
     {
@@ -216,10 +217,16 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
         if (context == null)
             return null;
 
-        // Find the first agent that matches the current context
+        // Find the first agent with a ContextMatchPattern that could match the context
         foreach (var agentInfo in agentDisplayInfos)
         {
-            if (agentInfo.AgentDefinition is IAgentWithContext contextAgent && contextAgent.Matches(context))
+            var pattern = agentInfo.AgentConfiguration.ContextMatchPattern;
+            if (string.IsNullOrEmpty(pattern))
+                continue;
+
+            // Simple pattern matching: check if address type matches the pattern
+            // Pattern examples: "address.type==pricing", "address=like=*Todo*"
+            if (MatchesContextPattern(pattern, context))
             {
                 Logger.LogDebug("Context-based agent selection: {AgentName} matches context {Context}",
                     agentInfo.Name, context.Address);
@@ -228,6 +235,29 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
         }
 
         return null;
+    }
+
+    /// <summary>
+    /// Simple RSQL-like pattern matching for context selection.
+    /// </summary>
+    private static bool MatchesContextPattern(string pattern, AgentContext context)
+    {
+        // Handle address.type==value patterns
+        if (pattern.StartsWith("address.type=="))
+        {
+            var expectedType = pattern["address.type==".Length..];
+            return context.Address?.Type?.Equals(expectedType, StringComparison.OrdinalIgnoreCase) == true;
+        }
+
+        // Handle address=like=*value* patterns
+        if (pattern.StartsWith("address=like="))
+        {
+            var likePattern = pattern["address=like=".Length..].Trim('*');
+            var addressString = context.Address?.ToString() ?? string.Empty;
+            return addressString.Contains(likePattern, StringComparison.OrdinalIgnoreCase);
+        }
+
+        return false;
     }
 
     private void OnAgentInfoChanged(AgentDisplayInfo? newAgentInfo)

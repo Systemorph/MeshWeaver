@@ -159,5 +159,6 @@
     <PackageVersion Include="xunit.runner.visualstudio" Version="3.1.5" />
     <PackageVersion Include="xunit.v3.runner.console" Version="3.2.0" />
     <PackageVersion Include="FluentAssertions" Version="8.8.0" />
+    <PackageVersion Include="NSubstitute" Version="5.3.0" />
   </ItemGroup>
 </Project>
