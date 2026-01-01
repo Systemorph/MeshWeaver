@@ -90,8 +90,8 @@ internal class MeshNodeCompilationService(
         var nodeName = cacheService.SanitizeNodeName(node.Path);
         var dllPath = cacheService.GetDllPath(nodeName);
 
-        // Check cache validity first
-        if (cacheService.IsCacheValid(nodeName, node.LastModified))
+        // Check cache validity first (only for disk cache)
+        if (cacheService.IsDiskCacheEnabled && cacheService.IsCacheValid(nodeName, node.LastModified))
         {
             logger.LogDebug("Using cached assembly for {NodePath}", node.Path);
             return dllPath;
@@ -141,17 +141,24 @@ internal class MeshNodeCompilationService(
             // Compile using CodeConfiguration, Configuration, and ContentCollections
             await CompileAsync(codeFile, configuration, contentCollections, node, ct);
 
-            // Return the DLL path if it exists
-            if (File.Exists(dllPath))
+            // For disk cache, return the DLL path if it exists
+            if (cacheService.IsDiskCacheEnabled)
             {
-                logger.LogInformation(
-                    "Compiled assembly for node {NodePath} at {DllPath}",
-                    node.Path, dllPath);
-                return dllPath;
+                if (File.Exists(dllPath))
+                {
+                    logger.LogInformation(
+                        "Compiled assembly for node {NodePath} at {DllPath}",
+                        node.Path, dllPath);
+                    return dllPath;
+                }
+
+                logger.LogWarning("Assembly compilation succeeded but DLL not found at {DllPath}", dllPath);
+                return null;
             }
 
-            logger.LogWarning("Assembly compilation succeeded but DLL not found at {DllPath}", dllPath);
-            return null;
+            // For in-memory cache, return a virtual path (assembly is already loaded)
+            logger.LogInformation("Compiled assembly for node {NodePath} (in-memory)", node.Path);
+            return $"memory://{nodeName}";
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -230,6 +237,7 @@ internal class MeshNodeCompilationService(
 
     /// <summary>
     /// Compiles CodeConfiguration into an assembly using Roslyn.
+    /// Supports both disk-based and in-memory compilation.
     /// </summary>
     private async Task CompileAsync(
         CodeConfiguration? codeFile,
@@ -242,22 +250,27 @@ internal class MeshNodeCompilationService(
 
         // Invalidate old cache and prepare for recompilation
         cacheService.InvalidateCache(nodeName);
-        cacheService.EnsureCacheDirectoryExists();
+
+        if (cacheService.IsDiskCacheEnabled)
+        {
+            cacheService.EnsureCacheDirectoryExists();
+        }
 
         ct.ThrowIfCancellationRequested();
 
         // Generate full source with MeshNodeAttribute (including content collections)
         var source = _attributeGenerator.GenerateAttributeSource(node, codeFile, hubConfiguration, contentCollections);
 
-        // Write source file for debugging
+        // Write source file for debugging (only for disk cache)
         var sourcePath = cacheService.GetSourcePath(nodeName);
-        if (_cacheOptions.EnableSourceDebugging)
+        if (cacheService.IsDiskCacheEnabled && _cacheOptions.EnableSourceDebugging)
         {
             await File.WriteAllTextAsync(sourcePath, source, ct);
             logger.LogDebug("Wrote source file for debugging: {SourcePath}", sourcePath);
         }
 
-        logger.LogInformation("Compiling assembly for {NodeName}", nodeName);
+        logger.LogInformation("Compiling assembly for {NodeName} ({Mode})",
+            nodeName, cacheService.IsDiskCacheEnabled ? "disk" : "in-memory");
 
         // Parse with source path and encoding embedded (critical for PDB source linking)
         var sourceText = Microsoft.CodeAnalysis.Text.SourceText.From(source, System.Text.Encoding.UTF8);
@@ -265,7 +278,7 @@ internal class MeshNodeCompilationService(
         var syntaxTree = CSharpSyntaxTree.ParseText(
             sourceText,
             parseOptions,
-            path: _cacheOptions.EnableSourceDebugging ? sourcePath : "",
+            path: cacheService.IsDiskCacheEnabled && _cacheOptions.EnableSourceDebugging ? sourcePath : "",
             cancellationToken: ct);
 
         var assemblyName = $"DynamicNode_{nodeName}";
@@ -278,7 +291,25 @@ internal class MeshNodeCompilationService(
                 .WithOptimizationLevel(OptimizationLevel.Debug)
                 .WithPlatform(Platform.AnyCpu));
 
-        // Emit DLL, PDB, and XML documentation to disk
+        if (cacheService.IsDiskCacheEnabled)
+        {
+            // Emit to disk
+            await CompileToDiskAsync(compilation, nodeName, node.Path, ct);
+        }
+        else
+        {
+            // Emit to memory and load immediately
+            CompileToMemory(compilation, nodeName, node.Path, ct);
+        }
+
+        logger.LogInformation("Successfully compiled assembly for {NodePath}", node.Path);
+    }
+
+    /// <summary>
+    /// Compiles and emits assembly to disk.
+    /// </summary>
+    private async Task CompileToDiskAsync(CSharpCompilation compilation, string nodeName, string nodePath, CancellationToken ct)
+    {
         var dllPath = cacheService.GetDllPath(nodeName);
         var pdbPath = cacheService.GetPdbPath(nodeName);
         var xmlDocPath = cacheService.GetXmlDocPath(nodeName);
@@ -302,17 +333,46 @@ internal class MeshNodeCompilationService(
                 .Select(d => d.GetMessage())
                 .ToList();
 
-            var errorMessage = $"Compilation failed for '{node.Path}':\n{string.Join('\n', errors)}";
+            var errorMessage = $"Compilation failed for '{nodePath}':\n{string.Join('\n', errors)}";
             logger.LogError("{ErrorMessage}", errorMessage);
-            throw new CompilationException(node.Path, errorMessage);
+            throw new CompilationException(nodePath, errorMessage);
         }
 
         // Close streams before loading
         await dllStream.DisposeAsync();
         await pdbStream.DisposeAsync();
         await xmlDocStream.DisposeAsync();
+    }
 
-        logger.LogInformation("Successfully compiled assembly for {NodePath} at {DllPath}", node.Path, dllPath);
+    /// <summary>
+    /// Compiles and loads assembly directly to memory (no disk I/O).
+    /// </summary>
+    private void CompileToMemory(CSharpCompilation compilation, string nodeName, string nodePath, CancellationToken ct)
+    {
+        using var dllStream = new MemoryStream();
+        using var pdbStream = new MemoryStream();
+
+        var emitOptions = new EmitOptions(
+            debugInformationFormat: DebugInformationFormat.PortablePdb);
+
+        var emitResult = compilation.Emit(dllStream, pdbStream, options: emitOptions, cancellationToken: ct);
+
+        if (!emitResult.Success)
+        {
+            var errors = emitResult.Diagnostics
+                .Where(d => d.Severity == DiagnosticSeverity.Error)
+                .Select(d => d.GetMessage())
+                .ToList();
+
+            var errorMessage = $"Compilation failed for '{nodePath}':\n{string.Join('\n', errors)}";
+            logger.LogError("{ErrorMessage}", errorMessage);
+            throw new CompilationException(nodePath, errorMessage);
+        }
+
+        // Load assembly from bytes immediately
+        var assemblyBytes = dllStream.ToArray();
+        var pdbBytes = pdbStream.ToArray();
+        cacheService.LoadAssemblyFromBytes(nodeName, assemblyBytes, pdbBytes);
     }
 }
 

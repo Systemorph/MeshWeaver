@@ -12,14 +12,22 @@ public class CompilationCacheOptions
     public string CacheDirectory { get; set; } = ".mesh-cache";
 
     /// <summary>
-    /// Enable compilation caching to disk. If false, compiles in-memory only (no caching).
+    /// Enable compilation caching. If false, recompiles on every request (but still caches in-memory).
     /// Default: true
     /// </summary>
     public bool EnableCompilationCache { get; set; } = true;
 
     /// <summary>
+    /// Enable disk-based caching of compiled assemblies. If false, compiles to memory only
+    /// (no files written to disk). Useful for tests to avoid file locking issues.
+    /// Default: true
+    /// </summary>
+    public bool EnableDiskCache { get; set; } = true;
+
+    /// <summary>
     /// Write .cs source files alongside DLLs for debugger source linking.
     /// When true, the debugger can step into dynamically compiled code.
+    /// Only applies when EnableDiskCache is true.
     /// Default: true
     /// </summary>
     public bool EnableSourceDebugging { get; set; } = true;

@@ -1,21 +1,21 @@
 {
   "id": "Project",
-  "namespace": "Systemorph/Type",
+  "namespace": "ACME/Type",
   "name": "Project",
   "nodeType": "NodeType",
-  "description": "A project containing stories",
+  "description": "A project containing todos and tasks",
   "iconName": "Folder",
   "displayOrder": 20,
   "isPersistent": true,
   "content": {
     "$type": "NodeTypeDefinition",
     "id": "Project",
-    "namespace": "Systemorph/Type",
+    "namespace": "ACME/Type",
     "displayName": "Project",
     "iconName": "Folder",
-    "description": "A project containing stories",
+    "description": "A project containing todos and tasks",
     "displayOrder": 20,
     "configuration": "config => config.WithContentType<Project>().AddNodeTypeView()",
-    "childrenQuery": "$source=activity;nodeType==Systemorph/Type/Project;$orderBy=lastAccessedAt:desc;$limit=20"
+    "childrenQuery": "$source=activity;nodeType==ACME/Type/Project;$orderBy=lastAccessedAt:desc;$limit=20"
   }
 }

@@ -1,0 +1,21 @@
+{
+  "id": "Todo4",
+  "namespace": "ACME/TodoProject/Todo",
+  "name": "Mobile app bug fixes",
+  "nodeType": "ACME/Type/Project/Todo",
+  "description": "Fix critical bugs reported in the latest mobile app release",
+  "iconName": "CheckmarkSquare",
+  "displayOrder": 4,
+  "isPersistent": true,
+  "content": {
+    "id": "Todo4",
+    "title": "Mobile app bug fixes",
+    "description": "Fix critical bugs reported in the latest mobile app release",
+    "category": "Work",
+    "responsiblePerson": "Unassigned",
+    "dueDate": "2025-12-31T00:00:00Z",
+    "status": "Pending",
+    "iconName": "CheckmarkSquare",
+    "createdAt": "2025-12-27T00:00:00Z"
+  }
+}

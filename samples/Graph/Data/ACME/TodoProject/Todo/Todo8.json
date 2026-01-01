@@ -1,0 +1,21 @@
+{
+  "id": "Todo8",
+  "namespace": "ACME/TodoProject/Todo",
+  "name": "Database migration script",
+  "nodeType": "ACME/Type/Project/Todo",
+  "description": "Write and test migration scripts for the new user preferences table",
+  "iconName": "CheckmarkSquare",
+  "displayOrder": 8,
+  "isPersistent": true,
+  "content": {
+    "id": "Todo8",
+    "title": "Database migration script",
+    "description": "Write and test migration scripts for the new user preferences table",
+    "category": "Work",
+    "responsiblePerson": "Unassigned",
+    "dueDate": "2026-01-02T00:00:00Z",
+    "status": "Pending",
+    "iconName": "CheckmarkSquare",
+    "createdAt": "2025-12-30T00:00:00Z"
+  }
+}

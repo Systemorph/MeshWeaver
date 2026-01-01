@@ -52,16 +52,18 @@ internal class DynamicMeshNodeAttributeGenerator
         sb.AppendLine("using MeshWeaver.ContentCollections;");
         sb.AppendLine("using Microsoft.Extensions.DependencyInjection;");
         sb.AppendLine("using Microsoft.Extensions.Configuration;");
+        sb.AppendLine("using Code;");
         sb.AppendLine();
 
         // Assembly attribute - MUST come before any namespace declarations
         sb.AppendLine($"[assembly: MeshWeaver.Graph.Generated.{safeClassName}MeshNode]");
         sb.AppendLine();
 
-        // User code in Dynamic namespace (if any)
+        // User code in Code namespace (block-scoped)
+        // Note: Global namespace causes Roslyn emit bugs, so we use a minimal namespace
         if (hasCode)
         {
-            sb.AppendLine("namespace MeshWeaver.Graph.Dynamic");
+            sb.AppendLine("namespace Code");
             sb.AppendLine("{");
             var indentedCode = IndentCode(code!, "    ");
             sb.AppendLine(indentedCode);

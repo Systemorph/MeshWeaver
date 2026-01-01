@@ -15,7 +15,7 @@
     "iconName": "DocumentText",
     "description": "A content article with YAML frontmatter",
     "displayOrder": 35,
-    "configuration": "config => config.WithContentType<MeshWeaver.Graph.Dynamic.Article>().AddNodeTypeView()",
+    "configuration": "config => config.WithContentType<Article>().AddNodeTypeView()",
     "childrenQuery": "$source=activity;nodeType==Type/Article;$orderBy=lastAccessedAt:desc;$limit=20"
   }
 }

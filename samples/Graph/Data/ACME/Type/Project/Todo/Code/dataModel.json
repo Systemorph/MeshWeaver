@@ -1,0 +1,4 @@
+{
+  "$type": "CodeConfiguration",
+  "code": "public record Todo\n{\n    [Key]\n    public string Id { get; init; } = string.Empty;\n\n    [Required]\n    public string Title { get; init; } = string.Empty;\n\n    public string? Description { get; init; }\n\n    public string Category { get; init; } = \"General\";\n\n    public string? ResponsiblePerson { get; init; }\n\n    public DateTimeOffset? DueDate { get; init; }\n\n    public TodoStatus Status { get; init; } = TodoStatus.Pending;\n\n    public string IconName { get; init; } = \"CheckmarkSquare\";\n\n    public DateTimeOffset CreatedAt { get; init; } = DateTimeOffset.UtcNow;\n\n    public DateTimeOffset? UpdatedAt { get; init; }\n}\n\npublic enum TodoStatus\n{\n    Pending,\n    InProgress,\n    Completed,\n    Cancelled\n}"
+}

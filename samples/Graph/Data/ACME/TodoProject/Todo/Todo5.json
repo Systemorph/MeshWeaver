@@ -1,0 +1,22 @@
+{
+  "id": "Todo5",
+  "namespace": "ACME/TodoProject/Todo",
+  "name": "Code review: authentication module",
+  "nodeType": "ACME/Type/Project/Todo",
+  "description": "Review Jordan's implementation of two-factor authentication",
+  "iconName": "CheckmarkSquare",
+  "displayOrder": 5,
+  "isPersistent": true,
+  "content": {
+    "id": "Todo5",
+    "title": "Code review: authentication module",
+    "description": "Review Alice's implementation of two-factor authentication",
+    "category": "Work",
+    "responsiblePerson": "Roland",
+    "dueDate": "2026-01-05T00:00:00Z",
+    "status": "InProgress",
+    "iconName": "CheckmarkSquare",
+    "createdAt": "2025-12-30T00:00:00Z",
+    "updatedAt": "2025-12-31T00:00:00Z"
+  }
+}

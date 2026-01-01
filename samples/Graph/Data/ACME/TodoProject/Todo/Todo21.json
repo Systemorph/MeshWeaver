@@ -1,0 +1,21 @@
+{
+  "id": "Todo21",
+  "namespace": "ACME/TodoProject/Todo",
+  "name": "Team lunch coordination",
+  "nodeType": "ACME/Type/Project/Todo",
+  "description": "Organize monthly team lunch and book restaurant",
+  "iconName": "CheckmarkSquare",
+  "displayOrder": 21,
+  "isPersistent": true,
+  "content": {
+    "id": "Todo21",
+    "title": "Team lunch coordination",
+    "description": "Organize monthly team lunch and book restaurant",
+    "category": "Personal",
+    "responsiblePerson": "David",
+    "status": "Completed",
+    "iconName": "CheckmarkSquare",
+    "createdAt": "2025-12-19T00:00:00Z",
+    "updatedAt": "2025-12-23T00:00:00Z"
+  }
+}
