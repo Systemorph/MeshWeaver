@@ -1,0 +1,21 @@
+{
+  "id": "SalesTraining",
+  "namespace": "ACME/ProductLaunch/Todo",
+  "name": "Train sales team",
+  "nodeType": "ACME/Project/Todo",
+  "description": "Conduct product training sessions for sales reps",
+  "iconName": "PersonBoard",
+  "displayOrder": 18,
+  "isPersistent": true,
+  "content": {
+    "$type": "Todo",
+    "id": "SalesTraining",
+    "title": "Train sales team",
+    "description": "Run 3-hour training workshop covering product features, demo flow, objection handling, and competitive positioning. Provide battle cards and cheat sheets.",
+    "category": "Sales",
+    "priority": "High",
+    "assignee": "Roland",
+    "dueDate": "2025-03-08T00:00:00Z",
+    "status": "Pending"
+  }
+}

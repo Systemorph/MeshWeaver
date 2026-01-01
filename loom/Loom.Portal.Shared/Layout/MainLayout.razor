@@ -12,10 +12,11 @@
         </FluentAnchor>
     </text>;
 
-    DesktopNavMenu = @<LoomDesktopNavMenu />;
+    // No DesktopNavMenu - we want a simpler layout without the nav bar
+    DesktopNavMenu = null;
 
-    MobileNavMenu = @<LoomMobileNavMenu IsNavMenuOpen="@IsNavMenuOpen" CloseNavMenu="@CloseMobileNavMenu"
-        LaunchSettingsAsync="@OpenSiteSettingsAsync" />;
+    // No MobileNavMenu either for now
+    MobileNavMenu = null;
 }
 
 @{

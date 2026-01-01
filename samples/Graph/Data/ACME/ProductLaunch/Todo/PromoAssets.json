@@ -1,0 +1,21 @@
+{
+  "id": "PromoAssets",
+  "namespace": "ACME/ProductLaunch/Todo",
+  "name": "Design promotional assets",
+  "nodeType": "ACME/Project/Todo",
+  "description": "Create graphics and visuals for marketing campaigns",
+  "iconName": "Image",
+  "displayOrder": 15,
+  "isPersistent": true,
+  "content": {
+    "$type": "Todo",
+    "id": "PromoAssets",
+    "title": "Design promotional assets",
+    "description": "Design banner ads, social media graphics, email headers, and product screenshots. Ensure consistent branding across all touchpoints.",
+    "category": "Design",
+    "priority": "Medium",
+    "assignee": "David",
+    "dueDate": "2025-03-03T00:00:00Z",
+    "status": "Pending"
+  }
+}

@@ -1,8 +1,6 @@
-using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using System.Reactive.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
 using FluentAssertions;
@@ -21,22 +19,14 @@ using Xunit;
 namespace MeshWeaver.Graph.Test;
 
 /// <summary>
-/// Tests for ContentCollection configuration via CollectionConfigReference.
-/// Uses the actual samples/Graph directory and its Person.json/Organization.json configurations.
-///
-/// The configuration uses MapContentCollection with hub address:
-/// - Person: MapContentCollection("avatars", "Graph:Storage", $"persons/{config.Address.Segments.Last()}")
-/// - Organization: MapContentCollection("logos", "Graph:Storage", $"logos/{config.Address.Segments.Last()}")
-///
-/// This means collections are configured on INSTANCE hubs (Alice, ACME), not NodeType hubs (Person, Organization).
+/// Tests for the unified path format: addressType/addressId/collection/collectionName
+/// Verifies CollectionPathHandler and CollectionConfigReference resolution.
 /// </summary>
 [Collection("ContentCollectionTests")]
 public class ContentCollectionReferenceTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
-    // Use the actual samples/Graph directory
     private static string GetSamplesGraphPath()
     {
-        // Navigate from test project to samples/Graph
         var currentDir = Directory.GetCurrentDirectory();
         var solutionRoot = Path.GetFullPath(Path.Combine(currentDir, "..", "..", "..", "..", ".."));
         return Path.Combine(solutionRoot, "samples", "Graph");
@@ -46,14 +36,9 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
     {
         var graphPath = GetSamplesGraphPath();
         var dataDirectory = Path.Combine(graphPath, "Data");
-        var cacheDirectory = Path.Combine(Path.GetTempPath(), "MeshWeaverContentCollectionTests", Guid.NewGuid().ToString(), ".mesh-cache");
+        var cacheDirectory = Path.Combine(Path.GetTempPath(), "MeshWeaverContentCollectionTests", System.Guid.NewGuid().ToString(), ".mesh-cache");
         Directory.CreateDirectory(cacheDirectory);
 
-        Output.WriteLine($"Graph path: {graphPath}");
-        Output.WriteLine($"Data directory: {dataDirectory}");
-        Output.WriteLine($"Cache directory: {cacheDirectory}");
-
-        // Configure Graph:Storage to point to samples/Graph (parent of Data)
         var configuration = new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?>
             {
@@ -75,220 +60,164 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
     }
 
     /// <summary>
-    /// Test that Person NodeType hub can be initialized and responds to ping.
+    /// Tests that UnifiedPathRegistry correctly parses collection keyword paths.
+    /// Format: addressType/addressId/collection/collectionName
     /// </summary>
-    [Fact(Timeout = 30000)]
-    public async Task Person_NodeType_CanBeInitialized()
+    [Fact]
+    public void UnifiedPathRegistry_ParsesCollectionPath()
     {
-        var personAddress = new Address("Person");
+        var registry = new UnifiedPathRegistry();
+        registry.Register("collection", new CollectionPathHandler());
+        registry.Register("area", new AreaPathHandler());
 
-        var client = GetClient(c => c.AddData(data => data));
+        // Path format: addressType/addressId/keyword/remainingPath
+        var found = registry.TryResolve("Person/Alice/collection/avatars", out var address, out var reference);
 
-        // Initialize Person NodeType hub - this should compile Person.json's Configuration
-        var response = await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(personAddress),
-            TestContext.Current.CancellationToken);
-
-        response.Should().NotBeNull();
+        found.Should().BeTrue();
+        address.Should().NotBeNull();
+        address!.Type.Should().Be("Person");
+        address.Id.Should().Be("Alice");
+        reference.Should().BeOfType<CollectionConfigReference>();
+        var collectionRef = (CollectionConfigReference)reference!;
+        collectionRef.CollectionNames.Should().Contain("avatars");
     }
 
     /// <summary>
-    /// Test that a Person instance hub (Alice) can be initialized and responds to ping.
+    /// Tests that UnifiedPathRegistry handles multiple collection names (comma-separated).
     /// </summary>
-    [Fact(Timeout = 30000)]
-    public async Task Person_Instance_CanBeInitialized()
+    [Fact]
+    public void UnifiedPathRegistry_ParsesMultipleCollectionNames()
     {
-        var aliceAddress = new Address("Alice");
+        var registry = new UnifiedPathRegistry();
+        registry.Register("collection", new CollectionPathHandler());
+        registry.Register("area", new AreaPathHandler());
 
-        var client = GetClient(c => c.AddData(data => data));
+        var found = registry.TryResolve("Person/Alice/collection/avatars,photos", out var address, out var reference);
 
-        // Initialize Alice instance hub
-        var response = await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(aliceAddress),
-            TestContext.Current.CancellationToken);
-
-        response.Should().NotBeNull();
+        found.Should().BeTrue();
+        var collectionRef = reference.Should().BeOfType<CollectionConfigReference>().Subject;
+        collectionRef.CollectionNames.Should().HaveCount(2);
+        collectionRef.CollectionNames.Should().Contain("avatars");
+        collectionRef.CollectionNames.Should().Contain("photos");
     }
 
     /// <summary>
-    /// Test that the "collection:avatars" unified path can be resolved from a Person instance hub (Alice).
-    ///
-    /// Person.json has Configuration:
-    /// "config => config.WithContentType<Person>().AddNodeTypeView().MapContentCollection(\"avatars\", \"Graph:Storage\", $\"persons/{config.Address.Segments.Last()}\")"
-    ///
-    /// This test verifies the full integration:
-    /// 1. Alice.json is loaded from samples/Graph/Data
-    /// 2. Person's NodeTypeDefinition.Configuration is compiled and applied to Alice hub
-    /// 3. MapContentCollection registers the "avatars" collection pointing to persons/Alice
-    /// 4. The "collection:" unified reference resolver returns the collection config
+    /// Tests that UnifiedPathRegistry handles empty collection path (get all collections).
+    /// </summary>
+    [Fact]
+    public void UnifiedPathRegistry_ParsesEmptyCollectionPath()
+    {
+        var registry = new UnifiedPathRegistry();
+        registry.Register("collection", new CollectionPathHandler());
+        registry.Register("area", new AreaPathHandler());
+
+        var found = registry.TryResolve("Person/Alice/collection", out var address, out var reference);
+
+        found.Should().BeTrue();
+        var collectionRef = reference.Should().BeOfType<CollectionConfigReference>().Subject;
+        collectionRef.CollectionNames.Should().BeNullOrEmpty();
+    }
+
+    /// <summary>
+    /// Tests that GetDataRequest with CollectionConfigReference returns collection configurations
+    /// from a Person instance hub (Alice).
     /// </summary>
     [Fact(Timeout = 60000)]
-    public async Task Person_Instance_CollectionAvatars_ReturnsCollectionConfig()
+    public async Task GetDataRequest_WithCollectionConfigReference_ReturnsConfig()
     {
         var aliceAddress = new Address("Alice");
-
-        Output.WriteLine("Creating client...");
         var client = GetClient(c => c.AddData(data => data));
 
-        Output.WriteLine("Sending PingRequest to Alice hub...");
-        // Initialize Alice instance hub - this triggers compilation of Person.json's Configuration
-        var pingResponse = await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(aliceAddress),
-            TestContext.Current.CancellationToken);
-        pingResponse.Should().NotBeNull("Alice hub should respond to ping");
-        Output.WriteLine("Alice hub initialized successfully");
-
-        // Request the "avatars" collection configuration via GetDataRequest with UnifiedReference
-        Output.WriteLine("Requesting collection config via GetDataRequest with UnifiedReference...");
-        var response = await client.AwaitResponse(
-            new GetDataRequest(new UnifiedReference("collection:avatars")),
-            o => o.WithTarget(aliceAddress),
-            TestContext.Current.CancellationToken);
-
-        // Assert
-        response.Should().NotBeNull("Response should not be null");
-        Output.WriteLine($"Response received: {response.Message?.GetType().Name}");
-
-        response.Message.Should().NotBeNull("Response message should not be null");
-        response.Message.Data.Should().NotBeNull("Response data should not be null");
-
-        // Handle both direct type and JSON serialized response
-        IReadOnlyCollection<ContentCollectionConfig>? configs;
-        if (response.Message.Data is JsonElement jsonElement)
-        {
-            // Parse JSON manually to avoid Address deserialization issues
-            configs = jsonElement.EnumerateArray()
-                .Select(e => new ContentCollectionConfig
-                {
-                    Name = e.GetProperty("name").GetString() ?? "",
-                    SourceType = e.GetProperty("sourceType").GetString() ?? "",
-                    BasePath = e.GetProperty("basePath").GetString()
-                })
-                .ToArray();
-        }
-        else
-        {
-            configs = response.Message.Data as IReadOnlyCollection<ContentCollectionConfig>;
-        }
-
-        configs.Should().NotBeNull($"Data should be a collection of ContentCollectionConfig, but was {response.Message.Data?.GetType().FullName}");
-        Output.WriteLine($"Received {configs?.Count ?? 0} collection configs");
-
-        configs.Should().HaveCount(1, "Should have exactly one collection config for 'avatars'");
-
-        var avatarsConfig = configs!.First();
-        Output.WriteLine($"Avatars config: Name={avatarsConfig.Name}, SourceType={avatarsConfig.SourceType}, BasePath={avatarsConfig.BasePath}");
-
-        avatarsConfig.Name.Should().Be("avatars");
-        avatarsConfig.SourceType.Should().Be("FileSystem");
-        // BasePath should end with "persons/Alice" (forward slash as used in the config)
-        avatarsConfig.BasePath.Should().Contain("persons").And.EndWith("Alice");
-    }
-
-    /// <summary>
-    /// Test that GetDataRequest with empty CollectionConfigReference returns all collections from Alice hub.
-    /// </summary>
-    [Fact(Timeout = 60000)]
-    public async Task Person_Instance_GetAllCollectionConfigs_ReturnsAllCollections()
-    {
-        var aliceAddress = new Address("Alice");
-
-        var client = GetClient(c => c.AddData(data => data));
-
-        Output.WriteLine("Sending PingRequest to Alice hub...");
-        // Initialize Alice instance hub
+        // Initialize Alice hub
         await client.AwaitResponse(
             new PingRequest(),
             o => o.WithTarget(aliceAddress),
             TestContext.Current.CancellationToken);
-        Output.WriteLine("Alice hub initialized");
 
-        // Request all collection configurations (empty collection names)
-        Output.WriteLine("Requesting all collection configs...");
+        // Request the "avatars" collection configuration
+        var response = await client.AwaitResponse(
+            new GetDataRequest(new CollectionConfigReference(["avatars"])),
+            o => o.WithTarget(aliceAddress),
+            TestContext.Current.CancellationToken);
+
+        response.Should().NotBeNull();
+        response.Message.Should().NotBeNull();
+        response.Message.Data.Should().NotBeNull();
+
+        var configs = ParseCollectionConfigs(response.Message.Data);
+        configs.Should().NotBeNull();
+        configs.Should().HaveCount(1);
+
+        var avatarsConfig = configs!.First();
+        avatarsConfig.Name.Should().Be("avatars");
+        avatarsConfig.SourceType.Should().Be("FileSystem");
+        avatarsConfig.BasePath.Should().Contain("persons").And.EndWith("Alice");
+    }
+
+    /// <summary>
+    /// Tests that GetDataRequest with empty CollectionConfigReference returns all collections.
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task GetDataRequest_WithEmptyCollectionConfigReference_ReturnsAllCollections()
+    {
+        var aliceAddress = new Address("Alice");
+        var client = GetClient(c => c.AddData(data => data));
+
+        await client.AwaitResponse(
+            new PingRequest(),
+            o => o.WithTarget(aliceAddress),
+            TestContext.Current.CancellationToken);
+
         var response = await client.AwaitResponse(
             new GetDataRequest(new CollectionConfigReference()),
             o => o.WithTarget(aliceAddress),
             TestContext.Current.CancellationToken);
 
-        // Assert
         response.Should().NotBeNull();
         response.Message.Data.Should().NotBeNull();
 
-        // Handle both direct type and JSON serialized response
-        IReadOnlyCollection<ContentCollectionConfig>? configs;
-        if (response.Message.Data is JsonElement jsonElement)
-        {
-            // Parse JSON manually to avoid Address deserialization issues
-            configs = jsonElement.EnumerateArray()
-                .Select(e => new ContentCollectionConfig
-                {
-                    Name = e.GetProperty("name").GetString() ?? "",
-                    SourceType = e.GetProperty("sourceType").GetString() ?? "",
-                    BasePath = e.GetProperty("basePath").GetString()
-                })
-                .ToArray();
-        }
-        else
-        {
-            configs = response.Message.Data as IReadOnlyCollection<ContentCollectionConfig>;
-        }
-
-        configs.Should().NotBeNull($"Data should be a collection of ContentCollectionConfig, but was {response.Message.Data?.GetType().FullName}");
-        Output.WriteLine($"Received {configs?.Count ?? 0} collection configs");
-        foreach (var config in configs ?? [])
-        {
-            Output.WriteLine($"  - {config.Name}: {config.SourceType} at {config.BasePath}");
-        }
-
-        configs.Should().Contain(c => c.Name == "avatars", "Should contain avatars collection");
+        var configs = ParseCollectionConfigs(response.Message.Data);
+        configs.Should().NotBeNull();
+        configs.Should().Contain(c => c.Name == "avatars");
     }
 
     /// <summary>
-    /// Test that Organization instance hub's (ACME) "logos" collection is accessible.
-    ///
-    /// Organization.json has Configuration:
-    /// "config => config.WithContentType<Organization>().AddDefaultViews().MapContentCollection(\"logos\", \"Graph:Storage\", $\"logos/{config.Address.Segments.Last()}\")"
+    /// Tests that Organization instance hub's (ACME) collection is accessible via CollectionConfigReference.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public async Task Organization_Instance_CollectionLogos_ReturnsCollectionConfig()
+    public async Task GetDataRequest_WithCollectionConfigReference_ForOrganization_ReturnsConfig()
     {
         var acmeAddress = new Address("ACME");
-
         var client = GetClient(c => c.AddData(data => data));
 
-        Output.WriteLine("Sending PingRequest to ACME hub...");
-        // Initialize ACME instance hub
         await client.AwaitResponse(
             new PingRequest(),
             o => o.WithTarget(acmeAddress),
             TestContext.Current.CancellationToken);
-        Output.WriteLine("ACME hub initialized");
 
-        // Request the "logos" collection configuration
-        Output.WriteLine("Requesting logos collection config...");
         var response = await client.AwaitResponse(
             new GetDataRequest(new CollectionConfigReference(["logos"])),
             o => o.WithTarget(acmeAddress),
             TestContext.Current.CancellationToken);
 
-        // Assert
-        response.Should().NotBeNull("Response should not be null");
-        response.Message.Should().NotBeNull("Response message should not be null");
+        response.Should().NotBeNull();
+        response.Message.Data.Should().NotBeNull();
 
-        Output.WriteLine($"Response data type: {response.Message.Data?.GetType().FullName ?? "null"}");
-        Output.WriteLine($"Response data: {response.Message.Data}");
+        var configs = ParseCollectionConfigs(response.Message.Data);
+        configs.Should().NotBeNull();
+        configs.Should().HaveCount(1);
 
-        response.Message.Data.Should().NotBeNull("Response data should not be null");
+        var logosConfig = configs!.First();
+        logosConfig.Name.Should().Be("logos");
+        logosConfig.SourceType.Should().Be("FileSystem");
+        logosConfig.BasePath.Should().Contain("logos").And.EndWith("ACME");
+    }
 
-        // Handle both direct type and JSON serialized response
-        IReadOnlyCollection<ContentCollectionConfig>? configs;
-        if (response.Message.Data is JsonElement jsonElement)
+    private static IReadOnlyCollection<ContentCollectionConfig>? ParseCollectionConfigs(object? data)
+    {
+        if (data is JsonElement jsonElement)
         {
-            // Parse JSON manually to avoid Address deserialization issues
-            configs = jsonElement.EnumerateArray()
+            return jsonElement.EnumerateArray()
                 .Select(e => new ContentCollectionConfig
                 {
                     Name = e.GetProperty("name").GetString() ?? "",
@@ -297,22 +226,6 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
                 })
                 .ToArray();
         }
-        else
-        {
-            configs = response.Message.Data as IReadOnlyCollection<ContentCollectionConfig>;
-        }
-
-        configs.Should().NotBeNull($"Data should be a collection of ContentCollectionConfig, but was {response.Message.Data?.GetType().FullName}");
-        Output.WriteLine($"Received {configs?.Count ?? 0} collection configs");
-
-        configs.Should().HaveCount(1, "Should have exactly one collection config for 'logos'");
-
-        var logosConfig = configs!.First();
-        Output.WriteLine($"Logos config: Name={logosConfig.Name}, SourceType={logosConfig.SourceType}, BasePath={logosConfig.BasePath}");
-
-        logosConfig.Name.Should().Be("logos");
-        logosConfig.SourceType.Should().Be("FileSystem");
-        // BasePath should end with "logos/ACME" (forward slash as used in the config)
-        logosConfig.BasePath.Should().Contain("logos").And.EndWith("ACME");
+        return data as IReadOnlyCollection<ContentCollectionConfig>;
     }
 }

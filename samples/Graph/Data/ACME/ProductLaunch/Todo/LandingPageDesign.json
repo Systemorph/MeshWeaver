@@ -1,0 +1,21 @@
+{
+  "id": "LandingPageDesign",
+  "namespace": "ACME/ProductLaunch/Todo",
+  "name": "Design landing page wireframes",
+  "nodeType": "ACME/Project/Todo",
+  "description": "Create wireframes for the MeshFlow product landing page",
+  "iconName": "DesignIdeas",
+  "displayOrder": 4,
+  "isPersistent": true,
+  "content": {
+    "$type": "Todo",
+    "id": "LandingPageDesign",
+    "title": "Design landing page wireframes",
+    "description": "Design high-fidelity wireframes for meshflow.io landing page. Include hero section, feature highlights, pricing table, and demo request form.",
+    "category": "Design",
+    "priority": "High",
+    "assignee": "David",
+    "dueDate": "2025-02-01T00:00:00Z",
+    "status": "InProgress"
+  }
+}

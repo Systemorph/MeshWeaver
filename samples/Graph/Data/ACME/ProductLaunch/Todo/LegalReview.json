@@ -1,0 +1,21 @@
+{
+  "id": "LegalReview",
+  "namespace": "ACME/ProductLaunch/Todo",
+  "name": "Review legal compliance",
+  "nodeType": "ACME/Project/Todo",
+  "description": "Ensure all launch materials meet legal requirements",
+  "iconName": "Gavel",
+  "displayOrder": 16,
+  "isPersistent": true,
+  "content": {
+    "$type": "Todo",
+    "id": "LegalReview",
+    "title": "Review legal compliance",
+    "description": "Legal review of terms of service, privacy policy, GDPR compliance, and marketing claims. Obtain sign-off before public launch.",
+    "category": "Legal",
+    "priority": "Critical",
+    "assignee": "Emma",
+    "dueDate": "2025-03-05T00:00:00Z",
+    "status": "Pending"
+  }
+}

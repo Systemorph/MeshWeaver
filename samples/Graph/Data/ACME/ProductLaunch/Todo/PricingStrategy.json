@@ -1,0 +1,21 @@
+{
+  "id": "PricingStrategy",
+  "namespace": "ACME/ProductLaunch/Todo",
+  "name": "Develop pricing tiers",
+  "nodeType": "ACME/Project/Todo",
+  "description": "Define pricing strategy and tier structure for MeshFlow",
+  "iconName": "Money",
+  "displayOrder": 5,
+  "isPersistent": true,
+  "content": {
+    "$type": "Todo",
+    "id": "PricingStrategy",
+    "title": "Develop pricing tiers",
+    "description": "Create Starter, Professional, and Enterprise tiers. Model unit economics, analyze competitor pricing, and propose launch pricing with introductory discounts.",
+    "category": "Strategy",
+    "priority": "Critical",
+    "assignee": "Emma",
+    "dueDate": "2025-02-05T00:00:00Z",
+    "status": "Pending"
+  }
+}

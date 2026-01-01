@@ -1,0 +1,21 @@
+{
+  "id": "PositioningDoc",
+  "namespace": "ACME/ProductLaunch/Todo",
+  "name": "Create product positioning document",
+  "nodeType": "ACME/Project/Todo",
+  "description": "Define MeshFlow's unique value proposition and market positioning",
+  "iconName": "Document",
+  "displayOrder": 3,
+  "isPersistent": true,
+  "content": {
+    "$type": "Todo",
+    "id": "PositioningDoc",
+    "title": "Create product positioning document",
+    "description": "Draft the positioning statement, key messages, and differentiation points. Include the 'Enterprise-grade automation, startup-simple setup' tagline.",
+    "category": "Marketing",
+    "priority": "Critical",
+    "assignee": "Carol",
+    "dueDate": "2025-01-28T00:00:00Z",
+    "status": "InProgress"
+  }
+}

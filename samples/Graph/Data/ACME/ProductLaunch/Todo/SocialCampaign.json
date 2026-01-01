@@ -1,0 +1,21 @@
+{
+  "id": "SocialCampaign",
+  "namespace": "ACME/ProductLaunch/Todo",
+  "name": "Plan social media campaign",
+  "nodeType": "ACME/Project/Todo",
+  "description": "Create content calendar for LinkedIn and Twitter launch campaign",
+  "iconName": "Share",
+  "displayOrder": 12,
+  "isPersistent": true,
+  "content": {
+    "$type": "Todo",
+    "id": "SocialCampaign",
+    "title": "Plan social media campaign",
+    "description": "Develop 4-week social media content calendar. Focus on LinkedIn for B2B reach. Include teaser posts, launch announcement, customer testimonials, and feature spotlights.",
+    "category": "Marketing",
+    "priority": "Medium",
+    "assignee": "Carol",
+    "dueDate": "2025-02-25T00:00:00Z",
+    "status": "Pending"
+  }
+}

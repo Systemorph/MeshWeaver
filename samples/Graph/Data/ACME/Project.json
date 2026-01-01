@@ -1,0 +1,21 @@
+{
+  "id": "Project",
+  "namespace": "ACME",
+  "name": "Project",
+  "nodeType": "NodeType",
+  "description": "A project containing tasks and deliverables",
+  "iconName": "Folder",
+  "displayOrder": 20,
+  "isPersistent": true,
+  "content": {
+    "$type": "NodeTypeDefinition",
+    "id": "Project",
+    "namespace": "ACME",
+    "displayName": "Project",
+    "iconName": "Folder",
+    "description": "A project containing tasks and deliverables",
+    "displayOrder": 20,
+    "configuration": "config => config.WithContentType<Project>().AddNodeTypeView()",
+    "childrenQuery": "$source=activity;nodeType==ACME/Project;$orderBy=lastAccessedAt:desc;$limit=20"
+  }
+}

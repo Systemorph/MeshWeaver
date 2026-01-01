@@ -1,0 +1,19 @@
+{
+  "id": "ProductLaunch",
+  "namespace": "ACME",
+  "name": "MeshFlow Product Launch",
+  "nodeType": "ACME/Project",
+  "description": "Launch campaign for MeshFlow - our new workflow automation platform",
+  "iconName": "Rocket",
+  "displayOrder": 100,
+  "isPersistent": true,
+  "content": {
+    "$type": "Project",
+    "id": "ProductLaunch",
+    "name": "MeshFlow Product Launch",
+    "description": "Q1 launch campaign for MeshFlow, targeting mid-market enterprises seeking workflow automation solutions.",
+    "status": "Active",
+    "iconName": "Rocket",
+    "targetDate": "2025-03-15T00:00:00Z"
+  }
+}

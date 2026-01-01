@@ -798,8 +798,25 @@ public static class DataExtensions
             "data" => ResolveDataPath(hub, parsed.RemainingPath, isLocal),
             "area" => (ResolveAreaPath(parsed.RemainingPath), null),
             "content" => (ResolveContentPath(parsed.RemainingPath), null),
+            "collection" => (ResolveCollectionPath(parsed.RemainingPath), null),
+            "type" => (new NodeTypeReference(), null),
+            "schema" => (new SchemaReference(parsed.RemainingPath), null),
+            "model" => (new DataModelReference(), null),
             _ => (null, new GetDataResponse(null, 0) { Error = $"Unknown keyword: {parsed.Keyword}" })
         };
+    }
+
+    /// <summary>
+    /// Resolves a collection path to CollectionConfigReference.
+    /// </summary>
+    private static WorkspaceReference ResolveCollectionPath(string? remainingPath)
+    {
+        string[]? collectionNames = null;
+        if (!string.IsNullOrEmpty(remainingPath))
+        {
+            collectionNames = remainingPath.Split(',', StringSplitOptions.RemoveEmptyEntries);
+        }
+        return new CollectionConfigReference(collectionNames);
     }
 
     /// <summary>

@@ -1,0 +1,21 @@
+{
+  "id": "PressRelease",
+  "namespace": "ACME/ProductLaunch/Todo",
+  "name": "Write press release draft",
+  "nodeType": "ACME/Project/Todo",
+  "description": "Draft the official MeshFlow launch press release",
+  "iconName": "News",
+  "displayOrder": 8,
+  "isPersistent": true,
+  "content": {
+    "$type": "Todo",
+    "id": "PressRelease",
+    "title": "Write press release draft",
+    "description": "Write and review press release announcing MeshFlow launch. Include customer quotes, key differentiators, and availability details for distribution to tech media.",
+    "category": "PR",
+    "priority": "Medium",
+    "assignee": "Carol",
+    "dueDate": "2025-02-15T00:00:00Z",
+    "status": "Pending"
+  }
+}

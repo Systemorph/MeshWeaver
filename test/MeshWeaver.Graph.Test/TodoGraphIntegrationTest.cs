@@ -21,9 +21,10 @@ using Xunit;
 namespace MeshWeaver.Graph.Test;
 
 /// <summary>
-/// Integration tests for the Todo/Project Graph structure under ACME organization.
+/// Integration tests for the ProductLaunch project under ACME organization.
 /// Tests verify that the JSON-based NodeType configuration works correctly
-/// and that Todo instances can be loaded and accessed.
+/// and that task instances can be loaded and accessed.
+/// Theme: MeshFlow B2B SaaS product launch campaign.
 /// </summary>
 [Collection("TodoGraphTests")]
 public class TodoGraphIntegrationTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
@@ -100,7 +101,7 @@ public class TodoGraphIntegrationTest(ITestOutputHelper output) : MonolithMeshTe
     [Fact(Timeout = 60000)]
     public async Task ACME_Project_NodeType_CanBeInitialized()
     {
-        var projectTypeAddress = new Address("ACME/Type/Project");
+        var projectTypeAddress = new Address("ACME/Project");
 
         var client = GetClient(c => c.AddData(data => data));
 
@@ -118,7 +119,7 @@ public class TodoGraphIntegrationTest(ITestOutputHelper output) : MonolithMeshTe
     [Fact(Timeout = 60000)]
     public async Task ACME_Todo_NodeType_CanBeInitialized()
     {
-        var todoTypeAddress = new Address("ACME/Type/Project/Todo");
+        var todoTypeAddress = new Address("ACME/Project/Todo");
 
         var client = GetClient(c => c.AddData(data => data));
 
@@ -131,67 +132,67 @@ public class TodoGraphIntegrationTest(ITestOutputHelper output) : MonolithMeshTe
     }
 
     /// <summary>
-    /// Test that TodoProject instance can be initialized.
+    /// Test that ProductLaunch project instance can be initialized.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public async Task TodoProject_Instance_CanBeInitialized()
+    public async Task ProductLaunch_Instance_CanBeInitialized()
     {
-        var todoProjectAddress = new Address("ACME/TodoProject");
+        var productLaunchAddress = new Address("ACME/ProductLaunch");
 
         var client = GetClient(c => c.AddData(data => data));
 
         var response = await client.AwaitResponse(
             new PingRequest(),
-            o => o.WithTarget(todoProjectAddress),
+            o => o.WithTarget(productLaunchAddress),
             TestContext.Current.CancellationToken);
 
         response.Should().NotBeNull();
     }
 
     /// <summary>
-    /// Test that a Todo instance can be initialized.
+    /// Test that a task instance can be initialized.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public async Task Todo_Instance_CanBeInitialized()
+    public async Task Task_Instance_CanBeInitialized()
     {
-        var todoAddress = new Address("ACME/TodoProject/Todo/Todo1");
+        var taskAddress = new Address("ACME/ProductLaunch/Todo/DefinePersona");
 
         var client = GetClient(c => c.AddData(data => data));
 
         var response = await client.AwaitResponse(
             new PingRequest(),
-            o => o.WithTarget(todoAddress),
+            o => o.WithTarget(taskAddress),
             TestContext.Current.CancellationToken);
 
         response.Should().NotBeNull();
     }
 
     /// <summary>
-    /// Test that TodoProject has Todo children.
+    /// Test that ProductLaunch has task children.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public async Task TodoProject_HasTodoChildren()
+    public async Task ProductLaunch_HasTaskChildren()
     {
         var persistence = Mesh.ServiceProvider.GetRequiredService<IPersistenceService>();
 
-        var children = await persistence.GetChildrenAsync("ACME/TodoProject/Todo").ToListAsync(TestContext.Current.CancellationToken);
+        var children = await persistence.GetChildrenAsync("ACME/ProductLaunch/Todo").ToListAsync(TestContext.Current.CancellationToken);
 
-        children.Should().NotBeEmpty("TodoProject should have Todo children");
-        children.Should().HaveCountGreaterThan(10, "TodoProject should have at least 10 todos");
-        children.Should().Contain(n => n.Path == "ACME/TodoProject/Todo/Todo1");
+        children.Should().NotBeEmpty("ProductLaunch should have task children");
+        children.Should().HaveCountGreaterThan(10, "ProductLaunch should have at least 10 tasks");
+        children.Should().Contain(n => n.Path == "ACME/ProductLaunch/Todo/DefinePersona");
     }
 
     /// <summary>
-    /// Test that Todo instances have correct NodeType.
+    /// Test that task instances have correct NodeType.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public async Task Todo_Instances_HaveCorrectNodeType()
+    public async Task Task_Instances_HaveCorrectNodeType()
     {
         var persistence = Mesh.ServiceProvider.GetRequiredService<IPersistenceService>();
 
-        var todo1 = await persistence.GetNodeAsync("ACME/TodoProject/Todo/Todo1", TestContext.Current.CancellationToken);
+        var task = await persistence.GetNodeAsync("ACME/ProductLaunch/Todo/DefinePersona", TestContext.Current.CancellationToken);
 
-        todo1.Should().NotBeNull();
-        todo1!.NodeType.Should().Be("ACME/Type/Project/Todo");
+        task.Should().NotBeNull();
+        task!.NodeType.Should().Be("ACME/Project/Todo");
     }
 }

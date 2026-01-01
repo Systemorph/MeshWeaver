@@ -1,0 +1,21 @@
+{
+  "id": "AnalyticsDashboard",
+  "namespace": "ACME/ProductLaunch/Todo",
+  "name": "Configure analytics dashboard",
+  "nodeType": "ACME/Project/Todo",
+  "description": "Set up tracking and reporting for launch metrics",
+  "iconName": "DataUsage",
+  "displayOrder": 11,
+  "isPersistent": true,
+  "content": {
+    "$type": "Todo",
+    "id": "AnalyticsDashboard",
+    "title": "Configure analytics dashboard",
+    "description": "Set up Mixpanel for product analytics and build launch dashboard tracking signups, activations, feature adoption, and conversion funnel.",
+    "category": "Engineering",
+    "priority": "Medium",
+    "assignee": "David",
+    "dueDate": "2025-02-22T00:00:00Z",
+    "status": "Pending"
+  }
+}

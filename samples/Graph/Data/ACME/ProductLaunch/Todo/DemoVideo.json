@@ -1,0 +1,21 @@
+{
+  "id": "DemoVideo",
+  "namespace": "ACME/ProductLaunch/Todo",
+  "name": "Record product demo video",
+  "nodeType": "ACME/Project/Todo",
+  "description": "Produce a professional product walkthrough video",
+  "iconName": "Video",
+  "displayOrder": 13,
+  "isPersistent": true,
+  "content": {
+    "$type": "Todo",
+    "id": "DemoVideo",
+    "title": "Record product demo video",
+    "description": "Script and record a 3-minute product demo video showcasing MeshFlow's workflow builder, integrations, and automation capabilities. Include professional voiceover.",
+    "category": "Marketing",
+    "priority": "High",
+    "assignee": "Roland",
+    "dueDate": "2025-02-28T00:00:00Z",
+    "status": "Pending"
+  }
+}

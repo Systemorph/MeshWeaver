@@ -151,3 +151,26 @@ public class ModelPathHandler : IUnifiedPathHandler
         return (address, new DataModelReference());
     }
 }
+
+/// <summary>
+/// Handler for collection keyword paths.
+/// Format: addressType/addressId/collection[/collectionName]
+/// Returns content collection configurations for the hub.
+/// If collectionName is specified, returns configuration for that specific collection.
+/// If collectionName is empty/null, returns all collection configurations.
+/// </summary>
+public class CollectionPathHandler : IUnifiedPathHandler
+{
+    /// <inheritdoc />
+    public (Address Address, WorkspaceReference Reference) Parse(string addressType, string addressId, string remainingPath)
+    {
+        var address = new Address(addressType, addressId);
+        // remainingPath is the collection name (can be null/empty for all collections)
+        string[]? collectionNames = null;
+        if (!string.IsNullOrEmpty(remainingPath))
+        {
+            collectionNames = remainingPath.Split(',', StringSplitOptions.RemoveEmptyEntries);
+        }
+        return (address, new CollectionConfigReference(collectionNames));
+    }
+}

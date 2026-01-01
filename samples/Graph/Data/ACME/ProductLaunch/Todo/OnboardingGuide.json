@@ -1,0 +1,21 @@
+{
+  "id": "OnboardingGuide",
+  "namespace": "ACME/ProductLaunch/Todo",
+  "name": "Create customer onboarding guide",
+  "nodeType": "ACME/Project/Todo",
+  "description": "Develop materials for new customer onboarding",
+  "iconName": "DocumentBulletList",
+  "displayOrder": 21,
+  "isPersistent": true,
+  "content": {
+    "$type": "Todo",
+    "id": "OnboardingGuide",
+    "title": "Create customer onboarding guide",
+    "description": "Write comprehensive onboarding playbook covering first-day setup, first workflow creation, integration setup, and success milestones. Include video tutorials.",
+    "category": "Support",
+    "priority": "High",
+    "assignee": "Alice",
+    "dueDate": "2025-03-14T00:00:00Z",
+    "status": "Pending"
+  }
+}
