@@ -107,6 +107,50 @@ internal interface ICompilationCacheService
     /// </summary>
     /// <param name="nodeName">Sanitized node name.</param>
     void UnloadContext(string nodeName);
+
+    /// <summary>
+    /// Gets the release folder path for a node and release key.
+    /// Release folders are immutable once created.
+    /// </summary>
+    /// <param name="nodeName">Sanitized node name.</param>
+    /// <param name="releaseKey">The computed release key (hash of compilation inputs).</param>
+    /// <returns>Absolute path to the release folder.</returns>
+    string GetReleaseFolderPath(string nodeName, string releaseKey);
+
+    /// <summary>
+    /// Checks if a release folder contains a valid compiled assembly.
+    /// </summary>
+    /// <param name="releaseFolder">Absolute path to the release folder.</param>
+    /// <returns>True if the release folder exists and contains a DLL.</returns>
+    bool IsReleaseValid(string releaseFolder);
+
+    /// <summary>
+    /// Gets the directory path for compilation locks.
+    /// </summary>
+    string GetLockDirectory();
+
+    /// <summary>
+    /// Gets or creates an AssemblyLoadContext for a release folder.
+    /// </summary>
+    /// <param name="release">The NodeTypeRelease containing path information.</param>
+    /// <param name="releaseFolder">Absolute path to the release folder.</param>
+    /// <returns>A NodeAssemblyLoadContext that can load the release's assembly.</returns>
+    NodeAssemblyLoadContext GetOrCreateLoadContextForRelease(NodeTypeRelease release, string releaseFolder);
+
+    /// <summary>
+    /// Loads an assembly from a release folder.
+    /// </summary>
+    /// <param name="release">The NodeTypeRelease containing path information.</param>
+    /// <param name="releaseFolder">Absolute path to the release folder.</param>
+    /// <returns>The loaded assembly, or null if the DLL doesn't exist.</returns>
+    System.Reflection.Assembly? LoadAssemblyFromRelease(NodeTypeRelease release, string releaseFolder);
+
+    /// <summary>
+    /// Gets the release folder path for a NodeTypeRelease.
+    /// </summary>
+    /// <param name="release">The NodeTypeRelease.</param>
+    /// <returns>Absolute path to the release folder.</returns>
+    string GetReleaseFolderPath(NodeTypeRelease release);
 }
 
 /// <summary>
@@ -502,6 +546,54 @@ internal class CompilationCacheService(
             context.Dispose();
         }
     }
+
+    /// <inheritdoc />
+    public string GetReleaseFolderPath(string nodeName, string releaseKey)
+        => Path.Combine(_absoluteCacheDirectory, $"{nodeName}_{releaseKey}");
+
+    /// <inheritdoc />
+    public bool IsReleaseValid(string releaseFolder)
+    {
+        if (!Directory.Exists(releaseFolder))
+            return false;
+
+        // Check that at least one DLL exists in the folder
+        return Directory.GetFiles(releaseFolder, "*.dll").Length > 0;
+    }
+
+    /// <inheritdoc />
+    public string GetLockDirectory()
+        => Path.Combine(_absoluteCacheDirectory, ".locks");
+
+    /// <inheritdoc />
+    public NodeAssemblyLoadContext GetOrCreateLoadContextForRelease(NodeTypeRelease release, string releaseFolder)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+
+        // Use release path as context key (already unique due to release hash)
+        var contextKey = release.Path;
+        var sanitizedPath = release.GetSanitizedPath();
+
+        return _loadContexts.GetOrAdd(contextKey, _ =>
+        {
+            var dllPath = Path.Combine(releaseFolder, $"{sanitizedPath}.dll");
+            logger.LogDebug("Creating new AssemblyLoadContext for {ReleasePath} from release {ReleaseFolder}", release.Path, releaseFolder);
+            return new NodeAssemblyLoadContext(sanitizedPath, dllPath, logger);
+        });
+    }
+
+    /// <inheritdoc />
+    public Assembly? LoadAssemblyFromRelease(NodeTypeRelease release, string releaseFolder)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+
+        var context = GetOrCreateLoadContextForRelease(release, releaseFolder);
+        return context.LoadNodeAssembly();
+    }
+
+    /// <inheritdoc />
+    public string GetReleaseFolderPath(NodeTypeRelease release)
+        => Path.Combine(_absoluteCacheDirectory, release.GetSanitizedPath());
 
     /// <summary>
     /// Disposes all load contexts and releases resources.

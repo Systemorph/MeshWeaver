@@ -5,6 +5,7 @@ namespace MeshWeaver.Data.Validation;
 /// Implementations can be registered to provide validation logic
 /// before data changes (creates, updates, deletes) are applied via DataChangeRequest.
 /// </summary>
+[Obsolete("Use IDataValidator instead for unified validation. This interface will be removed in a future version.")]
 public interface IDataChangeValidator
 {
     /// <summary>

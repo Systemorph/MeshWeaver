@@ -1,17 +1,24 @@
 /* Loom Layout - GitHub-style with no left navigation */
 
-/* Search bar in header - centered */
+/* Make the links container a flex row */
+::deep .layout > header .links {
+    display: flex;
+    align-items: center;
+    flex: 1;
+    gap: 8px;
+}
+
+/* Search bar in header */
 ::deep .loom-search-container {
     flex: 1;
     display: flex;
-    justify-content: center;
-    max-width: 600px;
-    margin: 0 16px;
+    justify-content: flex-end;
+    max-width: 400px;
 }
 
 ::deep .loom-search {
     width: 100%;
-    max-width: 400px;
+    min-width: 200px;
 }
 
 /* Adjust grid when no nav menu - remove nav column */

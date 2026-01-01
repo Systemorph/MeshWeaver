@@ -5,6 +5,7 @@ namespace MeshWeaver.Data.Validation;
 /// Implementations can be registered to provide additional validation logic
 /// before data is returned from GetDataRequest or SubscribeRequest.
 /// </summary>
+[Obsolete("Use IDataValidator instead for unified validation. This interface will be removed in a future version.")]
 public interface IDataReadValidator
 {
     /// <summary>
@@ -20,6 +21,7 @@ public interface IDataReadValidator
 /// Interface for custom data read validation with access to the data being returned.
 /// Called after data is retrieved but before it's returned to the caller.
 /// </summary>
+[Obsolete("Use IDataValidator instead for unified validation. This interface will be removed in a future version.")]
 public interface IDataReadResultValidator
 {
     /// <summary>

@@ -5,15 +5,12 @@
 @inherits PortalLayoutBase
 
 @{
-    // GitHub-style header - search in middle, actions on right
+    // GitHub-style header - search on right side of brand, then actions
     HeaderLinks = @<text>
-        @* Search bar - centered *@
         <div class="loom-search-container">
             <FluentSearch Placeholder="Search..." @bind-Value="searchQuery"
                 @onkeydown="HandleSearchKeyDown" Class="loom-search" />
         </div>
-        <FluentSpacer />
-        @* Create menu - will be context-aware in Phase 2 *@
         <FluentButton Appearance="Appearance.Stealth" Id="create-menu-button"
             Title="Create new" aria-label="Create new" @onclick="@(() => isCreateMenuOpen = !isCreateMenuOpen)">
             <FluentIcon Value="@(new Icons.Regular.Size20.Add())" Color="Color.FillInverse" />

@@ -1,4 +1,5 @@
-﻿using MeshWeaver.ContentCollections;
+﻿using System.Text.Json;
+using MeshWeaver.ContentCollections;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
@@ -373,6 +374,176 @@ internal class MeshNodeCompilationService(
         var assemblyBytes = dllStream.ToArray();
         var pdbBytes = pdbStream.ToArray();
         cacheService.LoadAssemblyFromBytes(nodeName, assemblyBytes, pdbBytes);
+    }
+
+    /// <summary>
+    /// Compiles a node type to a specific release folder.
+    /// This method is thread-safe and multi-process safe when used with CompilationLock.
+    /// The caller is responsible for acquiring the lock before calling this method.
+    /// </summary>
+    /// <param name="release">The NodeTypeRelease containing all compilation inputs.</param>
+    /// <param name="node">The MeshNode being compiled.</param>
+    /// <param name="releaseFolder">Target folder for the compiled assembly.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <returns>Compilation result with assembly location and configurations.</returns>
+    internal async Task<NodeCompilationResult?> CompileToReleaseAsync(
+        NodeTypeRelease release,
+        MeshNode node,
+        string releaseFolder,
+        CancellationToken ct = default)
+    {
+        var sanitizedPath = release.GetSanitizedPath();
+
+        logger.LogInformation("Compiling {NodePath} to release folder {ReleaseFolder}", node.Path, releaseFolder);
+
+        // Ensure release folder exists
+        Directory.CreateDirectory(releaseFolder);
+
+        var dllPath = Path.Combine(releaseFolder, $"{sanitizedPath}.dll");
+        var pdbPath = Path.Combine(releaseFolder, $"{sanitizedPath}.pdb");
+        var sourcePath = Path.Combine(releaseFolder, $"{sanitizedPath}.cs");
+        var xmlDocPath = Path.Combine(releaseFolder, $"{sanitizedPath}.xml");
+
+        ct.ThrowIfCancellationRequested();
+
+        // Generate source code
+        var codeConfig = string.IsNullOrEmpty(release.Code) ? null : new CodeConfiguration { Code = release.Code };
+        var source = _attributeGenerator.GenerateAttributeSource(node, codeConfig, release.HubConfiguration, release.ContentCollections);
+
+        // Write source file for debugging
+        if (_cacheOptions.EnableSourceDebugging)
+        {
+            await File.WriteAllTextAsync(sourcePath, source, ct);
+            logger.LogDebug("Wrote source file: {SourcePath}", sourcePath);
+        }
+
+        // Parse with source path embedded for PDB source linking
+        var sourceText = Microsoft.CodeAnalysis.Text.SourceText.From(source, System.Text.Encoding.UTF8);
+        var parseOptions = new CSharpParseOptions(documentationMode: DocumentationMode.Diagnose);
+        var syntaxTree = CSharpSyntaxTree.ParseText(
+            sourceText,
+            parseOptions,
+            path: _cacheOptions.EnableSourceDebugging ? sourcePath : "",
+            cancellationToken: ct);
+
+        var assemblyName = sanitizedPath;
+
+        var compilation = CSharpCompilation.Create(
+            assemblyName,
+            syntaxTrees: [syntaxTree],
+            references: _references,
+            options: new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary)
+                .WithOptimizationLevel(OptimizationLevel.Debug)
+                .WithPlatform(Platform.AnyCpu));
+
+        // Emit to release folder
+        await using var dllStream = File.Create(dllPath);
+        await using var pdbStream = File.Create(pdbPath);
+        await using var xmlDocStream = File.Create(xmlDocPath);
+
+        var emitOptions = new EmitOptions(
+            debugInformationFormat: DebugInformationFormat.PortablePdb,
+            pdbFilePath: pdbPath);
+
+        var emitResult = compilation.Emit(dllStream, pdbStream, xmlDocumentationStream: xmlDocStream, options: emitOptions, cancellationToken: ct);
+
+        if (!emitResult.Success)
+        {
+            // Clean up partial files on failure
+            await dllStream.DisposeAsync();
+            await pdbStream.DisposeAsync();
+            await xmlDocStream.DisposeAsync();
+
+            try { Directory.Delete(releaseFolder, recursive: true); } catch { /* ignore */ }
+
+            var errors = emitResult.Diagnostics
+                .Where(d => d.Severity == DiagnosticSeverity.Error)
+                .Select(d => d.GetMessage())
+                .ToList();
+
+            var errorMessage = $"Compilation failed for '{node.Path}':\n{string.Join('\n', errors)}";
+            logger.LogError("{ErrorMessage}", errorMessage);
+            throw new CompilationException(node.Path, errorMessage);
+        }
+
+        // Close streams before writing metadata
+        await dllStream.DisposeAsync();
+        await pdbStream.DisposeAsync();
+        await xmlDocStream.DisposeAsync();
+
+        // Write the NodeTypeRelease as release.json (contains all metadata)
+        var metadataPath = Path.Combine(releaseFolder, "release.json");
+        var metadataJson = JsonSerializer.Serialize(release, new JsonSerializerOptions { WriteIndented = true });
+        await File.WriteAllTextAsync(metadataPath, metadataJson, ct);
+
+        logger.LogInformation("Successfully compiled {NodePath} to {DllPath}", node.Path, dllPath);
+
+        // Load and extract configurations
+        return await LoadAndExtractConfigurationsFromReleaseAsync(release, releaseFolder, ct);
+    }
+
+    /// <summary>
+    /// Loads an assembly from a release folder and extracts NodeTypeConfigurations.
+    /// </summary>
+    internal async Task<NodeCompilationResult?> LoadAndExtractConfigurationsFromReleaseAsync(
+        NodeTypeRelease release,
+        string releaseFolder,
+        CancellationToken ct)
+    {
+        var sanitizedPath = release.GetSanitizedPath();
+        var dllPath = Path.Combine(releaseFolder, $"{sanitizedPath}.dll");
+
+        try
+        {
+            var assembly = cacheService.LoadAssemblyFromRelease(release, releaseFolder);
+            if (assembly == null)
+            {
+                logger.LogWarning("Failed to load assembly from {DllPath}", dllPath);
+                return new NodeCompilationResult(dllPath, []);
+            }
+
+            var configurations = new List<NodeTypeConfiguration>();
+            foreach (var type in assembly.GetTypes())
+            {
+                if (typeof(MeshNodeAttribute).IsAssignableFrom(type) && !type.IsAbstract)
+                {
+                    var attribute = (MeshNodeAttribute?)Activator.CreateInstance(type);
+                    if (attribute != null)
+                    {
+                        foreach (var meshNode in attribute.Nodes)
+                        {
+                            Func<MessageHubConfiguration, MessageHubConfiguration>? hubConfig = null;
+                            if (meshNode.HubConfiguration != null)
+                            {
+                                meshNode.HubConfiguration.Subscribe(config => hubConfig = config);
+                            }
+
+                            if (hubConfig != null)
+                            {
+                                configurations.Add(new NodeTypeConfiguration
+                                {
+                                    NodeType = meshNode.NodeType ?? meshNode.Path,
+                                    DataType = typeof(object),
+                                    HubConfiguration = hubConfig,
+                                    DisplayName = meshNode.Name,
+                                    Description = meshNode.Description,
+                                    IconName = meshNode.IconName,
+                                    DisplayOrder = meshNode.DisplayOrder
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+
+            logger.LogDebug("Extracted {Count} NodeTypeConfigurations from {DllPath}", configurations.Count, dllPath);
+            return new NodeCompilationResult(dllPath, configurations);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Failed to extract NodeTypeConfigurations from {DllPath}", dllPath);
+            return new NodeCompilationResult(dllPath, []);
+        }
     }
 }
 

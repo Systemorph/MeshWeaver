@@ -135,7 +135,7 @@ public class DynamicMeshNodeAttributeGeneratorTest
 
         // Verify assembly attribute comes before namespaces
         var assemblyAttrIndex = source.IndexOf("[assembly:");
-        var namespaceIndex = source.IndexOf("namespace MeshWeaver.Graph.Dynamic");
+        var namespaceIndex = source.IndexOf("namespace MeshWeaver.Graph.Generated");
         assemblyAttrIndex.Should().BeLessThan(namespaceIndex, "Assembly attribute must come before namespace declarations");
     }
 

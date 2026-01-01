@@ -1,4 +1,6 @@
-﻿using MeshWeaver.Domain;
+﻿using System.Collections.Immutable;
+using MeshWeaver.Data.Validation;
+using MeshWeaver.Domain;
 
 namespace MeshWeaver.Data;
 
@@ -88,5 +90,10 @@ public abstract record TypeSource<TTypeSource> : ITypeSource
         return This with { TypeDefinition = typeRegistry.WithKeyFunction(TypeDefinition.CollectionName, keyFunc) };
     }
 
-
+    /// <summary>
+    /// Access restrictions specific to this type.
+    /// Evaluated after global restrictions.
+    /// </summary>
+    public ImmutableList<AccessRestrictionEntry> AccessRestrictions { get; init; } =
+        ImmutableList<AccessRestrictionEntry>.Empty;
 }

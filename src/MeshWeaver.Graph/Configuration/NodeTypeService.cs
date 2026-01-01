@@ -1,32 +1,36 @@
 ﻿using System.Collections.Concurrent;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
+using MeshWeaver.ContentCollections;
 using MeshWeaver.Data;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 namespace MeshWeaver.Graph.Configuration;
 
 /// <summary>
 /// Service for managing NodeType data with thread-safe caching.
-/// CRITICAL: Uses Lazy&lt;Task&gt; to ensure factory runs exactly once per key.
-/// ConcurrentDictionary.GetOrAdd with a factory lambda can run the factory multiple times,
-/// but Lazy ensures the inner factory executes only once.
+/// Uses release-based compilation caching for multi-process safety.
+/// Each unique compilation input produces a deterministic release folder that is never modified once created.
 /// </summary>
 internal class NodeTypeService : INodeTypeService, IDisposable
 {
     private readonly IMessageHub meshHub;
     private readonly ILogger<NodeTypeService> logger;
-    private readonly IMeshNodeCompilationService? compilationService;
+    private readonly MeshNodeCompilationService? compilationService;
     private readonly MeshConfiguration meshConfiguration;
+    private readonly ICompilationCacheService cacheService;
+    private readonly CompilationCacheOptions cacheOptions;
 
-    // CRITICAL: Use Lazy<Task> to ensure factory runs exactly once per key.
-    // ConcurrentDictionary.GetOrAdd can run the factory multiple times concurrently,
-    // but Lazy ensures only one actual compilation happens.
-    private readonly ConcurrentDictionary<string, Lazy<Task<NodeTypeCacheEntry?>>> _cache = new();
+    // Compilation tasks by nodeTypePath - uses Task (not Lazy<Task>) to allow retry on failure
+    private readonly ConcurrentDictionary<string, Task<NodeTypeCacheEntry?>> _compilationTasks = new();
+
+    // Release keys by nodeTypePath - tracks which release is currently loaded
+    private readonly ConcurrentDictionary<string, string> _releaseKeys = new();
 
     // Stream subscriptions for cache invalidation
     private readonly ConcurrentDictionary<string, IDisposable> _subscriptions = new();
@@ -38,11 +42,15 @@ internal class NodeTypeService : INodeTypeService, IDisposable
         IMessageHub meshHub,
         MeshConfiguration meshConfiguration,
         ILogger<NodeTypeService> logger,
-        IMeshNodeCompilationService? compilationService = null)
+        ICompilationCacheService cacheService,
+        IOptions<CompilationCacheOptions> cacheOptions,
+        MeshNodeCompilationService? compilationService = null)
     {
         this.meshHub = meshHub;
         this.meshConfiguration = meshConfiguration;
         this.logger = logger;
+        this.cacheService = cacheService;
+        this.cacheOptions = cacheOptions.Value;
         this.compilationService = compilationService;
 
         // Initialize cache from pre-registered nodes in MeshConfiguration
@@ -79,13 +87,21 @@ internal class NodeTypeService : INodeTypeService, IDisposable
     /// <inheritdoc />
     public Task<string?> GetAssemblyPathAsync(string nodeTypePath, CancellationToken ct = default)
     {
-        // Use Lazy<Task> to ensure the factory runs exactly once per key.
-        // ConcurrentDictionary.GetOrAdd can run the factory multiple times,
-        // but Lazy ensures only one actual SubscribeAndProcessAsync call.
-        var lazyTask = _cache.GetOrAdd(nodeTypePath, path =>
-            new Lazy<Task<NodeTypeCacheEntry?>>(() => SubscribeAndProcessAsync(path, ct)));
+        // Use ConcurrentDictionary.GetOrAdd with a Task to ensure only one compilation runs per key.
+        // On failure, remove from dictionary to allow retry on next access.
+        var task = _compilationTasks.GetOrAdd(nodeTypePath, path =>
+            CompileWithReleaseAsync(path, ct));
 
-        return lazyTask.Value.ContinueWith(t => t.Result?.AssemblyPath, TaskContinuationOptions.ExecuteSynchronously);
+        return task.ContinueWith(t =>
+        {
+            // On failure, remove from cache to allow retry
+            if (t.IsFaulted || t.IsCanceled)
+            {
+                _compilationTasks.TryRemove(nodeTypePath, out _);
+                _releaseKeys.TryRemove(nodeTypePath, out _);
+            }
+            return t.Result?.AssemblyPath;
+        }, TaskContinuationOptions.ExecuteSynchronously);
     }
 
     /// <inheritdoc />
@@ -118,8 +134,9 @@ internal class NodeTypeService : INodeTypeService, IDisposable
     {
         logger.LogDebug("Invalidating cache for {NodeTypePath}", nodeTypePath);
 
-        // Remove from all caches (Lazy<Task> will be disposed by GC)
-        _cache.TryRemove(nodeTypePath, out _);
+        // Remove from all caches
+        _compilationTasks.TryRemove(nodeTypePath, out _);
+        _releaseKeys.TryRemove(nodeTypePath, out _);
         _hubConfigurations.TryRemove(nodeTypePath, out _);
 
         // Dispose subscription (will re-subscribe on next access)
@@ -284,100 +301,96 @@ internal class NodeTypeService : INodeTypeService, IDisposable
 
     /// <summary>
     /// Gets the NodeTypeData for a node type path.
-    /// Returns cached data if available, otherwise subscribes to remote stream.
+    /// Returns cached data if available, otherwise triggers compilation.
     /// </summary>
     public Task<NodeTypeData?> GetNodeTypeDataAsync(string nodeTypePath, CancellationToken ct = default)
     {
-        // Use Lazy<Task> to ensure the factory runs exactly once per key.
-        var lazyTask = _cache.GetOrAdd(nodeTypePath, path =>
-            new Lazy<Task<NodeTypeCacheEntry?>>(() => SubscribeAndProcessAsync(path, ct)));
+        var task = _compilationTasks.GetOrAdd(nodeTypePath, path =>
+            CompileWithReleaseAsync(path, ct));
 
-        // Return a projection of the cached task
-        return lazyTask.Value.ContinueWith(t => t.Result?.Data, TaskContinuationOptions.ExecuteSynchronously);
+        return task.ContinueWith(t =>
+        {
+            if (t.IsFaulted || t.IsCanceled)
+            {
+                _compilationTasks.TryRemove(nodeTypePath, out _);
+                _releaseKeys.TryRemove(nodeTypePath, out _);
+            }
+            return t.Result?.Data;
+        }, TaskContinuationOptions.ExecuteSynchronously);
     }
 
     /// <summary>
-    /// Fetches NodeTypeData directly from persistence and compiles it.
-    /// Uses direct persistence access to avoid circular dependency when hub is being created.
-    /// This method is called once per nodeTypePath due to ConcurrentDictionary.GetOrAdd.
+    /// Compiles a NodeType using release-based caching.
+    /// Uses file locks for multi-process safety and immutable release folders.
     /// </summary>
-    private async Task<NodeTypeCacheEntry?> SubscribeAndProcessAsync(string nodeTypePath, CancellationToken ct)
+    private async Task<NodeTypeCacheEntry?> CompileWithReleaseAsync(string nodeTypePath, CancellationToken ct)
     {
         try
         {
-            logger.LogDebug("Fetching NodeType data for {NodeTypePath}", nodeTypePath);
+            logger.LogDebug("CompileWithReleaseAsync for {NodeTypePath}", nodeTypePath);
 
-            // Get persistence service to fetch data directly (avoiding hub subscription deadlock)
-            var persistence = meshHub.ServiceProvider.GetService<IPersistenceService>();
-            if (persistence == null)
+            // 1. Gather compilation inputs and create release
+            var (release, node) = await GatherInputsAsync(nodeTypePath, ct);
+            if (release == null || node == null)
             {
-                logger.LogWarning("IPersistenceService not available for {NodeTypePath}", nodeTypePath);
+                logger.LogDebug("No compilation input available for {NodeTypePath}", nodeTypePath);
                 return null;
             }
 
-            // Get the node from persistence
-            var node = await persistence.GetNodeAsync(nodeTypePath, ct);
-            if (node == null)
+            // 2. Track release key
+            _releaseKeys[nodeTypePath] = release.Release;
+
+            // 3. Get release folder path
+            var releaseFolder = cacheService.GetReleaseFolderPath(release);
+
+            logger.LogDebug("Release folder for {NodeTypePath}: {ReleaseFolder}", nodeTypePath, releaseFolder);
+
+            // 4. Check if release already exists (fast path - no locking needed)
+            if (cacheService.IsReleaseValid(releaseFolder))
             {
-                logger.LogDebug("No node found in persistence for {NodeTypePath}", nodeTypePath);
-                return null;
+                logger.LogDebug("Using existing release for {NodeTypePath}", nodeTypePath);
+                return await LoadFromReleaseAsync(release, releaseFolder, nodeTypePath, ct);
             }
 
-            // Get NodeTypeDefinition from node content
-            var definition = node.Content as NodeTypeDefinition;
-            if (definition == null)
+            // 5. Acquire file lock for compilation (multi-process safe)
+            var nodeName = cacheService.SanitizeNodeName(nodeTypePath);
+            logger.LogDebug("Acquiring compilation lock for {NodeTypePath}", nodeTypePath);
+            using var lockObj = await CompilationLock.AcquireAsync(
+                cacheService.GetLockDirectory(),
+                nodeName,
+                cacheOptions.LockTimeout,
+                logger,
+                ct);
+
+            // 6. Double-check after acquiring lock (another process may have compiled)
+            if (cacheService.IsReleaseValid(releaseFolder))
             {
-                logger.LogDebug("Node at {NodeTypePath} has no NodeTypeDefinition content", nodeTypePath);
-                return null;
+                logger.LogDebug("Release created by another process for {NodeTypePath}", nodeTypePath);
+                return await LoadFromReleaseAsync(release, releaseFolder, nodeTypePath, ct);
             }
 
-            // Get CodeConfigurations from partition
-            var codeConfigurations = new List<CodeConfiguration>();
-            await foreach (var obj in persistence.GetPartitionObjectsAsync(nodeTypePath, null).WithCancellation(ct))
+            // 7. Compile to release folder
+            if (compilationService == null)
             {
-                if (obj is CodeConfiguration codeConfig)
+                logger.LogWarning("No compilation service available for {NodeTypePath}", nodeTypePath);
+                return CreateNodeTypeDataOnly(release);
+            }
+
+            var result = await compilationService.CompileToReleaseAsync(release, node, releaseFolder, ct);
+
+            // 8. Cache hub configurations
+            if (result?.NodeTypeConfigurations != null)
+            {
+                foreach (var config in result.NodeTypeConfigurations)
                 {
-                    codeConfigurations.Add(codeConfig);
+                    _hubConfigurations[config.NodeType] = config.HubConfiguration;
+                    logger.LogDebug("Cached HubConfiguration for {NodeType}", config.NodeType);
                 }
             }
 
-            var nodeTypeData = new NodeTypeData
-            {
-                Definition = definition,
-                CodeConfigurations = codeConfigurations
-            };
-
-            logger.LogDebug("Loaded NodeTypeData for {NodeTypePath} with {CodeConfigCount} code configurations",
-                nodeTypePath, codeConfigurations.Count);
-
-            // Compile if compilation service available
-            string? assemblyPath = null;
-            if (compilationService != null)
-            {
-                // Create a minimal MeshNode for compilation
-                var compileNode = MeshNode.FromPath(nodeTypePath) with
-                {
-                    Content = nodeTypeData.Definition,
-                    NodeType = nodeTypePath
-                };
-
-                var compilationResult = await compilationService.CompileAndGetConfigurationsAsync(compileNode, ct);
-                if (compilationResult != null)
-                {
-                    assemblyPath = compilationResult.AssemblyLocation;
-
-                    // Cache the HubConfiguration functions for fast synchronous access
-                    // Note: AddMeshDataSource is already added by the generator for NodeTypeDefinition content
-                    // via ConfigureMeshHub().WithCodeConfiguration().Build()
-                    foreach (var config in compilationResult.NodeTypeConfigurations)
-                    {
-                        _hubConfigurations[config.NodeType] = config.HubConfiguration;
-                        logger.LogDebug("Cached HubConfiguration for {NodeType}", config.NodeType);
-                    }
-                }
-            }
-
-            return new NodeTypeCacheEntry(nodeTypeData, assemblyPath);
+            return new NodeTypeCacheEntry(
+                CreateNodeTypeData(release),
+                result?.AssemblyLocation);
         }
         catch (OperationCanceledException)
         {
@@ -386,9 +399,162 @@ internal class NodeTypeService : INodeTypeService, IDisposable
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "Failed to fetch NodeType data for {NodeTypePath}", nodeTypePath);
-            return null;
+            logger.LogError(ex, "Failed to compile NodeType {NodeTypePath}", nodeTypePath);
+            throw; // Re-throw to trigger retry on next access
         }
+    }
+
+    /// <summary>
+    /// Gathers all inputs needed for compilation from persistence.
+    /// Returns a NodeTypeRelease with all compilation inputs and the MeshNode.
+    /// </summary>
+    private async Task<(NodeTypeRelease? Release, MeshNode? Node)> GatherInputsAsync(string nodeTypePath, CancellationToken ct)
+    {
+        var persistence = meshHub.ServiceProvider.GetService<IPersistenceService>();
+        if (persistence == null)
+        {
+            logger.LogWarning("IPersistenceService not available for {NodeTypePath}", nodeTypePath);
+            return (null, null);
+        }
+
+        // Get the node from persistence
+        var node = await persistence.GetNodeAsync(nodeTypePath, ct);
+        if (node == null)
+        {
+            logger.LogDebug("No node found in persistence for {NodeTypePath}", nodeTypePath);
+            return (null, null);
+        }
+
+        // Get NodeTypeDefinition from node content
+        var definition = node.Content as NodeTypeDefinition;
+        if (definition == null)
+        {
+            logger.LogDebug("Node at {NodeTypePath} has no NodeTypeDefinition content", nodeTypePath);
+            return (null, null);
+        }
+
+        // Get CodeConfigurations from /Code sub-partition
+        string? code = null;
+        var codePartition = $"{nodeTypePath}/Code";
+        await foreach (var obj in persistence.GetPartitionObjectsAsync(codePartition, null).WithCancellation(ct))
+        {
+            if (obj is CodeConfiguration codeConfig && !string.IsNullOrEmpty(codeConfig.Code))
+            {
+                code = codeConfig.Code;
+                break;
+            }
+        }
+
+        var frameworkVersion = typeof(NodeTypeService).Assembly.GetName().Version?.ToString() ?? "unknown";
+        var release = NodeTypeRelease.Create(
+            nodeTypePath,
+            code,
+            definition.Configuration,
+            definition.ContentCollections,
+            cacheService.GetFrameworkTimestamp(),
+            frameworkVersion);
+
+        var enrichedNode = node with
+        {
+            Content = definition,
+            NodeType = nodeTypePath
+        };
+
+        return (release, enrichedNode);
+    }
+
+    /// <summary>
+    /// Loads a compiled assembly from an existing release folder.
+    /// </summary>
+    private async Task<NodeTypeCacheEntry?> LoadFromReleaseAsync(
+        NodeTypeRelease release,
+        string releaseFolder,
+        string nodeTypePath,
+        CancellationToken ct)
+    {
+        try
+        {
+            var assembly = cacheService.LoadAssemblyFromRelease(release, releaseFolder);
+            if (assembly == null)
+            {
+                logger.LogWarning("Failed to load assembly from release {ReleaseFolder}", releaseFolder);
+                return CreateNodeTypeDataOnly(release);
+            }
+
+            // Extract NodeTypeConfigurations from the loaded assembly
+            var configurations = new List<NodeTypeConfiguration>();
+            foreach (var type in assembly.GetTypes())
+            {
+                if (typeof(MeshNodeAttribute).IsAssignableFrom(type) && !type.IsAbstract)
+                {
+                    var attribute = (MeshNodeAttribute?)Activator.CreateInstance(type);
+                    if (attribute != null)
+                    {
+                        foreach (var meshNode in attribute.Nodes)
+                        {
+                            Func<MessageHubConfiguration, MessageHubConfiguration>? hubConfig = null;
+                            meshNode.HubConfiguration?.Subscribe(config => hubConfig = config);
+
+                            if (hubConfig != null)
+                            {
+                                _hubConfigurations[meshNode.NodeType ?? meshNode.Path] = hubConfig;
+                                configurations.Add(new NodeTypeConfiguration
+                                {
+                                    NodeType = meshNode.NodeType ?? meshNode.Path,
+                                    DataType = typeof(object),
+                                    HubConfiguration = hubConfig
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+
+            var dllPath = Path.Combine(releaseFolder, $"{release.GetSanitizedPath()}.dll");
+            logger.LogDebug("Loaded {Count} configurations from release {ReleaseFolder}", configurations.Count, releaseFolder);
+
+            return new NodeTypeCacheEntry(CreateNodeTypeData(release), dllPath);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Failed to load from release {ReleaseFolder}", releaseFolder);
+            return CreateNodeTypeDataOnly(release);
+        }
+    }
+
+    /// <summary>
+    /// Creates NodeTypeData from a NodeTypeRelease.
+    /// </summary>
+    private static NodeTypeData CreateNodeTypeData(NodeTypeRelease release)
+    {
+        var codeConfigs = new List<CodeConfiguration>();
+        if (!string.IsNullOrEmpty(release.Code))
+        {
+            codeConfigs.Add(new CodeConfiguration { Code = release.Code });
+        }
+
+        // Create a minimal definition from the release
+        var definition = new NodeTypeDefinition
+        {
+            Id = release.NodeTypePath.Split('/').Last(),
+            Namespace = string.Join("/", release.NodeTypePath.Split('/').SkipLast(1)),
+            Configuration = release.HubConfiguration,
+            ContentCollections = release.ContentCollections?.ToList()
+        };
+
+        return new NodeTypeData
+        {
+            Definition = definition,
+            CodeConfigurations = codeConfigs
+        };
+    }
+
+    /// <summary>
+    /// Creates a cache entry with NodeTypeData but no assembly path.
+    /// </summary>
+    private static NodeTypeCacheEntry CreateNodeTypeDataOnly(NodeTypeRelease release)
+    {
+        return new NodeTypeCacheEntry(CreateNodeTypeData(release), null);
     }
 
     /// <summary>
@@ -408,7 +574,8 @@ internal class NodeTypeService : INodeTypeService, IDisposable
             subscription.Dispose();
         }
         _subscriptions.Clear();
-        _cache.Clear();
+        _compilationTasks.Clear();
+        _releaseKeys.Clear();
         _hubConfigurations.Clear();
 
         // Dispose ReplaySubjects

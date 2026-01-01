@@ -103,7 +103,10 @@ public static class GraphConfigurationExtensions
             builder.ConfigureHub(config => MeshNodeView.AddDefaultViews(config)
                 .WithServices(services =>
                 {
-                    services.AddSingleton<IMeshNodeCompilationService, MeshNodeCompilationService>();
+                    // Register MeshNodeCompilationService as both concrete and interface
+                    // NodeTypeService needs the concrete type for internal CompileToReleaseAsync method
+                    services.AddSingleton<MeshNodeCompilationService>();
+                    services.AddSingleton<IMeshNodeCompilationService>(sp => sp.GetRequiredService<MeshNodeCompilationService>());
                     services.AddSingleton<INodeTypeService, NodeTypeService>();
                     return services;
                 })
