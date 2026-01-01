@@ -1,24 +1,65 @@
 @using MeshWeaver.Blazor.Portal.Infrastructure
 @using MeshWeaver.Blazor.Portal.Layout
+@using MeshWeaver.Blazor.Portal.Components
+@using Icons = Microsoft.FluentUI.AspNetCore.Components.Icons
 @inherits PortalLayoutBase
 
 @{
-    // Set render fragments before base renders
+    // GitHub-style header - search in middle, actions on right
     HeaderLinks = @<text>
-        <FluentAnchor Appearance="Appearance.Hypertext" Href="http://github.com/Systemorph/MeshWeaver"
-            Target="_blank" Rel="noreferrer noopener" title="MeshWeaver on GitHub"
-            aria-label="MeshWeaver source on GitHub">
-            <FluentIcon Value="@(new PortalIcons.Size20.GitHub())" Color="Color.FillInverse" />
-        </FluentAnchor>
+        @* Search bar - centered *@
+        <div class="loom-search-container">
+            <FluentSearch Placeholder="Search..." @bind-Value="searchQuery"
+                @onkeydown="HandleSearchKeyDown" Class="loom-search" />
+        </div>
+        <FluentSpacer />
+        @* Create menu - will be context-aware in Phase 2 *@
+        <FluentButton Appearance="Appearance.Stealth" Id="create-menu-button"
+            Title="Create new" aria-label="Create new" @onclick="@(() => isCreateMenuOpen = !isCreateMenuOpen)">
+            <FluentIcon Value="@(new Icons.Regular.Size20.Add())" Color="Color.FillInverse" />
+        </FluentButton>
+        <FluentMenu Anchor="create-menu-button" @bind-Open="isCreateMenuOpen">
+            <FluentMenuItem OnClick="@(() => NavigateToCreate("Organization"))">New Organization</FluentMenuItem>
+            <FluentMenuItem OnClick="@(() => NavigateToCreate("Project"))">New Project</FluentMenuItem>
+        </FluentMenu>
     </text>;
 
-    // No DesktopNavMenu - we want a simpler layout without the nav bar
+    // No left navigation menu (GitHub-style full-width content)
     DesktopNavMenu = null;
 
-    // No MobileNavMenu either for now
-    MobileNavMenu = null;
+    // Mobile: Hamburger menu with essential actions
+    MobileNavMenu = @<LoomMobileMenu IsOpen="@IsNavMenuOpen" OnClose="@CloseMobileNavMenu"
+        OnSearch="@HandleMobileSearch" OnOpenSettings="@OpenSiteSettingsAsync" />;
 }
 
 @{
     base.BuildRenderTree(__builder);
+}
+
+@code {
+    private string searchQuery = "";
+    private bool isCreateMenuOpen;
+
+    private void HandleSearchKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter" && !string.IsNullOrWhiteSpace(searchQuery))
+        {
+            NavigationManager.NavigateTo($"/search?q={Uri.EscapeDataString(searchQuery)}");
+        }
+    }
+
+    private void HandleMobileSearch(string query)
+    {
+        if (!string.IsNullOrWhiteSpace(query))
+        {
+            NavigationManager.NavigateTo($"/search?q={Uri.EscapeDataString(query)}");
+        }
+    }
+
+    private void NavigateToCreate(string type)
+    {
+        isCreateMenuOpen = false;
+        // Phase 2: Will use context-aware creation
+        NavigationManager.NavigateTo($"/create/{type}");
+    }
 }
