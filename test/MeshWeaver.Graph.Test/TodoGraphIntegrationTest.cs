@@ -28,6 +28,12 @@ namespace MeshWeaver.Graph.Test;
 [Collection("TodoGraphTests")]
 public class TodoGraphIntegrationTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
+    // Shared cache directory for all tests - compiled assemblies are reused
+    private static readonly string SharedCacheDirectory = Path.Combine(
+        Path.GetTempPath(),
+        "MeshWeaverTodoGraphTests",
+        ".mesh-cache");
+
     private static string GetSamplesGraphPath()
     {
         var currentDir = Directory.GetCurrentDirectory();
@@ -39,12 +45,11 @@ public class TodoGraphIntegrationTest(ITestOutputHelper output) : MonolithMeshTe
     {
         var graphPath = GetSamplesGraphPath();
         var dataDirectory = Path.Combine(graphPath, "Data");
-        var cacheDirectory = Path.Combine(Path.GetTempPath(), "MeshWeaverTodoGraphTests", Guid.NewGuid().ToString(), ".mesh-cache");
-        Directory.CreateDirectory(cacheDirectory);
+        Directory.CreateDirectory(SharedCacheDirectory);
 
         Output.WriteLine($"Graph path: {graphPath}");
         Output.WriteLine($"Data directory: {dataDirectory}");
-        Output.WriteLine($"Cache directory: {cacheDirectory}");
+        Output.WriteLine($"Cache directory: {SharedCacheDirectory}");
 
         var configuration = new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?>
@@ -59,11 +64,11 @@ public class TodoGraphIntegrationTest(ITestOutputHelper output) : MonolithMeshTe
             .AddFileSystemPersistence(dataDirectory)
             .ConfigureServices(services =>
             {
-                // Disable disk caching to avoid file locking issues in tests
+                // Use shared disk cache - first test compiles, subsequent tests reuse
                 services.Configure<CompilationCacheOptions>(o =>
                 {
-                    o.CacheDirectory = cacheDirectory;
-                    o.EnableDiskCache = false;
+                    o.CacheDirectory = SharedCacheDirectory;
+                    o.EnableDiskCache = true;
                 });
                 services.AddSingleton<IConfiguration>(configuration);
                 return services;
