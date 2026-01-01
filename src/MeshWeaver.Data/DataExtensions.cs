@@ -192,8 +192,23 @@ public static class DataExtensions
                 CreateDataPathStream(workspace, path, null));
         }
 
+        // Register the content: prefix resolver for UnifiedReference (only if not already registered)
+        // This handles paths like "content:collection/path" - installed in constructor for robustness
+        if (!data.UnifiedReferenceResolvers.ContainsKey("content"))
+        {
+            data = data.WithUnifiedReference("content", (workspace, path) =>
+                CreateContentPathStream(workspace, path, null));
+        }
+
+        // Register the collection: prefix resolver for UnifiedReference (only if not already registered)
+        // This handles paths like "collection:name" - installed in constructor for robustness
+        if (!data.UnifiedReferenceResolvers.ContainsKey("collection"))
+        {
+            data = data.WithUnifiedReference("collection", CreateCollectionConfigStream);
+        }
+
         // Then register the built-in stream factories for DataPathReference and UnifiedReference
-        // Note: CollectionConfigReference is handled by ContentCollectionsExtensions.AddContentCollections
+        // Note: FileReference and CollectionConfigReference stream factories are added by ContentCollectionsExtensions.AddContentCollections
         return data.Configure(reduction => reduction
             .AddWorkspaceReferenceStream<object>((workspace, reference, configuration) =>
                 reference is not DataPathReference dataPathRef
@@ -382,6 +397,25 @@ public static class DataExtensions
         }
 
         return workspace.GetStream(new FileReference(collectionPart, filePath), configuration);
+    }
+
+    /// <summary>
+    /// Creates a stream for collection: unified reference paths.
+    /// Path format: collectionName or name1,name2 (comma-separated for multiple)
+    /// Returns null if stream factory for CollectionConfigReference isn't registered.
+    /// </summary>
+    private static ISynchronizationStream<object>? CreateCollectionConfigStream(
+        IWorkspace workspace,
+        string? remainingPath)
+    {
+        // Parse collection names from path (comma-separated if multiple)
+        string[]? collectionNames = null;
+        if (!string.IsNullOrEmpty(remainingPath))
+        {
+            collectionNames = remainingPath.Split(',', StringSplitOptions.RemoveEmptyEntries);
+        }
+
+        return workspace.GetStream(new CollectionConfigReference(collectionNames), null);
     }
 
     #endregion

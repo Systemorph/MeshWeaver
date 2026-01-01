@@ -634,10 +634,17 @@ public static class ContentCollectionsExtensions
                 };
             }
 
+            // Resolve base path to absolute path if it's relative
+            var basePath = storageConfig.BasePath ?? "";
+            if (!string.IsNullOrEmpty(basePath) && !Path.IsPathRooted(basePath))
+            {
+                basePath = Path.GetFullPath(Path.Combine(Directory.GetCurrentDirectory(), basePath));
+            }
+
             // Create localized config with collection name and combined path
             var fullPath = string.IsNullOrEmpty(subdirectory)
-                ? storageConfig.BasePath ?? ""
-                : Path.Combine(storageConfig.BasePath ?? "", subdirectory);
+                ? basePath
+                : Path.Combine(basePath, subdirectory);
 
             return storageConfig with
             {
