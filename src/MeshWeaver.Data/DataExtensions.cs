@@ -207,8 +207,8 @@ public static class DataExtensions
             data = data.WithUnifiedReference("collection", CreateCollectionConfigStream);
         }
 
-        // Then register the built-in stream factories for DataPathReference and UnifiedReference
-        // Note: FileReference and CollectionConfigReference stream factories are added by ContentCollectionsExtensions.AddContentCollections
+        // Register the built-in stream factories for all reference types
+        // These are installed in DefaultConfig to ensure thread-safe initialization
         return data.Configure(reduction => reduction
             .AddWorkspaceReferenceStream<object>((workspace, reference, configuration) =>
                 reference is not DataPathReference dataPathRef
@@ -218,6 +218,14 @@ public static class DataExtensions
                 reference is not UnifiedReference unifiedRef
                     ? null
                     : CreateUnifiedReferenceStream(workspace, unifiedRef, configuration))
+            .AddWorkspaceReferenceStream<object>((workspace, reference, configuration) =>
+                reference is not FileReference fileRef
+                    ? null
+                    : CreateFileReferenceStream(workspace, fileRef, configuration))
+            .AddWorkspaceReferenceStream<object>((workspace, reference, configuration) =>
+                reference is not CollectionConfigReference
+                    ? null
+                    : CreateCollectionConfigReferenceStream(workspace, reference, configuration))
         );
     }
 
@@ -416,6 +424,61 @@ public static class DataExtensions
         }
 
         return workspace.GetStream(new CollectionConfigReference(collectionNames), null);
+    }
+
+    /// <summary>
+    /// Creates a stream for a FileReference by loading file content from the content service.
+    /// Returns null if IFileContentProvider isn't available (graceful degradation).
+    /// </summary>
+    private static ISynchronizationStream<object>? CreateFileReferenceStream(
+        IWorkspace workspace,
+        FileReference reference,
+        Func<StreamConfiguration<object>, StreamConfiguration<object>>? configuration)
+    {
+        var fileContentProvider = workspace.Hub.ServiceProvider.GetService<IFileContentProvider>();
+        if (fileContentProvider == null)
+            return null;
+
+        var streamIdentity = new StreamIdentity(workspace.Hub.Address, reference.Path);
+        var stream = new SynchronizationStream<object>(
+            streamIdentity,
+            workspace.Hub,
+            reference,
+            workspace.ReduceManager.ReduceTo<object>(),
+            configuration ?? (c => c)
+        );
+
+        // Create an observable that loads the file content
+        var observable = Observable.FromAsync(async ct =>
+        {
+            var result = await fileContentProvider.GetFileContentAsync(reference.Collection, reference.Path, null, ct);
+            return result.Success ? (object?)result.Content : null;
+        });
+
+        stream.RegisterForDisposal(
+            observable
+                .Select(value => new ChangeItem<object>(value!, stream.StreamId, workspace.Hub.Version))
+                .Where(x => x.Value != null)
+                .DistinctUntilChanged()
+                .Synchronize()
+                .Subscribe(stream)
+        );
+
+        return stream;
+    }
+
+    /// <summary>
+    /// Creates a stream for a CollectionConfigReference.
+    /// Returns null - actual handling is done by the GetDataRequest handler.
+    /// </summary>
+    private static ISynchronizationStream<object>? CreateCollectionConfigReferenceStream(
+        IWorkspace workspace,
+        WorkspaceReference reference,
+        Func<StreamConfiguration<object>, StreamConfiguration<object>>? configuration)
+    {
+        // CollectionConfigReference is handled by GetDataRequest handler, not via streams
+        // Return null to let the request pass through to the handler
+        return null;
     }
 
     #endregion

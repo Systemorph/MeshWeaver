@@ -12,8 +12,9 @@ namespace MeshWeaver.Graph.Configuration;
 
 /// <summary>
 /// Service for managing NodeType data with thread-safe caching.
-/// CRITICAL: Caches Tasks, NOT awaited results, to prevent deadlocks.
-/// Uses ConcurrentDictionary.GetOrAdd pattern for thread-safe lazy initialization.
+/// CRITICAL: Uses Lazy&lt;Task&gt; to ensure factory runs exactly once per key.
+/// ConcurrentDictionary.GetOrAdd with a factory lambda can run the factory multiple times,
+/// but Lazy ensures the inner factory executes only once.
 /// </summary>
 internal class NodeTypeService : INodeTypeService, IDisposable
 {
@@ -22,8 +23,10 @@ internal class NodeTypeService : INodeTypeService, IDisposable
     private readonly IMeshNodeCompilationService? compilationService;
     private readonly MeshConfiguration meshConfiguration;
 
-    // CRITICAL: Cache Tasks, not results. Awaiting would cause deadlocks.
-    private readonly ConcurrentDictionary<string, Task<NodeTypeCacheEntry?>> _cache = new();
+    // CRITICAL: Use Lazy<Task> to ensure factory runs exactly once per key.
+    // ConcurrentDictionary.GetOrAdd can run the factory multiple times concurrently,
+    // but Lazy ensures only one actual compilation happens.
+    private readonly ConcurrentDictionary<string, Lazy<Task<NodeTypeCacheEntry?>>> _cache = new();
 
     // Stream subscriptions for cache invalidation
     private readonly ConcurrentDictionary<string, IDisposable> _subscriptions = new();
@@ -76,11 +79,13 @@ internal class NodeTypeService : INodeTypeService, IDisposable
     /// <inheritdoc />
     public Task<string?> GetAssemblyPathAsync(string nodeTypePath, CancellationToken ct = default)
     {
-        // GetOrAdd ensures thread-safe lazy initialization - we do NOT await inside GetOrAdd
-        var cacheTask = _cache.GetOrAdd(nodeTypePath, path =>
-            SubscribeAndProcessAsync(path, ct));
+        // Use Lazy<Task> to ensure the factory runs exactly once per key.
+        // ConcurrentDictionary.GetOrAdd can run the factory multiple times,
+        // but Lazy ensures only one actual SubscribeAndProcessAsync call.
+        var lazyTask = _cache.GetOrAdd(nodeTypePath, path =>
+            new Lazy<Task<NodeTypeCacheEntry?>>(() => SubscribeAndProcessAsync(path, ct)));
 
-        return cacheTask.ContinueWith(t => t.Result?.AssemblyPath, TaskContinuationOptions.ExecuteSynchronously);
+        return lazyTask.Value.ContinueWith(t => t.Result?.AssemblyPath, TaskContinuationOptions.ExecuteSynchronously);
     }
 
     /// <inheritdoc />
@@ -113,7 +118,7 @@ internal class NodeTypeService : INodeTypeService, IDisposable
     {
         logger.LogDebug("Invalidating cache for {NodeTypePath}", nodeTypePath);
 
-        // Remove from all caches
+        // Remove from all caches (Lazy<Task> will be disposed by GC)
         _cache.TryRemove(nodeTypePath, out _);
         _hubConfigurations.TryRemove(nodeTypePath, out _);
 
@@ -283,12 +288,12 @@ internal class NodeTypeService : INodeTypeService, IDisposable
     /// </summary>
     public Task<NodeTypeData?> GetNodeTypeDataAsync(string nodeTypePath, CancellationToken ct = default)
     {
-        // GetOrAdd returns the cached Task - we do NOT await inside GetOrAdd
-        var cacheTask = _cache.GetOrAdd(nodeTypePath, path =>
-            SubscribeAndProcessAsync(path, ct));
+        // Use Lazy<Task> to ensure the factory runs exactly once per key.
+        var lazyTask = _cache.GetOrAdd(nodeTypePath, path =>
+            new Lazy<Task<NodeTypeCacheEntry?>>(() => SubscribeAndProcessAsync(path, ct)));
 
         // Return a projection of the cached task
-        return cacheTask.ContinueWith(t => t.Result?.Data, TaskContinuationOptions.ExecuteSynchronously);
+        return lazyTask.Value.ContinueWith(t => t.Result?.Data, TaskContinuationOptions.ExecuteSynchronously);
     }
 
     /// <summary>

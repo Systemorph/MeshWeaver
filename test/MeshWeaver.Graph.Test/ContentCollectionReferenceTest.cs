@@ -233,6 +233,89 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
         response.Should().NotBeNull();
     }
 
+    /// <summary>
+    /// Tests concurrent collection requests to multiple organizations using UnifiedReference.
+    /// This test launches parallel requests to ACME and Systemorph simultaneously
+    /// to verify thread-safe hub initialization with collection:name format.
+    /// Both ACME and Systemorph are Organizations which have the "logos" collection.
+    /// </summary>
+    [Fact(Timeout = 120000)]
+    public async Task ConcurrentCollectionRequests_WithUnifiedReference_AllSucceed()
+    {
+        var acmeAddress = new Address("ACME");
+        var systemorphAddress = new Address("Systemorph");
+        var client = GetClient(c => c.AddData(data => data));
+
+        // Launch concurrent requests to both organizations WITHOUT pre-initializing them
+        // This tests the race condition where multiple hubs are initialized simultaneously
+        // Uses collection:name format (UnifiedReference)
+        // Both ACME and Systemorph are Organizations which have "logos" collection
+        var tasks = new List<Task<IMessageDelivery<GetDataResponse>>>();
+
+        for (int i = 0; i < 10; i++)
+        {
+            // Alternate between ACME and Systemorph - both request logos collection
+            var address = i % 2 == 0 ? acmeAddress : systemorphAddress;
+
+            tasks.Add(client.AwaitResponse(
+                new GetDataRequest(new UnifiedReference("collection:logos")),
+                o => o.WithTarget(address),
+                TestContext.Current.CancellationToken));
+        }
+
+        // Wait for all requests to complete
+        var responses = await Task.WhenAll(tasks);
+
+        // Verify all requests succeeded
+        for (int i = 0; i < responses.Length; i++)
+        {
+            var response = responses[i];
+            response.Should().NotBeNull($"Request {i} should not be null");
+            response.Message.Should().NotBeNull($"Request {i} message should not be null");
+            response.Message.Data.Should().NotBeNull($"Request {i} data should not be null");
+
+            var configs = ParseCollectionConfigs(response.Message.Data);
+            configs.Should().NotBeNull($"Request {i} configs should not be null");
+            configs.Should().HaveCount(1, $"Request {i} should return exactly 1 config");
+        }
+    }
+
+    /// <summary>
+    /// Tests concurrent content file requests to verify thread-safe file resolution.
+    /// </summary>
+    [Fact(Timeout = 120000)]
+    public async Task ConcurrentContentRequests_ToSameOrganization_AllSucceed()
+    {
+        var acmeAddress = new Address("ACME");
+        var client = GetClient(c => c.AddData(data => data));
+
+        // Launch concurrent content requests WITHOUT pre-initializing
+        var tasks = new List<Task<IMessageDelivery<GetDataResponse>>>();
+
+        for (int i = 0; i < 10; i++)
+        {
+            tasks.Add(client.AwaitResponse(
+                new GetDataRequest(new UnifiedReference("content:logos/logo.svg")),
+                o => o.WithTarget(acmeAddress),
+                TestContext.Current.CancellationToken));
+        }
+
+        // Wait for all requests to complete
+        var responses = await Task.WhenAll(tasks);
+
+        // Verify all requests succeeded with SVG content
+        foreach (var response in responses)
+        {
+            response.Should().NotBeNull();
+            response.Message.Should().NotBeNull();
+            response.Message.Data.Should().NotBeNull();
+
+            var content = response.Message.Data as string;
+            content.Should().NotBeNull();
+            content.Should().Contain("<svg");
+        }
+    }
+
     private static IReadOnlyCollection<ContentCollectionConfig>? ParseCollectionConfigs(object? data)
     {
         if (data is JsonElement jsonElement)

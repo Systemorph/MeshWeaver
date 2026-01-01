@@ -183,9 +183,13 @@ public record MessageHubConfiguration
         HubInstance = ServiceProvider.GetRequiredService<IMessageHub>();
         parentHubs?.Add(HubInstance);
 
-        // Execute synchronous initialization actions immediately after hub creation
+        // Execute synchronous initialization actions BEFORE starting message processing
+        // This ensures services like Workspace/DataContext are fully configured before any messages arrive
         foreach (var initAction in SyncBuildupActions)
             initAction(HubInstance);
+
+        // Start message processing after SyncBuildupActions complete
+        ((MessageHub)HubInstance).StartMessageProcessing();
 
         return HubInstance;
     }
