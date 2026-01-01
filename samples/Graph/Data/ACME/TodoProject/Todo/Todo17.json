@@ -1,0 +1,21 @@
+{
+  "id": "Todo17",
+  "namespace": "ACME/TodoProject/Todo",
+  "name": "Design user interface mockups",
+  "nodeType": "ACME/Type/Project/Todo",
+  "description": "Create wireframes and mockups for the new dashboard feature",
+  "iconName": "CheckmarkSquare",
+  "displayOrder": 17,
+  "isPersistent": true,
+  "content": {
+    "id": "Todo17",
+    "title": "Design user interface mockups",
+    "description": "Create wireframes and mockups for the new dashboard feature",
+    "category": "Work",
+    "responsiblePerson": "Unassigned",
+    "dueDate": "2026-01-05T00:00:00Z",
+    "status": "Pending",
+    "iconName": "CheckmarkSquare",
+    "createdAt": "2025-12-28T00:00:00Z"
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "id": "Todo14",
+  "namespace": "ACME/TodoProject/Todo",
+  "name": "Security vulnerability scan",
+  "nodeType": "ACME/Type/Project/Todo",
+  "description": "Run comprehensive security scan and address any findings",
+  "iconName": "CheckmarkSquare",
+  "displayOrder": 14,
+  "isPersistent": true,
+  "content": {
+    "id": "Todo14",
+    "title": "Security vulnerability scan",
+    "description": "Run comprehensive security scan and address any findings",
+    "category": "Work",
+    "responsiblePerson": "Unassigned",
+    "dueDate": "2026-01-05T00:00:00Z",
+    "status": "Pending",
+    "iconName": "CheckmarkSquare",
+    "createdAt": "2025-12-31T00:00:00Z"
+  }
+}

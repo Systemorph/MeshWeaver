@@ -81,11 +81,26 @@ internal interface ICompilationCacheService
     NodeAssemblyLoadContext GetOrCreateLoadContext(string nodeName);
 
     /// <summary>
-    /// Loads an assembly into the node's isolated load context.
+    /// Loads an assembly into the node's isolated load context from disk.
     /// </summary>
     /// <param name="nodeName">Sanitized node name.</param>
     /// <returns>The loaded assembly, or null if the DLL doesn't exist.</returns>
     Assembly? LoadAssembly(string nodeName);
+
+    /// <summary>
+    /// Loads an assembly from byte arrays into the node's isolated load context.
+    /// Used for in-memory compilation when disk caching is disabled.
+    /// </summary>
+    /// <param name="nodeName">Sanitized node name.</param>
+    /// <param name="assemblyBytes">The compiled assembly bytes.</param>
+    /// <param name="pdbBytes">The PDB bytes for debugging (optional).</param>
+    /// <returns>The loaded assembly.</returns>
+    Assembly LoadAssemblyFromBytes(string nodeName, byte[] assemblyBytes, byte[]? pdbBytes);
+
+    /// <summary>
+    /// Gets whether disk caching is enabled.
+    /// </summary>
+    bool IsDiskCacheEnabled { get; }
 
     /// <summary>
     /// Unloads the AssemblyLoadContext for a node, allowing the DLL to be regenerated.
@@ -97,12 +112,13 @@ internal interface ICompilationCacheService
 /// <summary>
 /// Collectible AssemblyLoadContext for dynamically compiled node assemblies.
 /// This context can be unloaded to allow recompilation of the assembly.
+/// Supports both file-based and in-memory assembly loading.
 /// </summary>
 internal sealed class NodeAssemblyLoadContext : AssemblyLoadContext, IDisposable
 {
     private readonly string _nodeName;
     private readonly ILogger? _logger;
-    private readonly string _dllPath;
+    private readonly string? _dllPath;
     private Assembly? _loadedAssembly;
     private bool _disposed;
 
@@ -121,7 +137,7 @@ internal sealed class NodeAssemblyLoadContext : AssemblyLoadContext, IDisposable
     /// </summary>
     public bool IsDisposed => _disposed;
 
-    public NodeAssemblyLoadContext(string nodeName, string dllPath, ILogger? logger = null)
+    public NodeAssemblyLoadContext(string nodeName, string? dllPath, ILogger? logger = null)
         : base(name: $"DynamicNode_{nodeName}", isCollectible: true)
     {
         _nodeName = nodeName;
@@ -140,7 +156,7 @@ internal sealed class NodeAssemblyLoadContext : AssemblyLoadContext, IDisposable
         if (_loadedAssembly != null)
             return _loadedAssembly;
 
-        if (!File.Exists(_dllPath))
+        if (string.IsNullOrEmpty(_dllPath) || !File.Exists(_dllPath))
         {
             _logger?.LogDebug("DLL not found at {DllPath}", _dllPath);
             return null;
@@ -149,6 +165,27 @@ internal sealed class NodeAssemblyLoadContext : AssemblyLoadContext, IDisposable
         // Load the assembly into this isolated context
         _loadedAssembly = LoadFromAssemblyPath(_dllPath);
         _logger?.LogDebug("Loaded assembly {AssemblyName} into context {ContextName}",
+            _loadedAssembly.GetName().Name, Name);
+
+        return _loadedAssembly;
+    }
+
+    /// <summary>
+    /// Loads an assembly from byte arrays (for in-memory compilation).
+    /// </summary>
+    public Assembly LoadFromBytes(byte[] assemblyBytes, byte[]? pdbBytes)
+    {
+        if (_disposed)
+            throw new ObjectDisposedException(Name, "Cannot load assembly from disposed context");
+
+        if (_loadedAssembly != null)
+            return _loadedAssembly;
+
+        using var assemblyStream = new MemoryStream(assemblyBytes);
+        using var pdbStream = pdbBytes != null ? new MemoryStream(pdbBytes) : null;
+
+        _loadedAssembly = LoadFromStream(assemblyStream, pdbStream);
+        _logger?.LogDebug("Loaded assembly {AssemblyName} from bytes into context {ContextName}",
             _loadedAssembly.GetName().Name, Name);
 
         return _loadedAssembly;
@@ -179,6 +216,7 @@ internal sealed class NodeAssemblyLoadContext : AssemblyLoadContext, IDisposable
 /// Service for managing the dynamic compilation cache.
 /// Handles cache validation, path generation, cache invalidation,
 /// and AssemblyLoadContext management for dynamic assembly loading/unloading.
+/// Supports both disk-based and in-memory caching.
 /// </summary>
 internal class CompilationCacheService(
     IOptions<CompilationCacheOptions> options,
@@ -190,6 +228,9 @@ internal class CompilationCacheService(
     private readonly string _absoluteCacheDirectory = ResolveAbsolutePath(options.Value?.CacheDirectory ?? ".mesh-cache");
     private readonly Lazy<DateTimeOffset> _frameworkTimestamp = new(ComputeFrameworkTimestamp);
     private bool _disposed;
+
+    /// <inheritdoc />
+    public bool IsDiskCacheEnabled => _options.EnableDiskCache;
 
     private static string ResolveAbsolutePath(string cacheDirectory)
     {
@@ -404,6 +445,21 @@ internal class CompilationCacheService(
 
         var context = GetOrCreateLoadContext(nodeName);
         return context.LoadNodeAssembly();
+    }
+
+    /// <inheritdoc />
+    public Assembly LoadAssemblyFromBytes(string nodeName, byte[] assemblyBytes, byte[]? pdbBytes)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+
+        // For in-memory loading, create context without dll path
+        var context = _loadContexts.GetOrAdd(nodeName, name =>
+        {
+            logger.LogDebug("Creating new in-memory AssemblyLoadContext for {NodeName}", name);
+            return new NodeAssemblyLoadContext(name, null, logger);
+        });
+
+        return context.LoadFromBytes(assemblyBytes, pdbBytes);
     }
 
     /// <inheritdoc />

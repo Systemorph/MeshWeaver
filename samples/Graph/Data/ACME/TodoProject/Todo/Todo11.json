@@ -1,0 +1,21 @@
+{
+  "id": "Todo11",
+  "namespace": "ACME/TodoProject/Todo",
+  "name": "Performance testing suite",
+  "nodeType": "ACME/Type/Project/Todo",
+  "description": "Create automated performance tests for the web application",
+  "iconName": "CheckmarkSquare",
+  "displayOrder": 11,
+  "isPersistent": true,
+  "content": {
+    "id": "Todo11",
+    "title": "Performance testing suite",
+    "description": "Create automated performance tests for the web application",
+    "category": "Work",
+    "responsiblePerson": "Unassigned",
+    "dueDate": "2026-01-14T00:00:00Z",
+    "status": "Pending",
+    "iconName": "CheckmarkSquare",
+    "createdAt": "2025-12-29T00:00:00Z"
+  }
+}

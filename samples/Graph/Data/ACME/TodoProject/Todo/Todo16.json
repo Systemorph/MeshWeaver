@@ -1,0 +1,21 @@
+{
+  "id": "Todo16",
+  "namespace": "ACME/TodoProject/Todo",
+  "name": "Database optimization",
+  "nodeType": "ACME/Type/Project/Todo",
+  "description": "Optimize database queries and indexes for better performance",
+  "iconName": "CheckmarkSquare",
+  "displayOrder": 16,
+  "isPersistent": true,
+  "content": {
+    "id": "Todo16",
+    "title": "Database optimization",
+    "description": "Optimize database queries and indexes for better performance",
+    "category": "Work",
+    "responsiblePerson": "Unassigned",
+    "dueDate": "2026-01-18T00:00:00Z",
+    "status": "Pending",
+    "iconName": "CheckmarkSquare",
+    "createdAt": "2025-12-27T00:00:00Z"
+  }
+}
