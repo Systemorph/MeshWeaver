@@ -1,0 +1,21 @@
+{
+  "id": "CRMSetup",
+  "namespace": "ACME/ProductLaunch/Todo",
+  "name": "Configure CRM pipeline",
+  "nodeType": "ACME/Project/Todo",
+  "description": "Set up sales pipeline stages in CRM",
+  "iconName": "People",
+  "displayOrder": 17,
+  "isPersistent": true,
+  "content": {
+    "$type": "Todo",
+    "id": "CRMSetup",
+    "title": "Configure CRM pipeline",
+    "description": "Configure Salesforce pipeline for MeshFlow leads: Demo Request → Qualified → Demo Scheduled → Proposal → Negotiation → Closed Won/Lost.",
+    "category": "Sales",
+    "priority": "Medium",
+    "assignee": "Bob",
+    "dueDate": "2025-03-07T00:00:00Z",
+    "status": "Pending"
+  }
+}

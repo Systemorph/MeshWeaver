@@ -119,8 +119,9 @@ internal sealed class NodeAssemblyLoadContext : AssemblyLoadContext, IDisposable
     private readonly string _nodeName;
     private readonly ILogger? _logger;
     private readonly string? _dllPath;
+    private readonly object _loadLock = new();
     private Assembly? _loadedAssembly;
-    private bool _disposed;
+    private volatile bool _disposed;
 
     /// <summary>
     /// Gets the node name associated with this context.
@@ -153,21 +154,34 @@ internal sealed class NodeAssemblyLoadContext : AssemblyLoadContext, IDisposable
         if (_disposed)
             throw new ObjectDisposedException(Name, "Cannot load assembly from disposed context");
 
-        if (_loadedAssembly != null)
-            return _loadedAssembly;
+        // Fast path: already loaded
+        var loaded = _loadedAssembly;
+        if (loaded != null)
+            return loaded;
 
-        if (string.IsNullOrEmpty(_dllPath) || !File.Exists(_dllPath))
+        lock (_loadLock)
         {
-            _logger?.LogDebug("DLL not found at {DllPath}", _dllPath);
-            return null;
+            // Double-check after acquiring lock
+            if (_disposed)
+                throw new ObjectDisposedException(Name, "Cannot load assembly from disposed context");
+
+            loaded = _loadedAssembly;
+            if (loaded != null)
+                return loaded;
+
+            if (string.IsNullOrEmpty(_dllPath) || !File.Exists(_dllPath))
+            {
+                _logger?.LogDebug("DLL not found at {DllPath}", _dllPath);
+                return null;
+            }
+
+            // Load the assembly into this isolated context
+            _loadedAssembly = LoadFromAssemblyPath(_dllPath);
+            _logger?.LogDebug("Loaded assembly {AssemblyName} into context {ContextName}",
+                _loadedAssembly.GetName().Name, Name);
+
+            return _loadedAssembly;
         }
-
-        // Load the assembly into this isolated context
-        _loadedAssembly = LoadFromAssemblyPath(_dllPath);
-        _logger?.LogDebug("Loaded assembly {AssemblyName} into context {ContextName}",
-            _loadedAssembly.GetName().Name, Name);
-
-        return _loadedAssembly;
     }
 
     /// <summary>
@@ -178,17 +192,30 @@ internal sealed class NodeAssemblyLoadContext : AssemblyLoadContext, IDisposable
         if (_disposed)
             throw new ObjectDisposedException(Name, "Cannot load assembly from disposed context");
 
-        if (_loadedAssembly != null)
+        // Fast path: already loaded
+        var loaded = _loadedAssembly;
+        if (loaded != null)
+            return loaded;
+
+        lock (_loadLock)
+        {
+            // Double-check after acquiring lock
+            if (_disposed)
+                throw new ObjectDisposedException(Name, "Cannot load assembly from disposed context");
+
+            loaded = _loadedAssembly;
+            if (loaded != null)
+                return loaded;
+
+            using var assemblyStream = new MemoryStream(assemblyBytes);
+            using var pdbStream = pdbBytes != null ? new MemoryStream(pdbBytes) : null;
+
+            _loadedAssembly = LoadFromStream(assemblyStream, pdbStream);
+            _logger?.LogDebug("Loaded assembly {AssemblyName} from bytes into context {ContextName}",
+                _loadedAssembly.GetName().Name, Name);
+
             return _loadedAssembly;
-
-        using var assemblyStream = new MemoryStream(assemblyBytes);
-        using var pdbStream = pdbBytes != null ? new MemoryStream(pdbBytes) : null;
-
-        _loadedAssembly = LoadFromStream(assemblyStream, pdbStream);
-        _logger?.LogDebug("Loaded assembly {AssemblyName} from bytes into context {ContextName}",
-            _loadedAssembly.GetName().Name, Name);
-
-        return _loadedAssembly;
+        }
     }
 
     protected override Assembly? Load(AssemblyName assemblyName)
@@ -199,15 +226,18 @@ internal sealed class NodeAssemblyLoadContext : AssemblyLoadContext, IDisposable
 
     public void Dispose()
     {
-        if (_disposed)
-            return;
+        lock (_loadLock)
+        {
+            if (_disposed)
+                return;
 
-        _disposed = true;
-        _loadedAssembly = null;
+            _disposed = true;
+            _loadedAssembly = null;
 
-        _logger?.LogDebug("Unloading AssemblyLoadContext {ContextName}", Name);
+            _logger?.LogDebug("Unloading AssemblyLoadContext {ContextName}", Name);
+        }
 
-        // Initiate unload - the context will be collected when all references are released
+        // Initiate unload outside the lock - the context will be collected when all references are released
         Unload();
     }
 }
@@ -227,7 +257,8 @@ internal class CompilationCacheService(
     private readonly ConcurrentDictionary<string, NodeAssemblyLoadContext> _loadContexts = new();
     private readonly string _absoluteCacheDirectory = ResolveAbsolutePath(options.Value?.CacheDirectory ?? ".mesh-cache");
     private readonly Lazy<DateTimeOffset> _frameworkTimestamp = new(ComputeFrameworkTimestamp);
-    private bool _disposed;
+    private readonly object _disposeLock = new();
+    private volatile bool _disposed;
 
     /// <inheritdoc />
     public bool IsDiskCacheEnabled => _options.EnableDiskCache;
@@ -477,25 +508,30 @@ internal class CompilationCacheService(
     /// </summary>
     public void Dispose()
     {
-        if (_disposed)
-            return;
+        lock (_disposeLock)
+        {
+            if (_disposed)
+                return;
 
-        _disposed = true;
+            _disposed = true;
+        }
 
         logger.LogDebug("Disposing CompilationCacheService, unloading all {Count} contexts", _loadContexts.Count);
 
-        foreach (var kvp in _loadContexts)
+        // Drain the dictionary by removing and disposing each context
+        foreach (var key in _loadContexts.Keys.ToList())
         {
-            try
+            if (_loadContexts.TryRemove(key, out var context))
             {
-                kvp.Value.Dispose();
-            }
-            catch (Exception ex)
-            {
-                logger.LogWarning(ex, "Failed to dispose context for {NodeName}", kvp.Key);
+                try
+                {
+                    context.Dispose();
+                }
+                catch (Exception ex)
+                {
+                    logger.LogWarning(ex, "Failed to dispose context for {NodeName}", key);
+                }
             }
         }
-
-        _loadContexts.Clear();
     }
 }

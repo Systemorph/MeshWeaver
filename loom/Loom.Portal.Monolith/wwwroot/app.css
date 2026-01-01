@@ -36,3 +36,48 @@ h1:focus {
 .form-floating > .form-control-plaintext:focus::placeholder, .form-floating > .form-control:focus::placeholder {
     text-align: start;
 }
+
+/* Loom Portal - Keep logo but remove nav frame, content spans full width */
+@media (min-width: 768px) {
+    .layout {
+        grid-template-columns: auto 1fr !important;
+        grid-template-rows: auto auto 1fr !important;
+        grid-template-areas:
+            "icon head"
+            "messagebar messagebar"
+            "main main" !important;
+    }
+
+    .layout.chat-visible.chat-position-right {
+        grid-template-columns: auto 1fr var(--chat-width) !important;
+        grid-template-areas:
+            "icon head head"
+            "messagebar messagebar chat"
+            "main main chat" !important;
+    }
+
+    .layout.chat-visible.chat-position-left {
+        grid-template-columns: auto var(--chat-width) 1fr !important;
+        grid-template-areas:
+            "icon head head"
+            "chat messagebar messagebar"
+            "chat main main" !important;
+    }
+
+    .layout.chat-visible.chat-position-bottom {
+        grid-template-rows: auto auto 1fr var(--chat-height) !important;
+        grid-template-areas:
+            "icon head"
+            "messagebar messagebar"
+            "main main"
+            "chat chat" !important;
+    }
+
+    .layout > .body-content {
+        border-left: none !important;
+    }
+
+    .layout > .messagebar-container {
+        border-left: none !important;
+    }
+}

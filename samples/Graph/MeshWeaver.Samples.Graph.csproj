@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <IsPackable>false</IsPackable>
+    <!-- This project doesn't produce any output, it's just for browsing files in VS -->
+    <NoBuild>true</NoBuild>
+    <NoDefaultLaunchSettingsFile>true</NoDefaultLaunchSettingsFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="**/*" Exclude="*.csproj" />
+  </ItemGroup>
+</Project>

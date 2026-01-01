@@ -1,4 +1,5 @@
-﻿using MeshWeaver.Blazor;
+﻿using System.Text.Json;
+using MeshWeaver.Blazor;
 using MeshWeaver.Blazor.Infrastructure;
 using MeshWeaver.ContentCollections;
 using MeshWeaver.Data;
@@ -153,7 +154,23 @@ public static class BlazorHostingExtensions
                         o => o.WithTarget(targetAddress),
                         context.RequestAborted);
 
-                    var configs = collectionResponse?.Message?.Data as IReadOnlyCollection<ContentCollectionConfig>;
+                    // Handle both direct type and JSON serialized response
+                    IReadOnlyCollection<ContentCollectionConfig>? configs;
+                    if (collectionResponse?.Message?.Data is JsonElement jsonElement)
+                    {
+                        configs = jsonElement.EnumerateArray()
+                            .Select(e => new ContentCollectionConfig
+                            {
+                                Name = e.TryGetProperty("name", out var nameProp) ? nameProp.GetString() ?? "" : "",
+                                SourceType = e.TryGetProperty("sourceType", out var typeProp) ? typeProp.GetString() ?? "" : "",
+                                BasePath = e.TryGetProperty("basePath", out var pathProp) ? pathProp.GetString() : null
+                            })
+                            .ToArray();
+                    }
+                    else
+                    {
+                        configs = collectionResponse?.Message?.Data as IReadOnlyCollection<ContentCollectionConfig>;
+                    }
                     collectionConfig = configs?.FirstOrDefault(c => c.Name == collectionName);
 
                     if (collectionConfig == null)

@@ -1,0 +1,22 @@
+{
+  "id": "CompetitiveAnalysis",
+  "namespace": "ACME/ProductLaunch/Todo",
+  "name": "Conduct competitive analysis",
+  "nodeType": "ACME/Project/Todo",
+  "description": "Analyze key competitors in the workflow automation space",
+  "iconName": "DataTrending",
+  "displayOrder": 2,
+  "isPersistent": true,
+  "content": {
+    "$type": "Todo",
+    "id": "CompetitiveAnalysis",
+    "title": "Conduct competitive analysis",
+    "description": "Deep-dive analysis of Zapier, Make, and Monday.com. Document feature gaps, pricing differences, and positioning opportunities for MeshFlow.",
+    "category": "Research",
+    "priority": "High",
+    "assignee": "Bob",
+    "dueDate": "2025-01-25T00:00:00Z",
+    "status": "Completed",
+    "completedAt": "2025-01-24T16:45:00Z"
+  }
+}
