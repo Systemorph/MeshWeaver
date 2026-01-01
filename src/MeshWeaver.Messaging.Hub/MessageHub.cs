@@ -54,6 +54,17 @@ public sealed class MessageHub : IMessageHub
         }
     }
 
+    /// <summary>
+    /// Starts message processing and posts the initialization request.
+    /// Called from Build() after SyncBuildupActions complete.
+    /// </summary>
+    internal void StartMessageProcessing()
+    {
+        messageService.Start();
+        if (!Configuration.DeferredInitialization)
+            Post(new InitializeHubRequest());
+    }
+
     private readonly ThreadSafeLinkedList<AsyncDelivery> rules = new();
     private readonly Lock messageHandlerRegistrationLock = new();
     private readonly Lock typeRegistryLock = new();
@@ -100,10 +111,10 @@ public sealed class MessageHub : IMessageHub
         }
         Register(ExecuteRequest);
         Register(HandleCallbacks);
-        messageService.Start();
-        if (!configuration.DeferredInitialization)
-            Post(new InitializeHubRequest());
 
+        // Note: messageService.Start() is called from MessageHubConfiguration.Build()
+        // AFTER SyncBuildupActions complete, to ensure services like Workspace/DataContext
+        // are fully configured before any messages arrive
     }
 
     private IMessageDelivery HandlePingRequest(IMessageDelivery<PingRequest> request)
