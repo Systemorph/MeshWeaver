@@ -1,0 +1,48 @@
+@using Icons = Microsoft.FluentUI.AspNetCore.Components.Icons
+
+<FluentMenu Open="@IsOpen" Anchored="false" Style="grid-area: nav-menu; height: auto; max-height: 80vh; width: 100%;">
+    <div style="padding: 8px;">
+        <FluentSearch Placeholder="Search..." @bind-Value="searchQuery"
+            @onkeydown="HandleSearchKeyDown" Style="width: 100%;" />
+    </div>
+    <FluentDivider />
+    <FluentMenuItem OnClick="@HandleCreateClick">
+        <FluentIcon Value="@(new Icons.Regular.Size20.Add())" Slot="start" />
+        Create New...
+    </FluentMenuItem>
+    <FluentDivider />
+    <FluentMenuItem OnClick="@HandleSettingsClick">
+        <FluentIcon Value="@(new Icons.Regular.Size20.Settings())" Slot="start" />
+        Settings
+    </FluentMenuItem>
+</FluentMenu>
+
+@code {
+    [Parameter] public bool IsOpen { get; set; }
+    [Parameter] public EventCallback OnClose { get; set; }
+    [Parameter] public EventCallback<string> OnSearch { get; set; }
+    [Parameter] public EventCallback OnOpenSettings { get; set; }
+
+    private string searchQuery = "";
+
+    private async Task HandleSearchKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter" && !string.IsNullOrWhiteSpace(searchQuery))
+        {
+            await OnSearch.InvokeAsync(searchQuery);
+            await OnClose.InvokeAsync();
+        }
+    }
+
+    private async Task HandleCreateClick()
+    {
+        // Phase 2: Will open create dialog
+        await OnClose.InvokeAsync();
+    }
+
+    private async Task HandleSettingsClick()
+    {
+        await OnOpenSettings.InvokeAsync();
+        await OnClose.InvokeAsync();
+    }
+}
