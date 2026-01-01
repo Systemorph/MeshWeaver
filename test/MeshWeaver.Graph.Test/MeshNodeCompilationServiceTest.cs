@@ -177,10 +177,10 @@ public record ProjectType
         // Act
         var assemblyPath = await service.GetAssemblyLocationAsync(node, TestContext.Current.CancellationToken);
 
-        // Assert
+        // Assert - user code is in global namespace (no namespace wrapper)
         assemblyPath.Should().NotBeNull();
         var assembly = Assembly.LoadFrom(assemblyPath!);
-        assembly.GetType("MeshWeaver.Graph.Dynamic.ProjectType").Should().NotBeNull();
+        assembly.GetType("ProjectType").Should().NotBeNull();
     }
 
     [Fact(Timeout = 20000)]
@@ -424,7 +424,8 @@ public record RecordType
         assemblyPath.Should().NotBeNull();
         var assembly = Assembly.LoadFrom(assemblyPath!);
 
-        var recordType = assembly.GetType("MeshWeaver.Graph.Dynamic.RecordType");
+        // User code is in global namespace (no namespace wrapper)
+        var recordType = assembly.GetType("RecordType");
         recordType.Should().NotBeNull();
 
         var instance = Activator.CreateInstance(recordType!);

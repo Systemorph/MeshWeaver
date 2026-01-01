@@ -31,4 +31,25 @@ public class CompilationCacheOptions
     /// Default: true
     /// </summary>
     public bool EnableSourceDebugging { get; set; } = true;
+
+    /// <summary>
+    /// Maximum time to wait when acquiring a compilation lock.
+    /// Used for multi-process synchronization when multiple processes
+    /// try to compile the same node type simultaneously.
+    /// Default: 2 minutes
+    /// </summary>
+    public TimeSpan LockTimeout { get; set; } = TimeSpan.FromMinutes(2);
+
+    /// <summary>
+    /// Initial delay when retrying lock acquisition.
+    /// Uses exponential backoff up to LockMaxRetryDelayMs.
+    /// Default: 50ms
+    /// </summary>
+    public int LockRetryDelayMs { get; set; } = 50;
+
+    /// <summary>
+    /// Maximum delay between lock acquisition retries.
+    /// Default: 2000ms
+    /// </summary>
+    public int LockMaxRetryDelayMs { get; set; } = 2000;
 }

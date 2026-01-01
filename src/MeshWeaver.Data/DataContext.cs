@@ -1,5 +1,6 @@
 ﻿using System.Collections.Immutable;
 using System.Reactive.Linq;
+using MeshWeaver.Data.Validation;
 using MeshWeaver.Domain;
 using MeshWeaver.Messaging;
 using MeshWeaver.Messaging.Serialization;
@@ -97,6 +98,13 @@ public sealed record DataContext : IDisposable
     /// </summary>
     public ImmutableDictionary<string, ImmutableList<UnifiedReferenceResolver>> UnifiedReferenceResolvers { get; init; } =
         ImmutableDictionary<string, ImmutableList<UnifiedReferenceResolver>>.Empty;
+
+    /// <summary>
+    /// Global access restrictions applied to all data operations.
+    /// Evaluated before type-specific restrictions.
+    /// </summary>
+    public ImmutableList<AccessRestrictionEntry> GlobalAccessRestrictions { get; init; } =
+        ImmutableList<AccessRestrictionEntry>.Empty;
 
     public DataContext WithInitializationTimeout(TimeSpan timeout) =>
         this with { InitializationTimeout = timeout };
@@ -385,4 +393,56 @@ public static class DataContextExtensions
         };
     }
 
+    /// <summary>
+    /// Adds a global access restriction that applies to all data operations.
+    /// Global restrictions are evaluated before type-specific restrictions.
+    /// </summary>
+    /// <param name="dataContext">The data context to configure</param>
+    /// <param name="restriction">Async restriction delegate to evaluate</param>
+    /// <param name="name">Optional name for logging/debugging</param>
+    /// <returns>Updated data context with the restriction added</returns>
+    /// <example>
+    /// <code>
+    /// .AddData(data => data
+    ///     .WithAccessRestriction(
+    ///         (action, ctx, accessCtx) =>
+    ///         {
+    ///             // Require authentication for all write operations
+    ///             if (action == AccessAction.Read)
+    ///                 return Task.FromResult(true);
+    ///             return Task.FromResult(accessCtx.UserContext != null);
+    ///         },
+    ///         "RequireAuthentication")
+    ///     .AddSource(...)
+    /// )
+    /// </code>
+    /// </example>
+    public static DataContext WithAccessRestriction(
+        this DataContext dataContext,
+        AccessRestrictionDelegate restriction,
+        string? name = null)
+    {
+        return dataContext with
+        {
+            GlobalAccessRestrictions = dataContext.GlobalAccessRestrictions.Add(
+                new AccessRestrictionEntry(restriction, name))
+        };
+    }
+
+    /// <summary>
+    /// Adds a global access restriction using a synchronous delegate.
+    /// </summary>
+    /// <param name="dataContext">The data context to configure</param>
+    /// <param name="restriction">Sync restriction delegate to evaluate</param>
+    /// <param name="name">Optional name for logging/debugging</param>
+    /// <returns>Updated data context with the restriction added</returns>
+    public static DataContext WithAccessRestriction(
+        this DataContext dataContext,
+        Func<string, object, AccessRestrictionContext, bool> restriction,
+        string? name = null)
+    {
+        return dataContext.WithAccessRestriction(
+            (action, ctx, accessCtx) => Task.FromResult(restriction(action, ctx, accessCtx)),
+            name);
+    }
 }

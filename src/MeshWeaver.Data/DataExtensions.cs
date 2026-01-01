@@ -81,7 +81,8 @@ public static class DataExtensions
                     var loggerFactory = sp.GetRequiredService<ILoggerFactory>();
                     return new Workspace(hub, loggerFactory.CreateLogger<Workspace>());
                 })
-                .AddScoped<IAutocompleteProvider, DataAutocompleteProvider>())
+                .AddScoped<IAutocompleteProvider, DataAutocompleteProvider>()
+                .AddScoped<IDataValidator, RlsDataValidator>())
             .WithSerialization(serialization =>
                 serialization.WithOptions(options =>
                 {
@@ -1675,19 +1676,92 @@ public static class DataExtensions
 
     /// <summary>
     /// Runs all registered change validators for the given data change request.
+    /// This includes both legacy IDataChangeValidator and unified IDataValidator implementations.
     /// </summary>
     private static async Task<DataValidationResult> RunChangeValidatorsAsync(
         IMessageHub hub,
         DataChangeRequest request,
         CancellationToken ct)
     {
-        var validators = hub.ServiceProvider.GetServices<IDataChangeValidator>();
-        foreach (var validator in validators)
+        // Run legacy IDataChangeValidator instances
+        var legacyValidators = hub.ServiceProvider.GetServices<IDataChangeValidator>();
+        foreach (var validator in legacyValidators)
         {
             var result = await validator.ValidateAsync(request, ct);
             if (!result.IsValid)
                 return result;
         }
+
+        // Run unified IDataValidator instances
+        var unifiedValidators = hub.ServiceProvider.GetServices<IDataValidator>();
+        var accessService = hub.ServiceProvider.GetService<AccessService>();
+
+        foreach (var validator in unifiedValidators)
+        {
+            // Check Creations
+            foreach (var entity in request.Creations)
+            {
+                if (!validator.SupportedOperations.Contains(DataOperation.Create) && validator.SupportedOperations.Count > 0)
+                    continue;
+
+                var context = new DataValidationContext
+                {
+                    Operation = DataOperation.Create,
+                    Entity = entity,
+                    EntityType = entity.GetType(),
+                    Request = request,
+                    AccessContext = accessService?.Context,
+                    ServiceProvider = hub.ServiceProvider
+                };
+
+                var result = await validator.ValidateAsync(context, ct);
+                if (!result.IsValid)
+                    return result;
+            }
+
+            // Check Updates
+            foreach (var entity in request.Updates)
+            {
+                if (!validator.SupportedOperations.Contains(DataOperation.Update) && validator.SupportedOperations.Count > 0)
+                    continue;
+
+                var context = new DataValidationContext
+                {
+                    Operation = DataOperation.Update,
+                    Entity = entity,
+                    EntityType = entity.GetType(),
+                    Request = request,
+                    AccessContext = accessService?.Context,
+                    ServiceProvider = hub.ServiceProvider
+                };
+
+                var result = await validator.ValidateAsync(context, ct);
+                if (!result.IsValid)
+                    return result;
+            }
+
+            // Check Deletions
+            foreach (var entity in request.Deletions)
+            {
+                if (!validator.SupportedOperations.Contains(DataOperation.Delete) && validator.SupportedOperations.Count > 0)
+                    continue;
+
+                var context = new DataValidationContext
+                {
+                    Operation = DataOperation.Delete,
+                    Entity = entity,
+                    EntityType = entity.GetType(),
+                    Request = request,
+                    AccessContext = accessService?.Context,
+                    ServiceProvider = hub.ServiceProvider
+                };
+
+                var result = await validator.ValidateAsync(context, ct);
+                if (!result.IsValid)
+                    return result;
+            }
+        }
+
         return DataValidationResult.Valid();
     }
 
