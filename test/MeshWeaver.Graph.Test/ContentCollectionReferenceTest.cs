@@ -19,8 +19,7 @@ using Xunit;
 namespace MeshWeaver.Graph.Test;
 
 /// <summary>
-/// Tests for the unified path format: addressType/addressId/collection/collectionName
-/// Verifies CollectionPathHandler and CollectionConfigReference resolution.
+/// Tests for CollectionConfigReference resolution via GetDataRequest.
 /// </summary>
 [Collection("ContentCollectionTests")]
 public class ContentCollectionReferenceTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
@@ -57,65 +56,6 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
                 return services;
             })
             .AddJsonGraphConfiguration(dataDirectory);
-    }
-
-    /// <summary>
-    /// Tests that UnifiedPathRegistry correctly parses collection keyword paths.
-    /// Format: addressType/addressId/collection/collectionName
-    /// </summary>
-    [Fact]
-    public void UnifiedPathRegistry_ParsesCollectionPath()
-    {
-        var registry = new UnifiedPathRegistry();
-        registry.Register("collection", new CollectionPathHandler());
-        registry.Register("area", new AreaPathHandler());
-
-        // Path format: addressType/addressId/keyword/remainingPath
-        var found = registry.TryResolve("Person/Alice/collection/avatars", out var address, out var reference);
-
-        found.Should().BeTrue();
-        address.Should().NotBeNull();
-        address!.Type.Should().Be("Person");
-        address.Id.Should().Be("Alice");
-        reference.Should().BeOfType<CollectionConfigReference>();
-        var collectionRef = (CollectionConfigReference)reference!;
-        collectionRef.CollectionNames.Should().Contain("avatars");
-    }
-
-    /// <summary>
-    /// Tests that UnifiedPathRegistry handles multiple collection names (comma-separated).
-    /// </summary>
-    [Fact]
-    public void UnifiedPathRegistry_ParsesMultipleCollectionNames()
-    {
-        var registry = new UnifiedPathRegistry();
-        registry.Register("collection", new CollectionPathHandler());
-        registry.Register("area", new AreaPathHandler());
-
-        var found = registry.TryResolve("Person/Alice/collection/avatars,photos", out var address, out var reference);
-
-        found.Should().BeTrue();
-        var collectionRef = reference.Should().BeOfType<CollectionConfigReference>().Subject;
-        collectionRef.CollectionNames.Should().HaveCount(2);
-        collectionRef.CollectionNames.Should().Contain("avatars");
-        collectionRef.CollectionNames.Should().Contain("photos");
-    }
-
-    /// <summary>
-    /// Tests that UnifiedPathRegistry handles empty collection path (get all collections).
-    /// </summary>
-    [Fact]
-    public void UnifiedPathRegistry_ParsesEmptyCollectionPath()
-    {
-        var registry = new UnifiedPathRegistry();
-        registry.Register("collection", new CollectionPathHandler());
-        registry.Register("area", new AreaPathHandler());
-
-        var found = registry.TryResolve("Person/Alice/collection", out var address, out var reference);
-
-        found.Should().BeTrue();
-        var collectionRef = reference.Should().BeOfType<CollectionConfigReference>().Subject;
-        collectionRef.CollectionNames.Should().BeNullOrEmpty();
     }
 
     /// <summary>
@@ -211,6 +151,86 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
         logosConfig.Name.Should().Be("logos");
         logosConfig.SourceType.Should().Be("FileSystem");
         logosConfig.BasePath.Should().Contain("logos").And.EndWith("ACME");
+    }
+
+    /// <summary>
+    /// Tests that UnifiedReference with "collection:logos" prefix resolves collection config from ACME.
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task UnifiedReference_CollectionPrefix_ReturnsConfig()
+    {
+        var acmeAddress = new Address("ACME");
+        var client = GetClient(c => c.AddData(data => data));
+
+        await client.AwaitResponse(
+            new PingRequest(),
+            o => o.WithTarget(acmeAddress),
+            TestContext.Current.CancellationToken);
+
+        // Request collection:logos from ACME hub using prefix:path format
+        var response = await client.AwaitResponse(
+            new GetDataRequest(new UnifiedReference("collection:logos")),
+            o => o.WithTarget(acmeAddress),
+            TestContext.Current.CancellationToken);
+
+        response.Should().NotBeNull();
+        response.Message.Data.Should().NotBeNull();
+
+        var configs = ParseCollectionConfigs(response.Message.Data);
+        configs.Should().NotBeNull();
+        configs.Should().Contain(c => c.Name == "logos");
+    }
+
+    /// <summary>
+    /// Tests that UnifiedReference with "content:logos/logo.svg" prefix resolves file content from ACME.
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task UnifiedReference_ContentPrefix_ReturnsFileContent()
+    {
+        var acmeAddress = new Address("ACME");
+        var client = GetClient(c => c.AddData(data => data));
+
+        await client.AwaitResponse(
+            new PingRequest(),
+            o => o.WithTarget(acmeAddress),
+            TestContext.Current.CancellationToken);
+
+        // Request content:logos/logo.svg from ACME hub using prefix:path format
+        var response = await client.AwaitResponse(
+            new GetDataRequest(new UnifiedReference("content:logos/logo.svg")),
+            o => o.WithTarget(acmeAddress),
+            TestContext.Current.CancellationToken);
+
+        response.Should().NotBeNull();
+        response.Message.Data.Should().NotBeNull();
+        // Content should be SVG
+        var content = response.Message.Data as string;
+        content.Should().NotBeNull();
+        content.Should().Contain("<svg");
+    }
+
+    /// <summary>
+    /// Tests that UnifiedReference with "data:" prefix resolves to DataPathReference behavior.
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task UnifiedReference_DataPrefix_ReturnsData()
+    {
+        var acmeAddress = new Address("ACME");
+        var client = GetClient(c => c.AddData(data => data));
+
+        await client.AwaitResponse(
+            new PingRequest(),
+            o => o.WithTarget(acmeAddress),
+            TestContext.Current.CancellationToken);
+
+        // Request data without prefix (defaults to data:) from ACME hub
+        var response = await client.AwaitResponse(
+            new GetDataRequest(new UnifiedReference("data:")),
+            o => o.WithTarget(acmeAddress),
+            TestContext.Current.CancellationToken);
+
+        // Should return default data (may be null or empty store)
+        response.Should().NotBeNull();
     }
 
     private static IReadOnlyCollection<ContentCollectionConfig>? ParseCollectionConfigs(object? data)

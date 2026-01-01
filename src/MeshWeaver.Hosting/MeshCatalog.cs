@@ -16,12 +16,10 @@ namespace MeshWeaver.Hosting;
 public sealed class MeshCatalog(
     IMessageHub hub,
     MeshConfiguration configuration,
-    IUnifiedPathRegistry pathRegistry,
     IPersistenceService persistenceService)
     : IMeshCatalog
 {
     public MeshConfiguration Configuration { get; } = configuration;
-    public IUnifiedPathRegistry PathRegistry { get; } = pathRegistry;
     public IPersistenceService Persistence { get; } = persistenceService;
     private readonly IMemoryCache cache = new MemoryCache(new MemoryCacheOptions());
     private readonly MemoryCacheEntryOptions cacheOptions = new() { SlidingExpiration = TimeSpan.FromMinutes(5) };

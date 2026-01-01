@@ -18,7 +18,6 @@ public record MeshBuilder
     }
 
     private List<MeshNode> MeshNodes { get; } = new();
-    private readonly UnifiedPathRegistry pathRegistry = new();
 
     public MeshBuilder InstallAssemblies(params string[] assemblyLocations)
     {
@@ -37,12 +36,6 @@ public record MeshBuilder
                 config.TypeRegistry.WithTypes(addressTypes);
                 return config;
             });
-        }
-
-        // Register path prefixes from attributes
-        foreach (var prefix in attributes.SelectMany(a => a.PathPrefixes))
-        {
-            pathRegistry.Register(prefix.Key, prefix.Value);
         }
 
         return this;
@@ -91,22 +84,12 @@ public record MeshBuilder
 
     private void Register()
     {
-        // Register built-in path handlers
-        pathRegistry.Register("data", new DataPathHandler());
-        pathRegistry.Register("area", new AreaPathHandler());
-        pathRegistry.Register("content", new ContentPathHandler());
-        pathRegistry.Register("type", new TypePathHandler());
-        pathRegistry.Register("schema", new SchemaPathHandler());
-        pathRegistry.Register("model", new ModelPathHandler());
-        pathRegistry.Register("collection", new CollectionPathHandler());
-
         // Create mesh-level type registry for polymorphic serialization
         // Hub-level type registries will inherit from this via ParentServiceProvider
         var meshTypeRegistry = MessageHubExtensions.CreateTypeRegistry();
 
         ConfigureServices(services => services
             .AddSingleton(_ => new MeshConfiguration(MeshNodes.ToDictionary(x => x.Path)))
-            .AddSingleton<IUnifiedPathRegistry>(_ => pathRegistry)
             .AddSingleton<ITypeRegistry>(_ => meshTypeRegistry)
             .AddSingleton(BuildHub)
             .AddSingleton<AccessService>()

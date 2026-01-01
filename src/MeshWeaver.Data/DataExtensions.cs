@@ -18,62 +18,28 @@ using Namotion.Reflection;
 
 namespace MeshWeaver.Data;
 
-/// <summary>
-/// Represents a parsed unified path with keyword, address, and remaining path.
-/// Keywords: data, area, content. Area is the default when no keyword is specified.
-/// Format: addressType/addressId[/keyword[/path]] where keyword defaults to "area" if not a reserved keyword.
-/// </summary>
-internal record ParsedPath(string Keyword, string AddressType, string AddressId, string? RemainingPath);
-
 public static class DataExtensions
 {
     /// <summary>
-    /// Reserved keywords that identify the type of reference.
+    /// Parses a unified path into prefix and remaining path.
+    /// Format: prefix:path (e.g., "data:Collection/id", "content:logos/logo.svg")
+    /// If no prefix is specified, defaults to "data".
     /// </summary>
-    private static readonly HashSet<string> ReservedKeywords = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "data", "area", "content"
-    };
-
-    /// <summary>
-    /// Parses a unified path into its components.
-    /// Format: addressType/addressId[/keyword[/path]]
-    /// If no keyword is specified (or third segment is not a reserved keyword), defaults to "area".
-    /// </summary>
-    private static ParsedPath ParseUnifiedPath(string path)
+    private static (string Prefix, string? RemainingPath) ParseUnifiedPath(string path)
     {
         if (string.IsNullOrEmpty(path))
-            throw new ArgumentException("Path cannot be empty", nameof(path));
+            return ("data", null);
 
-        var parts = path.Split('/');
-        if (parts.Length < 2)
-            throw new ArgumentException($"Invalid path: '{path}'. Expected at least addressType/addressId");
-
-        var addressType = parts[0];
-        var addressId = parts[1];
-
-        if (string.IsNullOrEmpty(addressType))
-            throw new ArgumentException($"Invalid path: '{path}'. Address type cannot be empty");
-        if (string.IsNullOrEmpty(addressId))
-            throw new ArgumentException($"Invalid path: '{path}'. Address ID cannot be empty");
-
-        string keyword;
-        string? remainingPath;
-
-        // Check if third segment is a reserved keyword
-        if (parts.Length >= 3 && ReservedKeywords.Contains(parts[2]))
+        var colonIndex = path.IndexOf(':');
+        if (colonIndex <= 0)
         {
-            keyword = parts[2].ToLowerInvariant();
-            remainingPath = parts.Length > 3 ? string.Join("/", parts.Skip(3)) : null;
-        }
-        else
-        {
-            // Default to "area" keyword, remaining path is everything after addressId
-            keyword = "area";
-            remainingPath = parts.Length > 2 ? string.Join("/", parts.Skip(2)) : null;
+            // No prefix - default to "data"
+            return ("data", path);
         }
 
-        return new ParsedPath(keyword, addressType, addressId, remainingPath);
+        var prefix = path[..colonIndex].ToLowerInvariant();
+        var remainingPath = colonIndex < path.Length - 1 ? path[(colonIndex + 1)..] : null;
+        return (prefix, remainingPath);
     }
 
     public static MessageHubConfiguration AddData(this MessageHubConfiguration config) =>
@@ -355,19 +321,18 @@ public static class DataExtensions
         UnifiedReference reference,
         Func<StreamConfiguration<object>, StreamConfiguration<object>>? _)
     {
-        var parsed = ParseUnifiedPath(reference.Path);
+        var (prefix, remainingPath) = ParseUnifiedPath(reference.Path);
         var dataContext = workspace.DataContext;
-        var normalizedPrefix = parsed.Keyword.ToLowerInvariant();
 
         // Get resolvers for this prefix
-        if (!dataContext.UnifiedReferenceResolvers.TryGetValue(normalizedPrefix, out var resolvers))
+        if (!dataContext.UnifiedReferenceResolvers.TryGetValue(prefix, out var resolvers))
             return null;
 
         // Try each registered resolver in order (first non-null wins)
         // Resolvers are inserted at position 0, so later registrations have priority
         foreach (var resolver in resolvers)
         {
-            var stream = resolver(workspace, parsed.RemainingPath);
+            var stream = resolver(workspace, remainingPath);
             if (stream != null)
                 return stream;
         }
@@ -699,7 +664,9 @@ public static class DataExtensions
     }
 
     /// <summary>
-    /// Handler for UnifiedReference which resolves paths locally or forwards to remote addresses.
+    /// Handler for UnifiedReference which resolves paths locally.
+    /// Format: prefix:path (e.g., "data:Collection/id", "content:logos/logo.svg")
+    /// The request is already routed to the correct hub via WithTarget().
     /// </summary>
     private static async Task<IMessageDelivery> HandleGetDataRequestCore(
         IMessageHub hub,
@@ -709,23 +676,13 @@ public static class DataExtensions
     {
         try
         {
-            var path = reference.Path;
-            if (string.IsNullOrEmpty(path))
-            {
-                hub.Post(new GetDataResponse(null, 0) { Error = "Path cannot be empty" },
-                    o => o.ResponseFor(request));
-                return request.Processed();
-            }
-
-            // Parse the path to get address and reference type
-            var parsed = ParseUnifiedPath(path);
-            var targetAddress = new Address(parsed.AddressType, parsed.AddressId);
-            var isLocal = targetAddress.Equals(hub.Address);
+            // Parse the path to get prefix and remaining path
+            var (prefix, remainingPath) = ParseUnifiedPath(reference.Path);
 
             // Resolve to appropriate workspace reference based on prefix
-            var (wsRef, immediateResult) = ResolveUnifiedReference(hub, parsed, isLocal);
+            var (wsRef, immediateResult) = ResolveUnifiedReference(hub, prefix, remainingPath);
 
-            // If we got an immediate result (e.g., default data), return it
+            // If we got an immediate result (e.g., error), return it
             if (immediateResult != null)
             {
                 hub.Post(immediateResult, o => o.ResponseFor(request));
@@ -734,8 +691,8 @@ public static class DataExtensions
 
             if (wsRef == null)
             {
-                // For local default data reference (no path), get the default data
-                if (isLocal && parsed.Keyword == "data" && string.IsNullOrEmpty(parsed.RemainingPath))
+                // For default data reference (no path), get the default data
+                if (prefix == "data" && string.IsNullOrEmpty(remainingPath))
                 {
                     var defaultResult = await GetDefaultDataAsync(hub, ct);
                     hub.Post(defaultResult, o => o.ResponseFor(request));
@@ -747,34 +704,15 @@ public static class DataExtensions
                 return request.Processed();
             }
 
-            // Handle local vs remote
-            if (isLocal)
+            // Resolve locally using prefix-specific handlers
+            var localResult = prefix switch
             {
-                // Resolve locally using prefix-specific handlers
-                var localResult = parsed.Keyword switch
-                {
-                    "data" => await HandleDataPathAsync(hub, parsed.RemainingPath, reference.NumberOfRows, ct),
-                    "area" => await HandleAreaPathAsync(hub, parsed.RemainingPath, ct),
-                    "content" => await HandleContentPathAsync(hub, parsed.RemainingPath, reference.NumberOfRows, ct),
-                    _ => await GetDataFromWorkspaceAsync(hub, wsRef, ct)
-                };
-                hub.Post(localResult, o => o.ResponseFor(request));
-            }
-            else
-            {
-                // Forward to remote address
-                var forwardRequest = new GetDataRequest(wsRef);
-                var response = await hub.AwaitResponse(forwardRequest, o => o.WithTarget(targetAddress), ct);
-                if (response is GetDataResponse dataResponse)
-                {
-                    hub.Post(dataResponse, o => o.ResponseFor(request));
-                }
-                else
-                {
-                    hub.Post(new GetDataResponse(null, 0) { Error = "Unexpected response type from remote" },
-                        o => o.ResponseFor(request));
-                }
-            }
+                "data" => await HandleDataPathAsync(hub, remainingPath, reference.NumberOfRows, ct),
+                "area" => await HandleAreaPathAsync(hub, remainingPath, ct),
+                "content" => await HandleContentPathAsync(hub, remainingPath, reference.NumberOfRows, ct),
+                _ => await GetDataFromWorkspaceAsync(hub, wsRef, ct)
+            };
+            hub.Post(localResult, o => o.ResponseFor(request));
         }
         catch (Exception ex)
         {
@@ -786,23 +724,23 @@ public static class DataExtensions
     }
 
     /// <summary>
-    /// Resolves a parsed path to the appropriate workspace reference.
+    /// Resolves a prefix and path to the appropriate workspace reference.
     /// </summary>
     private static (WorkspaceReference? Reference, GetDataResponse? ImmediateResult) ResolveUnifiedReference(
         IMessageHub hub,
-        ParsedPath parsed,
-        bool isLocal)
+        string prefix,
+        string? remainingPath)
     {
-        return parsed.Keyword switch
+        return prefix switch
         {
-            "data" => ResolveDataPath(hub, parsed.RemainingPath, isLocal),
-            "area" => (ResolveAreaPath(parsed.RemainingPath), null),
-            "content" => (ResolveContentPath(parsed.RemainingPath), null),
-            "collection" => (ResolveCollectionPath(parsed.RemainingPath), null),
+            "data" => ResolveDataPath(hub, remainingPath),
+            "area" => (ResolveAreaPath(remainingPath), null),
+            "content" => (ResolveContentPath(remainingPath), null),
+            "collection" => (ResolveCollectionPath(remainingPath), null),
             "type" => (new NodeTypeReference(), null),
-            "schema" => (new SchemaReference(parsed.RemainingPath), null),
+            "schema" => (new SchemaReference(remainingPath), null),
             "model" => (new DataModelReference(), null),
-            _ => (null, new GetDataResponse(null, 0) { Error = $"Unknown keyword: {parsed.Keyword}" })
+            _ => (null, new GetDataResponse(null, 0) { Error = $"Unknown prefix: {prefix}" })
         };
     }
 
@@ -824,27 +762,21 @@ public static class DataExtensions
     /// </summary>
     private static (WorkspaceReference? Reference, GetDataResponse? ImmediateResult) ResolveDataPath(
         IMessageHub hub,
-        string? path,
-        bool isLocal)
+        string? path)
     {
         var (collection, entityId) = ParseDataPath(path);
 
         // Default reference (no path) - needs special handling
         if (collection == null)
         {
-            if (isLocal)
-                return (null, null); // Signal to use default data handling
-            return (new DataPathReference(""), null);
+            return (null, null); // Signal to use default data handling
         }
 
         // Check if collection is a content provider (for file access via data: prefix)
-        if (isLocal)
-        {
-            var workspace = hub.GetWorkspace();
-            var dataContext = workspace.DataContext;
-            if (dataContext.ContentProviders.TryGetValue(collection, out var contentCollectionName))
-                return (new FileReference(contentCollectionName, entityId ?? ""), null);
-        }
+        var workspace = hub.GetWorkspace();
+        var dataContext = workspace.DataContext;
+        if (dataContext.ContentProviders.TryGetValue(collection, out var contentCollectionName))
+            return (new FileReference(contentCollectionName, entityId ?? ""), null);
 
         // Standard collection or entity reference
         WorkspaceReference wsRef = entityId != null
@@ -1239,13 +1171,13 @@ public static class DataExtensions
                 return request.Processed();
             }
 
-            var parsed = ParseUnifiedPath(path);
-            var result = parsed.Keyword switch
+            var (prefix, remainingPath) = ParseUnifiedPath(path);
+            var result = prefix switch
             {
-                "data" => await HandleUpdateDataPathAsync(hub, parsed.RemainingPath, request.Message.Content, request.Message.ChangedBy, ct),
-                "content" => await HandleUpdateContentPathAsync(hub, parsed.RemainingPath, request.Message.Content, ct),
+                "data" => await HandleUpdateDataPathAsync(hub, remainingPath, request.Message.Content, request.Message.ChangedBy, ct),
+                "content" => await HandleUpdateContentPathAsync(hub, remainingPath, request.Message.Content, ct),
                 "area" => UpdateUnifiedReferenceResponse.Fail("Layout area updates are not supported via this API"),
-                _ => UpdateUnifiedReferenceResponse.Fail($"Unknown keyword: {parsed.Keyword}")
+                _ => UpdateUnifiedReferenceResponse.Fail($"Unknown prefix: {prefix}")
             };
 
             hub.Post(result, o => o.ResponseFor(request));
@@ -1385,13 +1317,13 @@ public static class DataExtensions
                 return request.Processed();
             }
 
-            var parsed = ParseUnifiedPath(path);
-            var result = parsed.Keyword switch
+            var (prefix, remainingPath) = ParseUnifiedPath(path);
+            var result = prefix switch
             {
-                "data" => await HandleDeleteDataPathAsync(hub, parsed.RemainingPath, request.Message.ChangedBy, ct),
-                "content" => await HandleDeleteContentPathAsync(hub, parsed.RemainingPath, ct),
+                "data" => await HandleDeleteDataPathAsync(hub, remainingPath, request.Message.ChangedBy, ct),
+                "content" => await HandleDeleteContentPathAsync(hub, remainingPath, ct),
                 "area" => DeleteUnifiedReferenceResponse.Fail("Layout area deletion is not supported via this API"),
-                _ => DeleteUnifiedReferenceResponse.Fail($"Unknown keyword: {parsed.Keyword}")
+                _ => DeleteUnifiedReferenceResponse.Fail($"Unknown prefix: {prefix}")
             };
 
             hub.Post(result, o => o.ResponseFor(request));

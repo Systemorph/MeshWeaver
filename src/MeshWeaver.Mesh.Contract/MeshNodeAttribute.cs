@@ -16,14 +16,6 @@ public abstract class MeshNodeAttribute : Attribute
     public virtual IEnumerable<KeyValuePair<string, Type>> AddressTypes => [];
 
     /// <summary>
-    /// Gets the unified path prefix handlers to register with the mesh.
-    /// Key is the prefix (e.g., "data", "area", "pricing"), Value is the handler.
-    /// Built-in prefixes (data, area, content) are registered by default.
-    /// Custom domains can register their own prefixes (e.g., "pricing:MS-2024").
-    /// </summary>
-    public virtual IEnumerable<KeyValuePair<string, IUnifiedPathHandler>> PathPrefixes => [];
-
-    /// <summary>
     /// Creates a mesh node from a hub configuration using a string prefix.
     /// </summary>
     protected MeshNode CreateFromHubConfiguration(string prefix, string name,

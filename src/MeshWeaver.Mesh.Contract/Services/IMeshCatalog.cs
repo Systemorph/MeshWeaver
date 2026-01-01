@@ -51,12 +51,6 @@ public interface IMeshCatalog
     Task<StreamInfo> GetStreamInfoAsync(Address address);
 
     /// <summary>
-    /// Global registry for unified path prefixes.
-    /// Enables resolution of paths like "pricing:MS-2024" to target address and workspace reference.
-    /// </summary>
-    IUnifiedPathRegistry PathRegistry { get; }
-
-    /// <summary>
     /// Resolves a full URL path to an address using score-based matching.
     /// Returns the best matching node's address and the remaining path segments.
     /// Score is the number of matching segments from the path start.
