@@ -9,7 +9,6 @@ using MeshWeaver.Data.Serialization;
 using MeshWeaver.Layout;
 using MeshWeaver.Markdown;
 using MeshWeaver.Messaging;
-using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.ContentCollections;
@@ -118,21 +117,69 @@ public static class ContentCollectionsExtensions
             collectionNames = remainingPath.Split(',', StringSplitOptions.RemoveEmptyEntries);
         }
 
-        return workspace.GetStream(new ContentCollectionReference(collectionNames), null);
+        var reference = new ContentCollectionReference(collectionNames);
+        return CreateContentCollectionReferenceStream(workspace, reference, null);
     }
 
     /// <summary>
     /// Creates a stream for a ContentCollectionReference.
-    /// Returns null - actual handling is done by the GetDataRequest handler.
+    /// Returns collection configurations as a one-time observable.
     /// </summary>
     private static ISynchronizationStream<object>? CreateContentCollectionReferenceStream(
         IWorkspace workspace,
         WorkspaceReference reference,
         Func<StreamConfiguration<object>, StreamConfiguration<object>>? configuration)
     {
-        // ContentCollectionReference is handled by GetDataRequest handler, not via streams
-        // Return null to let the request pass through to the handler
-        return null;
+        if (reference is not ContentCollectionReference collectionRef)
+            return null;
+
+        var hub = workspace.Hub;
+        var contentService = hub.ServiceProvider.GetService<IContentService>();
+        if (contentService == null)
+            return null;
+
+        var streamIdentity = new StreamIdentity(hub.Address, collectionRef.ToString());
+        var stream = new SynchronizationStream<object>(
+            streamIdentity,
+            hub,
+            collectionRef,
+            workspace.ReduceManager.ReduceTo<object>(),
+            configuration ?? (c => c)
+        );
+
+        // Create an observable that returns the collection configs
+        var observable = Observable.FromAsync(ct =>
+        {
+            IReadOnlyCollection<ContentCollectionConfig> configs;
+            var collectionNames = collectionRef.CollectionNames;
+
+            if (collectionNames is null || collectionNames.Count == 0)
+            {
+                // Return all collection configurations
+                configs = contentService.GetAllCollectionConfigs();
+            }
+            else
+            {
+                // Return specific collection configurations
+                configs = collectionNames
+                    .Select(contentService.GetCollectionConfig)
+                    .OfType<ContentCollectionConfig>()
+                    .ToArray();
+            }
+
+            return Task.FromResult<object?>(configs);
+        });
+
+        stream.RegisterForDisposal(
+            observable
+                .Select(value => new ChangeItem<object>(value!, stream.StreamId, hub.Version))
+                .Where(x => x.Value != null)
+                .DistinctUntilChanged()
+                .Synchronize()
+                .Subscribe(stream)
+        );
+
+        return stream;
     }
 
     /// <summary>
@@ -469,184 +516,155 @@ public static class ContentCollectionsExtensions
             : $"/content/{collection}/{path}";
 
 
-    public static MessageHubConfiguration AddEmbeddedResourceContentCollection(
-        this MessageHubConfiguration configuration,
-        string collectionName,
-        Assembly assembly,
-        string relativePath)
-        => configuration.WithServices(services =>
-        {
-            var resourcePrefix = $"{assembly.GetName().Name}.{relativePath}";
-
-            // Register the stream provider for this embedded resource collection
-            services.AddKeyedSingleton<IStreamProvider>(collectionName, (_, _) =>
-                new EmbeddedResourceStreamProvider(assembly, resourcePrefix));
-
-            // Register the content collection provider
-            services.AddScoped<IContentCollectionConfigProvider>(_ =>
-            {
-                var config = new ContentCollectionConfig
-                {
-                    Name = collectionName,
-                    SourceType = "EmbeddedResource",
-                    Settings = new Dictionary<string, string>
-                    {
-                        ["AssemblyName"] = assembly.GetName().Name ?? "",
-                        ["ResourcePrefix"] = resourcePrefix
-                    },
-                    Address = configuration.Address
-                };
-                return new ContentCollectionConfigProvider(config);
-            });
-
-            return services;
-        });
-
-    /// <summary>
-    /// Configures a FileSystem content collection for this hub with a dynamically calculated path.
-    /// </summary>
     /// <param name="configuration">The message hub configuration</param>
-    /// <param name="collectionName">The name of the collection</param>
-    /// <param name="pathFactory">Factory function to compute the path based on service provider</param>
-    /// <returns>The configured message hub configuration</returns>
-    public static MessageHubConfiguration AddFileSystemContentCollection(
-        this MessageHubConfiguration configuration,
-        string collectionName,
-        Func<IServiceProvider, string> pathFactory)
-        => configuration
-            .AddContentCollections()
-            .WithServices(services =>
+    extension(MessageHubConfiguration configuration)
+    {
+        public MessageHubConfiguration AddEmbeddedResourceContentCollection(string collectionName,
+            Assembly assembly,
+            string relativePath)
+            => configuration.WithServices(services =>
             {
-                // Register the content collection provider
-                services.AddScoped<IContentCollectionConfigProvider>(sp =>
-                {
-                    var basePath = pathFactory(sp);
+                var resourcePrefix = $"{assembly.GetName().Name}.{relativePath}";
 
+                // Register the stream provider for this embedded resource collection
+                services.AddKeyedSingleton<IStreamProvider>(collectionName, (_, _) =>
+                    new EmbeddedResourceStreamProvider(assembly, resourcePrefix));
+
+                // Register the content collection provider
+                services.AddScoped<IContentCollectionConfigProvider>(_ =>
+                {
                     var config = new ContentCollectionConfig
                     {
                         Name = collectionName,
-                        SourceType = "FileSystem",
-                        BasePath = basePath,
-                        Address = configuration.Address,
+                        SourceType = "EmbeddedResource",
                         Settings = new Dictionary<string, string>
                         {
-                            ["BasePath"] = basePath
-                        }
+                            ["AssemblyName"] = assembly.GetName().Name ?? "",
+                            ["ResourcePrefix"] = resourcePrefix
+                        },
+                        Address = configuration.Address
                     };
-
                     return new ContentCollectionConfigProvider(config);
                 });
 
                 return services;
             });
 
-    /// <summary>
-    /// Configures a content collection for this hub using the provided configuration factory.
-    /// Uses the ContentCollectionRegistry to register the collection hierarchically.
-    /// </summary>
-    /// <param name="configuration">The message hub configuration</param>
-    /// <param name="collectionConfigFactory">Factory function that creates the content collection configuration</param>
-    /// <returns>The configured message hub configuration</returns>
-    public static MessageHubConfiguration AddContentCollection(
-        this MessageHubConfiguration configuration,
-        Func<IServiceProvider, ContentCollectionConfig> collectionConfigFactory)
-        => configuration
-            .AddContentCollections() // Ensure content service and registry are initialized
-            .WithServices(services =>
-            {
-                // Register the content collection provider
-                services.AddScoped<IContentCollectionConfigProvider>(sp =>
+        /// <summary>
+        /// Configures a FileSystem content collection for this hub with a dynamically calculated path.
+        /// </summary>
+        /// <param name="collectionName">The name of the collection</param>
+        /// <param name="pathFactory">Factory function to compute the path based on service provider</param>
+        /// <returns>The configured message hub configuration</returns>
+        public MessageHubConfiguration AddFileSystemContentCollection(string collectionName,
+            Func<IServiceProvider, string> pathFactory)
+            => configuration
+                .AddContentCollections()
+                .WithServices(services =>
                 {
-                    var collectionConfig = collectionConfigFactory(sp);
-
-                    // Ensure Settings are set
-                    var settings = collectionConfig.Settings ?? new Dictionary<string, string>();
-                    if (collectionConfig.BasePath != null && !settings.ContainsKey("BasePath"))
+                    // Register the content collection provider
+                    services.AddScoped<IContentCollectionConfigProvider>(sp =>
                     {
-                        settings["BasePath"] = collectionConfig.BasePath;
-                    }
+                        var basePath = pathFactory(sp);
 
-                    var finalConfig = collectionConfig with
-                    {
-                        Address = configuration.Address,
-                        Settings = settings
-                    };
+                        var config = new ContentCollectionConfig
+                        {
+                            Name = collectionName,
+                            SourceType = "FileSystem",
+                            BasePath = basePath,
+                            Address = configuration.Address,
+                            Settings = new Dictionary<string, string>
+                            {
+                                ["BasePath"] = basePath
+                            }
+                        };
 
-                    return new ContentCollectionConfigProvider(finalConfig);
+                        return new ContentCollectionConfigProvider(config);
+                    });
+
+                    return services;
                 });
 
-                return services;
-            });
-    /// <summary>
-    /// Configures a content collection for this hub using the provided configuration factory.
-    /// Uses the ContentCollectionRegistry to register the collection hierarchically.
-    /// </summary>
-    /// <param name="configuration">The message hub configuration</param>
-    /// <param name="collectionConfigs">Factory function that creates the content collection configuration</param>
-    /// <returns>The configured message hub configuration</returns>
-    public static MessageHubConfiguration AddContentCollections(
-        this MessageHubConfiguration configuration,
-        params IReadOnlyCollection<ContentCollectionConfig> collectionConfigs)
-        => configuration
-            .AddContentCollections() // Ensure content service and registry are initialized
-            .WithServices(services =>
-            {
-                // Register the content collection provider
-                services.AddScoped<IContentCollectionConfigProvider>(_ => new ContentCollectionConfigProvider(collectionConfigs));
+        /// <summary>
+        /// Configures a content collection for this hub using the provided configuration factory.
+        /// Uses the ContentCollectionRegistry to register the collection hierarchically.
+        /// </summary>
+        /// <param name="collectionConfigFactory">Factory function that creates the content collection configuration</param>
+        /// <returns>The configured message hub configuration</returns>
+        public MessageHubConfiguration AddContentCollection(Func<IServiceProvider, ContentCollectionConfig> collectionConfigFactory)
+            => configuration
+                .AddContentCollections() // Ensure content service and registry are initialized
+                .WithServices(services =>
+                {
+                    // Register the content collection provider
+                    services.AddScoped<IContentCollectionConfigProvider>(sp =>
+                    {
+                        var collectionConfig = collectionConfigFactory(sp);
 
-                return services;
-            });
+                        // Ensure Settings are set
+                        var settings = collectionConfig.Settings ?? new Dictionary<string, string>();
+                        if (collectionConfig.BasePath != null && !settings.ContainsKey("BasePath"))
+                        {
+                            settings["BasePath"] = collectionConfig.BasePath;
+                        }
 
+                        var finalConfig = collectionConfig with
+                        {
+                            Address = configuration.Address,
+                            Settings = settings
+                        };
 
-    /// <summary>
-    /// Maps a content collection from a source configuration section to a subdirectory path.
-    /// The subdirectory is relative to the source collection's BasePath.
-    /// Supports string interpolation for dynamic paths (e.g., $"persons/{config.Address.Segments.Last()}").
-    /// </summary>
-    /// <param name="configuration">The message hub configuration</param>
-    /// <param name="targetCollectionName">The name of the mapped collection (e.g., "avatars")</param>
-    /// <param name="sourceCollectionName">The configuration section name to read source config from (e.g., "Graph:Storage")</param>
-    /// <param name="subdirectory">The subdirectory within storage (e.g., "persons" or dynamic path)</param>
-    /// <returns>The configured message hub configuration</returns>
-    public static MessageHubConfiguration MapContentCollection(
-        this MessageHubConfiguration configuration,
-        string targetCollectionName,
-        string sourceCollectionName,
-        string subdirectory)
-        => configuration.AddContentCollection(sp =>
-        {
-            var conf = sp.GetRequiredService<IConfiguration>();
+                        return new ContentCollectionConfigProvider(finalConfig);
+                    });
 
-            // Get the global Graph:Storage configuration from appsettings
-            var storageConfig = conf.GetSection(sourceCollectionName).Get<ContentCollectionConfig>();
+                    return services;
+                });
 
-            // Source configuration is required
-            if (storageConfig == null)
-            {
-                throw new InvalidOperationException(
-                    $"No configuration found for '{sourceCollectionName}'. " +
-                    $"Please configure the source collection in appsettings.json.");
-            }
+        /// <summary>
+        /// Configures a content collection for this hub using the provided configuration factory.
+        /// Uses the ContentCollectionRegistry to register the collection hierarchically.
+        /// </summary>
+        /// <param name="collectionConfigs">Factory function that creates the content collection configuration</param>
+        /// <returns>The configured message hub configuration</returns>
+        public MessageHubConfiguration AddContentCollections(params IReadOnlyCollection<ContentCollectionConfig> collectionConfigs)
+            => configuration
+                .AddContentCollections() // Ensure content service and registry are initialized
+                .WithServices(services =>
+                {
+                    // Register the content collection provider
+                    services.AddScoped<IContentCollectionConfigProvider>(_ => new ContentCollectionConfigProvider(collectionConfigs));
 
-            // Resolve base path to absolute path if it's relative
-            var basePath = storageConfig.BasePath ?? "";
-            if (!string.IsNullOrEmpty(basePath) && !Path.IsPathRooted(basePath))
-            {
-                basePath = Path.GetFullPath(Path.Combine(Directory.GetCurrentDirectory(), basePath));
-            }
+                    return services;
+                });
 
-            // Create localized config with collection name and combined path
-            var fullPath = string.IsNullOrEmpty(subdirectory)
-                ? basePath
-                : Path.Combine(basePath, subdirectory);
+        /// <summary>
+        /// Maps a content collection from a registered source collection to a subdirectory path.
+        /// The subdirectory is relative to the source collection's BasePath.
+        /// Supports string interpolation for dynamic paths (e.g., $"persons/{config.Address.Segments.Last()}").
+        /// </summary>
+        /// <param name="targetCollectionName">The name of the mapped collection (e.g., "avatars")</param>
+        /// <param name="sourceCollectionName">The name of the registered source collection (e.g., "storage")</param>
+        /// <param name="subdirectory">The subdirectory within storage (e.g., "persons" or dynamic path)</param>
+        /// <returns>The configured message hub configuration</returns>
+        public MessageHubConfiguration MapContentCollection(string targetCollectionName,
+            string sourceCollectionName,
+            string subdirectory)
+            => configuration
+                .AddContentCollections() // Ensure content service is initialized
+                .WithServices(services =>
+                {
+                    // Register a lazy mapping provider that defers source lookup
+                    // This avoids circular dependency during ContentService construction
+                    services.AddScoped<IContentCollectionConfigProvider>(_ =>
+                        new MappedContentCollectionConfigProvider(
+                            targetCollectionName,
+                            sourceCollectionName,
+                            subdirectory,
+                            configuration.Address));
 
-            return storageConfig with
-            {
-                Name = targetCollectionName,
-                BasePath = fullPath
-            };
-        });
-
+                    return services;
+                });
+    }
 }
 
 public record ArticleCatalogOptions
@@ -664,4 +682,37 @@ public enum ArticleSortOrder
     AscendingPublishDate
 }
 
+/// <summary>
+/// A content collection config provider for mapped collections.
+/// Returns a placeholder config with SourceType="Mapped" that gets resolved lazily by ContentService.
+/// This avoids circular dependencies during ContentService construction.
+/// </summary>
+internal class MappedContentCollectionConfigProvider : IContentCollectionConfigProvider
+{
+    public const string MappedSourceType = "Mapped";
+    public const string SourceCollectionKey = "SourceCollection";
+    public const string SubdirectoryKey = "Subdirectory";
 
+    private readonly ContentCollectionConfig _config;
+
+    public MappedContentCollectionConfigProvider(
+        string targetCollectionName,
+        string sourceCollectionName,
+        string subdirectory,
+        Address address)
+    {
+        _config = new ContentCollectionConfig
+        {
+            Name = targetCollectionName,
+            SourceType = MappedSourceType,
+            Address = address,
+            Settings = new Dictionary<string, string>
+            {
+                [SourceCollectionKey] = sourceCollectionName,
+                [SubdirectoryKey] = subdirectory
+            }
+        };
+    }
+
+    public IEnumerable<ContentCollectionConfig> GetCollections() => [_config];
+}

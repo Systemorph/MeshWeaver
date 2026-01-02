@@ -17,7 +17,7 @@
     "iconName": "Building",
     "description": "An organization containing projects",
     "displayOrder": 10,
-    "configuration": "config => config.WithContentType<Organization>().AddDefaultViews().MapContentCollection(\"logos\", \"Graph:Storage\", $\"logos/{config.Address.Segments.Last()}\")",
+    "configuration": "config => config.WithContentType<Organization>().AddDefaultViews().MapContentCollection(\"logos\", \"storage\", $\"logos/{config.Address.Segments.Last()}\")",
     "childrenQuery": "$source=activity;nodeType==Organization;$orderBy=lastAccessedAt:desc;$limit=20"
   }
 }

@@ -10,48 +10,135 @@ public class ContentService : IContentService
 {
     private readonly IMessageHub hub;
     private readonly AccessService accessService;
-    private readonly IContentService? parentContentService;
     private readonly ConcurrentDictionary<string, ContentCollectionConfig> collectionConfigs;
     private readonly Dictionary<string, Task<ContentCollection?>> collections = new();
     private readonly Lock initializeLock = new();
+
+    // Cache for resolved mapped configs
+    private readonly ConcurrentDictionary<string, ContentCollectionConfig> resolvedMappedConfigs = new();
+
+    // Lazy parent lookup to avoid circular dependency during construction
+    private IContentService? parentContentService;
+    private bool parentResolved;
+    private readonly Lock parentLock = new();
+
     public ContentService(IMessageHub hub, AccessService accessService)
     {
         this.hub = hub;
         this.accessService = accessService;
-        // Get parent content service if available - walk up the parent chain
-        try
-        {
-            var currentParent = hub.Configuration.ParentHub;
-            var visited = new HashSet<IMessageHub>();
-            while (currentParent != null && currentParent != hub)
-            {
-                // Prevent infinite loops
-                if (!visited.Add(currentParent))
-                    break;
-
-                var parentCs = currentParent.ServiceProvider.GetService<IContentService>();
-                if (parentCs != null)
-                {
-                    parentContentService = parentCs;
-                    break;
-                }
-                // Try next parent in chain
-                currentParent = currentParent.Configuration.ParentHub;
-            }
-        }
-        catch (Exception ex)
-        {
-            // Parent may not have content service, that's ok
-            System.Diagnostics.Debug.WriteLine($"Error getting parent ContentService for {hub.Address}: {ex.Message}");
-        }
-
 
         // Add collections from providers
         var providers = hub.ServiceProvider.GetServices<IContentCollectionConfigProvider>();
         collectionConfigs = new(providers.SelectMany(p => p.GetCollections()).ToDictionary(c => c.Name));
-
     }
 
+    private IContentService? GetParentContentService()
+    {
+        if (parentResolved)
+            return parentContentService;
+
+        lock (parentLock)
+        {
+            if (parentResolved)
+                return parentContentService;
+
+            // Get parent content service if available - walk up the parent chain
+            try
+            {
+                var currentParent = hub.Configuration.ParentHub;
+                var visited = new HashSet<IMessageHub>();
+                while (currentParent != null && currentParent != hub)
+                {
+                    // Prevent infinite loops
+                    if (!visited.Add(currentParent))
+                        break;
+
+                    var parentCs = currentParent.ServiceProvider.GetService<IContentService>();
+                    if (parentCs != null)
+                    {
+                        parentContentService = parentCs;
+                        break;
+                    }
+                    // Try next parent in chain
+                    currentParent = currentParent.Configuration.ParentHub;
+                }
+            }
+            catch (Exception ex)
+            {
+                // Parent may not have content service, that's ok
+                System.Diagnostics.Debug.WriteLine($"Error getting parent ContentService for {hub.Address}: {ex.Message}");
+            }
+
+            parentResolved = true;
+            return parentContentService;
+        }
+    }
+
+    /// <summary>
+    /// Resolves a mapped config by looking up the source collection and applying the subdirectory.
+    /// This is called lazily when the collection is accessed, avoiding circular dependencies.
+    /// </summary>
+    private ContentCollectionConfig? ResolveMappedConfig(ContentCollectionConfig mappedConfig)
+    {
+        if (mappedConfig.SourceType != MappedContentCollectionConfigProvider.MappedSourceType)
+            return mappedConfig;
+
+        // Check cache first
+        if (resolvedMappedConfigs.TryGetValue(mappedConfig.Name, out var cached))
+            return cached;
+
+        var settings = mappedConfig.Settings;
+        if (settings == null ||
+            !settings.TryGetValue(MappedContentCollectionConfigProvider.SourceCollectionKey, out var sourceCollectionName) ||
+            !settings.TryGetValue(MappedContentCollectionConfigProvider.SubdirectoryKey, out var subdirectory))
+        {
+            return null;
+        }
+
+        // Look up the source collection from parent content service
+        var parent = GetParentContentService();
+        ContentCollectionConfig? sourceConfig = null;
+
+        if (parent != null)
+        {
+            sourceConfig = parent.GetCollectionConfig(sourceCollectionName);
+        }
+
+        if (sourceConfig == null)
+        {
+            System.Diagnostics.Debug.WriteLine(
+                $"No source collection '{sourceCollectionName}' found for mapped collection '{mappedConfig.Name}'");
+            return null;
+        }
+
+        // Resolve base path to absolute path if it's relative
+        var basePath = sourceConfig.BasePath ?? "";
+        if (!string.IsNullOrEmpty(basePath) && !Path.IsPathRooted(basePath))
+        {
+            basePath = Path.GetFullPath(Path.Combine(Directory.GetCurrentDirectory(), basePath));
+        }
+
+        // Create derived config with combined path
+        var fullPath = string.IsNullOrEmpty(subdirectory)
+            ? basePath
+            : Path.Combine(basePath, subdirectory);
+
+        var resolvedConfig = sourceConfig with
+        {
+            Name = mappedConfig.Name,
+            BasePath = fullPath,
+            Address = mappedConfig.Address,
+            Settings = new Dictionary<string, string>(sourceConfig.Settings ?? new Dictionary<string, string>())
+            {
+                ["BasePath"] = fullPath
+            }
+        };
+
+        // Cache the resolved config
+        resolvedMappedConfigs[mappedConfig.Name] = resolvedConfig;
+
+        return resolvedConfig;
+    }
 
     private async Task<ContentCollection?> CreateCollectionAsync(ContentCollectionConfig config, CancellationToken cancellationToken)
     {
@@ -72,9 +159,10 @@ public class ContentService : IContentService
 
     public async Task<ContentCollection?> GetCollectionAsync(string collection, CancellationToken ct)
     {
-        if (parentContentService is not null)
+        var parent = GetParentContentService();
+        if (parent is not null)
         {
-            var fromParent = await parentContentService.GetCollectionAsync(collection, ct);
+            var fromParent = await parent.GetCollectionAsync(collection, ct);
             if (fromParent is not null)
                 return fromParent;
         }
@@ -84,7 +172,16 @@ public class ContentService : IContentService
 
         var config = collectionConfigs.GetValueOrDefault(collection);
         if (config is not null)
+        {
+            // Resolve mapped config lazily before initializing
+            if (config.SourceType == MappedContentCollectionConfigProvider.MappedSourceType)
+            {
+                config = ResolveMappedConfig(config);
+                if (config == null)
+                    return null;
+            }
             return await InitializeCollectionAsync(config, ct);
+        }
 
         // Delegate to parent if not found locally
         return null;
@@ -122,24 +219,39 @@ public class ContentService : IContentService
     {
         // Try local configs first
         if (collectionConfigs.TryGetValue(collection, out var config))
+        {
+            // Resolve mapped config lazily
+            if (config.SourceType == MappedContentCollectionConfigProvider.MappedSourceType)
+            {
+                return ResolveMappedConfig(config);
+            }
             return config;
+        }
 
         // Delegate to parent if not found locally
-        if (parentContentService is not null)
-            return parentContentService.GetCollectionConfig(collection);
+        var parent = GetParentContentService();
+        if (parent is not null)
+            return parent.GetCollectionConfig(collection);
 
         return null;
     }
 
     public IReadOnlyCollection<ContentCollectionConfig> GetAllCollectionConfigs()
     {
-        // Get local configs
-        var configs = collectionConfigs.Values.ToList();
+        // Get local configs, resolving any mapped configs
+        var configs = collectionConfigs.Values
+            .Select(config => config.SourceType == MappedContentCollectionConfigProvider.MappedSourceType
+                ? ResolveMappedConfig(config)
+                : config)
+            .Where(c => c != null)
+            .Cast<ContentCollectionConfig>()
+            .ToList();
 
         // Add parent configs that aren't overridden locally
-        if (parentContentService is not null)
+        var parent = GetParentContentService();
+        if (parent is not null)
         {
-            var parentConfigs = parentContentService.GetAllCollectionConfigs();
+            var parentConfigs = parent.GetAllCollectionConfigs();
             foreach (var parentConfig in parentConfigs)
             {
                 if (!collectionConfigs.ContainsKey(parentConfig.Name))

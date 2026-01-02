@@ -1,6 +1,7 @@
 using MeshWeaver.Domain;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.Hosting.Persistence;
@@ -10,6 +11,75 @@ namespace MeshWeaver.Hosting.Persistence;
 /// </summary>
 public static class PersistenceExtensions
 {
+    /// <summary>
+    /// Adds persistence configured from Graph:Storage section.
+    /// Uses the Type field to select the appropriate storage adapter factory.
+    /// </summary>
+    /// <param name="builder">The mesh builder</param>
+    /// <param name="configuration">Configuration containing Graph:Storage section</param>
+    /// <returns>The mesh builder for chaining</returns>
+    public static TBuilder AddPersistenceFromConfig<TBuilder>(this TBuilder builder, IConfiguration configuration)
+        where TBuilder : MeshBuilder
+    {
+        builder.ConfigureServices(services => services.AddPersistenceFromConfig(configuration));
+        return builder;
+    }
+
+    /// <summary>
+    /// Adds persistence configured from Graph:Storage section.
+    /// Uses the Type field to select the appropriate storage adapter factory.
+    /// </summary>
+    /// <param name="services">The service collection</param>
+    /// <param name="configuration">Configuration containing Graph:Storage section</param>
+    /// <returns>The service collection for chaining</returns>
+    public static IServiceCollection AddPersistenceFromConfig(this IServiceCollection services, IConfiguration configuration)
+    {
+        var storageConfig = configuration.GetSection("Graph:Storage").Get<GraphStorageConfig>();
+        if (storageConfig == null)
+        {
+            throw new InvalidOperationException(
+                "Graph:Storage configuration section is required. " +
+                "Configure it in appsettings.json with at least Type and BasePath.");
+        }
+
+        return services.AddPersistence(storageConfig);
+    }
+
+    /// <summary>
+    /// Adds persistence using the specified storage configuration.
+    /// Uses the Type field to select the appropriate storage adapter factory.
+    /// </summary>
+    /// <param name="services">The service collection</param>
+    /// <param name="config">Storage configuration</param>
+    /// <returns>The service collection for chaining</returns>
+    public static IServiceCollection AddPersistence(this IServiceCollection services, GraphStorageConfig config)
+    {
+        // Register FileSystem factory as default
+        services.AddKeyedSingleton<IStorageAdapterFactory, FileSystemStorageAdapterFactory>(
+            FileSystemStorageAdapterFactory.StorageType);
+
+        // Register the storage adapter using the factory
+        services.AddSingleton<IStorageAdapter>(sp =>
+        {
+            var factory = sp.GetKeyedService<IStorageAdapterFactory>(config.Type);
+            if (factory == null)
+            {
+                var registeredTypes = string.Join(", ", new[] { "FileSystem", "AzureBlob", "Cosmos" });
+                throw new InvalidOperationException(
+                    $"Unknown storage type: '{config.Type}'. " +
+                    $"Supported types: {registeredTypes}. " +
+                    $"Ensure the appropriate package is referenced (e.g., MeshWeaver.Hosting.AzureStorage for AzureBlob).");
+            }
+
+            return factory.Create(config, sp);
+        });
+
+        services.AddSingleton<IPersistenceService>(sp =>
+            new FileSystemPersistenceService(sp.GetRequiredService<IStorageAdapter>()));
+
+        return services;
+    }
+
     /// <summary>
     /// Adds file system persistence to the mesh builder.
     /// </summary>
