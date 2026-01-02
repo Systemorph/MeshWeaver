@@ -1,7 +1,7 @@
 @inherits BlazorView<MeshNodeThumbnailControl, MeshNodeThumbnailView>
 @inject NavigationManager NavigationManager
 
-<FluentCard Class="mesh-node-thumbnail" Style="min-width: 280px; cursor: pointer;" @onclick="Navigate">
+<FluentCard Class="mesh-node-thumbnail" Style="min-width: 280px; cursor: pointer; margin: 8px;" @onclick="Navigate">
     <div class="mesh-node-thumbnail-content">
         @if (!string.IsNullOrEmpty(ImageUrl))
         {
