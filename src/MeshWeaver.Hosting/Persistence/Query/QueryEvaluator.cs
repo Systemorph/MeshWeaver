@@ -1,4 +1,4 @@
-﻿using System.Globalization;
+using System.Globalization;
 using System.Reflection;
 using System.Text;
 using System.Text.Json;
@@ -8,13 +8,13 @@ using MeshWeaver.Mesh.Query;
 namespace MeshWeaver.Hosting.Persistence.Query;
 
 /// <summary>
-/// Evaluates RSQL queries against objects in memory.
+/// Evaluates queries against objects in memory.
 /// </summary>
-public class RsqlEvaluator
+public class QueryEvaluator
 {
     private readonly FuzzyScorer _fuzzyScorer;
 
-    public RsqlEvaluator(FuzzyScorer? fuzzyScorer = null)
+    public QueryEvaluator(FuzzyScorer? fuzzyScorer = null)
     {
         _fuzzyScorer = fuzzyScorer ?? new FuzzyScorer();
     }
@@ -62,15 +62,15 @@ public class RsqlEvaluator
     }
 
     /// <summary>
-    /// Evaluates an RSQL AST node against an object.
+    /// Evaluates a query AST node against an object.
     /// </summary>
-    private bool EvaluateNode(object obj, RsqlNode node)
+    private bool EvaluateNode(object obj, QueryNode node)
     {
         return node switch
         {
-            RsqlComparison comparison => EvaluateComparison(obj, comparison.Condition),
-            RsqlAnd and => and.Children.All(child => EvaluateNode(obj, child)),
-            RsqlOr or => or.Children.Any(child => EvaluateNode(obj, child)),
+            QueryComparison comparison => EvaluateComparison(obj, comparison.Condition),
+            QueryAnd and => and.Children.All(child => EvaluateNode(obj, child)),
+            QueryOr or => or.Children.Any(child => EvaluateNode(obj, child)),
             _ => true
         };
     }
@@ -78,20 +78,20 @@ public class RsqlEvaluator
     /// <summary>
     /// Evaluates a single comparison condition against an object.
     /// </summary>
-    private bool EvaluateComparison(object obj, RsqlCondition condition)
+    private bool EvaluateComparison(object obj, QueryCondition condition)
     {
         var actualValue = GetPropertyValue(obj, condition.Selector);
         return condition.Operator switch
         {
-            RsqlOperator.Equal => CompareEqual(actualValue, condition.Value),
-            RsqlOperator.NotEqual => !CompareEqual(actualValue, condition.Value),
-            RsqlOperator.GreaterThan => CompareNumeric(actualValue, condition.Value) > 0,
-            RsqlOperator.LessThan => CompareNumeric(actualValue, condition.Value) < 0,
-            RsqlOperator.GreaterOrEqual => CompareNumeric(actualValue, condition.Value) >= 0,
-            RsqlOperator.LessOrEqual => CompareNumeric(actualValue, condition.Value) <= 0,
-            RsqlOperator.In => condition.Values.Any(v => CompareEqual(actualValue, v)),
-            RsqlOperator.NotIn => !condition.Values.Any(v => CompareEqual(actualValue, v)),
-            RsqlOperator.Like => CompareWildcard(actualValue, condition.Value),
+            QueryOperator.Equal => CompareEqual(actualValue, condition.Value),
+            QueryOperator.NotEqual => !CompareEqual(actualValue, condition.Value),
+            QueryOperator.GreaterThan => CompareNumeric(actualValue, condition.Value) > 0,
+            QueryOperator.LessThan => CompareNumeric(actualValue, condition.Value) < 0,
+            QueryOperator.GreaterOrEqual => CompareNumeric(actualValue, condition.Value) >= 0,
+            QueryOperator.LessOrEqual => CompareNumeric(actualValue, condition.Value) <= 0,
+            QueryOperator.In => condition.Values.Any(v => CompareEqual(actualValue, v)),
+            QueryOperator.NotIn => !condition.Values.Any(v => CompareEqual(actualValue, v)),
+            QueryOperator.Like => CompareWildcard(actualValue, condition.Value),
             _ => false
         };
     }

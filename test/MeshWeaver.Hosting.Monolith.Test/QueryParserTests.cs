@@ -4,93 +4,93 @@ using Xunit;
 
 namespace MeshWeaver.Hosting.Monolith.Test;
 
-public class RsqlParserTests
+public class QueryParserTests
 {
-    private readonly RsqlParser _parser = new();
+    private readonly QueryParser _parser = new();
 
     #region Basic Comparison Operators
 
     [Fact]
     public void Parse_EqualOperator_ReturnsCorrectCondition()
     {
-        var result = _parser.Parse("name==John");
+        var result = _parser.Parse("name:John");
 
-        result.Filter.Should().BeOfType<RsqlComparison>();
-        var comparison = (RsqlComparison)result.Filter!;
+        result.Filter.Should().BeOfType<QueryComparison>();
+        var comparison = (QueryComparison)result.Filter!;
         comparison.Condition.Selector.Should().Be("name");
-        comparison.Condition.Operator.Should().Be(RsqlOperator.Equal);
+        comparison.Condition.Operator.Should().Be(QueryOperator.Equal);
         comparison.Condition.Value.Should().Be("John");
     }
 
     [Fact]
     public void Parse_NotEqualOperator_ReturnsCorrectCondition()
     {
-        var result = _parser.Parse("status!=inactive");
+        var result = _parser.Parse("-status:inactive");
 
-        result.Filter.Should().BeOfType<RsqlComparison>();
-        var comparison = (RsqlComparison)result.Filter!;
+        result.Filter.Should().BeOfType<QueryComparison>();
+        var comparison = (QueryComparison)result.Filter!;
         comparison.Condition.Selector.Should().Be("status");
-        comparison.Condition.Operator.Should().Be(RsqlOperator.NotEqual);
+        comparison.Condition.Operator.Should().Be(QueryOperator.NotEqual);
         comparison.Condition.Value.Should().Be("inactive");
     }
 
     [Fact]
     public void Parse_GreaterThanOperator_ReturnsCorrectCondition()
     {
-        var result = _parser.Parse("price=gt=100");
+        var result = _parser.Parse("price:>100");
 
-        result.Filter.Should().BeOfType<RsqlComparison>();
-        var comparison = (RsqlComparison)result.Filter!;
+        result.Filter.Should().BeOfType<QueryComparison>();
+        var comparison = (QueryComparison)result.Filter!;
         comparison.Condition.Selector.Should().Be("price");
-        comparison.Condition.Operator.Should().Be(RsqlOperator.GreaterThan);
+        comparison.Condition.Operator.Should().Be(QueryOperator.GreaterThan);
         comparison.Condition.Value.Should().Be("100");
     }
 
     [Fact]
     public void Parse_LessThanOperator_ReturnsCorrectCondition()
     {
-        var result = _parser.Parse("age=lt=18");
+        var result = _parser.Parse("age:<18");
 
-        result.Filter.Should().BeOfType<RsqlComparison>();
-        var comparison = (RsqlComparison)result.Filter!;
+        result.Filter.Should().BeOfType<QueryComparison>();
+        var comparison = (QueryComparison)result.Filter!;
         comparison.Condition.Selector.Should().Be("age");
-        comparison.Condition.Operator.Should().Be(RsqlOperator.LessThan);
+        comparison.Condition.Operator.Should().Be(QueryOperator.LessThan);
         comparison.Condition.Value.Should().Be("18");
     }
 
     [Fact]
     public void Parse_GreaterOrEqualOperator_ReturnsCorrectCondition()
     {
-        var result = _parser.Parse("rating=ge=4.5");
+        var result = _parser.Parse("rating:>=4.5");
 
-        result.Filter.Should().BeOfType<RsqlComparison>();
-        var comparison = (RsqlComparison)result.Filter!;
+        result.Filter.Should().BeOfType<QueryComparison>();
+        var comparison = (QueryComparison)result.Filter!;
         comparison.Condition.Selector.Should().Be("rating");
-        comparison.Condition.Operator.Should().Be(RsqlOperator.GreaterOrEqual);
+        comparison.Condition.Operator.Should().Be(QueryOperator.GreaterOrEqual);
         comparison.Condition.Value.Should().Be("4.5");
     }
 
     [Fact]
     public void Parse_LessOrEqualOperator_ReturnsCorrectCondition()
     {
-        var result = _parser.Parse("quantity=le=10");
+        var result = _parser.Parse("quantity:<=10");
 
-        result.Filter.Should().BeOfType<RsqlComparison>();
-        var comparison = (RsqlComparison)result.Filter!;
+        result.Filter.Should().BeOfType<QueryComparison>();
+        var comparison = (QueryComparison)result.Filter!;
         comparison.Condition.Selector.Should().Be("quantity");
-        comparison.Condition.Operator.Should().Be(RsqlOperator.LessOrEqual);
+        comparison.Condition.Operator.Should().Be(QueryOperator.LessOrEqual);
         comparison.Condition.Value.Should().Be("10");
     }
 
     [Fact]
     public void Parse_LikeOperator_ReturnsCorrectCondition()
     {
-        var result = _parser.Parse("name=like=*laptop*");
+        var result = _parser.Parse("name:*laptop*");
 
-        result.Filter.Should().BeOfType<RsqlComparison>();
-        var comparison = (RsqlComparison)result.Filter!;
+        result.Filter.Should().BeOfType<QueryComparison>();
+        var comparison = (QueryComparison)result.Filter!;
         comparison.Condition.Selector.Should().Be("name");
-        comparison.Condition.Operator.Should().Be(RsqlOperator.Like);
+        comparison.Condition.Operator.Should().Be(QueryOperator.Like);
         comparison.Condition.Value.Should().Be("*laptop*");
     }
 
@@ -101,24 +101,24 @@ public class RsqlParserTests
     [Fact]
     public void Parse_InOperator_ParsesList()
     {
-        var result = _parser.Parse("category=in=(Electronics,Computers,Gadgets)");
+        var result = _parser.Parse("category:(Electronics OR Computers OR Gadgets)");
 
-        result.Filter.Should().BeOfType<RsqlComparison>();
-        var comparison = (RsqlComparison)result.Filter!;
+        result.Filter.Should().BeOfType<QueryComparison>();
+        var comparison = (QueryComparison)result.Filter!;
         comparison.Condition.Selector.Should().Be("category");
-        comparison.Condition.Operator.Should().Be(RsqlOperator.In);
+        comparison.Condition.Operator.Should().Be(QueryOperator.In);
         comparison.Condition.Values.Should().BeEquivalentTo(["Electronics", "Computers", "Gadgets"]);
     }
 
     [Fact]
     public void Parse_OutOperator_ParsesList()
     {
-        var result = _parser.Parse("status=out=(deleted,archived)");
+        var result = _parser.Parse("-status:(deleted OR archived)");
 
-        result.Filter.Should().BeOfType<RsqlComparison>();
-        var comparison = (RsqlComparison)result.Filter!;
+        result.Filter.Should().BeOfType<QueryComparison>();
+        var comparison = (QueryComparison)result.Filter!;
         comparison.Condition.Selector.Should().Be("status");
-        comparison.Condition.Operator.Should().Be(RsqlOperator.NotIn);
+        comparison.Condition.Operator.Should().Be(QueryOperator.NotIn);
         comparison.Condition.Values.Should().BeEquivalentTo(["deleted", "archived"]);
     }
 
@@ -127,59 +127,39 @@ public class RsqlParserTests
     #region Logical Operators
 
     [Fact]
-    public void Parse_SemicolonAnd_CombinesConditions()
+    public void Parse_SpaceAnd_CombinesConditions()
     {
-        var result = _parser.Parse("status==active;price=gt=100");
+        var result = _parser.Parse("status:active price:>100");
 
-        result.Filter.Should().BeOfType<RsqlAnd>();
-        var and = (RsqlAnd)result.Filter!;
+        result.Filter.Should().BeOfType<QueryAnd>();
+        var and = (QueryAnd)result.Filter!;
         and.Children.Should().HaveCount(2);
-        and.Children[0].Should().BeOfType<RsqlComparison>();
-        and.Children[1].Should().BeOfType<RsqlComparison>();
-    }
-
-    [Fact]
-    public void Parse_KeywordAnd_CombinesConditions()
-    {
-        var result = _parser.Parse("status==active and price=gt=100");
-
-        result.Filter.Should().BeOfType<RsqlAnd>();
-        var and = (RsqlAnd)result.Filter!;
-        and.Children.Should().HaveCount(2);
-    }
-
-    [Fact]
-    public void Parse_CommaOr_CombinesConditions()
-    {
-        var result = _parser.Parse("name==Laptop,name==Desktop");
-
-        result.Filter.Should().BeOfType<RsqlOr>();
-        var or = (RsqlOr)result.Filter!;
-        or.Children.Should().HaveCount(2);
+        and.Children[0].Should().BeOfType<QueryComparison>();
+        and.Children[1].Should().BeOfType<QueryComparison>();
     }
 
     [Fact]
     public void Parse_KeywordOr_CombinesConditions()
     {
-        var result = _parser.Parse("category==Electronics or category==Computers");
+        var result = _parser.Parse("name:Laptop OR name:Desktop");
 
-        result.Filter.Should().BeOfType<RsqlOr>();
-        var or = (RsqlOr)result.Filter!;
+        result.Filter.Should().BeOfType<QueryOr>();
+        var or = (QueryOr)result.Filter!;
         or.Children.Should().HaveCount(2);
     }
 
     [Fact]
     public void Parse_MixedAndOr_RespectsPrecedence()
     {
-        // AND has higher precedence than OR
-        // a,b;c should be parsed as a OR (b AND c)
-        var result = _parser.Parse("a==1,b==2;c==3");
+        // Space (AND) has higher precedence than OR
+        // a OR b c should be parsed as a OR (b AND c)
+        var result = _parser.Parse("a:1 OR b:2 c:3");
 
-        result.Filter.Should().BeOfType<RsqlOr>();
-        var or = (RsqlOr)result.Filter!;
+        result.Filter.Should().BeOfType<QueryOr>();
+        var or = (QueryOr)result.Filter!;
         or.Children.Should().HaveCount(2);
-        or.Children[0].Should().BeOfType<RsqlComparison>();
-        or.Children[1].Should().BeOfType<RsqlAnd>();
+        or.Children[0].Should().BeOfType<QueryComparison>();
+        or.Children[1].Should().BeOfType<QueryAnd>();
     }
 
     #endregion
@@ -189,21 +169,21 @@ public class RsqlParserTests
     [Fact]
     public void Parse_Parentheses_GroupsConditions()
     {
-        var result = _parser.Parse("(status==active;price=gt=100)");
+        var result = _parser.Parse("(status:active price:>100)");
 
-        result.Filter.Should().BeOfType<RsqlAnd>();
+        result.Filter.Should().BeOfType<QueryAnd>();
     }
 
     [Fact]
     public void Parse_NestedParentheses_GroupsCorrectly()
     {
-        var result = _parser.Parse("(a==1,b==2);c==3");
+        var result = _parser.Parse("(a:1 OR b:2) c:3");
 
-        result.Filter.Should().BeOfType<RsqlAnd>();
-        var and = (RsqlAnd)result.Filter!;
+        result.Filter.Should().BeOfType<QueryAnd>();
+        var and = (QueryAnd)result.Filter!;
         and.Children.Should().HaveCount(2);
-        and.Children[0].Should().BeOfType<RsqlOr>();
-        and.Children[1].Should().BeOfType<RsqlComparison>();
+        and.Children[0].Should().BeOfType<QueryOr>();
+        and.Children[1].Should().BeOfType<QueryComparison>();
     }
 
     #endregion
@@ -211,29 +191,29 @@ public class RsqlParserTests
     #region Reserved Parameters
 
     [Fact]
-    public void Parse_SearchParameter_ExtractsTextSearch()
+    public void Parse_BareTextSearch_ExtractsTextSearch()
     {
-        var result = _parser.Parse("status==active;$search=laptop gaming");
+        var result = _parser.Parse("status:active laptop gaming");
 
         result.TextSearch.Should().Be("laptop gaming");
-        result.Filter.Should().BeOfType<RsqlComparison>();
-        var comparison = (RsqlComparison)result.Filter!;
+        result.Filter.Should().BeOfType<QueryComparison>();
+        var comparison = (QueryComparison)result.Filter!;
         comparison.Condition.Selector.Should().Be("status");
     }
 
     [Fact]
     public void Parse_ScopeParameterDescendants_SetsScope()
     {
-        var result = _parser.Parse("$scope=descendants;name==test");
+        var result = _parser.Parse("scope:descendants name:test");
 
         result.Scope.Should().Be(QueryScope.Descendants);
-        result.Filter.Should().BeOfType<RsqlComparison>();
+        result.Filter.Should().BeOfType<QueryComparison>();
     }
 
     [Fact]
     public void Parse_ScopeParameterAncestors_SetsScope()
     {
-        var result = _parser.Parse("$scope=ancestors");
+        var result = _parser.Parse("scope:ancestors");
 
         result.Scope.Should().Be(QueryScope.Ancestors);
         result.Filter.Should().BeNull();
@@ -242,7 +222,7 @@ public class RsqlParserTests
     [Fact]
     public void Parse_ScopeParameterHierarchy_SetsScope()
     {
-        var result = _parser.Parse("$scope=hierarchy");
+        var result = _parser.Parse("scope:hierarchy");
 
         result.Scope.Should().Be(QueryScope.Hierarchy);
     }
@@ -250,11 +230,11 @@ public class RsqlParserTests
     [Fact]
     public void Parse_AllReservedParams_ExtractsAll()
     {
-        var result = _parser.Parse("status==active;$search=laptop;$scope=descendants");
+        var result = _parser.Parse("status:active laptop scope:descendants");
 
         result.TextSearch.Should().Be("laptop");
         result.Scope.Should().Be(QueryScope.Descendants);
-        result.Filter.Should().BeOfType<RsqlComparison>();
+        result.Filter.Should().BeOfType<QueryComparison>();
     }
 
     #endregion
@@ -264,20 +244,20 @@ public class RsqlParserTests
     [Fact]
     public void Parse_NestedSelector_ParsesCorrectly()
     {
-        var result = _parser.Parse("address.city==Seattle");
+        var result = _parser.Parse("address.city:Seattle");
 
-        result.Filter.Should().BeOfType<RsqlComparison>();
-        var comparison = (RsqlComparison)result.Filter!;
+        result.Filter.Should().BeOfType<QueryComparison>();
+        var comparison = (QueryComparison)result.Filter!;
         comparison.Condition.Selector.Should().Be("address.city");
     }
 
     [Fact]
     public void Parse_DeepNestedSelector_ParsesCorrectly()
     {
-        var result = _parser.Parse("user.profile.settings.theme==dark");
+        var result = _parser.Parse("user.profile.settings.theme:dark");
 
-        result.Filter.Should().BeOfType<RsqlComparison>();
-        var comparison = (RsqlComparison)result.Filter!;
+        result.Filter.Should().BeOfType<QueryComparison>();
+        var comparison = (QueryComparison)result.Filter!;
         comparison.Condition.Selector.Should().Be("user.profile.settings.theme");
     }
 
@@ -288,20 +268,20 @@ public class RsqlParserTests
     [Fact]
     public void Parse_DoubleQuotedValue_RemovesQuotes()
     {
-        var result = _parser.Parse("name==\"John Doe\"");
+        var result = _parser.Parse("name:\"John Doe\"");
 
-        result.Filter.Should().BeOfType<RsqlComparison>();
-        var comparison = (RsqlComparison)result.Filter!;
+        result.Filter.Should().BeOfType<QueryComparison>();
+        var comparison = (QueryComparison)result.Filter!;
         comparison.Condition.Value.Should().Be("John Doe");
     }
 
     [Fact]
     public void Parse_SingleQuotedValue_RemovesQuotes()
     {
-        var result = _parser.Parse("name=='Jane Doe'");
+        var result = _parser.Parse("name:'Jane Doe'");
 
-        result.Filter.Should().BeOfType<RsqlComparison>();
-        var comparison = (RsqlComparison)result.Filter!;
+        result.Filter.Should().BeOfType<QueryComparison>();
+        var comparison = (QueryComparison)result.Filter!;
         comparison.Condition.Value.Should().Be("Jane Doe");
     }
 
@@ -337,54 +317,53 @@ public class RsqlParserTests
     }
 
     [Fact]
-    public void Parse_OnlySearchParameter_ReturnsSearchWithoutFilter()
+    public void Parse_OnlyTextSearch_ReturnsSearchWithoutFilter()
     {
-        var result = _parser.Parse("$search=laptop");
+        var result = _parser.Parse("laptop");
 
         result.TextSearch.Should().Be("laptop");
         result.Filter.Should().BeNull();
     }
 
     [Fact]
-    public void Parse_DateValue_ParsesAsString()
+    public void Parse_QuotedTextSearch_ReturnsSearchWithoutFilter()
     {
-        var result = _parser.Parse("createdAt=ge=2024-01-01");
+        var result = _parser.Parse("\"laptop gaming\"");
 
-        result.Filter.Should().BeOfType<RsqlComparison>();
-        var comparison = (RsqlComparison)result.Filter!;
-        comparison.Condition.Value.Should().Be("2024-01-01");
+        result.TextSearch.Should().Be("laptop gaming");
+        result.Filter.Should().BeNull();
     }
 
     [Fact]
-    public void Parse_CaseInsensitiveOperators_Works()
+    public void Parse_DateValue_ParsesAsString()
     {
-        var result = _parser.Parse("price=GT=100");
+        var result = _parser.Parse("createdAt:>=2024-01-01");
 
-        result.Filter.Should().BeOfType<RsqlComparison>();
-        var comparison = (RsqlComparison)result.Filter!;
-        comparison.Condition.Operator.Should().Be(RsqlOperator.GreaterThan);
+        result.Filter.Should().BeOfType<QueryComparison>();
+        var comparison = (QueryComparison)result.Filter!;
+        comparison.Condition.Value.Should().Be("2024-01-01");
     }
 
     [Fact]
     public void Parse_ComplexQuery_ParsesCorrectly()
     {
-        var result = _parser.Parse("status==active;price=ge=100;price=le=500;category=in=(Electronics,Computers);$search=laptop;$scope=descendants");
+        var result = _parser.Parse("status:active price:>=100 price:<=500 category:(Electronics OR Computers) laptop scope:descendants");
 
         result.TextSearch.Should().Be("laptop");
         result.Scope.Should().Be(QueryScope.Descendants);
-        result.Filter.Should().BeOfType<RsqlAnd>();
-        var and = (RsqlAnd)result.Filter!;
+        result.Filter.Should().BeOfType<QueryAnd>();
+        var and = (QueryAnd)result.Filter!;
         and.Children.Should().HaveCount(4);
     }
 
     #endregion
 
-    #region OrderBy Parameter
+    #region Sort Parameter
 
     [Fact]
-    public void Parse_OrderByAscending_ParsesCorrectly()
+    public void Parse_SortAscending_ParsesCorrectly()
     {
-        var result = _parser.Parse("$orderBy=name");
+        var result = _parser.Parse("sort:name");
 
         result.OrderBy.Should().NotBeNull();
         result.OrderBy!.Property.Should().Be("name");
@@ -393,9 +372,9 @@ public class RsqlParserTests
     }
 
     [Fact]
-    public void Parse_OrderByDescending_ParsesCorrectly()
+    public void Parse_SortDescending_ParsesCorrectly()
     {
-        var result = _parser.Parse("$orderBy=lastAccessedAt:desc");
+        var result = _parser.Parse("sort:lastAccessedAt-desc");
 
         result.OrderBy.Should().NotBeNull();
         result.OrderBy!.Property.Should().Be("lastAccessedAt");
@@ -403,9 +382,9 @@ public class RsqlParserTests
     }
 
     [Fact]
-    public void Parse_OrderByAsc_ParsesCorrectly()
+    public void Parse_SortAsc_ParsesCorrectly()
     {
-        var result = _parser.Parse("$orderBy=createdAt:asc");
+        var result = _parser.Parse("sort:createdAt-asc");
 
         result.OrderBy.Should().NotBeNull();
         result.OrderBy!.Property.Should().Be("createdAt");
@@ -413,14 +392,14 @@ public class RsqlParserTests
     }
 
     [Fact]
-    public void Parse_OrderByWithFilter_ParsesBoth()
+    public void Parse_SortWithFilter_ParsesBoth()
     {
-        var result = _parser.Parse("status==active;$orderBy=name:desc");
+        var result = _parser.Parse("status:active sort:name-desc");
 
         result.OrderBy.Should().NotBeNull();
         result.OrderBy!.Property.Should().Be("name");
         result.OrderBy.Descending.Should().BeTrue();
-        result.Filter.Should().BeOfType<RsqlComparison>();
+        result.Filter.Should().BeOfType<QueryComparison>();
     }
 
     #endregion
@@ -430,7 +409,7 @@ public class RsqlParserTests
     [Fact]
     public void Parse_Limit_ParsesCorrectly()
     {
-        var result = _parser.Parse("$limit=20");
+        var result = _parser.Parse("limit:20");
 
         result.Limit.Should().Be(20);
         result.Filter.Should().BeNull();
@@ -439,16 +418,16 @@ public class RsqlParserTests
     [Fact]
     public void Parse_LimitWithFilter_ParsesBoth()
     {
-        var result = _parser.Parse("status==active;$limit=10");
+        var result = _parser.Parse("status:active limit:10");
 
         result.Limit.Should().Be(10);
-        result.Filter.Should().BeOfType<RsqlComparison>();
+        result.Filter.Should().BeOfType<QueryComparison>();
     }
 
     [Fact]
     public void Parse_LimitInvalidValue_ReturnsNull()
     {
-        var result = _parser.Parse("$limit=invalid");
+        var result = _parser.Parse("limit:invalid");
 
         result.Limit.Should().BeNull();
     }
@@ -460,7 +439,7 @@ public class RsqlParserTests
     [Fact]
     public void Parse_SourceActivity_ParsesCorrectly()
     {
-        var result = _parser.Parse("$source=activity");
+        var result = _parser.Parse("source:activity");
 
         result.Source.Should().Be(QuerySource.Activity);
         result.Filter.Should().BeNull();
@@ -469,7 +448,7 @@ public class RsqlParserTests
     [Fact]
     public void Parse_SourceDefault_ParsesCorrectly()
     {
-        var result = _parser.Parse("$source=default");
+        var result = _parser.Parse("source:default");
 
         result.Source.Should().Be(QuerySource.Default);
     }
@@ -477,7 +456,7 @@ public class RsqlParserTests
     [Fact]
     public void Parse_SourceUnknown_DefaultsToDefault()
     {
-        var result = _parser.Parse("$source=unknown");
+        var result = _parser.Parse("source:unknown");
 
         result.Source.Should().Be(QuerySource.Default);
     }
@@ -485,14 +464,14 @@ public class RsqlParserTests
     [Fact]
     public void Parse_SourceWithOtherParams_ParsesAll()
     {
-        var result = _parser.Parse("$source=activity;nodeType==Story;$orderBy=lastAccessedAt:desc;$limit=20");
+        var result = _parser.Parse("source:activity nodeType:Story sort:lastAccessedAt-desc limit:20");
 
         result.Source.Should().Be(QuerySource.Activity);
         result.OrderBy.Should().NotBeNull();
         result.OrderBy!.Property.Should().Be("lastAccessedAt");
         result.OrderBy.Descending.Should().BeTrue();
         result.Limit.Should().Be(20);
-        result.Filter.Should().BeOfType<RsqlComparison>();
+        result.Filter.Should().BeOfType<QueryComparison>();
     }
 
     #endregion
@@ -502,7 +481,7 @@ public class RsqlParserTests
     [Fact]
     public void Parse_AllNewParameters_ParsesCorrectly()
     {
-        var result = _parser.Parse("status==active;$search=laptop;$scope=descendants;$orderBy=price:desc;$limit=50;$source=default");
+        var result = _parser.Parse("status:active laptop scope:descendants sort:price-desc limit:50 source:default");
 
         result.TextSearch.Should().Be("laptop");
         result.Scope.Should().Be(QueryScope.Descendants);
@@ -511,24 +490,39 @@ public class RsqlParserTests
         result.OrderBy.Descending.Should().BeTrue();
         result.Limit.Should().Be(50);
         result.Source.Should().Be(QuerySource.Default);
-        result.Filter.Should().BeOfType<RsqlComparison>();
+        result.Filter.Should().BeOfType<QueryComparison>();
     }
 
     [Fact]
     public void Parse_ActivityQueryPattern_ParsesCorrectly()
     {
         // This is the typical query pattern for activity-based catalog
-        var result = _parser.Parse("$source=activity;nodeType==type/Story;$orderBy=lastAccessedAt:desc;$limit=20");
+        var result = _parser.Parse("source:activity nodeType:type/Story sort:lastAccessedAt-desc limit:20");
 
         result.Source.Should().Be(QuerySource.Activity);
         result.OrderBy.Should().NotBeNull();
         result.OrderBy!.Property.Should().Be("lastAccessedAt");
         result.OrderBy.Descending.Should().BeTrue();
         result.Limit.Should().Be(20);
-        result.Filter.Should().BeOfType<RsqlComparison>();
-        var comparison = (RsqlComparison)result.Filter!;
+        result.Filter.Should().BeOfType<QueryComparison>();
+        var comparison = (QueryComparison)result.Filter!;
         comparison.Condition.Selector.Should().Be("nodeType");
         comparison.Condition.Value.Should().Be("type/Story");
+    }
+
+    #endregion
+
+    #region Path Values with Slashes
+
+    [Fact]
+    public void Parse_PathValueWithSlash_ParsesCorrectly()
+    {
+        var result = _parser.Parse("nodeType:ACME/Project/Todo");
+
+        result.Filter.Should().BeOfType<QueryComparison>();
+        var comparison = (QueryComparison)result.Filter!;
+        comparison.Condition.Selector.Should().Be("nodeType");
+        comparison.Condition.Value.Should().Be("ACME/Project/Todo");
     }
 
     #endregion

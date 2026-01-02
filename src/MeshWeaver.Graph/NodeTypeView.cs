@@ -101,31 +101,15 @@ public static class NodeTypeView
         int limit)
     {
         var stack = Controls.Stack.WithWidth("100%").WithStyle("padding: 24px;");
-
-        // Header with title and Settings button
         var title = definition.DisplayName ?? definition.Id;
-        var headerRow = Controls.Stack
-            .WithOrientation(Orientation.Horizontal)
-            .WithStyle("justify-content: space-between; align-items: center; margin-bottom: 16px;")
-            .WithView(Controls.Html($"<h1 style=\"margin: 0;\">{System.Web.HttpUtility.HtmlEncode(title)}s</h1>"))
-            .WithView(Controls.Button("")
-                .WithIconStart(FluentIcons.Settings())
-                .WithAppearance(Appearance.Stealth)
-                .WithClickAction(actx =>
-                {
-                    var codeHref = new LayoutAreaReference(CodeViewArea).ToHref(hubAddress);
-                    actx.Host.UpdateArea(actx.Area, new RedirectControl(codeHref));
-                }));
-
-        stack = stack.WithView(headerRow);
 
         // Search bar
         var searchRow = Controls.Stack
             .WithOrientation(Orientation.Horizontal)
             .WithStyle("gap: 8px; margin-bottom: 16px; align-items: center;")
             .WithView(new TextFieldControl(new JsonPointerReference(""))
-                .WithPlaceholder("Search or add RSQL filter (e.g., name==*acme*)")
-                .WithStyle("flex: 1; max-width: 500px;")
+                .WithPlaceholder("Search or filter (e.g., name:*acme*)")
+                .WithStyle("flex: 1;")
                 .WithIconStart(FluentIcons.Search())
                 .WithImmediate(true) with { DataContext = LayoutAreaReference.GetDataPointer(CatalogSearchDataId) })
             .WithView(Controls.Button("Clear")
@@ -155,14 +139,14 @@ public static class NodeTypeView
             ? definition.Id
             : $"{definition.Namespace}/{definition.Id}";
         var baseQuery = definition.ChildrenQuery
-            ?? $"$source=activity;nodeType=={nodeTypePath};$orderBy=lastAccessedAt:desc";
+            ?? $"source:activity nodeType:{nodeTypePath} sort:lastAccessedAt-desc";
 
         // Request one more than limit to detect if there are more items
         var queryLimit = limit + 1;
         var query = BuildCatalogQuery(baseQuery, searchFilter, queryLimit);
 
         var nodes = new List<MeshNode>();
-        var isActivityQuery = query.Contains("$source=activity", StringComparison.OrdinalIgnoreCase);
+        var isActivityQuery = query.Contains("source:activity", StringComparison.OrdinalIgnoreCase);
 
         try
         {
@@ -192,9 +176,9 @@ public static class NodeTypeView
         {
             try
             {
-                // Build fallback query without $source=activity
+                // Build fallback query without source:activity
                 // Search from root namespace to find all instances regardless of location
-                var fallbackQuery = $"nodeType=={nodeTypePath};$scope=descendants;$limit={queryLimit}";
+                var fallbackQuery = $"nodeType:{nodeTypePath} scope:descendants limit:{queryLimit}";
                 await foreach (var item in persistence.QueryAsync(fallbackQuery, ""))
                 {
                     if (item is MeshNode mn)
@@ -230,7 +214,7 @@ public static class NodeTypeView
                 : $"Showing {nodes.Count} item{(nodes.Count != 1 ? "s" : "")}";
             stack = stack.WithView(Controls.Html($"<p style=\"color: #888; margin-bottom: 12px; font-size: 0.9em;\">{countText}</p>"));
 
-            var grid = Controls.LayoutGrid.WithSkin(s => s.WithSpacing(2));
+            var grid = Controls.LayoutGrid.WithSkin(s => s.WithSpacing(3));
             foreach (var node in nodes)
             {
                 grid = grid.WithView(
@@ -264,40 +248,35 @@ public static class NodeTypeView
     /// </summary>
     private static string BuildCatalogQuery(string baseQuery, string? searchFilter, int limit)
     {
-        // Remove any existing $limit from base query (we'll add our own)
+        // Remove any existing limit: from base query (we'll add our own)
         var query = System.Text.RegularExpressions.Regex.Replace(
             baseQuery,
-            @"\$limit=\d+;?",
+            @"limit:\d+\s*",
             "",
-            System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase).Trim();
 
         // Add user's search filter if provided
         if (!string.IsNullOrWhiteSpace(searchFilter))
         {
             var trimmedSearch = searchFilter.Trim();
 
-            // Check if it looks like RSQL (contains operators)
-            var isRsql = trimmedSearch.Contains("==") ||
-                         trimmedSearch.Contains("!=") ||
-                         trimmedSearch.Contains("=gt=") ||
-                         trimmedSearch.Contains("=lt=") ||
-                         trimmedSearch.Contains("=in=") ||
-                         trimmedSearch.Contains("=like=");
+            // Check if it looks like a query filter (contains field:value pattern)
+            var isQuery = trimmedSearch.Contains(':') && !trimmedSearch.StartsWith('"');
 
-            if (isRsql)
+            if (isQuery)
             {
-                // Append as RSQL filter
-                query = query.TrimEnd(';') + ";" + trimmedSearch;
+                // Append as query filter
+                query = query + " " + trimmedSearch;
             }
             else
             {
-                // Treat as text search - add to query
-                query = query.TrimEnd(';') + ";$search=" + Uri.EscapeDataString(trimmedSearch);
+                // Treat as text search - add directly (bare text is text search in GitHub syntax)
+                query = query + " " + trimmedSearch;
             }
         }
 
         // Add limit
-        query = query.TrimEnd(';') + ";$limit=" + limit;
+        query = query.Trim() + " limit:" + limit;
 
         return query;
     }
@@ -907,7 +886,7 @@ public static class NodeTypeView
             .WithStyle(formStyle)
             .WithView(Controls.Html("<label style=\"font-weight: 500;\">Children Query:</label>"))
             .WithView(new TextFieldControl(new JsonPointerReference(""))
-                .WithPlaceholder("RSQL query for children...")
+                .WithPlaceholder("Query for children (e.g., nodeType:Person)")
                 .WithImmediate(true) with { DataContext = LayoutAreaReference.GetDataPointer(childrenQueryDataId) }));
 
         // Dependencies

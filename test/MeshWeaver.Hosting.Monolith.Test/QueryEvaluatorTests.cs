@@ -7,10 +7,10 @@ using Xunit;
 
 namespace MeshWeaver.Hosting.Monolith.Test;
 
-public class RsqlEvaluatorTests
+public class QueryEvaluatorTests
 {
-    private readonly RsqlEvaluator _evaluator = new();
-    private readonly RsqlParser _parser = new();
+    private readonly QueryEvaluator _evaluator = new();
+    private readonly QueryParser _parser = new();
 
     #region Test Objects
 
@@ -26,7 +26,7 @@ public class RsqlEvaluatorTests
     public void Matches_EqualOperator_MatchesExact()
     {
         var product = new Product("Laptop", 999.99m, "Electronics", true, DateTimeOffset.Now);
-        var query = _parser.Parse("name==Laptop");
+        var query = _parser.Parse("name:Laptop");
 
         _evaluator.Matches(product, query).Should().BeTrue();
     }
@@ -35,7 +35,7 @@ public class RsqlEvaluatorTests
     public void Matches_EqualOperator_CaseInsensitive()
     {
         var product = new Product("Laptop", 999.99m, "Electronics", true, DateTimeOffset.Now);
-        var query = _parser.Parse("name==laptop");
+        var query = _parser.Parse("name:laptop");
 
         _evaluator.Matches(product, query).Should().BeTrue();
     }
@@ -44,7 +44,7 @@ public class RsqlEvaluatorTests
     public void Matches_NotEqualOperator_Works()
     {
         var product = new Product("Laptop", 999.99m, "Electronics", true, DateTimeOffset.Now);
-        var query = _parser.Parse("category!=Furniture");
+        var query = _parser.Parse("-category:Furniture");
 
         _evaluator.Matches(product, query).Should().BeTrue();
     }
@@ -53,7 +53,7 @@ public class RsqlEvaluatorTests
     public void Matches_GreaterThanOperator_Works()
     {
         var product = new Product("Laptop", 999.99m, "Electronics", true, DateTimeOffset.Now);
-        var query = _parser.Parse("price=gt=500");
+        var query = _parser.Parse("price:>500");
 
         _evaluator.Matches(product, query).Should().BeTrue();
     }
@@ -62,7 +62,7 @@ public class RsqlEvaluatorTests
     public void Matches_LessThanOperator_Works()
     {
         var product = new Product("Mouse", 29.99m, "Electronics", true, DateTimeOffset.Now);
-        var query = _parser.Parse("price=lt=50");
+        var query = _parser.Parse("price:<50");
 
         _evaluator.Matches(product, query).Should().BeTrue();
     }
@@ -71,7 +71,7 @@ public class RsqlEvaluatorTests
     public void Matches_GreaterOrEqualOperator_Works()
     {
         var product = new Product("Laptop", 999.99m, "Electronics", true, DateTimeOffset.Now);
-        var query = _parser.Parse("price=ge=999.99");
+        var query = _parser.Parse("price:>=999.99");
 
         _evaluator.Matches(product, query).Should().BeTrue();
     }
@@ -80,7 +80,7 @@ public class RsqlEvaluatorTests
     public void Matches_LessOrEqualOperator_Works()
     {
         var product = new Product("Laptop", 999.99m, "Electronics", true, DateTimeOffset.Now);
-        var query = _parser.Parse("price=le=1000");
+        var query = _parser.Parse("price:<=1000");
 
         _evaluator.Matches(product, query).Should().BeTrue();
     }
@@ -93,7 +93,7 @@ public class RsqlEvaluatorTests
     public void Matches_InOperator_MatchesAnyValue()
     {
         var product = new Product("Laptop", 999.99m, "Electronics", true, DateTimeOffset.Now);
-        var query = _parser.Parse("category=in=(Electronics,Computers,Gadgets)");
+        var query = _parser.Parse("category:(Electronics OR Computers OR Gadgets)");
 
         _evaluator.Matches(product, query).Should().BeTrue();
     }
@@ -102,7 +102,7 @@ public class RsqlEvaluatorTests
     public void Matches_InOperator_NoMatchReturnsFalse()
     {
         var product = new Product("Laptop", 999.99m, "Electronics", true, DateTimeOffset.Now);
-        var query = _parser.Parse("category=in=(Furniture,Clothing)");
+        var query = _parser.Parse("category:(Furniture OR Clothing)");
 
         _evaluator.Matches(product, query).Should().BeFalse();
     }
@@ -111,7 +111,7 @@ public class RsqlEvaluatorTests
     public void Matches_OutOperator_ExcludesValues()
     {
         var product = new Product("Laptop", 999.99m, "Electronics", true, DateTimeOffset.Now);
-        var query = _parser.Parse("category=out=(Furniture,Clothing)");
+        var query = _parser.Parse("-category:(Furniture OR Clothing)");
 
         _evaluator.Matches(product, query).Should().BeTrue();
     }
@@ -124,7 +124,7 @@ public class RsqlEvaluatorTests
     public void Matches_LikeOperator_ContainsPattern()
     {
         var product = new Product("Gaming Laptop Pro", 999.99m, "Electronics", true, DateTimeOffset.Now);
-        var query = _parser.Parse("name=like=*Laptop*");
+        var query = _parser.Parse("name:*Laptop*");
 
         _evaluator.Matches(product, query).Should().BeTrue();
     }
@@ -133,7 +133,7 @@ public class RsqlEvaluatorTests
     public void Matches_LikeOperator_StartsWithPattern()
     {
         var product = new Product("Gaming Laptop Pro", 999.99m, "Electronics", true, DateTimeOffset.Now);
-        var query = _parser.Parse("name=like=Gaming*");
+        var query = _parser.Parse("name:Gaming*");
 
         _evaluator.Matches(product, query).Should().BeTrue();
     }
@@ -142,7 +142,7 @@ public class RsqlEvaluatorTests
     public void Matches_LikeOperator_EndsWithPattern()
     {
         var product = new Product("Gaming Laptop Pro", 999.99m, "Electronics", true, DateTimeOffset.Now);
-        var query = _parser.Parse("name=like=*Pro");
+        var query = _parser.Parse("name:*Pro");
 
         _evaluator.Matches(product, query).Should().BeTrue();
     }
@@ -155,7 +155,7 @@ public class RsqlEvaluatorTests
     public void Matches_NestedProperty_Works()
     {
         var customer = new Customer("John", new Address("Seattle", "USA"), 30);
-        var query = _parser.Parse("address.city==Seattle");
+        var query = _parser.Parse("address.city:Seattle");
 
         _evaluator.Matches(customer, query).Should().BeTrue();
     }
@@ -164,7 +164,7 @@ public class RsqlEvaluatorTests
     public void Matches_NestedProperty_CaseInsensitive()
     {
         var customer = new Customer("John", new Address("Seattle", "USA"), 30);
-        var query = _parser.Parse("Address.City==seattle");
+        var query = _parser.Parse("Address.City:seattle");
 
         _evaluator.Matches(customer, query).Should().BeTrue();
     }
@@ -177,7 +177,7 @@ public class RsqlEvaluatorTests
     public void Matches_AndConditions_AllMustMatch()
     {
         var product = new Product("Laptop", 999.99m, "Electronics", true, DateTimeOffset.Now);
-        var query = _parser.Parse("name==Laptop;category==Electronics");
+        var query = _parser.Parse("name:Laptop category:Electronics");
 
         _evaluator.Matches(product, query).Should().BeTrue();
     }
@@ -186,7 +186,7 @@ public class RsqlEvaluatorTests
     public void Matches_AndConditions_OneFails()
     {
         var product = new Product("Laptop", 999.99m, "Electronics", true, DateTimeOffset.Now);
-        var query = _parser.Parse("name==Laptop;category==Furniture");
+        var query = _parser.Parse("name:Laptop category:Furniture");
 
         _evaluator.Matches(product, query).Should().BeFalse();
     }
@@ -195,7 +195,7 @@ public class RsqlEvaluatorTests
     public void Matches_OrConditions_OneMatchSuffices()
     {
         var product = new Product("Laptop", 999.99m, "Electronics", true, DateTimeOffset.Now);
-        var query = _parser.Parse("name==Desktop,name==Laptop");
+        var query = _parser.Parse("name:Desktop OR name:Laptop");
 
         _evaluator.Matches(product, query).Should().BeTrue();
     }
@@ -204,7 +204,7 @@ public class RsqlEvaluatorTests
     public void Matches_ComplexLogic_Works()
     {
         var product = new Product("Laptop", 999.99m, "Electronics", true, DateTimeOffset.Now);
-        var query = _parser.Parse("(name==Laptop,name==Desktop);category==Electronics");
+        var query = _parser.Parse("(name:Laptop OR name:Desktop) category:Electronics");
 
         _evaluator.Matches(product, query).Should().BeTrue();
     }
@@ -218,7 +218,7 @@ public class RsqlEvaluatorTests
     {
         var json = """{"name": "Laptop", "price": 999.99, "category": "Electronics"}""";
         var jsonElement = JsonDocument.Parse(json).RootElement;
-        var query = _parser.Parse("name==Laptop");
+        var query = _parser.Parse("name:Laptop");
 
         _evaluator.Matches(jsonElement, query).Should().BeTrue();
     }
@@ -228,7 +228,7 @@ public class RsqlEvaluatorTests
     {
         var json = """{"name": "Laptop", "price": 999.99, "category": "Electronics"}""";
         var jsonElement = JsonDocument.Parse(json).RootElement;
-        var query = _parser.Parse("price=gt=500");
+        var query = _parser.Parse("price:>500");
 
         _evaluator.Matches(jsonElement, query).Should().BeTrue();
     }
@@ -238,7 +238,7 @@ public class RsqlEvaluatorTests
     {
         var json = """{"name": "John", "address": {"city": "Seattle", "country": "USA"}}""";
         var jsonElement = JsonDocument.Parse(json).RootElement;
-        var query = _parser.Parse("address.city==Seattle");
+        var query = _parser.Parse("address.city:Seattle");
 
         _evaluator.Matches(jsonElement, query).Should().BeTrue();
     }
@@ -251,7 +251,7 @@ public class RsqlEvaluatorTests
     public void Matches_DateComparison_GreaterOrEqual()
     {
         var product = new Product("Laptop", 999.99m, "Electronics", true, new DateTimeOffset(2024, 6, 15, 0, 0, 0, TimeSpan.Zero));
-        var query = _parser.Parse("createdAt=ge=2024-01-01");
+        var query = _parser.Parse("createdAt:>=2024-01-01");
 
         _evaluator.Matches(product, query).Should().BeTrue();
     }
@@ -260,7 +260,7 @@ public class RsqlEvaluatorTests
     public void Matches_DateComparison_LessThan()
     {
         var product = new Product("Laptop", 999.99m, "Electronics", true, new DateTimeOffset(2024, 6, 15, 0, 0, 0, TimeSpan.Zero));
-        var query = _parser.Parse("createdAt=lt=2025-01-01");
+        var query = _parser.Parse("createdAt:<2025-01-01");
 
         _evaluator.Matches(product, query).Should().BeTrue();
     }
@@ -273,7 +273,7 @@ public class RsqlEvaluatorTests
     public void Matches_TextSearch_MatchesStringProperty()
     {
         var product = new Product("Gaming Laptop Pro", 999.99m, "Electronics", true, DateTimeOffset.Now);
-        var query = _parser.Parse("$search=laptop");
+        var query = _parser.Parse("laptop");
 
         _evaluator.Matches(product, query).Should().BeTrue();
     }
@@ -282,7 +282,7 @@ public class RsqlEvaluatorTests
     public void Matches_TextSearch_NoMatchReturnsFalse()
     {
         var product = new Product("Desktop Computer", 999.99m, "Electronics", true, DateTimeOffset.Now);
-        var query = _parser.Parse("$search=laptop");
+        var query = _parser.Parse("laptop");
 
         _evaluator.Matches(product, query).Should().BeFalse();
     }
@@ -303,7 +303,7 @@ public class RsqlEvaluatorTests
     public void Matches_CombinedFilterAndSearch_Works()
     {
         var product = new Product("Gaming Laptop Pro", 999.99m, "Electronics", true, DateTimeOffset.Now);
-        var query = _parser.Parse("category==Electronics;$search=laptop");
+        var query = _parser.Parse("category:Electronics laptop");
 
         _evaluator.Matches(product, query).Should().BeTrue();
     }
@@ -325,7 +325,7 @@ public class RsqlEvaluatorTests
     public void Matches_NonExistentProperty_ReturnsFalse()
     {
         var product = new Product("Laptop", 999.99m, "Electronics", true, DateTimeOffset.Now);
-        var query = _parser.Parse("nonexistent==value");
+        var query = _parser.Parse("nonexistent:value");
 
         _evaluator.Matches(product, query).Should().BeFalse();
     }
@@ -334,7 +334,7 @@ public class RsqlEvaluatorTests
     public void Matches_NullPropertyValue_HandledGracefully()
     {
         var product = new Product(null!, 999.99m, "Electronics", true, DateTimeOffset.Now);
-        var query = _parser.Parse("name==Laptop");
+        var query = _parser.Parse("name:Laptop");
 
         _evaluator.Matches(product, query).Should().BeFalse();
     }

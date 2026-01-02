@@ -248,9 +248,9 @@ public class ActivityTrackingPersistenceDecorator : IPersistenceService, IDispos
 
     public async IAsyncEnumerable<object> QueryAsync(string query, string path)
     {
-        var parser = new RsqlParser();
+        var parser = new QueryParser();
         var parsedQuery = parser.Parse(query);
-        var evaluator = new RsqlEvaluator();
+        var evaluator = new QueryEvaluator();
 
         IEnumerable<object> results;
 

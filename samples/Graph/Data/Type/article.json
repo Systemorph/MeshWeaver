@@ -16,6 +16,6 @@
     "description": "A content article with YAML frontmatter",
     "displayOrder": 35,
     "configuration": "config => config.WithContentType<Article>().AddNodeTypeView()",
-    "childrenQuery": "$source=activity;nodeType==Type/Article;$orderBy=lastAccessedAt:desc;$limit=20"
+    "childrenQuery": "source:activity nodeType:Type/Article sort:lastAccessedAt-desc limit:20"
   }
 }
