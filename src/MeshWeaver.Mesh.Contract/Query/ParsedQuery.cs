@@ -1,16 +1,16 @@
 namespace MeshWeaver.Mesh.Query;
 
 /// <summary>
-/// Represents a fully parsed RSQL query with reserved parameters.
+/// Represents a fully parsed query with reserved parameters.
 /// </summary>
-/// <param name="Filter">The parsed RSQL AST (null if no filter conditions)</param>
-/// <param name="TextSearch">Full-text search value from $search parameter</param>
-/// <param name="Scope">Path scope from $scope parameter</param>
-/// <param name="OrderBy">Ordering clause from $orderBy parameter</param>
-/// <param name="Limit">Result limit from $limit parameter</param>
-/// <param name="Source">Data source from $source parameter</param>
+/// <param name="Filter">The parsed query AST (null if no filter conditions)</param>
+/// <param name="TextSearch">Full-text search value (bare text in query)</param>
+/// <param name="Scope">Path scope from scope: qualifier</param>
+/// <param name="OrderBy">Ordering clause from sort: qualifier</param>
+/// <param name="Limit">Result limit from limit: qualifier</param>
+/// <param name="Source">Data source from source: qualifier</param>
 public record ParsedQuery(
-    RsqlNode? Filter,
+    QueryNode? Filter,
     string? TextSearch,
     QueryScope Scope = QueryScope.Exact,
     OrderByClause? OrderBy = null,

@@ -196,7 +196,7 @@ public class ActivityTrackingTests : IDisposable
             NullLogger<ActivityTrackingPersistenceDecorator>.Instance);
 
         // Act - query user's activity
-        var query = "$source=activity;nodeType==Type/Organization;$orderBy=accessCount:desc";
+        var query = "source:activity nodeType:Type/Organization sort:accessCount-desc";
         var results = await queryDecorator.QueryAsync(query, "org")
             .OfType<UserActivityRecord>()
             .ToListAsync();
@@ -237,7 +237,7 @@ public class ActivityTrackingTests : IDisposable
             NullLogger<ActivityTrackingPersistenceDecorator>.Instance);
 
         // Act - query with limit
-        var query = "$source=activity;$limit=3";
+        var query = "source:activity limit:3";
         var results = await queryDecorator.QueryAsync(query, "org")
             .OfType<UserActivityRecord>()
             .ToListAsync();
@@ -287,7 +287,7 @@ public class ActivityTrackingTests : IDisposable
             NullLogger<ActivityTrackingPersistenceDecorator>.Instance);
 
         // Act - query ordered by lastAccessedAt descending (most recent first)
-        var query = "$source=activity;$orderBy=lastAccessedAt:desc";
+        var query = "source:activity sort:lastAccessedAt-desc";
         var results = await queryDecorator.QueryAsync(query, "org")
             .OfType<UserActivityRecord>()
             .ToListAsync();
@@ -321,7 +321,7 @@ public class CatalogFallbackTests
         });
 
         // Act - query for organizations using standard query (simulating fallback)
-        var fallbackQuery = "nodeType==Type/Organization;$scope=descendants;$limit=20";
+        var fallbackQuery = "nodeType:Type/Organization scope:descendants limit:20";
         var results = await persistence.QueryAsync(fallbackQuery, "org")
             .OfType<MeshNode>()
             .ToListAsync();
@@ -377,7 +377,7 @@ public class CatalogFallbackTests
             accessService,
             NullLogger<ActivityTrackingPersistenceDecorator>.Instance);
 
-        var activityQuery = "$source=activity;nodeType==Type/Organization;$orderBy=lastAccessedAt:desc;$limit=20";
+        var activityQuery = "source:activity nodeType:Type/Organization sort:lastAccessedAt-desc limit:20";
         var activityRecords = await queryDecorator.QueryAsync(activityQuery, "org")
             .OfType<UserActivityRecord>()
             .ToListAsync();
@@ -463,7 +463,7 @@ public class CatalogFallbackTests
         using var queryDecorator = new ActivityTrackingPersistenceDecorator(
             persistence, accessService, NullLogger<ActivityTrackingPersistenceDecorator>.Instance);
 
-        var query = $"$source=activity;nodeType=={nodeType};$orderBy=lastAccessedAt:desc";
+        var query = $"source:activity nodeType:{nodeType} sort:lastAccessedAt-desc";
         return await queryDecorator.QueryAsync(query, "")
             .OfType<UserActivityRecord>()
             .Select(a => a.NodePath)
@@ -474,7 +474,7 @@ public class CatalogFallbackTests
 public class CatalogSearchAndPaginationTests
 {
     [Fact]
-    public async Task Catalog_SearchWithRsql_FiltersResults()
+    public async Task Catalog_SearchWithQuery_FiltersResults()
     {
         // Arrange
         var persistence = new InMemoryPersistenceService();
@@ -496,8 +496,8 @@ public class CatalogSearchAndPaginationTests
             NodeType = "Organization"
         });
 
-        // Act - query with RSQL filter for name containing "Corp" using =like= operator for wildcards
-        var query = "nodeType==Organization;name=like=*Corp*;$scope=descendants;$limit=20";
+        // Act - query with filter for name containing "Corp" using wildcard operator
+        var query = "nodeType:Organization name:*Corp* scope:descendants limit:20";
         var results = await persistence.QueryAsync(query, "org")
             .OfType<MeshNode>()
             .ToListAsync();
@@ -527,7 +527,7 @@ public class CatalogSearchAndPaginationTests
         });
 
         // Act - text search for "financial" with descendants scope
-        var query = "nodeType==Document;$search=financial;$scope=descendants;$limit=20";
+        var query = "nodeType:Document financial scope:descendants limit:20";
         var results = await persistence.QueryAsync(query, "doc")
             .OfType<MeshNode>()
             .ToListAsync();
@@ -554,17 +554,17 @@ public class CatalogSearchAndPaginationTests
         }
 
         // Act - first page (3 items) with descendants scope
-        var firstPage = await persistence.QueryAsync("nodeType==Item;$scope=descendants;$limit=3", "item")
+        var firstPage = await persistence.QueryAsync("nodeType:Item scope:descendants limit:3", "item")
             .OfType<MeshNode>()
             .ToListAsync();
 
         // Load more (6 items total)
-        var secondPage = await persistence.QueryAsync("nodeType==Item;$scope=descendants;$limit=6", "item")
+        var secondPage = await persistence.QueryAsync("nodeType:Item scope:descendants limit:6", "item")
             .OfType<MeshNode>()
             .ToListAsync();
 
         // Load all (10 items)
-        var allItems = await persistence.QueryAsync("nodeType==Item;$scope=descendants;$limit=100", "item")
+        var allItems = await persistence.QueryAsync("nodeType:Item scope:descendants limit:100", "item")
             .OfType<MeshNode>()
             .ToListAsync();
 
@@ -593,7 +593,7 @@ public class CatalogSearchAndPaginationTests
         // Act - request limit+1 to detect if there are more
         var limit = 3;
         var queryLimit = limit + 1;
-        var results = await persistence.QueryAsync($"nodeType==Test;$scope=descendants;$limit={queryLimit}", "test")
+        var results = await persistence.QueryAsync($"nodeType:Test scope:descendants limit:{queryLimit}", "test")
             .OfType<MeshNode>()
             .ToListAsync();
 
@@ -644,11 +644,11 @@ public class CatalogSearchAndPaginationTests
             await decorator.GetNodeAsync("data/project2");
         }
 
-        // Act - query activity filtered by nodeType==Project
+        // Act - query activity filtered by nodeType:Project
         using var queryDecorator = new ActivityTrackingPersistenceDecorator(
             innerPersistence, accessService, NullLogger<ActivityTrackingPersistenceDecorator>.Instance);
 
-        var query = "$source=activity;nodeType==Project;$orderBy=lastAccessedAt:desc;$limit=10";
+        var query = "source:activity nodeType:Project sort:lastAccessedAt-desc limit:10";
         var activityRecords = await queryDecorator.QueryAsync(query, "data")
             .OfType<UserActivityRecord>()
             .ToListAsync();

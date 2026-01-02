@@ -67,55 +67,55 @@ public class CosmosSqlGenerator
         return (sql, parameters);
     }
 
-    private string GenerateNodeClause(RsqlNode node, string alias)
+    private string GenerateNodeClause(QueryNode node, string alias)
     {
         return node switch
         {
-            RsqlComparison comparison => GenerateComparisonClause(comparison.Condition, alias),
-            RsqlAnd and => GenerateAndClause(and, alias),
-            RsqlOr or => GenerateOrClause(or, alias),
+            QueryComparison comparison => GenerateComparisonClause(comparison.Condition, alias),
+            QueryAnd and => GenerateAndClause(and, alias),
+            QueryOr or => GenerateOrClause(or, alias),
             _ => ""
         };
     }
 
-    private string GenerateComparisonClause(RsqlCondition condition, string alias)
+    private string GenerateComparisonClause(QueryCondition condition, string alias)
     {
         var selector = $"{alias}.{condition.Selector}";
         var paramName = $"@p{_paramIndex++}";
 
         switch (condition.Operator)
         {
-            case RsqlOperator.Equal:
+            case QueryOperator.Equal:
                 _parameters[paramName] = ConvertValue(condition.Value);
                 return $"{selector} = {paramName}";
 
-            case RsqlOperator.NotEqual:
+            case QueryOperator.NotEqual:
                 _parameters[paramName] = ConvertValue(condition.Value);
                 return $"{selector} != {paramName}";
 
-            case RsqlOperator.GreaterThan:
+            case QueryOperator.GreaterThan:
                 _parameters[paramName] = ConvertValue(condition.Value);
                 return $"{selector} > {paramName}";
 
-            case RsqlOperator.LessThan:
+            case QueryOperator.LessThan:
                 _parameters[paramName] = ConvertValue(condition.Value);
                 return $"{selector} < {paramName}";
 
-            case RsqlOperator.GreaterOrEqual:
+            case QueryOperator.GreaterOrEqual:
                 _parameters[paramName] = ConvertValue(condition.Value);
                 return $"{selector} >= {paramName}";
 
-            case RsqlOperator.LessOrEqual:
+            case QueryOperator.LessOrEqual:
                 _parameters[paramName] = ConvertValue(condition.Value);
                 return $"{selector} <= {paramName}";
 
-            case RsqlOperator.Like:
+            case QueryOperator.Like:
                 // Use CONTAINS for like queries (case-insensitive)
                 var pattern = condition.Value.Trim('*');
                 _parameters[paramName] = pattern;
                 return $"CONTAINS({selector}, {paramName}, true)";
 
-            case RsqlOperator.In:
+            case QueryOperator.In:
                 // Generate IN clause with multiple parameters
                 var inParams = new List<string>();
                 foreach (var value in condition.Values)
@@ -126,7 +126,7 @@ public class CosmosSqlGenerator
                 }
                 return $"{selector} IN ({string.Join(", ", inParams)})";
 
-            case RsqlOperator.NotIn:
+            case QueryOperator.NotIn:
                 // Generate NOT IN clause
                 var notInParams = new List<string>();
                 foreach (var value in condition.Values)
@@ -142,7 +142,7 @@ public class CosmosSqlGenerator
         }
     }
 
-    private string GenerateAndClause(RsqlAnd and, string alias)
+    private string GenerateAndClause(QueryAnd and, string alias)
     {
         var clauses = and.Children
             .Select(child => GenerateNodeClause(child, alias))
@@ -157,7 +157,7 @@ public class CosmosSqlGenerator
         return $"({string.Join(" AND ", clauses)})";
     }
 
-    private string GenerateOrClause(RsqlOr or, string alias)
+    private string GenerateOrClause(QueryOr or, string alias)
     {
         var clauses = or.Children
             .Select(child => GenerateNodeClause(child, alias))

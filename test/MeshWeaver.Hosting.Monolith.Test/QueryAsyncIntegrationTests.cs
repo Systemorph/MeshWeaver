@@ -23,7 +23,7 @@ public class QueryAsyncIntegrationTests
         await _persistence.SaveNodeAsync(MeshNode.FromPath("products/chair") with { Name = "Chair", NodeType = "Furniture" });
 
         // Act - need to use descendants scope to search child nodes
-        var results = await _persistence.QueryAsync("nodeType==Electronics;$scope=descendants", "products").ToListAsync();
+        var results = await _persistence.QueryAsync("nodeType:Electronics scope:descendants", "products").ToListAsync();
 
         // Assert
         results.Should().HaveCount(2);
@@ -38,7 +38,7 @@ public class QueryAsyncIntegrationTests
         await _persistence.SaveNodeAsync(MeshNode.FromPath("products/desktop") with { Name = "Desktop Computer", Description = "Standard desktop" });
 
         // Act - need descendants scope to search child nodes
-        var results = await _persistence.QueryAsync("$search=laptop;$scope=descendants", "products").ToListAsync();
+        var results = await _persistence.QueryAsync("laptop scope:descendants", "products").ToListAsync();
 
         // Assert
         results.Should().HaveCount(1);
@@ -55,7 +55,7 @@ public class QueryAsyncIntegrationTests
         await _persistence.SaveNodeAsync(MeshNode.FromPath("products/chair") with { Name = "Gaming Chair", NodeType = "Furniture" });
 
         // Act - need descendants scope to search child nodes
-        var results = await _persistence.QueryAsync("nodeType==Electronics;$search=gaming;$scope=descendants", "products").ToListAsync();
+        var results = await _persistence.QueryAsync("nodeType:Electronics gaming scope:descendants", "products").ToListAsync();
 
         // Assert
         results.Should().HaveCount(1);
@@ -73,7 +73,7 @@ public class QueryAsyncIntegrationTests
         await _persistence.SaveNodeAsync(MeshNode.FromPath("other/company") with { Name = "Other Company", NodeType = "company" });
 
         // Act
-        var results = await _persistence.QueryAsync("nodeType==company;$scope=descendants", "org").ToListAsync();
+        var results = await _persistence.QueryAsync("nodeType:company scope:descendants", "org").ToListAsync();
 
         // Assert
         results.Should().HaveCount(1);
@@ -90,7 +90,7 @@ public class QueryAsyncIntegrationTests
         await _persistence.SaveNodeAsync(MeshNode.FromPath("org/acme/project") with { Name = "Project X", NodeType = "project" });
 
         // Act
-        var results = await _persistence.QueryAsync("nodeType==root;$scope=ancestors", "org/acme/project").ToListAsync();
+        var results = await _persistence.QueryAsync("nodeType:root scope:ancestors", "org/acme/project").ToListAsync();
 
         // Assert
         results.Should().HaveCount(1);
@@ -108,7 +108,7 @@ public class QueryAsyncIntegrationTests
         await _persistence.SaveNodeAsync(MeshNode.FromPath("products/food") with { Name = "Food", NodeType = "Groceries" });
 
         // Act - need descendants scope to search child nodes
-        var results = await _persistence.QueryAsync("nodeType=in=(Electronics,Furniture);$scope=descendants", "products").ToListAsync();
+        var results = await _persistence.QueryAsync("nodeType:(Electronics OR Furniture) scope:descendants", "products").ToListAsync();
 
         // Assert
         results.Should().HaveCount(3);
@@ -124,7 +124,7 @@ public class QueryAsyncIntegrationTests
         await _persistence.SaveNodeAsync(MeshNode.FromPath("products/desktop") with { Name = "Desktop Computer", NodeType = "Electronics" });
 
         // Act - need descendants scope to search child nodes
-        var results = await _persistence.QueryAsync("name=like=*Laptop*;$scope=descendants", "products").ToListAsync();
+        var results = await _persistence.QueryAsync("name:*Laptop* scope:descendants", "products").ToListAsync();
 
         // Assert
         results.Should().HaveCount(2);
@@ -140,7 +140,7 @@ public class QueryAsyncIntegrationTests
         await _persistence.SaveNodeAsync(MeshNode.FromPath("products/food") with { Name = "Food", NodeType = "Groceries" });
 
         // Act - need descendants scope to search child nodes
-        var results = await _persistence.QueryAsync("nodeType==Electronics,nodeType==Furniture;$scope=descendants", "products").ToListAsync();
+        var results = await _persistence.QueryAsync("(nodeType:Electronics OR nodeType:Furniture) scope:descendants", "products").ToListAsync();
 
         // Assert
         results.Should().HaveCount(2);
@@ -171,7 +171,7 @@ public class QueryAsyncIntegrationTests
         await _persistence.SaveNodeAsync(MeshNode.FromPath("products/chair") with { Name = "Chair", NodeType = "Furniture" });
 
         // Act
-        var results = await _persistence.QueryAsync("nodeType!=Electronics;$scope=descendants", "products").ToListAsync();
+        var results = await _persistence.QueryAsync("-nodeType:Electronics scope:descendants", "products").ToListAsync();
 
         // Assert
         results.Should().HaveCount(1);
