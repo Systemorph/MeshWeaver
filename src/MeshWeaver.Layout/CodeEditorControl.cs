@@ -1,11 +1,9 @@
-using MeshWeaver.Layout;
-
-namespace MeshWeaver.Blazor.Monaco;
+﻿namespace MeshWeaver.Layout;
 
 /// <summary>
 /// A control that wraps the Monaco code editor.
 /// </summary>
-public record CodeEditorControl() : UiControl<CodeEditorControl>("MeshWeaver.Blazor.Monaco", "1.0.0")
+public record CodeEditorControl() : UiControl<CodeEditorControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion)
 {
     /// <summary>
     /// The initial value/content of the editor.

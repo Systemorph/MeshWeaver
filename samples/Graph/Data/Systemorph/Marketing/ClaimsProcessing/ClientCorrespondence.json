@@ -1,0 +1,18 @@
+{
+  "id": "ClientCorrespondence",
+  "namespace": "Systemorph/Marketing/ClaimsProcessing",
+  "name": "Client Correspondence",
+  "nodeType": "Systemorph/Marketing/Story",
+  "description": "AI-assisted response drafting for client communications",
+  "iconName": "Document",
+  "displayOrder": 30,
+  "addressSegments": 0,
+  "isPersistent": true,
+  "content": {
+    "id": "ClientCorrespondence",
+    "title": "Client Correspondence: AI-Assisted Response Drafting",
+    "description": "Intelligent drafting of client responses with full context",
+    "markdown": "# Client Correspondence: AI-Assisted Response Drafting\n\n## The Challenge\n\nResponse drafting currently requires gathering context from multiple sources. Claims handlers must navigate multiple systems to respond to inquiries, leading to slower response times and inconsistent quality.\n\n## How AI-Assisted Drafting Works\n\nWhen a claims handler needs to respond to a client inquiry or request clarification:\n\n1. **Handler Request**: Claims handler requests draft response\n2. **Context Assembly**: AI queries claim history, email thread, contract terms, open items from Data Mesh\n3. **Complete Context**: All relevant information assembled\n4. **Draft Generation**: AI generates draft with professional tone, addresses all points, includes relevant data\n5. **Human Review**: Handler reviews and edits draft\n6. **Approval and Send**: Handler approves and sends\n\n## Response Templates by Scenario\n\n| Scenario | AI Action | Human Review |\n|----------|-----------|-------------|\n| **Missing information** | Draft request for specific missing fields | Verify appropriate ask |\n| **Status inquiry** | Compile current status with timeline | Confirm accuracy |\n| **Reserve confirmation** | Prepare reserve statement with breakdown | Validate figures |\n| **Document request** | Identify required documents, draft request | Approve request |\n| **Escalation response** | Draft acknowledgment with next steps | Ensure appropriate tone |\n\n## Benefits\n\n- **Faster response**: Context assembled automatically\n- **Consistent quality**: Professional tone and complete information\n- **Reduced context switching**: No need to navigate multiple systems\n- **Better client service**: More informed, faster responses\n- **Human in control**: All responses reviewed before sending\n\n## Agent Configuration\n\nThe Correspondence Agent is configured with:\n- Mid-tier model (GPT / Claude Sonnet) for quality drafting\n- Access to full claim history and related documents\n- Knowledge of professional communication standards\n- Template patterns for common scenarios",
+    "iconName": "Document"
+  }
+}

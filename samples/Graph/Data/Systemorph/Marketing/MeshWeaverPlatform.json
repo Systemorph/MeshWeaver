@@ -1,0 +1,18 @@
+{
+  "id": "MeshWeaverPlatform",
+  "namespace": "Systemorph/Marketing",
+  "name": "MeshWeaver Platform",
+  "nodeType": "Systemorph/Marketing/Story",
+  "description": "Deep dive into the MeshWeaver data mesh platform",
+  "iconName": "Document",
+  "displayOrder": 40,
+  "addressSegments": 0,
+  "isPersistent": true,
+  "content": {
+    "id": "MeshWeaverPlatform",
+    "title": "MeshWeaver Platform Deep Dive",
+    "description": "Implementation of the data mesh paradigm",
+    "markdown": "# MeshWeaver Platform Deep Dive\n\n## What is MeshWeaver?\n\nMeshWeaver is an **implementation of the data mesh paradigm** - a platform that makes the entire data of an organization addressable in controlled data models, connecting structured with unstructured data.\n\n**Key distinction**: MeshWeaver is an **application layer**, not a data layer. It doesn't replace existing databases or data platforms—it connects them.\n\n## Core Principles\n\n- **Data Addressability**: Every piece of data has an address\n- **Non-Invasive**: Data stays where it is\n- **Virtual Synchronization**: Assemble data on demand\n- **Stream-Based**: Subscribe to changes\n\n## Data Addressability\n\nMeshWeaver introduces a unified notation for referencing any form of content:\n\n```\n@addressType/addressId[/keyword[/path]]\n```\n\nThe keyword determines how the content is fetched and rendered:\n- `data` - Fetches data entities and displays them as JSON\n- `content` - Fetches file content and renders based on mime type\n- `area` - Displays a layout area (default)\n\nSpecial prefixes for AI interactions:\n- `@agent/AgentName` - Selects an AI agent for chat\n- `@model/ModelName` - Selects an AI model for chat\n\n## Non-Invasive Data Access\n\nMeshWeaver connects to existing data sources without requiring data migration. Data is read from source systems, processed through the mesh, and results are written back to the original systems.\n\n### Supported Data Sources\n\n| Source Type | Connector | Use Case |\n|-------------|-----------|----------|\n| Azure SQL Database | Native | Structured business data |\n| Cosmos DB | Native | Document and vector data |\n| Azure Storage | Native | Files, documents, images |\n| DataBricks | REST API | Analytics data |\n| Document Management Systems | REST API | Document repositories |\n| SharePoint | Graph API | Collaboration content |\n\n## Virtual Synchronization\n\nRather than copying data into a central warehouse, MeshWeaver **virtually synchronizes** data when needed.\n\n| Traditional ETL | Virtual Synchronization |\n|-----------------|------------------------|\n| Data copied to central location | Data accessed at source |\n| Stale by design | Always current |\n| Storage duplication | No duplication |\n| Complex pipelines | Simple queries |\n\n## Stream-Based Architecture\n\nMeshWeaver provides data as **streams** that clients can subscribe to, using **Conflict-free Replicated Data Types (CRDT)** for distributed consistency.\n\n## Layout Areas\n\nMeshWeaver provides **layout areas** - reusable components for data visualization:\n- **Tables**: Data grids with sorting/filtering\n- **Charts**: Visualizations (bar, line, pie)\n- **KPIs**: Key performance indicators\n- **Forms**: Data entry interfaces\n- **Documents**: Composed reports\n\n## Summary\n\nMeshWeaver is the **foundation** that enables all AI use cases in this proposal - it provides the data addressability layer that makes agentic AI effective.",
+    "iconName": "Document"
+  }
+}

@@ -1,6 +1,6 @@
 {
   "id": "Project",
-  "namespace": "Systemorph/Type",
+  "namespace": "Systemorph",
   "name": "Project",
   "nodeType": "NodeType",
   "description": "A project containing stories",
@@ -10,12 +10,12 @@
   "content": {
     "$type": "NodeTypeDefinition",
     "id": "Project",
-    "namespace": "Systemorph/Type",
+    "namespace": "Systemorph",
     "displayName": "Project",
     "iconName": "Folder",
     "description": "A project containing stories",
     "displayOrder": 20,
     "configuration": "config => config.WithContentType<Project>().AddNodeTypeView()",
-    "childrenQuery": "source:activity nodeType:Systemorph/Type/Project sort:lastAccessedAt-desc limit:20"
+    "childrenQuery": "source:activity nodeType:Systemorph/Project sort:lastAccessedAt-desc limit:20"
   }
 }

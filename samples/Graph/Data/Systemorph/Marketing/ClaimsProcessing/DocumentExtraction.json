@@ -1,0 +1,18 @@
+{
+  "id": "DocumentExtraction",
+  "namespace": "Systemorph/Marketing/ClaimsProcessing",
+  "name": "Document Extraction",
+  "nodeType": "Systemorph/Marketing/Story",
+  "description": "Extracting structured data from claims documents",
+  "iconName": "Document",
+  "displayOrder": 20,
+  "addressSegments": 0,
+  "isPersistent": true,
+  "content": {
+    "id": "DocumentExtraction",
+    "title": "Document Extraction: From Unstructured to Structured",
+    "description": "AI-powered extraction of structured data from claims documents",
+    "markdown": "# Document Extraction: From Unstructured to Structured\n\n## Supported Document Types\n\n| Document Type | Key Fields | Output |\n|---------------|------------|--------|\n| **Precautionary Loss Advice (Prec)** | Loss date, cedent, contract, reserve amount, event description | Claim draft record |\n| **Claims Advice** | Claim number, paid/reserved amounts, loss details | Claim update |\n| **Statement of Account (StoA)** | Balances, transactions, period | Financial reconciliation |\n| **Loss Bordereau** | Multiple claim records, aggregates | Batch claim entries |\n\n## Extraction Pipeline\n\n### Step 1: Content Extraction\n- **PDF Attachments**: OCR / Document AI for text extraction\n- **Excel Attachments**: Content parsing for tables and fields\n- **Scanned Images**: OCR with quality checks\n\n### Step 2: Schema Mapping\n- Load Claim Data Model with field definitions\n- Load Dimensions (Cedent, Contract, LoB)\n- Load Validation Rules\n- Map extracted content to target schema\n\n### Step 3: Output Generation\n- **Structured Claim Record**: Ready for claims system\n- **Items for Review**: Fields requiring human validation\n- **Confidence Scores**: Extraction confidence per field\n\n## Field Mapping Guidance\n\nEach field includes synonyms and extraction hints:\n\n| Field | Synonyms | Extraction Hints |\n|-------|----------|------------------|\n| **ClaimNumber** | Claim #, Claim Ref, Reference No. | Usually in header or reference section |\n| **LossDate** | Date of Loss, DOL, Occurrence Date | Date format varies by region |\n| **PaidAmount** | Paid, Payment, Settled | Look for currency indicators |\n| **ReservedAmount** | Reserve, O/S Reserve, Outstanding | May be gross or net |\n| **CedentId** | Cedent, Ceding Company, Client | Match against master data |\n\n## Validation Checks\n\n- **Completeness**: Required fields present\n- **Range validation**: Values within expected bounds\n- **Referential integrity**: Cedent ID exists in master\n- **Business rules**: Domain-specific logic\n- **Consistency**: Cross-field validation",
+    "iconName": "Document"
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "id": "Marketing",
+  "namespace": "Systemorph",
+  "name": "Marketing",
+  "nodeType": "Systemorph/Project",
+  "description": "Marketing content and stories",
+  "iconName": "Megaphone",
+  "displayOrder": 10,
+  "addressSegments": 0,
+  "isPersistent": true,
+  "content": {
+    "id": "Marketing",
+    "name": "Marketing",
+    "description": "Marketing content and stories for MeshWeaver proposals",
+    "status": "Active",
+    "iconName": "Megaphone"
+  }
+}

@@ -1,7 +1,4 @@
-﻿using System.Reactive.Linq;
-using MeshWeaver.Layout.Composition;
-
-namespace MeshWeaver.Layout;
+﻿namespace MeshWeaver.Layout;
 /// <summary>
 /// Represents a layout stack control with cust/// omizable properties.
 /// </summary>

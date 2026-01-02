@@ -1,0 +1,18 @@
+{
+  "id": "ClaimsProcessing",
+  "namespace": "Systemorph/Marketing",
+  "name": "Claims Processing",
+  "nodeType": "Systemorph/Marketing/Story",
+  "description": "Claims processing and email management use case",
+  "iconName": "Document",
+  "displayOrder": 60,
+  "addressSegments": 0,
+  "isPersistent": true,
+  "content": {
+    "id": "ClaimsProcessing",
+    "title": "Claims Processing and Email Management Use Case",
+    "description": "High-volume document processing in claims operations",
+    "markdown": "# Claims Processing and Email Management Use Case\n\n## The Challenge: High-Volume Document Processing\n\nThe Middle Office and Claims Management teams process a high volume of incoming communications daily. Emails arrive with attachments containing Precautionary Loss Advices (Precs), Claims Advices, and Statements of Account.\n\n### Current State\n\n| Aspect | Problem |\n|--------|--------|\n| **Manual triage** | ~35% of incoming emails manually routed |\n| **Document extraction** | Key data extracted manually from PDFs |\n| **Prioritization gaps** | Precs not efficiently prioritized (10K docs/year) |\n| **Search limitations** | Complex searches are time-consuming and manual |\n| **Client correspondence** | Response drafting requires gathering context from multiple sources |\n\n## The Value Proposition\n\n**Key Value Drivers:**\n- Automate email triage and document classification\n- Extract structured data from claims documents\n- Enable intelligent prioritization based on content\n- Facilitate client correspondence with AI-drafted responses\n- Build comprehensive claims intelligence\n\n## Agentic Claims Workflow\n\nThe claims processing workflow places the **Claim** at the center, with AI agents collaborating to process incoming communications, extract data, and facilitate responses.\n\n## Email Ingestion Pipeline\n\n### Step 1: Email Triage\n\nIncoming emails are analyzed for urgency, sender priority, and content type:\n\n| Signal | Weight | Examples |\n|--------|--------|----------|\n| **Sender priority** | High | Tier 1 Cedent, key broker contact |\n| **Urgency keywords** | High | \"immediate\", \"deadline\", \"critical\" |\n| **Document type** | Medium | Prec = higher priority than routine |\n| **Sentiment** | Medium | Frustrated tone escalates priority |\n\n### Supported Document Types\n\n| Document Type | Key Fields | Output |\n|---------------|------------|--------|\n| **Precautionary Loss Advice** | Loss date, cedent, contract, reserve | Claim draft record |\n| **Claims Advice** | Claim number, paid/reserved amounts | Claim update |\n| **Statement of Account** | Balances, transactions, period | Financial reconciliation |\n| **Loss Bordereau** | Multiple claim records, aggregates | Batch claim entries |\n\n## Client Correspondence\n\nWhen a claims handler needs to respond to a client inquiry, the AI assembles relevant context and drafts a response with professional tone, addressing all points and including relevant data.\n\n## Success Metrics (Learning Indicators)\n\n| Metric | Target |\n|--------|--------|\n| Email classification | ≥90% |\n| Partner assignment | ≥90% |\n| Field extraction | ≥80% |\n| Search response | <60 sec |",
+    "iconName": "Document"
+  }
+}
