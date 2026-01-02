@@ -15,7 +15,7 @@
     "iconName": "Folder",
     "description": "A project containing stories",
     "displayOrder": 20,
-    "configuration": "config => config.WithContentType<Project>().AddNodeTypeView()",
-    "childrenQuery": "source:activity nodeType:Systemorph/Project sort:lastAccessedAt-desc limit:20"
+    "configuration": "config => config.WithContentType<Project>().WithDefaultViews()",
+    "childrenQuery": "nodeType:Systemorph/Project namespace:Systemorph scope:descendants"
   }
 }

@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reactive.Linq;
@@ -137,7 +138,7 @@ public record Organization
             Content = new NodeTypeDefinition
             {
                 Id = "org",
-                Namespace = "Type",
+                Namespace = "type",
                 DisplayName = "Organization",
                 IconName = "Building",
                 Description = "An organization",
@@ -746,6 +747,81 @@ public record Graph
 
         // Assert
         value.Should().NotBe(default(JsonElement), "Empty area should return default view content");
+    }
+
+    /// <summary>
+    /// Tests that the Organization NodeType catalog shows all organizations.
+    /// When navigating to type/org and requesting the Catalog area,
+    /// it should show all Organization instances (graph/org1, graph/org2).
+    /// </summary>
+    [Fact(Timeout = 30000)]
+    public async Task OrganizationType_GetCatalog_ShowsOrganizations()
+    {
+        // Arrange
+        var typeOrgAddress = new Address("type/org");
+
+        // Get a client with data services configured
+        var client = GetClient(c => c.AddData(data => data));
+
+        // Initialize type/org hub - this is a NodeType node
+        await client.AwaitResponse(
+            new PingRequest(),
+            o => o.WithTarget(typeOrgAddress),
+            TestContext.Current.CancellationToken);
+
+        // Act: Request Catalog area directly (the default view for NodeType)
+        var workspace = client.GetWorkspace();
+        var reference = new LayoutAreaReference(MeshNodeView.CatalogArea);
+        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(typeOrgAddress, reference);
+
+        // Wait for multiple emissions - first one may be loading state, later ones have data
+        var values = await stream
+            .Take(5)  // Take up to 5 emissions
+            .TakeUntil(Observable.Timer(TimeSpan.FromSeconds(10)))  // Or timeout after 10s
+            .ToList();
+
+        Output.WriteLine($"Received {values.Count} emissions");
+
+        // Find the last emission which should have the most complete data
+        var lastValue = values.LastOrDefault();
+        lastValue.Should().NotBeNull("Should receive at least one emission");
+
+        // Convert to string to check for organization names
+        var json = lastValue!.Value.GetRawText();
+        Output.WriteLine($"Last Catalog JSON (first 3000 chars): {json.Substring(0, Math.Min(3000, json.Length))}");
+
+        // Log all emissions for debugging
+        for (int i = 0; i < values.Count; i++)
+        {
+            var emissionJson = values[i].Value.GetRawText();
+            Output.WriteLine($"Emission {i}: {emissionJson.Substring(0, Math.Min(500, emissionJson.Length))}...");
+        }
+
+        // The catalog should contain organization names (Organization 1, Organization 2, or org1/org2 paths)
+        var containsOrg = json.Contains("Organization") || json.Contains("org1") || json.Contains("org2");
+        containsOrg.Should().BeTrue($"Catalog should show organization instances. JSON: {json.Substring(0, Math.Min(1000, json.Length))}");
+    }
+
+    /// <summary>
+    /// Tests that QueryAsync with nodeType filter returns organizations.
+    /// This tests the underlying query that the catalog uses.
+    /// </summary>
+    [Fact(Timeout = 10000)]
+    public async Task QueryAsync_NodeTypeOrg_ReturnsOrganizations()
+    {
+        // Act - query for all nodes with nodeType type/org
+        var query = "nodeType:type/org scope:descendants";
+        var results = new List<object>();
+        await foreach (var item in Persistence.QueryAsync(query, ""))
+        {
+            results.Add(item);
+            Output.WriteLine($"Found: {item}");
+        }
+
+        // Assert
+        results.Should().NotBeEmpty("Query should return organizations");
+        results.OfType<MeshNode>().Should().Contain(n => n.Path == "graph/org1", "Should find org1");
+        results.OfType<MeshNode>().Should().Contain(n => n.Path == "graph/org2", "Should find org2");
     }
 
     #endregion

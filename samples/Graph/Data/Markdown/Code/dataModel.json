@@ -1,0 +1,3 @@
+{
+  "code": "using System.ComponentModel.DataAnnotations;\n\n/// <summary>\n/// A simple markdown document for documentation and notes.\n/// </summary>\npublic record MarkdownDocument\n{\n    [Key]\n    public string Id { get; init; } = string.Empty;\n    \n    public string Title { get; init; } = string.Empty;\n    \n    public string Content { get; init; } = string.Empty;\n    \n    public string IconName { get; init; } = \"Document\";\n}"
+}

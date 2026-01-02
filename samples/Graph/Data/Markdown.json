@@ -1,0 +1,22 @@
+{
+  "id": "Markdown",
+  "namespace": "",
+  "name": "Markdown",
+  "nodeType": "NodeType",
+  "description": "A simple markdown document",
+  "iconName": "Document",
+  "displayOrder": 50,
+  "isPersistent": true,
+  "state": "Active",
+  "content": {
+    "$type": "NodeTypeDefinition",
+    "id": "Markdown",
+    "namespace": "",
+    "displayName": "Markdown",
+    "iconName": "Document",
+    "description": "A simple markdown document for documentation and notes",
+    "displayOrder": 50,
+    "configuration": "config => config.WithContentType<MarkdownDocument>().WithDefaultViews()",
+    "childrenQuery": "nodeType:Markdown namespace: scope:descendants"
+  }
+}

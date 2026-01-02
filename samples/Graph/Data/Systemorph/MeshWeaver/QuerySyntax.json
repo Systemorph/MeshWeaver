@@ -1,0 +1,18 @@
+{
+  "id": "QuerySyntax",
+  "namespace": "Systemorph/MeshWeaver",
+  "name": "Query Syntax",
+  "nodeType": "Markdown",
+  "description": "Documentation for the GitHub-style query syntax",
+  "iconName": "DocumentSearch",
+  "displayOrder": 10,
+  "isPersistent": true,
+  "state": "Active",
+  "content": {
+    "$type": "MarkdownDocument",
+    "id": "QuerySyntax",
+    "title": "Query Syntax Reference",
+    "iconName": "DocumentSearch",
+    "content": "# Query Syntax Reference\n\nMeshWeaver uses a GitHub-style query syntax for searching and filtering nodes. This document describes all available query features.\n\n## Basic Syntax\n\nQueries consist of space-separated terms. Each term can be:\n- **Field filter**: `field:value` - matches nodes where field equals value\n- **Negation**: `-field:value` - excludes nodes where field equals value\n- **Text search**: `keyword` - searches in name and description\n\n## Field Filters\n\n### Equality\n```\nnodeType:Organization\nname:Acme\nstatus:Active\n```\n\n### Negation\n```\n-nodeType:NodeType\n-status:Archived\n```\n\n### Wildcard Patterns\n```\nname:*claims*     # Contains 'claims'\nname:Acme*        # Starts with 'Acme'\nname:*Corp        # Ends with 'Corp'\n```\n\n### Comparison Operators\n```\nprice:>100        # Greater than 100\nprice:<50         # Less than 50\nprice:>=100       # Greater than or equal\nprice:<=50        # Less than or equal\n```\n\n### List Values (OR)\n```\nstatus:(Active OR Pending OR Draft)\nnodeType:(Organization OR Project)\n```\n\n### Empty Values\n```\nnamespace:         # Matches empty namespace (root level)\ndescription:       # Matches nodes with no description\n```\n\n## Reserved Qualifiers\n\n### scope\nControls the search scope:\n```\nscope:descendants  # Search all descendants (default)\nscope:children     # Search only direct children\n```\n\n### sort\nSpecifies sort order:\n```\nsort:name          # Sort by name ascending\nsort:name-desc     # Sort by name descending\nsort:lastModified-desc  # Most recently modified first\n```\n\n### limit\nLimits the number of results:\n```\nlimit:10           # Return at most 10 results\nlimit:50           # Return at most 50 results\n```\n\n### source\nSpecifies the data source:\n```\nsource:activity    # Query activity records\n```\n\n### namespace\nFilters by namespace (node's parent path):\n```\nnamespace:                    # Root namespace (empty)\nnamespace:Systemorph          # Nodes in Systemorph namespace\nnamespace:Systemorph/Marketing # Nodes in Marketing namespace\n```\n\n## Complex Queries\n\nCombine multiple filters:\n```\nnodeType:Project namespace:Systemorph scope:descendants\n\nnodeType:Story -status:Archived name:*claims* sort:lastModified-desc limit:20\n\nnodeType:(Organization OR Project) namespace: scope:descendants\n```\n\n## Query in Context\n\n### NodeType Catalog\nWhen viewing a NodeType (e.g., Organization), the default query is:\n```\nnodeType:Organization namespace: scope:descendants\n```\nThis finds all instances of Organization in the root namespace.\n\n### Instance Catalog\nWhen viewing an instance (e.g., Systemorph), the default query is:\n```\nnamespace:Systemorph -nodeType:NodeType scope:descendants\n```\nThis finds all direct children of Systemorph, excluding NodeType definitions.\n\n## Tips\n\n1. **Case insensitive**: All comparisons are case-insensitive\n2. **Namespace hierarchy**: Use namespace filter to scope queries to specific areas\n3. **Exclude types**: Use `-nodeType:X` to exclude certain types from results\n4. **Wildcards**: Use `*` for flexible pattern matching"
+  }
+}

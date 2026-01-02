@@ -305,7 +305,7 @@ namespace MeshWeaver.Graph.Test
             var persistence = Mesh.ServiceProvider.GetRequiredService<IPersistenceService>();
 
             // Use a simple query that doesn't require activity records
-            var query = "nodeType==Organization;$scope=descendants";
+            var query = "nodeType:Organization scope:descendants";
 
             // Act - execute the query (from root to find all matching nodes)
             var results = new List<object>();

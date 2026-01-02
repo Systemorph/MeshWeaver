@@ -185,7 +185,8 @@ public partial class QueryParser
     /// </summary>
     private (QueryCondition Condition, int Length) ParseFieldValue(string field, string input, int start, bool isNegated)
     {
-        if (start >= input.Length)
+        // Empty value: end of string or whitespace immediately after colon
+        if (start >= input.Length || char.IsWhiteSpace(input[start]))
             return (new QueryCondition(field, isNegated ? QueryOperator.NotEqual : QueryOperator.Equal, [""]), 0);
 
         var i = start;

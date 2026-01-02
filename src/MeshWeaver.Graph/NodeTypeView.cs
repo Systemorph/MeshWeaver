@@ -6,9 +6,7 @@ using MeshWeaver.Data;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
-using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Activity;
-using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using MeshWeaver.ShortGuid;
 using Microsoft.Extensions.DependencyInjection;
@@ -17,7 +15,7 @@ namespace MeshWeaver.Graph;
 
 /// <summary>
 /// Layout views for NodeType definition nodes.
-/// - Catalog: Default view showing instances of this type as thumbnails
+/// Uses standard MeshNodeView.Catalog with NodeTypeCatalogMode for showing instances.
 /// - Details: Overview of the NodeType
 /// - CodeView: Split view with left menu and code display
 /// - CodeEdit: Monaco editor for code editing
@@ -38,249 +36,22 @@ public static class NodeTypeView
     private const string CodeFilesDataId = "codeFiles";
     private const string CodeFileDataId = "codeFile";
     private const string SelectionDataId = "selection";
-    private const string CatalogSearchDataId = "catalogSearch";
-    private const string CatalogLimitDataId = "catalogLimit";
-    private const int DefaultPageSize = 20;
 
     /// <summary>
     /// Adds the NodeType views to the hub's layout for NodeType nodes.
-    /// Catalog is the default view showing instances of this type as thumbnails.
+    /// Uses the standard MeshNodeView.Catalog with NodeTypeCatalogMode to dynamically query instances.
     /// </summary>
     public static MessageHubConfiguration AddNodeTypeView(this MessageHubConfiguration configuration)
-        => configuration.AddLayout(layout => layout
-            .WithDefaultArea(CatalogArea)
-            .WithView(CatalogArea, Catalog)
-            .WithView(DetailsArea, Details)
-            .WithView(CodeViewArea, CodeView)
-            .WithView(CodeEditArea, CodeEdit)
-            .WithView(HubConfigViewArea, HubConfigView)
-            .WithView(HubConfigEditArea, HubConfigEdit));
-
-    /// <summary>
-    /// Renders the Catalog view showing instances of this NodeType as thumbnails.
-    /// Includes search bar for RSQL filtering and Load More for pagination.
-    /// </summary>
-    public static UiControl Catalog(LayoutAreaHost host, RenderingContext ctx)
-    {
-        var hubAddress = host.Hub.Address;
-        var persistence = host.Hub.ServiceProvider.GetService<IPersistenceService>();
-
-        // Subscribe to definition stream
-        host.SubscribeToDataStream(DefinitionDataId, host.Workspace.GetNodeContent<NodeTypeDefinition>());
-
-        // Initialize catalog state
-        host.UpdateData(CatalogSearchDataId, "");
-        host.UpdateData(CatalogLimitDataId, DefaultPageSize.ToString());
-
-        return Controls.Stack
-            .WithWidth("100%")
-            .WithView(
-                (h, c) => h.GetDataStream<NodeTypeDefinition>(DefinitionDataId)
-                    .CombineLatest(
-                        h.GetDataStream<string>(CatalogSearchDataId),
-                        h.GetDataStream<string>(CatalogLimitDataId))
-                    .Throttle(TimeSpan.FromMilliseconds(300))
-                    .SelectMany(async tuple =>
-                    {
-                        var (definition, search, limitStr) = tuple;
-                        if (definition == null)
-                            return RenderLoading("Loading...");
-
-                        var limit = int.TryParse(limitStr, out var l) ? l : DefaultPageSize;
-                        return await BuildCatalogViewAsync(host, hubAddress, definition, persistence, search, limit);
-                    }),
-                "Content");
-    }
-
-    private static async Task<UiControl> BuildCatalogViewAsync(
-        LayoutAreaHost host,
-        object hubAddress,
-        NodeTypeDefinition definition,
-        IPersistenceService? persistence,
-        string? searchFilter,
-        int limit)
-    {
-        var stack = Controls.Stack.WithWidth("100%").WithStyle("padding: 24px;");
-        var title = definition.DisplayName ?? definition.Id;
-
-        // Search bar
-        var searchRow = Controls.Stack
-            .WithOrientation(Orientation.Horizontal)
-            .WithStyle("gap: 8px; margin-bottom: 16px; align-items: center;")
-            .WithView(new TextFieldControl(new JsonPointerReference(""))
-                .WithPlaceholder("Search or filter (e.g., name:*acme*)")
-                .WithStyle("flex: 1;")
-                .WithIconStart(FluentIcons.Search())
-                .WithImmediate(true) with
-            { DataContext = LayoutAreaReference.GetDataPointer(CatalogSearchDataId) })
-            .WithView(Controls.Button("Clear")
-                .WithAppearance(Appearance.Neutral)
-                .WithClickAction(actx =>
-                {
-                    host.UpdateData(CatalogSearchDataId, "");
-                    host.UpdateData(CatalogLimitDataId, DefaultPageSize.ToString());
-                }));
-
-        stack = stack.WithView(searchRow);
-
-        // Subtitle
-        var subtitleText = string.IsNullOrWhiteSpace(searchFilter)
-            ? $"Showing recent {System.Web.HttpUtility.HtmlEncode(title)}s"
-            : $"Filtered {System.Web.HttpUtility.HtmlEncode(title)}s";
-        stack = stack.WithView(Controls.Html($"<p style=\"color: #666; margin-bottom: 16px;\">{subtitleText}</p>"));
-
-        if (persistence == null)
-        {
-            stack = stack.WithView(Controls.Html("<p style=\"color: #888;\">Persistence service not available.</p>"));
-            return stack;
-        }
-
-        // Build query - combine base query with user search
-        var nodeTypePath = string.IsNullOrEmpty(definition.Namespace)
-            ? definition.Id
-            : $"{definition.Namespace}/{definition.Id}";
-        var baseQuery = definition.ChildrenQuery
-            ?? $"source:activity nodeType:{nodeTypePath} sort:lastAccessedAt-desc";
-
-        // Request one more than limit to detect if there are more items
-        var queryLimit = limit + 1;
-        var query = BuildCatalogQuery(baseQuery, searchFilter, queryLimit);
-
-        var nodes = new List<MeshNode>();
-        var isActivityQuery = query.Contains("source:activity", StringComparison.OrdinalIgnoreCase);
-
-        try
-        {
-            // Search from root namespace to find all instances regardless of their location
-            await foreach (var item in persistence.QueryAsync(query, ""))
-            {
-                if (item is UserActivityRecord activity)
-                {
-                    // Load the actual MeshNode for the activity record
-                    var node = await persistence.GetNodeAsync(activity.NodePath);
-                    if (node != null)
-                        nodes.Add(node);
-                }
-                else if (item is MeshNode mn)
-                {
-                    nodes.Add(mn);
-                }
-            }
-        }
-        catch
-        {
-            // Query may fail if no activity data yet - that's ok
-        }
-
-        // Fallback: if activity query returned no results and no search filter, query actual nodes
-        if (nodes.Count == 0 && isActivityQuery && string.IsNullOrWhiteSpace(searchFilter))
-        {
-            try
-            {
-                // Build fallback query without source:activity
-                // Search from root namespace to find all instances regardless of location
-                var fallbackQuery = $"nodeType:{nodeTypePath} scope:descendants limit:{queryLimit}";
-                await foreach (var item in persistence.QueryAsync(fallbackQuery, ""))
-                {
-                    if (item is MeshNode mn)
-                        nodes.Add(mn);
-                }
-            }
-            catch
-            {
-                // Fallback query failed - that's ok
-            }
-        }
-
-        // Check if there are more items
-        var hasMore = nodes.Count > limit;
-        if (hasMore)
-        {
-            nodes = nodes.Take(limit).ToList();
-        }
-
-        // Thumbnail grid
-        if (nodes.Count == 0)
-        {
-            var noResultsMsg = string.IsNullOrWhiteSpace(searchFilter)
-                ? "No items found."
-                : "No items match your search.";
-            stack = stack.WithView(Controls.Html($"<p style=\"color: #888;\">{noResultsMsg}</p>"));
-        }
-        else
-        {
-            // Results count
-            var countText = hasMore
-                ? $"Showing {nodes.Count}+ items"
-                : $"Showing {nodes.Count} item{(nodes.Count != 1 ? "s" : "")}";
-            stack = stack.WithView(Controls.Html($"<p style=\"color: #888; margin-bottom: 12px; font-size: 0.9em;\">{countText}</p>"));
-
-            var grid = Controls.LayoutGrid.WithSkin(s => s.WithSpacing(3));
-            foreach (var node in nodes)
-            {
-                grid = grid.WithView(
-                    MeshNodeThumbnailControl.FromNode(node, node.Path),
-                    itemSkin => itemSkin.WithXs(12).WithSm(12).WithMd(6).WithLg(6));
-            }
-            stack = stack.WithView(grid);
-
-            // Load More button
-            if (hasMore)
-            {
-                var newLimit = limit + DefaultPageSize;
-                var loadMoreRow = Controls.Stack
-                    .WithStyle("margin-top: 24px; display: flex; justify-content: center;")
-                    .WithView(Controls.Button("Load More")
-                        .WithAppearance(Appearance.Neutral)
-                        .WithIconEnd(FluentIcons.ChevronDown())
-                        .WithClickAction(actx =>
-                        {
-                            host.UpdateData(CatalogLimitDataId, newLimit.ToString());
-                        }));
-                stack = stack.WithView(loadMoreRow);
-            }
-        }
-
-        return stack;
-    }
-
-    /// <summary>
-    /// Builds the final catalog query by combining base query with user search filter.
-    /// </summary>
-    private static string BuildCatalogQuery(string baseQuery, string? searchFilter, int limit)
-    {
-        // Remove any existing limit: from base query (we'll add our own)
-        var query = System.Text.RegularExpressions.Regex.Replace(
-            baseQuery,
-            @"limit:\d+\s*",
-            "",
-            System.Text.RegularExpressions.RegexOptions.IgnoreCase).Trim();
-
-        // Add user's search filter if provided
-        if (!string.IsNullOrWhiteSpace(searchFilter))
-        {
-            var trimmedSearch = searchFilter.Trim();
-
-            // Check if it looks like a query filter (contains field:value pattern)
-            var isQuery = trimmedSearch.Contains(':') && !trimmedSearch.StartsWith('"');
-
-            if (isQuery)
-            {
-                // Append as query filter
-                query = query + " " + trimmedSearch;
-            }
-            else
-            {
-                // Treat as text search - add directly (bare text is text search in GitHub syntax)
-                query = query + " " + trimmedSearch;
-            }
-        }
-
-        // Add limit
-        query = query.Trim() + " limit:" + limit;
-
-        return query;
-    }
+        => configuration
+            .Set(new NodeTypeCatalogMode())  // Enable NodeType catalog mode
+            .AddLayout(layout => layout
+                .WithDefaultArea(CatalogArea)
+                .WithView(CatalogArea, MeshNodeView.Catalog)  // Use standard catalog
+                .WithView(DetailsArea, Details)
+                .WithView(CodeViewArea, CodeView)
+                .WithView(CodeEditArea, CodeEdit)
+                .WithView(HubConfigViewArea, HubConfigView)
+                .WithView(HubConfigEditArea, HubConfigEdit));
 
     /// <summary>
     /// Renders the main Details area for a NodeType.

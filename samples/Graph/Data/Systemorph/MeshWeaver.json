@@ -2,7 +2,7 @@
   "id": "MeshWeaver",
   "namespace": "Systemorph",
   "name": "MeshWeaver",
-  "nodeType": "Systemorph/Type/Project",
+  "nodeType": "Systemorph/Project",
   "description": "An open-source framework for building mesh-based applications",
   "iconName": "Folder",
   "displayOrder": 10,
