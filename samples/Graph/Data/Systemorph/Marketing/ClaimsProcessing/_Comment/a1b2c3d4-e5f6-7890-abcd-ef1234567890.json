@@ -1,0 +1,8 @@
+{
+  "$type": "Comment",
+  "id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+  "nodePath": "Systemorph/Marketing/ClaimsProcessing",
+  "author": "Alice",
+  "text": "Great overview of the claims processing workflow. Should we add more details about the ML models used for classification?",
+  "createdAt": "2024-12-15T10:30:00Z"
+}

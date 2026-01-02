@@ -85,6 +85,7 @@ public static class GraphConfigurationExtensions
                     typeRegistry.WithType(typeof(CodeConfiguration), nameof(CodeConfiguration));
                     typeRegistry.WithType(typeof(AgentConfiguration), nameof(AgentConfiguration));
                     typeRegistry.WithType(typeof(AgentDelegation), nameof(AgentDelegation));
+                    typeRegistry.WithType(typeof(Comment), nameof(Comment));
                 }
 
                 // Register compilation cache options

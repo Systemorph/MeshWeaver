@@ -1,4 +1,5 @@
 using MeshWeaver.Domain;
+using MeshWeaver.Hosting.Persistence.Query;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using Microsoft.Extensions.Configuration;
@@ -77,6 +78,9 @@ public static class PersistenceExtensions
         services.AddSingleton<IPersistenceService>(sp =>
             new FileSystemPersistenceService(sp.GetRequiredService<IStorageAdapter>()));
 
+        services.AddSingleton<IMeshQuery>(sp =>
+            new InMemoryMeshQuery(sp.GetRequiredService<IPersistenceService>()));
+
         return services;
     }
 
@@ -134,6 +138,8 @@ public static class PersistenceExtensions
     public static IServiceCollection AddInMemoryPersistence(this IServiceCollection services)
     {
         services.AddSingleton<IPersistenceService>(new InMemoryPersistenceService());
+        services.AddSingleton<IMeshQuery>(sp =>
+            new InMemoryMeshQuery(sp.GetRequiredService<IPersistenceService>()));
         return services;
     }
 
@@ -155,6 +161,9 @@ public static class PersistenceExtensions
         services.AddSingleton<IPersistenceService>(sp =>
             new FileSystemPersistenceService(sp.GetRequiredService<IStorageAdapter>()));
 
+        services.AddSingleton<IMeshQuery>(sp =>
+            new InMemoryMeshQuery(sp.GetRequiredService<IPersistenceService>()));
+
         return services;
     }
 
@@ -169,6 +178,8 @@ public static class PersistenceExtensions
         var persistenceService = new InMemoryPersistenceService(storageAdapter);
         services.AddSingleton(storageAdapter);
         services.AddSingleton<IPersistenceService>(persistenceService);
+        services.AddSingleton<IMeshQuery>(sp =>
+            new InMemoryMeshQuery(sp.GetRequiredService<IPersistenceService>()));
         return services;
     }
 
@@ -181,6 +192,8 @@ public static class PersistenceExtensions
     public static IServiceCollection AddPersistence(this IServiceCollection services, IPersistenceService persistenceService)
     {
         services.AddSingleton(persistenceService);
+        services.AddSingleton<IMeshQuery>(sp =>
+            new InMemoryMeshQuery(sp.GetRequiredService<IPersistenceService>()));
         return services;
     }
 }

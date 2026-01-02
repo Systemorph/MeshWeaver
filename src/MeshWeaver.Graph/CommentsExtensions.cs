@@ -1,37 +1,62 @@
 using System.Reactive.Linq;
 using MeshWeaver.Data;
+using MeshWeaver.Domain;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Layout.Domain;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
+using MeshWeaver.ShortGuid;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.Graph;
 
 /// <summary>
 /// Extension methods for adding comments support to a message hub.
-/// Comments are stored per-node and displayed in a Facebook-style layout.
+/// Comments are stored per-node as individual JSON files in _Comment/ sub-partition.
+/// Each comment file is named by its GUID ID.
 /// </summary>
 public static class CommentsExtensions
 {
+    /// <summary>
+    /// The sub-partition name where comments are stored.
+    /// </summary>
+    public const string CommentPartition = "_Comment";
+
     /// <summary>
     /// Marker type used to detect if comments are enabled in a hub configuration.
     /// </summary>
     public record CommentsEnabled;
 
     /// <summary>
+    /// Registers the Comment type in the type registry at the mesh level.
+    /// This must be called during mesh configuration to enable polymorphic JSON deserialization.
+    /// </summary>
+    public static TBuilder WithCommentType<TBuilder>(this TBuilder builder) where TBuilder : MeshBuilder
+    {
+        builder.ConfigureServices(services =>
+        {
+            var typeRegistry = services.BuildServiceProvider().GetService<ITypeRegistry>();
+            typeRegistry?.WithType(typeof(Comment), nameof(Comment));
+            return services;
+        });
+        return builder;
+    }
+
+    /// <summary>
     /// Adds comments support to the message hub configuration.
     /// This registers the Comment type, adds it to the data source, and enables the Comments view area.
+    /// Comments are stored as individual JSON files in _Comment/ sub-partition with GUID filenames.
     /// Call this after AddMeshDataSource() to enable comments for a node type.
     /// </summary>
     public static MessageHubConfiguration AddComments(this MessageHubConfiguration configuration)
     {
         return configuration
-            .WithType<Comment>()
+            .WithType<Comment>(nameof(Comment))  // Register Comment in type registry
             .Set(new CommentsEnabled())
             .AddData(data => data.WithDataSource(_ =>
-                new MeshDataSource(Guid.NewGuid().ToString(), data.Workspace)
-                    .WithContentType<Comment>()))
+                new MeshDataSource(Guid.NewGuid().AsString(), data.Workspace)
+                    .WithType<Comment>(CommentPartition, nameof(Comment))))
             .AddLayout(layout => layout
                 .WithView(MeshNodeView.CommentsArea, CommentsView.Comments));
     }
