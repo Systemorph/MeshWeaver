@@ -111,7 +111,8 @@ public static class NodeTypeView
                 .WithPlaceholder("Search or filter (e.g., name:*acme*)")
                 .WithStyle("flex: 1;")
                 .WithIconStart(FluentIcons.Search())
-                .WithImmediate(true) with { DataContext = LayoutAreaReference.GetDataPointer(CatalogSearchDataId) })
+                .WithImmediate(true) with
+            { DataContext = LayoutAreaReference.GetDataPointer(CatalogSearchDataId) })
             .WithView(Controls.Button("Clear")
                 .WithAppearance(Appearance.Neutral)
                 .WithClickAction(actx =>
@@ -219,7 +220,7 @@ public static class NodeTypeView
             {
                 grid = grid.WithView(
                     MeshNodeThumbnailControl.FromNode(node, node.Path),
-                    itemSkin => itemSkin.WithXs(12).WithSm(6).WithMd(4).WithLg(3));
+                    itemSkin => itemSkin.WithXs(12).WithSm(12).WithMd(6).WithLg(6));
             }
             stack = stack.WithView(grid);
 
@@ -650,7 +651,8 @@ public static class NodeTypeView
             .WithView(new TextFieldControl(new JsonPointerReference(""))
                 .WithPlaceholder("Enter display name...")
                 .WithStyle("flex: 1; max-width: 400px;")
-                .WithImmediate(true) with { DataContext = LayoutAreaReference.GetDataPointer(displayNameDataId) });
+                .WithImmediate(true) with
+            { DataContext = LayoutAreaReference.GetDataPointer(displayNameDataId) });
 
         stack = stack.WithView(displayNameRow);
 
@@ -855,7 +857,8 @@ public static class NodeTypeView
             .WithView(Controls.Html("<label style=\"font-weight: 500;\">Display Name:</label>"))
             .WithView(new TextFieldControl(new JsonPointerReference(""))
                 .WithPlaceholder("Enter display name...")
-                .WithImmediate(true) with { DataContext = LayoutAreaReference.GetDataPointer(displayNameDataId) }));
+                .WithImmediate(true) with
+            { DataContext = LayoutAreaReference.GetDataPointer(displayNameDataId) }));
 
         // Description
         stack = stack.WithView(Controls.Stack
@@ -863,7 +866,8 @@ public static class NodeTypeView
             .WithView(Controls.Html("<label style=\"font-weight: 500;\">Description:</label>"))
             .WithView(new TextAreaControl(new JsonPointerReference(""))
                 .WithPlaceholder("Enter description...")
-                .WithImmediate(true) with { DataContext = LayoutAreaReference.GetDataPointer(descriptionDataId) }));
+                .WithImmediate(true) with
+            { DataContext = LayoutAreaReference.GetDataPointer(descriptionDataId) }));
 
         // Icon Name
         stack = stack.WithView(Controls.Stack
@@ -871,7 +875,8 @@ public static class NodeTypeView
             .WithView(Controls.Html("<label style=\"font-weight: 500;\">Icon Name:</label>"))
             .WithView(new TextFieldControl(new JsonPointerReference(""))
                 .WithPlaceholder("e.g., Document, Folder...")
-                .WithImmediate(true) with { DataContext = LayoutAreaReference.GetDataPointer(iconNameDataId) }));
+                .WithImmediate(true) with
+            { DataContext = LayoutAreaReference.GetDataPointer(iconNameDataId) }));
 
         // Display Order
         stack = stack.WithView(Controls.Stack
@@ -879,7 +884,8 @@ public static class NodeTypeView
             .WithView(Controls.Html("<label style=\"font-weight: 500;\">Display Order:</label>"))
             .WithView(new TextFieldControl(new JsonPointerReference(""))
                 .WithPlaceholder("0")
-                .WithImmediate(true) with { DataContext = LayoutAreaReference.GetDataPointer(displayOrderDataId) }));
+                .WithImmediate(true) with
+            { DataContext = LayoutAreaReference.GetDataPointer(displayOrderDataId) }));
 
         // Children Query
         stack = stack.WithView(Controls.Stack
@@ -887,7 +893,8 @@ public static class NodeTypeView
             .WithView(Controls.Html("<label style=\"font-weight: 500;\">Children Query:</label>"))
             .WithView(new TextFieldControl(new JsonPointerReference(""))
                 .WithPlaceholder("Query for children (e.g., nodeType:Person)")
-                .WithImmediate(true) with { DataContext = LayoutAreaReference.GetDataPointer(childrenQueryDataId) }));
+                .WithImmediate(true) with
+            { DataContext = LayoutAreaReference.GetDataPointer(childrenQueryDataId) }));
 
         // Dependencies
         stack = stack.WithView(Controls.Stack
@@ -895,7 +902,8 @@ public static class NodeTypeView
             .WithView(Controls.Html("<label style=\"font-weight: 500;\">Dependencies:</label>"))
             .WithView(new TextFieldControl(new JsonPointerReference(""))
                 .WithPlaceholder("Comma-separated node type paths...")
-                .WithImmediate(true) with { DataContext = LayoutAreaReference.GetDataPointer(dependenciesDataId) }));
+                .WithImmediate(true) with
+            { DataContext = LayoutAreaReference.GetDataPointer(dependenciesDataId) }));
 
         // Configuration (code editor)
         stack = stack.WithView(Controls.Html("<h3 style=\"margin: 24px 0 8px 0;\">Configuration</h3>"));
