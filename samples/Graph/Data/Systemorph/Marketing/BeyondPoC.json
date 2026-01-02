@@ -1,0 +1,18 @@
+{
+  "id": "BeyondPoC",
+  "namespace": "Systemorph/Marketing",
+  "name": "Beyond the PoC",
+  "nodeType": "Systemorph/Marketing/Story",
+  "description": "Vision and roadmap for production implementation",
+  "iconName": "Document",
+  "displayOrder": 120,
+  "addressSegments": 0,
+  "isPersistent": true,
+  "content": {
+    "id": "BeyondPoC",
+    "title": "Beyond the PoC: Vision and Roadmap",
+    "description": "Long-term vision and scaling path from PoC to production",
+    "markdown": "# Beyond the PoC: Vision and Roadmap\n\n## The PoC as Foundation\n\nThe Proof of Concept is explicitly **exploratory** - but the learnings and artifacts created will serve as the foundation for AI-driven transformation.\n\n## What the PoC Will Inform\n\n### Architecture Decisions\n\n| Question | PoC Will Answer |\n|----------|----------------|\n| Which AI models perform best for our documents? | Model comparison results |\n| What accuracy is achievable with our data? | Measured benchmarks |\n| What infrastructure is required? | Performance observations |\n| Where are the integration challenges? | Documented blockers |\n\n### Production Scope\n\n| Question | PoC Will Answer |\n|----------|----------------|\n| Which document types should be prioritized? | Complexity and value analysis |\n| How many file formats need support? | Format diversity assessment |\n| What level of automation is realistic? | Exception rate data |\n| Where is human-in-the-loop needed? | Edge case identification |\n\n## Scaling Path\n\n### Infrastructure Scaling\n\n**PoC**: Container Apps single instance, Cosmos DB Serverless\n\n**Production Phase 1**: AKS multi-node, Cosmos DB provisioned throughput\n\n**Production Phase 2**: AKS Multi-Region, Cosmos DB multi-region, Azure Front Door\n\n### Scope Expansion\n\n**PoC**: 1 LoB, 2-3 Doc Types, Sample Data\n\n**Phase 1**: 3-5 LoBs, 10+ Doc Types, Production Data\n\n**Phase 2**: All LoBs, All Doc Types, Full Integration\n\n## Additional Use Cases Enabled\n\n- **Claims Processing Automation**: Automated claim intake, loss documentation analysis\n- **Pricing-Claims Linking**: Cross-reference submissions with claims history\n- **Underwriting Workflow Automation**: End-to-end workflow support\n- **Reporting Through Chat API**: Natural language access to operational data\n- **AI-Based Workflows with Escalation**: Complex workflow orchestration\n\n## Partnership Model\n\n| Phase | Focus | Engagement |\n|-------|-------|------------|\n| **PoC** | Explore and learn | 4-6 weeks, fixed scope |\n| **Production Phase 1** | Core deployment | Agile delivery, 3-6 months |\n| **Production Phase 2** | Scale and extend | Ongoing partnership |\n| **Optimization** | Continuous improvement | Retainer/support model |\n\n## Long-Term Vision: AI-Driven Middle Office\n\nThe ultimate vision is a Middle Office where:\n\n- AI handles the routine processing\n- Humans handle exceptions and make decisions\n- Humans manage relationships\n\n**AI handles the routine. Humans focus on value.**\n\n## Summary\n\nThe PoC is the beginning of a journey:\n\n| PoC Delivers | Production Potential |\n|--------------|---------------------|\n| Document classification prototype | Full document processing |\n| Field extraction for sample types | All document types |\n| Search interface | Enterprise knowledge management |\n| Email triage concept | Intelligent workflow routing |\n| Data model foundation | Unified operational data |\n| Accuracy benchmarks | Production KPIs |\n\nWe look forward to this journey together.",
+    "iconName": "Document"
+  }
+}

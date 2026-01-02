@@ -1,0 +1,18 @@
+{
+  "id": "RealTimeIngestion",
+  "namespace": "Systemorph/Marketing/DataIngestionStrategy",
+  "name": "Real-Time Ingestion",
+  "nodeType": "Systemorph/Marketing/Story",
+  "description": "Collaborative processing of incoming information as it arrives",
+  "iconName": "Document",
+  "displayOrder": 20,
+  "addressSegments": 0,
+  "isPersistent": true,
+  "content": {
+    "id": "RealTimeIngestion",
+    "title": "Real-Time Ingestion: Collaborative Processing",
+    "description": "Event-driven processing with agent-user collaboration",
+    "markdown": "# Real-Time Ingestion: Collaborative Processing\n\n## Email as Primary Input Channel\n\nIn everyday Middle Office work, most new information arrives via email. Brokers send submissions, cedents report claims, and counterparties exchange documentation—all through email with attachments.\n\nReal-time ingestion captures this flow as it happens, with AI agents and human users working together to process and classify incoming information.\n\nThe key distinction from historic ingestion is that **the user is an active participant**, not just a validator.\n\n## Email Integration Options\n\n### Option 1: Dedicated Mailbox Monitoring\n\nA dedicated mailbox (e.g., claims@company.com) receives incoming communications. An AI agent monitors continuously, processing each email as it arrives.\n\nWhen an email arrives, the agent:\n- Extracts the email body and parses attachments\n- Identifies the sender and maps to known counterparties\n- Classifies the email type (claim notification, submission, inquiry)\n- Extracts key data fields based on classification\n- Creates draft structured records for user review\n\n**Advantages:**\n- Centralized processing with complete capture\n- Consistent handling regardless of which user receives the email\n- Clear audit trail from email receipt to processed record\n\n### Option 2: Outlook Plugin (Dynamics-Style)\n\nUsers process emails from their own inboxes using an Outlook plugin. When viewing an email, the user clicks a \"Process\" button.\n\nThe agent returns:\n- Suggested classification and categorization\n- Extracted data fields ready for review\n- Proposed links to existing records\n- Draft updates to document management\n\n**Advantages:**\n- User-controlled processing\n- Selective ingestion—not every email needs AI processing\n- Integration with existing workflow habits\n\n## The Collaborative Workflow\n\nRegardless of approach, real-time ingestion is fundamentally collaborative:\n\n1. **Agent Processing**: Extract content, classify, propose data mapping\n2. **User Collaboration**: Review proposals, correct, complete missing information\n3. **Approval**: User approves submission\n4. **Output**: Data Mesh (connected records), Structured Data (claims, submissions), Document Storage\n\n## PoC Approach: Curated Dataset\n\nThe PoC will **not** connect to live mailboxes. Instead, we work with a curated dataset of representative emails exported from production. This allows demonstration of the full collaborative workflow without requiring production email access.",
+    "iconName": "Document"
+  }
+}
