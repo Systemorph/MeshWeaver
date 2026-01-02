@@ -11,8 +11,6 @@ using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
-using Microsoft.Extensions.Configuration;
-using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
 namespace MeshWeaver.Graph.Test;
@@ -33,23 +31,19 @@ public class MapContentCollectionTest(ITestOutputHelper output) : MonolithMeshTe
         Directory.CreateDirectory(_testBasePath);
         Output.WriteLine($"Test base path: {_testBasePath}");
 
-        // Configure TestStorage section in IConfiguration
-        var configuration = new ConfigurationBuilder()
-            .AddInMemoryCollection(new Dictionary<string, string?>
-            {
-                ["TestStorage:SourceType"] = "FileSystem",
-                ["TestStorage:BasePath"] = _testBasePath
-            })
-            .Build();
+        // Create a "TestStorage" collection config at mesh level
+        var testStorageConfig = new ContentCollectionConfig
+        {
+            Name = "TestStorage",
+            SourceType = "FileSystem",
+            BasePath = _testBasePath
+        };
 
         return builder
             .UseMonolithMesh()
             .AddInMemoryPersistence()
-            .ConfigureServices(services =>
-            {
-                services.AddSingleton<IConfiguration>(configuration);
-                return services;
-            });
+            // Register the TestStorage collection at mesh level so clients can map from it
+            .ConfigureHub(hub => hub.AddContentCollections([testStorageConfig]));
     }
 
     public override async ValueTask DisposeAsync()
@@ -67,7 +61,7 @@ public class MapContentCollectionTest(ITestOutputHelper output) : MonolithMeshTe
     /// Test that MapContentCollection registers a collection with the correct configuration.
     /// The collection is configured on the CLIENT hub, not a remote hub.
     /// </summary>
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 10000)]
     public async Task MapContentCollection_RegistersCollectionWithCorrectBasePath()
     {
         // Arrange - create a client with MapContentCollection configured on it
@@ -106,7 +100,7 @@ public class MapContentCollectionTest(ITestOutputHelper output) : MonolithMeshTe
     /// <summary>
     /// Test that MapContentCollection with empty subdirectory uses the source base path.
     /// </summary>
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 10000)]
     public async Task MapContentCollection_WithEmptySubdirectory_UsesSourceBasePath()
     {
         // Arrange
@@ -137,33 +131,36 @@ public class MapContentCollectionTest(ITestOutputHelper output) : MonolithMeshTe
     }
 
     /// <summary>
-    /// Test that MapContentCollection throws when source config is missing.
-    /// The exception is thrown during service resolution when the collection is accessed.
+    /// Test that MapContentCollection returns null config when source collection doesn't exist.
+    /// The mapped collection config will be null when the source collection is not found.
     /// </summary>
-    [Fact(Timeout = 30000)]
-    public async Task MapContentCollection_WithMissingSourceConfig_ThrowsException()
+    [Fact(Timeout = 10000)]
+    public async Task MapContentCollection_WithMissingSourceCollection_ReturnsNullConfig()
     {
-        // Arrange - configure with a non-existent section
+        // Arrange - configure with a non-existent source collection
         var client = GetClient(c => c
             .AddData(data => data)
-            .MapContentCollection("files", "NonExistent:Section", "subdir"));
+            .MapContentCollection("files", "NonExistentCollection", "subdir"));
 
-        // Act & Assert - requesting the collection should trigger an exception
-        // because the source configuration doesn't exist
-        var act = async () => await client.AwaitResponse(
+        // Act - requesting the collection should return empty/null because source doesn't exist
+        var response = await client.AwaitResponse(
             new GetDataRequest(new ContentCollectionReference(["files"])),
             o => o.WithTarget(client.Address),
             TestContext.Current.CancellationToken);
 
-        // The InvalidOperationException is wrapped in AggregateException
-        var exception = await act.Should().ThrowAsync<Exception>();
-        exception.Which.ToString().Should().Contain("No configuration found for 'NonExistent:Section'");
+        // Assert - response should have no configs because the source collection wasn't found
+        response.Should().NotBeNull();
+        response.Message.Should().NotBeNull();
+
+        var configs = response.Message.Data as IReadOnlyCollection<ContentCollectionConfig>;
+        // configs may be null or empty because the mapped config couldn't be resolved
+        configs.Should().BeNullOrEmpty("mapped config should not resolve when source collection doesn't exist");
     }
 
     /// <summary>
     /// Test that GetAllCollectionConfigs returns all registered collections.
     /// </summary>
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 10000)]
     public async Task MapContentCollection_GetAllConfigs_ReturnsAllCollections()
     {
         // Arrange - create a client with multiple collections

@@ -6,8 +6,8 @@ using MeshWeaver.Blazor.Monaco;
 using MeshWeaver.Blazor.Pages;
 using MeshWeaver.Blazor.Portal;
 using MeshWeaver.Blazor.Portal.Authentication;
-using MeshWeaver.Blazor.Portal.Infrastructure;
 using MeshWeaver.Blazor.Radzen;
+using MeshWeaver.ContentCollections;
 using MeshWeaver.GoogleMaps;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting;
@@ -21,12 +21,12 @@ using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authentication.OpenIdConnect;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Components;
+using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
-using Microsoft.AspNetCore.DataProtection;
 using Microsoft.Identity.Web;
 using Microsoft.Identity.Web.UI;
 
@@ -102,7 +102,6 @@ public static class LoomConfiguration
                     .AddMicrosoftIdentityUI();
                 break;
 
-            case AuthenticationProviders.Dev:
             default:
                 // Persist data protection keys so cookies survive app restarts
                 var keysPath = Path.Combine(
@@ -131,80 +130,74 @@ public static class LoomConfiguration
         services.AddAuthorization();
     }
 
-    /// <summary>
-    /// Configures the mesh with Graph domain only.
-    /// Reads configuration from Graph section:
-    ///
-    /// For FileSystem (development):
-    /// - Graph:StorageProvider = "FileSystem"
-    /// - Graph:DataDirectory - path to the data directory for persistence and content collections
-    ///   Content sub-collections (logos, persons, etc.) are stored as subdirectories.
-    ///
-    /// For AzureBlob (production):
-    /// - Graph:StorageProvider = "AzureBlob"
-    /// - Graph:ConnectionString - Azure Storage connection string
-    /// - Graph:ContainerName - Azure Blob container name for content collections
-    ///   Content sub-collections use blob prefixes within the container.
-    ///
-    /// Can be overridden by Aspire via environment variables:
-    /// - Graph__StorageProvider
-    /// - Graph__DataDirectory / Graph__ConnectionString
-    /// - Graph__ContainerName
-    /// </summary>
-    public static TBuilder ConfigureLoomMesh<TBuilder>(this TBuilder builder, IConfiguration configuration)
-        where TBuilder : MeshBuilder
+    extension<TBuilder>(TBuilder builder) where TBuilder : MeshBuilder
     {
-        var graphSection = configuration.GetSection("Graph");
-        var storageProvider = graphSection["StorageProvider"] ?? "FileSystem";
-
-        if (storageProvider.Equals("AzureBlob", StringComparison.OrdinalIgnoreCase))
+        /// <summary>
+        /// Configures the mesh with Graph domain only.
+        ///
+        /// Configuration is read from appsettings:
+        /// - Graph:Storage:Type - Storage type: "FileSystem", "AzureBlob", or "Cosmos"
+        /// - Graph:Storage:BasePath - Base path for FileSystem storage
+        /// - Graph:Storage:ConnectionString - Connection string for AzureBlob/Cosmos
+        /// - storage - Content collection configuration (Name, SourceType, BasePath)
+        /// </summary>
+        public TBuilder ConfigureLoomMesh(IConfiguration configuration)
         {
-            // Azure Blob Storage for production
-            var connectionString = graphSection["ConnectionString"]
-                ?? throw new InvalidOperationException("Graph:ConnectionString is required for AzureBlob storage provider");
-            var containerName = graphSection["ContainerName"] ?? "graph-data";
+            // Read graph storage config
+            var graphStorageConfig = configuration.GetSection("Graph:Storage").Get<GraphStorageConfig>();
+            if (graphStorageConfig == null)
+            {
+                throw new InvalidOperationException(
+                    "Graph:Storage configuration is required. " +
+                    "Configure it in appsettings.json with Type and BasePath/ConnectionString.");
+            }
 
-            // TODO: Add Azure Blob persistence when implemented
-            // return (TBuilder)builder
-            //     .AddAzureBlobPersistence(connectionString, containerName)
-            //     .InstallAssemblies(typeof(GraphDomainAttribute).Assembly.Location);
+            // Resolve relative BasePath to absolute
+            var basePath = graphStorageConfig.BasePath;
+            if (!string.IsNullOrEmpty(basePath) && !Path.IsPathRooted(basePath))
+            {
+                basePath = Path.GetFullPath(Path.Combine(Directory.GetCurrentDirectory(), basePath));
+                graphStorageConfig = graphStorageConfig with { BasePath = basePath };
+            }
 
-            throw new NotImplementedException("AzureBlob storage provider is not yet implemented. Use FileSystem for now.");
-        }
-        else
-        {
-            // FileSystem for development
-            var baseDir = Directory.GetCurrentDirectory();
-            var dataDirectoryConfig = graphSection["DataDirectory"] ?? "Data";
-            var dataDirectory = Path.IsPathRooted(dataDirectoryConfig)
-                ? dataDirectoryConfig
-                : Path.GetFullPath(Path.Combine(baseDir, dataDirectoryConfig));
+            // Read content collection storage config from appsettings
+            var contentStorageConfig = configuration.GetSection("Storage").Get<ContentCollectionConfig>();
+            if (contentStorageConfig != null)
+            {
+                // Resolve relative path to absolute
+                if (!string.IsNullOrEmpty(contentStorageConfig.BasePath) && !Path.IsPathRooted(contentStorageConfig.BasePath))
+                {
+                    contentStorageConfig = contentStorageConfig with
+                    {
+                        BasePath = Path.GetFullPath(Path.Combine(Directory.GetCurrentDirectory(), contentStorageConfig.BasePath))
+                    };
+                }
+            }
 
             return (TBuilder)builder
-                .AddFileSystemPersistence(dataDirectory)
-                .AddJsonGraphConfiguration(dataDirectory)
+                // Configure persistence from Graph:Storage section
+                .ConfigureServices(services => services.AddPersistence(graphStorageConfig))
+                // Configure graph from the same base path
+                .AddJsonGraphConfiguration(basePath ?? Directory.GetCurrentDirectory())
                 // Register Azure Blob support for content collections.
-                // When IAzureClientFactory<BlobServiceClient> is registered (e.g., via Aspire),
-                // it will be used. Otherwise, falls back to Graph:ConnectionString configuration.
                 .ConfigureServices(services => services.AddAzureBlob())
-                // Register the mesh catalog with file-system persistence
+                // Register the mesh catalog
                 .ConfigureServices(services =>
                 {
                     services.AddSingleton<IMeshCatalog, MeshCatalog>();
                     return services;
                 })
+                // Add content collections support with the storage collection
+                .ConfigureHub(hub => hub
+                    .AddContentCollections(contentStorageConfig != null ? [contentStorageConfig] : []))
                 // Add activity tracking to record user access patterns
-                .AddActivityTracking()
-                ;
+                .AddActivityTracking();
         }
-    }
 
-    /// <summary>
-    /// Configures the portal with Graph views, Charts, GoogleMaps, and Radzen.
-    /// </summary>
-    public static TBuilder ConfigureLoomPortal<TBuilder>(this TBuilder builder)
-        where TBuilder : MeshBuilder
-        => (TBuilder)builder
+        /// <summary>
+        /// Configures the portal with Graph views, Charts, GoogleMaps, and Radzen.
+        /// </summary>
+        public TBuilder ConfigureLoomPortal() => (TBuilder)builder
             .ConfigureHub(mesh => mesh
                 .AddRadzenDataGrid()
                 .AddRadzenCharts()
@@ -215,6 +208,7 @@ public static class LoomConfiguration
             .AddBlazor(layoutClient => layoutClient
                 .WithPortalConfiguration(c => c)
             );
+    }
 
     /// <summary>
     /// Starts the Loom portal application with the specified App component type.

@@ -148,10 +148,12 @@ public static class BlazorHostingExtensions
                 }
 
                 var targetAddress = (Address)resolution.Prefix;
-                var cacheKey = $"{resolution.Prefix}/{collectionName}";
+                // Use qualified collection name to avoid collisions between different hubs
+                // e.g., "ACME/logos" vs "Systemorph/logos"
+                var qualifiedCollectionName = $"{resolution.Prefix}/{collectionName}";
 
                 // Get or fetch collection configuration
-                if (!collectionCache.TryGetValue(cacheKey, out var collectionConfig))
+                if (!collectionCache.TryGetValue(qualifiedCollectionName, out var collectionConfig))
                 {
                     // Request collection configuration from the target hub using GetDataRequest with ContentCollectionReference
                     var collectionResponse = await mainHub.AwaitResponse(
@@ -176,15 +178,22 @@ public static class BlazorHostingExtensions
                     {
                         configs = collectionResponse?.Message?.Data as IReadOnlyCollection<ContentCollectionConfig>;
                     }
-                    collectionConfig = configs?.FirstOrDefault(c => c.Name == collectionName);
+                    var sourceConfig = configs?.FirstOrDefault(c => c.Name == collectionName);
 
-                    if (collectionConfig == null)
+                    if (sourceConfig == null)
                     {
                         return Results.NotFound($"Content collection '{collectionName}' not found at {resolution.Prefix}");
                     }
 
+                    // Create config with qualified name to avoid collisions
+                    collectionConfig = sourceConfig with
+                    {
+                        Name = qualifiedCollectionName,
+                        Address = targetAddress
+                    };
+
                     // Cache the collection configuration
-                    collectionCache.TryAdd(cacheKey, collectionConfig);
+                    collectionCache.TryAdd(qualifiedCollectionName, collectionConfig);
                 }
 
                 // Get content service from portal
@@ -195,11 +204,11 @@ public static class BlazorHostingExtensions
                     return Results.NotFound("Content service not configured");
                 }
 
-                // Add the collection configuration (with the target address for hub stream provider)
-                contentService.AddConfiguration(collectionConfig with { Address = targetAddress });
+                // Add the collection configuration with qualified name
+                contentService.AddConfiguration(collectionConfig);
 
-                // Get the collection and retrieve content
-                var contentCollection = await contentService.GetCollectionAsync(collectionName, context.RequestAborted);
+                // Get the collection using qualified name
+                var contentCollection = await contentService.GetCollectionAsync(qualifiedCollectionName, context.RequestAborted);
                 if (contentCollection == null)
                 {
                     return Results.NotFound($"Content collection '{collectionName}' not found");

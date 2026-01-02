@@ -6,10 +6,47 @@ using MeshWeaver.Mesh.Services;
 namespace MeshWeaver.Hosting.Cosmos;
 
 /// <summary>
+/// Factory for creating CosmosStorageAdapter instances from configuration.
+/// </summary>
+public class CosmosStorageAdapterFactory : IStorageAdapterFactory
+{
+    public const string StorageType = "Cosmos";
+
+    public IStorageAdapter Create(GraphStorageConfig config, IServiceProvider serviceProvider)
+    {
+        var connectionString = config.ConnectionString
+            ?? throw new InvalidOperationException(
+                "Graph:Storage:ConnectionString is required for Cosmos storage. " +
+                "Configure it in appsettings.json.");
+
+        var databaseName = config.DatabaseName ?? "MeshWeaver";
+        var nodesContainerName = config.Settings?.GetValueOrDefault("NodesContainer") ?? "nodes";
+        var partitionsContainerName = config.Settings?.GetValueOrDefault("PartitionsContainer") ?? "partitions";
+
+        var cosmosClient = new CosmosClient(connectionString);
+        var database = cosmosClient.GetDatabase(databaseName);
+        var nodesContainer = database.GetContainer(nodesContainerName);
+        var partitionsContainer = database.GetContainer(partitionsContainerName);
+
+        return new CosmosStorageAdapter(nodesContainer, partitionsContainer);
+    }
+}
+
+/// <summary>
 /// Extension methods for configuring Cosmos DB persistence.
 /// </summary>
 public static class PersistenceExtensions
 {
+    /// <summary>
+    /// Registers the Cosmos storage adapter factory for use with AddPersistenceFromConfig.
+    /// </summary>
+    public static IServiceCollection AddCosmosStorageFactory(this IServiceCollection services)
+    {
+        services.AddKeyedSingleton<IStorageAdapterFactory, CosmosStorageAdapterFactory>(
+            CosmosStorageAdapterFactory.StorageType);
+        return services;
+    }
+
     /// <summary>
     /// Adds Cosmos DB persistence services.
     /// </summary>

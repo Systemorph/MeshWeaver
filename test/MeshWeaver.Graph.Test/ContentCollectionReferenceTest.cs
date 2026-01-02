@@ -46,6 +46,14 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
             })
             .Build();
 
+        // Create the "storage" collection config that node types (Organization, Person) will map from
+        var storageConfig = new ContentCollectionConfig
+        {
+            Name = "storage",
+            SourceType = "FileSystem",
+            BasePath = graphPath
+        };
+
         return builder
             .UseMonolithMesh()
             .AddFileSystemPersistence(dataDirectory)
@@ -55,6 +63,8 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
                 services.AddSingleton<IConfiguration>(configuration);
                 return services;
             })
+            // Register the storage collection at mesh level so node types can map from it
+            .ConfigureHub(hub => hub.AddContentCollections([storageConfig]))
             .AddJsonGraphConfiguration(dataDirectory);
     }
 
@@ -62,7 +72,7 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
     /// Tests that GetDataRequest with ContentCollectionReference returns collection configurations
     /// from a Person instance hub (Alice).
     /// </summary>
-    [Fact(Timeout = 60000)]
+    [Fact(Timeout = 10000)]
     public async Task GetDataRequest_WithContentCollectionReference_ReturnsConfig()
     {
         var aliceAddress = new Address("Alice");
@@ -97,7 +107,7 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
     /// <summary>
     /// Tests that GetDataRequest with empty ContentCollectionReference returns all collections.
     /// </summary>
-    [Fact(Timeout = 60000)]
+    [Fact(Timeout = 10000)]
     public async Task GetDataRequest_WithEmptyContentCollectionReference_ReturnsAllCollections()
     {
         var aliceAddress = new Address("Alice");
@@ -124,7 +134,7 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
     /// <summary>
     /// Tests that Organization instance hub's (ACME) collection is accessible via ContentCollectionReference.
     /// </summary>
-    [Fact(Timeout = 60000)]
+    [Fact(Timeout = 10000)]
     public async Task GetDataRequest_WithContentCollectionReference_ForOrganization_ReturnsConfig()
     {
         var acmeAddress = new Address("ACME");
@@ -156,7 +166,7 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
     /// <summary>
     /// Tests that UnifiedReference with "collection:logos" prefix resolves collection config from ACME.
     /// </summary>
-    [Fact(Timeout = 60000)]
+    [Fact(Timeout = 10000)]
     public async Task UnifiedReference_CollectionPrefix_ReturnsConfig()
     {
         var acmeAddress = new Address("ACME");
@@ -184,7 +194,7 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
     /// <summary>
     /// Tests that UnifiedReference with "content:logos/logo.svg" prefix resolves file content from ACME.
     /// </summary>
-    [Fact(Timeout = 60000)]
+    [Fact(Timeout = 10000)]
     public async Task UnifiedReference_ContentPrefix_ReturnsFileContent()
     {
         var acmeAddress = new Address("ACME");
@@ -212,7 +222,7 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
     /// <summary>
     /// Tests that UnifiedReference with "data:" prefix resolves to DataPathReference behavior.
     /// </summary>
-    [Fact(Timeout = 60000)]
+    [Fact(Timeout = 10000)]
     public async Task UnifiedReference_DataPrefix_ReturnsData()
     {
         var acmeAddress = new Address("ACME");
@@ -239,7 +249,7 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
     /// to verify thread-safe hub initialization with collection:name format.
     /// Both ACME and Systemorph are Organizations which have the "logos" collection.
     /// </summary>
-    [Fact(Timeout = 120000)]
+    [Fact(Timeout = 10000)]
     public async Task ConcurrentCollectionRequests_WithUnifiedReference_AllSucceed()
     {
         var acmeAddress = new Address("ACME");
@@ -283,7 +293,7 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
     /// <summary>
     /// Tests concurrent content file requests to verify thread-safe file resolution.
     /// </summary>
-    [Fact(Timeout = 120000)]
+    [Fact(Timeout = 10000)]
     public async Task ConcurrentContentRequests_ToSameOrganization_AllSucceed()
     {
         var acmeAddress = new Address("ACME");
@@ -314,6 +324,96 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
             content.Should().NotBeNull();
             content.Should().Contain("<svg");
         }
+    }
+
+    /// <summary>
+    /// Tests that simulate what BlazorHostingExtensions.MapStaticContent does:
+    /// 1. Get collection config from target hub (ACME or Systemorph)
+    /// 2. Add config to portal's content service
+    /// 3. Retrieve content from the collection
+    ///
+    /// This test verifies that ACME/logos and Systemorph/logos are stored separately
+    /// and don't overwrite each other when added to the portal's content service.
+    /// </summary>
+    [Fact(Timeout = 10000)]
+    public async Task StaticContentFlow_MultipleOrganizations_ReturnsCorrectContent()
+    {
+        var acmeAddress = new Address("ACME");
+        var systemorphAddress = new Address("Systemorph");
+        var client = GetClient(c => c.AddContentCollections());
+
+        // Initialize both hubs
+        await client.AwaitResponse(
+            new PingRequest(),
+            o => o.WithTarget(acmeAddress),
+            TestContext.Current.CancellationToken);
+
+        await client.AwaitResponse(
+            new PingRequest(),
+            o => o.WithTarget(systemorphAddress),
+            TestContext.Current.CancellationToken);
+
+        // Step 1: Get collection config from ACME (like BlazorHostingExtensions does)
+        var acmeConfigResponse = await client.AwaitResponse(
+            new GetDataRequest(new ContentCollectionReference(["logos"])),
+            o => o.WithTarget(acmeAddress),
+            TestContext.Current.CancellationToken);
+
+        var acmeConfigs = ParseCollectionConfigs(acmeConfigResponse.Message.Data);
+        acmeConfigs.Should().NotBeNull();
+        var acmeLogosConfig = acmeConfigs!.First();
+        Output.WriteLine($"ACME logos config: Name={acmeLogosConfig.Name}, BasePath={acmeLogosConfig.BasePath}");
+
+        // Step 2: Get collection config from Systemorph
+        var systemorphConfigResponse = await client.AwaitResponse(
+            new GetDataRequest(new ContentCollectionReference(["logos"])),
+            o => o.WithTarget(systemorphAddress),
+            TestContext.Current.CancellationToken);
+
+        var systemorphConfigs = ParseCollectionConfigs(systemorphConfigResponse.Message.Data);
+        systemorphConfigs.Should().NotBeNull();
+        var systemorphLogosConfig = systemorphConfigs!.First();
+        Output.WriteLine($"Systemorph logos config: Name={systemorphLogosConfig.Name}, BasePath={systemorphLogosConfig.BasePath}");
+
+        // Verify they have different base paths
+        acmeLogosConfig.BasePath.Should().Contain("ACME", "ACME logos should point to ACME directory");
+        systemorphLogosConfig.BasePath.Should().Contain("Systemorph", "Systemorph logos should point to Systemorph directory");
+        acmeLogosConfig.BasePath.Should().NotBe(systemorphLogosConfig.BasePath, "ACME and Systemorph should have different base paths");
+
+        // Step 3: Simulate what the portal does - add both configs to its content service
+        // and verify we can retrieve content from both without collision
+        var contentService = client.ServiceProvider.GetRequiredService<IContentService>();
+
+        // Add ACME config with qualified name to avoid collision
+        var acmeQualifiedConfig = acmeLogosConfig with
+        {
+            Name = $"{acmeAddress}/logos",
+            Address = acmeAddress
+        };
+        contentService.AddConfiguration(acmeQualifiedConfig);
+        Output.WriteLine($"Added ACME config with qualified name: {acmeQualifiedConfig.Name}");
+
+        // Add Systemorph config with qualified name
+        var systemorphQualifiedConfig = systemorphLogosConfig with
+        {
+            Name = $"{systemorphAddress}/logos",
+            Address = systemorphAddress
+        };
+        contentService.AddConfiguration(systemorphQualifiedConfig);
+        Output.WriteLine($"Added Systemorph config with qualified name: {systemorphQualifiedConfig.Name}");
+
+        // Verify we can get both collections separately
+        var acmeCollection = await contentService.GetCollectionAsync($"{acmeAddress}/logos", TestContext.Current.CancellationToken);
+        acmeCollection.Should().NotBeNull("ACME logos collection should be retrievable");
+        Output.WriteLine($"ACME collection retrieved: {acmeCollection?.Collection}");
+
+        var systemorphCollection = await contentService.GetCollectionAsync($"{systemorphAddress}/logos", TestContext.Current.CancellationToken);
+        systemorphCollection.Should().NotBeNull("Systemorph logos collection should be retrievable");
+        Output.WriteLine($"Systemorph collection retrieved: {systemorphCollection?.Collection}");
+
+        // Verify they are different collections with different base paths
+        acmeCollection!.Collection.Should().NotBe(systemorphCollection!.Collection,
+            "ACME and Systemorph should have different collection names");
     }
 
     private static IReadOnlyCollection<ContentCollectionConfig>? ParseCollectionConfigs(object? data)

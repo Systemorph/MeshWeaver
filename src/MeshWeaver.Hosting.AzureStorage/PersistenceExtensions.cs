@@ -6,10 +6,44 @@ using MeshWeaver.Mesh.Services;
 namespace MeshWeaver.Hosting.AzureStorage;
 
 /// <summary>
+/// Factory for creating AzureBlobStorageAdapter instances from configuration.
+/// </summary>
+public class AzureBlobStorageAdapterFactory : IStorageAdapterFactory
+{
+    public const string StorageType = "AzureBlob";
+
+    public IStorageAdapter Create(GraphStorageConfig config, IServiceProvider serviceProvider)
+    {
+        var connectionString = config.ConnectionString
+            ?? throw new InvalidOperationException(
+                "Graph:Storage:ConnectionString is required for AzureBlob storage. " +
+                "Configure it in appsettings.json.");
+
+        var containerName = config.ContainerName ?? "graph-data";
+
+        var blobServiceClient = new BlobServiceClient(connectionString);
+        var containerClient = blobServiceClient.GetBlobContainerClient(containerName);
+        containerClient.CreateIfNotExists();
+
+        return new AzureBlobStorageAdapter(containerClient);
+    }
+}
+
+/// <summary>
 /// Extension methods for configuring Azure Blob Storage persistence.
 /// </summary>
 public static class PersistenceExtensions
 {
+    /// <summary>
+    /// Registers the AzureBlob storage adapter factory for use with AddPersistenceFromConfig.
+    /// </summary>
+    public static IServiceCollection AddAzureBlobStorageFactory(this IServiceCollection services)
+    {
+        services.AddKeyedSingleton<IStorageAdapterFactory, AzureBlobStorageAdapterFactory>(
+            AzureBlobStorageAdapterFactory.StorageType);
+        return services;
+    }
+
     /// <summary>
     /// Adds Azure Blob Storage persistence services.
     /// </summary>
