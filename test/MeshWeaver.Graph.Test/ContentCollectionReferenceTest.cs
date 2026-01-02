@@ -19,7 +19,7 @@ using Xunit;
 namespace MeshWeaver.Graph.Test;
 
 /// <summary>
-/// Tests for CollectionConfigReference resolution via GetDataRequest.
+/// Tests for ContentCollectionReference resolution via GetDataRequest.
 /// </summary>
 [Collection("ContentCollectionTests")]
 public class ContentCollectionReferenceTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
@@ -59,14 +59,14 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
     }
 
     /// <summary>
-    /// Tests that GetDataRequest with CollectionConfigReference returns collection configurations
+    /// Tests that GetDataRequest with ContentCollectionReference returns collection configurations
     /// from a Person instance hub (Alice).
     /// </summary>
     [Fact(Timeout = 60000)]
-    public async Task GetDataRequest_WithCollectionConfigReference_ReturnsConfig()
+    public async Task GetDataRequest_WithContentCollectionReference_ReturnsConfig()
     {
         var aliceAddress = new Address("Alice");
-        var client = GetClient(c => c.AddData(data => data));
+        var client = GetClient(c => c.AddContentCollections());
 
         // Initialize Alice hub
         await client.AwaitResponse(
@@ -76,7 +76,7 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
 
         // Request the "avatars" collection configuration
         var response = await client.AwaitResponse(
-            new GetDataRequest(new CollectionConfigReference(["avatars"])),
+            new GetDataRequest(new ContentCollectionReference(["avatars"])),
             o => o.WithTarget(aliceAddress),
             TestContext.Current.CancellationToken);
 
@@ -95,13 +95,13 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
     }
 
     /// <summary>
-    /// Tests that GetDataRequest with empty CollectionConfigReference returns all collections.
+    /// Tests that GetDataRequest with empty ContentCollectionReference returns all collections.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public async Task GetDataRequest_WithEmptyCollectionConfigReference_ReturnsAllCollections()
+    public async Task GetDataRequest_WithEmptyContentCollectionReference_ReturnsAllCollections()
     {
         var aliceAddress = new Address("Alice");
-        var client = GetClient(c => c.AddData(data => data));
+        var client = GetClient(c => c.AddContentCollections());
 
         await client.AwaitResponse(
             new PingRequest(),
@@ -109,7 +109,7 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
             TestContext.Current.CancellationToken);
 
         var response = await client.AwaitResponse(
-            new GetDataRequest(new CollectionConfigReference()),
+            new GetDataRequest(new ContentCollectionReference()),
             o => o.WithTarget(aliceAddress),
             TestContext.Current.CancellationToken);
 
@@ -122,13 +122,13 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
     }
 
     /// <summary>
-    /// Tests that Organization instance hub's (ACME) collection is accessible via CollectionConfigReference.
+    /// Tests that Organization instance hub's (ACME) collection is accessible via ContentCollectionReference.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public async Task GetDataRequest_WithCollectionConfigReference_ForOrganization_ReturnsConfig()
+    public async Task GetDataRequest_WithContentCollectionReference_ForOrganization_ReturnsConfig()
     {
         var acmeAddress = new Address("ACME");
-        var client = GetClient(c => c.AddData(data => data));
+        var client = GetClient(c => c.AddContentCollections());
 
         await client.AwaitResponse(
             new PingRequest(),
@@ -136,7 +136,7 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
             TestContext.Current.CancellationToken);
 
         var response = await client.AwaitResponse(
-            new GetDataRequest(new CollectionConfigReference(["logos"])),
+            new GetDataRequest(new ContentCollectionReference(["logos"])),
             o => o.WithTarget(acmeAddress),
             TestContext.Current.CancellationToken);
 
@@ -160,7 +160,7 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
     public async Task UnifiedReference_CollectionPrefix_ReturnsConfig()
     {
         var acmeAddress = new Address("ACME");
-        var client = GetClient(c => c.AddData(data => data));
+        var client = GetClient(c => c.AddContentCollections());
 
         await client.AwaitResponse(
             new PingRequest(),
@@ -188,7 +188,7 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
     public async Task UnifiedReference_ContentPrefix_ReturnsFileContent()
     {
         var acmeAddress = new Address("ACME");
-        var client = GetClient(c => c.AddData(data => data));
+        var client = GetClient(c => c.AddContentCollections());
 
         await client.AwaitResponse(
             new PingRequest(),
@@ -216,7 +216,7 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
     public async Task UnifiedReference_DataPrefix_ReturnsData()
     {
         var acmeAddress = new Address("ACME");
-        var client = GetClient(c => c.AddData(data => data));
+        var client = GetClient(c => c.AddContentCollections());
 
         await client.AwaitResponse(
             new PingRequest(),
@@ -244,7 +244,7 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
     {
         var acmeAddress = new Address("ACME");
         var systemorphAddress = new Address("Systemorph");
-        var client = GetClient(c => c.AddData(data => data));
+        var client = GetClient(c => c.AddContentCollections());
 
         // Launch concurrent requests to both organizations WITHOUT pre-initializing them
         // This tests the race condition where multiple hubs are initialized simultaneously
@@ -287,7 +287,7 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
     public async Task ConcurrentContentRequests_ToSameOrganization_AllSucceed()
     {
         var acmeAddress = new Address("ACME");
-        var client = GetClient(c => c.AddData(data => data));
+        var client = GetClient(c => c.AddContentCollections());
 
         // Launch concurrent content requests WITHOUT pre-initializing
         var tasks = new List<Task<IMessageDelivery<GetDataResponse>>>();

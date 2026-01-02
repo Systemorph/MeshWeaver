@@ -21,7 +21,7 @@ public class PricingCatalogTests(ITestOutputHelper output) : InsuranceTestBase(o
             );
     }
 
-    [Fact]
+    [Fact(Timeout = 30000)]
     public async Task GetPricingCatalog_ShouldReturnPricings()
     {
         // Act - Get the pricing catalog from the Insurance hub
@@ -44,7 +44,7 @@ public class PricingCatalogTests(ITestOutputHelper output) : InsuranceTestBase(o
         }
     }
 
-    [Fact]
+    [Fact(Timeout = 30000)]
     public async Task GetPricingCatalog_ShouldHaveValidDimensions()
     {
         // Act
@@ -64,7 +64,7 @@ public class PricingCatalogTests(ITestOutputHelper output) : InsuranceTestBase(o
         Output.WriteLine($"  Currencies: {string.Join(", ", pricings.Select(p => p.Currency).Distinct())}");
     }
 
-    [Fact]
+    [Fact(Timeout = 30000)]
     public async Task GetPricingCatalog_ShouldHaveValidDates()
     {
         // Act
@@ -95,7 +95,7 @@ public class PricingCatalogTests(ITestOutputHelper output) : InsuranceTestBase(o
         Output.WriteLine($"All {pricings.Count} pricings have valid dates");
     }
 
-    [Fact]
+    [Fact(Timeout = 30000)]
     public async Task PricingHub_ShouldStartSuccessfully()
     {
         // This test verifies that the pricing hub initializes correctly
@@ -116,7 +116,7 @@ public class PricingCatalogTests(ITestOutputHelper output) : InsuranceTestBase(o
         Output.WriteLine($"Retrieved {pricings.Count} pricings from catalog");
     }
 
-    [Fact]
+    [Fact(Timeout = 30000)]
     public async Task GetPricingCatalog_UsingLayoutAreaReference_ShouldReturnPricingsControl()
     {
         // Arrange

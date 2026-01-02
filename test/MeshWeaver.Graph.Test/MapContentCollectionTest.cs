@@ -79,7 +79,7 @@ public class MapContentCollectionTest(ITestOutputHelper output) : MonolithMeshTe
 
         // Act - request the avatars collection configuration from the client's own hub
         var response = await client.AwaitResponse(
-            new GetDataRequest(new CollectionConfigReference(["avatars"])),
+            new GetDataRequest(new ContentCollectionReference(["avatars"])),
             o => o.WithTarget(client.Address), // Send to self
             TestContext.Current.CancellationToken);
 
@@ -116,7 +116,7 @@ public class MapContentCollectionTest(ITestOutputHelper output) : MonolithMeshTe
 
         // Act
         var response = await client.AwaitResponse(
-            new GetDataRequest(new CollectionConfigReference(["storage"])),
+            new GetDataRequest(new ContentCollectionReference(["storage"])),
             o => o.WithTarget(client.Address),
             TestContext.Current.CancellationToken);
 
@@ -137,38 +137,27 @@ public class MapContentCollectionTest(ITestOutputHelper output) : MonolithMeshTe
     }
 
     /// <summary>
-    /// Test that MapContentCollection falls back to current directory when source config is missing.
+    /// Test that MapContentCollection throws when source config is missing.
+    /// The exception is thrown during service resolution when the collection is accessed.
     /// </summary>
     [Fact(Timeout = 30000)]
-    public async Task MapContentCollection_WithMissingSourceConfig_UsesCurrentDirectory()
+    public async Task MapContentCollection_WithMissingSourceConfig_ThrowsException()
     {
-        // Arrange
+        // Arrange - configure with a non-existent section
         var client = GetClient(c => c
             .AddData(data => data)
             .MapContentCollection("files", "NonExistent:Section", "subdir"));
 
-        // Act
-        var response = await client.AwaitResponse(
-            new GetDataRequest(new CollectionConfigReference(["files"])),
+        // Act & Assert - requesting the collection should trigger an exception
+        // because the source configuration doesn't exist
+        var act = async () => await client.AwaitResponse(
+            new GetDataRequest(new ContentCollectionReference(["files"])),
             o => o.WithTarget(client.Address),
             TestContext.Current.CancellationToken);
 
-        // Assert
-        response.Should().NotBeNull();
-        response.Message.Should().NotBeNull();
-
-        Output.WriteLine($"Response data type: {response.Message.Data?.GetType().FullName ?? "null"}");
-
-        response.Message.Data.Should().NotBeNull();
-
-        var configs = response.Message.Data as IReadOnlyCollection<ContentCollectionConfig>;
-        configs.Should().NotBeNull();
-
-        var config = configs!.First();
-        config.Name.Should().Be("files");
-        config.SourceType.Should().Be("FileSystem");
-        // BasePath should be current directory combined with subdirectory
-        config.BasePath.Should().EndWith("subdir");
+        // The InvalidOperationException is wrapped in AggregateException
+        var exception = await act.Should().ThrowAsync<Exception>();
+        exception.Which.ToString().Should().Contain("No configuration found for 'NonExistent:Section'");
     }
 
     /// <summary>
@@ -185,7 +174,7 @@ public class MapContentCollectionTest(ITestOutputHelper output) : MonolithMeshTe
 
         // Act - request all collection configurations (empty array)
         var response = await client.AwaitResponse(
-            new GetDataRequest(new CollectionConfigReference()),
+            new GetDataRequest(new ContentCollectionReference()),
             o => o.WithTarget(client.Address),
             TestContext.Current.CancellationToken);
 

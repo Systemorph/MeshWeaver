@@ -70,7 +70,6 @@ public record MessageHubConfiguration
     protected internal ImmutableList<Func<IMessageHub, CancellationToken, Task>> BuildupActions { get; init; } = ImmutableList<Func<IMessageHub, CancellationToken, Task>>.Empty;
     protected internal ImmutableList<Action<IMessageHub>> SyncBuildupActions { get; init; } = [];
 
-
     internal IMessageHub HubInstance { get; set; } = null!;
 
     public MessageHubConfiguration RegisterForDisposal(Action<IMessageHub> disposeAction)
@@ -159,8 +158,6 @@ public record MessageHubConfiguration
     };
     public MessageHubConfiguration WithInitialization(Func<IMessageHub, CancellationToken, Task> action) => this with { BuildupActions = BuildupActions.Add(action) };
 
-
-
     protected void CreateServiceProvider(IMessageHub? parent)
     {
         lock (serviceProviderLock)
@@ -178,6 +175,7 @@ public record MessageHubConfiguration
         // TODO V10: Check whether this address is already built in hosted hubs collection, if not build. (18.01.2024, Roland Buergi)
         var parentHub = ParentServiceProvider?.GetService<ParentMessageHub>()?.Value;
         CreateServiceProvider(parentHub);
+
         var parentHubs = ParentServiceProvider?.GetService<HostedHubsCollection>();
 
         HubInstance = ServiceProvider.GetRequiredService<IMessageHub>();

@@ -84,7 +84,7 @@ public class MicrosoftImportTests(ITestOutputHelper output) : InsuranceTestBase(
         ]
     };
 
-    [Fact]
+    [Fact(Timeout = 30000)]
     public async Task Import_Microsoft_File_WithConfiguration()
     {
         // Skip test if file doesn't exist
@@ -134,7 +134,7 @@ public class MicrosoftImportTests(ITestOutputHelper output) : InsuranceTestBase(
         }
     }
 
-    [Fact]
+    [Fact(Timeout = 30000)]
     public async Task Import_Microsoft_WithAllocation()
     {
         // Skip test if file doesn't exist
@@ -187,7 +187,7 @@ public class MicrosoftImportTests(ITestOutputHelper output) : InsuranceTestBase(
         Output.WriteLine($"Imported {risks.Count} risks with proportional BI allocation");
     }
 
-    [Fact]
+    [Fact(Timeout = 30000)]
     public async Task Import_Microsoft_UsingSumMapping()
     {
         // Skip test if file doesn't exist

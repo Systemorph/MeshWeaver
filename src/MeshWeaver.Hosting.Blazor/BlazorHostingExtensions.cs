@@ -28,7 +28,7 @@ public static class BlazorHostingExtensions
 
     public static void MapMeshWeaver(this WebApplication app)
     {
-        app.MapStaticContent(app.Services.GetRequiredService<IMessageHub>());
+        app.MapStaticContent(app.Services);
         app.UseMiddleware<UserContextMiddleware>();
 
         // Thumbnail preview stub (returns 501 until implemented)
@@ -95,16 +95,21 @@ public static class BlazorHostingExtensions
     /// Example: /static/app/Northwind/Northwind/thumbnails/logo.png
     /// The path is resolved via IMeshCatalog.ResolvePath to get the prefix and remainder.
     /// First segment of remainder is collection name, rest is file path.
-    /// Uses GetDataRequest with CollectionConfigReference to obtain collection configuration from the target hub.
+    /// Uses GetDataRequest with ContentCollectionReference to obtain collection configuration from the target hub.
     /// </summary>
-    private static void MapStaticContent(this IEndpointRouteBuilder app, IMessageHub mainHub)
+    private static void MapStaticContent(this IEndpointRouteBuilder app, IServiceProvider services)
     {
         // Collection configuration cache: key = "prefix/collection"
         var collectionCache = new System.Collections.Concurrent.ConcurrentDictionary<string, ContentCollectionConfig>();
+        // Lazy resolution of IMessageHub to avoid circular dependency during startup
+        IMessageHub? mainHub = null;
 
         app.MapGet("/static/{**path}",
             async (HttpContext context, string path) =>
         {
+            // Resolve hub on first request
+            mainHub ??= services.GetRequiredService<IMessageHub>();
+
             if (string.IsNullOrEmpty(path))
             {
                 return Results.NotFound("Path is required");
@@ -148,9 +153,9 @@ public static class BlazorHostingExtensions
                 // Get or fetch collection configuration
                 if (!collectionCache.TryGetValue(cacheKey, out var collectionConfig))
                 {
-                    // Request collection configuration from the target hub using GetDataRequest with CollectionConfigReference
+                    // Request collection configuration from the target hub using GetDataRequest with ContentCollectionReference
                     var collectionResponse = await mainHub.AwaitResponse(
-                        new GetDataRequest(new CollectionConfigReference([collectionName])),
+                        new GetDataRequest(new ContentCollectionReference([collectionName])),
                         o => o.WithTarget(targetAddress),
                         context.RequestAborted);
 

@@ -67,6 +67,7 @@ public static class ContentCollectionsExtensions
     public static MessageHubConfiguration AddContentCollections(this MessageHubConfiguration config)
     {
         return config
+            .WithTypes(typeof(ContentCollectionReference))
             .WithServices(AddContentService)
             .AddData(data =>
             {
@@ -74,16 +75,14 @@ public static class ContentCollectionsExtensions
                 // This handles paths like "content:addressType/addressId/collection/path"
                 if (!data.UnifiedReferenceResolvers.ContainsKey("content"))
                 {
-                    data = data.WithUnifiedReference("content", (workspace, path) =>
-                        CreateContentPathStream(workspace, path));
+                    data = data.WithUnifiedReference("content", CreateContentPathStream);
                 }
 
                 // Register the collection: prefix resolver for UnifiedReference
                 // This handles paths like "collection:collectionName" or just "collection"
                 if (!data.UnifiedReferenceResolvers.ContainsKey("collection"))
                 {
-                    data = data.WithUnifiedReference("collection", (workspace, path) =>
-                        CreateCollectionConfigStream(workspace, path));
+                    data = data.WithUnifiedReference("collection", CreateCollectionConfigStream);
                 }
 
                 return data.Configure(reduction => reduction
@@ -92,9 +91,9 @@ public static class ContentCollectionsExtensions
                             ? null
                             : CreateFileReferenceStream(workspace, fileRef, configuration))
                     .AddWorkspaceReferenceStream<object>((workspace, reference, configuration) =>
-                        reference is not CollectionConfigReference
+                        reference is not ContentCollectionReference
                             ? null
-                            : CreateCollectionConfigReferenceStream(workspace, reference, configuration)));
+                            : CreateContentCollectionReferenceStream(workspace, reference, configuration)));
             })
             .AddLayout(layout => layout
                 .WithView(nameof(ContentLayoutArea.Content), ContentLayoutArea.Content)
@@ -119,35 +118,35 @@ public static class ContentCollectionsExtensions
             collectionNames = remainingPath.Split(',', StringSplitOptions.RemoveEmptyEntries);
         }
 
-        return workspace.GetStream(new CollectionConfigReference(collectionNames), null);
+        return workspace.GetStream(new ContentCollectionReference(collectionNames), null);
     }
 
     /// <summary>
-    /// Creates a stream for a CollectionConfigReference.
+    /// Creates a stream for a ContentCollectionReference.
     /// Returns null - actual handling is done by the GetDataRequest handler.
     /// </summary>
-    private static ISynchronizationStream<object>? CreateCollectionConfigReferenceStream(
+    private static ISynchronizationStream<object>? CreateContentCollectionReferenceStream(
         IWorkspace workspace,
         WorkspaceReference reference,
         Func<StreamConfiguration<object>, StreamConfiguration<object>>? configuration)
     {
-        // CollectionConfigReference is handled by GetDataRequest handler, not via streams
+        // ContentCollectionReference is handled by GetDataRequest handler, not via streams
         // Return null to let the request pass through to the handler
         return null;
     }
 
     /// <summary>
-    /// Handles GetDataRequest for CollectionConfigReference or UnifiedReference with "collection:" prefix.
+    /// Handles GetDataRequest for ContentCollectionReference or UnifiedReference with "collection:" prefix.
     /// Returns collection configurations via GetDataResponse.
     /// </summary>
     private static IMessageDelivery HandleCollectionConfigRequest(
         IMessageHub hub,
         IMessageDelivery<GetDataRequest> request)
     {
-        // Handle both CollectionConfigReference and UnifiedReference with "collection:" prefix
+        // Handle both ContentCollectionReference and UnifiedReference with "collection:" prefix
         IReadOnlyCollection<string>? collectionNames = null;
 
-        if (request.Message.Reference is CollectionConfigReference collectionRef)
+        if (request.Message.Reference is ContentCollectionReference collectionRef)
         {
             collectionNames = collectionRef.CollectionNames;
         }
@@ -621,17 +620,12 @@ public static class ContentCollectionsExtensions
             // Get the global Graph:Storage configuration from appsettings
             var storageConfig = conf.GetSection(sourceCollectionName).Get<ContentCollectionConfig>();
 
-            // If no configuration exists, create a default FileSystem-based collection
+            // Source configuration is required
             if (storageConfig == null)
             {
-                // Default to current directory
-                var defaultBasePath = Directory.GetCurrentDirectory();
-                storageConfig = new ContentCollectionConfig
-                {
-                    SourceType = FileSystemStreamProvider.SourceType,
-                    Name = targetCollectionName,
-                    BasePath = defaultBasePath
-                };
+                throw new InvalidOperationException(
+                    $"No configuration found for '{sourceCollectionName}'. " +
+                    $"Please configure the source collection in appsettings.json.");
             }
 
             // Resolve base path to absolute path if it's relative
