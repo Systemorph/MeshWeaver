@@ -18,11 +18,18 @@ public class Workspace : IWorkspace
         Hub = hub;
         _logger = logger;
         logger.LogDebug("Creating data context of address {address}", Id);
-        DataContext = this.GetDataConfiguration();
-
-        //stream.OnNext(new(stream.Owner, stream.Reference, new(), null, ChangeType.NoUpdate, null, stream.ParentHub.Version));
+        DataContext = this.CreateDataContext();
         logger.LogDebug("Started initialization of data context of address {address}", Id);
         DataContext.Initialize();
+    }
+
+    /// <summary>
+    /// Opens the initialization gate after all handlers are registered.
+    /// Called via SyncBuildupActions to ensure proper ordering.
+    /// </summary>
+    internal void OpenInitializationGate()
+    {
+        DataContext.OpenInitializationGate();
     }
 
 

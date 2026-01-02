@@ -19,9 +19,9 @@ public class HubStreamProviderFactory(IMessageHub hub) : IStreamProviderFactory
 
         var collectionName = config.Settings?.GetValueOrDefault("CollectionName") ?? config.Name;
 
-        // Query the remote hub for the collection configuration using GetDataRequest with CollectionConfigReference
+        // Query the remote hub for the collection configuration using GetDataRequest with ContentCollectionReference
         var response = await hub.AwaitResponse(
-            new GetDataRequest(new CollectionConfigReference([collectionName])),
+            new GetDataRequest(new ContentCollectionReference([collectionName])),
             o => o.WithTarget(config.Address),
             cancellationToken
         );

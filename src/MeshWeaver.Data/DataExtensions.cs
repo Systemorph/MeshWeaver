@@ -42,29 +42,29 @@ public static class DataExtensions
         return (prefix, remainingPath);
     }
 
-    public static MessageHubConfiguration AddData(this MessageHubConfiguration config) =>
-        config.AddData(x => x);
-
-    public static MessageHubConfiguration AddData(
-        this MessageHubConfiguration config,
-        Func<DataContext, DataContext> dataPluginConfiguration
-    )
+    extension(MessageHubConfiguration config)
     {
+        public MessageHubConfiguration AddData() =>
+            config.AddData(x => x);
 
-        var listOfLambdas = config.Get<ImmutableList<Func<DataContext, DataContext>>>();
-        if (listOfLambdas is null)
+        public MessageHubConfiguration AddData(Func<DataContext, DataContext> dataPluginConfiguration)
         {
-            listOfLambdas = [DefaultConfig];
-            config = GetDefaultConfiguration(config);
-        }
+
+            var listOfLambdas = config.Get<ImmutableList<Func<DataContext, DataContext>>>();
+            if (listOfLambdas is null)
+            {
+                listOfLambdas = [DefaultConfig];
+                config = GetDefaultConfiguration(config);
+            }
 
 
 
-        return config
+            return config
                 .Set(listOfLambdas.Add(dataPluginConfiguration));
 
 
 
+        }
     }
 
 
@@ -72,6 +72,12 @@ public static class DataExtensions
     {
         return config
             .WithInitialization(h => h.GetWorkspace())
+            // Initialize workspace and open gate after hub is fully constructed (handlers registered)
+            .WithInitialization((h, _) =>
+            {
+                ((Workspace)h.GetWorkspace()).OpenInitializationGate();
+                return Task.CompletedTask;
+            })
             .WithRoutes(routes => routes.WithHandler((delivery, _) => RouteStreamMessage(routes.Hub, delivery)))
             .WithServices(sc => sc
                 .AddScoped<IWorkspace>(sp =>
@@ -133,7 +139,6 @@ public static class DataExtensions
                 typeof(FileReference),
                 typeof(DataPathReference),
                 typeof(ContentWorkspaceReference),
-                typeof(CollectionConfigReference),
                 typeof(NodeTypeReference),
                 typeof(UpdateUnifiedReferenceRequest),
                 typeof(UpdateUnifiedReferenceResponse),
@@ -201,13 +206,6 @@ public static class DataExtensions
                 CreateContentPathStream(workspace, path, null));
         }
 
-        // Register the collection: prefix resolver for UnifiedReference (only if not already registered)
-        // This handles paths like "collection:name" - installed in constructor for robustness
-        if (!data.UnifiedReferenceResolvers.ContainsKey("collection"))
-        {
-            data = data.WithUnifiedReference("collection", CreateCollectionConfigStream);
-        }
-
         // Register the built-in stream factories for all reference types
         // These are installed in DefaultConfig to ensure thread-safe initialization
         return data.Configure(reduction => reduction
@@ -223,15 +221,11 @@ public static class DataExtensions
                 reference is not FileReference fileRef
                     ? null
                     : CreateFileReferenceStream(workspace, fileRef, configuration))
-            .AddWorkspaceReferenceStream<object>((workspace, reference, configuration) =>
-                reference is not CollectionConfigReference
-                    ? null
-                    : CreateCollectionConfigReferenceStream(workspace, reference, configuration))
         );
     }
 
 
-    internal static DataContext GetDataConfiguration(this IWorkspace workspace)
+    internal static DataContext CreateDataContext(this IWorkspace workspace)
     {
         var listOfLambdas = workspace.Hub.Configuration.Get<ImmutableList<Func<DataContext, DataContext>>>();
 
@@ -243,23 +237,22 @@ public static class DataExtensions
         return ret;
     }
 
-    public static DataContext AddPartitionedHubSource<TPartition>(this DataContext dataContext,
-        Func<PartitionedHubDataSource<TPartition>, PartitionedHubDataSource<TPartition>> configuration,
-        object? id = null) =>
-        dataContext.WithDataSource(_ => configuration.Invoke(new PartitionedHubDataSource<TPartition>(id ?? DefaultId, dataContext.Workspace)));
+    extension(DataContext dataContext)
+    {
+        public DataContext AddPartitionedHubSource<TPartition>(Func<PartitionedHubDataSource<TPartition>, PartitionedHubDataSource<TPartition>> configuration,
+            object? id = null) =>
+            dataContext.WithDataSource(_ => configuration.Invoke(new PartitionedHubDataSource<TPartition>(id ?? DefaultId, dataContext.Workspace)));
 
-    public static DataContext AddHubSource(
-        this DataContext dataContext,
-        Address address,
-        Func<UnpartitionedHubDataSource, IUnpartitionedDataSource> configuration
-    ) =>
-        dataContext.WithDataSource(_ => configuration.Invoke(new UnpartitionedHubDataSource(address, dataContext.Workspace)));
-
-    public static DataContext AddSource(this DataContext dataContext,
-           Func<GenericUnpartitionedDataSource, IUnpartitionedDataSource> configuration,
-           object? id = null
+        public DataContext AddHubSource(Address address,
+            Func<UnpartitionedHubDataSource, IUnpartitionedDataSource> configuration
         ) =>
-        dataContext.WithDataSource(_ => configuration.Invoke(new GenericUnpartitionedDataSource(id ?? DefaultId, dataContext.Workspace)));
+            dataContext.WithDataSource(_ => configuration.Invoke(new UnpartitionedHubDataSource(address, dataContext.Workspace)));
+
+        public DataContext AddSource(Func<GenericUnpartitionedDataSource, IUnpartitionedDataSource> configuration,
+            object? id = null
+        ) =>
+            dataContext.WithDataSource(_ => configuration.Invoke(new GenericUnpartitionedDataSource(id ?? DefaultId, dataContext.Workspace)));
+    }
 
     public static object DefaultId => Guid.NewGuid().AsString();
 
@@ -409,25 +402,6 @@ public static class DataExtensions
     }
 
     /// <summary>
-    /// Creates a stream for collection: unified reference paths.
-    /// Path format: collectionName or name1,name2 (comma-separated for multiple)
-    /// Returns null if stream factory for CollectionConfigReference isn't registered.
-    /// </summary>
-    private static ISynchronizationStream<object>? CreateCollectionConfigStream(
-        IWorkspace workspace,
-        string? remainingPath)
-    {
-        // Parse collection names from path (comma-separated if multiple)
-        string[]? collectionNames = null;
-        if (!string.IsNullOrEmpty(remainingPath))
-        {
-            collectionNames = remainingPath.Split(',', StringSplitOptions.RemoveEmptyEntries);
-        }
-
-        return workspace.GetStream(new CollectionConfigReference(collectionNames), null);
-    }
-
-    /// <summary>
     /// Creates a stream for a FileReference by loading file content from the content service.
     /// Returns null if IFileContentProvider isn't available (graceful degradation).
     /// </summary>
@@ -466,20 +440,6 @@ public static class DataExtensions
         );
 
         return stream;
-    }
-
-    /// <summary>
-    /// Creates a stream for a CollectionConfigReference.
-    /// Returns null - actual handling is done by the GetDataRequest handler.
-    /// </summary>
-    private static ISynchronizationStream<object>? CreateCollectionConfigReferenceStream(
-        IWorkspace workspace,
-        WorkspaceReference reference,
-        Func<StreamConfiguration<object>, StreamConfiguration<object>>? configuration)
-    {
-        // CollectionConfigReference is handled by GetDataRequest handler, not via streams
-        // Return null to let the request pass through to the handler
-        return null;
     }
 
     #endregion
@@ -834,25 +794,12 @@ public static class DataExtensions
             "data" => ResolveDataPath(hub, remainingPath),
             "area" => (ResolveAreaPath(remainingPath), null),
             "content" => (ResolveContentPath(remainingPath), null),
-            "collection" => (ResolveCollectionPath(remainingPath), null),
+            "collection" => (new UnifiedReference($"collection:{remainingPath ?? ""}"), null),
             "type" => (new NodeTypeReference(), null),
             "schema" => (new SchemaReference(remainingPath), null),
             "model" => (new DataModelReference(), null),
             _ => (null, new GetDataResponse(null, 0) { Error = $"Unknown prefix: {prefix}" })
         };
-    }
-
-    /// <summary>
-    /// Resolves a collection path to CollectionConfigReference.
-    /// </summary>
-    private static WorkspaceReference ResolveCollectionPath(string? remainingPath)
-    {
-        string[]? collectionNames = null;
-        if (!string.IsNullOrEmpty(remainingPath))
-        {
-            collectionNames = remainingPath.Split(',', StringSplitOptions.RemoveEmptyEntries);
-        }
-        return new CollectionConfigReference(collectionNames);
     }
 
     /// <summary>

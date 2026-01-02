@@ -158,6 +158,15 @@ public sealed record DataContext : IDisposable
             initialized.Add(dataSource.Reference);
         }
 
+        logger.LogDebug("DataContext initialization setup complete for {Address}, waiting for OpenInitializationGate", Hub.Address);
+    }
+
+    /// <summary>
+    /// Opens the initialization gate after all message handlers are registered.
+    /// Called via SyncBuildupActions to ensure proper ordering.
+    /// </summary>
+    internal void OpenInitializationGate()
+    {
         Task.WhenAll(tasks)
             .ContinueWith(task =>
             {
