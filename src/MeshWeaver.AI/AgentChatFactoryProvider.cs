@@ -50,9 +50,14 @@ public class AgentChatFactoryProvider : IAgentChatFactoryProvider
 
     public Task<IAgentChat> CreateAsync(string modelName)
     {
+        return CreateAsync(modelName, null);
+    }
+
+    public Task<IAgentChat> CreateAsync(string modelName, string? contextPath)
+    {
         var factory = GetFactoryForModel(modelName)
             ?? throw new ArgumentException($"No factory can serve model: {modelName}");
-        return factory.CreateAsync(modelName);
+        return factory.CreateAsync(modelName, contextPath);
     }
 
     public Task<IAgentChat> CreateAsync()

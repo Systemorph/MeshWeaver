@@ -140,6 +140,90 @@ public class AgentResolver : IAgentResolver
         return matching;
     }
 
+    /// <inheritdoc />
+    public async Task<AgentConfiguration?> GetClosestAgentAsync(
+        string? contextPath,
+        CancellationToken ct = default)
+    {
+        var segments = string.IsNullOrEmpty(contextPath)
+            ? Array.Empty<string>()
+            : contextPath.Split('/', StringSplitOptions.RemoveEmptyEntries);
+
+        // Search from most specific namespace to root, return first agent found
+        for (int depth = segments.Length; depth >= 0; depth--)
+        {
+            var namespacePath = depth == 0 ? "" : string.Join("/", segments.Take(depth));
+
+            try
+            {
+                await foreach (var node in _persistence.GetChildrenAsync(namespacePath).WithCancellation(ct))
+                {
+                    if (IsAgentNode(node))
+                    {
+                        var config = ExtractAgentConfiguration(node, namespacePath);
+                        if (config != null)
+                        {
+                            _logger.LogDebug("Found closest agent {AgentId} at namespace {Namespace} for context {Context}",
+                                config.Id, namespacePath, contextPath);
+                            return config; // Return first agent found (closest)
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Error searching for agents in namespace {Namespace}", namespacePath);
+            }
+        }
+
+        _logger.LogWarning("No agent found for context path {ContextPath}", contextPath);
+        return null;
+    }
+
+    /// <inheritdoc />
+    public async Task<IReadOnlyList<AgentConfiguration>> GetHierarchyAgentsAsync(
+        string? contextPath,
+        CancellationToken ct = default)
+    {
+        var agents = new List<(AgentConfiguration Config, int Depth)>();
+        var segments = string.IsNullOrEmpty(contextPath)
+            ? Array.Empty<string>()
+            : contextPath.Split('/', StringSplitOptions.RemoveEmptyEntries);
+
+        // Search from most specific namespace to root, collecting all agents
+        for (int depth = segments.Length; depth >= 0; depth--)
+        {
+            var namespacePath = depth == 0 ? "" : string.Join("/", segments.Take(depth));
+
+            try
+            {
+                await foreach (var node in _persistence.GetChildrenAsync(namespacePath).WithCancellation(ct))
+                {
+                    if (IsAgentNode(node))
+                    {
+                        var config = ExtractAgentConfiguration(node, namespacePath);
+                        if (config != null)
+                        {
+                            agents.Add((config, depth));
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Error loading agents from namespace {Namespace}", namespacePath);
+            }
+        }
+
+        // Order by depth descending (closest first), then DisplayOrder
+        return agents
+            .OrderByDescending(a => a.Depth)
+            .ThenBy(a => a.Config.DisplayOrder)
+            .ThenBy(a => a.Config.Id)
+            .Select(a => a.Config)
+            .ToList();
+    }
+
     /// <summary>
     /// Checks if a MeshNode represents an agent.
     /// </summary>

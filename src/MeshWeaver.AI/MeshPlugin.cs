@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.Text.Json;
+using MeshWeaver.AI.Services;
 using MeshWeaver.Data;
 using MeshWeaver.Layout;
 using MeshWeaver.Mesh;
@@ -234,6 +235,57 @@ public class MeshPlugin(IMessageHub hub, IAgentChat chat)
         }
     }
 
+    [Description("Test agent discovery - finds agents in the namespace hierarchy for a given context path. " +
+                 "Returns agents ordered by proximity (closest first). " +
+                 "Use this to verify which agent would be selected for a given context.")]
+    public async Task<string> TestAgentDiscovery(
+        [Description("Context path to search from (e.g., ACME/Projects/Alpha, @graph/org1)")] string contextPath)
+    {
+        logger.LogInformation("TestAgentDiscovery called with contextPath={ContextPath}", contextPath);
+
+        var agentResolver = hub.ServiceProvider.GetService<IAgentResolver>();
+        if (agentResolver == null)
+            return "IAgentResolver service not available.";
+
+        var resolvedPath = ResolvePath(contextPath);
+
+        try
+        {
+            // Get the closest agent
+            var closestAgent = await agentResolver.GetClosestAgentAsync(resolvedPath);
+
+            // Get all agents in hierarchy ordered by depth (closest first)
+            var hierarchyAgents = await agentResolver.GetHierarchyAgentsAsync(resolvedPath);
+
+            var result = new
+            {
+                contextPath = resolvedPath,
+                closestAgent = closestAgent != null ? new
+                {
+                    closestAgent.Id,
+                    closestAgent.DisplayName,
+                    closestAgent.Description,
+                    closestAgent.IsDefault
+                } : null,
+                hierarchyAgents = hierarchyAgents.Select(a => new
+                {
+                    a.Id,
+                    a.DisplayName,
+                    a.Description,
+                    a.IsDefault,
+                    delegationCount = a.Delegations?.Count ?? 0
+                }).ToList()
+            };
+
+            return JsonSerializer.Serialize(result, hub.JsonSerializerOptions);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Error testing agent discovery for context {ContextPath}", resolvedPath);
+            return $"Error: {ex.Message}";
+        }
+    }
+
     /// <summary>
     /// Creates all tools for this plugin.
     /// </summary>
@@ -245,7 +297,8 @@ public class MeshPlugin(IMessageHub hub, IAgentChat chat)
             AIFunctionFactory.Create(Update),
             AIFunctionFactory.Create(NavigateTo),
             AIFunctionFactory.Create(Search),
-            AIFunctionFactory.Create(Delete)
+            AIFunctionFactory.Create(Delete),
+            AIFunctionFactory.Create(TestAgentDiscovery)
         ];
     }
 }

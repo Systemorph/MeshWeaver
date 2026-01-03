@@ -438,6 +438,12 @@ public class AutocompleteServiceTest
 
         public Task<IReadOnlyList<AgentConfiguration>> FindMatchingAgentsAsync(AgentContext context, string? contextPath = null, CancellationToken ct = default)
             => Task.FromResult<IReadOnlyList<AgentConfiguration>>(agents.Where(a => !string.IsNullOrEmpty(a.ContextMatchPattern)).ToList());
+
+        public Task<AgentConfiguration?> GetClosestAgentAsync(string? contextPath, CancellationToken ct = default)
+            => Task.FromResult(agents.FirstOrDefault());
+
+        public Task<IReadOnlyList<AgentConfiguration>> GetHierarchyAgentsAsync(string? contextPath, CancellationToken ct = default)
+            => Task.FromResult(agents);
     }
 
     private class MockMeshCatalog(System.Collections.Generic.IReadOnlyList<Mesh.MeshNode> nodes) : Mesh.Services.IMeshCatalog

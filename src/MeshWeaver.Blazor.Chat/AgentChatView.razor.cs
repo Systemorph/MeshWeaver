@@ -330,7 +330,10 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
     private Lazy<Task<IAgentChat>> GetLazyChat()
     {
         // Use the selected model, or default if none selected
-        return new(() => AgentChatFactoryProvider.CreateAsync(selectedModel ?? AgentChatFactoryProvider.AllModels.FirstOrDefault() ?? string.Empty));
+        var model = selectedModel ?? AgentChatFactoryProvider.AllModels.FirstOrDefault() ?? string.Empty;
+        // Get context path for hierarchical agent resolution
+        var contextPath = GetCurrentAgentContext()?.ToUnifiedPath();
+        return new(() => AgentChatFactoryProvider.CreateAsync(model, contextPath));
     }
 
     // Public method to allow parent components to reset the conversation

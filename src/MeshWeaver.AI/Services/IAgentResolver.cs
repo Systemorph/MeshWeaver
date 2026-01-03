@@ -68,4 +68,28 @@ public interface IAgentResolver
         AgentContext context,
         string? contextPath = null,
         CancellationToken ct = default);
+
+    /// <summary>
+    /// Gets the closest agent to the given context path.
+    /// Searches from the most specific namespace to root, returns the first agent found.
+    /// This is useful for hierarchical agent discovery where the closest agent should handle requests.
+    /// </summary>
+    /// <param name="contextPath">The current context path (e.g., "ACME/Projects/Alpha")</param>
+    /// <param name="ct">Cancellation token</param>
+    /// <returns>The closest agent configuration or null if no agents exist</returns>
+    Task<AgentConfiguration?> GetClosestAgentAsync(
+        string? contextPath,
+        CancellationToken ct = default);
+
+    /// <summary>
+    /// Gets all agents in the namespace hierarchy ordered by depth (closest first).
+    /// Searches from the most specific namespace to root, collecting all agents.
+    /// Useful for building delegation tool descriptions with escalation hierarchy.
+    /// </summary>
+    /// <param name="contextPath">The current context path (e.g., "ACME/Projects/Alpha")</param>
+    /// <param name="ct">Cancellation token</param>
+    /// <returns>All agents in hierarchy, ordered by namespace depth descending (closest first)</returns>
+    Task<IReadOnlyList<AgentConfiguration>> GetHierarchyAgentsAsync(
+        string? contextPath,
+        CancellationToken ct = default);
 }

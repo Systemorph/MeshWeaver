@@ -28,6 +28,11 @@ public interface IAgentChatFactoryProvider
     Task<IAgentChat> CreateAsync(string modelName);
 
     /// <summary>
+    /// Create a chat with the specified model and context path for hierarchical agent resolution
+    /// </summary>
+    Task<IAgentChat> CreateAsync(string modelName, string? contextPath);
+
+    /// <summary>
     /// Create a chat with the default model from the first factory
     /// </summary>
     Task<IAgentChat> CreateAsync();

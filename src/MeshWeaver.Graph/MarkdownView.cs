@@ -67,6 +67,12 @@ public static class MarkdownView
         public string? ReplyingToAnnotationId { get; init; }
 
         /// <summary>
+        /// IDs of annotations that are expanded (collapsed by default).
+        /// </summary>
+        public IReadOnlySet<string> ExpandedAnnotationIds { get; init; }
+            = new HashSet<string>();
+
+        /// <summary>
         /// Replies that have been added (in-memory for now).
         /// </summary>
         public IReadOnlyDictionary<string, List<(string Author, string Text, DateTimeOffset Time)>> Replies { get; init; }
@@ -228,11 +234,11 @@ public static class MarkdownView
         // Reactive view mode toolbar
         outerContainer = outerContainer.WithView(BuildReactiveViewModeToolbar(viewModeSubject, currentViewMode, annotations));
 
-        // Split layout using nested stacks (proper Blazor structure)
+        // Split layout using nested stacks with position:relative for SVG lines
         var splitLayout = Controls.Stack
             .WithOrientation(Orientation.Horizontal)
             .WithWidth("100%")
-            .WithStyle("gap: 24px; align-items: flex-start;");
+            .WithStyle("gap: 16px; align-items: flex-start; position: relative;");
 
         // Left: Content area with markdown
         var contentArea = Controls.Stack
@@ -241,9 +247,9 @@ public static class MarkdownView
             .WithView(new MarkdownControl(content))
             .WithView(Controls.Html("</div>"));
 
-        // Right: Annotations column with proper UiControls
+        // Right: Annotations column - narrower for compact cards
         var annotationsColumn = Controls.Stack
-            .WithStyle("flex: 3; min-width: 280px; max-width: 320px; position: relative; padding-left: 16px;");
+            .WithStyle("flex: 0 0 260px; min-width: 200px; max-width: 280px; position: relative; padding-left: 8px;");
 
         // Add open tag for annotations container
         annotationsColumn = annotationsColumn.WithView(
@@ -271,7 +277,7 @@ public static class MarkdownView
     }
 
     /// <summary>
-    /// Builds an annotation card as a proper UiControl with reactive buttons.
+    /// Builds a collapsible annotation card with reactive buttons.
     /// </summary>
     private static UiControl BuildAnnotationCard(
         LayoutAreaHost host,
@@ -288,137 +294,134 @@ public static class MarkdownView
             _ => "#6b7280"
         };
 
-        var typeLabel = annotation.Type switch
+        // Use simple symbols instead of emojis for cleaner look
+        var typeSymbol = annotation.Type switch
         {
-            AnnotationType.Comment => "Comment",
-            AnnotationType.Insert => "Insertion",
-            AnnotationType.Delete => "Deletion",
-            _ => "Unknown"
-        };
-
-        var typeIcon = annotation.Type switch
-        {
-            AnnotationType.Comment => "💬",
-            AnnotationType.Insert => "➕",
-            AnnotationType.Delete => "➖",
+            AnnotationType.Comment => "C",
+            AnnotationType.Insert => "+",
+            AnnotationType.Delete => "−",
             _ => "•"
         };
 
-        var metaParts = new List<string>();
-        if (!string.IsNullOrEmpty(annotation.Author)) metaParts.Add(annotation.Author);
-        if (!string.IsNullOrEmpty(annotation.Date)) metaParts.Add(annotation.Date);
-        var metaLine = metaParts.Count > 0 ? string.Join(" • ", metaParts) : "";
-
-        var previewText = annotation.HighlightedText.Length > 40
-            ? annotation.HighlightedText[..37] + "..."
+        var author = annotation.Author ?? "";
+        var shortAuthor = author.Length > 8 ? author[..6] + ".." : author;
+        var shortPreview = annotation.HighlightedText.Length > 15
+            ? annotation.HighlightedText[..12] + "..."
             : annotation.HighlightedText;
 
-        var escapedPreview = System.Web.HttpUtility.HtmlEncode(previewText);
-        var escapedComment = !string.IsNullOrEmpty(annotation.CommentText)
-            ? System.Web.HttpUtility.HtmlEncode(annotation.CommentText)
-            : "";
-
+        var isExpanded = panelState.ExpandedAnnotationIds.Contains(annotation.Id);
         var isReplyingToThis = panelState.ReplyingToAnnotationId == annotation.Id;
+        var replyCount = panelState.Replies.TryGetValue(annotation.Id, out var replies) ? replies.Count : 0;
 
-        // Build the card container
-        var card = Controls.Stack
-            .WithStyle($@"margin-bottom: 12px; padding: 10px 12px; background: var(--neutral-layer-1); border-radius: 6px;
-                         border-left: 3px solid {typeColor}; cursor: pointer; position: relative;
-                         box-shadow: 0 1px 3px rgba(0,0,0,0.1); transition: all 0.2s ease;");
-
-        // Header with type icon and label
-        card = card.WithView(Controls.Html($@"
-            <div class=""annotation-connector"" style=""position: absolute; right: 100%; top: 14px; width: 16px; height: 2px; background: {typeColor}; opacity: 0.4;""></div>
-            <div style=""display: flex; align-items: center; gap: 6px; margin-bottom: 4px;"">
-                <span style=""font-size: 0.8rem;"">{typeIcon}</span>
-                <span style=""font-size: 0.7rem; font-weight: 600; color: {typeColor};"">{typeLabel}</span>
-                {(metaParts.Count > 0 ? $"<span style=\"font-size: 0.7rem; color: var(--neutral-foreground-hint);\">{metaLine}</span>" : "")}
-            </div>
-            <div style=""font-size: 0.8rem; color: var(--neutral-foreground-hint); margin-bottom: 4px;
-                       background: var(--neutral-layer-3); padding: 3px 6px; border-radius: 3px; font-style: italic;"">
-                ""{escapedPreview}""
-            </div>"));
-
-        // Comment text if present
-        if (!string.IsNullOrEmpty(annotation.CommentText))
+        // Toggle expansion function
+        void ToggleExpand()
         {
-            card = card.WithView(Controls.Html($@"
-                <div style=""font-size: 0.85rem; color: var(--neutral-foreground-rest); margin-bottom: 6px;"">
-                    {escapedComment}
-                </div>"));
+            var newExpanded = new HashSet<string>(panelState.ExpandedAnnotationIds);
+            if (isExpanded)
+                newExpanded.Remove(annotation.Id);
+            else
+                newExpanded.Add(annotation.Id);
+            panelStateSubject.OnNext(panelState with { ExpandedAnnotationIds = newExpanded });
         }
 
-        // Show existing replies
-        if (panelState.Replies.TryGetValue(annotation.Id, out var replies) && replies.Count > 0)
+        // Build the card container - very compact when collapsed (like Word's sidebar)
+        var cardStyle = isExpanded
+            ? $"padding: 6px 8px; background: var(--neutral-layer-1); border-radius: 3px; border-left: 3px solid {typeColor}; margin-bottom: 2px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);"
+            : $"padding: 2px 6px; background: var(--neutral-layer-1); border-radius: 3px; border-left: 2px solid {typeColor}; margin-bottom: 2px; opacity: 0.85;";
+
+        var card = Controls.Stack.WithStyle(cardStyle);
+
+        // Collapsed header - minimal info, single line
+        var headerContent = isExpanded
+            ? $"<span style=\"display:inline-flex;align-items:center;justify-content:center;width:14px;height:14px;border-radius:50%;background:{typeColor};color:white;font-size:9px;font-weight:bold;margin-right:4px;\">{typeSymbol}</span><b style=\"color:{typeColor};font-size:0.7rem;\">{System.Web.HttpUtility.HtmlEncode(shortAuthor)}</b>: \"{System.Web.HttpUtility.HtmlEncode(shortPreview)}\""
+            : $"<span style=\"display:inline-flex;align-items:center;justify-content:center;width:12px;height:12px;border-radius:50%;background:{typeColor};color:white;font-size:8px;font-weight:bold;margin-right:3px;\">{typeSymbol}</span><span style=\"font-size:0.65rem;color:var(--neutral-foreground-hint);\">{System.Web.HttpUtility.HtmlEncode(shortAuthor)}</span>" + (replyCount > 0 ? $"<span style=\"font-size:0.6rem;color:var(--accent-fill-rest);margin-left:2px;\">+{replyCount}</span>" : "");
+
+        var headerStyle = isExpanded
+            ? "display: flex; align-items: center; gap: 2px; font-size: 0.7rem; cursor: pointer; user-select: none; line-height: 1.2;"
+            : "display: flex; align-items: center; gap: 2px; font-size: 0.65rem; cursor: pointer; user-select: none; white-space: nowrap; overflow: hidden; line-height: 1.1;";
+
+        card = card.WithView(
+            Controls.Html($"<div style=\"{headerStyle}\">{headerContent}</div>")
+        );
+
+        // Make header clickable
+        card = card.WithClickAction(_ => ToggleExpand());
+
+        // Expanded content
+        if (isExpanded)
         {
-            foreach (var reply in replies)
+            // Comment text (more compact)
+            if (!string.IsNullOrEmpty(annotation.CommentText))
             {
                 card = card.WithView(Controls.Html($@"
-                    <div style=""font-size: 0.8rem; padding: 6px 8px; margin: 4px 0; background: var(--neutral-layer-2);
-                               border-radius: 4px; border-left: 2px solid var(--accent-fill-rest);"">
-                        <div style=""font-weight: 500; font-size: 0.75rem; color: var(--accent-fill-rest);"">{System.Web.HttpUtility.HtmlEncode(reply.Author)} • {reply.Time:MMM dd}</div>
-                        <div>{System.Web.HttpUtility.HtmlEncode(reply.Text)}</div>
+                    <div style=""font-size: 0.7rem; color: var(--neutral-foreground-rest); margin: 4px 0; padding: 3px 5px; background: var(--neutral-layer-2); border-radius: 2px; line-height: 1.3;"">
+                        {System.Web.HttpUtility.HtmlEncode(annotation.CommentText)}
                     </div>"));
             }
-        }
 
-        // Action buttons or reply form
-        if (annotation.Type == AnnotationType.Comment)
-        {
-            if (isReplyingToThis)
+            // Replies (compact)
+            if (replies != null && replies.Count > 0)
             {
-                // Show inline reply form
-                card = card.WithView(BuildReplyForm(host, annotation.Id, panelState, panelStateSubject));
+                foreach (var reply in replies)
+                {
+                    card = card.WithView(Controls.Html($@"
+                        <div style=""font-size: 0.65rem; padding: 2px 4px; margin: 2px 0; background: var(--neutral-layer-3);
+                                   border-radius: 2px; border-left: 2px solid var(--accent-fill-rest); line-height: 1.2;"">
+                            <span style=""font-weight: 500; color: var(--accent-fill-rest);"">{System.Web.HttpUtility.HtmlEncode(reply.Author)}</span>: {System.Web.HttpUtility.HtmlEncode(reply.Text)}
+                        </div>"));
+                }
+            }
+
+            // Reply form or action buttons (compact)
+            if (annotation.Type == AnnotationType.Comment)
+            {
+                if (isReplyingToThis)
+                {
+                    card = card.WithView(BuildReplyForm(host, annotation.Id, panelState, panelStateSubject));
+                }
+                else
+                {
+                    var buttonRow = Controls.Stack
+                        .WithOrientation(Orientation.Horizontal)
+                        .WithStyle("gap: 3px; margin-top: 3px;");
+
+                    buttonRow = buttonRow.WithView(
+                        Controls.Button("Reply")
+                            .WithStyle("padding: 1px 5px; font-size: 0.6rem;")
+                            .WithClickAction(_ => panelStateSubject.OnNext(
+                                panelState with { ReplyingToAnnotationId = annotation.Id })));
+
+                    buttonRow = buttonRow.WithView(
+                        Controls.Button("✓")
+                            .WithAppearance(Appearance.Stealth)
+                            .WithStyle("padding: 1px 5px; font-size: 0.6rem; border: 1px solid var(--neutral-stroke-rest);"));
+
+                    card = card.WithView(buttonRow);
+                }
             }
             else
             {
-                // Show action buttons
                 var buttonRow = Controls.Stack
                     .WithOrientation(Orientation.Horizontal)
-                    .WithStyle("gap: 6px; margin-top: 6px;");
+                    .WithStyle("gap: 3px; margin-top: 3px;");
 
                 buttonRow = buttonRow.WithView(
-                    Controls.Button("Reply")
-                        .WithStyle("flex: 1; padding: 4px 8px; font-size: 0.75rem;")
-                        .WithClickAction(_ => panelStateSubject.OnNext(
-                            panelState with { ReplyingToAnnotationId = annotation.Id })));
+                    Controls.Button("✓")
+                        .WithStyle("padding: 1px 6px; font-size: 0.6rem; background: #22c55e; color: white;")
+                        .WithClickAction(_ => viewModeSubject.OnNext(AnnotationViewMode.Accepted)));
 
                 buttonRow = buttonRow.WithView(
-                    Controls.Button("Resolve")
-                        .WithAppearance(Appearance.Stealth)
-                        .WithStyle("flex: 1; padding: 4px 8px; font-size: 0.75rem; border: 1px solid var(--neutral-stroke-rest);"));
-
-                buttonRow = buttonRow.WithView(
-                    Controls.Button("🗑")
-                        .WithAppearance(Appearance.Stealth)
-                        .WithStyle("padding: 4px 6px; font-size: 0.75rem; border: 1px solid #ef4444; color: #ef4444;"));
+                    Controls.Button("✗")
+                        .WithStyle("padding: 1px 6px; font-size: 0.6rem; background: #ef4444; color: white;")
+                        .WithClickAction(_ => viewModeSubject.OnNext(AnnotationViewMode.Original)));
 
                 card = card.WithView(buttonRow);
             }
         }
-        else
-        {
-            // Track change buttons - Accept/Reject
-            var buttonRow = Controls.Stack
-                .WithOrientation(Orientation.Horizontal)
-                .WithStyle("gap: 6px; margin-top: 6px;");
 
-            buttonRow = buttonRow.WithView(
-                Controls.Button("✓ Accept")
-                    .WithStyle("flex: 1; padding: 4px 8px; font-size: 0.75rem; background: #22c55e; color: white;")
-                    .WithClickAction(_ => viewModeSubject.OnNext(AnnotationViewMode.Accepted)));
-
-            buttonRow = buttonRow.WithView(
-                Controls.Button("✗ Reject")
-                    .WithStyle("flex: 1; padding: 4px 8px; font-size: 0.75rem; background: #ef4444; color: white;")
-                    .WithClickAction(_ => viewModeSubject.OnNext(AnnotationViewMode.Original)));
-
-            card = card.WithView(buttonRow);
-        }
-
-        // Wrap in a div with data attributes for JavaScript positioning
+        // Wrap in a div with data attributes for positioning and line drawing
         return Controls.Stack
-            .WithView(Controls.Html($"<div class=\"annotation-card\" data-annotation-id=\"{annotation.Id}\" data-annotation-type=\"{annotation.Type}\">"))
+            .WithView(Controls.Html($"<div class=\"annotation-card\" data-annotation-id=\"{annotation.Id}\" data-annotation-type=\"{annotation.Type}\" data-color=\"{typeColor}\">"))
             .WithView(card)
             .WithView(Controls.Html("</div>"));
     }
@@ -489,7 +492,7 @@ public static class MarkdownView
     }
 
     /// <summary>
-    /// Builds JavaScript for positioning annotation cards inline with their markers.
+    /// Builds JavaScript for positioning annotation cards and drawing SVG connecting lines.
     /// </summary>
     private static UiControl BuildInlineAnnotationScript(string containerId)
     {
@@ -497,7 +500,72 @@ public static class MarkdownView
 <script>
 (function() {{
     var containerId = '{containerId}';
-    var minCardGap = 8; // Minimum gap between cards
+    var minCardGap = 1; // Minimal gap between cards
+
+    function drawConnectingLines() {{
+        var container = document.getElementById(containerId);
+        var annotationsCol = document.getElementById(containerId + '-annotations');
+        if (!container || !annotationsCol) return;
+
+        // Remove old SVG if exists
+        var oldSvg = document.getElementById(containerId + '-lines');
+        if (oldSvg) oldSvg.remove();
+
+        // Create SVG in the split layout parent
+        var splitLayout = annotationsCol.parentElement;
+        if (!splitLayout) return;
+
+        var svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+        svg.id = containerId + '-lines';
+        svg.style.cssText = 'position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;z-index:1;overflow:visible;';
+        splitLayout.insertBefore(svg, splitLayout.firstChild);
+
+        var splitRect = splitLayout.getBoundingClientRect();
+        var containerRect = container.getBoundingClientRect();
+
+        // Update SVG size
+        svg.setAttribute('width', splitLayout.scrollWidth);
+        svg.setAttribute('height', Math.max(splitLayout.scrollHeight, container.scrollHeight, annotationsCol.scrollHeight));
+
+        var cards = annotationsCol.querySelectorAll('.annotation-card');
+        cards.forEach(function(card) {{
+            var annotationId = card.dataset.annotationId;
+            var color = card.dataset.color || '#6b7280';
+            var marker = container.querySelector('[data-comment-id=""' + annotationId + '""]') ||
+                         container.querySelector('[data-change-id=""' + annotationId + '""]');
+
+            if (marker && card.offsetParent) {{
+                var markerRect = marker.getBoundingClientRect();
+                var cardRect = card.getBoundingClientRect();
+
+                // Calculate positions relative to split layout
+                var markerX = markerRect.right - splitRect.left + 2;
+                var markerY = markerRect.top + markerRect.height / 2 - splitRect.top;
+                var cardX = cardRect.left - splitRect.left - 2;
+                var cardY = cardRect.top + 8 - splitRect.top;
+
+                // Simple horizontal line with small turn
+                var path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+                var midX = markerX + 10;
+                path.setAttribute('d', 'M ' + markerX + ' ' + markerY + ' H ' + midX + ' L ' + cardX + ' ' + cardY);
+                path.setAttribute('stroke', color);
+                path.setAttribute('stroke-width', '1');
+                path.setAttribute('fill', 'none');
+                path.setAttribute('opacity', '0.4');
+                path.setAttribute('data-annotation', annotationId);
+                svg.appendChild(path);
+
+                // Small dot at marker end
+                var circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+                circle.setAttribute('cx', markerX);
+                circle.setAttribute('cy', markerY);
+                circle.setAttribute('r', '2');
+                circle.setAttribute('fill', color);
+                circle.setAttribute('opacity', '0.6');
+                svg.appendChild(circle);
+            }}
+        }});
+    }}
 
     function positionAnnotationCards() {{
         var container = document.getElementById(containerId);
@@ -521,8 +589,9 @@ public static class MarkdownView
                 positions.push({{
                     card: card,
                     marker: marker,
+                    annotationId: annotationId,
                     desiredTop: desiredTop,
-                    height: card.offsetHeight || 100
+                    height: card.offsetHeight || 18
                 }});
             }}
         }});
@@ -538,35 +607,29 @@ public static class MarkdownView
             lastBottom = actualTop + pos.height;
         }});
 
-        // Apply positions and show cards
+        // Apply positions
         positions.forEach(function(pos) {{
+            pos.card.style.position = 'absolute';
             pos.card.style.top = pos.actualTop + 'px';
-            pos.card.style.opacity = '1';
-
-            // Update connector line
-            var connector = pos.card.querySelector('.annotation-connector');
-            if (connector) {{
-                var offset = pos.desiredTop - pos.actualTop;
-                if (Math.abs(offset) > 5) {{
-                    // Angled connector for offset cards
-                    connector.style.width = '24px';
-                    connector.style.transform = 'rotate(' + Math.atan2(offset, 24) * (180/Math.PI) + 'deg)';
-                    connector.style.transformOrigin = 'right center';
-                }}
-            }}
+            pos.card.style.left = '0';
+            pos.card.style.right = '0';
         }});
 
         // Set minimum height for annotations column
         if (positions.length > 0) {{
             var lastPos = positions[positions.length - 1];
-            annotationsCol.style.minHeight = (lastPos.actualTop + lastPos.height + 20) + 'px';
+            annotationsCol.style.minHeight = (lastPos.actualTop + lastPos.height + 16) + 'px';
         }}
+
+        // Draw lines after positioning
+        requestAnimationFrame(drawConnectingLines);
     }}
 
-    // Position on load and resize
+    // Initialize
     function init() {{
-        setTimeout(positionAnnotationCards, 100);
-        setTimeout(positionAnnotationCards, 500); // Retry after images load
+        setTimeout(positionAnnotationCards, 50);
+        setTimeout(positionAnnotationCards, 200);
+        setTimeout(positionAnnotationCards, 500);
     }}
 
     if (document.readyState === 'loading') {{
@@ -576,16 +639,35 @@ public static class MarkdownView
     }}
 
     window.addEventListener('resize', function() {{
-        setTimeout(positionAnnotationCards, 100);
+        requestAnimationFrame(positionAnnotationCards);
     }});
 
-    // Highlight annotation when card is clicked
+    // Re-run when cards expand/collapse
+    var observer = new MutationObserver(function(mutations) {{
+        requestAnimationFrame(positionAnnotationCards);
+    }});
+    setTimeout(function() {{
+        var annotationsCol = document.getElementById(containerId + '-annotations');
+        if (annotationsCol) {{
+            observer.observe(annotationsCol, {{ childList: true, subtree: true, attributes: true, characterData: true }});
+        }}
+    }}, 100);
+
+    // Highlight on click
+    document.addEventListener('click', function(e) {{
+        var marker = e.target.closest('[data-comment-id], [data-change-id]');
+        if (marker) {{
+            var id = marker.dataset.commentId || marker.dataset.changeId;
+            highlightAnnotation(id);
+        }}
+    }});
+
     window.highlightAnnotation = function(annotationId) {{
         var container = document.getElementById(containerId);
         if (!container) return;
 
         // Remove previous highlights
-        container.querySelectorAll('.annotation-active').forEach(function(el) {{
+        document.querySelectorAll('.annotation-active').forEach(function(el) {{
             el.classList.remove('annotation-active');
         }});
         document.querySelectorAll('.annotation-card.active').forEach(function(el) {{
@@ -597,87 +679,51 @@ public static class MarkdownView
                      container.querySelector('[data-change-id=""' + annotationId + '""]');
         if (marker) {{
             marker.classList.add('annotation-active');
-            marker.scrollIntoView({{ behavior: 'smooth', block: 'center' }});
         }}
 
-        // Highlight card
+        // Highlight card and line
         var card = document.querySelector('.annotation-card[data-annotation-id=""' + annotationId + '""]');
         if (card) {{
             card.classList.add('active');
         }}
-    }};
 
-    // Highlight card when marker is clicked
-    document.addEventListener('click', function(e) {{
-        var marker = e.target.closest('[data-comment-id], [data-change-id]');
-        if (marker) {{
-            var id = marker.dataset.commentId || marker.dataset.changeId;
-            highlightAnnotation(id);
-        }}
-    }});
-
-    // Action handlers
-    window.showReplyDialog = function(annotationId) {{
-        var reply = prompt('Enter your reply:');
-        if (reply) {{
-            console.log('Reply to annotation', annotationId, ':', reply);
-            alert('Reply: ' + reply + '\\n\\n(Persistence coming soon)');
-        }}
-    }};
-
-    window.resolveAnnotation = function(annotationId) {{
-        var card = document.querySelector('.annotation-card[data-annotation-id=""' + annotationId + '""]');
-        var marker = document.querySelector('[data-comment-id=""' + annotationId + '""]');
-        if (card) {{ card.style.opacity = '0.4'; card.style.textDecoration = 'line-through'; }}
-        if (marker) {{ marker.classList.add('resolved'); }}
-    }};
-
-    window.deleteAnnotation = function(annotationId) {{
-        if (!confirm('Delete this annotation?')) return;
-        var card = document.querySelector('.annotation-card[data-annotation-id=""' + annotationId + '""]');
-        if (card) {{ card.style.display = 'none'; }}
-    }};
-
-    window.acceptAnnotation = function(annotationId) {{
-        var card = document.querySelector('.annotation-card[data-annotation-id=""' + annotationId + '""]');
-        var marker = document.querySelector('[data-change-id=""' + annotationId + '""]');
-        if (card) {{ card.style.opacity = '0.4'; }}
-        if (marker) {{ marker.classList.add('accepted'); }}
-    }};
-
-    window.rejectAnnotation = function(annotationId) {{
-        var card = document.querySelector('.annotation-card[data-annotation-id=""' + annotationId + '""]');
-        var marker = document.querySelector('[data-change-id=""' + annotationId + '""]');
-        if (card) {{ card.style.opacity = '0.4'; }}
-        if (marker) {{
-            if (marker.classList.contains('track-insert')) {{
-                marker.style.display = 'none';
-            }} else {{
-                marker.classList.add('rejected');
-            }}
+        // Highlight the SVG line
+        var svg = document.getElementById(containerId + '-lines');
+        if (svg) {{
+            svg.querySelectorAll('path').forEach(function(p) {{
+                if (p.dataset.annotation === annotationId) {{
+                    p.setAttribute('opacity', '0.8');
+                    p.setAttribute('stroke-width', '2');
+                }} else {{
+                    p.setAttribute('opacity', '0.3');
+                    p.setAttribute('stroke-width', '1');
+                }}
+            }});
         }}
     }};
 }})();
 </script>
 <style>
+.annotations-column {{
+    position: relative;
+}}
 .annotation-card {{
-    transition: all 0.2s ease;
+    transition: all 0.15s ease;
 }}
 .annotation-card:hover {{
-    box-shadow: 0 2px 8px rgba(0,0,0,0.15) !important;
+    opacity: 1 !important;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.12) !important;
     z-index: 10;
 }}
 .annotation-card.active {{
-    box-shadow: 0 0 0 2px var(--accent-fill-rest), 0 2px 8px rgba(0,0,0,0.15) !important;
+    opacity: 1 !important;
+    box-shadow: 0 0 0 1px var(--accent-fill-rest), 0 1px 4px rgba(0,0,0,0.15) !important;
     z-index: 10;
 }}
 .annotation-active {{
-    background: rgba(59, 130, 246, 0.15) !important;
-    box-shadow: 0 0 0 2px var(--accent-fill-rest);
+    background: rgba(59, 130, 246, 0.12) !important;
+    box-shadow: 0 0 0 1px var(--accent-fill-rest);
     border-radius: 2px;
-}}
-.annotation-connector {{
-    pointer-events: none;
 }}
 </style>
         ");

@@ -25,6 +25,12 @@ public abstract class AgentChatFactoryBase : IAgentChatFactory
     /// </summary>
     protected string? CurrentContextPath { get; private set; }
 
+    /// <summary>
+    /// All agents in the current hierarchy, ordered by depth (closest first).
+    /// Used for building unified delegation tools.
+    /// </summary>
+    protected IReadOnlyList<AgentConfiguration> HierarchyAgents { get; private set; } = Array.Empty<AgentConfiguration>();
+
     protected AgentChatFactoryBase(IMessageHub hub, IAgentResolver agentResolver)
     {
         this.Hub = hub;
@@ -68,6 +74,10 @@ public abstract class AgentChatFactoryBase : IAgentChatFactory
 
         // Load agents from graph using hierarchical resolution
         var agentConfigs = await AgentResolver.GetAgentsForContextAsync(contextPath);
+
+        // Load hierarchy agents ordered by depth (closest first) for unified delegation
+        HierarchyAgents = await AgentResolver.GetHierarchyAgentsAsync(contextPath);
+
         var existingAgents = await GetExistingAgentsAsync();
 
         // Create AgentChatClient first so it can be passed to GetTools()
@@ -221,61 +231,35 @@ public abstract class AgentChatFactoryBase : IAgentChatFactory
 
     /// <summary>
     /// Creates delegation tools for agents that can delegate to other agents.
-    /// Creates custom delegation functions that signal AgentChatClient to invoke sub-agents in streaming mode.
-    /// For IsDefault: adds all agents marked with ExposedInNavigator
-    /// For agents with Delegations: adds agents specified in their Delegations property
+    /// Uses a unified Delegate tool that includes all available agents in its description.
+    /// The tool combines explicit delegations from the agent's configuration with
+    /// hierarchy agents for escalation.
     /// </summary>
     protected virtual IEnumerable<AITool> GetAgentTools(
         AgentConfiguration agentConfig,
         IAgentChat chat,
         IReadOnlyDictionary<string, ChatClientAgent> allAgents)
     {
-        IEnumerable<AgentDelegation> delegations;
+        // Check if this agent should have delegation capability
+        var hasDelegations = agentConfig.Delegations is { Count: > 0 };
+        var hasHierarchyAgents = HierarchyAgents.Count > 1; // More than just this agent
 
-        if (agentConfig.IsDefault)
+        if (!hasDelegations && !hasHierarchyAgents && !agentConfig.IsDefault)
         {
-            // Default agent gets all exposed agents (those with ExposedInNavigator = true)
-            var allConfigs = AgentResolver.GetAgentsForContextAsync(CurrentContextPath).GetAwaiter().GetResult();
-            var exposedAgents = allConfigs
-                .Where(a => a.ExposedInNavigator && a.Id != agentConfig.Id);
-
-            delegations = exposedAgents.Select(a => new AgentDelegation
-            {
-                AgentPath = a.Id,
-                Instructions = a.Description
-            });
-        }
-        else if (agentConfig.Delegations is { Count: > 0 })
-        {
-            // Non-default agent with delegations gets only the agents they specify
-            delegations = agentConfig.Delegations;
-        }
-        else
-        {
-            // Agent has no delegations
+            // No delegation capability needed
             yield break;
         }
 
-        // Create a delegation tool for each target agent
-        foreach (var delegation in delegations)
-        {
-            // Extract agent ID from path (last segment)
-            var targetAgentId = delegation.AgentPath.Split('/').Last();
+        // Create unified delegation tool with all available agents
+        var delegationTool = ChatPlugin.CreateUnifiedDelegationTool(
+            agentConfig,
+            HierarchyAgents,
+            Logger);
 
-            // Check if the target agent exists
-            if (!allAgents.ContainsKey(targetAgentId))
-                continue;
+        Logger.LogInformation("Created unified delegation tool for agent {AgentName} with {HierarchyCount} hierarchy agents",
+            agentConfig.Id, HierarchyAgents.Count);
 
-            var tool = ChatPlugin.CreateHandoffTool(
-                targetAgentId,
-                delegation.Instructions,
-                Logger);
-
-            Logger.LogInformation("Created delegation tool - ExpectedName='{ExpectedName}', ActualName='{ActualName}' for agent {AgentName}",
-                targetAgentId, tool.Name, agentConfig.Id);
-
-            yield return tool;
-        }
+        yield return delegationTool;
     }
 
     public abstract Task DeleteThreadAsync(string threadId);
@@ -294,78 +278,66 @@ public abstract class AgentChatFactoryBase : IAgentChatFactory
     {
         var baseInstructions = agentConfig.Instructions ?? string.Empty;
 
-        // Check if this agent supports delegations
-        if (agentConfig.Delegations is { Count: > 0 })
+        // Check if this agent has delegation capability
+        var hasDelegations = agentConfig.Delegations is { Count: > 0 };
+        var hasHierarchyAgents = HierarchyAgents.Count > 1; // More than just this agent
+
+        if (!hasDelegations && !hasHierarchyAgents && !agentConfig.IsDefault)
         {
-            var agentList = string.Join('\n', agentConfig.Delegations.Select(d =>
+            return baseInstructions;
+        }
+
+        // Build list of available agents
+        var agentList = new List<string>();
+
+        // Add explicit delegations first
+        if (agentConfig.Delegations != null)
+        {
+            foreach (var d in agentConfig.Delegations)
             {
                 var agentId = d.AgentPath.Split('/').Last();
-                return $"- {agentId}: {d.Instructions}";
-            }));
-
-            var delegationGuidelines =
-                $$$"""
-
-                   **Agent Delegation:**
-                   You have access to specialized agents as tools. Each agent appears as a tool with their name.
-                   When you need specialized help, simply call the appropriate agent tool with your message.
-
-                   **Available Agents:**
-                   {{{agentList}}}
-
-                   **How to delegate:**
-                   1. Identify which specialized agent can best handle the user's request
-                   2. Call that agent's tool with the message parameter containing what you need them to do
-                   3. The agent will handle the request and return their response
-
-                   **Important:**
-                   - The context from the user's message is automatically included - don't duplicate it
-                   - Each agent is a tool you can call directly by their name
-                   - Choose the most appropriate agent based on their specialization
-
-                   """;
-
-            // Append delegation guidelines to the base instructions
-            return baseInstructions + delegationGuidelines;
-        }
-        else if (agentConfig.IsDefault)
-        {
-            // Default agent gets exposed agents as delegations
-            var allConfigs = AgentResolver.GetAgentsForContextAsync(CurrentContextPath).GetAwaiter().GetResult();
-            var exposedAgents = allConfigs
-                .Where(a => a.ExposedInNavigator && a.Id != agentConfig.Id)
-                .ToList();
-
-            if (exposedAgents.Count > 0)
-            {
-                var agentList = string.Join('\n', exposedAgents.Select(a => $"- {a.Id}: {a.Description}"));
-
-                var delegationGuidelines =
-                    $$$"""
-
-                       **Agent Delegation:**
-                       You have access to specialized agents as tools. Each agent appears as a tool with their name.
-                       When you need specialized help, simply call the appropriate agent tool with your message.
-
-                       **Available Agents:**
-                       {{{agentList}}}
-
-                       **How to delegate:**
-                       1. Identify which specialized agent can best handle the user's request
-                       2. Call that agent's tool with the message parameter containing what you need them to do
-                       3. The agent will handle the request and return their response
-
-                       **Important:**
-                       - The context from the user's message is automatically included - don't duplicate it
-                       - Each agent is a tool you can call directly by their name
-                       - Choose the most appropriate agent based on their specialization
-
-                       """;
-
-                return baseInstructions + delegationGuidelines;
+                agentList.Add($"- {agentId}: {d.Instructions}");
             }
         }
 
-        return baseInstructions;
+        // Add hierarchy agents for escalation (excluding current agent and already listed)
+        var listedIds = agentConfig.Delegations?.Select(d => d.AgentPath.Split('/').Last()).ToHashSet()
+            ?? new HashSet<string>();
+
+        foreach (var agent in HierarchyAgents.Where(a => a.Id != agentConfig.Id && !listedIds.Contains(a.Id)))
+        {
+            agentList.Add($"- {agent.Id}: {agent.Description ?? "Agent in hierarchy"}");
+        }
+
+        if (agentList.Count == 0)
+        {
+            return baseInstructions;
+        }
+
+        var agentListStr = string.Join('\n', agentList);
+
+        var delegationGuidelines =
+            $$$"""
+
+               **Agent Delegation:**
+               You have access to a unified Delegate tool to route requests to specialized agents.
+               Use this when the request matches another agent's expertise or when you need to escalate.
+
+               **Available Agents:**
+               {{{agentListStr}}}
+
+               **How to delegate:**
+               1. Identify which specialized agent can best handle the user's request
+               2. Call the Delegate tool with the agent name and your message
+               3. The delegated agent will handle the request and respond directly
+
+               **Important:**
+               - After calling Delegate, do not provide additional output
+               - Choose the most appropriate agent based on their specialization
+               - For escalation (when you can't handle something), delegate to an agent higher in the hierarchy
+
+               """;
+
+        return baseInstructions + delegationGuidelines;
     }
 }

@@ -1,4 +1,8 @@
 ﻿using System.IdentityModel.Tokens.Jwt;
+using MeshWeaver.AI;
+using MeshWeaver.AI.AzureFoundry;
+using MeshWeaver.AI.AzureOpenAI;
+using MeshWeaver.AI.Persistence;
 using MeshWeaver.Blazor.GoogleMaps;
 using MeshWeaver.Blazor.Graph;
 using MeshWeaver.Blazor.Infrastructure;
@@ -59,6 +63,31 @@ public static class LoomConfiguration
 
         // Configure Radzen
         services.AddRadzenServices();
+
+        // Configure AI services
+        services.AddMemoryChatPersistence();
+
+        // Configure AI factories (read from appsettings)
+        services.AddAzureFoundryClaude(config =>
+        {
+            builder.Configuration.GetSection("Anthropic").Bind(config);
+            config.DisplayOrder = 0;  // Anthropic first
+        });
+
+        services.AddAzureFoundry(config =>
+        {
+            builder.Configuration.GetSection("AzureAIS").Bind(config);
+            config.DisplayOrder = 10;  // Azure Foundry second
+        });
+
+        services.AddAzureOpenAI(config =>
+        {
+            builder.Configuration.GetSection("AzureOpenAIS").Bind(config);
+            config.DisplayOrder = 20;  // Azure OpenAI last
+        });
+
+        // Register the factory provider (must be after all factory registrations)
+        services.AddAgentChatFactoryProvider();
 
         // Configure GoogleMaps
         services.Configure<GoogleMapsConfiguration>(builder.Configuration.GetSection("GoogleMaps"));

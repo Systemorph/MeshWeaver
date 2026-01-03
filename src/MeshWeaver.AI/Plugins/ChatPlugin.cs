@@ -1,5 +1,7 @@
 ﻿using System.ComponentModel;
+using System.Text.Json;
 using MeshWeaver.Data;
+using MeshWeaver.Graph.Configuration;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 
@@ -103,4 +105,86 @@ public class ChatPlugin
             name: targetAgentName,
             description: enhancedDescription);
     }
+
+    /// <summary>
+    /// Creates a unified delegation tool that can delegate to any available agent.
+    /// The tool description includes all agents from explicit delegations and hierarchy.
+    /// </summary>
+    /// <param name="currentAgent">The current agent's configuration</param>
+    /// <param name="hierarchyAgents">All agents in the namespace hierarchy (ordered closest first)</param>
+    /// <param name="logger">Optional logger for delegation events</param>
+    /// <returns>An AITool for unified delegation</returns>
+    public static AITool CreateUnifiedDelegationTool(
+        AgentConfiguration currentAgent,
+        IReadOnlyList<AgentConfiguration> hierarchyAgents,
+        ILogger? logger = null)
+    {
+        var delegationInfo = new List<DelegationInfo>();
+
+        // Add explicit delegations from current agent (specific routing)
+        if (currentAgent.Delegations != null)
+        {
+            foreach (var d in currentAgent.Delegations)
+            {
+                delegationInfo.Add(new DelegationInfo(
+                    d.AgentPath,
+                    d.Instructions ?? "Specialized agent for this task"));
+            }
+        }
+
+        // Add hierarchy agents for escalation (excluding current agent)
+        // These are fallback options - agents higher in the hierarchy
+        foreach (var agent in hierarchyAgents.Where(a => a.Id != currentAgent.Id))
+        {
+            // Check if not already added via explicit delegation
+            if (!delegationInfo.Any(d => d.AgentPath == agent.Id || d.AgentPath.EndsWith($"/{agent.Id}")))
+            {
+                delegationInfo.Add(new DelegationInfo(
+                    agent.Id,
+                    agent.Description ?? $"Agent {agent.Id}"));
+            }
+        }
+
+        // Build the JSON description of available agents
+        var agentsJson = JsonSerializer.Serialize(delegationInfo, new JsonSerializerOptions
+        {
+            WriteIndented = false,
+            PropertyNamingPolicy = JsonNamingPolicy.CamelCase
+        });
+
+        // Create the delegate function
+        string Delegate(
+            [Description("The name of the agent to delegate to. Use the agentPath from the available agents list.")] string agentName,
+            [Description("The message/instructions to send to the delegated agent. Be clear about what you need.")] string message)
+        {
+            logger?.LogInformation("Delegation requested to {AgentName} with message: {Message}", agentName, message);
+
+            // Return the handoff marker for AgentChatClient to intercept
+            return $"__HANDOFF__|{agentName}|{message}";
+        }
+
+        var description = $"""
+            Delegate to a specialized agent when the request matches their expertise.
+            IMPORTANT: After calling this function, DO NOT output any additional text.
+            The delegated agent will handle the request and respond directly.
+
+            Available agents:
+            {agentsJson}
+
+            Choose the most appropriate agent based on the user's request.
+            For general escalation (when you can't handle something), delegate to an agent higher in the hierarchy.
+            """;
+
+        return AIFunctionFactory.Create(
+            Delegate,
+            name: "Delegate",
+            description: description);
+    }
 }
+
+/// <summary>
+/// Information about an agent available for delegation.
+/// </summary>
+/// <param name="AgentPath">Path or ID of the agent</param>
+/// <param name="Description">When to delegate to this agent</param>
+public record DelegationInfo(string AgentPath, string Description);
