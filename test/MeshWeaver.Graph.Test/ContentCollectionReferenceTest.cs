@@ -65,6 +65,13 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
             })
             // Register the storage collection at mesh level so node types can map from it
             .ConfigureHub(hub => hub.AddContentCollections([storageConfig]))
+            // Configure default content collections for all node hubs
+            .ConfigureDefaultNodeHub(config =>
+            {
+                var nodePath = config.Address.ToString();
+                return config
+                    .MapContentCollection("attachments", "storage", $"attachments/{nodePath}");
+            })
             .AddJsonGraphConfiguration(dataDirectory);
     }
 
@@ -84,9 +91,9 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
             o => o.WithTarget(aliceAddress),
             TestContext.Current.CancellationToken);
 
-        // Request the "avatars" collection configuration
+        // Request the "attachments" collection configuration
         var response = await client.AwaitResponse(
-            new GetDataRequest(new ContentCollectionReference(["avatars"])),
+            new GetDataRequest(new ContentCollectionReference(["attachments"])),
             o => o.WithTarget(aliceAddress),
             TestContext.Current.CancellationToken);
 
@@ -98,10 +105,10 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
         configs.Should().NotBeNull();
         configs.Should().HaveCount(1);
 
-        var avatarsConfig = configs!.First();
-        avatarsConfig.Name.Should().Be("avatars");
-        avatarsConfig.SourceType.Should().Be("FileSystem");
-        avatarsConfig.BasePath.Should().Contain("persons").And.EndWith("Alice");
+        var attachmentsConfig = configs!.First();
+        attachmentsConfig.Name.Should().Be("attachments");
+        attachmentsConfig.SourceType.Should().Be("FileSystem");
+        attachmentsConfig.BasePath.Should().Contain("attachments").And.EndWith("Alice");
     }
 
     /// <summary>
@@ -128,7 +135,7 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
 
         var configs = ParseCollectionConfigs(response.Message.Data);
         configs.Should().NotBeNull();
-        configs.Should().Contain(c => c.Name == "avatars");
+        configs.Should().Contain(c => c.Name == "attachments");
     }
 
     /// <summary>
@@ -146,7 +153,7 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
             TestContext.Current.CancellationToken);
 
         var response = await client.AwaitResponse(
-            new GetDataRequest(new ContentCollectionReference(["logos"])),
+            new GetDataRequest(new ContentCollectionReference(["attachments"])),
             o => o.WithTarget(acmeAddress),
             TestContext.Current.CancellationToken);
 
@@ -157,14 +164,14 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
         configs.Should().NotBeNull();
         configs.Should().HaveCount(1);
 
-        var logosConfig = configs!.First();
-        logosConfig.Name.Should().Be("logos");
-        logosConfig.SourceType.Should().Be("FileSystem");
-        logosConfig.BasePath.Should().Contain("logos").And.EndWith("ACME");
+        var attachmentsConfig = configs!.First();
+        attachmentsConfig.Name.Should().Be("attachments");
+        attachmentsConfig.SourceType.Should().Be("FileSystem");
+        attachmentsConfig.BasePath.Should().Contain("attachments").And.EndWith("ACME");
     }
 
     /// <summary>
-    /// Tests that UnifiedReference with "collection:logos" prefix resolves collection config from ACME.
+    /// Tests that UnifiedReference with "collection:attachments" prefix resolves collection config from ACME.
     /// </summary>
     [Fact(Timeout = 10000)]
     public async Task UnifiedReference_CollectionPrefix_ReturnsConfig()
@@ -177,9 +184,9 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
             o => o.WithTarget(acmeAddress),
             TestContext.Current.CancellationToken);
 
-        // Request collection:logos from ACME hub using prefix:path format
+        // Request collection:attachments from ACME hub using prefix:path format
         var response = await client.AwaitResponse(
-            new GetDataRequest(new UnifiedReference("collection:logos")),
+            new GetDataRequest(new UnifiedReference("collection:attachments")),
             o => o.WithTarget(acmeAddress),
             TestContext.Current.CancellationToken);
 
@@ -188,11 +195,11 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
 
         var configs = ParseCollectionConfigs(response.Message.Data);
         configs.Should().NotBeNull();
-        configs.Should().Contain(c => c.Name == "logos");
+        configs.Should().Contain(c => c.Name == "attachments");
     }
 
     /// <summary>
-    /// Tests that UnifiedReference with "content:logos/logo.svg" prefix resolves file content from ACME.
+    /// Tests that UnifiedReference with "content:attachments/test.txt" prefix resolves file content from ACME.
     /// </summary>
     [Fact(Timeout = 10000)]
     public async Task UnifiedReference_ContentPrefix_ReturnsFileContent()
@@ -205,18 +212,18 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
             o => o.WithTarget(acmeAddress),
             TestContext.Current.CancellationToken);
 
-        // Request content:logos/logo.svg from ACME hub using prefix:path format
+        // Request content:attachments/test.txt from ACME hub using prefix:path format
         var response = await client.AwaitResponse(
-            new GetDataRequest(new UnifiedReference("content:logos/logo.svg")),
+            new GetDataRequest(new UnifiedReference("content:attachments/test.txt")),
             o => o.WithTarget(acmeAddress),
             TestContext.Current.CancellationToken);
 
         response.Should().NotBeNull();
         response.Message.Data.Should().NotBeNull();
-        // Content should be SVG
+        // Content should be test text
         var content = response.Message.Data as string;
         content.Should().NotBeNull();
-        content.Should().Contain("<svg");
+        content.Should().Contain("Test attachment");
     }
 
     /// <summary>
@@ -247,7 +254,7 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
     /// Tests concurrent collection requests to multiple organizations using UnifiedReference.
     /// This test launches parallel requests to ACME and Systemorph simultaneously
     /// to verify thread-safe hub initialization with collection:name format.
-    /// Both ACME and Systemorph are Organizations which have the "logos" collection.
+    /// Both ACME and Systemorph are Organizations which have the "attachments" collection.
     /// </summary>
     [Fact(Timeout = 10000)]
     public async Task ConcurrentCollectionRequests_WithUnifiedReference_AllSucceed()
@@ -259,16 +266,16 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
         // Launch concurrent requests to both organizations WITHOUT pre-initializing them
         // This tests the race condition where multiple hubs are initialized simultaneously
         // Uses collection:name format (UnifiedReference)
-        // Both ACME and Systemorph are Organizations which have "logos" collection
+        // Both ACME and Systemorph are Organizations which have "attachments" collection
         var tasks = new List<Task<IMessageDelivery<GetDataResponse>>>();
 
         for (int i = 0; i < 10; i++)
         {
-            // Alternate between ACME and Systemorph - both request logos collection
+            // Alternate between ACME and Systemorph - both request attachments collection
             var address = i % 2 == 0 ? acmeAddress : systemorphAddress;
 
             tasks.Add(client.AwaitResponse(
-                new GetDataRequest(new UnifiedReference("collection:logos")),
+                new GetDataRequest(new UnifiedReference("collection:attachments")),
                 o => o.WithTarget(address),
                 TestContext.Current.CancellationToken));
         }
@@ -305,7 +312,7 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
         for (int i = 0; i < 10; i++)
         {
             tasks.Add(client.AwaitResponse(
-                new GetDataRequest(new UnifiedReference("content:logos/logo.svg")),
+                new GetDataRequest(new UnifiedReference("content:attachments/test.txt")),
                 o => o.WithTarget(acmeAddress),
                 TestContext.Current.CancellationToken));
         }
@@ -313,7 +320,7 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
         // Wait for all requests to complete
         var responses = await Task.WhenAll(tasks);
 
-        // Verify all requests succeeded with SVG content
+        // Verify all requests succeeded with test content
         foreach (var response in responses)
         {
             response.Should().NotBeNull();
@@ -322,7 +329,7 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
 
             var content = response.Message.Data as string;
             content.Should().NotBeNull();
-            content.Should().Contain("<svg");
+            content.Should().Contain("Test attachment");
         }
     }
 
@@ -332,7 +339,7 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
     /// 2. Add config to portal's content service
     /// 3. Retrieve content from the collection
     ///
-    /// This test verifies that ACME/logos and Systemorph/logos are stored separately
+    /// This test verifies that ACME/attachments and Systemorph/attachments are stored separately
     /// and don't overwrite each other when added to the portal's content service.
     /// </summary>
     [Fact(Timeout = 10000)]
@@ -355,29 +362,29 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
 
         // Step 1: Get collection config from ACME (like BlazorHostingExtensions does)
         var acmeConfigResponse = await client.AwaitResponse(
-            new GetDataRequest(new ContentCollectionReference(["logos"])),
+            new GetDataRequest(new ContentCollectionReference(["attachments"])),
             o => o.WithTarget(acmeAddress),
             TestContext.Current.CancellationToken);
 
         var acmeConfigs = ParseCollectionConfigs(acmeConfigResponse.Message.Data);
         acmeConfigs.Should().NotBeNull();
         var acmeLogosConfig = acmeConfigs!.First();
-        Output.WriteLine($"ACME logos config: Name={acmeLogosConfig.Name}, BasePath={acmeLogosConfig.BasePath}");
+        Output.WriteLine($"ACME attachments config: Name={acmeLogosConfig.Name}, BasePath={acmeLogosConfig.BasePath}");
 
         // Step 2: Get collection config from Systemorph
         var systemorphConfigResponse = await client.AwaitResponse(
-            new GetDataRequest(new ContentCollectionReference(["logos"])),
+            new GetDataRequest(new ContentCollectionReference(["attachments"])),
             o => o.WithTarget(systemorphAddress),
             TestContext.Current.CancellationToken);
 
         var systemorphConfigs = ParseCollectionConfigs(systemorphConfigResponse.Message.Data);
         systemorphConfigs.Should().NotBeNull();
         var systemorphLogosConfig = systemorphConfigs!.First();
-        Output.WriteLine($"Systemorph logos config: Name={systemorphLogosConfig.Name}, BasePath={systemorphLogosConfig.BasePath}");
+        Output.WriteLine($"Systemorph attachments config: Name={systemorphLogosConfig.Name}, BasePath={systemorphLogosConfig.BasePath}");
 
         // Verify they have different base paths
-        acmeLogosConfig.BasePath.Should().Contain("ACME", "ACME logos should point to ACME directory");
-        systemorphLogosConfig.BasePath.Should().Contain("Systemorph", "Systemorph logos should point to Systemorph directory");
+        acmeLogosConfig.BasePath.Should().Contain("ACME", "ACME attachments should point to ACME directory");
+        systemorphLogosConfig.BasePath.Should().Contain("Systemorph", "Systemorph attachments should point to Systemorph directory");
         acmeLogosConfig.BasePath.Should().NotBe(systemorphLogosConfig.BasePath, "ACME and Systemorph should have different base paths");
 
         // Step 3: Simulate what the portal does - add both configs to its content service
@@ -387,7 +394,7 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
         // Add ACME config with qualified name to avoid collision
         var acmeQualifiedConfig = acmeLogosConfig with
         {
-            Name = $"{acmeAddress}/logos",
+            Name = $"{acmeAddress}/attachments",
             Address = acmeAddress
         };
         contentService.AddConfiguration(acmeQualifiedConfig);
@@ -396,19 +403,19 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
         // Add Systemorph config with qualified name
         var systemorphQualifiedConfig = systemorphLogosConfig with
         {
-            Name = $"{systemorphAddress}/logos",
+            Name = $"{systemorphAddress}/attachments",
             Address = systemorphAddress
         };
         contentService.AddConfiguration(systemorphQualifiedConfig);
         Output.WriteLine($"Added Systemorph config with qualified name: {systemorphQualifiedConfig.Name}");
 
         // Verify we can get both collections separately
-        var acmeCollection = await contentService.GetCollectionAsync($"{acmeAddress}/logos", TestContext.Current.CancellationToken);
-        acmeCollection.Should().NotBeNull("ACME logos collection should be retrievable");
+        var acmeCollection = await contentService.GetCollectionAsync($"{acmeAddress}/attachments", TestContext.Current.CancellationToken);
+        acmeCollection.Should().NotBeNull("ACME attachments collection should be retrievable");
         Output.WriteLine($"ACME collection retrieved: {acmeCollection?.Collection}");
 
-        var systemorphCollection = await contentService.GetCollectionAsync($"{systemorphAddress}/logos", TestContext.Current.CancellationToken);
-        systemorphCollection.Should().NotBeNull("Systemorph logos collection should be retrievable");
+        var systemorphCollection = await contentService.GetCollectionAsync($"{systemorphAddress}/attachments", TestContext.Current.CancellationToken);
+        systemorphCollection.Should().NotBeNull("Systemorph attachments collection should be retrievable");
         Output.WriteLine($"Systemorph collection retrieved: {systemorphCollection?.Collection}");
 
         // Verify they are different collections with different base paths

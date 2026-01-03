@@ -188,8 +188,19 @@ public static class LoomConfiguration
                     return services;
                 })
                 // Add content collections support with the storage collection
-                .ConfigureHub(hub => hub
-                    .AddContentCollections(contentStorageConfig != null ? [contentStorageConfig] : []))
+                .ConfigureHub(hub =>
+                {
+                    var config = hub.AddContentCollections(contentStorageConfig != null ? [contentStorageConfig] : []);
+
+                    // Add avatars and attachments collections mapped to subdirectories
+                    if (contentStorageConfig != null)
+                    {
+                        config = config
+                            .MapContentCollection("avatars", contentStorageConfig.Name ?? "storage", "avatars");
+                    }
+
+                    return config;
+                })
                 // Add activity tracking to record user access patterns
                 .AddActivityTracking();
         }

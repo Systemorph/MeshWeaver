@@ -54,9 +54,7 @@ public record MeshBuilder
     }
 
 
-    private List<Func<MessageHubConfiguration, MessageHubConfiguration>> HubConfiguration { get; } = new()    {
-        AddMesh
-    };
+    private List<Func<MessageHubConfiguration, MessageHubConfiguration>> HubConfiguration { get; } = [AddMesh];
     public MeshBuilder ConfigureHub(
         Func<MessageHubConfiguration, MessageHubConfiguration> hubConfiguration)
     {
@@ -66,6 +64,18 @@ public record MeshBuilder
 
     private List<Func<MeshConfiguration, MeshConfiguration>> MeshConfiguration { get; } = new();
 
+    private List<Func<MessageHubConfiguration, MessageHubConfiguration>> DefaultNodeHubConfiguration { get; } = new();
+
+    /// <summary>
+    /// Configures the default hub configuration that will be applied to all node hubs.
+    /// Use this for settings like content collections (e.g., logos) that should be available everywhere.
+    /// </summary>
+    public MeshBuilder ConfigureDefaultNodeHub(
+        Func<MessageHubConfiguration, MessageHubConfiguration> configuration)
+    {
+        DefaultNodeHubConfiguration.Add(configuration);
+        return this;
+    }
 
     public MeshBuilder ConfigureServices(Func<IServiceCollection, IServiceCollection> configuration)
     {
@@ -88,8 +98,20 @@ public record MeshBuilder
         // Hub-level type registries will inherit from this via ParentServiceProvider
         var meshTypeRegistry = MessageHubExtensions.CreateTypeRegistry();
 
+        // Capture the list reference - will be populated by ConfigureDefaultNodeHub calls later
+        // The lambda is evaluated when MeshConfiguration is resolved (after all builder calls)
+        var defaultNodeHubConfigs = DefaultNodeHubConfiguration;
+
         ConfigureServices(services => services
-            .AddSingleton(_ => new MeshConfiguration(MeshNodes.ToDictionary(x => x.Path)))
+            .AddSingleton(_ =>
+            {
+                // Evaluate defaultNodeHubConfigs at service resolution time, not at Register() time
+                Func<MessageHubConfiguration, MessageHubConfiguration>? combinedDefaultConfig =
+                    defaultNodeHubConfigs.Count > 0
+                        ? config => defaultNodeHubConfigs.Aggregate(config, (c, f) => f(c))
+                        : null;
+                return new MeshConfiguration(MeshNodes.ToDictionary(x => x.Path), combinedDefaultConfig);
+            })
             .AddSingleton<ITypeRegistry>(_ => meshTypeRegistry)
             .AddSingleton(BuildHub)
             .AddSingleton<AccessService>()
