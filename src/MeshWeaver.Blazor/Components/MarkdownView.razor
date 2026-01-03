@@ -3,6 +3,7 @@
 
 <HeadContent>
     <FluentDesignTheme StorageName="theme" @bind-Mode="@Mode" />
+    <link href="_content/MeshWeaver.Blazor/css/markdown.css" rel="stylesheet" />
     @if (Mode == DesignThemeModes.Light)
     {
         <link href="_content/MeshWeaver.Blazor/css/github.min.css" rel="stylesheet" />
@@ -11,7 +12,7 @@
     {
         <link href="_content/MeshWeaver.Blazor/css/github-dark.min.css" rel="stylesheet" />
     }
-
+    <link href="_content/MeshWeaver.Blazor/css/collaborative-annotations.css" rel="stylesheet" />
 </HeadContent>
 
 <article class="markdown-body" data-theme="@Mode.ToString().ToLower()" style="@Style">

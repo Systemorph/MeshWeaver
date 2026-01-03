@@ -436,6 +436,19 @@ public static class MeshNodeView
         if (node.Content is Article article)
             return article.Content ?? string.Empty;
 
+        // Handle MarkdownDocument content (JSON with $type and content fields)
+        if (node.Content is System.Text.Json.JsonElement jsonElement)
+        {
+            if (jsonElement.TryGetProperty("$type", out var typeProperty))
+            {
+                var typeName = typeProperty.GetString();
+                if (typeName == "MarkdownDocument" && jsonElement.TryGetProperty("content", out var contentProperty))
+                {
+                    return contentProperty.GetString() ?? string.Empty;
+                }
+            }
+        }
+
         // Handle Story content using reflection to avoid circular dependency
         var nodeType = node.NodeType?.ToLowerInvariant();
         if (nodeType == "story")

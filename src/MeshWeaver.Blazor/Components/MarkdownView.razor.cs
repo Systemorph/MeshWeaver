@@ -22,7 +22,10 @@ public partial class MarkdownView
         if (Html == null)
         {
             var pipeline = MarkdownExtensions.CreateMarkdownPipeline(Stream?.Owner);
-            var document = Markdig.Markdown.Parse(Markdown ?? "", pipeline);
+            // Transform annotation markers (<!--comment:id-->, <!--insert:id-->, <!--delete:id-->)
+            // into HTML spans before Markdig processing
+            var transformedMarkdown = AnnotationMarkdownExtension.TransformAnnotations(Markdown ?? "");
+            var document = Markdig.Markdown.Parse(transformedMarkdown, pipeline);
             Html = document.ToHtml(pipeline);
         }
     }
@@ -47,6 +50,10 @@ public partial class MarkdownView
             {
                 case HtmlTextNode text:
                     builder.AddMarkupContent(1, text.Text);
+                    break;
+                case HtmlCommentNode:
+                    // HTML comments are ignored - annotation markers are pre-processed
+                    // by AnnotationMarkdownExtension.TransformAnnotations() into spans
                     break;
                 case { Name: "div" } when node.GetAttributeValue("class", "").Contains("layout-area-error"):
                     // Render layout area error messages as styled div

@@ -2,21 +2,20 @@
 using System.Runtime.CompilerServices;
 using System.Text.Json;
 using MeshWeaver.Blazor.Articles;
-using MeshWeaver.Data;
-using Microsoft.DotNet.Interactive.Formatting;
-using MeshWeaver.Domain;
-using MeshWeaver.Graph;
-using MeshWeaver.Layout;
-using MeshWeaver.Layout.Client;
-using MeshWeaver.Layout.DataGrid;
-using MeshWeaver.Messaging;
-using static MeshWeaver.Layout.Client.LayoutClientConfiguration;
 using MeshWeaver.Blazor.Components;
 using MeshWeaver.Blazor.FileExplorer;
 using MeshWeaver.ContentCollections;
-using MeshWeaver.Mesh;
+using MeshWeaver.Data;
+using MeshWeaver.Domain;
+using MeshWeaver.Layout;
+using MeshWeaver.Layout.Client;
+using MeshWeaver.Layout.DataGrid;
 using MeshWeaver.Layout.Views;
+using MeshWeaver.Mesh;
+using MeshWeaver.Messaging;
+using Microsoft.DotNet.Interactive.Formatting;
 using Microsoft.Extensions.DependencyInjection;
+using static MeshWeaver.Layout.Client.LayoutClientConfiguration;
 
 [assembly: InternalsVisibleTo("MeshWeaver.Hosting.Blazor")]
 namespace MeshWeaver.Blazor;
@@ -30,7 +29,7 @@ public static class BlazorViewRegistry
         .AddData()
         .AddLayoutClient(c =>
             (configuration ?? (x => x))
-            .Invoke(c.WithView((i,s,a) => DefaultFormatting(c.Hub, i, s, a))))
+            .Invoke(c.WithView((i, s, a) => DefaultFormatting(c.Hub, i, s, a))))
         .AddMeshTypes()
     ;
     #region Standard Formatting
@@ -56,7 +55,7 @@ public static class BlazorViewRegistry
                 => StandardView<LayoutAreaControl, LayoutAreaView>(layoutArea, stream, area),
             HtmlControl html => StandardView<HtmlControl, HtmlView>(html, stream, area),
             LabelControl label => StandardView<LabelControl, Label>(label, stream, area),
-            NavLinkControl link => StandardView<NavLinkControl,NavLink>(link, stream, area),
+            NavLinkControl link => StandardView<NavLinkControl, NavLink>(link, stream, area),
             //PropertyControl property => StandardView<PropertyControl, PropertyColumnView>(property, stream, area),
             MenuItemControl menu => StandardView<MenuItemControl, MenuItemView>(menu, stream, area),
             DataGridControl dataGrid => StandardView<DataGridControl, DataGridView>(dataGrid, stream, area),
@@ -72,12 +71,12 @@ public static class BlazorViewRegistry
             ButtonControl button => StandardView<ButtonControl, ButtonView>(button, stream, area),
             IconControl icon => StandardView<IconControl, IconView>(icon, stream, area),
             BadgeControl badge => StandardView<BadgeControl, BadgeView>(badge, stream, area),
-            FileBrowserControl fileBrowser => StandardView<FileBrowserControl, FileBrowserView>(fileBrowser, stream,area),
+            FileBrowserControl fileBrowser => StandardView<FileBrowserControl, FileBrowserView>(fileBrowser, stream, area),
             ProgressControl progress => StandardView<ProgressControl, ProgressView>(progress, stream, area),
             CheckBoxControl checkbox => StandardView<CheckBoxControl, Checkbox>(checkbox, stream, area),
             ItemTemplateControl itemTemplate
                 => StandardView<ItemTemplateControl, ItemTemplate>(itemTemplate, stream, area),
-            MarkdownControl markdown => StandardView<MarkdownControl, MarkdownView>(markdown, stream, area),
+            MarkdownControl markdown => StandardView<MarkdownControl, Components.MarkdownView>(markdown, stream, area),
             NamedAreaControl namedView => StandardView<NamedAreaControl, NamedAreaView>(namedView, stream, area),
             SpacerControl spacer => StandardView<SpacerControl, SpacerView>(spacer, stream, area),
             ArticleControl article => StandardView<ArticleControl, ArticleView>(article, stream, area),
