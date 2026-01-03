@@ -3,6 +3,7 @@ using MeshWeaver.Blazor;
 using MeshWeaver.Blazor.Infrastructure;
 using MeshWeaver.ContentCollections;
 using MeshWeaver.Data;
+using MeshWeaver.Data.Services;
 using MeshWeaver.Layout.Client;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
@@ -23,6 +24,7 @@ public static class BlazorHostingExtensions
                 .AddContentService()
                 .AddFluentUIComponents()
                 .AddScoped<PortalApplication>()
+                .AddScoped<INavigationContextService, NavigationContextService>()
             )
             .ConfigureHub(hub => hub.AddBlazor(clientConfig));
 
@@ -245,7 +247,7 @@ public static class BlazorHostingExtensions
         IMessageHub hub,
         string collectionName,
         string filePath,
-        System.Collections.Concurrent.ConcurrentDictionary<string, ContentCollectionConfig> cache)
+        System.Collections.Concurrent.ConcurrentDictionary<string, ContentCollectionConfig> _)
     {
         if (string.IsNullOrEmpty(filePath))
         {

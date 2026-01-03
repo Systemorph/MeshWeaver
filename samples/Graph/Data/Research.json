@@ -1,0 +1,18 @@
+{
+  "id": "Research",
+  "name": "Research",
+  "nodeType": "Agent",
+  "description": "Searches for information",
+  "iconName": "Search",
+  "displayOrder": 30,
+  "isPersistent": true,
+  "content": {
+    "$type": "AgentConfiguration",
+    "id": "Research",
+    "displayName": "Research",
+    "description": "Searches for information",
+    "iconName": "Search",
+    "exposedInNavigator": true,
+    "instructions": "You are Research. Search for information efficiently using GetDocument and Search tools. Summarize findings concisely."
+  }
+}

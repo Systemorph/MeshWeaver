@@ -103,8 +103,8 @@ public static class MarkdownView
         var panelStateSubject = new BehaviorSubject<AnnotationPanelState>(new AnnotationPanelState());
         host.RegisterForDisposal(panelStateSubject);
 
-        var nodeStream = host.Workspace.GetStream<MeshNode>()
-            ?? Observable.Return<IReadOnlyCollection<MeshNode>>(Array.Empty<MeshNode>());
+        var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? Array.Empty<MeshNode>())
+            ?? Observable.Return<MeshNode[]>(Array.Empty<MeshNode>());
 
         // Combine node stream with view mode and panel state for reactive updates
         return nodeStream
@@ -850,8 +850,8 @@ public static class MarkdownView
     {
         var hubPath = host.Hub.Address.ToString();
 
-        var nodeStream = host.Workspace.GetStream<MeshNode>()
-            ?? Observable.Return<IReadOnlyCollection<MeshNode>>(Array.Empty<MeshNode>());
+        var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? Array.Empty<MeshNode>())
+            ?? Observable.Return<MeshNode[]>(Array.Empty<MeshNode>());
 
         return nodeStream.Select(nodes =>
         {
@@ -924,8 +924,8 @@ public static class MarkdownView
     {
         var hubPath = host.Hub.Address.ToString();
 
-        var nodeStream = host.Workspace.GetStream<MeshNode>()
-            ?? Observable.Return<IReadOnlyCollection<MeshNode>>(Array.Empty<MeshNode>());
+        var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? Array.Empty<MeshNode>())
+            ?? Observable.Return<MeshNode[]>(Array.Empty<MeshNode>());
 
         return nodeStream.Select(nodes =>
         {
@@ -983,8 +983,8 @@ public static class MarkdownView
     {
         var hubPath = host.Hub.Address.ToString();
 
-        var nodeStream = host.Workspace.GetStream<MeshNode>()
-            ?? Observable.Return<IReadOnlyCollection<MeshNode>>(Array.Empty<MeshNode>());
+        var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? Array.Empty<MeshNode>())
+            ?? Observable.Return<MeshNode[]>(Array.Empty<MeshNode>());
 
         return nodeStream.Select(nodes =>
         {
@@ -1042,8 +1042,8 @@ public static class MarkdownView
     {
         var hubPath = host.Hub.Address.ToString();
 
-        var nodeStream = host.Workspace.GetStream<MeshNode>()
-            ?? Observable.Return<IReadOnlyCollection<MeshNode>>(Array.Empty<MeshNode>());
+        var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? Array.Empty<MeshNode>())
+            ?? Observable.Return<MeshNode[]>(Array.Empty<MeshNode>());
 
         return Controls.Stack
             .WithView((h, c) => nodeStream.Select(nodes =>

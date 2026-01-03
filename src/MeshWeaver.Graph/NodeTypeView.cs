@@ -253,7 +253,7 @@ public static class NodeTypeView
     /// Shows either configuration or a code file.
     /// </summary>
     private static UiControl BuildMainPane(
-        LayoutAreaHost host,
+        LayoutAreaHost _,
         object hubAddress,
         NodeTypeDefinition definition,
         IReadOnlyCollection<CodeConfiguration>? codeFiles,

@@ -1,7 +1,5 @@
-@using Microsoft.AspNetCore.Components
 @using ChatMessage = Microsoft.Extensions.AI.ChatMessage
 @using MeshWeaver.Blazor.Monaco
-@using MeshWeaver.AI
 @inject IJSRuntime JS
 
 <div class="input-box page-width">
@@ -18,31 +16,42 @@
     </div>
 
     <div class="tools">
-        @if (ShowSelectors && AgentDisplayInfos.Count > 0)
+        @if (ShowSelectors)
         {
             <div class="chat-selectors">
-                <FluentSelect TOption="AgentDisplayInfo"
-                              SelectedOption="@SelectedAgentInfo"
-                              SelectedOptionChanged="@OnAgentSelectionChanged"
-                              Items="@AgentDisplayInfos"
-                              OptionValue="@(a => a.Name)"
-                              OptionText="@(a => a.Name)"
-                              AriaLabel="@(SelectedAgentInfo?.Description ?? "Select Agent")"
-                              Style="min-width: 150px;">
-                    <OptionTemplate Context="agent">
-                        <div class="agent-option" style="padding-left: @(agent.IndentLevel * 12)px;" title="@agent.Description">
-                            <span class="agent-name">@agent.Name</span>
-                        </div>
-                    </OptionTemplate>
-                </FluentSelect>
-                <FluentSelect TOption="string"
-                              Value="@SelectedModel"
-                              ValueChanged="@OnModelSelectionChanged"
-                              Items="@AvailableModels"
-                              OptionValue="@(m => m)"
-                              OptionText="@(m => m)"
-                              AriaLabel="Select Model"
-                              Style="min-width: 180px;" />
+                @* 1. Context autocomplete *@
+                <FluentAutocomplete TOption="string"
+                                    AutoComplete="off"
+                                    Placeholder="@ContextPlaceholder"
+                                    Width="180px"
+                                    MaximumSelectedOptions="1"
+                                    OptionText="@(item => item)"
+                                    @bind-SelectedOptions="@selectedContextOptions"
+                                    @bind-SelectedOptions:after="@OnContextSelectionChanged"
+                                    OnOptionsSearch="@OnContextSearchAsync" />
+
+                @* 2. Agent autocomplete *@
+                <FluentAutocomplete TOption="AgentDisplayInfo"
+                                    AutoComplete="off"
+                                    Placeholder="Agent"
+                                    Width="140px"
+                                    MaximumSelectedOptions="1"
+                                    OptionText="@(a => a.Name)"
+                                    @bind-SelectedOptions="@selectedAgentOptions"
+                                    @bind-SelectedOptions:after="@OnAgentSelectionChanged"
+                                    OnOptionsSearch="@OnAgentSearchAsync" />
+
+                @* 3. Model dropdown *@
+                @if (AvailableModels.Count > 0)
+                {
+                    <FluentSelect TOption="string"
+                                  Items="@AvailableModels"
+                                  Style="width: 140px;"
+                                  OptionText="@(m => m)"
+                                  OptionValue="@(m => m)"
+                                  Value="@SelectedModel"
+                                  ValueChanged="@OnModelValueChanged" />
+                }
             </div>
         }
         <button type="button" title="Send" class="send-button" @onclick="@SendMessageAsync"
@@ -57,8 +66,13 @@
 </div>
 
 @code {
+    private const string ContextPlaceholder = "@context";
     private MonacoEditorView? monacoEditor;
     private string? MessageText;
+
+    // Backing fields for FluentAutocomplete bindings
+    private IEnumerable<string> selectedContextOptions = [];
+    private IEnumerable<AgentDisplayInfo> selectedAgentOptions = [];
 
     [Parameter]
     public EventCallback<ChatMessage> OnSend { get; set; }
@@ -66,84 +80,126 @@
     [Parameter]
     public bool IsDisabled { get; set; }
 
-    /// <summary>
-    /// Optional completion provider configuration for the editor.
-    /// </summary>
     [Parameter]
     public CompletionProviderConfig? CompletionProvider { get; set; }
 
-    /// <summary>
-    /// Optional async callback for server-side completion with fuzzy scoring.
-    /// When provided, this will be used instead of static CompletionProvider items.
-    /// </summary>
     [Parameter]
     public Func<string, Task<CompletionItem[]>>? AsyncCompletionCallback { get; set; }
 
-    /// <summary>
-    /// Whether to show agent/model selectors in the input bar.
-    /// </summary>
     [Parameter]
     public bool ShowSelectors { get; set; } = true;
 
-    /// <summary>
-    /// Available agents with display info (grouping, icons, descriptions, indent levels).
-    /// </summary>
+    [Parameter]
+    public string? SelectedContext { get; set; }
+
+    [Parameter]
+    public EventCallback<string?> SelectedContextChanged { get; set; }
+
+    [Parameter]
+    public Func<string, Task<IEnumerable<string>>>? OnContextAutocomplete { get; set; }
+
+    [Parameter]
+    public Func<string, Task<IEnumerable<AgentDisplayInfo>>>? OnAgentAutocomplete { get; set; }
+
     [Parameter]
     public IReadOnlyList<AgentDisplayInfo> AgentDisplayInfos { get; set; } = [];
 
-    /// <summary>
-    /// Currently selected agent display info.
-    /// </summary>
     [Parameter]
     public AgentDisplayInfo? SelectedAgentInfo { get; set; }
 
-    /// <summary>
-    /// Callback when agent selection changes.
-    /// </summary>
     [Parameter]
     public EventCallback<AgentDisplayInfo?> SelectedAgentInfoChanged { get; set; }
 
-    /// <summary>
-    /// Available models (sorted by factory order).
-    /// </summary>
     [Parameter]
     public IReadOnlyList<string> AvailableModels { get; set; } = [];
 
-    /// <summary>
-    /// Currently selected model.
-    /// </summary>
     [Parameter]
     public string? SelectedModel { get; set; }
 
-    /// <summary>
-    /// Callback when model selection changes.
-    /// </summary>
     [Parameter]
     public EventCallback<string?> SelectedModelChanged { get; set; }
+
+    protected override void OnParametersSet()
+    {
+        // Sync selected options with parameters
+        if (SelectedContext != null && !selectedContextOptions.Contains(SelectedContext))
+        {
+            selectedContextOptions = [SelectedContext];
+        }
+        else if (SelectedContext == null && selectedContextOptions.Any())
+        {
+            selectedContextOptions = [];
+        }
+
+        if (SelectedAgentInfo != null && !selectedAgentOptions.Contains(SelectedAgentInfo))
+        {
+            selectedAgentOptions = [SelectedAgentInfo];
+        }
+    }
+
+    private async Task OnContextSearchAsync(OptionsSearchEventArgs<string> args)
+    {
+        if (OnContextAutocomplete != null)
+        {
+            var suggestions = await OnContextAutocomplete(args.Text ?? "");
+            args.Items = suggestions;
+        }
+        else
+        {
+            // Default: show current context if set
+            args.Items = string.IsNullOrEmpty(SelectedContext) ? [] : [SelectedContext];
+        }
+    }
+
+    private async Task OnAgentSearchAsync(OptionsSearchEventArgs<AgentDisplayInfo> args)
+    {
+        var text = args.Text ?? "";
+
+        if (OnAgentAutocomplete != null)
+        {
+            var suggestions = await OnAgentAutocomplete(text);
+            args.Items = suggestions;
+        }
+        else
+        {
+            // Fallback to filtering from AgentDisplayInfos
+            args.Items = AgentDisplayInfos
+                .Where(a => string.IsNullOrEmpty(text) || a.Name.Contains(text, StringComparison.OrdinalIgnoreCase))
+                .OrderBy(a => a.Name);
+        }
+    }
+
+    private async Task OnContextSelectionChanged()
+    {
+        var selected = selectedContextOptions.FirstOrDefault();
+        if (selected != SelectedContext)
+        {
+            await SelectedContextChanged.InvokeAsync(selected);
+        }
+    }
+
+    private async Task OnAgentSelectionChanged()
+    {
+        var selected = selectedAgentOptions.FirstOrDefault();
+        if (selected != SelectedAgentInfo)
+        {
+            await SelectedAgentInfoChanged.InvokeAsync(selected);
+        }
+    }
+
+    private async Task OnModelValueChanged(string? model)
+    {
+        if (model != SelectedModel)
+        {
+            await SelectedModelChanged.InvokeAsync(model);
+        }
+    }
 
     public async ValueTask FocusAsync()
     {
         if (monacoEditor != null)
         {
             await monacoEditor.FocusAsync();
-        }
-    }
-
-    private async Task OnAgentSelectionChanged(AgentDisplayInfo? agent)
-    {
-        if (agent != null && agent.Name != SelectedAgentInfo?.Name)
-        {
-            SelectedAgentInfo = agent;
-            await SelectedAgentInfoChanged.InvokeAsync(agent);
-        }
-    }
-
-    private async Task OnModelSelectionChanged(string? model)
-    {
-        if (model != SelectedModel)
-        {
-            SelectedModel = model;
-            await SelectedModelChanged.InvokeAsync(model);
         }
     }
 

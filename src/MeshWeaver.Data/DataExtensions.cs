@@ -643,7 +643,7 @@ public static class DataExtensions
         IMessageHub hub,
         SchemaReference reference,
         IMessageDelivery<GetDataRequest> request,
-        CancellationToken ct)
+        CancellationToken _)
     {
         try
         {
@@ -682,9 +682,9 @@ public static class DataExtensions
     /// </summary>
     private static Task<IMessageDelivery> HandleGetDataRequestCore(
         IMessageHub hub,
-        DataModelReference reference,
+        DataModelReference _,
         IMessageDelivery<GetDataRequest> request,
-        CancellationToken ct)
+        CancellationToken __)
     {
         try
         {
@@ -1592,7 +1592,9 @@ public static class DataExtensions
         WorkspaceReference reference,
         CancellationToken ct)
     {
+#pragma warning disable CS0618 // Intentionally supporting legacy validators for backwards compatibility
         var validators = hub.ServiceProvider.GetServices<IDataReadValidator>();
+#pragma warning restore CS0618
         foreach (var validator in validators)
         {
             var result = await validator.ValidateAsync(reference, ct);
@@ -1611,7 +1613,9 @@ public static class DataExtensions
         object? data,
         CancellationToken ct)
     {
+#pragma warning disable CS0618 // Intentionally supporting legacy validators for backwards compatibility
         var validators = hub.ServiceProvider.GetServices<IDataReadResultValidator>();
+#pragma warning restore CS0618
         foreach (var validator in validators)
         {
             var result = await validator.ValidateAsync(reference, data, ct);
@@ -1631,7 +1635,9 @@ public static class DataExtensions
         CancellationToken ct)
     {
         // Run legacy IDataChangeValidator instances
+#pragma warning disable CS0618 // Intentionally supporting legacy validators for backwards compatibility
         var legacyValidators = hub.ServiceProvider.GetServices<IDataChangeValidator>();
+#pragma warning restore CS0618
         foreach (var validator in legacyValidators)
         {
             var result = await validator.ValidateAsync(request, ct);

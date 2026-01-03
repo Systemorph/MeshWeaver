@@ -235,70 +235,83 @@ public class MeshPlugin(IMessageHub hub, IAgentChat chat)
         }
     }
 
-    [Description("Test agent discovery - finds agents in the namespace hierarchy for a given context path. " +
-                 "Returns agents ordered by proximity (closest first). " +
-                 "Use this to verify which agent would be selected for a given context.")]
-    public async Task<string> TestAgentDiscovery(
-        [Description("Context path to search from (e.g., ACME/Projects/Alpha, @graph/org1)")] string contextPath)
+    [Description("Gets a document (markdown) by path. Returns title and content. " +
+                 "Use this to fetch documentation or markdown content.")]
+    public async Task<string> GetDocument(
+        [Description("Unified path (e.g., MeshWeaver/QuerySyntax, @graph/doc1)")] string path)
     {
-        logger.LogInformation("TestAgentDiscovery called with contextPath={ContextPath}", contextPath);
+        logger.LogInformation("GetDocument called with path={Path}", path);
 
-        var agentResolver = hub.ServiceProvider.GetService<IAgentResolver>();
-        if (agentResolver == null)
-            return "IAgentResolver service not available.";
+        if (persistence == null)
+            return "Persistence service not available.";
 
-        var resolvedPath = ResolvePath(contextPath);
+        var resolvedPath = ResolvePath(path);
 
         try
         {
-            // Get the closest agent
-            var closestAgent = await agentResolver.GetClosestAgentAsync(resolvedPath);
+            var node = await persistence.GetNodeAsync(resolvedPath);
+            if (node == null)
+                return $"Not found: {resolvedPath}";
 
-            // Get all agents in hierarchy ordered by depth (closest first)
-            var hierarchyAgents = await agentResolver.GetHierarchyAgentsAsync(resolvedPath);
+            // Extract title from node.Name (display name)
+            var title = node.Name ?? node.Id;
 
-            var result = new
+            // Get content - if MarkdownDocument, extract content without redundant title
+            string? content = null;
+            if (node.Content is JsonElement je)
             {
-                contextPath = resolvedPath,
-                closestAgent = closestAgent != null ? new
-                {
-                    closestAgent.Id,
-                    closestAgent.DisplayName,
-                    closestAgent.Description,
-                    closestAgent.IsDefault
-                } : null,
-                hierarchyAgents = hierarchyAgents.Select(a => new
-                {
-                    a.Id,
-                    a.DisplayName,
-                    a.Description,
-                    a.IsDefault,
-                    delegationCount = a.Delegations?.Count ?? 0
-                }).ToList()
-            };
+                if (je.TryGetProperty("content", out var c))
+                    content = c.GetString();
+            }
+            else if (node.Content != null)
+            {
+                content = node.Content.ToString();
+            }
 
-            return JsonSerializer.Serialize(result, hub.JsonSerializerOptions);
+            // Remove redundant H1 title if it matches node name
+            if (content != null && content.StartsWith($"# {title}"))
+            {
+                var newlineIndex = content.IndexOf('\n');
+                if (newlineIndex > 0)
+                    content = content[(newlineIndex + 1)..].TrimStart();
+            }
+
+            return JsonSerializer.Serialize(new { title, content }, hub.JsonSerializerOptions);
         }
         catch (Exception ex)
         {
-            logger.LogWarning(ex, "Error testing agent discovery for context {ContextPath}", resolvedPath);
+            logger.LogWarning(ex, "Error getting document at path {Path}", resolvedPath);
             return $"Error: {ex.Message}";
         }
     }
 
     /// <summary>
-    /// Creates all tools for this plugin.
+    /// Creates the standard tools for this plugin (read-only operations).
     /// </summary>
     public IList<AITool> CreateTools()
     {
         return
         [
             AIFunctionFactory.Create(Get),
-            AIFunctionFactory.Create(Update),
-            AIFunctionFactory.Create(NavigateTo),
+            AIFunctionFactory.Create(GetDocument),
             AIFunctionFactory.Create(Search),
-            AIFunctionFactory.Create(Delete),
-            AIFunctionFactory.Create(TestAgentDiscovery)
+            AIFunctionFactory.Create(NavigateTo)
+        ];
+    }
+
+    /// <summary>
+    /// Creates all tools including write operations (for Executor agent).
+    /// </summary>
+    public IList<AITool> CreateAllTools()
+    {
+        return
+        [
+            AIFunctionFactory.Create(Get),
+            AIFunctionFactory.Create(GetDocument),
+            AIFunctionFactory.Create(Search),
+            AIFunctionFactory.Create(NavigateTo),
+            AIFunctionFactory.Create(Update),
+            AIFunctionFactory.Create(Delete)
         ];
     }
 }

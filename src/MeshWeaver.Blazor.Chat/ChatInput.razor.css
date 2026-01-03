@@ -69,22 +69,23 @@
     display: flex;
     gap: 8px;
     align-items: center;
-    flex-shrink: 0;
+    flex: 1;
+    min-width: 0;
 }
 
-.chat-selectors fluent-select {
-    flex-shrink: 0;
+.chat-selectors > * {
+    flex-shrink: 1;
 }
 
-.agent-option {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    padding: 2px 0;
+/* FluentAutocomplete styling */
+.chat-selectors fluent-autocomplete {
+    --design-unit: 3;
 }
 
-.agent-option .agent-name {
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
+.chat-selectors fluent-autocomplete::part(root) {
+    min-height: 28px;
+}
+
+.chat-selectors fluent-autocomplete::part(control) {
+    font-size: 0.85rem;
 }

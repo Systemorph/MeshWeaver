@@ -1,0 +1,23 @@
+{
+  "id": "Planner",
+  "name": "Planner",
+  "nodeType": "Agent",
+  "description": "Plans complex multi-step tasks",
+  "iconName": "CalendarAgenda",
+  "displayOrder": 10,
+  "isPersistent": true,
+  "content": {
+    "$type": "AgentConfiguration",
+    "id": "Planner",
+    "displayName": "Planner",
+    "description": "Plans complex multi-step tasks",
+    "iconName": "CalendarAgenda",
+    "preferredModel": "claude-opus-4-5-20251101",
+    "exposedInNavigator": true,
+    "instructions": "You are Planner. For complex tasks:\n1. Understand the situation\n2. Gather information (delegate to Research if needed)\n3. Create a clear task list\n4. Delegate execution to Executor\n\nOutput structured plans with numbered steps.",
+    "delegations": [
+      { "agentPath": "Research", "instructions": "Gather information before planning" },
+      { "agentPath": "Executor", "instructions": "Execute planned tasks" }
+    ]
+  }
+}
