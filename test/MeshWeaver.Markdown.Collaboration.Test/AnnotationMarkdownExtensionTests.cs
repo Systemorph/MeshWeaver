@@ -1,6 +1,7 @@
 using FluentAssertions;
 using MeshWeaver.Markdown;
 using Xunit;
+using MarkdownAnnotationType = MeshWeaver.Markdown.AnnotationType;
 
 namespace MeshWeaver.Markdown.Collaboration.Test;
 
@@ -15,7 +16,8 @@ public class AnnotationMarkdownExtensionTests
 
         var result = AnnotationMarkdownExtension.TransformAnnotations(markdown);
 
-        result.Should().Be("Hello <span class=\"annotation-comment\" data-marker-id=\"c1\">world</span>!");
+        result.Should().Contain("<span class=\"comment-highlight\" data-comment-id=\"c1\">");
+        result.Should().Contain(">world</span>");
     }
 
     [Fact]
@@ -25,7 +27,8 @@ public class AnnotationMarkdownExtensionTests
 
         var result = AnnotationMarkdownExtension.TransformAnnotations(markdown);
 
-        result.Should().Be("Hello <span class=\"annotation-insert\" data-marker-id=\"i1\">new text</span> world");
+        result.Should().Contain("<span class=\"track-insert\" data-change-id=\"i1\">");
+        result.Should().Contain(">new text</span>");
     }
 
     [Fact]
@@ -35,7 +38,8 @@ public class AnnotationMarkdownExtensionTests
 
         var result = AnnotationMarkdownExtension.TransformAnnotations(markdown);
 
-        result.Should().Be("Hello <span class=\"annotation-delete\" data-marker-id=\"d1\">old text</span> world");
+        result.Should().Contain("<span class=\"track-delete\" data-change-id=\"d1\">");
+        result.Should().Contain(">old text</span>");
     }
 
     [Fact]
@@ -47,9 +51,12 @@ public class AnnotationMarkdownExtensionTests
 
         var result = AnnotationMarkdownExtension.TransformAnnotations(markdown);
 
-        result.Should().Contain("<span class=\"annotation-comment\" data-marker-id=\"c1\">commented</span>");
-        result.Should().Contain("<span class=\"annotation-insert\" data-marker-id=\"i1\">inserted</span>");
-        result.Should().Contain("<span class=\"annotation-delete\" data-marker-id=\"d1\">deleted</span>");
+        result.Should().Contain("class=\"comment-highlight\"");
+        result.Should().Contain("data-comment-id=\"c1\"");
+        result.Should().Contain("class=\"track-insert\"");
+        result.Should().Contain("data-change-id=\"i1\"");
+        result.Should().Contain("class=\"track-delete\"");
+        result.Should().Contain("data-change-id=\"d1\"");
     }
 
     [Fact]
@@ -59,7 +66,8 @@ public class AnnotationMarkdownExtensionTests
 
         var result = AnnotationMarkdownExtension.TransformAnnotations(markdown);
 
-        result.Should().Contain("<span class=\"annotation-comment\" data-marker-id=\"c1\">line1\nline2\nline3</span>");
+        result.Should().Contain("class=\"comment-highlight\" data-comment-id=\"c1\"");
+        result.Should().Contain("line1\nline2\nline3");
     }
 
     [Fact]
@@ -220,7 +228,7 @@ public class AnnotationMarkdownExtensionTests
 
         var result = AnnotationMarkdownExtension.TransformAnnotations(markdown);
 
-        result.Should().Contain("data-marker-id=\"abc123xyz\"");
+        result.Should().Contain("data-comment-id=\"abc123xyz\"");
     }
 
     [Fact]
@@ -231,7 +239,212 @@ public class AnnotationMarkdownExtensionTests
 
         var result = AnnotationMarkdownExtension.TransformAnnotations(markdown);
 
-        result.Should().Contain($"data-marker-id=\"{id}\"");
+        result.Should().Contain($"data-comment-id=\"{id}\"");
+    }
+
+    [Fact]
+    public void TransformAnnotations_TrackChange_ProducesCleanSpan()
+    {
+        var markdown = "<!--insert:i1-->new text<!--/insert:i1-->";
+
+        var result = AnnotationMarkdownExtension.TransformAnnotations(markdown);
+
+        // Clean span without inline buttons (buttons are in side panel)
+        result.Should().Contain("<span class=\"track-insert\" data-change-id=\"i1\">");
+        result.Should().Contain(">new text</span>");
+        result.Should().NotContain("annotation-margin-label");
+    }
+
+    [Fact]
+    public void TransformAnnotations_Comment_ProducesCleanSpan()
+    {
+        var markdown = "<!--comment:c1-->text<!--/comment:c1-->";
+
+        var result = AnnotationMarkdownExtension.TransformAnnotations(markdown);
+
+        // Clean span without inline buttons
+        result.Should().Contain("<span class=\"comment-highlight\" data-comment-id=\"c1\">");
+        result.Should().NotContain("annotation-margin-label");
+    }
+
+    [Fact]
+    public void TransformAnnotations_WithMetadata_IncludesAuthorDateAsDataAttributes()
+    {
+        var markdown = "<!--insert:i1:Alice:Dec 15-->new text<!--/insert:i1-->";
+
+        var result = AnnotationMarkdownExtension.TransformAnnotations(markdown);
+
+        result.Should().Contain("data-author=\"Alice\"");
+        result.Should().Contain("data-date=\"Dec 15\"");
+    }
+
+    [Fact]
+    public void TransformAnnotations_CommentWithText_IncludesCommentTextAsDataAttribute()
+    {
+        var markdown = "<!--comment:c1:Alice:Dec 15|This is my comment-->highlighted text<!--/comment:c1-->";
+
+        var result = AnnotationMarkdownExtension.TransformAnnotations(markdown);
+
+        result.Should().Contain("class=\"comment-highlight\"");
+        result.Should().Contain("data-comment-id=\"c1\"");
+        result.Should().Contain("data-author=\"Alice\"");
+        result.Should().Contain("data-date=\"Dec 15\"");
+        result.Should().Contain("data-comment-text=\"This is my comment\"");
+        result.Should().Contain(">highlighted text</span>");
+    }
+
+    [Fact]
+    public void TransformAnnotations_CommentWithoutText_NoCommentTextAttribute()
+    {
+        var markdown = "<!--comment:c1:Alice:Dec 15-->highlighted text<!--/comment:c1-->";
+
+        var result = AnnotationMarkdownExtension.TransformAnnotations(markdown);
+
+        result.Should().NotContain("data-comment-text");
+    }
+
+    [Fact]
+    public void TransformAnnotations_Comment_DataAttributesOnly()
+    {
+        var markdown = "<!--comment:c1:Alice:Dec 15|My comment-->text<!--/comment:c1-->";
+
+        var result = AnnotationMarkdownExtension.TransformAnnotations(markdown);
+
+        // All info as data attributes, no inline buttons
+        result.Should().Contain("data-comment-id=\"c1\"");
+        result.Should().Contain("data-author=\"Alice\"");
+        result.Should().Contain("data-date=\"Dec 15\"");
+        result.Should().Contain("data-comment-text=\"My comment\"");
+        result.Should().NotContain("resolve-btn");
+    }
+
+    [Fact]
+    public void TransformAnnotations_SimpleComment_CleanOutput()
+    {
+        var markdown = "<!--comment:c1-->text<!--/comment:c1-->";
+
+        var result = AnnotationMarkdownExtension.TransformAnnotations(markdown);
+
+        result.Should().Be("<span class=\"comment-highlight\" data-comment-id=\"c1\">text</span>");
+    }
+
+    #endregion
+
+    #region AnnotationParser.ExtractAnnotations Tests
+
+    [Fact]
+    public void ExtractAnnotations_SimpleComment_ExtractsCorrectly()
+    {
+        var markdown = "Hello <!--comment:c1-->world<!--/comment:c1-->!";
+
+        var result = AnnotationParser.ExtractAnnotations(markdown);
+
+        result.Should().HaveCount(1);
+        result[0].Id.Should().Be("c1");
+        result[0].Type.Should().Be(MarkdownAnnotationType.Comment);
+        result[0].HighlightedText.Should().Be("world");
+        result[0].Author.Should().BeNull();
+    }
+
+    [Fact]
+    public void ExtractAnnotations_CommentWithMetadata_ExtractsAuthorAndDate()
+    {
+        var markdown = "Hello <!--comment:c1:Alice:Dec 15-->world<!--/comment:c1-->!";
+
+        var result = AnnotationParser.ExtractAnnotations(markdown);
+
+        result.Should().HaveCount(1);
+        result[0].Id.Should().Be("c1");
+        result[0].Author.Should().Be("Alice");
+        result[0].Date.Should().Be("Dec 15");
+        result[0].HighlightedText.Should().Be("world");
+    }
+
+    [Fact]
+    public void ExtractAnnotations_CommentWithText_ExtractsCommentText()
+    {
+        var markdown = "Hello <!--comment:c1:Alice:Dec 15|This is my comment-->world<!--/comment:c1-->!";
+
+        var result = AnnotationParser.ExtractAnnotations(markdown);
+
+        result.Should().HaveCount(1);
+        result[0].Id.Should().Be("c1");
+        result[0].CommentText.Should().Be("This is my comment");
+        result[0].HighlightedText.Should().Be("world");
+    }
+
+    [Fact]
+    public void ExtractAnnotations_InsertMarker_ExtractsAsInsertion()
+    {
+        var markdown = "Hello <!--insert:i1:Bob:Dec 16-->new text<!--/insert:i1--> world";
+
+        var result = AnnotationParser.ExtractAnnotations(markdown);
+
+        result.Should().HaveCount(1);
+        result[0].Id.Should().Be("i1");
+        result[0].Type.Should().Be(MarkdownAnnotationType.Insert);
+        result[0].Author.Should().Be("Bob");
+        result[0].HighlightedText.Should().Be("new text");
+    }
+
+    [Fact]
+    public void ExtractAnnotations_DeleteMarker_ExtractsAsDeletion()
+    {
+        var markdown = "Hello <!--delete:d1:Carol:Dec 17-->old text<!--/delete:d1--> world";
+
+        var result = AnnotationParser.ExtractAnnotations(markdown);
+
+        result.Should().HaveCount(1);
+        result[0].Id.Should().Be("d1");
+        result[0].Type.Should().Be(MarkdownAnnotationType.Delete);
+        result[0].Author.Should().Be("Carol");
+        result[0].HighlightedText.Should().Be("old text");
+    }
+
+    [Fact]
+    public void ExtractAnnotations_MultipleAnnotations_ExtractsAll()
+    {
+        var markdown = @"<!--comment:c1:Alice:Dec 15|Comment here-->commented<!--/comment:c1-->
+                         <!--insert:i1:Bob:Dec 16-->inserted<!--/insert:i1-->
+                         <!--delete:d1:Carol:Dec 17-->deleted<!--/delete:d1-->";
+
+        var result = AnnotationParser.ExtractAnnotations(markdown);
+
+        result.Should().HaveCount(3);
+        result.Should().Contain(a => a.Id == "c1" && a.Type == MarkdownAnnotationType.Comment);
+        result.Should().Contain(a => a.Id == "i1" && a.Type == MarkdownAnnotationType.Insert);
+        result.Should().Contain(a => a.Id == "d1" && a.Type == MarkdownAnnotationType.Delete);
+    }
+
+    [Fact]
+    public void ExtractAnnotations_EmptyContent_ReturnsEmptyList()
+    {
+        var result = AnnotationParser.ExtractAnnotations(string.Empty);
+
+        result.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void ExtractAnnotations_NoAnnotations_ReturnsEmptyList()
+    {
+        var markdown = "Just plain text with no annotations.";
+
+        var result = AnnotationParser.ExtractAnnotations(markdown);
+
+        result.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void ExtractAnnotations_OrderedByPosition()
+    {
+        var markdown = "First <!--delete:d1-->deleted<!--/delete:d1--> then <!--comment:c1-->commented<!--/comment:c1--> last <!--insert:i1-->inserted<!--/insert:i1-->";
+
+        var result = AnnotationParser.ExtractAnnotations(markdown);
+
+        result.Should().HaveCount(3);
+        result[0].Id.Should().Be("d1"); // First in document
+        result[1].Id.Should().Be("c1"); // Second
+        result[2].Id.Should().Be("i1"); // Third
     }
 
     #endregion

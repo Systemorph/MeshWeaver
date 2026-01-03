@@ -1,4 +1,5 @@
-﻿@inherits SkinnedView<MenuItemControl, MenuItemSkin, MenuItemView>
+﻿@using Icon = MeshWeaver.Domain.Icon
+@inherits SkinnedView<MenuItemControl, MenuItemSkin, MenuItemView>
 @using FluentAppearance = Microsoft.FluentUI.AspNetCore.Components.Appearance
 
 @if (HasSubMenus)
@@ -9,10 +10,12 @@
         <FluentStack Orientation="Microsoft.FluentUI.AspNetCore.Components.Orientation.Horizontal"
             Style="@($"display: flex; gap: 0; width: {Width}; {Style}")">
             <FluentButton Appearance="@ButtonAppearance" OnClick="OnClick"
+                IconStart="@ButtonIcon"
                 Style="flex: 1; border-radius: 4px 0 0 4px; text-align: left; justify-content: flex-start; display: flex;">
                 @Title
             </FluentButton>
-            <FluentMenuButton  ButtonAppearance="@ButtonAppearance"
+            <FluentMenuButton ButtonAppearance="@ButtonAppearance"
+                MenuStyle="z-index: 1000;"
                 Style="border-radius: 0 4px 4px 0; width: 32px; flex-shrink: 0;">
                 @foreach (var area in ViewModel.Areas ?? [])
                 {
@@ -26,8 +29,10 @@
     else
     {
         <!-- No top-level action: Clicking button expands menu -->
-        <div Style="@($"width: {Width}; {Style}")">
-            <FluentMenuButton Text="@Title" Appearance="@ButtonAppearance"
+        <div Style="@($"width: {Width}; {Style}")" class="menu-button-container">
+            <FluentMenuButton Text="@DisplayText" ButtonAppearance="@ButtonAppearance"
+                IconStart="@ButtonIcon"
+                MenuStyle="z-index: 1000;"
                 Style="width: 100%; text-align: left; justify-content: flex-start; display: flex;">
                 @foreach (var area in ViewModel.Areas ?? [])
                 {
@@ -44,6 +49,7 @@ else
     <!-- Regular menu item without sub-menus -->
     <div Style="@($"width: {Width}; {Style}")">
         <FluentButton OnClick="OnClick" Appearance="@ButtonAppearance"
+            IconStart="@ButtonIcon"
             Style="width: 100%; text-align: left; justify-content: flex-start; display: flex;">
             @Title
         </FluentButton>
@@ -53,15 +59,25 @@ else
 @code
 {
     private string? Title { get; set; }
+    private Icon? IconValue { get; set; }
     private FluentAppearance ButtonAppearance { get; set; } = FluentAppearance.Neutral;
     private string? Width { get; set; } = "auto";
     private bool HasSubMenus => ViewModel.Areas?.Any() == true;
     private bool HasTopLevelAction => ViewModel.IsClickable;
 
+    // Icon converted to FluentUI icon type
+    private Microsoft.FluentUI.AspNetCore.Components.Icon? ButtonIcon =>
+        IconValue?.ToFluentIcon();
+
+    // Display text: show title, or nothing if only icon (icon-only button)
+    private string? DisplayText =>
+        string.IsNullOrEmpty(Title) ? null : Title;
+
     protected override void BindData()
     {
         base.BindData();
         DataBind(Skin.Title, x => x.Title);
+        DataBind(Skin.Icon, x => x.IconValue);
         DataBind(Skin.Width, x => x.Width);
         DataBind(Skin.Style, x => x.Style);
 
