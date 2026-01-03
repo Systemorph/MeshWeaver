@@ -8,7 +8,7 @@
                     @bind-ValueText="@searchTerm"
                     @bind-SelectedOptions="selectedOptions"
                     @bind-SelectedOptions:after="HandleSearchClicked"
-                    OnOptionsSearch="@HandleSearchInput"
+                    OnOptionsSearch="@HandleSearchInputAsync"
                     ShowOverlayOnEmptyResults="false">
     <OptionTemplate>
         <span slot="start">

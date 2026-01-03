@@ -8,7 +8,7 @@
     margin-top: 0.75rem;
     color: var(--neutral-foreground-rest);
     min-width: 0; /* Allow shrinking in flex context */
-    overflow: hidden;
+    overflow: visible; /* Allow dropdown menus to overflow */
 }
 
 .input-container {
@@ -30,6 +30,10 @@
     display: flex;
     margin-top: 1rem;
     align-items: center;
+    width: 100%;
+    min-width: 0; /* Allow shrinking */
+    position: relative;
+    z-index: 100; /* Ensure dropdowns appear above other content */
 }
 
 .tool-icon {
@@ -69,23 +73,38 @@
     display: flex;
     gap: 8px;
     align-items: center;
-    flex: 1;
+    flex: 1 1 0;
     min-width: 0;
+    max-width: 100%;
 }
 
+/* All selectors grow equally */
 .chat-selectors > * {
-    flex-shrink: 1;
+    flex: 1 1 0;
+    min-width: 80px;
 }
 
-/* FluentAutocomplete styling */
-.chat-selectors fluent-autocomplete {
+/* FluentTextField styling */
+::deep fluent-text-field {
     --design-unit: 3;
+    width: 100%;
 }
 
-.chat-selectors fluent-autocomplete::part(root) {
+::deep fluent-text-field::part(root) {
     min-height: 28px;
 }
 
-.chat-selectors fluent-autocomplete::part(control) {
+::deep fluent-text-field::part(control) {
+    font-size: 0.85rem;
+}
+
+/* FluentSelect styling */
+::deep fluent-select {
+    --design-unit: 3;
+    min-height: 28px;
+    width: 100%;
+}
+
+::deep fluent-select::part(control) {
     font-size: 0.85rem;
 }
