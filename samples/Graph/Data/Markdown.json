@@ -3,9 +3,9 @@
   "namespace": "",
   "name": "Markdown",
   "nodeType": "NodeType",
-  "description": "A simple markdown document",
+  "description": "A markdown documentation node with collaborative editing support",
   "iconName": "Document",
-  "displayOrder": 50,
+  "displayOrder": 100,
   "isPersistent": true,
   "state": "Active",
   "content": {
@@ -14,9 +14,9 @@
     "namespace": "",
     "displayName": "Markdown",
     "iconName": "Document",
-    "description": "A simple markdown document for documentation and notes",
-    "displayOrder": 50,
-    "configuration": "config => config.WithContentType<MarkdownDocument>().WithDefaultViews()",
-    "childrenQuery": "nodeType:Markdown namespace: scope:descendants"
+    "description": "A markdown documentation node with collaborative editing support",
+    "displayOrder": 100,
+    "configuration": "config => config.AddMarkdownViews()",
+    "childrenQuery": "nodeType:Markdown scope:descendants"
   }
 }

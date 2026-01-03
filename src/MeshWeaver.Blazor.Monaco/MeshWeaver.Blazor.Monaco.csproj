@@ -12,9 +12,11 @@
         <PackageReference Include="BlazorMonaco" />
         <PackageReference Include="Microsoft.AspNetCore.Components.Web" />
         <PackageReference Include="Microsoft.FluentUI.AspNetCore.Components" />
+        <PackageReference Include="Microsoft.FluentUI.AspNetCore.Components.Icons" />
     </ItemGroup>
 
     <ItemGroup>
         <ProjectReference Include="..\MeshWeaver.Layout\MeshWeaver.Layout.csproj" />
+        <ProjectReference Include="..\MeshWeaver.Markdown.Collaboration\MeshWeaver.Markdown.Collaboration.csproj" />
     </ItemGroup>
 </Project>

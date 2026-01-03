@@ -1,0 +1,150 @@
+@using MeshWeaver.Markdown.Collaboration
+@using Microsoft.FluentUI.AspNetCore.Components
+
+<div class="comment-panel">
+    <div class="comment-panel-header">
+        <span class="comment-count">@Comments.Count Comment@(Comments.Count != 1 ? "s" : "")</span>
+    </div>
+
+    <div class="comment-list">
+        @if (Comments.Count == 0)
+        {
+            <div class="no-comments">
+                <FluentIcon Value="@(new Icons.Regular.Size20.Comment())" Color="Color.Neutral" />
+                <span>No comments yet</span>
+                <span class="hint">Select text in the editor to add a comment</span>
+            </div>
+        }
+        else
+        {
+            @foreach (var comment in Comments.OrderByDescending(c => c.CreatedAt))
+            {
+                <div class="comment-card @(comment.State == CommentState.Resolved ? "resolved" : "")">
+                    <div class="comment-header">
+                        <div class="comment-author">
+                            <FluentPersona Name="@comment.Author"
+                                            Size="@("24px")"
+                                            ImageSize="24px" />
+                            <span class="author-name">@comment.Author</span>
+                        </div>
+                        <span class="comment-time">@FormatTime(comment.CreatedAt)</span>
+                    </div>
+
+                    @if (!string.IsNullOrEmpty(comment.OriginalSelectedText))
+                    {
+                        <div class="quoted-text">
+                            <FluentIcon Value="@(new Icons.Regular.Size16.TextQuote())" Color="Color.Neutral" />
+                            <span>@TruncateText(comment.OriginalSelectedText, 50)</span>
+                        </div>
+                    }
+
+                    <div class="comment-text">
+                        @comment.Text
+                    </div>
+
+                    @if (comment.Replies != null && comment.Replies.Count > 0)
+                    {
+                        <div class="comment-replies">
+                            @foreach (var reply in comment.Replies)
+                            {
+                                <div class="reply">
+                                    <span class="reply-author">@reply.Author</span>
+                                    <span class="reply-text">@reply.Text</span>
+                                </div>
+                            }
+                        </div>
+                    }
+
+                    <div class="comment-actions">
+                        @if (comment.State != CommentState.Resolved)
+                        {
+                            <FluentButton Appearance="Appearance.Lightweight"
+                                           OnClick="@(() => OnResolveClick(comment.Id))">
+                                <FluentIcon Value="@(new Icons.Regular.Size16.Checkmark())" Slot="start" />
+                                Resolve
+                            </FluentButton>
+                        }
+                        <FluentButton Appearance="Appearance.Lightweight"
+                                       OnClick="@(() => OnDeleteClick(comment.Id))">
+                            <FluentIcon Value="@(new Icons.Regular.Size16.Delete())" Slot="start" />
+                            Delete
+                        </FluentButton>
+                    </div>
+
+                    @if (comment.State != CommentState.Resolved)
+                    {
+                        <div class="reply-input">
+                            <FluentTextField @bind-Value="replyText"
+                                             Placeholder="Reply..."
+                                             Style="flex: 1;" />
+                            <FluentButton Appearance="Appearance.Accent"
+                                           Disabled="@(string.IsNullOrWhiteSpace(replyText))"
+                                           OnClick="@(() => OnReplyClick(comment.Id))">
+                                Reply
+                            </FluentButton>
+                        </div>
+                    }
+                </div>
+            }
+        }
+    </div>
+</div>
+
+@code {
+    private string replyText = "";
+
+    [Parameter]
+    public string DocumentId { get; set; } = "";
+
+    [Parameter]
+    public List<RangeComment> Comments { get; set; } = new();
+
+    [Parameter]
+    public EventCallback<string> OnResolveComment { get; set; }
+
+    [Parameter]
+    public EventCallback<string> OnDeleteComment { get; set; }
+
+    [Parameter]
+    public EventCallback<(string commentId, string reply)> OnReplyToComment { get; set; }
+
+    private async Task OnResolveClick(string commentId)
+    {
+        await OnResolveComment.InvokeAsync(commentId);
+    }
+
+    private async Task OnDeleteClick(string commentId)
+    {
+        await OnDeleteComment.InvokeAsync(commentId);
+    }
+
+    private async Task OnReplyClick(string commentId)
+    {
+        if (!string.IsNullOrWhiteSpace(replyText))
+        {
+            await OnReplyToComment.InvokeAsync((commentId, replyText));
+            replyText = "";
+        }
+    }
+
+    private string FormatTime(DateTimeOffset time)
+    {
+        var diff = DateTimeOffset.UtcNow - time;
+        if (diff.TotalMinutes < 1)
+            return "Just now";
+        if (diff.TotalHours < 1)
+            return $"{(int)diff.TotalMinutes}m ago";
+        if (diff.TotalDays < 1)
+            return $"{(int)diff.TotalHours}h ago";
+        if (diff.TotalDays < 7)
+            return $"{(int)diff.TotalDays}d ago";
+        return time.ToString("MMM d");
+    }
+
+    private string TruncateText(string text, int maxLength)
+    {
+        if (string.IsNullOrEmpty(text) || text.Length <= maxLength)
+            return text;
+        return text[..(maxLength - 3)] + "...";
+    }
+}
