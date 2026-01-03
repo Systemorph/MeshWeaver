@@ -3,7 +3,6 @@ using MeshWeaver.AI.Commands;
 using MeshWeaver.AI.Completion;
 using MeshWeaver.AI.Parsing;
 using MeshWeaver.AI.Persistence;
-using AutocompleteService = MeshWeaver.AI.Completion.AutocompleteService;
 using MeshWeaver.Blazor.Monaco;
 using MeshWeaver.Data;
 using MeshWeaver.Data.Completion;
@@ -166,43 +165,46 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
     /// <summary>
     /// Handles navigation changes to update context and agent selection.
     /// </summary>
-    private void OnLocationChanged(object? sender, Microsoft.AspNetCore.Components.Routing.LocationChangedEventArgs e)
+    private async void OnLocationChanged(object? sender, Microsoft.AspNetCore.Components.Routing.LocationChangedEventArgs e)
     {
-        var newContext = GetCurrentAgentContext();
-
-        // Check if the context has actually changed (compare address and layout area)
-        var contextChanged = !ContextsAreEqual(lastNavigationContext, newContext);
-
-        if (contextChanged)
+        await InvokeAsync(() =>
         {
-            Logger.LogDebug("Navigation context changed from {OldContext} to {NewContext}",
-                lastNavigationContext?.Address?.ToString() ?? "null",
-                newContext?.Address?.ToString() ?? "null");
+            var newContext = GetCurrentAgentContext();
 
-            lastNavigationContext = newContext;
+            // Check if the context has actually changed (compare address and layout area)
+            var contextChanged = !ContextsAreEqual(lastNavigationContext, newContext);
 
-            // Update the context path for the UI combobox
-            var newPath = NavigationManager.ToBaseRelativePath(NavigationManager.Uri);
-            if (newPath != selectedContextPath)
+            if (contextChanged)
             {
-                selectedContextPath = string.IsNullOrEmpty(newPath) ? null : newPath;
-            }
+                Logger.LogDebug("Navigation context changed from {OldContext} to {NewContext}",
+                    lastNavigationContext?.Address?.ToString() ?? "null",
+                    newContext?.Address?.ToString() ?? "null");
 
-            // Try to find an agent that matches the new context
-            var matchingAgent = SelectAgentByContext();
-            if (matchingAgent != null && matchingAgent.Name != selectedAgentInfo?.Name)
-            {
-                Logger.LogDebug("Auto-selecting agent {AgentName} based on navigation context", matchingAgent.Name);
-                OnAgentInfoChanged(matchingAgent);
-            }
-            else
-            {
-                // Even if agent didn't change, reinitialize with new context
-                ScheduleAgentReinstantiation();
-            }
+                lastNavigationContext = newContext;
 
-            StateHasChanged();
-        }
+                // Update the context path for the UI combobox
+                var newPath = NavigationManager.ToBaseRelativePath(NavigationManager.Uri);
+                if (newPath != selectedContextPath)
+                {
+                    selectedContextPath = string.IsNullOrEmpty(newPath) ? null : newPath;
+                }
+
+                // Try to find an agent that matches the new context
+                var matchingAgent = SelectAgentByContext();
+                if (matchingAgent != null && matchingAgent.Name != selectedAgentInfo?.Name)
+                {
+                    Logger.LogDebug("Auto-selecting agent {AgentName} based on navigation context", matchingAgent.Name);
+                    OnAgentInfoChanged(matchingAgent);
+                }
+                else
+                {
+                    // Even if agent didn't change, reinitialize with new context
+                    ScheduleAgentReinstantiation();
+                }
+
+                StateHasChanged();
+            }
+        });
     }
 
     /// <summary>
@@ -334,82 +336,47 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
     {
         try
         {
-            var autocompleteService = Hub.ServiceProvider.GetService<AutocompleteService>();
-            if (autocompleteService == null)
+            var meshQuery = Hub.ServiceProvider.GetService<IMeshQuery>();
+            if (meshQuery == null)
             {
-                Logger.LogDebug("AutocompleteService not available for context autocomplete");
+                Logger.LogDebug("IMeshQuery not available for context autocomplete");
                 return [];
             }
 
-            // Ensure query starts with @ for autocomplete
-            var searchQuery = query.StartsWith("@") ? query : "@" + query;
-            var suggestions = await autocompleteService.GetCompletionsAsync(searchQuery, maxResults: 10);
-            return suggestions.Select(s => s.InsertText);
+            // Build query to search MeshNodes matching the typed text
+            // Search in namespace and id, or use general text search
+            var searchQuery = string.IsNullOrWhiteSpace(query)
+                ? "nodeType:MeshNode"
+                : $"nodeType:MeshNode {query}";
+
+            var request = new MeshQueryRequest
+            {
+                Query = searchQuery,
+                Limit = 10
+            };
+
+            var results = new List<string>();
+            await foreach (var item in meshQuery.QueryAsync(request))
+            {
+                if (item is MeshNode node)
+                {
+                    // Return the full path as the suggestion
+                    var path = !string.IsNullOrEmpty(node.Namespace)
+                        ? $"{node.Namespace}/{node.Id}"
+                        : node.Id;
+                    results.Add(path);
+                }
+
+                if (results.Count >= 10) break;
+            }
+
+            return results;
         }
         catch (Exception ex)
         {
             Logger.LogWarning(ex, "Error getting context autocomplete suggestions");
             return [];
         }
-    }
-
-    private async Task<IEnumerable<AgentDisplayInfo>> GetAgentAutocompleteAsync(string query)
-    {
-        try
-        {
-            var meshCatalog = Hub.ServiceProvider.GetService<IMeshCatalog>();
-            if (meshCatalog?.Persistence == null)
-            {
-                Logger.LogDebug("MeshCatalog not available for agent autocomplete, using local list");
-                return FilterAgents(query);
-            }
-
-            // Search for agents with NodeType=Agent
-            var agents = new List<AgentDisplayInfo>();
-            await foreach (var node in meshCatalog.Persistence.QueryAsync("nodeType==Agent", ""))
-            {
-                if (node is MeshNode meshNode)
-                {
-                    var name = meshNode.Name ?? meshNode.Id;
-                    if (string.IsNullOrEmpty(query) || name.Contains(query, StringComparison.OrdinalIgnoreCase))
-                    {
-                        // Try to find existing AgentDisplayInfo or create a minimal one
-                        var existingInfo = agentDisplayInfos.FirstOrDefault(a => a.Name == name);
-                        if (existingInfo != null)
-                        {
-                            agents.Add(existingInfo);
-                        }
-                        // Skip if no existing info - we need AgentConfiguration
-                    }
-                }
-
-                if (agents.Count >= 20) break;
-            }
-
-            // Also include matching items from the local list
-            foreach (var info in agentDisplayInfos)
-            {
-                if (!agents.Contains(info) &&
-                    (string.IsNullOrEmpty(query) || info.Name.Contains(query, StringComparison.OrdinalIgnoreCase)))
-                {
-                    agents.Add(info);
-                }
-            }
-
-            return agents.OrderBy(a => a.Name).Take(20);
-        }
-        catch (Exception ex)
-        {
-            Logger.LogWarning(ex, "Error getting agent autocomplete suggestions, using local list");
-            return FilterAgents(query);
-        }
-    }
-
-    private IEnumerable<AgentDisplayInfo> FilterAgents(string query)
-    {
-        return agentDisplayInfos
-            .Where(a => string.IsNullOrEmpty(query) || a.Name.Contains(query, StringComparison.OrdinalIgnoreCase))
-            .OrderBy(a => a.Name);
     }
 
     private void ScheduleAgentReinstantiation()

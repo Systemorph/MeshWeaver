@@ -19,34 +19,27 @@
         @if (ShowSelectors)
         {
             <div class="chat-selectors">
-                @* 1. Context autocomplete *@
-                <FluentAutocomplete TOption="string"
-                                    AutoComplete="off"
-                                    Placeholder="@ContextPlaceholder"
-                                    Width="180px"
-                                    MaximumSelectedOptions="1"
-                                    OptionText="@(item => item)"
-                                    @bind-SelectedOptions="@selectedContextOptions"
-                                    @bind-SelectedOptions:after="@OnContextSelectionChanged"
-                                    OnOptionsSearch="@OnContextSearchAsync" />
+                @* 1. Context text field *@
+                <FluentTextField @bind-Value="@contextDisplayText"
+                                 @bind-Value:after="@OnContextTextChanged"
+                                 Placeholder="@ContextPlaceholder"
+                                 Class="selector-context" />
 
-                @* 2. Agent autocomplete *@
-                <FluentAutocomplete TOption="AgentDisplayInfo"
-                                    AutoComplete="off"
-                                    Placeholder="Agent"
-                                    Width="140px"
-                                    MaximumSelectedOptions="1"
-                                    OptionText="@(a => a.Name)"
-                                    @bind-SelectedOptions="@selectedAgentOptions"
-                                    @bind-SelectedOptions:after="@OnAgentSelectionChanged"
-                                    OnOptionsSearch="@OnAgentSearchAsync" />
+                @* 2. Agent dropdown *@
+                <FluentSelect TOption="AgentDisplayInfo"
+                              Items="@AgentDisplayInfos"
+                              Class="selector-agent"
+                              OptionText="@(a => a?.Name ?? "")"
+                              OptionValue="@(a => a?.Name ?? "")"
+                              SelectedOption="@SelectedAgentInfo"
+                              SelectedOptionChanged="@OnAgentSelectChanged" />
 
                 @* 3. Model dropdown *@
                 @if (AvailableModels.Count > 0)
                 {
                     <FluentSelect TOption="string"
                                   Items="@AvailableModels"
-                                  Style="width: 140px;"
+                                  Class="selector-model"
                                   OptionText="@(m => m)"
                                   OptionValue="@(m => m)"
                                   Value="@SelectedModel"
@@ -70,9 +63,8 @@
     private MonacoEditorView? monacoEditor;
     private string? MessageText;
 
-    // Backing fields for FluentAutocomplete bindings
-    private IEnumerable<string> selectedContextOptions = [];
-    private IEnumerable<AgentDisplayInfo> selectedAgentOptions = [];
+    // Display text for context (read-only, shows current path)
+    private string? contextDisplayText;
 
     [Parameter]
     public EventCallback<ChatMessage> OnSend { get; set; }
@@ -99,9 +91,6 @@
     public Func<string, Task<IEnumerable<string>>>? OnContextAutocomplete { get; set; }
 
     [Parameter]
-    public Func<string, Task<IEnumerable<AgentDisplayInfo>>>? OnAgentAutocomplete { get; set; }
-
-    [Parameter]
     public IReadOnlyList<AgentDisplayInfo> AgentDisplayInfos { get; set; } = [];
 
     [Parameter]
@@ -121,69 +110,23 @@
 
     protected override void OnParametersSet()
     {
-        // Sync selected options with parameters
-        if (SelectedContext != null && !selectedContextOptions.Contains(SelectedContext))
-        {
-            selectedContextOptions = [SelectedContext];
-        }
-        else if (SelectedContext == null && selectedContextOptions.Any())
-        {
-            selectedContextOptions = [];
-        }
+        // Sync context display text with parameter
+        contextDisplayText = SelectedContext;
+    }
 
-        if (SelectedAgentInfo != null && !selectedAgentOptions.Contains(SelectedAgentInfo))
+    private async Task OnContextTextChanged()
+    {
+        if (contextDisplayText != SelectedContext)
         {
-            selectedAgentOptions = [SelectedAgentInfo];
+            await SelectedContextChanged.InvokeAsync(contextDisplayText);
         }
     }
 
-    private async Task OnContextSearchAsync(OptionsSearchEventArgs<string> args)
+    private async Task OnAgentSelectChanged(AgentDisplayInfo? agent)
     {
-        if (OnContextAutocomplete != null)
+        if (agent != SelectedAgentInfo)
         {
-            var suggestions = await OnContextAutocomplete(args.Text ?? "");
-            args.Items = suggestions;
-        }
-        else
-        {
-            // Default: show current context if set
-            args.Items = string.IsNullOrEmpty(SelectedContext) ? [] : [SelectedContext];
-        }
-    }
-
-    private async Task OnAgentSearchAsync(OptionsSearchEventArgs<AgentDisplayInfo> args)
-    {
-        var text = args.Text ?? "";
-
-        if (OnAgentAutocomplete != null)
-        {
-            var suggestions = await OnAgentAutocomplete(text);
-            args.Items = suggestions;
-        }
-        else
-        {
-            // Fallback to filtering from AgentDisplayInfos
-            args.Items = AgentDisplayInfos
-                .Where(a => string.IsNullOrEmpty(text) || a.Name.Contains(text, StringComparison.OrdinalIgnoreCase))
-                .OrderBy(a => a.Name);
-        }
-    }
-
-    private async Task OnContextSelectionChanged()
-    {
-        var selected = selectedContextOptions.FirstOrDefault();
-        if (selected != SelectedContext)
-        {
-            await SelectedContextChanged.InvokeAsync(selected);
-        }
-    }
-
-    private async Task OnAgentSelectionChanged()
-    {
-        var selected = selectedAgentOptions.FirstOrDefault();
-        if (selected != SelectedAgentInfo)
-        {
-            await SelectedAgentInfoChanged.InvokeAsync(selected);
+            await SelectedAgentInfoChanged.InvokeAsync(agent);
         }
     }
 

@@ -54,9 +54,9 @@ body {
     border-color: var(--neutral-stroke-rest);
     flex-shrink: 0;
     position: relative;
-    z-index: 10;
+    z-index: 100; /* Higher z-index for dropdown menus */
     min-width: 0; /* Allow shrinking */
-    overflow: hidden;
+    overflow: visible; /* Allow dropdown menus to overflow */
 }
 
 .chat-header {
