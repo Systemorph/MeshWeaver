@@ -1,4 +1,4 @@
-using System.Collections.Concurrent;
+﻿using System.Collections.Concurrent;
 using System.Reflection;
 using System.Runtime.Loader;
 using Microsoft.Extensions.Logging;
@@ -219,18 +219,62 @@ internal sealed class NodeAssemblyLoadContext : AssemblyLoadContext, IDisposable
                 return null;
             }
 
-            // Load the assembly into this isolated context
-            _loadedAssembly = LoadFromAssemblyPath(_dllPath);
-            _logger?.LogDebug("Loaded assembly {AssemblyName} into context {ContextName}",
-                _loadedAssembly.GetName().Name, Name);
+            // Check if cached DLL is older than the framework DLL (code generator)
+            var dllLastWrite = File.GetLastWriteTimeUtc(_dllPath);
+            var frameworkLocation = typeof(CompilationCacheService).Assembly.Location;
+            if (!string.IsNullOrEmpty(frameworkLocation) && File.Exists(frameworkLocation))
+            {
+                var frameworkLastWrite = File.GetLastWriteTimeUtc(frameworkLocation);
+                if (dllLastWrite < frameworkLastWrite)
+                {
+                    _logger?.LogInformation("Cached assembly at {DllPath} is older than framework, deleting for regeneration", _dllPath);
+                    try
+                    {
+                        File.Delete(_dllPath);
+                        var pdbPath = Path.ChangeExtension(_dllPath, ".pdb");
+                        if (File.Exists(pdbPath))
+                            File.Delete(pdbPath);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger?.LogWarning(ex, "Failed to delete stale assembly at {DllPath}", _dllPath);
+                    }
+                    return null;
+                }
+            }
 
-            return _loadedAssembly;
+            // Load the assembly into this isolated context
+            try
+            {
+                _loadedAssembly = LoadFromAssemblyPath(_dllPath);
+                _logger?.LogDebug("Loaded assembly {AssemblyName} into context {ContextName}",
+                    _loadedAssembly.GetName().Name, Name);
+
+                return _loadedAssembly;
+            }
+            catch (BadImageFormatException ex)
+            {
+                _logger?.LogWarning(ex, "Corrupted assembly at {DllPath}, deleting for regeneration", _dllPath);
+                try
+                {
+                    File.Delete(_dllPath);
+                    // Also delete PDB if it exists
+                    var pdbPath = Path.ChangeExtension(_dllPath, ".pdb");
+                    if (File.Exists(pdbPath))
+                        File.Delete(pdbPath);
+                }
+                catch (Exception deleteEx)
+                {
+                    _logger?.LogWarning(deleteEx, "Failed to delete corrupted assembly at {DllPath}", _dllPath);
+                }
+                return null;
+            }
         }
     }
 
     /// <summary>
     /// Loads an assembly from byte arrays (for in-memory compilation).
-    /// </summary>
+    /// </summary>  
     public Assembly LoadFromBytes(byte[] assemblyBytes, byte[]? pdbBytes)
     {
         if (_disposed)
