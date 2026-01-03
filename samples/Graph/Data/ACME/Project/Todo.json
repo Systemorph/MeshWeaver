@@ -15,7 +15,7 @@
     "iconName": "TaskListSquare",
     "description": "A task with status, assignee, and due date",
     "displayOrder": 30,
-    "configuration": "config => config.WithContentType<Todo>().AddNodeTypeView()",
+    "configuration": "config => config.WithContentType<Todo>().AddDefaultViews()",
     "childrenQuery": "source:activity nodeType:ACME/Project/Todo sort:lastAccessedAt-desc limit:20"
   }
 }
