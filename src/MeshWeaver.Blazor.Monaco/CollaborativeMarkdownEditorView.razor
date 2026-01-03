@@ -30,6 +30,8 @@
                                   ShowLineNumbers="true"
                                   ShowBorder="true"
                                   CodeEditMode="true"
+                                  CompletionProvider="@CompletionProvider"
+                                  AsyncCompletionCallback="@AsyncCompletionCallback"
                                   ValueChanged="@OnValueChanged" />
             </div>
             <CommentPanel DocumentId="@BoundDocumentId"
@@ -60,6 +62,8 @@
                                   ShowLineNumbers="true"
                                   ShowBorder="true"
                                   CodeEditMode="true"
+                                  CompletionProvider="@CompletionProvider"
+                                  AsyncCompletionCallback="@AsyncCompletionCallback"
                                   ValueChanged="@OnValueChanged" />
             </div>
         </div>
@@ -120,6 +124,19 @@
     /// </summary>
     [CascadingParameter(Name = "DataContext")]
     public string? DataContext { get; set; }
+
+    /// <summary>
+    /// Optional completion provider configuration for the editor.
+    /// </summary>
+    [Parameter]
+    public CompletionProviderConfig? CompletionProvider { get; set; }
+
+    /// <summary>
+    /// Optional async callback for server-side completion.
+    /// When provided, this will be used instead of static CompletionProvider items.
+    /// </summary>
+    [Parameter]
+    public Func<string, Task<CompletionItem[]>>? AsyncCompletionCallback { get; set; }
 
     protected override void OnParametersSet()
     {

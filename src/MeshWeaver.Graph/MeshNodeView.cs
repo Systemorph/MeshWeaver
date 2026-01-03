@@ -78,8 +78,8 @@ public static class MeshNodeView
         var persistence = host.Hub.ServiceProvider.GetService<IPersistenceService>();
 
         // Get the node from the workspace stream
-        var nodeStream = host.Workspace.GetStream<MeshNode>()
-            ?? Observable.Return<IReadOnlyCollection<MeshNode>>(Array.Empty<MeshNode>());
+        var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? Array.Empty<MeshNode>())
+            ?? Observable.Return<MeshNode[]>(Array.Empty<MeshNode>());
 
         // Load children from persistence asynchronously
         var childrenStream = Observable.FromAsync(async () =>
@@ -325,8 +325,8 @@ public static class MeshNodeView
         var persistence = host.Hub.ServiceProvider.GetService<IPersistenceService>();
 
         // Get node from stream
-        var nodeStream = host.Workspace.GetStream<MeshNode>()
-            ?? Observable.Return<IReadOnlyCollection<MeshNode>>(Array.Empty<MeshNode>());
+        var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? Array.Empty<MeshNode>())
+            ?? Observable.Return<MeshNode[]>(Array.Empty<MeshNode>());
 
         // Load NodeType children
         var typesStream = Observable.FromAsync(async () =>
@@ -350,7 +350,7 @@ public static class MeshNodeView
         }).StartWith(Controls.Markdown($"# Settings\n\n*Loading...*"));
     }
 
-    private static UiControl BuildSettingsContent(LayoutAreaHost host, MeshNode? node, IReadOnlyList<MeshNode> nodeTypes)
+    private static UiControl BuildSettingsContent(LayoutAreaHost _, MeshNode? node, IReadOnlyList<MeshNode> nodeTypes)
     {
         var stack = Controls.Stack.WithWidth("100%").WithStyle("padding: 24px;");
 

@@ -488,7 +488,7 @@ internal class MeshNodeCompilationService(
     internal async Task<NodeCompilationResult?> LoadAndExtractConfigurationsFromReleaseAsync(
         NodeTypeRelease release,
         string releaseFolder,
-        CancellationToken ct)
+        CancellationToken _)
     {
         var sanitizedPath = release.GetSanitizedPath();
         var dllPath = Path.Combine(releaseFolder, $"{sanitizedPath}.dll");
