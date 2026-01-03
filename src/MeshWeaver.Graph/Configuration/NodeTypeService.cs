@@ -123,10 +123,19 @@ internal class NodeTypeService : INodeTypeService, IDisposable
 
     /// <summary>
     /// Gets the cached HubConfiguration function for a node type.
+    /// Applies the DefaultNodeHubConfiguration from MeshConfiguration if available.
     /// </summary>
     public Func<MessageHubConfiguration, MessageHubConfiguration>? GetCachedHubConfiguration(string nodeTypePath)
     {
-        return _hubConfigurations.GetValueOrDefault(nodeTypePath);
+        var hubConfig = _hubConfigurations.GetValueOrDefault(nodeTypePath);
+        var defaultConfig = meshConfiguration.DefaultNodeHubConfiguration;
+
+        // Return combined config if both exist
+        if (hubConfig != null && defaultConfig != null)
+            return config => defaultConfig(hubConfig(config));
+
+        // Return whichever one exists, or null if neither
+        return hubConfig ?? defaultConfig;
     }
 
     /// <inheritdoc />
@@ -149,22 +158,27 @@ internal class NodeTypeService : INodeTypeService, IDisposable
     /// <inheritdoc />
     public MeshNode EnrichWithNodeType(MeshNode node)
     {
-        // Skip if no NodeType or HubConfiguration is already set
-        if (string.IsNullOrEmpty(node.NodeType) || node.HubConfiguration != null)
+        // Skip if HubConfiguration is already set
+        if (node.HubConfiguration != null)
             return node;
 
         var nodeType = node.NodeType;
 
-        // Try cached HubConfiguration (sync fast path) - wrap in Observable.Return
-        var cachedHubConfig = GetCachedHubConfiguration(nodeType);
+        // Get cached HubConfiguration which includes DefaultNodeHubConfiguration
+        // This works even when nodeType is null/empty - returns DefaultNodeHubConfiguration if set
+        var cachedHubConfig = GetCachedHubConfiguration(nodeType ?? "");
         if (cachedHubConfig != null)
         {
             return node with { HubConfiguration = Observable.Return<Func<MessageHubConfiguration, MessageHubConfiguration>?>(cachedHubConfig) };
         }
 
-        // Not cached - return node with Observable that will emit when compiled
-        // The caller will subscribe only when actually creating the hub
-        return node with { HubConfiguration = GetHubConfigurationForNodeType(nodeType) };
+        // No cached config and no default config - if there's a NodeType, try async compilation
+        if (!string.IsNullOrEmpty(nodeType))
+        {
+            return node with { HubConfiguration = GetHubConfigurationForNodeType(nodeType) };
+        }
+
+        return node;
     }
 
     /// <summary>

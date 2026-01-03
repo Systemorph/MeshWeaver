@@ -13,6 +13,7 @@
     "name": "Marketing",
     "description": "Marketing content and stories for MeshWeaver proposals",
     "status": "Active",
-    "iconName": "Megaphone"
+    "iconName": "Megaphone",
+    "logo": "/static/avatars/Systemorph/Marketing/logo.svg"
   }
 }

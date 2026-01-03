@@ -3,6 +3,7 @@ using System.Reactive.Linq;
 using MeshWeaver.Layout;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.ContentCollections;
 
@@ -21,7 +22,7 @@ public class ContentService : IContentService
     private IContentService? parentContentService;
     private bool parentResolved;
     private readonly Lock parentLock = new();
-
+    private readonly ILogger<ContentService> logger;
     public ContentService(IMessageHub hub, AccessService accessService)
     {
         this.hub = hub;
@@ -30,6 +31,7 @@ public class ContentService : IContentService
         // Add collections from providers
         var providers = hub.ServiceProvider.GetServices<IContentCollectionConfigProvider>();
         collectionConfigs = new(providers.SelectMany(p => p.GetCollections()).ToDictionary(c => c.Name));
+        logger = hub.ServiceProvider.GetRequiredService<ILogger<ContentService>>();
     }
 
     private IContentService? GetParentContentService()
@@ -96,18 +98,15 @@ public class ContentService : IContentService
         }
 
         // Look up the source collection from parent content service
-        var parent = GetParentContentService();
+        var parent = GetParentContentService() ?? this;
         ContentCollectionConfig? sourceConfig = null;
 
-        if (parent != null)
-        {
-            sourceConfig = parent.GetCollectionConfig(sourceCollectionName);
-        }
+        sourceConfig = parent.GetCollectionConfig(sourceCollectionName);
 
         if (sourceConfig == null)
         {
-            System.Diagnostics.Debug.WriteLine(
-                $"No source collection '{sourceCollectionName}' found for mapped collection '{mappedConfig.Name}'");
+            logger.LogDebug(
+                "No source collection '{Source}' found for mapped collection '{Mapped}'", sourceCollectionName, mappedConfig.Name);
             return null;
         }
 

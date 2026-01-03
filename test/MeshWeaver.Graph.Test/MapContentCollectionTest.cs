@@ -67,7 +67,7 @@ public class MapContentCollectionTest(ITestOutputHelper output) : MonolithMeshTe
         // Arrange - create a client with MapContentCollection configured on it
         var client = GetClient(c => c
             .AddData(data => data)
-            .MapContentCollection("avatars", "TestStorage", "persons/alice"));
+            .MapContentCollection("avatars", "TestStorage", "avatars/alice"));
 
         Output.WriteLine($"Client address: {client.Address}");
 
@@ -93,8 +93,8 @@ public class MapContentCollectionTest(ITestOutputHelper output) : MonolithMeshTe
         var config = configs!.First();
         config.Name.Should().Be("avatars");
         config.SourceType.Should().Be("FileSystem");
-        // BasePath should end with persons/alice (forward slashes as used in MapContentCollection)
-        config.BasePath.Should().EndWith("persons/alice");
+        // BasePath should end with avatars/alice (forward slashes as used in MapContentCollection)
+        config.BasePath.Should().EndWith("avatars/alice");
     }
 
     /// <summary>
