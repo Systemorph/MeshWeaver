@@ -35,9 +35,9 @@ public record AgentDisplayInfo
     public int IndentLevel { get; init; }
 
     /// <summary>
-    /// FluentUI icon name
+    /// Icon URL or identifier
     /// </summary>
-    public string? IconName { get; init; }
+    public string? Icon { get; init; }
 
     /// <summary>
     /// Custom SVG path override

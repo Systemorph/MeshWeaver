@@ -82,7 +82,7 @@ internal class DynamicMeshNodeAttributeGenerator
         sb.AppendLine($"                Name = \"{EscapeString(node.Name)}\",");
         sb.AppendLine($"                NodeType = \"{EscapeString(node.NodeType)}\",");
         sb.AppendLine($"                Description = \"{EscapeString(node.Description)}\",");
-        sb.AppendLine($"                IconName = \"{EscapeString(node.IconName)}\",");
+        sb.AppendLine($"                Icon = \"{EscapeString(node.Icon)}\",");
         sb.AppendLine($"                DisplayOrder = {node.DisplayOrder},");
         sb.AppendLine($"                IsPersistent = {node.IsPersistent.ToString().ToLowerInvariant()},");
         sb.AppendLine($"                LastModified = DateTimeOffset.Parse(\"{node.LastModified:O}\"),");

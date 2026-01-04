@@ -21,6 +21,7 @@ public class MeshPlugin(IMessageHub hub, IAgentChat chat)
 {
     private readonly ILogger<MeshPlugin> logger = hub.ServiceProvider.GetRequiredService<ILogger<MeshPlugin>>();
     private readonly IPersistenceService? persistence = hub.ServiceProvider.GetService<IMeshCatalog>()?.Persistence;
+    private readonly IMeshQuery? meshQuery = hub.ServiceProvider.GetService<IMeshQuery>();
 
     private const string NodesArea = "_Nodes";
 
@@ -62,7 +63,7 @@ public class MeshPlugin(IMessageHub hub, IAgentChat chat)
                         node.Name,
                         node.NodeType,
                         node.Description,
-                        node.IconName
+                        node.Icon
                     });
                 }
                 return JsonSerializer.Serialize(result, hub.JsonSerializerOptions);
@@ -161,24 +162,26 @@ public class MeshPlugin(IMessageHub hub, IAgentChat chat)
         return $"Navigating to: {resolvedPath}";
     }
 
-    [Description("Searches the mesh using RSQL query or text search. " +
-                 "RSQL examples: 'nodeType==Organization', 'name=like=*acme*', 'status==active;price=gt=100'. " +
-                 "Use $search=text for fuzzy search, $scope=descendants to include children.")]
+    [Description("Searches the mesh using GitHub-style query syntax. " +
+                 "Examples: 'nodeType:Organization', 'name:*acme*', 'status:active'. " +
+                 "Use 'text' for text search, 'scope:descendants' to include children.")]
     public async Task<string> Search(
-        [Description("RSQL query or search text (e.g., 'nodeType==Agent', '$search=laptop')")] string query,
+        [Description("Query string (e.g., 'nodeType:Agent', 'laptop', 'path:graph scope:descendants')")] string query,
         [Description("Base path to search from (e.g., @graph). Empty for all.")] string? basePath = null)
     {
         logger.LogInformation("Search called with query={Query}, basePath={BasePath}", query, basePath);
 
-        if (persistence == null)
-            return "Persistence service not available.";
+        if (meshQuery == null)
+            return "Query service not available.";
 
-        var resolvedBase = basePath != null ? ResolvePath(basePath) : "";
+        // Build the full query with path prefix if basePath is provided
+        var resolvedBase = basePath != null ? ResolvePath(basePath) : null;
+        var fullQuery = string.IsNullOrEmpty(resolvedBase) ? query : $"path:{resolvedBase} {query}";
 
         try
         {
             var results = new List<object>();
-            await foreach (var item in persistence.QueryAsync(query, resolvedBase))
+            await foreach (var item in meshQuery.QueryAsync(new MeshQueryRequest { Query = fullQuery, Limit = 50 }))
             {
                 if (item is MeshNode node)
                 {
@@ -194,9 +197,6 @@ public class MeshPlugin(IMessageHub hub, IAgentChat chat)
                 {
                     results.Add(item);
                 }
-
-                if (results.Count >= 50)
-                    break; // Limit results
             }
 
             return JsonSerializer.Serialize(results, hub.JsonSerializerOptions);

@@ -20,7 +20,7 @@ public class RiskImportAgent(IMessageHub hub) : IInitializableAgent, IAgentWithT
 
     public string? GroupName => "Insurance";
     public int DisplayOrder => 1;
-    public string? IconName => "DocumentTable";
+    public string? Icon => "DocumentTable";
 
     public string Description => "Runs risk imports for a pricing. Creates mappings and imports property risk data from Excel files.";
 

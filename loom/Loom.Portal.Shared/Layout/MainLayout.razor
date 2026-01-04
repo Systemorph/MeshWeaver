@@ -2,9 +2,8 @@
 @using Icons = Microsoft.FluentUI.AspNetCore.Components.Icons
 @inherits PortalLayoutBase
 
-@* Inline styles to override scoped CSS from PortalLayoutBase *@
 <style>
-    /* Override grid to remove nav column - higher specificity with attribute selector */
+    /* Override grid to remove nav column */
     .layout[class],
     div.layout[class] {
         grid-template-columns: auto 1fr !important;
@@ -34,52 +33,22 @@
             "chat chat" !important;
     }
 
-    /* Hide nav bar and remove body border */
+    /* Hide nav bar */
     .layout[class] > .fluent-appbar,
     .layout[class] > .desktop-nav-menu {
         display: none !important;
     }
 
-    .layout[class] > .body-content {
+    /* Full width - no left border since no nav */
+    .layout[class] > .body-content,
+    .layout[class] > .messagebar-container {
         border-left: none !important;
-    }
-
-    /* Header links container - flexbox for search + buttons */
-    .layout[class] > header .links {
-        display: flex !important;
-        align-items: center !important;
-        flex: 1 !important;
-        gap: 8px !important;
-    }
-
-    /* Search bar styling */
-    .loom-search-container {
-        flex: 1;
-        display: flex;
-        justify-content: flex-end;
-        max-width: 400px;
-    }
-
-    .loom-search {
-        width: 100%;
-        min-width: 200px;
-    }
-
-    /* Mobile: hide search */
-    @@media (max-width: 767px) {
-        .loom-search-container {
-            display: none;
-        }
     }
 </style>
 
 @{
-    // GitHub-style header - search on right side of brand, then actions
+    // GitHub-style header - create menu
     HeaderLinks = @<text>
-        <div class="loom-search-container">
-            <FluentSearch Placeholder="Search..." @bind-Value="searchQuery"
-                @onkeydown="HandleSearchKeyDown" Class="loom-search" />
-        </div>
         <FluentButton Appearance="Appearance.Stealth" Id="create-menu-button"
             Title="Create new" aria-label="Create new" @onclick="@(() => isCreateMenuOpen = !isCreateMenuOpen)">
             <FluentIcon Value="@(new Icons.Regular.Size20.Add())" Color="Color.FillInverse" />
@@ -95,7 +64,7 @@
 
     // Mobile: Hamburger menu with essential actions
     MobileNavMenu = @<LoomMobileMenu IsOpen="@IsNavMenuOpen" OnClose="@CloseMobileNavMenu"
-        OnSearch="@HandleMobileSearch" OnOpenSettings="@OpenSiteSettingsAsync" />;
+         OnOpenSettings="@OpenSiteSettingsAsync" />;
 }
 
 @{
@@ -103,24 +72,8 @@
 }
 
 @code {
-    private string searchQuery = "";
     private bool isCreateMenuOpen;
 
-    private void HandleSearchKeyDown(KeyboardEventArgs e)
-    {
-        if (e.Key == "Enter" && !string.IsNullOrWhiteSpace(searchQuery))
-        {
-            NavigationManager.NavigateTo($"/search?q={Uri.EscapeDataString(searchQuery)}");
-        }
-    }
-
-    private void HandleMobileSearch(string query)
-    {
-        if (!string.IsNullOrWhiteSpace(query))
-        {
-            NavigationManager.NavigateTo($"/search?q={Uri.EscapeDataString(query)}");
-        }
-    }
 
     private void NavigateToCreate(string type)
     {

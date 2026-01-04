@@ -10,7 +10,7 @@ public class MeshNavigator(Lazy<IEnumerable<IAgentDefinition>> agentDefinitions)
     public string Name => "MeshNavigator";
 
     public int DisplayOrder => -100;  // Always first as default agent
-    public string? IconName => "Compass";
+    public string? Icon => "Compass";
 
     public string Description => "A helpful assistant for navigating the MeshWeaver portal and providing general assistance.";
 

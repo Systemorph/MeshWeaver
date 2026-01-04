@@ -119,9 +119,9 @@ public record MeshNode([property: Key] string Id, string? Namespace = null)
     public string? Description { get; init; }
 
     /// <summary>
-    /// Icon name for display in UI (e.g., "Shield", "Database", "Folder").
+    /// Icon URL or identifier for display in UI.
     /// </summary>
-    public string? IconName { get; init; }
+    public string? Icon { get; init; }
 
     /// <summary>
     /// Display order for sorting in autocomplete lists (lower values appear first).

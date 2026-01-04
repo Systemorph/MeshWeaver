@@ -15,7 +15,7 @@ public class MeshAgent(IMessageHub hub) : IAgentDefinition, IAgentWithTools, IAg
     public string Name => "MeshAgent";
     public string? GroupName => "Graph";
     public int DisplayOrder => 0;
-    public string? IconName => "Organization";
+    public string? Icon => "Organization";
 
     public string Description =>
         "Manages the mesh graph structure. Can read, create, update, and delete nodes. " +

@@ -106,8 +106,8 @@ public static class NodeTypeView
             infoCard = infoCard.WithView(BuildInfoRow("Display Name", content.DisplayName));
         if (!string.IsNullOrEmpty(content.Description))
             infoCard = infoCard.WithView(BuildInfoRow("Description", content.Description));
-        if (!string.IsNullOrEmpty(content.IconName))
-            infoCard = infoCard.WithView(BuildInfoRow("Icon", content.IconName));
+        if (!string.IsNullOrEmpty(content.Icon))
+            infoCard = infoCard.WithView(BuildInfoRow("Icon", content.Icon));
         infoCard = infoCard.WithView(BuildInfoRow("Display Order", content.DisplayOrder.ToString()));
 
         var hasCode = !string.IsNullOrEmpty(codeFile?.Code);
@@ -315,8 +315,8 @@ public static class NodeTypeView
         if (!string.IsNullOrEmpty(definition.Description))
             propsCard = propsCard.WithView(BuildInfoRow("Description", definition.Description));
 
-        if (!string.IsNullOrEmpty(definition.IconName))
-            propsCard = propsCard.WithView(BuildInfoRow("Icon", definition.IconName));
+        if (!string.IsNullOrEmpty(definition.Icon))
+            propsCard = propsCard.WithView(BuildInfoRow("Icon", definition.Icon));
 
         propsCard = propsCard.WithView(BuildInfoRow("Display Order", definition.DisplayOrder.ToString()));
 
@@ -610,7 +610,7 @@ public static class NodeTypeView
         // Initialize data streams
         host.UpdateData(displayNameDataId, content.DisplayName ?? "");
         host.UpdateData(descriptionDataId, content.Description ?? "");
-        host.UpdateData(iconNameDataId, content.IconName ?? "");
+        host.UpdateData(iconNameDataId, content.Icon ?? "");
         host.UpdateData(displayOrderDataId, content.DisplayOrder.ToString());
         host.UpdateData(childrenQueryDataId, content.ChildrenQuery ?? "");
         host.UpdateData(dependenciesDataId, content.Dependencies != null ? string.Join(", ", content.Dependencies) : "");
@@ -739,7 +739,7 @@ public static class NodeTypeView
                 {
                     DisplayName = string.IsNullOrWhiteSpace(displayName) ? null : displayName,
                     Description = string.IsNullOrWhiteSpace(description) ? null : description,
-                    IconName = string.IsNullOrWhiteSpace(iconName) ? null : iconName,
+                    Icon = string.IsNullOrWhiteSpace(iconName) ? null : iconName,
                     DisplayOrder = displayOrder,
                     ChildrenQuery = string.IsNullOrWhiteSpace(childrenQuery) ? null : childrenQuery,
                     Dependencies = dependencies,

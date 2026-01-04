@@ -8,6 +8,9 @@
     margin-top: 0.75rem;
     color: var(--neutral-foreground-rest);
     min-width: 0; /* Allow shrinking in flex context */
+    width: 100%;
+    max-width: 100%;
+    box-sizing: border-box;
     overflow: visible; /* Allow dropdown menus to overflow */
 }
 
@@ -31,7 +34,9 @@
     margin-top: 1rem;
     align-items: center;
     width: 100%;
+    max-width: 100%;
     min-width: 0; /* Allow shrinking */
+    box-sizing: border-box;
     position: relative;
     z-index: 100; /* Ensure dropdowns appear above other content */
 }
@@ -76,10 +81,18 @@
     flex: 1 1 0;
     min-width: 0;
     max-width: 100%;
+    overflow: hidden; /* Prevent children from overflowing horizontally */
 }
 
-/* All selectors grow equally */
-.chat-selectors > * {
+/* Context field - larger min-width */
+.selector-context {
+    flex: 1 1 0;
+    min-width: 120px;
+}
+
+/* Agent and model selectors */
+.selector-agent,
+.selector-model {
     flex: 1 1 0;
     min-width: 80px;
 }

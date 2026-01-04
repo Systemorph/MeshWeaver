@@ -1,7 +1,9 @@
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
 using FluentAssertions;
+using MeshWeaver.Domain;
 using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Hosting.Persistence.Query;
 using MeshWeaver.Mesh;
@@ -17,7 +19,7 @@ namespace MeshWeaver.Hosting.Monolith.Test;
 public class HierarchicalBrowsingTests
 {
     private readonly InMemoryPersistenceService _persistence = new();
-    private readonly InMemoryMeshQuery _meshQuery;
+    private readonly IMeshQuery _meshQuery;
 
     public HierarchicalBrowsingTests()
     {
@@ -91,9 +93,9 @@ public class HierarchicalBrowsingTests
     [Fact]
     public async Task Query_TopLevel_ShowsAllStories()
     {
-        // Query all Story nodes under Marketing
-        var query = "nodeType:Systemorph/Marketing/Story scope:descendants";
-        var results = await _persistence.QueryAsync(query, "Systemorph/Marketing").ToListAsync();
+        // Query all Story nodes under Marketing using path: in query string
+        var query = "path:Systemorph/Marketing nodeType:Systemorph/Marketing/Story scope:descendants";
+        var results = await _meshQuery.QueryAsync(MeshQueryRequest.FromQuery(query)).ToListAsync();
 
         // Should find all 7 stories (2 parent + 5 sub-stories)
         results.Should().HaveCount(7);
@@ -111,10 +113,10 @@ public class HierarchicalBrowsingTests
     [Fact]
     public async Task Query_SubStories_OnlyReturnsChildrenOfParent()
     {
-        // Query stories under ClaimsProcessing only
+        // Query stories under ClaimsProcessing only using path: in query string
         // scope:descendants includes the base path itself, so we expect 4 items
-        var query = "nodeType:Systemorph/Marketing/Story scope:descendants";
-        var results = await _persistence.QueryAsync(query, "Systemorph/Marketing/ClaimsProcessing").ToListAsync();
+        var query = "path:Systemorph/Marketing/ClaimsProcessing nodeType:Systemorph/Marketing/Story scope:descendants";
+        var results = await _meshQuery.QueryAsync(MeshQueryRequest.FromQuery(query)).ToListAsync();
 
         // Should find ClaimsProcessing + 3 sub-stories (4 total)
         results.Should().HaveCount(4);
@@ -130,23 +132,13 @@ public class HierarchicalBrowsingTests
     }
 
     [Fact]
-    public async Task Query_ByNamespace_RestrictsResults()
+    public async Task Query_ByPath_RestrictsResults()
     {
-        // Use IMeshQuery with namespace restriction
-        var request = new MeshQueryRequest
-        {
-            Query = "nodeType:Systemorph/Marketing/Story scope:descendants",
-            BasePath = "",
-            Namespace = "Systemorph/Marketing/ClaimsProcessing"
-        };
+        // Use IMeshQuery with path: in query string (replaces old Namespace property)
+        var query = "path:Systemorph/Marketing/ClaimsProcessing nodeType:Systemorph/Marketing/Story scope:descendants";
+        var results = await _meshQuery.QueryAsync(MeshQueryRequest.FromQuery(query)).ToListAsync();
 
-        var results = new List<object>();
-        await foreach (var item in _meshQuery.QueryAsync(request))
-        {
-            results.Add(item);
-        }
-
-        // Should only return nodes under ClaimsProcessing namespace (ClaimsProcessing + 3 sub-stories = 4)
+        // Should only return nodes under ClaimsProcessing path (ClaimsProcessing + 3 sub-stories = 4)
         results.Should().HaveCount(4);
         var paths = results.Cast<MeshNode>().Select(n => n.Path);
         paths.Should().AllSatisfy(p => p.Should().StartWith("Systemorph/Marketing/ClaimsProcessing"));
@@ -210,8 +202,9 @@ public class HierarchicalBrowsingTests
     [Fact]
     public async Task Query_TextSearch_FindsMatchingDescriptions()
     {
-        // Search for "AI" in descriptions
-        var results = await _persistence.QueryAsync("AI scope:descendants", "Systemorph/Marketing").ToListAsync();
+        // Search for "AI" in descriptions using path: in query string
+        var query = "path:Systemorph/Marketing AI scope:descendants";
+        var results = await _meshQuery.QueryAsync(MeshQueryRequest.FromQuery(query)).ToListAsync();
 
         // Should find Email Triage and Client Correspondence which mention AI
         results.Should().HaveCountGreaterThanOrEqualTo(2);
@@ -223,27 +216,78 @@ public class HierarchicalBrowsingTests
     [Fact]
     public async Task Query_WithLimit_RespectsLimit()
     {
-        var request = new MeshQueryRequest
-        {
-            Query = "nodeType:Systemorph/Marketing/Story scope:descendants",
-            BasePath = "Systemorph/Marketing",
-            Limit = 3
-        };
-
-        var results = new List<object>();
-        await foreach (var item in _meshQuery.QueryAsync(request))
-        {
-            results.Add(item);
-        }
+        // Use limit: in query string
+        var query = "path:Systemorph/Marketing nodeType:Systemorph/Marketing/Story scope:descendants limit:3";
+        var results = await _meshQuery.QueryAsync(MeshQueryRequest.FromQuery(query)).ToListAsync();
 
         results.Should().HaveCount(3);
     }
 
     [Fact]
+    public async Task Query_WithLimitProperty_OverridesQueryLimit()
+    {
+        // Limit property takes precedence over limit in query string
+        var request = new MeshQueryRequest
+        {
+            Query = "path:Systemorph/Marketing nodeType:Systemorph/Marketing/Story scope:descendants limit:10",
+            Limit = 2
+        };
+        var results = await _meshQuery.QueryAsync(request).ToListAsync();
+
+        // Limit property (2) overrides query string limit (10)
+        results.Should().HaveCount(2);
+    }
+
+    [Fact]
+    public async Task Query_WithSkipAndLimit_ReturnsPaginatedResults()
+    {
+        // Query all 7 stories to get consistent ordering
+        var allQuery = "path:Systemorph/Marketing nodeType:Systemorph/Marketing/Story scope:descendants";
+        var allResults = await _meshQuery.QueryAsync(MeshQueryRequest.FromQuery(allQuery)).ToListAsync();
+        allResults.Should().HaveCount(7);
+
+        // Get first page (skip 0, limit 3)
+        var page1Request = new MeshQueryRequest
+        {
+            Query = allQuery,
+            Skip = 0,
+            Limit = 3
+        };
+        var page1 = await _meshQuery.QueryAsync(page1Request).ToListAsync();
+        page1.Should().HaveCount(3);
+
+        // Get second page (skip 3, limit 3)
+        var page2Request = new MeshQueryRequest
+        {
+            Query = allQuery,
+            Skip = 3,
+            Limit = 3
+        };
+        var page2 = await _meshQuery.QueryAsync(page2Request).ToListAsync();
+        page2.Should().HaveCount(3);
+
+        // Get third page (skip 6, limit 3) - only 1 item left
+        var page3Request = new MeshQueryRequest
+        {
+            Query = allQuery,
+            Skip = 6,
+            Limit = 3
+        };
+        var page3 = await _meshQuery.QueryAsync(page3Request).ToListAsync();
+        page3.Should().HaveCount(1);
+
+        // All pages should contain different items
+        var allPaths = page1.Concat(page2).Concat(page3).Cast<MeshNode>().Select(n => n.Path).ToList();
+        allPaths.Should().HaveCount(7);
+        allPaths.Distinct().Should().HaveCount(7);
+    }
+
+    [Fact]
     public async Task Query_Hierarchy_IncludesAncestorsAndDescendants()
     {
-        // Query with hierarchy scope from a sub-story
-        var results = await _persistence.QueryAsync("scope:hierarchy", "Systemorph/Marketing/ClaimsProcessing/EmailTriage").ToListAsync();
+        // Query with hierarchy scope from a sub-story using path: in query string
+        var query = "path:Systemorph/Marketing/ClaimsProcessing/EmailTriage scope:hierarchy";
+        var results = await _meshQuery.QueryAsync(MeshQueryRequest.FromQuery(query)).ToListAsync();
 
         // Should include the node itself, ancestors, and any descendants
         var paths = results.Cast<MeshNode>().Select(n => n.Path).ToList();
@@ -252,4 +296,213 @@ public class HierarchicalBrowsingTests
         paths.Should().Contain("Systemorph/Marketing/ClaimsProcessing");
         paths.Should().Contain("Systemorph/Marketing");
     }
+}
+
+/// <summary>
+/// Tests for generic typed query extensions.
+/// </summary>
+public class TypedQueryTests
+{
+    private readonly InMemoryPersistenceService _persistence = new();
+    private readonly IMeshQuery _meshQuery;
+
+    public TypedQueryTests()
+    {
+        _meshQuery = new InMemoryMeshQuery(_persistence);
+    }
+
+    [Fact]
+    public async Task QueryAsync_Generic_ReturnsTypedResults()
+    {
+        // Arrange - save partition objects with $type
+        var products = new List<object>
+        {
+            new TestProduct { Id = "1", Name = "Laptop", Price = 999.99m },
+            new TestProduct { Id = "2", Name = "Phone", Price = 499.99m },
+            new TestOrder { Id = "order-1", CustomerId = "cust-1", Total = 1500m }
+        };
+        await _persistence.SavePartitionObjectsAsync("shop/inventory", null, products);
+
+        // Act - query for TestProduct type only
+        var results = await _meshQuery.QueryAsync<TestProduct>(
+            "path:shop/inventory scope:descendants"
+        ).ToListAsync();
+
+        // Assert - should only return TestProduct items
+        results.Should().HaveCount(2);
+        results.Should().AllBeOfType<TestProduct>();
+        results.Select(p => p.Name).Should().Contain(["Laptop", "Phone"]);
+    }
+
+    [Fact]
+    public async Task QueryAsync_Generic_WithTypeRegistry_UsesRegisteredName()
+    {
+        // Arrange - without type registry, uses CLR type name
+        var products = new List<object>
+        {
+            new TestProduct { Id = "1", Name = "Laptop", Price = 999.99m },
+            new TestOrder { Id = "order-1", CustomerId = "cust-1", Total = 1500m }
+        };
+        await _persistence.SavePartitionObjectsAsync("shop/data", null, products);
+
+        // Act - query without type registry (uses CLR type name "TestProduct")
+        var results = await _meshQuery.QueryAsync<TestProduct>(
+            "path:shop/data scope:descendants"
+        ).ToListAsync();
+
+        // Assert - should find TestProduct by CLR type name
+        results.Should().HaveCount(1);
+        results.First().Name.Should().Be("Laptop");
+    }
+
+    [Fact]
+    public async Task QueryAsync_Generic_WithPaging_ReturnsPagedTypedResults()
+    {
+        // Arrange
+        var products = Enumerable.Range(1, 10)
+            .Select(i => new TestProduct { Id = i.ToString(), Name = $"Product {i}", Price = i * 10m })
+            .Cast<object>()
+            .ToList();
+        await _persistence.SavePartitionObjectsAsync("catalog/products", null, products);
+
+        // Act - get page 2 (skip 3, take 3)
+        var results = await _meshQuery.QueryAsync<TestProduct>(
+            "path:catalog/products scope:descendants",
+            skip: 3,
+            limit: 3
+        ).ToListAsync();
+
+        // Assert
+        results.Should().HaveCount(3);
+        results.Should().AllBeOfType<TestProduct>();
+    }
+
+    [Fact]
+    public async Task QueryAsync_Generic_WithAdditionalFilters_CombinesWithTypeFilter()
+    {
+        // Arrange
+        var products = new List<object>
+        {
+            new TestProduct { Id = "1", Name = "Gaming Laptop", Price = 1999.99m },
+            new TestProduct { Id = "2", Name = "Business Laptop", Price = 899.99m },
+            new TestProduct { Id = "3", Name = "Phone", Price = 499.99m },
+            new TestOrder { Id = "order-1", CustomerId = "cust-1", Total = 1500m }
+        };
+        await _persistence.SavePartitionObjectsAsync("shop/all", null, products);
+
+        // Act - query for TestProduct with name filter
+        var results = await _meshQuery.QueryAsync<TestProduct>(
+            "path:shop/all name:*Laptop* scope:descendants"
+        ).ToListAsync();
+
+        // Assert - should only return laptops (both gaming and business)
+        results.Should().HaveCount(2);
+        results.Should().OnlyContain(p => p.Name.Contains("Laptop"));
+    }
+
+    [Fact]
+    public async Task QueryAsync_Generic_NoMatchingType_ReturnsEmpty()
+    {
+        // Arrange - save only orders, no products
+        var orders = new List<object>
+        {
+            new TestOrder { Id = "order-1", CustomerId = "cust-1", Total = 100m },
+            new TestOrder { Id = "order-2", CustomerId = "cust-2", Total = 200m }
+        };
+        await _persistence.SavePartitionObjectsAsync("shop/orders", null, orders);
+
+        // Act - query for TestProduct (none exist)
+        var results = await _meshQuery.QueryAsync<TestProduct>(
+            "path:shop/orders scope:descendants"
+        ).ToListAsync();
+
+        // Assert
+        results.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task QueryAsync_Generic_MeshNode_WorksWithNodes()
+    {
+        // Arrange
+        await _persistence.SaveNodeAsync(MeshNode.FromPath("org/acme") with { Name = "Acme Corp" });
+        await _persistence.SaveNodeAsync(MeshNode.FromPath("org/contoso") with { Name = "Contoso Ltd" });
+
+        // Act - query for MeshNode type
+        var results = await _meshQuery.QueryAsync<MeshNode>(
+            "path:org scope:descendants"
+        ).ToListAsync();
+
+        // Assert
+        results.Should().HaveCount(2);
+        results.Select(n => n.Name).Should().Contain(["Acme Corp", "Contoso Ltd"]);
+    }
+}
+
+/// <summary>
+/// Test product class for typed query tests.
+/// </summary>
+public record TestProduct
+{
+    public string Id { get; init; } = "";
+    public string Name { get; init; } = "";
+    public decimal Price { get; init; }
+}
+
+/// <summary>
+/// Test order class for typed query tests.
+/// </summary>
+public record TestOrder
+{
+    public string Id { get; init; } = "";
+    public string CustomerId { get; init; } = "";
+    public decimal Total { get; init; }
+}
+
+/// <summary>
+/// Simple type registry for testing purposes.
+/// </summary>
+public class TestTypeRegistry : ITypeRegistry
+{
+    private readonly Dictionary<Type, string> _typeToName = new();
+    private readonly Dictionary<string, Type> _nameToType = new(StringComparer.OrdinalIgnoreCase);
+
+    public TestTypeRegistry Register<T>(string name)
+    {
+        _typeToName[typeof(T)] = name;
+        _nameToType[name] = typeof(T);
+        return this;
+    }
+
+    public bool TryGetCollectionName(Type type, out string? typeName)
+    {
+        return _typeToName.TryGetValue(type, out typeName);
+    }
+
+    public Type? GetType(string name)
+    {
+        return _nameToType.TryGetValue(name, out var type) ? type : null;
+    }
+
+    public bool TryGetType(string name, out ITypeDefinition? type)
+    {
+        type = null;
+        return false;
+    }
+
+    // Not implemented - not needed for tests
+    public ITypeRegistry WithType<TEvent>() => this;
+    public ITypeRegistry WithType<TEvent>(string name) => this;
+    public ITypeRegistry WithType(Type type) => this;
+    public ITypeRegistry WithType(Type type, string typeName) => this;
+    public KeyFunction? GetKeyFunction(string collection) => null;
+    public KeyFunction? GetKeyFunction(Type type) => null;
+    public ITypeDefinition WithKeyFunction(string collection, KeyFunction keyFunction) => null!;
+    public ITypeRegistry WithTypesFromAssembly(Type type, Func<Type, bool> filter) => this;
+    public ITypeRegistry WithTypes(params IEnumerable<Type> types) => this;
+    public ITypeRegistry WithTypes(params IEnumerable<KeyValuePair<string, Type>> types) => this;
+    public string GetOrAddType(Type valueType, string? defaultName = null) => defaultName ?? valueType.Name;
+    public ITypeRegistry WithKeyFunctionProvider(Func<Type, KeyFunction?> key) => this;
+    public ITypeDefinition? GetTypeDefinition(Type type, bool create = true, string? typeName = null) => null;
+    public ITypeDefinition? GetTypeDefinition(string collection) => null;
+    public IEnumerable<KeyValuePair<string, ITypeDefinition>> Types => [];
 }

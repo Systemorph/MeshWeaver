@@ -47,7 +47,7 @@ public class FileSystemPersistenceTest : IDisposable
             Name = "Organization 1",
             Description = "First organization",
             NodeType = "org",
-            IconName = "Building",
+            Icon = "Building",
             DisplayOrder = 10
         };
 

@@ -69,14 +69,14 @@ public record Story
             Name = "Story",
             NodeType = "NodeType",
             Description = "A user story",
-            IconName = "Document",
+            Icon = "Document",
             DisplayOrder = 30,
             IsPersistent = true,
             Content = new NodeTypeDefinition
             {
                 Id = "story", Namespace = "Type",
                 DisplayName = "Story",
-                IconName = "Document",
+                Icon = "Document",
                 Description = "A user story",
                 DisplayOrder = 30
             }
@@ -102,14 +102,14 @@ public record Graph
             Name = "Graph",
             NodeType = "NodeType",
             Description = "The graph root",
-            IconName = "Diagram",
+            Icon = "Diagram",
             DisplayOrder = 0,
             IsPersistent = true,
             Content = new NodeTypeDefinition
             {
                 Id = "graph", Namespace = "Type",
                 DisplayName = "Graph",
-                IconName = "Diagram",
+                Icon = "Diagram",
                 Description = "The graph root",
                 DisplayOrder = 0
             }

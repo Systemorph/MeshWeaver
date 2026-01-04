@@ -36,7 +36,7 @@ public class InsuranceApplicationAttribute : MeshNodeAttribute
         {
             Name = "Pricing",
             Description = "Insurance pricing submissions",
-            IconName = "Calculator",
+            Icon = "Calculator",
             DisplayOrder = 100,
             AddressSegments = 3, // pricing/company/year
             HubConfiguration = Observable.Return<Func<MessageHubConfiguration, MessageHubConfiguration>?>(InsuranceApplicationExtensions.ConfigureSinglePricingApplication),

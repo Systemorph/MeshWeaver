@@ -140,6 +140,22 @@
     ::deep.layout>header>.header-gutters {
         margin-left: 0;
     }
+
+    /* Header links container */
+    ::deep .links {
+        display: flex;
+        align-items: center;
+        flex: 1;
+        gap: 8px;
+    }
+
+    /* Search container in header */
+    ::deep .search-container {
+        flex: 1;
+        display: flex;
+        justify-content: flex-end;
+        max-width: 400px;
+    }
 }
 
 @media (max-width: 768px) {
@@ -347,6 +363,13 @@
         display: flex;
         pointer-events: auto;
         flex-direction: column;
+    }
+}
+
+/* Mobile: hide search in header */
+@media (max-width: 767px) {
+    ::deep .search-container {
+        display: none;
     }
 }
 

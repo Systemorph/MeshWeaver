@@ -37,6 +37,7 @@ public class DynamicGraphIntegrationTest : MonolithMeshTestBase
     private string? _testDirectory;
 
     private IPersistenceService Persistence => Mesh.ServiceProvider.GetRequiredService<IPersistenceService>();
+    private IMeshQuery MeshQuery => Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
     private IMeshCatalog MeshCatalog => Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
 
     /// <summary>
@@ -97,7 +98,7 @@ public enum StoryStatus
             Name = "Story",
             NodeType = "NodeType",
             Description = "A user story or task",
-            IconName = "Document",
+            Icon = "Document",
             DisplayOrder = 30,
             IsPersistent = true,
             Content = new NodeTypeDefinition
@@ -105,7 +106,7 @@ public enum StoryStatus
                 Id = "story",
                 Namespace = "Type",
                 DisplayName = "Story",
-                IconName = "Document",
+                Icon = "Document",
                 Description = "A user story or task",
                 DisplayOrder = 30,
                 Configuration = "config => config"
@@ -132,7 +133,7 @@ public record Organization
             Name = "Organization",
             NodeType = "NodeType",
             Description = "An organization",
-            IconName = "Building",
+            Icon = "Building",
             DisplayOrder = 10,
             IsPersistent = true,
             Content = new NodeTypeDefinition
@@ -140,7 +141,7 @@ public record Organization
                 Id = "org",
                 Namespace = "type",
                 DisplayName = "Organization",
-                IconName = "Building",
+                Icon = "Building",
                 Description = "An organization",
                 DisplayOrder = 10,
                 Configuration = "config => config"
@@ -167,7 +168,7 @@ public record Project
             Name = "Project",
             NodeType = "NodeType",
             Description = "A project",
-            IconName = "Folder",
+            Icon = "Folder",
             DisplayOrder = 20,
             IsPersistent = true,
             Content = new NodeTypeDefinition
@@ -175,7 +176,7 @@ public record Project
                 Id = "project",
                 Namespace = "Type",
                 DisplayName = "Project",
-                IconName = "Folder",
+                Icon = "Folder",
                 Description = "A project",
                 DisplayOrder = 20,
                 Configuration = "config => config"
@@ -201,7 +202,7 @@ public record Graph
             Name = "Graph",
             NodeType = "NodeType",
             Description = "The graph root",
-            IconName = "Diagram",
+            Icon = "Diagram",
             DisplayOrder = 0,
             IsPersistent = true,
             Content = new NodeTypeDefinition
@@ -209,7 +210,7 @@ public record Graph
                 Id = "graph",
                 Namespace = "Type",
                 DisplayName = "Graph",
-                IconName = "Diagram",
+                Icon = "Diagram",
                 Description = "The graph root",
                 DisplayOrder = 0,
                 Configuration = "config => config"
@@ -814,17 +815,14 @@ public record Graph
     {
         // Act - query for all nodes with nodeType type/org
         var query = "nodeType:type/org scope:descendants";
-        var results = new List<object>();
-        await foreach (var item in Persistence.QueryAsync(query, ""))
-        {
-            results.Add(item);
-            Output.WriteLine($"Found: {item}");
-        }
+        var nodes = await MeshQuery.QueryAsync<MeshNode>(query).ToListAsync();
+        foreach (var node in nodes)
+            Output.WriteLine($"Found: {node.Path}");
 
         // Assert
-        results.Should().NotBeEmpty("Query should return organizations");
-        results.OfType<MeshNode>().Should().Contain(n => n.Path == "graph/org1", "Should find org1");
-        results.OfType<MeshNode>().Should().Contain(n => n.Path == "graph/org2", "Should find org2");
+        nodes.Should().NotBeEmpty("Query should return organizations");
+        nodes.Should().Contain(n => n.Path == "graph/org1", "Should find org1");
+        nodes.Should().Contain(n => n.Path == "graph/org2", "Should find org2");
     }
 
     #endregion

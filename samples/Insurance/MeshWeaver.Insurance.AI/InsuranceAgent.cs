@@ -23,7 +23,7 @@ public class InsuranceAgent(IMessageHub hub) : IInitializableAgent, IAgentWithTo
 
     public string? GroupName => "Insurance";
     public int DisplayOrder => 0;
-    public string? IconName => "Shield";
+    public string? Icon => "Shield";
 
     public string Description =>
         "Handles all questions and actions related to insurance pricings, property risks, and dimensions. " +

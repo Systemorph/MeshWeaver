@@ -136,7 +136,7 @@ public class AgentChatFactoryProvider : IAgentChatFactoryProvider
                 GroupName = a.GroupName,
                 DisplayOrder = a.DisplayOrder,
                 IndentLevel = indentLevels.GetValueOrDefault(a.Id, 0),
-                IconName = a.IconName,
+                Icon = a.Icon,
                 CustomIconSvg = a.CustomIconSvg,
                 AgentConfiguration = a
             })

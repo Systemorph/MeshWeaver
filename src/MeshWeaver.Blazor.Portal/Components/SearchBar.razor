@@ -1,19 +1,22 @@
+@using MeshWeaver.Mesh
 <FluentAutocomplete @ref="searchAutocomplete"
-                    TOption="NavItem"
+                    TOption="MeshNode"
                     Width="250px"
-                    AutoComplete="off"
+                    AutoComplete="on"
                     Placeholder="Type / to search..."
                     MaximumSelectedOptions="1"
-                    OptionText="@(item => item.Title)"
+                    OptionText="@(item => item.Name)"
                     @bind-ValueText="@searchTerm"
                     @bind-SelectedOptions="selectedOptions"
                     @bind-SelectedOptions:after="HandleSearchClicked"
                     OnOptionsSearch="@HandleSearchInputAsync"
-                    ShowOverlayOnEmptyResults="false">
+                    ShowOverlayOnEmptyResults="false"
+                    @onkeydown="@HandleKeyDown">
     <OptionTemplate>
         <span slot="start">
-            <FluentIcon Value="@(context.Icon)" Class="search-result-icon" Color="Color.Neutral" Slot="start"/>
+            <img src="@context.Icon"/>
         </span>
-        @((MarkupString)@context.Title)
+        <h4>@context.Name</h4>
+        @context.Description
     </OptionTemplate>
 </FluentAutocomplete>

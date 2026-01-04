@@ -1,0 +1,156 @@
+@page "/search"
+@using MeshWeaver.Mesh
+@using MeshWeaver.Mesh.Services
+@inject IMeshQuery? MeshQuery
+@inject NavigationManager NavigationManager
+
+<PageTitle>Search - Loom</PageTitle>
+
+<div class="search-page">
+    <div class="search-header">
+        <h1>Search Results</h1>
+        @if (!string.IsNullOrWhiteSpace(Query))
+        {
+            <p class="search-query">Results for: <strong>@Query</strong></p>
+        }
+    </div>
+
+    @if (isLoading)
+    {
+        <FluentProgressRing />
+    }
+    else if (results == null || results.Length == 0)
+    {
+        <div class="no-results">
+            @if (string.IsNullOrWhiteSpace(Query))
+            {
+                <p>Enter a search query to find items.</p>
+            }
+            else
+            {
+                <p>No results found for "<strong>@Query</strong>"</p>
+                <p class="search-tips">
+                    Try different keywords or use search syntax:
+                    <br /><code>name:*claims*</code> - Search by name
+                    <br /><code>nodeType:Project</code> - Filter by type
+                    <br /><code>scope:descendants</code> - Search descendants
+                </p>
+            }
+        </div>
+    }
+    else
+    {
+        <p class="results-count">Found @results.Length item@(results.Length != 1 ? "s" : "")</p>
+
+        @foreach (var group in results.GroupBy(n => n.NodeType ?? "Other").OrderBy(g => g.Key))
+        {
+            <h3 class="type-header">@group.Key (@group.Count())</h3>
+            <div class="results-grid">
+                @foreach (var node in group)
+                {
+                    <FluentCard Class="result-card" @onclick="@(() => NavigateToNode(node))">
+                        <div class="result-content">
+                            @if (!string.IsNullOrEmpty(GetImageUrl(node)))
+                            {
+                                <img src="@GetImageUrl(node)" alt="@node.Name" class="result-image" />
+                            }
+                            else
+                            {
+                                <div class="result-placeholder">
+                                    <span>@GetInitial(node)</span>
+                                </div>
+                            }
+                            <div class="result-text">
+                                <FluentLabel Typo="Typography.Body" Weight="FontWeight.Bold">@node.Name</FluentLabel>
+                                @if (!string.IsNullOrEmpty(node.Description))
+                                {
+                                    <FluentLabel Typo="Typography.Body" Class="result-description">@TruncateDescription(node.Description)</FluentLabel>
+                                }
+                                <FluentLabel Typo="Typography.Body" Class="result-path">@node.Path</FluentLabel>
+                            </div>
+                        </div>
+                    </FluentCard>
+                }
+            </div>
+        }
+    }
+</div>
+
+@code {
+    [SupplyParameterFromQuery(Name = "q")]
+    public string? Query { get; set; }
+
+    private MeshNode[]? results;
+    private bool isLoading;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        await SearchAsync();
+    }
+
+    private async Task SearchAsync()
+    {
+        if (string.IsNullOrWhiteSpace(Query) || MeshQuery == null)
+        {
+            results = [];
+            return;
+        }
+
+        isLoading = true;
+        StateHasChanged();
+
+        try
+        {
+            var request = new MeshQueryRequest
+            {
+                Query = Query,
+                Limit = 50
+            };
+
+            results = await MeshQuery.QueryAsync<MeshNode>(request).ToArrayAsync();
+        }
+        catch
+        {
+            results = [];
+        }
+        finally
+        {
+            isLoading = false;
+        }
+    }
+
+    private void NavigateToNode(MeshNode node)
+    {
+        NavigationManager.NavigateTo($"/{node.Path}");
+    }
+
+    private string GetInitial(MeshNode node)
+    {
+        return !string.IsNullOrEmpty(node.Name) ? node.Name[0].ToString().ToUpper() : "?";
+    }
+
+    private string TruncateDescription(string description)
+    {
+        return description.Length > 100 ? description.Substring(0, 97) + "..." : description;
+    }
+
+    private string? GetImageUrl(MeshNode? node)
+    {
+        if (node?.Content == null)
+            return null;
+
+        if (node.Content is System.Text.Json.JsonElement jsonElement)
+        {
+            if (jsonElement.TryGetProperty("avatar", out var avatarProp) && avatarProp.ValueKind == System.Text.Json.JsonValueKind.String)
+                return avatarProp.GetString();
+            if (jsonElement.TryGetProperty("Avatar", out var avatarPascalProp) && avatarPascalProp.ValueKind == System.Text.Json.JsonValueKind.String)
+                return avatarPascalProp.GetString();
+            if (jsonElement.TryGetProperty("logo", out var logoProp) && logoProp.ValueKind == System.Text.Json.JsonValueKind.String)
+                return logoProp.GetString();
+            if (jsonElement.TryGetProperty("Logo", out var logoPascalProp) && logoPascalProp.ValueKind == System.Text.Json.JsonValueKind.String)
+                return logoPascalProp.GetString();
+        }
+
+        return null;
+    }
+}

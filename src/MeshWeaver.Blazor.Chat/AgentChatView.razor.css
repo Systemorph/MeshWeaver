@@ -29,6 +29,8 @@ body {
     display: flex;
     flex-direction: column;
     min-width: 0;
+    width: 100%;
+    max-width: 100%;
     position: relative;
     min-height: 0;
     overflow: hidden;
@@ -56,6 +58,9 @@ body {
     position: relative;
     z-index: 100; /* Higher z-index for dropdown menus */
     min-width: 0; /* Allow shrinking */
+    width: 100%;
+    max-width: 100%;
+    box-sizing: border-box;
     overflow: visible; /* Allow dropdown menus to overflow */
 }
 

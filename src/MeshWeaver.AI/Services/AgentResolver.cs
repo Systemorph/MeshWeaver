@@ -263,7 +263,7 @@ public class AgentResolver : IAgentResolver
             Id = node.Id,
             DisplayName = node.Name,
             Description = node.Description,
-            IconName = node.IconName,
+            Icon = node.Icon,
             DisplayOrder = node.DisplayOrder
         };
     }

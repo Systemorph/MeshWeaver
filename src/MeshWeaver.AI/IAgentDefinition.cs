@@ -33,9 +33,9 @@ public interface IAgentDefinition
     int DisplayOrder => 0;
 
     /// <summary>
-    /// Gets the FluentUI icon name (e.g., "Shield", "Document", "Database")
+    /// Gets the icon URL or identifier
     /// </summary>
-    string? IconName => null;
+    string? Icon => null;
 
     /// <summary>
     /// Gets custom SVG path override for the icon (optional)

@@ -33,9 +33,9 @@ public record AgentConfiguration
     public string? Instructions { get; init; }
 
     /// <summary>
-    /// FluentUI icon name (e.g., "Compass", "Shield", "Database").
+    /// Icon URL or identifier for the agent.
     /// </summary>
-    public string? IconName { get; init; }
+    public string? Icon { get; init; }
 
     /// <summary>
     /// Custom SVG path for icon (optional override).

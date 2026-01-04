@@ -1,9 +1,9 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using Microsoft.AspNetCore.Components;
+using Microsoft.AspNetCore.Components.Web;
 using Microsoft.FluentUI.AspNetCore.Components;
-using Icons = Microsoft.FluentUI.AspNetCore.Components.Icons;
 
 namespace MeshWeaver.Blazor.Portal.Components;
 
@@ -18,9 +18,9 @@ public partial class SearchBar : IAsyncDisposable
     [Inject]
     public IMeshQuery? MeshQuery { get; set; }
 
-    private FluentAutocomplete<NavItem>? searchAutocomplete;
+    private FluentAutocomplete<MeshNode>? searchAutocomplete;
     private string? searchTerm;
-    private IEnumerable<NavItem> selectedOptions = [];
+    private IEnumerable<MeshNode> selectedOptions = [];
 
     protected override void OnInitialized()
     {
@@ -36,7 +36,7 @@ public partial class SearchBar : IAsyncDisposable
         return Task.CompletedTask;
     }
 
-    private async Task HandleSearchInputAsync(OptionsSearchEventArgs<NavItem> e)
+    private async Task HandleSearchInputAsync(OptionsSearchEventArgs<MeshNode> e)
     {
         searchTerm = e.Text;
 
@@ -59,43 +59,16 @@ public partial class SearchBar : IAsyncDisposable
             Limit = 10
         };
 
-        var results = new List<NavItem>();
-        await foreach (var item in MeshQuery.QueryAsync(request))
-        {
-            if (item is MeshNode node)
-            {
-                var path = !string.IsNullOrEmpty(node.Namespace)
-                    ? $"{node.Namespace}/{node.Id}"
-                    : node.Id;
-
-                var icon = GetIconForNodeType(node.NodeType);
-                results.Add(new NavItem(node.Name ?? node.Id, $"/{path}", icon));
-            }
-
-            if (results.Count >= 10) break;
-        }
+        var results = await MeshQuery.QueryAsync<MeshNode>(request).ToArrayAsync();
 
         e.Items = results;
     }
 
-    private static Icon GetIconForNodeType(string? nodeType)
-    {
-        return nodeType switch
-        {
-            "Agent" => new Icons.Regular.Size16.Bot(),
-            "Story" => new Icons.Regular.Size16.Notebook(),
-            "Project" => new Icons.Regular.Size16.Folder(),
-            "Organization" => new Icons.Regular.Size16.Building(),
-            "Person" => new Icons.Regular.Size16.Person(),
-            "Document" => new Icons.Regular.Size16.Document(),
-            _ => new Icons.Regular.Size16.Circle()
-        };
-    }
 
     private void HandleSearchClicked()
     {
         searchTerm = null;
-        var targetHref = selectedOptions.SingleOrDefault()?.Href;
+        var targetHref = selectedOptions.SingleOrDefault()?.Path;
         selectedOptions = [];
         InvokeAsync(StateHasChanged);
 
@@ -106,6 +79,16 @@ public partial class SearchBar : IAsyncDisposable
         }
 
         NavigationManager.NavigateTo(targetHref ?? throw new UnreachableException("Item has no href"));
+    }
+
+    private void HandleKeyDown(KeyboardEventArgs e)
+    {
+        // Navigate to search page when Enter is pressed (and no autocomplete item is selected)
+        if (e.Key == "Enter" && !string.IsNullOrWhiteSpace(searchTerm) && !selectedOptions.Any())
+        {
+            var encodedQuery = Uri.EscapeDataString(searchTerm);
+            NavigationManager.NavigateTo($"/search?q={encodedQuery}");
+        }
     }
 
     public ValueTask DisposeAsync()

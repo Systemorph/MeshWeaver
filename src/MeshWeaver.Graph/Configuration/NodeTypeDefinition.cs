@@ -27,9 +27,9 @@ public record NodeTypeDefinition
     public string? DisplayName { get; init; }
 
     /// <summary>
-    /// Icon name for UI (e.g., "Document", "Folder").
+    /// Icon URL or identifier for UI.
     /// </summary>
-    public string? IconName { get; init; }
+    public string? Icon { get; init; }
 
     /// <summary>
     /// Description of this node type.

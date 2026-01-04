@@ -102,7 +102,7 @@ public class FileSystemPersistenceService(IStorageAdapter storageAdapter) : IPer
             Name = sourceNode.Name,
             NodeType = sourceNode.NodeType,
             Description = sourceNode.Description,
-            IconName = sourceNode.IconName,
+            Icon = sourceNode.Icon,
             DisplayOrder = sourceNode.DisplayOrder,
             AddressSegments = sourceNode.AddressSegments,
             IsPersistent = sourceNode.IsPersistent,

@@ -36,30 +36,20 @@ public interface IMeshQuery
 
 /// <summary>
 /// Request parameters for mesh queries.
+/// Most query parameters are expressed in the query string itself.
 /// </summary>
 public record MeshQueryRequest
 {
     /// <summary>
-    /// GitHub-style query string.
+    /// GitHub-style query string with all parameters.
     /// Examples:
     /// - "nodeType:Story" - filter by property
+    /// - "path:Org/Project nodeType:Story scope:descendants" - scoped search
     /// - "status:Open laptop" - filter + text search
-    /// - "nodeType:Story scope:descendants" - with scope
     /// - "sort:lastAccessedAt-desc limit:20" - with ordering and limit
+    /// - "source:activity" - query activity records
     /// </summary>
     public string Query { get; init; } = "";
-
-    /// <summary>
-    /// Base path to search from. Empty string means root.
-    /// Combined with Scope to determine search area.
-    /// </summary>
-    public string BasePath { get; init; } = "";
-
-    /// <summary>
-    /// Optional namespace restriction. When set, only returns nodes
-    /// whose path starts with this namespace.
-    /// </summary>
-    public string? Namespace { get; init; }
 
     /// <summary>
     /// User ID for access control filtering.
@@ -68,13 +58,12 @@ public record MeshQueryRequest
     public string? UserId { get; init; }
 
     /// <summary>
-    /// When true, queries user activity records instead of or in addition to nodes.
-    /// Equivalent to including "source:activity" in query.
+    /// Number of results to skip (for paging).
     /// </summary>
-    public bool IncludeActivities { get; init; }
+    public int? Skip { get; init; }
 
     /// <summary>
-    /// Override limit (takes precedence over limit in query string).
+    /// Maximum number of results to return (takes precedence over limit in query string).
     /// </summary>
     public int? Limit { get; init; }
 
@@ -84,10 +73,10 @@ public record MeshQueryRequest
     public static MeshQueryRequest FromQuery(string query) => new() { Query = query };
 
     /// <summary>
-    /// Creates a new request with query and base path.
+    /// Creates a new request with query and user ID.
     /// </summary>
-    public static MeshQueryRequest FromQuery(string query, string basePath)
-        => new() { Query = query, BasePath = basePath };
+    public static MeshQueryRequest FromQuery(string query, string? userId)
+        => new() { Query = query, UserId = userId };
 }
 
 /// <summary>

@@ -18,7 +18,7 @@ namespace MeshWeaver.Documentation.AI
         /// <inheritdoc />
         public int DisplayOrder => 100;
         /// <inheritdoc />
-        public string? IconName => "Games";
+        public string? Icon => "Games";
 
         /// <summary>
         /// name of the other player this agent can delegate to

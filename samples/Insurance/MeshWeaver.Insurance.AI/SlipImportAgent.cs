@@ -20,7 +20,7 @@ public class SlipImportAgent(IMessageHub hub) : IInitializableAgent, IAgentWithT
 
     public string? GroupName => "Insurance";
     public int DisplayOrder => 2;
-    public string? IconName => "DocumentPdf";
+    public string? Icon => "DocumentPdf";
 
     public string? GetPreferredModel(IReadOnlyList<string> availableModels)
         => availableModels.FirstOrDefault(m => m.Contains("claude-sonnet-4-5", StringComparison.OrdinalIgnoreCase));

@@ -21,7 +21,7 @@ public class TodoAgent(IMessageHub hub) : IInitializableAgent, IAgentWithTools, 
 
     public string? GroupName => "Todo";
     public int DisplayOrder => 0;
-    public string? IconName => "CheckmarkSquare";
+    public string? Icon => "CheckmarkSquare";
 
     public string Description => "Handles all questions and actions related to todo items, categories, and task management. Provides access to todo data, allows creation, categorization, and management of todo items.";
     public string Instructions =>
