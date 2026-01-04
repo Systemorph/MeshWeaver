@@ -348,7 +348,7 @@ public record ComponentType
             Name = "Header Component",
             NodeType = "type/component",
             Description = "The main header",
-            IconName = "Header",
+            Icon = "Header",
             DisplayOrder = 1,
             LastModified = DateTimeOffset.UtcNow
         };
@@ -380,7 +380,7 @@ public record ComponentType
         loadedNode.Name.Should().Be("Header Component");
         loadedNode.NodeType.Should().Be("type/component");
         loadedNode.Description.Should().Be("The main header");
-        loadedNode.IconName.Should().Be("Header");
+        loadedNode.Icon.Should().Be("Header");
         loadedNode.DisplayOrder.Should().Be(1);
     }
 

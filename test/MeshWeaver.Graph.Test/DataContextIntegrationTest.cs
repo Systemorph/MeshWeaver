@@ -72,7 +72,7 @@ public class DataContextIntegrationTest : MonolithMeshTestBase
             Name = "Story",
             NodeType = "NodeType",
             Description = "A user story or task",
-            IconName = "Document",
+            Icon = "Document",
             DisplayOrder = 30,
             IsPersistent = true,
             Content = new NodeTypeDefinition
@@ -80,7 +80,7 @@ public class DataContextIntegrationTest : MonolithMeshTestBase
                 Id = "story",
                 Namespace = "Type",
                 DisplayName = "Story",
-                IconName = "Document",
+                Icon = "Document",
                 Description = "A user story or task",
                 DisplayOrder = 30
             }
@@ -99,7 +99,7 @@ public class DataContextIntegrationTest : MonolithMeshTestBase
             Name = "Graph",
             NodeType = "NodeType",
             Description = "The graph root",
-            IconName = "Diagram",
+            Icon = "Diagram",
             DisplayOrder = 0,
             IsPersistent = true,
             Content = new NodeTypeDefinition
@@ -107,7 +107,7 @@ public class DataContextIntegrationTest : MonolithMeshTestBase
                 Id = "graph",
                 Namespace = "Type",
                 DisplayName = "Graph",
-                IconName = "Diagram",
+                Icon = "Diagram",
                 Description = "The graph root",
                 DisplayOrder = 0
             }

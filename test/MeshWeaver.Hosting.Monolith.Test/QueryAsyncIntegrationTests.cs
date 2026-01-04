@@ -1,9 +1,8 @@
-using System;
-using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
 using FluentAssertions;
 using MeshWeaver.Hosting.Persistence;
+using MeshWeaver.Hosting.Persistence.Query;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using Xunit;
@@ -13,6 +12,12 @@ namespace MeshWeaver.Hosting.Monolith.Test;
 public class QueryAsyncIntegrationTests
 {
     private readonly InMemoryPersistenceService _persistence = new();
+    private readonly IMeshQuery _meshQuery;
+
+    public QueryAsyncIntegrationTests()
+    {
+        _meshQuery = new InMemoryMeshQuery(_persistence);
+    }
 
     [Fact]
     public async Task QueryAsync_FilterByProperty_ReturnsMatchingNodes()
@@ -22,8 +27,9 @@ public class QueryAsyncIntegrationTests
         await _persistence.SaveNodeAsync(MeshNode.FromPath("products/phone") with { Name = "Phone", NodeType = "Electronics" });
         await _persistence.SaveNodeAsync(MeshNode.FromPath("products/chair") with { Name = "Chair", NodeType = "Furniture" });
 
-        // Act - need to use descendants scope to search child nodes
-        var results = await _persistence.QueryAsync("nodeType:Electronics scope:descendants", "products").ToListAsync();
+        // Act - use path: in query string with scope:descendants
+        var query = "path:products nodeType:Electronics scope:descendants";
+        var results = await _meshQuery.QueryAsync(MeshQueryRequest.FromQuery(query)).ToListAsync();
 
         // Assert
         results.Should().HaveCount(2);
@@ -37,8 +43,9 @@ public class QueryAsyncIntegrationTests
         await _persistence.SaveNodeAsync(MeshNode.FromPath("products/laptop") with { Name = "Gaming Laptop Pro", Description = "High performance gaming laptop" });
         await _persistence.SaveNodeAsync(MeshNode.FromPath("products/desktop") with { Name = "Desktop Computer", Description = "Standard desktop" });
 
-        // Act - need descendants scope to search child nodes
-        var results = await _persistence.QueryAsync("laptop scope:descendants", "products").ToListAsync();
+        // Act - use path: in query string with scope:descendants
+        var query = "path:products laptop scope:descendants";
+        var results = await _meshQuery.QueryAsync(MeshQueryRequest.FromQuery(query)).ToListAsync();
 
         // Assert
         results.Should().HaveCount(1);
@@ -54,8 +61,9 @@ public class QueryAsyncIntegrationTests
         await _persistence.SaveNodeAsync(MeshNode.FromPath("products/laptop2") with { Name = "Business Laptop", NodeType = "Electronics" });
         await _persistence.SaveNodeAsync(MeshNode.FromPath("products/chair") with { Name = "Gaming Chair", NodeType = "Furniture" });
 
-        // Act - need descendants scope to search child nodes
-        var results = await _persistence.QueryAsync("nodeType:Electronics gaming scope:descendants", "products").ToListAsync();
+        // Act - use path: in query string with scope:descendants
+        var query = "path:products nodeType:Electronics gaming scope:descendants";
+        var results = await _meshQuery.QueryAsync(MeshQueryRequest.FromQuery(query)).ToListAsync();
 
         // Assert
         results.Should().HaveCount(1);
@@ -73,7 +81,8 @@ public class QueryAsyncIntegrationTests
         await _persistence.SaveNodeAsync(MeshNode.FromPath("other/company") with { Name = "Other Company", NodeType = "company" });
 
         // Act
-        var results = await _persistence.QueryAsync("nodeType:company scope:descendants", "org").ToListAsync();
+        var query = "path:org nodeType:company scope:descendants";
+        var results = await _meshQuery.QueryAsync(MeshQueryRequest.FromQuery(query)).ToListAsync();
 
         // Assert
         results.Should().HaveCount(1);
@@ -90,7 +99,8 @@ public class QueryAsyncIntegrationTests
         await _persistence.SaveNodeAsync(MeshNode.FromPath("org/acme/project") with { Name = "Project X", NodeType = "project" });
 
         // Act
-        var results = await _persistence.QueryAsync("nodeType:root scope:ancestors", "org/acme/project").ToListAsync();
+        var query = "path:org/acme/project nodeType:root scope:ancestors";
+        var results = await _meshQuery.QueryAsync(MeshQueryRequest.FromQuery(query)).ToListAsync();
 
         // Assert
         results.Should().HaveCount(1);
@@ -107,8 +117,9 @@ public class QueryAsyncIntegrationTests
         await _persistence.SaveNodeAsync(MeshNode.FromPath("products/chair") with { Name = "Chair", NodeType = "Furniture" });
         await _persistence.SaveNodeAsync(MeshNode.FromPath("products/food") with { Name = "Food", NodeType = "Groceries" });
 
-        // Act - need descendants scope to search child nodes
-        var results = await _persistence.QueryAsync("nodeType:(Electronics OR Furniture) scope:descendants", "products").ToListAsync();
+        // Act - use path: in query string with scope:descendants
+        var query = "path:products nodeType:(Electronics OR Furniture) scope:descendants";
+        var results = await _meshQuery.QueryAsync(MeshQueryRequest.FromQuery(query)).ToListAsync();
 
         // Assert
         results.Should().HaveCount(3);
@@ -123,8 +134,9 @@ public class QueryAsyncIntegrationTests
         await _persistence.SaveNodeAsync(MeshNode.FromPath("products/laptop-basic") with { Name = "Laptop Basic", NodeType = "Electronics" });
         await _persistence.SaveNodeAsync(MeshNode.FromPath("products/desktop") with { Name = "Desktop Computer", NodeType = "Electronics" });
 
-        // Act - need descendants scope to search child nodes
-        var results = await _persistence.QueryAsync("name:*Laptop* scope:descendants", "products").ToListAsync();
+        // Act - use path: in query string with scope:descendants
+        var query = "path:products name:*Laptop* scope:descendants";
+        var results = await _meshQuery.QueryAsync(MeshQueryRequest.FromQuery(query)).ToListAsync();
 
         // Assert
         results.Should().HaveCount(2);
@@ -139,8 +151,9 @@ public class QueryAsyncIntegrationTests
         await _persistence.SaveNodeAsync(MeshNode.FromPath("products/chair") with { Name = "Chair", NodeType = "Furniture" });
         await _persistence.SaveNodeAsync(MeshNode.FromPath("products/food") with { Name = "Food", NodeType = "Groceries" });
 
-        // Act - need descendants scope to search child nodes
-        var results = await _persistence.QueryAsync("(nodeType:Electronics OR nodeType:Furniture) scope:descendants", "products").ToListAsync();
+        // Act - use path: in query string with scope:descendants
+        var query = "path:products (nodeType:Electronics OR nodeType:Furniture) scope:descendants";
+        var results = await _meshQuery.QueryAsync(MeshQueryRequest.FromQuery(query)).ToListAsync();
 
         // Assert
         results.Should().HaveCount(2);
@@ -155,8 +168,9 @@ public class QueryAsyncIntegrationTests
         await _persistence.SaveNodeAsync(MeshNode.FromPath("products/phone") with { Name = "Phone" });
         await _persistence.SaveNodeAsync(MeshNode.FromPath("other/chair") with { Name = "Chair" });
 
-        // Act - Empty query should return the node at the exact path only
-        var results = await _persistence.QueryAsync("", "products").ToListAsync();
+        // Act - Empty query with path should return the node at the exact path only
+        var query = "path:products";
+        var results = await _meshQuery.QueryAsync(MeshQueryRequest.FromQuery(query)).ToListAsync();
 
         // Assert - products node doesn't exist, so empty result for exact path
         results.Should().BeEmpty();
@@ -171,7 +185,8 @@ public class QueryAsyncIntegrationTests
         await _persistence.SaveNodeAsync(MeshNode.FromPath("products/chair") with { Name = "Chair", NodeType = "Furniture" });
 
         // Act
-        var results = await _persistence.QueryAsync("-nodeType:Electronics scope:descendants", "products").ToListAsync();
+        var query = "path:products -nodeType:Electronics scope:descendants";
+        var results = await _meshQuery.QueryAsync(MeshQueryRequest.FromQuery(query)).ToListAsync();
 
         // Assert
         results.Should().HaveCount(1);

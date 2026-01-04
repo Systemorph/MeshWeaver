@@ -5,6 +5,7 @@ namespace MeshWeaver.Mesh.Query;
 /// </summary>
 /// <param name="Filter">The parsed query AST (null if no filter conditions)</param>
 /// <param name="TextSearch">Full-text search value (bare text in query)</param>
+/// <param name="Path">Base path from path: qualifier (supports wildcards)</param>
 /// <param name="Scope">Path scope from scope: qualifier</param>
 /// <param name="OrderBy">Ordering clause from sort: qualifier</param>
 /// <param name="Limit">Result limit from limit: qualifier</param>
@@ -12,6 +13,7 @@ namespace MeshWeaver.Mesh.Query;
 public record ParsedQuery(
     QueryNode? Filter,
     string? TextSearch,
+    string? Path = null,
     QueryScope Scope = QueryScope.Exact,
     OrderByClause? OrderBy = null,
     int? Limit = null,

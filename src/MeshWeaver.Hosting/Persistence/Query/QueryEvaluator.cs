@@ -120,6 +120,12 @@ public class QueryEvaluator
     /// </summary>
     private object? GetDirectPropertyValue(object obj, string propertyName)
     {
+        // Handle $type as a special case - return the CLR type name
+        if (propertyName == "$type")
+        {
+            return obj.GetType().Name;
+        }
+
         if (obj is JsonElement jsonElement)
         {
             return GetJsonPropertyValue(jsonElement, propertyName);

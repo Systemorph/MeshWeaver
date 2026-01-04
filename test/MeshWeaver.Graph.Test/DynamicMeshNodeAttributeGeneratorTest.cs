@@ -88,7 +88,7 @@ public class DynamicMeshNodeAttributeGeneratorTest
             Name = "Acme Corp",
             NodeType = "organization",
             Description = "Test organization",
-            IconName = "Building",
+            Icon = "Building",
             DisplayOrder = 10,
             IsPersistent = true,
             LastModified = DateTimeOffset.Parse("2024-01-15T10:30:00Z")
@@ -106,7 +106,7 @@ public class DynamicMeshNodeAttributeGeneratorTest
         source.Should().Contain("Name = \"Acme Corp\"");
         source.Should().Contain("NodeType = \"organization\"");
         source.Should().Contain("Description = \"Test organization\"");
-        source.Should().Contain("IconName = \"Building\"");
+        source.Should().Contain("Icon = \"Building\"");
         source.Should().Contain("DisplayOrder = 10");
         source.Should().Contain("IsPersistent = true");
     }

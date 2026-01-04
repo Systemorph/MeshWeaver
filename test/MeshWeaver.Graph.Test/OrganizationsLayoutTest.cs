@@ -67,7 +67,7 @@ namespace MeshWeaver.Graph.Test
                 Name = "Organization",
                 NodeType = "NodeType",
                 Description = "An organization containing projects",
-                IconName = "Building",
+                Icon = "Building",
                 DisplayOrder = 10,
                 IsPersistent = true,
                 Content = new NodeTypeDefinition
@@ -75,7 +75,7 @@ namespace MeshWeaver.Graph.Test
                     Id = "Organization",
                     Namespace = "",
                     DisplayName = "Organization",
-                    IconName = "Building",
+                    Icon = "Building",
                     Description = "An organization containing projects",
                     DisplayOrder = 10,
                     Configuration = "config => config.WithContentType<MeshWeaver.Graph.Dynamic.Organization>().AddNodeTypeView()",
@@ -91,7 +91,7 @@ namespace MeshWeaver.Graph.Test
                 Name = "Acme Corporation",
                 NodeType = "Organization",
                 Description = "A famous company",
-                IconName = "Building",
+                Icon = "Building",
                 IsPersistent = true,
                 Content = new { Id = "Acme", Name = "Acme Corporation", Description = "A famous company", Logo = "/static/Organization/logos/acme.png" }
             };
@@ -102,7 +102,7 @@ namespace MeshWeaver.Graph.Test
                 Name = "Contoso Ltd",
                 NodeType = "Organization",
                 Description = "Another company",
-                IconName = "Building",
+                Icon = "Building",
                 IsPersistent = true,
                 Content = new { Id = "Contoso", Name = "Contoso Ltd", Description = "Another company", Logo = "/static/Organization/logos/contoso.png" }
             };
@@ -113,7 +113,7 @@ namespace MeshWeaver.Graph.Test
                 Name = "Fabrikam Inc",
                 NodeType = "Organization",
                 Description = "Yet another company",
-                IconName = "Building",
+                Icon = "Building",
                 IsPersistent = true,
                 Content = new { Id = "Fabrikam", Name = "Fabrikam Inc", Description = "Yet another company", Logo = "/static/Organization/logos/fabrikam.png" }
             };
@@ -302,21 +302,16 @@ namespace MeshWeaver.Graph.Test
         public async Task SimpleQuery_FindsAllOrganizationInstances()
         {
             // Arrange
-            var persistence = Mesh.ServiceProvider.GetRequiredService<IPersistenceService>();
+            var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
 
             // Use a simple query that doesn't require activity records
             var query = "nodeType:Organization scope:descendants";
 
             // Act - execute the query (from root to find all matching nodes)
-            var results = new List<object>();
-            await foreach (var obj in persistence.QueryAsync(query, ""))
-            {
-                results.Add(obj);
-            }
+            var nodes = await meshQuery.QueryAsync<MeshNode>(query).ToListAsync();
 
             // Assert - should find all 3 Organization instances (Acme, Contoso, Fabrikam)
-            results.Should().HaveCount(3, "Should find all 3 Organization instances");
-            var nodes = results.Cast<MeshNode>().ToList();
+            nodes.Should().HaveCount(3, "Should find all 3 Organization instances");
             nodes.Select(n => n.Name).Should().Contain("Acme Corporation");
             nodes.Select(n => n.Name).Should().Contain("Contoso Ltd");
             nodes.Select(n => n.Name).Should().Contain("Fabrikam Inc");

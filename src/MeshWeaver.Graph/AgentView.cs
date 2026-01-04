@@ -50,22 +50,18 @@ public static class AgentView
             .WithView(
                 (h, c) => Observable.FromAsync(async () =>
                 {
-                    var persistence = host.Hub.ServiceProvider.GetService<IPersistenceService>();
-                    if (persistence == null)
-                        return RenderError("Persistence service not available.");
+                    var meshQuery = host.Hub.ServiceProvider.GetService<IMeshQuery>();
+                    if (meshQuery == null)
+                        return RenderError("Query service not available.");
 
-                    var agents = new List<MeshNode>();
+                    List<MeshNode> agents;
                     try
                     {
-                        await foreach (var node in persistence.QueryAsync("nodeType==Agent", ""))
-                        {
-                            if (node is MeshNode mn)
-                                agents.Add(mn);
-                        }
+                        agents = await meshQuery.QueryAsync<MeshNode>("nodeType:Agent").ToListAsync();
                     }
                     catch
                     {
-                        // Query may fail - that's ok
+                        agents = [];
                     }
 
                     return BuildCatalogContent(agents);
@@ -168,8 +164,8 @@ public static class AgentView
         infoCard = infoCard.WithView(BuildInfoRow("ID", agent.Id));
         if (!string.IsNullOrEmpty(agent.GroupName))
             infoCard = infoCard.WithView(BuildInfoRow("Group", agent.GroupName));
-        if (!string.IsNullOrEmpty(agent.IconName))
-            infoCard = infoCard.WithView(BuildInfoRow("Icon", agent.IconName));
+        if (!string.IsNullOrEmpty(agent.Icon))
+            infoCard = infoCard.WithView(BuildInfoRow("Icon", agent.Icon));
         infoCard = infoCard.WithView(BuildInfoRow("Display Order", agent.DisplayOrder.ToString()));
         if (!string.IsNullOrEmpty(agent.PreferredModel))
             infoCard = infoCard.WithView(BuildInfoRow("Preferred Model", agent.PreferredModel));
@@ -275,7 +271,7 @@ public static class AgentView
         // Initialize data streams
         host.UpdateData(displayNameDataId, agent.DisplayName ?? "");
         host.UpdateData(descriptionDataId, agent.Description ?? "");
-        host.UpdateData(iconNameDataId, agent.IconName ?? "");
+        host.UpdateData(iconNameDataId, agent.Icon ?? "");
         host.UpdateData(groupNameDataId, agent.GroupName ?? "");
         host.UpdateData(displayOrderDataId, agent.DisplayOrder.ToString());
         host.UpdateData(preferredModelDataId, agent.PreferredModel ?? "");
@@ -419,7 +415,7 @@ public static class AgentView
                 {
                     DisplayName = string.IsNullOrWhiteSpace(newDisplayName) ? null : newDisplayName,
                     Description = string.IsNullOrWhiteSpace(newDescription) ? null : newDescription,
-                    IconName = string.IsNullOrWhiteSpace(newIconName) ? null : newIconName,
+                    Icon = string.IsNullOrWhiteSpace(newIconName) ? null : newIconName,
                     GroupName = string.IsNullOrWhiteSpace(newGroupName) ? null : newGroupName,
                     DisplayOrder = newDisplayOrder,
                     PreferredModel = string.IsNullOrWhiteSpace(newPreferredModel) ? null : newPreferredModel,

@@ -49,7 +49,7 @@ public static class GraphConfigurationExtensions
             {
                 Name = "Node Type",
                 Description = "Definition for a node type",
-                IconName = "Code",
+                Icon = "Code",
                 HubConfiguration = Observable.Return<Func<MessageHubConfiguration, MessageHubConfiguration>?>(
                     config => config
                         .AddMeshDataSource(source => source
@@ -64,7 +64,7 @@ public static class GraphConfigurationExtensions
             {
                 Name = "Agent",
                 Description = "AI Agent configuration",
-                IconName = "Bot",
+                Icon = "Bot",
                 HubConfiguration = Observable.Return<Func<MessageHubConfiguration, MessageHubConfiguration>?>(
                     config => config
                         .AddMeshDataSource(source => source

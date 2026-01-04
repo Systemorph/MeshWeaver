@@ -156,7 +156,7 @@ public record MeshNodeViewModel
     public string? Name { get; init; }
     public string? NodeType { get; init; }
     public string? Description { get; init; }
-    public string? IconName { get; init; }
+    public string? Icon { get; init; }
 
     public MeshNodeViewModel() { }
 
@@ -166,6 +166,6 @@ public record MeshNodeViewModel
         Name = node.Name;
         NodeType = node.NodeType;
         Description = node.Description;
-        IconName = node.IconName;
+        Icon = node.Icon;
     }
 }

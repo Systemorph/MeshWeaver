@@ -159,10 +159,10 @@ public static class MarkdownView
             .WithOrientation(Orientation.Horizontal)
             .WithStyle("align-items: center; gap: 12px;");
 
-        if (!string.IsNullOrEmpty(node?.IconName))
+        if (!string.IsNullOrEmpty(node?.Icon))
         {
             titleSection = titleSection.WithView(
-                Controls.Html($"<fluent-icon name=\"{node.IconName}\" style=\"font-size: 28px; color: var(--accent-fill-rest);\"></fluent-icon>"));
+                Controls.Html($"<fluent-icon name=\"{node.Icon}\" style=\"font-size: 28px; color: var(--accent-fill-rest);\"></fluent-icon>"));
         }
 
         titleSection = titleSection.WithView(
@@ -1057,7 +1057,7 @@ public static class MarkdownView
     {
         var title = node?.Name ?? hubPath.Split('/').LastOrDefault() ?? "Document";
         var description = node?.Description ?? "";
-        var iconName = node?.IconName ?? "Document";
+        var iconName = node?.Icon ?? "Document";
 
         // Truncate description for thumbnail
         if (description.Length > 100)

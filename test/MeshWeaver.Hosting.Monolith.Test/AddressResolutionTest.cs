@@ -30,7 +30,7 @@ public class AddressResolutionTest(ITestOutputHelper output) : MonolithMeshTestB
                 {
                     Name = "Pricing",
                     Description = "Insurance pricing submissions",
-                    IconName = "Calculator",
+                    Icon = "Calculator",
                     DisplayOrder = 100,
                     HubConfiguration = Observable.Return<Func<MessageHubConfiguration, MessageHubConfiguration>?>(c => c)
                 },
@@ -38,7 +38,7 @@ public class AddressResolutionTest(ITestOutputHelper output) : MonolithMeshTestB
                 {
                     Name = "Applications",
                     Description = "Standard applications",
-                    IconName = "App",
+                    Icon = "App",
                     DisplayOrder = 200,
                     HubConfiguration = Observable.Return<Func<MessageHubConfiguration, MessageHubConfiguration>?>(c => c)
                 }
@@ -225,7 +225,7 @@ public class AddressSegmentsTest(ITestOutputHelper output) : MonolithMeshTestBas
                 {
                     Name = "Pricing",
                     Description = "Insurance pricing submissions",
-                    IconName = "Calculator",
+                    Icon = "Calculator",
                     DisplayOrder = 100,
                     AddressSegments = 3, // pricing/company/year
                     HubConfiguration = Observable.Return<Func<MessageHubConfiguration, MessageHubConfiguration>?>(c => c)

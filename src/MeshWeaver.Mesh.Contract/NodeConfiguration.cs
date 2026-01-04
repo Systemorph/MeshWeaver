@@ -34,9 +34,9 @@ public record NodeTypeConfiguration
     public string? DisplayName { get; init; }
 
     /// <summary>
-    /// Optional icon name for UI display.
+    /// Optional icon URL or identifier for UI display.
     /// </summary>
-    public string? IconName { get; init; }
+    public string? Icon { get; init; }
 
     /// <summary>
     /// Optional description for the node type.

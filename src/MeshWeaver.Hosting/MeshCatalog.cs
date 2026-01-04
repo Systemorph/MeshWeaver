@@ -142,7 +142,7 @@ public sealed class MeshCatalog(
         {
             Name = template.Name,
             Description = template.Description,
-            IconName = template.IconName,
+            Icon = template.Icon,
             DisplayOrder = template.DisplayOrder,
             HubConfiguration = template.HubConfiguration,
             AddressSegments = template.AddressSegments,

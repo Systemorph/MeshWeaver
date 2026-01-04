@@ -5,6 +5,7 @@ using System.Threading.Tasks;
 using FluentAssertions;
 using MeshWeaver.Hosting.Activity;
 using MeshWeaver.Hosting.Persistence;
+using MeshWeaver.Hosting.Persistence.Query;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Activity;
 using MeshWeaver.Mesh.Services;
@@ -163,7 +164,7 @@ public class ActivityTrackingTests : IDisposable
     }
 
     [Fact]
-    public async Task QueryAsync_WithActivitySource_ReturnsUserActivity()
+    public async Task ActivityRecords_CanBeQueried_FromPartition()
     {
         // Arrange
         var userId = "user-query";
@@ -189,65 +190,22 @@ public class ActivityTrackingTests : IDisposable
         // Flush pending activities
         _decorator.Dispose();
 
-        // Recreate decorator for query (since we disposed it)
-        using var queryDecorator = new ActivityTrackingPersistenceDecorator(
-            _innerPersistence,
-            _accessService,
-            NullLogger<ActivityTrackingPersistenceDecorator>.Instance);
-
-        // Act - query user's activity
-        var query = "source:activity nodeType:Type/Organization sort:accessCount-desc";
-        var results = await queryDecorator.QueryAsync(query, "org")
+        // Act - query user's activity directly from partition
+        var activityRecords = await _innerPersistence.GetPartitionObjectsAsync($"_activity/{userId}")
             .OfType<UserActivityRecord>()
+            .OrderByDescending(a => a.AccessCount)
             .ToListAsync();
 
         // Assert
-        results.Should().HaveCount(2);
-        results.First().NodePath.Should().Be("org/alpha"); // More accesses
-        results.First().AccessCount.Should().Be(2);
-        results.Last().NodePath.Should().Be("org/beta");
-        results.Last().AccessCount.Should().Be(1);
+        activityRecords.Should().HaveCount(2);
+        activityRecords.First().NodePath.Should().Be("org/alpha"); // More accesses
+        activityRecords.First().AccessCount.Should().Be(2);
+        activityRecords.Last().NodePath.Should().Be("org/beta");
+        activityRecords.Last().AccessCount.Should().Be(1);
     }
 
     [Fact]
-    public async Task QueryAsync_WithLimit_RespectsLimit()
-    {
-        // Arrange
-        var userId = "user-limit";
-        _accessService.SetContext(new AccessContext { ObjectId = userId });
-
-        // Create and access multiple nodes
-        for (int i = 0; i < 5; i++)
-        {
-            await _innerPersistence.SaveNodeAsync(MeshNode.FromPath($"org/company{i}") with
-            {
-                Name = $"Company {i}",
-                NodeType = "Type/Organization"
-            });
-            await _decorator.GetNodeAsync($"org/company{i}");
-        }
-
-        // Flush pending activities
-        _decorator.Dispose();
-
-        // Recreate decorator for query
-        using var queryDecorator = new ActivityTrackingPersistenceDecorator(
-            _innerPersistence,
-            _accessService,
-            NullLogger<ActivityTrackingPersistenceDecorator>.Instance);
-
-        // Act - query with limit
-        var query = "source:activity limit:3";
-        var results = await queryDecorator.QueryAsync(query, "org")
-            .OfType<UserActivityRecord>()
-            .ToListAsync();
-
-        // Assert
-        results.Should().HaveCount(3);
-    }
-
-    [Fact]
-    public async Task QueryAsync_OrderByLastAccessedAt_ReturnsCorrectOrder()
+    public async Task ActivityRecords_OrderByLastAccessedAt_ReturnsCorrectOrder()
     {
         // Arrange
         var userId = "user-order";
@@ -280,16 +238,10 @@ public class ActivityTrackingTests : IDisposable
         // Flush pending activities
         _decorator.Dispose();
 
-        // Recreate decorator for query
-        using var queryDecorator = new ActivityTrackingPersistenceDecorator(
-            _innerPersistence,
-            _accessService,
-            NullLogger<ActivityTrackingPersistenceDecorator>.Instance);
-
-        // Act - query ordered by lastAccessedAt descending (most recent first)
-        var query = "source:activity sort:lastAccessedAt-desc";
-        var results = await queryDecorator.QueryAsync(query, "org")
+        // Act - get activity records ordered by lastAccessedAt descending (most recent first)
+        var results = await _innerPersistence.GetPartitionObjectsAsync($"_activity/{userId}")
             .OfType<UserActivityRecord>()
+            .OrderByDescending(a => a.LastAccessedAt)
             .ToListAsync();
 
         // Assert
@@ -307,6 +259,7 @@ public class CatalogFallbackTests
     {
         // Arrange - create persistence with nodes but no activity
         var persistence = new InMemoryPersistenceService();
+        var meshQuery = new InMemoryMeshQuery(persistence);
 
         // Create some organization nodes
         await persistence.SaveNodeAsync(MeshNode.FromPath("org/acme") with
@@ -321,8 +274,8 @@ public class CatalogFallbackTests
         });
 
         // Act - query for organizations using standard query (simulating fallback)
-        var fallbackQuery = "nodeType:Type/Organization scope:descendants limit:20";
-        var results = await persistence.QueryAsync(fallbackQuery, "org")
+        var query = "path:org nodeType:Type/Organization scope:descendants limit:20";
+        var results = await meshQuery.QueryAsync(MeshQueryRequest.FromQuery(query))
             .OfType<MeshNode>()
             .ToListAsync();
 
@@ -332,7 +285,7 @@ public class CatalogFallbackTests
     }
 
     [Fact]
-    public async Task Catalog_WithActivity_ReturnsActivityOrderedNodes()
+    public async Task Catalog_WithActivity_CanLoadNodesFromActivityPaths()
     {
         // Arrange
         var innerPersistence = new InMemoryPersistenceService();
@@ -371,15 +324,10 @@ public class CatalogFallbackTests
         // Flush activities
         decorator.Dispose();
 
-        // Act - query activity (simulating Catalog query)
-        using var queryDecorator = new ActivityTrackingPersistenceDecorator(
-            innerPersistence,
-            accessService,
-            NullLogger<ActivityTrackingPersistenceDecorator>.Instance);
-
-        var activityQuery = "source:activity nodeType:Type/Organization sort:lastAccessedAt-desc limit:20";
-        var activityRecords = await queryDecorator.QueryAsync(activityQuery, "org")
+        // Act - get activity records ordered by lastAccessedAt
+        var activityRecords = await innerPersistence.GetPartitionObjectsAsync("_activity/catalog-user")
             .OfType<UserActivityRecord>()
+            .OrderByDescending(a => a.LastAccessedAt)
             .ToListAsync();
 
         // Load actual nodes from activity records (as Catalog does)
@@ -435,7 +383,7 @@ public class CatalogFallbackTests
         } // Dispose flushes
 
         // Query initial order
-        var initialOrder = await GetActivityOrder(innerPersistence, accessService, "Type/Document");
+        var initialOrder = await GetActivityOrder(innerPersistence, "reorder-user");
         initialOrder[0].Should().Be("doc/doc3"); // Most recent
         initialOrder[1].Should().Be("doc/doc2");
         initialOrder[2].Should().Be("doc/doc1"); // Least recent
@@ -449,23 +397,17 @@ public class CatalogFallbackTests
         } // Dispose flushes
 
         // Query new order
-        var newOrder = await GetActivityOrder(innerPersistence, accessService, "Type/Document");
+        var newOrder = await GetActivityOrder(innerPersistence, "reorder-user");
         newOrder[0].Should().Be("doc/doc1"); // Now most recent
         newOrder[1].Should().Be("doc/doc3");
         newOrder[2].Should().Be("doc/doc2");
     }
 
-    private async Task<List<string>> GetActivityOrder(
-        InMemoryPersistenceService persistence,
-        AccessService accessService,
-        string nodeType)
+    private async Task<List<string>> GetActivityOrder(InMemoryPersistenceService persistence, string userId)
     {
-        using var queryDecorator = new ActivityTrackingPersistenceDecorator(
-            persistence, accessService, NullLogger<ActivityTrackingPersistenceDecorator>.Instance);
-
-        var query = $"source:activity nodeType:{nodeType} sort:lastAccessedAt-desc";
-        return await queryDecorator.QueryAsync(query, "")
+        return await persistence.GetPartitionObjectsAsync($"_activity/{userId}")
             .OfType<UserActivityRecord>()
+            .OrderByDescending(a => a.LastAccessedAt)
             .Select(a => a.NodePath)
             .ToListAsync();
     }
@@ -478,6 +420,7 @@ public class CatalogSearchAndPaginationTests
     {
         // Arrange
         var persistence = new InMemoryPersistenceService();
+        var meshQuery = new InMemoryMeshQuery(persistence);
 
         // Create organizations with different names (use simple NodeType like existing tests)
         await persistence.SaveNodeAsync(MeshNode.FromPath("org/acme") with
@@ -497,8 +440,8 @@ public class CatalogSearchAndPaginationTests
         });
 
         // Act - query with filter for name containing "Corp" using wildcard operator
-        var query = "nodeType:Organization name:*Corp* scope:descendants limit:20";
-        var results = await persistence.QueryAsync(query, "org")
+        var query = "path:org nodeType:Organization name:*Corp* scope:descendants limit:20";
+        var results = await meshQuery.QueryAsync(MeshQueryRequest.FromQuery(query))
             .OfType<MeshNode>()
             .ToListAsync();
 
@@ -512,6 +455,7 @@ public class CatalogSearchAndPaginationTests
     {
         // Arrange
         var persistence = new InMemoryPersistenceService();
+        var meshQuery = new InMemoryMeshQuery(persistence);
 
         await persistence.SaveNodeAsync(MeshNode.FromPath("doc/report1") with
         {
@@ -527,8 +471,8 @@ public class CatalogSearchAndPaginationTests
         });
 
         // Act - text search for "financial" with descendants scope
-        var query = "nodeType:Document financial scope:descendants limit:20";
-        var results = await persistence.QueryAsync(query, "doc")
+        var query = "path:doc nodeType:Document financial scope:descendants limit:20";
+        var results = await meshQuery.QueryAsync(MeshQueryRequest.FromQuery(query))
             .OfType<MeshNode>()
             .ToListAsync();
 
@@ -542,6 +486,7 @@ public class CatalogSearchAndPaginationTests
     {
         // Arrange
         var persistence = new InMemoryPersistenceService();
+        var meshQuery = new InMemoryMeshQuery(persistence);
 
         // Create 10 items
         for (int i = 0; i < 10; i++)
@@ -554,17 +499,17 @@ public class CatalogSearchAndPaginationTests
         }
 
         // Act - first page (3 items) with descendants scope
-        var firstPage = await persistence.QueryAsync("nodeType:Item scope:descendants limit:3", "item")
+        var firstPage = await meshQuery.QueryAsync(MeshQueryRequest.FromQuery("path:item nodeType:Item scope:descendants limit:3"))
             .OfType<MeshNode>()
             .ToListAsync();
 
         // Load more (6 items total)
-        var secondPage = await persistence.QueryAsync("nodeType:Item scope:descendants limit:6", "item")
+        var secondPage = await meshQuery.QueryAsync(MeshQueryRequest.FromQuery("path:item nodeType:Item scope:descendants limit:6"))
             .OfType<MeshNode>()
             .ToListAsync();
 
         // Load all (10 items)
-        var allItems = await persistence.QueryAsync("nodeType:Item scope:descendants limit:100", "item")
+        var allItems = await meshQuery.QueryAsync(MeshQueryRequest.FromQuery("path:item nodeType:Item scope:descendants limit:100"))
             .OfType<MeshNode>()
             .ToListAsync();
 
@@ -579,6 +524,7 @@ public class CatalogSearchAndPaginationTests
     {
         // Arrange
         var persistence = new InMemoryPersistenceService();
+        var meshQuery = new InMemoryMeshQuery(persistence);
 
         // Create 5 items
         for (int i = 0; i < 5; i++)
@@ -593,7 +539,7 @@ public class CatalogSearchAndPaginationTests
         // Act - request limit+1 to detect if there are more
         var limit = 3;
         var queryLimit = limit + 1;
-        var results = await persistence.QueryAsync($"nodeType:Test scope:descendants limit:{queryLimit}", "test")
+        var results = await meshQuery.QueryAsync(MeshQueryRequest.FromQuery($"path:test nodeType:Test scope:descendants limit:{queryLimit}"))
             .OfType<MeshNode>()
             .ToListAsync();
 
@@ -609,7 +555,7 @@ public class CatalogSearchAndPaginationTests
     }
 
     [Fact]
-    public async Task Catalog_ActivityQueryWithTypeFilter_ReturnsMatchingActivity()
+    public async Task Catalog_ActivityRecords_CanBeFilteredByNodeType()
     {
         // Arrange
         var innerPersistence = new InMemoryPersistenceService();
@@ -644,20 +590,28 @@ public class CatalogSearchAndPaginationTests
             await decorator.GetNodeAsync("data/project2");
         }
 
-        // Act - query activity filtered by nodeType:Project
-        using var queryDecorator = new ActivityTrackingPersistenceDecorator(
-            innerPersistence, accessService, NullLogger<ActivityTrackingPersistenceDecorator>.Instance);
-
-        var query = "source:activity nodeType:Project sort:lastAccessedAt-desc limit:10";
-        var activityRecords = await queryDecorator.QueryAsync(query, "data")
+        // Act - get activity records and filter by nodeType manually (as catalog would do)
+        var allActivityRecords = await innerPersistence.GetPartitionObjectsAsync("_activity/search-user")
             .OfType<UserActivityRecord>()
+            .OrderByDescending(a => a.LastAccessedAt)
             .ToListAsync();
 
+        // Load nodes and filter by type
+        var projectRecords = new List<UserActivityRecord>();
+        foreach (var activity in allActivityRecords)
+        {
+            var node = await innerPersistence.GetNodeAsync(activity.NodePath);
+            if (node?.NodeType == "Project")
+            {
+                projectRecords.Add(activity);
+            }
+        }
+
         // Assert - should return only Project nodes, not the Document
-        activityRecords.Should().HaveCount(2);
-        activityRecords.Select(a => a.NodePath).Should().Contain(["data/project1", "data/project2"]);
-        activityRecords.Select(a => a.NodePath).Should().NotContain("data/doc1");
+        projectRecords.Should().HaveCount(2);
+        projectRecords.Select(a => a.NodePath).Should().Contain(["data/project1", "data/project2"]);
+        projectRecords.Select(a => a.NodePath).Should().NotContain("data/doc1");
         // Most recent first
-        activityRecords[0].NodePath.Should().Be("data/project2");
+        projectRecords[0].NodePath.Should().Be("data/project2");
     }
 }

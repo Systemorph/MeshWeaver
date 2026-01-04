@@ -246,63 +246,6 @@ public class ActivityTrackingPersistenceDecorator : IPersistenceService, IDispos
     public Task<DateTimeOffset?> GetPartitionMaxTimestampAsync(string nodePath, string? subPath = null, CancellationToken ct = default)
         => _inner.GetPartitionMaxTimestampAsync(nodePath, subPath, ct);
 
-    public async IAsyncEnumerable<object> QueryAsync(string query, string path)
-    {
-        var parser = new QueryParser();
-        var parsedQuery = parser.Parse(query);
-        var evaluator = new QueryEvaluator();
-
-        IEnumerable<object> results;
-
-        // Handle $source=activity queries - query from user's activity partition
-        if (parsedQuery.Source == QuerySource.Activity)
-        {
-            var userId = _accessService.Context?.ObjectId;
-            if (string.IsNullOrEmpty(userId))
-            {
-                yield break; // No user context for activity query
-            }
-
-            var activityPath = $"_activity/{userId}";
-            var activityList = new List<object>();
-
-            await foreach (var obj in _inner.GetPartitionObjectsAsync(activityPath))
-            {
-                if (evaluator.Matches(obj, parsedQuery))
-                    activityList.Add(obj);
-            }
-
-            results = activityList;
-        }
-        else
-        {
-            // Delegate to inner service for regular queries
-            var innerResults = new List<object>();
-            await foreach (var item in _inner.QueryAsync(query, path))
-            {
-                innerResults.Add(item);
-            }
-            results = innerResults;
-        }
-
-        // Apply ordering
-        if (parsedQuery.OrderBy != null)
-        {
-            results = evaluator.OrderResults(results, parsedQuery.OrderBy);
-        }
-
-        // Apply limit
-        if (parsedQuery.Limit.HasValue)
-        {
-            results = evaluator.LimitResults(results, parsedQuery.Limit);
-        }
-
-        foreach (var item in results)
-        {
-            yield return item;
-        }
-    }
-
     // Secure operations delegate to inner
     public Task<MeshNode?> GetNodeSecureAsync(string path, string? userId, CancellationToken ct = default)
         => _inner.GetNodeSecureAsync(path, userId, ct);
@@ -312,9 +255,6 @@ public class ActivityTrackingPersistenceDecorator : IPersistenceService, IDispos
 
     public IAsyncEnumerable<MeshNode> GetDescendantsSecureAsync(string? parentPath, string? userId)
         => _inner.GetDescendantsSecureAsync(parentPath, userId);
-
-    public IAsyncEnumerable<object> QuerySecureAsync(string query, string path, string? userId)
-        => _inner.QuerySecureAsync(query, path, userId);
 
     #endregion
 

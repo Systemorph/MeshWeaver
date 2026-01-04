@@ -322,7 +322,7 @@ public static class MeshNodeView
     public static IObservable<UiControl?> Settings(LayoutAreaHost host, RenderingContext _)
     {
         var hubPath = host.Hub.Address.ToString();
-        var persistence = host.Hub.ServiceProvider.GetService<IPersistenceService>();
+        var meshQuery = host.Hub.ServiceProvider.GetService<IMeshQuery>();
 
         // Get node from stream
         var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? Array.Empty<MeshNode>())
@@ -331,16 +331,17 @@ public static class MeshNodeView
         // Load NodeType children
         var typesStream = Observable.FromAsync(async () =>
         {
-            var types = new List<MeshNode>();
-            if (persistence != null)
+            if (meshQuery == null)
+                return Array.Empty<MeshNode>() as IReadOnlyList<MeshNode>;
+
+            try
             {
-                await foreach (var item in persistence.QueryAsync("nodeType:NodeType scope:descendants", hubPath))
-                {
-                    if (item is MeshNode mn)
-                        types.Add(mn);
-                }
+                return await meshQuery.QueryAsync<MeshNode>($"path:{hubPath} nodeType:NodeType scope:descendants").ToListAsync() as IReadOnlyList<MeshNode>;
             }
-            return types.AsReadOnly() as IReadOnlyList<MeshNode>;
+            catch
+            {
+                return Array.Empty<MeshNode>();
+            }
         });
 
         return nodeStream.CombineLatest(typesStream, (nodes, types) =>
@@ -399,7 +400,7 @@ public static class MeshNodeView
         sb.AppendLine($"| **Namespace** | `{node.Namespace ?? ""}` |");
         sb.AppendLine($"| **NodeType** | {(string.IsNullOrEmpty(node.NodeType) ? "*not set*" : $"[{node.NodeType}](/{node.NodeType})")} |");
         sb.AppendLine($"| **Description** | {node.Description ?? "*not set*"} |");
-        sb.AppendLine($"| **IconName** | {node.IconName ?? "*not set*"} |");
+        sb.AppendLine($"| **Icon** | {node.Icon ?? "*not set*"} |");
         sb.AppendLine($"| **DisplayOrder** | {node.DisplayOrder} |");
         sb.AppendLine($"| **IsPersistent** | {node.IsPersistent} |");
         sb.AppendLine($"| **State** | {node.State} |");
@@ -480,7 +481,7 @@ public static class MeshNodeView
     public static UiControl Catalog(LayoutAreaHost host, RenderingContext ctx)
     {
         var hubPath = host.Hub.Address.ToString();
-        var persistence = host.Hub.ServiceProvider.GetService<IPersistenceService>();
+        var meshQuery = host.Hub.ServiceProvider.GetService<IMeshQuery>();
         var catalogConfig = host.Hub.Configuration.Get<CatalogQueryConfig>();
         var isNodeTypeMode = host.Hub.Configuration.Get<NodeTypeCatalogMode>() != null;
 
@@ -534,7 +535,7 @@ public static class MeshNodeView
                             var limit = int.TryParse(limitStr, out var l) ? l : DefaultCatalogPageSize;
                             // Search from root ("") to find all instances regardless of their location
                             // Use NodeType-specific catalog builder with activity fallback
-                            return await BuildNodeTypeCatalogViewAsync(host, persistence, dynamicConfig, nodeTypePath, limit);
+                            return await BuildNodeTypeCatalogViewAsync(host, meshQuery, dynamicConfig, nodeTypePath, limit);
                         }),
                     "CatalogContent");
         }
@@ -549,7 +550,7 @@ public static class MeshNodeView
                     {
                         var (search, limitStr) = tuple;
                         var limit = int.TryParse(limitStr, out var l) ? l : DefaultCatalogPageSize;
-                        return await BuildCatalogViewAsync(host, hubPath, persistence, catalogConfig, search, limit);
+                        return await BuildCatalogViewAsync(host, hubPath, meshQuery, catalogConfig, search, limit);
                     }),
                 "CatalogContent");
     }
@@ -557,7 +558,7 @@ public static class MeshNodeView
     private static async Task<UiControl> BuildCatalogViewAsync(
         LayoutAreaHost host,
         string basePath,
-        IPersistenceService? persistence,
+        IMeshQuery? meshQuery,
         CatalogQueryConfig? catalogConfig,
         string? searchFilter,
         int limit)
@@ -582,9 +583,9 @@ public static class MeshNodeView
 
         stack = stack.WithView(searchRow);
 
-        if (persistence == null)
+        if (meshQuery == null)
         {
-            stack = stack.WithView(Controls.Html("<p style=\"color: #888;\">Persistence service not available.</p>"));
+            stack = stack.WithView(Controls.Html("<p style=\"color: #888;\">Query service not available.</p>"));
             return stack;
         }
 
@@ -592,37 +593,26 @@ public static class MeshNodeView
         // Direct children are nodes whose Namespace property equals basePath
         // Exclude NodeType nodes (they go to Settings)
         var queryLimit = limit + 1; // Request one more to detect if there are more
-        var baseQuery = catalogConfig?.Query ?? $"namespace:{basePath} -nodeType:NodeType scope:descendants";
-        var query = $"{baseQuery} limit:{queryLimit}";
+        var baseQuery = catalogConfig?.Query ?? $"path:{basePath} namespace:{basePath} -nodeType:NodeType scope:descendants";
+        var query = $"{baseQuery}";
         if (!string.IsNullOrWhiteSpace(searchFilter))
         {
             query = searchFilter.Trim() + " " + query;
         }
 
-        var nodes = new List<MeshNode>();
-
+        List<MeshNode> nodes;
         try
         {
-            // Search from basePath with scope:descendants to find nodes with matching namespace
-            await foreach (var item in persistence.QueryAsync(query, basePath))
-            {
-                if (item is MeshNode mn)
-                {
-                    nodes.Add(mn);
-                }
-            }
+            nodes = await meshQuery.QueryAsync<MeshNode>(query, 0, queryLimit).ToListAsync();
         }
         catch
         {
-            // Query may fail - that's ok
+            nodes = [];
         }
 
-        // Check if there are more items
         var hasMore = nodes.Count > limit;
         if (hasMore)
-        {
             nodes = nodes.Take(limit).ToList();
-        }
 
         // Results info
         var subtitleText = catalogConfig?.Title ?? (string.IsNullOrWhiteSpace(searchFilter)
@@ -694,7 +684,7 @@ public static class MeshNodeView
     /// </summary>
     private static async Task<UiControl> BuildNodeTypeCatalogViewAsync(
         LayoutAreaHost host,
-        IPersistenceService? persistence,
+        IMeshQuery? meshQuery,
         CatalogQueryConfig catalogConfig,
         string nodeTypePath,
         int limit)
@@ -723,9 +713,9 @@ public static class MeshNodeView
         var title = catalogConfig.Title ?? nodeTypePath;
         stack = stack.WithView(Controls.Html($"<p style=\"color: #666; margin-bottom: 16px;\">Showing {System.Web.HttpUtility.HtmlEncode(title)}s</p>"));
 
-        if (persistence == null)
+        if (meshQuery == null)
         {
-            stack = stack.WithView(Controls.Html("<p style=\"color: #888;\">Persistence service not available.</p>"));
+            stack = stack.WithView(Controls.Html("<p style=\"color: #888;\">Query service not available.</p>"));
             return stack;
         }
 
@@ -733,35 +723,23 @@ public static class MeshNodeView
         var queryLimit = limit + 1; // Request one more to detect if there are more
         var query = catalogConfig.Query;
 
-        // Remove any existing limit from query (we'll add our own)
+        // Remove any existing limit from query (we'll use Limit parameter)
         query = System.Text.RegularExpressions.Regex.Replace(
             query,
             @"limit:\d+\s*",
             "",
             System.Text.RegularExpressions.RegexOptions.IgnoreCase).Trim();
 
-        // Add our limit
-        query = query + " limit:" + queryLimit;
-
-        var nodes = new List<MeshNode>();
-
+        List<MeshNode> nodes;
         try
         {
-            // Search from root to find all instances matching the query
-            await foreach (var item in persistence.QueryAsync(query, ""))
-            {
-                if (item is MeshNode mn)
-                {
-                    nodes.Add(mn);
-                }
-            }
+            nodes = await meshQuery.QueryAsync<MeshNode>(query, 0, queryLimit).ToListAsync();
         }
         catch
         {
-            // Query may fail - that's ok
+            nodes = [];
         }
 
-        // Check if there are more items
         var hasMore = nodes.Count > limit;
         if (hasMore)
         {

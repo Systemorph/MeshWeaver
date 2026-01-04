@@ -86,41 +86,6 @@ public class SecurePersistenceServiceDecorator : IPersistenceService
         }
     }
 
-    public async IAsyncEnumerable<object> QuerySecureAsync(string query, string path, string? userId)
-    {
-        await foreach (var obj in _inner.QueryAsync(query, path))
-        {
-            if (obj is MeshNode node)
-            {
-                var hasPermission = string.IsNullOrEmpty(userId)
-                    ? await _securityService.HasPermissionAsync(node.Path, Permission.Read)
-                    : await _securityService.HasPermissionAsync(node.Path, userId, Permission.Read);
-
-                if (hasPermission)
-                {
-                    yield return obj;
-                }
-                else
-                {
-                    _logger.LogTrace("SecurePersistence: Filtering out {Path} from query for user {UserId}", node.Path, userId ?? "(anonymous)");
-                }
-            }
-            else
-            {
-                // For non-MeshNode objects (partition objects), we check permission based on the path context
-                // These objects are typically associated with the query path
-                var hasPermission = string.IsNullOrEmpty(userId)
-                    ? await _securityService.HasPermissionAsync(path, Permission.Read)
-                    : await _securityService.HasPermissionAsync(path, userId, Permission.Read);
-
-                if (hasPermission)
-                {
-                    yield return obj;
-                }
-            }
-        }
-    }
-
     #endregion
 
     #region Delegated Methods (pass-through to inner service)
@@ -175,9 +140,6 @@ public class SecurePersistenceServiceDecorator : IPersistenceService
 
     public Task<DateTimeOffset?> GetPartitionMaxTimestampAsync(string nodePath, string? subPath = null, CancellationToken ct = default)
         => _inner.GetPartitionMaxTimestampAsync(nodePath, subPath, ct);
-
-    public IAsyncEnumerable<object> QueryAsync(string query, string path)
-        => _inner.QueryAsync(query, path);
 
     #endregion
 }

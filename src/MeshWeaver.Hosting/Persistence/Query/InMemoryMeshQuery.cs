@@ -33,13 +33,7 @@ public class InMemoryMeshQuery : IMeshQuery
             parsedQuery = parsedQuery with { Limit = request.Limit };
         }
 
-        // Handle source:activity from request
-        if (request.IncludeActivities && parsedQuery.Source != QuerySource.Activity)
-        {
-            parsedQuery = parsedQuery with { Source = QuerySource.Activity };
-        }
-
-        var basePath = NormalizePath(request.BasePath);
+        var basePath = NormalizePath(parsedQuery.Path);
 
         // Determine paths to search based on scope
         var pathsToSearch = GetPathsForScope(basePath, parsedQuery.Scope);
@@ -53,7 +47,7 @@ public class InMemoryMeshQuery : IMeshQuery
             var node = await _persistence.GetNodeAsync(searchPath, ct);
             if (node != null)
             {
-                if (MatchesQuery(node, parsedQuery, request.Namespace))
+                if (_evaluator.Matches(node, parsedQuery))
                 {
                     var score = _evaluator.GetFuzzyScore(node, parsedQuery.TextSearch);
                     results.Add((node, score));
@@ -76,17 +70,8 @@ public class InMemoryMeshQuery : IMeshQuery
         {
             await foreach (var descendant in _persistence.GetDescendantsAsync(basePath).WithCancellation(ct))
             {
-                var descendantPath = NormalizePath(descendant.Path);
-
-                // Check namespace restriction
-                if (!string.IsNullOrEmpty(request.Namespace) &&
-                    !descendantPath.StartsWith(request.Namespace, StringComparison.OrdinalIgnoreCase))
-                {
-                    continue;
-                }
-
                 // Evaluate the node itself
-                if (MatchesQuery(descendant, parsedQuery, request.Namespace))
+                if (_evaluator.Matches(descendant, parsedQuery))
                 {
                     var score = _evaluator.GetFuzzyScore(descendant, parsedQuery.TextSearch);
                     // Avoid duplicates
@@ -95,6 +80,7 @@ public class InMemoryMeshQuery : IMeshQuery
                 }
 
                 // Search partition objects under descendant
+                var descendantPath = NormalizePath(descendant.Path);
                 await foreach (var obj in _persistence.GetPartitionObjectsAsync(descendantPath).WithCancellation(ct))
                 {
                     if (_evaluator.Matches(obj, parsedQuery))
@@ -119,6 +105,12 @@ public class InMemoryMeshQuery : IMeshQuery
         else
         {
             orderedResults = results.Select(r => r.Item);
+        }
+
+        // Apply skip (for paging)
+        if (request.Skip.HasValue && request.Skip.Value > 0)
+        {
+            orderedResults = orderedResults.Skip(request.Skip.Value);
         }
 
         // Apply limit
@@ -177,21 +169,6 @@ public class InMemoryMeshQuery : IMeshQuery
         {
             yield return suggestion;
         }
-    }
-
-    private bool MatchesQuery(MeshNode node, ParsedQuery parsedQuery, string? namespaceRestriction)
-    {
-        // Check namespace restriction first
-        if (!string.IsNullOrEmpty(namespaceRestriction))
-        {
-            var nodePath = NormalizePath(node.Path);
-            if (!nodePath.StartsWith(namespaceRestriction, StringComparison.OrdinalIgnoreCase))
-            {
-                return false;
-            }
-        }
-
-        return _evaluator.Matches(node, parsedQuery);
     }
 
     private static bool FuzzyMatch(string text, string prefix)

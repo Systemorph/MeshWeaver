@@ -9,7 +9,7 @@ public partial class QueryParser
     // Reserved qualifier names (case-insensitive)
     private static readonly HashSet<string> ReservedQualifiers = new(StringComparer.OrdinalIgnoreCase)
     {
-        "scope", "sort", "limit", "source"
+        "path", "scope", "sort", "limit", "source"
     };
 
     /// <summary>
@@ -23,7 +23,7 @@ public partial class QueryParser
             return ParsedQuery.Empty;
 
         var tokens = Tokenize(query);
-        var (filterTokens, textSearch, scope, orderBy, limit, source) = ExtractReservedQualifiers(tokens);
+        var (filterTokens, textSearch, path, scope, orderBy, limit, source) = ExtractReservedQualifiers(tokens);
 
         // Parse the filter expression from remaining tokens
         QueryNode? filter = null;
@@ -33,7 +33,7 @@ public partial class QueryParser
             filter = ParseOr(filterTokens, ref position);
         }
 
-        return new ParsedQuery(filter, textSearch, scope, orderBy, limit, source);
+        return new ParsedQuery(filter, textSearch, path, scope, orderBy, limit, source);
     }
 
     /// <summary>
@@ -338,14 +338,15 @@ public partial class QueryParser
     }
 
     /// <summary>
-    /// Extracts reserved qualifiers (scope, sort, limit, source) from tokens.
+    /// Extracts reserved qualifiers (path, scope, sort, limit, source) from tokens.
     /// Returns remaining filter tokens and extracted values.
     /// </summary>
-    private (List<Token> FilterTokens, string? TextSearch, QueryScope Scope, OrderByClause? OrderBy, int? Limit, QuerySource Source)
+    private (List<Token> FilterTokens, string? TextSearch, string? Path, QueryScope Scope, OrderByClause? OrderBy, int? Limit, QuerySource Source)
         ExtractReservedQualifiers(List<Token> tokens)
     {
         var filterTokens = new List<Token>();
         var textSearchParts = new List<string>();
+        string? path = null;
         var scope = QueryScope.Exact;
         OrderByClause? orderBy = null;
         int? limit = null;
@@ -363,6 +364,12 @@ public partial class QueryParser
             {
                 var field = token.Condition.Selector;
                 var value = token.Condition.Value;
+
+                if (field.Equals("path", StringComparison.OrdinalIgnoreCase))
+                {
+                    path = value;
+                    continue;
+                }
 
                 if (field.Equals("scope", StringComparison.OrdinalIgnoreCase))
                 {
@@ -415,7 +422,7 @@ public partial class QueryParser
         }
 
         var textSearch = textSearchParts.Count > 0 ? string.Join(" ", textSearchParts) : null;
-        return (filterTokens, textSearch, scope, orderBy, limit, source);
+        return (filterTokens, textSearch, path, scope, orderBy, limit, source);
     }
 
     /// <summary>
@@ -495,7 +502,7 @@ public partial class QueryParser
     }
 
     private static bool IsValidFieldChar(char c) =>
-        char.IsLetterOrDigit(c) || c == '_' || c == '.' || c == '-' || c == '/';
+        char.IsLetterOrDigit(c) || c == '_' || c == '.' || c == '-' || c == '/' || c == '$';
 
     private enum TokenType
     {
