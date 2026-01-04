@@ -3,6 +3,7 @@
   "namespace": "ACME/ProductLaunch/Todo",
   "name": "Define target customer persona",
   "nodeType": "ACME/Project/Todo",
+  "category": "Tasks",
   "description": "Create detailed buyer persona for MeshFlow targeting operations managers at mid-market companies",
   "iconName": "Person",
   "displayOrder": 1,

@@ -79,7 +79,9 @@ public static class PersistenceExtensions
             new FileSystemPersistenceService(sp.GetRequiredService<IStorageAdapter>()));
 
         services.AddSingleton<IMeshQuery>(sp =>
-            new InMemoryMeshQuery(sp.GetRequiredService<IPersistenceService>()));
+            new InMemoryMeshQuery(
+                sp.GetRequiredService<IPersistenceService>(),
+                sp.GetService<INavigationContextService>()));
 
         return services;
     }
@@ -139,7 +141,9 @@ public static class PersistenceExtensions
     {
         services.AddSingleton<IPersistenceService>(new InMemoryPersistenceService());
         services.AddSingleton<IMeshQuery>(sp =>
-            new InMemoryMeshQuery(sp.GetRequiredService<IPersistenceService>()));
+            new InMemoryMeshQuery(
+                sp.GetRequiredService<IPersistenceService>(),
+                sp.GetService<INavigationContextService>()));
         return services;
     }
 
@@ -162,7 +166,9 @@ public static class PersistenceExtensions
             new FileSystemPersistenceService(sp.GetRequiredService<IStorageAdapter>()));
 
         services.AddSingleton<IMeshQuery>(sp =>
-            new InMemoryMeshQuery(sp.GetRequiredService<IPersistenceService>()));
+            new InMemoryMeshQuery(
+                sp.GetRequiredService<IPersistenceService>(),
+                sp.GetService<INavigationContextService>()));
 
         return services;
     }
@@ -179,7 +185,9 @@ public static class PersistenceExtensions
         services.AddSingleton(storageAdapter);
         services.AddSingleton<IPersistenceService>(persistenceService);
         services.AddSingleton<IMeshQuery>(sp =>
-            new InMemoryMeshQuery(sp.GetRequiredService<IPersistenceService>()));
+            new InMemoryMeshQuery(
+                sp.GetRequiredService<IPersistenceService>(),
+                sp.GetService<INavigationContextService>()));
         return services;
     }
 
@@ -193,7 +201,9 @@ public static class PersistenceExtensions
     {
         services.AddSingleton(persistenceService);
         services.AddSingleton<IMeshQuery>(sp =>
-            new InMemoryMeshQuery(sp.GetRequiredService<IPersistenceService>()));
+            new InMemoryMeshQuery(
+                sp.GetRequiredService<IPersistenceService>(),
+                sp.GetService<INavigationContextService>()));
         return services;
     }
 }

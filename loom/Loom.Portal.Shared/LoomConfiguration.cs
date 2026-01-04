@@ -221,11 +221,11 @@ public static class LoomConfiguration
                 {
                     var config = hub.AddContentCollections(contentStorageConfig != null ? [contentStorageConfig] : []);
 
-                    // Add avatars and attachments collections mapped to subdirectories
+                    // Add content and attachments collections mapped to subdirectories
                     if (contentStorageConfig != null)
                     {
                         config = config
-                            .MapContentCollection("avatars", contentStorageConfig.Name ?? "storage", "avatars");
+                            .MapContentCollection("content", contentStorageConfig.Name ?? "storage", "content");
                     }
 
                     return config;

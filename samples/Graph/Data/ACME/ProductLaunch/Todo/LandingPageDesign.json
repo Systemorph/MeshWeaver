@@ -3,6 +3,7 @@
   "namespace": "ACME/ProductLaunch/Todo",
   "name": "Design landing page wireframes",
   "nodeType": "ACME/Project/Todo",
+  "category": "Tasks",
   "description": "Create wireframes for the MeshFlow product landing page",
   "iconName": "DesignIdeas",
   "displayOrder": 4,

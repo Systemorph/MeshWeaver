@@ -3,6 +3,7 @@
   "namespace": "MeshWeaver",
   "name": "Collaborative Editing",
   "nodeType": "Markdown",
+  "category": "Documentation",
   "description": "How to use collaborative markdown editing with comments and track changes",
   "iconName": "PeopleTeam",
   "displayOrder": 30,

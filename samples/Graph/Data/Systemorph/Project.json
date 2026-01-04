@@ -3,8 +3,9 @@
   "namespace": "Systemorph",
   "name": "Project",
   "nodeType": "NodeType",
+  "category": "Types",
   "description": "A project containing stories",
-  "iconName": "Folder",
+  "icon": "/static/content/Systemorph/icons/briefcase.svg",
   "displayOrder": 20,
   "isPersistent": true,
   "content": {
@@ -12,10 +13,9 @@
     "id": "Project",
     "namespace": "Systemorph",
     "displayName": "Project",
-    "iconName": "Folder",
+    "icon": "/static/content/Systemorph/icons/briefcase.svg",
     "description": "A project containing stories",
     "displayOrder": 20,
-    "configuration": "config => config.WithContentType<Project>().WithDefaultViews()",
-    "childrenQuery": "nodeType:Systemorph/Project namespace:Systemorph scope:descendants"
+    "configuration": "config => config.WithContentType<Project>().WithDefaultViews()"
   }
 }

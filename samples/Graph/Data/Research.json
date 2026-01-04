@@ -2,6 +2,7 @@
   "id": "Research",
   "name": "Research",
   "nodeType": "Agent",
+  "category": "Agents",
   "description": "Searches for information",
   "iconName": "Search",
   "displayOrder": 30,

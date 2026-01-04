@@ -3,6 +3,7 @@
   "namespace": "ACME/ProductLaunch/Todo",
   "name": "Conduct competitive analysis",
   "nodeType": "ACME/Project/Todo",
+  "category": "Tasks",
   "description": "Analyze key competitors in the workflow automation space",
   "iconName": "DataTrending",
   "displayOrder": 2,

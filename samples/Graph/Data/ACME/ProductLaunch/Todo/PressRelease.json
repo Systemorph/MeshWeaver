@@ -3,6 +3,7 @@
   "namespace": "ACME/ProductLaunch/Todo",
   "name": "Write press release draft",
   "nodeType": "ACME/Project/Todo",
+  "category": "Tasks",
   "description": "Draft the official MeshFlow launch press release",
   "iconName": "News",
   "displayOrder": 8,

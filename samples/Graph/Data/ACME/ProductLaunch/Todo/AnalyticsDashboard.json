@@ -3,6 +3,7 @@
   "namespace": "ACME/ProductLaunch/Todo",
   "name": "Configure analytics dashboard",
   "nodeType": "ACME/Project/Todo",
+  "category": "Tasks",
   "description": "Set up tracking and reporting for launch metrics",
   "iconName": "DataUsage",
   "displayOrder": 11,

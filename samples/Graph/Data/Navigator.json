@@ -2,6 +2,7 @@
   "id": "Navigator",
   "name": "Navigator",
   "nodeType": "Agent",
+  "category": "Agents",
   "description": "Understands user intent and delegates to specialized agents",
   "iconName": "Compass",
   "displayOrder": -100,

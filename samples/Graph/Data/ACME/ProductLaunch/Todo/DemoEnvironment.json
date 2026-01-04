@@ -3,6 +3,7 @@
   "namespace": "ACME/ProductLaunch/Todo",
   "name": "Set up demo environment",
   "nodeType": "ACME/Project/Todo",
+  "category": "Tasks",
   "description": "Configure a stable demo instance with sample data",
   "iconName": "Server",
   "displayOrder": 7,

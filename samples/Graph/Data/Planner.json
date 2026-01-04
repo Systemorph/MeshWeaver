@@ -2,6 +2,7 @@
   "id": "Planner",
   "name": "Planner",
   "nodeType": "Agent",
+  "category": "Agents",
   "description": "Plans complex multi-step tasks",
   "iconName": "CalendarAgenda",
   "displayOrder": 10,

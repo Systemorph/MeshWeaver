@@ -12,12 +12,14 @@ namespace MeshWeaver.Hosting.Persistence.Query;
 public class InMemoryMeshQuery : IMeshQuery
 {
     private readonly IPersistenceService _persistence;
+    private readonly INavigationContextService? _navigationContext;
     private readonly QueryParser _parser = new();
     private readonly QueryEvaluator _evaluator = new();
 
-    public InMemoryMeshQuery(IPersistenceService persistence)
+    public InMemoryMeshQuery(IPersistenceService persistence, INavigationContextService? navigationContext = null)
     {
         _persistence = persistence;
+        _navigationContext = navigationContext;
     }
 
     /// <inheritdoc />
@@ -33,10 +35,28 @@ public class InMemoryMeshQuery : IMeshQuery
             parsedQuery = parsedQuery with { Limit = request.Limit };
         }
 
-        var basePath = NormalizePath(parsedQuery.Path);
+        // If no path is specified, use navigation context's namespace or default to root
+        var effectivePath = parsedQuery.Path;
+        var effectiveScope = parsedQuery.Scope;
+        if (string.IsNullOrEmpty(effectivePath))
+        {
+            if (_navigationContext?.CurrentNamespace != null)
+            {
+                effectivePath = _navigationContext.CurrentNamespace;
+            }
+            // When no path specified and scope is Exact, default to Children (items in current namespace only)
+            // This ensures queries like "nodeType:Organization" find root-level organizations
+            // Use scope:descendants explicitly for recursive search
+            if (parsedQuery.Scope == QueryScope.Exact)
+            {
+                effectiveScope = QueryScope.Children;
+            }
+        }
+
+        var basePath = NormalizePath(effectivePath);
 
         // Determine paths to search based on scope
-        var pathsToSearch = GetPathsForScope(basePath, parsedQuery.Scope);
+        var pathsToSearch = GetPathsForScope(basePath, effectiveScope);
 
         // Collect results with fuzzy scores for ordering
         var results = new List<(object Item, int Score)>();
@@ -65,8 +85,35 @@ public class InMemoryMeshQuery : IMeshQuery
             }
         }
 
-        // If we're doing scope=descendants, also search descendant paths
-        if (parsedQuery.Scope == QueryScope.Descendants || parsedQuery.Scope == QueryScope.Hierarchy)
+        // If we're doing scope=children, search immediate children only
+        if (effectiveScope == QueryScope.Children)
+        {
+            await foreach (var child in _persistence.GetChildrenAsync(basePath).WithCancellation(ct))
+            {
+                // Evaluate the node itself
+                if (_evaluator.Matches(child, parsedQuery))
+                {
+                    var score = _evaluator.GetFuzzyScore(child, parsedQuery.TextSearch);
+                    // Avoid duplicates
+                    if (!results.Any(r => ReferenceEquals(r.Item, child)))
+                        results.Add((child, score));
+                }
+
+                // Search partition objects under child
+                var childPath = NormalizePath(child.Path);
+                await foreach (var obj in _persistence.GetPartitionObjectsAsync(childPath).WithCancellation(ct))
+                {
+                    if (_evaluator.Matches(obj, parsedQuery))
+                    {
+                        var score = _evaluator.GetFuzzyScore(obj, parsedQuery.TextSearch);
+                        results.Add((obj, score));
+                    }
+                }
+            }
+        }
+
+        // If we're doing scope=descendants, also search descendant paths recursively
+        if (effectiveScope == QueryScope.Descendants || effectiveScope == QueryScope.Hierarchy)
         {
             await foreach (var descendant in _persistence.GetDescendantsAsync(basePath).WithCancellation(ct))
             {
@@ -201,6 +248,15 @@ public class InMemoryMeshQuery : IMeshQuery
     private static List<string> GetPathsForScope(string basePath, QueryScope scope)
     {
         var paths = new List<string>();
+
+        // For Children scope, we only want to search immediate children (handled separately)
+        // So we don't include the base path itself in the initial search
+        if (scope == QueryScope.Children)
+        {
+            // Children scope is handled by GetChildrenAsync in QueryAsync
+            // Return empty - children are fetched directly
+            return paths;
+        }
 
         // Always include the base path for Exact, Ancestors, Hierarchy
         if (scope != QueryScope.Descendants || string.IsNullOrEmpty(basePath))

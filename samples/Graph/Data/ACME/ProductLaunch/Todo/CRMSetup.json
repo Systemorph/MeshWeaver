@@ -3,6 +3,7 @@
   "namespace": "ACME/ProductLaunch/Todo",
   "name": "Configure CRM pipeline",
   "nodeType": "ACME/Project/Todo",
+  "category": "Tasks",
   "description": "Set up sales pipeline stages in CRM",
   "iconName": "People",
   "displayOrder": 17,

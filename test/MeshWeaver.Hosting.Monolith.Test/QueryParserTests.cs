@@ -526,4 +526,109 @@ public class QueryParserTests
     }
 
     #endregion
+
+    #region Namespace Parameter
+
+    [Fact]
+    public void Parse_NamespaceWithoutScope_DefaultsToChildren()
+    {
+        var result = _parser.Parse("namespace:MeshWeaver");
+
+        result.Path.Should().Be("MeshWeaver");
+        result.Scope.Should().Be(QueryScope.Children);
+        result.Filter.Should().BeNull();
+    }
+
+    [Fact]
+    public void Parse_NamespaceWithDescendantsScope_UsesDescendants()
+    {
+        var result = _parser.Parse("namespace:MeshWeaver scope:descendants");
+
+        result.Path.Should().Be("MeshWeaver");
+        result.Scope.Should().Be(QueryScope.Descendants);
+        result.Filter.Should().BeNull();
+    }
+
+    [Fact]
+    public void Parse_NamespaceWithAncestorsScope_UsesAncestors()
+    {
+        var result = _parser.Parse("namespace:MeshWeaver/Sub scope:ancestors");
+
+        result.Path.Should().Be("MeshWeaver/Sub");
+        result.Scope.Should().Be(QueryScope.Ancestors);
+    }
+
+    [Fact]
+    public void Parse_NamespaceWithExactScope_UsesExact()
+    {
+        var result = _parser.Parse("namespace:MeshWeaver scope:exact");
+
+        result.Path.Should().Be("MeshWeaver");
+        result.Scope.Should().Be(QueryScope.Exact);
+    }
+
+    [Fact]
+    public void Parse_NamespaceWithFilter_CombinesBoth()
+    {
+        var result = _parser.Parse("namespace:MeshWeaver nodeType:Story");
+
+        result.Path.Should().Be("MeshWeaver");
+        result.Scope.Should().Be(QueryScope.Children);
+        result.Filter.Should().BeOfType<QueryComparison>();
+        var comparison = (QueryComparison)result.Filter!;
+        comparison.Condition.Selector.Should().Be("nodeType");
+        comparison.Condition.Value.Should().Be("Story");
+    }
+
+    [Fact]
+    public void Parse_NamespaceWithFilterAndDescendants_CombinesAll()
+    {
+        var result = _parser.Parse("namespace:MeshWeaver nodeType:Story scope:descendants");
+
+        result.Path.Should().Be("MeshWeaver");
+        result.Scope.Should().Be(QueryScope.Descendants);
+        result.Filter.Should().BeOfType<QueryComparison>();
+    }
+
+    [Fact]
+    public void Parse_NamespaceWithNestedPath_ParsesCorrectly()
+    {
+        var result = _parser.Parse("namespace:ACME/ProductLaunch/Todo");
+
+        result.Path.Should().Be("ACME/ProductLaunch/Todo");
+        result.Scope.Should().Be(QueryScope.Children);
+    }
+
+    [Fact]
+    public void Parse_NamespaceWithChildrenScope_UsesChildren()
+    {
+        var result = _parser.Parse("namespace:MeshWeaver scope:children");
+
+        result.Path.Should().Be("MeshWeaver");
+        result.Scope.Should().Be(QueryScope.Children);
+    }
+
+    #endregion
+
+    #region Children Scope
+
+    [Fact]
+    public void Parse_ScopeChildren_SetsScope()
+    {
+        var result = _parser.Parse("scope:children");
+
+        result.Scope.Should().Be(QueryScope.Children);
+        result.Filter.Should().BeNull();
+    }
+
+    [Fact]
+    public void Parse_PathWithChildrenScope_ParsesBoth()
+    {
+        var result = _parser.Parse("path:products scope:children");
+
+        result.Path.Should().Be("products");
+        result.Scope.Should().Be(QueryScope.Children);
+    }
+
+    #endregion
 }

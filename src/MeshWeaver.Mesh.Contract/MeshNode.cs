@@ -56,7 +56,6 @@ public record MeshNode([property: Key] string Id, string? Namespace = null)
     /// The full path derived from Namespace and Id.
     /// For nodes without a namespace, this equals Id.
     /// </summary>
-    [JsonIgnore, NotMapped]
     public string Path => string.IsNullOrEmpty(Namespace) ? (Id) : $"{Namespace}/{Id}";
 
     /// <summary>
@@ -117,6 +116,20 @@ public record MeshNode([property: Key] string Id, string? Namespace = null)
     /// Human-readable description of this mesh node for display in autocomplete and UI.
     /// </summary>
     public string? Description { get; init; }
+
+    /// <summary>
+    /// Category for grouping in catalog views.
+    /// When set, overrides NodeType as the grouping title.
+    /// </summary>
+    public string? Category { get; init; }
+
+    /// <summary>
+    /// Controls how children are displayed in the catalog view.
+    /// - "grouped": Group by category with headings (default for instances)    
+    /// - "hierarchical": Show parent-child relationships with indentation, uses scope:descendants
+    /// - null: Use default behavior based on node type
+    /// </summary>
+    public string? CatalogMode { get; init; }
 
     /// <summary>
     /// Icon URL or identifier for display in UI.

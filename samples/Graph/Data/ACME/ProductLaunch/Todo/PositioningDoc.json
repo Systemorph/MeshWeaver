@@ -3,6 +3,7 @@
   "namespace": "ACME/ProductLaunch/Todo",
   "name": "Create product positioning document",
   "nodeType": "ACME/Project/Todo",
+  "category": "Tasks",
   "description": "Define MeshFlow's unique value proposition and market positioning",
   "iconName": "Document",
   "displayOrder": 3,

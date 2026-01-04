@@ -3,6 +3,7 @@
   "namespace": "ACME/ProductLaunch/Todo",
   "name": "Create email nurture sequence",
   "nodeType": "ACME/Project/Todo",
+  "category": "Tasks",
   "description": "Build automated email campaigns for lead nurturing",
   "iconName": "Mail",
   "displayOrder": 10,

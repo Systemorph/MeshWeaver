@@ -3,6 +3,7 @@
   "namespace": "ACME/ProductLaunch/Todo",
   "name": "Schedule analyst briefings",
   "nodeType": "ACME/Project/Todo",
+  "category": "Tasks",
   "description": "Arrange briefings with key industry analysts",
   "iconName": "PeopleTeam",
   "displayOrder": 9,
