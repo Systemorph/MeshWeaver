@@ -3,6 +3,7 @@
   "namespace": "ACME/ProductLaunch/Todo",
   "name": "Prepare customer FAQ",
   "nodeType": "ACME/Project/Todo",
+  "category": "Tasks",
   "description": "Document answers to frequently asked questions",
   "iconName": "ChatHelp",
   "displayOrder": 14,

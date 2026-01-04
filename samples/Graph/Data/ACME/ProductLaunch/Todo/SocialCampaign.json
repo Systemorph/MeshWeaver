@@ -3,6 +3,7 @@
   "namespace": "ACME/ProductLaunch/Todo",
   "name": "Plan social media campaign",
   "nodeType": "ACME/Project/Todo",
+  "category": "Tasks",
   "description": "Create content calendar for LinkedIn and Twitter launch campaign",
   "iconName": "Share",
   "displayOrder": 12,

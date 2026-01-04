@@ -3,6 +3,7 @@
   "namespace": "Type",
   "name": "Article",
   "nodeType": "NodeType",
+  "category": "Types",
   "description": "A content article with YAML frontmatter",
   "iconName": "DocumentText",
   "displayOrder": 35,
@@ -15,7 +16,6 @@
     "iconName": "DocumentText",
     "description": "A content article with YAML frontmatter",
     "displayOrder": 35,
-    "configuration": "config => config.WithContentType<Article>().AddNodeTypeView()",
-    "childrenQuery": "source:activity nodeType:Type/Article sort:lastAccessedAt-desc limit:20"
+    "configuration": "config => config.WithContentType<Article>().AddNodeTypeView()"
   }
 }

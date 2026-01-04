@@ -3,6 +3,7 @@
   "namespace": "ACME/ProductLaunch/Todo",
   "name": "Train sales team",
   "nodeType": "ACME/Project/Todo",
+  "category": "Tasks",
   "description": "Conduct product training sessions for sales reps",
   "iconName": "PersonBoard",
   "displayOrder": 18,

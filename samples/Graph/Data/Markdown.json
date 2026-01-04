@@ -3,6 +3,7 @@
   "namespace": "",
   "name": "Markdown",
   "nodeType": "NodeType",
+  "category": "Types",
   "description": "A markdown documentation node with collaborative editing support",
   "iconName": "Document",
   "displayOrder": 100,
@@ -16,7 +17,6 @@
     "iconName": "Document",
     "description": "A markdown documentation node with collaborative editing support",
     "displayOrder": 100,
-    "configuration": "config => config.AddMarkdownViews()",
-    "childrenQuery": "nodeType:Markdown scope:descendants"
+    "configuration": "config => config.AddMarkdownViews()"
   }
 }

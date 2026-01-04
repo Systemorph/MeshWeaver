@@ -3,6 +3,7 @@
   "namespace": "ACME/ProductLaunch/Todo",
   "name": "Record product demo video",
   "nodeType": "ACME/Project/Todo",
+  "category": "Tasks",
   "description": "Produce a professional product walkthrough video",
   "iconName": "Video",
   "displayOrder": 13,

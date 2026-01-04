@@ -3,7 +3,7 @@
   "name": "Systemorph",
   "nodeType": "Organization",
   "description": "The company behind MeshWeaver",
-  "iconName": "Building",
+  "icon": "/static/content/Systemorph/logo.svg",
   "displayOrder": 1,
   "addressSegments": 0,
   "isPersistent": true,
@@ -12,7 +12,6 @@
     "name": "Systemorph",
     "description": "The company behind MeshWeaver",
     "website": "https://systemorph.com",
-    "logo": "/static/avatars/Systemorph/logo.png",
-    "iconName": "Building"
+    "logo": "/static/content/Systemorph/logo.png"
   }
 }

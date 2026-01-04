@@ -1,7 +1,7 @@
 @inherits BlazorView<MeshNodeThumbnailControl, MeshNodeThumbnailView>
 @inject NavigationManager NavigationManager
 
-<FluentCard Class="mesh-node-thumbnail" Style="min-width: 280px; cursor: pointer; margin: 8px;" @onclick="Navigate">
+<FluentCard Class="mesh-node-thumbnail" Style="min-width: 320px; cursor: pointer; margin: 8px;" @onclick="Navigate">
     <div class="mesh-node-thumbnail-content">
         @if (!string.IsNullOrEmpty(ImageUrl))
         {
@@ -74,8 +74,10 @@
     .mesh-node-thumbnail-description {
         color: var(--neutral-foreground-hint);
         overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
+        display: -webkit-box;
+        -webkit-line-clamp: 2;
+        -webkit-box-orient: vertical;
+        line-height: 1.4;
     }
 </style>
 
@@ -87,8 +89,8 @@
 
     private string Initial => !string.IsNullOrEmpty(Title) ? Title[0].ToString().ToUpper() : "?";
 
-    private string TruncatedDescription => Description?.Length > 60
-        ? Description.Substring(0, 57) + "..."
+    private string TruncatedDescription => Description?.Length > 120
+        ? Description.Substring(0, 117) + "..."
         : Description ?? string.Empty;
 
     protected override void BindData()

@@ -24,6 +24,9 @@ public partial class ApplicationPage : ComponentBase
     [Inject]
     private IMeshCatalog MeshCatalog { get; set; } = null!;
 
+    [Inject]
+    private INavigationContextService NavigationContext { get; set; } = null!;
+
     /// <summary>
     /// Catch-all path parameter - the entire URL path is matched against registered namespace patterns.
     /// </summary>
@@ -46,9 +49,13 @@ public partial class ApplicationPage : ComponentBase
 
         if (Resolution is null)
         {
+            NavigationContext.SetCurrentNamespace(null);
             PageTitle = $"Page Not Found";
             return;
         }
+
+        // Set the current namespace from the resolved Address
+        NavigationContext.SetCurrentNamespace(Address?.ToString());
 
         // Parse remainder into area and id
         var (area, id) = ParseRemainder(Resolution.Remainder);

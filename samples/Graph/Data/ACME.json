@@ -11,7 +11,7 @@
     "name": "ACME Corporation",
     "description": "ACME Corporation - A sample organization containing AI agents",
     "website": "https://acme.example.com",
-    "logo": "/static/avatars/ACME/logo.svg",
+    "logo": "/static/content/ACME/logo.svg",
     "iconName": "Building"
   }
 }

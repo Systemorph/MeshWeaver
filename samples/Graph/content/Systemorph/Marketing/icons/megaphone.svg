@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48">
+  <defs>
+    <linearGradient id="megaphone-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#f59e0b"/>
+      <stop offset="100%" stop-color="#d97706"/>
+    </linearGradient>
+  </defs>
+  <rect width="48" height="48" rx="8" fill="url(#megaphone-grad)"/>
+  <path d="M34 14 L34 34 L18 28 L18 20 Z" fill="white"/>
+  <rect x="14" y="18" width="6" height="12" rx="1" fill="white"/>
+  <circle cx="36" cy="24" r="3" fill="white"/>
+  <path d="M16 30 L16 36 L20 36 L22 30" fill="white"/>
+</svg>

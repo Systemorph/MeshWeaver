@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48">
+  <defs>
+    <linearGradient id="docsearch-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#8b5cf6"/>
+      <stop offset="100%" stop-color="#7c3aed"/>
+    </linearGradient>
+  </defs>
+  <rect width="48" height="48" rx="8" fill="url(#docsearch-grad)"/>
+  <rect x="10" y="8" width="20" height="28" rx="2" fill="white"/>
+  <line x1="14" y1="16" x2="26" y2="16" stroke="#8b5cf6" stroke-width="2"/>
+  <line x1="14" y1="22" x2="26" y2="22" stroke="#8b5cf6" stroke-width="2"/>
+  <line x1="14" y1="28" x2="22" y2="28" stroke="#8b5cf6" stroke-width="2"/>
+  <circle cx="32" cy="32" r="8" fill="white" stroke="#8b5cf6" stroke-width="2"/>
+  <line x1="38" y1="38" x2="42" y2="42" stroke="white" stroke-width="3" stroke-linecap="round"/>
+</svg>

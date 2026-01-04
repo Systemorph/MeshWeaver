@@ -2,6 +2,7 @@
   "id": "Executor",
   "name": "Executor",
   "nodeType": "Agent",
+  "category": "Agents",
   "description": "Executes planned tasks",
   "iconName": "Play",
   "displayOrder": 20,

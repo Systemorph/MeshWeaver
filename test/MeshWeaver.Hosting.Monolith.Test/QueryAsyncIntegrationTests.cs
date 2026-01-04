@@ -193,4 +193,104 @@ public class QueryAsyncIntegrationTests
         var node = results.First() as MeshNode;
         node!.Name.Should().Be("Chair");
     }
+
+    #region Namespace Query Tests
+
+    [Fact]
+    public async Task QueryAsync_NamespaceWithoutScope_SearchesImmediateChildrenOnly()
+    {
+        // Arrange
+        await _persistence.SaveNodeAsync(MeshNode.FromPath("org/acme") with { Name = "Acme Corp", NodeType = "company" });
+        await _persistence.SaveNodeAsync(MeshNode.FromPath("org/beta") with { Name = "Beta Inc", NodeType = "company" });
+        await _persistence.SaveNodeAsync(MeshNode.FromPath("org/acme/project") with { Name = "Project X", NodeType = "project" });
+        await _persistence.SaveNodeAsync(MeshNode.FromPath("other/company") with { Name = "Other Company", NodeType = "company" });
+
+        // Act - namespace:org without scope defaults to children (immediate only, not recursive)
+        var query = "namespace:org";
+        var results = await _meshQuery.QueryAsync(MeshQueryRequest.FromQuery(query)).ToListAsync();
+
+        // Assert - should find only immediate children under org (acme, beta), not nested (project) or other
+        results.Should().HaveCount(2);
+        results.Cast<MeshNode>().Select(n => n.Name).Should().Contain(["Acme Corp", "Beta Inc"]);
+        results.Cast<MeshNode>().Select(n => n.Name).Should().NotContain("Project X");
+        results.Cast<MeshNode>().Select(n => n.Name).Should().NotContain("Other Company");
+    }
+
+    [Fact]
+    public async Task QueryAsync_NamespaceWithDescendants_SearchesRecursively()
+    {
+        // Arrange
+        await _persistence.SaveNodeAsync(MeshNode.FromPath("org/acme") with { Name = "Acme Corp", NodeType = "company" });
+        await _persistence.SaveNodeAsync(MeshNode.FromPath("org/acme/project") with { Name = "Project X", NodeType = "project" });
+        await _persistence.SaveNodeAsync(MeshNode.FromPath("org/acme/project/task") with { Name = "Task A", NodeType = "task" });
+        await _persistence.SaveNodeAsync(MeshNode.FromPath("other/company") with { Name = "Other Company", NodeType = "company" });
+
+        // Act - namespace:org with scope:descendants should find all nested nodes
+        var query = "namespace:org scope:descendants";
+        var results = await _meshQuery.QueryAsync(MeshQueryRequest.FromQuery(query)).ToListAsync();
+
+        // Assert - should find all nested nodes under org, but not other
+        results.Should().HaveCount(3);
+        results.Cast<MeshNode>().Select(n => n.Name).Should().Contain(["Acme Corp", "Project X", "Task A"]);
+        results.Cast<MeshNode>().Select(n => n.Name).Should().NotContain("Other Company");
+    }
+
+    [Fact]
+    public async Task QueryAsync_NamespaceWithFilter_SearchesImmediateChildrenWithFilter()
+    {
+        // Arrange
+        await _persistence.SaveNodeAsync(MeshNode.FromPath("org/acme") with { Name = "Acme Corp", NodeType = "company" });
+        await _persistence.SaveNodeAsync(MeshNode.FromPath("org/beta") with { Name = "Beta Inc", NodeType = "company" });
+        await _persistence.SaveNodeAsync(MeshNode.FromPath("org/project") with { Name = "Org Project", NodeType = "project" });
+        await _persistence.SaveNodeAsync(MeshNode.FromPath("org/acme/child") with { Name = "Acme Child", NodeType = "company" });
+
+        // Act - namespace:org with filter searches immediate children only and applies filter
+        var query = "namespace:org nodeType:company";
+        var results = await _meshQuery.QueryAsync(MeshQueryRequest.FromQuery(query)).ToListAsync();
+
+        // Assert - should find only immediate children that match filter (acme, beta), not nested (child)
+        results.Should().HaveCount(2);
+        results.Cast<MeshNode>().Select(n => n.Name).Should().Contain(["Acme Corp", "Beta Inc"]);
+        results.Cast<MeshNode>().Select(n => n.Name).Should().NotContain("Acme Child");
+        results.Cast<MeshNode>().Select(n => n.Name).Should().NotContain("Org Project");
+    }
+
+    [Fact]
+    public async Task QueryAsync_ScopeChildren_SearchesImmediateChildrenOnly()
+    {
+        // Arrange
+        await _persistence.SaveNodeAsync(new MeshNode("products") { Name = "Products", NodeType = "container" });
+        await _persistence.SaveNodeAsync(MeshNode.FromPath("products/laptop") with { Name = "Laptop", NodeType = "Electronics" });
+        await _persistence.SaveNodeAsync(MeshNode.FromPath("products/phone") with { Name = "Phone", NodeType = "Electronics" });
+        await _persistence.SaveNodeAsync(MeshNode.FromPath("products/laptop/accessories") with { Name = "Accessories", NodeType = "Electronics" });
+
+        // Act - path:products with scope:children should find immediate children only
+        var query = "path:products scope:children";
+        var results = await _meshQuery.QueryAsync(MeshQueryRequest.FromQuery(query)).ToListAsync();
+
+        // Assert - should find laptop and phone, not accessories (nested) or products itself
+        results.Should().HaveCount(2);
+        results.Cast<MeshNode>().Select(n => n.Name).Should().Contain(["Laptop", "Phone"]);
+        results.Cast<MeshNode>().Select(n => n.Name).Should().NotContain("Accessories");
+    }
+
+    [Fact]
+    public async Task QueryAsync_NamespaceWithScopeChildren_LimitsToImmediateChildren()
+    {
+        // Arrange
+        await _persistence.SaveNodeAsync(MeshNode.FromPath("org/acme") with { Name = "Acme Corp", NodeType = "company" });
+        await _persistence.SaveNodeAsync(MeshNode.FromPath("org/beta") with { Name = "Beta Inc", NodeType = "company" });
+        await _persistence.SaveNodeAsync(MeshNode.FromPath("org/acme/project") with { Name = "Project X", NodeType = "project" });
+
+        // Act - namespace:org with scope:children limits to immediate children
+        var query = "namespace:org scope:children";
+        var results = await _meshQuery.QueryAsync(MeshQueryRequest.FromQuery(query)).ToListAsync();
+
+        // Assert - should find only immediate children (acme, beta), not nested (project)
+        results.Should().HaveCount(2);
+        results.Cast<MeshNode>().Select(n => n.Name).Should().Contain(["Acme Corp", "Beta Inc"]);
+        results.Cast<MeshNode>().Select(n => n.Name).Should().NotContain("Project X");
+    }
+
+    #endregion
 }

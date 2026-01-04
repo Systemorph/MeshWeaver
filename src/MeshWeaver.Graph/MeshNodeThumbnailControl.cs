@@ -30,84 +30,92 @@ public record MeshNodeThumbnailControl(
     }
 
     /// <summary>
-    /// Gets the image URL for a node (avatar for person, logo for org).
+    /// Gets the image URL for a node.
+    /// Priority: content.avatar > content.logo > node.Icon
     /// Handles both typed objects and JsonElement/Dictionary content.
     /// </summary>
     private static string? GetImageUrl(MeshNode? node)
     {
-        if (node?.Content == null)
+        if (node == null)
             return null;
 
-        // Try JsonElement first (common when deserializing from JSON)
-        if (node.Content is System.Text.Json.JsonElement jsonElement)
+        // First check content properties (avatar, logo)
+        if (node.Content != null)
         {
-            // Try avatar
-            if (jsonElement.TryGetProperty("avatar", out var avatarProp) && avatarProp.ValueKind == System.Text.Json.JsonValueKind.String)
+            // Try JsonElement first (common when deserializing from JSON)
+            if (node.Content is System.Text.Json.JsonElement jsonElement)
             {
-                var avatar = avatarProp.GetString();
-                if (!string.IsNullOrEmpty(avatar))
-                    return avatar;
+                // Try avatar
+                if (jsonElement.TryGetProperty("avatar", out var avatarProp) && avatarProp.ValueKind == System.Text.Json.JsonValueKind.String)
+                {
+                    var avatar = avatarProp.GetString();
+                    if (!string.IsNullOrEmpty(avatar))
+                        return avatar;
+                }
+                // Try Avatar (PascalCase)
+                if (jsonElement.TryGetProperty("Avatar", out var avatarPascalProp) && avatarPascalProp.ValueKind == System.Text.Json.JsonValueKind.String)
+                {
+                    var avatar = avatarPascalProp.GetString();
+                    if (!string.IsNullOrEmpty(avatar))
+                        return avatar;
+                }
+                // Try logo
+                if (jsonElement.TryGetProperty("logo", out var logoProp) && logoProp.ValueKind == System.Text.Json.JsonValueKind.String)
+                {
+                    var logo = logoProp.GetString();
+                    if (!string.IsNullOrEmpty(logo))
+                        return logo;
+                }
+                // Try Logo (PascalCase)
+                if (jsonElement.TryGetProperty("Logo", out var logoPascalProp) && logoPascalProp.ValueKind == System.Text.Json.JsonValueKind.String)
+                {
+                    var logo = logoPascalProp.GetString();
+                    if (!string.IsNullOrEmpty(logo))
+                        return logo;
+                }
             }
-            // Try Avatar (PascalCase)
-            if (jsonElement.TryGetProperty("Avatar", out var avatarPascalProp) && avatarPascalProp.ValueKind == System.Text.Json.JsonValueKind.String)
+            // Try Dictionary<string, object>
+            else if (node.Content is IDictionary<string, object> dict)
             {
-                var avatar = avatarPascalProp.GetString();
-                if (!string.IsNullOrEmpty(avatar))
-                    return avatar;
+                if (dict.TryGetValue("avatar", out var avatar) || dict.TryGetValue("Avatar", out avatar))
+                {
+                    var avatarStr = avatar?.ToString();
+                    if (!string.IsNullOrEmpty(avatarStr))
+                        return avatarStr;
+                }
+                if (dict.TryGetValue("logo", out var logo) || dict.TryGetValue("Logo", out logo))
+                {
+                    var logoStr = logo?.ToString();
+                    if (!string.IsNullOrEmpty(logoStr))
+                        return logoStr;
+                }
             }
-            // Try logo
-            if (jsonElement.TryGetProperty("logo", out var logoProp) && logoProp.ValueKind == System.Text.Json.JsonValueKind.String)
+            else
             {
-                var logo = logoProp.GetString();
-                if (!string.IsNullOrEmpty(logo))
-                    return logo;
+                // Fall back to reflection for typed objects
+                // Try to get Avatar property (for Person)
+                var avatarProperty = node.Content.GetType().GetProperty("Avatar");
+                if (avatarProperty != null)
+                {
+                    var avatarValue = avatarProperty.GetValue(node.Content) as string;
+                    if (!string.IsNullOrEmpty(avatarValue))
+                        return avatarValue;
+                }
+
+                // Try to get Logo property (for Organization)
+                var logoProperty = node.Content.GetType().GetProperty("Logo");
+                if (logoProperty != null)
+                {
+                    var logoValue = logoProperty.GetValue(node.Content) as string;
+                    if (!string.IsNullOrEmpty(logoValue))
+                        return logoValue;
+                }
             }
-            // Try Logo (PascalCase)
-            if (jsonElement.TryGetProperty("Logo", out var logoPascalProp) && logoPascalProp.ValueKind == System.Text.Json.JsonValueKind.String)
-            {
-                var logo = logoPascalProp.GetString();
-                if (!string.IsNullOrEmpty(logo))
-                    return logo;
-            }
-            return null;
         }
 
-        // Try Dictionary<string, object>
-        if (node.Content is IDictionary<string, object> dict)
-        {
-            if (dict.TryGetValue("avatar", out var avatar) || dict.TryGetValue("Avatar", out avatar))
-            {
-                var avatarStr = avatar?.ToString();
-                if (!string.IsNullOrEmpty(avatarStr))
-                    return avatarStr;
-            }
-            if (dict.TryGetValue("logo", out var logo) || dict.TryGetValue("Logo", out logo))
-            {
-                var logoStr = logo?.ToString();
-                if (!string.IsNullOrEmpty(logoStr))
-                    return logoStr;
-            }
-            return null;
-        }
-
-        // Fall back to reflection for typed objects
-        // Try to get Avatar property (for Person)
-        var avatarProperty = node.Content.GetType().GetProperty("Avatar");
-        if (avatarProperty != null)
-        {
-            var avatarValue = avatarProperty.GetValue(node.Content) as string;
-            if (!string.IsNullOrEmpty(avatarValue))
-                return avatarValue;
-        }
-
-        // Try to get Logo property (for Organization)
-        var logoProperty = node.Content.GetType().GetProperty("Logo");
-        if (logoProperty != null)
-        {
-            var logoValue = logoProperty.GetValue(node.Content) as string;
-            if (!string.IsNullOrEmpty(logoValue))
-                return logoValue;
-        }
+        // Fall back to node.Icon (for stories, projects, etc.)
+        if (!string.IsNullOrEmpty(node.Icon))
+            return node.Icon;
 
         return null;
     }

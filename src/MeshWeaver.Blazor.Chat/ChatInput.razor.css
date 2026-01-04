@@ -86,15 +86,15 @@
 
 /* Context field - larger min-width */
 .selector-context {
-    flex: 1 1 0;
-    min-width: 120px;
+    flex: 2 1 0;
+    min-width: 100px;
 }
 
 /* Agent and model selectors */
 .selector-agent,
 .selector-model {
     flex: 1 1 0;
-    min-width: 80px;
+    min-width: 50px;
 }
 
 /* FluentTextField styling */

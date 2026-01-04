@@ -8,7 +8,10 @@ public enum QueryScope
     /// <summary>Query only at the exact path specified.</summary>
     Exact,
 
-    /// <summary>Query the path and all descendant paths.</summary>
+    /// <summary>Query immediate children of the path (one level deep).</summary>
+    Children,
+
+    /// <summary>Query the path and all descendant paths recursively.</summary>
     Descendants,
 
     /// <summary>Query the path and all ancestor paths upward.</summary>

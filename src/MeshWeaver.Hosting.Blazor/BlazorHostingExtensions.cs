@@ -3,7 +3,6 @@ using MeshWeaver.Blazor;
 using MeshWeaver.Blazor.Infrastructure;
 using MeshWeaver.ContentCollections;
 using MeshWeaver.Data;
-using MeshWeaver.Data.Services;
 using MeshWeaver.Layout.Client;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
@@ -93,7 +92,7 @@ public static class BlazorHostingExtensions
 
     /// <summary>
     /// Maps static content endpoint supporting two path patterns:
-    /// 1. /static/{collection}/{filePath} - when first segment is a known collection (e.g., avatars, attachments)
+    /// 1. /static/{collection}/{filePath} - when first segment is a known collection (e.g., content, attachments)
     /// 2. /static/{address}/{collection}/{filePath} - when first segment is an address
     ///
     /// The endpoint first checks if the first segment matches a registered collection name.

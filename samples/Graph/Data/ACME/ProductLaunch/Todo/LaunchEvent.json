@@ -3,6 +3,7 @@
   "namespace": "ACME/ProductLaunch/Todo",
   "name": "Plan virtual launch event",
   "nodeType": "ACME/Project/Todo",
+  "category": "Tasks",
   "description": "Organize the official MeshFlow launch webinar",
   "iconName": "CalendarLtr",
   "displayOrder": 20,

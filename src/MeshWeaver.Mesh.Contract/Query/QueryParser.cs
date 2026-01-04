@@ -9,7 +9,7 @@ public partial class QueryParser
     // Reserved qualifier names (case-insensitive)
     private static readonly HashSet<string> ReservedQualifiers = new(StringComparer.OrdinalIgnoreCase)
     {
-        "path", "scope", "sort", "limit", "source"
+        "path", "namespace", "scope", "sort", "limit", "source"
     };
 
     /// <summary>
@@ -338,7 +338,7 @@ public partial class QueryParser
     }
 
     /// <summary>
-    /// Extracts reserved qualifiers (path, scope, sort, limit, source) from tokens.
+    /// Extracts reserved qualifiers (path, namespace, scope, sort, limit, source) from tokens.
     /// Returns remaining filter tokens and extracted values.
     /// </summary>
     private (List<Token> FilterTokens, string? TextSearch, string? Path, QueryScope Scope, OrderByClause? OrderBy, int? Limit, QuerySource Source)
@@ -348,6 +348,8 @@ public partial class QueryParser
         var textSearchParts = new List<string>();
         string? path = null;
         var scope = QueryScope.Exact;
+        bool explicitScope = false;
+        bool namespaceUsed = false;
         OrderByClause? orderBy = null;
         int? limit = null;
         var source = QuerySource.Default;
@@ -371,10 +373,19 @@ public partial class QueryParser
                     continue;
                 }
 
+                if (field.Equals("namespace", StringComparison.OrdinalIgnoreCase))
+                {
+                    path = value;
+                    namespaceUsed = true;
+                    continue;
+                }
+
                 if (field.Equals("scope", StringComparison.OrdinalIgnoreCase))
                 {
+                    explicitScope = true;
                     scope = value.ToLowerInvariant() switch
                     {
+                        "children" => QueryScope.Children,
                         "descendants" => QueryScope.Descendants,
                         "ancestors" => QueryScope.Ancestors,
                         "hierarchy" => QueryScope.Hierarchy,
@@ -419,6 +430,14 @@ public partial class QueryParser
             }
 
             filterTokens.Add(token);
+        }
+
+        // When namespace: is used without explicit scope, default to Children (exact namespace)
+        // This makes namespace:X behave like "search items directly in folder X" (not recursive)
+        // Use scope:descendants explicitly for recursive search
+        if (namespaceUsed && !explicitScope)
+        {
+            scope = QueryScope.Children;
         }
 
         var textSearch = textSearchParts.Count > 0 ? string.Join(" ", textSearchParts) : null;

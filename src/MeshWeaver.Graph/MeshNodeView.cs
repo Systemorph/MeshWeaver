@@ -15,15 +15,6 @@ using Microsoft.Extensions.DependencyInjection;
 namespace MeshWeaver.Graph;
 
 /// <summary>
-/// Configuration for the catalog view query.
-/// Set this in hub configuration to customize what query the standard catalog uses.
-/// Use GitHub-style query syntax including exclusions (e.g., "-nodeType:NodeType" to exclude NodeType nodes).
-/// </summary>
-/// <param name="Query">The GitHub-style query to use for catalog (e.g., "scope:descendants -nodeType:NodeType")</param>
-/// <param name="Title">Optional title for the catalog</param>
-public record CatalogQueryConfig(string Query, string? Title = null);
-
-/// <summary>
 /// Marker record indicating that the catalog should operate in NodeType mode.
 /// When set, the catalog reads NodeTypeDefinition from workspace to build the query dynamically.
 /// </summary>
@@ -45,14 +36,10 @@ public static class MeshNodeView
     public const string SettingsArea = "Settings";
     public const string CommentsArea = "Comments";
     public const string CatalogArea = "Catalog";
-
-    // Data keys for catalog
-    private const string CatalogSearchDataId = "catalogSearch";
-    private const string CatalogLimitDataId = "catalogLimit";
-    private const int DefaultCatalogPageSize = 20;
+    public const string CalendarArea = "Calendar";
 
     /// <summary>
-    /// Adds the mesh node views (Details, Thumbnail, Metadata, Settings, Catalog) to the hub's layout.
+    /// Adds the mesh node views (Details, Thumbnail, Metadata, Settings, Catalog, Calendar) to the hub's layout.
     /// Requires AddMeshDataSource() to be called first to enable GetStream&lt;MeshNode&gt;() in views.
     /// Catalog is set as the default area for browsing children with search.
     /// For comments support, call AddComments() after this method.
@@ -65,7 +52,8 @@ public static class MeshNodeView
                 .WithView(ThumbnailArea, Thumbnail)
                 .WithView(MetadataArea, Metadata)
                 .WithView(SettingsArea, Settings)
-                .WithView(CatalogArea, Catalog));
+                .WithView(CatalogArea, Catalog)
+                .WithView(CalendarArea, Calendar));
 
     /// <summary>
     /// Renders the Details area showing the node's main content with action menu.
@@ -473,319 +461,424 @@ public static class MeshNodeView
     }
 
     /// <summary>
-    /// Renders the Catalog view showing nodes as thumbnails.
-    /// Uses CatalogQueryConfig from hub configuration if available, otherwise defaults to showing descendants.
-    /// If NodeTypeCatalogMode is set, reads NodeTypeDefinition to build query dynamically.
-    /// Includes search bar for filtering and Load More for pagination.
+    /// Renders the Catalog view showing nodes as thumbnails in a LayoutGrid.
+    /// Includes a search bar that combines user query with background filters.
+    /// For NodeTypes, shows instances of that type.
+    /// For instance nodes, shows children grouped by Category.
     /// </summary>
     public static UiControl Catalog(LayoutAreaHost host, RenderingContext ctx)
     {
         var hubPath = host.Hub.Address.ToString();
         var meshQuery = host.Hub.ServiceProvider.GetService<IMeshQuery>();
-        var catalogConfig = host.Hub.Configuration.Get<CatalogQueryConfig>();
         var isNodeTypeMode = host.Hub.Configuration.Get<NodeTypeCatalogMode>() != null;
 
-        // Initialize catalog state
-        host.UpdateData(CatalogSearchDataId, "");
-        host.UpdateData(CatalogLimitDataId, DefaultCatalogPageSize.ToString());
+        if (meshQuery == null)
+        {
+            return Controls.Html("<p style=\"color: #888;\">Query service not available.</p>");
+        }
 
-        // If NodeType mode, build query from NodeTypeDefinition dynamically
-        // Search from root to find all instances of this type regardless of location
+        // For NodeType mode, get the definition to build the nodeType filter
         if (isNodeTypeMode)
         {
             var definitionStream = host.Workspace.GetNodeContent<NodeTypeDefinition>();
 
-            // Flag to track if we've initialized the search bar with the default query
-            var queryInitialized = false;
-
             return Controls.Stack
                 .WithWidth("100%")
+                .WithView(BuildSearchBar(hubPath), "catalogSearch")
                 .WithView(
-                    (h, c) => definitionStream
-                        .CombineLatest(
-                            h.GetDataStream<string>(CatalogSearchDataId),
-                            h.GetDataStream<string>(CatalogLimitDataId))
-                        .Throttle(TimeSpan.FromMilliseconds(300))
-                        .SelectMany(async tuple =>
+                    (h, _) => definitionStream
+                        .SelectMany(async definition =>
                         {
-                            var (definition, currentSearch, limitStr) = tuple;
                             if (definition == null)
                                 return Controls.Markdown("*Loading...*");
 
-                            // Build default query from NodeTypeDefinition
-                            // Use ChildrenQuery if defined, otherwise simple nodeType + scope query
+                            // Build nodeType filter path
                             var nodeTypePath = string.IsNullOrEmpty(definition.Namespace)
                                 ? definition.Id
                                 : $"{definition.Namespace}/{definition.Id}";
-                            var defaultQuery = definition.ChildrenQuery
-                                ?? $"nodeType:{nodeTypePath} scope:descendants";
 
-                            // Pre-fill search bar with the default query on first load
-                            if (!queryInitialized && string.IsNullOrEmpty(currentSearch))
-                            {
-                                queryInitialized = true;
-                                host.UpdateData(CatalogSearchDataId, defaultQuery);
-                                currentSearch = defaultQuery;
-                            }
-
-                            // Use the search bar content as the query (user can modify it)
-                            var query = string.IsNullOrWhiteSpace(currentSearch) ? defaultQuery : currentSearch;
-                            var dynamicConfig = new CatalogQueryConfig(query, definition.DisplayName ?? definition.Id);
-
-                            var limit = int.TryParse(limitStr, out var l) ? l : DefaultCatalogPageSize;
-                            // Search from root ("") to find all instances regardless of their location
-                            // Use NodeType-specific catalog builder with activity fallback
-                            return await BuildNodeTypeCatalogViewAsync(host, meshQuery, dynamicConfig, nodeTypePath, limit);
+                            // Query: nodeType filter only
+                            var query = $"nodeType:{nodeTypePath}";
+                            return await BuildCatalogGridAsync(meshQuery, query);
                         }),
                     "CatalogContent");
         }
 
+        // Instance node catalog - check for hierarchical mode
+        var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? Array.Empty<MeshNode>())
+            ?? Observable.Return<MeshNode[]>(Array.Empty<MeshNode>());
+
         return Controls.Stack
             .WithWidth("100%")
+            .WithView(BuildSearchBar(hubPath), "catalogSearch")
             .WithView(
-                (h, c) => h.GetDataStream<string>(CatalogSearchDataId)
-                    .CombineLatest(h.GetDataStream<string>(CatalogLimitDataId))
-                    .Throttle(TimeSpan.FromMilliseconds(300))
-                    .SelectMany(async tuple =>
+                (h, _) => nodeStream.SelectMany(async nodes =>
+                {
+                    var node = nodes.FirstOrDefault(n => n.Path == hubPath);
+                    var catalogMode = node?.CatalogMode?.ToLowerInvariant();
+
+                    if (catalogMode == "hierarchical")
                     {
-                        var (search, limitStr) = tuple;
-                        var limit = int.TryParse(limitStr, out var l) ? l : DefaultCatalogPageSize;
-                        return await BuildCatalogViewAsync(host, hubPath, meshQuery, catalogConfig, search, limit);
-                    }),
+                        // Hierarchical mode: scope:descendants with tree structure
+                        var query = $"namespace:{hubPath} scope:descendants";
+                        return await BuildCatalogGridHierarchicalAsync(meshQuery, query, hubPath);
+                    }
+                    else
+                    {
+                        // Default: grouped by category
+                        var query = $"namespace:{hubPath}";
+                        return await BuildCatalogGridWithCategoriesAsync(meshQuery, query);
+                    }
+                }),
                 "CatalogContent");
     }
 
-    private static async Task<UiControl> BuildCatalogViewAsync(
-        LayoutAreaHost host,
-        string basePath,
-        IMeshQuery? meshQuery,
-        CatalogQueryConfig? catalogConfig,
-        string? searchFilter,
-        int limit)
+    /// <summary>
+    /// Builds the search bar with text input and Search button.
+    /// Search navigates to search page with query parameter.
+    /// </summary>
+    private static UiControl BuildSearchBar(string hubPath)
     {
-        var stack = Controls.Stack.WithWidth("100%").WithStyle("padding: 24px;");
+        var searchInputId = $"search_{hubPath.Replace("/", "_")}";
 
-        // Search bar - full width with Search button on same row
-        var searchRow = Controls.Stack
-            .WithOrientation(Orientation.Horizontal)
-            .WithStyle("gap: 8px; margin-bottom: 16px; align-items: center; width: 100%;")
-            .WithView(new TextFieldControl(new JsonPointerReference(""))
-                .WithPlaceholder("Search (e.g., name:*claims* status:Open)")
-                .WithStyle("flex: 1;")
-                .WithIconStart(FluentIcons.Search())
-                .WithImmediate(true) with
-            {
-                DataContext = LayoutAreaReference.GetDataPointer(CatalogSearchDataId)
-            })
-            .WithView(Controls.Button("Search")
-                .WithAppearance(Appearance.Accent)
-                .WithIconStart(FluentIcons.Search()));
+        return Controls.Html($@"
+            <div style=""display: flex; gap: 8px; margin-bottom: 16px; align-items: center; width: 100%;"">
+                <input type=""text"" id=""{searchInputId}"" placeholder=""Search...""
+                    style=""flex: 1; padding: 8px 12px; border: 1px solid #d1d1d1; border-radius: 4px; font-size: 14px;""
+                    onkeydown=""if(event.key==='Enter'){{var q=this.value;if(q)window.location.href='/search?q='+encodeURIComponent('namespace:{hubPath} scope:descendants '+q);}}"" />
+                <button onclick=""var q=document.getElementById('{searchInputId}').value;if(q)window.location.href='/search?q='+encodeURIComponent('namespace:{hubPath} scope:descendants '+q);""
+                    style=""padding: 8px 16px; background: #0078d4; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 14px;"">
+                    Search
+                </button>
+            </div>");
+    }
 
-        stack = stack.WithView(searchRow);
-
-        if (meshQuery == null)
-        {
-            stack = stack.WithView(Controls.Html("<p style=\"color: #888;\">Query service not available.</p>"));
-            return stack;
-        }
-
-        // Build query - search for direct children using namespace filter
-        // Direct children are nodes whose Namespace property equals basePath
-        // Exclude NodeType nodes (they go to Settings)
-        var queryLimit = limit + 1; // Request one more to detect if there are more
-        var baseQuery = catalogConfig?.Query ?? $"path:{basePath} namespace:{basePath} -nodeType:NodeType scope:descendants";
-        var query = $"{baseQuery}";
-        if (!string.IsNullOrWhiteSpace(searchFilter))
-        {
-            query = searchFilter.Trim() + " " + query;
-        }
-
+    /// <summary>
+    /// Builds a LayoutGrid with thumbnail cards for each query result.
+    /// Renders icon, title, and description directly from node properties.
+    /// </summary>
+    private static async Task<UiControl> BuildCatalogGridAsync(IMeshQuery meshQuery, string query)
+    {
         List<MeshNode> nodes;
         try
         {
-            nodes = await meshQuery.QueryAsync<MeshNode>(query, 0, queryLimit).ToListAsync();
+            nodes = await meshQuery.QueryAsync<MeshNode>(query).ToListAsync();
         }
         catch
         {
             nodes = [];
         }
 
-        var hasMore = nodes.Count > limit;
-        if (hasMore)
-            nodes = nodes.Take(limit).ToList();
-
-        // Results info
-        var subtitleText = catalogConfig?.Title ?? (string.IsNullOrWhiteSpace(searchFilter)
-            ? "Showing children"
-            : "Filtered results");
-        stack = stack.WithView(Controls.Html($"<p style=\"color: #666; margin-bottom: 16px;\">{subtitleText}</p>"));
-
-        // Group by nodeType and render
         if (nodes.Count == 0)
         {
-            var noResultsMsg = string.IsNullOrWhiteSpace(searchFilter)
-                ? "No items found."
-                : "No items match your search.";
-            stack = stack.WithView(Controls.Html($"<p style=\"color: #888;\">{noResultsMsg}</p>"));
+            return Controls.Html("<p style=\"color: #888;\">No items found.</p>");
         }
-        else
+
+        // Build LayoutGrid with thumbnail cards rendered directly
+        var grid = Controls.LayoutGrid.WithSkin(s => s.WithSpacing(3));
+
+        foreach (var node in nodes)
         {
-            // Results count
-            var countText = hasMore
-                ? $"Showing {nodes.Count}+ items"
-                : $"Showing {nodes.Count} item{(nodes.Count != 1 ? "s" : "")}";
-            stack = stack.WithView(Controls.Html($"<p style=\"color: #888; margin-bottom: 12px; font-size: 0.9em;\">{countText}</p>"));
+            // Render thumbnail directly from node properties (icon, title, description)
+            // Use wider columns: 1 per row on mobile, 2 on tablet, 2 on desktop, 3 on large screens
+            grid = grid.WithView(
+                MeshNodeThumbnailControl.FromNode(node, node.Path),
+                itemSkin => itemSkin.WithXs(12).WithSm(6).WithMd(6).WithLg(4));
+        }
 
-            // Group nodes by nodeType
-            var groupedNodes = nodes
-                .GroupBy(n => n.NodeType ?? "Other")
-                .OrderBy(g => g.Key);
+        return grid;
+    }
 
-            foreach (var group in groupedNodes)
+    /// <summary>
+    /// Builds a hierarchical LayoutGrid showing parent-child relationships with indentation.
+    /// Groups items by their immediate parent, showing tree structure.
+    /// </summary>
+    private static async Task<UiControl> BuildCatalogGridHierarchicalAsync(IMeshQuery meshQuery, string query, string basePath)
+    {
+        List<MeshNode> nodes;
+        try
+        {
+            nodes = await meshQuery.QueryAsync<MeshNode>(query).ToListAsync();
+        }
+        catch
+        {
+            nodes = [];
+        }
+
+        if (nodes.Count == 0)
+        {
+            return Controls.Html("<p style=\"color: #888;\">No items found.</p>");
+        }
+
+        // Build a tree structure from the flat list
+        var nodesByPath = nodes.ToDictionary(n => n.Path, n => n);
+        var basePathNormalized = basePath.Trim('/');
+        var baseDepth = string.IsNullOrEmpty(basePathNormalized) ? 0 : basePathNormalized.Split('/').Length;
+
+        // Find root-level nodes (immediate children of basePath)
+        var rootNodes = nodes
+            .Where(n => GetParentPath(n.Path, basePathNormalized) == basePathNormalized)
+            .OrderBy(n => n.DisplayOrder)
+            .ThenBy(n => n.Name)
+            .ToList();
+
+        // Build the hierarchical grid
+        var grid = Controls.LayoutGrid.WithSkin(s => s.WithSpacing(2));
+
+        foreach (var rootNode in rootNodes)
+        {
+            grid = AddNodeToGrid(grid, rootNode, nodes, baseDepth, 0);
+        }
+
+        return grid;
+    }
+
+    private static string GetParentPath(string path, string basePath)
+    {
+        var pathNormalized = path.Trim('/');
+        var lastSlash = pathNormalized.LastIndexOf('/');
+        if (lastSlash < 0)
+            return "";
+        return pathNormalized.Substring(0, lastSlash);
+    }
+
+    private static LayoutGridControl AddNodeToGrid(LayoutGridControl grid, MeshNode node, List<MeshNode> allNodes, int baseDepth, int indentLevel)
+    {
+        // Calculate left margin for indentation
+        var marginLeft = indentLevel * 32;
+
+        // Add the node with indentation
+        grid = grid.WithView(
+            Controls.Stack
+                .WithOrientation(Orientation.Horizontal)
+                .WithStyle($"margin-left: {marginLeft}px; width: calc(100% - {marginLeft}px);")
+                .WithView(MeshNodeThumbnailControl.FromNode(node, node.Path)),
+            itemSkin => itemSkin.WithXs(12).WithSm(6).WithMd(6).WithLg(4));
+
+        // Find and add children
+        var nodePath = node.Path;
+        var children = allNodes
+            .Where(n => GetParentPath(n.Path, "") == nodePath)
+            .OrderBy(n => n.DisplayOrder)
+            .ThenBy(n => n.Name)
+            .ToList();
+
+        foreach (var child in children)
+        {
+            grid = AddNodeToGrid(grid, child, allNodes, baseDepth, indentLevel + 1);
+        }
+
+        return grid;
+    }
+
+    /// <summary>
+    /// Builds a LayoutGrid with thumbnail cards grouped by Category.
+    /// Each category gets a heading followed by its nodes.
+    /// </summary>
+    private static async Task<UiControl> BuildCatalogGridWithCategoriesAsync(IMeshQuery meshQuery, string query)
+    {
+        List<MeshNode> nodes;
+        try
+        {
+            nodes = await meshQuery.QueryAsync<MeshNode>(query).ToListAsync();
+        }
+        catch
+        {
+            nodes = [];
+        }
+
+        if (nodes.Count == 0)
+        {
+            return Controls.Html("<p style=\"color: #888;\">No items found.</p>");
+        }
+
+        // Group nodes by Category
+        var groups = nodes
+            .GroupBy(n => n.Category ?? "Uncategorized")
+            .OrderBy(g => g.Key)
+            .ToList();
+
+        // Build LayoutGrid with category headings
+        var grid = Controls.LayoutGrid.WithSkin(s => s.WithSpacing(3));
+
+        foreach (var group in groups)
+        {
+            // Category heading spans full width
+            grid = grid.WithView(
+                Controls.Html($"<h3 style=\"margin: 24px 0 8px 0;\">{group.Key}</h3>"),
+                itemSkin => itemSkin.WithXs(12));
+
+            // Nodes in this category
+            foreach (var node in group.OrderBy(n => n.DisplayOrder).ThenBy(n => n.Name))
             {
-                // Group header
-                var typeName = group.Key;
-                stack = stack.WithView(Controls.Html($"<h3 style=\"margin: 16px 0 8px 0; font-size: 1.1em; color: #444;\">{System.Web.HttpUtility.HtmlEncode(typeName)}</h3>"));
-
-                // Grid for this group
-                var grid = Controls.LayoutGrid.WithSkin(s => s.WithSpacing(3));
-                foreach (var node in group)
-                {
-                    grid = grid.WithView(
-                        MeshNodeThumbnailControl.FromNode(node, node.Path),
-                        itemSkin => itemSkin.WithXs(12).WithSm(6).WithMd(6).WithLg(6));
-                }
-                stack = stack.WithView(grid);
+                grid = grid.WithView(
+                    MeshNodeThumbnailControl.FromNode(node, node.Path),
+                    itemSkin => itemSkin.WithXs(12).WithSm(6).WithMd(6).WithLg(4));
             }
+        }
 
-            // Load More button
-            if (hasMore)
+        return grid;
+    }
+
+    /// <summary>
+    /// Renders a Calendar view showing scheduled items by publish date.
+    /// Groups items by week and displays them in a timeline format.
+    /// </summary>
+    public static UiControl Calendar(LayoutAreaHost host, RenderingContext ctx)
+    {
+        var hubPath = host.Hub.Address.ToString();
+        var meshQuery = host.Hub.ServiceProvider.GetService<IMeshQuery>();
+
+        if (meshQuery == null)
+        {
+            return Controls.Html("<p style=\"color: #888;\">Query service not available.</p>");
+        }
+
+        return Controls.Stack
+            .WithWidth("100%")
+            .WithView(Controls.Html("<h2 style=\"margin: 0 0 16px 0;\">Publishing Calendar</h2>"))
+            .WithView(
+                (h, _) => Observable.FromAsync(async () =>
+                {
+                    // Query all descendants to find items with publish dates
+                    var query = $"namespace:{hubPath} scope:descendants";
+                    return await BuildCalendarViewAsync(meshQuery, query);
+                }),
+                "CalendarContent");
+    }
+
+    /// <summary>
+    /// Builds a calendar view showing items grouped by week.
+    /// </summary>
+    private static async Task<UiControl> BuildCalendarViewAsync(IMeshQuery meshQuery, string query)
+    {
+        List<MeshNode> nodes;
+        try
+        {
+            nodes = await meshQuery.QueryAsync<MeshNode>(query).ToListAsync();
+        }
+        catch
+        {
+            nodes = [];
+        }
+
+        // Filter nodes that have publishable content (Posts with PublishDate)
+        var scheduledItems = new List<(MeshNode Node, DateTime PublishDate, string? Status)>();
+
+        foreach (var node in nodes)
+        {
+            if (node.Content is System.Text.Json.JsonElement json)
             {
-                var newLimit = limit + DefaultCatalogPageSize;
-                var loadMoreRow = Controls.Stack
-                    .WithStyle("margin-top: 24px; display: flex; justify-content: center;")
-                    .WithView(Controls.Button("Load More")
-                        .WithAppearance(Appearance.Neutral)
-                        .WithIconEnd(FluentIcons.ChevronDown())
-                        .WithClickAction(actx =>
-                        {
-                            host.UpdateData(CatalogLimitDataId, newLimit.ToString());
-                        }));
-                stack = stack.WithView(loadMoreRow);
+                DateTime? publishDate = null;
+                string? status = null;
+
+                if (json.TryGetProperty("publishDate", out var dateProp) && dateProp.ValueKind != System.Text.Json.JsonValueKind.Null)
+                {
+                    if (DateTime.TryParse(dateProp.GetString(), out var date))
+                        publishDate = date;
+                }
+
+                if (json.TryGetProperty("status", out var statusProp))
+                {
+                    status = statusProp.GetString();
+                }
+
+                if (publishDate.HasValue)
+                {
+                    scheduledItems.Add((node, publishDate.Value, status));
+                }
+            }
+        }
+
+        if (scheduledItems.Count == 0)
+        {
+            return Controls.Html("<p style=\"color: #888;\">No scheduled items found.</p>");
+        }
+
+        // Group by week
+        var groupedByWeek = scheduledItems
+            .OrderBy(x => x.PublishDate)
+            .GroupBy(x => GetWeekStart(x.PublishDate))
+            .ToList();
+
+        var stack = Controls.Stack.WithWidth("100%");
+
+        foreach (var week in groupedByWeek)
+        {
+            var weekStart = week.Key;
+            var weekEnd = weekStart.AddDays(6);
+            var weekHeader = $"{weekStart:MMM d} - {weekEnd:MMM d, yyyy}";
+
+            stack = stack.WithView(Controls.Html($"<h3 style=\"margin: 24px 0 12px 0; padding-bottom: 8px; border-bottom: 2px solid #0078d4;\">{weekHeader}</h3>"));
+
+            // Items in this week, grouped by day
+            var byDay = week.GroupBy(x => x.PublishDate.Date).OrderBy(x => x.Key);
+
+            foreach (var day in byDay)
+            {
+                var dayLabel = day.Key.ToString("ddd, MMM d");
+                stack = stack.WithView(Controls.Html($"<div style=\"font-weight: 600; margin: 12px 0 8px 0; color: #666;\">{dayLabel}</div>"));
+
+                foreach (var (node, publishDate, status) in day.OrderBy(x => x.PublishDate))
+                {
+                    var time = publishDate.ToString("HH:mm");
+                    var statusBadge = GetStatusBadge(status);
+                    var platforms = GetPlatforms(node);
+
+                    var itemHtml = $@"
+                        <div style=""display: flex; align-items: center; gap: 12px; padding: 12px; margin: 4px 0; background: #f5f5f5; border-radius: 8px; cursor: pointer;"" onclick=""window.location.href='/{node.Path}'"">
+                            <div style=""font-weight: 600; color: #0078d4; min-width: 50px;"">{time}</div>
+                            <div style=""flex: 1;"">
+                                <div style=""font-weight: 500;"">{node.Name}</div>
+                                <div style=""font-size: 12px; color: #666;"">{platforms}</div>
+                            </div>
+                            {statusBadge}
+                        </div>";
+
+                    stack = stack.WithView(Controls.Html(itemHtml));
+                }
             }
         }
 
         return stack;
     }
 
-    /// <summary>
-    /// Builds the catalog view for NodeType mode with activity query fallback.
-    /// If the activity query returns no results, falls back to regular node query.
-    /// </summary>
-    private static async Task<UiControl> BuildNodeTypeCatalogViewAsync(
-        LayoutAreaHost host,
-        IMeshQuery? meshQuery,
-        CatalogQueryConfig catalogConfig,
-        string nodeTypePath,
-        int limit)
+    private static DateTime GetWeekStart(DateTime date)
     {
-        var stack = Controls.Stack.WithWidth("100%").WithStyle("padding: 24px;");
+        var diff = (7 + (date.DayOfWeek - DayOfWeek.Monday)) % 7;
+        return date.AddDays(-diff).Date;
+    }
 
-        // Search bar - full width with Search button on same row
-        var searchRow = Controls.Stack
-            .WithOrientation(Orientation.Horizontal)
-            .WithStyle("gap: 8px; margin-bottom: 16px; align-items: center; width: 100%;")
-            .WithView(new TextFieldControl(new JsonPointerReference(""))
-                .WithPlaceholder("Query (e.g., nodeType:Person scope:descendants)")
-                .WithStyle("flex: 1;")
-                .WithIconStart(FluentIcons.Search())
-                .WithImmediate(true) with
+    private static string GetStatusBadge(string? status)
+    {
+        var (color, bg) = status?.ToLowerInvariant() switch
+        {
+            "scheduled" => ("#0078d4", "#e6f2ff"),
+            "published" => ("#107c10", "#e6f7e6"),
+            "draft" => ("#797979", "#f0f0f0"),
+            "archived" => ("#a80000", "#ffe6e6"),
+            _ => ("#797979", "#f0f0f0")
+        };
+
+        return $"<span style=\"padding: 4px 8px; border-radius: 4px; font-size: 11px; font-weight: 500; background: {bg}; color: {color};\">{status ?? "Draft"}</span>";
+    }
+
+    private static string GetPlatforms(MeshNode node)
+    {
+        if (node.Content is System.Text.Json.JsonElement json && json.TryGetProperty("platforms", out var platformsProp))
+        {
+            if (platformsProp.ValueKind == System.Text.Json.JsonValueKind.Array)
             {
-                DataContext = LayoutAreaReference.GetDataPointer(CatalogSearchDataId)
-            })
-            .WithView(Controls.Button("Search")
-                .WithAppearance(Appearance.Accent)
-                .WithIconStart(FluentIcons.Search()));
-
-        stack = stack.WithView(searchRow);
-
-        // Subtitle
-        var title = catalogConfig.Title ?? nodeTypePath;
-        stack = stack.WithView(Controls.Html($"<p style=\"color: #666; margin-bottom: 16px;\">Showing {System.Web.HttpUtility.HtmlEncode(title)}s</p>"));
-
-        if (meshQuery == null)
-        {
-            stack = stack.WithView(Controls.Html("<p style=\"color: #888;\">Query service not available.</p>"));
-            return stack;
-        }
-
-        // Build query from catalogConfig.Query (which is the search bar content)
-        var queryLimit = limit + 1; // Request one more to detect if there are more
-        var query = catalogConfig.Query;
-
-        // Remove any existing limit from query (we'll use Limit parameter)
-        query = System.Text.RegularExpressions.Regex.Replace(
-            query,
-            @"limit:\d+\s*",
-            "",
-            System.Text.RegularExpressions.RegexOptions.IgnoreCase).Trim();
-
-        List<MeshNode> nodes;
-        try
-        {
-            nodes = await meshQuery.QueryAsync<MeshNode>(query, 0, queryLimit).ToListAsync();
-        }
-        catch
-        {
-            nodes = [];
-        }
-
-        var hasMore = nodes.Count > limit;
-        if (hasMore)
-        {
-            nodes = nodes.Take(limit).ToList();
-        }
-
-        // Thumbnail grid
-        if (nodes.Count == 0)
-        {
-            stack = stack.WithView(Controls.Html("<p style=\"color: #888;\">No items match your query.</p>"));
-        }
-        else
-        {
-            // Results count
-            var countText = hasMore
-                ? $"Showing {nodes.Count}+ items"
-                : $"Showing {nodes.Count} item{(nodes.Count != 1 ? "s" : "")}";
-            stack = stack.WithView(Controls.Html($"<p style=\"color: #888; margin-bottom: 12px; font-size: 0.9em;\">{countText}</p>"));
-
-            var grid = Controls.LayoutGrid.WithSkin(s => s.WithSpacing(3));
-            foreach (var node in nodes)
-            {
-                grid = grid.WithView(
-                    MeshNodeThumbnailControl.FromNode(node, node.Path),
-                    itemSkin => itemSkin.WithXs(12).WithSm(6).WithMd(6).WithLg(6));
-            }
-            stack = stack.WithView(grid);
-
-            // Load More button
-            if (hasMore)
-            {
-                var newLimit = limit + DefaultCatalogPageSize;
-                var loadMoreRow = Controls.Stack
-                    .WithStyle("margin-top: 24px; display: flex; justify-content: center;")
-                    .WithView(Controls.Button("Load More")
-                        .WithAppearance(Appearance.Neutral)
-                        .WithIconEnd(FluentIcons.ChevronDown())
-                        .WithClickAction(actx =>
-                        {
-                            host.UpdateData(CatalogLimitDataId, newLimit.ToString());
-                        }));
-                stack = stack.WithView(loadMoreRow);
+                var platforms = new List<string>();
+                foreach (var p in platformsProp.EnumerateArray())
+                {
+                    if (p.GetString() is string platform)
+                        platforms.Add(platform);
+                }
+                return string.Join(" • ", platforms);
             }
         }
-
-        return stack;
+        return "";
     }
 
 }

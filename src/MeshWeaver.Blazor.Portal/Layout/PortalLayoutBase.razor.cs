@@ -15,6 +15,11 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
     [Inject] protected NavigationManager NavigationManager { get; set; } = null!;
     [Inject] protected ChatWindowStateService ChatState { get; set; } = null!;
 
+    // Splitter pane sizes
+    private string MainPaneSize => ChatState.Width.HasValue ? $"{100 - ChatState.Width.Value}%" : "70%";
+    private string ChatPaneSize => ChatState.Width.HasValue ? $"{ChatState.Width.Value}%" : "30%";
+    private int chatPaneSizePercent = 30;
+
     /// <summary>
     /// Render fragment for header links (social media icons, etc.)
     /// </summary>
@@ -142,19 +147,22 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
             "import", "./_content/MeshWeaver.Blazor.Chat/AgentChatView.razor.js");
     }
 
-    protected async Task StartResize()
-    {
-        await EnsureJsModuleAsync();
-        await jsModule!.InvokeVoidAsync("startResize");
-    }
-
     /// <summary>
-    /// Called from JavaScript when resize ends to persist the new size.
+    /// Called when the splitter is resized.
     /// </summary>
-    [JSInvokable]
-    public void OnResizeEnd(int? width, int? height)
+    private void OnSplitterResize(FluentMultiSplitterResizeEventArgs e)
     {
-        ChatState.SetSize(width, height);
+        // The second pane (index 1) is the chat pane
+        if (e.PaneIndex == 1)
+        {
+            // NewSize is a percentage value (0-100)
+            var percent = (int)Math.Round(e.NewSize);
+            if (percent > 0 && percent <= 100)
+            {
+                chatPaneSizePercent = percent;
+                ChatState.SetSize(percent, null);
+            }
+        }
     }
 
     protected async Task HandleNewChatAsync()

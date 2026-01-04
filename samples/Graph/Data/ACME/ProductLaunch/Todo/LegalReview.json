@@ -3,6 +3,7 @@
   "namespace": "ACME/ProductLaunch/Todo",
   "name": "Review legal compliance",
   "nodeType": "ACME/Project/Todo",
+  "category": "Tasks",
   "description": "Ensure all launch materials meet legal requirements",
   "iconName": "Gavel",
   "displayOrder": 16,

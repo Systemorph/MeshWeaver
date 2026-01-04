@@ -1,0 +1,4 @@
+{
+  "$type": "CodeConfiguration",
+  "code": "public record Post\n{\n    [Key]\n    public string Id { get; init; } = string.Empty;\n\n    public string Title { get; init; } = string.Empty;\n\n    public string Text { get; init; } = string.Empty;\n\n    public string? ImageLink { get; init; }\n\n    public DateTime? PublishDate { get; init; }\n\n    /// <summary>\n    /// Reference to the Person who publishes this post (e.g., \"Roland\")\n    /// </summary>\n    public string? Author { get; init; }\n\n    /// <summary>\n    /// Platforms to publish on (LinkedIn, X, Instagram)\n    /// </summary>\n    public List<string> Platforms { get; init; } = new();\n\n    public PostStatus Status { get; init; } = PostStatus.Draft;\n}\n\npublic enum PostStatus\n{\n    Draft,\n    Scheduled,\n    Published,\n    Archived\n}"
+}

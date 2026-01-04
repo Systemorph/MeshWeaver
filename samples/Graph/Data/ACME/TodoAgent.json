@@ -2,6 +2,7 @@
   "id": "TodoAgent",
   "name": "Project Task Agent",
   "nodeType": "Agent",
+  "category": "Agents",
   "description": "Handles all questions and actions related to project tasks, categories, and task management. Provides access to task data for the MeshFlow ProductLaunch project.",
   "iconName": "TaskListSquare",
   "displayOrder": 0,

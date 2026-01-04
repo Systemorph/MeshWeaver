@@ -11,7 +11,7 @@
     "name": "MeshWeaver",
     "description": "Open source platform for building modular, reactive applications with a graph-based data model",
     "website": "https://github.com/systemorph/MeshWeaver",
-    "logo": "/static/avatars/MeshWeaver/logo.svg",
+    "logo": "/static/content/MeshWeaver/logo.svg",
     "iconName": "Globe"
   }
 }

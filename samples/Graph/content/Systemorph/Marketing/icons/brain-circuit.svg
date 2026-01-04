@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48">
+  <defs>
+    <linearGradient id="brain-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#8b5cf6"/>
+      <stop offset="100%" stop-color="#6d28d9"/>
+    </linearGradient>
+  </defs>
+  <rect width="48" height="48" rx="8" fill="url(#brain-grad)"/>
+  <circle cx="24" cy="18" r="6" fill="none" stroke="white" stroke-width="2"/>
+  <circle cx="16" cy="28" r="5" fill="none" stroke="white" stroke-width="2"/>
+  <circle cx="32" cy="28" r="5" fill="none" stroke="white" stroke-width="2"/>
+  <circle cx="24" cy="36" r="4" fill="none" stroke="white" stroke-width="2"/>
+  <line x1="24" y1="24" x2="24" y2="32" stroke="white" stroke-width="2"/>
+  <line x1="19" y1="21" x2="17" y2="23" stroke="white" stroke-width="2"/>
+  <line x1="29" y1="21" x2="31" y2="23" stroke="white" stroke-width="2"/>
+  <circle cx="24" cy="18" r="2" fill="white"/>
+  <circle cx="16" cy="28" r="2" fill="white"/>
+  <circle cx="32" cy="28" r="2" fill="white"/>
+</svg>

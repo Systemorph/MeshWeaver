@@ -1,20 +1,28 @@
-using MeshWeaver.Data.Services;
+﻿using MeshWeaver.Mesh.Services;
 using Microsoft.AspNetCore.Components;
 
 namespace MeshWeaver.Hosting.Blazor;
 
 /// <summary>
-/// Provides the current navigation path from NavigationManager.
+/// Provides the current navigation path and namespace context from NavigationManager.
 /// </summary>
-public class NavigationContextService : INavigationContextService
+public class NavigationContextService(NavigationManager navigationManager) : INavigationContextService
 {
-    private readonly NavigationManager navigationManager;
+    /// <inheritdoc />
+    public string? CurrentPath => navigationManager.ToBaseRelativePath(navigationManager.Uri);
 
-    public NavigationContextService(NavigationManager navigationManager)
+    /// <inheritdoc />
+    public string? CurrentNamespace { get; private set; }
+
+    /// <inheritdoc />
+    public void SetCurrentNamespace(string? @namespace)
     {
-        this.navigationManager = navigationManager;
+        CurrentNamespace = @namespace;
     }
 
     /// <inheritdoc />
-    public string? CurrentPath => navigationManager.ToBaseRelativePath(navigationManager.Uri);
+    public void NavigateTo(string uri, bool forceLoad = false)
+    {
+        navigationManager.NavigateTo(uri, forceLoad);
+    }
 }

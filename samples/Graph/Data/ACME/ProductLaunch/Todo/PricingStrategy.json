@@ -3,6 +3,7 @@
   "namespace": "ACME/ProductLaunch/Todo",
   "name": "Develop pricing tiers",
   "nodeType": "ACME/Project/Todo",
+  "category": "Tasks",
   "description": "Define pricing strategy and tier structure for MeshFlow",
   "iconName": "Money",
   "displayOrder": 5,

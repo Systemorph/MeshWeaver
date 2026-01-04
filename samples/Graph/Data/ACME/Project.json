@@ -3,6 +3,7 @@
   "namespace": "ACME",
   "name": "Project",
   "nodeType": "NodeType",
+  "category": "Types",
   "description": "A project containing tasks and deliverables",
   "iconName": "Folder",
   "displayOrder": 20,
@@ -15,7 +16,6 @@
     "iconName": "Folder",
     "description": "A project containing tasks and deliverables",
     "displayOrder": 20,
-    "configuration": "config => config.WithContentType<Project>().AddNodeTypeView()",
-    "childrenQuery": "source:activity nodeType:ACME/Project sort:lastAccessedAt-desc limit:20"
+    "configuration": "config => config.WithContentType<Project>().AddNodeTypeView()"
   }
 }
