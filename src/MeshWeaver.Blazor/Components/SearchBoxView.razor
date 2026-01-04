@@ -1,0 +1,129 @@
+@using MeshWeaver.Blazor.Monaco
+@using MeshWeaver.Layout
+@using MeshWeaver.Layout.Client
+@using MeshWeaver.Data
+@using MeshWeaver.Mesh
+@using MeshWeaver.Mesh.Services
+@using System.Text.Json
+@inject NavigationManager NavigationManager
+
+<div class="search-box-container" style="display: flex; gap: 8px; align-items: center; width: 100%;">
+    <div style="flex: 1;">
+        <MonacoEditorView @ref="monacoEditor"
+                          Value="@_currentValue"
+                          ValueChanged="@OnValueChanged"
+                          OnSubmit="HandleSearch"
+                          Placeholder="@BoundPlaceholder"
+                          Height="38px"
+                          MaxHeight="38px"
+                          ShowBorder="true"
+                          CodeEditMode="false"
+                          AsyncCompletionCallback="@GetCompletionsAsync" />
+    </div>
+    <button type="button" @onclick="HandleSearch"
+        style="padding: 8px 16px; background: var(--accent-fill-rest, #0078d4); color: var(--foreground-on-accent-rest, white); border: none; border-radius: 4px; cursor: pointer; font-size: 14px; font-weight: 500; height: 38px;">
+        Search
+    </button>
+</div>
+
+@code {
+    private MonacoEditorView? monacoEditor;
+    private string _currentValue = "";
+    private bool _initialized;
+
+    [Parameter]
+    public SearchBoxControl? ViewModel { get; set; }
+
+    [Parameter]
+    public ISynchronizationStream<JsonElement>? Stream { get; set; }
+
+    [Parameter]
+    public string? Area { get; set; }
+
+    [CascadingParameter(Name = "DataContext")]
+    public string? DataContext { get; set; }
+
+    [Inject]
+    public IMeshQuery? MeshQuery { get; set; }
+
+    private string BoundValue => ViewModel?.Value?.ToString() ?? "";
+    private string BoundPlaceholder => ViewModel?.Placeholder?.ToString() ?? "Search... (use @ for references)";
+    private string BoundNamespace => ViewModel?.Namespace?.ToString() ?? "";
+    private int BoundMaxSuggestions => (ViewModel?.MaxSuggestions as int?) ?? 10;
+
+    protected override void OnParametersSet()
+    {
+        base.OnParametersSet();
+        // Initialize current value from ViewModel on first load
+        if (!_initialized && !string.IsNullOrEmpty(BoundValue))
+        {
+            _currentValue = BoundValue;
+        }
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender && monacoEditor != null && !string.IsNullOrEmpty(BoundValue))
+        {
+            _initialized = true;
+            // Set the initial value after Monaco is initialized
+            await monacoEditor.SetValueAsync(BoundValue);
+        }
+    }
+
+    private Task OnValueChanged(string value)
+    {
+        _currentValue = value;
+        return Task.CompletedTask;
+    }
+
+    private async Task<CompletionItem[]> GetCompletionsAsync(string query)
+    {
+        if (MeshQuery == null || string.IsNullOrWhiteSpace(query))
+            return [];
+
+        try
+        {
+            var searchQuery = string.IsNullOrEmpty(BoundNamespace)
+                ? $"*{query}* scope:descendants"
+                : $"namespace:{BoundNamespace} *{query}* scope:descendants";
+
+            var request = new MeshQueryRequest
+            {
+                Query = searchQuery,
+                Limit = BoundMaxSuggestions
+            };
+
+            var results = await MeshQuery.QueryAsync<MeshNode>(request).ToArrayAsync();
+
+            return results.Select(node => new CompletionItem
+            {
+                Label = node.Name ?? node.Id,
+                InsertText = node.Name ?? node.Id,
+                Description = node.Description ?? "",
+                Detail = node.NodeType ?? "",
+                Category = node.Category ?? ""
+            }).ToArray();
+        }
+        catch
+        {
+            return [];
+        }
+    }
+
+    private async Task HandleSearch()
+    {
+        if (monacoEditor == null) return;
+
+        var text = await monacoEditor.GetValueAsync();
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            NavigationManager.NavigateTo(NavigationManager.Uri.Split('?')[0]);
+            return;
+        }
+
+        var currentPath = new Uri(NavigationManager.Uri).AbsolutePath;
+        var encodedQuery = Uri.EscapeDataString(text.Trim());
+        NavigationManager.NavigateTo($"{currentPath}?q={encodedQuery}");
+    }
+}

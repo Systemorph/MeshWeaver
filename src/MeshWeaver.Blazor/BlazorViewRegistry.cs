@@ -84,6 +84,7 @@ public static class BlazorViewRegistry
             ArticleCatalogItemControl articleCatalogItem => StandardView<ArticleCatalogItemControl, ArticleCatalogItemView>(articleCatalogItem, stream, area),
             LayoutAreaDefinitionControl layoutAreaDefinition => StandardView<LayoutAreaDefinitionControl, LayoutAreaDefinitionView>(layoutAreaDefinition, stream, area),
             RedirectControl redirect => StandardView<RedirectControl, RedirectView>(redirect, stream, area),
+            SearchBoxControl searchBox => StandardView<SearchBoxControl, SearchBoxView>(searchBox, stream, area),
             _ => DelegateToDotnetInteractive(instance, stream, area),
         };
     }

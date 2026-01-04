@@ -15,10 +15,10 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
     [Inject] protected NavigationManager NavigationManager { get; set; } = null!;
     [Inject] protected ChatWindowStateService ChatState { get; set; } = null!;
 
-    // Splitter pane sizes
-    private string MainPaneSize => ChatState.Width.HasValue ? $"{100 - ChatState.Width.Value}%" : "70%";
-    private string ChatPaneSize => ChatState.Width.HasValue ? $"{ChatState.Width.Value}%" : "30%";
-    private int chatPaneSizePercent = 30;
+    // Splitter pane sizes - default 3:1 ratio (75% main, 25% chat)
+    private string MainPaneSize => ChatState.Width.HasValue ? $"{100 - ChatState.Width.Value}%" : "75%";
+    private string ChatPaneSize => ChatState.Width.HasValue ? $"{ChatState.Width.Value}%" : "25%";
+    private int chatPaneSizePercent = 25;
 
     /// <summary>
     /// Render fragment for header links (social media icons, etc.)

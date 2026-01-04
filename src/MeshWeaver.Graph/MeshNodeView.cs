@@ -462,15 +462,19 @@ public static class MeshNodeView
 
     /// <summary>
     /// Renders the Catalog view showing nodes as thumbnails in a LayoutGrid.
-    /// Includes a search bar that combines user query with background filters.
+    /// Includes a search bar that filters results inline (no redirect).
     /// For NodeTypes, shows instances of that type.
     /// For instance nodes, shows children grouped by Category.
+    /// Reads search term from ?q= query parameter.
     /// </summary>
     public static UiControl Catalog(LayoutAreaHost host, RenderingContext ctx)
     {
         var hubPath = host.Hub.Address.ToString();
         var meshQuery = host.Hub.ServiceProvider.GetService<IMeshQuery>();
         var isNodeTypeMode = host.Hub.Configuration.Get<NodeTypeCatalogMode>() != null;
+
+        // Get search term from query string (if present)
+        var searchTerm = host.GetQueryStringParamValue("q")?.Trim();
 
         if (meshQuery == null)
         {
@@ -484,7 +488,7 @@ public static class MeshNodeView
 
             return Controls.Stack
                 .WithWidth("100%")
-                .WithView(BuildSearchBar(hubPath), "catalogSearch")
+                .WithView(BuildSearchBar(hubPath, searchTerm), "catalogSearch")
                 .WithView(
                     (h, _) => definitionStream
                         .SelectMany(async definition =>
@@ -497,8 +501,10 @@ public static class MeshNodeView
                                 ? definition.Id
                                 : $"{definition.Namespace}/{definition.Id}";
 
-                            // Query: nodeType filter only
+                            // Query: nodeType filter + optional search term
                             var query = $"nodeType:{nodeTypePath}";
+                            if (!string.IsNullOrEmpty(searchTerm))
+                                query += $" {searchTerm}";
                             return await BuildCatalogGridAsync(meshQuery, query);
                         }),
                     "CatalogContent");
@@ -510,7 +516,7 @@ public static class MeshNodeView
 
         return Controls.Stack
             .WithWidth("100%")
-            .WithView(BuildSearchBar(hubPath), "catalogSearch")
+            .WithView(BuildSearchBar(hubPath, searchTerm), "catalogSearch")
             .WithView(
                 (h, _) => nodeStream.SelectMany(async nodes =>
                 {
@@ -519,38 +525,35 @@ public static class MeshNodeView
 
                     if (catalogMode == "hierarchical")
                     {
-                        // Hierarchical mode: scope:descendants with tree structure
+                        // Hierarchical mode: scope:descendants with tree structure + optional search term
                         var query = $"namespace:{hubPath} scope:descendants";
+                        if (!string.IsNullOrEmpty(searchTerm))
+                            query += $" {searchTerm}";
                         return await BuildCatalogGridHierarchicalAsync(meshQuery, query, hubPath);
                     }
                     else
                     {
-                        // Default: grouped by category
+                        // Default: grouped by category + optional search term
                         var query = $"namespace:{hubPath}";
-                        return await BuildCatalogGridWithCategoriesAsync(meshQuery, query);
+                        if (!string.IsNullOrEmpty(searchTerm))
+                            query += $" scope:descendants {searchTerm}";
+                        return await BuildCatalogGridWithCategoriesAsync(meshQuery, query, hubPath);
                     }
                 }),
                 "CatalogContent");
     }
 
     /// <summary>
-    /// Builds the search bar with text input and Search button.
-    /// Search navigates to search page with query parameter.
+    /// Builds the search bar using SearchBoxControl with Monaco editor and autocomplete.
+    /// Search stays on the current catalog page by updating the URL with ?q= parameter.
+    /// The catalog reads the search term from the URL and filters results inline.
     /// </summary>
-    private static UiControl BuildSearchBar(string hubPath)
+    private static UiControl BuildSearchBar(string hubPath, string? searchTerm = null)
     {
-        var searchInputId = $"search_{hubPath.Replace("/", "_")}";
-
-        return Controls.Html($@"
-            <div style=""display: flex; gap: 8px; margin-bottom: 16px; align-items: center; width: 100%;"">
-                <input type=""text"" id=""{searchInputId}"" placeholder=""Search...""
-                    style=""flex: 1; padding: 8px 12px; border: 1px solid #d1d1d1; border-radius: 4px; font-size: 14px;""
-                    onkeydown=""if(event.key==='Enter'){{var q=this.value;if(q)window.location.href='/search?q='+encodeURIComponent('namespace:{hubPath} scope:descendants '+q);}}"" />
-                <button onclick=""var q=document.getElementById('{searchInputId}').value;if(q)window.location.href='/search?q='+encodeURIComponent('namespace:{hubPath} scope:descendants '+q);""
-                    style=""padding: 8px 16px; background: #0078d4; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 14px;"">
-                    Search
-                </button>
-            </div>");
+        return Controls.SearchBox()
+            .WithValue(searchTerm ?? "")
+            .WithNamespace(hubPath)
+            .WithPlaceholder("Search... (use @ for references)");
     }
 
     /// <summary>
@@ -591,7 +594,8 @@ public static class MeshNodeView
 
     /// <summary>
     /// Builds a hierarchical LayoutGrid showing parent-child relationships with indentation.
-    /// Groups items by their immediate parent, showing tree structure.
+    /// Groups top-level items by Category with headings, then shows tree structure.
+    /// Each root node and its entire subtree are kept in a single grid cell.
     /// </summary>
     private static async Task<UiControl> BuildCatalogGridHierarchicalAsync(IMeshQuery meshQuery, string query, string basePath)
     {
@@ -605,77 +609,139 @@ public static class MeshNodeView
             nodes = [];
         }
 
+        // Filter out the base path node itself (only show children/descendants)
+        var basePathNormalized = basePath.Trim('/');
+        nodes = nodes.Where(n => n.Path != basePathNormalized).ToList();
+
         if (nodes.Count == 0)
         {
             return Controls.Html("<p style=\"color: #888;\">No items found.</p>");
         }
 
-        // Build a tree structure from the flat list
-        var nodesByPath = nodes.ToDictionary(n => n.Path, n => n);
-        var basePathNormalized = basePath.Trim('/');
-        var baseDepth = string.IsNullOrEmpty(basePathNormalized) ? 0 : basePathNormalized.Split('/').Length;
+        // Build hierarchy based on namespace containment
+        var allPaths = nodes.Select(n => n.Path).ToHashSet();
 
-        // Find root-level nodes (immediate children of basePath)
+        // Find root nodes - those that have no parent in the result set
         var rootNodes = nodes
-            .Where(n => GetParentPath(n.Path, basePathNormalized) == basePathNormalized)
-            .OrderBy(n => n.DisplayOrder)
-            .ThenBy(n => n.Name)
+            .Where(n => !HasParentInSet(n.Path, allPaths))
             .ToList();
 
-        // Build the hierarchical grid
+        // Group root nodes by Category
+        var groups = rootNodes
+            .GroupBy(n => n.Category ?? "Uncategorized")
+            .OrderBy(g => g.Key)
+            .ToList();
+
+        // Build the hierarchical grid with category headings
         var grid = Controls.LayoutGrid.WithSkin(s => s.WithSpacing(2));
 
-        foreach (var rootNode in rootNodes)
+        foreach (var group in groups)
         {
-            grid = AddNodeToGrid(grid, rootNode, nodes, baseDepth, 0);
-        }
+            // Category heading spans full width
+            grid = grid.WithView(
+                Controls.Html($"<h3 style=\"margin: 24px 0 8px 0;\">{group.Key}</h3>"),
+                itemSkin => itemSkin.WithXs(12));
 
-        return grid;
-    }
-
-    private static string GetParentPath(string path, string basePath)
-    {
-        var pathNormalized = path.Trim('/');
-        var lastSlash = pathNormalized.LastIndexOf('/');
-        if (lastSlash < 0)
-            return "";
-        return pathNormalized.Substring(0, lastSlash);
-    }
-
-    private static LayoutGridControl AddNodeToGrid(LayoutGridControl grid, MeshNode node, List<MeshNode> allNodes, int baseDepth, int indentLevel)
-    {
-        // Calculate left margin for indentation
-        var marginLeft = indentLevel * 32;
-
-        // Add the node with indentation
-        grid = grid.WithView(
-            Controls.Stack
-                .WithOrientation(Orientation.Horizontal)
-                .WithStyle($"margin-left: {marginLeft}px; width: calc(100% - {marginLeft}px);")
-                .WithView(MeshNodeThumbnailControl.FromNode(node, node.Path)),
-            itemSkin => itemSkin.WithXs(12).WithSm(6).WithMd(6).WithLg(4));
-
-        // Find and add children
-        var nodePath = node.Path;
-        var children = allNodes
-            .Where(n => GetParentPath(n.Path, "") == nodePath)
-            .OrderBy(n => n.DisplayOrder)
-            .ThenBy(n => n.Name)
-            .ToList();
-
-        foreach (var child in children)
-        {
-            grid = AddNodeToGrid(grid, child, allNodes, baseDepth, indentLevel + 1);
+            // Add each root node with its entire subtree as a single grid cell
+            foreach (var rootNode in group.OrderBy(n => n.DisplayOrder).ThenBy(n => n.Name))
+            {
+                // Build the entire tree structure in a single Stack
+                var treeStack = BuildNodeTreeStack(rootNode, nodes, 0);
+                grid = grid.WithView(treeStack, itemSkin => itemSkin.WithXs(12).WithSm(6).WithMd(6).WithLg(4));
+            }
         }
 
         return grid;
     }
 
     /// <summary>
+    /// Checks if a node has a parent in the given set of paths.
+    /// A parent exists if any other path is a prefix of this path (with / separator).
+    /// </summary>
+    private static bool HasParentInSet(string path, HashSet<string> allPaths)
+    {
+        var pathNormalized = path.Trim('/');
+
+        // Check all possible parent paths
+        var lastSlash = pathNormalized.LastIndexOf('/');
+        while (lastSlash > 0)
+        {
+            var parentPath = pathNormalized.Substring(0, lastSlash);
+            if (allPaths.Contains(parentPath))
+                return true;
+            lastSlash = parentPath.LastIndexOf('/');
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Finds direct children of a node within the result set.
+    /// A child is a node whose path starts with parent path + "/" and has no intermediate parent in the set.
+    /// </summary>
+    private static List<MeshNode> FindDirectChildren(MeshNode parent, List<MeshNode> allNodes)
+    {
+        var parentPath = parent.Path + "/";
+        var allPaths = allNodes.Select(n => n.Path).ToHashSet();
+
+        return allNodes
+            .Where(n => n.Path.StartsWith(parentPath) && !HasIntermediateParent(n.Path, parent.Path, allPaths))
+            .OrderBy(n => n.DisplayOrder)
+            .ThenBy(n => n.Name)
+            .ToList();
+    }
+
+    /// <summary>
+    /// Checks if there's an intermediate parent between child and parent in the set.
+    /// </summary>
+    private static bool HasIntermediateParent(string childPath, string parentPath, HashSet<string> allPaths)
+    {
+        var childNormalized = childPath.Trim('/');
+        var parentNormalized = parentPath.Trim('/');
+
+        // Start from child and walk up to parent
+        var lastSlash = childNormalized.LastIndexOf('/');
+        while (lastSlash > parentNormalized.Length)
+        {
+            var intermediatePath = childNormalized.Substring(0, lastSlash);
+            if (allPaths.Contains(intermediatePath))
+                return true;
+            lastSlash = intermediatePath.LastIndexOf('/');
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Builds a Stack containing a node and all its children with proper indentation.
+    /// The entire subtree is kept together in a single container.
+    /// </summary>
+    private static UiControl BuildNodeTreeStack(MeshNode node, List<MeshNode> allNodes, int indentLevel)
+    {
+        var stack = Controls.Stack.WithWidth("100%");
+
+        // Add the current node with indentation
+        var marginLeft = indentLevel * 24;
+        stack = stack.WithView(
+            Controls.Stack
+                .WithStyle($"margin-left: {marginLeft}px; margin-bottom: 8px;")
+                .WithView(MeshNodeThumbnailControl.FromNode(node, node.Path)));
+
+        // Find and add direct children recursively
+        var children = FindDirectChildren(node, allNodes);
+        foreach (var child in children)
+        {
+            stack = stack.WithView(BuildNodeTreeStack(child, allNodes, indentLevel + 1));
+        }
+
+        return stack;
+    }
+
+    /// <summary>
     /// Builds a LayoutGrid with thumbnail cards grouped by Category.
     /// Each category gets a heading followed by its nodes.
     /// </summary>
-    private static async Task<UiControl> BuildCatalogGridWithCategoriesAsync(IMeshQuery meshQuery, string query)
+    private static async Task<UiControl> BuildCatalogGridWithCategoriesAsync(IMeshQuery meshQuery, string query, string basePath)
     {
         List<MeshNode> nodes;
         try
@@ -686,6 +752,10 @@ public static class MeshNodeView
         {
             nodes = [];
         }
+
+        // Filter out the base path node itself (only show children)
+        var basePathNormalized = basePath.Trim('/');
+        nodes = nodes.Where(n => n.Path != basePathNormalized).ToList();
 
         if (nodes.Count == 0)
         {

@@ -187,4 +187,6 @@ public static class Controls
         => new(collection) { Path = path! };
 
     public static RedirectControl Redirect(object href) => new(href);
+
+    public static SearchBoxControl SearchBox() => new();
 }

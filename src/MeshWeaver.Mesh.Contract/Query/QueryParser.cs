@@ -389,6 +389,8 @@ public partial class QueryParser
                         "descendants" => QueryScope.Descendants,
                         "ancestors" => QueryScope.Ancestors,
                         "hierarchy" => QueryScope.Hierarchy,
+                        "subtree" => QueryScope.Subtree,
+                        "ancestorsandself" => QueryScope.AncestorsAndSelf,
                         _ => QueryScope.Exact
                     };
                     continue;

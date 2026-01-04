@@ -1,48 +1,15 @@
 @using MeshWeaver.Mesh
+@using MeshWeaver.Blazor.Monaco
 @using Microsoft.FluentUI.AspNetCore.Components
-<FluentAutocomplete @ref="searchAutocomplete"
-                    TOption="MeshNode"
-                    Width="100%"
-                    AutoComplete="on"
-                    Placeholder="@SearchPlaceholder"
-                    MaximumSelectedOptions="1"
-                    OptionText="@(item => item.Name)"
-                    @bind-ValueText="@searchTerm"
-                    @bind-SelectedOptions="selectedOptions"
-                    @bind-SelectedOptions:after="HandleOptionSelected"
-                    OnOptionsSearch="@HandleSearchInputAsync"
-                    ShowOverlayOnEmptyResults="false"
-                    @onkeydown="@HandleKeyDown">
-    <OptionTemplate>
-        <div style="display: flex; align-items: center; gap: 12px; width: 100%; padding: 4px 0;">
-            <div style="width: 24px; height: 24px; flex-shrink: 0; display: flex; align-items: center; justify-content: center;">
-                @if (!string.IsNullOrEmpty(context.Icon))
-                {
-                    @if (context.Icon.Contains("/") || context.Icon.Contains("."))
-                    {
-                        <img src="@context.Icon" style="width: 24px; height: 24px;" alt=""/>
-                    }
-                    else
-                    {
-                        <FluentIcon Value="@GetIconForName(context.Icon)" Color="Color.Neutral" />
-                    }
-                }
-                else
-                {
-                    <FluentIcon Value="@GetIconForNodeType(context.NodeType)" Color="Color.Neutral" />
-                }
-            </div>
-            <div style="flex: 1; min-width: 0; overflow: hidden;">
-                <div style="font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">@context.Name</div>
-                @if (!string.IsNullOrEmpty(context.Description))
-                {
-                    <div style="font-size: 0.8em; opacity: 0.7; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">@TruncateDescription(context.Description)</div>
-                }
-            </div>
-            @if (!string.IsNullOrEmpty(context.NodeType))
-            {
-                <FluentBadge Appearance="Appearance.Neutral" Style="flex-shrink: 0; margin-left: auto;">@GetNodeTypeDisplay(context.NodeType)</FluentBadge>
-            }
-        </div>
-    </OptionTemplate>
-</FluentAutocomplete>
+
+<div class="search-bar-container" style="width: 100%;">
+    <MonacoEditorView @ref="monacoEditor"
+                      @bind-Value="searchTerm"
+                      OnSubmit="HandleSubmit"
+                      Placeholder="@SearchPlaceholder"
+                      Height="38px"
+                      MaxHeight="38px"
+                      ShowBorder="true"
+                      CodeEditMode="false"
+                      AsyncCompletionCallback="@GetCompletionsAsync" />
+</div>

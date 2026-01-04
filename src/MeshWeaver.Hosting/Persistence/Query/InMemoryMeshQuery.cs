@@ -113,7 +113,7 @@ public class InMemoryMeshQuery : IMeshQuery
         }
 
         // If we're doing scope=descendants, also search descendant paths recursively
-        if (effectiveScope == QueryScope.Descendants || effectiveScope == QueryScope.Hierarchy)
+        if (effectiveScope == QueryScope.Descendants || effectiveScope == QueryScope.Hierarchy || effectiveScope == QueryScope.Subtree)
         {
             await foreach (var descendant in _persistence.GetDescendantsAsync(basePath).WithCancellation(ct))
             {
@@ -249,23 +249,23 @@ public class InMemoryMeshQuery : IMeshQuery
     {
         var paths = new List<string>();
 
-        // For Children scope, we only want to search immediate children (handled separately)
-        // So we don't include the base path itself in the initial search
-        if (scope == QueryScope.Children)
+        // Children and Descendants scopes do NOT include self
+        // Children are fetched separately by GetChildrenAsync
+        // Descendants are fetched separately by GetDescendantsAsync
+        if (scope == QueryScope.Children || scope == QueryScope.Descendants)
         {
-            // Children scope is handled by GetChildrenAsync in QueryAsync
-            // Return empty - children are fetched directly
             return paths;
         }
 
-        // Always include the base path for Exact, Ancestors, Hierarchy
-        if (scope != QueryScope.Descendants || string.IsNullOrEmpty(basePath))
+        // Include self for: Exact, Hierarchy, Subtree, AncestorsAndSelf
+        // Ancestors does NOT include self
+        if (scope != QueryScope.Ancestors)
         {
             paths.Add(basePath);
         }
 
-        // Add ancestor paths for Ancestors and Hierarchy scopes
-        if (scope == QueryScope.Ancestors || scope == QueryScope.Hierarchy)
+        // Add ancestor paths for: Ancestors, AncestorsAndSelf, Hierarchy
+        if (scope == QueryScope.Ancestors || scope == QueryScope.AncestorsAndSelf || scope == QueryScope.Hierarchy)
         {
             var segments = basePath.Split('/', StringSplitOptions.RemoveEmptyEntries);
             for (int i = segments.Length - 1; i >= 0; i--)
@@ -274,12 +274,6 @@ public class InMemoryMeshQuery : IMeshQuery
                 if (!paths.Contains(ancestorPath, StringComparer.OrdinalIgnoreCase))
                     paths.Add(ancestorPath);
             }
-        }
-
-        // For Descendants scope, the base path is also searched
-        if (scope == QueryScope.Descendants)
-        {
-            paths.Add(basePath);
         }
 
         return paths;

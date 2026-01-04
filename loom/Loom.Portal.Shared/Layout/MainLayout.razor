@@ -13,26 +13,6 @@
             "main main" !important;
     }
 
-    /* Chat right position */
-    .layout[class].chat-visible.chat-position-right {
-        grid-template-columns: auto 1fr var(--chat-width, 400px) !important;
-        grid-template-areas:
-            "icon head head"
-            "messagebar messagebar chat"
-            "main main chat" !important;
-    }
-
-    /* Chat bottom position */
-    .layout[class].chat-visible.chat-position-bottom {
-        grid-template-columns: auto 1fr !important;
-        grid-template-rows: auto auto 1fr var(--chat-height, 400px) !important;
-        grid-template-areas:
-            "icon head"
-            "messagebar messagebar"
-            "main main"
-            "chat chat" !important;
-    }
-
     /* Hide nav bar */
     .layout[class] > .fluent-appbar,
     .layout[class] > .desktop-nav-menu {
@@ -41,8 +21,28 @@
 
     /* Full width - no left border since no nav */
     .layout[class] > .body-content,
-    .layout[class] > .messagebar-container {
+    .layout[class] > .body-content-splitter,
+    .layout[class] > .messagebar-container,
+    .layout[class] > .main-with-chat {
         border-left: none !important;
+    }
+
+    /* Main with chat splitter - full width */
+    .layout[class] > .main-with-chat {
+        grid-area: main;
+        width: 100% !important;
+        height: 100% !important;
+    }
+
+    /* Chat content in splitter - full width */
+    .ai-chat-content {
+        width: 100% !important;
+        height: 100% !important;
+    }
+
+    /* Mobile chat overlay - full width */
+    .ai-chat-overlay {
+        width: 100% !important;
     }
 </style>
 

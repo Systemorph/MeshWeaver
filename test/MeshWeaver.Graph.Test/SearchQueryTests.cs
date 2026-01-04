@@ -495,6 +495,222 @@ public class SearchQueryTests : MonolithMeshTestBase
     }
 
     #endregion
+
+    #region QueryParser Tests
+
+    [Fact]
+    public void QueryParser_ParsesTextSearchFromCatalogQuery()
+    {
+        // Arrange - this is the exact query pattern from Catalog
+        var parser = new MeshWeaver.Mesh.Query.QueryParser();
+        var query = "namespace:Systemorph scope:descendants Claims";
+
+        // Act
+        var parsed = parser.Parse(query);
+
+        // Assert
+        Output.WriteLine($"Query: '{query}'");
+        Output.WriteLine($"TextSearch: '{parsed.TextSearch}'");
+        Output.WriteLine($"Path: '{parsed.Path}'");
+        Output.WriteLine($"Scope: {parsed.Scope}");
+
+        parsed.TextSearch.Should().Be("Claims", "The search term should be extracted as TextSearch");
+        parsed.Path.Should().Be("Systemorph");
+        parsed.Scope.Should().Be(MeshWeaver.Mesh.Query.QueryScope.Descendants);
+    }
+
+    [Fact]
+    public void QueryParser_MultipleTextTerms_JoinedWithSpace()
+    {
+        var parser = new MeshWeaver.Mesh.Query.QueryParser();
+        var query = "namespace:Systemorph scope:descendants hello world";
+
+        var parsed = parser.Parse(query);
+
+        Output.WriteLine($"TextSearch: '{parsed.TextSearch}'");
+        parsed.TextSearch.Should().Be("hello world");
+    }
+
+    #endregion
+
+    #region Catalog Query Pattern Tests
+
+    /// <summary>
+    /// Tests the exact query pattern used by the Catalog function in MeshNodeView.cs.
+    /// The Catalog builds queries like: "namespace:X scope:descendants searchTerm" for hierarchical mode
+    /// or "namespace:X searchTerm" which adds scope:descendants when search term is present.
+    /// </summary>
+    [Fact(Timeout = 30000)]
+    public async Task CatalogQuery_WithSearchTerm_FiltersResults()
+    {
+        // This simulates what the Catalog does:
+        // 1. For hierarchical mode: query = $"namespace:{hubPath} scope:descendants";
+        //    if (!string.IsNullOrEmpty(searchTerm)) query += $" {searchTerm}";
+        // 2. For default mode: query = $"namespace:{hubPath}";
+        //    if (!string.IsNullOrEmpty(searchTerm)) query += $" scope:descendants {searchTerm}";
+
+        // Arrange - simulate catalog search at Systemorph with search term "Marketing"
+        var hubPath = "Systemorph";
+        var searchTerm = "Marketing";
+
+        // Build query like Catalog does for default mode
+        var query = $"namespace:{hubPath} scope:descendants {searchTerm}";
+        var request = new MeshQueryRequest { Query = query, Limit = 100 };
+
+        // Act
+        var results = await MeshQuery.QueryAsync<MeshNode>(request).ToArrayAsync();
+
+        // Assert
+        Output.WriteLine($"Query: '{query}'");
+        Output.WriteLine($"Found {results.Length} results");
+        foreach (var r in results)
+            Output.WriteLine($"  - {r.Path}: {r.Name}");
+
+        // All results should contain "Marketing" in name or description
+        results.Should().AllSatisfy(node =>
+        {
+            var searchable = $"{node.Name} {node.Description}".ToLowerInvariant();
+            searchable.Should().Contain(searchTerm.ToLowerInvariant(),
+                $"All results should contain the search term '{searchTerm}'");
+        });
+    }
+
+    [Fact(Timeout = 30000)]
+    public async Task CatalogQuery_NodeTypeMode_WithSearchTerm_FiltersResults()
+    {
+        // This simulates NodeType catalog mode:
+        // var query = $"nodeType:{nodeTypePath}";
+        // if (!string.IsNullOrEmpty(searchTerm)) query += $" {searchTerm}";
+
+        // Arrange - simulate catalog search for Person type with search term "Alice"
+        var nodeTypePath = "Person";
+        var searchTerm = "Alice";
+
+        var query = $"nodeType:{nodeTypePath} {searchTerm}";
+        var request = new MeshQueryRequest { Query = query, Limit = 100 };
+
+        // Act
+        var results = await MeshQuery.QueryAsync<MeshNode>(request).ToArrayAsync();
+
+        // Assert
+        Output.WriteLine($"Query: '{query}'");
+        Output.WriteLine($"Found {results.Length} results");
+        foreach (var r in results)
+            Output.WriteLine($"  - {r.Path}: {r.Name} ({r.NodeType})");
+
+        if (results.Length > 0)
+        {
+            // All results should contain "Alice" in searchable text
+            results.Should().AllSatisfy(node =>
+            {
+                var searchable = $"{node.Name} {node.Description}".ToLowerInvariant();
+                searchable.Should().Contain(searchTerm.ToLowerInvariant());
+            });
+        }
+    }
+
+    [Fact(Timeout = 30000)]
+    public async Task CatalogQuery_HierarchicalMode_WithSearchTerm_FiltersResults()
+    {
+        // This simulates hierarchical catalog mode:
+        // var query = $"namespace:{hubPath} scope:descendants";
+        // if (!string.IsNullOrEmpty(searchTerm)) query += $" {searchTerm}";
+
+        // Arrange
+        var hubPath = "Systemorph";
+        var searchTerm = "Claims";
+
+        var query = $"namespace:{hubPath} scope:descendants {searchTerm}";
+        var request = new MeshQueryRequest { Query = query, Limit = 100 };
+
+        // Act
+        var results = await MeshQuery.QueryAsync<MeshNode>(request).ToArrayAsync();
+
+        // Assert
+        Output.WriteLine($"Query: '{query}'");
+        Output.WriteLine($"Found {results.Length} results");
+        foreach (var r in results)
+            Output.WriteLine($"  - {r.Path}: {r.Name}");
+
+        if (results.Length > 0)
+        {
+            results.Should().AllSatisfy(node =>
+            {
+                var searchable = $"{node.Name} {node.Description}".ToLowerInvariant();
+                searchable.Should().Contain(searchTerm.ToLowerInvariant());
+            });
+        }
+    }
+
+    #endregion
+
+    #region Search Term Filtering Tests
+
+    [Fact(Timeout = 30000)]
+    public async Task Search_NonExistentTerm_ReturnsNoResults()
+    {
+        // Arrange - search for a completely non-existent word within a namespace
+        // This tests that the search term is actually being considered in the query
+        var request = new MeshQueryRequest { Query = "namespace:Systemorph scope:descendants xyznonexistent123", Limit = 100 };
+
+        // Act
+        var results = await MeshQuery.QueryAsync<MeshNode>(request).ToArrayAsync();
+
+        // Assert
+        Output.WriteLine($"Found {results.Length} results for 'namespace:Systemorph scope:descendants xyznonexistent123'");
+        foreach (var r in results)
+            Output.WriteLine($"  - {r.Path}: {r.Name}");
+
+        results.Should().BeEmpty("A non-existent search term should return no results");
+    }
+
+    [Fact(Timeout = 30000)]
+    public async Task Search_WithSearchTerm_FiltersResults()
+    {
+        // Arrange - first get all results without filter
+        var allRequest = new MeshQueryRequest { Query = "namespace:Systemorph scope:descendants", Limit = 100 };
+        var allResults = await MeshQuery.QueryAsync<MeshNode>(allRequest).ToArrayAsync();
+
+        Output.WriteLine($"Found {allResults.Length} total results in Systemorph namespace");
+
+        // Now search with a specific term that exists
+        var filteredRequest = new MeshQueryRequest { Query = "namespace:Systemorph scope:descendants Marketing", Limit = 100 };
+        var filteredResults = await MeshQuery.QueryAsync<MeshNode>(filteredRequest).ToArrayAsync();
+
+        Output.WriteLine($"Found {filteredResults.Length} results with 'Marketing' filter");
+        foreach (var r in filteredResults)
+            Output.WriteLine($"  - {r.Path}: {r.Name}");
+
+        // Assert - filtered results should be subset of all results
+        filteredResults.Length.Should().BeLessThan(allResults.Length,
+            "Adding a search term should filter down the results");
+    }
+
+    [Fact(Timeout = 30000)]
+    public async Task Search_NamespaceWithDescendantsAndTerm_TermIsApplied()
+    {
+        // This is the exact query pattern used by the catalog search bar
+        // Arrange - search like: "namespace:Systemorph/Marketing scope:descendants blabla"
+        var request = new MeshQueryRequest
+        {
+            Query = "namespace:Systemorph/Marketing scope:descendants thisdoesnotexistatall",
+            Limit = 100
+        };
+
+        // Act
+        var results = await MeshQuery.QueryAsync<MeshNode>(request).ToArrayAsync();
+
+        // Assert
+        Output.WriteLine($"Query: 'namespace:Systemorph/Marketing scope:descendants thisdoesnotexistatall'");
+        Output.WriteLine($"Found {results.Length} results");
+        foreach (var r in results)
+            Output.WriteLine($"  - {r.Path}: {r.Name}");
+
+        results.Should().BeEmpty(
+            "The search term 'thisdoesnotexistatall' should filter out all results since it doesn't exist");
+    }
+
+    #endregion
 }
 
 [CollectionDefinition("SearchQueryTests", DisableParallelization = true)]

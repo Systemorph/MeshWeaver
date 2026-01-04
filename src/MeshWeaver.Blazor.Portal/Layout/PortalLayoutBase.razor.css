@@ -315,6 +315,23 @@
 
     ::deep .main-with-chat fluent-multi-splitter-pane {
         overflow: hidden;
+        display: flex;
+        flex-direction: column;
+    }
+
+    /* Ensure pane content wrapper fills the pane */
+    ::deep .main-with-chat fluent-multi-splitter-pane > div {
+        width: 100%;
+        height: 100%;
+        display: flex;
+        flex-direction: column;
+    }
+
+    /* Ensure chat content fills the pane */
+    ::deep .main-with-chat .ai-chat-content {
+        width: 100%;
+        height: 100%;
+        flex: 1;
     }
 }
 
