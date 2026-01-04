@@ -8,15 +8,21 @@ public enum QueryScope
     /// <summary>Query only at the exact path specified.</summary>
     Exact,
 
-    /// <summary>Query immediate children of the path (one level deep).</summary>
+    /// <summary>Query immediate children of the path (one level deep, excludes self).</summary>
     Children,
 
-    /// <summary>Query the path and all descendant paths recursively.</summary>
+    /// <summary>Query all descendant paths recursively (excludes self).</summary>
     Descendants,
 
-    /// <summary>Query the path and all ancestor paths upward.</summary>
+    /// <summary>Query all ancestor paths upward (excludes self).</summary>
     Ancestors,
 
     /// <summary>Query ancestors, the path, and all descendants.</summary>
-    Hierarchy
+    Hierarchy,
+
+    /// <summary>Query self and all descendant paths recursively (subtree).</summary>
+    Subtree,
+
+    /// <summary>Query self and all ancestor paths upward.</summary>
+    AncestorsAndSelf
 }

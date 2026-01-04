@@ -42,6 +42,7 @@ public class QueryEvaluator
     /// <summary>
     /// Gets the fuzzy search score for an object (higher is better match).
     /// Returns int.MinValue if no match.
+    /// For text search terms, we require substring containment (not fuzzy character matching).
     /// </summary>
     public int GetFuzzyScore(object obj, string? textSearch)
     {
@@ -52,13 +53,23 @@ public class QueryEvaluator
         if (string.IsNullOrEmpty(searchableText))
             return int.MinValue;
 
+        // Split search into individual terms - ALL terms must be found as substrings
+        var terms = textSearch.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        foreach (var term in terms)
+        {
+            // Require substring containment for each term (case-insensitive)
+            if (!searchableText.Contains(term, StringComparison.OrdinalIgnoreCase))
+                return int.MinValue;
+        }
+
+        // Use fuzzy scoring for ranking matched results
         var scored = _fuzzyScorer.Score(
             [searchableText],
             textSearch,
             s => s
         ).FirstOrDefault();
 
-        return scored?.Score ?? int.MinValue;
+        return scored?.Score ?? 0;
     }
 
     /// <summary>

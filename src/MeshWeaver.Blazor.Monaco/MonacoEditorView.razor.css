@@ -12,13 +12,40 @@
     border: 1px solid var(--neutral-stroke-rest, #d1d1d1);
     border-radius: 4px;
     background: var(--neutral-layer-1, #ffffff);
+    padding: 4px 8px;
 }
 
-/* Dark mode border */
+/* Focus state for bordered containers */
+.monaco-editor-container.with-border:focus-within {
+    border-color: var(--accent-fill-rest, #0078d4);
+    box-shadow: 0 0 0 1px var(--accent-fill-rest, #0078d4);
+}
+
+/* Dark mode support using CSS custom properties */
+:global([data-theme="dark"]) .monaco-editor-container.with-border,
+:global(.dark) .monaco-editor-container.with-border,
+:global(.fluent-dark) .monaco-editor-container.with-border {
+    border-color: var(--neutral-stroke-rest, #505050);
+    background: var(--neutral-layer-1, #2d2d2d);
+}
+
+:global([data-theme="dark"]) .monaco-editor-container.with-border:focus-within,
+:global(.dark) .monaco-editor-container.with-border:focus-within,
+:global(.fluent-dark) .monaco-editor-container.with-border:focus-within {
+    border-color: var(--accent-fill-rest, #479ef5);
+    box-shadow: 0 0 0 1px var(--accent-fill-rest, #479ef5);
+}
+
+/* Fallback dark mode via media query */
 @media (prefers-color-scheme: dark) {
     .monaco-editor-container.with-border {
-        border-color: var(--neutral-stroke-rest, #404040);
-        background: var(--neutral-layer-1, #1e1e1e);
+        border-color: var(--neutral-stroke-rest, #505050);
+        background: var(--neutral-layer-1, #2d2d2d);
+    }
+
+    .monaco-editor-container.with-border:focus-within {
+        border-color: var(--accent-fill-rest, #479ef5);
+        box-shadow: 0 0 0 1px var(--accent-fill-rest, #479ef5);
     }
 }
 
@@ -88,6 +115,47 @@
 
 /* Placeholder styling */
 ::deep .monaco-placeholder {
-    color: var(--neutral-foreground-hint) !important;
+    color: var(--neutral-foreground-hint, #707070) !important;
     font-family: var(--body-font, "Segoe UI", sans-serif);
+    font-size: 14px;
+    padding-left: 2px;
+}
+
+/* Dark mode placeholder */
+:global([data-theme="dark"]) ::deep .monaco-placeholder,
+:global(.dark) ::deep .monaco-placeholder,
+:global(.fluent-dark) ::deep .monaco-placeholder {
+    color: var(--neutral-foreground-hint, #a0a0a0) !important;
+}
+
+@media (prefers-color-scheme: dark) {
+    ::deep .monaco-placeholder {
+        color: var(--neutral-foreground-hint, #a0a0a0) !important;
+    }
+}
+
+/* Editor text color for dark mode */
+:global([data-theme="dark"]) ::deep .monaco-editor .view-line,
+:global(.dark) ::deep .monaco-editor .view-line,
+:global(.fluent-dark) ::deep .monaco-editor .view-line {
+    color: var(--neutral-foreground-rest, #e0e0e0) !important;
+}
+
+@media (prefers-color-scheme: dark) {
+    ::deep .monaco-editor .view-line {
+        color: var(--neutral-foreground-rest, #e0e0e0) !important;
+    }
+}
+
+/* Cursor color for dark mode */
+:global([data-theme="dark"]) ::deep .monaco-editor .cursor,
+:global(.dark) ::deep .monaco-editor .cursor,
+:global(.fluent-dark) ::deep .monaco-editor .cursor {
+    background-color: var(--neutral-foreground-rest, #ffffff) !important;
+}
+
+@media (prefers-color-scheme: dark) {
+    ::deep .monaco-editor .cursor {
+        background-color: var(--neutral-foreground-rest, #ffffff) !important;
+    }
 }
