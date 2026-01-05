@@ -13,6 +13,8 @@ using MeshWeaver.Hosting.Monolith;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Layout;
+using Markdig;
+using Markdig.Syntax;
 using MeshWeaver.Markdown;
 using MeshWeaver.Markdown.Collaboration;
 using MeshWeaver.Mesh;
@@ -536,6 +538,350 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
 
         value.Should().NotBe(default(JsonElement), "Should receive layout content");
         value.ValueKind.Should().NotBe(JsonValueKind.Undefined, "Layout should not be undefined");
+    }
+
+    #endregion
+
+    #region UCR Data Reference Tests
+
+    /// <summary>
+    /// Test that data: self-reference (empty path) parses to null Id.
+    /// This should trigger showing the current node's data (the MeshNode itself).
+    /// </summary>
+    [Fact]
+    public void DataSelfReference_ParsesCorrectly()
+    {
+        var markdown = "@@MeshWeaver/CollaborativeEditing/data:";
+        var extension = new LayoutAreaMarkdownExtension();
+        var pipeline = new Markdig.MarkdownPipelineBuilder().Use(extension).Build();
+        var document = Markdig.Markdown.Parse(markdown, pipeline);
+
+        var layoutArea = document.Descendants<LayoutAreaComponentInfo>().Single();
+        layoutArea.Address.Should().Be("MeshWeaver/CollaborativeEditing");
+        layoutArea.Area.Should().Be(LayoutAreaMarkdownParser.DataAreaName);
+        layoutArea.Id.Should().BeNull("Empty path after data: means self-reference");
+        layoutArea.IsInline.Should().BeTrue();
+    }
+
+    /// <summary>
+    /// Test that data:TypeName parses correctly for data type references.
+    /// Example: @Systemorph/data:Organization should reference Organization type.
+    /// </summary>
+    [Fact]
+    public void DataTypeReference_ParsesCorrectly()
+    {
+        var markdown = "@Systemorph/data:Organization";
+        var extension = new LayoutAreaMarkdownExtension();
+        var pipeline = new Markdig.MarkdownPipelineBuilder().Use(extension).Build();
+        var document = Markdig.Markdown.Parse(markdown, pipeline);
+
+        var layoutArea = document.Descendants<LayoutAreaComponentInfo>().Single();
+        layoutArea.Address.Should().Be("Systemorph");
+        layoutArea.Area.Should().Be(LayoutAreaMarkdownParser.DataAreaName);
+        layoutArea.Id.Should().Be("Organization");
+        layoutArea.IsInline.Should().BeFalse();
+    }
+
+    /// <summary>
+    /// Test that keyword without colon parses correctly (e.g., @Systemorph/data).
+    /// </summary>
+    [Fact]
+    public void KeywordWithoutColon_Data_ParsesCorrectly()
+    {
+        var markdown = "@Systemorph/data";
+        var extension = new LayoutAreaMarkdownExtension();
+        var pipeline = new MarkdownPipelineBuilder().Use(extension).Build();
+        var document = Markdig.Markdown.Parse(markdown, pipeline);
+
+        var layoutArea = document.Descendants<LayoutAreaComponentInfo>().Single();
+        layoutArea.Address.Should().Be("Systemorph");
+        layoutArea.Area.Should().Be(LayoutAreaMarkdownParser.DataAreaName);
+        layoutArea.Id.Should().BeNull(); // No path means self-reference
+        layoutArea.IsInline.Should().BeFalse();
+    }
+
+    /// <summary>
+    /// Test that keyword without colon with path parses correctly (e.g., @Systemorph/data/Organization).
+    /// </summary>
+    [Fact]
+    public void KeywordWithoutColon_DataWithPath_ParsesCorrectly()
+    {
+        var markdown = "@Systemorph/data/Organization";
+        var extension = new LayoutAreaMarkdownExtension();
+        var pipeline = new MarkdownPipelineBuilder().Use(extension).Build();
+        var document = Markdig.Markdown.Parse(markdown, pipeline);
+
+        var layoutArea = document.Descendants<LayoutAreaComponentInfo>().Single();
+        layoutArea.Address.Should().Be("Systemorph");
+        layoutArea.Area.Should().Be(LayoutAreaMarkdownParser.DataAreaName);
+        layoutArea.Id.Should().Be("Organization");
+        layoutArea.IsInline.Should().BeFalse();
+    }
+
+    /// <summary>
+    /// Test that schema without colon parses correctly.
+    /// </summary>
+    [Fact]
+    public void KeywordWithoutColon_Schema_ParsesCorrectly()
+    {
+        var markdown = "@@MeshWeaver/UnifiedContentReferences/schema";
+        var extension = new LayoutAreaMarkdownExtension();
+        var pipeline = new MarkdownPipelineBuilder().Use(extension).Build();
+        var document = Markdig.Markdown.Parse(markdown, pipeline);
+
+        var layoutArea = document.Descendants<LayoutAreaComponentInfo>().Single();
+        layoutArea.Address.Should().Be("MeshWeaver/UnifiedContentReferences");
+        layoutArea.Area.Should().Be(LayoutAreaMarkdownParser.SchemaAreaName);
+        layoutArea.Id.Should().BeNull();
+        layoutArea.IsInline.Should().BeTrue();
+    }
+
+    /// <summary>
+    /// Test that content without colon parses correctly.
+    /// </summary>
+    [Fact]
+    public void KeywordWithoutColon_Content_ParsesCorrectly()
+    {
+        var markdown = "@MeshWeaver/UnifiedContentReferences/content";
+        var extension = new LayoutAreaMarkdownExtension();
+        var pipeline = new MarkdownPipelineBuilder().Use(extension).Build();
+        var document = Markdig.Markdown.Parse(markdown, pipeline);
+
+        var layoutArea = document.Descendants<LayoutAreaComponentInfo>().Single();
+        layoutArea.Address.Should().Be("MeshWeaver/UnifiedContentReferences");
+        layoutArea.Area.Should().Be(LayoutAreaMarkdownParser.ContentAreaName);
+        layoutArea.Id.Should().BeNull();
+        layoutArea.IsInline.Should().BeFalse();
+    }
+
+    /// <summary>
+    /// Test that model without colon parses correctly.
+    /// </summary>
+    [Fact]
+    public void KeywordWithoutColon_Model_ParsesCorrectly()
+    {
+        var markdown = "@@Systemorph/Marketing/model";
+        var extension = new LayoutAreaMarkdownExtension();
+        var pipeline = new MarkdownPipelineBuilder().Use(extension).Build();
+        var document = Markdig.Markdown.Parse(markdown, pipeline);
+
+        var layoutArea = document.Descendants<LayoutAreaComponentInfo>().Single();
+        layoutArea.Address.Should().Be("Systemorph/Marketing");
+        layoutArea.Area.Should().Be(LayoutAreaMarkdownParser.ModelAreaName);
+        layoutArea.Id.Should().BeNull();
+        layoutArea.IsInline.Should().BeTrue();
+    }
+
+    /// <summary>
+    /// Test that requesting the $Data layout area with self-reference returns the MeshNode.
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task DataSelfReference_ReturnsLayoutView()
+    {
+        var nodeAddress = new Address("MeshWeaver/CollaborativeEditing");
+
+        var client = GetClient(c => c
+            .WithInitialization((h, _) => RoutingService.RegisterStreamAsync(h))
+            .AddLayoutClient(cc => cc)
+            .AddData(data => data));
+
+        // Request the $Data layout area with no Id (self-reference)
+        var workspace = client.GetWorkspace();
+        var reference = new LayoutAreaReference(MeshNodeView.DataArea); // "$Data"
+
+        Output.WriteLine($"Getting {MeshNodeView.DataArea} layout for MeshWeaver/CollaborativeEditing...");
+        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(nodeAddress, reference);
+
+        var changeItem = await stream.Timeout(30.Seconds()).FirstAsync();
+        var value = changeItem.Value;
+
+        Output.WriteLine($"Received layout ValueKind: {value.ValueKind}");
+        if (value.ValueKind != JsonValueKind.Undefined && value.ValueKind != JsonValueKind.Null)
+        {
+            var rawText = value.GetRawText();
+            Output.WriteLine($"Received layout: {rawText.Substring(0, Math.Min(500, rawText.Length))}...");
+        }
+
+        value.Should().NotBe(default(JsonElement), "Should receive layout content for $Data self-reference");
+        value.ValueKind.Should().NotBe(JsonValueKind.Undefined, "Layout should not be undefined");
+    }
+
+    /// <summary>
+    /// Test that requesting the $Schema layout area with self-reference returns schema info.
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task SchemaSelfReference_ReturnsLayoutView()
+    {
+        var nodeAddress = new Address("MeshWeaver/CollaborativeEditing");
+
+        var client = GetClient(c => c
+            .WithInitialization((h, _) => RoutingService.RegisterStreamAsync(h))
+            .AddLayoutClient(cc => cc)
+            .AddData(data => data));
+
+        // Request the $Schema layout area with no Id (self-reference)
+        var workspace = client.GetWorkspace();
+        var reference = new LayoutAreaReference(MeshNodeView.SchemaArea); // "$Schema"
+
+        Output.WriteLine($"Getting {MeshNodeView.SchemaArea} layout for MeshWeaver/CollaborativeEditing...");
+        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(nodeAddress, reference);
+
+        var changeItem = await stream.Timeout(30.Seconds()).FirstAsync();
+        var value = changeItem.Value;
+
+        Output.WriteLine($"Received layout ValueKind: {value.ValueKind}");
+        if (value.ValueKind != JsonValueKind.Undefined && value.ValueKind != JsonValueKind.Null)
+        {
+            var rawText = value.GetRawText();
+            Output.WriteLine($"Received layout: {rawText.Substring(0, Math.Min(500, rawText.Length))}...");
+        }
+
+        value.Should().NotBe(default(JsonElement), "Should receive layout content for $Schema self-reference");
+        value.ValueKind.Should().NotBe(JsonValueKind.Undefined, "Layout should not be undefined");
+    }
+
+    /// <summary>
+    /// Test that requesting the $Model layout area returns data model diagram.
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task ModelSelfReference_ReturnsLayoutView()
+    {
+        var nodeAddress = new Address("MeshWeaver/CollaborativeEditing");
+
+        var client = GetClient(c => c
+            .WithInitialization((h, _) => RoutingService.RegisterStreamAsync(h))
+            .AddLayoutClient(cc => cc)
+            .AddData(data => data));
+
+        // Request the $Model layout area
+        var workspace = client.GetWorkspace();
+        var reference = new LayoutAreaReference(MeshNodeView.ModelArea); // "$Model"
+
+        Output.WriteLine($"Getting {MeshNodeView.ModelArea} layout for MeshWeaver/CollaborativeEditing...");
+        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(nodeAddress, reference);
+
+        var changeItem = await stream.Timeout(30.Seconds()).FirstAsync();
+        var value = changeItem.Value;
+
+        Output.WriteLine($"Received layout ValueKind: {value.ValueKind}");
+        if (value.ValueKind != JsonValueKind.Undefined && value.ValueKind != JsonValueKind.Null)
+        {
+            var rawText = value.GetRawText();
+            Output.WriteLine($"Received layout: {rawText.Substring(0, Math.Min(500, rawText.Length))}...");
+        }
+
+        value.Should().NotBe(default(JsonElement), "Should receive layout content for $Model");
+        value.ValueKind.Should().NotBe(JsonValueKind.Undefined, "Layout should not be undefined");
+    }
+
+    /// <summary>
+    /// Test that requesting the $Content layout area with self-reference returns the node's icon.
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task ContentSelfReference_ReturnsNodeIcon()
+    {
+        var nodeAddress = new Address("MeshWeaver/CollaborativeEditing");
+
+        var client = GetClient(c => c
+            .WithInitialization((h, _) => RoutingService.RegisterStreamAsync(h))
+            .AddLayoutClient(cc => cc)
+            .AddData(data => data));
+
+        // Request the $Content layout area with no Id (self-reference)
+        var workspace = client.GetWorkspace();
+        var reference = new LayoutAreaReference(MeshNodeView.ContentArea); // "$Content"
+
+        Output.WriteLine($"Getting {MeshNodeView.ContentArea} layout for MeshWeaver/CollaborativeEditing...");
+        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(nodeAddress, reference);
+
+        var changeItem = await stream.Timeout(30.Seconds()).FirstAsync();
+        var value = changeItem.Value;
+
+        Output.WriteLine($"Received layout ValueKind: {value.ValueKind}");
+        if (value.ValueKind != JsonValueKind.Undefined && value.ValueKind != JsonValueKind.Null)
+        {
+            var rawText = value.GetRawText();
+            Output.WriteLine($"Received layout: {rawText.Substring(0, Math.Min(500, rawText.Length))}...");
+        }
+
+        value.Should().NotBe(default(JsonElement), "Should receive layout content for $Content self-reference");
+        value.ValueKind.Should().NotBe(JsonValueKind.Undefined, "Layout should not be undefined");
+    }
+
+    /// <summary>
+    /// Test that data: prefix with colon but no path returns the MeshNode (self-reference).
+    /// Syntax: @address/data: (with colon, nothing after)
+    /// </summary>
+    [Fact]
+    public void DataColonSelfReference_ParsesCorrectly()
+    {
+        var markdown = "@@MeshWeaver/UnifiedContentReferences/data:";
+        var extension = new LayoutAreaMarkdownExtension();
+        var pipeline = new MarkdownPipelineBuilder().Use(extension).Build();
+        var document = Markdig.Markdown.Parse(markdown, pipeline);
+
+        var layoutArea = document.Descendants<LayoutAreaComponentInfo>().Single();
+        layoutArea.Address.Should().Be("MeshWeaver/UnifiedContentReferences");
+        layoutArea.Area.Should().Be(LayoutAreaMarkdownParser.DataAreaName);
+        layoutArea.Id.Should().BeNull("Self-reference (empty path) should have null Id");
+        layoutArea.IsInline.Should().BeTrue();
+    }
+
+    /// <summary>
+    /// Test that schema: prefix with colon but no path returns self-reference.
+    /// Syntax: @address/schema:
+    /// </summary>
+    [Fact]
+    public void SchemaColonSelfReference_ParsesCorrectly()
+    {
+        var markdown = "@@MeshWeaver/UnifiedContentReferences/schema:";
+        var extension = new LayoutAreaMarkdownExtension();
+        var pipeline = new MarkdownPipelineBuilder().Use(extension).Build();
+        var document = Markdig.Markdown.Parse(markdown, pipeline);
+
+        var layoutArea = document.Descendants<LayoutAreaComponentInfo>().Single();
+        layoutArea.Address.Should().Be("MeshWeaver/UnifiedContentReferences");
+        layoutArea.Area.Should().Be(LayoutAreaMarkdownParser.SchemaAreaName);
+        layoutArea.Id.Should().BeNull("Self-reference (empty path) should have null Id");
+        layoutArea.IsInline.Should().BeTrue();
+    }
+
+    /// <summary>
+    /// Test that content: prefix with colon but no path returns self-reference (icon).
+    /// Syntax: @address/content:
+    /// </summary>
+    [Fact]
+    public void ContentColonSelfReference_ParsesCorrectly()
+    {
+        var markdown = "@@MeshWeaver/UnifiedContentReferences/content:";
+        var extension = new LayoutAreaMarkdownExtension();
+        var pipeline = new MarkdownPipelineBuilder().Use(extension).Build();
+        var document = Markdig.Markdown.Parse(markdown, pipeline);
+
+        var layoutArea = document.Descendants<LayoutAreaComponentInfo>().Single();
+        layoutArea.Address.Should().Be("MeshWeaver/UnifiedContentReferences");
+        layoutArea.Area.Should().Be(LayoutAreaMarkdownParser.ContentAreaName);
+        layoutArea.Id.Should().BeNull("Self-reference (empty path) should have null Id");
+        layoutArea.IsInline.Should().BeTrue();
+    }
+
+    /// <summary>
+    /// Test that model: prefix with colon but no path returns self-reference.
+    /// Syntax: @address/model:
+    /// </summary>
+    [Fact]
+    public void ModelColonSelfReference_ParsesCorrectly()
+    {
+        var markdown = "@@MeshWeaver/UnifiedContentReferences/model:";
+        var extension = new LayoutAreaMarkdownExtension();
+        var pipeline = new MarkdownPipelineBuilder().Use(extension).Build();
+        var document = Markdig.Markdown.Parse(markdown, pipeline);
+
+        var layoutArea = document.Descendants<LayoutAreaComponentInfo>().Single();
+        layoutArea.Address.Should().Be("MeshWeaver/UnifiedContentReferences");
+        layoutArea.Area.Should().Be(LayoutAreaMarkdownParser.ModelAreaName);
+        layoutArea.Id.Should().BeNull("Self-reference (empty path) should have null Id");
+        layoutArea.IsInline.Should().BeTrue();
     }
 
     #endregion

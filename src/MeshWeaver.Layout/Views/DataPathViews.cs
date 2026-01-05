@@ -20,6 +20,7 @@ public static class DataPathViews
 
     /// <summary>
     /// Adds the $Data layout area for unified data references.
+    /// For self-reference (empty path), returns a JSON representation of the current data context.
     /// </summary>
     public static LayoutDefinition AddDataReferenceView(this LayoutDefinition layout)
         => layout.WithView(ctx => ctx.Area == DataAreaName, DataContentView);
@@ -32,10 +33,22 @@ public static class DataPathViews
     private static IObservable<UiControl> DataContentView(LayoutAreaHost host, RenderingContext ctx)
     {
         var localPath = host.Reference.Id?.ToString();
-        var pathReference = new DataPathReference(localPath ?? string.Empty);
+        if (string.IsNullOrEmpty(localPath))
+            return Observable.Return(Controls.Html("<div class='muted'>No data path specified</div>"));
+
+        var pathReference = new DataPathReference(localPath);
 
         // Use DataPathReference which handles both entity and collection paths
-        var stream = host.Workspace.GetStream(pathReference);
+        ISynchronizationStream? stream;
+        try
+        {
+            stream = host.Workspace.GetStream(pathReference);
+        }
+        catch (InvalidOperationException)
+        {
+            return Observable.Return(Controls.Html($"<div class='error'>Unable to create stream for: {localPath}</div>"));
+        }
+
         if (stream == null)
             return Observable.Return(Controls.Html($"<div class='error'>Unable to get stream for: {localPath}</div>"));
 

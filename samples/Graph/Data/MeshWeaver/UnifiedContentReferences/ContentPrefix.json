@@ -1,0 +1,18 @@
+{
+  "id": "ContentPrefix",
+  "namespace": "MeshWeaver/UnifiedContentReferences",
+  "name": "Content Prefix",
+  "nodeType": "Markdown",
+  "category": "Documentation",
+  "description": "Embed files like images, markdown, and documents",
+  "iconName": "Document",
+  "displayOrder": 2,
+  "isPersistent": true,
+  "state": "Active",
+  "content": {
+    "$type": "MarkdownDocument",
+    "id": "ContentPrefix",
+    "title": "Content Prefix (content:)",
+    "content": "# Content Prefix\n\nThe `content:` prefix embeds static files from a node's content folder.\n\n## Syntax\n\n```\n@@{address}/content:{path}\n```\n\n## Supported File Types\n\n| Type | Extension | Rendering |\n|------|-----------|----------|\n| Images | `.png`, `.jpg`, `.gif`, `.svg` | Inline image |\n| Markdown | `.md` | Rendered markdown |\n| PDF | `.pdf` | Embedded viewer |\n| Text | `.txt`, `.json`, `.xml` | Code block |\n\n## Example: Inline Image\n\nEmbed an SVG logo from this documentation's content folder:\n\n**Syntax:**\n```\n@@MeshWeaver/UnifiedContentReferences/content:logo.svg\n```\n\n**Result:**\n\n@@MeshWeaver/UnifiedContentReferences/content:logo.svg\n\n## Example: Embedded Markdown\n\nEmbed a markdown file inline:\n\n**Syntax:**\n```\n@@MeshWeaver/UnifiedContentReferences/content:sample.md\n```\n\n**Result:**\n\n@@MeshWeaver/UnifiedContentReferences/content:sample.md\n\n## Hyperlink to Content\n\nUse single `@` to create a download link:\n\n**Syntax:**\n```\n@MeshWeaver/UnifiedContentReferences/content:logo.svg\n```\n\n**Result:**\n\n@MeshWeaver/UnifiedContentReferences/content:logo.svg\n\n## Notes\n\n- Content files are stored in `content/{namespace}/` folders\n- Path is relative to the node's content directory\n- Files are served via the content collection provider"
+  }
+}

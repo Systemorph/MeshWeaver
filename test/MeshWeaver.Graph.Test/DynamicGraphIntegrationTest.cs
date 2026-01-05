@@ -799,16 +799,13 @@ public record Graph
             Output.WriteLine($"Emission {i}: {emissionJson.Substring(0, Math.Min(500, emissionJson.Length))}...");
         }
 
-        // The catalog should render as a StackControl with CatalogContent area
-        // CatalogContent will contain either:
-        // - A LayoutGridControl with MeshNodeThumbnailControl items (if organizations exist)
-        // - An HtmlControl with "No items found" message (if no organizations)
-        var hasCatalogStructure = json.Contains("Catalog") && json.Contains("CatalogContent");
-        hasCatalogStructure.Should().BeTrue($"Catalog should have proper structure with CatalogContent. JSON: {json.Substring(0, Math.Min(1000, json.Length))}");
+        // The catalog should render as a MeshSearchControl
+        var hasCatalogStructure = json.Contains("Catalog") && json.Contains("MeshSearchControl");
+        hasCatalogStructure.Should().BeTrue($"Catalog should have MeshSearchControl. JSON: {json.Substring(0, Math.Min(1000, json.Length))}");
 
-        // The content should either show thumbnails or the empty message
-        var hasContent = json.Contains("MeshNodeThumbnailControl") || json.Contains("LayoutGridControl") || json.Contains("No items found");
-        hasContent.Should().BeTrue($"Catalog should show either thumbnails or empty message. JSON: {json.Substring(0, Math.Min(1000, json.Length))}");
+        // The MeshSearchControl should have the correct query for nodeType filtering
+        var hasCorrectQuery = json.Contains("nodeType:type/org") && json.Contains("scope:subtree");
+        hasCorrectQuery.Should().BeTrue($"Catalog should have nodeType filter in query. JSON: {json.Substring(0, Math.Min(1000, json.Length))}");
     }
 
     /// <summary>

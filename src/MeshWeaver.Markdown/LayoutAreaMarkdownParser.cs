@@ -195,10 +195,21 @@ public class LayoutAreaMarkdownParser : BlockParser
     public const string ContentAreaName = "$Content";
 
     /// <summary>
+    /// Area name for schema references.
+    /// </summary>
+    public const string SchemaAreaName = "$Schema";
+
+    /// <summary>
+    /// Area name for data model references.
+    /// </summary>
+    public const string ModelAreaName = "$Model";
+
+    /// <summary>
     /// Reserved keywords for unified references.
     /// When one of these appears as the third segment, it determines the reference type.
+    /// Supports both `address/keyword/path` and `address/keyword:path` formats.
     /// </summary>
-    private static readonly HashSet<string> ReservedKeywords = ["data", "content", "area"];
+    private static readonly HashSet<string> ReservedKeywords = ["data", "content", "area", "schema", "model"];
 
     /// <summary>
     /// Creates the appropriate block type based on the token content.
@@ -218,8 +229,7 @@ public class LayoutAreaMarkdownParser : BlockParser
             return new LayoutAreaComponentInfo(token, this, isInline);
         }
 
-        var (addressType, addressId, keyword, remainingPath) = parsed.Value;
-        var address = $"{addressType}/{addressId}";
+        var (address, keyword, remainingPath) = parsed.Value;
 
         return keyword.ToLowerInvariant() switch
         {
@@ -232,6 +242,18 @@ public class LayoutAreaMarkdownParser : BlockParser
             "content" => new LayoutAreaComponentInfo(
                 address,
                 ContentAreaName,
+                remainingPath,
+                this,
+                isInline),
+            "schema" => new LayoutAreaComponentInfo(
+                address,
+                SchemaAreaName,
+                remainingPath,
+                this,
+                isInline),
+            "model" => new LayoutAreaComponentInfo(
+                address,
+                ModelAreaName,
                 remainingPath,
                 this,
                 isInline),
@@ -277,42 +299,103 @@ public class LayoutAreaMarkdownParser : BlockParser
 
     /// <summary>
     /// Parses a path into its components.
-    /// Format: addressType/addressId[/keyword[/remainingPath]]
-    /// If keyword is not a reserved keyword (data, content, area), it's treated as part of remainingPath
+    /// Supports two formats:
+    /// 1. addressType/addressId[/keyword[/remainingPath]] - slash-separated
+    /// 2. address/prefix:path - colon-separated prefix (e.g., MeshWeaver/UnifiedContentReferences/content:logo.svg)
+    /// If keyword is not a reserved keyword (data, content, area, schema, model), it's treated as part of remainingPath
     /// and the keyword defaults to "area".
     /// </summary>
-    private (string AddressType, string AddressId, string Keyword, string? RemainingPath)? ParsePath(string path)
+    private (string Address, string Keyword, string? RemainingPath)? ParsePath(string path)
     {
         if (string.IsNullOrEmpty(path))
             return null;
 
-        var parts = path.Split('/', StringSplitOptions.RemoveEmptyEntries);
-        if (parts.Length < 2)
+        // Check for prefix:path format (e.g., "address/content:file.svg" or "address/area:Dashboard/id")
+        // Find the segment that contains a reserved keyword followed by ':'
+        var parts = path.Split('/');
+
+        // Handle prefix:path format (e.g., "Systemorph/data:Organization" or "MeshWeaver/UCR/content:logo.svg")
+        // Also handle keyword alone (e.g., "Systemorph/data" == "Systemorph/data:")
+        if (parts.Length >= 2)
+        {
+            // Look for a segment starting with a reserved keyword followed by ':'
+            for (int i = 1; i < parts.Length; i++)
+            {
+                var segment = parts[i];
+                var colonIndex = segment.IndexOf(':');
+                if (colonIndex > 0)
+                {
+                    var prefix = segment[..colonIndex].ToLowerInvariant();
+                    if (ReservedKeywords.Contains(prefix))
+                    {
+                        // Found prefix:value format at segment i
+                        var resourcePath = segment[(colonIndex + 1)..];
+
+                        // Include any remaining segments after this one
+                        if (i + 1 < parts.Length)
+                        {
+                            var remainingSegments = string.Join("/", parts.Skip(i + 1));
+                            resourcePath = string.IsNullOrEmpty(resourcePath)
+                                ? remainingSegments
+                                : $"{resourcePath}/{remainingSegments}";
+                        }
+
+                        // Empty string after colon (with no further segments) means self-reference
+                        var actualPath = string.IsNullOrEmpty(resourcePath) ? null : resourcePath;
+
+                        // Address is everything before the prefix segment
+                        var address = string.Join("/", parts.Take(i));
+                        return (address, prefix, actualPath);
+                    }
+                }
+                else
+                {
+                    // Check if the segment itself is a keyword (no colon)
+                    // e.g., "Systemorph/data" -> keyword is "data", no path
+                    var segmentLower = segment.ToLowerInvariant();
+                    if (ReservedKeywords.Contains(segmentLower))
+                    {
+                        // Include any remaining segments as the path
+                        string? pathAfterKeyword = null;
+                        if (i + 1 < parts.Length)
+                        {
+                            pathAfterKeyword = string.Join("/", parts.Skip(i + 1));
+                        }
+
+                        // Address is everything before the keyword segment
+                        var addr = string.Join("/", parts.Take(i));
+                        return (addr, segmentLower, pathAfterKeyword);
+                    }
+                }
+            }
+        }
+
+        var partsNoEmpty = path.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        if (partsNoEmpty.Length < 2)
             return null;
 
-        var addressType = parts[0];
-        var addressId = parts[1];
+        var fullAddress = $"{partsNoEmpty[0]}/{partsNoEmpty[1]}";
 
         string keyword;
         string? remainingPath;
 
-        if (parts.Length >= 3 && ReservedKeywords.Contains(parts[2].ToLowerInvariant()))
+        if (partsNoEmpty.Length >= 3 && ReservedKeywords.Contains(partsNoEmpty[2].ToLowerInvariant()))
         {
             // Explicit keyword specified (e.g., host/1/data/Collection)
-            keyword = parts[2].ToLowerInvariant();
-            remainingPath = parts.Length > 3
-                ? string.Join("/", parts.Skip(3))
+            keyword = partsNoEmpty[2].ToLowerInvariant();
+            remainingPath = partsNoEmpty.Length > 3
+                ? string.Join("/", partsNoEmpty.Skip(3))
                 : null;
         }
         else
         {
             // No keyword or unrecognized keyword - default to area
             keyword = "area";
-            remainingPath = parts.Length > 2
-                ? string.Join("/", parts.Skip(2))
+            remainingPath = partsNoEmpty.Length > 2
+                ? string.Join("/", partsNoEmpty.Skip(2))
                 : null;
         }
 
-        return (addressType, addressId, keyword, remainingPath);
+        return (fullAddress, keyword, remainingPath);
     }
 }
