@@ -2,6 +2,7 @@ using MeshWeaver.Blazor.Chat;
 using MeshWeaver.Blazor.Infrastructure;
 using MeshWeaver.Blazor.Portal.Infrastructure;
 using MeshWeaver.Blazor.Portal.Resize;
+using MeshWeaver.Blazor.Services;
 using Microsoft.AspNetCore.Components.Server;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
@@ -25,7 +26,7 @@ public static class BlazorPortalExtensions
     }
 
     /// <summary>
-    /// Adds core portal services (DimensionManager, CacheStorageAccessor, AppVersionService).
+    /// Adds core portal services (DimensionManager, CacheStorageAccessor, AppVersionService, BlazorAutocompleteService).
     /// Use AddBlazorPortalServices(IServerSideBlazorBuilder) for full support including chat state persistence.
     /// </summary>
     public static IServiceCollection AddBlazorPortalCoreServices(this IServiceCollection services)
@@ -33,6 +34,7 @@ public static class BlazorPortalExtensions
         services.AddSingleton<DimensionManager>();
         services.AddScoped<CacheStorageAccessor>();
         services.AddSingleton<IAppVersionService, AppVersionService>();
+        services.AddSingleton<BlazorAutocompleteService>();  // Centralized @ autocomplete
         return services;
     }
 }

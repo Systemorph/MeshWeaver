@@ -14,6 +14,22 @@ public partial class MarkdownView
     private string? Html { get; set; }
     private readonly string? Markdown;
 
+    /// <summary>
+    /// Collection of UCR hyperlink references found in the markdown (@ syntax).
+    /// These are displayed in a separate "References" section.
+    /// </summary>
+    private List<UcrReference> References { get; } = new();
+
+    /// <summary>
+    /// Whether to show the References section at the end of the markdown.
+    /// </summary>
+    public bool ShowReferencesSection { get; set; } = true;
+
+    /// <summary>
+    /// Record to hold UCR hyperlink reference information.
+    /// </summary>
+    private record UcrReference(string Address, string Area, string AreaId, string Href, string DisplayText);
+
     protected override void BindData()
     {
         base.BindData();
@@ -36,10 +52,19 @@ public partial class MarkdownView
         if (Html is null)
             return;
 
+        // Clear references before rendering
+        References.Clear();
+
         var doc = new HtmlDocument();
         doc.LoadHtml(Html);
 
         RenderNodes(builder, doc.DocumentNode.ChildNodes);
+
+        // Render the References section if there are any references
+        if (ShowReferencesSection && References.Count > 0)
+        {
+            RenderReferencesSection(builder);
+        }
     }
 
     private void RenderNodes(RenderTreeBuilder builder, IEnumerable<HtmlNode> nodes)
@@ -63,7 +88,12 @@ public partial class MarkdownView
                     builder.AddMarkupContent(4, node.InnerHtml);
                     builder.CloseElement();
                     break;
+                case { Name: "a" } when node.GetAttributeValue("class", "").Contains(LayoutAreaMarkdownRenderer.UcrLink):
+                    // UCR hyperlink (@ syntax) - collect reference and render styled link
+                    RenderUcrLink(builder, node);
+                    break;
                 case { Name: "div" } when node.GetAttributeValue("class", "").Contains(LayoutAreaMarkdownRenderer.LayoutArea):
+                    // UCR inline content (@@ syntax) - render layout area
                     var address = node.GetAttributeValue($"data-{LayoutAreaMarkdownRenderer.Address}", null);
                     var area = node.GetAttributeValue($"data-{LayoutAreaMarkdownRenderer.Area}", null);
                     var areaId = node.GetAttributeValue($"data-{LayoutAreaMarkdownRenderer.AreaId}", null);
@@ -96,6 +126,63 @@ public partial class MarkdownView
                     break;
             }
         }
+    }
+
+    private void RenderUcrLink(RenderTreeBuilder builder, HtmlNode node)
+    {
+        var address = node.GetAttributeValue($"data-{LayoutAreaMarkdownRenderer.Address}", "");
+        var area = node.GetAttributeValue($"data-{LayoutAreaMarkdownRenderer.Area}", "");
+        var areaId = node.GetAttributeValue($"data-{LayoutAreaMarkdownRenderer.AreaId}", "");
+        var href = node.GetAttributeValue("href", "#");
+        var title = node.GetAttributeValue("title", "");
+        var displayText = node.InnerText;
+
+        // Collect reference for the References section
+        References.Add(new UcrReference(address, area, areaId, href, displayText));
+
+        // Render as styled hyperlink
+        builder.OpenElement(1, "a");
+        builder.AddAttribute(2, "href", href);
+        builder.AddAttribute(3, "class", "ucr-link");
+        builder.AddAttribute(4, "title", title);
+        builder.AddAttribute(5, "data-address", address);
+        builder.AddAttribute(6, "data-area", area);
+        builder.AddAttribute(7, "data-area-id", areaId);
+        builder.AddContent(8, displayText);
+        builder.CloseElement();
+    }
+
+    private void RenderReferencesSection(RenderTreeBuilder builder)
+    {
+        builder.OpenElement(1, "section");
+        builder.AddAttribute(2, "class", "ucr-references");
+
+        builder.OpenElement(3, "h3");
+        builder.AddContent(4, "References");
+        builder.CloseElement();
+
+        builder.OpenElement(5, "ul");
+        foreach (var reference in References.DistinctBy(r => r.Href))
+        {
+            builder.OpenElement(6, "li");
+            builder.OpenElement(7, "a");
+            builder.AddAttribute(8, "href", reference.Href);
+            builder.AddAttribute(9, "class", "ucr-link");
+            builder.AddAttribute(10, "title", $"{reference.Area}: {reference.Address}");
+            builder.AddContent(11, reference.DisplayText);
+            builder.CloseElement();
+            if (!string.IsNullOrEmpty(reference.Address))
+            {
+                builder.OpenElement(12, "span");
+                builder.AddAttribute(13, "class", "ucr-reference-path");
+                builder.AddContent(14, $" ({reference.Address})");
+                builder.CloseElement();
+            }
+            builder.CloseElement();
+        }
+        builder.CloseElement();
+
+        builder.CloseElement();
     }
 
 

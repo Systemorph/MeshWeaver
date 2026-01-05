@@ -14,8 +14,9 @@ public static class BlazorMonacoExtensions
     public static MessageHubConfiguration AddMonacoViews(this MessageHubConfiguration configuration)
     {
         return configuration
-            .WithTypes(typeof(CodeEditorControl))
+            .WithTypes(typeof(CodeEditorControl), typeof(MarkdownEditorControl))
             .AddViews(registry => registry
-                .WithView<CodeEditorControl, CodeEditorView>());
+                .WithView<CodeEditorControl, CodeEditorView>()
+                .WithView<MarkdownEditorControl, MarkdownEditorView>());
     }
 }

@@ -1,11 +1,14 @@
 @using MeshWeaver.Layout
 @using MeshWeaver.Layout.Client
 @using MeshWeaver.Data
+@using MeshWeaver.Data.Completion
 @using MeshWeaver.Blazor.Monaco
+@using MeshWeaver.Mesh.Services
 @using MeshWeaver.Markdown.Collaboration
 @using System.Text.Json
 @using System.Reactive.Linq
 @using Microsoft.FluentUI.AspNetCore.Components
+@inject IMeshQuery? MeshQuery
 @implements IDisposable
 
 <div class="collaborative-editor-container">
@@ -30,8 +33,8 @@
                                   ShowLineNumbers="true"
                                   ShowBorder="true"
                                   CodeEditMode="true"
-                                  CompletionProvider="@CompletionProvider"
-                                  AsyncCompletionCallback="@AsyncCompletionCallback"
+                                  CompletionProvider="@GetEffectiveCompletionConfig()"
+                                  AsyncCompletionCallback="@EffectiveCompletionCallback"
                                   ValueChanged="@OnValueChanged" />
             </div>
             <CommentPanel DocumentId="@BoundDocumentId"
@@ -62,8 +65,8 @@
                                   ShowLineNumbers="true"
                                   ShowBorder="true"
                                   CodeEditMode="true"
-                                  CompletionProvider="@CompletionProvider"
-                                  AsyncCompletionCallback="@AsyncCompletionCallback"
+                                  CompletionProvider="@GetEffectiveCompletionConfig()"
+                                  AsyncCompletionCallback="@EffectiveCompletionCallback"
                                   ValueChanged="@OnValueChanged" />
             </div>
         </div>
@@ -102,10 +105,10 @@
     private JsonPointerReference? ValuePointer;
 
     /// <summary>
-    /// The view model for this collaborative markdown editor.
+    /// The view model for this markdown editor.
     /// </summary>
     [Parameter]
-    public CollaborativeMarkdownEditorControl? ViewModel { get; set; }
+    public MarkdownEditorControl? ViewModel { get; set; }
 
     /// <summary>
     /// The synchronization stream (required by the view infrastructure).
@@ -137,6 +140,127 @@
     /// </summary>
     [Parameter]
     public Func<string, Task<CompletionItem[]>>? AsyncCompletionCallback { get; set; }
+
+    /// <summary>
+    /// Gets the effective completion callback - uses the parameter if provided,
+    /// otherwise falls back to IMeshQuery for UCR autocomplete.
+    /// </summary>
+    private Func<string, Task<CompletionItem[]>>? EffectiveCompletionCallback =>
+        AsyncCompletionCallback ?? (MeshQuery != null ? GetDefaultCompletionsAsync : null);
+
+    /// <summary>
+    /// Gets the effective completion provider config - uses the parameter if provided,
+    /// otherwise creates a default config with @ trigger for UCR autocomplete.
+    /// </summary>
+    private CompletionProviderConfig GetEffectiveCompletionConfig()
+    {
+        if (CompletionProvider != null)
+            return CompletionProvider;
+
+        // Default config for UCR autocomplete - trigger on @ for unified content references
+        return new CompletionProviderConfig
+        {
+            TriggerCharacters = ["@"],
+            Items = []
+        };
+    }
+
+    /// <summary>
+    /// Default completion callback that uses IMeshQuery for UCR autocomplete.
+    /// </summary>
+    private async Task<CompletionItem[]> GetDefaultCompletionsAsync(string query)
+    {
+        if (MeshQuery == null || string.IsNullOrWhiteSpace(query))
+            return [];
+
+        try
+        {
+            // Handle @ reference mode
+            if (query.StartsWith("@"))
+            {
+                var reference = query[1..];
+                return await GetReferenceCompletionsAsync(reference);
+            }
+
+            // Standard search - delegate to mesh query
+            return await SearchNodesAsync(query);
+        }
+        catch
+        {
+            return [];
+        }
+    }
+
+    private async Task<CompletionItem[]> GetReferenceCompletionsAsync(string reference)
+    {
+        if (string.IsNullOrWhiteSpace(reference))
+        {
+            // Just "@" - show top-level nodes
+            return await GetTopLevelNodesAsync();
+        }
+
+        // Check for path with trailing slash for sub-completions
+        if (reference.EndsWith("/"))
+        {
+            var basePath = reference.TrimEnd('/');
+            return await GetChildNodesAsync(basePath);
+        }
+
+        // Partial match like "@Sys" -> Systemorph
+        return await GetNodesMatchingPrefixAsync(reference);
+    }
+
+    private async Task<CompletionItem[]> GetTopLevelNodesAsync()
+    {
+        var suggestions = await MeshQuery!.AutocompleteAsync("", "", 20).ToArrayAsync();
+        return suggestions.Select(s => new CompletionItem
+        {
+            Label = $"{s.Path}/",
+            InsertText = $"@{s.Path}/",
+            Description = s.NodeType ?? s.Name,
+            Detail = s.Name,
+            Category = "Addresses"
+        }).ToArray();
+    }
+
+    private async Task<CompletionItem[]> GetChildNodesAsync(string basePath)
+    {
+        var suggestions = await MeshQuery!.AutocompleteAsync(basePath, "", 20).ToArrayAsync();
+        return suggestions.Select(s => new CompletionItem
+        {
+            Label = $"{s.Path}/",
+            InsertText = $"@{s.Path}/",
+            Description = s.NodeType ?? "",
+            Detail = s.Name,
+            Category = ""
+        }).ToArray();
+    }
+
+    private async Task<CompletionItem[]> GetNodesMatchingPrefixAsync(string prefix)
+    {
+        var suggestions = await MeshQuery!.AutocompleteAsync("", prefix, 20).ToArrayAsync();
+        return suggestions.Select(s => new CompletionItem
+        {
+            Label = $"{s.Path}/",
+            InsertText = $"@{s.Path}/",
+            Description = s.NodeType ?? s.Name,
+            Detail = s.Name,
+            Category = "Addresses"
+        }).ToArray();
+    }
+
+    private async Task<CompletionItem[]> SearchNodesAsync(string query)
+    {
+        var suggestions = await MeshQuery!.AutocompleteAsync("", query, 20).ToArrayAsync();
+        return suggestions.Select(s => new CompletionItem
+        {
+            Label = s.Path,
+            InsertText = s.Path,
+            Description = s.NodeType ?? "",
+            Detail = s.Name,
+            Category = ""
+        }).ToArray();
+    }
 
     protected override void OnParametersSet()
     {

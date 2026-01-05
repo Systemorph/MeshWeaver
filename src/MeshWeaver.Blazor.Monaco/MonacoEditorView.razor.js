@@ -238,6 +238,7 @@ export function registerCompletionProvider(editorId, config) {
     // Parse config
     const triggerCharacters = config?.triggerCharacters || [];
     const useAsync = config?.useAsync || false;
+    const language = config?.language || 'plaintext';
     let items = [];
     if (Array.isArray(config?.items)) {
         items = config.items;
@@ -245,7 +246,7 @@ export function registerCompletionProvider(editorId, config) {
         items = Object.values(config.items);
     }
 
-    state.completionConfig = { triggerCharacters, items, useAsync };
+    state.completionConfig = { triggerCharacters, items, useAsync, language };
     state.isCompletionPending = false;
 
     // Dispose previous provider if exists
@@ -265,34 +266,39 @@ export function registerCompletionProvider(editorId, config) {
     // Build trigger character set for regex (not used directly anymore, but kept for reference)
     const escapedTriggers = triggerCharacters.map(c => c.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('');
 
-    // Create debounced async fetch function (150ms delay)
+    // Create debounced async fetch function (50ms delay)
     const debouncedFetch = debounce(async (query) => {
         if (!state.dotNetRef) {
             return [];
         }
         try {
             state.isCompletionPending = true;
-            const result = await state.dotNetRef.invokeMethodAsync('GetAsyncCompletions', query);
-            return result;
+            return await state.dotNetRef.invokeMethodAsync('GetAsyncCompletions', query);
         } catch (e) {
             console.error('Error fetching async completions:', e);
             return [];
         } finally {
             state.isCompletionPending = false;
         }
-    }, 150);
+    }, 50);
 
-    // Register new completion provider
+    console.log('[Monaco Completion] Registering provider for language:', language, 'triggers:', triggerCharacters, 'async:', useAsync);
+
+    // Register new completion provider for the specified language
     // Note: Monaco registers providers globally per language, so we need to check
     // if this request is for our specific editor instance
-    state.completionDisposable = monaco.languages.registerCompletionItemProvider('plaintext', {
+    state.completionDisposable = monaco.languages.registerCompletionItemProvider(language, {
         triggerCharacters: triggerCharacters,
         provideCompletionItems: async (model, position) => {
+            console.log('[Monaco Completion] provideCompletionItems called for model language:', model.getLanguageId());
+
             // Check if this model belongs to our editor
             const editorInstance = monaco.editor.getEditors().find(e => e.getContainerDomNode()?.id === editorId);
             if (!editorInstance || editorInstance.getModel() !== model) {
                 // This completion request is not for our editor, skip it
-                return { suggestions: [] };
+                // Return null to let Monaco know this provider has no suggestions for this model
+                console.log('[Monaco Completion] Model mismatch, skipping');
+                return null;
             }
 
             const currentState = editorState.get(editorId);
@@ -304,6 +310,8 @@ export function registerCompletionProvider(editorId, config) {
                 endLineNumber: position.lineNumber,
                 endColumn: position.column
             });
+
+            console.log('[Monaco Completion] Text until position:', textUntilPosition);
 
             let fullQuery;
             let matchLength;
@@ -329,8 +337,11 @@ export function registerCompletionProvider(editorId, config) {
             }
 
             if (!triggerMatch) {
+                console.log('[Monaco Completion] No trigger match found');
                 return { suggestions: [] };
             }
+
+            console.log('[Monaco Completion] Trigger match:', triggerMatch);
 
             const triggerChar = triggerMatch[0].charAt(0);
             const afterTrigger = triggerMatch[1] || '';
@@ -339,6 +350,8 @@ export function registerCompletionProvider(editorId, config) {
             // For @ prefix: could be @agent/Name, @model/Name, or just @something
             fullQuery = triggerChar + afterTrigger;
             matchLength = triggerMatch[0].length;
+
+            console.log('[Monaco Completion] Query:', fullQuery, 'matchLength:', matchLength);
 
             // Calculate range to replace (from trigger/prefix to current position)
             const range = new monaco.Range(
@@ -365,28 +378,45 @@ export function registerCompletionProvider(editorId, config) {
             }
 
             if (!Array.isArray(currentItems)) {
+                console.log('[Monaco Completion] currentItems is not an array:', currentItems);
                 return { suggestions: [] };
             }
 
-            const suggestions = currentItems.map((item) => ({
-                label: {
-                    label: item.label,
-                    description: item.description || ''
-                },
-                // Use item.kind if provided, otherwise default to Text (0)
-                // Monaco CompletionItemKind values match our enum: Module=8, File=16, Function=2, Text=0
-                kind: typeof item.kind === 'number' ? item.kind : monaco.languages.CompletionItemKind.Text,
-                insertText: item.insertText || item.label,
-                range: range,
-                // Show category as detail (appears on the right side)
-                detail: item.category || item.detail || '',
-                // filterText tells Monaco what to match against the user's input
-                filterText: item.label,
-                // sortText: category first, then label for grouping
-                sortText: (item.category || 'zzz') + '_' + item.label.toLowerCase()
-            }));
+            console.log('[Monaco Completion] Building suggestions from', currentItems.length, 'items');
 
-            return { suggestions };
+            const suggestions = currentItems.map((item) => {
+                // filterText must match what the user typed (fullQuery includes the trigger char)
+                // For "@Sys" query, filterText should be "@Systemorph/" so it matches
+                // Use insertText as filterText since that's what matches the typed pattern
+                const filterText = item.insertText || item.label;
+
+                return {
+                    // Use simple string label for maximum compatibility
+                    label: item.label,
+                    // Use item.kind if provided, otherwise default to Text (0)
+                    kind: typeof item.kind === 'number' ? item.kind : monaco.languages.CompletionItemKind.Text,
+                    insertText: item.insertText || item.label,
+                    range: range,
+                    // Show description and category as detail
+                    detail: item.description || item.category || item.detail || '',
+                    // filterText must start with what user typed for Monaco to show it
+                    filterText: filterText,
+                    // sortText: category first, then label for grouping
+                    sortText: (item.category || 'zzz') + '_' + item.label.toLowerCase()
+                };
+            });
+
+            console.log('[Monaco Completion] Returning', suggestions.length, 'suggestions');
+            if (suggestions.length > 0) {
+                console.log('[Monaco Completion] First suggestion:', JSON.stringify(suggestions[0]));
+                console.log('[Monaco Completion] Range:', JSON.stringify({
+                    startLineNumber: range.startLineNumber,
+                    startColumn: range.startColumn,
+                    endLineNumber: range.endLineNumber,
+                    endColumn: range.endColumn
+                }));
+            }
+            return { suggestions, incomplete: false };
         }
     });
 }

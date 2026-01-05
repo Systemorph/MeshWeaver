@@ -12,6 +12,7 @@ public static class BlazorGraphExtensions
 {
     /// <summary>
     /// Adds the Graph Blazor views (MeshNodeEditorView, MeshNodeThumbnailView) to the configuration.
+    /// Also enables @ autocomplete for unified content references in markdown editors.
     /// </summary>
     public static MessageHubConfiguration AddGraphViews(this MessageHubConfiguration configuration)
     {
@@ -19,6 +20,7 @@ public static class BlazorGraphExtensions
             .WithTypes(typeof(MeshNodeEditorControl), typeof(MeshNodeThumbnailControl))
             .AddViews(registry => registry
                 .WithView<MeshNodeEditorControl, MeshNodeEditorView>()
-                .WithView<MeshNodeThumbnailControl, MeshNodeThumbnailView>());
+                .WithView<MeshNodeThumbnailControl, MeshNodeThumbnailView>())
+            .AddMeshNavigation();  // Enable @ autocomplete in markdown editors
     }
 }

@@ -7,7 +7,7 @@ namespace MeshWeaver.Markdown;
 public class LayoutAreaComponentInfo : ContainerBlock
 {
 
-    public LayoutAreaComponentInfo(string url, BlockParser blockParser) : base(blockParser)
+    public LayoutAreaComponentInfo(string url, BlockParser blockParser, bool isInline = true) : base(blockParser)
     {
         if (string.IsNullOrWhiteSpace(url))
             throw new ArgumentException("URL cannot be null or empty", nameof(url));
@@ -18,6 +18,7 @@ public class LayoutAreaComponentInfo : ContainerBlock
 
         Address = $"{parts[0]}/{parts[1]}";
         Area = parts[2];
+        IsInline = isInline;
 
         if (string.IsNullOrWhiteSpace(Address.ToString()))
             throw new ArgumentException($"Invalid address in URL '{url}'", nameof(url));
@@ -41,7 +42,7 @@ public class LayoutAreaComponentInfo : ContainerBlock
             Id = string.Join('/', parts.Skip(3));
     }
 
-    public LayoutAreaComponentInfo(string address, string? area, string? id, BlockParser blockParser) : base(blockParser)
+    public LayoutAreaComponentInfo(string address, string? area, string? id, BlockParser blockParser, bool isInline = true) : base(blockParser)
     {
         if (string.IsNullOrWhiteSpace(address))
             throw new ArgumentException("Address cannot be null or empty", nameof(address));
@@ -49,12 +50,18 @@ public class LayoutAreaComponentInfo : ContainerBlock
         Address = address;
         Area = area;
         Id = id;
+        IsInline = isInline;
     }
 
     public string? Area { get; }
 
     public object Address { get; }
     public object? Id { get; }
+
+    /// <summary>
+    /// When true (@@), render inline content. When false (@), render as hyperlink.
+    /// </summary>
+    public bool IsInline { get; }
 
     public LayoutAreaReference Reference =>
         new(Area) { Id = Id };

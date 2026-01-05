@@ -191,11 +191,15 @@
             return;
         }
 
-        // Skip if already registered with same configuration
-        if (completionProviderRegistered && !useAsync && currentItemCount == lastCompletionItemCount)
+        // Skip if already registered - don't re-register as it disrupts in-flight completions
+        if (completionProviderRegistered)
         {
-            Logger.LogDebug("Skipping completion provider registration - already registered with same items");
-            return;
+            // Only re-register for sync mode if item count changed
+            if (useAsync || currentItemCount == lastCompletionItemCount)
+            {
+                Logger.LogDebug("Skipping completion provider registration - already registered");
+                return;
+            }
         }
 
         var triggerCharacters = CompletionProvider?.TriggerCharacters ?? ["@"];
@@ -207,10 +211,11 @@
             {
                 triggerCharacters = triggerCharacters,
                 useAsync = true,
-                items = Array.Empty<object>()
+                items = Array.Empty<object>(),
+                language = Language
             };
-            Logger.LogDebug("Registering async completion provider with triggers: {Triggers}",
-                string.Join(",", triggerCharacters));
+            Logger.LogDebug("Registering async completion provider for language '{Language}' with triggers: {Triggers}",
+                Language, string.Join(",", triggerCharacters));
             await jsModule.InvokeVoidAsync("registerCompletionProvider", EditorId, config);
         }
         else if (CompletionProvider != null)
@@ -227,10 +232,11 @@
                     description = i.Description ?? "",
                     detail = i.Detail ?? "",
                     category = i.Category ?? ""
-                }).ToArray()
+                }).ToArray(),
+                language = Language
             };
-            Logger.LogDebug("Registering sync completion provider with {ItemCount} items, triggers: {Triggers}",
-                config.items.Length, string.Join(",", triggerCharacters));
+            Logger.LogDebug("Registering sync completion provider for language '{Language}' with {ItemCount} items, triggers: {Triggers}",
+                Language, config.items.Length, string.Join(",", triggerCharacters));
             await jsModule.InvokeVoidAsync("registerCompletionProvider", EditorId, config);
         }
 

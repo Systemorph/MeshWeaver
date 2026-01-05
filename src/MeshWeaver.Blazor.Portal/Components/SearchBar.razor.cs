@@ -1,6 +1,5 @@
 ﻿using MeshWeaver.Blazor.Monaco;
-using MeshWeaver.Mesh;
-using MeshWeaver.Mesh.Services;
+using MeshWeaver.Blazor.Services;
 using Microsoft.AspNetCore.Components;
 using Microsoft.FluentUI.AspNetCore.Components;
 
@@ -17,7 +16,7 @@ public partial class SearchBar : IAsyncDisposable
     public required IKeyCodeService KeyCodeService { get; set; }
 
     [Inject]
-    public IMeshQuery? MeshQuery { get; set; }
+    public BlazorAutocompleteService? AutocompleteService { get; set; }
 
     private MonacoEditorView? monacoEditor;
     private string? searchTerm;
@@ -33,96 +32,24 @@ public partial class SearchBar : IAsyncDisposable
         {
             monacoEditor?.FocusAsync();
         }
+
         return Task.CompletedTask;
     }
 
     private async Task<CompletionItem[]> GetCompletionsAsync(string query)
     {
-        if (MeshQuery == null || string.IsNullOrWhiteSpace(query))
+        if (AutocompleteService == null || string.IsNullOrWhiteSpace(query))
             return [];
 
         try
         {
-            // Handle @ reference mode
-            if (query.StartsWith("@"))
-            {
-                return await GetReferenceCompletionsAsync(query.Substring(1));
-            }
-
-            // Standard search mode
-            var request = new MeshQueryRequest
-            {
-                Query = $"*{query}* scope:descendants",
-                Limit = 10
-            };
-
-            var results = await MeshQuery.QueryAsync<MeshNode>(request).ToArrayAsync();
-            return results.Select(ToCompletionItem).ToArray();
+            return await AutocompleteService.GetCompletionsAsync(query);
         }
         catch
         {
             return [];
         }
     }
-
-    private async Task<CompletionItem[]> GetReferenceCompletionsAsync(string reference)
-    {
-        if (string.IsNullOrWhiteSpace(reference))
-        {
-            // Just "@" - show all nodes
-            var request = new MeshQueryRequest { Query = "scope:descendants", Limit = 10 };
-            var results = await MeshQuery!.QueryAsync<MeshNode>(request).ToArrayAsync();
-            return results.Select(ToCompletionItem).ToArray();
-        }
-
-        // Check for scope pattern (e.g., "data:MyType/Id1")
-        var colonIndex = reference.IndexOf(':');
-        if (colonIndex > 0)
-        {
-            var scope = reference.Substring(0, colonIndex);
-            var remainder = reference.Substring(colonIndex + 1);
-            var query = string.IsNullOrWhiteSpace(remainder)
-                ? $"nodeType:*{scope}* scope:descendants"
-                : $"nodeType:*{scope}* *{remainder}* scope:descendants";
-
-            var request = new MeshQueryRequest { Query = query, Limit = 10 };
-            var results = await MeshQuery!.QueryAsync<MeshNode>(request).ToArrayAsync();
-            return results.Select(ToCompletionItem).ToArray();
-        }
-
-        // Check for path with trailing slash for sub-completions
-        if (reference.EndsWith("/"))
-        {
-            var basePath = reference.TrimEnd('/');
-            var suggestions = await MeshQuery!.AutocompleteAsync(basePath, "", 10).ToArrayAsync();
-            return suggestions.Select(s => new CompletionItem
-            {
-                Label = s.Name,
-                InsertText = $"@{s.Path}/",
-                Description = s.NodeType ?? "",
-                Detail = s.Path,
-                Category = ""
-            }).ToArray();
-        }
-
-        // Standard node search with wildcard
-        var searchRequest = new MeshQueryRequest
-        {
-            Query = $"*{reference}* scope:descendants",
-            Limit = 10
-        };
-        var searchResults = await MeshQuery!.QueryAsync<MeshNode>(searchRequest).ToArrayAsync();
-        return searchResults.Select(ToCompletionItem).ToArray();
-    }
-
-    private static CompletionItem ToCompletionItem(MeshNode node) => new()
-    {
-        Label = node.Name ?? node.Id,
-        InsertText = node.Name ?? node.Id,
-        Description = TruncateDescription(node.Description),
-        Detail = GetNodeTypeDisplay(node.NodeType),
-        Category = node.Category ?? ""
-    };
 
     private async Task HandleSubmit()
     {
