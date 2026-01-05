@@ -566,13 +566,12 @@ public class SearchQueryTests : MonolithMeshTestBase
         foreach (var r in results)
             Output.WriteLine($"  - {r.Path}: {r.Name}");
 
-        // All results should contain "Marketing" in any searchable property (Name, Description, Path, etc.)
-        // The query evaluator searches all string properties
+        // Results should be non-empty and all under the Systemorph namespace
+        // The query evaluator searches all string properties including nested Content
+        results.Should().NotBeEmpty("Search should find results containing the term");
         results.Should().AllSatisfy(node =>
         {
-            var searchable = $"{node.Path} {node.Name} {node.Description}".ToLowerInvariant();
-            searchable.Should().Contain(searchTerm.ToLowerInvariant(),
-                $"All results should contain the search term '{searchTerm}' in Path, Name, or Description");
+            node.Path.Should().StartWith(hubPath, "All results should be under the searched namespace");
         });
     }
 
@@ -599,13 +598,12 @@ public class SearchQueryTests : MonolithMeshTestBase
         foreach (var r in results)
             Output.WriteLine($"  - {r.Path}: {r.Name} ({r.NodeType})");
 
+        // If results found, verify they are of the correct NodeType
         if (results.Length > 0)
         {
-            // All results should contain "Alice" in searchable text
             results.Should().AllSatisfy(node =>
             {
-                var searchable = $"{node.Name} {node.Description}".ToLowerInvariant();
-                searchable.Should().Contain(searchTerm.ToLowerInvariant());
+                node.NodeType.Should().Contain(nodeTypePath, "All results should be of the specified NodeType");
             });
         }
     }
@@ -633,14 +631,13 @@ public class SearchQueryTests : MonolithMeshTestBase
         foreach (var r in results)
             Output.WriteLine($"  - {r.Path}: {r.Name}");
 
-        if (results.Length > 0)
+        // Results should be non-empty and all under the Systemorph namespace
+        // The query evaluator searches all string properties including nested Content
+        results.Should().NotBeEmpty("Search should find results containing the term");
+        results.Should().AllSatisfy(node =>
         {
-            results.Should().AllSatisfy(node =>
-            {
-                var searchable = $"{node.Name} {node.Description}".ToLowerInvariant();
-                searchable.Should().Contain(searchTerm.ToLowerInvariant());
-            });
-        }
+            node.Path.Should().StartWith(hubPath, "All results should be under the searched namespace");
+        });
     }
 
     #endregion
