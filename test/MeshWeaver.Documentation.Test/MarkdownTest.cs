@@ -492,4 +492,175 @@ Console.WriteLine(""Hello World"");
     }
 
     #endregion
+
+    #region Double At (@@) Inline Syntax Tests
+
+    [Fact]
+    public void DoubleAt_SetsIsInlineTrue()
+    {
+        // @@ syntax should set IsInline = true
+        var markdown = "@@app/test/MyArea";
+        var extension = new LayoutAreaMarkdownExtension();
+        var document = ParseMarkdown(markdown, extension);
+
+        var layoutAreas = document.Descendants<LayoutAreaComponentInfo>().ToArray();
+        layoutAreas.Should().HaveCount(1);
+        layoutAreas[0].IsInline.Should().BeTrue();
+        layoutAreas[0].Area.Should().Be("MyArea");
+    }
+
+    [Fact]
+    public void SingleAt_SetsIsInlineFalse()
+    {
+        // @ syntax should set IsInline = false (hyperlink)
+        var markdown = "@app/test/MyArea";
+        var extension = new LayoutAreaMarkdownExtension();
+        var document = ParseMarkdown(markdown, extension);
+
+        var layoutAreas = document.Descendants<LayoutAreaComponentInfo>().ToArray();
+        layoutAreas.Should().HaveCount(1);
+        layoutAreas[0].IsInline.Should().BeFalse();
+        layoutAreas[0].Area.Should().Be("MyArea");
+    }
+
+    [Fact]
+    public void DoubleAt_WithDataReference()
+    {
+        var markdown = "@@app/test/data/Users";
+        var extension = new LayoutAreaMarkdownExtension();
+        var document = ParseMarkdown(markdown, extension);
+
+        var layoutAreas = document.Descendants<LayoutAreaComponentInfo>().ToArray();
+        layoutAreas.Should().HaveCount(1);
+        layoutAreas[0].IsInline.Should().BeTrue();
+        layoutAreas[0].Area.Should().Be(LayoutAreaMarkdownParser.DataAreaName);
+        layoutAreas[0].Id.Should().Be("Users");
+    }
+
+    [Fact]
+    public void DoubleAt_WithContentReference()
+    {
+        var markdown = "@@app/test/content/Docs/report.pdf";
+        var extension = new LayoutAreaMarkdownExtension();
+        var document = ParseMarkdown(markdown, extension);
+
+        var layoutAreas = document.Descendants<LayoutAreaComponentInfo>().ToArray();
+        layoutAreas.Should().HaveCount(1);
+        layoutAreas[0].IsInline.Should().BeTrue();
+        layoutAreas[0].Area.Should().Be(LayoutAreaMarkdownParser.ContentAreaName);
+        layoutAreas[0].Id.Should().Be("Docs/report.pdf");
+    }
+
+    [Fact]
+    public void DoubleAt_WithQuotedPath()
+    {
+        var markdown = "@@\"app/test/content/Docs/My Report.pdf\"";
+        var extension = new LayoutAreaMarkdownExtension();
+        var document = ParseMarkdown(markdown, extension);
+
+        var layoutAreas = document.Descendants<LayoutAreaComponentInfo>().ToArray();
+        layoutAreas.Should().HaveCount(1);
+        layoutAreas[0].IsInline.Should().BeTrue();
+        layoutAreas[0].Area.Should().Be(LayoutAreaMarkdownParser.ContentAreaName);
+        layoutAreas[0].Id.Should().Be("Docs/My Report.pdf");
+    }
+
+    [Fact]
+    public void DoubleAt_WithParenthesesSyntax()
+    {
+        var markdown = "@@(\"app/test/Dashboard\")";
+        var extension = new LayoutAreaMarkdownExtension();
+        var document = ParseMarkdown(markdown, extension);
+
+        var layoutAreas = document.Descendants<LayoutAreaComponentInfo>().ToArray();
+        layoutAreas.Should().HaveCount(1);
+        layoutAreas[0].IsInline.Should().BeTrue();
+        layoutAreas[0].Area.Should().Be("Dashboard");
+    }
+
+    [Fact]
+    public void RenderSingleAt_RendersAsHyperlink()
+    {
+        var markdown = "@app/test/Dashboard";
+        var extension = new LayoutAreaMarkdownExtension();
+        var html = RenderMarkdown(markdown, extension);
+
+        // Single @ should render as a hyperlink with ucr-link class
+        html.Should().Contain("class='ucr-link'");
+        html.Should().Contain("href=");
+        html.Should().Contain("data-address='app/test'");
+    }
+
+    [Fact]
+    public void RenderDoubleAt_RendersAsLayoutArea()
+    {
+        var markdown = "@@app/test/Dashboard";
+        var extension = new LayoutAreaMarkdownExtension();
+        var html = RenderMarkdown(markdown, extension);
+
+        // Double @ should render as inline layout area div
+        html.Should().Contain("class='layout-area'");
+        html.Should().Contain("data-address='app/test'");
+        html.Should().Contain("data-area='Dashboard'");
+    }
+
+    [Fact]
+    public void MixedSingleAndDoubleAt()
+    {
+        // Note: @ references work at block level (start of line), not inline within text
+        // Each reference must be on its own line for the block parser to handle it
+        var markdown = @"@app/test/Dashboard
+
+@@app/test/SalesByCategory
+
+@app/test/OrderSummary";
+        var extension = new LayoutAreaMarkdownExtension();
+        var document = ParseMarkdown(markdown, extension);
+
+        var layoutAreas = document.Descendants<LayoutAreaComponentInfo>().ToArray();
+        layoutAreas.Should().HaveCount(3);
+
+        // First should be hyperlink (IsInline = false, single @)
+        layoutAreas[0].IsInline.Should().BeFalse();
+        layoutAreas[0].Area.Should().Be("Dashboard");
+
+        // Second should be inline (IsInline = true, double @@)
+        layoutAreas[1].IsInline.Should().BeTrue();
+        layoutAreas[1].Area.Should().Be("SalesByCategory");
+
+        // Third should be hyperlink (IsInline = false, single @)
+        layoutAreas[2].IsInline.Should().BeFalse();
+        layoutAreas[2].Area.Should().Be("OrderSummary");
+    }
+
+    [Fact]
+    public void MixedSingleAndDoubleAt_RendersDifferentHtml()
+    {
+        var markdown = @"
+@app/test/Dashboard
+@@app/test/SalesByCategory
+";
+        var extension = new LayoutAreaMarkdownExtension();
+        var html = RenderMarkdown(markdown, extension);
+
+        // Should have one hyperlink and one layout area div
+        html.Should().Contain("class='ucr-link'");
+        html.Should().Contain("class='layout-area'");
+    }
+
+    [Fact]
+    public void BackwardCompatibility_LegacyAtSyntax()
+    {
+        // Existing @ syntax should work and render as hyperlink (IsInline = false by default)
+        var markdown = "@(\"app/test/MyArea\")";
+        var extension = new LayoutAreaMarkdownExtension();
+        var document = ParseMarkdown(markdown, extension);
+
+        var layoutAreas = document.Descendants<LayoutAreaComponentInfo>().ToArray();
+        layoutAreas.Should().HaveCount(1);
+        layoutAreas[0].IsInline.Should().BeFalse();
+        layoutAreas[0].Area.Should().Be("MyArea");
+    }
+
+    #endregion
 }

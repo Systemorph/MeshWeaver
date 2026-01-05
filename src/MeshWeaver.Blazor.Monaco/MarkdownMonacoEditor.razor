@@ -1,0 +1,189 @@
+@using MeshWeaver.Mesh.Services
+@inject IMeshQuery? MeshQuery
+
+<MonacoEditorView @ref="editorRef"
+                  Value="@Value"
+                  ValueChanged="@ValueChanged"
+                  OnSubmit="@OnSubmit"
+                  IsDisabled="@IsDisabled"
+                  Placeholder="@Placeholder"
+                  Language="markdown"
+                  Height="@Height"
+                  MaxHeight="@MaxHeight"
+                  ShowLineNumbers="@ShowLineNumbers"
+                  ShowBorder="@ShowBorder"
+                  CodeEditMode="@CodeEditMode"
+                  CompletionProvider="@DefaultCompletionProvider"
+                  AsyncCompletionCallback="@GetCompletionsAsync" />
+
+@code {
+    private MonacoEditorView? editorRef;
+
+    [Parameter]
+    public string? Value { get; set; }
+
+    [Parameter]
+    public EventCallback<string> ValueChanged { get; set; }
+
+    [Parameter]
+    public EventCallback OnSubmit { get; set; }
+
+    [Parameter]
+    public bool IsDisabled { get; set; }
+
+    [Parameter]
+    public string Placeholder { get; set; } = "Start typing markdown...";
+
+    [Parameter]
+    public string Height { get; set; } = "400px";
+
+    [Parameter]
+    public string MaxHeight { get; set; } = "600px";
+
+    [Parameter]
+    public bool ShowLineNumbers { get; set; } = true;
+
+    [Parameter]
+    public bool ShowBorder { get; set; } = true;
+
+    [Parameter]
+    public bool CodeEditMode { get; set; } = true;
+
+    /// <summary>
+    /// Optional custom completion callback. If not provided, uses default UCR autocomplete.
+    /// </summary>
+    [Parameter]
+    public Func<string, Task<CompletionItem[]>>? CustomCompletionCallback { get; set; }
+
+    private static readonly CompletionProviderConfig DefaultCompletionProvider = new()
+    {
+        TriggerCharacters = ["@"],
+        Items = []
+    };
+
+    private async Task<CompletionItem[]> GetCompletionsAsync(string query)
+    {
+        // Use custom callback if provided
+        if (CustomCompletionCallback != null)
+        {
+            return await CustomCompletionCallback(query);
+        }
+
+        // Default UCR autocomplete using IMeshQuery
+        if (MeshQuery == null || string.IsNullOrWhiteSpace(query))
+            return [];
+
+        try
+        {
+            if (query.StartsWith("@"))
+            {
+                var reference = query[1..];
+                return await GetReferenceCompletionsAsync(reference);
+            }
+
+            return await SearchNodesAsync(query);
+        }
+        catch
+        {
+            return [];
+        }
+    }
+
+    private async Task<CompletionItem[]> GetReferenceCompletionsAsync(string reference)
+    {
+        if (string.IsNullOrWhiteSpace(reference))
+        {
+            return await GetTopLevelNodesAsync();
+        }
+
+        if (reference.EndsWith("/"))
+        {
+            var basePath = reference.TrimEnd('/');
+            return await GetChildNodesAsync(basePath);
+        }
+
+        return await GetNodesMatchingPrefixAsync(reference);
+    }
+
+    private async Task<CompletionItem[]> GetTopLevelNodesAsync()
+    {
+        var suggestions = await MeshQuery!.AutocompleteAsync("", "", 20).ToArrayAsync();
+        return suggestions.Select(s => new CompletionItem
+        {
+            Label = $"{s.Path}/",
+            InsertText = $"@{s.Path}/",
+            Description = s.NodeType ?? s.Name,
+            Detail = s.Name,
+            Category = "Addresses"
+        }).ToArray();
+    }
+
+    private async Task<CompletionItem[]> GetChildNodesAsync(string basePath)
+    {
+        var suggestions = await MeshQuery!.AutocompleteAsync(basePath, "", 20).ToArrayAsync();
+        return suggestions.Select(s => new CompletionItem
+        {
+            Label = $"{s.Path}/",
+            InsertText = $"@{s.Path}/",
+            Description = s.NodeType ?? "",
+            Detail = s.Name,
+            Category = ""
+        }).ToArray();
+    }
+
+    private async Task<CompletionItem[]> GetNodesMatchingPrefixAsync(string prefix)
+    {
+        var suggestions = await MeshQuery!.AutocompleteAsync("", prefix, 20).ToArrayAsync();
+        return suggestions.Select(s => new CompletionItem
+        {
+            Label = $"{s.Path}/",
+            InsertText = $"@{s.Path}/",
+            Description = s.NodeType ?? s.Name,
+            Detail = s.Name,
+            Category = "Addresses"
+        }).ToArray();
+    }
+
+    private async Task<CompletionItem[]> SearchNodesAsync(string query)
+    {
+        var suggestions = await MeshQuery!.AutocompleteAsync("", query, 20).ToArrayAsync();
+        return suggestions.Select(s => new CompletionItem
+        {
+            Label = s.Path,
+            InsertText = s.Path,
+            Description = s.NodeType ?? "",
+            Detail = s.Name,
+            Category = ""
+        }).ToArray();
+    }
+
+    // Expose methods from the underlying editor
+    public async ValueTask<string> GetValueAsync()
+    {
+        return editorRef != null ? await editorRef.GetValueAsync() : string.Empty;
+    }
+
+    public async Task SetValueAsync(string value)
+    {
+        if (editorRef != null)
+        {
+            await editorRef.SetValueAsync(value);
+        }
+    }
+
+    public async Task ClearAsync()
+    {
+        if (editorRef != null)
+        {
+            await editorRef.ClearAsync();
+        }
+    }
+
+    public async Task FocusAsync()
+    {
+        if (editorRef != null)
+        {
+            await editorRef.FocusAsync();
+        }
+    }
+}

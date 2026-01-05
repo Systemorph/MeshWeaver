@@ -1,11 +1,11 @@
 namespace MeshWeaver.Layout;
 
 /// <summary>
-/// A control that wraps the Monaco editor for collaborative markdown editing
+/// A control that wraps the Monaco editor for markdown editing
 /// with comments and track changes support.
 /// </summary>
-public record CollaborativeMarkdownEditorControl()
-    : UiControl<CollaborativeMarkdownEditorControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion)
+public record MarkdownEditorControl()
+    : UiControl<MarkdownEditorControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion)
 {
     /// <summary>
     /// The markdown content to edit.
@@ -48,12 +48,12 @@ public record CollaborativeMarkdownEditorControl()
     /// </summary>
     public object? Placeholder { get; init; }
 
-    public CollaborativeMarkdownEditorControl WithValue(string value) => this with { Value = value };
-    public CollaborativeMarkdownEditorControl WithDocumentId(string documentId) => this with { DocumentId = documentId };
-    public CollaborativeMarkdownEditorControl WithReadonly(bool @readonly) => this with { Readonly = @readonly };
-    public CollaborativeMarkdownEditorControl WithHeight(string height) => this with { Height = height };
-    public CollaborativeMarkdownEditorControl WithTrackChanges(bool enabled) => this with { TrackChangesEnabled = enabled };
-    public CollaborativeMarkdownEditorControl WithCommentsPanel(bool show) => this with { ShowCommentsPanel = show };
-    public CollaborativeMarkdownEditorControl WithPreview(bool show) => this with { ShowPreview = show };
-    public CollaborativeMarkdownEditorControl WithPlaceholder(string placeholder) => this with { Placeholder = placeholder };
+    public MarkdownEditorControl WithValue(string value) => this with { Value = value };
+    public MarkdownEditorControl WithDocumentId(string documentId) => this with { DocumentId = documentId };
+    public MarkdownEditorControl WithReadonly(bool @readonly) => this with { Readonly = @readonly };
+    public MarkdownEditorControl WithHeight(string height) => this with { Height = height };
+    public MarkdownEditorControl WithTrackChanges(bool enabled) => this with { TrackChangesEnabled = enabled };
+    public MarkdownEditorControl WithCommentsPanel(bool show) => this with { ShowCommentsPanel = show };
+    public MarkdownEditorControl WithPreview(bool show) => this with { ShowPreview = show };
+    public MarkdownEditorControl WithPlaceholder(string placeholder) => this with { Placeholder = placeholder };
 }

@@ -1,4 +1,5 @@
 ﻿using MeshWeaver.Data.Completion;
+using MeshWeaver.Mesh.Completion;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -19,6 +20,13 @@ public static class GraphExtensions
             => configuration.WithServices(services =>
                 services.AddScoped<IAutocompleteProvider, MeshNodeAutocompleteProvider>());
 
+        /// <summary>
+        /// Adds the unified reference autocomplete provider to the hub.
+        /// This enables context-aware @ autocomplete for unified content references in markdown.
+        /// </summary>
+        public MessageHubConfiguration AddUnifiedReferenceAutocomplete()
+            => configuration.WithServices(services =>
+                services.AddScoped<IAutocompleteProvider, UnifiedReferenceAutocompleteProvider>());
 
         /// <summary>
         /// Adds both the mesh node autocomplete provider and the mesh catalog view.
@@ -26,6 +34,7 @@ public static class GraphExtensions
         /// </summary>
         public MessageHubConfiguration AddMeshNavigation()
             => configuration
-                .AddMeshNodeAutocomplete();
+                .AddMeshNodeAutocomplete()
+                .AddUnifiedReferenceAutocomplete();
     }
 }

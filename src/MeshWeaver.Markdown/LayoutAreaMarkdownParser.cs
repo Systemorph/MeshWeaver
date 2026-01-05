@@ -25,8 +25,17 @@ public class LayoutAreaMarkdownParser : BlockParser
         var line = processor.Line;
         Prune(ref line);
 
-        string? token;
+        // Check for double @@ (inline rendering) vs single @ (hyperlink)
+        bool isInline = false;
         var nextChar = line.PeekChar();
+        if (nextChar == '@')
+        {
+            isInline = true;
+            line.NextChar(); // consume second @
+            nextChar = line.PeekChar();
+        }
+
+        string? token;
 
         if (nextChar == '(')
         {
@@ -63,7 +72,7 @@ public class LayoutAreaMarkdownParser : BlockParser
         }
 
         // Try to parse as unified content reference (addressType/addressId/keyword/...)
-        var block = CreateBlockFromToken(token);
+        var block = CreateBlockFromToken(token, isInline);
         processor.NewBlocks.Push(block);
 
         return BlockState.ContinueDiscard;
@@ -197,14 +206,16 @@ public class LayoutAreaMarkdownParser : BlockParser
     /// Format: addressType/addressId[/keyword[/remainingPath]]
     /// If no keyword is specified, defaults to area.
     /// </summary>
-    private ContainerBlock CreateBlockFromToken(string token)
+    /// <param name="token">The parsed token/path</param>
+    /// <param name="isInline">True for @@ (inline rendering), false for @ (hyperlink)</param>
+    private ContainerBlock CreateBlockFromToken(string token, bool isInline)
     {
         // Parse address and extract keyword/path
         var parsed = ParsePath(token);
         if (parsed == null)
         {
             // Fall back to legacy format
-            return new LayoutAreaComponentInfo(token, this);
+            return new LayoutAreaComponentInfo(token, this, isInline);
         }
 
         var (addressType, addressId, keyword, remainingPath) = parsed.Value;
@@ -216,14 +227,16 @@ public class LayoutAreaMarkdownParser : BlockParser
                 address,
                 DataAreaName,
                 remainingPath,
-                this),
+                this,
+                isInline),
             "content" => new LayoutAreaComponentInfo(
                 address,
                 ContentAreaName,
                 remainingPath,
-                this),
-            "area" or "" => CreateAreaBlock(address, remainingPath),
-            _ => new LayoutAreaComponentInfo(token, this)
+                this,
+                isInline),
+            "area" or "" => CreateAreaBlock(address, remainingPath, isInline),
+            _ => new LayoutAreaComponentInfo(token, this, isInline)
         };
     }
 
@@ -233,10 +246,13 @@ public class LayoutAreaMarkdownParser : BlockParser
     /// The areaId includes all remaining path segments joined with '/'
     /// When no area is specified, null is passed to let the layout system determine the default.
     /// </summary>
-    private ContainerBlock CreateAreaBlock(string address, string? remainingPath)
+    /// <param name="address">The resolved address</param>
+    /// <param name="remainingPath">The remaining path after address</param>
+    /// <param name="isInline">True for @@ (inline rendering), false for @ (hyperlink)</param>
+    private ContainerBlock CreateAreaBlock(string address, string? remainingPath, bool isInline)
     {
         if (string.IsNullOrEmpty(remainingPath))
-            return new LayoutAreaComponentInfo(address, null, null, this);
+            return new LayoutAreaComponentInfo(address, null, null, this, isInline);
 
         // Check for ? separator (query params as area id)
         var queryIndex = remainingPath.IndexOf('?');
@@ -244,7 +260,7 @@ public class LayoutAreaMarkdownParser : BlockParser
         {
             var areaName = remainingPath[..queryIndex];
             var areaId = remainingPath[(queryIndex + 1)..];
-            return new LayoutAreaComponentInfo(address, areaName, areaId, this);
+            return new LayoutAreaComponentInfo(address, areaName, areaId, this, isInline);
         }
 
         // Check for / separator - areaId is everything after the first /
@@ -253,10 +269,10 @@ public class LayoutAreaMarkdownParser : BlockParser
         {
             var areaName = remainingPath[..slashIndex];
             var areaId = remainingPath[(slashIndex + 1)..]; // Keep all remaining segments
-            return new LayoutAreaComponentInfo(address, areaName, areaId, this);
+            return new LayoutAreaComponentInfo(address, areaName, areaId, this, isInline);
         }
 
-        return new LayoutAreaComponentInfo(address, remainingPath, null, this);
+        return new LayoutAreaComponentInfo(address, remainingPath, null, this, isInline);
     }
 
     /// <summary>
