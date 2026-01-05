@@ -114,8 +114,8 @@ public class HierarchicalBrowsingTests
     public async Task Query_SubStories_OnlyReturnsChildrenOfParent()
     {
         // Query stories under ClaimsProcessing only using path: in query string
-        // scope:descendants includes the base path itself, so we expect 4 items
-        var query = "path:Systemorph/Marketing/ClaimsProcessing nodeType:Systemorph/Marketing/Story scope:descendants";
+        // scope:subtree includes the base path itself plus all descendants
+        var query = "path:Systemorph/Marketing/ClaimsProcessing nodeType:Systemorph/Marketing/Story scope:subtree";
         var results = await _meshQuery.QueryAsync(MeshQueryRequest.FromQuery(query)).ToListAsync();
 
         // Should find ClaimsProcessing + 3 sub-stories (4 total)
@@ -135,7 +135,8 @@ public class HierarchicalBrowsingTests
     public async Task Query_ByPath_RestrictsResults()
     {
         // Use IMeshQuery with path: in query string (replaces old Namespace property)
-        var query = "path:Systemorph/Marketing/ClaimsProcessing nodeType:Systemorph/Marketing/Story scope:descendants";
+        // scope:subtree includes the base path itself plus all descendants
+        var query = "path:Systemorph/Marketing/ClaimsProcessing nodeType:Systemorph/Marketing/Story scope:subtree";
         var results = await _meshQuery.QueryAsync(MeshQueryRequest.FromQuery(query)).ToListAsync();
 
         // Should only return nodes under ClaimsProcessing path (ClaimsProcessing + 3 sub-stories = 4)
@@ -324,8 +325,9 @@ public class TypedQueryTests
         await _persistence.SavePartitionObjectsAsync("shop/inventory", null, products);
 
         // Act - query for TestProduct type only
+        // Use scope:subtree to include the base path where partition objects are stored
         var results = await _meshQuery.QueryAsync<TestProduct>(
-            "path:shop/inventory scope:descendants"
+            "path:shop/inventory scope:subtree"
         ).ToListAsync();
 
         // Assert - should only return TestProduct items
@@ -346,8 +348,9 @@ public class TypedQueryTests
         await _persistence.SavePartitionObjectsAsync("shop/data", null, products);
 
         // Act - query without type registry (uses CLR type name "TestProduct")
+        // Use scope:subtree to include the base path where partition objects are stored
         var results = await _meshQuery.QueryAsync<TestProduct>(
-            "path:shop/data scope:descendants"
+            "path:shop/data scope:subtree"
         ).ToListAsync();
 
         // Assert - should find TestProduct by CLR type name
@@ -366,8 +369,9 @@ public class TypedQueryTests
         await _persistence.SavePartitionObjectsAsync("catalog/products", null, products);
 
         // Act - get page 2 (skip 3, take 3)
+        // Use scope:subtree to include the base path where partition objects are stored
         var results = await _meshQuery.QueryAsync<TestProduct>(
-            "path:catalog/products scope:descendants",
+            "path:catalog/products scope:subtree",
             skip: 3,
             limit: 3
         ).ToListAsync();
@@ -391,8 +395,9 @@ public class TypedQueryTests
         await _persistence.SavePartitionObjectsAsync("shop/all", null, products);
 
         // Act - query for TestProduct with name filter
+        // Use scope:subtree to include the base path where partition objects are stored
         var results = await _meshQuery.QueryAsync<TestProduct>(
-            "path:shop/all name:*Laptop* scope:descendants"
+            "path:shop/all name:*Laptop* scope:subtree"
         ).ToListAsync();
 
         // Assert - should only return laptops (both gaming and business)
@@ -412,11 +417,12 @@ public class TypedQueryTests
         await _persistence.SavePartitionObjectsAsync("shop/orders", null, orders);
 
         // Act - query for TestProduct (none exist)
+        // Use scope:subtree to include the base path where partition objects are stored
         var results = await _meshQuery.QueryAsync<TestProduct>(
-            "path:shop/orders scope:descendants"
+            "path:shop/orders scope:subtree"
         ).ToListAsync();
 
-        // Assert
+        // Assert - no TestProduct objects exist, only TestOrder
         results.Should().BeEmpty();
     }
 
