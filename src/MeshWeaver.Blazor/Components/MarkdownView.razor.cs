@@ -28,7 +28,7 @@ public partial class MarkdownView
     /// <summary>
     /// Record to hold UCR hyperlink reference information.
     /// </summary>
-    private record UcrReference(string Address, string Area, string AreaId, string Href, string DisplayText);
+    private record UcrReference(string RawPath, string Href, string DisplayText);
 
     protected override void BindData()
     {
@@ -93,11 +93,21 @@ public partial class MarkdownView
                     RenderUcrLink(builder, node);
                     break;
                 case { Name: "div" } when node.GetAttributeValue("class", "").Contains(LayoutAreaMarkdownRenderer.LayoutArea):
-                    // UCR inline content (@@ syntax) - render layout area
-                    var address = node.GetAttributeValue($"data-{LayoutAreaMarkdownRenderer.Address}", null);
-                    var area = node.GetAttributeValue($"data-{LayoutAreaMarkdownRenderer.Area}", null);
-                    var areaId = node.GetAttributeValue($"data-{LayoutAreaMarkdownRenderer.AreaId}", null);
-                    RenderLayoutArea(builder, address, area, areaId);
+                    // Layout area - check if it's a raw path (UCR) or pre-resolved address
+                    var rawPath = node.GetAttributeValue($"data-{LayoutAreaMarkdownRenderer.RawPath}", null);
+                    if (!string.IsNullOrEmpty(rawPath))
+                    {
+                        // UCR inline content (@@ syntax) - render using path resolution
+                        RenderLayoutAreaFromPath(builder, rawPath);
+                    }
+                    else
+                    {
+                        // Pre-resolved address (executable code blocks)
+                        var address = node.GetAttributeValue($"data-{LayoutAreaMarkdownRenderer.Address}", null);
+                        var area = node.GetAttributeValue($"data-{LayoutAreaMarkdownRenderer.Area}", null);
+                        var areaId = node.GetAttributeValue($"data-{LayoutAreaMarkdownRenderer.AreaId}", null);
+                        RenderLayoutArea(builder, address, area, areaId);
+                    }
                     break;
                 case { Name: "div" } when node.GetAttributeValue("class", "").Contains("mermaid"):
                     builder.OpenComponent<Mermaid>(1);
@@ -130,26 +140,24 @@ public partial class MarkdownView
 
     private void RenderUcrLink(RenderTreeBuilder builder, HtmlNode node)
     {
+        var rawPath = node.GetAttributeValue($"data-{LayoutAreaMarkdownRenderer.RawPath}", "");
         var address = node.GetAttributeValue($"data-{LayoutAreaMarkdownRenderer.Address}", "");
-        var area = node.GetAttributeValue($"data-{LayoutAreaMarkdownRenderer.Area}", "");
-        var areaId = node.GetAttributeValue($"data-{LayoutAreaMarkdownRenderer.AreaId}", "");
         var href = node.GetAttributeValue("href", "#");
-        var title = node.GetAttributeValue("title", "");
         var displayText = node.InnerText;
 
-        // Collect reference for the References section
-        References.Add(new UcrReference(address, area, areaId, href, displayText));
+        // Use the raw path or address for reference tracking
+        var pathForReference = !string.IsNullOrEmpty(rawPath) ? rawPath : address;
 
-        // Render as styled hyperlink
-        builder.OpenElement(1, "a");
-        builder.AddAttribute(2, "href", href);
-        builder.AddAttribute(3, "class", "ucr-link");
-        builder.AddAttribute(4, "title", title);
-        builder.AddAttribute(5, "data-address", address);
-        builder.AddAttribute(6, "data-area", area);
-        builder.AddAttribute(7, "data-area-id", areaId);
-        builder.AddContent(8, displayText);
-        builder.CloseElement();
+        // Collect reference for the References section
+        if (!string.IsNullOrEmpty(pathForReference))
+            References.Add(new UcrReference(pathForReference, href, displayText));
+
+        // Render as UcrLink component which resolves name/description for tooltip
+        builder.OpenComponent<UcrLink>(1);
+        builder.AddAttribute(2, nameof(UcrLink.Path), pathForReference);
+        builder.AddAttribute(3, nameof(UcrLink.Href), href);
+        builder.AddAttribute(4, nameof(UcrLink.DisplayText), displayText);
+        builder.CloseComponent();
     }
 
     private void RenderReferencesSection(RenderTreeBuilder builder)
@@ -161,33 +169,42 @@ public partial class MarkdownView
         builder.AddContent(4, "References");
         builder.CloseElement();
 
-        builder.OpenElement(5, "ul");
-        foreach (var reference in References.DistinctBy(r => r.Href))
+        builder.OpenElement(5, "div");
+        builder.AddAttribute(6, "class", "ucr-references-grid");
+
+        foreach (var reference in References.DistinctBy(r => r.RawPath))
         {
-            builder.OpenElement(6, "li");
-            builder.OpenElement(7, "a");
-            builder.AddAttribute(8, "href", reference.Href);
-            builder.AddAttribute(9, "class", "ucr-link");
-            builder.AddAttribute(10, "title", $"{reference.Area}: {reference.Address}");
-            builder.AddContent(11, reference.DisplayText);
-            builder.CloseElement();
-            if (!string.IsNullOrEmpty(reference.Address))
-            {
-                builder.OpenElement(12, "span");
-                builder.AddAttribute(13, "class", "ucr-reference-path");
-                builder.AddContent(14, $" ({reference.Address})");
-                builder.CloseElement();
-            }
-            builder.CloseElement();
+            builder.OpenComponent<UcrReferenceCard>(10);
+            builder.AddAttribute(11, nameof(UcrReferenceCard.Path), reference.RawPath);
+            builder.SetKey(reference.RawPath); // Use path as key for proper diffing
+            builder.CloseComponent();
         }
-        builder.CloseElement();
+
+        builder.CloseElement(); // div.ucr-references-grid
+        builder.CloseElement(); // section.ucr-references
+    }
+
+
+    private void RenderLayoutAreaFromPath(RenderTreeBuilder builder, string? rawPath)
+    {
+        if (string.IsNullOrEmpty(rawPath))
+            return;
+
+        builder.OpenElement(1, "div");
+        builder.AddAttribute(2, "class", "layout-area");
+
+        builder.OpenComponent<PathBasedLayoutArea>(3);
+        builder.AddAttribute(4, nameof(PathBasedLayoutArea.Path), rawPath);
+        builder.CloseComponent();
 
         builder.CloseElement();
     }
 
-
-    private void RenderLayoutArea(RenderTreeBuilder builder, string address, string area, string areaId)
+    private void RenderLayoutArea(RenderTreeBuilder builder, string? address, string? area, string? areaId)
     {
+        if (string.IsNullOrEmpty(address))
+            return;
+
         builder.OpenElement(1, "div");
         builder.AddAttribute(2, "class", "layout-area");
 
@@ -204,38 +221,6 @@ public partial class MarkdownView
         {
             ShowProgress = true,
             ProgressMessage = progressMessage
-        });
-        builder.CloseComponent();
-
-        builder.CloseElement();
-    }
-
-    private void RenderDataContent(RenderTreeBuilder builder, string address, string path)
-    {
-        builder.OpenElement(1, "div");
-        builder.AddAttribute(2, "class", "data-content");
-
-        builder.OpenComponent<LayoutAreaView>(3);
-        builder.AddAttribute(4, nameof(LayoutAreaView.ViewModel), new LayoutAreaControl((Address)address, new LayoutAreaReference("Data") { Id = path })
-        {
-            ShowProgress = true,
-            ProgressMessage = "Loading data..."
-        });
-        builder.CloseComponent();
-
-        builder.CloseElement();
-    }
-
-    private void RenderFileContent(RenderTreeBuilder builder, string address, string path)
-    {
-        builder.OpenElement(1, "div");
-        builder.AddAttribute(2, "class", "file-content");
-
-        builder.OpenComponent<LayoutAreaView>(3);
-        builder.AddAttribute(4, nameof(LayoutAreaView.ViewModel), new LayoutAreaControl((Address)address, new LayoutAreaReference("Content") { Id = path })
-        {
-            ShowProgress = true,
-            ProgressMessage = "Loading content..."
         });
         builder.CloseComponent();
 

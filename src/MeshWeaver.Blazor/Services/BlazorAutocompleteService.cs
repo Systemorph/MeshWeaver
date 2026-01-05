@@ -78,7 +78,25 @@ public class BlazorAutocompleteService(IMeshQuery meshQuery)
 
     private async Task<CompletionItem[]> GetNodesMatchingPrefixAsync(string prefix)
     {
-        var suggestions = await meshQuery.AutocompleteAsync("", prefix, 20).ToArrayAsync();
+        // Split prefix into path and name parts
+        // E.g., "Systemorph/Mark" -> basePath="Systemorph", namePrefix="Mark"
+        // E.g., "System" -> basePath="", namePrefix="System"
+        var lastSlash = prefix.LastIndexOf('/');
+        string basePath;
+        string namePrefix;
+
+        if (lastSlash >= 0)
+        {
+            basePath = prefix[..lastSlash];
+            namePrefix = prefix[(lastSlash + 1)..];
+        }
+        else
+        {
+            basePath = "";
+            namePrefix = prefix;
+        }
+
+        var suggestions = await meshQuery.AutocompleteAsync(basePath, namePrefix, 20).ToArrayAsync();
         return suggestions.Select(s => new CompletionItem
         {
             Label = $"{s.Path}/",

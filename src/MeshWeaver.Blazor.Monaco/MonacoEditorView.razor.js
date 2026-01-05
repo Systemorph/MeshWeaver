@@ -282,22 +282,16 @@ export function registerCompletionProvider(editorId, config) {
         }
     }, 50);
 
-    console.log('[Monaco Completion] Registering provider for language:', language, 'triggers:', triggerCharacters, 'async:', useAsync);
-
     // Register new completion provider for the specified language
     // Note: Monaco registers providers globally per language, so we need to check
     // if this request is for our specific editor instance
     state.completionDisposable = monaco.languages.registerCompletionItemProvider(language, {
         triggerCharacters: triggerCharacters,
         provideCompletionItems: async (model, position) => {
-            console.log('[Monaco Completion] provideCompletionItems called for model language:', model.getLanguageId());
-
             // Check if this model belongs to our editor
             const editorInstance = monaco.editor.getEditors().find(e => e.getContainerDomNode()?.id === editorId);
             if (!editorInstance || editorInstance.getModel() !== model) {
                 // This completion request is not for our editor, skip it
-                // Return null to let Monaco know this provider has no suggestions for this model
-                console.log('[Monaco Completion] Model mismatch, skipping');
                 return null;
             }
 
@@ -310,8 +304,6 @@ export function registerCompletionProvider(editorId, config) {
                 endLineNumber: position.lineNumber,
                 endColumn: position.column
             });
-
-            console.log('[Monaco Completion] Text until position:', textUntilPosition);
 
             let fullQuery;
             let matchLength;
@@ -332,26 +324,19 @@ export function registerCompletionProvider(editorId, config) {
                     const fullMatch = triggerMatch[0];
                     const slashIndex = fullMatch.indexOf('/');
                     triggerMatch[0] = fullMatch.substring(slashIndex);
-                    // triggerMatch[1] stays the same (the capture group)
                 }
             }
 
             if (!triggerMatch) {
-                console.log('[Monaco Completion] No trigger match found');
                 return { suggestions: [] };
             }
-
-            console.log('[Monaco Completion] Trigger match:', triggerMatch);
 
             const triggerChar = triggerMatch[0].charAt(0);
             const afterTrigger = triggerMatch[1] || '';
 
             // Include trigger char in query for server to determine context
-            // For @ prefix: could be @agent/Name, @model/Name, or just @something
             fullQuery = triggerChar + afterTrigger;
             matchLength = triggerMatch[0].length;
-
-            console.log('[Monaco Completion] Query:', fullQuery, 'matchLength:', matchLength);
 
             // Calculate range to replace (from trigger/prefix to current position)
             const range = new monaco.Range(
@@ -378,44 +363,25 @@ export function registerCompletionProvider(editorId, config) {
             }
 
             if (!Array.isArray(currentItems)) {
-                console.log('[Monaco Completion] currentItems is not an array:', currentItems);
                 return { suggestions: [] };
             }
 
-            console.log('[Monaco Completion] Building suggestions from', currentItems.length, 'items');
-
             const suggestions = currentItems.map((item) => {
                 // filterText must match what the user typed (fullQuery includes the trigger char)
-                // For "@Sys" query, filterText should be "@Systemorph/" so it matches
                 // Use insertText as filterText since that's what matches the typed pattern
                 const filterText = item.insertText || item.label;
 
                 return {
-                    // Use simple string label for maximum compatibility
                     label: item.label,
-                    // Use item.kind if provided, otherwise default to Text (0)
                     kind: typeof item.kind === 'number' ? item.kind : monaco.languages.CompletionItemKind.Text,
                     insertText: item.insertText || item.label,
                     range: range,
-                    // Show description and category as detail
                     detail: item.description || item.category || item.detail || '',
-                    // filterText must start with what user typed for Monaco to show it
                     filterText: filterText,
-                    // sortText: category first, then label for grouping
                     sortText: (item.category || 'zzz') + '_' + item.label.toLowerCase()
                 };
             });
 
-            console.log('[Monaco Completion] Returning', suggestions.length, 'suggestions');
-            if (suggestions.length > 0) {
-                console.log('[Monaco Completion] First suggestion:', JSON.stringify(suggestions[0]));
-                console.log('[Monaco Completion] Range:', JSON.stringify({
-                    startLineNumber: range.startLineNumber,
-                    startColumn: range.startColumn,
-                    endLineNumber: range.endLineNumber,
-                    endColumn: range.endColumn
-                }));
-            }
             return { suggestions, incomplete: false };
         }
     });

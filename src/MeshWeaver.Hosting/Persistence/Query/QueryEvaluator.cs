@@ -3,6 +3,7 @@ using System.Reflection;
 using System.Text;
 using System.Text.Json;
 using MeshWeaver.AI.Completion;
+using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Query;
 
 namespace MeshWeaver.Hosting.Persistence.Query;
@@ -320,6 +321,13 @@ public class QueryEvaluator
     private string ExtractSearchableText(object obj)
     {
         var sb = new StringBuilder();
+
+        // For MeshNode, explicitly include Path (computed property) for path-based search
+        if (obj is MeshNode meshNode)
+        {
+            sb.Append(meshNode.Path).Append(' ');
+        }
+
         ExtractStrings(obj, sb, maxDepth: 3);
         return sb.ToString();
     }

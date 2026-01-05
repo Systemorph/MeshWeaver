@@ -1,4 +1,6 @@
 ﻿using System.Reactive.Linq;
+using System.Reflection;
+using System.Text.Json;
 using MeshWeaver.Application.Styles;
 using MeshWeaver.ContentCollections;
 using MeshWeaver.Data;
@@ -38,6 +40,12 @@ public static class MeshNodeView
     public const string CatalogArea = "Catalog";
     public const string CalendarArea = "Calendar";
 
+    // UCR (Unified Content Reference) special areas
+    public const string ContentArea = "$Content";
+    public const string DataArea = "$Data";
+    public const string SchemaArea = "$Schema";
+    public const string ModelArea = "$Model";
+
     /// <summary>
     /// Adds the mesh node views (Details, Thumbnail, Metadata, Settings, Catalog, Calendar) to the hub's layout.
     /// Requires AddMeshDataSource() to be called first to enable GetStream&lt;MeshNode&gt;() in views.
@@ -53,7 +61,12 @@ public static class MeshNodeView
                 .WithView(MetadataArea, Metadata)
                 .WithView(SettingsArea, Settings)
                 .WithView(CatalogArea, Catalog)
-                .WithView(CalendarArea, Calendar));
+                .WithView(CalendarArea, Calendar)
+                // UCR special areas
+                .WithView(ContentArea, Content)
+                .WithView(DataArea, Data)
+                .WithView(SchemaArea, Schema)
+                .WithView(ModelArea, DataModelLayoutArea.DataModel));
 
     /// <summary>
     /// Renders the Details area showing the node's main content with action menu.
@@ -682,6 +695,524 @@ public static class MeshNodeView
         }
         return "";
     }
+
+    #region UCR Special Areas
+
+    /// <summary>
+    /// Renders content from the node's content collection.
+    /// For images: renders inline. For markdown: renders the content.
+    /// For other files: shows a download link.
+    /// For self-reference (no path): shows the node's icon/logo.
+    /// </summary>
+    public static IObservable<UiControl?> Content(LayoutAreaHost host, RenderingContext context)
+    {
+        var contentPath = host.Reference.Id?.ToString();
+        var hubPath = host.Hub.Address.ToString();
+
+        if (string.IsNullOrEmpty(contentPath))
+        {
+            // Self-reference: show the node's icon/logo
+            return host.StreamView<MeshNode>(
+                (nodes, h) =>
+                {
+                    var node = nodes?.FirstOrDefault(n => n.Path == hubPath);
+                    if (node == null)
+                        return Controls.Markdown($"*Node not found: {hubPath}*");
+
+                    return RenderNodeIcon(node, hubPath);
+                },
+                hubPath);
+        }
+
+        // Determine content type from extension
+        var extension = Path.GetExtension(contentPath)?.ToLowerInvariant() ?? "";
+
+        var control = extension switch
+        {
+            ".png" or ".jpg" or ".jpeg" or ".gif" or ".webp" or ".svg" =>
+                RenderImage(host, contentPath, extension),
+            ".md" or ".markdown" =>
+                RenderMarkdownContent(host, contentPath),
+            ".pdf" =>
+                RenderPdf(host, contentPath),
+            ".json" =>
+                RenderJsonContent(host, contentPath),
+            _ => RenderDownloadLink(host, contentPath, extension)
+        };
+
+        return Observable.Return<UiControl?>(control);
+    }
+
+    /// <summary>
+    /// Renders the node's icon/logo for content self-reference.
+    /// Priority: content.avatar > content.logo > node.Icon
+    /// </summary>
+    private static UiControl RenderNodeIcon(MeshNode node, string hubPath)
+    {
+        var imageUrl = GetNodeImageUrl(node);
+
+        if (string.IsNullOrEmpty(imageUrl))
+        {
+            // No image - show a placeholder or the node type icon
+            var iconName = !string.IsNullOrEmpty(node.Icon) ? node.Icon : "Document";
+            return Controls.Html($@"
+                <div style=""display: flex; align-items: center; gap: 8px;"">
+                    <fluent-icon name=""{iconName}"" size=""24""></fluent-icon>
+                    <span>{node.Name ?? node.Id}</span>
+                </div>");
+        }
+
+        // Check if it's a data URI (inline SVG or base64 image)
+        if (imageUrl.StartsWith("data:"))
+        {
+            return Controls.Html($@"<img src=""{imageUrl}"" alt=""{node.Name ?? node.Id}"" style=""max-width: 100%; max-height: 200px; height: auto;"" />");
+        }
+
+        // External URL
+        return Controls.Html($@"<img src=""{imageUrl}"" alt=""{node.Name ?? node.Id}"" style=""max-width: 100%; max-height: 200px; height: auto;"" />");
+    }
+
+    /// <summary>
+    /// Gets the image URL for a node.
+    /// Priority: content.avatar > content.logo > node.Icon (if URL/data URI)
+    /// </summary>
+    private static string? GetNodeImageUrl(MeshNode node)
+    {
+        // Check content properties (avatar, logo)
+        if (node.Content != null)
+        {
+            if (node.Content is System.Text.Json.JsonElement jsonElement)
+            {
+                // Try avatar
+                if (jsonElement.TryGetProperty("avatar", out var avatarProp) && avatarProp.ValueKind == System.Text.Json.JsonValueKind.String)
+                {
+                    var avatar = avatarProp.GetString();
+                    if (!string.IsNullOrEmpty(avatar))
+                        return avatar;
+                }
+                if (jsonElement.TryGetProperty("Avatar", out var avatarPascalProp) && avatarPascalProp.ValueKind == System.Text.Json.JsonValueKind.String)
+                {
+                    var avatar = avatarPascalProp.GetString();
+                    if (!string.IsNullOrEmpty(avatar))
+                        return avatar;
+                }
+                // Try logo
+                if (jsonElement.TryGetProperty("logo", out var logoProp) && logoProp.ValueKind == System.Text.Json.JsonValueKind.String)
+                {
+                    var logo = logoProp.GetString();
+                    if (!string.IsNullOrEmpty(logo))
+                        return logo;
+                }
+                if (jsonElement.TryGetProperty("Logo", out var logoPascalProp) && logoPascalProp.ValueKind == System.Text.Json.JsonValueKind.String)
+                {
+                    var logo = logoPascalProp.GetString();
+                    if (!string.IsNullOrEmpty(logo))
+                        return logo;
+                }
+            }
+            else if (node.Content is IDictionary<string, object> dict)
+            {
+                if (dict.TryGetValue("avatar", out var avatar) || dict.TryGetValue("Avatar", out avatar))
+                {
+                    var avatarStr = avatar?.ToString();
+                    if (!string.IsNullOrEmpty(avatarStr))
+                        return avatarStr;
+                }
+                if (dict.TryGetValue("logo", out var logo) || dict.TryGetValue("Logo", out logo))
+                {
+                    var logoStr = logo?.ToString();
+                    if (!string.IsNullOrEmpty(logoStr))
+                        return logoStr;
+                }
+            }
+            else
+            {
+                // Reflection for typed objects
+                var avatarProperty = node.Content.GetType().GetProperty("Avatar");
+                if (avatarProperty != null)
+                {
+                    var avatarValue = avatarProperty.GetValue(node.Content) as string;
+                    if (!string.IsNullOrEmpty(avatarValue))
+                        return avatarValue;
+                }
+                var logoProperty = node.Content.GetType().GetProperty("Logo");
+                if (logoProperty != null)
+                {
+                    var logoValue = logoProperty.GetValue(node.Content) as string;
+                    if (!string.IsNullOrEmpty(logoValue))
+                        return logoValue;
+                }
+            }
+        }
+
+        // Fall back to node.Icon if it's a URL or data URI
+        if (!string.IsNullOrEmpty(node.Icon) && (node.Icon.StartsWith("data:") || node.Icon.StartsWith("http")))
+            return node.Icon;
+
+        return null;
+    }
+
+    private static UiControl RenderImage(LayoutAreaHost host, string contentPath, string extension)
+    {
+        var contentUrl = $"/api/content/{host.Hub.Address}/{contentPath}";
+        var mimeType = extension switch
+        {
+            ".svg" => "image/svg+xml",
+            ".png" => "image/png",
+            ".jpg" or ".jpeg" => "image/jpeg",
+            ".gif" => "image/gif",
+            ".webp" => "image/webp",
+            _ => "image/*"
+        };
+
+        return Controls.Html($"<img src=\"{contentUrl}\" alt=\"{Path.GetFileName(contentPath)}\" style=\"max-width: 100%; height: auto;\" />");
+    }
+
+    private static UiControl RenderMarkdownContent(LayoutAreaHost host, string contentPath)
+    {
+        // For markdown files, show text indicating content is inserted and provide navigation link
+        var address = host.Hub.Address.ToString();
+        var fileName = Path.GetFileName(contentPath);
+
+        // Create a message with link to navigate to the content
+        var markdown = $"*This is text inserted from @{address}/content:{contentPath}*\n\n" +
+                       $"[Navigate to {fileName}](/{address}/$Content/{contentPath})";
+
+        return Controls.Markdown(markdown);
+    }
+
+    private static UiControl RenderPdf(LayoutAreaHost host, string contentPath)
+    {
+        var contentUrl = $"/api/content/{host.Hub.Address}/{contentPath}";
+        return Controls.Html($@"
+            <div style=""width: 100%; min-height: 500px;"">
+                <iframe src=""{contentUrl}"" style=""width: 100%; height: 600px; border: 1px solid #ccc; border-radius: 4px;"" title=""{Path.GetFileName(contentPath)}""></iframe>
+                <div style=""margin-top: 8px;"">
+                    <a href=""{contentUrl}"" download=""{Path.GetFileName(contentPath)}"" style=""color: #0078d4;"">Download PDF</a>
+                </div>
+            </div>");
+    }
+
+    private static UiControl RenderJsonContent(LayoutAreaHost host, string contentPath)
+    {
+        var contentUrl = $"/api/content/{host.Hub.Address}/{contentPath}";
+        return Controls.Markdown($"```json\n// Loading {contentPath}...\n```");
+    }
+
+    private static UiControl RenderDownloadLink(LayoutAreaHost host, string contentPath, string extension)
+    {
+        var contentUrl = $"/api/content/{host.Hub.Address}/{contentPath}";
+        var fileName = Path.GetFileName(contentPath);
+        return Controls.Html($@"
+            <div style=""padding: 16px; background: #f5f5f5; border-radius: 8px; display: inline-flex; align-items: center; gap: 12px;"">
+                <span style=""font-size: 24px;"">📄</span>
+                <div>
+                    <div style=""font-weight: 500;"">{fileName}</div>
+                    <a href=""{contentUrl}"" download=""{fileName}"" style=""color: #0078d4; font-size: 14px;"">Download</a>
+                </div>
+            </div>");
+    }
+
+    /// <summary>
+    /// Renders data entities from the node's data context.
+    /// If Id is specified, renders that specific entity/collection/type.
+    /// If no Id (self-reference), shows the current MeshNode data.
+    /// </summary>
+    public static IObservable<UiControl?> Data(LayoutAreaHost host, RenderingContext context)
+    {
+        var dataPath = host.Reference.Id?.ToString();
+        var hubPath = host.Hub.Address.ToString();
+
+        if (string.IsNullOrEmpty(dataPath))
+        {
+            // Self-reference: show the current MeshNode data as JSON
+            return host.StreamView<MeshNode>(
+                (nodes, h) =>
+                {
+                    var node = nodes?.FirstOrDefault(n => n.Path == hubPath);
+                    if (node == null)
+                        return Controls.Markdown($"*Node not found: {hubPath}*");
+
+                    return RenderMeshNodeData(node, host.Hub.JsonSerializerOptions);
+                },
+                hubPath);
+        }
+
+        // Check if dataPath is a collection name or a type name
+        if (host.Workspace.DataContext.TypeSources.TryGetValue(dataPath, out var typeSource))
+        {
+            // It's a collection name - show catalog for this collection
+            return Observable.Return<UiControl?>(Controls.MeshSearch
+                .WithHiddenQuery($"namespace:{host.Hub.Address} type:{dataPath}")
+                .WithPlaceholder($"Search {dataPath}...")
+                .WithRenderMode(MeshSearchRenderMode.Hierarchical));
+        }
+
+        // Render specific collection or entity
+        // The dataPath could be "CollectionName/entityId"
+        var parts = dataPath.Split('/', 2);
+        var collectionName = parts[0];
+        var entityId = parts.Length > 1 ? parts[1] : null;
+
+        if (!host.Workspace.DataContext.TypeSources.TryGetValue(collectionName, out typeSource))
+        {
+            // Not a known collection - might be a type name, search for it
+            return Observable.Return<UiControl?>(Controls.MeshSearch
+                .WithHiddenQuery($"namespace:{host.Hub.Address} {dataPath}")
+                .WithPlaceholder($"Search {dataPath}...")
+                .WithRenderMode(MeshSearchRenderMode.Hierarchical));
+        }
+
+        if (string.IsNullOrEmpty(entityId))
+        {
+            // Show catalog for this collection
+            return Observable.Return<UiControl?>(Controls.MeshSearch
+                .WithHiddenQuery($"namespace:{host.Hub.Address} type:{collectionName}")
+                .WithPlaceholder($"Search {collectionName}...")
+                .WithRenderMode(MeshSearchRenderMode.Hierarchical));
+        }
+
+        // Show specific entity - delegate to standard entity view
+        return Observable.Return<UiControl?>(Controls.Markdown($"*Loading entity {entityId} from {collectionName}...*"));
+    }
+
+    private static UiControl RenderMeshNodeData(MeshNode node, JsonSerializerOptions jsonOptions)
+    {
+        // Serialize the MeshNode as JSON
+        var json = JsonSerializer.Serialize(node, new JsonSerializerOptions(jsonOptions)
+        {
+            WriteIndented = true
+        });
+
+        return new MarkdownControl($"```json\n{json}\n```");
+    }
+
+    /// <summary>
+    /// Renders JSON schema for a type.
+    /// If Id is specified, shows schema for that type name.
+    /// If no Id (self-reference), shows schema for MeshNode and content type.
+    /// </summary>
+    public static IObservable<UiControl?> Schema(LayoutAreaHost host, RenderingContext context)
+    {
+        var typeName = host.Reference.Id?.ToString();
+        var hubPath = host.Hub.Address.ToString();
+
+        if (string.IsNullOrEmpty(typeName))
+        {
+            // Self-reference: show MeshNode schema and content type schema
+            return host.StreamView<MeshNode>(
+                (nodes, h) =>
+                {
+                    var node = nodes?.FirstOrDefault(n => n.Path == hubPath);
+                    return RenderNodeSchema(node, hubPath);
+                },
+                hubPath);
+        }
+
+        // Try to get the type from the registry
+        var typeRegistry = host.Hub.ServiceProvider.GetService<ITypeRegistry>();
+        if (typeRegistry == null)
+            return Observable.Return<UiControl?>(Controls.Markdown($"*Type registry not available.*"));
+
+        var typeDef = typeRegistry.GetTypeDefinition(typeName);
+        if (typeDef == null)
+            return Observable.Return<UiControl?>(Controls.Markdown($"*Type '{typeName}' not found.*"));
+
+        // Generate JSON schema for the type using hub's JSON options
+        var schema = GenerateJsonSchema(typeDef.Type, host.Hub.JsonSerializerOptions);
+        return Observable.Return<UiControl?>(new MarkdownControl($"## JSON Schema: {typeName}\n\n```json\n{schema}\n```"));
+    }
+
+    private static UiControl RenderNodeSchema(MeshNode? node, string hubPath, JsonSerializerOptions? jsonOptions = null)
+    {
+        var sb = new System.Text.StringBuilder();
+        sb.AppendLine("## Schema");
+        sb.AppendLine();
+
+        // MeshNode schema
+        sb.AppendLine("### MeshNode");
+        sb.AppendLine();
+        sb.AppendLine("```json");
+        sb.AppendLine(GenerateJsonSchema(typeof(MeshNode), jsonOptions));
+        sb.AppendLine("```");
+
+        // Content type schema if available
+        if (node?.Content != null)
+        {
+            var contentType = node.Content.GetType();
+
+            // Handle JsonElement specially
+            if (contentType == typeof(JsonElement))
+            {
+                var jsonElement = (JsonElement)node.Content;
+                if (jsonElement.TryGetProperty("$type", out var typeProperty))
+                {
+                    var contentTypeName = typeProperty.GetString();
+                    sb.AppendLine();
+                    sb.AppendLine($"### Content Type: {contentTypeName}");
+                    sb.AppendLine();
+                    sb.AppendLine("Content is a `JsonElement` with type indicator.");
+                }
+                else
+                {
+                    sb.AppendLine();
+                    sb.AppendLine("### Content Type");
+                    sb.AppendLine();
+                    sb.AppendLine("Content is a `JsonElement` (dynamic content).");
+                }
+            }
+            else
+            {
+                sb.AppendLine();
+                sb.AppendLine($"### Content Type: {contentType.Name}");
+                sb.AppendLine();
+                sb.AppendLine("```json");
+                sb.AppendLine(GenerateJsonSchema(contentType));
+                sb.AppendLine("```");
+            }
+        }
+        else
+        {
+            sb.AppendLine();
+            sb.AppendLine("### Content Type");
+            sb.AppendLine();
+            sb.AppendLine("*No content defined for this node.*");
+        }
+
+        return new MarkdownControl(sb.ToString());
+    }
+
+    private static string GenerateJsonSchema(Type type, JsonSerializerOptions? jsonOptions = null)
+    {
+        var namingPolicy = jsonOptions?.PropertyNamingPolicy;
+
+        var sb = new System.Text.StringBuilder();
+        sb.AppendLine("{");
+        sb.AppendLine($"  \"$schema\": \"http://json-schema.org/draft-07/schema#\",");
+        sb.AppendLine($"  \"title\": \"{type.Name}\",");
+
+        // Add $type discriminator info if polymorphic serialization is used
+        var typeDiscriminator = jsonOptions?.TypeInfoResolver != null ? "$type" : null;
+        if (typeDiscriminator != null)
+        {
+            sb.AppendLine($"  \"$type\": \"{type.Name}\",");
+        }
+
+        // Add type description if available
+        var typeDescription = GetDescription(type);
+        if (!string.IsNullOrEmpty(typeDescription))
+        {
+            sb.AppendLine($"  \"description\": \"{EscapeJsonString(typeDescription)}\",");
+        }
+
+        sb.AppendLine($"  \"type\": \"object\",");
+        sb.AppendLine($"  \"properties\": {{");
+
+        var properties = type.GetProperties(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
+        var propLines = new List<string>();
+
+        foreach (var prop in properties)
+        {
+            // Use naming policy for property names (e.g., camelCase)
+            var propName = namingPolicy?.ConvertName(prop.Name) ?? prop.Name;
+            var jsonType = GetJsonSchemaType(prop.PropertyType);
+            var isNullable = Nullable.GetUnderlyingType(prop.PropertyType) != null ||
+                             !prop.PropertyType.IsValueType;
+
+            // Get description from attributes
+            var description = GetDescription(prop);
+
+            var propDef = new System.Text.StringBuilder();
+            propDef.Append($"    \"{propName}\": {{ \"type\": \"{jsonType}\"");
+
+            if (!string.IsNullOrEmpty(description))
+            {
+                propDef.Append($", \"description\": \"{EscapeJsonString(description)}\"");
+            }
+
+            // Add format hints for common types
+            var underlying = Nullable.GetUnderlyingType(prop.PropertyType) ?? prop.PropertyType;
+            if (underlying == typeof(DateTime) || underlying == typeof(DateTimeOffset))
+                propDef.Append($", \"format\": \"date-time\"");
+            else if (underlying == typeof(Guid))
+                propDef.Append($", \"format\": \"uuid\"");
+            else if (underlying == typeof(Uri))
+                propDef.Append($", \"format\": \"uri\"");
+
+            propDef.Append(" }");
+            propLines.Add(propDef.ToString());
+        }
+
+        sb.AppendLine(string.Join(",\n", propLines));
+        sb.AppendLine("  },");
+
+        // Add required fields based on [Required] attribute
+        var requiredProps = properties
+            .Where(p => p.GetCustomAttribute<System.ComponentModel.DataAnnotations.RequiredAttribute>() != null ||
+                        p.GetCustomAttribute<System.ComponentModel.DataAnnotations.KeyAttribute>() != null)
+            .Select(p => namingPolicy?.ConvertName(p.Name) ?? p.Name)
+            .ToList();
+
+        if (requiredProps.Any())
+        {
+            sb.AppendLine($"  \"required\": [{string.Join(", ", requiredProps.Select(r => $"\"{r}\""))}]");
+        }
+        else
+        {
+            // Remove trailing comma from properties if no required section
+            var result = sb.ToString();
+            result = result.TrimEnd('\n', '\r').TrimEnd(',') + "\n";
+            sb.Clear();
+            sb.Append(result);
+        }
+
+        sb.AppendLine("}");
+
+        return sb.ToString();
+    }
+
+    private static string? GetDescription(MemberInfo member)
+    {
+        // Try DescriptionAttribute
+        var descAttr = member.GetCustomAttribute<System.ComponentModel.DescriptionAttribute>();
+        if (descAttr != null)
+            return descAttr.Description;
+
+        // Try DisplayAttribute
+        var displayAttr = member.GetCustomAttribute<System.ComponentModel.DataAnnotations.DisplayAttribute>();
+        if (displayAttr != null)
+            return displayAttr.Description ?? displayAttr.Name;
+
+        return null;
+    }
+
+    private static string EscapeJsonString(string value)
+    {
+        return value
+            .Replace("\\", "\\\\")
+            .Replace("\"", "\\\"")
+            .Replace("\n", "\\n")
+            .Replace("\r", "\\r")
+            .Replace("\t", "\\t");
+    }
+
+    private static string GetJsonSchemaType(Type type)
+    {
+        var underlying = Nullable.GetUnderlyingType(type) ?? type;
+
+        if (underlying == typeof(string)) return "string";
+        if (underlying == typeof(int) || underlying == typeof(long) || underlying == typeof(short)) return "integer";
+        if (underlying == typeof(double) || underlying == typeof(float) || underlying == typeof(decimal)) return "number";
+        if (underlying == typeof(bool)) return "boolean";
+        if (underlying == typeof(DateTime) || underlying == typeof(DateTimeOffset)) return "string";
+        if (underlying == typeof(Guid)) return "string";
+        if (underlying == typeof(Uri)) return "string";
+        if (underlying.IsArray || (underlying.IsGenericType && typeof(System.Collections.IEnumerable).IsAssignableFrom(underlying))) return "array";
+
+        return "object";
+    }
+
+    #endregion
 
 }
 

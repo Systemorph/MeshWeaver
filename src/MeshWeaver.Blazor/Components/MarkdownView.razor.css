@@ -97,4 +97,159 @@
     border: 1px solid #30363d;
 }
 
+/* UCR (Unified Content Reference) Links - @ syntax */
+.markdown-body ::deep .ucr-link {
+    color: var(--accent-fill-rest, #0078d4);
+    text-decoration: none;
+    font-weight: 500;
+    border-bottom: 1px dotted var(--accent-fill-rest, #0078d4);
+    padding: 0 2px;
+    transition: all 0.15s ease;
+}
+
+.markdown-body ::deep .ucr-link:hover {
+    color: var(--accent-fill-hover, #106ebe);
+    border-bottom-style: solid;
+    background-color: var(--neutral-layer-2, #f3f2f1);
+    border-radius: 3px;
+}
+
+.markdown-body ::deep .ucr-link:visited {
+    color: var(--accent-fill-rest, #0078d4);
+}
+
+/* UCR References Section */
+.markdown-body ::deep .ucr-references {
+    margin-top: 2em;
+    padding-top: 1.5em;
+    border-top: 1px solid var(--neutral-stroke-rest, #d1d1d1);
+}
+
+.markdown-body ::deep .ucr-references h3 {
+    font-size: 1.1em;
+    color: var(--neutral-foreground-hint, #605e5c);
+    margin-bottom: 0.75em;
+}
+
+.markdown-body ::deep .ucr-references ul {
+    list-style: none;
+    padding-left: 0;
+    margin: 0;
+}
+
+.markdown-body ::deep .ucr-references li {
+    padding: 0.4em 0;
+    display: flex;
+    align-items: baseline;
+    gap: 0.5em;
+}
+
+.markdown-body ::deep .ucr-references .ucr-link {
+    font-weight: 500;
+}
+
+.markdown-body ::deep .ucr-reference-path {
+    font-size: 0.85em;
+    color: var(--neutral-foreground-hint, #605e5c);
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", Consolas, monospace;
+}
+
+/* UCR Reference Cards - uses LayoutGrid-like responsive grid */
+.markdown-body ::deep .ucr-references-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 16px;
+    margin-top: 1em;
+}
+
+.markdown-body ::deep .ucr-reference-card {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 16px;
+    background: var(--neutral-layer-card-container, #fff);
+    border: 1px solid var(--neutral-stroke-rest, #d1d1d1);
+    border-radius: 8px;
+    cursor: pointer;
+    min-width: 280px;
+    max-width: 400px;
+    transition: box-shadow 0.2s ease, border-color 0.2s ease;
+}
+
+.markdown-body ::deep .ucr-reference-card:hover {
+    border-color: var(--accent-fill-rest, #0078d4);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+.markdown-body ::deep .ucr-reference-card-loading {
+    opacity: 0.6;
+    cursor: default;
+}
+
+.markdown-body ::deep .ucr-reference-card-image {
+    width: 40px;
+    height: 40px;
+    border-radius: 6px;
+    object-fit: cover;
+    flex-shrink: 0;
+}
+
+.markdown-body ::deep .ucr-reference-card-placeholder {
+    width: 40px;
+    height: 40px;
+    border-radius: 6px;
+    background: var(--accent-fill-rest, #0078d4);
+    color: var(--foreground-on-accent-rest, #fff);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: bold;
+    font-size: 16px;
+    flex-shrink: 0;
+}
+
+.markdown-body ::deep .ucr-reference-card-text {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.markdown-body ::deep .ucr-reference-card-title {
+    font-weight: 600;
+    font-size: 0.95em;
+    color: var(--neutral-foreground-rest, #323130);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.markdown-body ::deep .ucr-reference-card-description {
+    font-size: 0.85em;
+    color: var(--neutral-foreground-hint, #605e5c);
+    overflow: hidden;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    line-height: 1.3;
+}
+
+.markdown-body ::deep .ucr-reference-card-type {
+    font-size: 0.75em;
+    color: var(--neutral-foreground-hint, #605e5c);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+/* Dark theme support */
+[data-theme="dark"] .markdown-body ::deep .ucr-reference-card {
+    background: var(--neutral-layer-card-container, #1f1f1f);
+    border-color: var(--neutral-stroke-rest, #3b3b3b);
+}
+
+[data-theme="dark"] .markdown-body ::deep .ucr-reference-card:hover {
+    border-color: var(--accent-fill-rest, #0078d4);
+}
+
 /* Collaborative Editing Annotations are in wwwroot/css/collaborative-annotations.css */

@@ -1,0 +1,18 @@
+{
+  "id": "Syntax",
+  "namespace": "MeshWeaver/UnifiedContentReferences",
+  "name": "UCR Syntax",
+  "nodeType": "Markdown",
+  "category": "Documentation",
+  "description": "The address/prefix:path pattern explained",
+  "iconName": "Code",
+  "displayOrder": 1,
+  "isPersistent": true,
+  "state": "Active",
+  "content": {
+    "$type": "MarkdownDocument",
+    "id": "Syntax",
+    "title": "UCR Syntax",
+    "content": "# UCR Syntax\n\nUnified Content References use the pattern:\n\n```\n{address}/{prefix}:{path}\n```\n\n## Components\n\n| Component | Description | Example |\n|-----------|-------------|----------|\n| `address` | The MeshNode address (resolved via MeshCatalog) | `Systemorph/Marketing` |\n| `prefix` | Content type selector | `content:`, `data:`, `area:`, `schema:`, `model:` |\n| `path` | Resource path within the address | `docs/readme.md`, `Posts`, `Thumbnail` |\n\n## Address Resolution\n\nThe `address` portion is matched against nodes in the MeshCatalog using score-based matching:\n\n1. The path is split into segments\n2. Each segment is matched against registered namespace patterns\n3. The best match (highest score) determines the target node\n4. Remaining segments become the `path` portion\n\n## Prefix Types\n\n| Prefix | Purpose | Renders As |\n|--------|---------|------------|\n| `content:` | Static files (images, markdown, etc.) | File content inline |\n| `data:` | Data collections/entities | Data grid or entity view |\n| `area:` | Layout areas | Layout component |\n| `schema:` | Type schemas | JSON schema code block |\n| `model:` | Data model diagrams | Mermaid class diagram |\n| *(none)* | Default area reference | Layout component |\n\n## Single @ vs Double @@\n\n| Syntax | Behavior |\n|--------|----------|\n| `@path` | Creates a **hyperlink** to the referenced content |\n| `@@path` | **Embeds** the content inline |\n\n## Examples\n\n### Simple Reference (hyperlink)\n\n```\n@Systemorph/Marketing\n```\n\nResult:\n\n@Systemorph/Marketing\n\n### Embedded Content\n\n```\n@@Systemorph/Marketing/Thumbnail\n```\n\nResult:\n\n@@Systemorph/Marketing/Thumbnail\n\n## Related\n\n@MeshWeaver/UnifiedContentReferences/ContentPrefix\n\n@MeshWeaver/UnifiedContentReferences/DataPrefix\n\n@MeshWeaver/UnifiedContentReferences/AreaPrefix"
+  }
+}

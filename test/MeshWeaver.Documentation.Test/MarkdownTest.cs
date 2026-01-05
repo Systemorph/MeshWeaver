@@ -663,4 +663,314 @@ Console.WriteLine(""Hello World"");
     }
 
     #endregion
+
+    #region Real Path Tests (Systemorph/Marketing style)
+
+    [Fact]
+    public void DirectPath_SingleSegment()
+    {
+        // @Systemorph - just namespace, no child path
+        var markdown = "@Systemorph";
+        var extension = new LayoutAreaMarkdownExtension();
+        var document = ParseMarkdown(markdown, extension);
+
+        var layoutAreas = document.Descendants<LayoutAreaComponentInfo>().ToArray();
+        layoutAreas.Should().HaveCount(1);
+        layoutAreas[0].Address.Should().Be("Systemorph");
+        layoutAreas[0].Area.Should().BeNull();
+        layoutAreas[0].IsInline.Should().BeFalse();
+    }
+
+    [Fact]
+    public void DirectPath_TwoSegments()
+    {
+        // @Systemorph/Marketing - namespace/id format
+        var markdown = "@Systemorph/Marketing";
+        var extension = new LayoutAreaMarkdownExtension();
+        var document = ParseMarkdown(markdown, extension);
+
+        var layoutAreas = document.Descendants<LayoutAreaComponentInfo>().ToArray();
+        layoutAreas.Should().HaveCount(1);
+        layoutAreas[0].Address.Should().Be("Systemorph/Marketing");
+        layoutAreas[0].Area.Should().BeNull(); // No area specified, just address
+    }
+
+    [Fact]
+    public void DirectPath_ThreeSegments_DefaultsToArea()
+    {
+        // @Systemorph/Marketing/BeyondPoC - defaults to area reference
+        var markdown = "@Systemorph/Marketing/BeyondPoC";
+        var extension = new LayoutAreaMarkdownExtension();
+        var document = ParseMarkdown(markdown, extension);
+
+        var layoutAreas = document.Descendants<LayoutAreaComponentInfo>().ToArray();
+        layoutAreas.Should().HaveCount(1);
+        layoutAreas[0].Address.Should().Be("Systemorph/Marketing");
+        layoutAreas[0].Area.Should().Be("BeyondPoC");
+    }
+
+    [Fact]
+    public void DirectPath_FourSegments_AreaWithId()
+    {
+        // @ACME/ProductLaunch/Todo/SalesDeck - area with id
+        var markdown = "@ACME/ProductLaunch/Todo/SalesDeck";
+        var extension = new LayoutAreaMarkdownExtension();
+        var document = ParseMarkdown(markdown, extension);
+
+        var layoutAreas = document.Descendants<LayoutAreaComponentInfo>().ToArray();
+        layoutAreas.Should().HaveCount(1);
+        layoutAreas[0].Address.Should().Be("ACME/ProductLaunch");
+        layoutAreas[0].Area.Should().Be("Todo");
+        layoutAreas[0].Id.Should().Be("SalesDeck");
+    }
+
+    [Fact]
+    public void DirectPath_WithDataKeyword()
+    {
+        // @Systemorph/Marketing/data/Posts
+        var markdown = "@Systemorph/Marketing/data/Posts";
+        var extension = new LayoutAreaMarkdownExtension();
+        var document = ParseMarkdown(markdown, extension);
+
+        var layoutAreas = document.Descendants<LayoutAreaComponentInfo>().ToArray();
+        layoutAreas.Should().HaveCount(1);
+        layoutAreas[0].Address.Should().Be("Systemorph/Marketing");
+        layoutAreas[0].Area.Should().Be(LayoutAreaMarkdownParser.DataAreaName);
+        layoutAreas[0].Id.Should().Be("Posts");
+    }
+
+    [Fact]
+    public void DoubleAt_TwoSegments_InlineRender()
+    {
+        // @@Systemorph/Marketing - inline embed of address
+        var markdown = "@@Systemorph/Marketing";
+        var extension = new LayoutAreaMarkdownExtension();
+        var document = ParseMarkdown(markdown, extension);
+
+        var layoutAreas = document.Descendants<LayoutAreaComponentInfo>().ToArray();
+        layoutAreas.Should().HaveCount(1);
+        layoutAreas[0].IsInline.Should().BeTrue();
+        layoutAreas[0].Address.Should().Be("Systemorph/Marketing");
+    }
+
+    [Fact]
+    public void DoubleAt_ThreeSegments_InlineRender()
+    {
+        // @@Systemorph/Marketing/BeyondPoC - inline embed of area
+        var markdown = "@@Systemorph/Marketing/BeyondPoC";
+        var extension = new LayoutAreaMarkdownExtension();
+        var document = ParseMarkdown(markdown, extension);
+
+        var layoutAreas = document.Descendants<LayoutAreaComponentInfo>().ToArray();
+        layoutAreas.Should().HaveCount(1);
+        layoutAreas[0].IsInline.Should().BeTrue();
+        layoutAreas[0].Address.Should().Be("Systemorph/Marketing");
+        layoutAreas[0].Area.Should().Be("BeyondPoC");
+    }
+
+    [Fact]
+    public void RenderSingleAt_TwoSegments_RendersAsHyperlink()
+    {
+        var markdown = "@Systemorph/Marketing";
+        var extension = new LayoutAreaMarkdownExtension();
+        var html = RenderMarkdown(markdown, extension);
+
+        html.Should().Contain("class='ucr-link'");
+        html.Should().Contain("href='/Systemorph/Marketing'");
+        html.Should().Contain("data-raw-path='Systemorph/Marketing'");
+    }
+
+    [Fact]
+    public void RenderDoubleAt_TwoSegments_RendersAsLayoutArea()
+    {
+        var markdown = "@@Systemorph/Marketing";
+        var extension = new LayoutAreaMarkdownExtension();
+        var html = RenderMarkdown(markdown, extension);
+
+        html.Should().Contain("class='layout-area'");
+        // UCR paths use data-raw-path for runtime resolution via IMeshCatalog
+        html.Should().Contain("data-raw-path='Systemorph/Marketing'");
+    }
+
+    [Fact]
+    public void MultipleReferences_MixedFormats()
+    {
+        var markdown = @"
+@Systemorph/Marketing
+@@Systemorph/Marketing/BeyondPoC
+@ACME/ProductLaunch/Todo/SalesDeck
+";
+        var extension = new LayoutAreaMarkdownExtension();
+        var document = ParseMarkdown(markdown, extension);
+
+        var layoutAreas = document.Descendants<LayoutAreaComponentInfo>().ToArray();
+        layoutAreas.Should().HaveCount(3);
+
+        // First: two segments
+        layoutAreas[0].Address.Should().Be("Systemorph/Marketing");
+        layoutAreas[0].IsInline.Should().BeFalse();
+
+        // Second: three segments with @@
+        layoutAreas[1].Address.Should().Be("Systemorph/Marketing");
+        layoutAreas[1].Area.Should().Be("BeyondPoC");
+        layoutAreas[1].IsInline.Should().BeTrue();
+
+        // Third: four segments with area/id
+        layoutAreas[2].Address.Should().Be("ACME/ProductLaunch");
+        layoutAreas[2].Area.Should().Be("Todo");
+        layoutAreas[2].Id.Should().Be("SalesDeck");
+        layoutAreas[2].IsInline.Should().BeFalse();
+    }
+
+    [Fact]
+    public void PrefixColonSyntax_Content()
+    {
+        // New prefix:path format: address/content:file.svg
+        var markdown = "@@MeshWeaver/UnifiedContentReferences/content:logo.svg";
+        var extension = new LayoutAreaMarkdownExtension();
+        var document = ParseMarkdown(markdown, extension);
+
+        var layoutArea = document.Descendants<LayoutAreaComponentInfo>().Single();
+        layoutArea.Address.Should().Be("MeshWeaver/UnifiedContentReferences");
+        layoutArea.Area.Should().Be(LayoutAreaMarkdownParser.ContentAreaName);
+        layoutArea.Id.Should().Be("logo.svg");
+        layoutArea.IsInline.Should().BeTrue();
+    }
+
+    [Fact]
+    public void PrefixColonSyntax_Data()
+    {
+        // New prefix:path format: address/data:collection
+        var markdown = "@MeshWeaver/UnifiedContentReferences/data:Posts";
+        var extension = new LayoutAreaMarkdownExtension();
+        var document = ParseMarkdown(markdown, extension);
+
+        var layoutArea = document.Descendants<LayoutAreaComponentInfo>().Single();
+        layoutArea.Address.Should().Be("MeshWeaver/UnifiedContentReferences");
+        layoutArea.Area.Should().Be(LayoutAreaMarkdownParser.DataAreaName);
+        layoutArea.Id.Should().Be("Posts");
+        layoutArea.IsInline.Should().BeFalse();
+    }
+
+    [Fact]
+    public void PrefixColonSyntax_Schema()
+    {
+        // New prefix:path format: address/schema:typeName
+        var markdown = "@@Systemorph/Marketing/schema:MeshNode";
+        var extension = new LayoutAreaMarkdownExtension();
+        var document = ParseMarkdown(markdown, extension);
+
+        var layoutArea = document.Descendants<LayoutAreaComponentInfo>().Single();
+        layoutArea.Address.Should().Be("Systemorph/Marketing");
+        layoutArea.Area.Should().Be(LayoutAreaMarkdownParser.SchemaAreaName);
+        layoutArea.Id.Should().Be("MeshNode");
+        layoutArea.IsInline.Should().BeTrue();
+    }
+
+    [Fact]
+    public void PrefixColonSyntax_DataSelfReference()
+    {
+        // Self reference: address/data: (nothing after colon means self)
+        var markdown = "@@MeshWeaver/UnifiedContentReferences/data:";
+        var extension = new LayoutAreaMarkdownExtension();
+        var document = ParseMarkdown(markdown, extension);
+
+        var layoutArea = document.Descendants<LayoutAreaComponentInfo>().Single();
+        layoutArea.Address.Should().Be("MeshWeaver/UnifiedContentReferences");
+        layoutArea.Area.Should().Be(LayoutAreaMarkdownParser.DataAreaName);
+        layoutArea.Id.Should().BeNull(); // Empty after colon means self-reference
+        layoutArea.IsInline.Should().BeTrue();
+    }
+
+    [Fact]
+    public void PrefixColonSyntax_SchemaSelfReference()
+    {
+        // Self reference: address/schema: (show schema of current node)
+        var markdown = "@@Systemorph/Marketing/schema:";
+        var extension = new LayoutAreaMarkdownExtension();
+        var document = ParseMarkdown(markdown, extension);
+
+        var layoutArea = document.Descendants<LayoutAreaComponentInfo>().Single();
+        layoutArea.Address.Should().Be("Systemorph/Marketing");
+        layoutArea.Area.Should().Be(LayoutAreaMarkdownParser.SchemaAreaName);
+        layoutArea.Id.Should().BeNull();
+        layoutArea.IsInline.Should().BeTrue();
+    }
+
+    [Fact]
+    public void PrefixColonSyntax_ContentSelfReference()
+    {
+        // Self reference: address/content: (show content of current node)
+        var markdown = "@@MeshWeaver/UnifiedContentReferences/content:";
+        var extension = new LayoutAreaMarkdownExtension();
+        var document = ParseMarkdown(markdown, extension);
+
+        var layoutArea = document.Descendants<LayoutAreaComponentInfo>().Single();
+        layoutArea.Address.Should().Be("MeshWeaver/UnifiedContentReferences");
+        layoutArea.Area.Should().Be(LayoutAreaMarkdownParser.ContentAreaName);
+        layoutArea.Id.Should().BeNull();
+        layoutArea.IsInline.Should().BeTrue();
+    }
+
+    [Fact]
+    public void PrefixColonSyntax_Model()
+    {
+        // Model prefix: address/model:TypeName (show data model for type)
+        var markdown = "@@Systemorph/Marketing/model:MeshNode";
+        var extension = new LayoutAreaMarkdownExtension();
+        var document = ParseMarkdown(markdown, extension);
+
+        var layoutArea = document.Descendants<LayoutAreaComponentInfo>().Single();
+        layoutArea.Address.Should().Be("Systemorph/Marketing");
+        layoutArea.Area.Should().Be(LayoutAreaMarkdownParser.ModelAreaName);
+        layoutArea.Id.Should().Be("MeshNode");
+        layoutArea.IsInline.Should().BeTrue();
+    }
+
+    [Fact]
+    public void PrefixColonSyntax_ModelSelfReference()
+    {
+        // Model self reference: address/model: (show data model for current node's type)
+        var markdown = "@@Systemorph/Marketing/model:";
+        var extension = new LayoutAreaMarkdownExtension();
+        var document = ParseMarkdown(markdown, extension);
+
+        var layoutArea = document.Descendants<LayoutAreaComponentInfo>().Single();
+        layoutArea.Address.Should().Be("Systemorph/Marketing");
+        layoutArea.Area.Should().Be(LayoutAreaMarkdownParser.ModelAreaName);
+        layoutArea.Id.Should().BeNull();
+        layoutArea.IsInline.Should().BeTrue();
+    }
+
+    [Fact]
+    public void PrefixColonSyntax_Area()
+    {
+        // Area prefix with colon: address/area:AreaName
+        var markdown = "@Systemorph/Marketing/area:Dashboard";
+        var extension = new LayoutAreaMarkdownExtension();
+        var document = ParseMarkdown(markdown, extension);
+
+        var layoutArea = document.Descendants<LayoutAreaComponentInfo>().Single();
+        layoutArea.Address.Should().Be("Systemorph/Marketing");
+        layoutArea.Area.Should().Be("Dashboard");
+        layoutArea.Id.Should().BeNull();
+        layoutArea.IsInline.Should().BeFalse();
+    }
+
+    [Fact]
+    public void PrefixColonSyntax_AreaWithId()
+    {
+        // Area prefix with id: address/area:AreaName/id
+        var markdown = "@Systemorph/Marketing/area:Todo/SalesDeck";
+        var extension = new LayoutAreaMarkdownExtension();
+        var document = ParseMarkdown(markdown, extension);
+
+        var layoutArea = document.Descendants<LayoutAreaComponentInfo>().Single();
+        layoutArea.Address.Should().Be("Systemorph/Marketing");
+        layoutArea.Area.Should().Be("Todo");
+        layoutArea.Id.Should().Be("SalesDeck");
+        layoutArea.IsInline.Should().BeFalse();
+    }
+
+    #endregion
 }

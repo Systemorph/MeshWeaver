@@ -59,8 +59,45 @@ public partial class SearchBar : IAsyncDisposable
         if (string.IsNullOrWhiteSpace(text))
             return;
 
-        var encodedQuery = Uri.EscapeDataString(text.Trim());
-        NavigationManager.NavigateTo($"/search?q={encodedQuery}");
+        var trimmed = text.Trim();
+
+        // Check if it starts with @ (reference syntax)
+        if (trimmed.StartsWith("@"))
+        {
+            var afterAt = trimmed[1..];
+            var spaceIndex = afterAt.IndexOf(' ');
+
+            if (spaceIndex < 0)
+            {
+                // Just @path with no space - navigate directly
+                var path = afterAt.TrimEnd('/');
+                if (!string.IsNullOrEmpty(path))
+                {
+                    NavigationManager.NavigateTo($"/{path}");
+                    await monacoEditor.ClearAsync();
+                    return;
+                }
+            }
+            else
+            {
+                // @path query - convert to namespace:path scope:descendants query
+                var path = afterAt[..spaceIndex].TrimEnd('/');
+                var query = afterAt[(spaceIndex + 1)..].Trim();
+
+                if (!string.IsNullOrEmpty(path) && !string.IsNullOrEmpty(query))
+                {
+                    // Build search query with namespace filter and descendants scope
+                    var searchQuery = $"namespace:{path} scope:descendants {query}";
+                    var encodedQuery = Uri.EscapeDataString(searchQuery);
+                    NavigationManager.NavigateTo($"/search?q={encodedQuery}");
+                    return;
+                }
+            }
+        }
+
+        // Plain search query (no @ prefix)
+        var encodedPlainQuery = Uri.EscapeDataString(trimmed);
+        NavigationManager.NavigateTo($"/search?q={encodedPlainQuery}");
     }
 
     private static string TruncateDescription(string? description, int maxLength = 60)

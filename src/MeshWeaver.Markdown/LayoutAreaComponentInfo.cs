@@ -6,56 +6,72 @@ namespace MeshWeaver.Markdown;
 
 public class LayoutAreaComponentInfo : ContainerBlock
 {
-
-    public LayoutAreaComponentInfo(string url, BlockParser blockParser, bool isInline = true) : base(blockParser)
+    /// <summary>
+    /// Constructor for raw path references. The path will be resolved at render time
+    /// using IMeshCatalog.ResolvePathAsync for proper address matching.
+    /// </summary>
+    /// <param name="rawPath">The raw path (e.g., "Systemorph/Marketing/BeyondPoC")</param>
+    /// <param name="blockParser">The block parser</param>
+    /// <param name="isInline">True for @@ (inline), false for @ (hyperlink)</param>
+    public LayoutAreaComponentInfo(string rawPath, BlockParser blockParser, bool isInline = false) : base(blockParser)
     {
-        if (string.IsNullOrWhiteSpace(url))
-            throw new ArgumentException("URL cannot be null or empty", nameof(url));
+        if (string.IsNullOrWhiteSpace(rawPath))
+            throw new ArgumentException("Path cannot be null or empty", nameof(rawPath));
 
-        var parts = url.Split('/');
-        if (parts.Length < 3)
-            throw new ArgumentException($"Invalid URL format '{url}'. Expected format: 'addressType/addressId/areaName' or 'addressType/addressId/areaName/areaId'", nameof(url));
-
-        Address = $"{parts[0]}/{parts[1]}";
-        Area = parts[2];
+        RawPath = rawPath;
         IsInline = isInline;
 
-        if (string.IsNullOrWhiteSpace(Address.ToString()))
-            throw new ArgumentException($"Invalid address in URL '{url}'", nameof(url));
-        if (string.IsNullOrWhiteSpace(Area))
-            throw new ArgumentException($"Invalid area in URL '{url}'", nameof(url));
-
-        if (parts.Length == 3)
-        {
-            var optionalSplit = Area.Split('?');
-            if (optionalSplit.Length > 1)
-            {
-                Area = optionalSplit[0];
-                Id = optionalSplit[1];
-            }
-        }
-        else if (parts.Length == 4)
-        {
-            Id = parts[3];
-        }
-        else
-            Id = string.Join('/', parts.Skip(3));
+        // For raw paths, we don't pre-parse into address/area/id
+        // The rendering layer will use IMeshCatalog.ResolvePathAsync
+        Address = rawPath;
+        Area = null;
+        Id = null;
     }
 
-    public LayoutAreaComponentInfo(string address, string? area, string? id, BlockParser blockParser, bool isInline = true) : base(blockParser)
+    /// <summary>
+    /// Constructor for pre-parsed references (used by parser for keyword-based paths like data:, content:, area:).
+    /// </summary>
+    public LayoutAreaComponentInfo(string address, string? area, string? id, BlockParser blockParser, bool isInline = false) : base(blockParser)
     {
         if (string.IsNullOrWhiteSpace(address))
             throw new ArgumentException("Address cannot be null or empty", nameof(address));
 
+        RawPath = BuildRawPath(address, area, id);
         Address = address;
         Area = area;
         Id = id;
         IsInline = isInline;
     }
 
+    private static string BuildRawPath(string address, string? area, string? id)
+    {
+        if (string.IsNullOrEmpty(area))
+            return address;
+        if (string.IsNullOrEmpty(id))
+            return $"{address}/{area}";
+        return $"{address}/{area}/{id}";
+    }
+
+    /// <summary>
+    /// The original raw path as written in markdown (e.g., "Systemorph/Marketing/BeyondPoC").
+    /// Used for proper address resolution at render time.
+    /// </summary>
+    public string RawPath { get; }
+
+    /// <summary>
+    /// The area name (may be null for raw path references).
+    /// For keyword references: the area name (e.g., "$Data", "$Content", or custom area)
+    /// </summary>
     public string? Area { get; }
 
+    /// <summary>
+    /// The resolved address (for raw paths, this equals RawPath until resolved at render time).
+    /// </summary>
     public object Address { get; }
+
+    /// <summary>
+    /// The area ID or additional path after the area name.
+    /// </summary>
     public object? Id { get; }
 
     /// <summary>

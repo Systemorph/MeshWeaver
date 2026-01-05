@@ -1,0 +1,18 @@
+{
+  "id": "AreaPrefix",
+  "namespace": "MeshWeaver/UnifiedContentReferences",
+  "name": "Area Prefix",
+  "nodeType": "Markdown",
+  "category": "Documentation",
+  "description": "Embed layout areas like Thumbnail, Details, or Catalog",
+  "iconName": "GridDots",
+  "displayOrder": 4,
+  "isPersistent": true,
+  "state": "Active",
+  "content": {
+    "$type": "MarkdownDocument",
+    "id": "AreaPrefix",
+    "title": "Area Prefix (area:)",
+    "content": "# Area Prefix\n\nThe `area:` prefix (or no prefix) embeds layout areas from a node.\n\n## Syntax\n\n```\n@@{address}/area:{areaName}\n@@{address}/{areaName}          (shorthand)\n```\n\n## Standard Areas\n\nMeshNodes typically have these standard areas:\n\n| Area | Description |\n|------|-------------|\n| `Thumbnail` | Compact card view (image, title, description) |\n| `Details` | Full content with action menu |\n| `Catalog` | Grid of child nodes with search |\n| `Metadata` | Node properties display |\n| `Settings` | Configuration view |\n\n## Example: Thumbnail Area\n\nEmbed the thumbnail card of this documentation:\n\n**Syntax:**\n```\n@@MeshWeaver/UnifiedContentReferences/Thumbnail\n```\n\n**Result:**\n\n@@MeshWeaver/UnifiedContentReferences/Thumbnail\n\n## Example: Catalog Area\n\nEmbed the catalog (child nodes grid) of an organization:\n\n**Syntax:**\n```\n@@Systemorph/Catalog\n```\n\n**Result:**\n\n@@Systemorph/Catalog\n\n## Hyperlinks to Areas\n\nSingle `@` creates a navigation link:\n\n**Syntax:**\n```\n@Systemorph/Marketing/Details\n```\n\n**Result:**\n\n@Systemorph/Marketing/Details\n\n## Custom Areas\n\nNodes can register custom areas:\n\n```csharp\nconfiguration.AddLayout(layout => layout\n    .WithView(\"MyCustomArea\", MyCustomView));\n```\n\nThen reference with:\n```\n@@MyNode/MyCustomArea\n```"
+  }
+}
