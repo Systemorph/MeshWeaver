@@ -566,12 +566,13 @@ public class SearchQueryTests : MonolithMeshTestBase
         foreach (var r in results)
             Output.WriteLine($"  - {r.Path}: {r.Name}");
 
-        // All results should contain "Marketing" in name or description
+        // All results should contain "Marketing" in any searchable property (Name, Description, Path, etc.)
+        // The query evaluator searches all string properties
         results.Should().AllSatisfy(node =>
         {
-            var searchable = $"{node.Name} {node.Description}".ToLowerInvariant();
+            var searchable = $"{node.Path} {node.Name} {node.Description}".ToLowerInvariant();
             searchable.Should().Contain(searchTerm.ToLowerInvariant(),
-                $"All results should contain the search term '{searchTerm}'");
+                $"All results should contain the search term '{searchTerm}' in Path, Name, or Description");
         });
     }
 

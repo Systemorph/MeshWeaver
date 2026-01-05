@@ -1,0 +1,382 @@
+@using MeshWeaver.Blazor.Monaco
+@using MeshWeaver.Layout
+@using MeshWeaver.Layout.Client
+@using MeshWeaver.Data
+@using MeshWeaver.Mesh
+@using MeshWeaver.Mesh.Services
+@using System.Text.Json
+@using Microsoft.FluentUI.AspNetCore.Components
+@inject NavigationManager NavigationManager
+@inject IMeshQuery MeshQuery
+
+<div class="mesh-search-container" style="width: 100%;">
+    @if (BoundShowSearchBox)
+    {
+        <div class="mesh-search-box" style="margin-bottom: 16px; width: 100%;">
+            <div style="display: flex; gap: 8px; align-items: center; width: 100%;">
+                <div style="flex: 1;">
+                    <MonacoEditorView @ref="monacoEditor"
+                                      Value="@_currentValue"
+                                      ValueChanged="@OnValueChanged"
+                                      OnSubmit="HandleSearch"
+                                      Placeholder="@BoundPlaceholder"
+                                      Height="38px"
+                                      MaxHeight="38px"
+                                      ShowBorder="true"
+                                      CodeEditMode="false"
+                                      AsyncCompletionCallback="@GetCompletionsAsync" />
+                </div>
+                <button type="button" @onclick="HandleSearch"
+                    style="padding: 8px 16px; background: var(--accent-fill-rest, #0078d4); color: var(--foreground-on-accent-rest, white); border: none; border-radius: 4px; cursor: pointer; font-size: 14px; font-weight: 500; height: 38px;">
+                    Search
+                </button>
+            </div>
+        </div>
+    }
+
+    <div class="mesh-search-results" style="width: 100%;">
+        @if (_isLoading)
+        {
+            <FluentProgressRing />
+        }
+        else if (_nodes.Count == 0)
+        {
+            <FluentLabel Typo="Microsoft.FluentUI.AspNetCore.Components.Typography.Body" Style="color: var(--neutral-foreground-hint);">No items found.</FluentLabel>
+        }
+        else
+        {
+            @RenderHierarchicalResults()
+        }
+    </div>
+</div>
+
+@code {
+    private MonacoEditorView? monacoEditor;
+    private string _currentValue = "";
+    private bool _initialized;
+    private bool _isLoading = true;
+    private List<MeshNode> _nodes = new();
+
+    [Parameter]
+    public MeshSearchControl? ViewModel { get; set; }
+
+    [Parameter]
+    public ISynchronizationStream<JsonElement>? Stream { get; set; }
+
+    [Parameter]
+    public string? Area { get; set; }
+
+    private string BoundHiddenQuery => ViewModel?.HiddenQuery?.ToString() ?? "";
+    private string BoundVisibleQuery => ViewModel?.VisibleQuery?.ToString() ?? "";
+    private string BoundPlaceholder => ViewModel?.Placeholder?.ToString() ?? "Search...";
+    private string BoundNamespace => ViewModel?.Namespace?.ToString() ?? "";
+    private int BoundMaxColumns => ViewModel?.MaxColumns is int cols ? cols : 3;
+    private bool BoundShowSearchBox => ViewModel?.ShowSearchBox is bool show ? show : true;
+    private bool BoundExcludeBasePath => ViewModel?.ExcludeBasePath is bool exclude ? exclude : true;
+    private bool BoundLiveSearch => ViewModel?.LiveSearch is bool live ? live : true;
+
+    protected override void OnParametersSet()
+    {
+        base.OnParametersSet();
+        if (!_initialized && !string.IsNullOrEmpty(BoundVisibleQuery))
+        {
+            _currentValue = BoundVisibleQuery;
+        }
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            _initialized = true;
+            if (monacoEditor != null && !string.IsNullOrEmpty(BoundVisibleQuery))
+            {
+                await monacoEditor.SetValueAsync(BoundVisibleQuery);
+            }
+            await LoadResultsAsync();
+            StateHasChanged();
+        }
+    }
+
+    private Task OnValueChanged(string value)
+    {
+        _currentValue = value;
+        if (BoundLiveSearch)
+        {
+            _ = LoadResultsAsync();
+        }
+        return Task.CompletedTask;
+    }
+
+    private async Task HandleSearch()
+    {
+        if (monacoEditor != null)
+        {
+            _currentValue = await monacoEditor.GetValueAsync();
+        }
+        await LoadResultsAsync();
+    }
+
+    private async Task LoadResultsAsync()
+    {
+        _isLoading = true;
+        StateHasChanged();
+
+        try
+        {
+            var query = BuildFullQuery();
+            _nodes = await MeshQuery.QueryAsync<MeshNode>(query).ToListAsync();
+
+            // Exclude base path node if configured
+            if (BoundExcludeBasePath && !string.IsNullOrEmpty(BoundNamespace))
+            {
+                var basePath = BoundNamespace.Trim('/');
+                _nodes = _nodes.Where(n => n.Path != basePath).ToList();
+            }
+        }
+        catch
+        {
+            _nodes = new List<MeshNode>();
+        }
+        finally
+        {
+            _isLoading = false;
+            StateHasChanged();
+        }
+    }
+
+    private string BuildFullQuery()
+    {
+        var parts = new List<string>();
+
+        if (!string.IsNullOrWhiteSpace(BoundHiddenQuery))
+            parts.Add(BoundHiddenQuery);
+
+        if (!string.IsNullOrWhiteSpace(_currentValue))
+            parts.Add(_currentValue.Trim());
+
+        return string.Join(" ", parts);
+    }
+
+    private async Task<CompletionItem[]> GetCompletionsAsync(string query)
+    {
+        if (string.IsNullOrWhiteSpace(query))
+            return [];
+
+        try
+        {
+            var searchQuery = string.IsNullOrEmpty(BoundNamespace)
+                ? $"*{query}* scope:descendants"
+                : $"namespace:{BoundNamespace} *{query}* scope:descendants";
+
+            var request = new MeshQueryRequest { Query = searchQuery, Limit = 10 };
+            var results = await MeshQuery.QueryAsync<MeshNode>(request).ToArrayAsync();
+
+            return results.Select(node => new CompletionItem
+            {
+                Label = node.Name ?? node.Id,
+                InsertText = node.Name ?? node.Id,
+                Description = node.Description ?? "",
+                Detail = node.NodeType ?? "",
+                Category = node.Category ?? ""
+            }).ToArray();
+        }
+        catch
+        {
+            return [];
+        }
+    }
+
+    private RenderFragment RenderHierarchicalResults() => builder =>
+    {
+        // Find root nodes (those without a parent in the result set)
+        var allPaths = _nodes.Select(n => n.Path).ToHashSet();
+        var rootNodes = _nodes.Where(n => !HasParentInSet(n.Path, allPaths)).ToList();
+
+        // Group by category of the top (root) item
+        var groups = rootNodes
+            .GroupBy(n => n.Category ?? "Uncategorized")
+            .OrderBy(g => g.Key)
+            .ToList();
+
+        var seq = 0;
+        foreach (var group in groups)
+        {
+            // Category heading
+            builder.OpenElement(seq++, "h3");
+            builder.AddAttribute(seq++, "style", "margin: 24px 0 12px 0;");
+            builder.AddContent(seq++, group.Key);
+            builder.CloseElement();
+
+            // FluentGrid for this category - each root node + its subtree is one cell
+            builder.OpenComponent<FluentGrid>(seq++);
+            builder.AddAttribute(seq++, "Spacing", 3);
+            builder.AddAttribute(seq++, "Justify", Microsoft.FluentUI.AspNetCore.Components.JustifyContent.FlexStart);
+            builder.AddAttribute(seq++, "ChildContent", (RenderFragment)(gridBuilder =>
+            {
+                var gridSeq = 0;
+                foreach (var rootNode in group.OrderBy(n => n.DisplayOrder).ThenBy(n => n.Name))
+                {
+                    // Each root with its subtree goes into one FluentGridItem
+                    gridBuilder.OpenComponent<FluentGridItem>(gridSeq++);
+                    gridBuilder.AddAttribute(gridSeq++, "xs", 12);
+                    gridBuilder.AddAttribute(gridSeq++, "sm", 6);
+                    gridBuilder.AddAttribute(gridSeq++, "md", 4);
+                    gridBuilder.AddAttribute(gridSeq++, "ChildContent", (RenderFragment)(itemBuilder =>
+                    {
+                        RenderNodeTree(itemBuilder, rootNode, 0);
+                    }));
+                    gridBuilder.CloseComponent();
+                }
+            }));
+            builder.CloseComponent();
+        }
+    };
+
+    private void RenderNodeTree(Microsoft.AspNetCore.Components.Rendering.RenderTreeBuilder builder, MeshNode node, int indentLevel)
+    {
+        var seq = 0;
+        var marginLeft = indentLevel * 20;
+
+        // Container for this node and its children
+        builder.OpenElement(seq++, "div");
+        builder.AddAttribute(seq++, "style", $"margin-left: {marginLeft}px; width: 100%;");
+
+        // Render the thumbnail for this node
+        RenderThumbnailCard(builder, node, ref seq);
+
+        // Render children recursively
+        var children = FindDirectChildren(node);
+        foreach (var child in children)
+        {
+            RenderNodeTree(builder, child, indentLevel + 1);
+        }
+
+        builder.CloseElement();
+    }
+
+    private void RenderThumbnailCard(Microsoft.AspNetCore.Components.Rendering.RenderTreeBuilder builder, MeshNode node, ref int seq)
+    {
+        var imageUrl = GetImageUrl(node);
+        var title = node.Name ?? node.Id;
+        var description = node.Description ?? "";
+        var initial = !string.IsNullOrEmpty(title) ? title[0].ToString().ToUpper() : "?";
+
+        builder.OpenComponent<FluentCard>(seq++);
+        builder.AddAttribute(seq++, "Class", "mesh-search-card");
+        builder.AddAttribute(seq++, "Style", "width: 100%; margin-bottom: 8px; cursor: pointer;");
+        builder.AddAttribute(seq++, "onclick", EventCallback.Factory.Create(this, () => NavigateTo(node.Path)));
+        builder.AddAttribute(seq++, "ChildContent", (RenderFragment)(cardBuilder =>
+        {
+            var cardSeq = 0;
+            cardBuilder.OpenElement(cardSeq++, "div");
+            cardBuilder.AddAttribute(cardSeq++, "style", "display: flex; align-items: center; gap: 12px; padding: 8px;");
+
+            // Image or initial
+            if (!string.IsNullOrEmpty(imageUrl))
+            {
+                cardBuilder.OpenElement(cardSeq++, "img");
+                cardBuilder.AddAttribute(cardSeq++, "src", imageUrl);
+                cardBuilder.AddAttribute(cardSeq++, "alt", title);
+                cardBuilder.AddAttribute(cardSeq++, "style", "width: 40px; height: 40px; border-radius: 6px; object-fit: cover; flex-shrink: 0;");
+                cardBuilder.CloseElement();
+            }
+            else
+            {
+                cardBuilder.OpenElement(cardSeq++, "div");
+                cardBuilder.AddAttribute(cardSeq++, "style", "width: 40px; height: 40px; border-radius: 6px; background: var(--accent-fill-rest, #0078d4); color: var(--foreground-on-accent-rest, white); display: flex; align-items: center; justify-content: center; font-weight: bold; font-size: 16px; flex-shrink: 0;");
+                cardBuilder.AddContent(cardSeq++, initial);
+                cardBuilder.CloseElement();
+            }
+
+            // Text content
+            cardBuilder.OpenElement(cardSeq++, "div");
+            cardBuilder.AddAttribute(cardSeq++, "style", "flex: 1; min-width: 0;");
+
+            cardBuilder.OpenElement(cardSeq++, "div");
+            cardBuilder.AddAttribute(cardSeq++, "style", "font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;");
+            cardBuilder.AddContent(cardSeq++, title);
+            cardBuilder.CloseElement();
+
+            if (!string.IsNullOrEmpty(description))
+            {
+                cardBuilder.OpenElement(cardSeq++, "div");
+                cardBuilder.AddAttribute(cardSeq++, "style", "font-size: 12px; color: var(--neutral-foreground-hint, #666); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;");
+                cardBuilder.AddContent(cardSeq++, Truncate(description, 50));
+                cardBuilder.CloseElement();
+            }
+
+            cardBuilder.CloseElement();
+            cardBuilder.CloseElement();
+        }));
+        builder.CloseComponent();
+    }
+
+    private void NavigateTo(string path)
+    {
+        NavigationManager.NavigateTo($"/{path}");
+    }
+
+    private bool HasParentInSet(string path, HashSet<string> allPaths)
+    {
+        var pathNormalized = path.Trim('/');
+        var lastSlash = pathNormalized.LastIndexOf('/');
+        while (lastSlash > 0)
+        {
+            var parentPath = pathNormalized.Substring(0, lastSlash);
+            if (allPaths.Contains(parentPath))
+                return true;
+            lastSlash = parentPath.LastIndexOf('/');
+        }
+        return false;
+    }
+
+    private List<MeshNode> FindDirectChildren(MeshNode parent)
+    {
+        var parentPath = parent.Path + "/";
+        var allPaths = _nodes.Select(n => n.Path).ToHashSet();
+
+        return _nodes
+            .Where(n => n.Path.StartsWith(parentPath) && !HasIntermediateParent(n.Path, parent.Path, allPaths))
+            .OrderBy(n => n.DisplayOrder)
+            .ThenBy(n => n.Name)
+            .ToList();
+    }
+
+    private bool HasIntermediateParent(string childPath, string parentPath, HashSet<string> allPaths)
+    {
+        var childNormalized = childPath.Trim('/');
+        var parentNormalized = parentPath.Trim('/');
+
+        var lastSlash = childNormalized.LastIndexOf('/');
+        while (lastSlash > parentNormalized.Length)
+        {
+            var intermediatePath = childNormalized.Substring(0, lastSlash);
+            if (allPaths.Contains(intermediatePath))
+                return true;
+            lastSlash = intermediatePath.LastIndexOf('/');
+        }
+        return false;
+    }
+
+    private string? GetImageUrl(MeshNode node)
+    {
+        if (node.Content is System.Text.Json.JsonElement json)
+        {
+            if (json.TryGetProperty("avatar", out var avatar) && avatar.ValueKind == System.Text.Json.JsonValueKind.String)
+                return avatar.GetString();
+            if (json.TryGetProperty("Avatar", out var Avatar) && Avatar.ValueKind == System.Text.Json.JsonValueKind.String)
+                return Avatar.GetString();
+            if (json.TryGetProperty("logo", out var logo) && logo.ValueKind == System.Text.Json.JsonValueKind.String)
+                return logo.GetString();
+            if (json.TryGetProperty("Logo", out var Logo) && Logo.ValueKind == System.Text.Json.JsonValueKind.String)
+                return Logo.GetString();
+        }
+        return node.Icon;
+    }
+
+    private string Truncate(string text, int maxLength)
+    {
+        return text.Length > maxLength ? text.Substring(0, maxLength - 3) + "..." : text;
+    }
+}

@@ -188,5 +188,7 @@ public static class Controls
 
     public static RedirectControl Redirect(object href) => new(href);
 
-    public static SearchBoxControl SearchBox() => new();
+    public static SearchBoxControl SearchBox => new();
+
+    public static MeshSearchControl MeshSearch => new();
 }

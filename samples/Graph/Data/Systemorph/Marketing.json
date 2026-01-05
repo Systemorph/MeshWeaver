@@ -10,6 +10,7 @@
   "addressSegments": 0,
   "isPersistent": true,
   "catalogMode": "hierarchical",
+  "catalogQuery": "namespace:Systemorph/Marketing scope:descendants",
   "content": {
     "id": "Marketing",
     "name": "Marketing",

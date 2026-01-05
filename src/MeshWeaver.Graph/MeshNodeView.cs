@@ -462,332 +462,64 @@ public static class MeshNodeView
 
     /// <summary>
     /// Renders the Catalog view showing nodes as thumbnails in a LayoutGrid.
-    /// Includes a search bar that filters results inline (no redirect).
-    /// For NodeTypes, shows instances of that type.
-    /// For instance nodes, shows children grouped by Category.
+    /// Uses MeshSearchControl for unified search and display.
+    /// For NodeType nodes, shows instances of that type (nodeType:name scope:subtree).
+    /// For instance nodes, uses CatalogQuery if set, otherwise defaults to namespace:path (direct children).
+    /// Render mode is determined by CatalogMode property (hierarchical or grouped).
     /// Reads search term from ?q= query parameter.
     /// </summary>
-    public static UiControl Catalog(LayoutAreaHost host, RenderingContext ctx)
+    public static IObservable<UiControl?> Catalog(LayoutAreaHost host, RenderingContext ctx)
     {
         var hubPath = host.Hub.Address.ToString();
-        var meshQuery = host.Hub.ServiceProvider.GetService<IMeshQuery>();
         var isNodeTypeMode = host.Hub.Configuration.Get<NodeTypeCatalogMode>() != null;
 
         // Get search term from query string (if present)
         var searchTerm = host.GetQueryStringParamValue("q")?.Trim();
 
-        if (meshQuery == null)
-        {
-            return Controls.Html("<p style=\"color: #888;\">Query service not available.</p>");
-        }
-
-        // For NodeType mode, get the definition to build the nodeType filter
-        if (isNodeTypeMode)
-        {
-            var definitionStream = host.Workspace.GetNodeContent<NodeTypeDefinition>();
-
-            return Controls.Stack
-                .WithWidth("100%")
-                .WithView(BuildSearchBar(hubPath, searchTerm), "catalogSearch")
-                .WithView(
-                    (h, _) => definitionStream
-                        .SelectMany(async definition =>
-                        {
-                            if (definition == null)
-                                return Controls.Markdown("*Loading...*");
-
-                            // Build nodeType filter path
-                            var nodeTypePath = string.IsNullOrEmpty(definition.Namespace)
-                                ? definition.Id
-                                : $"{definition.Namespace}/{definition.Id}";
-
-                            // Query: nodeType filter + optional search term
-                            var query = $"nodeType:{nodeTypePath}";
-                            if (!string.IsNullOrEmpty(searchTerm))
-                                query += $" {searchTerm}";
-                            return await BuildCatalogGridAsync(meshQuery, query);
-                        }),
-                    "CatalogContent");
-        }
-
-        // Instance node catalog - check for hierarchical mode
+        // Get node stream to access node properties
         var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? Array.Empty<MeshNode>())
             ?? Observable.Return<MeshNode[]>(Array.Empty<MeshNode>());
 
-        return Controls.Stack
-            .WithWidth("100%")
-            .WithView(BuildSearchBar(hubPath, searchTerm), "catalogSearch")
-            .WithView(
-                (h, _) => nodeStream.SelectMany(async nodes =>
-                {
-                    var node = nodes.FirstOrDefault(n => n.Path == hubPath);
-                    var catalogMode = node?.CatalogMode?.ToLowerInvariant();
-
-                    if (catalogMode == "hierarchical")
-                    {
-                        // Hierarchical mode: scope:descendants with tree structure + optional search term
-                        var query = $"namespace:{hubPath} scope:descendants";
-                        if (!string.IsNullOrEmpty(searchTerm))
-                            query += $" {searchTerm}";
-                        return await BuildCatalogGridHierarchicalAsync(meshQuery, query, hubPath);
-                    }
-                    else
-                    {
-                        // Default: grouped by category + optional search term
-                        var query = $"namespace:{hubPath}";
-                        if (!string.IsNullOrEmpty(searchTerm))
-                            query += $" scope:descendants {searchTerm}";
-                        return await BuildCatalogGridWithCategoriesAsync(meshQuery, query, hubPath);
-                    }
-                }),
-                "CatalogContent");
-    }
-
-    /// <summary>
-    /// Builds the search bar using SearchBoxControl with Monaco editor and autocomplete.
-    /// Search stays on the current catalog page by updating the URL with ?q= parameter.
-    /// The catalog reads the search term from the URL and filters results inline.
-    /// </summary>
-    private static UiControl BuildSearchBar(string hubPath, string? searchTerm = null)
-    {
-        return Controls.SearchBox()
-            .WithValue(searchTerm ?? "")
-            .WithNamespace(hubPath)
-            .WithPlaceholder("Search... (use @ for references)");
-    }
-
-    /// <summary>
-    /// Builds a LayoutGrid with thumbnail cards for each query result.
-    /// Renders icon, title, and description directly from node properties.
-    /// </summary>
-    private static async Task<UiControl> BuildCatalogGridAsync(IMeshQuery meshQuery, string query)
-    {
-        List<MeshNode> nodes;
-        try
+        return nodeStream.Select(nodes =>
         {
-            nodes = await meshQuery.QueryAsync<MeshNode>(query).ToListAsync();
-        }
-        catch
-        {
-            nodes = [];
-        }
+            var node = nodes.FirstOrDefault(n => n.Path == hubPath);
 
-        if (nodes.Count == 0)
-        {
-            return Controls.Html("<p style=\"color: #888;\">No items found.</p>");
-        }
-
-        // Build LayoutGrid with thumbnail cards rendered directly
-        var grid = Controls.LayoutGrid.WithSkin(s => s.WithSpacing(3));
-
-        foreach (var node in nodes)
-        {
-            // Render thumbnail directly from node properties (icon, title, description)
-            // Use wider columns: 1 per row on mobile, 2 on tablet, 2 on desktop, 3 on large screens
-            grid = grid.WithView(
-                MeshNodeThumbnailControl.FromNode(node, node.Path),
-                itemSkin => itemSkin.WithXs(12).WithSm(6).WithMd(6).WithLg(4));
-        }
-
-        return grid;
-    }
-
-    /// <summary>
-    /// Builds a hierarchical LayoutGrid showing parent-child relationships with indentation.
-    /// Groups top-level items by Category with headings, then shows tree structure.
-    /// Each root node and its entire subtree are kept in a single grid cell.
-    /// </summary>
-    private static async Task<UiControl> BuildCatalogGridHierarchicalAsync(IMeshQuery meshQuery, string query, string basePath)
-    {
-        List<MeshNode> nodes;
-        try
-        {
-            nodes = await meshQuery.QueryAsync<MeshNode>(query).ToListAsync();
-        }
-        catch
-        {
-            nodes = [];
-        }
-
-        // Filter out the base path node itself (only show children/descendants)
-        var basePathNormalized = basePath.Trim('/');
-        nodes = nodes.Where(n => n.Path != basePathNormalized).ToList();
-
-        if (nodes.Count == 0)
-        {
-            return Controls.Html("<p style=\"color: #888;\">No items found.</p>");
-        }
-
-        // Build hierarchy based on namespace containment
-        var allPaths = nodes.Select(n => n.Path).ToHashSet();
-
-        // Find root nodes - those that have no parent in the result set
-        var rootNodes = nodes
-            .Where(n => !HasParentInSet(n.Path, allPaths))
-            .ToList();
-
-        // Group root nodes by Category
-        var groups = rootNodes
-            .GroupBy(n => n.Category ?? "Uncategorized")
-            .OrderBy(g => g.Key)
-            .ToList();
-
-        // Build the hierarchical grid with category headings
-        var grid = Controls.LayoutGrid.WithSkin(s => s.WithSpacing(2));
-
-        foreach (var group in groups)
-        {
-            // Category heading spans full width
-            grid = grid.WithView(
-                Controls.Html($"<h3 style=\"margin: 24px 0 8px 0;\">{group.Key}</h3>"),
-                itemSkin => itemSkin.WithXs(12));
-
-            // Add each root node with its entire subtree as a single grid cell
-            foreach (var rootNode in group.OrderBy(n => n.DisplayOrder).ThenBy(n => n.Name))
+            // For NodeType mode, query by the node's full path as the nodeType filter
+            // Also limit to the node's namespace
+            if (isNodeTypeMode && node != null)
             {
-                // Build the entire tree structure in a single Stack
-                var treeStack = BuildNodeTreeStack(rootNode, nodes, 0);
-                grid = grid.WithView(treeStack, itemSkin => itemSkin.WithXs(12).WithSm(6).WithMd(6).WithLg(4));
+                var nodeTypePath = node.Path; // Full path like "Type/Person" or "Systemorph/Type/Project"
+                var nodeTypeNamespace = node.Namespace ?? "";
+                var hiddenQuery = string.IsNullOrEmpty(nodeTypeNamespace)
+                    ? $"nodeType:{nodeTypePath} scope:subtree"
+                    : $"namespace:{nodeTypeNamespace} nodeType:{nodeTypePath} scope:subtree";
+                return (UiControl?)Controls.MeshSearch
+                    .WithHiddenQuery(hiddenQuery)
+                    .WithVisibleQuery(searchTerm ?? "")
+                    .WithNamespace(hubPath)
+                    .WithPlaceholder("Search... (use @ for references)")
+                    .WithRenderMode(MeshSearchRenderMode.Hierarchical)
+                    .WithMaxColumns(3);
             }
-        }
 
-        return grid;
-    }
+            // Instance node catalog
+            // Use CatalogQuery if set, otherwise default to namespace:node.Namespace (direct children only)
+            var instanceHiddenQuery = node?.CatalogQuery ?? $"namespace:{node?.Namespace ?? hubPath}";
 
-    /// <summary>
-    /// Checks if a node has a parent in the given set of paths.
-    /// A parent exists if any other path is a prefix of this path (with / separator).
-    /// </summary>
-    private static bool HasParentInSet(string path, HashSet<string> allPaths)
-    {
-        var pathNormalized = path.Trim('/');
+            // Determine render mode from CatalogMode property (default: hierarchical)
+            var catalogMode = node?.CatalogMode?.ToLowerInvariant();
+            var renderMode = catalogMode == "grouped"
+                ? MeshSearchRenderMode.Grouped
+                : MeshSearchRenderMode.Hierarchical;
 
-        // Check all possible parent paths
-        var lastSlash = pathNormalized.LastIndexOf('/');
-        while (lastSlash > 0)
-        {
-            var parentPath = pathNormalized.Substring(0, lastSlash);
-            if (allPaths.Contains(parentPath))
-                return true;
-            lastSlash = parentPath.LastIndexOf('/');
-        }
-
-        return false;
-    }
-
-    /// <summary>
-    /// Finds direct children of a node within the result set.
-    /// A child is a node whose path starts with parent path + "/" and has no intermediate parent in the set.
-    /// </summary>
-    private static List<MeshNode> FindDirectChildren(MeshNode parent, List<MeshNode> allNodes)
-    {
-        var parentPath = parent.Path + "/";
-        var allPaths = allNodes.Select(n => n.Path).ToHashSet();
-
-        return allNodes
-            .Where(n => n.Path.StartsWith(parentPath) && !HasIntermediateParent(n.Path, parent.Path, allPaths))
-            .OrderBy(n => n.DisplayOrder)
-            .ThenBy(n => n.Name)
-            .ToList();
-    }
-
-    /// <summary>
-    /// Checks if there's an intermediate parent between child and parent in the set.
-    /// </summary>
-    private static bool HasIntermediateParent(string childPath, string parentPath, HashSet<string> allPaths)
-    {
-        var childNormalized = childPath.Trim('/');
-        var parentNormalized = parentPath.Trim('/');
-
-        // Start from child and walk up to parent
-        var lastSlash = childNormalized.LastIndexOf('/');
-        while (lastSlash > parentNormalized.Length)
-        {
-            var intermediatePath = childNormalized.Substring(0, lastSlash);
-            if (allPaths.Contains(intermediatePath))
-                return true;
-            lastSlash = intermediatePath.LastIndexOf('/');
-        }
-
-        return false;
-    }
-
-    /// <summary>
-    /// Builds a Stack containing a node and all its children with proper indentation.
-    /// The entire subtree is kept together in a single container.
-    /// </summary>
-    private static UiControl BuildNodeTreeStack(MeshNode node, List<MeshNode> allNodes, int indentLevel)
-    {
-        var stack = Controls.Stack.WithWidth("100%");
-
-        // Add the current node with indentation
-        var marginLeft = indentLevel * 24;
-        stack = stack.WithView(
-            Controls.Stack
-                .WithStyle($"margin-left: {marginLeft}px; margin-bottom: 8px;")
-                .WithView(MeshNodeThumbnailControl.FromNode(node, node.Path)));
-
-        // Find and add direct children recursively
-        var children = FindDirectChildren(node, allNodes);
-        foreach (var child in children)
-        {
-            stack = stack.WithView(BuildNodeTreeStack(child, allNodes, indentLevel + 1));
-        }
-
-        return stack;
-    }
-
-    /// <summary>
-    /// Builds a LayoutGrid with thumbnail cards grouped by Category.
-    /// Each category gets a heading followed by its nodes.
-    /// </summary>
-    private static async Task<UiControl> BuildCatalogGridWithCategoriesAsync(IMeshQuery meshQuery, string query, string basePath)
-    {
-        List<MeshNode> nodes;
-        try
-        {
-            nodes = await meshQuery.QueryAsync<MeshNode>(query).ToListAsync();
-        }
-        catch
-        {
-            nodes = [];
-        }
-
-        // Filter out the base path node itself (only show children)
-        var basePathNormalized = basePath.Trim('/');
-        nodes = nodes.Where(n => n.Path != basePathNormalized).ToList();
-
-        if (nodes.Count == 0)
-        {
-            return Controls.Html("<p style=\"color: #888;\">No items found.</p>");
-        }
-
-        // Group nodes by Category
-        var groups = nodes
-            .GroupBy(n => n.Category ?? "Uncategorized")
-            .OrderBy(g => g.Key)
-            .ToList();
-
-        // Build LayoutGrid with category headings
-        var grid = Controls.LayoutGrid.WithSkin(s => s.WithSpacing(3));
-
-        foreach (var group in groups)
-        {
-            // Category heading spans full width
-            grid = grid.WithView(
-                Controls.Html($"<h3 style=\"margin: 24px 0 8px 0;\">{group.Key}</h3>"),
-                itemSkin => itemSkin.WithXs(12));
-
-            // Nodes in this category
-            foreach (var node in group.OrderBy(n => n.DisplayOrder).ThenBy(n => n.Name))
-            {
-                grid = grid.WithView(
-                    MeshNodeThumbnailControl.FromNode(node, node.Path),
-                    itemSkin => itemSkin.WithXs(12).WithSm(6).WithMd(6).WithLg(4));
-            }
-        }
-
-        return grid;
+            return (UiControl?)Controls.MeshSearch
+                .WithHiddenQuery(instanceHiddenQuery)
+                .WithVisibleQuery(searchTerm ?? "")
+                .WithNamespace(hubPath)
+                .WithPlaceholder("Search... (use @ for references)")
+                .WithRenderMode(renderMode)
+                .WithMaxColumns(3);
+        });
     }
 
     /// <summary>

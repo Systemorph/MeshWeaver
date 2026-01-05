@@ -125,11 +125,19 @@ public record MeshNode([property: Key] string Id, string? Namespace = null)
 
     /// <summary>
     /// Controls how children are displayed in the catalog view.
-    /// - "grouped": Group by category with headings (default for instances)    
-    /// - "hierarchical": Show parent-child relationships with indentation, uses scope:descendants
+    /// - "grouped": Group by category with headings (default for instances)
+    /// - "hierarchical": Show parent-child relationships with indentation
     /// - null: Use default behavior based on node type
     /// </summary>
     public string? CatalogMode { get; init; }
+
+    /// <summary>
+    /// Override the default catalog query.
+    /// Default is "namespace:{path}" (direct children only).
+    /// Set to "namespace:{path} scope:descendants" to show all descendants.
+    /// Supports any valid query syntax.
+    /// </summary>
+    public string? CatalogQuery { get; init; }
 
     /// <summary>
     /// Icon URL or identifier for display in UI.
