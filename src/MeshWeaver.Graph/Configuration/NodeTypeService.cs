@@ -166,18 +166,34 @@ internal class NodeTypeService : INodeTypeService, IDisposable
 
         var nodeType = node.NodeType;
 
-        // Get cached HubConfiguration which includes DefaultNodeHubConfiguration
-        // This works even when nodeType is null/empty - returns DefaultNodeHubConfiguration if set
-        var cachedHubConfig = GetCachedHubConfiguration(nodeType ?? "");
-        if (cachedHubConfig != null)
-        {
-            return node with { HubConfiguration = Observable.Return<Func<MessageHubConfiguration, MessageHubConfiguration>?>(cachedHubConfig) };
-        }
-
-        // No cached config and no default config - if there's a NodeType, try async compilation
         if (!string.IsNullOrEmpty(nodeType))
         {
+            // Check if this specific nodeType config is cached
+            if (_hubConfigurations.ContainsKey(nodeType))
+            {
+                // NodeType config is compiled - return combined config immediately
+                var cachedHubConfig = GetCachedHubConfiguration(nodeType);
+                return node with { HubConfiguration = Observable.Return<Func<MessageHubConfiguration, MessageHubConfiguration>?>(cachedHubConfig) };
+            }
+
+            // Check if this is a built-in NodeType (registered via AddMeshNodes)
+            if (meshConfiguration.Nodes.TryGetValue(nodeType, out var builtInNode) &&
+                builtInNode.HubConfiguration != null)
+            {
+                // Use the built-in configuration directly
+                return node with { HubConfiguration = builtInNode.HubConfiguration };
+            }
+
+            // NodeType not compiled yet - trigger async compilation
+            // This will compile the nodeType and return combined config when done
             return node with { HubConfiguration = GetHubConfigurationForNodeType(nodeType) };
+        }
+
+        // No NodeType - return default config if available
+        var defaultConfig = meshConfiguration.DefaultNodeHubConfiguration;
+        if (defaultConfig != null)
+        {
+            return node with { HubConfiguration = Observable.Return<Func<MessageHubConfiguration, MessageHubConfiguration>?>(defaultConfig) };
         }
 
         return node;
