@@ -307,6 +307,15 @@
         overflow: auto;
     }
 
+    /* Main content pane inside splitter */
+    .main-content-pane {
+        height: 100%;
+        width: 100%;
+        overflow: auto;
+        padding: 16px;
+        box-sizing: border-box;
+    }
+
     /* Style the splitter panes */
     ::deep .main-with-chat fluent-multi-splitter {
         height: 100%;

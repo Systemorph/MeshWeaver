@@ -17,7 +17,9 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
 
     // Splitter pane sizes - default 3:1 ratio (75% main, 25% chat)
     private string MainPaneSize => ChatState.Width.HasValue ? $"{100 - ChatState.Width.Value}%" : "75%";
+    private string MainPaneSizeWithChat => IsAIChatVisible ? MainPaneSize : "100%";
     private string ChatPaneSize => ChatState.Width.HasValue ? $"{ChatState.Width.Value}%" : "25%";
+    private string ChatPaneSizeWithVisibility => IsAIChatVisible ? ChatPaneSize : "0%";
     private int chatPaneSizePercent = 25;
 
     /// <summary>
@@ -144,26 +146,9 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
     private async Task EnsureJsModuleAsync()
     {
         jsModule ??= await JSRuntime.InvokeAsync<IJSObjectReference>(
-            "import", "./_content/MeshWeaver.Blazor.Chat/AgentChatView.razor.js");
+            "import", "./_content/MeshWeaver.Blazor.Portal/Layout/PortalLayoutBase.razor.js");
     }
 
-    /// <summary>
-    /// Called when the splitter is resized.
-    /// </summary>
-    private void OnSplitterResize(FluentMultiSplitterResizeEventArgs e)
-    {
-        // The second pane (index 1) is the chat pane
-        if (e.PaneIndex == 1)
-        {
-            // NewSize is a percentage value (0-100)
-            var percent = (int)Math.Round(e.NewSize);
-            if (percent > 0 && percent <= 100)
-            {
-                chatPaneSizePercent = percent;
-                ChatState.SetSize(percent, null);
-            }
-        }
-    }
 
     protected async Task HandleNewChatAsync()
     {

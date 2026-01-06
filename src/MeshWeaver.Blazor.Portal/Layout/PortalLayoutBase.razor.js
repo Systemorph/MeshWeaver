@@ -235,16 +235,30 @@ export async function removeAll() {
 }
 
 // =============================================================================
+// Blazor Interop Exports
+// =============================================================================
+
+let blazorDotNetRef = null;
+
+export function initialize(dotNetRef) {
+    blazorDotNetRef = dotNetRef;
+}
+
+export function applyChatSize(width, height) {
+    // Size is now managed by FluentSplitter, this is a no-op
+}
+
+// =============================================================================
 // Initialization
 // =============================================================================
 
-function initialize() {
+function initializePage() {
     checkCookieConsent();
     window.themeHandler.initialize();
 }
 
 if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', initialize);
+    document.addEventListener('DOMContentLoaded', initializePage);
 } else {
-    initialize();
+    initializePage();
 }

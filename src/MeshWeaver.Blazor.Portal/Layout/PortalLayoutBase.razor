@@ -1,7 +1,3 @@
-@using MeshWeaver.Blazor.Portal.Infrastructure
-@using MeshWeaver.Blazor.Portal.Resize
-@using MeshWeaver.Blazor.Components
-@using MeshWeaver.Blazor.Chat
 @using Orientation = Microsoft.FluentUI.AspNetCore.Components.Orientation
 @inherits LayoutComponentBase
 @inject IDialogService DialogService
@@ -65,49 +61,27 @@
         <FluentMessageBarProvider Section="@MessageBarSection" Class="top-messagebar" />
     </div>
 
-    @if (IsAIChatVisible && ViewportInformation.IsDesktop)
-    {
-        <div class="main-with-chat">
-            <FluentMultiSplitter Orientation="@(ChatPositionValue == ChatPosition.Bottom ? Orientation.Vertical : Orientation.Horizontal)"
-                                 OnResize="@OnSplitterResize"
-                                 Style="height: 100%; width: 100%;">
-                <FluentMultiSplitterPane Size="@MainPaneSize" Min="200px">
-                    <FluentBodyContent Class="custom-body-content body-content-splitter">
-                        <FluentToastProvider MaxToastCount="3" Timeout="5000" />
-                        @Body
-                    </FluentBodyContent>
-                </FluentMultiSplitterPane>
-                <FluentMultiSplitterPane Size="@ChatPaneSize" Min="250px" Max="60%" Resizable="true">
-                    <div class="ai-chat-content">
-                        <AgentChatView @ref="chatComponent" ViewModel="@chatControl" OnCloseRequested="ToggleAIChatVisibility" OnPositionChanged="HandleChatPositionChanged" />
-                    </div>
-                </FluentMultiSplitterPane>
-            </FluentMultiSplitter>
-        </div>
-    }
-    else
-    {
-        <FluentBodyContent Class="custom-body-content body-content">
-            <FluentToastProvider MaxToastCount="3" Timeout="5000" />
-            @Body
-        </FluentBodyContent>
-
-        @if (IsAIChatVisible)
-        {
-            <!-- Mobile: full-screen overlay -->
-            <div class="ai-chat-overlay">
-                <div class="ai-chat-content">
-                    <AgentChatView @ref="chatComponent" ViewModel="@chatControl" OnCloseRequested="ToggleAIChatVisibility" OnPositionChanged="HandleChatPositionChanged" />
-                </div>
-            </div>
-        }
-    }
-
     <FluentDialogProvider />
     <FluentTooltipProvider />
     <FluentMenuProvider />
     <FluentToastProvider MaxToastCount="10" />
     <FluentKeyCodeProvider />
+
+    <FluentMultiSplitter Orientation="@(ChatPositionValue == ChatPosition.Bottom ? Orientation.Vertical : Orientation.Horizontal)"
+                         Style="grid-area: main; height: 100%; width: 100%;"
+                         Class="body-splitter">
+        <FluentMultiSplitterPane Size="@MainPaneSizeWithChat" Min="200px">
+            <div class="main-content-pane">
+                <FluentToastProvider MaxToastCount="3" Timeout="5000" />
+                @Body
+            </div>
+        </FluentMultiSplitterPane>
+        <FluentMultiSplitterPane Size="@ChatPaneSizeWithVisibility" Min="@(IsAIChatVisible ? "250px" : "0")" Max="60%" Resizable="@IsAIChatVisible" Collapsible="true" Collapsed="@(!IsAIChatVisible)">
+            <div class="ai-chat-content" style="@(IsAIChatVisible ? "" : "display: none;")">
+                <AgentChatView @ref="chatComponent" ViewModel="@chatControl" OnCloseRequested="ToggleAIChatVisibility" OnPositionChanged="HandleChatPositionChanged" />
+            </div>
+        </FluentMultiSplitterPane>
+    </FluentMultiSplitter>
 
     <div id="blazor-error-ui">
         An unhandled error has occurred.

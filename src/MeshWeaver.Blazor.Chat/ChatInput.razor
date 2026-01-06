@@ -23,7 +23,8 @@
                 <FluentTextField @bind-Value="@contextDisplayText"
                                  @bind-Value:after="@OnContextTextChanged"
                                  Placeholder="@ContextPlaceholder"
-                                 Class="selector-context" />
+                                 Class="selector-context"
+                                 Style="min-width: 50px;" />
 
                 @* 2. Agent dropdown *@
                 <FluentSelect TOption="AgentDisplayInfo"
@@ -32,7 +33,8 @@
                               OptionText="@(a => a?.Name ?? "")"
                               OptionValue="@(a => a?.Name ?? "")"
                               SelectedOption="@SelectedAgentInfo"
-                              SelectedOptionChanged="@OnAgentSelectChanged" />
+                              SelectedOptionChanged="@OnAgentSelectChanged" 
+                              Style="min-width: 50px;" />
 
                 @* 3. Model dropdown *@
                 @if (AvailableModels.Count > 0)
@@ -43,7 +45,9 @@
                                   OptionText="@(m => m)"
                                   OptionValue="@(m => m)"
                                   Value="@SelectedModel"
-                                  ValueChanged="@OnModelValueChanged" />
+                                  ValueChanged="@OnModelValueChanged"
+                                  Style="min-width: 50px;" 
+                                  />
                 }
             </div>
         }

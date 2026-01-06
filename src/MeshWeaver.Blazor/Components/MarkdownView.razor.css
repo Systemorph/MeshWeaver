@@ -252,4 +252,41 @@
     border-color: var(--accent-fill-rest, #0078d4);
 }
 
+/* Table background overrides - use Fluent UI tokens */
+.markdown-body ::deep table {
+    background-color: transparent;
+}
+
+.markdown-body ::deep table tr {
+    background-color: var(--neutral-layer-1);
+    border-top-color: var(--neutral-stroke-rest, #d1d9e0);
+}
+
+.markdown-body ::deep table tr:nth-child(2n) {
+    background-color: var(--neutral-layer-2);
+}
+
+.markdown-body ::deep table td,
+.markdown-body ::deep table th {
+    border-color: var(--neutral-stroke-rest, #d1d9e0);
+}
+
+.markdown-body ::deep table th {
+    background-color: var(--neutral-layer-2);
+}
+
+/* Image background - transparent for proper display */
+.markdown-body ::deep img {
+    background-color: transparent;
+}
+
+/* Mermaid diagram backgrounds */
+.markdown-body ::deep .mermaid {
+    background-color: transparent;
+}
+
+.markdown-body ::deep .mermaid svg {
+    background-color: transparent;
+}
+
 /* Collaborative Editing Annotations are in wwwroot/css/collaborative-annotations.css */

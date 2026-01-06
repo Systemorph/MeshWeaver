@@ -87,7 +87,7 @@
 /* Context field - larger min-width */
 .selector-context {
     flex: 2 1 0;
-    min-width: 100px;
+    min-width: 50px;
 }
 
 /* Agent and model selectors */

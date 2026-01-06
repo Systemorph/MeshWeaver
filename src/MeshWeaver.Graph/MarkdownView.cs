@@ -180,7 +180,7 @@ public static class MarkdownView
         // No annotations or non-markup mode - simple layout
         var container = Controls.Stack
             .WithWidth("100%")
-            .WithStyle("max-width: 900px; margin: 0 auto; padding: 24px;");
+            .WithStyle("max-width: 900px; margin: 0 auto; padding: 24px; background: var(--neutral-layer-1);");
 
         container = container.WithView(headerStack);
 
@@ -227,7 +227,7 @@ public static class MarkdownView
         // Outer container - centered with max width
         var outerContainer = Controls.Stack
             .WithWidth("100%")
-            .WithStyle("max-width: 1200px; margin: 0 auto; padding: 24px;");
+            .WithStyle("max-width: 1200px; margin: 0 auto; padding: 24px; background: var(--neutral-layer-1);");
 
         outerContainer = outerContainer.WithView(headerStack);
 
