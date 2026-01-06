@@ -563,7 +563,7 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
                 }
 
                 // Get the current AgentChat instance
-                var agentChat = lazyChat.IsValueCreated ? await lazyChat.Value : null;
+                var agentChat = lazyChat?.IsValueCreated == true ? await lazyChat.Value : null;
 
                 await ChatPersistenceService.SaveConversationAsync(currentConversation, agentChat);
 
@@ -630,6 +630,10 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
         IAgentChat chat;
         try
         {
+            if (lazyChat == null)
+            {
+                throw new InvalidOperationException("Chat service not initialized");
+            }
             chat = await lazyChat.Value;
         }
         catch (InvalidOperationException ex) when (ex.Message.Contains("API key") || ex.Message.Contains("endpoint URL"))

@@ -40,6 +40,7 @@ internal class DynamicMeshNodeAttributeGenerator
         // Using statements
         sb.AppendLine("using System;");
         sb.AppendLine("using System.Collections.Generic;");
+        sb.AppendLine("using System.ComponentModel;");
         sb.AppendLine("using System.ComponentModel.DataAnnotations;");
         sb.AppendLine("using System.Linq;");
         sb.AppendLine("using System.Reactive.Linq;");

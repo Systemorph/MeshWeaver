@@ -3,15 +3,7 @@
 
 <HeadContent>
     <FluentDesignTheme StorageName="theme" @bind-Mode="@Mode" />
-    <link href="_content/MeshWeaver.Blazor/css/markdown.css" rel="stylesheet" />
-    @if (Mode == DesignThemeModes.Light)
-    {
-        <link href="_content/MeshWeaver.Blazor/css/github.min.css" rel="stylesheet" />
-    }
-    else
-    {
-        <link href="_content/MeshWeaver.Blazor/css/github-dark.min.css" rel="stylesheet" />
-    }
+    <link href="https://cdn.jsdelivr.net/npm/github-markdown-css@5.8.1/github-markdown.min.css" rel="stylesheet" />
     <link href="_content/MeshWeaver.Blazor/css/collaborative-annotations.css" rel="stylesheet" />
 </HeadContent>
 

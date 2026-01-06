@@ -162,6 +162,19 @@ public partial class MarkdownView
 
     private void RenderReferencesSection(RenderTreeBuilder builder)
     {
+        // Get current address to filter out self-references
+        var currentAddress = Stream?.Owner?.ToString();
+
+        // Filter references: exclude self-references and get distinct by raw path
+        var referencesToShow = References
+            .DistinctBy(r => r.RawPath)
+            .Where(r => !IsSelfReference(r.RawPath, currentAddress))
+            .ToList();
+
+        // Don't render section if no references remain after filtering
+        if (referencesToShow.Count == 0)
+            return;
+
         builder.OpenElement(1, "section");
         builder.AddAttribute(2, "class", "ucr-references");
 
@@ -172,7 +185,7 @@ public partial class MarkdownView
         builder.OpenElement(5, "div");
         builder.AddAttribute(6, "class", "ucr-references-grid");
 
-        foreach (var reference in References.DistinctBy(r => r.RawPath))
+        foreach (var reference in referencesToShow)
         {
             builder.OpenComponent<UcrReferenceCard>(10);
             builder.AddAttribute(11, nameof(UcrReferenceCard.Path), reference.RawPath);
@@ -182,6 +195,33 @@ public partial class MarkdownView
 
         builder.CloseElement(); // div.ucr-references-grid
         builder.CloseElement(); // section.ucr-references
+    }
+
+    /// <summary>
+    /// Check if a reference path is a self-reference to the current page.
+    /// A self-reference is when the path points to the same node as the current address,
+    /// even if it has additional path segments (like data:, content:, schema:).
+    /// </summary>
+    private static bool IsSelfReference(string referencePath, string? currentAddress)
+    {
+        if (string.IsNullOrEmpty(currentAddress) || string.IsNullOrEmpty(referencePath))
+            return false;
+
+        // Extract the base path before any prefix (data:, content:, schema:, area:)
+        var basePath = referencePath;
+        var prefixIndex = referencePath.IndexOf(':');
+        if (prefixIndex > 0)
+        {
+            // Find the last '/' before the prefix
+            var lastSlash = referencePath.LastIndexOf('/', prefixIndex);
+            if (lastSlash > 0)
+                basePath = referencePath.Substring(0, lastSlash);
+        }
+
+        // Compare base path with current address (case-insensitive)
+        return string.Equals(basePath, currentAddress, StringComparison.OrdinalIgnoreCase) ||
+               basePath.StartsWith(currentAddress + "/", StringComparison.OrdinalIgnoreCase) ||
+               currentAddress.StartsWith(basePath + "/", StringComparison.OrdinalIgnoreCase);
     }
 
 

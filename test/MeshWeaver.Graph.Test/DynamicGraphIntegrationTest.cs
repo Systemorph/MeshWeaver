@@ -1539,6 +1539,91 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
 
         control.Should().NotBeNull("Code area should have a control");
     }
+
+    /// <summary>
+    /// Test that loading the default layout area (empty string) from MeshWeaver node works.
+    /// This test diagnoses eternal spinner issue when navigating to /MeshWeaver.
+    /// </summary>
+    [Fact(Timeout = 30000)]
+    public async Task MeshWeaver_GetDefaultLayoutArea_ShouldNotHang()
+    {
+        // Arrange
+        var meshWeaverAddress = new Address("MeshWeaver");
+
+        // Get a client with data services configured
+        var client = GetClient(c => c
+            .WithInitialization((h, _) => RoutingService.RegisterStreamAsync(h))
+            .AddLayoutClient(cc => cc)
+            .AddData(data => data));
+
+        Output.WriteLine($"Samples data directory: {SamplesDataDirectory}");
+
+        // First check if MeshWeaver node exists
+        var meshCatalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
+        var node = await meshCatalog.GetNodeAsync(meshWeaverAddress);
+        node.Should().NotBeNull("MeshWeaver node should exist in samples");
+        Output.WriteLine($"MeshWeaver node: Path={node.Path}, NodeType={node.NodeType}");
+
+        // Initialize hub via PingRequest
+        Output.WriteLine("Sending PingRequest to MeshWeaver...");
+        await client.AwaitResponse(
+            new PingRequest(),
+            o => o.WithTarget(meshWeaverAddress),
+            TestContext.Current.CancellationToken);
+        Output.WriteLine("PingRequest completed successfully");
+
+        // Act: Request the default layout area (empty = default view)
+        var workspace = client.GetWorkspace();
+        var reference = new LayoutAreaReference(string.Empty);
+
+        Output.WriteLine("Getting remote stream for MeshWeaver default layout area...");
+        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(meshWeaverAddress, reference);
+
+        Output.WriteLine("Waiting for first value from stream...");
+        // Wait for the stream to emit a value - this is where eternal spinner would occur
+        var value = await stream.FirstAsync();
+
+        Output.WriteLine($"Received value: {value}");
+
+        // Assert
+        value.Should().NotBe(default(JsonElement),
+            "MeshWeaver node should return default layout area content");
+    }
+
+    /// <summary>
+    /// Test that loading the Catalog area from MeshWeaver node works.
+    /// </summary>
+    [Fact(Timeout = 30000)]
+    public async Task MeshWeaver_GetCatalogArea_ShouldNotHang()
+    {
+        // Arrange
+        var meshWeaverAddress = new Address("MeshWeaver");
+
+        var client = GetClient(c => c
+            .WithInitialization((h, _) => RoutingService.RegisterStreamAsync(h))
+            .AddLayoutClient(cc => cc)
+            .AddData(data => data));
+
+        // Initialize hub
+        await client.AwaitResponse(
+            new PingRequest(),
+            o => o.WithTarget(meshWeaverAddress),
+            TestContext.Current.CancellationToken);
+
+        // Act: Request the Catalog area
+        var workspace = client.GetWorkspace();
+        var reference = new LayoutAreaReference(MeshNodeView.CatalogArea);
+
+        Output.WriteLine("Getting Catalog area for MeshWeaver...");
+        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(meshWeaverAddress, reference);
+
+        var value = await stream.FirstAsync();
+        Output.WriteLine($"Received Catalog area value");
+
+        // Assert
+        value.Should().NotBe(default(JsonElement),
+            "MeshWeaver Catalog area should return content");
+    }
 }
 
 [CollectionDefinition("SamplesGraphDataTests", DisableParallelization = true)]
