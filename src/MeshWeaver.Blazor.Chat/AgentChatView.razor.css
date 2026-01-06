@@ -1,12 +1,4 @@
-/* Prevent outer page scrolling when chat is active */
-html,
-body {
-    overflow: hidden;
-    height: 100%;
-    margin: 0;
-    padding: 0;
-}
-
+/* Chat component container - should NOT affect global html/body styles */
 .chat-app-container,
 .chat-app-container * {
     box-sizing: border-box;

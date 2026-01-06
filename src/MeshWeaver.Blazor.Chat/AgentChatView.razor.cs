@@ -1,4 +1,4 @@
-using MeshWeaver.AI;
+﻿using MeshWeaver.AI;
 using MeshWeaver.AI.Commands;
 using MeshWeaver.AI.Completion;
 using MeshWeaver.AI.Parsing;
@@ -14,8 +14,6 @@ using Microsoft.AspNetCore.Components;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
-using Microsoft.JSInterop;
-using AgentConfiguration = MeshWeaver.Graph.Configuration.AgentConfiguration;
 using TextContent = Microsoft.Extensions.AI.TextContent;
 
 namespace MeshWeaver.Blazor.Chat;
@@ -89,19 +87,6 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
         // Subscribe to navigation changes to update agent selection
         NavigationManager.LocationChanged += OnLocationChanged;
 
-        // Remove padding/margin from body-content when this is a standalone chat page
-        var currentPath = NavigationManager.ToBaseRelativePath(NavigationManager.Uri);
-        if (currentPath == "chat")
-        {
-            await JSRuntime.InvokeVoidAsync("eval", @"
-                const bodyContent = document.querySelector('.body-content, .custom-body-content');
-                if (bodyContent) {
-                    bodyContent.style.padding = '0';
-                    bodyContent.style.margin = '0';
-                }
-            ");
-        }
-
         // Initialize agent and model selections
         await InitializeAgentAndModelSelectionsAsync();
 
@@ -163,48 +148,53 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
     }
 
     /// <summary>
-    /// Handles navigation changes to update context and agent selection.
+    /// Handles navigation changes to update context display.
+    /// NOTE: The chat persists across navigation and does NOT reinstantiate the agent.
+    /// The user can manually change context/agent if needed.
     /// </summary>
     private async void OnLocationChanged(object? sender, Microsoft.AspNetCore.Components.Routing.LocationChangedEventArgs e)
     {
-        await InvokeAsync(() =>
+        try
         {
-            var newContext = GetCurrentAgentContext();
-
-            // Check if the context has actually changed (compare address and layout area)
-            var contextChanged = !ContextsAreEqual(lastNavigationContext, newContext);
-
-            if (contextChanged)
+            await InvokeAsync(() =>
             {
-                Logger.LogDebug("Navigation context changed from {OldContext} to {NewContext}",
-                    lastNavigationContext?.Address?.ToString() ?? "null",
-                    newContext?.Address?.ToString() ?? "null");
+                var newContext = GetCurrentAgentContext();
 
-                lastNavigationContext = newContext;
+                // Check if the context has actually changed (compare address and layout area)
+                var contextChanged = !ContextsAreEqual(lastNavigationContext, newContext);
 
-                // Update the context path for the UI combobox
-                var newPath = NavigationManager.ToBaseRelativePath(NavigationManager.Uri);
-                if (newPath != selectedContextPath)
+                if (contextChanged)
                 {
-                    selectedContextPath = string.IsNullOrEmpty(newPath) ? null : newPath;
-                }
+                    Logger.LogDebug("Navigation context changed from {OldContext} to {NewContext}",
+                        lastNavigationContext?.Address?.ToString() ?? "null",
+                        newContext?.Address?.ToString() ?? "null");
 
-                // Try to find an agent that matches the new context
-                var matchingAgent = SelectAgentByContext();
-                if (matchingAgent != null && matchingAgent.Name != selectedAgentInfo?.Name)
-                {
-                    Logger.LogDebug("Auto-selecting agent {AgentName} based on navigation context", matchingAgent.Name);
-                    OnAgentInfoChanged(matchingAgent);
-                }
-                else
-                {
-                    // Even if agent didn't change, reinitialize with new context
-                    ScheduleAgentReinstantiation();
-                }
+                    lastNavigationContext = newContext;
 
-                StateHasChanged();
-            }
-        });
+                    // Update the context path for the UI display only - do NOT reinstantiate the agent
+                    // The chat should persist across navigation without resetting
+                    var newPath = NavigationManager.ToBaseRelativePath(NavigationManager.Uri);
+                    if (newPath != selectedContextPath)
+                    {
+                        selectedContextPath = string.IsNullOrEmpty(newPath) ? null : newPath;
+                    }
+
+                    // NOTE: We intentionally do NOT auto-select agents or reinstantiate on navigation
+                    // The chat is an integral part of the layout and should persist across page changes
+                    // Users can manually change context/agent if needed
+
+                    StateHasChanged();
+                }
+            });
+        }
+        catch (ObjectDisposedException)
+        {
+            // Component was disposed during navigation - this is expected, ignore
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Error handling navigation change in chat");
+        }
     }
 
     /// <summary>
@@ -762,12 +752,16 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
     }
     private async Task InvokeStreamingAsync(ChatMessage userMessage, IAgentChat chat, string lastRole, TextContent responseText)
     {
+        Logger.LogDebug("Starting streaming response");
+        var updateCount = 0;
+
         // Stream and display a new response from the IChatClient
         await foreach (var update in chat.GetStreamingResponseAsync([userMessage], currentResponseCancellation.Token))
         {
+            updateCount++;
             var currentAuthor = update.AuthorName ?? "Assistant";
-
-
+            Logger.LogDebug("Streaming update #{Count}: Author={Author}, TextLength={Length}",
+                updateCount, currentAuthor, update.Text?.Length ?? 0);
 
             if (lastRole == currentAuthor)
             {
@@ -791,14 +785,20 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
                 {
                     AuthorName = currentAuthor
                 };
+                Logger.LogDebug("Created new response message for author: {Author}", currentAuthor);
             }
 
             if (currentResponseMessage != null)
+            {
+                Logger.LogDebug("Notifying message change, text length: {Length}", currentResponseMessage.Text?.Length ?? 0);
                 ChatMessageItem.NotifyChanged(currentResponseMessage);
+            }
 
+            Logger.LogDebug("Calling StateHasChanged");
             StateHasChanged();
         }
 
+        Logger.LogDebug("Streaming completed, total updates: {Count}", updateCount);
         // Delegation messages are now added immediately during streaming, no need to defer them
     }
 
