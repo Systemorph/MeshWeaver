@@ -1,0 +1,19 @@
+{
+  "id": "ToolIntegration",
+  "namespace": "Systemorph/Marketing",
+  "name": "Tool Integration",
+  "nodeType": "Markdown",
+  "category": "MeshWeaver",
+  "description": "Connect AI agents to existing systems through configurable tools",
+  "icon": "/static/content/Systemorph/Marketing/icons/share.svg",
+  "displayOrder": 33,
+  "addressSegments": 0,
+  "isPersistent": true,
+  "content": {
+    "$type": "MarkdownDocument",
+    "id": "ToolIntegration",
+    "title": "Tool Integration",
+    "iconName": "Document",
+    "content": "# Tool Integration\n\nAI agents need to interact with the real world - read documents, query databases, update systems. MeshWeaver provides a configurable tool layer that connects agents to existing infrastructure.\n\n## What Are Tools?\n\nTools are capabilities that AI agents can invoke:\n\n```mermaid\ngraph TD\n    subgraph \"AI Agent\"\n        A[Agent Logic]\n    end\n\n    subgraph \"Available Tools\"\n        B[Read Document]\n        C[Query Data Mesh]\n        D[Update Record]\n        E[Send Notification]\n    end\n\n    subgraph \"External Systems\"\n        F[Document Store]\n        G[Databases]\n        H[Workflow System]\n        I[Email]\n    end\n\n    A -->|invoke| B --> F\n    A -->|invoke| C --> G\n    A -->|invoke| D --> H\n    A -->|invoke| E --> I\n```\n\n## Built-in Tools\n\n| Tool Category | Capabilities |\n|---------------|-------------|\n| **Data Mesh Query** | Access any addressable data - records, documents, metadata |\n| **Document Parser** | Extract content from PDFs, Excel, Word |\n| **Vector Search** | Semantic search across indexed content |\n| **Business Rules** | Apply configured validation rules |\n| **Workflow Trigger** | Initiate downstream processes |\n\n## External Tool Connectors\n\n| System Type | Integration |\n|-------------|-------------|\n| **Document Management** | REST API connector |\n| **Email (Outlook)** | Microsoft Graph API |\n| **Cloud Storage** | Native connectors |\n| **Databases** | SQL/NoSQL connectors |\n| **Custom APIs** | Configurable REST endpoints |\n\n## Tool Configuration\n\nTools are defined as data in the mesh - configurable without code changes:\n\n```yaml\ntool:\n  name: queryContracts\n  description: Search and retrieve contract information\n  endpoint: /api/contracts/search\n  parameters:\n    - name: clientId\n      type: string\n      required: false\n    - name: dateRange\n      type: dateRange\n      required: false\n  returns:\n    type: contractList\n```\n\n## Agent-Tool Mapping\n\nDifferent agents have access to different tools:\n\n```mermaid\ngraph LR\n    subgraph \"Research Agent\"\n        R[Can search, can read]\n    end\n    \n    subgraph \"Processing Agent\"\n        P[Can read, can write]\n    end\n    \n    subgraph \"Notification Agent\"\n        N[Can read, can notify]\n    end\n    \n    subgraph \"Tools\"\n        T1[Search]\n        T2[Read]\n        T3[Write]\n        T4[Notify]\n    end\n    \n    R --> T1\n    R --> T2\n    P --> T2\n    P --> T3\n    N --> T2\n    N --> T4\n```\n\n## Security & Governance\n\n| Concern | How It's Addressed |\n|---------|-------------------|\n| **Access Control** | Agents only access permitted tools |\n| **Audit Trail** | Every tool invocation logged |\n| **Rate Limiting** | Configurable limits per tool |\n| **Validation** | Input/output schema enforcement |\n\n## Benefits\n\n- **Extensibility**: Add new tools without code changes\n- **Security**: Fine-grained tool permissions\n- **Reusability**: Tools shared across agents\n- **Observability**: Full trace of tool usage\n- **Flexibility**: Connect to any system with REST API"
+  }
+}

@@ -73,59 +73,62 @@ public static class ContentCollectionsExtensions
     /// </summary>
     public const string FileBrowserAreaName = "$FileBrowser";
 
-    /// <summary>
-    /// Adds content collection infrastructure without registering layout areas.
-    /// Use this at the mesh level to set up the content service and base storage collections.
-    /// Node hubs should call AddContentCollections() which includes layout area registration.
-    /// </summary>
-    public static MessageHubConfiguration AddContentCollectionsInfrastructure(this MessageHubConfiguration config)
+    extension(MessageHubConfiguration config)
     {
-        return config
-            .WithTypes(typeof(ContentCollectionReference))
-            .WithServices(AddContentService)
-            .AddData(data =>
-            {
-                // Register the content: prefix resolver for UnifiedReference (only if not already registered)
-                // This handles paths like "content:addressType/addressId/collection/path"
-                if (!data.UnifiedReferenceResolvers.ContainsKey("content"))
+        /// <summary>
+        /// Adds content collection infrastructure without registering layout areas.
+        /// Use this at the mesh level to set up the content service and base storage collections.
+        /// Node hubs should call AddContentCollections() which includes layout area registration.
+        /// </summary>
+        public MessageHubConfiguration AddContentCollectionsInfrastructure()
+        {
+            return config
+                .WithTypes(typeof(ContentCollectionReference))
+                .WithServices(AddContentService)
+                .AddData(data =>
                 {
-                    data = data.WithUnifiedReference("content", CreateContentPathStream);
-                }
+                    // Register the content: prefix resolver for UnifiedReference (only if not already registered)
+                    // This handles paths like "content:addressType/addressId/collection/path"
+                    if (!data.UnifiedReferenceResolvers.ContainsKey("content"))
+                    {
+                        data = data.WithUnifiedReference("content", CreateContentPathStream);
+                    }
 
-                // Register the collection: prefix resolver for UnifiedReference
-                // This handles paths like "collection:collectionName" or just "collection"
-                if (!data.UnifiedReferenceResolvers.ContainsKey("collection"))
-                {
-                    data = data.WithUnifiedReference("collection", CreateCollectionConfigStream);
-                }
+                    // Register the collection: prefix resolver for UnifiedReference
+                    // This handles paths like "collection:collectionName" or just "collection"
+                    if (!data.UnifiedReferenceResolvers.ContainsKey("collection"))
+                    {
+                        data = data.WithUnifiedReference("collection", CreateCollectionConfigStream);
+                    }
 
-                return data.Configure(reduction => reduction
-                    .AddWorkspaceReferenceStream<object>((workspace, reference, configuration) =>
-                        reference is not FileReference fileRef
-                            ? null
-                            : CreateFileReferenceStream(workspace, fileRef, configuration))
-                    .AddWorkspaceReferenceStream<object>((workspace, reference, configuration) =>
-                        reference is not ContentCollectionReference
-                            ? null
-                            : CreateContentCollectionReferenceStream(workspace, reference, configuration)));
-            })
-            .WithHandler<GetDataRequest>(HandleCollectionConfigRequest);
-    }
+                    return data.Configure(reduction => reduction
+                        .AddWorkspaceReferenceStream<object>((workspace, reference, configuration) =>
+                            reference is not FileReference fileRef
+                                ? null
+                                : CreateFileReferenceStream(workspace, fileRef, configuration))
+                        .AddWorkspaceReferenceStream<object>((workspace, reference, configuration) =>
+                            reference is not ContentCollectionReference
+                                ? null
+                                : CreateContentCollectionReferenceStream(workspace, reference, configuration)));
+                })
+                .WithHandler<GetDataRequest>(HandleCollectionConfigRequest);
+        }
 
-    /// <summary>
-    /// Adds content collection support including layout areas ($Content, $FileBrowser, $Collection).
-    /// Call this at node hub level where content collections are actually mapped.
-    /// For mesh-level infrastructure only, use AddContentCollectionsInfrastructure().
-    /// All area names use $ prefix to avoid conflicts with local view areas.
-    /// </summary>
-    public static MessageHubConfiguration AddContentCollections(this MessageHubConfiguration config)
-    {
-        return config
-            .AddContentCollectionsInfrastructure()
-            .AddLayout(layout => layout
-                .WithView(ContentAreaName, ContentLayoutArea.UnifiedContent)
-                .WithView(FileBrowserAreaName, FileBrowserLayoutAreas.FileBrowser)
-                .WithView(CollectionAreaName, CollectionLayoutArea.Collection));
+        /// <summary>
+        /// Adds content collection support including layout areas ($Content, $FileBrowser, $Collection).
+        /// Call this at node hub level where content collections are actually mapped.
+        /// For mesh-level infrastructure only, use AddContentCollectionsInfrastructure().
+        /// All area names use $ prefix to avoid conflicts with local view areas.
+        /// </summary>
+        public MessageHubConfiguration AddContentCollections()
+        {
+            return config
+                .AddContentCollectionsInfrastructure()
+                .AddLayout(layout => layout
+                    .WithView(ContentAreaName, ContentLayoutArea.UnifiedContent)
+                    .WithView(FileBrowserAreaName, FileBrowserLayoutAreas.FileBrowser)
+                    .WithView(CollectionAreaName, CollectionLayoutArea.Collection));
+        }
     }
 
     /// <summary>
@@ -728,32 +731,28 @@ public enum ArticleSortOrder
 /// Returns a placeholder config with SourceType="Mapped" that gets resolved lazily by ContentService.
 /// This avoids circular dependencies during ContentService construction.
 /// </summary>
-internal class MappedContentCollectionConfigProvider : IContentCollectionConfigProvider
+internal class MappedContentCollectionConfigProvider(
+    string targetCollectionName,
+    string sourceCollectionName,
+    string subdirectory,
+    Address address)
+    : IContentCollectionConfigProvider
 {
     public const string MappedSourceType = "Mapped";
     public const string SourceCollectionKey = "SourceCollection";
     public const string SubdirectoryKey = "Subdirectory";
 
-    private readonly ContentCollectionConfig _config;
-
-    public MappedContentCollectionConfigProvider(
-        string targetCollectionName,
-        string sourceCollectionName,
-        string subdirectory,
-        Address address)
+    private readonly ContentCollectionConfig _config = new()
     {
-        _config = new ContentCollectionConfig
+        Name = targetCollectionName,
+        SourceType = MappedSourceType,
+        Address = address,
+        Settings = new Dictionary<string, string>
         {
-            Name = targetCollectionName,
-            SourceType = MappedSourceType,
-            Address = address,
-            Settings = new Dictionary<string, string>
-            {
-                [SourceCollectionKey] = sourceCollectionName,
-                [SubdirectoryKey] = subdirectory
-            }
-        };
-    }
+            [SourceCollectionKey] = sourceCollectionName,
+            [SubdirectoryKey] = subdirectory
+        }
+    };
 
     public IEnumerable<ContentCollectionConfig> GetCollections() => [_config];
 }

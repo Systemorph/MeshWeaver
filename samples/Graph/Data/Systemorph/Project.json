@@ -16,6 +16,6 @@
     "icon": "/static/content/Systemorph/icons/briefcase.svg",
     "description": "A project containing stories",
     "displayOrder": 20,
-    "configuration": "config => config.WithContentType<Project>().WithDefaultViews()"
+    "configuration": "config => config.WithContentType<Project>().AddMeshNodeViews()"
   }
 }

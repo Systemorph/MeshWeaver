@@ -41,10 +41,10 @@ public static class MeshNodeView
     public const string CalendarArea = "Calendar";
 
     // UCR (Unified Content Reference) special areas
-    public const string ContentArea = "$Content";
-    public const string DataArea = "$Data";
-    public const string SchemaArea = "$Schema";
-    public const string ModelArea = "$Model";
+    public const string ContentArea = "Content";
+    public const string DataArea = "Data";
+    public const string SchemaArea = "Schema";
+    public const string ModelArea = "Model";
 
     /// <summary>
     /// Adds the mesh node views (Details, Thumbnail, Metadata, Settings, Catalog, Calendar) to the hub's layout.

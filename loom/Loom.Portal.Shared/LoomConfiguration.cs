@@ -13,7 +13,6 @@ using MeshWeaver.Blazor.Portal.Authentication;
 using MeshWeaver.Blazor.Radzen;
 using MeshWeaver.ContentCollections;
 using MeshWeaver.GoogleMaps;
-using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting;
 using MeshWeaver.Hosting.Activity;
@@ -219,7 +218,13 @@ public static class LoomConfiguration
                 })
                 // Add content collections at mesh level (infrastructure + storage config, no layout areas)
                 // The storage collection is registered as a source for node hub mappings
-                .ConfigureHub(hub => hub.AddContentCollections(contentStorageConfig != null ? [contentStorageConfig] : []))
+                .ConfigureHub(hub =>
+                {
+                    if (contentStorageConfig == null)
+                        return hub;
+                    return hub.AddContentCollections([contentStorageConfig])
+                        .MapContentCollection("content", contentStorageConfig.Name, $"content");
+                })
                 // Configure default views and content collections for each node hub
                 // Order matters: AddContentCollections registers $Content area first,
                 // then AddMeshNodeViews sets CatalogArea as default (can be overridden by node type config)
@@ -230,11 +235,10 @@ public static class LoomConfiguration
                         var nodePath = config.Address.ToString();
                         config = config
                             .AddContentCollections() // Register $Content layout area first
-                            .MapContentCollection("content", contentStorageConfig.Name ?? "storage", $"content/{nodePath}");
+                            .MapContentCollection("content", contentStorageConfig.Name, $"content/{nodePath}");
                     }
 
-                    // Add mesh node views last (sets CatalogArea as default, can be overridden by node type)
-                    return config.AddMeshNodeViews();
+                    return config;
                 })
                 // Add activity tracking to record user access patterns
                 .AddActivityTracking();

@@ -1,0 +1,19 @@
+{
+  "id": "LayoutAreas",
+  "namespace": "Systemorph/Marketing",
+  "name": "Layout Areas",
+  "nodeType": "Markdown",
+  "category": "MeshWeaver",
+  "description": "Composable visualizations for chat responses and reports",
+  "icon": "/static/content/Systemorph/Marketing/icons/data-usage.svg",
+  "displayOrder": 34,
+  "addressSegments": 0,
+  "isPersistent": true,
+  "content": {
+    "$type": "MarkdownDocument",
+    "id": "LayoutAreas",
+    "title": "Layout Areas",
+    "iconName": "Document",
+    "content": "# Layout Areas\n\nMeshWeaver provides layout areas - reusable visualization components that can be composed into dashboards, reports, and chat responses.\n\n## What Are Layout Areas?\n\nLayout areas are addressable UI components:\n\n```\n@app/Claims/SummaryKPI         # A KPI card\n@app/Claims/TrendChart         # A chart\n@app/Claims/RecentClaimsTable  # A data grid\n```\n\nBecause they're addressable, they can be:\n- Composed into dashboards\n- Embedded in AI chat responses\n- Reused across applications\n- Updated independently\n\n## Component Types\n\n| Component | Description | Use Case |\n|-----------|-------------|----------|\n| **Tables** | Data grids with sorting/filtering | Claims list, document index |\n| **Charts** | Bar, line, pie visualizations | Trends, distributions |\n| **KPIs** | Key performance indicators | Status summaries |\n| **Forms** | Data entry interfaces | Submission intake |\n| **Cards** | Information summaries | Record overviews |\n\n## Composition\n\n```mermaid\ngraph TD\n    subgraph \"Layout Areas\"\n        A[Claims KPI]\n        B[Trend Chart]\n        C[Claims Table]\n    end\n\n    subgraph \"Composed Views\"\n        D[Dashboard]\n        E[Report]\n        F[Chat Response]\n    end\n\n    A --> D\n    B --> D\n    C --> D\n\n    A --> E\n    B --> E\n\n    A --> F\n    C --> F\n```\n\n## AI Chat Integration\n\nWhen AI responds to questions, it can embed layout areas:\n\n**User**: \"Show me the claims summary\"\n\n**AI Response**:\n> Here's the current claims overview:\n>\n> [Embedded: @app/Claims/SummaryKPI]\n>\n> And the recent claims:\n>\n> [Embedded: @app/Claims/RecentClaimsTable]\n\nThe user sees live, interactive visualizations - not static text.\n\n## Live Data\n\nLayout areas are connected to the data mesh:\n\n```mermaid\nsequenceDiagram\n    participant User as User\n    participant Area as Layout Area\n    participant Mesh as Data Mesh\n    participant Source as Data Source\n\n    User->>Area: View dashboard\n    Area->>Mesh: Subscribe to data\n    Mesh->>Source: Connect to source\n    Source->>Mesh: Initial data\n    Mesh->>Area: Render with data\n    Area->>User: Display visualization\n\n    Note over Source: Data changes\n\n    Source->>Mesh: Update notification\n    Mesh->>Area: Delta update\n    Area->>User: Refresh automatically\n```\n\n## Report Generation\n\nCompose layout areas into documents:\n\n```yaml\nreport:\n  name: Monthly Claims Summary\n  sections:\n    - header: \"Executive Summary\"\n      areas:\n        - @app/Claims/ExecutiveKPIs\n    - header: \"Claims Trends\"\n      areas:\n        - @app/Claims/MonthlyTrendChart\n        - @app/Claims/ByLineOfBusiness\n    - header: \"Details\"\n      areas:\n        - @app/Claims/TopClaimsTable\n```\n\n## Benefits\n\n| Traditional Approach | Layout Areas Approach |\n|---------------------|----------------------|\n| Build each dashboard from scratch | Compose from reusable components |\n| Static reports | Live, updating visualizations |\n| Separate chat and BI | Unified experience |\n| Code changes for new views | Configuration-driven |\n\n## Consistency\n\nBecause layout areas are reusable:\n- Same KPI definition used everywhere\n- Metrics calculated consistently\n- Updates propagate to all usages\n- No drift between dashboard and report"
+  }
+}
