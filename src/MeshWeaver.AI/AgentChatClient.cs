@@ -52,27 +52,28 @@ public class AgentChatClient(
 
     private async Task<AgentThread> GetOrCreateThreadAsync(AIAgent agent)
     {
+        logger.LogDebug("[AgentChatClient] GetOrCreateThreadAsync called for agent: {AgentName}", agent.Name);
+
         // Use shared thread across all agents in this conversation
         if (sharedThread != null)
         {
-            logger.LogInformation("Using existing shared thread: {ThreadId} for agent: {AgentName}",
-                currentThreadId, agent.Name);
+            logger.LogDebug("[AgentChatClient] Using existing shared thread: {ThreadId}", currentThreadId);
             return sharedThread;
         }
 
         // Try to load persisted thread
+        logger.LogDebug("[AgentChatClient] Loading persisted thread...");
         var serializedThread = await persistenceService.LoadThreadAsync(currentThreadId, "shared");
 
         if (serializedThread.HasValue)
         {
-            logger.LogInformation("Loading persisted thread: {ThreadId} for agent: {AgentName}",
-                currentThreadId, agent.Name);
+            logger.LogDebug("[AgentChatClient] Found persisted thread, deserializing...");
             sharedThread = agent.DeserializeThread(serializedThread.Value, hub.JsonSerializerOptions);
+            logger.LogDebug("[AgentChatClient] Thread deserialized successfully");
             return sharedThread;
         }
 
-        logger.LogInformation("Creating new shared thread: {ThreadId} for agent: {AgentName}",
-            currentThreadId, agent.Name);
+        logger.LogDebug("[AgentChatClient] Creating new shared thread: {ThreadId}", currentThreadId);
         sharedThread = agent.GetNewThread();
         return sharedThread;
     }
@@ -125,8 +126,8 @@ public class AgentChatClient(
         IReadOnlyCollection<ChatMessage> messages,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
-        // Select which agent to use
-        var agent = SelectAgent(messages.LastOrDefault());
+        // Select which agent to use (async to avoid deadlock in Blazor context)
+        var agent = await SelectAgentAsync(messages.LastOrDefault());
         if (agent == null)
         {
             yield return new ChatMessage(ChatRole.Assistant, "No suitable agent found to handle the request.");
@@ -184,25 +185,39 @@ public class AgentChatClient(
         IReadOnlyCollection<ChatMessage> messages,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
-        // Select which agent to use
-        var agent = SelectAgent(messages.LastOrDefault());
+        logger.LogDebug("[AgentChatClient] GetStreamingResponseAsync entered, selecting agent...");
+
+        // Select which agent to use (async to avoid deadlock in Blazor context)
+        var agent = await SelectAgentAsync(messages.LastOrDefault());
         if (agent == null)
         {
+            logger.LogDebug("[AgentChatClient] No agent selected!");
             yield return new ChatResponseUpdate(ChatRole.Assistant, "No suitable agent found to handle the request.");
             yield break;
         }
 
+        logger.LogDebug("[AgentChatClient] Selected agent: {AgentName}", agent.Name);
         currentAgentName = agent.Name;
 
         // Get or create thread for this agent
+        logger.LogDebug("[AgentChatClient] Getting or creating thread...");
         var thread = await GetOrCreateThreadAsync(agent);
+        logger.LogDebug("[AgentChatClient] Got thread: {ThreadId}", currentThreadId);
 
         // Build the user message with context
         var userMessage = BuildMessageWithContext(messages);
+        logger.LogDebug("[AgentChatClient] Built message with context, length: {Length}", userMessage.Length);
 
         // Get streaming response from the agent with thread
+        logger.LogDebug("[AgentChatClient] Starting RunStreamingAsync on agent...");
+        var streamUpdateCount = 0;
         await foreach (var update in agent.RunStreamingAsync(userMessage, thread, cancellationToken: cancellationToken))
         {
+            streamUpdateCount++;
+            if (streamUpdateCount == 1)
+            {
+                logger.LogDebug("[AgentChatClient] Got FIRST update from RunStreamingAsync!");
+            }
             // Forward the complete update with all contents (including FunctionCallContent)
             if (update.Contents.Count > 0)
             {
@@ -321,6 +336,8 @@ public class AgentChatClient(
             }
         }
 
+        logger.LogDebug("[AgentChatClient] RunStreamingAsync completed, total updates: {Count}", streamUpdateCount);
+
         // Save the updated thread
         await SaveThreadAsync(agent, thread);
 
@@ -339,9 +356,10 @@ public class AgentChatClient(
     private static readonly Regex AgentReferencePattern =
         new(@"@agent/(\w+)", RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
-    private AIAgent? SelectAgent(ChatMessage? lastMessage)
+    private async Task<AIAgent?> SelectAgentAsync(ChatMessage? lastMessage)
     {
-        logger.LogDebug("SelectAgent called. Current context: {Context}", Context != null ? $"Address={Context.Address}, LayoutArea={Context.LayoutArea?.Area}" : "null");
+        logger.LogDebug("[AgentChatClient] SelectAgentAsync called. Context: {Context}",
+            Context != null ? $"Address={Context.Address}, LayoutArea={Context.LayoutArea?.Area}" : "null");
         logger.LogDebug("Available agents: {Agents}", string.Join(", ", agents.Keys));
         logger.LogDebug("Agent configurations with ContextMatchPattern: {AgentConfigs}",
             string.Join(", ", agentConfigurations.Where(a => !string.IsNullOrEmpty(a.ContextMatchPattern)).Select(a => a.Id)));
@@ -383,8 +401,9 @@ public class AgentChatClient(
             // Try to find an agent that matches the context using ContextMatchPattern
             if (Context != null)
             {
-                var matchingAgents = agentResolver.FindMatchingAgentsAsync(Context, null).GetAwaiter().GetResult();
-                logger.LogDebug("Found {Count} agents matching context", matchingAgents.Count);
+                logger.LogDebug("[AgentChatClient] Looking for agents matching context...");
+                var matchingAgents = await agentResolver.FindMatchingAgentsAsync(Context, null);
+                logger.LogDebug("[AgentChatClient] Found {Count} agents matching context", matchingAgents.Count);
 
                 foreach (var agentConfig in matchingAgents)
                 {
