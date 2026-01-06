@@ -8,7 +8,14 @@ namespace MeshWeaver.Mesh;
 /// </summary>
 public enum CommentStatus
 {
+    /// <summary>
+    /// Comment is active and awaiting response or action.
+    /// </summary>
     Active,
+
+    /// <summary>
+    /// Comment has been resolved and addressed.
+    /// </summary>
     Resolved
 }
 
@@ -124,7 +131,14 @@ public record TrackedChange
 /// </summary>
 public enum TrackedChangeType
 {
+    /// <summary>
+    /// Text was inserted into the document.
+    /// </summary>
     Insertion,
+
+    /// <summary>
+    /// Text was deleted from the document.
+    /// </summary>
     Deletion
 }
 
@@ -133,7 +147,18 @@ public enum TrackedChangeType
 /// </summary>
 public enum TrackedChangeStatus
 {
+    /// <summary>
+    /// Change is pending review.
+    /// </summary>
     Pending,
+
+    /// <summary>
+    /// Change has been accepted and applied.
+    /// </summary>
     Accepted,
+
+    /// <summary>
+    /// Change has been rejected and reverted.
+    /// </summary>
     Rejected
 }

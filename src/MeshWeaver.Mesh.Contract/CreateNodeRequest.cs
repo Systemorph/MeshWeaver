@@ -36,8 +36,14 @@ public record CreateNodeResponse(MeshNode? Node)
     /// </summary>
     public NodeCreationRejectionReason? RejectionReason { get; init; }
 
+    /// <summary>
+    /// Creates a successful response with the created node.
+    /// </summary>
     public static CreateNodeResponse Ok(MeshNode node) => new(node);
 
+    /// <summary>
+    /// Creates a failed response with an error message.
+    /// </summary>
     public static CreateNodeResponse Fail(string error, NodeCreationRejectionReason reason = NodeCreationRejectionReason.Unknown)
         => new((MeshNode?)null) { Error = error, RejectionReason = reason };
 }
@@ -47,10 +53,29 @@ public record CreateNodeResponse(MeshNode? Node)
 /// </summary>
 public enum NodeCreationRejectionReason
 {
+    /// <summary>
+    /// Unknown or unspecified reason.
+    /// </summary>
     Unknown,
+
+    /// <summary>
+    /// A node with the same path already exists.
+    /// </summary>
     NodeAlreadyExists,
+
+    /// <summary>
+    /// The specified node type is invalid or not found.
+    /// </summary>
     InvalidNodeType,
+
+    /// <summary>
+    /// The specified path is invalid.
+    /// </summary>
     InvalidPath,
+
+    /// <summary>
+    /// Node content validation failed.
+    /// </summary>
     ValidationFailed
 }
 
@@ -91,8 +116,14 @@ public record DeleteNodeResponse
     /// </summary>
     public NodeDeletionRejectionReason? RejectionReason { get; init; }
 
+    /// <summary>
+    /// Creates a successful deletion response.
+    /// </summary>
     public static DeleteNodeResponse Ok() => new();
 
+    /// <summary>
+    /// Creates a failed deletion response with an error message.
+    /// </summary>
     public static DeleteNodeResponse Fail(string error, NodeDeletionRejectionReason reason = NodeDeletionRejectionReason.Unknown)
         => new() { Error = error, RejectionReason = reason };
 }
@@ -102,9 +133,24 @@ public record DeleteNodeResponse
 /// </summary>
 public enum NodeDeletionRejectionReason
 {
+    /// <summary>
+    /// Unknown or unspecified reason.
+    /// </summary>
     Unknown,
+
+    /// <summary>
+    /// The node to delete was not found.
+    /// </summary>
     NodeNotFound,
+
+    /// <summary>
+    /// The node has children and recursive deletion was not requested.
+    /// </summary>
     HasChildren,
+
+    /// <summary>
+    /// Deletion validation failed.
+    /// </summary>
     ValidationFailed
 }
 
@@ -141,8 +187,14 @@ public record UpdateNodeResponse(MeshNode? Node)
     /// </summary>
     public NodeUpdateRejectionReason? RejectionReason { get; init; }
 
+    /// <summary>
+    /// Creates a successful update response with the updated node.
+    /// </summary>
     public static UpdateNodeResponse Ok(MeshNode node) => new(node);
 
+    /// <summary>
+    /// Creates a failed update response with an error message.
+    /// </summary>
     public static UpdateNodeResponse Fail(string error, NodeUpdateRejectionReason reason = NodeUpdateRejectionReason.Unknown)
         => new((MeshNode?)null) { Error = error, RejectionReason = reason };
 }
@@ -152,9 +204,28 @@ public record UpdateNodeResponse(MeshNode? Node)
 /// </summary>
 public enum NodeUpdateRejectionReason
 {
+    /// <summary>
+    /// Unknown or unspecified reason.
+    /// </summary>
     Unknown,
+
+    /// <summary>
+    /// The node to update was not found.
+    /// </summary>
     NodeNotFound,
+
+    /// <summary>
+    /// Node content validation failed.
+    /// </summary>
     ValidationFailed,
+
+    /// <summary>
+    /// The specified node type is invalid or not found.
+    /// </summary>
     InvalidNodeType,
+
+    /// <summary>
+    /// The node was modified by another process (optimistic concurrency conflict).
+    /// </summary>
     ConcurrencyConflict
 }

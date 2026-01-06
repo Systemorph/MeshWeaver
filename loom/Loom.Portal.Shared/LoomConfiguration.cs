@@ -13,6 +13,7 @@ using MeshWeaver.Blazor.Portal.Authentication;
 using MeshWeaver.Blazor.Radzen;
 using MeshWeaver.ContentCollections;
 using MeshWeaver.GoogleMaps;
+using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting;
 using MeshWeaver.Hosting.Activity;
@@ -222,8 +223,7 @@ public static class LoomConfiguration
                 {
                     if (contentStorageConfig == null)
                         return hub;
-                    return hub.AddContentCollections([contentStorageConfig])
-                        .MapContentCollection("content", contentStorageConfig.Name, $"content");
+                    return hub.AddContentCollections([contentStorageConfig]);
                 })
                 // Configure default views and content collections for each node hub
                 // Order matters: AddContentCollections registers $Content area first,
@@ -238,7 +238,7 @@ public static class LoomConfiguration
                             .MapContentCollection("content", contentStorageConfig.Name, $"content/{nodePath}");
                     }
 
-                    return config;
+                    return config.AddMeshNodeViews();
                 })
                 // Add activity tracking to record user access patterns
                 .AddActivityTracking();
