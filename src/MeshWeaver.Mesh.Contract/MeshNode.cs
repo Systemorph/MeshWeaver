@@ -9,6 +9,16 @@ using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.Mesh;
 
+/// <summary>
+/// Represents a system log entry for diagnostic and monitoring purposes.
+/// </summary>
+/// <param name="Service">The name of the service that generated the log.</param>
+/// <param name="ServiceId">Unique identifier for the service instance.</param>
+/// <param name="Level">Log level (e.g., Info, Warning, Error).</param>
+/// <param name="Timestamp">When the log entry was created.</param>
+/// <param name="Message">The log message content.</param>
+/// <param name="Exception">Exception details if applicable.</param>
+/// <param name="Properties">Additional contextual properties.</param>
 public record SystemLog(
     string Service,
     string ServiceId,
@@ -19,8 +29,26 @@ public record SystemLog(
     IReadOnlyDictionary<string, object>? Properties
 )
 {
+    /// <summary>
+    /// Unique identifier for the log entry.
+    /// </summary>
     public long Id { get; init; }
 }
+
+/// <summary>
+/// Represents a message log entry for tracking message flow in the mesh.
+/// </summary>
+/// <param name="Service">The name of the service that processed the message.</param>
+/// <param name="ServiceId">Unique identifier for the service instance.</param>
+/// <param name="Timestamp">When the message was logged.</param>
+/// <param name="Address">The hub address that processed the message.</param>
+/// <param name="MessageId">Unique identifier for the message.</param>
+/// <param name="Message">The message content as key-value pairs.</param>
+/// <param name="Sender">Address of the message sender.</param>
+/// <param name="Target">Address of the message target.</param>
+/// <param name="State">Current state of the message delivery.</param>
+/// <param name="AccessContext">Security and access context information.</param>
+/// <param name="Properties">Additional message properties.</param>
 public record MessageLog(
     string Service,
     string ServiceId,
@@ -34,6 +62,9 @@ public record MessageLog(
     IReadOnlyDictionary<string, object?>? AccessContext,
     IReadOnlyDictionary<string, object?>? Properties)
 {
+    /// <summary>
+    /// Unique identifier for the message log entry.
+    /// </summary>
     public long Id { get; init; }
 }
 /// <summary>
@@ -212,8 +243,19 @@ public record MeshNode([property: Key] string Id, string? Namespace = null)
         }
     }
 
+    /// <summary>
+    /// URL or path to a thumbnail image for this node.
+    /// </summary>
     public string? ThumbNail { get; init; }
+
+    /// <summary>
+    /// Name of the stream provider used for data synchronization.
+    /// </summary>
     public string? StreamProvider { get; init; }
+
+    /// <summary>
+    /// File path to the dynamically compiled assembly for this node type.
+    /// </summary>
     [NotMapped]
     public string? AssemblyLocation { get; init; }
     /// <summary>
@@ -223,12 +265,20 @@ public record MeshNode([property: Key] string Id, string? Namespace = null)
     /// </summary>
     [JsonIgnore, NotMapped]
     public IObservable<Func<MessageHubConfiguration, MessageHubConfiguration>?>? HubConfiguration { get; init; }
-    public string? StartupScript
-    {
-        get; init;
-    }
 
+    /// <summary>
+    /// Script to execute when the node hub starts up.
+    /// </summary>
+    public string? StartupScript { get; init; }
+
+    /// <summary>
+    /// Determines how requests are routed to this node.
+    /// </summary>
     public RoutingType RoutingType { get; init; }
+
+    /// <summary>
+    /// Determines how the node hub is instantiated.
+    /// </summary>
     public InstantiationType InstantiationType { get; set; }
 
 
@@ -247,8 +297,18 @@ public record MeshNode([property: Key] string Id, string? Namespace = null)
     public Func<AgentContext?, Address?>? AutocompleteAddress { get; init; }
 }
 
+/// <summary>
+/// Determines how a node hub is instantiated and configured.
+/// </summary>
 public enum InstantiationType
 {
+    /// <summary>
+    /// Hub is configured using a C# configuration function.
+    /// </summary>
     HubConfiguration,
+
+    /// <summary>
+    /// Hub is configured using a startup script.
+    /// </summary>
     Script
 }

@@ -66,7 +66,18 @@ public record UserActivityRecord
 /// </summary>
 public enum ActivityType
 {
+    /// <summary>
+    /// User read/viewed a node.
+    /// </summary>
     Read,
+
+    /// <summary>
+    /// User modified a node.
+    /// </summary>
     Write,
+
+    /// <summary>
+    /// User deleted a node.
+    /// </summary>
     Delete
 }
