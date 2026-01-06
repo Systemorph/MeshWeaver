@@ -17,15 +17,6 @@ public static class GraphConfigurationExtensions
     /// The NodeType value used to identify agent nodes.
     /// </summary>
     public const string AgentNodeType = "Agent";
-    /// <summary>
-    /// Adds default views to a node type hub:
-    /// - DefaultViews: Details (markdown property view), Edit (standard editor)
-    /// - MeshNodeView: Thumbnail, Metadata, Settings, Comments
-    /// Details is set as the default view for empty path requests.
-    /// Note: MeshDataSource is added automatically via NodeTypeService.
-    /// </summary>
-    public static MessageHubConfiguration WithDefaultViews(this MessageHubConfiguration config)
-        => MeshNodeView.AddMeshNodeViews(DefaultViews.AddEditView(config));
 
     /// <param name="builder">The mesh builder</param>
     extension<TBuilder>(TBuilder builder) where TBuilder : MeshBuilder

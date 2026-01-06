@@ -1,0 +1,19 @@
+{
+  "id": "IntelligentSearch",
+  "namespace": "Systemorph/Marketing",
+  "name": "Intelligent Search",
+  "nodeType": "Markdown",
+  "category": "AI Use Cases",
+  "description": "Natural language queries across all enterprise data",
+  "icon": "/static/content/Systemorph/Marketing/icons/document-search.svg",
+  "displayOrder": 13,
+  "addressSegments": 0,
+  "isPersistent": true,
+  "content": {
+    "$type": "MarkdownDocument",
+    "id": "IntelligentSearch",
+    "title": "Intelligent Search",
+    "iconName": "Document",
+    "content": "# Intelligent Search\n\nAI-powered search enables users to find information using natural language across all enterprise data sources.\n\n## The Challenge\n\nTraditional search limitations:\n- **Keyword-based**: Must know exact terms\n- **Siloed**: Search each system separately\n- **Limited context**: No understanding of relationships\n- **No reasoning**: Can't answer questions, only find documents\n\n## AI-Powered Solution\n\n```mermaid\ngraph TD\n    A[Natural Language Query] --> B[AI Search Agent]\n    \n    B --> C[Semantic Understanding]\n    C --> D[Multi-Source Search]\n    \n    D --> E[Documents]\n    D --> F[Databases]\n    D --> G[Emails]\n    D --> H[Knowledge Base]\n    \n    E --> I[Result Synthesis]\n    F --> I\n    G --> I\n    H --> I\n    \n    I --> J[Conversational Answer]\n```\n\n## Search Capabilities\n\n| Query Type | Example | AI Behavior |\n|------------|---------|-------------|\n| **Factual** | \"What is the contract limit for ABC Corp?\" | Direct lookup with answer |\n| **Analytical** | \"Which clients had claims over $1M last year?\" | Query, aggregate, present |\n| **Document** | \"Find the latest renewal proposal\" | Semantic search + ranking |\n| **Relationship** | \"Show me all communications about Project X\" | Cross-source linking |\n\n## How It Works\n\n1. **Understand Intent**: AI interprets what you're really asking\n2. **Expand Query**: Include synonyms, related terms, context\n3. **Multi-Source Search**: Query documents, databases, emails simultaneously\n4. **Rank Results**: Order by relevance, recency, and relationships\n5. **Synthesize Answer**: Provide a direct answer, not just links\n\n## Example Interaction\n\n> **User**: \"What happened with the Smith claim?\"\n>\n> **AI**: \"The Smith claim (CLM-2024-1234) was filed on March 15, 2024 for property damage. The initial reserve was $50,000. I found 3 related emails, 2 assessor reports, and 1 payment record. The claim was settled on April 20 for $47,500.\"\n\n## Benefits\n\n- **Natural Language**: Ask questions as you would to a colleague\n- **Unified View**: One search across all systems\n- **Answers, Not Links**: Get information, not homework\n- **Context-Aware**: AI understands relationships and history"
+  }
+}

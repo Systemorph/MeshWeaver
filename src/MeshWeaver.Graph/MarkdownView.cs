@@ -31,25 +31,19 @@ public static class MarkdownView
 
     /// <summary>
     /// Adds the markdown-specific views to the hub's layout.
-    /// Sets $Content as the default area to render the node's markdown content.
-    /// Includes UCR areas ($Data, $Schema, $Model) for unified content references.
-    /// Note: $Content is registered by ContentCollectionsExtensions.AddContentCollections.
+    /// Sets Read as the default area for a clean reading experience.
     /// </summary>
     public static MessageHubConfiguration AddMarkdownViews(this MessageHubConfiguration configuration)
         => configuration
             .AddLayout(layout => layout
-                .WithDefaultArea(ContentCollections.ContentCollectionsExtensions.ContentAreaName)
+                .WithDefaultArea(ReadArea)
                 .WithView(ReadArea, ReadView)
                 .WithView(EditArea, EditView)
                 .WithView(CommentsArea, CommentsView)
                 .WithView(AttachmentsArea, AttachmentsView)
                 .WithView(MeshNodeView.SettingsArea, MeshNodeView.Settings)
                 .WithView(MeshNodeView.MetadataArea, MeshNodeView.Metadata)
-                .WithView(MeshNodeView.ThumbnailArea, Thumbnail)
-                // UCR special areas for unified content references
-                .WithView(MeshNodeView.DataArea, MeshNodeView.Data)
-                .WithView(MeshNodeView.SchemaArea, MeshNodeView.Schema)
-                .WithView(MeshNodeView.ModelArea, DataModelLayoutArea.DataModel));
+                .WithView(MeshNodeView.ThumbnailArea, Thumbnail));
 
     /// <summary>
     /// View mode for annotation display.
@@ -230,10 +224,10 @@ public static class MarkdownView
         AnnotationPanelState panelState,
         BehaviorSubject<AnnotationPanelState> panelStateSubject)
     {
-        // Outer container - full width
+        // Outer container - centered with max width
         var outerContainer = Controls.Stack
             .WithWidth("100%")
-            .WithStyle("padding: 24px;");
+            .WithStyle("max-width: 1200px; margin: 0 auto; padding: 24px;");
 
         outerContainer = outerContainer.WithView(headerStack);
 

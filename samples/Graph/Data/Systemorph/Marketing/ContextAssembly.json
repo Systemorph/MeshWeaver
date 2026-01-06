@@ -1,0 +1,19 @@
+{
+  "id": "ContextAssembly",
+  "namespace": "Systemorph/Marketing",
+  "name": "Context Assembly",
+  "nodeType": "Markdown",
+  "category": "Agentic AI",
+  "description": "How AI decisions are guided by assembling many small text snippets into context",
+  "icon": "/static/content/Systemorph/Marketing/icons/chat.svg",
+  "displayOrder": 21,
+  "addressSegments": 0,
+  "isPersistent": true,
+  "content": {
+    "$type": "MarkdownDocument",
+    "id": "ContextAssembly",
+    "title": "Context Assembly: The Key to AI Intelligence",
+    "iconName": "Document",
+    "content": "# Context Assembly: The Key to AI Intelligence\n\nThe secret to effective AI is not model training - it's **context assembly**. AI makes intelligent decisions when it has the right information in its working memory at the right time.\n\n## The Core Insight\n\nAI decisions are guided by assembling **many small text snippets** into context. Each decision point pulls in a different contextual piece - instructions, rules, examples, definitions.\n\n## Example: Processing an Incoming Email\n\n```mermaid\ngraph TD\n    A[Email Arrives] --> B{What type of email?}\n    B --> |Context: Email Classification Guide| C[Claims Report]\n    \n    C --> D{Which claim?}\n    D --> |Context: Claim Reference Extraction Rules| E[CLM-12345]\n    \n    E --> F{What line of business?}\n    F --> |Context: LoB Detection Keywords| G[Casualty]\n    \n    G --> H{How to process?}\n    H --> |Context: Casualty Claims Handling Manual| I[Process Steps]\n    \n    I --> J{Needs escalation?}\n    J --> |Context: Escalation Rules for Casualty| K[Decision]\n```\n\n## Many Small Texts\n\nAt each decision point, the AI pulls in a specific contextual text:\n\n| Decision | Context Text Pulled In |\n|----------|------------------------|\n| \"Is this a claims report?\" | Email type classification guide |\n| \"Which claim does this reference?\" | Claim reference extraction patterns |\n| \"What line of business?\" | LoB keywords and definitions |\n| \"How should casualty claims be handled?\" | Casualty claims processing manual |\n| \"Does this need escalation?\" | Escalation thresholds and rules |\n\nEach text is small - perhaps 100-500 words. But together, they form a comprehensive instruction set.\n\n## The Context Window\n\nModern AI models have a \"context window\" - a working memory where all relevant information must fit:\n\n```mermaid\ngraph LR\n    subgraph \"Context Window (Working Memory)\"\n        A[Email Content]\n        B[Classification Guide]\n        C[Claim History]\n        D[LoB Definitions]\n        E[Processing Rules]\n        F[Escalation Thresholds]\n    end\n    \n    G[AI Model] --> |reads all| A\n    G --> B\n    G --> C\n    G --> D\n    G --> E\n    G --> F\n    G --> H[Intelligent Decision]\n```\n\n## Why This Approach Works\n\n**Not training, but context:**\n- AI models don't need to be trained on your specific business\n- They need the right context at decision time\n- Small, focused texts are easier to maintain than training data\n- Changes take effect immediately - no retraining needed\n\n**Addressability enables assembly:**\n- Each context snippet is addressable in the data mesh\n- AI can request exactly the context it needs\n- Relevant snippets are assembled dynamically\n- Context stays current as source texts are updated\n\n## Building Your Context Library\n\nEffective AI requires building a library of contextual texts:\n\n1. **Classification guides** - How to identify types\n2. **Extraction rules** - What to look for and where\n3. **Business definitions** - What terms mean in your domain\n4. **Process instructions** - How to handle each scenario\n5. **Escalation rules** - When to involve humans\n\nThis is the work that makes AI effective - not model tuning, but knowledge capture."
+  }
+}
