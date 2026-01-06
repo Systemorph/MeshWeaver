@@ -1,6 +1,8 @@
 @using ChatMessage = Microsoft.Extensions.AI.ChatMessage
 @using MeshWeaver.Blazor.Monaco
+@using Microsoft.Extensions.Logging
 @inject IJSRuntime JS
+@inject ILogger<ChatInput> Logger
 
 <div class="input-box page-width">
     <div class="input-container">
@@ -119,6 +121,8 @@
         // to prevent the :after callback from triggering a circular update
         if (contextDisplayText != SelectedContext)
         {
+            Logger.LogDebug("[ChatInput] OnParametersSet: context changed from '{Old}' to '{New}', setting flag",
+                contextDisplayText, SelectedContext);
             isSettingFromParameter = true;
             contextDisplayText = SelectedContext;
         }
@@ -126,15 +130,20 @@
 
     private async Task OnContextTextChanged()
     {
+        Logger.LogDebug("[ChatInput] OnContextTextChanged called. isSettingFromParameter={Flag}, contextDisplayText='{Display}', SelectedContext='{Selected}'",
+            isSettingFromParameter, contextDisplayText, SelectedContext);
+
         // Skip callback if this change came from parameter sync
         if (isSettingFromParameter)
         {
+            Logger.LogDebug("[ChatInput] Skipping callback - change came from parameter sync");
             isSettingFromParameter = false;
             return;
         }
 
         if (contextDisplayText != SelectedContext)
         {
+            Logger.LogDebug("[ChatInput] Invoking SelectedContextChanged callback with '{Context}'", contextDisplayText);
             await SelectedContextChanged.InvokeAsync(contextDisplayText);
         }
     }
