@@ -1,7 +1,9 @@
 ﻿using System.ComponentModel;
 using System.Reactive.Linq;
+using System.Text.Json;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
+using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 
 namespace MeshWeaver.ContentCollections;
@@ -142,9 +144,71 @@ public static class ContentLayoutArea
     };
 
     /// <summary>
+    /// Renders the MeshNode's own content from the Content property.
+    /// Used when $Content area is accessed without a path.
+    /// </summary>
+    private static IObservable<UiControl?> RenderNodeContent(LayoutAreaHost host)
+    {
+        var hubPath = host.Hub.Address.ToString();
+
+        var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? Array.Empty<MeshNode>())
+            ?? Observable.Return<MeshNode[]>(Array.Empty<MeshNode>());
+
+        return nodeStream.Select(nodes =>
+        {
+            var node = nodes.FirstOrDefault(n => n.Path == hubPath);
+            if (node == null)
+                return new MarkdownControl($"*Node not found: {hubPath}*");
+
+            var content = GetMarkdownContent(node);
+            if (string.IsNullOrWhiteSpace(content))
+                return new MarkdownControl("*No content available.*");
+
+            return new MarkdownControl(content);
+        });
+    }
+
+    /// <summary>
+    /// Extracts markdown content from a MeshNode's Content property.
+    /// Handles MarkdownDocument JSON format with $type and content fields.
+    /// </summary>
+    private static string GetMarkdownContent(MeshNode node)
+    {
+        if (node.Content == null)
+            return string.Empty;
+
+        // Handle MarkdownDocument content (JSON with $type and content fields)
+        if (node.Content is JsonElement jsonElement)
+        {
+            if (jsonElement.TryGetProperty("$type", out var typeProperty))
+            {
+                var typeName = typeProperty.GetString();
+                if (typeName == "MarkdownDocument" && jsonElement.TryGetProperty("content", out var contentProperty))
+                {
+                    return contentProperty.GetString() ?? string.Empty;
+                }
+            }
+
+            // Try to get content directly if it's just a string JSON value
+            if (jsonElement.ValueKind == JsonValueKind.String)
+            {
+                return jsonElement.GetString() ?? string.Empty;
+            }
+        }
+
+        // Handle string content directly
+        if (node.Content is string strContent)
+            return strContent;
+
+        // Fall back to Description
+        return node.Description ?? string.Empty;
+    }
+
+    /// <summary>
     /// Handles unified content references ($Content area).
     /// The host.Reference.Id contains the path like "Markdown/images/meshbros.png"
     /// Format:
+    ///   - (empty) - renders the MeshNode's own content from the Content property
     ///   - path (uses default "content" collection)
     ///   - collection/path
     ///   - collection@partition/path
@@ -156,8 +220,11 @@ public static class ContentLayoutArea
         {
             var contentPath = host.Reference.Id?.ToString() ?? "";
 
+            // If no path specified, render the node's own content from the MeshNode.Content property
             if (string.IsNullOrEmpty(contentPath))
-                return Observable.Return<UiControl?>(new MarkdownControl("No content path specified"));
+            {
+                return RenderNodeContent(host);
+            }
 
             // Split collection from file path
             // If no slash, use "content" as the default collection name

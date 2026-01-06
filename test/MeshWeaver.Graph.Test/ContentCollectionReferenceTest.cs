@@ -4,6 +4,7 @@ using System.IO;
 using System.Linq;
 using System.Reactive.Linq;
 using System.Text.Json;
+using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
 using MeshWeaver.ContentCollections;
@@ -69,12 +70,18 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
             // Register the storage collection at mesh level so node types can map from it
             .ConfigureHub(hub => hub.AddContentCollections([storageConfig]))
             // Configure default content collections for all node hubs
+            // Order matters: AddContentCollections registers $Content area first,
+            // then AddMeshNodeViews sets CatalogArea as default (can be overridden by node type config)
             .ConfigureDefaultNodeHub(config =>
             {
                 var nodePath = config.Address.ToString();
-                return config
+                config = config
+                    .AddContentCollections() // Register $Content layout area first
                     .MapContentCollection("attachments", "storage", $"attachments/{nodePath}")
                     .MapContentCollection("content", "storage", $"content/{nodePath}");
+
+                // Add mesh node views last (sets CatalogArea as default, can be overridden by node type)
+                return config.AddMeshNodeViews();
             })
             .AddJsonGraphConfiguration(dataDirectory);
     }
@@ -695,6 +702,52 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
 
         // Assert
         value.Should().NotBe(default(JsonElement), "Should receive a layout area response with data");
+    }
+
+    /// <summary>
+    /// Tests that Markdown node's default area is $Content, not Catalog.
+    /// This uses the same configuration pattern as LoomConfiguration.cs.
+    /// When requesting the default area (empty area), it should resolve to $Content for Markdown nodes.
+    /// </summary>
+    [Fact(Timeout = 15000)]
+    public async Task MarkdownNode_DefaultArea_IsContentNotCatalog()
+    {
+        var ucrAddress = new Address("MeshWeaver/UnifiedContentReferences");
+        var client = GetClient(c => c
+            .AddLayoutClient(cc => cc)
+            .AddContentCollections());
+
+        Output.WriteLine($"Testing default area for Markdown node at {ucrAddress}");
+
+        // Initialize the UCR node hub
+        await client.AwaitResponse(
+            new PingRequest(),
+            o => o.WithTarget(ucrAddress),
+            TestContext.Current.CancellationToken);
+        Output.WriteLine("Hub initialized");
+
+        // Request the default area (empty string) - should resolve to $Content for Markdown nodes
+        var workspace = client.GetWorkspace();
+        var reference = new LayoutAreaReference(""); // Empty area = default area
+
+        Output.WriteLine($"Requesting default layout area");
+        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(ucrAddress, reference);
+
+        // Wait for the stream to emit a value
+        // The nodeType config (Markdown) should be compiled before hub creation,
+        // so the first emission should already have $Content as default area
+        Output.WriteLine("Waiting for stream value...");
+        var changeItem = await stream.Timeout(TimeSpan.FromSeconds(10)).FirstAsync();
+        var value = changeItem.Value;
+
+        var rawText = value.GetRawText();
+        Output.WriteLine($"Received value: {rawText.Substring(0, Math.Min(500, rawText.Length))}...");
+
+        // For Markdown nodes, default area should be $Content which renders the markdown content
+        // NOT $Catalog which shows a search grid
+        // Check that the resolved area is $Content, not $Catalog
+        rawText.Should().Contain("\"area\":\"$Content\"",
+            "Markdown node default should resolve to $Content area, not $Catalog");
     }
 
     private static IReadOnlyCollection<ContentCollectionConfig>? ParseCollectionConfigs(object? data)
