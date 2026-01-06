@@ -11,6 +11,7 @@ using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
+using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
 namespace MeshWeaver.Graph.Test;
@@ -189,5 +190,86 @@ public class MapContentCollectionTest(ITestOutputHelper output) : MonolithMeshTe
 
         configs.Should().Contain(c => c.Name == "collection1");
         configs.Should().Contain(c => c.Name == "collection2");
+    }
+
+    /// <summary>
+    /// Test that accessing content through a mapped collection correctly resolves the path.
+    /// When "content" is mapped to "TestStorage" with subdirectory "images",
+    /// accessing "content:logo.svg" should resolve to "TestStorage:images/logo.svg".
+    /// </summary>
+    [Fact(Timeout = 10000)]
+    public async Task MapContentCollection_AccessContent_ResolvesPathCorrectly()
+    {
+        // Arrange - create subdirectory and test file
+        var imagesPath = Path.Combine(_testBasePath, "images");
+        Directory.CreateDirectory(imagesPath);
+        var testFilePath = Path.Combine(imagesPath, "logo.svg");
+        var testContent = "<svg><circle cx='50' cy='50' r='40'/></svg>";
+        await File.WriteAllTextAsync(testFilePath, testContent);
+
+        Output.WriteLine($"Created test file: {testFilePath}");
+
+        // Create client with "content" mapped to "TestStorage" with subdirectory "images"
+        var client = GetClient(c => c
+            .AddData(data => data)
+            .MapContentCollection("content", "TestStorage", "images"));
+
+        // Act - get the content collection and read the file via mapped name
+        var contentService = client.ServiceProvider.GetRequiredService<IContentService>();
+        var collection = await contentService.GetCollectionAsync("content", TestContext.Current.CancellationToken);
+
+        collection.Should().NotBeNull("Content collection should be resolved");
+
+        // Read "logo.svg" via the mapped "content" collection
+        // This should resolve to TestStorage:images/logo.svg
+        await using var stream = await collection!.GetContentAsync("logo.svg", TestContext.Current.CancellationToken);
+
+        stream.Should().NotBeNull("Content should be found via mapped path");
+
+        using var reader = new StreamReader(stream!);
+        var content = await reader.ReadToEndAsync();
+
+        // Assert
+        content.Should().Be(testContent, "Content should match the file we created");
+    }
+
+    /// <summary>
+    /// Test that accessing nested paths through a mapped collection works correctly.
+    /// When "content" is mapped to "TestStorage" with subdirectory "media",
+    /// accessing "content:icons/app.png" should resolve to "TestStorage:media/icons/app.png".
+    /// </summary>
+    [Fact(Timeout = 10000)]
+    public async Task MapContentCollection_AccessNestedContent_ResolvesPathCorrectly()
+    {
+        // Arrange - create nested subdirectory and test file
+        var nestedPath = Path.Combine(_testBasePath, "media", "icons");
+        Directory.CreateDirectory(nestedPath);
+        var testFilePath = Path.Combine(nestedPath, "app.txt");
+        var testContent = "Test nested content";
+        await File.WriteAllTextAsync(testFilePath, testContent);
+
+        Output.WriteLine($"Created test file: {testFilePath}");
+
+        // Create client with "content" mapped to "TestStorage" with subdirectory "media"
+        var client = GetClient(c => c
+            .AddData(data => data)
+            .MapContentCollection("content", "TestStorage", "media"));
+
+        // Act - read nested file via mapped collection
+        var contentService = client.ServiceProvider.GetRequiredService<IContentService>();
+        var collection = await contentService.GetCollectionAsync("content", TestContext.Current.CancellationToken);
+
+        collection.Should().NotBeNull();
+
+        // Access "icons/app.txt" which should resolve to "TestStorage:media/icons/app.txt"
+        await using var stream = await collection!.GetContentAsync("icons/app.txt", TestContext.Current.CancellationToken);
+
+        stream.Should().NotBeNull("Nested content should be found via mapped path");
+
+        using var reader = new StreamReader(stream!);
+        var content = await reader.ReadToEndAsync();
+
+        // Assert
+        content.Should().Be(testContent);
     }
 }

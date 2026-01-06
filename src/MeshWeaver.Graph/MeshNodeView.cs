@@ -1,6 +1,8 @@
 ﻿using System.Reactive.Linq;
 using System.Reflection;
 using System.Text.Json;
+using System.Text.Json.Nodes;
+using System.Text.Json.Schema;
 using MeshWeaver.Application.Styles;
 using MeshWeaver.ContentCollections;
 using MeshWeaver.Data;
@@ -62,8 +64,7 @@ public static class MeshNodeView
                 .WithView(SettingsArea, Settings)
                 .WithView(CatalogArea, Catalog)
                 .WithView(CalendarArea, Calendar)
-                // UCR special areas
-                .WithView(ContentArea, Content)
+                // UCR special areas - $Content is registered by ContentCollectionsExtensions.AddContentCollections
                 .WithView(DataArea, Data)
                 .WithView(SchemaArea, Schema)
                 .WithView(ModelArea, DataModelLayoutArea.DataModel));
@@ -727,20 +728,18 @@ public static class MeshNodeView
         // Determine content type from extension
         var extension = Path.GetExtension(contentPath)?.ToLowerInvariant() ?? "";
 
-        var control = extension switch
+        return extension switch
         {
             ".png" or ".jpg" or ".jpeg" or ".gif" or ".webp" or ".svg" =>
-                RenderImage(host, contentPath, extension),
+                RenderImageAsync(host, contentPath, extension),
             ".md" or ".markdown" =>
-                RenderMarkdownContent(host, contentPath),
+                Observable.Return<UiControl?>(RenderMarkdownContent(host, contentPath)),
             ".pdf" =>
-                RenderPdf(host, contentPath),
+                Observable.Return<UiControl?>(RenderPdf(host, contentPath)),
             ".json" =>
-                RenderJsonContent(host, contentPath),
-            _ => RenderDownloadLink(host, contentPath, extension)
+                Observable.Return<UiControl?>(RenderJsonContent(host, contentPath)),
+            _ => Observable.Return<UiControl?>(RenderDownloadLink(host, contentPath, extension))
         };
-
-        return Observable.Return<UiControl?>(control);
     }
 
     /// <summary>
@@ -852,20 +851,14 @@ public static class MeshNodeView
         return null;
     }
 
-    private static UiControl RenderImage(LayoutAreaHost host, string contentPath, string extension)
+    private static IObservable<UiControl?> RenderImageAsync(LayoutAreaHost host, string contentPath, string extension)
     {
-        var contentUrl = $"/api/content/{host.Hub.Address}/{contentPath}";
-        var mimeType = extension switch
-        {
-            ".svg" => "image/svg+xml",
-            ".png" => "image/png",
-            ".jpg" or ".jpeg" => "image/jpeg",
-            ".gif" => "image/gif",
-            ".webp" => "image/webp",
-            _ => "image/*"
-        };
+        // Build static content URL: /static/{address}/content/{filePath}
+        var address = host.Hub.Address.ToString();
+        var staticUrl = $"/static/{address}/content/{contentPath}";
 
-        return Controls.Html($"<img src=\"{contentUrl}\" alt=\"{Path.GetFileName(contentPath)}\" style=\"max-width: 100%; height: auto;\" />");
+        return Observable.Return<UiControl?>(
+            Controls.Html($"<img src='{staticUrl}' alt='{Path.GetFileName(contentPath)}' style='max-width: 100%;' />"));
     }
 
     private static UiControl RenderMarkdownContent(LayoutAreaHost host, string contentPath)
@@ -1000,11 +993,12 @@ public static class MeshNodeView
         if (string.IsNullOrEmpty(typeName))
         {
             // Self-reference: show MeshNode schema and content type schema
+            var jsonOptions = host.Hub.JsonSerializerOptions;
             return host.StreamView<MeshNode>(
                 (nodes, h) =>
                 {
                     var node = nodes?.FirstOrDefault(n => n.Path == hubPath);
-                    return RenderNodeSchema(node, hubPath);
+                    return RenderNodeSchema(node, hubPath, jsonOptions);
                 },
                 hubPath);
         }
@@ -1067,7 +1061,7 @@ public static class MeshNodeView
                 sb.AppendLine($"### Content Type: {contentType.Name}");
                 sb.AppendLine();
                 sb.AppendLine("```json");
-                sb.AppendLine(GenerateJsonSchema(contentType));
+                sb.AppendLine(GenerateJsonSchema(contentType, jsonOptions));
                 sb.AppendLine("```");
             }
         }
@@ -1084,91 +1078,37 @@ public static class MeshNodeView
 
     private static string GenerateJsonSchema(Type type, JsonSerializerOptions? jsonOptions = null)
     {
-        var namingPolicy = jsonOptions?.PropertyNamingPolicy;
+        // Use the built-in JsonSchemaExporter from System.Text.Json.Schema (.NET 9+)
+        var options = jsonOptions ?? JsonSerializerOptions.Default;
 
-        var sb = new System.Text.StringBuilder();
-        sb.AppendLine("{");
-        sb.AppendLine($"  \"$schema\": \"http://json-schema.org/draft-07/schema#\",");
-        sb.AppendLine($"  \"title\": \"{type.Name}\",");
-
-        // Add $type discriminator info if polymorphic serialization is used
-        var typeDiscriminator = jsonOptions?.TypeInfoResolver != null ? "$type" : null;
-        if (typeDiscriminator != null)
+        // Configure schema exporter options with custom transformer to add descriptions
+        var exporterOptions = new System.Text.Json.Schema.JsonSchemaExporterOptions
         {
-            sb.AppendLine($"  \"$type\": \"{type.Name}\",");
-        }
-
-        // Add type description if available
-        var typeDescription = GetDescription(type);
-        if (!string.IsNullOrEmpty(typeDescription))
-        {
-            sb.AppendLine($"  \"description\": \"{EscapeJsonString(typeDescription)}\",");
-        }
-
-        sb.AppendLine($"  \"type\": \"object\",");
-        sb.AppendLine($"  \"properties\": {{");
-
-        var properties = type.GetProperties(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
-        var propLines = new List<string>();
-
-        foreach (var prop in properties)
-        {
-            // Use naming policy for property names (e.g., camelCase)
-            var propName = namingPolicy?.ConvertName(prop.Name) ?? prop.Name;
-            var jsonType = GetJsonSchemaType(prop.PropertyType);
-            var isNullable = Nullable.GetUnderlyingType(prop.PropertyType) != null ||
-                             !prop.PropertyType.IsValueType;
-
-            // Get description from attributes
-            var description = GetDescription(prop);
-
-            var propDef = new System.Text.StringBuilder();
-            propDef.Append($"    \"{propName}\": {{ \"type\": \"{jsonType}\"");
-
-            if (!string.IsNullOrEmpty(description))
+            TreatNullObliviousAsNonNullable = false,
+            TransformSchemaNode = (context, node) =>
             {
-                propDef.Append($", \"description\": \"{EscapeJsonString(description)}\"");
+                // Add description from attributes or XML documentation
+                MemberInfo? member = context.PropertyInfo?.PropertyType != null
+                    ? context.PropertyInfo.AttributeProvider as MemberInfo
+                    : context.TypeInfo.Type;
+
+                if (member != null)
+                {
+                    var description = GetDescription(member);
+                    if (!string.IsNullOrEmpty(description) && node is JsonObject obj && !obj.ContainsKey("description"))
+                    {
+                        obj["description"] = description;
+                    }
+                }
+
+                return node;
             }
+        };
 
-            // Add format hints for common types
-            var underlying = Nullable.GetUnderlyingType(prop.PropertyType) ?? prop.PropertyType;
-            if (underlying == typeof(DateTime) || underlying == typeof(DateTimeOffset))
-                propDef.Append($", \"format\": \"date-time\"");
-            else if (underlying == typeof(Guid))
-                propDef.Append($", \"format\": \"uuid\"");
-            else if (underlying == typeof(Uri))
-                propDef.Append($", \"format\": \"uri\"");
+        var schemaNode = options.GetJsonSchemaAsNode(type, exporterOptions);
 
-            propDef.Append(" }");
-            propLines.Add(propDef.ToString());
-        }
-
-        sb.AppendLine(string.Join(",\n", propLines));
-        sb.AppendLine("  },");
-
-        // Add required fields based on [Required] attribute
-        var requiredProps = properties
-            .Where(p => p.GetCustomAttribute<System.ComponentModel.DataAnnotations.RequiredAttribute>() != null ||
-                        p.GetCustomAttribute<System.ComponentModel.DataAnnotations.KeyAttribute>() != null)
-            .Select(p => namingPolicy?.ConvertName(p.Name) ?? p.Name)
-            .ToList();
-
-        if (requiredProps.Any())
-        {
-            sb.AppendLine($"  \"required\": [{string.Join(", ", requiredProps.Select(r => $"\"{r}\""))}]");
-        }
-        else
-        {
-            // Remove trailing comma from properties if no required section
-            var result = sb.ToString();
-            result = result.TrimEnd('\n', '\r').TrimEnd(',') + "\n";
-            sb.Clear();
-            sb.Append(result);
-        }
-
-        sb.AppendLine("}");
-
-        return sb.ToString();
+        // Convert to indented JSON string
+        return schemaNode.ToJsonString(new JsonSerializerOptions { WriteIndented = true });
     }
 
     private static string? GetDescription(MemberInfo member)
@@ -1183,7 +1123,107 @@ public static class MeshNodeView
         if (displayAttr != null)
             return displayAttr.Description ?? displayAttr.Name;
 
+        // Try XML documentation
+        var xmlDoc = GetXmlDocumentation(member);
+        if (!string.IsNullOrEmpty(xmlDoc))
+            return xmlDoc;
+
         return null;
+    }
+
+    // Cache for XML documentation per assembly
+    private static readonly Dictionary<string, System.Xml.Linq.XDocument?> XmlDocCache = new();
+
+    private static string? GetXmlDocumentation(MemberInfo member)
+    {
+        var assembly = member.DeclaringType?.Assembly;
+        if (assembly == null)
+            return null;
+
+        // Try to load the XML documentation file
+        var xmlDoc = GetXmlDocumentForAssembly(assembly);
+        if (xmlDoc == null)
+            return null;
+
+        // Build the member name in XML documentation format
+        var memberName = GetXmlMemberName(member);
+        if (string.IsNullOrEmpty(memberName))
+            return null;
+
+        try
+        {
+            // Find the member element
+            var memberElement = xmlDoc.Descendants("member")
+                .FirstOrDefault(m => m.Attribute("name")?.Value == memberName);
+
+            if (memberElement != null)
+            {
+                // Get the summary element
+                var summary = memberElement.Element("summary")?.Value;
+                if (!string.IsNullOrWhiteSpace(summary))
+                {
+                    // Clean up whitespace
+                    return System.Text.RegularExpressions.Regex.Replace(summary.Trim(), @"\s+", " ");
+                }
+            }
+        }
+        catch
+        {
+            // Ignore XML parsing errors
+        }
+
+        return null;
+    }
+
+    private static System.Xml.Linq.XDocument? GetXmlDocumentForAssembly(System.Reflection.Assembly assembly)
+    {
+        var assemblyLocation = assembly.Location;
+        if (string.IsNullOrEmpty(assemblyLocation))
+            return null;
+
+        lock (XmlDocCache)
+        {
+            if (XmlDocCache.TryGetValue(assemblyLocation, out var cached))
+                return cached;
+
+            try
+            {
+                var xmlPath = Path.ChangeExtension(assemblyLocation, ".xml");
+                if (File.Exists(xmlPath))
+                {
+                    var doc = System.Xml.Linq.XDocument.Load(xmlPath);
+                    XmlDocCache[assemblyLocation] = doc;
+                    return doc;
+                }
+            }
+            catch
+            {
+                // Ignore file loading errors
+            }
+
+            XmlDocCache[assemblyLocation] = null;
+            return null;
+        }
+    }
+
+    private static string? GetXmlMemberName(MemberInfo member)
+    {
+        var declaringType = member.DeclaringType;
+        if (declaringType == null)
+            return null;
+
+        var typeName = declaringType.FullName?.Replace('+', '.');
+        if (typeName == null)
+            return null;
+
+        return member switch
+        {
+            PropertyInfo prop => $"P:{typeName}.{prop.Name}",
+            FieldInfo field => $"F:{typeName}.{field.Name}",
+            MethodInfo method => $"M:{typeName}.{method.Name}",
+            Type type => $"T:{type.FullName?.Replace('+', '.')}",
+            _ => null
+        };
     }
 
     private static string EscapeJsonString(string value)
@@ -1194,22 +1234,6 @@ public static class MeshNodeView
             .Replace("\n", "\\n")
             .Replace("\r", "\\r")
             .Replace("\t", "\\t");
-    }
-
-    private static string GetJsonSchemaType(Type type)
-    {
-        var underlying = Nullable.GetUnderlyingType(type) ?? type;
-
-        if (underlying == typeof(string)) return "string";
-        if (underlying == typeof(int) || underlying == typeof(long) || underlying == typeof(short)) return "integer";
-        if (underlying == typeof(double) || underlying == typeof(float) || underlying == typeof(decimal)) return "number";
-        if (underlying == typeof(bool)) return "boolean";
-        if (underlying == typeof(DateTime) || underlying == typeof(DateTimeOffset)) return "string";
-        if (underlying == typeof(Guid)) return "string";
-        if (underlying == typeof(Uri)) return "string";
-        if (underlying.IsArray || (underlying.IsGenericType && typeof(System.Collections.IEnumerable).IsAssignableFrom(underlying))) return "array";
-
-        return "object";
     }
 
     #endregion

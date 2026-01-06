@@ -70,7 +70,8 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
             {
                 var nodePath = config.Address.ToString();
                 return config
-                    .MapContentCollection("attachments", "storage", $"attachments/{nodePath}");
+                    .MapContentCollection("attachments", "storage", $"attachments/{nodePath}")
+                    .MapContentCollection("content", "storage", $"content/{nodePath}");
             })
             .AddJsonGraphConfiguration(dataDirectory);
     }
@@ -421,6 +422,76 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
         // Verify they are different collections with different base paths
         acmeCollection!.Collection.Should().NotBe(systemorphCollection!.Collection,
             "ACME and Systemorph should have different collection names");
+    }
+
+    /// <summary>
+    /// Tests that "content" collection is properly mapped for Markdown nodes.
+    /// The content files at samples/Graph/content/{nodePath}/ should be accessible.
+    /// </summary>
+    [Fact(Timeout = 10000)]
+    public async Task ContentCollection_ForMarkdownNode_ResolvesCorrectly()
+    {
+        var ucrAddress = new Address("MeshWeaver/UnifiedContentReferences");
+        var client = GetClient(c => c.AddContentCollections());
+
+        // Initialize the UCR node hub
+        await client.AwaitResponse(
+            new PingRequest(),
+            o => o.WithTarget(ucrAddress),
+            TestContext.Current.CancellationToken);
+
+        // Request the "content" collection configuration
+        var response = await client.AwaitResponse(
+            new GetDataRequest(new ContentCollectionReference(["content"])),
+            o => o.WithTarget(ucrAddress),
+            TestContext.Current.CancellationToken);
+
+        response.Should().NotBeNull();
+        response.Message.Should().NotBeNull();
+        response.Message.Data.Should().NotBeNull();
+
+        var configs = ParseCollectionConfigs(response.Message.Data);
+        configs.Should().NotBeNull();
+        configs.Should().HaveCount(1);
+
+        var contentConfig = configs!.First();
+        contentConfig.Name.Should().Be("content");
+        contentConfig.SourceType.Should().Be("FileSystem");
+        // BasePath should contain content/MeshWeaver/UnifiedContentReferences
+        contentConfig.BasePath.Should().Contain("content");
+        contentConfig.BasePath.Should().EndWith("MeshWeaver/UnifiedContentReferences");
+    }
+
+    /// <summary>
+    /// Tests that content files can be retrieved from the "content" collection.
+    /// The logo.svg file at samples/Graph/content/MeshWeaver/UnifiedContentReferences/logo.svg should be accessible.
+    /// </summary>
+    [Fact(Timeout = 10000)]
+    public async Task ContentCollection_RetrieveFile_ReturnsContent()
+    {
+        var ucrAddress = new Address("MeshWeaver/UnifiedContentReferences");
+        var client = GetClient(c => c.AddContentCollections());
+
+        // Initialize the UCR node hub
+        await client.AwaitResponse(
+            new PingRequest(),
+            o => o.WithTarget(ucrAddress),
+            TestContext.Current.CancellationToken);
+
+        // Request content:content/logo.svg from UCR hub
+        var response = await client.AwaitResponse(
+            new GetDataRequest(new UnifiedReference("content:content/logo.svg")),
+            o => o.WithTarget(ucrAddress),
+            TestContext.Current.CancellationToken);
+
+        response.Should().NotBeNull();
+        response.Message.Should().NotBeNull();
+        response.Message.Data.Should().NotBeNull();
+
+        // Content should be SVG text
+        var content = response.Message.Data as string;
+        content.Should().NotBeNull();
+        content.Should().Contain("<svg");
     }
 
     private static IReadOnlyCollection<ContentCollectionConfig>? ParseCollectionConfigs(object? data)
