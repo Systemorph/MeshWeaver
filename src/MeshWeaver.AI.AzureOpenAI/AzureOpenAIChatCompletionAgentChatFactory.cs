@@ -51,10 +51,9 @@ public class AzureOpenAIChatCompletionAgentChatFactory(
         var openAIChatClient = azureClient.GetChatClient(modelName);
 
         // Use the AsChatClient extension method to convert OpenAI.Chat.ChatClient to Microsoft.Extensions.AI.IChatClient
-        // Wrap with ChatClientBuilder and enable function invocation for automatic tool calling
-        IChatClient chatClient = new ChatClientBuilder(openAIChatClient.AsIChatClient())
-            .UseFunctionInvocation()
-            .Build();
+        // Note: Do NOT add UseFunctionInvocation() here - ChatClientAgent from Microsoft.Agents.AI
+        // handles tool/function invocation internally. Double-wrapping causes streaming issues.
+        IChatClient chatClient = openAIChatClient.AsIChatClient();
 
         return chatClient;
     }
