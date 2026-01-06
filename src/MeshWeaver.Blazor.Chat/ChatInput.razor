@@ -69,6 +69,7 @@
 
     // Display text for context (read-only, shows current path)
     private string? contextDisplayText;
+    private bool isSettingFromParameter;
 
     [Parameter]
     public EventCallback<ChatMessage> OnSend { get; set; }
@@ -114,12 +115,24 @@
 
     protected override void OnParametersSet()
     {
-        // Sync context display text with parameter
-        contextDisplayText = SelectedContext;
+        // Sync context display text with parameter, but flag that we're setting from parameter
+        // to prevent the :after callback from triggering a circular update
+        if (contextDisplayText != SelectedContext)
+        {
+            isSettingFromParameter = true;
+            contextDisplayText = SelectedContext;
+        }
     }
 
     private async Task OnContextTextChanged()
     {
+        // Skip callback if this change came from parameter sync
+        if (isSettingFromParameter)
+        {
+            isSettingFromParameter = false;
+            return;
+        }
+
         if (contextDisplayText != SelectedContext)
         {
             await SelectedContextChanged.InvokeAsync(contextDisplayText);

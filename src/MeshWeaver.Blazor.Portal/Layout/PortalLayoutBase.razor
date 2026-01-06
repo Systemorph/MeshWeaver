@@ -67,18 +67,22 @@
     <FluentToastProvider MaxToastCount="10" />
     <FluentKeyCodeProvider />
 
+    @* Main content area with splitter at top level (in grid-area: main).
+       @Body goes in first pane with body-content class. Chat is in second pane. *@
     <FluentMultiSplitter Orientation="@(ChatPositionValue == ChatPosition.Bottom ? Orientation.Vertical : Orientation.Horizontal)"
-                         Style="grid-area: main; height: 100%; width: 100%;"
+                         Style="grid-area: main; height: 100%; width: 100%; overflow: hidden;"
                          Class="body-splitter">
         <FluentMultiSplitterPane Size="@MainPaneSizeWithChat" Min="200px">
-            <div class="main-content-pane">
+            @* Page content - body-content class applies grid-area styles *@
+            <div class="body-content">
                 <FluentToastProvider MaxToastCount="3" Timeout="5000" />
                 @Body
             </div>
         </FluentMultiSplitterPane>
         <FluentMultiSplitterPane Size="@ChatPaneSizeWithVisibility" Min="@(IsAIChatVisible ? "250px" : "0")" Max="60%" Resizable="@IsAIChatVisible" Collapsible="true" Collapsed="@(!IsAIChatVisible)">
+            @* Chat panel - persists across navigation, independent from @Body *@
             <div class="ai-chat-content" style="@(IsAIChatVisible ? "" : "display: none;")">
-                <AgentChatView @ref="chatComponent" ViewModel="@chatControl" OnCloseRequested="ToggleAIChatVisibility" OnPositionChanged="HandleChatPositionChanged" />
+                <AgentChatView @key="@("chat-singleton")" @ref="chatComponent" ViewModel="@chatControl" OnCloseRequested="ToggleAIChatVisibility" OnPositionChanged="HandleChatPositionChanged" />
             </div>
         </FluentMultiSplitterPane>
     </FluentMultiSplitter>

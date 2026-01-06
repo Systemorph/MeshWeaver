@@ -6,6 +6,7 @@
 @using MeshWeaver.Layout
 @using MeshWeaver.Utils
 @using ChatMessage = Microsoft.Extensions.AI.ChatMessage
+@implements IDisposable
 
 @if (Message.Role == ChatRole.User)
 {
@@ -158,7 +159,9 @@ page_number='(?<page>\d*)'>(?<quote>.*?)</citation>", RegexOptions.NonBacktracki
 
     public static void NotifyChanged(ChatMessage source)
     {
-        if (SubscribersLookup.TryGetValue(source, out var subscriber))
+        var found = SubscribersLookup.TryGetValue(source, out var subscriber);
+        System.Diagnostics.Debug.WriteLine($"ChatMessageItem.NotifyChanged: found={found}, sourceTextLen={source.Text?.Length ?? 0}");
+        if (found && subscriber != null)
         {
             subscriber.StateHasChanged();
         }
@@ -264,8 +267,13 @@ page_number='(?<page>\d*)'>(?<quote>.*?)</citation>", RegexOptions.NonBacktracki
         {
             return (beforeCodeBlock.ToString(), language, true, "");
         }
-        
+
         return (text, "",  false, "");
     }
 
+    public void Dispose()
+    {
+        // Remove from the lookup to prevent stale references
+        SubscribersLookup.Remove(Message);
+    }
 }
