@@ -272,4 +272,85 @@ public class MapContentCollectionTest(ITestOutputHelper output) : MonolithMeshTe
         // Assert
         content.Should().Be(testContent);
     }
+
+    /// <summary>
+    /// Test that UCR content path without slash uses default "content" collection.
+    /// When accessing "logo.svg" without a collection prefix, it should use "content" collection.
+    /// </summary>
+    [Fact(Timeout = 10000)]
+    public async Task UcrContentPath_WithoutSlash_UsesDefaultContentCollection()
+    {
+        // Arrange - create content collection mapped to "content" and a test file
+        var contentPath = Path.Combine(_testBasePath, "images");
+        Directory.CreateDirectory(contentPath);
+        var testFilePath = Path.Combine(contentPath, "logo.svg");
+        var testContent = "<svg><circle cx='50' cy='50' r='40'/></svg>";
+        await File.WriteAllTextAsync(testFilePath, testContent);
+
+        Output.WriteLine($"Created test file: {testFilePath}");
+
+        // Create client with "content" mapped to "TestStorage" with subdirectory "images"
+        var client = GetClient(c => c
+            .AddData(data => data)
+            .MapContentCollection("content", "TestStorage", "images"));
+
+        // Act - get the content service and try to resolve "logo.svg" directly
+        // This simulates what happens when UCR parses "content:logo.svg" (no slash)
+        var contentService = client.ServiceProvider.GetRequiredService<IContentService>();
+        var collection = await contentService.GetCollectionAsync("content", TestContext.Current.CancellationToken);
+
+        collection.Should().NotBeNull("Content collection should be resolved");
+
+        // Read "logo.svg" via the "content" collection
+        await using var stream = await collection!.GetContentAsync("logo.svg", TestContext.Current.CancellationToken);
+
+        stream.Should().NotBeNull("Content should be found when using default collection");
+
+        using var reader = new StreamReader(stream!);
+        var content = await reader.ReadToEndAsync();
+
+        // Assert
+        content.Should().Be(testContent, "Content should match the file we created");
+    }
+
+    /// <summary>
+    /// Test that UCR content path with explicit collection works correctly.
+    /// When accessing "other/data.json", it should use "other" collection and "data.json" path.
+    /// </summary>
+    [Fact(Timeout = 10000)]
+    public async Task UcrContentPath_WithExplicitCollection_UsesSpecifiedCollection()
+    {
+        // Arrange - create two collections: "content" and "other"
+        var contentPath = Path.Combine(_testBasePath, "content");
+        var otherPath = Path.Combine(_testBasePath, "other");
+        Directory.CreateDirectory(contentPath);
+        Directory.CreateDirectory(otherPath);
+
+        // Put different content in each
+        await File.WriteAllTextAsync(Path.Combine(contentPath, "data.json"), "{\"source\":\"content\"}");
+        await File.WriteAllTextAsync(Path.Combine(otherPath, "data.json"), "{\"source\":\"other\"}");
+
+        // Create client with both collections mapped
+        var client = GetClient(c => c
+            .AddData(data => data)
+            .MapContentCollection("content", "TestStorage", "content")
+            .MapContentCollection("other", "TestStorage", "other"));
+
+        // Act - get the "other" collection
+        var contentService = client.ServiceProvider.GetRequiredService<IContentService>();
+        var collection = await contentService.GetCollectionAsync("other", TestContext.Current.CancellationToken);
+
+        collection.Should().NotBeNull("Other collection should be resolved");
+
+        // Read "data.json" from the "other" collection
+        await using var stream = await collection!.GetContentAsync("data.json", TestContext.Current.CancellationToken);
+
+        stream.Should().NotBeNull("Content should be found in 'other' collection");
+
+        using var reader = new StreamReader(stream!);
+        var content = await reader.ReadToEndAsync();
+
+        // Assert - should get the content from "other" collection, not "content"
+        content.Should().Contain("\"source\":\"other\"", "Should read from 'other' collection");
+    }
 }

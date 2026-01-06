@@ -27,7 +27,7 @@ public static class MeshCatalogView
     /// This enables browsing child mesh nodes and editing.
     /// </summary>
     public static MessageHubConfiguration AddMeshCatalogView(this MessageHubConfiguration configuration)
-        => MeshNodeView.AddDefaultViews(configuration) // Add Overview, Details, and Comments views
+        => MeshNodeView.AddMeshNodeViews(configuration) // Add Overview, Details, and Comments views
             .AddLayout(layout => layout
                 .WithView(NodesArea, Nodes)
                 .WithView(EditorArea, Editor));

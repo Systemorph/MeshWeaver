@@ -122,6 +122,19 @@ public class ContentService : IContentService
             ? basePath
             : Path.Combine(basePath, subdirectory);
 
+        // Ensure the directory exists for FileSystem source type
+        if (sourceConfig.SourceType == "FileSystem" && !string.IsNullOrEmpty(fullPath))
+        {
+            try
+            {
+                Directory.CreateDirectory(fullPath);
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex, "Failed to create content directory '{Path}'", fullPath);
+            }
+        }
+
         var resolvedConfig = sourceConfig with
         {
             Name = mappedConfig.Name,

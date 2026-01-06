@@ -1,6 +1,8 @@
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Reactive.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
 using FluentAssertions;
@@ -10,6 +12,7 @@ using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Monolith;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Hosting.Persistence;
+using MeshWeaver.Layout;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.Configuration;
@@ -492,6 +495,206 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
         var content = response.Message.Data as string;
         content.Should().NotBeNull();
         content.Should().Contain("<svg");
+    }
+
+    /// <summary>
+    /// Tests that $Content layout area for logo.svg returns content without hanging.
+    /// This simulates what happens when @@MeshWeaver/UnifiedContentReferences/content:logo.svg is rendered.
+    /// </summary>
+    [Fact(Timeout = 15000)]
+    public async Task ContentLayoutArea_LogoSvg_ReturnsWithoutHanging()
+    {
+        var ucrAddress = new Address("MeshWeaver/UnifiedContentReferences");
+        var client = GetClient(c => c
+            .AddLayoutClient(cc => cc)
+            .AddContentCollections());
+
+        Output.WriteLine($"Testing $Content area for logo.svg on {ucrAddress}");
+
+        // Initialize the UCR node hub
+        await client.AwaitResponse(
+            new PingRequest(),
+            o => o.WithTarget(ucrAddress),
+            TestContext.Current.CancellationToken);
+        Output.WriteLine("Hub initialized");
+
+        // Request the $Content area with logo.svg as the id
+        // This is what @@MeshWeaver/UnifiedContentReferences/content:logo.svg does
+        var workspace = client.GetWorkspace();
+        var reference = new LayoutAreaReference("$Content") { Id = "logo.svg" };
+
+        Output.WriteLine($"Requesting layout area: {reference.Area} with id: {reference.Id}");
+        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(ucrAddress, reference);
+
+        // Wait for the stream to emit a value - this is where eternal spinner would occur
+        Output.WriteLine("Waiting for stream value...");
+        var changeItem = await stream.Timeout(TimeSpan.FromSeconds(10)).FirstAsync();
+        var value = changeItem.Value;
+
+        var rawText = value.GetRawText();
+        Output.WriteLine($"Received value: {rawText.Substring(0, Math.Min(200, rawText.Length))}...");
+
+        // Assert - should have received something (content or error message)
+        value.Should().NotBe(default(JsonElement), "Should receive a layout area response");
+    }
+
+    /// <summary>
+    /// Tests that $Content layout area for sample.md returns content without hanging.
+    /// This simulates what happens when @@MeshWeaver/UnifiedContentReferences/content:sample.md is rendered.
+    /// </summary>
+    [Fact(Timeout = 15000)]
+    public async Task ContentLayoutArea_SampleMd_ReturnsWithoutHanging()
+    {
+        var ucrAddress = new Address("MeshWeaver/UnifiedContentReferences");
+        var client = GetClient(c => c
+            .AddLayoutClient(cc => cc)
+            .AddContentCollections());
+
+        Output.WriteLine($"Testing $Content area for sample.md on {ucrAddress}");
+
+        // Initialize the UCR node hub
+        await client.AwaitResponse(
+            new PingRequest(),
+            o => o.WithTarget(ucrAddress),
+            TestContext.Current.CancellationToken);
+        Output.WriteLine("Hub initialized");
+
+        // Request the $Content area with sample.md as the id
+        var workspace = client.GetWorkspace();
+        var reference = new LayoutAreaReference("$Content") { Id = "sample.md" };
+
+        Output.WriteLine($"Requesting layout area: {reference.Area} with id: {reference.Id}");
+        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(ucrAddress, reference);
+
+        // Wait for the stream to emit a value
+        Output.WriteLine("Waiting for stream value...");
+        var changeItem = await stream.Timeout(TimeSpan.FromSeconds(10)).FirstAsync();
+        var value = changeItem.Value;
+
+        var rawText = value.GetRawText();
+        Output.WriteLine($"Received value: {rawText.Substring(0, Math.Min(200, rawText.Length))}...");
+
+        // Assert
+        value.Should().NotBe(default(JsonElement), "Should receive a layout area response");
+    }
+
+    /// <summary>
+    /// Tests that $Content layout area for non-existent file returns error message, not eternal spinner.
+    /// </summary>
+    [Fact(Timeout = 15000)]
+    public async Task ContentLayoutArea_NonExistentFile_ReturnsErrorMessage()
+    {
+        var ucrAddress = new Address("MeshWeaver/UnifiedContentReferences");
+        var client = GetClient(c => c
+            .AddLayoutClient(cc => cc)
+            .AddContentCollections());
+
+        Output.WriteLine($"Testing $Content area for non-existent file on {ucrAddress}");
+
+        // Initialize the UCR node hub
+        await client.AwaitResponse(
+            new PingRequest(),
+            o => o.WithTarget(ucrAddress),
+            TestContext.Current.CancellationToken);
+        Output.WriteLine("Hub initialized");
+
+        // Request the $Content area with a non-existent file
+        var workspace = client.GetWorkspace();
+        var reference = new LayoutAreaReference("$Content") { Id = "does-not-exist.txt" };
+
+        Output.WriteLine($"Requesting layout area: {reference.Area} with id: {reference.Id}");
+        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(ucrAddress, reference);
+
+        // Wait for the stream to emit a value - should return error message, not hang
+        Output.WriteLine("Waiting for stream value...");
+        var changeItem = await stream.Timeout(TimeSpan.FromSeconds(10)).FirstAsync();
+        var value = changeItem.Value;
+
+        var rawText = value.GetRawText();
+        Output.WriteLine($"Received value: {rawText.Substring(0, Math.Min(500, rawText.Length))}...");
+
+        // Assert - should have received something (error message)
+        value.Should().NotBe(default(JsonElement), "Should receive a layout area response with error message");
+    }
+
+    /// <summary>
+    /// Tests that $Schema layout area returns schema without hanging.
+    /// This simulates what happens when @@MeshWeaver/UnifiedContentReferences/schema: is rendered.
+    /// </summary>
+    [Fact(Timeout = 15000)]
+    public async Task SchemaLayoutArea_SelfReference_ReturnsWithoutHanging()
+    {
+        var ucrAddress = new Address("MeshWeaver/UnifiedContentReferences");
+        var client = GetClient(c => c
+            .AddLayoutClient(cc => cc)
+            .AddContentCollections());
+
+        Output.WriteLine($"Testing $Schema area on {ucrAddress}");
+
+        // Initialize the UCR node hub
+        await client.AwaitResponse(
+            new PingRequest(),
+            o => o.WithTarget(ucrAddress),
+            TestContext.Current.CancellationToken);
+        Output.WriteLine("Hub initialized");
+
+        // Request the $Schema area with empty id (self-reference)
+        var workspace = client.GetWorkspace();
+        var reference = new LayoutAreaReference("$Schema") { Id = "" };
+
+        Output.WriteLine($"Requesting layout area: {reference.Area} with id: {reference.Id}");
+        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(ucrAddress, reference);
+
+        // Wait for the stream to emit a value
+        Output.WriteLine("Waiting for stream value...");
+        var changeItem = await stream.Timeout(TimeSpan.FromSeconds(10)).FirstAsync();
+        var value = changeItem.Value;
+
+        var rawText = value.GetRawText();
+        Output.WriteLine($"Received value: {rawText.Substring(0, Math.Min(500, rawText.Length))}...");
+
+        // Assert
+        value.Should().NotBe(default(JsonElement), "Should receive a layout area response with schema");
+    }
+
+    /// <summary>
+    /// Tests that $Data layout area returns data without hanging.
+    /// This simulates what happens when @@MeshWeaver/UnifiedContentReferences/data: is rendered.
+    /// </summary>
+    [Fact(Timeout = 15000)]
+    public async Task DataLayoutArea_SelfReference_ReturnsWithoutHanging()
+    {
+        var ucrAddress = new Address("MeshWeaver/UnifiedContentReferences");
+        var client = GetClient(c => c
+            .AddLayoutClient(cc => cc)
+            .AddContentCollections());
+
+        Output.WriteLine($"Testing $Data area on {ucrAddress}");
+
+        // Initialize the UCR node hub
+        await client.AwaitResponse(
+            new PingRequest(),
+            o => o.WithTarget(ucrAddress),
+            TestContext.Current.CancellationToken);
+        Output.WriteLine("Hub initialized");
+
+        // Request the $Data area with empty id (self-reference)
+        var workspace = client.GetWorkspace();
+        var reference = new LayoutAreaReference("$Data") { Id = "" };
+
+        Output.WriteLine($"Requesting layout area: {reference.Area} with id: {reference.Id}");
+        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(ucrAddress, reference);
+
+        // Wait for the stream to emit a value
+        Output.WriteLine("Waiting for stream value...");
+        var changeItem = await stream.Timeout(TimeSpan.FromSeconds(10)).FirstAsync();
+        var value = changeItem.Value;
+
+        var rawText = value.GetRawText();
+        Output.WriteLine($"Received value: {rawText.Substring(0, Math.Min(500, rawText.Length))}...");
+
+        // Assert
+        value.Should().NotBe(default(JsonElement), "Should receive a layout area response with data");
     }
 
     private static IReadOnlyCollection<ContentCollectionConfig>? ParseCollectionConfigs(object? data)

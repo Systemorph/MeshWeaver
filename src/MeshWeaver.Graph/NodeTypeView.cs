@@ -6,6 +6,7 @@ using MeshWeaver.Data;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
+using MeshWeaver.Layout.Domain;
 using MeshWeaver.Mesh.Activity;
 using MeshWeaver.Messaging;
 using MeshWeaver.ShortGuid;
@@ -40,6 +41,8 @@ public static class NodeTypeView
     /// <summary>
     /// Adds the NodeType views to the hub's layout for NodeType nodes.
     /// Uses the standard MeshNodeView.Catalog with NodeTypeCatalogMode to dynamically query instances.
+    /// Includes UCR areas ($Data, $Schema, $Model) for unified content references.
+    /// Note: $Content is registered by ContentCollectionsExtensions.AddContentCollections.
     /// </summary>
     public static MessageHubConfiguration AddNodeTypeView(this MessageHubConfiguration configuration)
         => configuration
@@ -51,7 +54,11 @@ public static class NodeTypeView
                 .WithView(CodeViewArea, CodeView)
                 .WithView(CodeEditArea, CodeEdit)
                 .WithView(HubConfigViewArea, HubConfigView)
-                .WithView(HubConfigEditArea, HubConfigEdit));
+                .WithView(HubConfigEditArea, HubConfigEdit)
+                // UCR special areas for unified content references
+                .WithView(MeshNodeView.DataArea, MeshNodeView.Data)
+                .WithView(MeshNodeView.SchemaArea, MeshNodeView.Schema)
+                .WithView(MeshNodeView.ModelArea, DataModelLayoutArea.DataModel));
 
     /// <summary>
     /// Renders the main Details area for a NodeType.

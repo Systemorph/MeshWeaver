@@ -217,19 +217,24 @@ public static class LoomConfiguration
                     services.AddSingleton<IMeshCatalog, MeshCatalog>();
                     return services;
                 })
-                // Add content collections support with the storage collection
-                .ConfigureHub(hub =>
+                // Add content collections at mesh level (infrastructure + storage config, no layout areas)
+                // The storage collection is registered as a source for node hub mappings
+                .ConfigureHub(hub => hub.AddContentCollections(contentStorageConfig != null ? [contentStorageConfig] : []))
+                // Configure default views and content collections for each node hub
+                // Order matters: AddContentCollections registers $Content area first,
+                // then AddMeshNodeViews sets CatalogArea as default (can be overridden by node type config)
+                .ConfigureDefaultNodeHub(config =>
                 {
-                    var config = hub.AddContentCollections(contentStorageConfig != null ? [contentStorageConfig] : []);
-
-                    // Add content and attachments collections mapped to subdirectories
                     if (contentStorageConfig != null)
                     {
+                        var nodePath = config.Address.ToString();
                         config = config
-                            .MapContentCollection("content", contentStorageConfig.Name ?? "storage", "content");
+                            .AddContentCollections() // Register $Content layout area first
+                            .MapContentCollection("content", contentStorageConfig.Name ?? "storage", $"content/{nodePath}");
                     }
 
-                    return config;
+                    // Add mesh node views last (sets CatalogArea as default, can be overridden by node type)
+                    return config.AddMeshNodeViews();
                 })
                 // Add activity tracking to record user access patterns
                 .AddActivityTracking();

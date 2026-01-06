@@ -20,19 +20,19 @@ namespace MeshWeaver.AI.Plugins;
 /// Supports context resolution via LayoutAreaReference and dynamic collection configuration.
 ///
 /// Context Resolution:
-/// - When LayoutAreaReference.Area is "Content" or "Collection"
+/// - When LayoutAreaReference.Area is "$Content" or "$Collection"
 /// - LayoutAreaReference.Id format: "{collection}/{path}"
 /// - The plugin automatically parses collection and path from the Id
 ///
 /// Examples:
 /// 1. Viewing "Slip.md" in "Submissions@Microsoft-2026" collection:
-///    - Area: "Content" or "Collection"
+///    - Area: "$Content" or "$Collection"
 ///    - Id: "Submissions@Microsoft-2026/Slip.md"
 ///    - Parsed collection: "Submissions@Microsoft-2026"
 ///    - Parsed path: "Slip.md"
 ///
 /// 2. Viewing root folder of "Documents" collection:
-///    - Area: "Collection"
+///    - Area: "$Collection"
 ///    - Id: "Documents/"
 ///    - Parsed collection: "Documents"
 ///    - Parsed path: "/" (root)
@@ -98,7 +98,7 @@ public class ContentPlugin
     /// Gets the collection name from the parsed path or resolves from context.
     /// The collection is resolved in this order:
     /// 1. Parsed collection from 'collection:path' syntax if provided
-    /// 2. Parsed from LayoutAreaReference.Id (format: "{collection}/{path}") ONLY when Area is "Content" or "Collection"
+    /// 2. Parsed from LayoutAreaReference.Id (format: "{collection}/{path}") ONLY when Area is "$Content" or "$Collection"
     /// 3. Via ContextToConfigMap if configured
     /// 4. Falls back to first configured collection
     /// </summary>
@@ -110,11 +110,11 @@ public class ContentPlugin
         if (chat == null)
             return config.Collections.FirstOrDefault()?.Name;
 
-        // Only parse from LayoutAreaReference.Id when area is "Content" or "Collection"
+        // Only parse from LayoutAreaReference.Id when area is "$Content" or "$Collection"
         if (chat.Context?.LayoutArea != null)
         {
             var area = chat.Context.LayoutArea.Area;
-            if (area == "Content" || area == "Collection")
+            if (area == ContentCollectionsExtensions.ContentAreaName || area == ContentCollectionsExtensions.CollectionAreaName)
             {
                 var id = chat.Context.LayoutArea.Id?.ToString();
                 if (!string.IsNullOrEmpty(id))
@@ -143,7 +143,7 @@ public class ContentPlugin
 
     /// <summary>
     /// Gets the path from the agent's LayoutAreaReference.Id.
-    /// When LayoutAreaReference.Area is "Content" or "Collection", the Id format is "{collection}/{path}".
+    /// When LayoutAreaReference.Area is "$Content" or "$Collection", the Id format is "{collection}/{path}".
     /// This method extracts and returns the path portion.
     /// For example, "Submissions@Microsoft-2026/Slip.md" returns "Slip.md".
     /// Returns null if no context is available.
@@ -154,7 +154,7 @@ public class ContentPlugin
             return null;
 
         var area = chat.Context.LayoutArea.Area;
-        if (area != "Content" && area != "Collection")
+        if (area != ContentCollectionsExtensions.ContentAreaName && area != ContentCollectionsExtensions.CollectionAreaName)
             return null;
 
         var id = chat.Context.LayoutArea.Id?.ToString();

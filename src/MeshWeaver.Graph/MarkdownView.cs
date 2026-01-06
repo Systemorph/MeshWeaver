@@ -31,19 +31,25 @@ public static class MarkdownView
 
     /// <summary>
     /// Adds the markdown-specific views to the hub's layout.
-    /// Sets Read as the default area for a clean reading experience.
+    /// Sets $Content as the default area to render the node's markdown content.
+    /// Includes UCR areas ($Data, $Schema, $Model) for unified content references.
+    /// Note: $Content is registered by ContentCollectionsExtensions.AddContentCollections.
     /// </summary>
     public static MessageHubConfiguration AddMarkdownViews(this MessageHubConfiguration configuration)
         => configuration
             .AddLayout(layout => layout
-                .WithDefaultArea(ReadArea)
+                .WithDefaultArea(ContentCollections.ContentCollectionsExtensions.ContentAreaName)
                 .WithView(ReadArea, ReadView)
                 .WithView(EditArea, EditView)
                 .WithView(CommentsArea, CommentsView)
                 .WithView(AttachmentsArea, AttachmentsView)
                 .WithView(MeshNodeView.SettingsArea, MeshNodeView.Settings)
                 .WithView(MeshNodeView.MetadataArea, MeshNodeView.Metadata)
-                .WithView(MeshNodeView.ThumbnailArea, Thumbnail));
+                .WithView(MeshNodeView.ThumbnailArea, Thumbnail)
+                // UCR special areas for unified content references
+                .WithView(MeshNodeView.DataArea, MeshNodeView.Data)
+                .WithView(MeshNodeView.SchemaArea, MeshNodeView.Schema)
+                .WithView(MeshNodeView.ModelArea, DataModelLayoutArea.DataModel));
 
     /// <summary>
     /// View mode for annotation display.

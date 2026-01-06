@@ -5,9 +5,7 @@ using System.Text.Json.Nodes;
 using System.Text.Json.Schema;
 using MeshWeaver.Application.Styles;
 using MeshWeaver.ContentCollections;
-using MeshWeaver.Data;
 using MeshWeaver.Domain;
-using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Layout.Domain;
@@ -54,7 +52,7 @@ public static class MeshNodeView
     /// Catalog is set as the default area for browsing children with search.
     /// For comments support, call AddComments() after this method.
     /// </summary>
-    public static MessageHubConfiguration AddDefaultViews(this MessageHubConfiguration configuration)
+    public static MessageHubConfiguration AddMeshNodeViews(this MessageHubConfiguration configuration)
         => configuration
             .AddLayout(layout => layout
                 .WithDefaultArea(CatalogArea)
