@@ -16,6 +16,6 @@
     "icon": "/static/content/Systemorph/Marketing/icons/share.svg",
     "description": "A social media post for LinkedIn, X, or Instagram",
     "displayOrder": 30,
-    "configuration": "config => config.WithContentType<Post>().AddDefaultViews()"
+    "configuration": "config => config.WithContentType<Post>().AddMeshNodeViews()"
   }
 }

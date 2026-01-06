@@ -63,7 +63,22 @@ public static class ContentCollectionsExtensions
     /// </summary>
     public const string ContentAreaName = "$Content";
 
-    public static MessageHubConfiguration AddContentCollections(this MessageHubConfiguration config)
+    /// <summary>
+    /// Area name for collection configuration. Uses $ prefix to avoid name collisions.
+    /// </summary>
+    public const string CollectionAreaName = "$Collection";
+
+    /// <summary>
+    /// Area name for file browser. Uses $ prefix to avoid name collisions.
+    /// </summary>
+    public const string FileBrowserAreaName = "$FileBrowser";
+
+    /// <summary>
+    /// Adds content collection infrastructure without registering layout areas.
+    /// Use this at the mesh level to set up the content service and base storage collections.
+    /// Node hubs should call AddContentCollections() which includes layout area registration.
+    /// </summary>
+    public static MessageHubConfiguration AddContentCollectionsInfrastructure(this MessageHubConfiguration config)
     {
         return config
             .WithTypes(typeof(ContentCollectionReference))
@@ -94,12 +109,23 @@ public static class ContentCollectionsExtensions
                             ? null
                             : CreateContentCollectionReferenceStream(workspace, reference, configuration)));
             })
-            .AddLayout(layout => layout
-                .WithView(nameof(ContentLayoutArea.Content), ContentLayoutArea.Content)
-                .WithView(ContentAreaName, ContentLayoutArea.UnifiedContent)
-                .WithView(nameof(FileBrowserLayoutAreas.FileBrowser), FileBrowserLayoutAreas.FileBrowser)
-                .WithView(nameof(CollectionLayoutArea.Collection), CollectionLayoutArea.Collection))
             .WithHandler<GetDataRequest>(HandleCollectionConfigRequest);
+    }
+
+    /// <summary>
+    /// Adds content collection support including layout areas ($Content, $FileBrowser, $Collection).
+    /// Call this at node hub level where content collections are actually mapped.
+    /// For mesh-level infrastructure only, use AddContentCollectionsInfrastructure().
+    /// All area names use $ prefix to avoid conflicts with local view areas.
+    /// </summary>
+    public static MessageHubConfiguration AddContentCollections(this MessageHubConfiguration config)
+    {
+        return config
+            .AddContentCollectionsInfrastructure()
+            .AddLayout(layout => layout
+                .WithView(ContentAreaName, ContentLayoutArea.UnifiedContent)
+                .WithView(FileBrowserAreaName, FileBrowserLayoutAreas.FileBrowser)
+                .WithView(CollectionAreaName, CollectionLayoutArea.Collection));
     }
 
     /// <summary>
@@ -236,7 +262,10 @@ public static class ContentCollectionsExtensions
 
     /// <summary>
     /// Creates a stream for content: unified reference paths.
-    /// Path format: collection/path or collection@partition/path
+    /// Path format:
+    ///   - path (uses default "content" collection)
+    ///   - collection/path
+    ///   - collection@partition/path
     /// </summary>
     private static ISynchronizationStream<object>? CreateContentPathStream(
         IWorkspace workspace,
@@ -246,12 +275,22 @@ public static class ContentCollectionsExtensions
             return null;
 
         // remainingPath format: collection/path or collection@partition/path
+        // If no slash, use "content" as the default collection name
         var slashIndex = remainingPath.IndexOf('/');
-        if (slashIndex < 0)
-            return null;
+        string collectionPart;
+        string filePath;
 
-        var collectionPart = remainingPath[..slashIndex];
-        var filePath = remainingPath[(slashIndex + 1)..];
+        if (slashIndex < 0)
+        {
+            // No slash - use default "content" collection
+            collectionPart = "content";
+            filePath = remainingPath;
+        }
+        else
+        {
+            collectionPart = remainingPath[..slashIndex];
+            filePath = remainingPath[(slashIndex + 1)..];
+        }
 
         if (string.IsNullOrEmpty(filePath))
             return null;
@@ -621,14 +660,15 @@ public static class ContentCollectionsExtensions
                 });
 
         /// <summary>
-        /// Configures a content collection for this hub using the provided configuration factory.
-        /// Uses the ContentCollectionRegistry to register the collection hierarchically.
+        /// Registers content collection configurations without layout areas.
+        /// Use this to register base storage collections at mesh level.
+        /// For node hubs that need $Content layout area, call AddContentCollections() first.
         /// </summary>
-        /// <param name="collectionConfigs">Factory function that creates the content collection configuration</param>
+        /// <param name="collectionConfigs">The collection configurations to register</param>
         /// <returns>The configured message hub configuration</returns>
         public MessageHubConfiguration AddContentCollections(params IReadOnlyCollection<ContentCollectionConfig> collectionConfigs)
             => configuration
-                .AddContentCollections() // Ensure content service and registry are initialized
+                .AddContentCollectionsInfrastructure() // Infrastructure only, no layout areas
                 .WithServices(services =>
                 {
                     // Register the content collection provider
@@ -641,6 +681,7 @@ public static class ContentCollectionsExtensions
         /// Maps a content collection from a registered source collection to a subdirectory path.
         /// The subdirectory is relative to the source collection's BasePath.
         /// Supports string interpolation for dynamic paths (e.g., $"persons/{config.Address.Segments.Last()}").
+        /// Note: This only maps the collection. Call AddContentCollections() first if you need $Content layout area.
         /// </summary>
         /// <param name="targetCollectionName">The name of the mapped collection (e.g., "avatars")</param>
         /// <param name="sourceCollectionName">The name of the registered source collection (e.g., "storage")</param>
@@ -650,7 +691,7 @@ public static class ContentCollectionsExtensions
             string sourceCollectionName,
             string subdirectory)
             => configuration
-                .AddContentCollections() // Ensure content service is initialized
+                .AddContentCollectionsInfrastructure() // Infrastructure only, no layout areas
                 .WithServices(services =>
                 {
                     // Register a lazy mapping provider that defers source lookup

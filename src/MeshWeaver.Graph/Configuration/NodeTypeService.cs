@@ -131,8 +131,10 @@ internal class NodeTypeService : INodeTypeService, IDisposable
         var defaultConfig = meshConfiguration.DefaultNodeHubConfiguration;
 
         // Return combined config if both exist
+        // Apply defaultConfig first (sets defaults like CatalogArea),
+        // then hubConfig (node type can override, e.g., Markdown sets $Content)
         if (hubConfig != null && defaultConfig != null)
-            return config => defaultConfig(hubConfig(config));
+            return config => hubConfig(defaultConfig(config));
 
         // Return whichever one exists, or null if neither
         return hubConfig ?? defaultConfig;

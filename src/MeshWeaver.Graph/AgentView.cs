@@ -6,6 +6,7 @@ using MeshWeaver.Data;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
+using MeshWeaver.Layout.Domain;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
@@ -32,13 +33,19 @@ public static class AgentView
     /// <summary>
     /// Adds the Agent views to the hub's layout for Agent nodes.
     /// Catalog is the default view showing all agents.
+    /// Includes UCR areas ($Data, $Schema, $Model) for unified content references.
+    /// Note: $Content is registered by ContentCollectionsExtensions.AddContentCollections.
     /// </summary>
     public static MessageHubConfiguration AddAgentView(this MessageHubConfiguration configuration)
         => configuration.AddLayout(layout => layout
             .WithDefaultArea(DetailsArea)
             .WithView(CatalogArea, Catalog)
             .WithView(DetailsArea, Details)
-            .WithView(EditArea, Edit));
+            .WithView(EditArea, Edit)
+            // UCR special areas for unified content references
+            .WithView(MeshNodeView.DataArea, MeshNodeView.Data)
+            .WithView(MeshNodeView.SchemaArea, MeshNodeView.Schema)
+            .WithView(MeshNodeView.ModelArea, DataModelLayoutArea.DataModel));
 
     /// <summary>
     /// Renders the Catalog view showing all agents.
