@@ -227,7 +227,7 @@ public static class LoomConfiguration
                 })
                 // Configure default views and content collections for each node hub
                 // Order matters: AddContentCollections registers $Content area first,
-                // then AddMeshNodeViews sets CatalogArea as default (can be overridden by node type config)
+                // then AddDefaultViews sets CatalogArea as default (can be overridden by node type config)
                 .ConfigureDefaultNodeHub(config =>
                 {
                     if (contentStorageConfig != null)
@@ -238,7 +238,7 @@ public static class LoomConfiguration
                             .MapContentCollection("content", contentStorageConfig.Name, $"content/{nodePath}");
                     }
 
-                    return config.AddMeshNodeViews();
+                    return config.AddDefaultViews();
                 })
                 // Add activity tracking to record user access patterns
                 .AddActivityTracking();

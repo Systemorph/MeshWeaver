@@ -18,6 +18,6 @@
     "iconName": "Building",
     "description": "An organization containing projects",
     "displayOrder": 10,
-    "configuration": "config => config.WithContentType<Organization>().AddMeshNodeViews()"
+    "configuration": "config => config.WithContentType<Organization>().AddDefaultViews()"
   }
 }

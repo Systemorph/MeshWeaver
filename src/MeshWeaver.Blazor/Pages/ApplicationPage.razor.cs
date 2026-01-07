@@ -25,7 +25,7 @@ public partial class ApplicationPage : ComponentBase
     private IMeshCatalog MeshCatalog { get; set; } = null!;
 
     [Inject]
-    private INavigationContextService NavigationContext { get; set; } = null!;
+    private INavigationService NavigationContext { get; set; } = null!;
 
     /// <summary>
     /// Catch-all path parameter - the entire URL path is matched against registered namespace patterns.

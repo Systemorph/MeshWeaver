@@ -23,7 +23,7 @@ public static class BlazorHostingExtensions
                 .AddContentService()
                 .AddFluentUIComponents()
                 .AddScoped<PortalApplication>()
-                .AddScoped<INavigationContextService, NavigationContextService>()
+                .AddScoped<INavigationService, NavigationService>()
             )
             .ConfigureHub(hub => hub.AddBlazor(clientConfig));
 

@@ -12,11 +12,11 @@ namespace MeshWeaver.Hosting.Persistence.Query;
 public class InMemoryMeshQuery : IMeshQuery
 {
     private readonly IPersistenceService _persistence;
-    private readonly INavigationContextService? _navigationContext;
+    private readonly INavigationService? _navigationContext;
     private readonly QueryParser _parser = new();
     private readonly QueryEvaluator _evaluator = new();
 
-    public InMemoryMeshQuery(IPersistenceService persistence, INavigationContextService? navigationContext = null)
+    public InMemoryMeshQuery(IPersistenceService persistence, INavigationService? navigationContext = null)
     {
         _persistence = persistence;
         _navigationContext = navigationContext;

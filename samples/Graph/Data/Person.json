@@ -18,6 +18,6 @@
     "iconName": "Person",
     "description": "A person with profile and avatar",
     "displayOrder": 5,
-    "configuration": "config => config.WithContentType<Person>().AddMeshNodeViews()"
+    "configuration": "config => config.WithContentType<Person>().AddDefaultViews()"
   }
 }

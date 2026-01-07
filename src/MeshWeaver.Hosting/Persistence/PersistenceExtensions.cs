@@ -81,7 +81,7 @@ public static class PersistenceExtensions
         services.AddSingleton<IMeshQuery>(sp =>
             new InMemoryMeshQuery(
                 sp.GetRequiredService<IPersistenceService>(),
-                sp.GetService<INavigationContextService>()));
+                sp.GetService<INavigationService>()));
 
         return services;
     }
@@ -143,7 +143,7 @@ public static class PersistenceExtensions
         services.AddSingleton<IMeshQuery>(sp =>
             new InMemoryMeshQuery(
                 sp.GetRequiredService<IPersistenceService>(),
-                sp.GetService<INavigationContextService>()));
+                sp.GetService<INavigationService>()));
         return services;
     }
 
@@ -168,7 +168,7 @@ public static class PersistenceExtensions
         services.AddSingleton<IMeshQuery>(sp =>
             new InMemoryMeshQuery(
                 sp.GetRequiredService<IPersistenceService>(),
-                sp.GetService<INavigationContextService>()));
+                sp.GetService<INavigationService>()));
 
         return services;
     }
@@ -187,7 +187,7 @@ public static class PersistenceExtensions
         services.AddSingleton<IMeshQuery>(sp =>
             new InMemoryMeshQuery(
                 sp.GetRequiredService<IPersistenceService>(),
-                sp.GetService<INavigationContextService>()));
+                sp.GetService<INavigationService>()));
         return services;
     }
 
@@ -203,7 +203,7 @@ public static class PersistenceExtensions
         services.AddSingleton<IMeshQuery>(sp =>
             new InMemoryMeshQuery(
                 sp.GetRequiredService<IPersistenceService>(),
-                sp.GetService<INavigationContextService>()));
+                sp.GetService<INavigationService>()));
         return services;
     }
 }

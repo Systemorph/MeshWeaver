@@ -85,4 +85,16 @@ public record NodeTypeDefinition
     /// The collections are registered via extension methods in the generated hub configuration.
     /// </summary>
     public List<ContentCollectionConfig>? ContentCollections { get; init; }
+
+    /// <summary>
+    /// Whether to show children section in the Details view.
+    /// Default: true (show children if ChildrenQuery is set or has children).
+    /// </summary>
+    public bool ShowChildrenInDetails { get; init; } = true;
+
+    /// <summary>
+    /// Maximum number of children to show in the Details view before "Show more" link.
+    /// Default: 10.
+    /// </summary>
+    public int DetailsChildrenLimit { get; init; } = 10;
 }

@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -71,7 +71,7 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
             .ConfigureHub(hub => hub.AddContentCollections([storageConfig]))
             // Configure default content collections for all node hubs
             // Order matters: AddContentCollections registers $Content area first,
-            // then AddMeshNodeViews sets CatalogArea as default (can be overridden by node type config)
+            // then AddDefaultViews sets CatalogArea as default (can be overridden by node type config)
             .ConfigureDefaultNodeHub(config =>
             {
                 var nodePath = config.Address.ToString();
@@ -81,7 +81,7 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
                     .MapContentCollection("content", "storage", $"content/{nodePath}");
 
                 // Add mesh node views last (sets CatalogArea as default, can be overridden by node type)
-                return config.AddMeshNodeViews();
+                return config.AddDefaultViews();
             })
             .AddJsonGraphConfiguration(dataDirectory);
     }
@@ -743,11 +743,11 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
         var rawText = value.GetRawText();
         Output.WriteLine($"Received value: {rawText.Substring(0, Math.Min(500, rawText.Length))}...");
 
-        // For Markdown nodes, default area should be $Content which renders the markdown content
+        // For Markdown nodes, default area should be Read which renders the markdown content
         // NOT $Catalog which shows a search grid
-        // Check that the resolved area is $Content, not $Catalog
-        rawText.Should().Contain("\"area\":\"$Content\"",
-            "Markdown node default should resolve to $Content area, not $Catalog");
+        // Check that the resolved area is Read, not $Catalog
+        rawText.Should().Contain("\"area\":\"Read\"",
+            "Markdown node default should resolve to Read area, not $Catalog");
     }
 
     private static IReadOnlyCollection<ContentCollectionConfig>? ParseCollectionConfigs(object? data)
