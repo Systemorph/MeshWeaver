@@ -13,7 +13,7 @@ namespace MeshWeaver.Mesh.Completion;
 public class UnifiedReferenceAutocompleteProvider(
     IMeshCatalog? meshCatalog,
     IMeshQuery? meshQuery,
-    INavigationContextService? navigationContext) : IAutocompleteProvider
+    INavigationService? navigationContext) : IAutocompleteProvider
 {
     private const int ContextPriority = 2000;  // Higher priority for context-aware items
     private const int PrefixPriority = 1800;

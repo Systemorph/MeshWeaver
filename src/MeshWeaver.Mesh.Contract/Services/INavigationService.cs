@@ -3,9 +3,9 @@
 namespace MeshWeaver.Mesh.Services;
 
 /// <summary>
-/// Service for getting the current navigation path and namespace context.
+/// Service for navigation and getting the current navigation path and namespace context.
 /// </summary>
-public interface INavigationContextService
+public interface INavigationService
 {
     /// <summary>
     /// Gets the current relative path from navigation.
@@ -58,9 +58,9 @@ public interface INavigationContextService
 }
 
 /// <summary>
-/// Default implementations for INavigationContextService helper methods.
+/// Default implementations for INavigationService helper methods.
 /// </summary>
-public static class NavigationContextServiceExtensions
+public static class NavigationServiceExtensions
 {
     /// <summary>
     /// Default implementation of GenerateHref.

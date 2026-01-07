@@ -246,8 +246,8 @@ public class UnifiedReferenceAutocompleteProviderTest : MonolithMeshTestBase
     [Fact(Timeout = 30000)]
     public void DI_AutocompleteProvider_IsRegistered()
     {
-        // Verify the MeshNodeAutocompleteProvider is registered (it doesn't require INavigationContextService)
-        // Note: UnifiedReferenceAutocompleteProvider requires INavigationContextService which is only
+        // Verify the MeshNodeAutocompleteProvider is registered (it doesn't require INavigationService)
+        // Note: UnifiedReferenceAutocompleteProvider requires INavigationService which is only
         // available in Blazor hosting, so we test it with manual instantiation instead
         var meshNodeProvider = Mesh.ServiceProvider.GetService<IMeshQuery>();
         meshNodeProvider.Should().NotBeNull("IMeshQuery should be registered for autocomplete");
@@ -265,7 +265,7 @@ public class UnifiedReferenceAutocompleteProviderTest : MonolithMeshTestBase
     [Fact(Timeout = 30000)]
     public async Task DI_ManualProvider_ReturnsSystemorphForAtSys()
     {
-        // Create provider manually with available services (no INavigationContextService in test env)
+        // Create provider manually with available services (no INavigationService in test env)
         var meshCatalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
         var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
         var provider = new UnifiedReferenceAutocompleteProvider(meshCatalog, meshQuery, null);

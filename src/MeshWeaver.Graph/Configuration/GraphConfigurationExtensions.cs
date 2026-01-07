@@ -18,6 +18,11 @@ public static class GraphConfigurationExtensions
     /// </summary>
     public const string AgentNodeType = "Agent";
 
+    /// <summary>
+    /// The NodeType value used to identify markdown documentation nodes.
+    /// </summary>
+    public const string MarkdownNodeType = "Markdown";
+
     /// <param name="builder">The mesh builder</param>
     extension<TBuilder>(TBuilder builder) where TBuilder : MeshBuilder
     {
@@ -63,6 +68,17 @@ public static class GraphConfigurationExtensions
                         .AddAgentView())
             });
 
+            // Register the built-in "Markdown" MeshNode
+            // This provides HubConfiguration for nodes with nodeType="Markdown" (markdown documentation nodes).
+            builder.AddMeshNodes(new MeshNode(MarkdownNodeType)
+            {
+                Name = "Markdown",
+                Description = "A markdown documentation node with collaborative editing support",
+                Icon = "Document",
+                HubConfiguration = Observable.Return<Func<MessageHubConfiguration, MessageHubConfiguration>?>(
+                    config => config.AddMarkdownViews())
+            });
+
             // Register services that don't need hub-level dependencies at the mesh level
             builder.ConfigureServices(services =>
             {
@@ -92,7 +108,7 @@ public static class GraphConfigurationExtensions
             // Note: MeshDataSource is added automatically via NodeTypeService.WrapWithMeshDataSource
             // Node types are compiled on-demand via IMeshNodeCompilationService.
             // MeshCatalog loads NodeTypeConfiguration from compiled assemblies when nodes are accessed.
-            builder.ConfigureHub(config => MeshNodeView.AddMeshNodeViews(config)
+            builder.ConfigureHub(config => MeshNodeView.AddDefaultViews(config)
                 .WithServices(services =>
                 {
                     // Register MeshNodeCompilationService as both concrete and interface
