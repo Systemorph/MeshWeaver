@@ -833,11 +833,17 @@ public static class DataExtensions
 
     /// <summary>
     /// Resolves an area path to LayoutAreaReference.
+    /// Handles UCR prefixes (content:, data:, schema:, model:) by mapping them to special areas.
     /// </summary>
     private static WorkspaceReference? ResolveAreaPath(string? remainingPath)
     {
         if (string.IsNullOrEmpty(remainingPath))
             return null;
+
+        // Check for UCR prefix (e.g., "content:logo.svg" or "data:")
+        var ucrRef = UcrPrefixResolver.ResolveToLayoutAreaReference(remainingPath);
+        if (ucrRef != null)
+            return ucrRef;
 
         var queryIndex = remainingPath.IndexOf('?');
         if (queryIndex > 0)

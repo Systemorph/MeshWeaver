@@ -134,7 +134,7 @@ public static class MeshNodeView
             }
 
             return BuildDetailsContent(host, data.Node, children, data.TypeDef);
-        }).StartWith(Controls.Markdown($"# {hubPath}\n\n*Loading...*"));
+        });
     }
 
     private static UiControl BuildDetailsContent(this LayoutAreaHost host, MeshNode? node, IEnumerable<MeshNode> children, NodeTypeDefinition? typeDef)
@@ -492,7 +492,7 @@ public static class MeshNodeView
         {
             var node = nodes.FirstOrDefault(n => n.Path == hubPath);
             return BuildSettingsContent(host, node, types ?? Array.Empty<MeshNode>());
-        }).StartWith(Controls.Markdown($"# Settings\n\n*Loading...*"));
+        });
     }
 
     private static UiControl BuildSettingsContent(LayoutAreaHost _, MeshNode? node, IReadOnlyList<MeshNode> nodeTypes)
@@ -1050,7 +1050,7 @@ public static class MeshNodeView
                     return (UiControl?)Controls.Markdown($"*Node not found: {hubPath}*");
 
                 return (UiControl?)RenderNodeIcon(node, hubPath);
-            }).StartWith(Controls.Markdown($"*Loading...*"));
+            });
         }
 
         // Determine content type from extension
@@ -1257,7 +1257,7 @@ public static class MeshNodeView
                     return (UiControl?)Controls.Markdown($"*Node not found: {hubPath}*");
 
                 return (UiControl?)RenderMeshNodeData(node, host.Hub.JsonSerializerOptions);
-            }).StartWith(Controls.Markdown($"# {hubPath}\n\n*Loading data...*"));
+            });
         }
 
         // Check if dataPath is a collection name or a type name
@@ -1330,7 +1330,7 @@ public static class MeshNodeView
             {
                 var node = nodes.FirstOrDefault(n => n.Path == hubPath);
                 return (UiControl?)RenderNodeSchema(node, hubPath, jsonOptions);
-            }).StartWith(Controls.Markdown($"# Schema\n\n*Loading schema...*"));
+            });
         }
 
         // Try to get the type from the registry

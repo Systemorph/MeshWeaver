@@ -1,4 +1,5 @@
 ﻿using System.Reactive.Linq;
+using MeshWeaver.ContentCollections;
 using MeshWeaver.Data;
 using MeshWeaver.Domain;
 using MeshWeaver.Mesh;
@@ -73,10 +74,10 @@ public static class GraphConfigurationExtensions
             builder.AddMeshNodes(new MeshNode(MarkdownNodeType)
             {
                 Name = "Markdown",
-                Description = "A markdown documentation node with collaborative editing support",
+                Description = "A markdown node with collaborative editing support",
                 Icon = "Document",
                 HubConfiguration = Observable.Return<Func<MessageHubConfiguration, MessageHubConfiguration>?>(
-                    config => config.AddMarkdownViews())
+                    config => config.AddMarkdownViews().AddMeshDataSource().AddContentCollections())
             });
 
             // Register services that don't need hub-level dependencies at the mesh level
