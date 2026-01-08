@@ -3,15 +3,18 @@
   "name": "ACME Corporation",
   "nodeType": "Organization",
   "description": "ACME Corporation - A sample organization containing AI agents",
-  "iconName": "Building",
+  "icon": "/static/storage/content/ACME/logo.svg",
   "displayOrder": 2,
   "isPersistent": true,
   "content": {
+    "$type": "Organization",
     "id": "ACME",
     "name": "ACME Corporation",
     "description": "ACME Corporation - A sample organization containing AI agents",
     "website": "https://acme.example.com",
-    "logo": "/static/content/ACME/logo.svg",
-    "iconName": "Building"
+    "logo": "/static/storage/content/ACME/logo.svg",
+    "location": "United States",
+    "email": "info@acme.example.com",
+    "isVerified": false
   }
 }

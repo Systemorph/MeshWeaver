@@ -791,55 +791,32 @@ public static class MarkdownView
     {
         var nodePath = node?.Path ?? host.Hub.Address.ToString();
 
-        // Create menu items
-        var menuItems = Controls.Stack
-            .WithOrientation(Orientation.Vertical)
-            .WithStyle("min-width: 180px;");
+        // Start with the trigger button (MoreHorizontal icon)
+        var menu = Controls.MenuItem("", FluentIcons.MoreHorizontal(IconSize.Size20))
+            .WithAppearance(Appearance.Stealth)
+            .WithStyle("border-radius: 4px;");
 
         // Edit option
         var editHref = $"/{nodePath}/{EditArea}";
-        menuItems = menuItems.WithView(
-            Controls.MenuItem("Edit", FluentIcons.Edit(IconSize.Size16))
-                .WithStyle("width: 100%;")
-                .WithClickAction(ctx => ctx.Host.UpdateArea(ctx.Area, new RedirectControl(editHref))));
+        menu = menu.WithView(new NavLinkControl("Edit", FluentIcons.Edit(IconSize.Size16), editHref));
 
         // Comments option
         var commentsHref = $"/{nodePath}/{CommentsArea}";
-        menuItems = menuItems.WithView(
-            Controls.MenuItem("Comments", FluentIcons.Comment(IconSize.Size16))
-                .WithStyle("width: 100%;")
-                .WithClickAction(ctx => ctx.Host.UpdateArea(ctx.Area, new RedirectControl(commentsHref))));
+        menu = menu.WithView(new NavLinkControl("Comments", FluentIcons.Comment(IconSize.Size16), commentsHref));
 
         // Attachments option
         var attachmentsHref = $"/{nodePath}/{AttachmentsArea}";
-        menuItems = menuItems.WithView(
-            Controls.MenuItem("Attachments", FluentIcons.Attach(IconSize.Size16))
-                .WithStyle("width: 100%;")
-                .WithClickAction(ctx => ctx.Host.UpdateArea(ctx.Area, new RedirectControl(attachmentsHref))));
-
-        // Divider
-        menuItems = menuItems.WithView(
-            Controls.Html("<hr style=\"margin: 8px 0; border: none; border-top: 1px solid var(--neutral-stroke-rest);\" />"));
+        menu = menu.WithView(new NavLinkControl("Attachments", FluentIcons.Attach(IconSize.Size16), attachmentsHref));
 
         // Settings option
         var settingsHref = $"/{nodePath}/{MeshNodeView.SettingsArea}";
-        menuItems = menuItems.WithView(
-            Controls.MenuItem("Settings", FluentIcons.Settings(IconSize.Size16))
-                .WithStyle("width: 100%;")
-                .WithClickAction(ctx => ctx.Host.UpdateArea(ctx.Area, new RedirectControl(settingsHref))));
+        menu = menu.WithView(new NavLinkControl("Settings", FluentIcons.Settings(IconSize.Size16), settingsHref));
 
         // Metadata option
         var metadataHref = $"/{nodePath}/{MeshNodeView.MetadataArea}";
-        menuItems = menuItems.WithView(
-            Controls.MenuItem("Properties", FluentIcons.Info(IconSize.Size16))
-                .WithStyle("width: 100%;")
-                .WithClickAction(ctx => ctx.Host.UpdateArea(ctx.Area, new RedirectControl(metadataHref))));
+        menu = menu.WithView(new NavLinkControl("Properties", FluentIcons.Info(IconSize.Size16), metadataHref));
 
-        // Create the menu button with icon
-        return Controls.MenuItem("", FluentIcons.MoreHorizontal(IconSize.Size20))
-            .WithAppearance(Appearance.Stealth)
-            .WithStyle("border-radius: 4px;")
-            .WithView(menuItems);
+        return menu;
     }
 
     /// <summary>
@@ -881,7 +858,7 @@ public static class MarkdownView
             Controls.Button("")
                 .WithIconStart(FluentIcons.ArrowLeft(IconSize.Size16))
                 .WithAppearance(Appearance.Stealth)
-                .WithClickAction(ctx => ctx.Host.UpdateArea(ctx.Area, new RedirectControl(readHref))));
+                .WithNavigateToHref(readHref));
 
         headerStack = headerStack.WithView(
             Controls.Html($"<h2 style=\"margin: 0; font-size: 1.25rem;\">Editing: {title}</h2>"));
@@ -954,7 +931,7 @@ public static class MarkdownView
             Controls.Button("")
                 .WithIconStart(FluentIcons.ArrowLeft(IconSize.Size16))
                 .WithAppearance(Appearance.Stealth)
-                .WithClickAction(ctx => ctx.Host.UpdateArea(ctx.Area, new RedirectControl(readHref))));
+                .WithNavigateToHref(readHref));
 
         headerStack = headerStack.WithView(
             Controls.Html($"<h2 style=\"margin: 0;\">Comments on: {title}</h2>"));
@@ -1013,7 +990,7 @@ public static class MarkdownView
             Controls.Button("")
                 .WithIconStart(FluentIcons.ArrowLeft(IconSize.Size16))
                 .WithAppearance(Appearance.Stealth)
-                .WithClickAction(ctx => ctx.Host.UpdateArea(ctx.Area, new RedirectControl(readHref))));
+                .WithNavigateToHref(readHref));
 
         headerStack = headerStack.WithView(
             Controls.Html($"<h2 style=\"margin: 0;\">Attachments: {title}</h2>"));

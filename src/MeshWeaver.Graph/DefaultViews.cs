@@ -47,7 +47,7 @@ public static class DefaultViews
                     .WithOrientation(Orientation.Horizontal)
                     .WithStyle("margin-bottom: 16px;")
                     .WithView(Controls.Button("← Back to Details")
-                        .WithClickAction(c => c.Host.UpdateArea(c.Area, new RedirectControl(detailsHref)))));
+                        .WithNavigateToHref(detailsHref)));
 
             // Editor control
             stack = stack.WithView(new MeshNodeEditorControl

@@ -50,7 +50,12 @@ internal class DynamicMeshNodeAttributeGenerator
         sb.AppendLine("using MeshWeaver.Data;");
         sb.AppendLine("using MeshWeaver.Graph;");
         sb.AppendLine("using MeshWeaver.Graph.Configuration;");
+        sb.AppendLine("using MeshWeaver.Layout;");
+        sb.AppendLine("using MeshWeaver.Layout.Composition;");
+        sb.AppendLine("using MeshWeaver.Layout.Domain;");
+        sb.AppendLine("using MeshWeaver.Application.Styles;");
         sb.AppendLine("using MeshWeaver.ContentCollections;");
+        sb.AppendLine("using MeshWeaver.Mesh.Services;");
         sb.AppendLine("using Microsoft.Extensions.DependencyInjection;");
         sb.AppendLine("using Microsoft.Extensions.Configuration;");
         sb.AppendLine();

@@ -5,7 +5,7 @@
   "nodeType": "Markdown",
   "category": "AI Use Cases",
   "description": "Intelligent inbox management, prioritization, and response drafting",
-  "icon": "/static/content/Systemorph/Marketing/icons/mail.svg",
+  "icon": "/static/storage/content/Systemorph/Marketing/icons/mail.svg",
   "displayOrder": 11,
   "addressSegments": 0,
   "isPersistent": true,
