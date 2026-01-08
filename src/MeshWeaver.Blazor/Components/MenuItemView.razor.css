@@ -1,0 +1,20 @@
+/* Hide the dropdown indicator arrow in FluentMenuButton */
+/* The indicator is rendered as an svg icon in the end slot */
+::deep .menu-button-container fluent-menu-button::part(indicator) {
+    display: none;
+}
+
+/* Hide via the end slot which contains the indicator */
+::deep .menu-button-container fluent-menu-button [slot="end"] {
+    display: none;
+}
+
+/* Target the SVG icon directly */
+::deep .menu-button-container fluent-menu-button svg[slot="end"] {
+    display: none;
+}
+
+/* Target by aria attribute if used */
+::deep .menu-button-container fluent-menu-button [aria-hidden="true"]:last-child {
+    display: none;
+}

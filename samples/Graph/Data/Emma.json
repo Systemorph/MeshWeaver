@@ -10,7 +10,7 @@
     "id": "Emma",
     "name": "Emma Johnson",
     "email": "emma.johnson@example.com",
-    "avatar": "/static/content/Emma/avatar.svg",
+    "avatar": "/static/storage/content/Emma/avatar.svg",
     "bio": "Tech lead with expertise in distributed systems and microservices architecture.",
     "role": "Tech Lead",
     "iconName": "Person"

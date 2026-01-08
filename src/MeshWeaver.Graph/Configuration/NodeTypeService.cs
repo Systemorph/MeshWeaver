@@ -466,16 +466,17 @@ internal class NodeTypeService : INodeTypeService, IDisposable
         }
 
         // Get CodeConfigurations from /Code sub-partition
-        string? code = null;
+        // Collect ALL CodeConfiguration files (dataModel.json, views.json, etc.) and combine them
+        var codeFiles = new List<string>();
         var codePartition = $"{nodeTypePath}/Code";
         await foreach (var obj in persistence.GetPartitionObjectsAsync(codePartition, null).WithCancellation(ct))
         {
             if (obj is CodeConfiguration codeConfig && !string.IsNullOrEmpty(codeConfig.Code))
             {
-                code = codeConfig.Code;
-                break;
+                codeFiles.Add(codeConfig.Code);
             }
         }
+        var code = codeFiles.Count > 0 ? string.Join("\n\n", codeFiles) : null;
 
         var frameworkVersion = typeof(NodeTypeService).Assembly.GetName().Version?.ToString() ?? "unknown";
         var release = NodeTypeRelease.Create(

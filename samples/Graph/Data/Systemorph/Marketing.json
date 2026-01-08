@@ -5,7 +5,7 @@
   "nodeType": "Systemorph/Project",
   "category": "Marketing",
   "description": "Marketing content and stories",
-  "icon": "/static/content/Systemorph/Marketing/icons/megaphone.svg",
+  "icon": "/static/storage/content/Systemorph/Marketing/icons/megaphone.svg",
   "displayOrder": 10,
   "addressSegments": 0,
   "isPersistent": true,
@@ -16,7 +16,7 @@
     "name": "Marketing",
     "description": "Marketing content and stories for MeshWeaver proposals",
     "status": "Active",
-    "icon": "/static/content/Systemorph/Marketing/icons/megaphone.svg",
-    "logo": "/static/content/Systemorph/Marketing/logo.svg"
+    "icon": "/static/storage/content/Systemorph/Marketing/icons/megaphone.svg",
+    "logo": "/static/storage/content/Systemorph/Marketing/logo.svg"
   }
 }

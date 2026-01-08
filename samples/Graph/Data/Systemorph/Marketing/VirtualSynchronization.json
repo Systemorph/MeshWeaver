@@ -5,7 +5,7 @@
   "nodeType": "Markdown",
   "category": "MeshWeaver",
   "description": "Assemble data on demand without migration - data stays where it is",
-  "icon": "/static/content/Systemorph/Marketing/icons/history.svg",
+  "icon": "/static/storage/content/Systemorph/Marketing/icons/history.svg",
   "displayOrder": 31,
   "addressSegments": 0,
   "isPersistent": true,

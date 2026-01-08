@@ -5,7 +5,7 @@
   "nodeType": "Markdown",
   "category": "AI Use Cases",
   "description": "Automated extraction, classification, and intelligent routing of documents",
-  "icon": "/static/content/Systemorph/Marketing/icons/clipboard-task.svg",
+  "icon": "/static/storage/content/Systemorph/Marketing/icons/clipboard-task.svg",
   "displayOrder": 10,
   "addressSegments": 0,
   "isPersistent": true,

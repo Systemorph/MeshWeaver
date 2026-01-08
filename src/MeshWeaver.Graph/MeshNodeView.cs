@@ -69,6 +69,7 @@ public static class MeshNodeView
                 // UCR special areas - $Content is registered by ContentCollectionsExtensions.AddContentCollections
                 .WithView(DataArea, Data)
                 .WithView(SchemaArea, Schema)
+                .WithView(DefaultViews.EditArea, DefaultViews.Edit)
                 .WithView(ModelArea, DataModelLayoutArea.DataModel));
 
     /// <summary>
@@ -226,7 +227,7 @@ public static class MeshNodeView
                         grid = grid.WithView(
                             Controls.Button($"Show all {group.Count()}")
                                 .WithAppearance(Appearance.Lightweight)
-                                .WithClickAction(ctx => ctx.Host.UpdateArea(ctx.Area, new RedirectControl(showMoreHref))),
+                                .WithNavigateToHref(showMoreHref),
                             itemSkin => itemSkin.WithXs(12));
                     }
                 }
@@ -249,7 +250,7 @@ public static class MeshNodeView
     /// Each menu item is added individually so FluentMenuButton wraps each in a proper FluentMenuItem.
     /// Uses NavLinkControl for instant navigation via href.
     /// </summary>
-    private static UiControl BuildActionMenu(LayoutAreaHost host, MeshNode? node)
+    public static UiControl BuildActionMenu(LayoutAreaHost host, MeshNode? node)
     {
         var nodePath = node?.Namespace ?? host.Hub.Address.ToString();
 
@@ -261,7 +262,7 @@ public static class MeshNodeView
         // Edit option - goes to DefaultViews.Edit area
         if (node != null)
         {
-            var editHref = $"/{node.Namespace}/{DefaultViews.EditArea}";
+            var editHref = $"/{nodePath}/{DefaultViews.EditArea}";
             menu = menu.WithView(new NavLinkControl("Edit", FluentIcons.Edit(IconSize.Size16), editHref));
         }
 
@@ -299,6 +300,78 @@ public static class MeshNodeView
     }
 
     /// <summary>
+    /// Builds a children section showing child nodes grouped by type in a responsive grid.
+    /// Use this in custom views to display subnodes below your custom header.
+    /// </summary>
+    /// <param name="host">The layout area host.</param>
+    /// <param name="children">The list of child nodes to display.</param>
+    /// <param name="nodePath">The parent node path (for "show more" links).</param>
+    /// <param name="childrenLimit">Maximum children per type to show (default 10).</param>
+    /// <returns>A LayoutGrid control with children, or null if no children.</returns>
+    public static UiControl? BuildChildrenSection(
+        LayoutAreaHost host,
+        IEnumerable<MeshNode> children,
+        string nodePath,
+        int childrenLimit = 10)
+    {
+        var childTypes = children
+            .Where(c => !string.IsNullOrEmpty(c.NodeType))
+            .GroupBy(c => c.NodeType!)
+            .OrderBy(g => g.Key)
+            .ToList();
+
+        if (childTypes.Count == 0)
+            return null;
+
+        // Single unified grid for all child types
+        var grid = Controls.LayoutGrid.WithSkin(s => s.WithSpacing(2));
+
+        foreach (var group in childTypes)
+        {
+            var recentNodes = group.Take(childrenLimit).ToList();
+            var displayName = GetNodeTypeDisplayName(group.Key, group.Count());
+
+            // Section header spans full width
+            grid = grid.WithView(
+                Controls.Html($"<h3 style=\"margin: 24px 0 8px 0;\">{displayName}</h3>"),
+                itemSkin => itemSkin.WithXs(12));
+
+            // Thumbnails in grid: xs=12, sm=6, md=4, lg=3
+            foreach (var child in recentNodes)
+            {
+                grid = grid.WithView(
+                    MeshNodeThumbnailControl.FromNode(child, child.Namespace ?? ""),
+                    itemSkin => itemSkin.WithXs(12).WithSm(6).WithMd(4).WithLg(3));
+            }
+
+            // "Show more" button if there are more than the limit
+            if (group.Count() > childrenLimit)
+            {
+                var showMoreHref = $"/{nodePath}/{MeshCatalogView.NodesArea}/{group.Key}";
+                grid = grid.WithView(
+                    Controls.Button($"Show all {group.Count()}")
+                        .WithAppearance(Appearance.Lightweight)
+                        .WithNavigateToHref(showMoreHref),
+                    itemSkin => itemSkin.WithXs(12));
+            }
+        }
+
+        return grid;
+    }
+
+    /// <summary>
+    /// Gets the display name for a node type with count (e.g., "Projects (5)").
+    /// </summary>
+    public static string GetNodeTypeDisplayName(string nodeType, int count)
+    {
+        // Extract just the last segment if it's a path
+        var typeName = nodeType.Contains('/') ? nodeType.Split('/').Last() : nodeType;
+        // Capitalize first letter
+        var display = char.ToUpper(typeName[0]) + typeName.Substring(1);
+        return $"{display}s ({count})";
+    }
+
+    /// <summary>
     /// Renders a compact thumbnail/card view of a node for use in catalogs and lists.
     /// Uses GetStream for reactive data binding instead of direct persistence access.
     /// </summary>
@@ -319,13 +392,6 @@ public static class MeshNodeView
     private static UiControl BuildThumbnailContent(MeshNode? node, string hubPath)
     {
         return MeshNodeThumbnailControl.FromNode(node, hubPath);
-    }
-
-    private static string GetNodeTypeDisplayName(string nodeType, int count)
-    {
-        // Capitalize first letter and add count
-        var display = char.ToUpper(nodeType[0]) + nodeType.Substring(1);
-        return $"{display}s ({count})";
     }
 
     /// <summary>
@@ -357,7 +423,7 @@ public static class MeshNodeView
             .WithOrientation(Orientation.Horizontal)
             .WithView(Controls.Html("<h2>Metadata</h2>"))
             .WithView(Controls.Button("Back to Content")
-                .WithClickAction(ctx => ctx.Host.UpdateArea(ctx.Area, new RedirectControl(backHref)))));
+                .WithNavigateToHref(backHref)));
 
         if (node == null)
         {
@@ -386,7 +452,7 @@ public static class MeshNodeView
                 .WithOrientation(Orientation.Horizontal)
                 .WithView(Controls.Html("<p><strong>Parent:</strong> </p>"))
                 .WithView(Controls.Button(node.ParentPath)
-                    .WithClickAction(ctx => ctx.Host.UpdateArea(ctx.Area, new RedirectControl(parentHref)))));
+                    .WithNavigateToHref(parentHref)));
         }
 
         return stack;

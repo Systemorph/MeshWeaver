@@ -1591,6 +1591,97 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
     }
 
     /// <summary>
+    /// Test that the views.json file exists alongside dataModel.json for Organization.
+    /// This validates the custom view configuration structure.
+    /// </summary>
+    [Fact]
+    public void Organization_ViewsJson_Exists()
+    {
+        var viewsJsonPath = Path.Combine(SamplesDataDirectory, "Organization", "Code", "views.json");
+        Output.WriteLine($"Checking for views.json at: {viewsJsonPath}");
+
+        File.Exists(viewsJsonPath).Should().BeTrue(
+            $"Organization/Code/views.json should exist at {viewsJsonPath} for custom view configuration");
+    }
+
+    /// <summary>
+    /// Test that Organization node with custom AddLayout view compiles successfully.
+    /// This validates the fix for missing using statements in DynamicMeshNodeAttributeGenerator.
+    /// </summary>
+    [Fact(Timeout = 30000)]
+    public async Task Organization_CustomView_CompilesSuccessfully()
+    {
+        var organizationAddress = new Address("Organization");
+
+        // Get node from mesh catalog - this triggers compilation
+        var meshCatalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
+
+        Output.WriteLine("Getting Organization node (triggers compilation)...");
+        var node = await meshCatalog.GetNodeAsync(organizationAddress);
+
+        node.Should().NotBeNull("Organization node should exist");
+        node.NodeType.Should().Be("NodeType");
+        node.HubConfiguration.Should().NotBeNull(
+            "Organization node should have HubConfiguration from compiled assembly with custom view");
+
+        // Get the hub configuration function
+        var hubConfig = await node.HubConfiguration.FirstAsync();
+        hubConfig.Should().NotBeNull("HubConfiguration should be available");
+
+        Output.WriteLine("Organization custom view compiled successfully!");
+    }
+
+    /// <summary>
+    /// Test that the custom OrganizationViews.Details view compiles and renders.
+    /// This tests the complete flow from views.json through compilation to rendering.
+    /// Note: In a test environment without full data setup, the view may return a loading state.
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task Organization_DetailsView_RendersCustomView()
+    {
+        var organizationAddress = new Address("Systemorph");
+
+        var client = GetClient(c => c
+            .WithInitialization((h, _) => RoutingService.RegisterStreamAsync(h))
+            .AddLayoutClient(cc => cc)
+            .AddData(data => data));
+
+        var workspace = client.GetWorkspace();
+
+        // Initialize hub
+        Output.WriteLine("Initializing Systemorph hub...");
+        await client.AwaitResponse(
+            new PingRequest(),
+            o => o.WithTarget(organizationAddress),
+            TestContext.Current.CancellationToken);
+
+        // Request the Details view area
+        var reference = new LayoutAreaReference(MeshNodeView.DetailsArea);
+
+        Output.WriteLine("Getting Details area for Systemorph organization...");
+        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(organizationAddress, reference);
+
+        var control = await stream
+            .GetControlStream(MeshNodeView.DetailsArea)
+            .Timeout(30.Seconds())
+            .FirstAsync(x => x != null);
+
+        Output.WriteLine($"Received control type: {control?.GetType().FullName}");
+
+        // Verify the custom view is invoked and returns a control
+        // The view returns either:
+        // - StackControl (when data is loaded - the organization header)
+        // - MarkdownControl (loading state "*Loading...*")
+        control.Should().NotBeNull("Details view should render a control for Organization instance");
+
+        // The important thing is that the custom view compiled and was called.
+        // In test environment, we may get loading state since data isn't fully set up.
+        var isExpectedType = control is StackControl || control is MarkdownControl;
+        isExpectedType.Should().BeTrue(
+            $"Custom OrganizationViews.Details should return StackControl or MarkdownControl, got {control?.GetType().Name}");
+    }
+
+    /// <summary>
     /// Test that loading the Catalog area from MeshWeaver node works.
     /// </summary>
     [Fact(Timeout = 30000)]

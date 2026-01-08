@@ -75,7 +75,7 @@ public record MessageLog(
 /// For template nodes, AddressSegments determines how many path segments are used for hub addressing.
 /// Score-based matching uses the Prefix (derived from Path) for pattern matching.
 /// </summary>
-public record MeshNode([property: Key] string Id, string? Namespace = null)
+public record MeshNode([property: Key] string Id, [property: Editable(false)] string? Namespace = null)
 {
     /// <summary>
     /// The path for the built-in NodeType type definition node.
@@ -141,6 +141,7 @@ public record MeshNode([property: Key] string Id, string? Namespace = null)
     /// The type/category of this node (e.g., "Northwind", "Todo", "Insurance").
     /// Used to identify the application type for routing and configuration.
     /// </summary>
+    [Editable(false)]
     public string? NodeType { get; init; }
 
     /// <summary>
@@ -192,6 +193,7 @@ public record MeshNode([property: Key] string Id, string? Namespace = null)
     /// Indicates this node's data is persisted and should be loaded on startup.
     /// When true, the hub will load children from IPersistenceService via MeshNodeTypeSource.
     /// </summary>
+    [Editable(false)]
     public bool IsPersistent { get; init; }
 
     /// <summary>
@@ -199,12 +201,14 @@ public record MeshNode([property: Key] string Id, string? Namespace = null)
     /// Used for cache invalidation of dynamically compiled assemblies.
     /// When reading from file system, defaults to file's last modified time if not specified in JSON.
     /// </summary>
+    [Editable(false)]
     public DateTimeOffset LastModified { get; init; }
 
     /// <summary>
     /// The hub version when this node was last saved.
     /// Used to restore hub version on restart.
     /// </summary>
+    [Editable(false)]
     public long Version { get; init; }
 
     /// <summary>
@@ -212,6 +216,7 @@ public record MeshNode([property: Key] string Id, string? Namespace = null)
     /// Transient nodes are awaiting hub confirmation.
     /// Active nodes have been validated and persisted.
     /// </summary>
+    [Editable(false)]
     public MeshNodeState State { get; init; } = MeshNodeState.Active;
 
     /// <summary>
@@ -219,12 +224,14 @@ public record MeshNode([property: Key] string Id, string? Namespace = null)
     /// Virtual nodes are created on-demand when addressing template-based paths.
     /// CreateNodeRequest should not consider virtual nodes as "existing" nodes.
     /// </summary>
+    [Editable(false)]
     public bool IsVirtual { get; init; }
 
     /// <summary>
     /// The data model content for this node.
     /// The type depends on NodeType (e.g., Organization, Project, Story).
     /// </summary>
+    [Editable(false)]
     public object? Content { get; init; }
 
     /// <summary>
@@ -269,20 +276,24 @@ public record MeshNode([property: Key] string Id, string? Namespace = null)
     /// <summary>
     /// Script to execute when the node hub starts up.
     /// </summary>
+    [Editable(false)]
     public string? StartupScript { get; init; }
 
     /// <summary>
     /// Determines how requests are routed to this node.
     /// </summary>
+    [Editable(false)]
     public RoutingType RoutingType { get; init; }
 
     /// <summary>
     /// Determines how the node hub is instantiated.
     /// </summary>
+    [Editable(false)]
     public InstantiationType InstantiationType { get; set; }
 
 
     [JsonIgnore, NotMapped]
+    [Editable(false)]
     public ImmutableList<Func<IServiceCollection, IServiceCollection>> GlobalServiceConfigurations { get; set; } = [];
 
     public MeshNode WithGlobalServiceRegistry(Func<IServiceCollection, IServiceCollection> services)
@@ -294,6 +305,7 @@ public record MeshNode([property: Key] string Id, string? Namespace = null)
     /// Returns null if autocomplete should not be routed.
     /// </summary>
     [JsonIgnore, NotMapped]
+    [Editable(false)]
     public Func<AgentContext?, Address?>? AutocompleteAddress { get; init; }
 }
 

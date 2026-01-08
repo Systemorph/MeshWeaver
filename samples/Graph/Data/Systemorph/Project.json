@@ -5,7 +5,7 @@
   "nodeType": "NodeType",
   "category": "Types",
   "description": "A project containing stories",
-  "icon": "/static/content/Systemorph/icons/briefcase.svg",
+  "icon": "/static/storage/content/Systemorph/icons/briefcase.svg",
   "displayOrder": 20,
   "isPersistent": true,
   "content": {
@@ -13,7 +13,7 @@
     "id": "Project",
     "namespace": "Systemorph",
     "displayName": "Project",
-    "icon": "/static/content/Systemorph/icons/briefcase.svg",
+    "icon": "/static/storage/content/Systemorph/icons/briefcase.svg",
     "description": "A project containing stories",
     "displayOrder": 20,
     "configuration": "config => config.WithContentType<Project>().AddDefaultViews()"
