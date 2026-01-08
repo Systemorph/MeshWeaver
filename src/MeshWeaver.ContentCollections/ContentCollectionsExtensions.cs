@@ -122,6 +122,9 @@ public static class ContentCollectionsExtensions
         /// </summary>
         public MessageHubConfiguration AddContentCollections()
         {
+            if (config.Get<bool>(nameof(AddContentCollections)))
+                return config;
+            config = config.Set(true, nameof(AddContentCollections));
             return config
                 .AddContentCollectionsInfrastructure()
                 .AddLayout(layout => layout

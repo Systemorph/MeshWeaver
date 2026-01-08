@@ -31,25 +31,22 @@ public class LayoutAreaComponentInfo : ContainerBlock
     /// <summary>
     /// Constructor for pre-parsed references (used by parser for keyword-based paths like data:, content:, area:).
     /// </summary>
-    public LayoutAreaComponentInfo(string address, string? area, string? id, BlockParser blockParser, bool isInline = false) : base(blockParser)
+    /// <param name="originalPath">The original path as written in markdown (e.g., "MeshWeaver/UCR/content:logo.svg")</param>
+    /// <param name="address">The resolved address part</param>
+    /// <param name="area">The resolved area name (e.g., "$Content")</param>
+    /// <param name="id">The area ID or path after the prefix</param>
+    /// <param name="blockParser">The block parser</param>
+    /// <param name="isInline">True for @@ (inline), false for @ (hyperlink)</param>
+    public LayoutAreaComponentInfo(string originalPath, string address, string? area, string? id, BlockParser blockParser, bool isInline = false) : base(blockParser)
     {
         if (string.IsNullOrWhiteSpace(address))
             throw new ArgumentException("Address cannot be null or empty", nameof(address));
 
-        RawPath = BuildRawPath(address, area, id);
+        RawPath = originalPath;
         Address = address;
         Area = area;
         Id = id;
         IsInline = isInline;
-    }
-
-    private static string BuildRawPath(string address, string? area, string? id)
-    {
-        if (string.IsNullOrEmpty(area))
-            return address;
-        if (string.IsNullOrEmpty(id))
-            return $"{address}/{area}";
-        return $"{address}/{area}/{id}";
     }
 
     /// <summary>

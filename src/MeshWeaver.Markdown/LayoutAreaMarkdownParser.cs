@@ -234,30 +234,34 @@ public class LayoutAreaMarkdownParser : BlockParser
         return keyword.ToLowerInvariant() switch
         {
             "data" => new LayoutAreaComponentInfo(
+                token,
                 address,
                 DataAreaName,
                 remainingPath,
                 this,
                 isInline),
             "content" => new LayoutAreaComponentInfo(
+                token,
                 address,
                 ContentAreaName,
                 remainingPath,
                 this,
                 isInline),
             "schema" => new LayoutAreaComponentInfo(
+                token,
                 address,
                 SchemaAreaName,
                 remainingPath,
                 this,
                 isInline),
             "model" => new LayoutAreaComponentInfo(
+                token,
                 address,
                 ModelAreaName,
                 remainingPath,
                 this,
                 isInline),
-            "area" or "" => CreateAreaBlock(address, remainingPath, isInline),
+            "area" or "" => CreateAreaBlock(token, address, remainingPath, isInline),
             _ => new LayoutAreaComponentInfo(token, this, isInline)
         };
     }
@@ -268,13 +272,14 @@ public class LayoutAreaMarkdownParser : BlockParser
     /// The areaId includes all remaining path segments joined with '/'
     /// When no area is specified, null is passed to let the layout system determine the default.
     /// </summary>
+    /// <param name="originalToken">The original token as written in markdown</param>
     /// <param name="address">The resolved address</param>
     /// <param name="remainingPath">The remaining path after address</param>
     /// <param name="isInline">True for @@ (inline rendering), false for @ (hyperlink)</param>
-    private ContainerBlock CreateAreaBlock(string address, string? remainingPath, bool isInline)
+    private ContainerBlock CreateAreaBlock(string originalToken, string address, string? remainingPath, bool isInline)
     {
         if (string.IsNullOrEmpty(remainingPath))
-            return new LayoutAreaComponentInfo(address, null, null, this, isInline);
+            return new LayoutAreaComponentInfo(originalToken, address, null, null, this, isInline);
 
         // Check for ? separator (query params as area id)
         var queryIndex = remainingPath.IndexOf('?');
@@ -282,7 +287,7 @@ public class LayoutAreaMarkdownParser : BlockParser
         {
             var areaName = remainingPath[..queryIndex];
             var areaId = remainingPath[(queryIndex + 1)..];
-            return new LayoutAreaComponentInfo(address, areaName, areaId, this, isInline);
+            return new LayoutAreaComponentInfo(originalToken, address, areaName, areaId, this, isInline);
         }
 
         // Check for / separator - areaId is everything after the first /
@@ -291,10 +296,10 @@ public class LayoutAreaMarkdownParser : BlockParser
         {
             var areaName = remainingPath[..slashIndex];
             var areaId = remainingPath[(slashIndex + 1)..]; // Keep all remaining segments
-            return new LayoutAreaComponentInfo(address, areaName, areaId, this, isInline);
+            return new LayoutAreaComponentInfo(originalToken, address, areaName, areaId, this, isInline);
         }
 
-        return new LayoutAreaComponentInfo(address, remainingPath, null, this, isInline);
+        return new LayoutAreaComponentInfo(originalToken, address, remainingPath, null, this, isInline);
     }
 
     /// <summary>
