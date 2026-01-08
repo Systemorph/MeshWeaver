@@ -2,11 +2,8 @@
   "mcpServers": {
     "github": {
       "type": "stdio",
-      "command": "npx",
-      "args": [
-        "-y",
-        "@modelcontextprotocol/server-github"
-      ]
+      "command": "mcp-server-github",
+      "args": []
     }
   }
 }
