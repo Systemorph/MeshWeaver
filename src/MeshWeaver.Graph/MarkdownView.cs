@@ -1,17 +1,14 @@
-using System.Reactive.Linq;
+﻿using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using MeshWeaver.Application.Styles;
-using ViewModeSubject = System.Reactive.Subjects.ISubject<MeshWeaver.Graph.MarkdownView.AnnotationViewMode>;
 using MeshWeaver.Data;
 using MeshWeaver.Domain;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
-using MeshWeaver.Layout.Domain;
 using MeshWeaver.Markdown;
 using MeshWeaver.Mesh;
-using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
-using Microsoft.Extensions.DependencyInjection;
+using ViewModeSubject = System.Reactive.Subjects.ISubject<MeshWeaver.Graph.MarkdownView.AnnotationViewMode>;
 
 namespace MeshWeaver.Graph;
 
