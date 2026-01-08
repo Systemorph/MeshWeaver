@@ -44,6 +44,7 @@ public class DataContextIntegrationTest : MonolithMeshTestBase
     private string? _testDirectory;
 
     private IPersistenceService Persistence => Mesh.ServiceProvider.GetRequiredService<IPersistenceService>();
+    private IMeshQuery MeshQuery => Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
 
     private string GetOrCreateTestDirectory()
     {
@@ -240,12 +241,12 @@ public class DataContextIntegrationTest : MonolithMeshTestBase
             o => o.WithTarget(graphAddress),
             TestContext.Current.CancellationToken);
 
-        // Act - get children from persistence
-        var children = await Persistence.GetChildrenAsync("graph")
+        // Act - get children via IMeshQuery
+        var children = await MeshQuery.QueryAsync<MeshNode>("path:graph scope:children", ct: TestContext.Current.CancellationToken)
             .ToListAsync(TestContext.Current.CancellationToken);
 
         // Assert - children should be available
-        children.Should().NotBeNull("Children should be available in Persistence");
+        children.Should().NotBeNull("Children should be available via IMeshQuery");
         children.Should().HaveCountGreaterThanOrEqualTo(2, "Should have story1 and story2 as children");
         children.Should().Contain(n => n.Path == "graph/story1");
         children.Should().Contain(n => n.Path == "graph/story2");

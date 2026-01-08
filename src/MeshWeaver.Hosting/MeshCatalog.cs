@@ -16,11 +16,13 @@ namespace MeshWeaver.Hosting;
 public sealed class MeshCatalog(
     IMessageHub hub,
     MeshConfiguration configuration,
-    IPersistenceService persistenceService)
+    IPersistenceService persistenceService,
+    IMeshQuery? meshQuery = null)
     : IMeshCatalog
 {
     public MeshConfiguration Configuration { get; } = configuration;
     public IPersistenceService Persistence { get; } = persistenceService;
+    private readonly IMeshQuery? _meshQuery = meshQuery;
     private readonly IMemoryCache cache = new MemoryCache(new MemoryCacheOptions());
     private readonly MemoryCacheEntryOptions cacheOptions = new() { SlidingExpiration = TimeSpan.FromMinutes(5) };
     private readonly IMessageHub persistenceHub = hub.GetHostedHub(AddressExtensions.CreatePersistenceAddress())!;
@@ -457,26 +459,33 @@ public sealed class MeshCatalog(
     public async IAsyncEnumerable<MeshNode> QueryAsync(string? parentPath, string? query = null, int? maxResults = null, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
     {
         var count = 0;
-        await foreach (var child in Persistence.GetChildrenAsync(parentPath).WithCancellation(ct))
+
+        // Build query string for IMeshQuery
+        var queryParts = new List<string>();
+        if (!string.IsNullOrEmpty(parentPath))
+            queryParts.Add($"path:{parentPath}");
+        queryParts.Add("scope:children");
+        if (!string.IsNullOrWhiteSpace(query))
+            queryParts.Add(query);
+
+        var fullQuery = string.Join(" ", queryParts);
+
+        if (_meshQuery != null)
         {
-            // Filter by query if provided
-            if (!string.IsNullOrWhiteSpace(query))
+            var request = new MeshQueryRequest { Query = fullQuery, Limit = maxResults };
+            await foreach (var item in _meshQuery.QueryAsync(request, ct))
             {
-                if (!(child.Name?.Contains(query, StringComparison.OrdinalIgnoreCase) ?? false) &&
-                    !(child.Description?.Contains(query, StringComparison.OrdinalIgnoreCase) ?? false) &&
-                    !(child.Namespace?.Contains(query, StringComparison.OrdinalIgnoreCase) ?? false))
+                if (item is MeshNode child)
                 {
-                    continue;
+                    yield return child;
+                    count++;
+
+                    // Apply max results if provided
+                    if (maxResults.HasValue && maxResults.Value > 0 && count >= maxResults.Value)
+                    {
+                        yield break;
+                    }
                 }
-            }
-
-            yield return child;
-            count++;
-
-            // Apply max results if provided
-            if (maxResults.HasValue && maxResults.Value > 0 && count >= maxResults.Value)
-            {
-                yield break;
             }
         }
     }

@@ -16,6 +16,7 @@
     "iconName": "Folder",
     "description": "A project containing tasks and deliverables",
     "displayOrder": 20,
-    "configuration": "config => config.WithContentType<Project>().AddNodeTypeView()"
+    "childrenQuery": "nodeType:ACME/Project/Todo scope:descendants",
+    "configuration": "config => config.WithContentType<Project>().AddLayout(layout => layout.WithView(\"Summary\", ProjectViews.Summary).WithView(\"AllItems\", ProjectViews.AllItems).WithView(\"TodosByCategory\", ProjectViews.TodosByCategory).WithView(\"Planning\", ProjectViews.Planning).WithView(\"MyTasks\", ProjectViews.MyTasks).WithView(\"Backlog\", ProjectViews.Backlog).WithView(\"TodaysFocus\", ProjectViews.TodaysFocus).WithDefaultArea(\"TodosByCategory\")).AddNodeTypeView()"
   }
 }

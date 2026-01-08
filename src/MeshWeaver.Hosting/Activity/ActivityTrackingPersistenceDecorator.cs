@@ -1,9 +1,6 @@
-using System.Collections.Concurrent;
-using System.Runtime.CompilerServices;
-using MeshWeaver.Hosting.Persistence.Query;
+﻿using System.Collections.Concurrent;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Activity;
-using MeshWeaver.Mesh.Query;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.Logging;
@@ -94,7 +91,7 @@ public class ActivityTrackingPersistenceDecorator : IPersistenceService, IDispos
     private void TrackActivity(string path, MeshNode? node, ActivityType type)
     {
         // Skip tracking for _activity paths to avoid infinite loop
-        if (path.StartsWith("_activity/", StringComparison.OrdinalIgnoreCase) ||
+        if (string.IsNullOrEmpty(path) || path.StartsWith("_activity/", StringComparison.OrdinalIgnoreCase) ||
             path.StartsWith("_activity", StringComparison.OrdinalIgnoreCase))
             return;
 

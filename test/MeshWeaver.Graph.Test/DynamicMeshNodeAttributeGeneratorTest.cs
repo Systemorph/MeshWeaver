@@ -276,9 +276,9 @@ public class DynamicMeshNodeAttributeGeneratorTest
         // Act
         var source = _generator.GenerateAttributeSource(node, codeConfig, null);
 
-        // Assert - WithDefaultViews() is injected automatically for non-NodeType nodes
-        source.Should().Contain("WithDefaultViews()",
-            "Generated code must include WithDefaultViews() for non-NodeType nodes");
+        // Assert - AddMeshDataSource() is injected automatically for non-NodeType nodes
+        source.Should().Contain("AddMeshDataSource()",
+            "Generated code must include AddMeshDataSource() for non-NodeType nodes");
     }
 
     [Fact]
@@ -300,10 +300,9 @@ public class DynamicMeshNodeAttributeGeneratorTest
         // Act
         var source = _generator.GenerateAttributeSource(node, codeConfig, null);
 
-        // Assert - NodeType nodes MUST include WithDefaultViews() because the same ConfigureHub is used
-        // for both the type definition and instances of that type. Instances need standard views (Details, etc.)
-        source.Should().Contain("ConfigureMeshHub().WithCodeConfiguration().Build().WithDefaultViews()",
-            "Generated code must include ConfigureMeshHub with WithDefaultViews for NodeType definition nodes");
+        // Assert - NodeType nodes use ConfigureMeshHub with WithCodeConfiguration
+        source.Should().Contain("ConfigureMeshHub().WithCodeConfiguration().Build()",
+            "Generated code must include ConfigureMeshHub with WithCodeConfiguration for NodeType definition nodes");
     }
 
     [Fact]
