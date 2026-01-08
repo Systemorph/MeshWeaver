@@ -234,7 +234,6 @@ public static class LoomConfiguration
                     {
                         var nodePath = config.Address.ToString();
                         config = config
-                            .AddContentCollections() // Register $Content layout area first
                             .MapContentCollection("content", contentStorageConfig.Name, $"content/{nodePath}");
                     }
 
