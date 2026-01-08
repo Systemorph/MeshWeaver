@@ -124,7 +124,22 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
         {
             // If there's an error loading conversations, start fresh
             Logger.LogWarning(ex, "[Chat:{InstanceId}] Error loading conversations, starting fresh", _instanceId);
-            await StartNewConversationAsync();
+            try
+            {
+                await StartNewConversationAsync();
+            }
+            catch (ArgumentException argEx) when (argEx.Message.Contains("No factory can serve model"))
+            {
+                // Handle missing model configuration
+                Logger.LogError(argEx, "[Chat:{InstanceId}] No AI model factory configured", _instanceId);
+                ShowConfigurationError("No AI model is configured. Please configure an AI service provider (e.g., OpenAI, Azure OpenAI, or Anthropic) in your application settings.");
+            }
+            catch (Exception initEx)
+            {
+                // Handle other initialization errors
+                Logger.LogError(initEx, "[Chat:{InstanceId}] Failed to initialize chat", _instanceId);
+                ShowConfigurationError($"Failed to initialize chat: {initEx.Message}");
+            }
         }
 
         Logger.LogInformation("[Chat:{InstanceId}] OnInitializedAsync completed. IsDisposed={IsDisposed}", _instanceId, _isDisposed);
@@ -452,9 +467,24 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
         messages.Clear();
         lazyChat = GetLazyChat();
 
-        // Set a new thread ID for the new conversation
-        var chat = await lazyChat.Value;
-        chat.SetThreadId(Guid.NewGuid().AsString());
+        try
+        {
+            // Set a new thread ID for the new conversation
+            var chat = await lazyChat.Value;
+            chat.SetThreadId(Guid.NewGuid().AsString());
+        }
+        catch (ArgumentException ex) when (ex.Message.Contains("No factory can serve model"))
+        {
+            // Handle missing model configuration
+            Logger.LogError(ex, "[Chat:{InstanceId}] No AI model factory configured", _instanceId);
+            ShowConfigurationError("No AI model is configured. Please configure an AI service provider (e.g., OpenAI, Azure OpenAI, or Anthropic) in your application settings.");
+        }
+        catch (Exception ex)
+        {
+            // Handle other initialization errors
+            Logger.LogError(ex, "[Chat:{InstanceId}] Failed to initialize chat", _instanceId);
+            ShowConfigurationError($"Failed to initialize chat: {ex.Message}");
+        }
 
         if (chatInput != null)
         {
@@ -669,10 +699,30 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
             chat = await lazyChat.Value;
             Logger.LogDebug("[Chat:{InstanceId}] Got chat successfully", _instanceId);
         }
+        catch (ArgumentException ex) when (ex.Message.Contains("No factory can serve model"))
+        {
+            // Handle missing model configuration
+            var errorMessage = "⚠️ **Configuration Error**\n\n" +
+                             "No AI model is configured. Please configure an AI service provider (e.g., OpenAI, Azure OpenAI, or Anthropic) in your application settings.\n\n" +
+                             "Please contact your administrator to configure the AI service.";
+
+            var errorResponseText = new TextContent(errorMessage);
+            var errorResponseMessage = new ChatMessage(new ChatRole("Assistant"), [errorResponseText])
+            {
+                AuthorName = "System"
+            };
+
+            // Add the user message to show what they tried to ask
+            messages.Add(userMessage);
+            messages.Add(errorResponseMessage);
+
+            StateHasChanged();
+            return;
+        }
         catch (InvalidOperationException ex) when (ex.Message.Contains("API key") || ex.Message.Contains("endpoint URL"))
         {
             // Handle configuration errors (missing API key, endpoint, etc.)
-            var errorMessage = "❌ **Configuration Error**\n\n" +
+            var errorMessage = "⚠️ **Configuration Error**\n\n" +
                              "The AI service is not properly configured. Please check that:\n" +
                              "• The API key is set\n" +
                              "• The Endpoint URL is configured\n" +
@@ -680,7 +730,10 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
                              "Please contact your administrator to configure the AI service.";
 
             var errorResponseText = new TextContent(errorMessage);
-            var errorResponseMessage = new ChatMessage(new ChatRole("Assistant"), [errorResponseText]);
+            var errorResponseMessage = new ChatMessage(new ChatRole("Assistant"), [errorResponseText])
+            {
+                AuthorName = "System"
+            };
 
             // Add the user message to show what they tried to ask
             messages.Add(userMessage);
@@ -692,10 +745,13 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
         catch (Exception ex)
         {
             // Handle other initialization errors
-            var errorMessage = $"❌ **Service Error**\n\nFailed to initialize AI service: {ex.Message}\n\nPlease try again or contact your administrator if the problem persists.";
+            var errorMessage = $"⚠️ **Service Error**\n\nFailed to initialize AI service: {ex.Message}\n\nPlease try again or contact your administrator if the problem persists.";
 
             var errorResponseText = new TextContent(errorMessage);
-            var errorResponseMessage = new ChatMessage(new ChatRole("Assistant"), [errorResponseText]);
+            var errorResponseMessage = new ChatMessage(new ChatRole("Assistant"), [errorResponseText])
+            {
+                AuthorName = "System"
+            };
 
             // Add the user message to show what they tried to ask
             messages.Add(userMessage);
@@ -1111,6 +1167,21 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
             AuthorName = "System"
         };
         messages.Add(systemMessage);
+        StateHasChanged();
+    }
+
+    /// <summary>
+    /// Displays a configuration error message to the user.
+    /// </summary>
+    private void ShowConfigurationError(string errorMessage)
+    {
+        var formattedMessage = $"⚠️ **Configuration Error**\n\n{errorMessage}";
+        var errorContent = new TextContent(formattedMessage);
+        var errorChatMessage = new ChatMessage(new ChatRole("Assistant"), [errorContent])
+        {
+            AuthorName = "System"
+        };
+        messages.Add(errorChatMessage);
         StateHasChanged();
     }
 
