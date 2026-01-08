@@ -13,6 +13,7 @@ namespace MeshWeaver.AI.Services;
 public class AgentResolver : IAgentResolver
 {
     private readonly IPersistenceService _persistence;
+    private readonly IMeshQuery? _meshQuery;
     private readonly ILogger<AgentResolver> _logger;
 
     /// <summary>
@@ -20,9 +21,10 @@ public class AgentResolver : IAgentResolver
     /// </summary>
     public const string AgentNodeType = "Agent";
 
-    public AgentResolver(IPersistenceService persistence, ILogger<AgentResolver> logger)
+    public AgentResolver(IPersistenceService persistence, IMeshQuery? meshQuery, ILogger<AgentResolver> logger)
     {
         _persistence = persistence;
+        _meshQuery = meshQuery;
         _logger = logger;
     }
 
@@ -44,16 +46,21 @@ public class AgentResolver : IAgentResolver
 
             try
             {
-                await foreach (var node in _persistence.GetChildrenAsync(namespacePath).WithCancellation(ct))
-                {
-                    if (!IsAgentNode(node))
-                        continue;
+                // Query for Agent nodes using IMeshQuery with scope:children
+                var query = string.IsNullOrEmpty(namespacePath)
+                    ? $"nodeType:{AgentNodeType} scope:children"
+                    : $"path:{namespacePath} nodeType:{AgentNodeType} scope:children";
 
-                    var config = ExtractAgentConfiguration(node, namespacePath);
-                    if (config != null && !agents.ContainsKey(config.Id))
+                if (_meshQuery != null)
+                {
+                    await foreach (var node in _meshQuery.QueryAsync<MeshNode>(query, ct: ct))
                     {
-                        // First found wins (most specific namespace)
-                        agents[config.Id] = (config, depth);
+                        var config = ExtractAgentConfiguration(node, namespacePath);
+                        if (config != null && !agents.ContainsKey(config.Id))
+                        {
+                            // First found wins (most specific namespace)
+                            agents[config.Id] = (config, depth);
+                        }
                     }
                 }
             }
@@ -156,9 +163,14 @@ public class AgentResolver : IAgentResolver
 
             try
             {
-                await foreach (var node in _persistence.GetChildrenAsync(namespacePath).WithCancellation(ct))
+                // Query for Agent nodes using IMeshQuery with scope:children
+                var query = string.IsNullOrEmpty(namespacePath)
+                    ? $"nodeType:{AgentNodeType} scope:children"
+                    : $"path:{namespacePath} nodeType:{AgentNodeType} scope:children";
+
+                if (_meshQuery != null)
                 {
-                    if (IsAgentNode(node))
+                    await foreach (var node in _meshQuery.QueryAsync<MeshNode>(query, ct: ct))
                     {
                         var config = ExtractAgentConfiguration(node, namespacePath);
                         if (config != null)
@@ -197,9 +209,14 @@ public class AgentResolver : IAgentResolver
 
             try
             {
-                await foreach (var node in _persistence.GetChildrenAsync(namespacePath).WithCancellation(ct))
+                // Query for Agent nodes using IMeshQuery with scope:children
+                var query = string.IsNullOrEmpty(namespacePath)
+                    ? $"nodeType:{AgentNodeType} scope:children"
+                    : $"path:{namespacePath} nodeType:{AgentNodeType} scope:children";
+
+                if (_meshQuery != null)
                 {
-                    if (IsAgentNode(node))
+                    await foreach (var node in _meshQuery.QueryAsync<MeshNode>(query, ct: ct))
                     {
                         var config = ExtractAgentConfiguration(node, namespacePath);
                         if (config != null)

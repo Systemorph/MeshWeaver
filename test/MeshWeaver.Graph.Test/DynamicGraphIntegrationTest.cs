@@ -113,7 +113,7 @@ public enum StoryStatus
             }
         };
         await persistence.SaveNodeAsync(storyNode);
-        await persistence.SavePartitionObjectsAsync("type/story", null, [storyCodeConfig]);
+        await persistence.SavePartitionObjectsAsync("type/story", "Code", [storyCodeConfig]);
 
         // Create Organization type
         var orgCodeConfig = new CodeConfiguration
@@ -144,11 +144,11 @@ public record Organization
                 Icon = "Building",
                 Description = "An organization",
                 DisplayOrder = 10,
-                Configuration = "config => config"
+                Configuration = "config => config.WithContentType<Organization>().AddDefaultViews()"
             }
         };
         await persistence.SaveNodeAsync(orgNode);
-        await persistence.SavePartitionObjectsAsync("type/org", null, [orgCodeConfig]);
+        await persistence.SavePartitionObjectsAsync("type/org", "Code", [orgCodeConfig]);
 
         // Create Project type
         var projectCodeConfig = new CodeConfiguration
@@ -183,7 +183,7 @@ public record Project
             }
         };
         await persistence.SaveNodeAsync(projectNode);
-        await persistence.SavePartitionObjectsAsync("type/project", null, [projectCodeConfig]);
+        await persistence.SavePartitionObjectsAsync("type/project", "Code", [projectCodeConfig]);
 
         // Create Graph type
         var graphCodeConfig = new CodeConfiguration
@@ -217,7 +217,7 @@ public record Graph
             }
         };
         await persistence.SaveNodeAsync(graphTypeNode);
-        await persistence.SavePartitionObjectsAsync("type/graph", null, [graphCodeConfig]);
+        await persistence.SavePartitionObjectsAsync("type/graph", "Code", [graphCodeConfig]);
     }
 
     private static async Task SeedHierarchyAsync(IPersistenceService persistence)
@@ -277,8 +277,9 @@ public record Graph
             o => o.WithTarget(graphAddress),
             TestContext.Current.CancellationToken);
 
-        // Verify persistence has the pre-seeded data
-        var children = await Persistence.GetChildrenAsync("graph").ToListAsync(TestContext.Current.CancellationToken);
+        // Verify IMeshQuery finds the pre-seeded data
+        var children = await MeshQuery.QueryAsync<MeshNode>("path:graph scope:children", ct: TestContext.Current.CancellationToken)
+            .ToListAsync(TestContext.Current.CancellationToken);
         children.Should().HaveCount(2, "graph should have 2 org children pre-seeded");
         children.Should().Contain(n => n.Path == "graph/org1");
         children.Should().Contain(n => n.Path == "graph/org2");
@@ -303,8 +304,9 @@ public record Graph
             o => o.WithTarget(orgAddress),
             TestContext.Current.CancellationToken);
 
-        // Verify persistence has the pre-seeded projects
-        var children = await Persistence.GetChildrenAsync("graph/org1").ToListAsync(TestContext.Current.CancellationToken);
+        // Verify IMeshQuery finds the pre-seeded projects
+        var children = await MeshQuery.QueryAsync<MeshNode>("path:graph/org1 scope:children", ct: TestContext.Current.CancellationToken)
+            .ToListAsync(TestContext.Current.CancellationToken);
         children.Should().HaveCount(2, "org1 should have 2 project children pre-seeded");
         children.Should().Contain(n => n.Path == "graph/org1/proj1");
         children.Should().Contain(n => n.Path == "graph/org1/proj2");
@@ -329,8 +331,9 @@ public record Graph
             o => o.WithTarget(projAddress),
             TestContext.Current.CancellationToken);
 
-        // Verify persistence has the pre-seeded stories
-        var children = await Persistence.GetChildrenAsync("graph/org1/proj1").ToListAsync(TestContext.Current.CancellationToken);
+        // Verify IMeshQuery finds the pre-seeded stories
+        var children = await MeshQuery.QueryAsync<MeshNode>("path:graph/org1/proj1 scope:children", ct: TestContext.Current.CancellationToken)
+            .ToListAsync(TestContext.Current.CancellationToken);
         children.Should().HaveCount(2, "proj1 should have 2 story children pre-seeded");
         children.Should().Contain(n => n.Path == "graph/org1/proj1/story1");
         children.Should().Contain(n => n.Path == "graph/org1/proj1/story2");

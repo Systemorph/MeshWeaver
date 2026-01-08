@@ -1,5 +1,6 @@
 using System.ComponentModel.DataAnnotations;
 using System.Reflection;
+using System.Text.Json;
 using MeshWeaver.Data;
 using MeshWeaver.Domain;
 using MeshWeaver.Mesh;
@@ -132,7 +133,27 @@ public record ContentTypeSource<T> : TypeSourceWithType<T, ContentTypeSource<T>>
         _logger?.LogWarning("ContentTypeSource<{Type}>.InitializeAsync: meshNode={MeshNode}, Content type={ContentType}",
             typeof(T).Name, meshNode?.Path ?? "null", meshNode?.Content?.GetType().Name ?? "null");
 
-        if (meshNode?.Content is T content)
+        T? content = null;
+
+        if (meshNode?.Content is T typedContent)
+        {
+            content = typedContent;
+        }
+        else if (meshNode?.Content is JsonElement jsonElement)
+        {
+            // Deserialize JsonElement to expected type T using Hub's options
+            try
+            {
+                content = jsonElement.Deserialize<T>(_workspace.Hub.JsonSerializerOptions);
+                _logger?.LogWarning("ContentTypeSource<{Type}>.InitializeAsync: Deserialized JsonElement to {Type}", typeof(T).Name, typeof(T).Name);
+            }
+            catch (Exception ex)
+            {
+                _logger?.LogWarning(ex, "ContentTypeSource<{Type}>.InitializeAsync: Failed to deserialize JsonElement", typeof(T).Name);
+            }
+        }
+
+        if (content != null)
         {
             _logger?.LogWarning("ContentTypeSource<{Type}>.InitializeAsync: Found content, returning it", typeof(T).Name);
             // Return the content as the initial data

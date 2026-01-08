@@ -76,12 +76,11 @@ public static class MeshNodeView
     /// Renders the Details area showing the node's main content with action menu.
     /// This is the default view for a node, showing content and providing navigation.
     /// Uses GetStream for node data. Children are loaded via ChildrenQuery from NodeTypeDefinition
-    /// if set, otherwise via persistence GetChildrenAsync.
+    /// if set, otherwise via IMeshQuery with scope:children.
     /// </summary>
     public static IObservable<UiControl?> Details(LayoutAreaHost host, RenderingContext _)
     {
         var hubPath = host.Hub.Address.ToString();
-        var persistence = host.Hub.ServiceProvider.GetService<IPersistenceService>();
         var meshQuery = host.Hub.ServiceProvider.GetService<IMeshQuery>();
 
         // Get the node from the workspace stream
@@ -99,7 +98,7 @@ public static class MeshNodeView
             return (Node: node, TypeDef: typeDef);
         });
 
-        // Load children based on ChildrenQuery or default GetChildrenAsync
+        // Load children based on ChildrenQuery or default IMeshQuery with scope:children
         return combinedStream.SelectMany(async data =>
         {
             var childrenQuery = data.TypeDef?.ChildrenQuery;
@@ -121,16 +120,22 @@ public static class MeshNodeView
             }
             else
             {
-                // Default: use GetChildrenAsync
-                var childrenList = new List<MeshNode>();
-                if (persistence != null)
+                // Default: use IMeshQuery with scope:children
+                if (meshQuery != null)
                 {
-                    await foreach (var child in persistence.GetChildrenAsync(hubPath))
+                    try
                     {
-                        childrenList.Add(child);
+                        children = await meshQuery.QueryAsync<MeshNode>($"path:{hubPath} scope:children").ToListAsync();
+                    }
+                    catch
+                    {
+                        children = Array.Empty<MeshNode>();
                     }
                 }
-                children = childrenList.AsReadOnly();
+                else
+                {
+                    children = Array.Empty<MeshNode>();
+                }
             }
 
             return BuildDetailsContent(host, data.Node, children, data.TypeDef);

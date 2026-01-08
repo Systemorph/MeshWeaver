@@ -53,16 +53,20 @@ public class MeshPlugin(IMessageHub hub, IAgentChat chat)
             {
                 var parentPath = resolvedPath[..^2];
                 var result = new List<object>();
-                await foreach (var node in persistence.GetChildrenAsync(parentPath))
+                if (meshQuery != null)
                 {
-                    result.Add(new
+                    var query = $"path:{parentPath} scope:children";
+                    await foreach (var node in meshQuery.QueryAsync<MeshNode>(MeshQueryRequest.FromQuery(query)))
                     {
-                        node.Path,
-                        node.Name,
-                        node.NodeType,
-                        node.Description,
-                        node.Icon
-                    });
+                        result.Add(new
+                        {
+                            node.Path,
+                            node.Name,
+                            node.NodeType,
+                            node.Description,
+                            node.Icon
+                        });
+                    }
                 }
                 return JsonSerializer.Serialize(result, hub.JsonSerializerOptions);
             }

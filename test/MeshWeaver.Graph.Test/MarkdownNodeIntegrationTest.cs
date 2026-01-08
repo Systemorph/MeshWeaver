@@ -464,9 +464,10 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
     [Fact(Timeout = 30000)]
     public async Task MeshWeaver_HasMarkdownChildren()
     {
-        var persistence = Mesh.ServiceProvider.GetRequiredService<IPersistenceService>();
+        var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
 
-        var children = await persistence.GetChildrenAsync("MeshWeaver").ToListAsync(TestContext.Current.CancellationToken);
+        var children = await meshQuery.QueryAsync<MeshNode>("path:MeshWeaver scope:children", ct: TestContext.Current.CancellationToken)
+            .ToListAsync(TestContext.Current.CancellationToken);
 
         children.Should().NotBeEmpty("MeshWeaver should have children");
         children.Should().Contain(n => n.Path == "MeshWeaver/CollaborativeEditing");

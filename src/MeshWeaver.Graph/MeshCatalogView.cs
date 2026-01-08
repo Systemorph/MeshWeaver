@@ -38,15 +38,15 @@ public static class MeshCatalogView
     /// </summary>
     public static IObservable<UiControl> Nodes(LayoutAreaHost host, RenderingContext ctx)
     {
-        var meshCatalog = host.Hub.ServiceProvider.GetService<IMeshCatalog>();
+        var meshQuery = host.Hub.ServiceProvider.GetService<IMeshQuery>();
         var parentPath = host.Hub.Address.ToString();
 
-        if (meshCatalog == null)
+        if (meshQuery == null)
         {
             return Observable.Return(Controls.Stack
                 .WithWidth("100%")
                 .WithView(Controls.Html($"<h2>Browse {parentPath}</h2>"))
-                .WithView(Controls.Html("<p>Mesh catalog not available.</p>")));
+                .WithView(Controls.Html("<p>Query service not available.</p>")));
         }
 
         // Extract node type filter from the area reference ID if present
@@ -55,16 +55,19 @@ public static class MeshCatalogView
 
         return Observable.FromAsync(async ct =>
         {
-            var children = new List<MeshNode>();
-            await foreach (var child in meshCatalog.Persistence.GetChildrenAsync(parentPath).WithCancellation(ct))
+            // Build query with optional nodeType filter
+            var query = string.IsNullOrEmpty(nodeTypeFilter)
+                ? $"path:{parentPath} scope:children"
+                : $"path:{parentPath} nodeType:{nodeTypeFilter} scope:children";
+
+            IReadOnlyList<MeshNode> children;
+            try
             {
-                // Filter by node type if specified
-                if (!string.IsNullOrEmpty(nodeTypeFilter))
-                {
-                    if (!string.Equals(child.NodeType, nodeTypeFilter, StringComparison.OrdinalIgnoreCase))
-                        continue;
-                }
-                children.Add(child);
+                children = await meshQuery.QueryAsync<MeshNode>(query, ct: ct).ToListAsync(ct);
+            }
+            catch
+            {
+                children = Array.Empty<MeshNode>();
             }
 
             return BuildNodesView(host, parentPath, nodeTypeFilter, children);

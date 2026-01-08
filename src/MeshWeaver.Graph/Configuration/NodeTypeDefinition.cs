@@ -48,11 +48,11 @@ public record NodeTypeDefinition
     public Dictionary<string, object>? DefaultValues { get; init; }
 
     /// <summary>
-    /// RSQL query for getting "children" to display in the Details view.
-    /// When set, uses QueryAsync instead of GetChildrenAsync.
-    /// Example: "nodeType==Type/Organization;$scope=descendants" finds all nodes
+    /// Query string for getting "children" to display in the Details view.
+    /// Uses IMeshQuery with the specified query pattern.
+    /// Example: "nodeType:Type/Organization scope:descendants" finds all nodes
     /// of type "Type/Organization" anywhere in the hierarchy.
-    /// If null, defaults to "$scope=children" (direct children only).
+    /// If null, defaults to "scope:children" (direct children only).
     /// </summary>
     public string? ChildrenQuery { get; init; }
 
