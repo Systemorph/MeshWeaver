@@ -69,7 +69,9 @@
       "Bash(for f in \"C:/dev/MeshWeaver/samples/Graph/Data/Type/Person/Code/dataModel.json\" \"C:/dev/MeshWeaver/samples/Graph/Data/Type/Organizations/Code/dataModel.json\" \"C:/dev/MeshWeaver/samples/Graph/Data/Type/Article/Code/dataModel.json\" \"C:/dev/MeshWeaver/samples/Graph/Data/Type/People/Code/dataModel.json\" \"C:/dev/MeshWeaver/samples/Graph/Data/Type/Organization/Code/dataModel.json\" \"C:/dev/MeshWeaver/samples/Graph/Data/Systemorph/Type/Project/Code/dataModel.json\" \"C:/dev/MeshWeaver/samples/Graph/Data/Systemorph/Type/Project/Story/Code/dataModel.json\")",
       "Bash(do sed -i 's/CodeFile/CodeConfiguration/g' \"$f\")",
       "Bash(/dev/null -exec cat {} ;)",
-      "WebFetch(domain:localhost)"
+      "WebFetch(domain:localhost)",
+      "Bash(git pull:*)",
+      "Bash(git check-ignore:*)"
     ],
     "deny": []
   }
