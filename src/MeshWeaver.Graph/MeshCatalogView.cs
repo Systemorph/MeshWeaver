@@ -132,7 +132,7 @@ public static class MeshCatalogView
                 Controls.Stack
                     .WithOrientation(Orientation.Horizontal)
                     .WithView(Controls.Button("← Back to Content")
-                        .WithClickAction(c => c.Host.UpdateArea(c.Area, new RedirectControl(detailsHref)))));
+                        .WithNavigateToHref(detailsHref)));
 
             // Editor control
             stack = stack.WithView(new MeshNodeEditorControl

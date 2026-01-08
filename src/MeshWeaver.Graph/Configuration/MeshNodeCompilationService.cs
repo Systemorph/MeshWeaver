@@ -101,18 +101,26 @@ internal class MeshNodeCompilationService(
         // Get CodeConfiguration from the Code sub-partition
         // For NodeType nodes (where Content is NodeTypeDefinition), use the node's own path
         // For instance nodes, use the NodeType's path (e.g., "Person/Code" for Alice with NodeType="Person")
-        CodeConfiguration? codeFile = null;
+        // Collect ALL CodeConfiguration files (dataModel.json, views.json, etc.) and combine them
+        var codeFiles = new List<CodeConfiguration>();
         var codePartition = node.Content is NodeTypeDefinition
             ? $"{node.Path}/Code"    // NodeType node - use its own Code partition
             : $"{node.NodeType}/Code"; // Instance node - use NodeType's Code partition
         await foreach (var obj in persistence.GetPartitionObjectsAsync(codePartition).WithCancellation(ct))
         {
-            if (obj is CodeConfiguration cf)
+            if (obj is CodeConfiguration cf && !string.IsNullOrWhiteSpace(cf.Code))
             {
-                codeFile = cf;
-                break;
+                codeFiles.Add(cf);
             }
         }
+
+        // Combine all code files into a single CodeConfiguration
+        CodeConfiguration? codeFile = codeFiles.Count switch
+        {
+            0 => null,
+            1 => codeFiles[0],
+            _ => new CodeConfiguration { Code = string.Join("\n\n", codeFiles.Select(cf => cf.Code)) }
+        };
 
         // Get Configuration and ContentCollections from the NodeTypeDefinition content
         // Configuration is the source code that gets compiled into HubConfiguration

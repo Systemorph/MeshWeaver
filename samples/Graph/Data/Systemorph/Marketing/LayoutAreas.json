@@ -5,7 +5,7 @@
   "nodeType": "Markdown",
   "category": "MeshWeaver",
   "description": "Composable visualizations for chat responses and reports",
-  "icon": "/static/content/Systemorph/Marketing/icons/data-usage.svg",
+  "icon": "/static/storage/content/Systemorph/Marketing/icons/data-usage.svg",
   "displayOrder": 34,
   "addressSegments": 0,
   "isPersistent": true,

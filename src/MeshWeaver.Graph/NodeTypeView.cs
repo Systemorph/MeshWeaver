@@ -132,7 +132,7 @@ public static class NodeTypeView
         buttonRow = buttonRow.WithView(Controls.Button("View Code & Configuration")
             .WithAppearance(Appearance.Accent)
             .WithIconStart(FluentIcons.Code())
-            .WithClickAction(actx => actx.Host.UpdateArea(actx.Area, new RedirectControl(codeHref))));
+            .WithNavigateToHref(codeHref));
 
         stack = stack.WithView(buttonRow);
 
@@ -200,8 +200,7 @@ public static class NodeTypeView
         // Back to Catalog link
         var catalogHref = new LayoutAreaReference(CatalogArea).ToHref(hubAddress);
         navMenu = navMenu.WithView(
-            new NavLinkControl("← Back to Catalog", FluentIcons.ArrowLeft(), null)
-                .WithClickAction(actx => actx.Host.UpdateArea(actx.Area, new RedirectControl(catalogHref)))
+            new NavLinkControl("← Back to Catalog", FluentIcons.ArrowLeft(), catalogHref)
         );
 
         // Node type definition entry - switches main view to configuration
@@ -304,7 +303,7 @@ public static class NodeTypeView
             .WithView(
                 Controls.Button("")
                     .WithIconStart(FluentIcons.Edit())
-                    .WithClickAction(actx => actx.Host.UpdateArea(actx.Area, new RedirectControl(editHref)))
+                    .WithNavigateToHref(editHref)
             );
 
         stack = stack.WithView(headerRow);
@@ -364,7 +363,7 @@ public static class NodeTypeView
             headerRow = headerRow.WithView(
                 Controls.Button("")
                     .WithIconStart(FluentIcons.Edit())
-                    .WithClickAction(actx => actx.Host.UpdateArea(actx.Area, new RedirectControl(editHref)))
+                    .WithNavigateToHref(editHref)
             );
         }
 
@@ -504,7 +503,7 @@ public static class NodeTypeView
         var viewHref = new LayoutAreaReference(CodeViewArea).ToHref(hubAddress);
         buttonRow = buttonRow.WithView(Controls.Button("Cancel")
             .WithAppearance(Appearance.Neutral)
-            .WithClickAction(actx => actx.Host.UpdateArea(actx.Area, new RedirectControl(viewHref))));
+            .WithNavigateToHref(viewHref));
 
         stack = stack.WithView(buttonRow);
 
@@ -554,7 +553,7 @@ public static class NodeTypeView
                     .WithView(Controls.Button("Edit")
                         .WithAppearance(Appearance.Accent)
                         .WithIconStart(FluentIcons.Edit())
-                        .WithClickAction(actx => actx.Host.UpdateArea(actx.Area, new RedirectControl(editHref))))
+                        .WithNavigateToHref(editHref))
             );
         }
         else
@@ -567,7 +566,7 @@ public static class NodeTypeView
         stack = stack.WithView(Controls.Button("Back")
             .WithAppearance(Appearance.Neutral)
             .WithStyle("margin-top: 24px;")
-            .WithClickAction(actx => actx.Host.UpdateArea(actx.Area, new RedirectControl(codeHref))));
+            .WithNavigateToHref(codeHref));
 
         return stack;
     }
@@ -778,7 +777,7 @@ public static class NodeTypeView
         var viewHref = new LayoutAreaReference(CodeViewArea).ToHref(hubAddress);
         buttonRow = buttonRow.WithView(Controls.Button("Cancel")
             .WithAppearance(Appearance.Neutral)
-            .WithClickAction(actx => actx.Host.UpdateArea(actx.Area, new RedirectControl(viewHref))));
+            .WithNavigateToHref(viewHref));
 
         stack = stack.WithView(buttonRow);
 

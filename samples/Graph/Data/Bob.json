@@ -10,7 +10,7 @@
     "id": "Bob",
     "name": "Bob Wilson",
     "email": "bob.wilson@example.com",
-    "avatar": "/static/content/Bob/avatar.svg",
+    "avatar": "/static/storage/content/Bob/avatar.svg",
     "bio": "Product manager with 10 years of experience in agile methodologies.",
     "role": "Product Manager",
     "iconName": "Person"
