@@ -5,7 +5,7 @@
   "nodeType": "Markdown",
   "category": "Agentic AI",
   "description": "How AI decisions are guided by assembling many small text snippets into context",
-  "icon": "/static/content/Systemorph/Marketing/icons/chat.svg",
+  "icon": "/static/storage/content/Systemorph/Marketing/icons/chat.svg",
   "displayOrder": 21,
   "addressSegments": 0,
   "isPersistent": true,

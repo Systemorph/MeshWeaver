@@ -5,7 +5,7 @@
   "nodeType": "Markdown",
   "category": "AI Use Cases",
   "description": "Natural language queries across all enterprise data",
-  "icon": "/static/content/Systemorph/Marketing/icons/document-search.svg",
+  "icon": "/static/storage/content/Systemorph/Marketing/icons/document-search.svg",
   "displayOrder": 13,
   "addressSegments": 0,
   "isPersistent": true,

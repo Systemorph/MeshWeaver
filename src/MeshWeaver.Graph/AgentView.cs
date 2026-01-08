@@ -143,11 +143,7 @@ public static class AgentView
             .WithView(Controls.Button("")
                 .WithIconStart(FluentIcons.Edit())
                 .WithAppearance(Appearance.Accent)
-                .WithClickAction(actx =>
-                {
-                    var editHref = new LayoutAreaReference(EditArea).ToHref(hubAddress);
-                    actx.Host.UpdateArea(actx.Area, new RedirectControl(editHref));
-                }));
+                .WithNavigateToHref(new LayoutAreaReference(EditArea).ToHref(hubAddress)));
 
         stack = stack.WithView(headerRow);
 
@@ -457,7 +453,7 @@ public static class AgentView
         var detailsHref = new LayoutAreaReference(DetailsArea).ToHref(hubAddress);
         buttonRow = buttonRow.WithView(Controls.Button("Cancel")
             .WithAppearance(Appearance.Neutral)
-            .WithClickAction(actx => actx.Host.UpdateArea(actx.Area, new RedirectControl(detailsHref))));
+            .WithNavigateToHref(detailsHref));
 
         stack = stack.WithView(buttonRow);
 

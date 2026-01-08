@@ -5,7 +5,7 @@
   "nodeType": "Systemorph/Marketing/Post",
   "category": "Announcements",
   "description": "Microsoft Azure partnership announcement",
-  "icon": "/static/content/Systemorph/Marketing/icons/share.svg",
+  "icon": "/static/storage/content/Systemorph/Marketing/icons/share.svg",
   "displayOrder": 30,
   "isPersistent": true,
   "content": {

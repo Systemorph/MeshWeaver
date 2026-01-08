@@ -3,15 +3,19 @@
   "name": "Systemorph",
   "nodeType": "Organization",
   "description": "The company behind MeshWeaver",
-  "icon": "/static/content/Systemorph/logo.svg",
+  "icon": "/static/storage/content/Systemorph/logo_t.png",
   "displayOrder": 1,
   "addressSegments": 0,
   "isPersistent": true,
   "content": {
+    "$type": "Organization",
     "id": "Systemorph",
     "name": "Systemorph",
-    "description": "The company behind MeshWeaver",
-    "website": "https://systemorph.com",
-    "logo": "/static/content/Systemorph/logo.png"
+    "description": "Systemorph Cloud",
+    "website": "https://systemorph.cloud",
+    "logo": "/static/storage/content/Systemorph/logo_t.png",
+    "location": "Switzerland",
+    "email": "cloud@systemorph.com",
+    "isVerified": true
   }
 }

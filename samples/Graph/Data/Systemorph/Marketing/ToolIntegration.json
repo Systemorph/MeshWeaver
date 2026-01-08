@@ -5,7 +5,7 @@
   "nodeType": "Markdown",
   "category": "MeshWeaver",
   "description": "Connect AI agents to existing systems through configurable tools",
-  "icon": "/static/content/Systemorph/Marketing/icons/share.svg",
+  "icon": "/static/storage/content/Systemorph/Marketing/icons/share.svg",
   "displayOrder": 33,
   "addressSegments": 0,
   "isPersistent": true,

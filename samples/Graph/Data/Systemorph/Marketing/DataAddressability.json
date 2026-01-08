@@ -5,7 +5,7 @@
   "nodeType": "Markdown",
   "category": "MeshWeaver",
   "description": "Unified addressing for all data types with @address syntax",
-  "icon": "/static/content/Systemorph/Marketing/icons/grid.svg",
+  "icon": "/static/storage/content/Systemorph/Marketing/icons/grid.svg",
   "displayOrder": 30,
   "addressSegments": 0,
   "isPersistent": true,
