@@ -32,8 +32,8 @@ public class LayoutAreaMarkdownRenderer : HtmlObjectRenderer<LayoutAreaComponent
         {
             if (isPreParsed)
             {
-                // Pre-parsed reference - use address/area/id for hyperlink
-                renderer.WriteLine(GetLayoutAreaLink(obj.Address, obj.Area, obj.Id));
+                // Pre-parsed reference - use address/area/id for hyperlink, RawPath for display
+                renderer.WriteLine(GetLayoutAreaLink(obj.RawPath, obj.Address, obj.Area, obj.Id));
             }
             else
             {
@@ -80,7 +80,11 @@ public class LayoutAreaMarkdownRenderer : HtmlObjectRenderer<LayoutAreaComponent
     /// Creates a UCR hyperlink with pre-resolved address/area/id.
     /// Used for paths with keywords like data:, content:, area:.
     /// </summary>
-    internal static string GetLayoutAreaLink(object address, string? area, object? id)
+    /// <param name="rawPath">The original path as written (for display text)</param>
+    /// <param name="address">The resolved address</param>
+    /// <param name="area">The resolved area name (e.g., "$Content")</param>
+    /// <param name="id">The area ID</param>
+    internal static string GetLayoutAreaLink(string rawPath, object address, string? area, object? id)
     {
         // Generate href: /{address}/{area}[/{id}]
         var href = $"/{address}";
@@ -91,10 +95,10 @@ public class LayoutAreaMarkdownRenderer : HtmlObjectRenderer<LayoutAreaComponent
                 href += $"/{HttpUtility.UrlEncode(id.ToString()!)}";
         }
 
-        // Display text: @ prefix with constructed path
-        var displayText = $"@{address}" + (area != null ? $"/{area}" : "") + (id != null ? $"/{id}" : "");
-        var tooltip = string.IsNullOrEmpty(area) ? address.ToString() : $"{area}: {address}";
+        // Display text: @ prefix with original path (preserves original syntax like content:logo.svg)
+        var displayText = $"@{rawPath}";
+        var tooltip = rawPath;
 
-        return $"<a href='{href}' class='{UcrLink}' data-{Address}='{HttpUtility.HtmlAttributeEncode(address.ToString()!)}' data-{Area}='{HttpUtility.HtmlAttributeEncode(area ?? string.Empty)}' data-{AreaId}='{HttpUtility.HtmlAttributeEncode(id?.ToString() ?? string.Empty)}' title='{HttpUtility.HtmlAttributeEncode(tooltip!)}'>{HttpUtility.HtmlEncode(displayText)}</a>";
+        return $"<a href='{href}' class='{UcrLink}' data-{Address}='{HttpUtility.HtmlAttributeEncode(address.ToString()!)}' data-{Area}='{HttpUtility.HtmlAttributeEncode(area ?? string.Empty)}' data-{AreaId}='{HttpUtility.HtmlAttributeEncode(id?.ToString() ?? string.Empty)}' title='{HttpUtility.HtmlAttributeEncode(tooltip)}'>{HttpUtility.HtmlEncode(displayText)}</a>";
     }
 }

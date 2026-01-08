@@ -1,17 +1,14 @@
-using System.Reactive.Linq;
+﻿using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using MeshWeaver.Application.Styles;
-using ViewModeSubject = System.Reactive.Subjects.ISubject<MeshWeaver.Graph.MarkdownView.AnnotationViewMode>;
 using MeshWeaver.Data;
 using MeshWeaver.Domain;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
-using MeshWeaver.Layout.Domain;
 using MeshWeaver.Markdown;
 using MeshWeaver.Mesh;
-using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
-using Microsoft.Extensions.DependencyInjection;
+using ViewModeSubject = System.Reactive.Subjects.ISubject<MeshWeaver.Graph.MarkdownView.AnnotationViewMode>;
 
 namespace MeshWeaver.Graph;
 
@@ -112,8 +109,7 @@ public static class MarkdownView
             {
                 var node = nodes.FirstOrDefault(n => n.Path == hubPath);
                 return BuildReadView(host, node, viewMode, viewModeSubject, panelState, panelStateSubject);
-            })
-            .StartWith(Controls.Markdown($"*Loading...*"));
+            });
     }
 
     private static UiControl BuildReadView(
@@ -834,7 +830,7 @@ public static class MarkdownView
         {
             var node = nodes.FirstOrDefault(n => n.Path == hubPath);
             return BuildEditView(host, node);
-        }).StartWith(Controls.Markdown($"*Loading editor...*"));
+        });
     }
 
     private static UiControl BuildEditView(LayoutAreaHost host, MeshNode? node)
@@ -908,7 +904,7 @@ public static class MarkdownView
         {
             var node = nodes.FirstOrDefault(n => n.Path == hubPath);
             return BuildCommentsView(host, node);
-        }).StartWith(Controls.Markdown($"*Loading comments...*"));
+        });
     }
 
     private static UiControl BuildCommentsView(LayoutAreaHost host, MeshNode? node)
@@ -967,7 +963,7 @@ public static class MarkdownView
         {
             var node = nodes.FirstOrDefault(n => n.Path == hubPath);
             return BuildAttachmentsView(host, node);
-        }).StartWith(Controls.Markdown($"*Loading attachments...*"));
+        });
     }
 
     private static UiControl BuildAttachmentsView(LayoutAreaHost host, MeshNode? node)
