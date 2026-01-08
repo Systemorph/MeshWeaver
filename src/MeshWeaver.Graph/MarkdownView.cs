@@ -109,8 +109,7 @@ public static class MarkdownView
             {
                 var node = nodes.FirstOrDefault(n => n.Path == hubPath);
                 return BuildReadView(host, node, viewMode, viewModeSubject, panelState, panelStateSubject);
-            })
-            .StartWith(Controls.Markdown($"*Loading...*"));
+            });
     }
 
     private static UiControl BuildReadView(
@@ -831,7 +830,7 @@ public static class MarkdownView
         {
             var node = nodes.FirstOrDefault(n => n.Path == hubPath);
             return BuildEditView(host, node);
-        }).StartWith(Controls.Markdown($"*Loading editor...*"));
+        });
     }
 
     private static UiControl BuildEditView(LayoutAreaHost host, MeshNode? node)
@@ -905,7 +904,7 @@ public static class MarkdownView
         {
             var node = nodes.FirstOrDefault(n => n.Path == hubPath);
             return BuildCommentsView(host, node);
-        }).StartWith(Controls.Markdown($"*Loading comments...*"));
+        });
     }
 
     private static UiControl BuildCommentsView(LayoutAreaHost host, MeshNode? node)
@@ -964,7 +963,7 @@ public static class MarkdownView
         {
             var node = nodes.FirstOrDefault(n => n.Path == hubPath);
             return BuildAttachmentsView(host, node);
-        }).StartWith(Controls.Markdown($"*Loading attachments...*"));
+        });
     }
 
     private static UiControl BuildAttachmentsView(LayoutAreaHost host, MeshNode? node)
