@@ -16,6 +16,7 @@ using MeshWeaver.GoogleMaps;
 using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting;
+using MeshWeaver.Kernel.Hub;
 using MeshWeaver.Hosting.Activity;
 using MeshWeaver.Hosting.AzureBlob;
 using MeshWeaver.Hosting.Blazor;
@@ -209,6 +210,8 @@ public static class LoomConfiguration
                 .ConfigureServices(services => services.AddPersistence(graphStorageConfig))
                 // Configure graph from the same base path
                 .AddJsonGraphConfiguration(basePath ?? Directory.GetCurrentDirectory())
+                // Add kernel for interactive markdown code execution
+                .AddKernel()
                 // Register Azure Blob support for content collections.
                 .ConfigureServices(services => services.AddAzureBlob())
                 // Register the mesh catalog

@@ -130,6 +130,9 @@ public record MeshNode([property: Key] string Id, [property: Editable(false)] st
         return new MeshNode(id, ns);
     }
 
+    /// <summary>
+    /// Constant identifying the mesh input.
+    /// </summary>
     public const string MeshIn = nameof(MeshIn);
 
     /// <summary>
@@ -292,10 +295,18 @@ public record MeshNode([property: Key] string Id, [property: Editable(false)] st
     public InstantiationType InstantiationType { get; set; }
 
 
+    /// <summary>
+    /// Gets or sets the global service configurations for this mesh node.
+    /// </summary>
     [JsonIgnore, NotMapped]
     [Editable(false)]
     public ImmutableList<Func<IServiceCollection, IServiceCollection>> GlobalServiceConfigurations { get; set; } = [];
 
+    /// <summary>
+    /// Adds a global service registry configuration to this mesh node.
+    /// </summary>
+    /// <param name="services">Function to configure services.</param>
+    /// <returns>A new MeshNode with the added service configuration.</returns>
     public MeshNode WithGlobalServiceRegistry(Func<IServiceCollection, IServiceCollection> services)
         => this with { GlobalServiceConfigurations = GlobalServiceConfigurations.Add(services) };
 

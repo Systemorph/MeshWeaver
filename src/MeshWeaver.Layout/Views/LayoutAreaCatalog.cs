@@ -7,11 +7,11 @@ public static class LayoutAreaCatalogArea
 {
     public const string LayoutAreas = nameof(LayoutAreas);
 
-    internal static LayoutDefinition AddLayoutAreaCatalog(this LayoutDefinition layout)
+    public static LayoutDefinition AddLayoutAreaCatalog(this LayoutDefinition layout)
         => layout.WithView(LayoutAreas, LayoutAreaCatalog);
 
     [Browsable(false)]
-    private static UiControl LayoutAreaCatalog(LayoutAreaHost host, RenderingContext ctx)
+    public static UiControl LayoutAreaCatalog(LayoutAreaHost host, RenderingContext ctx)
     {
         var layouts = host.GetLayoutAreaDefinitions();
         var thumbnailPattern = host.LayoutDefinition.ThumbnailPattern;

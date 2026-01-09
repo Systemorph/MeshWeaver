@@ -3,9 +3,21 @@
 [assembly: System.Runtime.CompilerServices.InternalsVisibleTo("MeshWeaver.Orleans")]
 namespace MeshWeaver.Mesh.Services;
 
+/// <summary>
+/// Catalog service for managing mesh nodes and their configuration.
+/// </summary>
 public interface IMeshCatalog
 {
+    /// <summary>
+    /// Gets the mesh configuration.
+    /// </summary>
     MeshConfiguration Configuration { get; }
+
+    /// <summary>
+    /// Gets a mesh node by its address.
+    /// </summary>
+    /// <param name="address">The address of the node to retrieve.</param>
+    /// <returns>The mesh node, or null if not found.</returns>
     Task<MeshNode?> GetNodeAsync(Address address);
 
     /// <summary>
@@ -48,6 +60,11 @@ public interface IMeshCatalog
     /// <param name="ct">Cancellation token</param>
     Task DeleteNodeAsync(string path, bool recursive = false, CancellationToken ct = default);
 
+    /// <summary>
+    /// Gets stream information for the specified address.
+    /// </summary>
+    /// <param name="address">The address to get stream info for.</param>
+    /// <returns>Stream information for the address.</returns>
     Task<StreamInfo> GetStreamInfoAsync(Address address);
 
     /// <summary>
@@ -75,20 +92,52 @@ public interface IMeshCatalog
 
 }
 
-
-
+/// <summary>
+/// Information about a stream including its type and provider.
+/// </summary>
+/// <param name="Type">The type of stream (Stream or Channel).</param>
+/// <param name="Provider">The stream provider name.</param>
+/// <param name="Namespace">The namespace for the stream.</param>
 public record StreamInfo(
     StreamType Type,
     string Provider,
     string Namespace);
-public enum StreamType { Stream, Channel }
+
+/// <summary>
+/// Type of stream.
+/// </summary>
+public enum StreamType
+{
+    /// <summary>
+    /// A data stream.
+    /// </summary>
+    Stream,
+
+    /// <summary>
+    /// A communication channel.
+    /// </summary>
+    Channel
+}
+
+/// <summary>
+/// Information about storage configuration.
+/// </summary>
+/// <param name="Id">The storage identifier.</param>
+/// <param name="BaseDirectory">The base directory for storage.</param>
+/// <param name="AssemblyLocation">The location of the assembly.</param>
+/// <param name="AddressType">The type of address used.</param>
 public record StorageInfo(
     string Id,
     string BaseDirectory,
     string AssemblyLocation,
     string AddressType);
 
-
+/// <summary>
+/// Information needed to start a mesh node.
+/// </summary>
+/// <param name="Address">The address of the node.</param>
+/// <param name="PackageName">The package name.</param>
+/// <param name="AssemblyLocation">The location of the assembly.</param>
 public record StartupInfo(Address Address, string PackageName, string AssemblyLocation);
 
 /// <summary>
