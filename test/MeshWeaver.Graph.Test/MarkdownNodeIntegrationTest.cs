@@ -15,6 +15,7 @@ using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Layout;
 using Markdig;
 using Markdig.Syntax;
+using MeshWeaver.Kernel.Hub;
 using MeshWeaver.Markdown;
 using MeshWeaver.Markdown.Collaboration;
 using MeshWeaver.Mesh;
@@ -66,6 +67,7 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
         return builder
             .UseMonolithMesh()
             .AddFileSystemPersistence(dataDirectory)
+            .AddKernel()  // Required for interactive markdown code execution
             .ConfigureServices(services =>
             {
                 services.Configure<CompilationCacheOptions>(o =>
@@ -77,6 +79,12 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
                 return services;
             })
             .AddJsonGraphConfiguration(dataDirectory);
+    }
+
+    protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
+    {
+        return base.ConfigureClient(configuration)
+            .AddLayoutClient();  // Required for workspace/layout area streams
     }
 
     #region Markdown Node Loading Tests
@@ -883,6 +891,221 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
         layoutArea.Area.Should().Be(LayoutAreaMarkdownParser.ModelAreaName);
         layoutArea.Id.Should().BeNull("Self-reference (empty path) should have null Id");
         layoutArea.IsInline.Should().BeTrue();
+    }
+
+    #endregion
+
+    #region Interactive Markdown Tests
+
+    /// <summary>
+    /// Test that InteractiveMarkdown node exists and has executable code blocks.
+    /// </summary>
+    [Fact(Timeout = 30000)]
+    public async Task InteractiveMarkdown_NodeExists_WithExecutableCodeBlocks()
+    {
+        var persistence = Mesh.ServiceProvider.GetRequiredService<IPersistenceService>();
+
+        var node = await persistence.GetNodeAsync("MeshWeaver/InteractiveMarkdown", TestContext.Current.CancellationToken);
+
+        node.Should().NotBeNull("InteractiveMarkdown node should exist");
+        node!.Path.Should().Be("MeshWeaver/InteractiveMarkdown");
+        node.NodeType.Should().Be("Markdown");
+        node.Name.Should().Be("Interactive Markdown");
+    }
+
+    /// <summary>
+    /// Test that InteractiveMarkdown content contains --render flags.
+    /// </summary>
+    [Fact(Timeout = 30000)]
+    public async Task InteractiveMarkdown_ContentContainsRenderFlags()
+    {
+        var persistence = Mesh.ServiceProvider.GetRequiredService<IPersistenceService>();
+
+        var node = await persistence.GetNodeAsync("MeshWeaver/InteractiveMarkdown", TestContext.Current.CancellationToken);
+
+        node.Should().NotBeNull();
+
+        // Extract content field from the MarkdownDocument
+        var jsonContent = node!.Content as JsonElement?;
+        jsonContent.Should().NotBeNull();
+
+        if (jsonContent.HasValue && jsonContent.Value.TryGetProperty("content", out var contentProp))
+        {
+            var markdownContent = contentProp.GetString();
+            markdownContent.Should().NotBeNullOrEmpty();
+            markdownContent.Should().Contain("--render HelloWorld");
+            markdownContent.Should().Contain("--render HelloWorld2");
+            markdownContent.Should().Contain("DateTime.Now");
+        }
+    }
+
+    /// <summary>
+    /// Test that parsing Interactive Markdown extracts ExecutableCodeBlock with render flags.
+    /// This validates that the markdown parsing correctly identifies code blocks with --render.
+    /// </summary>
+    [Fact]
+    public async Task InteractiveMarkdown_ParsesExecutableCodeBlocks()
+    {
+        var persistence = Mesh.ServiceProvider.GetRequiredService<IPersistenceService>();
+
+        var node = await persistence.GetNodeAsync("MeshWeaver/InteractiveMarkdown", TestContext.Current.CancellationToken);
+        node.Should().NotBeNull();
+
+        var jsonContent = node!.Content as JsonElement?;
+        jsonContent.Should().NotBeNull();
+
+        if (jsonContent.HasValue && jsonContent.Value.TryGetProperty("content", out var contentProp))
+        {
+            var markdownContent = contentProp.GetString();
+            markdownContent.Should().NotBeNullOrEmpty();
+
+            // Parse the markdown with the executable code block extension
+            var pipeline = Markdown.MarkdownExtensions.CreateMarkdownPipeline("test");
+            var document = Markdig.Markdown.Parse(markdownContent!, pipeline);
+
+            // Find executable code blocks
+            var executableBlocks = document.Descendants<ExecutableCodeBlock>().ToList();
+
+            Output.WriteLine($"Found {executableBlocks.Count} executable code blocks");
+            foreach (var block in executableBlocks)
+            {
+                // Initialize must be called to parse Args and create SubmitCode
+                block.Initialize();
+                Output.WriteLine($"  - Info: {block.Info}, Args: {block.Arguments}");
+                if (block.SubmitCode != null)
+                    Output.WriteLine($"    SubmitCode Id: {block.SubmitCode.Id}");
+            }
+
+            // Should have at least 2 executable code blocks with --render
+            var renderBlocks = executableBlocks.Where(b => b.SubmitCode != null).ToList();
+            renderBlocks.Should().HaveCountGreaterThanOrEqualTo(2,
+                "Interactive Markdown should have at least 2 code blocks with --render");
+
+            // Verify the render IDs (note: IDs are lowercased during parsing)
+            renderBlocks.Should().Contain(b => b.SubmitCode!.Id == "helloworld");
+            renderBlocks.Should().Contain(b => b.SubmitCode!.Id == "helloworld2");
+        }
+    }
+
+    /// <summary>
+    /// Test that the prerendered HTML contains the kernel address placeholder.
+    /// This is needed for the client to replace with actual kernel address.
+    /// </summary>
+    [Fact]
+    public async Task InteractiveMarkdown_PrerenderedHtml_ContainsKernelPlaceholder()
+    {
+        var persistence = Mesh.ServiceProvider.GetRequiredService<IPersistenceService>();
+
+        var node = await persistence.GetNodeAsync("MeshWeaver/InteractiveMarkdown", TestContext.Current.CancellationToken);
+        node.Should().NotBeNull();
+
+        var jsonContent = node!.Content as JsonElement?;
+        jsonContent.Should().NotBeNull();
+
+        if (jsonContent.HasValue && jsonContent.Value.TryGetProperty("content", out var contentProp))
+        {
+            var markdownContent = contentProp.GetString();
+            markdownContent.Should().NotBeNullOrEmpty();
+
+            // Render the markdown to HTML
+            var pipeline = Markdown.MarkdownExtensions.CreateMarkdownPipeline("test");
+            var html = Markdig.Markdown.ToHtml(markdownContent!, pipeline);
+
+            Output.WriteLine($"Rendered HTML length: {html.Length}");
+            Output.WriteLine($"First 1000 chars: {html.Substring(0, Math.Min(1000, html.Length))}");
+
+            // The rendered HTML should contain the kernel address placeholder
+            html.Should().Contain(ExecutableCodeBlockRenderer.KernelAddressPlaceholder,
+                "Rendered HTML should contain __KERNEL_ADDRESS__ placeholder for executable code blocks");
+
+            // Should contain layout-area divs with the placeholder (note: HTML uses single quotes)
+            html.Should().Contain("data-address='__KERNEL_ADDRESS__'",
+                "Rendered HTML should contain layout-area divs with kernel address placeholder");
+        }
+    }
+
+    /// <summary>
+    /// Test that kernel is configured and can be used to create kernel addresses.
+    /// This verifies that .AddKernel() is properly called in the configuration.
+    /// </summary>
+    [Fact]
+    public void InteractiveMarkdown_KernelIsConfigured()
+    {
+        // Verify kernel address can be created (this works if .AddKernel() was called)
+        var kernelAddress = AddressExtensions.CreateKernelAddress();
+        Output.WriteLine($"Created kernel address: {kernelAddress}");
+
+        kernelAddress.Should().NotBeNull("Kernel address should be created");
+        kernelAddress.ToString().Should().StartWith("kernel/", "Kernel address should start with 'kernel/'");
+
+        // Verify we can get a client (basic sanity check)
+        var client = GetClient();
+        client.Should().NotBeNull("Client should be created");
+    }
+
+    /// <summary>
+    /// Test full kernel execution flow - submits code and verifies the layout area receives output.
+    /// This replicates the flow from MarkdownView.
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task InteractiveMarkdown_FullKernelFlow()
+    {
+        // Use a unique kernel ID for each test run
+        var kernelId = $"test-interactive-markdown-{Guid.NewGuid().ToString("N")[..8]}";
+
+        // Get client
+        var client = GetClient();
+
+        // Create the kernel node first - this is required for proper routing
+        // Without this, all kernel/* messages go to a single hub at "kernel"
+        var kernelAddress = AddressExtensions.CreateKernelAddress(kernelId);
+        Output.WriteLine($"Creating kernel node at: {kernelAddress}");
+
+        var kernelNode = new MeshNode(kernelId, AddressExtensions.KernelType)
+        {
+            Name = $"Kernel-{kernelId}"
+        };
+
+        var createResponse = await client.AwaitResponse(
+            new CreateNodeRequest(kernelNode),
+            o => o.WithTarget(Mesh.Address),
+            TestContext.Current.CancellationToken);
+
+        createResponse.Message.Success.Should().BeTrue($"Failed to create kernel node: {createResponse.Message.Error}");
+        Output.WriteLine($"Kernel node created successfully at: {kernelAddress}");
+
+        // Create a simple code submission like the interactive markdown does
+        var submission = new MeshWeaver.Kernel.SubmitCodeRequest("\"Hello World \" + DateTime.Now.ToString()")
+        {
+            Id = "helloworld"  // This is the area name
+        };
+
+        Output.WriteLine($"Submitting code with Id: {submission.Id}");
+        Output.WriteLine($"Code: {submission.Code}");
+
+        // Submit the code
+        client.Post(submission, o => o.WithTarget(kernelAddress));
+
+        // Now get the layout area stream - this is what LayoutAreaView does
+        var reference = new LayoutAreaReference("helloworld");
+        Output.WriteLine($"Getting remote stream for reference: Area={reference.Area}, Id={reference.Id}");
+
+        var layoutStream = client.GetWorkspace()
+            .GetRemoteStream<JsonElement, LayoutAreaReference>(kernelAddress, reference);
+
+        Output.WriteLine("Waiting for control...");
+
+        // Get the control stream and wait for a non-null value
+        var controlPointer = LayoutAreaReference.GetControlPointer("helloworld");
+        Output.WriteLine($"Control pointer: {controlPointer}");
+
+        var control = await layoutStream.GetControlStream("helloworld")
+            .Do(x => Output.WriteLine($"Received control update: {x?.GetType().Name ?? "null"}"))
+            .Timeout(30.Seconds())
+            .FirstAsync(x => x is not null);
+
+        Output.WriteLine($"Final control: {control?.GetType().Name}");
+        control.Should().NotBeNull("Should receive a control from the kernel");
     }
 
     #endregion
