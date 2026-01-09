@@ -57,20 +57,23 @@ public static class MeshNodeView
     /// </summary>
     public static MessageHubConfiguration AddDefaultViews(this MessageHubConfiguration configuration)
         => configuration
-            .AddLayout(layout => layout
-                .WithDefaultArea(DetailsArea)
-                .WithView(DetailsArea, Details)
-                .WithView(ThumbnailArea, Thumbnail)
-                .WithView(MetadataArea, Metadata)
-                .WithView(SettingsArea, Settings)
-                .WithView(CatalogArea, Catalog)
-                .WithView(CalendarArea, Calendar)
-                .WithView(FilesArea, Files)
-                // UCR special areas - $Content is registered by ContentCollectionsExtensions.AddContentCollections
-                .WithView(DataArea, Data)
-                .WithView(SchemaArea, Schema)
-                .WithView(DefaultViews.EditArea, DefaultViews.Edit)
-                .WithView(ModelArea, DataModelLayoutArea.DataModel));
+            .AddLayout(layout => layout.AddDefaultViews());
+
+    public static LayoutDefinition AddDefaultViews(this LayoutDefinition layout)
+        => layout
+            .WithDefaultArea(DetailsArea)
+            .WithView(DetailsArea, Details)
+            .WithView(ThumbnailArea, Thumbnail)
+            .WithView(MetadataArea, Metadata)
+            .WithView(SettingsArea, Settings)
+            .WithView(CatalogArea, Catalog)
+            .WithView(CalendarArea, Calendar)
+            .WithView(FilesArea, Files)
+            // UCR special areas - $Content is registered by ContentCollectionsExtensions.AddContentCollections
+            .WithView(DataArea, Data)
+            .WithView(SchemaArea, Schema)
+            .WithView(DefaultViews.EditArea, DefaultViews.Edit)
+            .WithView(ModelArea, DataModelLayoutArea.DataModel);
 
     /// <summary>
     /// Renders the Details area showing the node's main content with action menu.
