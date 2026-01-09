@@ -1,10 +1,15 @@
 ﻿using HtmlAgilityPack;
 using Markdig;
+using Markdig.Syntax;
 using MeshWeaver.Data;
+using MeshWeaver.Kernel;
 using MeshWeaver.Layout;
 using MeshWeaver.Markdown;
+using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.AspNetCore.Components.Rendering;
+using Microsoft.JSInterop;
 using MarkdownExtensions = MeshWeaver.Markdown.MarkdownExtensions;
 
 namespace MeshWeaver.Blazor.Components;
@@ -13,6 +18,21 @@ public partial class MarkdownView
 {
     private string? Html { get; set; }
     private readonly string? Markdown;
+    private object? CodeSubmissionsRaw { get; set; }
+    private IReadOnlyCollection<SubmitCodeRequest>? CodeSubmissions => CodeSubmissionsRaw as IReadOnlyCollection<SubmitCodeRequest>;
+
+    /// <summary>
+    /// Unique kernel ID for this markdown view instance.
+    /// Uses a stable ID based on the stream owner to ensure consistent routing.
+    /// </summary>
+    private string? _kernelId;
+    private Address? _kernelAddress;
+    private Address KernelAddress => _kernelAddress ??= AddressExtensions.CreateKernelAddress(KernelId);
+    private string KernelId => _kernelId ??= $"md-{(Stream?.Owner?.ToString() ?? Guid.NewGuid().ToString("N"))[..Math.Min(Stream?.Owner?.ToString().Length ?? 32, 32)].Replace('/', '-')}";
+
+    private bool _codeSubmitted;
+    private bool _kernelNodeCreated;
+    private IJSObjectReference? _jsModule;
 
     /// <summary>
     /// Collection of UCR hyperlink references found in the markdown (@ syntax).
@@ -35,6 +55,8 @@ public partial class MarkdownView
         base.BindData();
         DataBind(ViewModel.Markdown, x => x.Markdown);
         DataBind(ViewModel.Html, x => x.Html);
+        DataBind(ViewModel.CodeSubmissions, x => x.CodeSubmissionsRaw);
+
         if (Html == null)
         {
             var pipeline = MarkdownExtensions.CreateMarkdownPipeline(Stream?.Owner);
@@ -42,7 +64,100 @@ public partial class MarkdownView
             // into HTML spans before Markdig processing
             var transformedMarkdown = AnnotationMarkdownExtension.TransformAnnotations(Markdown ?? "");
             var document = Markdig.Markdown.Parse(transformedMarkdown, pipeline);
+
+            // Extract code submissions from executable code blocks if not already provided
+            if (CodeSubmissions == null || CodeSubmissions.Count == 0)
+            {
+                var executableBlocks = document.Descendants<ExecutableCodeBlock>().ToList();
+                foreach (var block in executableBlocks)
+                {
+                    block.Initialize();
+                }
+                var submissions = executableBlocks
+                    .Select(b => b.SubmitCode)
+                    .Where(s => s != null)
+                    .Cast<SubmitCodeRequest>()  // Cast to non-nullable to fix IReadOnlyCollection cast
+                    .ToList();
+                if (submissions.Count > 0)
+                {
+                    CodeSubmissionsRaw = submissions;
+                }
+            }
+
             Html = document.ToHtml(pipeline);
+        }
+
+        // Replace kernel address placeholder in HTML with actual kernel address
+        if (Html != null && CodeSubmissions != null && CodeSubmissions.Count > 0)
+        {
+            var htmlString = Html.ToString();
+            if (htmlString != null && htmlString.Contains(ExecutableCodeBlockRenderer.KernelAddressPlaceholder))
+            {
+                Html = htmlString.Replace(ExecutableCodeBlockRenderer.KernelAddressPlaceholder, KernelAddress.ToString());
+            }
+        }
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            // Initialize JS module for markdown theme handling
+            try
+            {
+                _jsModule = await JSRuntime.InvokeAsync<IJSObjectReference>(
+                    "import", "./_content/MeshWeaver.Blazor/Components/MarkdownView.razor.js");
+                await _jsModule.InvokeVoidAsync("ensureMarkdownTheme");
+            }
+            catch (JSException)
+            {
+                // JS not available during prerendering
+            }
+        }
+
+        await base.OnAfterRenderAsync(firstRender);
+
+        // Submit code to kernel on first render
+        if (firstRender && !_codeSubmitted && CodeSubmissions != null && CodeSubmissions.Count > 0)
+        {
+            _codeSubmitted = true;
+
+            // Create the kernel node first - required for proper routing
+            // Without this, all kernel/* messages go to a single shared hub at "kernel"
+            if (!_kernelNodeCreated)
+            {
+                _kernelNodeCreated = true;
+                var kernelNode = new MeshNode(KernelId, AddressExtensions.KernelType)
+                {
+                    Name = $"Kernel-{KernelId}"
+                };
+
+                try
+                {
+                    var meshAddress = Hub.Configuration.ParentHub?.Address ?? Hub.Address;
+                    var response = await Hub.AwaitResponse(
+                        new CreateNodeRequest(kernelNode),
+                        o => o.WithTarget(meshAddress));
+
+                    // If node already exists, that's fine - it means another instance already created it
+                    if (!response.Message.Success && !response.Message.Error?.Contains("already exists") == true)
+                    {
+                        // Log error but continue - code will still be submitted
+                        Console.WriteLine($"Warning: Failed to create kernel node: {response.Message.Error}");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    // Log error but continue - code will still be submitted
+                    Console.WriteLine($"Warning: Error creating kernel node: {ex.Message}");
+                }
+            }
+
+            // Now submit the code to the kernel
+            foreach (var submission in CodeSubmissions)
+            {
+                Hub.Post(submission, o => o.WithTarget(KernelAddress));
+            }
         }
     }
 

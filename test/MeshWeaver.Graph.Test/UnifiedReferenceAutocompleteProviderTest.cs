@@ -95,7 +95,7 @@ public class UnifiedReferenceAutocompleteProviderTest : MonolithMeshTestBase
         Output.WriteLine("Querying for Systemorph via IMeshQuery...");
 
         // Query from root to find Systemorph
-        var suggestions = await MeshQuery.AutocompleteAsync("", "Sys", 10).ToArrayAsync();
+        var suggestions = await MeshQuery.AutocompleteAsync("", "Sys", 10).ToArrayAsync(TestContext.Current.CancellationToken);
 
         Output.WriteLine($"Found {suggestions.Length} suggestions for 'Sys':");
         foreach (var s in suggestions)
@@ -123,7 +123,7 @@ public class UnifiedReferenceAutocompleteProviderTest : MonolithMeshTestBase
             navigationContext: null);  // No navigation context for this test
 
         // Act - query with just "@"
-        var items = await provider.GetItemsAsync("@");
+        var items = await provider.GetItemsAsync("@", TestContext.Current.CancellationToken);
 
         // Assert
         Output.WriteLine($"Got {items.Count()} suggestions for '@':");
@@ -145,7 +145,7 @@ public class UnifiedReferenceAutocompleteProviderTest : MonolithMeshTestBase
             navigationContext: null);
 
         // Act - query with "@Sys" (partial match for Systemorph)
-        var items = await provider.GetItemsAsync("@Sys");
+        var items = await provider.GetItemsAsync("@Sys", TestContext.Current.CancellationToken);
 
         // Assert
         Output.WriteLine($"Got {items.Count()} suggestions for '@Sys':");
@@ -174,7 +174,7 @@ public class UnifiedReferenceAutocompleteProviderTest : MonolithMeshTestBase
             navigationContext: null);
 
         // Act - query with "@Org" (partial match for Organization)
-        var items = await provider.GetItemsAsync("@Org");
+        var items = await provider.GetItemsAsync("@Org", TestContext.Current.CancellationToken);
 
         // Assert
         Output.WriteLine($"Got {items.Count()} suggestions for '@Org':");
