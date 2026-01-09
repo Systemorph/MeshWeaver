@@ -71,7 +71,9 @@
       "Bash(/dev/null -exec cat {} ;)",
       "WebFetch(domain:localhost)",
       "Bash(git pull:*)",
-      "Bash(git check-ignore:*)"
+      "Bash(git check-ignore:*)",
+      "Bash(echo:*)",
+      "Bash(source ~/.zshrc)"
     ],
     "deny": []
   }
