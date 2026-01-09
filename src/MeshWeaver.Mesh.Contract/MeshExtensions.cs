@@ -6,8 +6,16 @@ using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Mesh;
 
+/// <summary>
+/// Extension methods for mesh configuration and type registration.
+/// </summary>
 public static class MeshExtensions
 {
+    /// <summary>
+    /// Registers mesh-related types with the hub's type registry.
+    /// </summary>
+    /// <param name="config">The message hub configuration.</param>
+    /// <returns>The configured message hub configuration.</returns>
     public static MessageHubConfiguration AddMeshTypes(this MessageHubConfiguration config)
     {
         // Register mesh-related types with short names for data consistency

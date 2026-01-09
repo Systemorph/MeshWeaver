@@ -25,6 +25,8 @@ public record ValidatableData(
 
 #region Validators
 
+#pragma warning disable CS0618 // Testing deprecated interfaces
+
 /// <summary>
 /// A validator that rejects entities with "forbidden" in their name (for creations).
 /// </summary>
@@ -118,6 +120,8 @@ public class HiddenDataResultValidator : IDataReadResultValidator
         return Task.FromResult(DataValidationResult.Valid());
     }
 }
+
+#pragma warning restore CS0618
 
 #endregion
 

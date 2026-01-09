@@ -4,9 +4,15 @@ using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.Mesh;
 
+/// <summary>
+/// Attribute to define mesh nodes at the assembly level.
+/// </summary>
 [AttributeUsage(AttributeTargets.Assembly, AllowMultiple = true)]
 public abstract class MeshNodeAttribute : Attribute
 {
+    /// <summary>
+    /// Gets the mesh nodes defined by this attribute.
+    /// </summary>
     public virtual IEnumerable<MeshNode> Nodes => [];
 
     /// <summary>

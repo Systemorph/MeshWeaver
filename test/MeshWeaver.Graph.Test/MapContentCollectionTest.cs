@@ -205,7 +205,7 @@ public class MapContentCollectionTest(ITestOutputHelper output) : MonolithMeshTe
         Directory.CreateDirectory(imagesPath);
         var testFilePath = Path.Combine(imagesPath, "logo.svg");
         var testContent = "<svg><circle cx='50' cy='50' r='40'/></svg>";
-        await File.WriteAllTextAsync(testFilePath, testContent);
+        await File.WriteAllTextAsync(testFilePath, testContent, TestContext.Current.CancellationToken);
 
         Output.WriteLine($"Created test file: {testFilePath}");
 
@@ -227,7 +227,7 @@ public class MapContentCollectionTest(ITestOutputHelper output) : MonolithMeshTe
         stream.Should().NotBeNull("Content should be found via mapped path");
 
         using var reader = new StreamReader(stream!);
-        var content = await reader.ReadToEndAsync();
+        var content = await reader.ReadToEndAsync(TestContext.Current.CancellationToken);
 
         // Assert
         content.Should().Be(testContent, "Content should match the file we created");
@@ -246,7 +246,7 @@ public class MapContentCollectionTest(ITestOutputHelper output) : MonolithMeshTe
         Directory.CreateDirectory(nestedPath);
         var testFilePath = Path.Combine(nestedPath, "app.txt");
         var testContent = "Test nested content";
-        await File.WriteAllTextAsync(testFilePath, testContent);
+        await File.WriteAllTextAsync(testFilePath, testContent, TestContext.Current.CancellationToken);
 
         Output.WriteLine($"Created test file: {testFilePath}");
 
@@ -267,7 +267,7 @@ public class MapContentCollectionTest(ITestOutputHelper output) : MonolithMeshTe
         stream.Should().NotBeNull("Nested content should be found via mapped path");
 
         using var reader = new StreamReader(stream!);
-        var content = await reader.ReadToEndAsync();
+        var content = await reader.ReadToEndAsync(TestContext.Current.CancellationToken);
 
         // Assert
         content.Should().Be(testContent);
@@ -285,7 +285,7 @@ public class MapContentCollectionTest(ITestOutputHelper output) : MonolithMeshTe
         Directory.CreateDirectory(contentPath);
         var testFilePath = Path.Combine(contentPath, "logo.svg");
         var testContent = "<svg><circle cx='50' cy='50' r='40'/></svg>";
-        await File.WriteAllTextAsync(testFilePath, testContent);
+        await File.WriteAllTextAsync(testFilePath, testContent, TestContext.Current.CancellationToken);
 
         Output.WriteLine($"Created test file: {testFilePath}");
 
@@ -307,7 +307,7 @@ public class MapContentCollectionTest(ITestOutputHelper output) : MonolithMeshTe
         stream.Should().NotBeNull("Content should be found when using default collection");
 
         using var reader = new StreamReader(stream!);
-        var content = await reader.ReadToEndAsync();
+        var content = await reader.ReadToEndAsync(TestContext.Current.CancellationToken);
 
         // Assert
         content.Should().Be(testContent, "Content should match the file we created");
@@ -327,8 +327,8 @@ public class MapContentCollectionTest(ITestOutputHelper output) : MonolithMeshTe
         Directory.CreateDirectory(otherPath);
 
         // Put different content in each
-        await File.WriteAllTextAsync(Path.Combine(contentPath, "data.json"), "{\"source\":\"content\"}");
-        await File.WriteAllTextAsync(Path.Combine(otherPath, "data.json"), "{\"source\":\"other\"}");
+        await File.WriteAllTextAsync(Path.Combine(contentPath, "data.json"), "{\"source\":\"content\"}", TestContext.Current.CancellationToken);
+        await File.WriteAllTextAsync(Path.Combine(otherPath, "data.json"), "{\"source\":\"other\"}", TestContext.Current.CancellationToken);
 
         // Create client with both collections mapped
         var client = GetClient(c => c
@@ -348,7 +348,7 @@ public class MapContentCollectionTest(ITestOutputHelper output) : MonolithMeshTe
         stream.Should().NotBeNull("Content should be found in 'other' collection");
 
         using var reader = new StreamReader(stream!);
-        var content = await reader.ReadToEndAsync();
+        var content = await reader.ReadToEndAsync(TestContext.Current.CancellationToken);
 
         // Assert - should get the content from "other" collection, not "content"
         content.Should().Contain("\"source\":\"other\"", "Should read from 'other' collection");

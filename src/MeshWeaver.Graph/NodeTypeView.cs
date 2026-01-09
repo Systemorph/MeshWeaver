@@ -48,7 +48,7 @@ public static class NodeTypeView
         => configuration
             .Set(new NodeTypeCatalogMode())  // Enable NodeType catalog mode
             .AddLayout(layout => layout
-                .WithDefaultArea(CatalogArea)
+                .WithDefaultArea(CodeViewArea)
                 .WithView(CatalogArea, MeshNodeView.Catalog)  // Use standard catalog
                 .WithView(DetailsArea, Details)
                 .WithView(CodeViewArea, CodeView)
@@ -101,8 +101,8 @@ public static class NodeTypeView
 
         // Header
         var title = content.DisplayName ?? content.Id;
-        stack = stack.WithView(Controls.Html($"<h1 style=\"margin: 0 0 8px 0;\">{System.Web.HttpUtility.HtmlEncode(title)}</h1>"));
-        stack = stack.WithView(Controls.Html($"<p style=\"color: #666; margin: 0 0 24px 0;\">NodeType Configuration</p>"));
+        stack = stack.WithView(Controls.H1(title));
+        stack = stack.WithView(Controls.Body("NodeType Configuration").WithStyle("color: var(--neutral-foreground-hint); margin-bottom: 24px;"));
 
         // Type info card
         var infoCard = Controls.Stack
@@ -228,7 +228,7 @@ public static class NodeTypeView
         else
         {
             codeGroup = codeGroup.WithView(
-                Controls.Html("<span style=\"padding: 4px 16px; display: block; color: #888;\">No code files</span>")
+                Controls.Body("No code files").WithStyle("padding: 4px 16px; display: block; color: var(--neutral-foreground-hint);")
             );
         }
 
@@ -244,7 +244,7 @@ public static class NodeTypeView
             foreach (var dep in content.Dependencies)
             {
                 depsGroup = depsGroup.WithView(
-                    Controls.Html($"<span style=\"padding: 4px 16px; display: block;\">{System.Web.HttpUtility.HtmlEncode(dep)}</span>")
+                    Controls.Body(dep).WithStyle("padding: 4px 16px; display: block;")
                 );
             }
 
@@ -267,7 +267,7 @@ public static class NodeTypeView
     {
         var stack = Controls.Stack
             .WithWidth("100%")
-            .WithStyle("padding: 24px; min-height: 100%; overflow: auto;");
+            .WithStyle("padding: 24px; height: 100%; overflow: auto;");
 
         // Show configuration
         if (selection == "configuration")
@@ -281,7 +281,7 @@ public static class NodeTypeView
 
         if (codeFile == null)
         {
-            return stack.WithView(Controls.Html("<p style=\"color: #888;\">No code files available.</p>"));
+            return stack.WithView(Controls.Body("No code files available.").WithStyle("color: var(--neutral-foreground-hint);"));
         }
 
         return BuildCodeFilePane(stack, hubAddress, codeFile);
@@ -299,7 +299,7 @@ public static class NodeTypeView
         var headerRow = Controls.Stack
             .WithOrientation(Orientation.Horizontal)
             .WithStyle("justify-content: space-between; align-items: center; margin-bottom: 16px;")
-            .WithView(Controls.Html($"<h2 style=\"margin: 0;\">{System.Web.HttpUtility.HtmlEncode(definition.DisplayName ?? definition.Id)}</h2>"))
+            .WithView(Controls.H2(definition.DisplayName ?? definition.Id))
             .WithView(
                 Controls.Button("")
                     .WithIconStart(FluentIcons.Edit())
@@ -337,10 +337,9 @@ public static class NodeTypeView
         // Configuration section (lambda expression)
         if (!string.IsNullOrEmpty(definition.Configuration))
         {
-            stack = stack.WithView(Controls.Html("<h3 style=\"margin: 16px 0 8px 0;\">Configuration</h3>"));
-            stack = stack.WithView(Controls.Html("<p style=\"color: #666; margin-bottom: 8px;\">Lambda expression for configuring the message hub:</p>"));
-            var markdown = $"```csharp\n{definition.Configuration}\n```";
-            stack = stack.WithView(new MarkdownControl(markdown).WithStyle("width: 100%;"));
+            stack = stack.WithView(Controls.H3("Configuration").WithStyle("margin: 16px 0 8px 0;"));
+            stack = stack.WithView(Controls.Body("Lambda expression for configuring the message hub:").WithStyle("color: var(--neutral-foreground-hint); margin-bottom: 8px;"));
+            stack = stack.WithView(Controls.Markdown($"```csharp\n{definition.Configuration}\n```").WithStyle("width: 100%; max-height: 400px; overflow: auto;"));
         }
 
         return stack;
@@ -356,7 +355,7 @@ public static class NodeTypeView
         var headerRow = Controls.Stack
             .WithOrientation(Orientation.Horizontal)
             .WithStyle("justify-content: space-between; align-items: center; margin-bottom: 16px;")
-            .WithView(Controls.Html($"<h2 style=\"margin: 0;\">{System.Web.HttpUtility.HtmlEncode(codeFile.DisplayName ?? codeFile.Id)}</h2>"));
+            .WithView(Controls.H2(codeFile.DisplayName ?? codeFile.Id));
 
         if (!string.IsNullOrEmpty(codeFile.Code))
         {
@@ -371,12 +370,11 @@ public static class NodeTypeView
 
         if (!string.IsNullOrEmpty(codeFile.Code))
         {
-            var markdown = $"```{codeFile.Language}\n{codeFile.Code}\n```";
-            stack = stack.WithView(new MarkdownControl(markdown).WithStyle("width: 100%;"));
+            stack = stack.WithView(Controls.Markdown($"```{codeFile.Language ?? "csharp"}\n{codeFile.Code}\n```").WithStyle("width: 100%; flex: 1; min-height: 0; overflow: auto;"));
         }
         else
         {
-            stack = stack.WithView(Controls.Html("<p style=\"color: #888;\">No code defined.</p>"));
+            stack = stack.WithView(Controls.Body("No code defined.").WithStyle("color: var(--neutral-foreground-hint);"));
         }
 
         return stack;
@@ -424,7 +422,7 @@ public static class NodeTypeView
         var displayNameRow = Controls.Stack
             .WithOrientation(Orientation.Horizontal)
             .WithStyle("gap: 12px; align-items: center; margin-bottom: 16px;")
-            .WithView(Controls.Html("<label style=\"font-weight: 500;\">Display Name:</label>"))
+            .WithView(Controls.Label("Display Name:").WithStyle("font-weight: 500;"))
             .WithView(new TextFieldControl(new JsonPointerReference(""))
                 .WithPlaceholder("Enter display name...")
                 .WithStyle("flex: 1; max-width: 400px;")
@@ -536,13 +534,12 @@ public static class NodeTypeView
         var hubAddress = host.Hub.Address;
         var stack = Controls.Stack.WithWidth("100%").WithStyle("padding: 24px;");
 
-        stack = stack.WithView(Controls.Html("<h2 style=\"margin-bottom: 16px;\">Configuration</h2>"));
-        stack = stack.WithView(Controls.Html("<p style=\"color: #666; margin-bottom: 16px;\">Lambda expression: <code>Func&lt;MessageHubConfiguration, MessageHubConfiguration&gt;</code></p>"));
+        stack = stack.WithView(Controls.H2("Configuration").WithStyle("margin-bottom: 16px;"));
+        stack = stack.WithView(Controls.Body("Lambda expression: Func<MessageHubConfiguration, MessageHubConfiguration>").WithStyle("color: var(--neutral-foreground-hint); margin-bottom: 16px;"));
 
         if (!string.IsNullOrEmpty(content.Configuration))
         {
-            var markdown = $"```csharp\n{content.Configuration}\n```";
-            stack = stack.WithView(new MarkdownControl(markdown));
+            stack = stack.WithView(Controls.Markdown($"```csharp\n{content.Configuration}\n```").WithStyle("max-height: 400px; overflow: auto;"));
 
             // Edit button
             var editHref = new LayoutAreaReference(HubConfigEditArea).ToHref(hubAddress);
@@ -558,7 +555,7 @@ public static class NodeTypeView
         }
         else
         {
-            stack = stack.WithView(Controls.Html("<p style=\"color: #888;\">No Configuration defined.</p>"));
+            stack = stack.WithView(Controls.Body("No Configuration defined.").WithStyle("color: var(--neutral-foreground-hint);"));
         }
 
         // Back button
@@ -623,7 +620,7 @@ public static class NodeTypeView
         host.UpdateData(configurationDataId, content.Configuration ?? "config => config");
 
         // Header
-        stack = stack.WithView(Controls.Html($"<h2 style=\"margin-bottom: 16px;\">Edit: {System.Web.HttpUtility.HtmlEncode(content.DisplayName ?? content.Id)}</h2>"));
+        stack = stack.WithView(Controls.H2($"Edit: {content.DisplayName ?? content.Id}").WithStyle("margin-bottom: 16px;"));
 
         // Form fields
         var formStyle = "display: grid; grid-template-columns: 150px 1fr; gap: 12px; align-items: center; margin-bottom: 12px;";
@@ -631,7 +628,7 @@ public static class NodeTypeView
         // Display Name
         stack = stack.WithView(Controls.Stack
             .WithStyle(formStyle)
-            .WithView(Controls.Html("<label style=\"font-weight: 500;\">Display Name:</label>"))
+            .WithView(Controls.Label("Display Name:").WithStyle("font-weight: 500;"))
             .WithView(new TextFieldControl(new JsonPointerReference(""))
                 .WithPlaceholder("Enter display name...")
                 .WithImmediate(true) with
@@ -640,7 +637,7 @@ public static class NodeTypeView
         // Description
         stack = stack.WithView(Controls.Stack
             .WithStyle(formStyle)
-            .WithView(Controls.Html("<label style=\"font-weight: 500;\">Description:</label>"))
+            .WithView(Controls.Label("Description:").WithStyle("font-weight: 500;"))
             .WithView(new TextAreaControl(new JsonPointerReference(""))
                 .WithPlaceholder("Enter description...")
                 .WithImmediate(true) with
@@ -649,7 +646,7 @@ public static class NodeTypeView
         // Icon Name
         stack = stack.WithView(Controls.Stack
             .WithStyle(formStyle)
-            .WithView(Controls.Html("<label style=\"font-weight: 500;\">Icon Name:</label>"))
+            .WithView(Controls.Label("Icon Name:").WithStyle("font-weight: 500;"))
             .WithView(new TextFieldControl(new JsonPointerReference(""))
                 .WithPlaceholder("e.g., Document, Folder...")
                 .WithImmediate(true) with
@@ -658,7 +655,7 @@ public static class NodeTypeView
         // Display Order
         stack = stack.WithView(Controls.Stack
             .WithStyle(formStyle)
-            .WithView(Controls.Html("<label style=\"font-weight: 500;\">Display Order:</label>"))
+            .WithView(Controls.Label("Display Order:").WithStyle("font-weight: 500;"))
             .WithView(new TextFieldControl(new JsonPointerReference(""))
                 .WithPlaceholder("0")
                 .WithImmediate(true) with
@@ -667,7 +664,7 @@ public static class NodeTypeView
         // Children Query
         stack = stack.WithView(Controls.Stack
             .WithStyle(formStyle)
-            .WithView(Controls.Html("<label style=\"font-weight: 500;\">Children Query:</label>"))
+            .WithView(Controls.Label("Children Query:").WithStyle("font-weight: 500;"))
             .WithView(new TextFieldControl(new JsonPointerReference(""))
                 .WithPlaceholder("Query for children (e.g., nodeType:Person)")
                 .WithImmediate(true) with
@@ -676,15 +673,15 @@ public static class NodeTypeView
         // Dependencies
         stack = stack.WithView(Controls.Stack
             .WithStyle(formStyle)
-            .WithView(Controls.Html("<label style=\"font-weight: 500;\">Dependencies:</label>"))
+            .WithView(Controls.Label("Dependencies:").WithStyle("font-weight: 500;"))
             .WithView(new TextFieldControl(new JsonPointerReference(""))
                 .WithPlaceholder("Comma-separated node type paths...")
                 .WithImmediate(true) with
             { DataContext = LayoutAreaReference.GetDataPointer(dependenciesDataId) }));
 
         // Configuration (code editor)
-        stack = stack.WithView(Controls.Html("<h3 style=\"margin: 24px 0 8px 0;\">Configuration</h3>"));
-        stack = stack.WithView(Controls.Html("<p style=\"color: #666; margin-bottom: 8px;\">Lambda expression: <code>config => config.AddData(...)</code></p>"));
+        stack = stack.WithView(Controls.H3("Configuration").WithStyle("margin: 24px 0 8px 0;"));
+        stack = stack.WithView(Controls.Body("Lambda expression: config => config.AddData(...)").WithStyle("color: var(--neutral-foreground-hint); margin-bottom: 8px;"));
 
         var editor = new CodeEditorControl()
             .WithLanguage("csharp")
@@ -789,8 +786,8 @@ public static class NodeTypeView
         return Controls.Stack
             .WithOrientation(Orientation.Horizontal)
             .WithStyle("padding: 8px 0; border-bottom: 1px solid var(--neutral-stroke-divider);")
-            .WithView(Controls.Html($"<strong style=\"width: 150px; flex-shrink: 0;\">{System.Web.HttpUtility.HtmlEncode(label)}:</strong>"))
-            .WithView(Controls.Html($"<span>{System.Web.HttpUtility.HtmlEncode(value)}</span>"));
+            .WithView(Controls.Label($"{label}:").WithStyle("width: 150px; flex-shrink: 0; font-weight: 600;"))
+            .WithView(Controls.Body(value));
     }
 
     private static UiControl RenderLoading(string message)

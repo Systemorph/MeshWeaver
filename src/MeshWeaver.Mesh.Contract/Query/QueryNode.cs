@@ -15,6 +15,10 @@ public record QueryComparison(QueryCondition Condition) : QueryNode;
 /// </summary>
 public record QueryAnd(IReadOnlyList<QueryNode> Children) : QueryNode
 {
+    /// <summary>
+    /// Initializes a new QueryAnd node with the specified child nodes.
+    /// </summary>
+    /// <param name="children">The child query nodes to combine with AND logic.</param>
     public QueryAnd(params QueryNode[] children) : this((IReadOnlyList<QueryNode>)children) { }
 }
 
@@ -23,5 +27,9 @@ public record QueryAnd(IReadOnlyList<QueryNode> Children) : QueryNode
 /// </summary>
 public record QueryOr(IReadOnlyList<QueryNode> Children) : QueryNode
 {
+    /// <summary>
+    /// Initializes a new QueryOr node with the specified child nodes.
+    /// </summary>
+    /// <param name="children">The child query nodes to combine with OR logic.</param>
     public QueryOr(params QueryNode[] children) : this((IReadOnlyList<QueryNode>)children) { }
 }
