@@ -10,25 +10,3 @@
 <article class="markdown-body" data-theme="@Mode.ToString().ToLower()" style="background-color: var(--neutral-layer-1); @Style">
     @((RenderFragment)RenderHtml)
 </article>
-
-@code {
-    private IJSObjectReference? _jsModule;
-
-    protected override async Task OnAfterRenderAsync(bool firstRender)
-    {
-        if (firstRender)
-        {
-            try
-            {
-                _jsModule = await JSRuntime.InvokeAsync<IJSObjectReference>(
-                    "import", "./_content/MeshWeaver.Blazor/Components/MarkdownView.razor.js");
-                await _jsModule.InvokeVoidAsync("ensureMarkdownTheme");
-            }
-            catch (JSException)
-            {
-                // JS not available during prerendering
-            }
-        }
-        await base.OnAfterRenderAsync(firstRender);
-    }
-}

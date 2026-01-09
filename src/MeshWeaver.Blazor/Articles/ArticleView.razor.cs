@@ -4,6 +4,7 @@ using MeshWeaver.Layout;
 using MeshWeaver.Layout.Client;
 using MeshWeaver.Markdown;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.AspNetCore.Components;
 using Microsoft.FluentUI.AspNetCore.Components;
@@ -70,7 +71,17 @@ public partial class ArticleView
         InvokeAsync(StateHasChanged);
     }
 
-    private readonly Address KernelAddress = AddressExtensions.CreateKernelAddress();
+    /// <summary>
+    /// Unique kernel ID for this article view instance.
+    /// Uses a stable ID based on the stream owner to ensure consistent routing.
+    /// </summary>
+    private string? _kernelId;
+    private Address? _kernelAddress;
+    private Address KernelAddress => _kernelAddress ??= AddressExtensions.CreateKernelAddress(KernelId);
+    private string KernelId => _kernelId ??= $"article-{(Stream?.Owner?.ToString() ?? Guid.NewGuid().ToString("N"))[..Math.Min(Stream?.Owner?.ToString().Length ?? 32, 32)].Replace('/', '-')}";
+
+    private bool _codeSubmitted;
+    private bool _kernelNodeCreated;
 
     private MarkdownControl MarkdownControl
     {
@@ -84,18 +95,49 @@ public partial class ArticleView
     }
 
 
-    protected override void OnAfterRender(bool firstRender)
+    protected override async Task OnAfterRenderAsync(bool firstRender)
     {
-        base.OnAfterRender(firstRender);
+        await base.OnAfterRenderAsync(firstRender);
 
-        if (firstRender)
+        if (firstRender && !_codeSubmitted)
         {
             if (ArticleModel?.Element.CodeSubmissions is not null && ArticleModel?.Element.CodeSubmissions.Any() == true)
             {
+                _codeSubmitted = true;
+
+                // Create the kernel node first - required for proper routing
+                // Without this, all kernel/* messages go to a single shared hub at "kernel"
+                if (!_kernelNodeCreated)
+                {
+                    _kernelNodeCreated = true;
+                    var kernelNode = new MeshNode(KernelId, AddressExtensions.KernelType)
+                    {
+                        Name = $"Kernel-{KernelId}"
+                    };
+
+                    try
+                    {
+                        var meshAddress = Hub.Configuration.ParentHub?.Address ?? Hub.Address;
+                        var response = await Hub.AwaitResponse(
+                            new CreateNodeRequest(kernelNode),
+                            o => o.WithTarget(meshAddress));
+
+                        // If node already exists, that's fine - it means another instance already created it
+                        if (!response.Message.Success && !response.Message.Error?.Contains("already exists") == true)
+                        {
+                            Console.WriteLine($"Warning: Failed to create kernel node: {response.Message.Error}");
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"Warning: Error creating kernel node: {ex.Message}");
+                    }
+                }
+
+                // Now submit the code to the kernel
                 foreach (var s in ArticleModel.Element.CodeSubmissions)
                     Hub.Post(s, o => o.WithTarget(KernelAddress));
             }
-
         }
     }
 
