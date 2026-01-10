@@ -42,6 +42,8 @@ public static class MeshNodeView
     public const string CatalogArea = "Catalog";
     public const string CalendarArea = "Calendar";
     public const string FilesArea = "Files";
+    public const string ChildrenArea = "Children";
+    public const string NodeTypesArea = "NodeTypes";
 
     // UCR (Unified Content Reference) special areas
     public const string ContentArea = "$Content";
@@ -69,6 +71,8 @@ public static class MeshNodeView
             .WithView(CatalogArea, Catalog)
             .WithView(CalendarArea, Calendar)
             .WithView(FilesArea, Files)
+            .WithView(ChildrenArea, Children)
+            .WithView(NodeTypesArea, NodeTypes)
             // UCR special areas - $Content is registered by ContentCollectionsExtensions.AddContentCollections
             .WithView(DataArea, Data)
             .WithView(SchemaArea, Schema)
@@ -128,7 +132,7 @@ public static class MeshNodeView
                 {
                     try
                     {
-                        children = await meshQuery.QueryAsync<MeshNode>($"path:{hubPath} scope:children").ToListAsync();
+                        children = await meshQuery.QueryAsync<MeshNode>($"path:{hubPath} scope:children -nodeType:NodeType").ToListAsync();
                     }
                     catch
                     {
@@ -289,16 +293,14 @@ public static class MeshNodeView
         var metadataHref = $"/{nodePath}/{MetadataArea}";
         menu = menu.WithView(new NavLinkControl("Metadata", FluentIcons.Info(IconSize.Size16), metadataHref));
 
-        // NodeType link (if node has a NodeType)
-        if (!string.IsNullOrEmpty(node?.NodeType))
-        {
-            var nodeTypeHref = $"/{node.NodeType}";
-            menu = menu.WithView(new NavLinkControl("Node Type", FluentIcons.Code(IconSize.Size16), nodeTypeHref));
-        }
 
         // Catalog option
         var catalogHref = $"/{nodePath}/{CatalogArea}";
         menu = menu.WithView(new NavLinkControl("Catalog", FluentIcons.Grid(IconSize.Size16), catalogHref));
+
+        // Node Types option
+        var nodeTypesHref = $"/{nodePath}/{NodeTypesArea}";
+        menu = menu.WithView(new NavLinkControl("Node Types", FluentIcons.Document(IconSize.Size16), nodeTypesHref));
 
         // Settings option
         var settingsHref = $"/{nodePath}/{SettingsArea}";
@@ -523,7 +525,7 @@ public static class MeshNodeView
         // Types catalog - show NodeType children using standard grid
         if (nodeTypes.Count > 0)
         {
-            stack = stack.WithView(Controls.Html("<h3 style=\"margin: 32px 0 16px 0;\">Types</h3>"));
+            stack = stack.WithView(Controls.Html($"<h3 style=\"margin: 32px 0 16px 0;\">Types</h3>"));
 
             var grid = Controls.LayoutGrid.WithSkin(s => s.WithSpacing(3));
             foreach (var typeNode in nodeTypes.OrderBy(t => t.Name))
@@ -799,10 +801,11 @@ public static class MeshNodeView
     }
 
     /// <summary>
-    /// Renders the Catalog view showing nodes as thumbnails in a LayoutGrid.
+    /// Renders the Catalog view showing nodes as thumbnails with search.
     /// Uses MeshSearchControl for unified search and display.
     /// For NodeType nodes, shows instances of that type (nodeType:name scope:subtree).
-    /// For instance nodes, uses CatalogQuery if set, otherwise defaults to namespace:path (direct children).
+    /// For instance nodes, uses CatalogQuery if set, otherwise defaults to scope:children.
+    /// Excludes NodeType nodes from results (use NodeTypes area to view those).
     /// Render mode is determined by CatalogMode property (hierarchical or grouped).
     /// Reads search term from ?q= query parameter.
     /// </summary>
@@ -823,10 +826,9 @@ public static class MeshNodeView
             var node = nodes.FirstOrDefault(n => n.Path == hubPath);
 
             // For NodeType mode, query by the node's full path as the nodeType filter
-            // Also limit to the node's namespace
             if (isNodeTypeMode && node != null)
             {
-                var nodeTypePath = node.Path; // Full path like "Type/Person" or "Systemorph/Type/Project"
+                var nodeTypePath = node.Path;
                 var nodeTypeNamespace = node.Namespace ?? "";
                 var hiddenQuery = string.IsNullOrEmpty(nodeTypeNamespace)
                     ? $"nodeType:{nodeTypePath} scope:subtree"
@@ -840,11 +842,9 @@ public static class MeshNodeView
                     .WithMaxColumns(3);
             }
 
-            // Instance node catalog
-            // Use CatalogQuery if set, otherwise default to scope:children (direct children only)
-            var instanceHiddenQuery = node?.CatalogQuery ?? $"path:{node?.Namespace ?? hubPath} scope:children";
+            // Instance node catalog - excludes NodeType nodes
+            var instanceHiddenQuery = node?.CatalogQuery ?? $"path:{node?.Namespace ?? hubPath} scope:children -nodeType:NodeType";
 
-            // Determine render mode from CatalogMode property (default: hierarchical)
             var catalogMode = node?.CatalogMode?.ToLowerInvariant();
             var renderMode = catalogMode == "grouped"
                 ? MeshSearchRenderMode.Grouped
@@ -857,6 +857,143 @@ public static class MeshNodeView
                 .WithPlaceholder("Search... (use @ for references)")
                 .WithRenderMode(renderMode)
                 .WithMaxColumns(3);
+        });
+    }
+
+    /// <summary>
+    /// Renders the Children view showing child nodes as thumbnails without search.
+    /// Simple grid of children thumbnails, excludes NodeType nodes.
+    /// Use this for embedding children in custom views via LayoutAreaControl.
+    /// </summary>
+    public static IObservable<UiControl?> Children(LayoutAreaHost host, RenderingContext ctx)
+    {
+        var hubPath = host.Hub.Address.ToString();
+        var meshQuery = host.Hub.ServiceProvider.GetService<IMeshQuery>();
+
+        if (meshQuery == null)
+        {
+            return Observable.Return<UiControl?>(Controls.Html("<p style=\"color: #888;\">Query service not available.</p>"));
+        }
+
+        return Observable.FromAsync(async () =>
+        {
+            IReadOnlyList<MeshNode> children;
+            try
+            {
+                children = await meshQuery.QueryAsync<MeshNode>($"path:{hubPath} scope:children -nodeType:NodeType").ToListAsync();
+            }
+            catch
+            {
+                children = Array.Empty<MeshNode>();
+            }
+
+            if (children.Count == 0)
+            {
+                return (UiControl?)Controls.Html("<p style=\"color: var(--neutral-foreground-hint);\">No children found.</p>");
+            }
+
+            var grid = Controls.LayoutGrid.WithSkin(s => s.WithSpacing(2));
+
+            foreach (var child in children.OrderBy(n => n.DisplayOrder).ThenBy(n => n.Name))
+            {
+                grid = grid.WithView(
+                    MeshNodeThumbnailControl.FromNode(child, child.Path),
+                    itemSkin => itemSkin.WithXs(12).WithSm(6).WithMd(4).WithLg(3));
+            }
+
+            return (UiControl?)grid;
+        });
+    }
+
+    /// <summary>
+    /// Renders the NodeTypes view showing NodeType nodes defined at this level.
+    /// Shows the node's own type (if any) and any NodeType children.
+    /// Accessible from the menu as a separate page.
+    /// </summary>
+    public static IObservable<UiControl?> NodeTypes(LayoutAreaHost host, RenderingContext ctx)
+    {
+        var hubPath = host.Hub.Address.ToString();
+        var meshQuery = host.Hub.ServiceProvider.GetService<IMeshQuery>();
+
+        if (meshQuery == null)
+        {
+            return Observable.Return<UiControl?>(Controls.Html("<p style=\"color: #888;\">Query service not available.</p>"));
+        }
+
+        var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? Array.Empty<MeshNode>())
+            ?? Observable.Return<MeshNode[]>(Array.Empty<MeshNode>());
+
+        return nodeStream.SelectMany(async nodes =>
+        {
+            var node = nodes.FirstOrDefault(n => n.Path == hubPath);
+
+            // Query for NodeType children at this level
+            IReadOnlyList<MeshNode> nodeTypeChildren;
+            try
+            {
+                nodeTypeChildren = await meshQuery.QueryAsync<MeshNode>($"path:{hubPath} nodeType:NodeType scope:children").ToListAsync();
+            }
+            catch
+            {
+                nodeTypeChildren = Array.Empty<MeshNode>();
+            }
+
+            // Query for the node's own NodeType definition (if it has one)
+            MeshNode? ownType = null;
+            if (node != null && !string.IsNullOrEmpty(node.NodeType))
+            {
+                try
+                {
+                    ownType = await meshQuery.QueryAsync<MeshNode>($"path:{node.NodeType} scope:exact").FirstOrDefaultAsync();
+                }
+                catch { }
+            }
+
+            var hasOwnType = ownType != null;
+            var hasNodeTypeChildren = nodeTypeChildren.Count > 0;
+
+            if (!hasOwnType && !hasNodeTypeChildren)
+            {
+                return (UiControl?)Controls.Html("<p style=\"color: var(--neutral-foreground-hint);\">No node types defined at this level.</p>");
+            }
+
+            var stack = Controls.Stack.WithWidth("100%");
+
+            // Own type section
+            if (hasOwnType)
+            {
+                stack = stack.WithView(Controls.Html($"<h3 style=\"margin: 0 0 16px 0;\">Type of {node?.Name ?? "this node"}</h3>"));
+                var ownTypeGrid = Controls.LayoutGrid.WithSkin(s => s.WithSpacing(2));
+                ownTypeGrid = ownTypeGrid.WithView(
+                    MeshNodeThumbnailControl.FromNode(ownType!, ownType!.Path),
+                    itemSkin => itemSkin.WithXs(12).WithSm(6).WithMd(4).WithLg(3));
+                stack = stack.WithView(ownTypeGrid);
+            }
+
+            // NodeType children section
+            if (hasNodeTypeChildren)
+            {
+                if (hasOwnType)
+                {
+                    stack = stack.WithView(Controls.Html("<div style=\"margin: 24px 0;\"></div>")); // Spacer
+                }
+                stack = stack.WithView(Controls.Html($"<h3 style=\"margin: 0 0 16px 0;\">Types in {node?.Namespace ?? hubPath}</h3>"));
+
+                var typesGrid = Controls.LayoutGrid.WithSkin(s => s.WithSpacing(2));
+                foreach (var typeNode in nodeTypeChildren.OrderBy(n => n.DisplayOrder).ThenBy(n => n.Name))
+                {
+                    // Skip if it's the same as own type
+                    if (ownType != null && typeNode.Path == ownType.Path)
+                        continue;
+
+                    typesGrid = typesGrid.WithView(
+                        MeshNodeThumbnailControl.FromNode(typeNode, typeNode.Path),
+                        itemSkin => itemSkin.WithXs(12).WithSm(6).WithMd(4).WithLg(3));
+                }
+                stack = stack.WithView(typesGrid);
+            }
+
+            return (UiControl?)stack;
         });
     }
 
