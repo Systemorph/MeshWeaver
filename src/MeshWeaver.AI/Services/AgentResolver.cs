@@ -1,4 +1,4 @@
-using MeshWeaver.Data;
+﻿using MeshWeaver.Data;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
@@ -55,7 +55,7 @@ public class AgentResolver : IAgentResolver
                 {
                     await foreach (var node in _meshQuery.QueryAsync<MeshNode>(query, ct: ct))
                     {
-                        var config = ExtractAgentConfiguration(node, namespacePath);
+                        var config = ExtractAgentConfiguration(node);
                         if (config != null && !agents.ContainsKey(config.Id))
                         {
                             // First found wins (most specific namespace)
@@ -97,7 +97,7 @@ public class AgentResolver : IAgentResolver
                 return agents.FirstOrDefault(a => a.Id == agentId);
             }
 
-            return ExtractAgentConfiguration(node, node.Namespace);
+            return ExtractAgentConfiguration(node);
         }
         catch (Exception ex)
         {
@@ -172,7 +172,7 @@ public class AgentResolver : IAgentResolver
                 {
                     await foreach (var node in _meshQuery.QueryAsync<MeshNode>(query, ct: ct))
                     {
-                        var config = ExtractAgentConfiguration(node, namespacePath);
+                        var config = ExtractAgentConfiguration(node);
                         if (config != null)
                         {
                             _logger.LogDebug("Found closest agent {AgentId} at namespace {Namespace} for context {Context}",
@@ -218,7 +218,7 @@ public class AgentResolver : IAgentResolver
                 {
                     await foreach (var node in _meshQuery.QueryAsync<MeshNode>(query, ct: ct))
                     {
-                        var config = ExtractAgentConfiguration(node, namespacePath);
+                        var config = ExtractAgentConfiguration(node);
                         if (config != null)
                         {
                             agents.Add((config, depth));
@@ -251,7 +251,7 @@ public class AgentResolver : IAgentResolver
     /// <summary>
     /// Extracts AgentConfiguration from a MeshNode.
     /// </summary>
-    private AgentConfiguration? ExtractAgentConfiguration(MeshNode node, string? ns)
+    private AgentConfiguration? ExtractAgentConfiguration(MeshNode node)
     {
         if (node.Content is AgentConfiguration config)
         {
