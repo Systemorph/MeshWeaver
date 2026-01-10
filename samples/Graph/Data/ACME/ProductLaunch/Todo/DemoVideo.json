@@ -6,7 +6,6 @@
   "category": "Tasks",
   "description": "Produce a professional product walkthrough video",
   "iconName": "Video",
-  "displayOrder": 13,
   "isPersistent": true,
   "content": {
     "$type": "Todo",

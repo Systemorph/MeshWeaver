@@ -1,3 +1,5 @@
+#pragma warning disable CS1591 // Missing XML comment for publicly visible type or member
+
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
@@ -48,7 +50,7 @@ public class AgentResolverTest
             .Returns(ToAsyncEnumerable(rootAgent));
 
         // Act
-        var agents = await _resolver.GetAgentsForContextAsync(null);
+        var agents = await _resolver.GetAgentsForContextAsync(null, TestContext.Current.CancellationToken);
 
         // Assert
         agents.Should().HaveCount(1);
@@ -89,7 +91,7 @@ public class AgentResolverTest
             .Returns(ToAsyncEnumerable());
 
         // Act
-        var agents = await _resolver.GetAgentsForContextAsync("pricing/MS-2024");
+        var agents = await _resolver.GetAgentsForContextAsync("pricing/MS-2024", TestContext.Current.CancellationToken);
 
         // Assert - Should get agents from all levels, ordered by DisplayOrder
         agents.Should().HaveCount(2);
@@ -122,7 +124,7 @@ public class AgentResolverTest
             .Returns(ToAsyncEnumerable(overriddenMeshAgent));
 
         // Act
-        var agents = await _resolver.GetAgentsForContextAsync("custom");
+        var agents = await _resolver.GetAgentsForContextAsync("custom", TestContext.Current.CancellationToken);
 
         // Assert - Should only have one MeshAgent (from custom level)
         agents.Should().HaveCount(1);
@@ -150,7 +152,7 @@ public class AgentResolverTest
             .Returns(ToAsyncEnumerable(regularAgent, defaultAgent));
 
         // Act
-        var agent = await _resolver.GetDefaultAgentAsync(null);
+        var agent = await _resolver.GetDefaultAgentAsync(null, TestContext.Current.CancellationToken);
 
         // Assert
         agent.Should().NotBeNull();
@@ -178,7 +180,7 @@ public class AgentResolverTest
             .Returns(ToAsyncEnumerable(exposedAgent, hiddenAgent));
 
         // Act
-        var agents = await _resolver.GetExposedAgentsAsync(null);
+        var agents = await _resolver.GetExposedAgentsAsync(null, TestContext.Current.CancellationToken);
 
         // Assert
         agents.Should().HaveCount(1);
@@ -195,11 +197,11 @@ public class AgentResolverTest
             DisplayName = "Todo Agent"
         });
 
-        _persistence.GetNodeAsync("app/Todo/TodoAgent")
+        _persistence.GetNodeAsync("app/Todo/TodoAgent", Arg.Any<CancellationToken>())
             .Returns(agent);
 
         // Act
-        var result = await _resolver.GetAgentAsync("app/Todo/TodoAgent");
+        var result = await _resolver.GetAgentAsync("app/Todo/TodoAgent", ct: TestContext.Current.CancellationToken);
 
         // Assert
         result.Should().NotBeNull();
@@ -232,7 +234,7 @@ public class AgentResolverTest
         };
 
         // Act
-        var agents = await _resolver.FindMatchingAgentsAsync(context, null);
+        var agents = await _resolver.FindMatchingAgentsAsync(context, null, TestContext.Current.CancellationToken);
 
         // Assert
         agents.Should().HaveCount(1);
@@ -265,7 +267,7 @@ public class AgentResolverTest
             .Returns(ToAsyncEnumerable(agentB, agentA, agentC));
 
         // Act
-        var agents = await _resolver.GetAgentsForContextAsync(null);
+        var agents = await _resolver.GetAgentsForContextAsync(null, TestContext.Current.CancellationToken);
 
         // Assert
         agents.Should().HaveCount(3);

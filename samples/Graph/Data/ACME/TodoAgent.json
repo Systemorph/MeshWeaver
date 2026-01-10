@@ -5,7 +5,6 @@
   "category": "Agents",
   "description": "Handles all questions and actions related to project tasks, categories, and task management. Provides access to task data for the MeshFlow ProductLaunch project.",
   "iconName": "TaskListSquare",
-  "displayOrder": 0,
   "isPersistent": true,
   "content": {
     "$type": "AgentConfiguration",
@@ -13,7 +12,6 @@
     "displayName": "Project Task Agent",
     "description": "Handles all questions and actions related to project tasks, categories, and task management. Provides access to task data for the MeshFlow ProductLaunch project.",
     "iconName": "TaskListSquare",
-    "displayOrder": 0,
     "groupName": "Projects",
     "isDefault": false,
     "exposedInNavigator": true,

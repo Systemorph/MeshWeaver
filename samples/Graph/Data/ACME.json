@@ -4,7 +4,6 @@
   "nodeType": "Organization",
   "description": "ACME Corporation - A sample organization containing AI agents",
   "icon": "/static/storage/content/ACME/logo.svg",
-  "displayOrder": 2,
   "isPersistent": true,
   "content": {
     "$type": "Organization",

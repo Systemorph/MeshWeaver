@@ -6,7 +6,6 @@
   "category": "Tasks",
   "description": "Set up sales pipeline stages in CRM",
   "iconName": "People",
-  "displayOrder": 17,
   "isPersistent": true,
   "content": {
     "$type": "Todo",

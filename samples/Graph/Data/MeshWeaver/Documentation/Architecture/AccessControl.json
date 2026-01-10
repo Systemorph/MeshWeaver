@@ -1,12 +1,11 @@
 {
   "id": "AccessControl",
-  "namespace": "MeshWeaver/Architecture",
+  "namespace": "MeshWeaver/Documentation/Architecture",
   "name": "Access Control",
   "nodeType": "Markdown",
   "category": "Documentation",
   "description": "How IDataValidator enables flexible access control through hierarchical visibility and reference data dimensions",
   "iconName": "Security",
-  "displayOrder": 60,
   "isPersistent": true,
   "state": "Active",
   "content": {

@@ -6,7 +6,6 @@
   "category": "MeshWeaver",
   "description": "Declarative, immutable data models with type-safe constraints that compose naturally",
   "icon": "/static/storage/content/Systemorph/Marketing/icons/database.svg",
-  "displayOrder": 36,
   "addressSegments": 0,
   "isPersistent": true,
   "content": {

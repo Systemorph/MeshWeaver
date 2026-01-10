@@ -6,7 +6,6 @@
   "category": "Tasks",
   "description": "Set up tracking and reporting for launch metrics",
   "iconName": "DataUsage",
-  "displayOrder": 11,
   "isPersistent": true,
   "content": {
     "$type": "Todo",

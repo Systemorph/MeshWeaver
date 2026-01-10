@@ -1,12 +1,11 @@
 {
   "id": "UserInterface",
-  "namespace": "MeshWeaver/Architecture",
+  "namespace": "MeshWeaver/Documentation/Architecture",
   "name": "User Interface",
   "nodeType": "Markdown",
   "category": "Documentation",
   "description": "How UI components are generated where data lives and streamed to browsers with two-way binding",
   "iconName": "DesktopMac",
-  "displayOrder": 20,
   "isPersistent": true,
   "state": "Active",
   "content": {

@@ -1,4 +1,4 @@
-using MeshWeaver.AI;
+﻿using MeshWeaver.AI;
 using MeshWeaver.Blazor.Chat;
 using MeshWeaver.Blazor.Portal.Components;
 using MeshWeaver.Blazor.Portal.Resize;
@@ -20,7 +20,6 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
     private string MainPaneSizeWithChat => IsAIChatVisible ? MainPaneSize : "100%";
     private string ChatPaneSize => ChatState.Width.HasValue ? $"{ChatState.Width.Value}%" : "25%";
     private string ChatPaneSizeWithVisibility => IsAIChatVisible ? ChatPaneSize : "0%";
-    private int chatPaneSizePercent = 25;
 
     /// <summary>
     /// Render fragment for header links (social media icons, etc.)

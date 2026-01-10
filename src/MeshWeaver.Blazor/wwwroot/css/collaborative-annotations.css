@@ -760,3 +760,41 @@
     border-radius: 4px;
     color: var(--annotation-delete-color);
 }
+
+/* ==========================================================================
+   SVG Theme Container - Mobile Responsive
+   ========================================================================== */
+
+.svg-theme-container {
+    overflow-x: auto;
+    overflow-y: visible;
+    display: block;
+    -webkit-overflow-scrolling: touch;
+}
+
+.svg-theme-container svg {
+    display: block;
+    height: auto !important;
+}
+
+/* Theme switching - hide inactive SVG */
+.svg-theme-container .svg-dark {
+    display: none;
+}
+
+[data-theme="dark"] .svg-theme-container .svg-light {
+    display: none;
+}
+
+[data-theme="dark"] .svg-theme-container .svg-dark {
+    display: block;
+}
+
+@media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) .svg-theme-container .svg-light {
+        display: none;
+    }
+    :root:not([data-theme="light"]) .svg-theme-container .svg-dark {
+        display: block;
+    }
+}

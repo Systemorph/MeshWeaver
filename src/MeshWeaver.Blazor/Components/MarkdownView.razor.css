@@ -289,4 +289,29 @@
     background-color: transparent;
 }
 
+/* SVG theme container - constrain to viewport on mobile */
+.markdown-body ::deep .svg-theme-container {
+    overflow-x: auto !important;
+    overflow-y: visible;
+    max-width: 100%;
+    width: 100%;
+    box-sizing: border-box;
+    -webkit-overflow-scrolling: touch;
+}
+
+/* Constrain SVGs to container width on mobile */
+.markdown-body ::deep .svg-theme-container svg {
+    max-width: 100%;
+    height: auto;
+}
+
+.markdown-body ::deep .svg-theme-container::-webkit-scrollbar {
+    height: 6px;
+}
+
+.markdown-body ::deep .svg-theme-container::-webkit-scrollbar-thumb {
+    background-color: #c6c6c6;
+    border-radius: 3px;
+}
+
 /* Collaborative Editing Annotations are in wwwroot/css/collaborative-annotations.css */

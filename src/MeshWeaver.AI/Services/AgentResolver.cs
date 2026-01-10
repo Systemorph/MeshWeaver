@@ -232,10 +232,9 @@ public class AgentResolver : IAgentResolver
             }
         }
 
-        // Order by depth descending (closest first), then DisplayOrder
+        // Order by depth descending (closest first), then by Id
         return agents
             .OrderByDescending(a => a.Depth)
-            .ThenBy(a => a.Config.DisplayOrder)
             .ThenBy(a => a.Config.Id)
             .Select(a => a.Config)
             .ToList();
@@ -280,8 +279,7 @@ public class AgentResolver : IAgentResolver
             Id = node.Id,
             DisplayName = node.Name,
             Description = node.Description,
-            Icon = node.Icon,
-            DisplayOrder = node.DisplayOrder
+            Icon = node.Icon
         };
     }
 

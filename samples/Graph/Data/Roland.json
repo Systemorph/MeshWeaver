@@ -4,7 +4,6 @@
   "nodeType": "Person",
   "description": "Founder & CEO at Systemorph",
   "iconName": "Person",
-  "displayOrder": 0,
   "isPersistent": true,
   "content": {
     "id": "Roland",

@@ -198,7 +198,7 @@ public static class MarkdownView
         // No annotations or non-markup mode - simple layout
         var container = Controls.Stack
             .WithWidth("100%")
-            .WithStyle("max-width: 900px; margin: 0 auto; padding: 24px; background: var(--neutral-layer-1);");
+            .WithStyle("max-width: 1100px; margin: 0 auto; padding: 24px; background: var(--neutral-layer-1); overflow-y: auto;");
 
         container = container.WithView(headerStack);
 
@@ -249,7 +249,7 @@ public static class MarkdownView
         // Grid of child thumbnails using MeshNodeThumbnailControl
         var grid = Controls.LayoutGrid.WithSkin(s => s.WithSpacing(2));
 
-        foreach (var child in children.OrderBy(c => c.DisplayOrder).ThenBy(c => c.Name))
+        foreach (var child in children.OrderBy(c => c.DisplayOrder ?? int.MaxValue))
         {
             grid = grid.WithView(
                 MeshNodeThumbnailControl.FromNode(child, child.Path),

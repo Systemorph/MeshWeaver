@@ -4,7 +4,6 @@
   "nodeType": "Person",
   "description": "Product Manager",
   "iconName": "Person",
-  "displayOrder": 2,
   "isPersistent": true,
   "content": {
     "id": "Bob",

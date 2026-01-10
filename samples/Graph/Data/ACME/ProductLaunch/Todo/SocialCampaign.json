@@ -6,7 +6,6 @@
   "category": "Tasks",
   "description": "Create content calendar for LinkedIn and Twitter launch campaign",
   "iconName": "Share",
-  "displayOrder": 12,
   "isPersistent": true,
   "content": {
     "$type": "Todo",

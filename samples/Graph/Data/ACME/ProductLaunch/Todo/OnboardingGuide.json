@@ -6,7 +6,6 @@
   "category": "Tasks",
   "description": "Develop materials for new customer onboarding",
   "iconName": "DocumentBulletList",
-  "displayOrder": 21,
   "isPersistent": true,
   "content": {
     "$type": "Todo",

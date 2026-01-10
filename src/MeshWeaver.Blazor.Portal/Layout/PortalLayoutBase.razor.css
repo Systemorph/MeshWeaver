@@ -171,6 +171,55 @@
         color: var(--error-ui-accent-foreground-color);
     }
 
+    /* Mobile body-content - allow scrolling, clip at viewport width */
+    ::deep .body-content {
+        overflow-x: clip;
+        overflow-y: auto;
+        display: flex;
+        flex-direction: column;
+        min-height: 0;
+        height: 100%;
+        width: 100%;
+        max-width: 100vw;
+    }
+
+    /* Mobile splitter and pane */
+    ::deep .body-splitter {
+        overflow: hidden !important;
+        max-width: 100vw;
+    }
+
+    ::deep .body-splitter fluent-multi-splitter-pane {
+        overflow-x: clip !important;
+        overflow-y: auto !important;
+    }
+
+    /* Allow svg containers to scroll horizontally within body-content */
+    ::deep .body-content .svg-theme-container {
+        overflow-x: auto !important;
+        -webkit-overflow-scrolling: touch;
+    }
+
+    /* Hide scrollbar until hovering/scrolling on mobile */
+    ::deep .body-content::-webkit-scrollbar {
+        width: 0;
+        background: transparent;
+    }
+
+    ::deep .body-content:hover::-webkit-scrollbar,
+    ::deep .body-content:active::-webkit-scrollbar {
+        width: 6px;
+    }
+
+    ::deep .body-content {
+        scrollbar-width: none; /* Firefox - hide by default */
+    }
+
+    ::deep .body-content:hover,
+    ::deep .body-content:active {
+        scrollbar-width: thin; /* Firefox - show on hover/active */
+    }
+
     ::deep.layout {
         height: 100vh;
         width: 100vw;

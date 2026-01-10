@@ -6,7 +6,6 @@
   "category": "Agentic AI",
   "description": "Classification guides for Line of Business, Product, Document Types, and other dimensions",
   "icon": "/static/storage/content/Systemorph/Marketing/icons/tag.svg",
-  "displayOrder": 22,
   "addressSegments": 0,
   "isPersistent": true,
   "content": {

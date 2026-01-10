@@ -6,7 +6,6 @@
   "category": "Tasks",
   "description": "Create the main sales deck for MeshFlow demos and pitches",
   "iconName": "SlideText",
-  "displayOrder": 6,
   "isPersistent": true,
   "content": {
     "$type": "Todo",

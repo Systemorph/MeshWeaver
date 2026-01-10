@@ -6,7 +6,6 @@
   "category": "Tasks",
   "description": "Organize the official MeshFlow launch webinar",
   "iconName": "CalendarLtr",
-  "displayOrder": 20,
   "isPersistent": true,
   "content": {
     "$type": "Todo",

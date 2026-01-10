@@ -4,7 +4,6 @@
   "nodeType": "Person",
   "description": "UX Designer",
   "iconName": "Person",
-  "displayOrder": 3,
   "isPersistent": true,
   "content": {
     "id": "Carol",

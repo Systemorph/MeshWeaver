@@ -6,7 +6,6 @@
   "category": "Tasks",
   "description": "Create graphics and visuals for marketing campaigns",
   "iconName": "Image",
-  "displayOrder": 15,
   "isPersistent": true,
   "content": {
     "$type": "Todo",

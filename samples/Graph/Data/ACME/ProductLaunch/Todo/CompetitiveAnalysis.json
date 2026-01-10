@@ -6,7 +6,6 @@
   "category": "Tasks",
   "description": "Analyze key competitors in the workflow automation space",
   "iconName": "DataTrending",
-  "displayOrder": 2,
   "isPersistent": true,
   "content": {
     "$type": "Todo",

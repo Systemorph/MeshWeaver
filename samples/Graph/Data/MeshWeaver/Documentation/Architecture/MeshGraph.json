@@ -1,12 +1,11 @@
 {
   "id": "MeshGraph",
-  "namespace": "MeshWeaver/Architecture",
+  "namespace": "MeshWeaver/Documentation/Architecture",
   "name": "Mesh Graph",
   "nodeType": "Markdown",
   "category": "Documentation",
   "description": "How data types define hubs, hierarchical namespaces enable organization, and semantic versioning supports evolution",
   "iconName": "AccountTree",
-  "displayOrder": 40,
   "isPersistent": true,
   "state": "Active",
   "content": {

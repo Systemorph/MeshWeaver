@@ -6,7 +6,6 @@
   "category": "Tasks",
   "description": "Define pricing strategy and tier structure for MeshFlow",
   "iconName": "Money",
-  "displayOrder": 5,
   "isPersistent": true,
   "content": {
     "$type": "Todo",

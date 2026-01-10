@@ -6,7 +6,6 @@
   "category": "Tasks",
   "description": "Create wireframes for the MeshFlow product landing page",
   "iconName": "DesignIdeas",
-  "displayOrder": 4,
   "isPersistent": true,
   "content": {
     "$type": "Todo",

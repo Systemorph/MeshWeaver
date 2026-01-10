@@ -6,7 +6,6 @@
   "category": "Tasks",
   "description": "Configure a stable demo instance with sample data",
   "iconName": "Server",
-  "displayOrder": 7,
   "isPersistent": true,
   "content": {
     "$type": "Todo",

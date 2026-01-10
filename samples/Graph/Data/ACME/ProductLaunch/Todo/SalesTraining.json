@@ -6,7 +6,6 @@
   "category": "Tasks",
   "description": "Conduct product training sessions for sales reps",
   "iconName": "PersonBoard",
-  "displayOrder": 18,
   "isPersistent": true,
   "content": {
     "$type": "Todo",
