@@ -16,7 +16,7 @@
     "category": "PR",
     "priority": "Medium",
     "assignee": "Emma",
-    "dueDate": "2025-02-20T00:00:00Z",
+    "dueDateOffsetDays": 12,
     "status": "Pending"
   }
 }

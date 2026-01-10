@@ -3,11 +3,14 @@ using System.Reactive.Subjects;
 using MeshWeaver.Application.Styles;
 using MeshWeaver.Data;
 using MeshWeaver.Domain;
+using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Markdown;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
+using Microsoft.Extensions.DependencyInjection;
 using ViewModeSubject = System.Reactive.Subjects.ISubject<MeshWeaver.Graph.MarkdownView.AnnotationViewMode>;
 
 namespace MeshWeaver.Graph;
@@ -87,10 +90,12 @@ public static class MarkdownView
     /// <summary>
     /// Renders the readonly markdown view with a clean reading experience.
     /// Includes a header with title and action menu.
+    /// If there are Markdown child nodes, they are displayed in a separate section.
     /// </summary>
     public static IObservable<UiControl?> ReadView(LayoutAreaHost host, RenderingContext _)
     {
         var hubPath = host.Hub.Address.ToString();
+        var meshQuery = host.Hub.ServiceProvider.GetService<IMeshQuery>();
 
         // Create a subject for view mode changes
         var viewModeSubject = new BehaviorSubject<AnnotationViewMode>(AnnotationViewMode.Markup);
@@ -103,12 +108,28 @@ public static class MarkdownView
         var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? Array.Empty<MeshNode>())
             ?? Observable.Return<MeshNode[]>(Array.Empty<MeshNode>());
 
-        // Combine node stream with view mode and panel state for reactive updates
+        // Query for Markdown child nodes
+        var childrenStream = Observable.FromAsync(async () =>
+        {
+            if (meshQuery == null)
+                return Array.Empty<MeshNode>() as IReadOnlyList<MeshNode>;
+
+            try
+            {
+                return await meshQuery.QueryAsync<MeshNode>($"path:{hubPath} nodeType:{GraphConfigurationExtensions.MarkdownNodeType} scope:children").ToListAsync() as IReadOnlyList<MeshNode>;
+            }
+            catch
+            {
+                return Array.Empty<MeshNode>();
+            }
+        });
+
+        // Combine node stream with view mode, panel state, and children for reactive updates
         return nodeStream
-            .CombineLatest(viewModeSubject, panelStateSubject, (nodes, viewMode, panelState) =>
+            .CombineLatest(viewModeSubject, panelStateSubject, childrenStream, (nodes, viewMode, panelState, children) =>
             {
                 var node = nodes.FirstOrDefault(n => n.Path == hubPath);
-                return BuildReadView(host, node, viewMode, viewModeSubject, panelState, panelStateSubject);
+                return BuildReadView(host, node, viewMode, viewModeSubject, panelState, panelStateSubject, children ?? Array.Empty<MeshNode>());
             });
     }
 
@@ -118,7 +139,8 @@ public static class MarkdownView
         AnnotationViewMode viewMode,
         ViewModeSubject viewModeSubject,
         AnnotationPanelState panelState,
-        BehaviorSubject<AnnotationPanelState> panelStateSubject)
+        BehaviorSubject<AnnotationPanelState> panelStateSubject,
+        IReadOnlyList<MeshNode> markdownChildren)
     {
         var nodePath = node?.Path ?? host.Hub.Address.ToString();
         var containerId = $"markdown-container-{Guid.NewGuid():N}";
@@ -170,7 +192,7 @@ public static class MarkdownView
         // If we have annotations and in markup mode, use a split layout (Word-style)
         if (hasAnnotations && annotations.Count > 0 && viewMode == AnnotationViewMode.Markup)
         {
-            return BuildSplitLayoutWithAnnotations(host, node, headerStack, content, containerId, annotations, viewModeSubject, viewMode, panelState, panelStateSubject);
+            return BuildSplitLayoutWithAnnotations(host, node, headerStack, content, containerId, annotations, viewModeSubject, viewMode, panelState, panelStateSubject, markdownChildren);
         }
 
         // No annotations or non-markup mode - simple layout
@@ -201,7 +223,41 @@ public static class MarkdownView
                 Controls.Html("<p style=\"color: var(--neutral-foreground-hint); font-style: italic;\">No content yet. Click Edit to add content.</p>"));
         }
 
+        // Add Markdown children section if there are any
+        if (markdownChildren.Count > 0)
+        {
+            container = container.WithView(BuildMarkdownChildrenSection(markdownChildren, nodePath));
+        }
+
         return container;
+    }
+
+    /// <summary>
+    /// Builds a section displaying Markdown child nodes as a grid of thumbnails.
+    /// Uses MeshNodeThumbnailControl for consistent styling with the catalog.
+    /// </summary>
+    private static UiControl BuildMarkdownChildrenSection(IReadOnlyList<MeshNode> children, string parentPath)
+    {
+        var section = Controls.Stack
+            .WithWidth("100%")
+            .WithStyle("margin-top: 32px; padding-top: 24px; border-top: 1px solid var(--neutral-stroke-rest);");
+
+        // Section header
+        section = section.WithView(
+            Controls.Html($"<h2 style=\"margin: 0 0 16px 0; font-size: 1.25rem; font-weight: 600;\">Sub-documents ({children.Count})</h2>"));
+
+        // Grid of child thumbnails using MeshNodeThumbnailControl
+        var grid = Controls.LayoutGrid.WithSkin(s => s.WithSpacing(2));
+
+        foreach (var child in children.OrderBy(c => c.DisplayOrder).ThenBy(c => c.Name))
+        {
+            grid = grid.WithView(
+                MeshNodeThumbnailControl.FromNode(child, child.Path),
+                itemSkin => itemSkin.WithXs(12).WithSm(6).WithMd(4));
+        }
+
+        section = section.WithView(grid);
+        return section;
     }
 
     /// <summary>
@@ -218,8 +274,10 @@ public static class MarkdownView
         ViewModeSubject viewModeSubject,
         AnnotationViewMode currentViewMode,
         AnnotationPanelState panelState,
-        BehaviorSubject<AnnotationPanelState> panelStateSubject)
+        BehaviorSubject<AnnotationPanelState> panelStateSubject,
+        IReadOnlyList<MeshNode> markdownChildren)
     {
+        var nodePath = node?.Path ?? host.Hub.Address.ToString();
         // Outer container - centered with max width
         var outerContainer = Controls.Stack
             .WithWidth("100%")
@@ -268,6 +326,12 @@ public static class MarkdownView
 
         // Add JavaScript for positioning and connecting lines
         outerContainer = outerContainer.WithView(BuildInlineAnnotationScript(containerId));
+
+        // Add Markdown children section if there are any
+        if (markdownChildren.Count > 0)
+        {
+            outerContainer = outerContainer.WithView(BuildMarkdownChildrenSection(markdownChildren, nodePath));
+        }
 
         return outerContainer;
     }

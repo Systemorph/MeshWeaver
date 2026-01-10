@@ -76,5 +76,9 @@
       "Bash(source ~/.zshrc)"
     ],
     "deny": []
-  }
+  },
+  "enabledMcpjsonServers": [
+    "github"
+  ],
+  "enableAllProjectMcpServers": true
 }

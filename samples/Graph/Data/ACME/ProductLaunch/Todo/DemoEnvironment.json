@@ -16,7 +16,7 @@
     "category": "Engineering",
     "priority": "Critical",
     "assignee": "Bob",
-    "dueDate": "2025-02-10T00:00:00Z",
-    "status": "Pending"
+    "dueDateOffsetDays": 5,
+    "status": "InProgress"
   }
 }

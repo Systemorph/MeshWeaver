@@ -16,7 +16,7 @@
     "category": "Sales",
     "priority": "High",
     "assignee": "Roland",
-    "dueDate": "2025-03-08T00:00:00Z",
+    "dueDateOffsetDays": 40,
     "status": "Pending"
   }
 }

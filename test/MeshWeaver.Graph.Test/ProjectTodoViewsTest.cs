@@ -336,5 +336,67 @@ public class ProjectTodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBa
         Output.WriteLine($"Grid has {grid.Areas.Count} areas");
     }
 
+    /// <summary>
+    /// Test that exactly 2 items are overdue based on their DueDateOffsetDays.
+    /// The test data has been set up with relative dates using DueDateOffsetDays:
+    /// - PositioningDoc: -3 days (overdue, InProgress)
+    /// - PricingStrategy: -5 days (overdue, Pending)
+    /// All other non-completed items have positive offsets (future dates).
+    /// Note: The IContentInitializable.Initialize() method calculates DueDate from DueDateOffsetDays.
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task TodaysFocus_ShouldHaveExactlyTwoOverdueItems()
+    {
+        var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
+
+        // Query for all Todo items
+        var query = "path:ACME/ProductLaunch/Todo nodeType:ACME/Project/Todo scope:children";
+        Output.WriteLine($"Querying: {query}");
+
+        var results = await meshQuery.QueryAsync<MeshNode>(MeshQueryRequest.FromQuery(query), ct: TestContext.Current.CancellationToken)
+            .ToListAsync(TestContext.Current.CancellationToken);
+
+        Output.WriteLine($"Found {results.Count} Todo items");
+
+        // Get content as dynamic objects to access properties
+        var todosWithDates = new List<(string Id, int? OffsetDays, string Status)>();
+        foreach (var node in results)
+        {
+            var contentJson = JsonSerializer.Serialize(node.Content);
+            using var doc = JsonDocument.Parse(contentJson);
+            var root = doc.RootElement;
+
+            var id = root.TryGetProperty("id", out var idProp) ? idProp.GetString() : "unknown";
+            var status = root.TryGetProperty("status", out var statusProp) ? statusProp.GetString() : "unknown";
+            int? offsetDays = root.TryGetProperty("dueDateOffsetDays", out var offsetProp) && offsetProp.ValueKind == JsonValueKind.Number
+                ? offsetProp.GetInt32()
+                : null;
+
+            todosWithDates.Add((id ?? "unknown", offsetDays, status ?? "unknown"));
+            Output.WriteLine($"  - {id}: offset={offsetDays}, status={status}");
+        }
+
+        // Filter for overdue items: negative offset (past due date) and not completed
+        var overdueItems = todosWithDates
+            .Where(t => t.OffsetDays.HasValue && t.OffsetDays.Value < 0 && t.Status != "Completed")
+            .ToList();
+
+        Output.WriteLine($"\nOverdue items (offset < 0, not completed): {overdueItems.Count}");
+        foreach (var item in overdueItems)
+        {
+            Output.WriteLine($"  - {item.Id}: offset={item.OffsetDays}, status={item.Status}");
+        }
+
+        // Verify exactly 2 items are overdue
+        overdueItems.Should().HaveCount(2, "Should have exactly 2 overdue items");
+
+        // Verify the specific items
+        var overdueIds = overdueItems.Select(t => t.Id).ToList();
+        overdueIds.Should().Contain("PositioningDoc", "PositioningDoc should be overdue (dueDateOffsetDays: -3)");
+        overdueIds.Should().Contain("PricingStrategy", "PricingStrategy should be overdue (dueDateOffsetDays: -5)");
+
+        Output.WriteLine("\nTest passed: Exactly 2 overdue items (PositioningDoc and PricingStrategy)");
+    }
+
     #endregion
 }

@@ -16,7 +16,7 @@
     "category": "Partnerships",
     "priority": "Medium",
     "assignee": "Carol",
-    "dueDate": "2025-03-10T00:00:00Z",
+    "dueDateOffsetDays": 42,
     "status": "Pending"
   }
 }

@@ -16,7 +16,7 @@
     "category": "Marketing",
     "priority": "High",
     "assignee": "Emma",
-    "dueDate": "2025-03-12T00:00:00Z",
+    "dueDateOffsetDays": 50,
     "status": "Pending"
   }
 }
