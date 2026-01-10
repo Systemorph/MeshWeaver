@@ -841,8 +841,8 @@ public static class MeshNodeView
             }
 
             // Instance node catalog
-            // Use CatalogQuery if set, otherwise default to namespace:node.Namespace (direct children only)
-            var instanceHiddenQuery = node?.CatalogQuery ?? $"namespace:{node?.Namespace ?? hubPath}";
+            // Use CatalogQuery if set, otherwise default to scope:children (direct children only)
+            var instanceHiddenQuery = node?.CatalogQuery ?? $"path:{node?.Namespace ?? hubPath} scope:children";
 
             // Determine render mode from CatalogMode property (default: hierarchical)
             var catalogMode = node?.CatalogMode?.ToLowerInvariant();

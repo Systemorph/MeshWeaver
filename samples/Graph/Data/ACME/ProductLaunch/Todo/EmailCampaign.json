@@ -6,7 +6,6 @@
   "category": "Tasks",
   "description": "Build automated email campaigns for lead nurturing",
   "iconName": "Mail",
-  "displayOrder": 10,
   "isPersistent": true,
   "content": {
     "$type": "Todo",

@@ -6,7 +6,6 @@
   "category": "MeshWeaver",
   "description": "Real-time updates via CRDT - subscribe to data changes as they happen",
   "icon": "/static/storage/content/Systemorph/Marketing/icons/flash.svg",
-  "displayOrder": 32,
   "addressSegments": 0,
   "isPersistent": true,
   "content": {

@@ -1,4 +1,4 @@
-using System.ComponentModel.DataAnnotations;
+﻿using System.ComponentModel.DataAnnotations;
 
 namespace MeshWeaver.Graph.Configuration;
 
@@ -43,11 +43,6 @@ public record AgentConfiguration
     public string? CustomIconSvg { get; init; }
 
     /// <summary>
-    /// Display order for sorting in UI lists (lower = first).
-    /// </summary>
-    public int DisplayOrder { get; init; }
-
-    /// <summary>
     /// Group name for UI categorization (e.g., "Insurance", "Todo").
     /// </summary>
     public string? GroupName { get; init; }
@@ -81,6 +76,12 @@ public record AgentConfiguration
     /// Example: "address.type==pricing" or "address.path=like=*Todo*"
     /// </summary>
     public string? ContextMatchPattern { get; init; }
+
+    /// <summary>
+    /// Display order for sorting agents in the UI.
+    /// Lower values appear first.
+    /// </summary>
+    public int DisplayOrder { get; init; }
 }
 
 /// <summary>

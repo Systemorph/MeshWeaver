@@ -6,7 +6,6 @@
   "category": "Tasks",
   "description": "Define MeshFlow's unique value proposition and market positioning",
   "iconName": "Document",
-  "displayOrder": 3,
   "isPersistent": true,
   "content": {
     "$type": "Todo",

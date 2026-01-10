@@ -4,7 +4,6 @@
   "nodeType": "Person",
   "description": "Senior Software Engineer",
   "iconName": "Person",
-  "displayOrder": 1,
   "isPersistent": true,
   "content": {
     "id": "Alice",

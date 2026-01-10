@@ -6,7 +6,6 @@
   "category": "MeshWeaver",
   "description": "Composable, reactive GUI components that bind directly to your data mesh",
   "icon": "/static/storage/content/Systemorph/Marketing/icons/grid.svg",
-  "displayOrder": 35,
   "addressSegments": 0,
   "isPersistent": true,
   "content": {

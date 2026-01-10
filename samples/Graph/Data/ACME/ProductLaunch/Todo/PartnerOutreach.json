@@ -6,7 +6,6 @@
   "category": "Tasks",
   "description": "Recruit integration and channel partners for launch",
   "iconName": "Handshake",
-  "displayOrder": 19,
   "isPersistent": true,
   "content": {
     "$type": "Todo",

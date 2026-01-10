@@ -6,7 +6,6 @@
   "category": "Marketing",
   "description": "Marketing content and stories",
   "icon": "/static/storage/content/Systemorph/Marketing/icons/megaphone.svg",
-  "displayOrder": 10,
   "addressSegments": 0,
   "isPersistent": true,
   "catalogMode": "hierarchical",

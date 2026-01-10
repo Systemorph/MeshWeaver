@@ -5,7 +5,6 @@
   "category": "Agents",
   "description": "Searches for information",
   "iconName": "Search",
-  "displayOrder": 30,
   "isPersistent": true,
   "content": {
     "$type": "AgentConfiguration",

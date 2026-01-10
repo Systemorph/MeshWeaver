@@ -6,7 +6,6 @@
   "category": "Tasks",
   "description": "Draft the official MeshFlow launch press release",
   "iconName": "News",
-  "displayOrder": 8,
   "isPersistent": true,
   "content": {
     "$type": "Todo",

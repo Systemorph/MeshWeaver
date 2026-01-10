@@ -5,7 +5,6 @@
   "category": "Agents",
   "description": "Understands user intent and delegates to specialized agents",
   "iconName": "Compass",
-  "displayOrder": -100,
   "isPersistent": true,
   "content": {
     "$type": "AgentConfiguration",
@@ -13,7 +12,6 @@
     "displayName": "Navigator",
     "description": "Understands user intent and delegates to specialized agents",
     "iconName": "Compass",
-    "displayOrder": -100,
     "isDefault": true,
     "exposedInNavigator": false,
     "instructions": "You are Navigator. Your role is to understand what the user wants and delegate appropriately:\n- For complex tasks requiring planning -> delegate to Planner\n- For simple queries/searches -> handle yourself or delegate to Research\n- For direct actions -> delegate to Executor\n- For domain-specific questions -> delegate to domain agents\n\nKeep responses brief. Delegate rather than do complex work yourself.",

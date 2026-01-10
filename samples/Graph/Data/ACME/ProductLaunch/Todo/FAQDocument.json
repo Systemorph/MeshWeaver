@@ -6,7 +6,6 @@
   "category": "Tasks",
   "description": "Document answers to frequently asked questions",
   "iconName": "ChatHelp",
-  "displayOrder": 14,
   "isPersistent": true,
   "content": {
     "$type": "Todo",

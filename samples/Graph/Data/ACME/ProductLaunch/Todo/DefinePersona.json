@@ -6,7 +6,6 @@
   "category": "Tasks",
   "description": "Create detailed buyer persona for MeshFlow targeting operations managers at mid-market companies",
   "iconName": "Person",
-  "displayOrder": 1,
   "isPersistent": true,
   "content": {
     "$type": "Todo",

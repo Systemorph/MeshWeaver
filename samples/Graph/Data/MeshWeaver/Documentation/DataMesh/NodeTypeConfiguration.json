@@ -1,12 +1,11 @@
 {
   "id": "NodeTypeConfiguration",
-  "namespace": "MeshWeaver",
+  "namespace": "MeshWeaver/Documentation/DataMesh",
   "name": "NodeType Configuration",
   "nodeType": "Markdown",
   "category": "Documentation",
   "description": "How to create and configure NodeTypes",
   "icon": "Settings",
-  "displayOrder": 20,
   "isPersistent": true,
   "state": "Active",
   "content": {

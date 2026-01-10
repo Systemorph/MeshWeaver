@@ -1,12 +1,11 @@
 {
   "id": "DataVersioning",
-  "namespace": "MeshWeaver/Architecture",
+  "namespace": "MeshWeaver/Documentation/Architecture",
   "name": "Data Versioning",
   "nodeType": "Markdown",
   "category": "Documentation",
   "description": "Technology-specific approaches to data versioning across Snowflake, SQL Server, Cosmos DB, and file storage",
   "iconName": "History",
-  "displayOrder": 50,
   "isPersistent": true,
   "state": "Active",
   "content": {

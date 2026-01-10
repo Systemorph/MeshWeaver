@@ -6,7 +6,6 @@
   "category": "Tasks",
   "description": "Ensure all launch materials meet legal requirements",
   "iconName": "Gavel",
-  "displayOrder": 16,
   "isPersistent": true,
   "content": {
     "$type": "Todo",

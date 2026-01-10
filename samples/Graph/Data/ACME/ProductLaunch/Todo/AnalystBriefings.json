@@ -6,7 +6,6 @@
   "category": "Tasks",
   "description": "Arrange briefings with key industry analysts",
   "iconName": "PeopleTeam",
-  "displayOrder": 9,
   "isPersistent": true,
   "content": {
     "$type": "Todo",
