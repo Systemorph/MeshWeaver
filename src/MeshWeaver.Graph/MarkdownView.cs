@@ -233,7 +233,7 @@ public static class MarkdownView
     }
 
     /// <summary>
-    /// Builds a section displaying Markdown child nodes as a grid of thumbnails.
+    /// Builds a section displaying child nodes grouped by Category (or NodeType as fallback).
     /// Uses MeshNodeThumbnailControl for consistent styling with the catalog.
     /// </summary>
     private static UiControl BuildMarkdownChildrenSection(IReadOnlyList<MeshNode> children, string parentPath)
@@ -242,21 +242,49 @@ public static class MarkdownView
             .WithWidth("100%")
             .WithStyle("margin-top: 32px; padding-top: 24px; border-top: 1px solid var(--neutral-stroke-rest);");
 
-        // Section header
-        section = section.WithView(
-            Controls.Html($"<h2 style=\"margin: 0 0 16px 0; font-size: 1.25rem; font-weight: 600;\">Sub-documents ({children.Count})</h2>"));
+        // Group by Category if set, otherwise by NodeType
+        var childGroups = children
+            .Where(c => !string.IsNullOrEmpty(c.Category) || !string.IsNullOrEmpty(c.NodeType))
+            .GroupBy(c => c.Category ?? c.NodeType!)
+            .OrderBy(g => g.Key)
+            .ToList();
 
-        // Grid of child thumbnails using MeshNodeThumbnailControl
-        var grid = Controls.LayoutGrid.WithSkin(s => s.WithSpacing(2));
-
-        foreach (var child in children.OrderBy(c => c.DisplayOrder ?? int.MaxValue))
+        if (childGroups.Count == 0)
         {
-            grid = grid.WithView(
-                MeshNodeThumbnailControl.FromNode(child, child.Path),
-                itemSkin => itemSkin.WithXs(12).WithSm(6).WithMd(4));
+            // Fallback for children without Category or NodeType
+            var grid = Controls.LayoutGrid.WithSkin(s => s.WithSpacing(2));
+            foreach (var child in children.OrderBy(c => c.DisplayOrder ?? int.MaxValue))
+            {
+                grid = grid.WithView(
+                    MeshNodeThumbnailControl.FromNode(child, child.Path),
+                    itemSkin => itemSkin.WithXs(12).WithSm(6).WithMd(4).WithLg(4));
+            }
+            section = section.WithView(grid);
+            return section;
         }
 
-        section = section.WithView(grid);
+        // Grid with grouped children
+        var mainGrid = Controls.LayoutGrid.WithSkin(s => s.WithSpacing(2));
+
+        foreach (var group in childGroups)
+        {
+            var displayName = MeshNodeView.GetGroupDisplayName(group.Key, group.Count());
+
+            // Section header spans full width
+            mainGrid = mainGrid.WithView(
+                Controls.Html($"<h3 style=\"margin: 24px 0 8px 0;\">{displayName}</h3>"),
+                itemSkin => itemSkin.WithXs(12));
+
+            // Thumbnails in grid
+            foreach (var child in group.OrderBy(c => c.DisplayOrder ?? int.MaxValue).ThenBy(c => c.Name))
+            {
+                mainGrid = mainGrid.WithView(
+                    MeshNodeThumbnailControl.FromNode(child, child.Path),
+                    itemSkin => itemSkin.WithXs(12).WithSm(6).WithMd(4).WithLg(4));
+            }
+        }
+
+        section = section.WithView(mainGrid);
         return section;
     }
 

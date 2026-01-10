@@ -203,21 +203,22 @@ public static class MeshNodeView
 
         if (showChildren)
         {
-            var childTypes = children
-                .Where(c => !string.IsNullOrEmpty(c.NodeType))
-                .GroupBy(c => c.NodeType!)
+            // Group by Category if set, otherwise by NodeType
+            var childGroups = children
+                .Where(c => !string.IsNullOrEmpty(c.Category) || !string.IsNullOrEmpty(c.NodeType))
+                .GroupBy(c => c.Category ?? c.NodeType!)
                 .OrderBy(g => g.Key)
                 .ToList();
 
-            if (childTypes.Count > 0)
+            if (childGroups.Count > 0)
             {
                 // Single unified grid for all child types
                 var grid = Controls.LayoutGrid.WithSkin(s => s.WithSpacing(2));
 
-                foreach (var group in childTypes)
+                foreach (var group in childGroups)
                 {
                     var recentNodes = group.Take(childrenLimit).ToList();
-                    var displayName = GetNodeTypeDisplayName(group.Key, group.Count());
+                    var displayName = GetGroupDisplayName(group.Key, group.Count());
 
                     // Section header spans full width
                     grid = grid.WithView(
@@ -229,7 +230,7 @@ public static class MeshNodeView
                     {
                         grid = grid.WithView(
                             BuildThumbnailContent(child, child.Namespace ?? ""),
-                            itemSkin => itemSkin.WithXs(12).WithSm(6).WithMd(4).WithLg(3));
+                            itemSkin => itemSkin.WithXs(12).WithSm(6).WithMd(4).WithLg(4));
                     }
 
                     // "Show more" button if there are more than the limit
@@ -324,22 +325,23 @@ public static class MeshNodeView
         string nodePath,
         int childrenLimit = 10)
     {
-        var childTypes = children
-            .Where(c => !string.IsNullOrEmpty(c.NodeType))
-            .GroupBy(c => c.NodeType!)
-            .OrderBy(g => g.Key)
-            .ToList();
+        // Group by Category if set, otherwise by NodeType
+            var childGroups = children
+                .Where(c => !string.IsNullOrEmpty(c.Category) || !string.IsNullOrEmpty(c.NodeType))
+                .GroupBy(c => c.Category ?? c.NodeType!)
+                .OrderBy(g => g.Key)
+                .ToList();
 
-        if (childTypes.Count == 0)
+        if (childGroups.Count == 0)
             return null;
 
         // Single unified grid for all child types
         var grid = Controls.LayoutGrid.WithSkin(s => s.WithSpacing(2));
 
-        foreach (var group in childTypes)
+        foreach (var group in childGroups)
         {
             var recentNodes = group.Take(childrenLimit).ToList();
-            var displayName = GetNodeTypeDisplayName(group.Key, group.Count());
+            var displayName = GetGroupDisplayName(group.Key, group.Count());
 
             // Section header spans full width
             grid = grid.WithView(
@@ -351,7 +353,7 @@ public static class MeshNodeView
             {
                 grid = grid.WithView(
                     MeshNodeThumbnailControl.FromNode(child, child.Namespace ?? ""),
-                    itemSkin => itemSkin.WithXs(12).WithSm(6).WithMd(4).WithLg(3));
+                    itemSkin => itemSkin.WithXs(12).WithSm(6).WithMd(4).WithLg(4));
             }
 
             // "Show more" button if there are more than the limit
@@ -372,7 +374,7 @@ public static class MeshNodeView
     /// <summary>
     /// Gets the display name for a node type with count (e.g., "Projects (5)").
     /// </summary>
-    public static string GetNodeTypeDisplayName(string nodeType, int count)
+    public static string GetGroupDisplayName(string nodeType, int count)
     {
         // Extract just the last segment if it's a path
         var typeName = nodeType.Contains('/') ? nodeType.Split('/').Last() : nodeType;
@@ -532,7 +534,7 @@ public static class MeshNodeView
             {
                 grid = grid.WithView(
                     MeshNodeThumbnailControl.FromNode(typeNode, typeNode.Path),
-                    itemSkin => itemSkin.WithXs(12).WithSm(6).WithMd(4).WithLg(3));
+                    itemSkin => itemSkin.WithXs(12).WithSm(6).WithMd(4).WithLg(4));
             }
             stack = stack.WithView(grid);
         }
@@ -898,7 +900,7 @@ public static class MeshNodeView
             {
                 grid = grid.WithView(
                     MeshNodeThumbnailControl.FromNode(child, child.Path),
-                    itemSkin => itemSkin.WithXs(12).WithSm(6).WithMd(4).WithLg(3));
+                    itemSkin => itemSkin.WithXs(12).WithSm(6).WithMd(4).WithLg(4));
             }
 
             return (UiControl?)grid;
@@ -966,7 +968,7 @@ public static class MeshNodeView
                 var ownTypeGrid = Controls.LayoutGrid.WithSkin(s => s.WithSpacing(2));
                 ownTypeGrid = ownTypeGrid.WithView(
                     MeshNodeThumbnailControl.FromNode(ownType!, ownType!.Path),
-                    itemSkin => itemSkin.WithXs(12).WithSm(6).WithMd(4).WithLg(3));
+                    itemSkin => itemSkin.WithXs(12).WithSm(6).WithMd(4).WithLg(4));
                 stack = stack.WithView(ownTypeGrid);
             }
 
@@ -988,7 +990,7 @@ public static class MeshNodeView
 
                     typesGrid = typesGrid.WithView(
                         MeshNodeThumbnailControl.FromNode(typeNode, typeNode.Path),
-                        itemSkin => itemSkin.WithXs(12).WithSm(6).WithMd(4).WithLg(3));
+                        itemSkin => itemSkin.WithXs(12).WithSm(6).WithMd(4).WithLg(4));
                 }
                 stack = stack.WithView(typesGrid);
             }
