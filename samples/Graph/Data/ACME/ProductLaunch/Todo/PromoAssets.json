@@ -16,7 +16,7 @@
     "category": "Design",
     "priority": "Medium",
     "assignee": "David",
-    "dueDate": "2025-03-03T00:00:00Z",
+    "dueDateOffsetDays": 33,
     "status": "Pending"
   }
 }

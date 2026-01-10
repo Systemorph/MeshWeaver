@@ -16,7 +16,7 @@
     "category": "Strategy",
     "priority": "Critical",
     "assignee": "Emma",
-    "dueDate": "2025-02-05T00:00:00Z",
+    "dueDateOffsetDays": -5,
     "status": "Pending"
   }
 }

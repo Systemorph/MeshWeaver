@@ -16,7 +16,7 @@
     "category": "Support",
     "priority": "Medium",
     "assignee": "Alice",
-    "dueDate": "2025-03-01T00:00:00Z",
+    "dueDateOffsetDays": 35,
     "status": "Pending"
   }
 }

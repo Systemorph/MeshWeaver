@@ -451,7 +451,7 @@ public static class DataContextExtensions
         string? name = null)
     {
         return dataContext.WithAccessRestriction(
-            (action, ctx, accessCtx) => Task.FromResult(restriction(action, ctx, accessCtx)),
+            (action, ctx, accessCtx, _) => Task.FromResult(restriction(action, ctx, accessCtx)),
             name);
     }
 }

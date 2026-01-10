@@ -16,7 +16,7 @@
     "category": "PR",
     "priority": "Medium",
     "assignee": "Carol",
-    "dueDate": "2025-02-15T00:00:00Z",
+    "dueDateOffsetDays": 15,
     "status": "Pending"
   }
 }

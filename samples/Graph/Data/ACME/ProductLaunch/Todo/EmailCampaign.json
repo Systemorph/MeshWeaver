@@ -16,7 +16,7 @@
     "category": "Marketing",
     "priority": "High",
     "assignee": "Alice",
-    "dueDate": "2025-02-18T00:00:00Z",
+    "dueDateOffsetDays": 20,
     "status": "Pending"
   }
 }

@@ -16,7 +16,7 @@
     "category": "Marketing",
     "priority": "High",
     "assignee": "Roland",
-    "dueDate": "2025-02-28T00:00:00Z",
+    "dueDateOffsetDays": 30,
     "status": "Pending"
   }
 }
