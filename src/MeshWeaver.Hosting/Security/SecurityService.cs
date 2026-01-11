@@ -1,21 +1,32 @@
+using System.Collections.Concurrent;
+using System.Linq;
+using System.Runtime.CompilerServices;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.Logging;
-using System.Runtime.CompilerServices;
 
 namespace MeshWeaver.Hosting.Security;
 
 /// <summary>
 /// Implementation of ISecurityService providing row-level security for mesh nodes.
+/// Uses per-namespace Access partitions for access management:
+/// - Global access: Access/ partition (e.g., Access/Roland.json for global admin)
+/// - Namespace access: {namespace}/Access/ partition (e.g., ACME/Access/Alice.json)
+/// - Anonymous access: Use "Public" as userId (e.g., MeshWeaver/Access/Public.json)
 /// </summary>
 public class SecurityService : ISecurityService
 {
+    private const string AccessPartitionName = "Access";
+
     private readonly IPersistenceService _persistence;
     private readonly AccessService _accessService;
-    private readonly SecurityStorageAdapter _storage;
     private readonly ILogger<SecurityService> _logger;
+
+    // In-memory cache for performance
+    private readonly ConcurrentDictionary<string, List<UserAccess>> _accessCache = new();
+    private readonly SemaphoreSlim _cacheLock = new(1, 1);
 
     // Built-in roles lookup
     private static readonly Dictionary<string, Role> BuiltInRoles = new()
@@ -28,12 +39,10 @@ public class SecurityService : ISecurityService
     public SecurityService(
         IPersistenceService persistence,
         AccessService accessService,
-        SecurityStorageAdapter storage,
         ILogger<SecurityService> logger)
     {
         _persistence = persistence;
         _accessService = accessService;
-        _storage = storage;
         _logger = logger;
     }
 
@@ -44,9 +53,9 @@ public class SecurityService : ISecurityService
         var context = _accessService.Context;
         var userId = context?.ObjectId;
 
-        // If no user context, check if anonymous access is allowed
+        // If no user context, check "Public" user permissions
         if (string.IsNullOrEmpty(userId))
-            return HasAnonymousPermissionAsync(nodePath, permission, ct);
+            userId = WellKnownUsers.Public;
 
         return HasPermissionAsync(nodePath, userId, permission, ct);
     }
@@ -65,61 +74,34 @@ public class SecurityService : ISecurityService
         var context = _accessService.Context;
         var userId = context?.ObjectId;
 
-        // If no user context, return anonymous permissions
+        // If no user context, check "Public" user permissions
         if (string.IsNullOrEmpty(userId))
-            return GetAnonymousPermissionsAsync(nodePath, ct);
+            userId = WellKnownUsers.Public;
 
         return GetEffectivePermissionsAsync(nodePath, userId, ct);
     }
 
     public async Task<Permission> GetEffectivePermissionsAsync(string nodePath, string userId, CancellationToken ct = default)
     {
+        // For empty userId, use "Public"
         if (string.IsNullOrEmpty(userId))
-            return await GetAnonymousPermissionsAsync(nodePath, ct);
+            userId = WellKnownUsers.Public;
 
-        // 1. Get the node to determine its NodeType
-        var node = await _persistence.GetNodeAsync(nodePath, ct);
-        var nodeType = node?.NodeType;
-
-        // 2. Get role configuration for NodeType
-        RoleConfiguration? roleConfig = null;
-        if (!string.IsNullOrEmpty(nodeType))
-        {
-            roleConfig = await _storage.GetRoleConfigurationAsync(nodeType, ct);
-        }
-
-        // 3. Get node-specific security configuration
-        var nodeSecurityConfig = await _storage.GetNodeSecurityConfigurationAsync(nodePath, ct);
-
-        // 4. Determine inheritance setting
-        var inheritFromParent = nodeSecurityConfig?.InheritFromParentOverride
-            ?? roleConfig?.InheritFromParent
-            ?? true;
-
-        // 5. Build path hierarchy if inheritance enabled
-        var pathsToCheck = GetPathHierarchy(nodePath, inheritFromParent);
-
-        // 6. Collect effective permissions from role assignments
+        // Collect effective permissions from role assignments
         var effectivePermissions = Permission.None;
 
-        await foreach (var assignment in _storage.GetUserRoleAssignmentsAsync(userId, ct))
+        // Check Access partitions - UserAccess with hierarchical roles
+        var effectiveRoles = await GetEffectiveRolesAsync(userId, nodePath, ct);
+        foreach (var userRole in effectiveRoles)
         {
-            // Check if assignment applies to this path
-            if (assignment.NodePath == null || pathsToCheck.Contains(assignment.NodePath))
+            var role = await GetRoleAsync(userRole.RoleId, ct);
+            if (role != null)
             {
-                var role = await GetRoleAsync(assignment.RoleId, ct);
-                if (role != null)
-                {
-                    // Check if role is inheritable or if this is the exact node
-                    if (role.IsInheritable || assignment.NodePath == nodePath || assignment.NodePath == null)
-                    {
-                        effectivePermissions |= role.Permissions;
-                    }
-                }
+                effectivePermissions |= role.Permissions;
             }
         }
 
-        // 7. Add permissions from AccessContext.Roles (claim-based roles)
+        // Add permissions from AccessContext.Roles (claim-based roles)
         var context = _accessService.Context;
         if (context?.Roles != null)
         {
@@ -137,52 +119,6 @@ public class SecurityService : ISecurityService
             userId, effectivePermissions, nodePath);
 
         return effectivePermissions;
-    }
-
-    private async Task<bool> HasAnonymousPermissionAsync(string nodePath, Permission permission, CancellationToken ct)
-    {
-        var anonymousPermissions = await GetAnonymousPermissionsAsync(nodePath, ct);
-        return anonymousPermissions.HasFlag(permission);
-    }
-
-    private async Task<Permission> GetAnonymousPermissionsAsync(string nodePath, CancellationToken ct)
-    {
-        // Get the node to determine its NodeType
-        var node = await _persistence.GetNodeAsync(nodePath, ct);
-        var nodeType = node?.NodeType;
-
-        // Get node-specific security configuration
-        var nodeSecurityConfig = await _storage.GetNodeSecurityConfigurationAsync(nodePath, ct);
-
-        // Check node-level override first
-        if (nodeSecurityConfig?.IsPublicOverride == true)
-        {
-            return nodeSecurityConfig.AnonymousPermissionsOverride ?? Permission.Read;
-        }
-
-        if (nodeSecurityConfig?.IsPublicOverride == false)
-        {
-            return Permission.None;
-        }
-
-        // Check NodeType configuration
-        if (!string.IsNullOrEmpty(nodeType))
-        {
-            var roleConfig = await _storage.GetRoleConfigurationAsync(nodeType, ct);
-            if (roleConfig != null)
-            {
-                if (roleConfig.IsPublic)
-                {
-                    return roleConfig.AnonymousPermissions != Permission.None
-                        ? roleConfig.AnonymousPermissions
-                        : Permission.Read;
-                }
-                return Permission.None;
-            }
-        }
-
-        // Default: no anonymous access
-        return Permission.None;
     }
 
     private static List<string> GetPathHierarchy(string nodePath, bool includeAncestors)
@@ -203,74 +139,11 @@ public class SecurityService : ISecurityService
 
     #endregion
 
-    #region Role Configuration (NodeType Level)
+    #region Role Definitions (Global Access Partition)
 
-    public Task<RoleConfiguration?> GetRoleConfigurationAsync(string nodeType, CancellationToken ct = default)
-    {
-        return _storage.GetRoleConfigurationAsync(nodeType, ct);
-    }
-
-    public Task SetRoleConfigurationAsync(RoleConfiguration config, CancellationToken ct = default)
-    {
-        return _storage.SaveRoleConfigurationAsync(config, ct);
-    }
-
-    #endregion
-
-    #region Node Security Configuration (Instance Level)
-
-    public Task<NodeSecurityConfiguration?> GetNodeSecurityConfigurationAsync(string nodePath, CancellationToken ct = default)
-    {
-        return _storage.GetNodeSecurityConfigurationAsync(nodePath, ct);
-    }
-
-    public Task SetNodeSecurityConfigurationAsync(NodeSecurityConfiguration config, CancellationToken ct = default)
-    {
-        return _storage.SaveNodeSecurityConfigurationAsync(config, ct);
-    }
-
-    #endregion
-
-    #region Role Assignments
-
-    public async Task AssignRoleAsync(string userId, string roleId, string? nodePath, string? assignedBy = null, CancellationToken ct = default)
-    {
-        var assignment = new RoleAssignment
-        {
-            UserId = userId,
-            RoleId = roleId,
-            NodePath = nodePath,
-            CreatedBy = assignedBy,
-            CreatedAt = DateTimeOffset.UtcNow
-        };
-
-        await _storage.SaveRoleAssignmentAsync(assignment, ct);
-
-        _logger.LogInformation("Assigned role {RoleId} to user {UserId} on node {NodePath} by {AssignedBy}",
-            roleId, userId, nodePath ?? "(global)", assignedBy ?? "(system)");
-    }
-
-    public async Task RemoveRoleAssignmentAsync(string userId, string roleId, string? nodePath, CancellationToken ct = default)
-    {
-        await _storage.RemoveRoleAssignmentAsync(userId, roleId, nodePath, ct);
-
-        _logger.LogInformation("Removed role {RoleId} from user {UserId} on node {NodePath}",
-            roleId, userId, nodePath ?? "(global)");
-    }
-
-    public IAsyncEnumerable<RoleAssignment> GetUserRoleAssignmentsAsync(string userId, CancellationToken ct = default)
-    {
-        return _storage.GetUserRoleAssignmentsAsync(userId, ct);
-    }
-
-    public IAsyncEnumerable<RoleAssignment> GetNodeRoleAssignmentsAsync(string nodePath, CancellationToken ct = default)
-    {
-        return _storage.GetNodeRoleAssignmentsAsync(nodePath, ct);
-    }
-
-    #endregion
-
-    #region Role Definitions
+    // Cache for custom roles
+    private readonly ConcurrentDictionary<string, Role> _customRoleCache = new();
+    private bool _customRolesLoaded;
 
     public async Task<Role?> GetRoleAsync(string roleId, CancellationToken ct = default)
     {
@@ -281,8 +154,13 @@ public class SecurityService : ISecurityService
         if (BuiltInRoles.TryGetValue(roleId, out var builtInRole))
             return builtInRole;
 
-        // Check custom roles
-        return await _storage.GetCustomRoleAsync(roleId, ct);
+        // Check custom roles cache
+        if (_customRoleCache.TryGetValue(roleId, out var cached))
+            return cached;
+
+        // Load all custom roles from global Access partition
+        await LoadCustomRolesAsync(ct);
+        return _customRoleCache.GetValueOrDefault(roleId);
     }
 
     public async IAsyncEnumerable<Role> GetRolesAsync([EnumeratorCancellation] CancellationToken ct = default)
@@ -293,14 +171,15 @@ public class SecurityService : ISecurityService
             yield return role;
         }
 
-        // Return custom roles
-        await foreach (var role in _storage.GetCustomRolesAsync(ct))
+        // Load and return custom roles from global Access partition
+        await LoadCustomRolesAsync(ct);
+        foreach (var role in _customRoleCache.Values)
         {
             yield return role;
         }
     }
 
-    public Task SaveRoleAsync(Role role, CancellationToken ct = default)
+    public async Task SaveRoleAsync(Role role, CancellationToken ct = default)
     {
         // Don't allow overwriting built-in roles
         if (BuiltInRoles.ContainsKey(role.Id))
@@ -308,7 +187,360 @@ public class SecurityService : ISecurityService
             throw new InvalidOperationException($"Cannot modify built-in role: {role.Id}");
         }
 
-        return _storage.SaveCustomRoleAsync(role, ct);
+        // Load existing objects from global Access partition
+        var objects = new List<object>();
+        await foreach (var obj in _persistence.GetPartitionObjectsAsync(AccessPartitionName, null).WithCancellation(ct))
+        {
+            // Keep all objects except existing Role with same Id
+            if (obj is Role existing && existing.Id == role.Id)
+                continue;
+            objects.Add(obj);
+        }
+
+        // Add the new/updated role
+        objects.Add(role);
+
+        await _persistence.SavePartitionObjectsAsync(AccessPartitionName, null, objects, ct);
+        _customRoleCache[role.Id] = role;
+    }
+
+    private async Task LoadCustomRolesAsync(CancellationToken ct)
+    {
+        if (_customRolesLoaded)
+            return;
+
+        await foreach (var obj in _persistence.GetPartitionObjectsAsync(AccessPartitionName, null).WithCancellation(ct))
+        {
+            if (obj is Role role && !BuiltInRoles.ContainsKey(role.Id))
+            {
+                _customRoleCache[role.Id] = role;
+            }
+        }
+        _customRolesLoaded = true;
+    }
+
+    #endregion
+
+    #region User Access Management (Per-Namespace Access Partitions)
+
+    /// <summary>
+    /// Gets the partition path for access storage.
+    /// Global access uses "Access", namespace access uses "{namespace}/Access".
+    /// </summary>
+    private static string GetAccessPartitionPath(string? targetNamespace)
+        => string.IsNullOrEmpty(targetNamespace)
+            ? AccessPartitionName
+            : $"{targetNamespace}/{AccessPartitionName}";
+
+    /// <summary>
+    /// Gets all UserAccess records from a specific partition (cached).
+    /// </summary>
+    private async Task<List<UserAccess>> GetAccessRecordsAsync(string partitionPath, CancellationToken ct)
+    {
+        if (_accessCache.TryGetValue(partitionPath, out var cached))
+            return cached;
+
+        await _cacheLock.WaitAsync(ct);
+        try
+        {
+            // Double-check after acquiring lock
+            if (_accessCache.TryGetValue(partitionPath, out cached))
+                return cached;
+
+            var records = new List<UserAccess>();
+            await foreach (var obj in _persistence.GetPartitionObjectsAsync(partitionPath, null).WithCancellation(ct))
+            {
+                if (obj is UserAccess userAccess)
+                    records.Add(userAccess);
+            }
+
+            _accessCache[partitionPath] = records;
+            return records;
+        }
+        finally
+        {
+            _cacheLock.Release();
+        }
+    }
+
+    /// <summary>
+    /// Saves UserAccess records to a specific partition (and updates cache).
+    /// </summary>
+    private async Task SaveAccessRecordsAsync(string partitionPath, List<UserAccess> records, CancellationToken ct)
+    {
+        await _persistence.SavePartitionObjectsAsync(partitionPath, null, records.Cast<object>().ToList(), ct);
+        _accessCache[partitionPath] = records;
+    }
+
+    /// <summary>
+    /// Gets a user's access configuration by aggregating from relevant partitions.
+    /// If targetNamespace is provided, includes roles from that namespace and its ancestors.
+    /// Always includes global roles.
+    /// </summary>
+    public async Task<UserAccess?> GetUserAccessAsync(string userId, CancellationToken ct = default)
+        => await GetUserAccessAsync(userId, null, ct);
+
+    /// <summary>
+    /// Gets a user's access configuration by aggregating from relevant partitions.
+    /// If targetNamespace is provided, includes roles from that namespace and its ancestors.
+    /// Always includes global roles.
+    /// </summary>
+    public async Task<UserAccess?> GetUserAccessAsync(string userId, string? targetNamespace, CancellationToken ct = default)
+    {
+        if (string.IsNullOrEmpty(userId))
+            return null;
+
+        var allRoles = new List<UserRole>();
+        string? displayName = null;
+
+        // Check global access partition
+        var globalRecords = await GetAccessRecordsAsync(AccessPartitionName, ct);
+        var globalAccess = globalRecords.FirstOrDefault(u => u.UserId == userId);
+        if (globalAccess != null)
+        {
+            allRoles.AddRange(globalAccess.Roles);
+            displayName = globalAccess.DisplayName;
+        }
+
+        // If a target namespace is specified, also check that namespace and its ancestors
+        if (!string.IsNullOrEmpty(targetNamespace))
+        {
+            var pathsToCheck = GetPathHierarchy(targetNamespace, true);
+            foreach (var path in pathsToCheck)
+            {
+                var partitionPath = GetAccessPartitionPath(path);
+                var records = await GetAccessRecordsAsync(partitionPath, ct);
+                var userAccess = records.FirstOrDefault(u => u.UserId == userId);
+                if (userAccess != null)
+                {
+                    allRoles.AddRange(userAccess.Roles);
+                    displayName ??= userAccess.DisplayName;
+                }
+            }
+        }
+
+        if (allRoles.Count == 0)
+            return null;
+
+        return new UserAccess
+        {
+            UserId = userId,
+            DisplayName = displayName,
+            Roles = allRoles
+        };
+    }
+
+    /// <summary>
+    /// Saves a user's access configuration to the specified namespace partition.
+    /// </summary>
+    public async Task SaveUserAccessAsync(UserAccess userAccess, CancellationToken ct = default)
+    {
+        // For simplified model, we need the caller to specify where to save
+        // This saves to the global partition - use AddUserRoleAsync for namespace-specific
+        _logger.LogInformation("Saving user access for {UserId} with {RoleCount} roles to global partition",
+            userAccess.UserId, userAccess.Roles.Count);
+
+        var records = await GetAccessRecordsAsync(AccessPartitionName, ct);
+        records = records.Where(u => u.UserId != userAccess.UserId).ToList();
+        records.Add(userAccess);
+        await SaveAccessRecordsAsync(AccessPartitionName, records, ct);
+    }
+
+    /// <summary>
+    /// Saves a user's access configuration to a specific namespace partition.
+    /// </summary>
+    public async Task SaveUserAccessAsync(UserAccess userAccess, string targetNamespace, CancellationToken ct = default)
+    {
+        _logger.LogInformation("Saving user access for {UserId} with {RoleCount} roles to {Namespace}",
+            userAccess.UserId, userAccess.Roles.Count, targetNamespace ?? "(global)");
+
+        var partitionPath = GetAccessPartitionPath(targetNamespace);
+        var records = await GetAccessRecordsAsync(partitionPath, ct);
+        records = records.Where(u => u.UserId != userAccess.UserId).ToList();
+        records.Add(userAccess);
+        await SaveAccessRecordsAsync(partitionPath, records, ct);
+    }
+
+    /// <summary>
+    /// Gets all user access configurations from the global partition.
+    /// </summary>
+    public async IAsyncEnumerable<UserAccess> GetAllUserAccessAsync([EnumeratorCancellation] CancellationToken ct = default)
+    {
+        var records = await GetAccessRecordsAsync(AccessPartitionName, ct);
+        foreach (var record in records)
+        {
+            yield return record;
+        }
+    }
+
+    /// <summary>
+    /// Gets all users who have access to a specific namespace.
+    /// Checks the namespace partition, ancestor partitions, and global partition.
+    /// </summary>
+    public async IAsyncEnumerable<UserAccess> GetUsersWithAccessToNamespaceAsync(
+        string targetNamespace,
+        [EnumeratorCancellation] CancellationToken ct = default)
+    {
+        var seenUsers = new HashSet<string>();
+
+        // Check namespace-specific partition
+        var namespacePartition = GetAccessPartitionPath(targetNamespace);
+        var namespaceRecords = await GetAccessRecordsAsync(namespacePartition, ct);
+        foreach (var record in namespaceRecords)
+        {
+            seenUsers.Add(record.UserId);
+            yield return record;
+        }
+
+        // Check ancestor namespaces (roles on parent namespaces inherit to children)
+        var ancestors = GetPathHierarchy(targetNamespace, true).Skip(1);
+        foreach (var ancestor in ancestors)
+        {
+            var ancestorPartition = GetAccessPartitionPath(ancestor);
+            var ancestorRecords = await GetAccessRecordsAsync(ancestorPartition, ct);
+            foreach (var record in ancestorRecords.Where(r => !seenUsers.Contains(r.UserId)))
+            {
+                seenUsers.Add(record.UserId);
+                yield return record;
+            }
+        }
+
+        // Check global partition (users with global roles have access everywhere)
+        var globalRecords = await GetAccessRecordsAsync(AccessPartitionName, ct);
+        foreach (var record in globalRecords.Where(r => !seenUsers.Contains(r.UserId)))
+        {
+            seenUsers.Add(record.UserId);
+            yield return record;
+        }
+    }
+
+    /// <summary>
+    /// Adds a role to a user's access configuration for a specific namespace.
+    /// </summary>
+    public async Task AddUserRoleAsync(string userId, string roleId, string? targetNamespace, string? assignedBy = null, CancellationToken ct = default)
+    {
+        _logger.LogInformation("Adding role {RoleId} to user {UserId} on namespace {Namespace} by {AssignedBy}",
+            roleId, userId, targetNamespace ?? "(global)", assignedBy ?? "(system)");
+
+        var partitionPath = GetAccessPartitionPath(targetNamespace);
+        var records = await GetAccessRecordsAsync(partitionPath, ct);
+
+        var existingAccess = records.FirstOrDefault(u => u.UserId == userId);
+        if (existingAccess != null)
+        {
+            // Check if role already exists
+            if (existingAccess.Roles.Any(r => r.RoleId == roleId))
+                return; // Role already assigned
+
+            // Add new role to existing access
+            var updatedAccess = existingAccess with
+            {
+                Roles = existingAccess.Roles.Append(new UserRole
+                {
+                    RoleId = roleId,
+                    AssignedAt = DateTimeOffset.UtcNow,
+                    AssignedBy = assignedBy
+                }).ToList()
+            };
+
+            records = records.Where(u => u.UserId != userId).Append(updatedAccess).ToList();
+        }
+        else
+        {
+            // Create new access record
+            records.Add(new UserAccess
+            {
+                UserId = userId,
+                Roles =
+                [
+                    new UserRole
+                    {
+                        RoleId = roleId,
+                        AssignedAt = DateTimeOffset.UtcNow,
+                        AssignedBy = assignedBy
+                    }
+                ]
+            });
+        }
+
+        await SaveAccessRecordsAsync(partitionPath, records, ct);
+    }
+
+    /// <summary>
+    /// Removes a role from a user's access configuration for a specific namespace.
+    /// </summary>
+    public async Task RemoveUserRoleAsync(string userId, string roleId, string? targetNamespace, CancellationToken ct = default)
+    {
+        _logger.LogInformation("Removing role {RoleId} from user {UserId} on namespace {Namespace}",
+            roleId, userId, targetNamespace ?? "(global)");
+
+        var partitionPath = GetAccessPartitionPath(targetNamespace);
+        var records = await GetAccessRecordsAsync(partitionPath, ct);
+
+        var existingAccess = records.FirstOrDefault(u => u.UserId == userId);
+        if (existingAccess == null)
+            return;
+
+        var updatedRoles = existingAccess.Roles
+            .Where(r => r.RoleId != roleId)
+            .ToList();
+
+        if (updatedRoles.Count == existingAccess.Roles.Count)
+            return; // No role removed
+
+        if (updatedRoles.Count == 0)
+        {
+            // No more roles in this namespace, remove the record
+            records = records.Where(u => u.UserId != userId).ToList();
+        }
+        else
+        {
+            // Update with remaining roles
+            var updatedAccess = existingAccess with { Roles = updatedRoles };
+            records = records.Where(u => u.UserId != userId).Append(updatedAccess).ToList();
+        }
+
+        await SaveAccessRecordsAsync(partitionPath, records, ct);
+    }
+
+    /// <summary>
+    /// Gets the effective roles for a user at a specific namespace path.
+    /// Considers global roles and hierarchical inheritance from parent namespaces.
+    /// </summary>
+    public async Task<IReadOnlyList<UserRole>> GetEffectiveRolesAsync(string userId, string targetNamespace, CancellationToken ct = default)
+    {
+        var effectiveRoles = new List<UserRole>();
+
+        // Check global partition first (global roles apply everywhere)
+        var globalRecords = await GetAccessRecordsAsync(AccessPartitionName, ct);
+        var globalAccess = globalRecords.FirstOrDefault(u => u.UserId == userId);
+        if (globalAccess != null)
+        {
+            effectiveRoles.AddRange(globalAccess.Roles);
+        }
+
+        // Check namespace and all ancestor partitions
+        var pathsToCheck = GetPathHierarchy(targetNamespace, true);
+        foreach (var path in pathsToCheck)
+        {
+            var partitionPath = GetAccessPartitionPath(path);
+            var records = await GetAccessRecordsAsync(partitionPath, ct);
+            var userAccess = records.FirstOrDefault(u => u.UserId == userId);
+            if (userAccess != null)
+            {
+                effectiveRoles.AddRange(userAccess.Roles);
+            }
+        }
+
+        return effectiveRoles;
+    }
+
+    /// <summary>
+    /// Clears the access cache (useful for testing or after bulk updates).
+    /// </summary>
+    public void ClearAccessCache()
+    {
+        _accessCache.Clear();
     }
 
     #endregion

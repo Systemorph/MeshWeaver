@@ -21,6 +21,7 @@ using MeshWeaver.Hosting.Activity;
 using MeshWeaver.Hosting.AzureBlob;
 using MeshWeaver.Hosting.Blazor;
 using MeshWeaver.Hosting.Persistence;
+using MeshWeaver.Hosting.Security;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using Microsoft.AspNetCore.Authentication.Cookies;
@@ -208,6 +209,8 @@ public static class LoomConfiguration
             return (TBuilder)builder
                 // Configure persistence from Graph:Storage section
                 .ConfigureServices(services => services.AddPersistence(graphStorageConfig))
+                // Enable Row-Level Security for access control
+                .AddRowLevelSecurity()
                 // Configure graph from the same base path
                 .AddJsonGraphConfiguration(basePath ?? Directory.GetCurrentDirectory())
                 // Add kernel for interactive markdown code execution
