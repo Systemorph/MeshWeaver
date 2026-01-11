@@ -48,83 +48,6 @@ public interface ISecurityService
 
     #endregion
 
-    #region Role Configuration (NodeType Level)
-
-    /// <summary>
-    /// Gets the role configuration for a NodeType.
-    /// </summary>
-    /// <param name="nodeType">The NodeType identifier</param>
-    /// <param name="ct">Cancellation token</param>
-    /// <returns>The role configuration or null if not found</returns>
-    Task<RoleConfiguration?> GetRoleConfigurationAsync(string nodeType, CancellationToken ct = default);
-
-    /// <summary>
-    /// Sets or updates the role configuration for a NodeType.
-    /// </summary>
-    /// <param name="config">The role configuration to save</param>
-    /// <param name="ct">Cancellation token</param>
-    Task SetRoleConfigurationAsync(RoleConfiguration config, CancellationToken ct = default);
-
-    #endregion
-
-    #region Node Security Configuration (Instance Level)
-
-    /// <summary>
-    /// Gets the security configuration for a specific node.
-    /// </summary>
-    /// <param name="nodePath">The node path</param>
-    /// <param name="ct">Cancellation token</param>
-    /// <returns>The security configuration or null if not found</returns>
-    Task<NodeSecurityConfiguration?> GetNodeSecurityConfigurationAsync(string nodePath, CancellationToken ct = default);
-
-    /// <summary>
-    /// Sets or updates the security configuration for a specific node.
-    /// </summary>
-    /// <param name="config">The security configuration to save</param>
-    /// <param name="ct">Cancellation token</param>
-    Task SetNodeSecurityConfigurationAsync(NodeSecurityConfiguration config, CancellationToken ct = default);
-
-    #endregion
-
-    #region Role Assignments
-
-    /// <summary>
-    /// Assigns a role to a user for a specific node.
-    /// </summary>
-    /// <param name="userId">The user's ObjectId</param>
-    /// <param name="roleId">The role ID to assign</param>
-    /// <param name="nodePath">The node path (null for global assignment)</param>
-    /// <param name="assignedBy">The ObjectId of the user making the assignment</param>
-    /// <param name="ct">Cancellation token</param>
-    Task AssignRoleAsync(string userId, string roleId, string? nodePath, string? assignedBy = null, CancellationToken ct = default);
-
-    /// <summary>
-    /// Removes a role assignment from a user for a specific node.
-    /// </summary>
-    /// <param name="userId">The user's ObjectId</param>
-    /// <param name="roleId">The role ID to remove</param>
-    /// <param name="nodePath">The node path (null for global assignment)</param>
-    /// <param name="ct">Cancellation token</param>
-    Task RemoveRoleAssignmentAsync(string userId, string roleId, string? nodePath, CancellationToken ct = default);
-
-    /// <summary>
-    /// Gets all role assignments for a user.
-    /// </summary>
-    /// <param name="userId">The user's ObjectId</param>
-    /// <param name="ct">Cancellation token</param>
-    /// <returns>Async enumerable of role assignments</returns>
-    IAsyncEnumerable<RoleAssignment> GetUserRoleAssignmentsAsync(string userId, CancellationToken ct = default);
-
-    /// <summary>
-    /// Gets all role assignments for a node.
-    /// </summary>
-    /// <param name="nodePath">The node path</param>
-    /// <param name="ct">Cancellation token</param>
-    /// <returns>Async enumerable of role assignments</returns>
-    IAsyncEnumerable<RoleAssignment> GetNodeRoleAssignmentsAsync(string nodePath, CancellationToken ct = default);
-
-    #endregion
-
     #region Role Definitions
 
     /// <summary>
@@ -148,6 +71,70 @@ public interface ISecurityService
     /// <param name="role">The role to save</param>
     /// <param name="ct">Cancellation token</param>
     Task SaveRoleAsync(Role role, CancellationToken ct = default);
+
+    #endregion
+
+    #region User Access Management (Per-Namespace Access Partitions)
+
+    /// <summary>
+    /// Gets a user's global access configuration.
+    /// To include namespace-specific roles, use the overload with targetNamespace parameter.
+    /// </summary>
+    /// <param name="userId">The user's ObjectId</param>
+    /// <param name="ct">Cancellation token</param>
+    /// <returns>The user's access configuration or null if not found</returns>
+    Task<UserAccess?> GetUserAccessAsync(string userId, CancellationToken ct = default);
+
+    /// <summary>
+    /// Gets a user's access configuration for a specific namespace.
+    /// Includes global roles plus roles from the target namespace and its ancestors.
+    /// </summary>
+    /// <param name="userId">The user's ObjectId</param>
+    /// <param name="targetNamespace">The namespace to check (null for global only)</param>
+    /// <param name="ct">Cancellation token</param>
+    /// <returns>The user's access configuration or null if not found</returns>
+    Task<UserAccess?> GetUserAccessAsync(string userId, string? targetNamespace, CancellationToken ct = default);
+
+    /// <summary>
+    /// Saves a user's access configuration to the Access partition.
+    /// </summary>
+    /// <param name="userAccess">The user access configuration to save</param>
+    /// <param name="ct">Cancellation token</param>
+    Task SaveUserAccessAsync(UserAccess userAccess, CancellationToken ct = default);
+
+    /// <summary>
+    /// Gets all user access configurations.
+    /// </summary>
+    /// <param name="ct">Cancellation token</param>
+    /// <returns>Async enumerable of user access configurations</returns>
+    IAsyncEnumerable<UserAccess> GetAllUserAccessAsync(CancellationToken ct = default);
+
+    /// <summary>
+    /// Gets all users who have access to a specific namespace.
+    /// </summary>
+    /// <param name="targetNamespace">The namespace to check</param>
+    /// <param name="ct">Cancellation token</param>
+    /// <returns>Async enumerable of user access configurations</returns>
+    IAsyncEnumerable<UserAccess> GetUsersWithAccessToNamespaceAsync(string targetNamespace, CancellationToken ct = default);
+
+    /// <summary>
+    /// Adds a role to a user's access configuration.
+    /// </summary>
+    /// <param name="userId">The user's ObjectId</param>
+    /// <param name="roleId">The role ID to add</param>
+    /// <param name="targetNamespace">The namespace (null for global)</param>
+    /// <param name="assignedBy">The ObjectId of the user making the assignment</param>
+    /// <param name="ct">Cancellation token</param>
+    Task AddUserRoleAsync(string userId, string roleId, string? targetNamespace, string? assignedBy = null, CancellationToken ct = default);
+
+    /// <summary>
+    /// Removes a role from a user's access configuration.
+    /// </summary>
+    /// <param name="userId">The user's ObjectId</param>
+    /// <param name="roleId">The role ID to remove</param>
+    /// <param name="targetNamespace">The namespace (null for global)</param>
+    /// <param name="ct">Cancellation token</param>
+    Task RemoveUserRoleAsync(string userId, string roleId, string? targetNamespace, CancellationToken ct = default);
 
     #endregion
 }

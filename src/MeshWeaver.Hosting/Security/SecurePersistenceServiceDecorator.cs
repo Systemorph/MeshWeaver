@@ -14,18 +14,20 @@ namespace MeshWeaver.Hosting.Security;
 public class SecurePersistenceServiceDecorator : IPersistenceService
 {
     private readonly IPersistenceService _inner;
-    private readonly ISecurityService _securityService;
+    private readonly Lazy<ISecurityService> _securityService;
     private readonly ILogger<SecurePersistenceServiceDecorator> _logger;
 
     public SecurePersistenceServiceDecorator(
         IPersistenceService inner,
-        ISecurityService securityService,
+        Lazy<ISecurityService> securityService,
         ILogger<SecurePersistenceServiceDecorator> logger)
     {
         _inner = inner;
         _securityService = securityService;
         _logger = logger;
     }
+
+    private ISecurityService SecurityService => _securityService.Value;
 
     #region Secure Operations
 
@@ -36,8 +38,8 @@ public class SecurePersistenceServiceDecorator : IPersistenceService
             return null;
 
         var hasPermission = string.IsNullOrEmpty(userId)
-            ? await _securityService.HasPermissionAsync(path, Permission.Read, ct)
-            : await _securityService.HasPermissionAsync(path, userId, Permission.Read, ct);
+            ? await SecurityService.HasPermissionAsync(path, Permission.Read, ct)
+            : await SecurityService.HasPermissionAsync(path, userId, Permission.Read, ct);
 
         if (!hasPermission)
         {
@@ -53,8 +55,8 @@ public class SecurePersistenceServiceDecorator : IPersistenceService
         await foreach (var node in _inner.GetChildrenAsync(parentPath))
         {
             var hasPermission = string.IsNullOrEmpty(userId)
-                ? await _securityService.HasPermissionAsync(node.Path, Permission.Read)
-                : await _securityService.HasPermissionAsync(node.Path, userId, Permission.Read);
+                ? await SecurityService.HasPermissionAsync(node.Path, Permission.Read)
+                : await SecurityService.HasPermissionAsync(node.Path, userId, Permission.Read);
 
             if (hasPermission)
             {
@@ -72,8 +74,8 @@ public class SecurePersistenceServiceDecorator : IPersistenceService
         await foreach (var node in _inner.GetDescendantsAsync(parentPath))
         {
             var hasPermission = string.IsNullOrEmpty(userId)
-                ? await _securityService.HasPermissionAsync(node.Path, Permission.Read)
-                : await _securityService.HasPermissionAsync(node.Path, userId, Permission.Read);
+                ? await SecurityService.HasPermissionAsync(node.Path, Permission.Read)
+                : await SecurityService.HasPermissionAsync(node.Path, userId, Permission.Read);
 
             if (hasPermission)
             {

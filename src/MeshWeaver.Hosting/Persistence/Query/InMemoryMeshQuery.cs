@@ -1,7 +1,9 @@
 using System.Runtime.CompilerServices;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Query;
+using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Messaging;
 
 namespace MeshWeaver.Hosting.Persistence.Query;
 
@@ -13,13 +15,36 @@ public class InMemoryMeshQuery : IMeshQuery
 {
     private readonly IPersistenceService _persistence;
     private readonly INavigationService? _navigationContext;
+    private readonly ISecurityService? _securityService;
+    private readonly AccessService? _accessService;
     private readonly QueryParser _parser = new();
     private readonly QueryEvaluator _evaluator = new();
 
-    public InMemoryMeshQuery(IPersistenceService persistence, INavigationService? navigationContext = null)
+    public InMemoryMeshQuery(
+        IPersistenceService persistence,
+        INavigationService? navigationContext = null,
+        ISecurityService? securityService = null,
+        AccessService? accessService = null)
     {
         _persistence = persistence;
         _navigationContext = navigationContext;
+        _securityService = securityService;
+        _accessService = accessService;
+    }
+
+    /// <summary>
+    /// Gets the effective user ID from the request or from the current access context.
+    /// Returns WellKnownUsers.Public for anonymous/unauthenticated access.
+    /// </summary>
+    private string GetEffectiveUserId(MeshQueryRequest request)
+    {
+        // If request has explicit UserId, use it
+        if (!string.IsNullOrEmpty(request.UserId))
+            return request.UserId;
+
+        // Get from access context, defaulting to Public for anonymous users
+        var userId = _accessService?.Context?.ObjectId;
+        return string.IsNullOrEmpty(userId) ? WellKnownUsers.Public : userId;
     }
 
     /// <inheritdoc />
@@ -61,10 +86,13 @@ public class InMemoryMeshQuery : IMeshQuery
         // Collect results with fuzzy scores for ordering
         var results = new List<(object Item, int Score)>();
 
+        // Get the effective user ID for security filtering (from request or access context)
+        var userId = GetEffectiveUserId(request);
+
         foreach (var searchPath in pathsToSearch)
         {
-            // Search MeshNodes at this path
-            var node = await _persistence.GetNodeAsync(searchPath, ct);
+            // Search MeshNodes at this path (with security filtering)
+            var node = await _persistence.GetNodeSecureAsync(searchPath, userId, ct);
             if (node != null)
             {
                 if (_evaluator.Matches(node, parsedQuery))
@@ -88,7 +116,7 @@ public class InMemoryMeshQuery : IMeshQuery
         // If we're doing scope=children, search immediate children only
         if (effectiveScope == QueryScope.Children)
         {
-            await foreach (var child in _persistence.GetChildrenAsync(basePath).WithCancellation(ct))
+            await foreach (var child in _persistence.GetChildrenSecureAsync(basePath, userId).WithCancellation(ct))
             {
                 // Evaluate the node itself
                 if (_evaluator.Matches(child, parsedQuery))
@@ -115,7 +143,7 @@ public class InMemoryMeshQuery : IMeshQuery
         // If we're doing scope=descendants, also search descendant paths recursively
         if (effectiveScope == QueryScope.Descendants || effectiveScope == QueryScope.Hierarchy || effectiveScope == QueryScope.Subtree)
         {
-            await foreach (var descendant in _persistence.GetDescendantsAsync(basePath).WithCancellation(ct))
+            await foreach (var descendant in _persistence.GetDescendantsSecureAsync(basePath, userId).WithCancellation(ct))
             {
                 // Evaluate the node itself
                 if (_evaluator.Matches(descendant, parsedQuery))
@@ -168,14 +196,54 @@ public class InMemoryMeshQuery : IMeshQuery
 
         foreach (var item in orderedResults)
         {
+            // Apply access control filtering if security service is available
+            if (_securityService != null)
+            {
+                var itemPath = GetItemPath(item);
+                if (!string.IsNullOrEmpty(itemPath))
+                {
+                    var permissions = await _securityService.GetEffectivePermissionsAsync(
+                        itemPath, userId, ct);
+                    if (!permissions.HasFlag(Permission.Read))
+                        continue; // Skip items user cannot read
+                }
+            }
+
             yield return item;
         }
     }
 
+    /// <summary>
+    /// Gets the path for an item (MeshNode or object with Path property).
+    /// </summary>
+    private static string? GetItemPath(object item)
+    {
+        if (item is MeshNode node)
+            return node.Path;
+
+        // Try to get Path property via reflection for partition objects
+        var pathProp = item.GetType().GetProperty("Path");
+        if (pathProp != null)
+            return pathProp.GetValue(item) as string;
+
+        return null;
+    }
+
     /// <inheritdoc />
+    public IAsyncEnumerable<QuerySuggestion> AutocompleteAsync(
+        string basePath,
+        string prefix,
+        int limit = 10,
+        CancellationToken ct = default)
+        => AutocompleteAsync(basePath, prefix, null, limit, ct);
+
+    /// <summary>
+    /// Autocomplete with user ID for access control filtering.
+    /// </summary>
     public async IAsyncEnumerable<QuerySuggestion> AutocompleteAsync(
         string basePath,
         string prefix,
+        string? userId,
         int limit = 10,
         [EnumeratorCancellation] CancellationToken ct = default)
     {
@@ -184,8 +252,8 @@ public class InMemoryMeshQuery : IMeshQuery
 
         var suggestions = new List<QuerySuggestion>();
 
-        // Search descendants for matching nodes
-        await foreach (var node in _persistence.GetDescendantsAsync(normalizedPath).WithCancellation(ct))
+        // Search descendants for matching nodes (with security filtering)
+        await foreach (var node in _persistence.GetDescendantsSecureAsync(normalizedPath, userId).WithCancellation(ct))
         {
             var name = node.Name ?? node.Id;
             var nameLower = name.ToLowerInvariant();

@@ -1,7 +1,9 @@
 using MeshWeaver.Domain;
 using MeshWeaver.Hosting.Persistence.Query;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Messaging;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -81,7 +83,9 @@ public static class PersistenceExtensions
         services.AddSingleton<IMeshQuery>(sp =>
             new InMemoryMeshQuery(
                 sp.GetRequiredService<IPersistenceService>(),
-                sp.GetService<INavigationService>()));
+                sp.GetService<INavigationService>(),
+                sp.GetService<ISecurityService>(),
+                sp.GetService<AccessService>()));
 
         return services;
     }
@@ -143,7 +147,9 @@ public static class PersistenceExtensions
         services.AddSingleton<IMeshQuery>(sp =>
             new InMemoryMeshQuery(
                 sp.GetRequiredService<IPersistenceService>(),
-                sp.GetService<INavigationService>()));
+                sp.GetService<INavigationService>(),
+                sp.GetService<ISecurityService>(),
+                sp.GetService<AccessService>()));
         return services;
     }
 
@@ -168,7 +174,9 @@ public static class PersistenceExtensions
         services.AddSingleton<IMeshQuery>(sp =>
             new InMemoryMeshQuery(
                 sp.GetRequiredService<IPersistenceService>(),
-                sp.GetService<INavigationService>()));
+                sp.GetService<INavigationService>(),
+                sp.GetService<ISecurityService>(),
+                sp.GetService<AccessService>()));
 
         return services;
     }
@@ -187,7 +195,9 @@ public static class PersistenceExtensions
         services.AddSingleton<IMeshQuery>(sp =>
             new InMemoryMeshQuery(
                 sp.GetRequiredService<IPersistenceService>(),
-                sp.GetService<INavigationService>()));
+                sp.GetService<INavigationService>(),
+                sp.GetService<ISecurityService>(),
+                sp.GetService<AccessService>()));
         return services;
     }
 
@@ -203,7 +213,9 @@ public static class PersistenceExtensions
         services.AddSingleton<IMeshQuery>(sp =>
             new InMemoryMeshQuery(
                 sp.GetRequiredService<IPersistenceService>(),
-                sp.GetService<INavigationService>()));
+                sp.GetService<INavigationService>(),
+                sp.GetService<ISecurityService>(),
+                sp.GetService<AccessService>()));
         return services;
     }
 }
