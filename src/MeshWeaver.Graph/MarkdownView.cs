@@ -1149,16 +1149,24 @@ public static class MarkdownView
 
     /// <summary>
     /// Extracts markdown content from a MeshNode.
-    /// Handles MarkdownDocument JSON content format.
+    /// Handles plain string content and MarkdownDocument JSON format.
     /// </summary>
     private static string GetMarkdownContent(MeshNode? node)
     {
         if (node?.Content == null)
             return string.Empty;
 
+        // Handle plain string content (from MarkdownFileParser)
+        if (node.Content is string stringContent)
+            return stringContent;
+
         // Handle MarkdownDocument content (JSON with $type and content fields)
         if (node.Content is System.Text.Json.JsonElement jsonElement)
         {
+            // Check for string JSON element
+            if (jsonElement.ValueKind == System.Text.Json.JsonValueKind.String)
+                return jsonElement.GetString() ?? string.Empty;
+
             if (jsonElement.TryGetProperty("$type", out var typeProperty))
             {
                 var typeName = typeProperty.GetString();
