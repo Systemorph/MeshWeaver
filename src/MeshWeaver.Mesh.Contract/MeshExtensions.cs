@@ -33,6 +33,9 @@ public static class MeshExtensions
         config.TypeRegistry.WithType(typeof(UpdateNodeRequest), nameof(UpdateNodeRequest));
         config.TypeRegistry.WithType(typeof(UpdateNodeResponse), nameof(UpdateNodeResponse));
         config.TypeRegistry.WithType(typeof(NodeUpdateRejectionReason), nameof(NodeUpdateRejectionReason));
+
+        // Security types for row-level security (stored in JSON files)
+        config.TypeRegistry.WithType(typeof(UserAccess), nameof(UserAccess));
         return config;
     }
 

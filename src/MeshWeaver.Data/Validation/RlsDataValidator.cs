@@ -1,8 +1,7 @@
-using MeshWeaver.Data.Validation;
-using MeshWeaver.Messaging;
+﻿using MeshWeaver.Messaging;
 using Microsoft.Extensions.Logging;
 
-namespace MeshWeaver.Data;
+namespace MeshWeaver.Data.Validation;
 
 /// <summary>
 /// Data validator that enforces Row-Level Security based on access restrictions.
@@ -60,7 +59,7 @@ public class RlsDataValidator : IDataValidator
         {
             try
             {
-                var allowed = await restriction.Restriction(action, context.Entity, accessRestrictionContext);
+                var allowed = await restriction.Restriction(action, context.Entity, accessRestrictionContext, ct);
 
                 if (!allowed)
                 {
@@ -137,7 +136,7 @@ public class RlsDataValidator : IDataValidator
         {
             try
             {
-                var allowed = await restriction.Restriction(action, type, accessRestrictionContext);
+                var allowed = await restriction.Restriction(action, type, accessRestrictionContext, ct);
                 if (!allowed)
                 {
                     _logger.LogDebug(

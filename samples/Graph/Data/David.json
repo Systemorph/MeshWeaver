@@ -4,7 +4,6 @@
   "nodeType": "Person",
   "description": "DevOps Engineer",
   "iconName": "Person",
-  "displayOrder": 4,
   "isPersistent": true,
   "content": {
     "id": "David",

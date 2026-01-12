@@ -23,7 +23,7 @@ public class MeshCatalogAutocompleteProvider(IMeshCatalog? meshCatalog) : IAutoc
         {
             var topLevelNodes = meshCatalog.Configuration.Nodes.Values
                 .Where(n => n.Segments.Count == 1)
-                .OrderBy(n => n.DisplayOrder)
+                .OrderBy(n => n.DisplayOrder ?? int.MaxValue)
                 .ThenBy(n => n.Name);
 
             foreach (var node in topLevelNodes)
@@ -33,7 +33,7 @@ public class MeshCatalogAutocompleteProvider(IMeshCatalog? meshCatalog) : IAutoc
                     InsertText: $"@{node.Path}/",
                     Description: node.Description ?? node.Name,
                     Category: "Prefixes",
-                    Priority: PrefixCategoryPriority - node.DisplayOrder,
+                    Priority: PrefixCategoryPriority - (node.DisplayOrder ?? 0),
                     Kind: AutocompleteKind.Other
                 ));
             }

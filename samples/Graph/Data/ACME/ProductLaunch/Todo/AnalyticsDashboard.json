@@ -6,7 +6,6 @@
   "category": "Tasks",
   "description": "Set up tracking and reporting for launch metrics",
   "iconName": "DataUsage",
-  "displayOrder": 11,
   "isPersistent": true,
   "content": {
     "$type": "Todo",
@@ -16,7 +15,7 @@
     "category": "Engineering",
     "priority": "Medium",
     "assignee": "David",
-    "dueDate": "2025-02-22T00:00:00Z",
+    "dueDateOffsetDays": 22,
     "status": "Pending"
   }
 }

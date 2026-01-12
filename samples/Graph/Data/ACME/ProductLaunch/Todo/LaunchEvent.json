@@ -6,7 +6,6 @@
   "category": "Tasks",
   "description": "Organize the official MeshFlow launch webinar",
   "iconName": "CalendarLtr",
-  "displayOrder": 20,
   "isPersistent": true,
   "content": {
     "$type": "Todo",
@@ -16,7 +15,7 @@
     "category": "Marketing",
     "priority": "High",
     "assignee": "Emma",
-    "dueDate": "2025-03-12T00:00:00Z",
+    "dueDateOffsetDays": 50,
     "status": "Pending"
   }
 }

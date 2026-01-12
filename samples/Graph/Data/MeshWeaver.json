@@ -4,7 +4,6 @@
   "nodeType": "Organization",
   "description": "Open source platform for building modular, reactive applications",
   "icon": "/static/storage/content/MeshWeaver/logo.svg",
-  "displayOrder": 0,
   "isPersistent": true,
   "content": {
     "$type": "Organization",

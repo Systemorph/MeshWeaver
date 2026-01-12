@@ -6,7 +6,6 @@
   "category": "Tasks",
   "description": "Configure a stable demo instance with sample data",
   "iconName": "Server",
-  "displayOrder": 7,
   "isPersistent": true,
   "content": {
     "$type": "Todo",
@@ -16,7 +15,7 @@
     "category": "Engineering",
     "priority": "Critical",
     "assignee": "Bob",
-    "dueDate": "2025-02-10T00:00:00Z",
-    "status": "Pending"
+    "dueDateOffsetDays": 5,
+    "status": "InProgress"
   }
 }

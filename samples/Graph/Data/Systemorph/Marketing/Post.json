@@ -6,7 +6,6 @@
   "category": "Types",
   "description": "A social media post for LinkedIn, X, or Instagram",
   "icon": "/static/storage/content/Systemorph/Marketing/icons/share.svg",
-  "displayOrder": 30,
   "isPersistent": true,
   "content": {
     "$type": "NodeTypeDefinition",
@@ -15,7 +14,6 @@
     "displayName": "Post",
     "icon": "/static/storage/content/Systemorph/Marketing/icons/share.svg",
     "description": "A social media post for LinkedIn, X, or Instagram",
-    "displayOrder": 30,
     "configuration": "config => config.WithContentType<Post>().AddDefaultViews()"
   }
 }

@@ -25,22 +25,9 @@ public class SecurityServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
     {
-        // Add Row-Level Security services
-        builder.AddRowLevelSecurity();
-
-        // Configure role configuration for "project" NodeType
-        builder.WithRoleConfiguration("project", config => config
-            .WithAdminRole()
-            .WithEditorRole()
-            .WithViewerRole()
-            .WithInheritance());
-
-        // Configure public access for "public-doc" NodeType
-        builder.WithRoleConfiguration("public-doc", config => config
-            .AsPublic(Permission.Read)
-            .WithViewerRole());
-
-        return base.ConfigureMesh(builder);
+        // First configure base (adds persistence), then add Row-Level Security
+        // RLS must be added after persistence so it can decorate IPersistenceService
+        return base.ConfigureMesh(builder).AddRowLevelSecurity();
     }
 
     [Fact]
@@ -52,7 +39,7 @@ public class SecurityServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
         const string nodePath = "org/acme/project";
 
         // Assign Admin role to user
-        await securityService.AssignRoleAsync(userId, "Admin", nodePath, "system", TestTimeout);
+        await securityService.AddUserRoleAsync(userId, "Admin", nodePath, "system", TestTimeout);
 
         // Act
         var permissions = await securityService.GetEffectivePermissionsAsync(nodePath, userId, TestTimeout);
@@ -70,7 +57,7 @@ public class SecurityServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
         const string nodePath = "org/acme/docs";
 
         // Assign Viewer role to user
-        await securityService.AssignRoleAsync(userId, "Viewer", nodePath, "system", TestTimeout);
+        await securityService.AddUserRoleAsync(userId, "Viewer", nodePath, "system", TestTimeout);
 
         // Act
         var permissions = await securityService.GetEffectivePermissionsAsync(nodePath, userId, TestTimeout);
@@ -88,7 +75,7 @@ public class SecurityServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
         const string nodePath = "org/acme/project/docs";
 
         // Assign Editor role to user
-        await securityService.AssignRoleAsync(userId, "Editor", nodePath, "system", TestTimeout);
+        await securityService.AddUserRoleAsync(userId, "Editor", nodePath, "system", TestTimeout);
 
         // Act
         var permissions = await securityService.GetEffectivePermissionsAsync(nodePath, userId, TestTimeout);
@@ -122,7 +109,7 @@ public class SecurityServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
         const string childPath = "org/parent/child/grandchild";
 
         // Assign Admin role at parent level
-        await securityService.AssignRoleAsync(userId, "Admin", parentPath, "system", TestTimeout);
+        await securityService.AddUserRoleAsync(userId, "Admin", parentPath, "system", TestTimeout);
 
         // Act - Check permissions at child level
         var permissions = await securityService.GetEffectivePermissionsAsync(childPath, userId, TestTimeout);
@@ -140,7 +127,7 @@ public class SecurityServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
         const string anyPath = "some/random/path";
 
         // Assign global Admin role (null nodePath)
-        await securityService.AssignRoleAsync(userId, "Admin", null!, "system", TestTimeout);
+        await securityService.AddUserRoleAsync(userId, "Admin", null!, "system", TestTimeout);
 
         // Act - Check permissions at any path
         var permissions = await securityService.GetEffectivePermissionsAsync(anyPath, userId, TestTimeout);
@@ -159,8 +146,8 @@ public class SecurityServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
         const string path2 = "org/project1/subproject";
 
         // Assign Viewer at parent, Editor at child
-        await securityService.AssignRoleAsync(userId, "Viewer", path1, "system", TestTimeout);
-        await securityService.AssignRoleAsync(userId, "Editor", path2, "system", TestTimeout);
+        await securityService.AddUserRoleAsync(userId, "Viewer", path1, "system", TestTimeout);
+        await securityService.AddUserRoleAsync(userId, "Editor", path2, "system", TestTimeout);
 
         // Act - Check permissions at child path
         var permissions = await securityService.GetEffectivePermissionsAsync(path2, userId, TestTimeout);
@@ -178,7 +165,7 @@ public class SecurityServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
         const string nodePath = "org/docs/readme";
 
         // Assign Viewer role
-        await securityService.AssignRoleAsync(userId, "Viewer", nodePath, "system", TestTimeout);
+        await securityService.AddUserRoleAsync(userId, "Viewer", nodePath, "system", TestTimeout);
 
         // Act & Assert
         var canRead = await securityService.HasPermissionAsync(nodePath, userId, Permission.Read, TestTimeout);
@@ -194,7 +181,7 @@ public class SecurityServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
         const string nodePath = "org/restricted/data";
 
         // Assign Viewer role (Read only)
-        await securityService.AssignRoleAsync(userId, "Viewer", nodePath, "system", TestTimeout);
+        await securityService.AddUserRoleAsync(userId, "Viewer", nodePath, "system", TestTimeout);
 
         // Act & Assert - Should not have Delete permission
         var canDelete = await securityService.HasPermissionAsync(nodePath, userId, Permission.Delete, TestTimeout);
@@ -202,133 +189,56 @@ public class SecurityServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
     }
 
     [Fact]
-    public async Task AssignRole_CreatesAssignment()
+    public async Task AddUserRole_CreatesAssignment()
     {
         // Arrange
         var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
         const string userId = "newassignee";
-        const string nodePath = "org/newproject";
+        const string targetNamespace = "org/newproject";
 
         // Act
-        await securityService.AssignRoleAsync(userId, "Editor", nodePath, "admin", TestTimeout);
+        await securityService.AddUserRoleAsync(userId, "Editor", targetNamespace, "admin", TestTimeout);
 
-        // Assert
-        var assignments = await securityService.GetUserRoleAssignmentsAsync(userId, TestTimeout).ToListAsync();
-        assignments.Should().ContainSingle(a =>
-            a.UserId == userId &&
-            a.RoleId == "Editor" &&
-            a.NodePath == nodePath);
+        // Assert - With per-namespace storage, we need to specify the namespace to find the user
+        var userAccess = await securityService.GetUserAccessAsync(userId, targetNamespace, TestTimeout);
+        userAccess.Should().NotBeNull();
+        userAccess!.Roles.Should().ContainSingle(r => r.RoleId == "Editor");
     }
 
     [Fact]
-    public async Task RemoveRoleAssignment_RemovesAssignment()
+    public async Task RemoveUserRole_RemovesAssignment()
     {
         // Arrange
         var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
         const string userId = "removetest";
-        const string nodePath = "org/removeproject";
+        const string targetNamespace = "org/removeproject";
 
-        await securityService.AssignRoleAsync(userId, "Admin", nodePath, "admin", TestTimeout);
+        await securityService.AddUserRoleAsync(userId, "Admin", targetNamespace, "admin", TestTimeout);
 
         // Act
-        await securityService.RemoveRoleAssignmentAsync(userId, "Admin", nodePath, TestTimeout);
+        await securityService.RemoveUserRoleAsync(userId, "Admin", targetNamespace, TestTimeout);
 
-        // Assert
-        var assignments = await securityService.GetUserRoleAssignmentsAsync(userId, TestTimeout).ToListAsync();
-        assignments.Should().BeEmpty();
+        // Assert - With per-namespace storage, user should have no access in this namespace after removal
+        var userAccess = await securityService.GetUserAccessAsync(userId, targetNamespace, TestTimeout);
+        var hasRole = userAccess?.Roles.Any(r => r.RoleId == "Admin") ?? false;
+        hasRole.Should().BeFalse();
     }
 
     [Fact]
-    public async Task GetUserRoleAssignments_ReturnsAllAssignments()
+    public async Task PublicUser_GetsAnonymousPermissions()
     {
         // Arrange
         var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
-        const string userId = "multiassign";
+        const string targetNamespace = "org/public/area";
 
-        await securityService.AssignRoleAsync(userId, "Admin", "org/project1", "admin", TestTimeout);
-        await securityService.AssignRoleAsync(userId, "Viewer", "org/project2", "admin", TestTimeout);
-        await securityService.AssignRoleAsync(userId, "Editor", "org/project3", "admin", TestTimeout);
+        // Grant Viewer role to "Public" user (represents anonymous access)
+        await securityService.AddUserRoleAsync(WellKnownUsers.Public, "Viewer", targetNamespace, "system", TestTimeout);
 
-        // Act
-        var assignments = await securityService.GetUserRoleAssignmentsAsync(userId, TestTimeout).ToListAsync();
+        // Act - Check anonymous permissions (empty userId)
+        var permissions = await securityService.GetEffectivePermissionsAsync(targetNamespace, "", TestTimeout);
 
-        // Assert
-        assignments.Should().HaveCount(3);
-        assignments.Select(a => a.RoleId).Should().Contain(["Admin", "Viewer", "Editor"]);
-    }
-
-    [Fact]
-    public async Task GetNodeRoleAssignments_ReturnsAssignmentsForNode()
-    {
-        // Arrange
-        var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
-        const string nodePath = "org/shared/project";
-
-        await securityService.AssignRoleAsync("user1", "Admin", nodePath, "system", TestTimeout);
-        await securityService.AssignRoleAsync("user2", "Editor", nodePath, "system", TestTimeout);
-        await securityService.AssignRoleAsync("user3", "Viewer", nodePath, "system", TestTimeout);
-
-        // Act
-        var assignments = await securityService.GetNodeRoleAssignmentsAsync(nodePath, TestTimeout).ToListAsync();
-
-        // Assert
-        assignments.Should().HaveCount(3);
-        assignments.Select(a => a.UserId).Should().Contain(["user1", "user2", "user3"]);
-    }
-
-    [Fact]
-    public async Task SetRoleConfiguration_PersistsConfiguration()
-    {
-        // Arrange
-        var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
-        var customRole = new Role
-        {
-            Id = "CustomRole",
-            DisplayName = "Custom Role",
-            Permissions = Permission.Read | Permission.Create,
-            IsInheritable = true
-        };
-
-        var config = new RoleConfiguration
-        {
-            NodeType = "custom-type",
-            Roles = new Dictionary<string, Role> { { "CustomRole", customRole } },
-            IsPublic = false,
-            InheritFromParent = true
-        };
-
-        // Act
-        await securityService.SetRoleConfigurationAsync(config, TestTimeout);
-
-        // Assert
-        var retrievedConfig = await securityService.GetRoleConfigurationAsync("custom-type", TestTimeout);
-        retrievedConfig.Should().NotBeNull();
-        retrievedConfig!.NodeType.Should().Be("custom-type");
-        retrievedConfig.Roles.Should().ContainKey("CustomRole");
-    }
-
-    [Fact]
-    public async Task SetNodeSecurityConfiguration_PersistsOverrides()
-    {
-        // Arrange
-        var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
-        var nodeConfig = new NodeSecurityConfiguration
-        {
-            NodePath = "org/special/node",
-            IsPublicOverride = true,
-            AnonymousPermissionsOverride = Permission.Read,
-            InheritFromParentOverride = false
-        };
-
-        // Act
-        await securityService.SetNodeSecurityConfigurationAsync(nodeConfig, TestTimeout);
-
-        // Assert
-        var retrievedConfig = await securityService.GetNodeSecurityConfigurationAsync("org/special/node", TestTimeout);
-        retrievedConfig.Should().NotBeNull();
-        retrievedConfig!.IsPublicOverride.Should().BeTrue();
-        retrievedConfig.AnonymousPermissionsOverride.Should().Be(Permission.Read);
-        retrievedConfig.InheritFromParentOverride.Should().BeFalse();
+        // Assert - Public user should have Viewer (Read) permissions
+        permissions.Should().Be(Permission.Read);
     }
 
     [Fact]
@@ -400,13 +310,9 @@ public class RlsNodeValidatorTests(ITestOutputHelper output) : MonolithMeshTestB
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
     {
-        // Add Row-Level Security services (includes RlsNodeValidator)
-        builder.AddRowLevelSecurity();
-
-        // Assign global admin role for test setup
-        builder.WithGlobalRoleAssignment("testadmin", "Admin");
-
-        return base.ConfigureMesh(builder);
+        // First configure base (adds persistence), then add Row-Level Security
+        // RLS must be added after persistence so it can decorate IPersistenceService
+        return base.ConfigureMesh(builder).AddRowLevelSecurity();
     }
 
     [Fact]
@@ -446,7 +352,7 @@ public class RlsNodeValidatorTests(ITestOutputHelper output) : MonolithMeshTestB
         const string userId = "authorized-user";
 
         // Grant Admin permissions
-        await securityService.AssignRoleAsync(userId, "Admin", "allowed/area", "system", TestTimeout);
+        await securityService.AddUserRoleAsync(userId, "Admin", "allowed/area", "system", TestTimeout);
 
         var context = new NodeValidationContext
         {

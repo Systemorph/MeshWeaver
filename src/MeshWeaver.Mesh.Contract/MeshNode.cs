@@ -180,9 +180,9 @@ public record MeshNode([property: Key] string Id, [property: Editable(false)] st
     public string? Icon { get; init; }
 
     /// <summary>
-    /// Display order for sorting in autocomplete lists (lower values appear first).
+    /// Display order for sorting (lower values appear first, null values appear last).
     /// </summary>
-    public int DisplayOrder { get; init; }
+    public int? DisplayOrder { get; init; }
 
     /// <summary>
     /// Number of segments to include in the address when creating hub instances.

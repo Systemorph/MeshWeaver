@@ -6,7 +6,6 @@
   "category": "Types",
   "description": "An organization containing projects",
   "iconName": "Building",
-  "displayOrder": 10,
   "isPersistent": true,
   "lastModified": "2025-12-27T22:43:18.5377224+00:00",
   "state": "Active",
@@ -17,7 +16,6 @@
     "displayName": "Organization",
     "iconName": "Building",
     "description": "An organization containing projects",
-    "displayOrder": 10,
     "configuration": "config => config.WithContentType<Organization>().AddDefaultViews().AddLayout(layout => layout.WithView(\"Details\", OrganizationViews.Details))"
   }
 }

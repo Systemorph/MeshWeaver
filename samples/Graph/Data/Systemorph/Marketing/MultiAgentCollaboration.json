@@ -6,7 +6,6 @@
   "category": "Agentic AI",
   "description": "Specialized AI agents working together on complex tasks",
   "icon": "/static/storage/content/Systemorph/Marketing/icons/brain-circuit.svg",
-  "displayOrder": 23,
   "addressSegments": 0,
   "isPersistent": true,
   "content": {

@@ -6,7 +6,6 @@
   "category": "Technical",
   "description": "Deep dive into agentic AI architecture",
   "icon": "/static/storage/content/Systemorph/Marketing/icons/share.svg",
-  "displayOrder": 20,
   "isPersistent": true,
   "content": {
     "id": "AgenticAIDeep",

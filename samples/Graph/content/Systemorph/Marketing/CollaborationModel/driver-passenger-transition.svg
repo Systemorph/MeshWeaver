@@ -1,0 +1,164 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 320">
+  <style>
+    .bg { fill: #f7fafc; }
+    .title { fill: #2d3748; }
+    .road { fill: url(#roadGrad); }
+    .road-line { stroke: #edf2f7; }
+    .car-body { fill: url(#carGrad); }
+    .window-blue { fill: #bee3f8; }
+    .window-green { fill: #c6f6d5; }
+    .wheel-outer { fill: #1a202c; }
+    .wheel-inner { fill: #718096; }
+    .steering { stroke: #2d3748; fill: none; }
+    .sys-head { fill: #9f7aea; }
+    .sys-label { fill: #805ad5; }
+    .client-head { fill: #48bb78; }
+    .client-label { fill: #2f855a; }
+    .arrow { fill: url(#arrowGrad); }
+    .arrow-text { fill: #2f855a; }
+    .phase1-title { fill: #5a67d8; }
+    .phase2-title { fill: #38a169; }
+    .phase-text { fill: #718096; }
+    .legend-text { fill: #4a5568; }
+
+    [data-theme="dark"] .bg { fill: #1a202c; }
+    [data-theme="dark"] .title { fill: #e2e8f0; }
+    [data-theme="dark"] .road-line { stroke: #4a5568; }
+    [data-theme="dark"] .window-blue { fill: #4299e1; fill-opacity: 0.6; }
+    [data-theme="dark"] .window-green { fill: #10b981; fill-opacity: 0.5; }
+    [data-theme="dark"] .wheel-outer { fill: #0d1117; }
+    [data-theme="dark"] .wheel-inner { fill: #4a5568; }
+    [data-theme="dark"] .steering { stroke: #e2e8f0; }
+    [data-theme="dark"] .sys-head { fill: #a78bfa; }
+    [data-theme="dark"] .sys-label { fill: #c4b5fd; }
+    [data-theme="dark"] .client-head { fill: #34d399; }
+    [data-theme="dark"] .client-label { fill: #6ee7b7; }
+    [data-theme="dark"] .arrow-text { fill: #6ee7b7; }
+    [data-theme="dark"] .phase1-title { fill: #a78bfa; }
+    [data-theme="dark"] .phase2-title { fill: #34d399; }
+    [data-theme="dark"] .phase-text { fill: #a0aec0; }
+    [data-theme="dark"] .legend-text { fill: #cbd5e0; }
+  </style>
+
+  <defs>
+    <linearGradient id="roadGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#4a5568"/>
+      <stop offset="100%" style="stop-color:#2d3748"/>
+    </linearGradient>
+    <linearGradient id="carGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#667eea"/>
+      <stop offset="100%" style="stop-color:#5a67d8"/>
+    </linearGradient>
+    <linearGradient id="arrowGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#48bb78"/>
+      <stop offset="100%" style="stop-color:#38a169"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Background -->
+  <rect class="bg" width="800" height="320"/>
+
+  <!-- Title -->
+  <text class="title" x="400" y="35" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="22" font-weight="600">Partnership Evolution</text>
+
+  <!-- Phase 1: Systemorph Drives -->
+  <g transform="translate(60, 70)">
+    <!-- Road -->
+    <rect class="road" x="0" y="140" width="260" height="50" rx="5"/>
+    <line class="road-line" x1="20" y1="165" x2="50" y2="165" stroke-width="3" stroke-dasharray="15,10"/>
+    <line class="road-line" x1="70" y1="165" x2="100" y2="165" stroke-width="3" stroke-dasharray="15,10"/>
+    <line class="road-line" x1="120" y1="165" x2="150" y2="165" stroke-width="3" stroke-dasharray="15,10"/>
+    <line class="road-line" x1="170" y1="165" x2="200" y2="165" stroke-width="3" stroke-dasharray="15,10"/>
+    <line class="road-line" x1="220" y1="165" x2="250" y2="165" stroke-width="3" stroke-dasharray="15,10"/>
+
+    <!-- Car Body -->
+    <rect class="car-body" x="60" y="95" width="140" height="55" rx="10"/>
+    <rect class="car-body" x="75" y="70" width="110" height="35" rx="8"/>
+
+    <!-- Windows -->
+    <rect class="window-blue" x="82" y="75" width="45" height="25" rx="4"/>
+    <rect class="window-blue" x="133" y="75" width="45" height="25" rx="4"/>
+
+    <!-- Wheels -->
+    <circle class="wheel-outer" cx="95" cy="150" r="18"/>
+    <circle class="wheel-inner" cx="95" cy="150" r="8"/>
+    <circle class="wheel-outer" cx="165" cy="150" r="18"/>
+    <circle class="wheel-inner" cx="165" cy="150" r="8"/>
+
+    <!-- Driver (Systemorph - purple) -->
+    <circle class="sys-head" cx="100" cy="82" r="10"/>
+    <text class="sys-label" x="100" y="60" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="9" font-weight="600">SYS</text>
+
+    <!-- Passenger (Client - green) -->
+    <circle class="client-head" cx="155" cy="82" r="10"/>
+    <text class="client-label" x="155" y="60" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="9" font-weight="600">CLIENT</text>
+
+    <!-- Steering wheel indicator -->
+    <circle class="steering" cx="100" cy="115" r="12" stroke-width="2"/>
+    <line class="steering" x1="100" y1="103" x2="100" y2="127" stroke-width="2"/>
+    <line class="steering" x1="88" y1="115" x2="112" y2="115" stroke-width="2"/>
+
+    <!-- Label -->
+    <text class="phase1-title" x="130" y="215" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="600">Phase 1: Getting Started</text>
+    <text class="phase-text" x="130" y="235" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="12">Systemorph drives,</text>
+    <text class="phase-text" x="130" y="250" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="12">Client learns the road</text>
+  </g>
+
+  <!-- Arrow -->
+  <g transform="translate(345, 150)">
+    <path class="arrow" d="M0,20 L80,20 L80,5 L110,30 L80,55 L80,40 L0,40 Z"/>
+    <text class="arrow-text" x="55" y="75" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="11" font-weight="600">Knowledge</text>
+    <text class="arrow-text" x="55" y="88" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="11" font-weight="600">Transfer</text>
+  </g>
+
+  <!-- Phase 2: Client Drives -->
+  <g transform="translate(480, 70)">
+    <!-- Road -->
+    <rect class="road" x="0" y="140" width="260" height="50" rx="5"/>
+    <line class="road-line" x1="20" y1="165" x2="50" y2="165" stroke-width="3" stroke-dasharray="15,10"/>
+    <line class="road-line" x1="70" y1="165" x2="100" y2="165" stroke-width="3" stroke-dasharray="15,10"/>
+    <line class="road-line" x1="120" y1="165" x2="150" y2="165" stroke-width="3" stroke-dasharray="15,10"/>
+    <line class="road-line" x1="170" y1="165" x2="200" y2="165" stroke-width="3" stroke-dasharray="15,10"/>
+    <line class="road-line" x1="220" y1="165" x2="250" y2="165" stroke-width="3" stroke-dasharray="15,10"/>
+
+    <!-- Car Body -->
+    <rect class="car-body" x="60" y="95" width="140" height="55" rx="10"/>
+    <rect class="car-body" x="75" y="70" width="110" height="35" rx="8"/>
+
+    <!-- Windows - green tint for client ownership -->
+    <rect class="window-green" x="82" y="75" width="45" height="25" rx="4"/>
+    <rect class="window-green" x="133" y="75" width="45" height="25" rx="4"/>
+
+    <!-- Wheels -->
+    <circle class="wheel-outer" cx="95" cy="150" r="18"/>
+    <circle class="wheel-inner" cx="95" cy="150" r="8"/>
+    <circle class="wheel-outer" cx="165" cy="150" r="18"/>
+    <circle class="wheel-inner" cx="165" cy="150" r="8"/>
+
+    <!-- Driver (Client - green, now driving!) -->
+    <circle class="client-head" cx="100" cy="82" r="10"/>
+    <text class="client-label" x="100" y="60" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="9" font-weight="600">CLIENT</text>
+
+    <!-- Passenger (Systemorph - purple, now advising) -->
+    <circle class="sys-head" cx="155" cy="82" r="10"/>
+    <text class="sys-label" x="155" y="60" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="9" font-weight="600">SYS</text>
+
+    <!-- Steering wheel indicator -->
+    <circle class="steering" cx="100" cy="115" r="12" stroke-width="2"/>
+    <line class="steering" x1="100" y1="103" x2="100" y2="127" stroke-width="2"/>
+    <line class="steering" x1="88" y1="115" x2="112" y2="115" stroke-width="2"/>
+
+    <!-- Label -->
+    <text class="phase2-title" x="130" y="215" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="600">Phase 2: Client Ownership</text>
+    <text class="phase-text" x="130" y="235" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="12">Client drives,</text>
+    <text class="phase-text" x="130" y="250" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="12">Systemorph navigates</text>
+  </g>
+
+  <!-- Legend -->
+  <g transform="translate(300, 285)">
+    <circle class="sys-head" cx="0" cy="8" r="6"/>
+    <text class="legend-text" x="12" y="12" font-family="Segoe UI, Arial, sans-serif" font-size="11">Systemorph</text>
+    <circle class="client-head" cx="100" cy="8" r="6"/>
+    <text class="legend-text" x="112" y="12" font-family="Segoe UI, Arial, sans-serif" font-size="11">Client</text>
+  </g>
+</svg>

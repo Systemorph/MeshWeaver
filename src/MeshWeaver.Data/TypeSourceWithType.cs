@@ -1,5 +1,4 @@
-﻿using System.Collections.Immutable;
-using MeshWeaver.Data.Validation;
+﻿using MeshWeaver.Data.Validation;
 using MeshWeaver.Domain;
 
 namespace MeshWeaver.Data;
@@ -87,14 +86,14 @@ public abstract record TypeSourceWithType<T, TTypeSource>(IWorkspace Workspace, 
     /// </code>
     /// </example>
     public TTypeSource WithTypedAccessRestriction(
-        Func<string, T, AccessRestrictionContext, bool> restriction,
+        Func<string, T, AccessRestrictionContext, CancellationToken, bool> restriction,
         string? name = null)
     {
         return WithAccessRestriction(
-            (action, ctx, accessCtx) =>
+            (action, ctx, accessCtx, ct) =>
             {
                 if (ctx is T instance)
-                    return Task.FromResult(restriction(action, instance, accessCtx));
+                    return Task.FromResult(restriction(action, instance, accessCtx, ct));
                 return Task.FromResult(true); // Allow if not the right type (shouldn't happen for instance-level checks)
             },
             name);
@@ -107,14 +106,14 @@ public abstract record TypeSourceWithType<T, TTypeSource>(IWorkspace Workspace, 
     /// <param name="name">Optional name for logging/debugging</param>
     /// <returns>Updated type source with the restriction added</returns>
     public TTypeSource WithTypedAccessRestriction(
-        Func<string, T, AccessRestrictionContext, Task<bool>> restriction,
+        Func<string, T, AccessRestrictionContext, CancellationToken, Task<bool>> restriction,
         string? name = null)
     {
         return WithAccessRestriction(
-            async (action, ctx, accessCtx) =>
+            async (action, ctx, accessCtx, ct) =>
             {
                 if (ctx is T instance)
-                    return await restriction(action, instance, accessCtx);
+                    return await restriction(action, instance, accessCtx, ct);
                 return true;
             },
             name);

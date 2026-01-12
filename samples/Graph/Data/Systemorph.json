@@ -4,7 +4,6 @@
   "nodeType": "Organization",
   "description": "The company behind MeshWeaver",
   "icon": "/static/storage/content/Systemorph/logo_t.png",
-  "displayOrder": 1,
   "addressSegments": 0,
   "isPersistent": true,
   "content": {

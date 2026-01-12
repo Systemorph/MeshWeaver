@@ -6,7 +6,6 @@
   "category": "Tasks",
   "description": "Set up sales pipeline stages in CRM",
   "iconName": "People",
-  "displayOrder": 17,
   "isPersistent": true,
   "content": {
     "$type": "Todo",
@@ -16,7 +15,7 @@
     "category": "Sales",
     "priority": "Medium",
     "assignee": "Bob",
-    "dueDate": "2025-03-07T00:00:00Z",
+    "dueDateOffsetDays": 38,
     "status": "Pending"
   }
 }
