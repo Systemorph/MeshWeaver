@@ -68,12 +68,13 @@ public class DevAuthController : ControllerBase
         }
 
         // Create claims matching what UserContextMiddleware expects
+        // Use node.Id (e.g., "Roland") for preferred_username to match Access/{userId}.json
         var claims = new List<Claim>
         {
-            new(ClaimTypes.NameIdentifier, person.Id),
+            new(ClaimTypes.NameIdentifier, node.Id),
             new(ClaimTypes.Name, person.Name),
             new("name", person.Name),
-            new("preferred_username", person.Email ?? person.Id),
+            new("preferred_username", node.Id),
         };
 
         if (!string.IsNullOrEmpty(person.Email))

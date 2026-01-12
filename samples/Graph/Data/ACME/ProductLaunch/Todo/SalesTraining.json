@@ -14,7 +14,7 @@
     "description": "Run 3-hour training workshop covering product features, demo flow, objection handling, and competitive positioning. Provide battle cards and cheat sheets.",
     "category": "Sales",
     "priority": "High",
-    "assignee": "Roland",
+    "assignee": "Alice",
     "dueDateOffsetDays": 40,
     "status": "Pending"
   }
