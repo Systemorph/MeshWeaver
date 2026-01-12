@@ -35,9 +35,9 @@ public class DevAuthController : ControllerBase
 
         await foreach (var node in _persistence.GetDescendantsAsync(null))
         {
-            if (node.NodeType == "Type/Person" && node.Content != null)
+            if (node.NodeType == "User" && node.Content != null)
             {
-                var person = ExtractPersonInfo(node.Id, node.Content);
+                var person = ExtractPersonInfo(node.Path, node.Content);
                 if (person != null)
                 {
                     persons.Add(person);
@@ -56,7 +56,7 @@ public class DevAuthController : ControllerBase
     {
         // Find the person node
         var node = await _persistence.GetNodeAsync(personId);
-        if (node?.NodeType != "Type/Person" || node.Content == null)
+        if (node?.NodeType != "User" || node.Content == null)
         {
             return BadRequest("Person not found");
         }

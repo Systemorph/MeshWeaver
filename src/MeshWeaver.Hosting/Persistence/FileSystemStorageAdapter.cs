@@ -37,6 +37,16 @@ public class FileSystemStorageAdapter : IStorageAdapter
         if (node == null)
             return null;
 
+        // Derive namespace from file path if not set in JSON
+        // Path "User/Alice" means namespace="User", id="Alice"
+        var normalizedPath = path.Trim('/');
+        var lastSlash = normalizedPath.LastIndexOf('/');
+        if (lastSlash > 0 && string.IsNullOrEmpty(node.Namespace))
+        {
+            var derivedNamespace = normalizedPath[..lastSlash];
+            node = node with { Namespace = derivedNamespace };
+        }
+
         // Use file system last modified time if not specified in JSON
         // Check if LastModified is the default value (indicates it wasn't in the JSON)
         if (node.LastModified == default)
