@@ -210,6 +210,7 @@ public class MeshPlugin(IMessageHub hub, IAgentChat chat)
         }
     }
 
+    [Obsolete]
     [Description("Deletes a node at the specified path.")]
     public async Task<string> Delete(
         [Description("Path to delete (e.g., @graph/org1)")] string path,
@@ -237,6 +238,7 @@ public class MeshPlugin(IMessageHub hub, IAgentChat chat)
         }
     }
 
+    [Obsolete]
     [Description("Gets a document (markdown) by path. Returns title and content. " +
                  "Use this to fetch documentation or markdown content.")]
     public async Task<string> GetDocument(

@@ -1,4 +1,5 @@
-﻿using System.Reactive.Linq;
+﻿using System.ComponentModel;
+using System.Reactive.Linq;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Schema;
@@ -382,7 +383,7 @@ public static class MeshNodeView
     }
 
     /// <summary>
-    /// Gets the display name for a node type with count (e.g., "Projects (5)").
+    /// Gets the display name for a node type with count (e.g., "Project (5)").
     /// </summary>
     public static string GetGroupDisplayName(string nodeType, int count)
     {
@@ -390,7 +391,7 @@ public static class MeshNodeView
         var typeName = nodeType.Contains('/') ? nodeType.Split('/').Last() : nodeType;
         // Capitalize first letter
         var display = char.ToUpper(typeName[0]) + typeName.Substring(1);
-        return $"{display}s ({count})";
+        return $"{display} ({count})";
     }
 
     /// <summary>
@@ -874,9 +875,10 @@ public static class MeshNodeView
 
     /// <summary>
     /// Renders the Children view showing child nodes as thumbnails without search.
-    /// Simple grid of children thumbnails, excludes NodeType nodes.
+    /// Groups children by Category (or NodeType if no Category), excludes NodeType nodes.
     /// Use this for embedding children in custom views via LayoutAreaControl.
     /// </summary>
+    [Browsable(false)]
     public static IObservable<UiControl?> Children(LayoutAreaHost host, RenderingContext ctx)
     {
         var hubPath = host.Hub.Address.ToString();
@@ -904,13 +906,34 @@ public static class MeshNodeView
                 return (UiControl?)Controls.Html("<p style=\"color: var(--neutral-foreground-hint);\">No children found.</p>");
             }
 
+            // Group by Category if set, otherwise by NodeType
+            var childGroups = children
+                .GroupBy(c => c.Category ?? c.NodeType ?? "")
+                .OrderBy(g => g.Key)
+                .ToList();
+
             var grid = Controls.LayoutGrid.WithSkin(s => s.WithSpacing(2));
 
-            foreach (var child in children.OrderBy(n => n.DisplayOrder).ThenBy(n => n.Name))
+            foreach (var group in childGroups)
             {
-                grid = grid.WithView(
-                    MeshNodeThumbnailControl.FromNode(child, child.Path),
-                    itemSkin => itemSkin.WithXs(12).WithSm(6).WithMd(4).WithLg(4));
+                var groupKey = group.Key;
+                var groupChildren = group.OrderBy(n => n.DisplayOrder).ThenBy(n => n.Name).ToList();
+
+                // Add section header if there's a group key
+                if (!string.IsNullOrEmpty(groupKey))
+                {
+                    var displayName = GetGroupDisplayName(groupKey, groupChildren.Count);
+                    grid = grid.WithView(
+                        Controls.Html($"<h3 style=\"margin: 24px 0 8px 0;\">{displayName}</h3>"),
+                        itemSkin => itemSkin.WithXs(12));
+                }
+
+                foreach (var child in groupChildren)
+                {
+                    grid = grid.WithView(
+                        MeshNodeThumbnailControl.FromNode(child, child.Path),
+                        itemSkin => itemSkin.WithXs(12).WithSm(6).WithMd(4).WithLg(4));
+                }
             }
 
             return (UiControl?)grid;
@@ -922,6 +945,7 @@ public static class MeshNodeView
     /// Shows the node's own type (if any) and any NodeType children.
     /// Accessible from the menu as a separate page.
     /// </summary>
+    [Browsable(false)]
     public static IObservable<UiControl?> NodeTypes(LayoutAreaHost host, RenderingContext ctx)
     {
         var hubPath = host.Hub.Address.ToString();
@@ -1174,6 +1198,7 @@ public static class MeshNodeView
     /// Renders a file browser for the node's content directory.
     /// Uses FileBrowserControl to display and manage files in the content collection.
     /// </summary>
+    [Browsable(false)]
     public static UiControl Files(LayoutAreaHost host, RenderingContext _)
     {
         return new FileBrowserControl("content")
@@ -1189,6 +1214,7 @@ public static class MeshNodeView
     /// For other files: shows a download link.
     /// For self-reference (no path): shows the node's icon/logo.
     /// </summary>
+    [Browsable(false)]
     public static IObservable<UiControl?> Content(LayoutAreaHost host, RenderingContext context)
     {
         var contentPath = host.Reference.Id?.ToString();
@@ -1396,6 +1422,7 @@ public static class MeshNodeView
     /// If Id is specified, renders that specific entity/collection/type.
     /// If no Id (self-reference), shows the current MeshNode data.
     /// </summary>
+    [Browsable(false)]
     public static IObservable<UiControl?> Data(LayoutAreaHost host, RenderingContext context)
     {
         var dataPath = host.Reference.Id?.ToString();
@@ -1471,6 +1498,7 @@ public static class MeshNodeView
     /// If Id is specified, shows schema for that type name.
     /// If no Id (self-reference), shows schema for MeshNode and content type.
     /// </summary>
+    [Browsable(false)]
     public static IObservable<UiControl?> Schema(LayoutAreaHost host, RenderingContext context)
     {
         var typeName = host.Reference.Id?.ToString();
@@ -1618,6 +1646,7 @@ public static class MeshNodeView
     /// Renders the Access Control area for managing user roles and permissions on this node.
     /// Shows current role assignments and allows adding/removing users with specific roles.
     /// </summary>
+    [Browsable(false)]
     public static IObservable<UiControl?> AccessControl(LayoutAreaHost host, RenderingContext _)
     {
         var hubPath = host.Hub.Address.ToString();
