@@ -63,7 +63,7 @@ public record LayoutDefinition(IMessageHub Hub)
     /// <summary>
     /// Configures thumbnails using the default naming convention: {basePath}/{area}.png and {basePath}/{area}-dark.png
     /// </summary>
-    public LayoutDefinition WithThumbnailBasePath(string basePath)
+    public LayoutDefinition WithThumbnailsPath(string basePath)
         => this with { ThumbnailPattern = ThumbnailPattern.FromBasePath(basePath) };
 
     /// <summary>

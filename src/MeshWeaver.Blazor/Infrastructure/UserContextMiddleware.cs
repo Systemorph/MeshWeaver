@@ -2,10 +2,11 @@
 using MeshWeaver.Messaging;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Blazor.Infrastructure;
 
-public class UserContextMiddleware(RequestDelegate next)
+public class UserContextMiddleware(RequestDelegate next, ILogger<UserContextMiddleware> logger)
 {
     public async Task InvokeAsync(HttpContext context)
     {
@@ -13,8 +14,17 @@ public class UserContextMiddleware(RequestDelegate next)
         var userContext = ExtractUserContext(context.User);
         if (userContext is not null)
         {
+            logger.LogInformation("UserContext: ObjectId={ObjectId}, Name={Name}, Email={Email}, Roles=[{Roles}]",
+                userContext.ObjectId, userContext.Name, userContext.Email, string.Join(", ", userContext.Roles ?? []));
+
             var userService = context.RequestServices.GetRequiredService<PortalApplication>().Hub.ServiceProvider.GetRequiredService<AccessService>();
             userService.SetContext(userContext);
+            // Set circuit context for SignalR calls
+            userService.SetCircuitContext(userContext);
+        }
+        else
+        {
+            logger.LogDebug("No authenticated user context found");
         }
         // Continue the middleware pipeline
         await next(context);

@@ -15,7 +15,7 @@
     "category": "Sales",
     "priority": "High",
     "assignee": "Roland",
-    "dueDateOffsetDays": 0,
+    "dueDateOffsetDays": -5,
     "status": "InProgress"
   }
 }

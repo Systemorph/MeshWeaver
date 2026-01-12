@@ -33,7 +33,7 @@ public static class DocumentationApplicationExtensions
                 .AddDistributionStatistics()
                 .AddProgress()
                 .AddFileBrowser()
-                .WithThumbnailBasePath("/static/app/Documentation/Documentation/thumbnails")
+                .WithThumbnailsPath("/static/app/Documentation/Documentation/thumbnails")
             );
 
 }
