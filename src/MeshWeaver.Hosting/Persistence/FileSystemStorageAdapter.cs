@@ -1,5 +1,6 @@
 using System.Text.Json;
 using MeshWeaver.Domain;
+using MeshWeaver.Hosting.Persistence.Parsers;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 
@@ -7,16 +8,22 @@ namespace MeshWeaver.Hosting.Persistence;
 
 /// <summary>
 /// File system storage adapter that emulates Cosmos DB document structure.
-/// Each node is stored as a JSON file in a hierarchical directory structure.
-/// Path "org/acme/project/web" maps to "{baseDirectory}/org/acme/project/web.json"
+/// Supports multiple file formats: .json, .md (with YAML front matter), .cs (C# code files).
+/// Path "org/acme/project/web" maps to "{baseDirectory}/org/acme/project/web.{ext}"
 /// </summary>
 public class FileSystemStorageAdapter : IStorageAdapter
 {
     private readonly string _baseDirectory;
     private readonly Func<ITypeRegistry?>? _typeRegistryFactory;
+    private readonly FileFormatParserRegistry _parserRegistry = new();
     private JsonSerializerOptions? _jsonOptions;
 
     private JsonSerializerOptions JsonOptions => _jsonOptions ??= PersistenceJsonOptions.CreateForPersistence(_typeRegistryFactory?.Invoke());
+
+    /// <summary>
+    /// Supported file extensions in priority order for reading.
+    /// </summary>
+    private static readonly string[] SupportedExtensions = [".md", ".cs", ".json"];
 
     public FileSystemStorageAdapter(string baseDirectory, Func<ITypeRegistry?>? typeRegistryFactory = null)
     {
@@ -27,17 +34,29 @@ public class FileSystemStorageAdapter : IStorageAdapter
 
     public async Task<MeshNode?> ReadAsync(string path, CancellationToken ct = default)
     {
-        var filePath = GetFilePath(path);
-        if (!File.Exists(filePath))
+        var (filePath, extension) = FindFileWithExtension(path);
+        if (filePath == null || !File.Exists(filePath))
             return null;
 
-        var json = await File.ReadAllTextAsync(filePath, ct);
-        var node = JsonSerializer.Deserialize<MeshNode>(json, JsonOptions);
+        var content = await File.ReadAllTextAsync(filePath, ct);
+
+        // Try to use a parser for non-JSON formats
+        var parser = _parserRegistry.GetParser(extension);
+        MeshNode? node;
+        if (parser != null)
+        {
+            node = await parser.ParseAsync(filePath, content, path, ct);
+        }
+        else
+        {
+            // Default to JSON deserialization
+            node = JsonSerializer.Deserialize<MeshNode>(content, JsonOptions);
+        }
 
         if (node == null)
             return null;
 
-        // Derive namespace from file path if not set in JSON
+        // Derive namespace from file path if not set
         // Path "User/Alice" means namespace="User", id="Alice"
         var normalizedPath = path.Trim('/');
         var lastSlash = normalizedPath.LastIndexOf('/');
@@ -47,8 +66,7 @@ public class FileSystemStorageAdapter : IStorageAdapter
             node = node with { Namespace = derivedNamespace };
         }
 
-        // Use file system last modified time if not specified in JSON
-        // Check if LastModified is the default value (indicates it wasn't in the JSON)
+        // Use file system last modified time if not specified
         if (node.LastModified == default)
         {
             var fileInfo = new FileInfo(filePath);
@@ -60,27 +78,50 @@ public class FileSystemStorageAdapter : IStorageAdapter
 
     public async Task WriteAsync(MeshNode node, CancellationToken ct = default)
     {
-        var filePath = GetFilePath(node.Path);
+        // Determine the output format based on the node type
+        var serializer = _parserRegistry.GetSerializerFor(node);
+        string content;
+        string extension;
+
+        if (serializer != null)
+        {
+            content = await serializer.SerializeAsync(node, ct);
+            extension = serializer.SupportedExtensions[0]; // Use primary extension
+        }
+        else
+        {
+            content = JsonSerializer.Serialize(node, JsonOptions);
+            extension = ".json";
+        }
+
+        var filePath = GetFilePath(node.Path, extension);
         var directory = Path.GetDirectoryName(filePath);
         if (!string.IsNullOrEmpty(directory))
         {
             Directory.CreateDirectory(directory);
         }
 
-        var json = JsonSerializer.Serialize(node, JsonOptions);
-        await File.WriteAllTextAsync(filePath, json, ct);
+        await File.WriteAllTextAsync(filePath, content, ct);
+
+        // Clean up old files with different extensions
+        CleanupOtherExtensions(node.Path, extension);
     }
 
     public Task DeleteAsync(string path, CancellationToken ct = default)
     {
-        var filePath = GetFilePath(path);
-        if (File.Exists(filePath))
+        // Delete any file with supported extensions
+        foreach (var ext in SupportedExtensions)
         {
-            File.Delete(filePath);
+            var filePath = GetFilePath(path, ext);
+            if (File.Exists(filePath))
+            {
+                File.Delete(filePath);
+            }
         }
 
         // Also try to clean up empty directories
-        var directory = Path.GetDirectoryName(filePath);
+        var basePath = GetFilePath(path, ".json");
+        var directory = Path.GetDirectoryName(basePath);
         while (!string.IsNullOrEmpty(directory) &&
                directory != _baseDirectory &&
                Directory.Exists(directory) &&
@@ -102,37 +143,44 @@ public class FileSystemStorageAdapter : IStorageAdapter
         if (!Directory.Exists(directoryPath))
             return Task.FromResult<(IEnumerable<string>, IEnumerable<string>)>(([], []));
 
-        var nodePaths = new List<string>();
+        var nodePaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var directoryPaths = new List<string>();
 
-        // Get JSON files (direct children) - these are nodes
-        foreach (var file in Directory.GetFiles(directoryPath, "*.json"))
+        // Get files with all supported extensions (direct children) - these are nodes
+        foreach (var ext in SupportedExtensions)
         {
-            var name = Path.GetFileNameWithoutExtension(file);
-            var childPath = string.IsNullOrEmpty(parentPath) ? name : $"{parentPath}/{name}";
-            nodePaths.Add(childPath);
+            foreach (var file in Directory.GetFiles(directoryPath, $"*{ext}"))
+            {
+                var name = Path.GetFileNameWithoutExtension(file);
+                var childPath = string.IsNullOrEmpty(parentPath) ? name : $"{parentPath}/{name}";
+                nodePaths.Add(childPath);
+            }
         }
 
-        // Get subdirectories that contain JSON files
+        // Get subdirectories that contain supported files
         foreach (var dir in Directory.GetDirectories(directoryPath))
         {
             var name = Path.GetFileName(dir);
             var childPath = string.IsNullOrEmpty(parentPath) ? name : $"{parentPath}/{name}";
 
-            // Check if there's a JSON file with the same name (node already added above)
-            var namedFile = Path.Combine(directoryPath, $"{name}.json");
-            if (File.Exists(namedFile))
+            // Check if there's a file with the same name (node already added above)
+            if (nodePaths.Contains(childPath))
             {
                 // Already added as a node file, will be scanned recursively
                 continue;
             }
 
-            // Check if directory has any JSON content
-            if (Directory.EnumerateFiles(dir, "*.json", SearchOption.AllDirectories).Any())
+            // Check if directory has any supported content
+            var hasContent = SupportedExtensions.Any(ext =>
+                Directory.EnumerateFiles(dir, $"*{ext}", SearchOption.AllDirectories).Any());
+
+            if (hasContent)
             {
-                // Check if there's an index.json representing this as a node
-                var indexFile = Path.Combine(dir, "index.json");
-                if (File.Exists(indexFile))
+                // Check if there's an index file representing this as a node
+                var hasIndex = SupportedExtensions.Any(ext =>
+                    File.Exists(Path.Combine(dir, $"index{ext}")));
+
+                if (hasIndex)
                 {
                     nodePaths.Add(childPath);
                 }
@@ -149,8 +197,8 @@ public class FileSystemStorageAdapter : IStorageAdapter
 
     public Task<bool> ExistsAsync(string path, CancellationToken ct = default)
     {
-        var filePath = GetFilePath(path);
-        return Task.FromResult(File.Exists(filePath));
+        var (filePath, _) = FindFileWithExtension(path);
+        return Task.FromResult(filePath != null && File.Exists(filePath));
     }
 
     #region Partition Storage
@@ -164,6 +212,12 @@ public class FileSystemStorageAdapter : IStorageAdapter
         if (!Directory.Exists(partitionDir))
             yield break;
 
+        // Check if this is a Code partition (subPath == "Code" OR nodePath ends with "/Code")
+        var isCodePartition = string.Equals(subPath, "Code", StringComparison.OrdinalIgnoreCase)
+            || nodePath.EndsWith("/Code", StringComparison.OrdinalIgnoreCase)
+            || nodePath.EndsWith("\\Code", StringComparison.OrdinalIgnoreCase);
+
+        // Process JSON files
         foreach (var file in Directory.GetFiles(partitionDir, "*.json"))
         {
             object? obj = null;
@@ -188,6 +242,27 @@ public class FileSystemStorageAdapter : IStorageAdapter
 
             if (obj != null)
                 yield return obj;
+        }
+
+        // Process C# files in Code partitions
+        if (isCodePartition)
+        {
+            foreach (var file in Directory.GetFiles(partitionDir, "*.cs"))
+            {
+                CodeConfiguration? config = null;
+                try
+                {
+                    var content = await File.ReadAllTextAsync(file, ct);
+                    config = await _parserRegistry.CSharpParser.ParseCodeConfigurationAsync(file, content, ct);
+                }
+                catch
+                {
+                    // Skip malformed files
+                }
+
+                if (config != null)
+                    yield return config;
+            }
         }
     }
 
@@ -245,13 +320,25 @@ public class FileSystemStorageAdapter : IStorageAdapter
     {
         var partitionDir = GetPartitionDirectory(nodePath, subPath);
         Directory.CreateDirectory(partitionDir);
+        var isCodePartition = string.Equals(subPath, "Code", StringComparison.OrdinalIgnoreCase);
 
         foreach (var obj in objects)
         {
-            var fileName = GetObjectFileName(obj);
-            var filePath = Path.Combine(partitionDir, fileName);
-            var json = JsonSerializer.Serialize(obj, obj.GetType(), JsonOptions);
-            await File.WriteAllTextAsync(filePath, json, ct);
+            // Handle CodeConfiguration specially - save as .cs files
+            if (isCodePartition && obj is CodeConfiguration codeConfig)
+            {
+                var fileName = GetCodeConfigurationFileName(codeConfig);
+                var filePath = Path.Combine(partitionDir, fileName);
+                var content = CSharpFileParser.SerializeCodeConfiguration(codeConfig);
+                await File.WriteAllTextAsync(filePath, content, ct);
+            }
+            else
+            {
+                var fileName = GetObjectFileName(obj);
+                var filePath = Path.Combine(partitionDir, fileName);
+                var json = JsonSerializer.Serialize(obj, obj.GetType(), JsonOptions);
+                await File.WriteAllTextAsync(filePath, json, ct);
+            }
         }
     }
 
@@ -263,9 +350,19 @@ public class FileSystemStorageAdapter : IStorageAdapter
         var partitionDir = GetPartitionDirectory(nodePath, subPath);
         if (Directory.Exists(partitionDir))
         {
+            // Delete JSON files
             foreach (var file in Directory.GetFiles(partitionDir, "*.json"))
             {
                 File.Delete(file);
+            }
+
+            // Delete C# files in Code partitions
+            if (string.Equals(subPath, "Code", StringComparison.OrdinalIgnoreCase))
+            {
+                foreach (var file in Directory.GetFiles(partitionDir, "*.cs"))
+                {
+                    File.Delete(file);
+                }
             }
 
             // Clean up empty directories
@@ -318,8 +415,15 @@ public class FileSystemStorageAdapter : IStorageAdapter
         if (!Directory.Exists(partitionDir))
             return Task.FromResult<DateTimeOffset?>(null);
 
-        var files = Directory.GetFiles(partitionDir, "*.json");
-        if (files.Length == 0)
+        var files = Directory.GetFiles(partitionDir, "*.json").ToList();
+
+        // Include C# files in Code partitions
+        if (string.Equals(subPath, "Code", StringComparison.OrdinalIgnoreCase))
+        {
+            files.AddRange(Directory.GetFiles(partitionDir, "*.cs"));
+        }
+
+        if (files.Count == 0)
             return Task.FromResult<DateTimeOffset?>(null);
 
         var maxTime = files
@@ -329,18 +433,107 @@ public class FileSystemStorageAdapter : IStorageAdapter
         return Task.FromResult<DateTimeOffset?>(new DateTimeOffset(maxTime, TimeSpan.Zero));
     }
 
+    private static string GetCodeConfigurationFileName(CodeConfiguration config)
+    {
+        // Use Id as the filename, sanitized for file system
+        var id = config.Id;
+        if (string.IsNullOrEmpty(id))
+            id = "code";
+
+        // Remove invalid characters
+        var invalidChars = Path.GetInvalidFileNameChars();
+        foreach (var c in invalidChars)
+        {
+            id = id.Replace(c, '_');
+        }
+
+        return id + ".cs";
+    }
+
     #endregion
 
-    private string GetFilePath(string path)
+    #region File Path Helpers
+
+    /// <summary>
+    /// Finds a file with any supported extension for the given path.
+    /// Returns the first matching file in priority order: .md, .cs, .json
+    /// </summary>
+    private (string? FilePath, string Extension) FindFileWithExtension(string path)
     {
         var normalizedPath = path.Trim('/');
         if (string.IsNullOrEmpty(normalizedPath))
         {
-            return Path.Combine(_baseDirectory, "index.json");
+            // For root, check for index files
+            foreach (var ext in SupportedExtensions)
+            {
+                var indexPath = Path.Combine(_baseDirectory, $"index{ext}");
+                if (File.Exists(indexPath))
+                    return (indexPath, ext);
+            }
+            return (null, ".json");
         }
 
         var segments = normalizedPath.Split('/', StringSplitOptions.RemoveEmptyEntries);
         var relativePath = string.Join(Path.DirectorySeparatorChar.ToString(), segments);
-        return Path.Combine(_baseDirectory, relativePath + ".json");
+        var basePath = Path.Combine(_baseDirectory, relativePath);
+
+        // Check for files with each extension in priority order
+        foreach (var ext in SupportedExtensions)
+        {
+            var filePath = basePath + ext;
+            if (File.Exists(filePath))
+                return (filePath, ext);
+        }
+
+        // Check for index files in a directory
+        if (Directory.Exists(basePath))
+        {
+            foreach (var ext in SupportedExtensions)
+            {
+                var indexPath = Path.Combine(basePath, $"index{ext}");
+                if (File.Exists(indexPath))
+                    return (indexPath, ext);
+            }
+        }
+
+        // Return the JSON path as default (for writes)
+        return (basePath + ".json", ".json");
     }
+
+    /// <summary>
+    /// Gets the file path for a node with a specific extension.
+    /// </summary>
+    private string GetFilePath(string path, string extension = ".json")
+    {
+        var normalizedPath = path.Trim('/');
+        if (string.IsNullOrEmpty(normalizedPath))
+        {
+            return Path.Combine(_baseDirectory, $"index{extension}");
+        }
+
+        var segments = normalizedPath.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        var relativePath = string.Join(Path.DirectorySeparatorChar.ToString(), segments);
+        return Path.Combine(_baseDirectory, relativePath + extension);
+    }
+
+    /// <summary>
+    /// Removes files with other extensions when a new file is written.
+    /// This prevents having both .json and .md files for the same node.
+    /// </summary>
+    private void CleanupOtherExtensions(string path, string keepExtension)
+    {
+        foreach (var ext in SupportedExtensions)
+        {
+            if (ext == keepExtension)
+                continue;
+
+            var filePath = GetFilePath(path, ext);
+            if (File.Exists(filePath))
+            {
+                File.Delete(filePath);
+            }
+        }
+    }
+
+    #endregion
 }

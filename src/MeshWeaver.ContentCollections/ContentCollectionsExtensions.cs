@@ -445,8 +445,7 @@ public static class ContentCollectionsExtensions
 
         return markdownBuilder.ToString();
     }
-    public static MarkdownElement ParseContent(string collection, string path, DateTime lastWriteTime, string content,
-        IReadOnlyDictionary<string, Author> authors, Address? address)
+    public static MarkdownElement ParseContent(string collection, string path, DateTime lastWriteTime, string content, Address? address)
     {
         if (OperatingSystem.IsWindows())
             path = path.Replace("\\", "/");
@@ -457,54 +456,14 @@ public static class ContentCollectionsExtensions
         var name = Path.GetFileNameWithoutExtension(path);
         var pathWithoutExtension = path.EndsWith(".md", StringComparison.OrdinalIgnoreCase) ? path[..^3] : path;
 
-        if (yamlBlock is null)
-            return new MarkdownElement
-            {
-                Name = name,
-                Path = path,
-                Collection = collection,
-                Url = GetContentUrl(collection, pathWithoutExtension, address),
-                PrerenderedHtml = document.ToHtml(pipeline),
-                LastUpdated = lastWriteTime,
-                Content = content,
-                CodeSubmissions = document.Descendants().OfType<ExecutableCodeBlock>().Select(x => x.SubmitCode).Where(x => x is not null).ToArray()!,
+        // Remove the YAML block from the content if present
+        var contentWithoutYaml = yamlBlock != null
+            ? content.Substring(yamlBlock.Span.End + 1).Trim('\r', '\n')
+            : content;
 
-            };
-
-        Article ret;
-        try
-        {
-            ret = new YamlDotNet.Serialization.DeserializerBuilder().Build()
-                .Deserialize<Article>(yamlBlock.Lines.ToString());
-        }
-        catch
-        {
-            ret = new Article
-            {
-                Name = string.Empty,
-                Collection = string.Empty,
-                PrerenderedHtml = string.Empty,
-                Content = string.Empty,
-                Url = string.Empty,
-                Path = string.Empty,
-                CodeSubmissions = [],
-                Title = string.Empty,
-                Source = string.Empty
-            };
-        }
-
-        // Remove the YAML block from the content
-        var contentWithoutYaml = content.Substring(yamlBlock.Span.End + 1).Trim('\r', '\n');
-
-        // Adapt thumbnail URL to include address and collection path
-        var adaptedThumbnail = AdaptResourceUrl(ret.Thumbnail, collection, address);
-
-        // Render abstract as HTML if it exists
-        var abstractHtml = string.IsNullOrEmpty(ret.Abstract)
-            ? string.Empty
-            : Markdig.Markdown.ToHtml(ret.Abstract, pipeline);
-
-        return ret with
+        // Return MarkdownElement - do not try to deserialize YAML as Article
+        // Markdown files should be loaded as MeshNodes via IPersistenceService
+        return new MarkdownElement
         {
             Name = name,
             Path = path,
@@ -514,20 +473,7 @@ public static class ContentCollectionsExtensions
             LastUpdated = lastWriteTime,
             Content = contentWithoutYaml,
             CodeSubmissions = document.Descendants().OfType<ExecutableCodeBlock>().Select(x => x.SubmitCode).Where(x => x is not null).ToArray()!,
-            AuthorDetails = ret.Authors?.Select(x => authors.GetValueOrDefault(x) ?? ConvertToAuthor(x)).ToArray() ?? [],
-            Thumbnail = adaptedThumbnail,
-            AbstractHtml = abstractHtml
         };
-    }
-
-    private static Author ConvertToAuthor(string authorName)
-    {
-        var names = authorName.Split(' ');
-        if (names.Length == 1)
-            return new Author(string.Empty, names[0]);
-        if (names.Length == 2)
-            return new Author(names[0], names[1]);
-        return new Author(names[0], names[^1]) { MiddleName = string.Join(' ', names.Skip(1).Take(names.Length - 2)), };
     }
 
     public static string? AdaptResourceUrl(string? resourceUrl, string collection, Address? address)
