@@ -1,7 +1,7 @@
 {
   "id": "David",
   "name": "David Kim",
-  "nodeType": "Person",
+  "nodeType": "User",
   "description": "DevOps Engineer",
   "iconName": "Person",
   "isPersistent": true,

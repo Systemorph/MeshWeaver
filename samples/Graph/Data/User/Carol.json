@@ -1,7 +1,7 @@
 {
   "id": "Carol",
   "name": "Carol Martinez",
-  "nodeType": "Person",
+  "nodeType": "User",
   "description": "UX Designer",
   "iconName": "Person",
   "isPersistent": true,
