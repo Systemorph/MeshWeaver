@@ -6,7 +6,6 @@
   "category": "Tasks",
   "description": "Document answers to frequently asked questions",
   "iconName": "ChatHelp",
-  "displayOrder": 14,
   "isPersistent": true,
   "content": {
     "$type": "Todo",
@@ -16,7 +15,7 @@
     "category": "Support",
     "priority": "Medium",
     "assignee": "Alice",
-    "dueDate": "2025-03-01T00:00:00Z",
+    "dueDateOffsetDays": 35,
     "status": "Pending"
   }
 }

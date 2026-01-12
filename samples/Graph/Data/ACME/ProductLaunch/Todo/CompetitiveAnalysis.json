@@ -6,7 +6,6 @@
   "category": "Tasks",
   "description": "Analyze key competitors in the workflow automation space",
   "iconName": "DataTrending",
-  "displayOrder": 2,
   "isPersistent": true,
   "content": {
     "$type": "Todo",
@@ -16,7 +15,7 @@
     "category": "Research",
     "priority": "High",
     "assignee": "Bob",
-    "dueDate": "2025-01-25T00:00:00Z",
+    "dueDateOffsetDays": -7,
     "status": "Completed",
     "completedAt": "2025-01-24T16:45:00Z"
   }

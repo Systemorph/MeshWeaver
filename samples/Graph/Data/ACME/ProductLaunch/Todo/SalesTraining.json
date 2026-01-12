@@ -6,7 +6,6 @@
   "category": "Tasks",
   "description": "Conduct product training sessions for sales reps",
   "iconName": "PersonBoard",
-  "displayOrder": 18,
   "isPersistent": true,
   "content": {
     "$type": "Todo",
@@ -16,7 +15,7 @@
     "category": "Sales",
     "priority": "High",
     "assignee": "Roland",
-    "dueDate": "2025-03-08T00:00:00Z",
+    "dueDateOffsetDays": 40,
     "status": "Pending"
   }
 }

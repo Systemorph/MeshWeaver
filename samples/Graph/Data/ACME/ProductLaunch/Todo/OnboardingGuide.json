@@ -6,7 +6,6 @@
   "category": "Tasks",
   "description": "Develop materials for new customer onboarding",
   "iconName": "DocumentBulletList",
-  "displayOrder": 21,
   "isPersistent": true,
   "content": {
     "$type": "Todo",
@@ -16,7 +15,7 @@
     "category": "Support",
     "priority": "High",
     "assignee": "Alice",
-    "dueDate": "2025-03-14T00:00:00Z",
+    "dueDateOffsetDays": 45,
     "status": "Pending"
   }
 }

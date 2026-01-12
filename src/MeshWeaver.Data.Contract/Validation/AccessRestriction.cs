@@ -1,4 +1,4 @@
-using MeshWeaver.Messaging;
+﻿using MeshWeaver.Messaging;
 
 namespace MeshWeaver.Data.Validation;
 
@@ -40,7 +40,8 @@ public static class AccessAction
 public delegate Task<bool> AccessRestrictionDelegate(
     string action,
     object operationContext,
-    AccessRestrictionContext context);
+    AccessRestrictionContext context,
+    CancellationToken ct);
 
 /// <summary>
 /// Context passed to access restriction lambdas.

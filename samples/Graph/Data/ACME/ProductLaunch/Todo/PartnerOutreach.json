@@ -6,7 +6,6 @@
   "category": "Tasks",
   "description": "Recruit integration and channel partners for launch",
   "iconName": "Handshake",
-  "displayOrder": 19,
   "isPersistent": true,
   "content": {
     "$type": "Todo",
@@ -16,7 +15,7 @@
     "category": "Partnerships",
     "priority": "Medium",
     "assignee": "Carol",
-    "dueDate": "2025-03-10T00:00:00Z",
+    "dueDateOffsetDays": 42,
     "status": "Pending"
   }
 }

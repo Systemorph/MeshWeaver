@@ -27,20 +27,14 @@ public class RlsIntegrationTests(ITestOutputHelper output) : MonolithMeshTestBas
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
     {
-        // Add Row-Level Security services
-        builder.AddRowLevelSecurity();
-
-        // Configure role configuration for "secure" NodeType
-        builder.WithRoleConfiguration("secure", config => config
-            .WithAdminRole()
-            .WithEditorRole()
-            .WithViewerRole()
-            .WithInheritance());
+        // First configure base (adds persistence), then add Row-Level Security
+        // RLS must be added after persistence so it can decorate IPersistenceService
+        var configured = base.ConfigureMesh(builder).AddRowLevelSecurity();
 
         // Register node types as MeshNodes
-        builder.AddMeshNodes(new MeshNode("secure") { Name = "Secure Type" });
+        configured.AddMeshNodes(new MeshNode("secure") { Name = "Secure Type" });
 
-        return base.ConfigureMesh(builder);
+        return configured;
     }
 
     [Fact]
@@ -54,7 +48,7 @@ public class RlsIntegrationTests(ITestOutputHelper output) : MonolithMeshTestBas
         const string parentPath = "rls/create";
 
         // Assign Editor role (has Create permission) to the parent path
-        await securityService.AssignRoleAsync(userId, "Editor", parentPath, "system", TestTimeout);
+        await securityService.AddUserRoleAsync(userId, "Editor", parentPath, "system", TestTimeout);
 
         // Create node with CreatedBy set to the authorized user
         var node = new MeshNode("NewNode", parentPath)
@@ -87,7 +81,7 @@ public class RlsIntegrationTests(ITestOutputHelper output) : MonolithMeshTestBas
         const string parentPath = "rls/readonly";
 
         // Assign Viewer role (only Read permission, no Create)
-        await securityService.AssignRoleAsync(userId, "Viewer", parentPath, "system", TestTimeout);
+        await securityService.AddUserRoleAsync(userId, "Viewer", parentPath, "system", TestTimeout);
 
         var node = new MeshNode("FailedNode", parentPath)
         {
@@ -143,7 +137,7 @@ public class RlsIntegrationTests(ITestOutputHelper output) : MonolithMeshTestBas
         const string parentPath = "rls/delete";
 
         // Assign Admin role (has all permissions including Delete)
-        await securityService.AssignRoleAsync(adminId, "Admin", parentPath, "system", TestTimeout);
+        await securityService.AddUserRoleAsync(adminId, "Admin", parentPath, "system", TestTimeout);
 
         // Create a node first
         var node = new MeshNode("ToDelete", parentPath)
@@ -179,7 +173,7 @@ public class RlsIntegrationTests(ITestOutputHelper output) : MonolithMeshTestBas
         const string parentPath = "rls/nodelete";
 
         // Create node as admin
-        await securityService.AssignRoleAsync(adminId, "Admin", parentPath, "system", TestTimeout);
+        await securityService.AddUserRoleAsync(adminId, "Admin", parentPath, "system", TestTimeout);
         var node = new MeshNode("Protected", parentPath)
         {
             Name = "Protected Node",
@@ -192,7 +186,7 @@ public class RlsIntegrationTests(ITestOutputHelper output) : MonolithMeshTestBas
         createResponse.Message.Success.Should().BeTrue();
 
         // Assign Viewer role (no Delete permission)
-        await securityService.AssignRoleAsync(viewerId, "Viewer", parentPath, "system", TestTimeout);
+        await securityService.AddUserRoleAsync(viewerId, "Viewer", parentPath, "system", TestTimeout);
 
         // Act - viewer tries to delete
         var deleteResponse = await client.AwaitResponse(
@@ -216,7 +210,7 @@ public class RlsIntegrationTests(ITestOutputHelper output) : MonolithMeshTestBas
         const string parentPath = "rls/update";
 
         // Assign Editor role (has Create and Update permissions)
-        await securityService.AssignRoleAsync(editorId, "Editor", parentPath, "system", TestTimeout);
+        await securityService.AddUserRoleAsync(editorId, "Editor", parentPath, "system", TestTimeout);
 
         // Create a node first
         var node = new MeshNode("ToUpdate", parentPath)
@@ -254,7 +248,7 @@ public class RlsIntegrationTests(ITestOutputHelper output) : MonolithMeshTestBas
         const string parentPath = "rls/noupdate";
 
         // Create node as admin
-        await securityService.AssignRoleAsync(adminId, "Admin", parentPath, "system", TestTimeout);
+        await securityService.AddUserRoleAsync(adminId, "Admin", parentPath, "system", TestTimeout);
         var node = new MeshNode("NoUpdate", parentPath)
         {
             Name = "Cannot Update",
@@ -267,7 +261,7 @@ public class RlsIntegrationTests(ITestOutputHelper output) : MonolithMeshTestBas
         createResponse.Message.Success.Should().BeTrue();
 
         // Assign Viewer role (no Update permission)
-        await securityService.AssignRoleAsync(viewerId, "Viewer", parentPath, "system", TestTimeout);
+        await securityService.AddUserRoleAsync(viewerId, "Viewer", parentPath, "system", TestTimeout);
 
         // Act - viewer tries to update
         var updatedNode = node with { Name = "Trying to Update" };
@@ -293,7 +287,7 @@ public class RlsIntegrationTests(ITestOutputHelper output) : MonolithMeshTestBas
         const string parentPath = "rls/parent";
 
         // Assign Admin role at top level (rls) so user can create anywhere under rls/
-        await securityService.AssignRoleAsync(userId, "Admin", topLevelPath, "system", TestTimeout);
+        await securityService.AddUserRoleAsync(userId, "Admin", topLevelPath, "system", TestTimeout);
 
         // Create parent node first
         var parentNode = new MeshNode("parent", topLevelPath)
@@ -332,7 +326,7 @@ public class RlsIntegrationTests(ITestOutputHelper output) : MonolithMeshTestBas
         const string globalAdminId = "globaladmin";
 
         // Assign global Admin role (null path = applies everywhere)
-        await securityService.AssignRoleAsync(globalAdminId, "Admin", null!, "system", TestTimeout);
+        await securityService.AddUserRoleAsync(globalAdminId, "Admin", null!, "system", TestTimeout);
 
         // Act - create nodes in different paths
         var node1 = new MeshNode("GlobalTest1", "random/path")
@@ -372,8 +366,8 @@ public class RlsIntegrationTests(ITestOutputHelper output) : MonolithMeshTestBas
         const string path2 = "rls/multi/project2";
 
         // Assign different roles at different paths
-        await securityService.AssignRoleAsync(userId, "Viewer", path1, "system", TestTimeout);
-        await securityService.AssignRoleAsync(userId, "Editor", path2, "system", TestTimeout);
+        await securityService.AddUserRoleAsync(userId, "Viewer", path1, "system", TestTimeout);
+        await securityService.AddUserRoleAsync(userId, "Editor", path2, "system", TestTimeout);
 
         // Act - check permissions at each path
         var permissions1 = await securityService.GetEffectivePermissionsAsync(path1, userId, TestTimeout);
@@ -394,9 +388,9 @@ public class SecurePersistenceDecoratorTests(ITestOutputHelper output) : Monolit
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
     {
-        // Add Row-Level Security services
-        builder.AddRowLevelSecurity();
-        return base.ConfigureMesh(builder);
+        // First configure base (adds persistence), then add Row-Level Security
+        // RLS must be added after persistence so it can decorate IPersistenceService
+        return base.ConfigureMesh(builder).AddRowLevelSecurity();
     }
 
     [Fact]
@@ -408,7 +402,7 @@ public class SecurePersistenceDecoratorTests(ITestOutputHelper output) : Monolit
         var logger = Mesh.ServiceProvider.GetRequiredService<ILogger<SecurePersistenceServiceDecorator>>();
 
         // Act
-        var decorator = new SecurePersistenceServiceDecorator(persistence, securityService, logger);
+        var decorator = new SecurePersistenceServiceDecorator(persistence, new Lazy<ISecurityService>(() => securityService), logger);
 
         // Assert
         decorator.Should().NotBeNull();
@@ -422,7 +416,7 @@ public class SecurePersistenceDecoratorTests(ITestOutputHelper output) : Monolit
         var persistence = Mesh.ServiceProvider.GetRequiredService<IPersistenceService>();
         var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
         var logger = Mesh.ServiceProvider.GetRequiredService<ILogger<SecurePersistenceServiceDecorator>>();
-        var decorator = new SecurePersistenceServiceDecorator(persistence, securityService, logger);
+        var decorator = new SecurePersistenceServiceDecorator(persistence, new Lazy<ISecurityService>(() => securityService), logger);
 
         const string userId = "secureReader";
         const string nodePath = "secure/test/node";
@@ -436,7 +430,7 @@ public class SecurePersistenceDecoratorTests(ITestOutputHelper output) : Monolit
         await persistence.SaveNodeAsync(node, TestTimeout);
 
         // Assign read permission
-        await securityService.AssignRoleAsync(userId, "Viewer", "secure/test", "system", TestTimeout);
+        await securityService.AddUserRoleAsync(userId, "Viewer", "secure/test", "system", TestTimeout);
 
         // Act
         var result = await decorator.GetNodeSecureAsync(nodePath, userId, TestTimeout);
@@ -453,7 +447,7 @@ public class SecurePersistenceDecoratorTests(ITestOutputHelper output) : Monolit
         var persistence = Mesh.ServiceProvider.GetRequiredService<IPersistenceService>();
         var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
         var logger = Mesh.ServiceProvider.GetRequiredService<ILogger<SecurePersistenceServiceDecorator>>();
-        var decorator = new SecurePersistenceServiceDecorator(persistence, securityService, logger);
+        var decorator = new SecurePersistenceServiceDecorator(persistence, new Lazy<ISecurityService>(() => securityService), logger);
 
         const string userId = "noAccess";
         const string nodePath = "restricted/hidden/node";
@@ -482,7 +476,7 @@ public class SecurePersistenceDecoratorTests(ITestOutputHelper output) : Monolit
         var persistence = Mesh.ServiceProvider.GetRequiredService<IPersistenceService>();
         var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
         var logger = Mesh.ServiceProvider.GetRequiredService<ILogger<SecurePersistenceServiceDecorator>>();
-        var decorator = new SecurePersistenceServiceDecorator(persistence, securityService, logger);
+        var decorator = new SecurePersistenceServiceDecorator(persistence, new Lazy<ISecurityService>(() => securityService), logger);
 
         const string userId = "partialAccess";
         const string parentPath = "filter/test";
@@ -502,7 +496,7 @@ public class SecurePersistenceDecoratorTests(ITestOutputHelper output) : Monolit
         await persistence.SaveNodeAsync(node2, TestTimeout);
 
         // Only grant access to node1's subtree
-        await securityService.AssignRoleAsync(userId, "Viewer", "filter/test/accessible", "system", TestTimeout);
+        await securityService.AddUserRoleAsync(userId, "Viewer", "filter/test/accessible", "system", TestTimeout);
 
         // Act
         var children = await decorator.GetChildrenSecureAsync(parentPath, userId).ToListAsync();

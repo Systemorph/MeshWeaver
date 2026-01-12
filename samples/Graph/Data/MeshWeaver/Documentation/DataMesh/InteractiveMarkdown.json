@@ -1,12 +1,11 @@
 {
   "id": "InteractiveMarkdown",
-  "namespace": "MeshWeaver",
+  "namespace": "MeshWeaver/Documentation/DataMesh",
   "name": "Interactive Markdown",
   "nodeType": "Markdown",
   "category": "Documentation",
   "description": "Interactive markdown is the future of software engineering. With the introduction of AI in software engineering, the main job of humans will be to compose different parts and review the quality. Executable markdown facilitates this process.",
   "iconName": "Code",
-  "displayOrder": 15,
   "isPersistent": true,
   "state": "Active",
   "content": {

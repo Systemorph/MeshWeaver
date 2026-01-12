@@ -5,7 +5,6 @@
   "category": "Agents",
   "description": "Executes planned tasks",
   "iconName": "Play",
-  "displayOrder": 20,
   "isPersistent": true,
   "content": {
     "$type": "AgentConfiguration",

@@ -1,4 +1,4 @@
-using MeshWeaver.Mesh.Services;
+﻿using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 
 namespace MeshWeaver.Mesh;
@@ -46,7 +46,7 @@ public record NodeTypeConfiguration
     /// <summary>
     /// Display order for sorting in autocomplete lists (lower values appear first).
     /// </summary>
-    public int DisplayOrder { get; init; }
+    public int? DisplayOrder { get; init; }
 
     /// <summary>
     /// Validator types for this NodeType.
@@ -59,7 +59,7 @@ public record NodeTypeConfiguration
     /// Adds a validator type to this configuration.
     /// </summary>
     public NodeTypeConfiguration WithValidator<T>() where T : INodeValidator
-        => this with { ValidatorTypes = [..ValidatorTypes, typeof(T)] };
+        => this with { ValidatorTypes = [.. ValidatorTypes, typeof(T)] };
 
     /// <summary>
     /// Adds a validator type to this configuration.
@@ -68,6 +68,6 @@ public record NodeTypeConfiguration
     {
         if (!typeof(INodeValidator).IsAssignableFrom(validatorType))
             throw new ArgumentException($"Type {validatorType.Name} must implement INodeValidator", nameof(validatorType));
-        return this with { ValidatorTypes = [..ValidatorTypes, validatorType] };
+        return this with { ValidatorTypes = [.. ValidatorTypes, validatorType] };
     }
 }

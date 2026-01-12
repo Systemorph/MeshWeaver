@@ -6,7 +6,6 @@
   "category": "Tasks",
   "description": "Arrange briefings with key industry analysts",
   "iconName": "PeopleTeam",
-  "displayOrder": 9,
   "isPersistent": true,
   "content": {
     "$type": "Todo",
@@ -16,7 +15,7 @@
     "category": "PR",
     "priority": "Medium",
     "assignee": "Emma",
-    "dueDate": "2025-02-20T00:00:00Z",
+    "dueDateOffsetDays": 12,
     "status": "Pending"
   }
 }

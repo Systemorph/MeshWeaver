@@ -78,7 +78,7 @@ public class TypeLevelAccessRestrictionTest(ITestOutputHelper output) : HubTestB
                         type
                             // Only Admin role can Create - validation runs on client
                             .WithAccessRestriction(
-                                (action, ctx, accessCtx) =>
+                                (action, ctx, accessCtx, ct) =>
                                 {
                                     // Allow all actions except Create for non-admins
                                     if (action != AccessAction.Create)
@@ -222,7 +222,7 @@ public class RowLevelAccessRestrictionTest(ITestOutputHelper output) : HubTestBa
                         type
                             // Row-level restriction: only owner can Update or Delete
                             .WithTypedAccessRestriction(
-                                (action, entity, accessCtx) =>
+                                (action, entity, accessCtx, ct) =>
                                 {
                                     // Read is allowed for all
                                     if (action == AccessAction.Read)
@@ -409,9 +409,9 @@ public class GlobalAccessRestrictionTest(ITestOutputHelper output) : HubTestBase
                         {
                             // Allow everything except anonymous deletes
                             if (action != AccessAction.Delete)
-                                return Task.FromResult(true);
+                                return true;
                             // For Delete, require authenticated user
-                            return Task.FromResult(accessCtx.UserContext != null);
+                            return accessCtx.UserContext != null;
                         },
                         "NoAnonymousDeletes")
                     .AddHubSource(CreateHostAddress(), dataSource =>
@@ -546,8 +546,8 @@ public class CombinedAccessRestrictionTest(ITestOutputHelper output) : HubTestBa
                         (action, ctx, accessCtx) =>
                         {
                             if (action == AccessAction.Read)
-                                return Task.FromResult(true);
-                            return Task.FromResult(accessCtx.UserContext != null);
+                                return true;
+                            return accessCtx.UserContext != null;
                         },
                         "RequireAuthentication")
                     .AddHubSource(CreateHostAddress(), dataSource =>
@@ -555,7 +555,7 @@ public class CombinedAccessRestrictionTest(ITestOutputHelper output) : HubTestBa
                             type
                                 // Type-specific: only Admin can Create
                                 .WithAccessRestriction(
-                                    (action, ctx, accessCtx) =>
+                                    (action, ctx, accessCtx, ct) =>
                                     {
                                         if (action != AccessAction.Create)
                                             return Task.FromResult(true);

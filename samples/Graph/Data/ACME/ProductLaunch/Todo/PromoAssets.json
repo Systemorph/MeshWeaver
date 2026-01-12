@@ -6,7 +6,6 @@
   "category": "Tasks",
   "description": "Create graphics and visuals for marketing campaigns",
   "iconName": "Image",
-  "displayOrder": 15,
   "isPersistent": true,
   "content": {
     "$type": "Todo",
@@ -16,7 +15,7 @@
     "category": "Design",
     "priority": "Medium",
     "assignee": "David",
-    "dueDate": "2025-03-03T00:00:00Z",
+    "dueDateOffsetDays": 33,
     "status": "Pending"
   }
 }

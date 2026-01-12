@@ -6,7 +6,6 @@
   "category": "Types",
   "description": "A content article with YAML frontmatter",
   "iconName": "DocumentText",
-  "displayOrder": 35,
   "isPersistent": true,
   "content": {
     "$type": "NodeTypeDefinition",
@@ -15,7 +14,6 @@
     "displayName": "Article",
     "iconName": "DocumentText",
     "description": "A content article with YAML frontmatter",
-    "displayOrder": 35,
     "configuration": "config => config.WithContentType<Article>().AddNodeTypeView()"
   }
 }

@@ -6,7 +6,6 @@
   "category": "Announcements",
   "description": "Announcing the MeshWeaver platform launch",
   "icon": "/static/storage/content/Systemorph/Marketing/icons/share.svg",
-  "displayOrder": 10,
   "isPersistent": true,
   "content": {
     "id": "MeshWeaverLaunch",

@@ -6,7 +6,6 @@
   "category": "Tasks",
   "description": "Create wireframes for the MeshFlow product landing page",
   "iconName": "DesignIdeas",
-  "displayOrder": 4,
   "isPersistent": true,
   "content": {
     "$type": "Todo",
@@ -16,7 +15,7 @@
     "category": "Design",
     "priority": "High",
     "assignee": "David",
-    "dueDate": "2025-02-01T00:00:00Z",
+    "dueDateOffsetDays": 3,
     "status": "InProgress"
   }
 }

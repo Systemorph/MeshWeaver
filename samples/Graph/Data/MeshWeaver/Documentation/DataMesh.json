@@ -1,0 +1,19 @@
+{
+  "id": "DataMesh",
+  "namespace": "MeshWeaver/Documentation",
+  "name": "Data Mesh",
+  "nodeType": "Markdown",
+  "category": "Documentation",
+  "description": "Operational guides for setting up, configuring, and operating the MeshWeaver data mesh",
+  "iconName": "Settings",
+  "isPersistent": true,
+  "state": "Active",
+  "content": {
+    "$type": "MarkdownDocument",
+    "id": "DataMesh",
+    "title": "Data Mesh Operations",
+    "iconName": "Settings",
+    "logo": "data:image/svg+xml,%3Csvg viewBox='0 0 48 48' xmlns='http://www.w3.org/2000/svg'%3E%3Cdefs%3E%3ClinearGradient id='mesh' x1='0%25' y1='0%25' x2='100%25' y2='100%25'%3E%3Cstop offset='0%25' stop-color='%23ff9800'/%3E%3Cstop offset='100%25' stop-color='%23f57c00'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='48' height='48' rx='8' fill='url(%23mesh)'/%3E%3Ccircle cx='12' cy='12' r='4' fill='white'/%3E%3Ccircle cx='36' cy='12' r='4' fill='white'/%3E%3Ccircle cx='12' cy='36' r='4' fill='white'/%3E%3Ccircle cx='36' cy='36' r='4' fill='white'/%3E%3Ccircle cx='24' cy='24' r='5' fill='white'/%3E%3Cpath d='M12 12L24 24M36 12L24 24M12 36L24 24M36 36L24 24' stroke='white' stroke-width='2'/%3E%3C/svg%3E",
+    "content": "# Data Mesh Operations\n\nThis section covers the practical aspects of setting up, configuring, and operating your MeshWeaver data mesh.\n\n## Overview\n\nThe Data Mesh operational guides provide hands-on documentation for:\n- **Node Type Configuration** - Defining and customizing mesh node types\n- **Query Syntax** - Filtering and retrieving data from the mesh\n- **Unified Content References** - Working with UCR links and references\n- **Interactive Markdown** - Creating dynamic, data-driven documents\n- **Collaborative Editing** - Enabling real-time collaboration features\n\n## Getting Started\n\nTo begin working with the data mesh, start with [Node Type Configuration](MeshWeaver/Documentation/DataMesh/NodeTypeConfiguration) to understand how to define your data structures, then explore [Query Syntax](MeshWeaver/Documentation/DataMesh/QuerySyntax) to learn how to filter and retrieve data.\n\n## Guides\n\n### Node Type Configuration\nLearn how to define node types, configure properties, and customize behavior.\n\n[Read Guide](MeshWeaver/Documentation/DataMesh/NodeTypeConfiguration)\n\n---\n\n### Query Syntax\nMaster the query syntax for filtering and retrieving mesh data.\n\n[Read Guide](MeshWeaver/Documentation/DataMesh/QuerySyntax)\n\n---\n\n### Unified Content References\nUnderstand how UCR links work and how to create references between content.\n\n[Read Guide](MeshWeaver/Documentation/DataMesh/UnifiedContentReferences)\n\n---\n\n### Interactive Markdown\nCreate dynamic documents with embedded data and interactive components.\n\n[Read Guide](MeshWeaver/Documentation/DataMesh/InteractiveMarkdown)\n\n---\n\n### Collaborative Editing\nEnable real-time collaboration and concurrent editing features.\n\n[Read Guide](MeshWeaver/Documentation/DataMesh/CollaborativeEditing)"
+  }
+}

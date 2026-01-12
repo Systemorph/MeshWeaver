@@ -180,7 +180,7 @@ public class UnifiedReferenceAutocompleteProvider(
                 .Where(n => n.Segments.Count == 1)
                 .Where(n => string.IsNullOrEmpty(prefix) ||
                            n.Path.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
-                .OrderBy(n => n.DisplayOrder)
+                .OrderBy(n => n.DisplayOrder ?? int.MaxValue)
                 .ThenBy(n => n.Name)
                 .Take(10);
 
@@ -193,7 +193,7 @@ public class UnifiedReferenceAutocompleteProvider(
                         InsertText: $"@{node.Path}/",
                         Description: node.Description ?? node.Name,
                         Category: "Types",
-                        Priority: PrefixPriority - node.DisplayOrder,
+                        Priority: PrefixPriority - (node.DisplayOrder ?? 0),
                         Kind: AutocompleteKind.Other
                     ));
                 }

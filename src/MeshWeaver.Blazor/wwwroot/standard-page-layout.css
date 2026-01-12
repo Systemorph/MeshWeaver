@@ -31,12 +31,17 @@
     scrollbar-color: #c6c6c6 white;
 }
 
+html, body {
+    height: 100%;
+    margin: 0;
+    padding: 0;
+}
+
 body {
     --body-font: "Segoe UI Variable", "Segoe UI", sans-serif;
     font-family: var(--body-font);
     font-size: var(--type-ramp-base-font-size);
     line-height: var(--type-ramp-base-line-height);
-    margin: 0;
 }
 
 .main {
@@ -208,6 +213,7 @@ code {
     .main {
         flex-direction: column !important;
         row-gap: 0 !important;
+        overflow-y: auto;
     }
 
     #main-menu {

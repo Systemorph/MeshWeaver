@@ -1,0 +1,17 @@
+{
+  "id": "DataPrefix",
+  "namespace": "MeshWeaver/Documentation/DataMesh/UnifiedContentReferences",
+  "name": "Data Prefix",
+  "nodeType": "Markdown",
+  "category": "Documentation",
+  "description": "Embed data collections and entities",
+  "iconName": "Database",
+  "isPersistent": true,
+  "state": "Active",
+  "content": {
+    "$type": "MarkdownDocument",
+    "id": "DataPrefix",
+    "title": "Data Prefix (data:)",
+    "content": "# Data Prefix\n\nThe `data:` prefix embeds data collections or individual entities from a node's data store.\n\n## Syntax\n\n```\n@@{address}/data:{collection}[/{entityId}]\n@@{address}/data:\n```\n\n## Components\n\n| Component | Description | Example |\n|-----------|-------------|----------|\n| `collection` | Name of the data collection | `Posts`, `Users`, `Products` |\n| `entityId` | (Optional) Specific entity ID | `post-123`, `user-456` |\n| (empty) | Self-reference to node's data | |\n\n## Example: Self-Reference\n\nEmbed the data collections of this node:\n\n**Syntax:**\n```\n@@MeshWeaver/Documentation/DataMesh/UnifiedContentReferences/DataPrefix/data:\n```\n\nEmpty path after `data:` means self-reference - shows available data collections.\n\n**Result:**\n\n@@MeshWeaver/Documentation/DataMesh/UnifiedContentReferences/DataPrefix/data:\n\n## Example: Collection Reference\n\nReference a specific data collection:\n\n**Syntax:**\n```\n@Systemorph/Marketing/data:Posts\n```\n\n**Result:**\n\n@Systemorph/Marketing/data:Posts\n\n## Rendering\n\n| Reference Type | Renders As |\n|----------------|------------|\n| Collection | Data grid with all items |\n| Single entity | Entity detail view |\n| (empty) | List of available collections |\n\n## Notes\n\n- Data is fetched from the node's workspace\n- Collections use the registered data providers\n- Supports filtering via query parameters"
+  }
+}

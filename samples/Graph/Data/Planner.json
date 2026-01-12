@@ -5,7 +5,6 @@
   "category": "Agents",
   "description": "Plans complex multi-step tasks",
   "iconName": "CalendarAgenda",
-  "displayOrder": 10,
   "isPersistent": true,
   "content": {
     "$type": "AgentConfiguration",

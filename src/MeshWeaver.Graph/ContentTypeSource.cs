@@ -8,6 +8,8 @@ using MeshWeaver.Mesh.Services;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
+// IContentInitializable is in MeshWeaver.Mesh namespace
+
 namespace MeshWeaver.Graph;
 
 /// <summary>
@@ -156,6 +158,18 @@ public record ContentTypeSource<T> : TypeSourceWithType<T, ContentTypeSource<T>>
         if (content != null)
         {
             _logger?.LogWarning("ContentTypeSource<{Type}>.InitializeAsync: Found content, returning it", typeof(T).Name);
+
+            // Call Initialize() if content implements IContentInitializable
+            if (content is IContentInitializable initializable)
+            {
+                var initialized = initializable.Initialize();
+                if (initialized is T typedInitialized)
+                {
+                    content = typedInitialized;
+                    _logger?.LogWarning("ContentTypeSource<{Type}>.InitializeAsync: Content was initialized via IContentInitializable", typeof(T).Name);
+                }
+            }
+
             // Return the content as the initial data
             _lastSaved = new InstanceCollection([content], TypeDefinition.GetKey);
             return _lastSaved;

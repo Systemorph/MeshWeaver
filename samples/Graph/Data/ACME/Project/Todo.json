@@ -5,7 +5,6 @@
   "nodeType": "NodeType",
   "description": "A task with status, assignee, and due date",
   "iconName": "TaskListSquare",
-  "displayOrder": 30,
   "isPersistent": true,
   "content": {
     "$type": "NodeTypeDefinition",
@@ -14,7 +13,6 @@
     "displayName": "Task",
     "iconName": "TaskListSquare",
     "description": "A task with status, assignee, and due date",
-    "displayOrder": 30,
     "configuration": "config => config.WithContentType<Todo>().AddLayout(layout => layout.WithView(\"Details\", TodoViews.Details).WithView(\"Thumbnail\", TodoViews.Thumbnail).WithDefaultArea(\"Details\")).AddDefaultViews()"
   }
 }

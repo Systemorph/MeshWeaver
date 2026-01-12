@@ -1,12 +1,11 @@
 {
   "id": "QuerySyntax",
-  "namespace": "MeshWeaver",
+  "namespace": "MeshWeaver/Documentation/DataMesh",
   "name": "Query Syntax",
   "nodeType": "Markdown",
   "category": "Documentation",
   "description": "Documentation for the GitHub-style query syntax",
   "iconName": "DocumentSearch",
-  "displayOrder": 10,
   "isPersistent": true,
   "state": "Active",
   "content": {

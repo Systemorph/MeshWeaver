@@ -6,7 +6,6 @@
   "category": "Tasks",
   "description": "Create detailed buyer persona for MeshFlow targeting operations managers at mid-market companies",
   "iconName": "Person",
-  "displayOrder": 1,
   "isPersistent": true,
   "content": {
     "$type": "Todo",
@@ -16,7 +15,7 @@
     "category": "Research",
     "priority": "High",
     "assignee": "Alice",
-    "dueDate": "2025-01-20T00:00:00Z",
+    "dueDateOffsetDays": -10,
     "status": "Completed",
     "completedAt": "2025-01-18T14:30:00Z"
   }

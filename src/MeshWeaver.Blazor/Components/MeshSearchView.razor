@@ -215,7 +215,7 @@
             builder.AddAttribute(seq++, "ChildContent", (RenderFragment)(gridBuilder =>
             {
                 var gridSeq = 0;
-                foreach (var rootNode in group.OrderBy(n => n.DisplayOrder).ThenBy(n => n.Name))
+                foreach (var rootNode in group)
                 {
                     // Each root with its subtree goes into one FluentGridItem
                     gridBuilder.OpenComponent<FluentGridItem>(gridSeq++);
@@ -338,8 +338,6 @@
 
         return _nodes
             .Where(n => n.Path.StartsWith(parentPath) && !HasIntermediateParent(n.Path, parent.Path, allPaths))
-            .OrderBy(n => n.DisplayOrder)
-            .ThenBy(n => n.Name)
             .ToList();
     }
 

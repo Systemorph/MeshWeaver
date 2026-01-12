@@ -6,7 +6,6 @@
   "category": "AI Use Cases",
   "description": "Cross-reference and verify data against master records",
   "icon": "/static/storage/content/Systemorph/Marketing/icons/checkmark-circle.svg",
-  "displayOrder": 14,
   "addressSegments": 0,
   "isPersistent": true,
   "content": {

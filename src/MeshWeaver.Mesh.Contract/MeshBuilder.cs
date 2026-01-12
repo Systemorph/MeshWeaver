@@ -2,6 +2,7 @@
 using System.Runtime.CompilerServices;
 using MeshWeaver.Domain;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Mesh.Security;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -129,6 +130,9 @@ public record MeshBuilder
         // Create mesh-level type registry for polymorphic serialization
         // Hub-level type registries will inherit from this via ParentServiceProvider
         var meshTypeRegistry = MessageHubExtensions.CreateTypeRegistry();
+
+        // Register mesh types on the shared registry for JSON deserialization (e.g., Access partition files)
+        meshTypeRegistry.WithType(typeof(UserAccess), nameof(UserAccess));
 
         // Capture the list reference - will be populated by ConfigureDefaultNodeHub calls later
         // The lambda is evaluated when MeshConfiguration is resolved (after all builder calls)

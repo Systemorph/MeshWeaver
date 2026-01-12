@@ -7,7 +7,9 @@ using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Layout.Domain;
+using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Activity;
+using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using MeshWeaver.ShortGuid;
 using Microsoft.Extensions.DependencyInjection;
@@ -146,11 +148,28 @@ public static class NodeTypeView
     public static UiControl CodeView(LayoutAreaHost host, RenderingContext ctx)
     {
         var hubAddress = host.Hub.Address;
+        var hubPath = host.Hub.Address.ToString();
+        var meshQuery = host.Hub.ServiceProvider.GetService<IMeshQuery>();
 
         // Get data streams directly
         var definitionStream = host.Workspace.GetNodeContent<NodeTypeDefinition>();
         var codeFilesStream = host.Workspace.GetStream<CodeConfiguration>()!;
         var selectionStream = host.Stream.GetDataStream<string?>(SelectionDataId);
+
+        // Query for NodeType nodes under this namespace
+        var nodeTypesStream = Observable.FromAsync(async () =>
+        {
+            if (meshQuery == null)
+                return Array.Empty<MeshNode>() as IReadOnlyList<MeshNode>;
+            try
+            {
+                return await meshQuery.QueryAsync<MeshNode>($"path:{hubPath} nodeType:NodeType scope:descendants").ToListAsync() as IReadOnlyList<MeshNode>;
+            }
+            catch
+            {
+                return Array.Empty<MeshNode>();
+            }
+        });
 
         // Initialize selection to "configuration" (show node type definition by default)
         host.UpdateData(SelectionDataId, "configuration");
@@ -161,13 +180,13 @@ public static class NodeTypeView
             .WithView(
                 // Left menu - observable, updates when definition or code files load
                 (h, c) => definitionStream
-                    .CombineLatest(codeFilesStream)
+                    .CombineLatest(codeFilesStream, nodeTypesStream)
                     .Select(tuple =>
                     {
-                        var (definition, codeFiles) = tuple;
+                        var (definition, codeFiles, nodeTypes) = tuple;
                         if (definition == null)
                             return RenderLoading("Loading...");
-                        return BuildLeftMenu(host, hubAddress, definition, codeFiles);
+                        return BuildLeftMenu(host, hubAddress, definition, codeFiles, nodeTypes);
                     }),
                 skin => skin.WithSize("280px").WithMin("200px").WithMax("400px").WithCollapsible(true)
             )
@@ -187,13 +206,14 @@ public static class NodeTypeView
     }
 
     /// <summary>
-    /// Builds the left navigation menu with Configuration and Code files entries.
+    /// Builds the left navigation menu with Configuration, Code files, and Node Types entries.
     /// </summary>
     private static UiControl BuildLeftMenu(
         LayoutAreaHost host,
         object hubAddress,
         NodeTypeDefinition content,
-        IReadOnlyCollection<CodeConfiguration>? codeFiles)
+        IReadOnlyCollection<CodeConfiguration>? codeFiles,
+        IReadOnlyCollection<MeshNode>? nodeTypes = null)
     {
         var navMenu = Controls.NavMenu.WithSkin(s => s.WithWidth(280).WithCollapsible(false));
 
@@ -233,6 +253,24 @@ public static class NodeTypeView
         }
 
         navMenu = navMenu.WithNavGroup(codeGroup);
+
+        // Node Types section (if any NodeType nodes exist under this namespace)
+        if (nodeTypes != null && nodeTypes.Count > 0)
+        {
+            var typesGroup = new NavGroupControl("Node Types")
+                .WithIcon(FluentIcons.Document())
+                .WithSkin(s => s.WithExpanded(true));
+
+            foreach (var typeNode in nodeTypes.OrderBy(n => n.DisplayOrder).ThenBy(n => n.Name))
+            {
+                var typeHref = $"/{typeNode.Path}";
+                typesGroup = typesGroup.WithView(
+                    new NavLinkControl(typeNode.Name ?? typeNode.Id, FluentIcons.DocumentText(), typeHref)
+                );
+            }
+
+            navMenu = navMenu.WithNavGroup(typesGroup);
+        }
 
         // Dependencies section (if any)
         if (content.Dependencies != null && content.Dependencies.Count > 0)

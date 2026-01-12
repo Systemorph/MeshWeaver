@@ -85,7 +85,7 @@ public class InMemoryPersistenceService(IStorageAdapter? storageAdapter = null) 
                 }
                 return true;
             })
-            .OrderBy(n => n.DisplayOrder)
+            .OrderBy(n => n.DisplayOrder ?? int.MaxValue)
             .ThenBy(n => n.Name);
 
         foreach (var child in children)
@@ -312,7 +312,7 @@ public class InMemoryPersistenceService(IStorageAdapter? storageAdapter = null) 
 
                 return false;
             })
-            .OrderBy(n => n.DisplayOrder)
+            .OrderBy(n => n.DisplayOrder ?? int.MaxValue)
             .ThenBy(n => n.Name);
 
         foreach (var result in results)

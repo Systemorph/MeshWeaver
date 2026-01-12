@@ -6,7 +6,6 @@
   "category": "Tasks",
   "description": "Create the main sales deck for MeshFlow demos and pitches",
   "iconName": "SlideText",
-  "displayOrder": 6,
   "isPersistent": true,
   "content": {
     "$type": "Todo",
@@ -16,7 +15,7 @@
     "category": "Sales",
     "priority": "High",
     "assignee": "Roland",
-    "dueDate": "2025-02-08T00:00:00Z",
-    "status": "Pending"
+    "dueDateOffsetDays": 0,
+    "status": "InProgress"
   }
 }

@@ -6,7 +6,6 @@
   "category": "Tasks",
   "description": "Create content calendar for LinkedIn and Twitter launch campaign",
   "iconName": "Share",
-  "displayOrder": 12,
   "isPersistent": true,
   "content": {
     "$type": "Todo",
@@ -16,7 +15,7 @@
     "category": "Marketing",
     "priority": "Medium",
     "assignee": "Carol",
-    "dueDate": "2025-02-25T00:00:00Z",
+    "dueDateOffsetDays": 25,
     "status": "Pending"
   }
 }
