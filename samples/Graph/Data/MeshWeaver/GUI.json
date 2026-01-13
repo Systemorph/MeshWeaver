@@ -1,0 +1,19 @@
+{
+  "id": "GUI",
+  "namespace": "MeshWeaver",
+  "name": "Graphical User Interface",
+  "nodeType": "Markdown",
+  "category": "Documentation",
+  "description": "Build reactive UIs with controls, layout areas, and data binding",
+  "iconName": "AppGeneric",
+  "displayOrder": 20,
+  "isPersistent": true,
+  "state": "Active",
+  "content": {
+    "$type": "MarkdownDocument",
+    "id": "GUI",
+    "title": "Graphical User Interface",
+    "iconName": "AppGeneric",
+    "content": "# Graphical User Interface\n\nMeshWeaver provides a control-based GUI system that renders reactive user interfaces from C# code.\n\n## Core Concepts\n\n| Concept | Purpose |\n|---------|----------|\n| **Controls** | Declarative UI elements that define what to render |\n| **Layout Areas** | Named regions that display controls |\n| **Data Binding** | Automatic synchronization between UI and data |\n| **Skins** | Styling and appearance customization |\n\n## How It Works\n\nYou create controls using the `Controls` class:\n\n```csharp\nvar button = Controls.Button(\"Click Me\");\nvar label = Controls.Label(\"Hello World\");\nvar stack = Controls.Stack()\n    .WithArea(label)\n    .WithArea(button);\n```\n\nControls are immutable records. Each `With*` method returns a new control instance with the specified modification.\n\n## Control Categories\n\n**Container Controls**: Organize other controls\n- Stack, Tabs, Splitter, Layout, LayoutGrid\n\n**Input Controls**: Accept user data\n- TextField, NumberField, CheckBox, Select, ComboBox, DatePicker\n\n**Display Controls**: Show information\n- Label, Badge, Icon, Markdown, Html, CodeSample\n\n**Data Controls**: Show collections\n- DataGrid, Editor\n\n**Action Controls**: Trigger operations\n- Button, MenuItem, NavLink\n\n## Detailed Documentation\n\n@MeshWeaver/GUI/Editor\n\n@MeshWeaver/GUI/Stack\n\n@MeshWeaver/GUI/DataGrid\n\n## Quick Example\n\n```csharp\npublic record Person\n{\n    [Required]\n    public string Name { get; init; }\n    public int Age { get; init; }\n}\n\n// Create an editable form\nvar editor = host.Hub.Edit(new Person());\n\n// Display results\nvar result = Controls.Markdown(\"Form created\");\n\n// Combine in a vertical stack\nvar ui = Controls.Stack()\n    .WithArea(editor)\n    .WithArea(result);\n```\n\nResult: A vertical layout containing an auto-generated form for Person and a markdown display below it."
+  }
+}
