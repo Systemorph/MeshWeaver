@@ -38,19 +38,29 @@ public interface INodeTypeService
     void InvalidateCache(string nodeTypePath);
 
     /// <summary>
-    /// Enriches a MeshNode with its NodeType's HubConfiguration.
-    /// Uses cached configuration if available, otherwise triggers async compilation (non-blocking).
+    /// Enriches a MeshNode with its NodeType's HubConfiguration (synchronous, cached only).
+    /// Uses cached configuration if available, otherwise returns node unchanged.
+    /// For async compilation support, use <see cref="EnrichWithNodeTypeAsync"/>.
     /// </summary>
     /// <param name="node">The MeshNode to enrich</param>
-    /// <returns>The MeshNode with HubConfiguration set if NodeType is configured</returns>
+    /// <returns>The MeshNode with HubConfiguration set if NodeType is already cached</returns>
     MeshNode EnrichWithNodeType(MeshNode node);
 
     /// <summary>
-    /// Gets the HubConfiguration observable for an address via remote stream subscription.
-    /// Returns immediately without blocking - subscribe only when creating the hub.
+    /// Enriches a MeshNode with its NodeType's HubConfiguration (async, with compilation).
+    /// Triggers compilation if needed and waits for it to complete.
+    /// </summary>
+    /// <param name="node">The MeshNode to enrich</param>
+    /// <param name="ct">Cancellation token</param>
+    /// <returns>The MeshNode with HubConfiguration set if NodeType is configured</returns>
+    Task<MeshNode> EnrichWithNodeTypeAsync(MeshNode node, CancellationToken ct = default);
+
+    /// <summary>
+    /// Gets the HubConfiguration for an address via remote stream subscription.
     /// Encapsulates all caching, stream subscription, and compilation logic.
     /// </summary>
     /// <param name="address">The node address</param>
-    /// <returns>Observable that emits the HubConfiguration function, or null if not found/compiled</returns>
-    IObservable<Func<MessageHubConfiguration, MessageHubConfiguration>?> GetHubConfiguration(Address address);
+    /// <param name="ct">Cancellation token.</param>
+    /// <returns>The HubConfiguration function, or null if not found/compiled</returns>
+    Task<Func<MessageHubConfiguration, MessageHubConfiguration>?> GetHubConfigurationAsync(Address address, CancellationToken ct = default);
 }

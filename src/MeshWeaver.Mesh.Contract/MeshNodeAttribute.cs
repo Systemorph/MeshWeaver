@@ -1,5 +1,4 @@
-﻿using System.Reactive.Linq;
-using MeshWeaver.Messaging;
+﻿using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.Mesh;
@@ -30,7 +29,7 @@ public abstract class MeshNodeAttribute : Attribute
         {
             Name = name,
             AssemblyLocation = GetType().Assembly.Location,
-            HubConfiguration = Observable.Return<Func<MessageHubConfiguration, MessageHubConfiguration>?>(hubConfiguration)
+            HubConfiguration = hubConfiguration
         };
 
     /// <summary>

@@ -1,6 +1,5 @@
 ﻿using System.Collections.Concurrent;
 using System.Reactive.Linq;
-using System.Reactive.Subjects;
 using MeshWeaver.ContentCollections;
 using MeshWeaver.Data;
 using MeshWeaver.Mesh;
@@ -59,7 +58,6 @@ internal class NodeTypeService : INodeTypeService, IDisposable
 
     /// <summary>
     /// Initializes the HubConfiguration cache from pre-registered mesh nodes.
-    /// Subscribes to HubConfiguration observables and caches the results.
     /// </summary>
     private void InitializeFromMeshConfiguration()
     {
@@ -68,19 +66,8 @@ internal class NodeTypeService : INodeTypeService, IDisposable
             if (node.HubConfiguration == null)
                 continue;
 
-            var path = node.Path;
-            var subscription = node.HubConfiguration.Subscribe(
-                hubConfig =>
-                {
-                    if (hubConfig != null)
-                    {
-                        _hubConfigurations[path] = hubConfig;
-                        logger.LogDebug("Cached HubConfiguration from MeshConfiguration for {Path}", path);
-                    }
-                },
-                ex => logger.LogError(ex, "Error subscribing to HubConfiguration for {Path}", path));
-
-            _subscriptions[path] = subscription;
+            _hubConfigurations[node.Path] = node.HubConfiguration;
+            logger.LogDebug("Cached HubConfiguration from MeshConfiguration for {Path}", node.Path);
         }
     }
 
@@ -185,7 +172,7 @@ internal class NodeTypeService : INodeTypeService, IDisposable
             {
                 // NodeType config is compiled - return combined config immediately
                 var cachedHubConfig = GetCachedHubConfiguration(nodeType);
-                return node with { HubConfiguration = Observable.Return<Func<MessageHubConfiguration, MessageHubConfiguration>?>(cachedHubConfig) };
+                return node with { HubConfiguration = cachedHubConfig };
             }
 
             // Check if this is a built-in NodeType (registered via AddMeshNodes)
@@ -196,109 +183,80 @@ internal class NodeTypeService : INodeTypeService, IDisposable
                 return node with { HubConfiguration = builtInNode.HubConfiguration };
             }
 
-            // NodeType not compiled yet - trigger async compilation
-            // This will compile the nodeType and return combined config when done
-            return node with { HubConfiguration = GetHubConfigurationForNodeType(nodeType) };
+            // NodeType not compiled yet - return with whatever default config is available
+            // Use EnrichWithNodeTypeAsync for full async compilation support
+            return node with { HubConfiguration = GetCachedHubConfiguration(nodeType) };
         }
 
         // No NodeType - return default config if available
         var defaultConfig = meshConfiguration.DefaultNodeHubConfiguration;
         if (defaultConfig != null)
         {
-            return node with { HubConfiguration = Observable.Return<Func<MessageHubConfiguration, MessageHubConfiguration>?>(defaultConfig) };
+            return node with { HubConfiguration = defaultConfig };
         }
 
         return node;
     }
 
-    /// <summary>
-    /// Gets or compiles the HubConfiguration for a node type.
-    /// Returns an Observable that can be stored without blocking.
-    /// </summary>
-    private IObservable<Func<MessageHubConfiguration, MessageHubConfiguration>?> GetHubConfigurationForNodeType(string nodeType)
+    /// <inheritdoc />
+    public async Task<MeshNode> EnrichWithNodeTypeAsync(MeshNode node, CancellationToken ct = default)
     {
-        var subject = new ReplaySubject<Func<MessageHubConfiguration, MessageHubConfiguration>?>(1);
+        // Skip if HubConfiguration is already set
+        if (node.HubConfiguration != null)
+            return node;
 
-        // Fire off compilation asynchronously
-        _ = Task.Run(async () =>
+        var nodeType = node.NodeType;
+
+        if (!string.IsNullOrEmpty(nodeType))
         {
-            try
+            // Check if this specific nodeType config is cached
+            if (_hubConfigurations.ContainsKey(nodeType))
             {
-                // Trigger compilation
-                await GetAssemblyPathAsync(nodeType);
-
-                // Emit the cached config
-                var hubConfig = GetCachedHubConfiguration(nodeType);
-                subject.OnNext(hubConfig);
-                subject.OnCompleted();
+                // NodeType config is compiled - return combined config immediately
+                return node with { HubConfiguration = GetCachedHubConfiguration(nodeType) };
             }
-            catch (Exception ex)
+
+            // Check if this is a built-in NodeType (registered via AddMeshNodes)
+            if (meshConfiguration.Nodes.TryGetValue(nodeType, out var builtInNode) &&
+                builtInNode.HubConfiguration != null)
             {
-                logger.LogError(ex, "Failed to get HubConfiguration for NodeType {NodeType}", nodeType);
-                subject.OnNext(null);
-                subject.OnCompleted();
+                // Use the built-in configuration directly
+                return node with { HubConfiguration = builtInNode.HubConfiguration };
             }
-        });
 
-        return subject.AsObservable();
+            // NodeType not compiled yet - trigger async compilation and wait
+            logger.LogDebug("Triggering async compilation for NodeType {NodeType}", nodeType);
+            await GetAssemblyPathAsync(nodeType, ct);
+
+            // After compilation, check cache again
+            return node with { HubConfiguration = GetCachedHubConfiguration(nodeType) };
+        }
+
+        // No NodeType - return default config if available
+        var defaultConfig = meshConfiguration.DefaultNodeHubConfiguration;
+        if (defaultConfig != null)
+        {
+            return node with { HubConfiguration = defaultConfig };
+        }
+
+        return node;
     }
-
-    // Cache for HubConfiguration observables by address - uses ReplaySubject to cache the latest value
-    private readonly ConcurrentDictionary<string, ReplaySubject<Func<MessageHubConfiguration, MessageHubConfiguration>?>> _addressHubConfigCache = new();
 
     /// <inheritdoc />
-    public IObservable<Func<MessageHubConfiguration, MessageHubConfiguration>?> GetHubConfiguration(Address address)
+    public async Task<Func<MessageHubConfiguration, MessageHubConfiguration>?> GetHubConfigurationAsync(Address address, CancellationToken ct = default)
     {
-        var addressKey = address.ToString();
+        logger.LogDebug("Getting HubConfiguration for {Address}", address);
 
-        // GetOrAdd ensures thread-safe lazy initialization
-        // Returns the ReplaySubject as IObservable - caller subscribes when needed
-        return _addressHubConfigCache.GetOrAdd(addressKey, _ => CreateHubConfigSubject(address));
-    }
-
-    /// <summary>
-    /// Creates a ReplaySubject that subscribes to the remote stream for a node,
-    /// extracts NodeType, compiles and emits the HubConfiguration.
-    /// </summary>
-    private ReplaySubject<Func<MessageHubConfiguration, MessageHubConfiguration>?> CreateHubConfigSubject(Address address)
-    {
-        // ReplaySubject(1) caches the latest value for late subscribers
-        var subject = new ReplaySubject<Func<MessageHubConfiguration, MessageHubConfiguration>?>(1);
-
-        logger.LogDebug("Creating HubConfiguration subject for {Address}", address);
-
-        // Subscribe to the node hub with empty DataPathReference
+        // Subscribe to the node hub with empty DataPathReference to get the MeshNode
         var workspace = meshHub.GetWorkspace();
         var stream = workspace.GetRemoteStream<MeshNode, DataPathReference>(
             address,
             new DataPathReference(""));
 
-        // Subscribe to stream - process each value and emit HubConfiguration
-        var subscription = stream
-            .Subscribe(
-                async change =>
-                {
-                    try
-                    {
-                        var hubConfig = await ProcessNodeForHubConfigAsync(change.Value, address);
-                        subject.OnNext(hubConfig);
-                    }
-                    catch (Exception ex)
-                    {
-                        logger.LogError(ex, "Error processing node for HubConfiguration at {Address}", address);
-                        subject.OnNext(null);
-                    }
-                },
-                ex =>
-                {
-                    logger.LogError(ex, "Error in node stream for {Address}", address);
-                    subject.OnError(ex);
-                });
+        // Get the first value from the stream
+        var node = await stream.Select(c => c.Value).FirstOrDefaultAsync();
 
-        // Store subscription for cleanup
-        _subscriptions[address.ToString()] = subscription;
-
-        return subject;
+        return await ProcessNodeForHubConfigAsync(node, address);
     }
 
     /// <summary>
@@ -537,9 +495,7 @@ internal class NodeTypeService : INodeTypeService, IDisposable
                     {
                         foreach (var meshNode in attribute.Nodes)
                         {
-                            Func<MessageHubConfiguration, MessageHubConfiguration>? hubConfig = null;
-                            meshNode.HubConfiguration?.Subscribe(config => hubConfig = config);
-
+                            var hubConfig = meshNode.HubConfiguration;
                             if (hubConfig != null)
                             {
                                 _hubConfigurations[meshNode.NodeType ?? meshNode.Path] = hubConfig;
@@ -622,13 +578,6 @@ internal class NodeTypeService : INodeTypeService, IDisposable
         _compilationTasks.Clear();
         _releaseKeys.Clear();
         _hubConfigurations.Clear();
-
-        // Dispose ReplaySubjects
-        foreach (var subject in _addressHubConfigCache.Values)
-        {
-            subject.Dispose();
-        }
-        _addressHubConfigCache.Clear();
     }
 
     /// <summary>

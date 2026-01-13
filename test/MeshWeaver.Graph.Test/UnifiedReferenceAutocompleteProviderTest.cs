@@ -190,7 +190,7 @@ public class UnifiedReferenceAutocompleteProviderTest : MonolithMeshTestBase
     }
 
     [Fact(Timeout = 30000)]
-    public async Task Provider_AtPer_ReturnsPersonSuggestion()
+    public async Task Provider_AtUse_ReturnsUserSuggestion()
     {
         // Arrange
         var provider = new UnifiedReferenceAutocompleteProvider(
@@ -198,20 +198,20 @@ public class UnifiedReferenceAutocompleteProviderTest : MonolithMeshTestBase
             MeshQuery,
             navigationContext: null);
 
-        // Act - query with "@Per" (partial match for Person)
-        var items = await provider.GetItemsAsync("@Per");
+        // Act - query with "@Use" (partial match for User)
+        var items = await provider.GetItemsAsync("@Use");
 
         // Assert
-        Output.WriteLine($"Got {items.Count()} suggestions for '@Per':");
+        Output.WriteLine($"Got {items.Count()} suggestions for '@Use':");
         foreach (var item in items)
         {
             Output.WriteLine($"  - Label: {item.Label}, InsertText: {item.InsertText}");
         }
 
-        var personItem = items.FirstOrDefault(i =>
-            i.Label.Contains("Person", StringComparison.OrdinalIgnoreCase));
+        var userItem = items.FirstOrDefault(i =>
+            i.Label.Contains("User", StringComparison.OrdinalIgnoreCase));
 
-        personItem.Should().NotBeNull("@Per should match Person");
+        userItem.Should().NotBeNull("@Use should match User");
     }
 
     [Fact(Timeout = 30000)]
