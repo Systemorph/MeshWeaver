@@ -166,6 +166,18 @@ internal class NodeTypeService : INodeTypeService, IDisposable
 
         var nodeType = node.NodeType;
 
+        // If NodeType is not set, try to infer it from the namespace (first path segment)
+        // This handles legacy nodes that were created without NodeType
+        if (string.IsNullOrEmpty(nodeType) && !string.IsNullOrEmpty(node.Namespace))
+        {
+            var firstSegment = node.Namespace.Split('/')[0];
+            // Check if this segment matches a built-in node type
+            if (meshConfiguration.Nodes.ContainsKey(firstSegment) || _hubConfigurations.ContainsKey(firstSegment))
+            {
+                nodeType = firstSegment;
+            }
+        }
+
         if (!string.IsNullOrEmpty(nodeType))
         {
             // Check if this specific nodeType config is cached

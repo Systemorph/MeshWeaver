@@ -1,4 +1,5 @@
 using System.Reactive.Linq;
+using MeshWeaver.Kernel;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 
@@ -11,16 +12,33 @@ public static class KernelExtensions
     /// The kernel node matches any path starting with "kernel/" using score-based matching.
     /// </summary>
     public static MeshBuilder AddKernel(this MeshBuilder builder)
-        => builder.AddMeshNodes(
-            new MeshNode(AddressExtensions.KernelType)
-            {
-                Name = "Kernel",
-                AssemblyLocation = typeof(KernelExtensions).Assembly.Location,
-                HubConfiguration = Observable.Return<Func<MessageHubConfiguration, MessageHubConfiguration>?>(ConfigureHub),
-                Description = "Jupyter kernel for code execution",
-                AddressSegments = 2 // "kernel/{id}" enables dynamic child nodes
-            }
-        );
+        => builder
+            // Register Kernel types at mesh level for proper deserialization
+            .ConfigureHub(AddKernelTypes)
+            .AddMeshNodes(
+                new MeshNode(AddressExtensions.KernelType)
+                {
+                    Name = "Kernel",
+                    AssemblyLocation = typeof(KernelExtensions).Assembly.Location,
+                    HubConfiguration = Observable.Return<Func<MessageHubConfiguration, MessageHubConfiguration>?>(ConfigureHub),
+                    Description = "Jupyter kernel for code execution",
+                    AddressSegments = 2 // "kernel/{id}" enables dynamic child nodes
+                }
+            );
+
+    /// <summary>
+    /// Registers Kernel message types for JSON deserialization.
+    /// Called at mesh level so types are known before routing.
+    /// </summary>
+    private static MessageHubConfiguration AddKernelTypes(MessageHubConfiguration config)
+    {
+        config.TypeRegistry.WithType(typeof(SubmitCodeRequest), nameof(SubmitCodeRequest));
+        config.TypeRegistry.WithType(typeof(KernelEventEnvelope), nameof(KernelEventEnvelope));
+        config.TypeRegistry.WithType(typeof(KernelCommandEnvelope), nameof(KernelCommandEnvelope));
+        config.TypeRegistry.WithType(typeof(SubscribeKernelEventsRequest), nameof(SubscribeKernelEventsRequest));
+        config.TypeRegistry.WithType(typeof(UnsubscribeKernelEventsRequest), nameof(UnsubscribeKernelEventsRequest));
+        return config;
+    }
 
     private static MessageHubConfiguration ConfigureHub(this MessageHubConfiguration config)
     {

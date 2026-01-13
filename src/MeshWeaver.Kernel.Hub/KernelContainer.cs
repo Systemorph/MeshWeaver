@@ -2,6 +2,7 @@
 using System.Reactive.Linq;
 using MeshWeaver.Data;
 using MeshWeaver.Data.Serialization;
+using MeshWeaver.Kernel;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Mesh;
@@ -44,6 +45,7 @@ public class KernelContainer(IServiceProvider serviceProvider)
 
     public MessageHubConfiguration ConfigureHub(MessageHubConfiguration config)
     {
+        // Note: Kernel types are registered at mesh level in KernelExtensions.AddKernelTypes
         return config
             .AddLayout(layout =>
                 layout.WithView(_ => true,
@@ -270,7 +272,14 @@ public class KernelContainer(IServiceProvider serviceProvider)
 
         ret.KernelInfo.Uri = new Uri(ret.KernelInfo.Uri.ToString().Replace("local", "mesh"));
 
-        ret.AddAssemblyReferences([typeof(IMessageHub).Assembly.Location, typeof(Address).Assembly.Location, typeof(UiControl).Assembly.Location, typeof(DataExtensions).Assembly.Location]);
+        ret.AddAssemblyReferences([
+            typeof(IMessageHub).Assembly.Location,
+            typeof(Address).Assembly.Location,
+            typeof(UiControl).Assembly.Location,
+            typeof(DataExtensions).Assembly.Location,
+            typeof(System.ComponentModel.DescriptionAttribute).Assembly.Location,
+            typeof(System.ComponentModel.DataAnnotations.RequiredAttribute).Assembly.Location
+        ]);
 
         var composite = new CompositeKernel("mesh")
             .UseNugetDirective(OnResolve);
@@ -278,6 +287,16 @@ public class KernelContainer(IServiceProvider serviceProvider)
         composite.Add(ret);
         await Task.WhenAll(composite.ChildKernels.OfType<CSharpKernel>()
             .Select(k => k.SetValueAsync(nameof(Mesh), hub, typeof(IMessageHub))));
+
+        // Add default using directives for interactive markdown
+        var defaultUsings = @"
+using System.ComponentModel;
+using System.ComponentModel.DataAnnotations;
+using MeshWeaver.Layout;
+using MeshWeaver.Messaging;
+using static MeshWeaver.Layout.Controls;
+";
+        await ret.SendAsync(new SubmitCode(defaultUsings));
         composite.KernelEvents.Subscribe(e => PublishEventToContext(hub, e));
 
         hub.RegisterForDisposal(composite);
