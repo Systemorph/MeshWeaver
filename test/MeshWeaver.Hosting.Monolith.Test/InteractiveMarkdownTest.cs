@@ -7,6 +7,7 @@ using FluentAssertions.Extensions;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Hosting.Persistence.Parsers;
 using MeshWeaver.Layout;
+using MeshWeaver.Markdown;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
@@ -49,8 +50,8 @@ public class InteractiveMarkdownTest(ITestOutputHelper output) : MonolithMeshTes
         node.Category.Should().Be("Documentation");
         node.Description.Should().Be("This is a sample description of the article.");
         node.NodeType.Should().Be("Markdown");
-        node.Content.Should().BeOfType<string>();
-        ((string)node.Content!).Should().Contain("# Northwind");
+        node.Content.Should().BeOfType<MarkdownContent>();
+        ((MarkdownContent)node.Content!).Content.Should().Contain("# Northwind");
     }
 
     [Fact]
@@ -73,7 +74,8 @@ public class InteractiveMarkdownTest(ITestOutputHelper output) : MonolithMeshTes
             node!.Id.Should().Be("Simple");
             node.Name.Should().Be("Simple"); // Defaults to Id
             node.NodeType.Should().Be("Markdown");
-            node.Content.Should().Be(content);
+            node.Content.Should().BeOfType<MarkdownContent>();
+            ((MarkdownContent)node.Content!).Content.Should().Be(content);
         }
         finally
         {

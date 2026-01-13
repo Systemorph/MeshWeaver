@@ -4,6 +4,7 @@ using System.Linq;
 using System.Threading.Tasks;
 using FluentAssertions;
 using MeshWeaver.Hosting.Persistence;
+using MeshWeaver.Markdown;
 using MeshWeaver.Mesh;
 using Xunit;
 
@@ -563,8 +564,9 @@ public class FileSystemPersistenceTest : IDisposable
         node.Category.Should().Be("Documentation");
         node.Description.Should().Be("A test document");
         node.Icon.Should().Be("/static/storage/content/test/icon.svg");
-        node.Content.Should().BeOfType<string>();
-        ((string)node.Content!).Should().Contain("# Hello World");
+        node.Content.Should().BeOfType<MarkdownContent>();
+        var markdownContent = (MarkdownContent)node.Content!;
+        markdownContent.Content.Should().Contain("# Hello World");
     }
 
     [Fact]
@@ -589,7 +591,8 @@ public class FileSystemPersistenceTest : IDisposable
         node!.Id.Should().Be("simple");
         node.Name.Should().Be("Simple Doc");
         node.NodeType.Should().Be("Markdown"); // Default
-        ((string)node.Content!).Should().Contain("Just some content");
+        var markdownContent1 = (MarkdownContent)node.Content!;
+        markdownContent1.Content.Should().Contain("Just some content");
     }
 
     [Fact]
@@ -612,7 +615,8 @@ public class FileSystemPersistenceTest : IDisposable
         node!.Id.Should().Be("plain");
         node.Name.Should().Be("plain"); // Defaults to Id
         node.NodeType.Should().Be("Markdown");
-        ((string)node.Content!).Should().Contain("# Plain Markdown");
+        var markdownContent2 = (MarkdownContent)node.Content!;
+        markdownContent2.Content.Should().Contain("# Plain Markdown");
     }
 
     [Fact]

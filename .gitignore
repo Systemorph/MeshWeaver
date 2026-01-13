@@ -355,3 +355,6 @@ ASALocalRun/
 
 # Template generation output
 dist/
+
+# Kernel cache files
+samples/Graph/Data/kernel/
