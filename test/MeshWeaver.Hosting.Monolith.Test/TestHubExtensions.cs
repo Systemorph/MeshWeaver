@@ -1,6 +1,4 @@
-﻿using System;
-using System.Reactive.Linq;
-using MeshWeaver.Layout;
+﻿using MeshWeaver.Layout;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 
@@ -20,9 +18,9 @@ public static class TestHubExtensions
     public static readonly MeshNode Node = new(nameof(Test), AddressExtensions.AppType)
     {
         Name = nameof(Test),
-        HubConfiguration = Observable.Return<Func<MessageHubConfiguration, MessageHubConfiguration>?>(config => config.AddLayout(layout =>
+        HubConfiguration = config => config.AddLayout(layout =>
             layout.WithView(ctx => ctx.Area == "Dashboard",
-                (_, ctx) => new LayoutGridControl())))
+                (_, ctx) => new LayoutGridControl()))
     };
     public static readonly string GetDashboardCommand =
         @$"
