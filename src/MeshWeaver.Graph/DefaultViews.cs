@@ -1,4 +1,5 @@
-﻿using System.Reactive.Linq;
+﻿using System.ComponentModel;
+using System.Reactive.Linq;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Mesh.Services;
@@ -29,6 +30,7 @@ public static class DefaultViews
     /// Renders the Edit area using MeshNodeEditorControl.
     /// Includes a back button to return to Details.
     /// </summary>
+    [Browsable(false)]
     public static IObservable<UiControl> Edit(LayoutAreaHost host, RenderingContext _)
     {
         var nodePath = host.Hub.Address.ToString();

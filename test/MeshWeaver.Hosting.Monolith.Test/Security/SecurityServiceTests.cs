@@ -1,11 +1,13 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
 using FluentAssertions.Extensions;
 using MeshWeaver.Hosting.Monolith.TestBase;
+using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Hosting.Security;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
@@ -385,5 +387,133 @@ public class RlsNodeValidatorTests(ITestOutputHelper output) : MonolithMeshTestB
         operations.Should().Contain(NodeOperation.Create);
         operations.Should().Contain(NodeOperation.Update);
         operations.Should().Contain(NodeOperation.Delete);
+    }
+}
+
+/// <summary>
+/// Tests for security using the sample Graph data (samples/Graph/Data).
+/// Tests real-world scenarios with existing access configuration files.
+/// </summary>
+public class SampleDataSecurityTests(ITestOutputHelper output) : MonolithMeshTestBase(output)
+{
+    private CancellationToken TestTimeout => new CancellationTokenSource(10.Seconds()).Token;
+
+    // Get the samples/Graph/Data path relative to the test project
+    private static string SamplesDataPath
+    {
+        get
+        {
+            // Navigate from test output directory to samples/Graph/Data
+            var currentDir = AppContext.BaseDirectory;
+            var solutionDir = Path.GetFullPath(Path.Combine(currentDir, "..", "..", "..", "..", ".."));
+            return Path.Combine(solutionDir, "samples", "Graph", "Data");
+        }
+    }
+
+    protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
+    {
+        // Use file system persistence with the samples data folder
+        return builder
+            .UseMonolithMesh()
+            .AddFileSystemPersistence(SamplesDataPath)
+            .AddRowLevelSecurity();
+    }
+
+    [Fact]
+    public async Task Roland_WithGlobalAdminRole_CanEditArchitectureNode()
+    {
+        // Arrange
+        var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
+        const string userId = "Roland"; // From samples/Graph/Data/Access/Roland.json
+        const string nodePath = "MeshWeaver/Documentation/Architecture";
+
+        // Act - Check if Roland has Update permission (editability)
+        var permissions = await securityService.GetEffectivePermissionsAsync(nodePath, userId, TestTimeout);
+        var canEdit = await securityService.HasPermissionAsync(nodePath, userId, Permission.Update, TestTimeout);
+
+        // Assert
+        permissions.Should().Be(Permission.All, "Roland has global Admin role with null namespace");
+        canEdit.Should().BeTrue("Roland should be able to edit the Architecture node");
+    }
+
+    [Fact]
+    public async Task Roland_GlobalAdmin_CanEditAnyNode()
+    {
+        // Arrange
+        var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
+        const string userId = "Roland";
+
+        // Test various paths across the mesh
+        var paths = new[]
+        {
+            "MeshWeaver/Documentation/Architecture",
+            "Systemorph",
+            "ACME",
+            "some/random/path"
+        };
+
+        foreach (var path in paths)
+        {
+            // Act
+            var canEdit = await securityService.HasPermissionAsync(path, userId, Permission.Update, TestTimeout);
+
+            // Assert
+            canEdit.Should().BeTrue($"Roland should be able to edit '{path}' as global Admin");
+        }
+    }
+
+    [Fact]
+    public async Task Alice_WithAcmeEditorRole_CanEditInAcmeOnly()
+    {
+        // Arrange
+        var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
+        const string userId = "Alice"; // From samples/Graph/Data/ACME/Access/Alice.json
+
+        // Act - Check ACME namespace
+        var acmePermissions = await securityService.GetEffectivePermissionsAsync("ACME/Project/Task1", userId, TestTimeout);
+        var canEditAcme = await securityService.HasPermissionAsync("ACME/Project/Task1", userId, Permission.Update, TestTimeout);
+
+        // Act - Check MeshWeaver namespace (should NOT have access)
+        var meshWeaverPermissions = await securityService.GetEffectivePermissionsAsync("MeshWeaver/Documentation", userId, TestTimeout);
+        var canEditMeshWeaver = await securityService.HasPermissionAsync("MeshWeaver/Documentation", userId, Permission.Update, TestTimeout);
+
+        // Assert
+        canEditAcme.Should().BeTrue("Alice should be able to edit in ACME namespace");
+        canEditMeshWeaver.Should().BeFalse("Alice should NOT be able to edit in MeshWeaver namespace");
+    }
+
+    [Fact]
+    public async Task PublicUser_WithMeshWeaverViewerRole_CannotEdit()
+    {
+        // Arrange
+        var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
+        const string userId = "Public"; // From samples/Graph/Data/MeshWeaver/Access/Public.json
+        const string nodePath = "MeshWeaver/Documentation/Architecture";
+
+        // Act
+        var permissions = await securityService.GetEffectivePermissionsAsync(nodePath, userId, TestTimeout);
+        var canEdit = await securityService.HasPermissionAsync(nodePath, userId, Permission.Update, TestTimeout);
+        var canRead = await securityService.HasPermissionAsync(nodePath, userId, Permission.Read, TestTimeout);
+
+        // Assert
+        canRead.Should().BeTrue("Public user should be able to read MeshWeaver content");
+        canEdit.Should().BeFalse("Public user should NOT be able to edit MeshWeaver content");
+    }
+
+    [Fact]
+    public async Task GetUserAccess_Roland_ReturnsGlobalAdminRole()
+    {
+        // Arrange
+        var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
+        const string userId = "Roland";
+
+        // Act
+        var userAccess = await securityService.GetUserAccessAsync(userId, TestTimeout);
+
+        // Assert
+        userAccess.Should().NotBeNull();
+        userAccess!.UserId.Should().Be("Roland");
+        userAccess.DisplayName.Should().Be("Roland Buergi");
+        userAccess.Roles.Should().ContainSingle(r => r.RoleId == "Admin");
     }
 }

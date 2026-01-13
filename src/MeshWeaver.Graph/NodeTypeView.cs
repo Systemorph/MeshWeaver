@@ -1,4 +1,5 @@
-﻿using System.Reactive.Linq;
+﻿using System.ComponentModel;
+using System.Reactive.Linq;
 using Humanizer;
 using MeshWeaver.Application.Styles;
 using MeshWeaver.Blazor.Monaco;
@@ -422,6 +423,7 @@ public static class NodeTypeView
     /// Renders the Monaco editor for editing code files.
     /// Returns static structure with data-bound editor.
     /// </summary>
+    [Browsable(false)]
     public static UiControl CodeEdit(LayoutAreaHost host, RenderingContext ctx)
     {
         // Subscribe to data streams
@@ -550,6 +552,7 @@ public static class NodeTypeView
     /// Renders the view for Configuration.
     /// Returns static structure with data-bound content.
     /// </summary>
+    [Browsable(false)]
     public static UiControl HubConfigView(LayoutAreaHost host, RenderingContext ctx)
     {
         // Subscribe to data stream
@@ -610,6 +613,7 @@ public static class NodeTypeView
     /// Renders the Monaco editor for editing Configuration.
     /// Returns static structure with data-bound editor.
     /// </summary>
+    [Browsable(false)]
     public static UiControl HubConfigEdit(LayoutAreaHost host, RenderingContext ctx)
     {
         // Subscribe to data streams

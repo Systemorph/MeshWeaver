@@ -1,4 +1,5 @@
-﻿using System.Reactive.Linq;
+﻿using System.ComponentModel;
+using System.Reactive.Linq;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Schema;
@@ -11,11 +12,11 @@ using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Layout.DataGrid;
 using MeshWeaver.Layout.Domain;
-using MeshWeaver.ShortGuid;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
+using MeshWeaver.ShortGuid;
 using MeshWeaver.Utils;
 using Microsoft.Extensions.DependencyInjection;
 using Namotion.Reflection;
@@ -74,7 +75,6 @@ public static class MeshNodeView
             .WithView(MetadataArea, Metadata)
             .WithView(SettingsArea, Settings)
             .WithView(CatalogArea, Catalog)
-            .WithView(CalendarArea, Calendar)
             .WithView(FilesArea, Files)
             .WithView(ChildrenArea, Children)
             .WithView(NodeTypesArea, NodeTypes)
@@ -91,6 +91,7 @@ public static class MeshNodeView
     /// Uses GetStream for node data. Children are loaded via ChildrenQuery from NodeTypeDefinition
     /// if set, otherwise via IMeshQuery with scope:children.
     /// </summary>
+    [Browsable(false)]
     public static IObservable<UiControl?> Details(LayoutAreaHost host, RenderingContext _)
     {
         var hubPath = host.Hub.Address.ToString();
@@ -269,6 +270,7 @@ public static class MeshNodeView
     /// Each menu item is added individually so FluentMenuButton wraps each in a proper FluentMenuItem.
     /// Uses NavLinkControl for instant navigation via href.
     /// </summary>
+    [Browsable(false)]
     public static UiControl BuildActionMenu(LayoutAreaHost host, MeshNode? node)
     {
         var nodePath = node?.Namespace ?? host.Hub.Address.ToString();
@@ -329,6 +331,7 @@ public static class MeshNodeView
     /// <param name="nodePath">The parent node path (for "show more" links).</param>
     /// <param name="childrenLimit">Maximum children per type to show (default 10).</param>
     /// <returns>A LayoutGrid control with children, or null if no children.</returns>
+    [Browsable(false)]
     public static UiControl? BuildChildrenSection(
         LayoutAreaHost host,
         IEnumerable<MeshNode> children,
@@ -336,11 +339,11 @@ public static class MeshNodeView
         int childrenLimit = 10)
     {
         // Group by Category if set, otherwise by NodeType
-            var childGroups = children
-                .Where(c => !string.IsNullOrEmpty(c.Category) || !string.IsNullOrEmpty(c.NodeType))
-                .GroupBy(c => c.Category ?? c.NodeType!)
-                .OrderBy(g => g.Key)
-                .ToList();
+        var childGroups = children
+            .Where(c => !string.IsNullOrEmpty(c.Category) || !string.IsNullOrEmpty(c.NodeType))
+            .GroupBy(c => c.Category ?? c.NodeType!)
+            .OrderBy(g => g.Key)
+            .ToList();
 
         if (childGroups.Count == 0)
             return null;
@@ -382,7 +385,7 @@ public static class MeshNodeView
     }
 
     /// <summary>
-    /// Gets the display name for a node type with count (e.g., "Projects (5)").
+    /// Gets the display name for a node type with count (e.g., "Project (5)").
     /// </summary>
     public static string GetGroupDisplayName(string nodeType, int count)
     {
@@ -390,13 +393,14 @@ public static class MeshNodeView
         var typeName = nodeType.Contains('/') ? nodeType.Split('/').Last() : nodeType;
         // Capitalize first letter
         var display = char.ToUpper(typeName[0]) + typeName.Substring(1);
-        return $"{display}s ({count})";
+        return $"{display} ({count})";
     }
 
     /// <summary>
     /// Renders a compact thumbnail/card view of a node for use in catalogs and lists.
     /// Uses GetStream for reactive data binding instead of direct persistence access.
     /// </summary>
+    [Browsable(false)]
     public static IObservable<UiControl?> Thumbnail(LayoutAreaHost host, RenderingContext _)
     {
         var hubPath = host.Hub.Address.ToString();
@@ -420,6 +424,7 @@ public static class MeshNodeView
     /// Renders the Metadata area showing node properties (name, type, description, path).
     /// Uses GetStream for reactive data binding instead of direct persistence access.
     /// </summary>
+    [Browsable(false)]
     public static IObservable<UiControl?> Metadata(LayoutAreaHost host, RenderingContext _1)
     {
         var hubPath = host.Hub.Address.ToString();
@@ -485,6 +490,7 @@ public static class MeshNodeView
     /// Provides read-only view of node metadata with embedded catalog of NodeType children.
     /// Uses GetStream for reactive data binding instead of direct persistence access.
     /// </summary>
+    [Browsable(false)]
     public static IObservable<UiControl?> Settings(LayoutAreaHost host, RenderingContext _)
     {
         var hubPath = host.Hub.Address.ToString();
@@ -821,6 +827,7 @@ public static class MeshNodeView
     /// Render mode is determined by CatalogMode property (hierarchical or grouped).
     /// Reads search term from ?q= query parameter.
     /// </summary>
+    [Browsable(false)]
     public static IObservable<UiControl?> Catalog(LayoutAreaHost host, RenderingContext ctx)
     {
         var hubPath = host.Hub.Address.ToString();
@@ -874,9 +881,10 @@ public static class MeshNodeView
 
     /// <summary>
     /// Renders the Children view showing child nodes as thumbnails without search.
-    /// Simple grid of children thumbnails, excludes NodeType nodes.
+    /// Groups children by Category (or NodeType if no Category), excludes NodeType nodes.
     /// Use this for embedding children in custom views via LayoutAreaControl.
     /// </summary>
+    [Browsable(false)]
     public static IObservable<UiControl?> Children(LayoutAreaHost host, RenderingContext ctx)
     {
         var hubPath = host.Hub.Address.ToString();
@@ -904,13 +912,34 @@ public static class MeshNodeView
                 return (UiControl?)Controls.Html("<p style=\"color: var(--neutral-foreground-hint);\">No children found.</p>");
             }
 
+            // Group by Category if set, otherwise by NodeType
+            var childGroups = children
+                .GroupBy(c => c.Category ?? c.NodeType ?? "")
+                .OrderBy(g => g.Key)
+                .ToList();
+
             var grid = Controls.LayoutGrid.WithSkin(s => s.WithSpacing(2));
 
-            foreach (var child in children.OrderBy(n => n.DisplayOrder).ThenBy(n => n.Name))
+            foreach (var group in childGroups)
             {
-                grid = grid.WithView(
-                    MeshNodeThumbnailControl.FromNode(child, child.Path),
-                    itemSkin => itemSkin.WithXs(12).WithSm(6).WithMd(4).WithLg(4));
+                var groupKey = group.Key;
+                var groupChildren = group.OrderBy(n => n.DisplayOrder).ThenBy(n => n.Name).ToList();
+
+                // Add section header if there's a group key
+                if (!string.IsNullOrEmpty(groupKey))
+                {
+                    var displayName = GetGroupDisplayName(groupKey, groupChildren.Count);
+                    grid = grid.WithView(
+                        Controls.Html($"<h3 style=\"margin: 24px 0 8px 0;\">{displayName}</h3>"),
+                        itemSkin => itemSkin.WithXs(12));
+                }
+
+                foreach (var child in groupChildren)
+                {
+                    grid = grid.WithView(
+                        MeshNodeThumbnailControl.FromNode(child, child.Path),
+                        itemSkin => itemSkin.WithXs(12).WithSm(6).WithMd(4).WithLg(4));
+                }
             }
 
             return (UiControl?)grid;
@@ -922,6 +951,7 @@ public static class MeshNodeView
     /// Shows the node's own type (if any) and any NodeType children.
     /// Accessible from the menu as a separate page.
     /// </summary>
+    [Browsable(false)]
     public static IObservable<UiControl?> NodeTypes(LayoutAreaHost host, RenderingContext ctx)
     {
         var hubPath = host.Hub.Address.ToString();
@@ -1009,128 +1039,6 @@ public static class MeshNodeView
         });
     }
 
-    /// <summary>
-    /// Renders a Calendar view showing scheduled items by publish date.
-    /// Groups items by week and displays them in a timeline format.
-    /// </summary>
-    public static UiControl Calendar(LayoutAreaHost host, RenderingContext ctx)
-    {
-        var hubPath = host.Hub.Address.ToString();
-        var meshQuery = host.Hub.ServiceProvider.GetService<IMeshQuery>();
-
-        if (meshQuery == null)
-        {
-            return Controls.Html("<p style=\"color: #888;\">Query service not available.</p>");
-        }
-
-        return Controls.Stack
-            .WithWidth("100%")
-            .WithView(Controls.Html("<h2 style=\"margin: 0 0 16px 0;\">Publishing Calendar</h2>"))
-            .WithView(
-                (h, _) => Observable.FromAsync(async () =>
-                {
-                    // Query all descendants to find items with publish dates
-                    var query = $"namespace:{hubPath} scope:descendants";
-                    return await BuildCalendarViewAsync(meshQuery, query);
-                }),
-                "CalendarContent");
-    }
-
-    /// <summary>
-    /// Builds a calendar view showing items grouped by week.
-    /// </summary>
-    private static async Task<UiControl> BuildCalendarViewAsync(IMeshQuery meshQuery, string query)
-    {
-        List<MeshNode> nodes;
-        try
-        {
-            nodes = await meshQuery.QueryAsync<MeshNode>(query).ToListAsync();
-        }
-        catch
-        {
-            nodes = [];
-        }
-
-        // Filter nodes that have publishable content (Posts with PublishDate)
-        var scheduledItems = new List<(MeshNode Node, DateTime PublishDate, string? Status)>();
-
-        foreach (var node in nodes)
-        {
-            if (node.Content is System.Text.Json.JsonElement json)
-            {
-                DateTime? publishDate = null;
-                string? status = null;
-
-                if (json.TryGetProperty("publishDate", out var dateProp) && dateProp.ValueKind != System.Text.Json.JsonValueKind.Null)
-                {
-                    if (DateTime.TryParse(dateProp.GetString(), out var date))
-                        publishDate = date;
-                }
-
-                if (json.TryGetProperty("status", out var statusProp))
-                {
-                    status = statusProp.GetString();
-                }
-
-                if (publishDate.HasValue)
-                {
-                    scheduledItems.Add((node, publishDate.Value, status));
-                }
-            }
-        }
-
-        if (scheduledItems.Count == 0)
-        {
-            return Controls.Html("<p style=\"color: #888;\">No scheduled items found.</p>");
-        }
-
-        // Group by week
-        var groupedByWeek = scheduledItems
-            .OrderBy(x => x.PublishDate)
-            .GroupBy(x => GetWeekStart(x.PublishDate))
-            .ToList();
-
-        var stack = Controls.Stack.WithWidth("100%");
-
-        foreach (var week in groupedByWeek)
-        {
-            var weekStart = week.Key;
-            var weekEnd = weekStart.AddDays(6);
-            var weekHeader = $"{weekStart:MMM d} - {weekEnd:MMM d, yyyy}";
-
-            stack = stack.WithView(Controls.Html($"<h3 style=\"margin: 24px 0 12px 0; padding-bottom: 8px; border-bottom: 2px solid #0078d4;\">{weekHeader}</h3>"));
-
-            // Items in this week, grouped by day
-            var byDay = week.GroupBy(x => x.PublishDate.Date).OrderBy(x => x.Key);
-
-            foreach (var day in byDay)
-            {
-                var dayLabel = day.Key.ToString("ddd, MMM d");
-                stack = stack.WithView(Controls.Html($"<div style=\"font-weight: 600; margin: 12px 0 8px 0; color: #666;\">{dayLabel}</div>"));
-
-                foreach (var (node, publishDate, status) in day.OrderBy(x => x.PublishDate))
-                {
-                    var time = publishDate.ToString("HH:mm");
-                    var statusBadge = GetStatusBadge(status);
-                    var platforms = GetPlatforms(node);
-
-                    var itemHtml = $@"
-                        <div style=""display: flex; align-items: center; gap: 12px; padding: 12px; margin: 4px 0; background: #f5f5f5; border-radius: 8px; cursor: pointer;"" onclick=""window.location.href='/{node.Path}'"">
-                            <div style=""font-weight: 600; color: #0078d4; min-width: 50px;"">{time}</div>
-                            <div style=""flex: 1;"">
-                                <div style=""font-weight: 500;"">{node.Name}</div>
-                                <div style=""font-size: 12px; color: #666;"">{platforms}</div>
-                            </div>
-                            {statusBadge}
-                        </div>";
-
-                    stack = stack.WithView(Controls.Html(itemHtml));
-                }
-            }
-        }
-
-        return stack;
-    }
 
     private static DateTime GetWeekStart(DateTime date)
     {
@@ -1174,6 +1082,7 @@ public static class MeshNodeView
     /// Renders a file browser for the node's content directory.
     /// Uses FileBrowserControl to display and manage files in the content collection.
     /// </summary>
+    [Browsable(false)]
     public static UiControl Files(LayoutAreaHost host, RenderingContext _)
     {
         return new FileBrowserControl("content")
@@ -1189,6 +1098,7 @@ public static class MeshNodeView
     /// For other files: shows a download link.
     /// For self-reference (no path): shows the node's icon/logo.
     /// </summary>
+    [Browsable(false)]
     public static IObservable<UiControl?> Content(LayoutAreaHost host, RenderingContext context)
     {
         var contentPath = host.Reference.Id?.ToString();
@@ -1396,6 +1306,7 @@ public static class MeshNodeView
     /// If Id is specified, renders that specific entity/collection/type.
     /// If no Id (self-reference), shows the current MeshNode data.
     /// </summary>
+    [Browsable(false)]
     public static IObservable<UiControl?> Data(LayoutAreaHost host, RenderingContext context)
     {
         var dataPath = host.Reference.Id?.ToString();
@@ -1471,6 +1382,7 @@ public static class MeshNodeView
     /// If Id is specified, shows schema for that type name.
     /// If no Id (self-reference), shows schema for MeshNode and content type.
     /// </summary>
+    [Browsable(false)]
     public static IObservable<UiControl?> Schema(LayoutAreaHost host, RenderingContext context)
     {
         var typeName = host.Reference.Id?.ToString();
@@ -1618,6 +1530,7 @@ public static class MeshNodeView
     /// Renders the Access Control area for managing user roles and permissions on this node.
     /// Shows current role assignments and allows adding/removing users with specific roles.
     /// </summary>
+    [Browsable(false)]
     public static IObservable<UiControl?> AccessControl(LayoutAreaHost host, RenderingContext _)
     {
         var hubPath = host.Hub.Address.ToString();
