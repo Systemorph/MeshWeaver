@@ -62,16 +62,37 @@ public partial class MarkdownFileParser : IFileFormatParser
         var fileInfo = new FileInfo(filePath);
         var lastModified = new DateTimeOffset(fileInfo.LastWriteTimeUtc, TimeSpan.Zero);
 
+        // Use Published date if available, otherwise file last modified
+        if (frontMatter?.Published != null && DateTimeOffset.TryParse(frontMatter.Published, out var publishedDate))
+        {
+            lastModified = publishedDate;
+        }
+
         // Parse markdown and create MarkdownContent with pre-rendered HTML and code submissions
-        var markdownDocument = MarkdownContent.Parse(markdownContent, relativePath);
+        // Include article metadata in the MarkdownContent
+        var markdownDocument = MarkdownContent.Parse(markdownContent, relativePath) with
+        {
+            Authors = frontMatter?.Authors,
+            Tags = frontMatter?.Tags,
+            Thumbnail = frontMatter?.Thumbnail,
+            VideoUrl = frontMatter?.VideoUrl,
+            VideoDuration = ParseTimeSpan(frontMatter?.VideoDuration),
+            VideoTitle = frontMatter?.VideoTitle,
+            VideoDescription = frontMatter?.VideoDescription,
+            VideoTagLine = frontMatter?.VideoTagLine,
+            VideoTranscript = frontMatter?.VideoTranscript
+        };
 
         var node = new MeshNode(id, ns)
         {
             NodeType = frontMatter?.NodeType ?? "Markdown",
-            Name = frontMatter?.Name ?? id,
+            // Name: prefer Name, then Title (legacy), then id
+            Name = frontMatter?.Name ?? frontMatter?.Title ?? id,
             Category = frontMatter?.Category,
-            Description = frontMatter?.Description,
-            Icon = frontMatter?.Icon ?? DefaultMarkdownIcon,
+            // Description: prefer Description, then Abstract (legacy)
+            Description = frontMatter?.Description ?? frontMatter?.Abstract,
+            // Icon: prefer Icon, then Thumbnail (legacy)
+            Icon = frontMatter?.Icon ?? frontMatter?.Thumbnail ?? DefaultMarkdownIcon,
             State = ParseState(frontMatter?.State),
             IsPersistent = true,
             LastModified = lastModified,
@@ -79,6 +100,13 @@ public partial class MarkdownFileParser : IFileFormatParser
         };
 
         return Task.FromResult<MeshNode?>(node);
+    }
+
+    private static TimeSpan? ParseTimeSpan(string? value)
+    {
+        if (string.IsNullOrEmpty(value))
+            return null;
+        return TimeSpan.TryParse(value, out var result) ? result : null;
     }
 
     public Task<string> SerializeAsync(MeshNode node, CancellationToken ct = default)
@@ -165,14 +193,32 @@ public partial class MarkdownFileParser : IFileFormatParser
 
     /// <summary>
     /// YAML front matter model for markdown files.
+    /// Supports both new MeshNode properties and legacy Article properties for backwards compatibility.
     /// </summary>
     private class MarkdownFrontMatter
     {
+        // MeshNode standard properties
         public string? NodeType { get; set; }
         public string? Name { get; set; }
         public string? Category { get; set; }
         public string? Description { get; set; }
         public string? Icon { get; set; }
         public string? State { get; set; }
+
+        // Legacy Article properties (for backwards compatibility)
+        public string? Title { get; set; }          // Maps to Name
+        public string? Abstract { get; set; }       // Maps to Description
+        public string? Thumbnail { get; set; }      // Maps to Icon, also stored in MarkdownContent
+        public string? Published { get; set; }      // Maps to LastModified
+        public List<string>? Authors { get; set; }  // Stored in MarkdownContent
+        public List<string>? Tags { get; set; }     // Stored in MarkdownContent
+
+        // Video-related properties (stored in MarkdownContent)
+        public string? VideoUrl { get; set; }
+        public string? VideoDuration { get; set; }
+        public string? VideoTitle { get; set; }
+        public string? VideoDescription { get; set; }
+        public string? VideoTagLine { get; set; }
+        public string? VideoTranscript { get; set; }
     }
 }

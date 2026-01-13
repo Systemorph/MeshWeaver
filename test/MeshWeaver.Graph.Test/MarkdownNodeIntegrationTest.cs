@@ -924,23 +924,8 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
 
         node.Should().NotBeNull();
 
-        // Content can be JsonElement or string depending on how the markdown was loaded
-        string? markdownContent = null;
-        if (node!.Content is JsonElement jsonContent)
-        {
-            if (jsonContent.TryGetProperty("content", out var contentProp))
-            {
-                markdownContent = contentProp.GetString();
-            }
-            else if (jsonContent.ValueKind == JsonValueKind.String)
-            {
-                markdownContent = jsonContent.GetString();
-            }
-        }
-        else if (node.Content is string strContent)
-        {
-            markdownContent = strContent;
-        }
+        // Content can be MarkdownContent, JsonElement or string depending on how the markdown was loaded
+        string? markdownContent = ExtractMarkdownContent(node!);
 
         markdownContent.Should().NotBeNullOrEmpty("Markdown content should be available");
         markdownContent.Should().Contain("--render HelloWorld");
@@ -993,9 +978,14 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
 
     private static string? ExtractMarkdownContent(MeshNode node)
     {
+        if (node.Content is MarkdownContent markdownContent)
+        {
+            return markdownContent.Content;
+        }
         if (node.Content is JsonElement jsonContent)
         {
-            if (jsonContent.TryGetProperty("content", out var contentProp))
+            if (jsonContent.TryGetProperty("Content", out var contentProp) ||
+                jsonContent.TryGetProperty("content", out contentProp))
                 return contentProp.GetString();
             if (jsonContent.ValueKind == JsonValueKind.String)
                 return jsonContent.GetString();

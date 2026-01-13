@@ -474,7 +474,7 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
 
     /// <summary>
     /// Tests that content files can be retrieved from the "content" collection.
-    /// The logo.svg file at samples/Graph/content/MeshWeaver/Documentation/DataMesh/UnifiedContentReferences/logo.svg should be accessible.
+    /// The icon.svg file at samples/Graph/content/MeshWeaver/Documentation/DataMesh/UnifiedContentReferences/icon.svg should be accessible.
     /// </summary>
     [Fact(Timeout = 10000)]
     public async Task ContentCollection_RetrieveFile_ReturnsContent()
@@ -488,9 +488,9 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
             o => o.WithTarget(ucrAddress),
             TestContext.Current.CancellationToken);
 
-        // Request content:content/logo.svg from UCR hub
+        // Request content:content/icon.svg from UCR hub
         var response = await client.AwaitResponse(
-            new GetDataRequest(new UnifiedReference("content:content/logo.svg")),
+            new GetDataRequest(new UnifiedReference("content:content/icon.svg")),
             o => o.WithTarget(ucrAddress),
             TestContext.Current.CancellationToken);
 
@@ -505,18 +505,18 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
     }
 
     /// <summary>
-    /// Tests that $Content layout area for logo.svg returns content without hanging.
-    /// This simulates what happens when @@MeshWeaver/Documentation/DataMesh/UnifiedContentReferences/content:logo.svg is rendered.
+    /// Tests that $Content layout area for icon.svg returns content without hanging.
+    /// This simulates what happens when @@MeshWeaver/Documentation/DataMesh/UnifiedContentReferences/content:icon.svg is rendered.
     /// </summary>
     [Fact(Timeout = 15000)]
-    public async Task ContentLayoutArea_LogoSvg_ReturnsWithoutHanging()
+    public async Task ContentLayoutArea_IconSvg_ReturnsWithoutHanging()
     {
         var ucrAddress = new Address("MeshWeaver/Documentation/DataMesh/UnifiedContentReferences");
         var client = GetClient(c => c
             .AddLayoutClient(cc => cc)
             .AddContentCollections());
 
-        Output.WriteLine($"Testing $Content area for logo.svg on {ucrAddress}");
+        Output.WriteLine($"Testing $Content area for icon.svg on {ucrAddress}");
 
         // Initialize the UCR node hub
         await client.AwaitResponse(
@@ -525,10 +525,10 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
             TestContext.Current.CancellationToken);
         Output.WriteLine("Hub initialized");
 
-        // Request the $Content area with logo.svg as the id
-        // This is what @@MeshWeaver/Documentation/DataMesh/UnifiedContentReferences/content:logo.svg does
+        // Request the $Content area with icon.svg as the id
+        // This is what @@MeshWeaver/Documentation/DataMesh/UnifiedContentReferences/content:icon.svg does
         var workspace = client.GetWorkspace();
-        var reference = new LayoutAreaReference("$Content") { Id = "logo.svg" };
+        var reference = new LayoutAreaReference("$Content") { Id = "icon.svg" };
 
         Output.WriteLine($"Requesting layout area: {reference.Area} with id: {reference.Id}");
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(ucrAddress, reference);
