@@ -1,0 +1,502 @@
+@using Microsoft.FluentUI.AspNetCore.Components
+@using MeshWeaver.Kernel
+@using MeshWeaver.Layout
+@using MeshWeaver.Layout.Client
+@using MeshWeaver.Messaging
+@using MeshWeaver.Data
+@using System.Collections.Immutable
+@using System.Text.Json
+@using System.Reactive.Linq
+@using FluentAppearance = Microsoft.FluentUI.AspNetCore.Components.Appearance
+@using FluentOrientation = Microsoft.FluentUI.AspNetCore.Components.Orientation
+@inject IJSRuntime JSRuntime
+@implements IAsyncDisposable
+
+<div class="notebook-editor" @ref="containerRef" tabindex="-1" @onkeydown="OnGlobalKeyDown">
+    <div class="notebook-toolbar">
+        <FluentButton Appearance="FluentAppearance.Stealth"
+                      IconStart="@(new Icons.Regular.Size20.Code())"
+                      Title="Add code cell"
+                      Disabled="@BoundReadonly"
+                      OnClick="() => AddCellBelow(selectedCellIndex, NotebookCellType.Code)">
+            + Code
+        </FluentButton>
+
+        <FluentButton Appearance="FluentAppearance.Stealth"
+                      IconStart="@(new Icons.Regular.Size20.Markdown())"
+                      Title="Add markdown cell"
+                      Disabled="@BoundReadonly"
+                      OnClick="() => AddCellBelow(selectedCellIndex, NotebookCellType.Markdown)">
+            + Markdown
+        </FluentButton>
+
+        <FluentDivider Orientation="FluentOrientation.Vertical" Style="height: 24px; margin: 0 8px;" />
+
+        <FluentButton Appearance="FluentAppearance.Stealth"
+                      IconStart="@(new Icons.Regular.Size20.Play())"
+                      Title="Run all cells"
+                      Disabled="@(BoundReadonly || isRunningAll)"
+                      OnClick="RunAllCells">
+            Run All
+        </FluentButton>
+
+        <FluentButton Appearance="FluentAppearance.Stealth"
+                      IconStart="@(new Icons.Regular.Size20.DismissCircle())"
+                      Title="Clear all outputs"
+                      Disabled="@BoundReadonly"
+                      OnClick="ClearAllOutputs">
+            Clear Outputs
+        </FluentButton>
+
+        @if (isRunningAll)
+        {
+            <FluentProgressRing Style="width: 20px; height: 20px; margin-left: 8px;" />
+            <span style="margin-left: 4px; font-size: 12px;">Running...</span>
+        }
+    </div>
+
+    <div class="notebook-cells">
+        @for (int i = 0; i < cellControls.Count; i++)
+        {
+            var index = i;
+            var cellControl = cellControls[i];
+            var skin = cellControl.Skins.OfType<NotebookCellSkin>().FirstOrDefault() ?? new NotebookCellSkin();
+            var cellId = skin.CellId as string ?? "";
+            <NotebookCellView CellControl="@cellControl"
+                              IsSelected="@(selectedCellIndex == index)"
+                              IsReadonly="@BoundReadonly"
+                              IsFirst="@(index == 0)"
+                              IsLast="@(index == cellControls.Count - 1)"
+                              IsExecuting="@(executingCellIds.Contains(cellId))"
+                              ShowLineNumbers="@BoundShowLineNumbers"
+                              AvailableLanguages="@BoundAvailableLanguages"
+                              CellChanged="(c) => OnCellChanged(index, c)"
+                              OnRun="() => RunCell(index)"
+                              OnDelete="() => DeleteCell(index)"
+                              OnMoveUp="() => MoveCellUp(index)"
+                              OnMoveDown="() => MoveCellDown(index)"
+                              OnSelect="() => SelectCell(index)"
+                              OnRunAndAddBelow="() => RunAndAddBelow(index)"
+                              OnRunAndMoveNext="() => RunAndMoveNext(index)" />
+        }
+
+        @if (cellControls.Count == 0)
+        {
+            <div class="notebook-empty">
+                <p>This notebook is empty.</p>
+                <FluentButton Appearance="FluentAppearance.Accent"
+                              IconStart="@(new Icons.Regular.Size20.Code())"
+                              Disabled="@BoundReadonly"
+                              OnClick="() => AddCellBelow(-1, NotebookCellType.Code)">
+                    Add your first code cell
+                </FluentButton>
+            </div>
+        }
+    </div>
+</div>
+
+@code {
+    private ElementReference containerRef;
+    private List<NotebookCellControl> cellControls = new();
+    private int selectedCellIndex = -1;
+    private HashSet<string> executingCellIds = new();
+    private int executionCounter = 0;
+    private bool isRunningAll = false;
+    private IJSObjectReference? jsModule;
+    private List<IDisposable> subscriptions = new();
+
+    // Bound values from ViewModel
+    private bool BoundReadonly = false;
+    private bool BoundShowLineNumbers = true;
+    private string BoundDefaultLanguage = "csharp";
+    private IEnumerable<string> BoundAvailableLanguages = ImmutableList.Create("csharp", "python");
+    private Address? BoundKernelAddress;
+    private string? BoundHeight;
+
+    [Parameter]
+    public NotebookControl? ViewModel { get; set; }
+
+    [Parameter]
+    public ISynchronizationStream<JsonElement>? Stream { get; set; }
+
+    [Parameter]
+    public string? Area { get; set; }
+
+    [CascadingParameter(Name = "DataContext")]
+    public string? DataContext { get; set; }
+
+    [CascadingParameter]
+    public IMessageHub? Hub { get; set; }
+
+    protected override void OnInitialized()
+    {
+        base.OnInitialized();
+        BindData();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            jsModule = await JSRuntime.InvokeAsync<IJSObjectReference>("import",
+                "./_content/MeshWeaver.Blazor.Monaco/NotebookEditorView.razor.js");
+        }
+    }
+
+    protected override void OnParametersSet()
+    {
+        base.OnParametersSet();
+        BindData();
+    }
+
+    private void BindData()
+    {
+        if (ViewModel == null)
+            return;
+
+        // Get cells from the NotebookControl's Cells property
+        cellControls = ViewModel.Cells.ToList();
+
+        // Bind skin properties
+        var notebookSkin = ViewModel.Skins.OfType<NotebookSkin>().FirstOrDefault();
+        if (notebookSkin != null)
+        {
+            BoundShowLineNumbers = notebookSkin.ShowLineNumbers as bool? ?? true;
+            BoundDefaultLanguage = notebookSkin.DefaultLanguage as string ?? "csharp";
+            BoundAvailableLanguages = notebookSkin.AvailableLanguages as IEnumerable<string>
+                ?? ImmutableList.Create("csharp", "python");
+            BoundKernelAddress = notebookSkin.KernelAddress as Address;
+            BoundHeight = notebookSkin.Height as string;
+        }
+
+        BoundReadonly = ResolveValue<bool?>(ViewModel.Readonly) ?? false;
+    }
+
+    private string? GetEffectiveDataContext()
+    {
+        return DataContext ?? ViewModel?.DataContext;
+    }
+
+    private T? ResolveValue<T>(object? value)
+    {
+        if (value == null)
+            return default;
+
+        // If we have a stream, try to resolve data bindings
+        if (Stream != null)
+        {
+            return Stream.GetDataBoundValue<T>(value, GetEffectiveDataContext());
+        }
+
+        // Fall back to direct conversion
+        if (value is T typedValue)
+            return typedValue;
+
+        if (value is JsonElement element)
+        {
+            try
+            {
+                return element.Deserialize<T>();
+            }
+            catch
+            {
+                return default;
+            }
+        }
+
+        return default;
+    }
+
+    private void OnCellChanged(int index, NotebookCellControl cellControl)
+    {
+        if (index >= 0 && index < cellControls.Count)
+        {
+            cellControls[index] = cellControl;
+            NotifyCellsChanged();
+        }
+    }
+
+    private void SelectCell(int index)
+    {
+        selectedCellIndex = index;
+        StateHasChanged();
+    }
+
+    private void AddCellBelow(int index, NotebookCellType cellType)
+    {
+        var newCell = cellType == NotebookCellType.Markdown
+            ? NotebookCellControl.Markdown("")
+            : NotebookCellControl.Code("", BoundDefaultLanguage);
+
+        var insertIndex = index + 1;
+        if (insertIndex <= 0)
+            insertIndex = 0;
+        if (insertIndex > cellControls.Count)
+            insertIndex = cellControls.Count;
+
+        cellControls.Insert(insertIndex, newCell);
+        selectedCellIndex = insertIndex;
+        NotifyCellsChanged();
+    }
+
+    private void DeleteCell(int index)
+    {
+        if (index >= 0 && index < cellControls.Count)
+        {
+            cellControls.RemoveAt(index);
+            if (selectedCellIndex >= cellControls.Count)
+                selectedCellIndex = cellControls.Count - 1;
+            NotifyCellsChanged();
+        }
+    }
+
+    private void MoveCellUp(int index)
+    {
+        if (index > 0 && index < cellControls.Count)
+        {
+            var cell = cellControls[index];
+            cellControls.RemoveAt(index);
+            cellControls.Insert(index - 1, cell);
+            selectedCellIndex = index - 1;
+            NotifyCellsChanged();
+        }
+    }
+
+    private void MoveCellDown(int index)
+    {
+        if (index >= 0 && index < cellControls.Count - 1)
+        {
+            var cell = cellControls[index];
+            cellControls.RemoveAt(index);
+            cellControls.Insert(index + 1, cell);
+            selectedCellIndex = index + 1;
+            NotifyCellsChanged();
+        }
+    }
+
+    private async Task RunCell(int index)
+    {
+        if (index < 0 || index >= cellControls.Count)
+            return;
+
+        var cellControl = cellControls[index];
+        var skin = cellControl.Skins.OfType<NotebookCellSkin>().FirstOrDefault();
+        var cellType = skin?.CellType as NotebookCellType? ?? NotebookCellType.Code;
+        var cellId = skin?.CellId as string ?? "";
+
+        if (cellType != NotebookCellType.Code)
+            return;
+
+        executingCellIds.Add(cellId);
+        StateHasChanged();
+
+        try
+        {
+            var content = cellControl.Content as string ?? "";
+            var language = skin?.Language as string ?? "csharp";
+            var output = await ExecuteCodeAsync(content, language);
+            executionCounter++;
+
+            cellControls[index] = cellControl
+                .WithOutput(output)
+                .WithExecutionCount(executionCounter)
+                .WithIsExecuting(false);
+        }
+        catch (Exception ex)
+        {
+            cellControls[index] = cellControl
+                .WithOutput(new NotebookCellOutput
+                {
+                    Error = ex.Message,
+                    IsSuccess = false
+                })
+                .WithIsExecuting(false);
+        }
+        finally
+        {
+            executingCellIds.Remove(cellId);
+            NotifyCellsChanged();
+        }
+    }
+
+    private async Task RunAndAddBelow(int index)
+    {
+        await RunCell(index);
+        AddCellBelow(index, NotebookCellType.Code);
+    }
+
+    private async Task RunAndMoveNext(int index)
+    {
+        await RunCell(index);
+        if (index < cellControls.Count - 1)
+        {
+            selectedCellIndex = index + 1;
+            StateHasChanged();
+        }
+        else
+        {
+            AddCellBelow(index, NotebookCellType.Code);
+        }
+    }
+
+    private async Task RunAllCells()
+    {
+        isRunningAll = true;
+        StateHasChanged();
+
+        try
+        {
+            for (int i = 0; i < cellControls.Count; i++)
+            {
+                var skin = cellControls[i].Skins.OfType<NotebookCellSkin>().FirstOrDefault();
+                var cellType = skin?.CellType as NotebookCellType? ?? NotebookCellType.Code;
+                if (cellType == NotebookCellType.Code)
+                {
+                    selectedCellIndex = i;
+                    StateHasChanged();
+                    await RunCell(i);
+                }
+            }
+        }
+        finally
+        {
+            isRunningAll = false;
+            StateHasChanged();
+        }
+    }
+
+    private void ClearAllOutputs()
+    {
+        for (int i = 0; i < cellControls.Count; i++)
+        {
+            cellControls[i] = cellControls[i]
+                .WithOutput(null)
+                .WithExecutionCount(null);
+        }
+        executionCounter = 0;
+        NotifyCellsChanged();
+    }
+
+    private async Task<NotebookCellOutput> ExecuteCodeAsync(string code, string language)
+    {
+        if (Hub == null || BoundKernelAddress == null)
+        {
+            return new NotebookCellOutput
+            {
+                Error = "No kernel available for execution. Please configure KernelAddress.",
+                IsSuccess = false
+            };
+        }
+
+        try
+        {
+            var request = new SubmitCodeRequest(code);
+            // Post request and wait for response
+            var response = await Hub.AwaitResponse(request, o => o.WithTarget(BoundKernelAddress));
+
+            if (response is NotebookCellOutput output)
+            {
+                return output;
+            }
+
+            return new NotebookCellOutput
+            {
+                Value = response,
+                IsSuccess = true
+            };
+        }
+        catch (Exception ex)
+        {
+            return new NotebookCellOutput
+            {
+                Error = ex.Message,
+                IsSuccess = false
+            };
+        }
+    }
+
+    private void OnGlobalKeyDown(KeyboardEventArgs e)
+    {
+        // Only handle when not in edit mode (when container has focus)
+        if (selectedCellIndex < 0 || selectedCellIndex >= cellControls.Count)
+            return;
+
+        // A: Add cell above
+        if (e.Key == "a" && !e.CtrlKey && !e.AltKey && !e.ShiftKey)
+        {
+            AddCellBelow(selectedCellIndex - 1, NotebookCellType.Code);
+            return;
+        }
+
+        // B: Add cell below
+        if (e.Key == "b" && !e.CtrlKey && !e.AltKey && !e.ShiftKey)
+        {
+            AddCellBelow(selectedCellIndex, NotebookCellType.Code);
+            return;
+        }
+
+        // M: Convert to markdown
+        if (e.Key == "m" && !e.CtrlKey && !e.AltKey && !e.ShiftKey)
+        {
+            var cell = cellControls[selectedCellIndex];
+            cellControls[selectedCellIndex] = cell
+                .WithCellType(NotebookCellType.Markdown)
+                .WithLanguage("markdown");
+            NotifyCellsChanged();
+            return;
+        }
+
+        // Y: Convert to code
+        if (e.Key == "y" && !e.CtrlKey && !e.AltKey && !e.ShiftKey)
+        {
+            var cell = cellControls[selectedCellIndex];
+            cellControls[selectedCellIndex] = cell
+                .WithCellType(NotebookCellType.Code)
+                .WithLanguage(BoundDefaultLanguage);
+            NotifyCellsChanged();
+            return;
+        }
+
+        // Arrow up: Select previous cell
+        if (e.Key == "ArrowUp" && !e.CtrlKey && !e.AltKey && !e.ShiftKey)
+        {
+            if (selectedCellIndex > 0)
+            {
+                selectedCellIndex--;
+                StateHasChanged();
+            }
+            return;
+        }
+
+        // Arrow down: Select next cell
+        if (e.Key == "ArrowDown" && !e.CtrlKey && !e.AltKey && !e.ShiftKey)
+        {
+            if (selectedCellIndex < cellControls.Count - 1)
+            {
+                selectedCellIndex++;
+                StateHasChanged();
+            }
+            return;
+        }
+    }
+
+    private void NotifyCellsChanged()
+    {
+        StateHasChanged();
+        // TODO: Implement two-way binding to update ViewModel or notify parent
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        foreach (var sub in subscriptions)
+        {
+            sub.Dispose();
+        }
+        subscriptions.Clear();
+
+        if (jsModule != null)
+        {
+            await jsModule.DisposeAsync();
+        }
+    }
+}

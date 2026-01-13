@@ -52,7 +52,7 @@ public class NavMenuExtensionsTest(ITestOutputHelper output) : HubTestBase(outpu
 
             var control = await stream.GetControlStream(reference.Area!)
                 .Timeout(10.Seconds())
-                .FirstAsync();
+                .FirstAsync(x => x != null);
             
             control
                 .Should()

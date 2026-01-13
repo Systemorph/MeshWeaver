@@ -1,0 +1,288 @@
+@using Microsoft.FluentUI.AspNetCore.Components
+@using MeshWeaver.Kernel
+@using MeshWeaver.Layout
+@using FluentAppearance = Microsoft.FluentUI.AspNetCore.Components.Appearance
+
+<div class="notebook-cell @(IsSelected ? "selected" : "") @(CellType.ToString().ToLower())"
+     tabindex="0"
+     @onclick="OnCellClick"
+     @onkeydown="OnKeyDown"
+     @onfocusin="OnFocusIn"
+     @onfocusout="OnFocusOut">
+
+    <div class="cell-gutter">
+        <span class="cell-index">[@(ExecutionIndex?.ToString() ?? " ")]</span>
+    </div>
+
+    <div class="cell-content">
+        <div class="cell-toolbar">
+            <FluentSelect TOption="string"
+                          Value="@Language"
+                          ValueChanged="OnLanguageChanged"
+                          Style="width: 120px; min-width: 100px;"
+                          Disabled="@(CellType == NotebookCellType.Markdown || IsReadonly)">
+                @foreach (var lang in AvailableLanguages)
+                {
+                    <FluentOption Value="@lang">@GetLanguageDisplayName(lang)</FluentOption>
+                }
+            </FluentSelect>
+
+            <FluentButton Appearance="FluentAppearance.Stealth"
+                          IconStart="@(new Icons.Regular.Size20.Play())"
+                          Title="Run cell (Ctrl+Enter)"
+                          Disabled="@(CellType == NotebookCellType.Markdown || IsExecuting || IsReadonly)"
+                          OnClick="OnRunClick" />
+
+            <FluentButton Appearance="FluentAppearance.Stealth"
+                          IconStart="@(new Icons.Regular.Size20.ArrowUp())"
+                          Title="Move cell up"
+                          Disabled="@(IsFirst || IsReadonly)"
+                          OnClick="OnMoveUpClick" />
+
+            <FluentButton Appearance="FluentAppearance.Stealth"
+                          IconStart="@(new Icons.Regular.Size20.ArrowDown())"
+                          Title="Move cell down"
+                          Disabled="@(IsLast || IsReadonly)"
+                          OnClick="OnMoveDownClick" />
+
+            <FluentButton Appearance="FluentAppearance.Stealth"
+                          IconStart="@(new Icons.Regular.Size20.Delete())"
+                          Title="Delete cell"
+                          Disabled="@IsReadonly"
+                          OnClick="OnDeleteClick" />
+
+            @if (IsExecuting)
+            {
+                <FluentProgressRing Style="width: 20px; height: 20px;" />
+            }
+        </div>
+
+        <div class="cell-editor">
+            <MonacoEditorView @ref="editorRef"
+                              Value="@Content"
+                              Language="@GetMonacoLanguage(Language)"
+                              Height="@EditorHeight"
+                              IsDisabled="@IsReadonly"
+                              ShowLineNumbers="@ShowLineNumbers"
+                              ShowBorder="true"
+                              CodeEditMode="true"
+                              ValueChanged="OnContentChanged" />
+        </div>
+
+        @if (CellType == NotebookCellType.Code && Output != null)
+        {
+            <div class="cell-output @(Output.IsSuccess ? "success" : "error")">
+                @if (!Output.IsSuccess && !string.IsNullOrEmpty(Output.Error))
+                {
+                    <pre class="output-error">@Output.Error</pre>
+                }
+                else if (!string.IsNullOrEmpty(Output.StandardOutput))
+                {
+                    <pre class="output-stdout">@Output.StandardOutput</pre>
+                }
+                @if (Output.Value != null)
+                {
+                    <div class="output-value">
+                        @RenderOutput(Output.Value)
+                    </div>
+                }
+            </div>
+        }
+    </div>
+</div>
+
+@code {
+    private MonacoEditorView? editorRef;
+
+    [Parameter]
+    public NotebookCellControl CellControl { get; set; } = new();
+
+    [Parameter]
+    public bool IsSelected { get; set; }
+
+    [Parameter]
+    public bool IsReadonly { get; set; }
+
+    [Parameter]
+    public bool IsFirst { get; set; }
+
+    [Parameter]
+    public bool IsLast { get; set; }
+
+    [Parameter]
+    public bool IsExecuting { get; set; }
+
+    [Parameter]
+    public bool ShowLineNumbers { get; set; } = true;
+
+    [Parameter]
+    public IEnumerable<string> AvailableLanguages { get; set; } = new[] { "csharp", "python", "markdown" };
+
+    [Parameter]
+    public EventCallback<NotebookCellControl> CellChanged { get; set; }
+
+    [Parameter]
+    public EventCallback OnRun { get; set; }
+
+    [Parameter]
+    public EventCallback OnDelete { get; set; }
+
+    [Parameter]
+    public EventCallback OnMoveUp { get; set; }
+
+    [Parameter]
+    public EventCallback OnMoveDown { get; set; }
+
+    [Parameter]
+    public EventCallback OnSelect { get; set; }
+
+    [Parameter]
+    public EventCallback OnRunAndAddBelow { get; set; }
+
+    [Parameter]
+    public EventCallback OnRunAndMoveNext { get; set; }
+
+    // Derived properties from CellControl and its skin
+    private NotebookCellSkin Skin => CellControl.Skins.OfType<NotebookCellSkin>().FirstOrDefault() ?? new NotebookCellSkin();
+    private NotebookCellType CellType => Skin.CellType as NotebookCellType? ?? NotebookCellType.Code;
+    private string Language => Skin.Language as string ?? "csharp";
+    private int? ExecutionIndex => Skin.ExecutionCount as int?;
+    private string Content => CellControl.Content as string ?? "";
+    private NotebookCellOutput? Output => CellControl.Output as NotebookCellOutput;
+
+    private string EditorHeight => CellType == NotebookCellType.Markdown ? "100px" : "150px";
+
+    private string GetLanguageDisplayName(string lang) => lang switch
+    {
+        "csharp" => "C#",
+        "python" => "Python",
+        "markdown" => "Markdown",
+        "javascript" => "JavaScript",
+        _ => lang
+    };
+
+    private string GetMonacoLanguage(string lang) => lang switch
+    {
+        "csharp" => "csharp",
+        "python" => "python",
+        "markdown" => "markdown",
+        "javascript" => "javascript",
+        _ => "plaintext"
+    };
+
+    private async Task OnContentChanged(string content)
+    {
+        if (content != Content)
+        {
+            var updatedCell = CellControl.WithContent(content);
+            await CellChanged.InvokeAsync(updatedCell);
+        }
+    }
+
+    private async Task OnLanguageChanged(string? language)
+    {
+        if (language != null && language != Language)
+        {
+            var cellType = language == "markdown" ? NotebookCellType.Markdown : NotebookCellType.Code;
+            var updatedCell = CellControl
+                .WithLanguage(language)
+                .WithCellType(cellType);
+            await CellChanged.InvokeAsync(updatedCell);
+        }
+    }
+
+    private async Task OnRunClick()
+    {
+        await OnRun.InvokeAsync();
+    }
+
+    private async Task OnDeleteClick()
+    {
+        await OnDelete.InvokeAsync();
+    }
+
+    private async Task OnMoveUpClick()
+    {
+        await OnMoveUp.InvokeAsync();
+    }
+
+    private async Task OnMoveDownClick()
+    {
+        await OnMoveDown.InvokeAsync();
+    }
+
+    private async Task OnCellClick()
+    {
+        await OnSelect.InvokeAsync();
+    }
+
+    private void OnFocusIn()
+    {
+        // Cell has focus
+    }
+
+    private void OnFocusOut()
+    {
+        // Cell lost focus
+    }
+
+    private async Task OnKeyDown(KeyboardEventArgs e)
+    {
+        // Ctrl+Enter: Run cell
+        if (e.CtrlKey && e.Key == "Enter")
+        {
+            await OnRun.InvokeAsync();
+            return;
+        }
+
+        // Alt+Enter: Run cell and add new cell below
+        if (e.AltKey && e.Key == "Enter")
+        {
+            await OnRunAndAddBelow.InvokeAsync();
+            return;
+        }
+
+        // Shift+Enter: Run cell and move to next
+        if (e.ShiftKey && e.Key == "Enter")
+        {
+            await OnRunAndMoveNext.InvokeAsync();
+            return;
+        }
+    }
+
+    private RenderFragment RenderOutput(object value)
+    {
+        return builder =>
+        {
+            if (value is string strValue)
+            {
+                builder.OpenElement(0, "pre");
+                builder.AddContent(1, strValue);
+                builder.CloseElement();
+            }
+            else
+            {
+                builder.OpenElement(0, "pre");
+                builder.AddContent(1, value?.ToString() ?? "null");
+                builder.CloseElement();
+            }
+        };
+    }
+
+    public async Task FocusEditorAsync()
+    {
+        if (editorRef != null)
+        {
+            await editorRef.FocusAsync();
+        }
+    }
+
+    public async ValueTask<string> GetContentAsync()
+    {
+        if (editorRef != null)
+        {
+            return await editorRef.GetValueAsync();
+        }
+        return Content;
+    }
+}
