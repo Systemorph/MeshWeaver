@@ -3,6 +3,7 @@ using System.Text.RegularExpressions;
 using Markdig;
 using Markdig.Extensions.Yaml;
 using Markdig.Syntax;
+using MeshWeaver.Markdown;
 using MeshWeaver.Mesh;
 using YamlDotNet.Serialization;
 
@@ -35,7 +36,7 @@ public partial class MarkdownFileParser : IFileFormatParser
         var (id, ns) = DeriveIdAndNamespace(relativePath, filePath);
 
         // Parse markdown to extract YAML front matter
-        var document = Markdown.Parse(content, Pipeline);
+        var document = Markdig.Markdown.Parse(content, Pipeline);
         var yamlBlock = document.Descendants<YamlFrontMatterBlock>().FirstOrDefault();
 
         MarkdownFrontMatter? frontMatter = null;
@@ -61,6 +62,9 @@ public partial class MarkdownFileParser : IFileFormatParser
         var fileInfo = new FileInfo(filePath);
         var lastModified = new DateTimeOffset(fileInfo.LastWriteTimeUtc, TimeSpan.Zero);
 
+        // Parse markdown and create MarkdownContent with pre-rendered HTML and code submissions
+        var markdownDocument = MarkdownContent.Parse(markdownContent, relativePath);
+
         var node = new MeshNode(id, ns)
         {
             NodeType = frontMatter?.NodeType ?? "Markdown",
@@ -71,7 +75,7 @@ public partial class MarkdownFileParser : IFileFormatParser
             State = ParseState(frontMatter?.State),
             IsPersistent = true,
             LastModified = lastModified,
-            Content = markdownContent
+            Content = markdownDocument
         };
 
         return Task.FromResult<MeshNode?>(node);
@@ -109,8 +113,15 @@ public partial class MarkdownFileParser : IFileFormatParser
             sb.AppendLine();
         }
 
-        // Append markdown content
-        if (node.Content is string markdownContent)
+        // Append markdown content - extract from MarkdownContent if needed
+        var markdownContent = node.Content switch
+        {
+            MarkdownContent doc => doc.Content,
+            string str => str,
+            _ => null
+        };
+
+        if (markdownContent != null)
         {
             sb.Append(markdownContent);
         }
@@ -120,8 +131,8 @@ public partial class MarkdownFileParser : IFileFormatParser
 
     public bool CanSerialize(MeshNode node)
     {
-        // Handle nodes with NodeType "Markdown" or with string content
-        return node.NodeType == "Markdown" || node.Content is string;
+        // Handle nodes with NodeType "Markdown", MarkdownContent content, or string content
+        return node.NodeType == "Markdown" || node.Content is MarkdownContent || node.Content is string;
     }
 
     private static (string Id, string? Namespace) DeriveIdAndNamespace(string relativePath, string filePath)
