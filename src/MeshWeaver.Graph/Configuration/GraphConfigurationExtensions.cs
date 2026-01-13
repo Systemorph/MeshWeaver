@@ -1,5 +1,4 @@
-﻿using System.Reactive.Linq;
-using MeshWeaver.ContentCollections;
+﻿using MeshWeaver.ContentCollections;
 using MeshWeaver.Data;
 using MeshWeaver.Domain;
 using MeshWeaver.Mesh;
@@ -47,12 +46,11 @@ public static class GraphConfigurationExtensions
                 Name = "Node Type",
                 Description = "Definition for a node type",
                 Icon = "Code",
-                HubConfiguration = Observable.Return<Func<MessageHubConfiguration, MessageHubConfiguration>?>(
-                    config => config
-                        .AddMeshDataSource(source => source
-                            .WithContentType<NodeTypeDefinition>()
-                            .WithType<CodeConfiguration>("Code"))
-                        .AddNodeTypeView())
+                HubConfiguration = config => config
+                    .AddMeshDataSource(source => source
+                        .WithContentType<NodeTypeDefinition>()
+                        .WithType<CodeConfiguration>("Code"))
+                    .AddNodeTypeView()
             });
 
             // Register the built-in "Agent" MeshNode
@@ -62,11 +60,10 @@ public static class GraphConfigurationExtensions
                 Name = "Agent",
                 Description = "AI Agent configuration",
                 Icon = "Bot",
-                HubConfiguration = Observable.Return<Func<MessageHubConfiguration, MessageHubConfiguration>?>(
-                    config => config
-                        .AddMeshDataSource(source => source
-                            .WithContentType<AgentConfiguration>())
-                        .AddAgentView())
+                HubConfiguration = config => config
+                    .AddMeshDataSource(source => source
+                        .WithContentType<AgentConfiguration>())
+                    .AddAgentView()
             });
 
             // Register the built-in "Markdown" MeshNode
@@ -76,8 +73,7 @@ public static class GraphConfigurationExtensions
                 Name = "Markdown",
                 Description = "A markdown node with collaborative editing support",
                 Icon = "Document",
-                HubConfiguration = Observable.Return<Func<MessageHubConfiguration, MessageHubConfiguration>?>(
-                    config => config.AddMarkdownViews().AddMeshDataSource().AddContentCollections())
+                HubConfiguration = config => config.AddMarkdownViews().AddMeshDataSource().AddContentCollections()
             });
 
             // Register services that don't need hub-level dependencies at the mesh level

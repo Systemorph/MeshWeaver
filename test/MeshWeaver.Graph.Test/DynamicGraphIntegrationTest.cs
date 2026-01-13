@@ -1199,9 +1199,9 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
         File.Exists(organizationPath).Should().BeTrue(
             $"Organization.json should exist at {organizationPath}");
 
-        var codeConfigPath = Path.Combine(SamplesDataDirectory, "Organization", "Code", "dataModel.json");
+        var codeConfigPath = Path.Combine(SamplesDataDirectory, "Organization", "Code", "Organization.cs");
         File.Exists(codeConfigPath).Should().BeTrue(
-            $"Organization/Code/dataModel.json should exist at {codeConfigPath}");
+            $"Organization/Code/Organization.cs should exist at {codeConfigPath}");
     }
 
     /// <summary>
@@ -1257,9 +1257,9 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
             "NodeType nodes should have HubConfiguration from their own code");
 
         // Verify we can get the actual HubConfiguration function
-        var hubConfig = await node.HubConfiguration.FirstAsync();
-        hubConfig.Should().NotBeNull("Should be able to get HubConfiguration from Observable");
-        Output.WriteLine("Successfully obtained HubConfiguration from Observable");
+        var hubConfig = node.HubConfiguration;
+        hubConfig.Should().NotBeNull("Should be able to get HubConfiguration");
+        Output.WriteLine("Successfully obtained HubConfiguration");
     }
 
     /// <summary>
@@ -1594,17 +1594,17 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
     }
 
     /// <summary>
-    /// Test that the views.json file exists alongside dataModel.json for Organization.
+    /// Test that the OrganizationViews.cs file exists alongside Organization.cs for Organization.
     /// This validates the custom view configuration structure.
     /// </summary>
     [Fact]
-    public void Organization_ViewsJson_Exists()
+    public void Organization_ViewsCs_Exists()
     {
-        var viewsJsonPath = Path.Combine(SamplesDataDirectory, "Organization", "Code", "views.json");
-        Output.WriteLine($"Checking for views.json at: {viewsJsonPath}");
+        var viewsCsPath = Path.Combine(SamplesDataDirectory, "Organization", "Code", "OrganizationViews.cs");
+        Output.WriteLine($"Checking for OrganizationViews.cs at: {viewsCsPath}");
 
-        File.Exists(viewsJsonPath).Should().BeTrue(
-            $"Organization/Code/views.json should exist at {viewsJsonPath} for custom view configuration");
+        File.Exists(viewsCsPath).Should().BeTrue(
+            $"Organization/Code/OrganizationViews.cs should exist at {viewsCsPath} for custom view configuration");
     }
 
     /// <summary>
@@ -1628,7 +1628,7 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
             "Organization node should have HubConfiguration from compiled assembly with custom view");
 
         // Get the hub configuration function
-        var hubConfig = await node.HubConfiguration.FirstAsync();
+        var hubConfig = node.HubConfiguration;
         hubConfig.Should().NotBeNull("HubConfiguration should be available");
 
         Output.WriteLine("Organization custom view compiled successfully!");

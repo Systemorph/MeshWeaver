@@ -207,13 +207,7 @@ internal class MeshNodeCompilationService(
                         // Extract configurations from Nodes property
                         foreach (var meshNode in attribute.Nodes)
                         {
-                            // Get HubConfiguration by subscribing to Observable (it emits immediately via Observable.Return)
-                            Func<MessageHubConfiguration, MessageHubConfiguration>? hubConfig = null;
-                            if (meshNode.HubConfiguration != null)
-                            {
-                                meshNode.HubConfiguration.Subscribe(config => hubConfig = config);
-                            }
-
+                            var hubConfig = meshNode.HubConfiguration;
                             if (hubConfig != null)
                             {
                                 configurations.Add(new NodeTypeConfiguration
@@ -520,12 +514,7 @@ internal class MeshNodeCompilationService(
                     {
                         foreach (var meshNode in attribute.Nodes)
                         {
-                            Func<MessageHubConfiguration, MessageHubConfiguration>? hubConfig = null;
-                            if (meshNode.HubConfiguration != null)
-                            {
-                                meshNode.HubConfiguration.Subscribe(config => hubConfig = config);
-                            }
-
+                            var hubConfig = meshNode.HubConfiguration;
                             if (hubConfig != null)
                             {
                                 configurations.Add(new NodeTypeConfiguration

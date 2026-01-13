@@ -201,21 +201,21 @@ public class SearchQueryTests : MonolithMeshTestBase
     #region Graph Sample Data Integration Tests
 
     [Fact(Timeout = 30000)]
-    public async Task Search_GraphSampleData_FindsPersonNodes()
+    public async Task Search_GraphSampleData_FindsUserNodes()
     {
-        // Arrange - search for Person nodes
-        var request = new MeshQueryRequest { Query = "nodeType:*Person* scope:descendants", Limit = 20 };
+        // Arrange - search for User nodes (User is a NodeType that uses Person as content type)
+        var request = new MeshQueryRequest { Query = "nodeType:User scope:descendants", Limit = 20 };
 
         // Act
         var results = await MeshQuery.QueryAsync<MeshNode>(request).ToArrayAsync();
 
         // Assert
-        Output.WriteLine($"Found {results.Length} Person nodes");
+        Output.WriteLine($"Found {results.Length} User nodes");
         foreach (var r in results)
             Output.WriteLine($"  - {r.Path}: {r.Name}");
 
-        // The samples/Graph/Data should have Person nodes
-        results.Should().NotBeEmpty("Sample data should contain Person nodes");
+        // The samples/Graph/Data should have User nodes (Alice, Bob, etc.)
+        results.Should().NotBeEmpty("Sample data should contain User nodes");
     }
 
     [Fact(Timeout = 30000)]
