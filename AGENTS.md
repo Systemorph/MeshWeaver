@@ -24,12 +24,23 @@ dotnet restore
 
 ### Running Applications
 
-#### Monolithic Portal (Development)
+#### Loom Portal (Recommended for Development)
+```bash
+cd loom/Loom.Portal.Monolith
+dotnet run
+# Access at https://localhost:7122
+```
+
+The Loom Portal uses `AddJsonGraphConfiguration()` to dynamically load Graph nodes from `samples/Graph/Data/`, including the MeshWeaver documentation and Architecture articles. This is the recommended portal for development.
+
+#### Standard Portal (Legacy/Pre-compiled Applications)
 ```bash
 cd portal/MeshWeaver.Portal
 dotnet run
 # Access at https://localhost:65260
 ```
+
+Note: The Standard Portal uses `InstallAssemblies()` for pre-compiled sample applications (Northwind, Todo, Insurance) but does NOT support the Graph data in `samples/Graph/Data/`.
 
 #### Microservices Portal (.NET Aspire)
 ```bash
@@ -72,8 +83,12 @@ dotnet new meshweaver-solution -n MyApp
   - `Northwind/` - Sample business application with analytics
   - `Todo/` - Simple CRUD demonstration
 
-- **`portal/`** - Web applications
-  - `MeshWeaver.Portal/` - Monolithic deployment
+- **`loom/`** - Loom Portal (recommended for development)
+  - `Loom.Portal.Monolith/` - Development portal with full Graph support
+  - `aspire/` - Microservices with .NET Aspire orchestration
+
+- **`portal/`** - Standard Portal (legacy/pre-compiled applications)
+  - `MeshWeaver.Portal/` - Monolithic deployment (no Graph support)
   - `aspire/` - Microservices with .NET Aspire orchestration
 
 ### Architectural Patterns
@@ -173,7 +188,7 @@ public class MyPlugin(IMessageHub hub, IAgentChat chat)
 
 ## Key Dependencies
 
-- **.NET 9.0** - Target framework
+- **.NET 10.0** - Target framework
 - **Orleans** - Distributed deployment (distributed deployment, microservices)
 - **Blazor Server** - Web UI framework  
 - **Semantic Kernel** - AI integration

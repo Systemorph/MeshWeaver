@@ -112,7 +112,8 @@ public partial class ArticleView
                     _kernelNodeCreated = true;
                     var kernelNode = new MeshNode(KernelId, AddressExtensions.KernelType)
                     {
-                        Name = $"Kernel-{KernelId}"
+                        Name = $"Kernel-{KernelId}",
+                        NodeType = AddressExtensions.KernelType
                     };
 
                     try
