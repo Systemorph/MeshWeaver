@@ -1,3 +1,4 @@
+using MeshWeaver.Kernel;
 using MeshWeaver.Layout;
 using MeshWeaver.Messaging;
 
@@ -9,14 +10,15 @@ namespace MeshWeaver.Blazor.Monaco;
 public static class BlazorMonacoExtensions
 {
     /// <summary>
-    /// Adds the Monaco editor views (CodeEditorView) to the configuration.
+    /// Adds the Monaco editor views (CodeEditorView, MarkdownEditorView, NotebookEditorView) to the configuration.
     /// </summary>
     public static MessageHubConfiguration AddMonacoViews(this MessageHubConfiguration configuration)
     {
         return configuration
-            .WithTypes(typeof(CodeEditorControl), typeof(MarkdownEditorControl))
+            .WithTypes(typeof(CodeEditorControl), typeof(MarkdownEditorControl), typeof(NotebookControl))
             .AddViews(registry => registry
                 .WithView<CodeEditorControl, CodeEditorView>()
-                .WithView<MarkdownEditorControl, MarkdownEditorView>());
+                .WithView<MarkdownEditorControl, MarkdownEditorView>()
+                .WithView<NotebookControl, NotebookEditorView>());
     }
 }

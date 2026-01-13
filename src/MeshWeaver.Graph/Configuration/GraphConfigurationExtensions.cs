@@ -21,7 +21,7 @@ public static class GraphConfigurationExtensions
     /// <summary>
     /// The NodeType value used to identify markdown documentation nodes.
     /// </summary>
-    public const string MarkdownNodeType = "Markdown";
+    public const string MarkdownNodeType = Configuration.MarkdownNodeType.NodeType;
 
     /// <param name="builder">The mesh builder</param>
     extension<TBuilder>(TBuilder builder) where TBuilder : MeshBuilder
@@ -68,13 +68,7 @@ public static class GraphConfigurationExtensions
 
             // Register the built-in "Markdown" MeshNode
             // This provides HubConfiguration for nodes with nodeType="Markdown" (markdown documentation nodes).
-            builder.AddMeshNodes(new MeshNode(MarkdownNodeType)
-            {
-                Name = "Markdown",
-                Description = "A markdown node with collaborative editing support",
-                Icon = "Document",
-                HubConfiguration = config => config.AddMarkdownViews().AddMeshDataSource().AddContentCollections()
-            });
+            builder.AddMeshNodes(Configuration.MarkdownNodeType.CreateMeshNode());
 
             // Register services that don't need hub-level dependencies at the mesh level
             builder.ConfigureServices(services =>

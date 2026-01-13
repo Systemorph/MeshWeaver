@@ -4,6 +4,7 @@ using MeshWeaver.Application.Styles;
 using MeshWeaver.Data;
 using MeshWeaver.Domain;
 using MeshWeaver.Graph.Configuration;
+using MeshWeaver.Kernel;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Markdown;
@@ -26,6 +27,7 @@ public static class MarkdownView
 {
     public const string ReadArea = "Read";
     public const string EditArea = "Edit";
+    public const string NotebookArea = "Notebook";
     public const string CommentsArea = "Comments";
     public const string AttachmentsArea = "Attachments";
 
@@ -39,6 +41,7 @@ public static class MarkdownView
                 .WithDefaultArea(ReadArea)
                 .WithView(ReadArea, ReadView)
                 .WithView(EditArea, EditView)
+                .WithView(NotebookArea, NotebookView)
                 .WithView(CommentsArea, CommentsView)
                 .WithView(AttachmentsArea, AttachmentsView)
                 .WithView(MeshNodeView.SettingsArea, MeshNodeView.Settings)
@@ -888,6 +891,10 @@ public static class MarkdownView
         var editHref = $"/{nodePath}/{EditArea}";
         menu = menu.WithView(new NavLinkControl("Edit", FluentIcons.Edit(IconSize.Size16), editHref));
 
+        // Notebook option
+        var notebookHref = $"/{nodePath}/{NotebookArea}";
+        menu = menu.WithView(new NavLinkControl("Notebook", FluentIcons.Code(IconSize.Size16), notebookHref));
+
         // Comments option
         var commentsHref = $"/{nodePath}/{CommentsArea}";
         menu = menu.WithView(new NavLinkControl("Comments", FluentIcons.Comment(IconSize.Size16), commentsHref));
@@ -978,6 +985,75 @@ public static class MarkdownView
             "));
 
         container = container.WithView(editorArea);
+
+        return container;
+    }
+
+    /// <summary>
+    /// Renders the markdown content as a notebook with code and markdown cells.
+    /// Uses NotebookParser to split the content into cells.
+    /// </summary>
+    public static IObservable<UiControl?> NotebookView(LayoutAreaHost host, RenderingContext _)
+    {
+        var hubPath = host.Hub.Address.ToString();
+
+        var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? Array.Empty<MeshNode>())
+            ?? Observable.Return<MeshNode[]>(Array.Empty<MeshNode>());
+
+        return nodeStream.Select(nodes =>
+        {
+            var node = nodes.FirstOrDefault(n => n.Path == hubPath);
+            return BuildNotebookView(host, node);
+        });
+    }
+
+    private static UiControl BuildNotebookView(LayoutAreaHost host, MeshNode? node)
+    {
+        var nodePath = node?.Path ?? host.Hub.Address.ToString();
+        var title = node?.Name ?? "Notebook";
+
+        var container = Controls.Stack
+            .WithWidth("100%")
+            .WithStyle("height: 100%; display: flex; flex-direction: column;");
+
+        // Header with back button and title
+        var headerStack = Controls.Stack
+            .WithOrientation(Orientation.Horizontal)
+            .WithWidth("100%")
+            .WithStyle("align-items: center; gap: 16px; padding: 16px 24px; border-bottom: 1px solid var(--neutral-stroke-rest); flex-shrink: 0;");
+
+        // Back button
+        var readHref = $"/{nodePath}/{ReadArea}";
+        headerStack = headerStack.WithView(
+            Controls.Button("")
+                .WithIconStart(FluentIcons.ArrowLeft(IconSize.Size16))
+                .WithAppearance(Appearance.Stealth)
+                .WithNavigateToHref(readHref));
+
+        headerStack = headerStack.WithView(
+            Controls.Html($"<h2 style=\"margin: 0; font-size: 1.25rem;\">{System.Web.HttpUtility.HtmlEncode(title)}</h2>"));
+
+        container = container.WithView(headerStack);
+
+        // Get markdown content and parse into cells
+        var content = GetMarkdownContent(node);
+        var cells = NotebookParser.ParseMarkdown(content ?? string.Empty);
+
+        // Create the notebook control
+        var notebook = new NotebookControl()
+            .WithCells(cells)
+            .WithDefaultLanguage("csharp")
+            .WithAvailableLanguages("csharp", "python", "javascript", "typescript", "fsharp", "markdown")
+            .WithShowLineNumbers(true)
+            .WithHeight("100%");
+
+        // Notebook area
+        var notebookArea = Controls.Stack
+            .WithWidth("100%")
+            .WithStyle("flex: 1; padding: 16px; overflow: auto; box-sizing: border-box;")
+            .WithView(notebook);
+
+        container = container.WithView(notebookArea);
 
         return container;
     }
