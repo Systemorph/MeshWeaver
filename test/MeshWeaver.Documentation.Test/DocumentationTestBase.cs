@@ -71,12 +71,12 @@ namespace MeshWeaver.Documentation.Test
                 .AddFileSystemPersistence(markdownPath)
                 .AddKernel()  // Required for interactive markdown code execution
                 .InstallAssemblies(DocumentationAssemblyLocation)
-                .ConfigureHub(hub => hub.AddContentCollections(new ContentCollectionConfig()
+                .ConfigureHub(hub => hub.AddContentCollections([new ContentCollectionConfig()
                 {
                     SourceType = FileSystemStreamProvider.SourceType,
                     Name = "Documentation",
                     BasePath = markdownPath
-                }))
+                }]))
                 .ConfigureServices(services =>
                 {
                     services.AddSingleton<IConfiguration>(configuration);

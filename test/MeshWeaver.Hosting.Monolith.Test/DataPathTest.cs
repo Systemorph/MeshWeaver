@@ -447,8 +447,8 @@ public class DataPathTest(ITestOutputHelper output) : HubTestBase(output)
     #region Global Registry Tests
 
     /// <summary>
-    /// Tests that UnifiedReference with data keyword resolves correctly.
-    /// New format: addressType/addressId/keyword/path
+    /// Tests that UnifiedReference with data prefix resolves correctly.
+    /// Format: data:collection
     /// </summary>
     [Fact]
     public async Task UnifiedReference_DataPrefix_ResolvesCorrectly()
@@ -457,9 +457,9 @@ public class DataPathTest(ITestOutputHelper output) : HubTestBase(output)
         GetHost();
         var client = GetClient();
 
-        // Act - Use UnifiedReference with new format: addressType/addressId/keyword/path
+        // Act - Use UnifiedReference with data: prefix format
         var response = await client.AwaitResponse(
-            new GetDataRequest(new UnifiedReference("host/1/data/Order")),
+            new GetDataRequest(new UnifiedReference("data:Order")),
             o => o.WithTarget(CreateHostAddress()),
             TestContext.Current.CancellationToken);
 
@@ -471,8 +471,8 @@ public class DataPathTest(ITestOutputHelper output) : HubTestBase(output)
     }
 
     /// <summary>
-    /// Tests that UnifiedReference with data keyword for entity resolves correctly.
-    /// New format: addressType/addressId/keyword/path
+    /// Tests that UnifiedReference with data prefix for entity resolves correctly.
+    /// Format: data:collection/entityId
     /// </summary>
     [Fact]
     public async Task UnifiedReference_DataPrefix_Entity_ResolvesCorrectly()
@@ -481,9 +481,9 @@ public class DataPathTest(ITestOutputHelper output) : HubTestBase(output)
         GetHost();
         var client = GetClient();
 
-        // Act - Use UnifiedReference with new format for specific entity
+        // Act - Use UnifiedReference with data: prefix for specific entity
         var response = await client.AwaitResponse(
-            new GetDataRequest(new UnifiedReference("host/1/data/Customer/C2")),
+            new GetDataRequest(new UnifiedReference("data:Customer/C2")),
             o => o.WithTarget(CreateHostAddress()),
             TestContext.Current.CancellationToken);
 
