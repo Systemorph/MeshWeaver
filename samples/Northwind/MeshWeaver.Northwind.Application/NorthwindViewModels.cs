@@ -1,6 +1,5 @@
 ﻿using MeshWeaver.Layout;
 using MeshWeaver.Layout.Domain;
-using MeshWeaver.Layout.Pivot;
 using MeshWeaver.Messaging;
 
 namespace MeshWeaver.Northwind.Application
@@ -49,7 +48,7 @@ namespace MeshWeaver.Northwind.Application
                             .AddOrdersAnalysis()
                             .AddSalesAnalysis()
                             .AddTopClients()
-                            .WithThumbnailBasePath("/static/app/Northwind/Northwind/thumbnails")
+                            .WithThumbnailsPath("/static/app/Northwind/Northwind/thumbnails")
                     )
                 ;
         }

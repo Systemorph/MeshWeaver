@@ -1,5 +1,4 @@
-﻿using System.Collections.Immutable;
-using System.Reactive.Linq;
+﻿using System.Reactive.Linq;
 using System.Text;
 using System.Text.Json;
 using MeshWeaver.Data;
@@ -66,19 +65,6 @@ public class ContentCollection : IDisposable
         markdownStream.Dispose();
     }
 
-    protected ImmutableDictionary<string, Author> Authors { get; private set; } = ImmutableDictionary<string, Author>.Empty;
-
-    protected ImmutableDictionary<string, Author> AdaptAuthorUrls(ImmutableDictionary<string, Author> authors)
-    {
-        return authors.Select(x =>
-            new KeyValuePair<string, Author>(
-                x.Key,
-                x.Value with
-                {
-                    ImageUrl = ContentCollectionsExtensions.AdaptResourceUrl(x.Value.ImageUrl, Collection, Address)
-                })).ToImmutableDictionary();
-    }
-
     public Task<IReadOnlyCollection<FolderItem>> GetFoldersAsync(string path)
         => provider.GetFoldersAsync(path);
 
@@ -111,8 +97,6 @@ public class ContentCollection : IDisposable
 
     public virtual async Task<InstanceCollection> InitializeAsync(CancellationToken ct)
     {
-        var loadedAuthors = await provider.LoadAuthorsAsync(ct);
-        Authors = AdaptAuthorUrls(loadedAuthors);
         var parsedArticles = new Dictionary<object, object>();
         await foreach (var tuple in provider.GetStreamsAsync(MarkdownFilter, ct).WithCancellation(ct))
         {
@@ -158,7 +142,6 @@ public class ContentCollection : IDisposable
             path,
             lastModified,
             content,
-            Authors,
             Address
         );
     }

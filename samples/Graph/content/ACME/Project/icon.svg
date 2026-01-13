@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+  <!-- Folder back -->
+  <path d="M8 16h18l4 6h26a2 2 0 012 2v28a2 2 0 01-2 2H8a2 2 0 01-2-2V18a2 2 0 012-2z" stroke="currentColor" stroke-width="2.5" fill="none"/>
+  <!-- Folder tab -->
+  <path d="M8 16h18l4 6" stroke="currentColor" stroke-width="2.5" fill="none"/>
+  <!-- Project items inside -->
+  <rect x="14" y="30" width="16" height="3" rx="1" fill="var(--accent-fill-rest, #0078d4)"/>
+  <rect x="14" y="36" width="24" height="3" rx="1" fill="var(--accent-fill-rest, #0078d4)" opacity="0.7"/>
+  <rect x="14" y="42" width="20" height="3" rx="1" fill="var(--accent-fill-rest, #0078d4)" opacity="0.5"/>
+  <!-- Checkmark badge -->
+  <circle cx="46" cy="38" r="8" fill="var(--accent-fill-rest, #0078d4)"/>
+  <path d="M42 38l3 3 5-5" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+</svg>

@@ -528,6 +528,288 @@ public class FileSystemPersistenceTest : IDisposable
     }
 
     #endregion
+
+    #region Markdown File Tests
+
+    [Fact]
+    public async Task Read_MarkdownFile_ParsesYamlFrontMatter()
+    {
+        // Arrange - Create a .md file with YAML front matter
+        var mdPath = Path.Combine(_testDirectory, "docs", "readme.md");
+        Directory.CreateDirectory(Path.GetDirectoryName(mdPath)!);
+        await File.WriteAllTextAsync(mdPath, """
+            ---
+            NodeType: Markdown
+            Name: Test Document
+            Category: Documentation
+            Description: A test document
+            Icon: /static/storage/content/test/icon.svg
+            State: Active
+            ---
+
+            # Hello World
+
+            This is test content.
+            """);
+
+        // Act
+        var node = await _storageAdapter.ReadAsync("docs/readme");
+
+        // Assert
+        node.Should().NotBeNull();
+        node!.Id.Should().Be("readme");
+        node.Name.Should().Be("Test Document");
+        node.NodeType.Should().Be("Markdown");
+        node.Category.Should().Be("Documentation");
+        node.Description.Should().Be("A test document");
+        node.Icon.Should().Be("/static/storage/content/test/icon.svg");
+        node.Content.Should().BeOfType<string>();
+        ((string)node.Content!).Should().Contain("# Hello World");
+    }
+
+    [Fact]
+    public async Task Read_MarkdownFile_WithMinimalYaml()
+    {
+        // Arrange - Create a .md file with minimal YAML
+        var mdPath = Path.Combine(_testDirectory, "docs", "simple.md");
+        Directory.CreateDirectory(Path.GetDirectoryName(mdPath)!);
+        await File.WriteAllTextAsync(mdPath, """
+            ---
+            Name: Simple Doc
+            ---
+
+            Just some content.
+            """);
+
+        // Act
+        var node = await _storageAdapter.ReadAsync("docs/simple");
+
+        // Assert
+        node.Should().NotBeNull();
+        node!.Id.Should().Be("simple");
+        node.Name.Should().Be("Simple Doc");
+        node.NodeType.Should().Be("Markdown"); // Default
+        ((string)node.Content!).Should().Contain("Just some content");
+    }
+
+    [Fact]
+    public async Task Read_MarkdownFile_WithoutYaml()
+    {
+        // Arrange - Create a .md file without YAML front matter
+        var mdPath = Path.Combine(_testDirectory, "docs", "plain.md");
+        Directory.CreateDirectory(Path.GetDirectoryName(mdPath)!);
+        await File.WriteAllTextAsync(mdPath, """
+            # Plain Markdown
+
+            No YAML here.
+            """);
+
+        // Act
+        var node = await _storageAdapter.ReadAsync("docs/plain");
+
+        // Assert
+        node.Should().NotBeNull();
+        node!.Id.Should().Be("plain");
+        node.Name.Should().Be("plain"); // Defaults to Id
+        node.NodeType.Should().Be("Markdown");
+        ((string)node.Content!).Should().Contain("# Plain Markdown");
+    }
+
+    [Fact]
+    public async Task Write_MarkdownNode_CreatesMarkdownFile()
+    {
+        // Arrange
+        var node = MeshNode.FromPath("docs/mydoc") with
+        {
+            Name = "My Document",
+            NodeType = "Markdown",
+            Category = "Test",
+            Description = "Test description",
+            Content = "# My Document\n\nContent here."
+        };
+
+        // Act
+        await _storageAdapter.WriteAsync(node);
+
+        // Assert
+        var mdPath = Path.Combine(_testDirectory, "docs", "mydoc.md");
+        File.Exists(mdPath).Should().BeTrue();
+        var content = await File.ReadAllTextAsync(mdPath);
+        content.Should().Contain("---");
+        content.Should().Contain("Name: My Document");
+        content.Should().Contain("Category: Test");
+        content.Should().Contain("# My Document");
+    }
+
+    [Fact]
+    public async Task ListChildren_IncludesMarkdownFiles()
+    {
+        // Arrange
+        var docsDir = Path.Combine(_testDirectory, "docs");
+        Directory.CreateDirectory(docsDir);
+        await File.WriteAllTextAsync(Path.Combine(docsDir, "doc1.md"), "# Doc 1");
+        await File.WriteAllTextAsync(Path.Combine(docsDir, "doc2.json"), "{}");
+        await File.WriteAllTextAsync(Path.Combine(docsDir, "doc3.md"), "# Doc 3");
+
+        // Act
+        var (nodePaths, _) = await _storageAdapter.ListChildPathsAsync("docs");
+
+        // Assert
+        nodePaths.Should().HaveCount(3);
+        nodePaths.Should().Contain("docs/doc1");
+        nodePaths.Should().Contain("docs/doc2");
+        nodePaths.Should().Contain("docs/doc3");
+    }
+
+    #endregion
+
+    #region C# Code File Tests
+
+    [Fact]
+    public async Task GetPartitionObjects_ReadsCSharpFiles()
+    {
+        // Arrange - Create a Code partition with .cs files
+        var codeDir = Path.Combine(_testDirectory, "Type", "Person", "Code");
+        Directory.CreateDirectory(codeDir);
+        await File.WriteAllTextAsync(Path.Combine(codeDir, "Person.cs"), """
+            public record Person
+            {
+                public string Id { get; init; }
+                public string Name { get; init; }
+            }
+            """);
+
+        // Act
+        var objects = await _storageAdapter.GetPartitionObjectsAsync("Type/Person", "Code").ToListAsync();
+
+        // Assert
+        objects.Should().HaveCount(1);
+        objects[0].Should().BeOfType<CodeConfiguration>();
+        var config = (CodeConfiguration)objects[0];
+        config.Id.Should().Be("Person");
+        config.Code.Should().Contain("public record Person");
+    }
+
+    [Fact]
+    public async Task GetPartitionObjects_ReadsCSharpFilesWithMetadata()
+    {
+        // Arrange
+        var codeDir = Path.Combine(_testDirectory, "Type", "Org", "Code");
+        Directory.CreateDirectory(codeDir);
+        await File.WriteAllTextAsync(Path.Combine(codeDir, "Organization.cs"), """
+            // <meshweaver>
+            // Id: Organization
+            // DisplayName: Organization Data Model
+            // </meshweaver>
+
+            public record Organization
+            {
+                public string Id { get; init; }
+                public string Name { get; init; }
+            }
+            """);
+
+        // Act
+        var objects = await _storageAdapter.GetPartitionObjectsAsync("Type/Org", "Code").ToListAsync();
+
+        // Assert
+        objects.Should().HaveCount(1);
+        var config = (CodeConfiguration)objects[0];
+        config.Id.Should().Be("Organization");
+        config.DisplayName.Should().Be("Organization Data Model");
+        config.Code.Should().Contain("public record Organization");
+        config.Code.Should().NotContain("<meshweaver>"); // Metadata should be stripped
+    }
+
+    [Fact]
+    public async Task SavePartitionObjects_WritesCSharpFiles()
+    {
+        // Arrange
+        var codeConfig = new CodeConfiguration
+        {
+            Id = "MyClass",
+            Code = "public class MyClass { }",
+            DisplayName = "My Class"
+        };
+
+        // Act
+        await _storageAdapter.SavePartitionObjectsAsync("Type/Test", "Code", [codeConfig]);
+
+        // Assert
+        var csPath = Path.Combine(_testDirectory, "Type", "Test", "Code", "MyClass.cs");
+        File.Exists(csPath).Should().BeTrue();
+        var content = await File.ReadAllTextAsync(csPath);
+        content.Should().Contain("// <meshweaver>");
+        content.Should().Contain("// DisplayName: My Class");
+        content.Should().Contain("public class MyClass { }");
+    }
+
+    [Fact]
+    public async Task GetPartitionObjects_HandlesMixedJsonAndCsFiles()
+    {
+        // Arrange
+        var codeDir = Path.Combine(_testDirectory, "Type", "Mixed", "Code");
+        Directory.CreateDirectory(codeDir);
+
+        // Add a .cs file
+        await File.WriteAllTextAsync(Path.Combine(codeDir, "MyRecord.cs"), "public record MyRecord { }");
+
+        // Add a .json file (legacy format)
+        await File.WriteAllTextAsync(Path.Combine(codeDir, "other.json"), """
+            {"$type":"CodeConfiguration","code":"public class Other { }"}
+            """);
+
+        // Act
+        var objects = await _storageAdapter.GetPartitionObjectsAsync("Type/Mixed", "Code").ToListAsync();
+
+        // Assert
+        objects.Should().HaveCount(2);
+    }
+
+    #endregion
+
+    #region Format Priority Tests
+
+    [Fact]
+    public async Task Read_PrefersMarkdownOverJson()
+    {
+        // Arrange - Create both .md and .json for same path
+        var dir = Path.Combine(_testDirectory, "priority");
+        Directory.CreateDirectory(dir);
+        await File.WriteAllTextAsync(Path.Combine(dir, "doc.md"), """
+            ---
+            Name: From Markdown
+            ---
+            MD Content
+            """);
+        await File.WriteAllTextAsync(Path.Combine(dir, "doc.json"), """
+            {"id":"doc","name":"From JSON"}
+            """);
+
+        // Act
+        var node = await _storageAdapter.ReadAsync("priority/doc");
+
+        // Assert - should read from .md (higher priority)
+        node.Should().NotBeNull();
+        node!.Name.Should().Be("From Markdown");
+    }
+
+    [Fact]
+    public async Task Exists_FindsMarkdownFiles()
+    {
+        // Arrange
+        var dir = Path.Combine(_testDirectory, "exists");
+        Directory.CreateDirectory(dir);
+        await File.WriteAllTextAsync(Path.Combine(dir, "doc.md"), "# Test");
+
+        // Act
+        var exists = await _storageAdapter.ExistsAsync("exists/doc");
+
+        // Assert
+        exists.Should().BeTrue();
+    }
+
+    #endregion
 }
 
 /// <summary>

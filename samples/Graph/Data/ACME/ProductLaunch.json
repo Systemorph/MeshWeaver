@@ -5,6 +5,7 @@
   "nodeType": "ACME/Project",
   "description": "Launch campaign for MeshFlow - our new workflow automation platform",
   "iconName": "Rocket",
+  "icon": "/static/storage/content/ProductLaunch/icon.svg",
   "isPersistent": true,
   "content": {
     "$type": "Project",

@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+  <!-- Target/bullseye -->
+  <circle cx="32" cy="32" r="24" stroke="currentColor" stroke-width="2" fill="none"/>
+  <circle cx="32" cy="32" r="16" stroke="currentColor" stroke-width="2" fill="none"/>
+  <circle cx="32" cy="32" r="8" stroke="currentColor" stroke-width="2" fill="none"/>
+  <circle cx="32" cy="32" r="3" fill="var(--accent-fill-rest, #0078d4)"/>
+  <!-- Clock indicator -->
+  <circle cx="50" cy="14" r="9" fill="var(--neutral-layer-1, white)" stroke="currentColor" stroke-width="1.5"/>
+  <path d="M50 10v4l2.5 2.5" stroke="var(--accent-fill-rest, #0078d4)" stroke-width="1.5" stroke-linecap="round" fill="none"/>
+</svg>

@@ -1,0 +1,20 @@
+{
+  "id": "BacklogItem1",
+  "namespace": "ACME/ProductLaunch/Todo",
+  "name": "Research competitor pricing models",
+  "nodeType": "ACME/Project/Todo",
+  "category": "Tasks",
+  "description": "Analyze competitor pricing strategies for similar workflow automation products",
+  "iconName": "TaskListSquare",
+  "isPersistent": true,
+  "content": {
+    "$type": "Todo",
+    "id": "BacklogItem1",
+    "title": "Research competitor pricing models",
+    "description": "Conduct comprehensive analysis of competitor pricing tiers, feature packaging, and enterprise vs SMB offerings.",
+    "category": "Research",
+    "priority": "Medium",
+    "dueDateOffsetDays": 14,
+    "status": "Pending"
+  }
+}

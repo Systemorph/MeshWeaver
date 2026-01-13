@@ -1,0 +1,20 @@
+{
+  "id": "BacklogItem2",
+  "namespace": "ACME/ProductLaunch/Todo",
+  "name": "Create ROI calculator tool",
+  "nodeType": "ACME/Project/Todo",
+  "category": "Tasks",
+  "description": "Build an interactive ROI calculator for prospects to estimate savings",
+  "iconName": "Calculator",
+  "isPersistent": true,
+  "content": {
+    "$type": "Todo",
+    "id": "BacklogItem2",
+    "title": "Create ROI calculator tool",
+    "description": "Develop an interactive web-based ROI calculator that helps prospects estimate time and cost savings from using MeshFlow.",
+    "category": "Marketing",
+    "priority": "High",
+    "dueDateOffsetDays": 21,
+    "status": "Pending"
+  }
+}

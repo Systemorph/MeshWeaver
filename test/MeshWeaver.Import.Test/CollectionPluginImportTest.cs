@@ -45,7 +45,7 @@ SystemName,DisplayName
         var client = GetClient();
         var plugin = new ContentPlugin(client);
 
-        // Act - use fully qualified collection:path syntax
+        // Act - use fully qualified collection:address syntax
         var result = await plugin.Import(
             path: "TestCollection:test-data.csv",
             address: ImportAddress.Create(2024),
@@ -78,7 +78,7 @@ SystemName,DisplayName
         var client = GetClient();
         var plugin = new ContentPlugin(client);
 
-        // Act - use fully qualified collection:path syntax
+        // Act - use fully qualified collection:address syntax
         var result = await plugin.Import(
             path: "TestCollection:non-existent.csv",
             address: ImportAddress.Create(2024),
@@ -96,7 +96,7 @@ SystemName,DisplayName
         var client = GetClient();
         var plugin = new ContentPlugin(client);
 
-        // Act - use fully qualified collection:path syntax with non-existent collection
+        // Act - use fully qualified collection:address syntax with non-existent collection
         var result = await plugin.Import(
             path: "NonExistentCollection:test-data.csv",
             address: ImportAddress.Create(2024),
@@ -114,7 +114,7 @@ SystemName,DisplayName
         var client = GetClient();
         var plugin = new ContentPlugin(client);
 
-        // Act - path without collection:path syntax (no colon)
+        // Act - address without collection:address syntax (no colon)
         var result = await plugin.Import(
             path: "test-data.csv",
             address: ImportAddress.Create(2024),
@@ -132,7 +132,7 @@ SystemName,DisplayName
         var client = GetClient();
         var plugin = new ContentPlugin(client);
 
-        // Act - use fully qualified collection:path syntax but missing address
+        // Act - use fully qualified collection:address syntax but missing address
         var result = await plugin.Import(
             path: "TestCollection:test-data.csv",
             address: null,
@@ -150,7 +150,7 @@ SystemName,DisplayName
         var client = GetClient();
         var plugin = new ContentPlugin(client);
 
-        // Act - use fully qualified collection:path syntax with explicit format
+        // Act - use fully qualified collection:address syntax with explicit format
         var result = await plugin.Import(
             path: "TestCollection:test-data.csv",
             address: ImportAddress.Create(2024),
@@ -185,7 +185,7 @@ SystemName,DisplayName
             ""address"": ""ImportAddress/2024""
         }";
 
-        // Act - use fully qualified collection:path syntax with configuration
+        // Act - use fully qualified collection:address syntax with configuration
         var result = await plugin.Import(
             path: "TestCollection:test-data.csv",
             address: ImportAddress.Create(2024),
