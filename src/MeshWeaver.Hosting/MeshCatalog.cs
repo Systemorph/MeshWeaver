@@ -65,7 +65,7 @@ public sealed class MeshCatalog(
             // Enrich with HubConfiguration based on NodeType (if not already set)
             if (node.HubConfiguration == null && NodeTypeService != null)
             {
-                node = NodeTypeService.EnrichWithNodeType(node);
+                node = await NodeTypeService.EnrichWithNodeTypeAsync(node);
             }
             cache.Set(node.Path, node, cacheOptions);
             if (!await ValidateReadAsync(node))
@@ -78,10 +78,10 @@ public sealed class MeshCatalog(
         if (persistenceNode != null)
         {
             // Enrich with HubConfiguration based on NodeType (NOT the address - that would cause circular dependency)
-            // EnrichWithNodeType looks up HubConfiguration from compiled NodeType configs
+            // EnrichWithNodeTypeAsync looks up HubConfiguration from compiled NodeType configs, triggering compilation if needed
             if (NodeTypeService != null)
             {
-                persistenceNode = NodeTypeService.EnrichWithNodeType(persistenceNode);
+                persistenceNode = await NodeTypeService.EnrichWithNodeTypeAsync(persistenceNode);
             }
 
             cache.Set(persistenceNode.Path, persistenceNode, cacheOptions);

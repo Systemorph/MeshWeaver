@@ -1,5 +1,4 @@
 ﻿using System;
-using System.Reactive.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
@@ -56,7 +55,7 @@ public class MonolithMeshTest(ITestOutputHelper output) : MonolithMeshTestBase(o
             .AddMeshNodes(MeshNode.FromPath($"{AddressExtensions.AppType}/HubFactory") with
             {
                 Name = "HubFactory",
-                HubConfiguration = Observable.Return<Func<MessageHubConfiguration, MessageHubConfiguration>?>(x => x)
+                HubConfiguration = x => x
             })
                 .AddMeshNodes(MeshNode.FromPath($"{AddressExtensions.AppType}/Kernel") with
                 {

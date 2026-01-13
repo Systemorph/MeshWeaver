@@ -1,5 +1,4 @@
 using System;
-using System.Reactive.Linq;
 using System.Threading.Tasks;
 using FluentAssertions;
 using MeshWeaver.Hosting.Monolith.TestBase;
@@ -32,7 +31,7 @@ public class AddressResolutionTest(ITestOutputHelper output) : MonolithMeshTestB
                     Description = "Insurance pricing submissions",
                     Icon = "Calculator",
                     DisplayOrder = 100,
-                    HubConfiguration = Observable.Return<Func<MessageHubConfiguration, MessageHubConfiguration>?>(c => c)
+                    HubConfiguration = c => c
                 },
                 new MeshNode(AppType)
                 {
@@ -40,7 +39,7 @@ public class AddressResolutionTest(ITestOutputHelper output) : MonolithMeshTestB
                     Description = "Standard applications",
                     Icon = "App",
                     DisplayOrder = 200,
-                    HubConfiguration = Observable.Return<Func<MessageHubConfiguration, MessageHubConfiguration>?>(c => c)
+                    HubConfiguration = c => c
                 }
             );
     }
@@ -228,7 +227,7 @@ public class AddressSegmentsTest(ITestOutputHelper output) : MonolithMeshTestBas
                     Icon = "Calculator",
                     DisplayOrder = 100,
                     AddressSegments = 3, // pricing/company/year
-                    HubConfiguration = Observable.Return<Func<MessageHubConfiguration, MessageHubConfiguration>?>(c => c)
+                    HubConfiguration = c => c
                 }
             );
     }

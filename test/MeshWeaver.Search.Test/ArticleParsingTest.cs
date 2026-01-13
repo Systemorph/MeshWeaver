@@ -1,5 +1,4 @@
 ﻿using System;
-using System.Collections.Immutable;
 using System.IO;
 using System.Threading.Tasks;
 using Azure.Storage.Blobs;
@@ -26,7 +25,7 @@ public class ArticleParsingTest(ITestOutputHelper output) : HubTestBase(output)
         {
             var content = await File.ReadAllTextAsync(file);
             var path = Path.GetRelativePath(baseDir, file);
-            var markdownElement = ContentCollectionsExtensions.ParseContent("demo", path, DateTime.UtcNow, content, ImmutableDictionary<string, Author>.Empty, null);
+            var markdownElement = ContentCollectionsExtensions.ParseContent("demo", path, DateTime.UtcNow, content, null);
             var article = markdownElement.Should().BeOfType<Article>().Subject;
 
             article.Title.Should().Be("Northwind Overview");

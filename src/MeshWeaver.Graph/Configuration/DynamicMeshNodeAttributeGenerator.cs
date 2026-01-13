@@ -94,7 +94,7 @@ internal class DynamicMeshNodeAttributeGenerator
         sb.AppendLine($"                IsPersistent = {node.IsPersistent.ToString().ToLowerInvariant()},");
         sb.AppendLine($"                LastModified = DateTimeOffset.Parse(\"{node.LastModified:O}\"),");
         sb.AppendLine($"                AssemblyLocation = typeof({safeClassName}MeshNodeAttribute).Assembly.Location,");
-        sb.AppendLine("                HubConfiguration = Observable.Return<Func<MessageHubConfiguration, MessageHubConfiguration>?>(ConfigureHub)");
+        sb.AppendLine("                HubConfiguration = ConfigureHub");
         sb.AppendLine("            }");
         sb.AppendLine("        ];");
         sb.AppendLine();
