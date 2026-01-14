@@ -131,8 +131,8 @@ public static class LayoutExtensions
     )
     {
         var first = true;
-        var collection = referencePointer.First();
-        var idString = referencePointer.Skip(1).FirstOrDefault();
+        var collection = referencePointer[0].ToString();
+        var idString = referencePointer.SegmentCount > 1 ? referencePointer[1].ToString() : null;
         // Deserialize the id as string directly to ensure consistent comparison
         var id =
             idString == null ? null :

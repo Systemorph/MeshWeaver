@@ -1,6 +1,7 @@
 ﻿using System.Collections.Immutable;
 using System.Runtime.CompilerServices;
 using Azure.Storage.Blobs;
+using Azure.Storage.Blobs.Models;
 
 namespace MeshWeaver.ContentCollections;
 
@@ -81,7 +82,7 @@ public class AzureBlobStreamProvider(BlobServiceClient blobServiceClient, string
         }
 
         var folders = new HashSet<string>();
-        await foreach (var blobItem in containerClient.GetBlobsByHierarchyAsync(prefix: prefix, delimiter: "/"))
+        await foreach (var blobItem in containerClient.GetBlobsByHierarchyAsync(BlobTraits.None, BlobStates.None, "/", prefix, default))
         {
             if (blobItem.IsPrefix)
             {
@@ -104,7 +105,7 @@ public class AzureBlobStreamProvider(BlobServiceClient blobServiceClient, string
         }
 
         var files = new List<FileItem>();
-        await foreach (var blobItem in containerClient.GetBlobsByHierarchyAsync(prefix: prefix, delimiter: "/"))
+        await foreach (var blobItem in containerClient.GetBlobsByHierarchyAsync(BlobTraits.None, BlobStates.None, "/", prefix, default))
         {
             if (blobItem.IsBlob)
             {
@@ -141,7 +142,7 @@ public class AzureBlobStreamProvider(BlobServiceClient blobServiceClient, string
             prefix += '/';
         }
 
-        await foreach (var blobItem in containerClient.GetBlobsAsync(prefix: prefix))
+        await foreach (var blobItem in containerClient.GetBlobsAsync(BlobTraits.None, BlobStates.None, prefix, default))
         {
             await containerClient.DeleteBlobAsync(blobItem.Name);
         }
