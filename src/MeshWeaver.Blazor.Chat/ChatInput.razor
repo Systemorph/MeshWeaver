@@ -28,15 +28,30 @@
                                  Class="selector-context"
                                  Style="min-width: 50px;" />
 
-                @* 2. Agent dropdown *@
+                @* 2. Agent dropdown - shows name only, expanded shows path and description *@
                 <FluentSelect TOption="AgentDisplayInfo"
                               Items="@AgentDisplayInfos"
                               Class="selector-agent"
                               OptionText="@(a => a?.Name ?? "")"
                               OptionValue="@(a => a?.Name ?? "")"
                               SelectedOption="@SelectedAgentInfo"
-                              SelectedOptionChanged="@OnAgentSelectChanged" 
-                              Style="min-width: 50px;" />
+                              SelectedOptionChanged="@OnAgentSelectChanged"
+                              Style="min-width: 50px;"
+                              Height="200px">
+                    <OptionTemplate Context="agent">
+                        <div class="agent-option">
+                            <div class="agent-option-name">@agent.Name</div>
+                            @if (!string.IsNullOrEmpty(agent.Path) && agent.Path != agent.Name)
+                            {
+                                <div class="agent-option-path">@agent.Path</div>
+                            }
+                            @if (!string.IsNullOrEmpty(agent.Description))
+                            {
+                                <div class="agent-option-desc">@TruncateDescription(agent.Description, 60)</div>
+                            }
+                        </div>
+                    </OptionTemplate>
+                </FluentSelect>
 
                 @* 3. Model dropdown *@
                 @if (AvailableModels.Count > 0)
@@ -48,8 +63,8 @@
                                   OptionValue="@(m => m)"
                                   Value="@SelectedModel"
                                   ValueChanged="@OnModelValueChanged"
-                                  Style="min-width: 50px;" 
-                                  />
+                                  Style="min-width: 50px;"
+                                  Height="200px" />
                 }
             </div>
         }
@@ -184,5 +199,12 @@
                 await OnSend.InvokeAsync(new ChatMessage(ChatRole.User, text));
             }
         }
+    }
+
+    private static string TruncateDescription(string description, int maxLength)
+    {
+        if (string.IsNullOrEmpty(description) || description.Length <= maxLength)
+            return description;
+        return description[..maxLength] + "...";
     }
 }

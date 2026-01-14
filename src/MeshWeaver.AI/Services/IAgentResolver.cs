@@ -4,6 +4,13 @@ using MeshWeaver.Graph.Configuration;
 namespace MeshWeaver.AI.Services;
 
 /// <summary>
+/// Agent configuration with its MeshNode path.
+/// </summary>
+/// <param name="Configuration">The agent configuration.</param>
+/// <param name="Path">The full path to the agent's MeshNode (e.g., "Insurance/InsuranceAgent").</param>
+public record AgentWithPath(AgentConfiguration Configuration, string Path);
+
+/// <summary>
 /// Resolves agent configurations from the graph with hierarchical lookup.
 /// Agents are stored as MeshNodes with nodeType="Agent" and Content=AgentConfiguration.
 /// Resolution searches upward through namespaces - most specific namespace wins.
@@ -90,6 +97,18 @@ public interface IAgentResolver
     /// <param name="ct">Cancellation token</param>
     /// <returns>All agents in hierarchy, ordered by namespace depth descending (closest first)</returns>
     Task<IReadOnlyList<AgentConfiguration>> GetHierarchyAgentsAsync(
+        string? contextPath,
+        CancellationToken ct = default);
+
+    /// <summary>
+    /// Gets all agent configurations with their MeshNode paths visible from the given context path.
+    /// Searches upward through namespaces: /a/b/c → /a/b → /a → / (root)
+    /// Agents at more specific namespaces override parent namespace agents with same Id.
+    /// </summary>
+    /// <param name="contextPath">The current context path (e.g., "pricing/MS-2024")</param>
+    /// <param name="ct">Cancellation token</param>
+    /// <returns>All visible agents with their paths, ordered by DisplayOrder then Id</returns>
+    Task<IReadOnlyList<AgentWithPath>> GetAgentsWithPathsAsync(
         string? contextPath,
         CancellationToken ct = default);
 }

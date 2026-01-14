@@ -360,4 +360,53 @@ public class AgentResolver : IAgentResolver
             _ => context.Address?.ToString()
         };
     }
+
+    /// <inheritdoc />
+    public async Task<IReadOnlyList<AgentWithPath>> GetAgentsWithPathsAsync(
+        string? contextPath,
+        CancellationToken ct = default)
+    {
+        var agents = new Dictionary<string, (AgentConfiguration Config, string Path, int Depth)>();
+        var segments = string.IsNullOrEmpty(contextPath)
+            ? Array.Empty<string>()
+            : contextPath.Split('/', StringSplitOptions.RemoveEmptyEntries);
+
+        // Search from most specific namespace to root
+        // At each level, find agents (MeshNodes with nodeType="Agent")
+        for (int depth = segments.Length; depth >= 0; depth--)
+        {
+            var namespacePath = depth == 0 ? "" : string.Join("/", segments.Take(depth));
+
+            try
+            {
+                // Query for Agent nodes using IMeshQuery with scope:children
+                var query = string.IsNullOrEmpty(namespacePath)
+                    ? $"nodeType:{AgentNodeType} scope:children"
+                    : $"path:{namespacePath} nodeType:{AgentNodeType} scope:children";
+
+                if (_meshQuery != null)
+                {
+                    await foreach (var node in _meshQuery.QueryAsync<MeshNode>(query, ct: ct))
+                    {
+                        var config = ExtractAgentConfiguration(node);
+                        if (config != null && !agents.ContainsKey(config.Id))
+                        {
+                            // First found wins (most specific namespace)
+                            agents[config.Id] = (config, node.Path, depth);
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Error loading agents from namespace {Namespace}", namespacePath);
+            }
+        }
+
+        return agents.Values
+            .Select(x => new AgentWithPath(x.Config, x.Path))
+            .OrderBy(a => a.Configuration.DisplayOrder)
+            .ThenBy(a => a.Configuration.Id)
+            .ToList();
+    }
 }

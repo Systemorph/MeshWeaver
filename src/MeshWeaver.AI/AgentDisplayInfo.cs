@@ -15,6 +15,11 @@ public record AgentDisplayInfo
     public required string Name { get; init; }
 
     /// <summary>
+    /// The full path to the agent's MeshNode (e.g., "Insurance/InsuranceAgent")
+    /// </summary>
+    public string? Path { get; init; }
+
+    /// <summary>
     /// The agent description
     /// </summary>
     public required string Description { get; init; }

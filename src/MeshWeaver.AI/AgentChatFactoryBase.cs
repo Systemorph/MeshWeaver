@@ -274,6 +274,9 @@ public abstract class AgentChatFactoryBase : IAgentChatFactory
     public async Task<IReadOnlyList<AgentConfiguration>> GetAgentsAsync(string? contextPath = null)
         => await AgentResolver.GetAgentsForContextAsync(contextPath);
 
+    public async Task<IReadOnlyList<AgentWithPath>> GetAgentsWithPathsAsync(string? contextPath = null)
+        => await AgentResolver.GetAgentsWithPathsAsync(contextPath);
+
     protected string GetAgentInstructions(AgentConfiguration agentConfig)
     {
         var baseInstructions = agentConfig.Instructions ?? string.Empty;

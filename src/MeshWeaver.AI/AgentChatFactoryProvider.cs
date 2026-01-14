@@ -1,3 +1,4 @@
+using MeshWeaver.AI.Services;
 using MeshWeaver.Graph.Configuration;
 
 namespace MeshWeaver.AI;
@@ -78,6 +79,15 @@ public class AgentChatFactoryProvider : IAgentChatFactoryProvider
         return await _factories[0].GetAgentsAsync(contextPath);
     }
 
+    public async Task<IReadOnlyList<AgentWithPath>> GetAgentsWithPathsAsync(string? contextPath = null)
+    {
+        // Get agents with paths from the first factory (all factories share the same agent resolver)
+        if (_factories.Count == 0)
+            return new List<AgentWithPath>();
+
+        return await _factories[0].GetAgentsWithPathsAsync(contextPath);
+    }
+
     public string GetPreferredModelForAgent(string agentName)
     {
         // Check if user has overridden the preference
@@ -124,21 +134,24 @@ public class AgentChatFactoryProvider : IAgentChatFactoryProvider
 
     public async Task<IReadOnlyList<AgentDisplayInfo>> GetAgentsWithDisplayInfoAsync(string? contextPath = null)
     {
-        var agents = await GetAgentsAsync(contextPath);
+        var agentsWithPaths = await GetAgentsWithPathsAsync(contextPath);
+        var agents = agentsWithPaths.Select(a => a.Configuration).ToList();
+        var pathsByAgentId = agentsWithPaths.ToDictionary(a => a.Configuration.Id, a => a.Path);
         var indentLevels = CalculateIndentLevels(agents);
 
         // Build display info dictionary
-        var displayInfos = agents
+        var displayInfos = agentsWithPaths
             .Select(a => new AgentDisplayInfo
             {
-                Name = a.Id,
-                Description = a.Description ?? string.Empty,
-                GroupName = a.GroupName,
-                DisplayOrder = a.DisplayOrder,
-                IndentLevel = indentLevels.GetValueOrDefault(a.Id, 0),
-                Icon = a.Icon,
-                CustomIconSvg = a.CustomIconSvg,
-                AgentConfiguration = a
+                Name = a.Configuration.Id,
+                Path = a.Path,
+                Description = a.Configuration.Description ?? string.Empty,
+                GroupName = a.Configuration.GroupName,
+                DisplayOrder = a.Configuration.DisplayOrder,
+                IndentLevel = indentLevels.GetValueOrDefault(a.Configuration.Id, 0),
+                Icon = a.Configuration.Icon,
+                CustomIconSvg = a.Configuration.CustomIconSvg,
+                AgentConfiguration = a.Configuration
             })
             .ToDictionary(a => a.Name);
 

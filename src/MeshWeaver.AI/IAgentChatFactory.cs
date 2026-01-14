@@ -1,4 +1,5 @@
 using MeshWeaver.AI.Persistence;
+using MeshWeaver.AI.Services;
 using MeshWeaver.Graph.Configuration;
 
 namespace MeshWeaver.AI;
@@ -42,4 +43,9 @@ public interface IAgentChatFactory
     /// Gets available agents for the specified context path using hierarchical resolution
     /// </summary>
     Task<IReadOnlyList<AgentConfiguration>> GetAgentsAsync(string? contextPath = null);
+
+    /// <summary>
+    /// Gets available agents with their MeshNode paths for the specified context path using hierarchical resolution
+    /// </summary>
+    Task<IReadOnlyList<AgentWithPath>> GetAgentsWithPathsAsync(string? contextPath = null);
 }

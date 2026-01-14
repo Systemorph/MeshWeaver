@@ -1,3 +1,4 @@
+using MeshWeaver.AI.Services;
 using MeshWeaver.Graph.Configuration;
 
 namespace MeshWeaver.AI;
@@ -41,6 +42,11 @@ public interface IAgentChatFactoryProvider
     /// Get all agent configurations for the specified context path
     /// </summary>
     Task<IReadOnlyList<AgentConfiguration>> GetAgentsAsync(string? contextPath = null);
+
+    /// <summary>
+    /// Get all agent configurations with their MeshNode paths for the specified context path
+    /// </summary>
+    Task<IReadOnlyList<AgentWithPath>> GetAgentsWithPathsAsync(string? contextPath = null);
 
     /// <summary>
     /// Gets the preferred model for a specific agent.
