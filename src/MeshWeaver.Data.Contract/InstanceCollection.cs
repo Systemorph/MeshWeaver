@@ -10,6 +10,11 @@ public record InstanceCollection
     public ImmutableDictionary<object, object> Instances { get; init; } =
         ImmutableDictionary<object, object>.Empty;
 
+    /// <summary>
+    /// Optional collection name used during serialization to preserve type information.
+    /// </summary>
+    public string? CollectionName { get; init; }
+
     public InstanceCollection() { }
 
     public InstanceCollection(IReadOnlyDictionary<object, object> instances) =>

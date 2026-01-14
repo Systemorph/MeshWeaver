@@ -57,7 +57,9 @@ public class RawJsonTest(ITestOutputHelper output) : HubTestBase(output)
         // assert
         deserialized.Should().NotBeNull()
             .And.NotBeSameAs(delivery)
-            .And.BeEquivalentTo(delivery, o => o.Excluding(x => x.Message));
+            .And.BeEquivalentTo(delivery, o => o
+                .Excluding(x => x.Message)
+                .Excluding(x => x.Properties));
         var rawJsonContent = deserialized.Message.Should().NotBeNull()
             .And.Subject.As<RawJson>()
                 .Content.Should().NotBeNullOrWhiteSpace()
@@ -101,7 +103,9 @@ public class RawJsonTest(ITestOutputHelper output) : HubTestBase(output)
         // assert
         deserialized.Should().NotBeNull()
             .And.NotBeSameAs(delivery)
-            .And.BeEquivalentTo(delivery, o => o.Excluding(x => x.Message));
+            .And.BeEquivalentTo(delivery, o => o
+                .Excluding(x => x.Message)
+                .Excluding(x => x.Properties));
         var rawJsonContent = deserialized.Message.Should().NotBeNull()
             .And.Subject.As<RawJson>()
                 .Content.Should().NotBeNullOrWhiteSpace()

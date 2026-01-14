@@ -4,23 +4,30 @@ using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using Json.More;
 using MeshWeaver.Domain;
-using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Data.Serialization;
 
-public class InstanceCollectionConverter(ITypeRegistry typeRegistry, ILogger<InstanceCollectionConverter>? logger = null)
+public class InstanceCollectionConverter(ITypeRegistry typeRegistry)
     : JsonConverter<InstanceCollection>
 {
     public const string CollectionProperty = "$type";
 
     private JsonNode Serialize(InstanceCollection instances, JsonSerializerOptions options)
     {
-        return new JsonObject(
+        var jsonObject = new JsonObject(
             instances.Instances.Select(x => new KeyValuePair<string, JsonNode?>(
                 ConvertKeyToString(x.Key, options),
                 JsonSerializer.SerializeToNode(x.Value, options)
             ))
         );
+
+        // Include collection name as $type if present
+        if (instances.CollectionName != null)
+        {
+            jsonObject[CollectionProperty] = instances.CollectionName;
+        }
+
+        return jsonObject;
     }
 
     /// <summary>
@@ -57,28 +64,17 @@ public class InstanceCollectionConverter(ITypeRegistry typeRegistry, ILogger<Ins
         var keyFunction = collection == null ? null : typeRegistry.GetKeyFunction(collection);
         var type = keyFunction?.KeyType ?? typeof(string);  // Default to string, not object
 
-        logger?.LogDebug("InstanceCollectionConverter.Read: collection={Collection}, keyFunction={KeyFunction}, keyType={KeyType}",
-            collection, keyFunction != null ? "found" : "null", type.Name);
-
         return new InstanceCollection
         {
             Instances = obj.Where(i => i.Key != CollectionProperty)
                 .Select(i =>
                 {
-                    try
-                    {
-                        var deserializedKey = ConvertStringToKey(i.Key, type, options);
-                        var deserializedValue = i.Value.Deserialize<object>(options) ?? new object();
-                        return new KeyValuePair<object, object>(deserializedKey, deserializedValue);
-                    }
-                    catch (Exception ex)
-                    {
-                        logger?.LogError(ex, "InstanceCollectionConverter.Read: Failed to deserialize key={Key} as type={Type}. Raw key: '{RawKey}'",
-                            i.Key, type.Name, i.Key);
-                        throw;
-                    }
+                    var deserializedKey = ConvertStringToKey(i.Key, type, options);
+                    var deserializedValue = i.Value.Deserialize<object>(options) ?? new object();
+                    return new KeyValuePair<object, object>(deserializedKey, deserializedValue);
                 })
-                .ToImmutableDictionary()
+                .ToImmutableDictionary(),
+            CollectionName = collection
         };
     }
 
