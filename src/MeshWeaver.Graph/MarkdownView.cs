@@ -1232,7 +1232,11 @@ public static class MarkdownView
         if (node?.Content == null)
             return string.Empty;
 
-        // Handle plain string content (from MarkdownFileParser)
+        // Handle MarkdownContent (from MarkdownFileParser)
+        if (node.Content is MarkdownContent markdownContent)
+            return markdownContent.Content;
+
+        // Handle plain string content
         if (node.Content is string stringContent)
             return stringContent;
 
