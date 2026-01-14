@@ -4,7 +4,6 @@ using System.ComponentModel.DataAnnotations;
 using System.IO;
 using System.Linq;
 using System.Reactive.Linq;
-using System.Text.Json;
 using System.Threading.Tasks;
 using FluentAssertions;
 using MeshWeaver.ContentCollections;
@@ -12,7 +11,6 @@ using MeshWeaver.Data;
 using MeshWeaver.Fixture;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
-using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 using Xunit;
 
@@ -36,7 +34,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
         // arrange - client sends request to host
         GetHost(); // Ensure host is initialized
         var client = GetClient();
-        var path = "host/1/data/TestPricing";
+        var path = "data:TestPricing";
 
         // act - send from client to host
         var response = await client.AwaitResponse(
@@ -59,7 +57,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
         // arrange - client sends request to host
         GetHost(); // Ensure host is initialized
         var client = GetClient();
-        var path = $"host/1/data/TestPricing/{TestPricingId}";
+        var path = $"data:TestPricing/{TestPricingId}";
 
         // act - send from client to host
         var response = await client.AwaitResponse(
@@ -82,7 +80,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
         // arrange - client sends request to host
         GetHost(); // Ensure host is initialized
         var client = GetClient();
-        var path = "host/1/data";
+        var path = "data:";
 
         // act - send from client to host
         var response = await client.AwaitResponse(
@@ -105,7 +103,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
         // arrange - client sends request to host
         GetHost(); // Ensure host is initialized
         var client = GetClient();
-        var path = "host/1/TestArea"; // area is default, no keyword needed
+        var path = "area:TestArea"; // area is default, no keyword needed
 
         // act - send from client to host
         var response = await client.AwaitResponse(
@@ -128,7 +126,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
         // arrange - client sends request to host
         GetHost(); // Ensure host is initialized
         var client = GetClient();
-        var path = $"host/1/TestArea/{TestPricingId}"; // area is default, no keyword needed
+        var path = $"area:TestArea/{TestPricingId}"; // area is default, no keyword needed
 
         // act - send from client to host
         var response = await client.AwaitResponse(
@@ -162,21 +160,25 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
     }
 
     [Fact]
-    public async Task GetDataRequest_UnifiedReference_EmptyPath_ReturnsError()
+    public async Task GetDataRequest_UnifiedReference_EmptyPath_ReturnsDefaultData()
     {
         // arrange - client sends request to host
         GetHost(); // Ensure host is initialized
         var client = GetClient();
 
-        // act - send from client to host
+        // act - send from client to host (empty path defaults to "data:" which returns default data)
         var response = await client.AwaitResponse(
             new GetDataRequest(new UnifiedReference("")),
             o => o.WithTarget(CreateHostAddress()),
             TestContext.Current.CancellationToken);
 
-        // assert
+        // assert - empty path should return default data (same as "data:")
         var dataResponse = response.Message;
-        dataResponse.Error.Should().Contain("empty");
+        dataResponse.Error.Should().BeNull();
+        dataResponse.Data.Should().NotBeNull();
+
+        var pricing = dataResponse.Data.Should().BeOfType<TestPricing>().Subject;
+        pricing.Id.Should().Be(TestPricingId);
     }
 
     [Fact]
@@ -192,7 +194,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
         {
             var host = GetHostWithFileProvider(testDir);
             var client = GetClient();
-            var path = "host/1/content/TestFiles/content-test.txt";
+            var path = "content:TestFiles/content-test.txt";
 
             // act - send from client to host
             var response = await client.AwaitResponse(
@@ -233,7 +235,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
             // Create a host with file content provider
             var host = GetHostWithFileProvider(testDir);
             var client = GetClient();
-            var path = "host/1/data/TestFiles/test.txt";
+            var path = "content:TestFiles/test.txt";
 
             // act - send from client to host
             var response = await client.AwaitResponse(
@@ -271,7 +273,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
         {
             var host = GetHostWithFileProvider(testDir);
             var client = GetClient();
-            var path = "host/1/data/TestFiles/multiline.txt";
+            var path = "content:TestFiles/multiline.txt";
 
             // act - request only 2 rows
             var response = await client.AwaitResponse(
@@ -306,7 +308,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
         {
             var host = GetHostWithFileProvider(testDir);
             var client = GetClient();
-            var path = "host/1/data/TestFiles/nonexistent.txt";
+            var path = "content:TestFiles/nonexistent.txt";
 
             // act
             var response = await client.AwaitResponse(
@@ -339,7 +341,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
         {
             var host = GetHostWithFileProvider(testDir);
             var client = GetClient();
-            var path = "host/1/data/TestFiles/subfolder/nested.txt";
+            var path = "content:TestFiles/subfolder/nested.txt";
 
             // act
             var response = await client.AwaitResponse(
@@ -443,7 +445,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
         // arrange
         GetHost();
         var client = GetClient();
-        var path = $"host/1/data/TestPricing/{TestPricingId}";
+        var path = $"data:TestPricing/{TestPricingId}";
 
         // First, verify the entity exists
         var getResponse = await client.AwaitResponse(
@@ -516,7 +518,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
         // arrange
         GetHost();
         var client = GetClient();
-        var path = "host/1/data";
+        var path = "data:";
 
         // act
         var response = await client.AwaitResponse(
@@ -542,7 +544,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
         {
             var host = GetHostWithFileProvider(testDir);
             var client = GetClient();
-            var path = "host/1/content/TestFiles/update-test.txt";
+            var path = "content:TestFiles/update-test.txt";
 
             // act
             var response = await client.AwaitResponse(
@@ -571,7 +573,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
         // arrange
         GetHost();
         var client = GetClient();
-        var path = "host/1/TestArea"; // area is default
+        var path = "area:TestArea"; // area is default
 
         // act
         var response = await client.AwaitResponse(
@@ -608,7 +610,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
             TestContext.Current.CancellationToken);
 
         // Verify it exists
-        var path = $"host/1/data/TestPricing/{newEntityId}";
+        var path = $"data:TestPricing/{newEntityId}";
         var getResponse = await client.AwaitResponse(
             new GetDataRequest(new UnifiedReference(path)),
             o => o.WithTarget(CreateHostAddress()),
@@ -657,7 +659,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
         // arrange
         GetHost();
         var client = GetClient();
-        var path = "host/1/data";
+        var path = "data:";
 
         // act
         var response = await client.AwaitResponse(
@@ -676,7 +678,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
         // arrange
         GetHost();
         var client = GetClient();
-        var path = "host/1/data/TestPricing";
+        var path = "data:TestPricing";
 
         // act
         var response = await client.AwaitResponse(
@@ -702,7 +704,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
         {
             var host = GetHostWithFileProvider(testDir);
             var client = GetClient();
-            var path = "host/1/content/TestFiles/delete-test.txt";
+            var path = "content:TestFiles/delete-test.txt";
 
             // Verify file exists
             File.Exists(testFilePath).Should().BeTrue();
@@ -733,7 +735,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
         // arrange
         GetHost();
         var client = GetClient();
-        var path = "host/1/TestArea"; // area is default
+        var path = "area:TestArea"; // area is default
 
         // act
         var response = await client.AwaitResponse(
@@ -752,7 +754,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
         // arrange
         GetHost();
         var client = GetClient();
-        var path = "host/1/data/TestPricing/nonexistent-entity-id";
+        var path = "data:TestPricing/nonexistent-entity-id";
 
         // act
         var response = await client.AwaitResponse(
@@ -775,7 +777,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
         // arrange
         GetHost();
         var client = GetClient();
-        var path = "host/1/data/TestPricing";
+        var path = "data:TestPricing";
 
         // act - use GetDataRequest which correctly handles the UnifiedReference
         var response = await client.AwaitResponse(
@@ -797,7 +799,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
         // arrange
         GetHost();
         var client = GetClient();
-        var path = $"host/1/data/TestPricing/{TestPricingId}";
+        var path = $"data:TestPricing/{TestPricingId}";
 
         // act - use GetDataRequest which correctly handles the UnifiedReference
         var response = await client.AwaitResponse(
@@ -818,7 +820,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
         // arrange
         GetHost();
         var client = GetClient();
-        var path = "host/1/TestArea"; // area is default, no keyword needed
+        var path = "area:TestArea"; // area is default, no keyword needed
 
         // act - use GetDataRequest which correctly handles the UnifiedReference
         var response = await client.AwaitResponse(

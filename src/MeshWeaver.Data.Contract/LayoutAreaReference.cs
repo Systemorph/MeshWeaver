@@ -86,8 +86,7 @@ public record LayoutAreaReference : WorkspaceReference<EntityStore>
     /// <param name="area">The area for the control pointer.</param>
     /// <returns>A string representing the control pointer.</returns>
     public static string GetControlPointer(string area) =>
-        string.IsNullOrEmpty(area) ? JsonPointer.Parse($"/{Areas}/").ToString() :
-        JsonPointer.Create(Areas, JsonSerializer.Serialize(area)).ToString();
+        JsonPointer.Create(Areas, JsonSerializer.Serialize(area ?? string.Empty)).ToString();
 
 
     /// <summary>

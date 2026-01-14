@@ -46,8 +46,8 @@ public class AgentResolverTest
             IsDefault = true
         });
 
-        _meshQuery.QueryAsync<MeshNode>(Arg.Is<string>(s => s.Contains("nodeType:Agent") && s.Contains("scope:children")), ct: Arg.Any<CancellationToken>())
-            .Returns(ToAsyncEnumerable(rootAgent));
+        _meshQuery.QueryAsync(Arg.Is<MeshQueryRequest>(r => r.Query.Contains("nodeType:Agent") && r.Query.Contains("scope:children")), Arg.Any<CancellationToken>())
+            .Returns(ToAsyncEnumerableObject(rootAgent));
 
         // Act
         var agents = await _resolver.GetAgentsForContextAsync(null, TestContext.Current.CancellationToken);
@@ -79,16 +79,16 @@ public class AgentResolverTest
         });
 
         // Root level - matches queries without path: prefix or with empty path
-        _meshQuery.QueryAsync<MeshNode>(Arg.Is<string>(s => s.Contains("nodeType:Agent") && !s.Contains("path:")), ct: Arg.Any<CancellationToken>())
-            .Returns(ToAsyncEnumerable(rootAgent));
+        _meshQuery.QueryAsync(Arg.Is<MeshQueryRequest>(r => r.Query.Contains("nodeType:Agent") && !r.Query.Contains("path:")), Arg.Any<CancellationToken>())
+            .Returns(ToAsyncEnumerableObject(rootAgent));
 
         // Pricing level
-        _meshQuery.QueryAsync<MeshNode>(Arg.Is<string>(s => s.Contains("path:pricing") && s.Contains("nodeType:Agent")), ct: Arg.Any<CancellationToken>())
-            .Returns(ToAsyncEnumerable(pricingAgent));
+        _meshQuery.QueryAsync(Arg.Is<MeshQueryRequest>(r => r.Query.Contains("path:pricing") && r.Query.Contains("nodeType:Agent")), Arg.Any<CancellationToken>())
+            .Returns(ToAsyncEnumerableObject(pricingAgent));
 
         // pricing/MS-2024 level (no agents)
-        _meshQuery.QueryAsync<MeshNode>(Arg.Is<string>(s => s.Contains("path:pricing/MS-2024")), ct: Arg.Any<CancellationToken>())
-            .Returns(ToAsyncEnumerable());
+        _meshQuery.QueryAsync(Arg.Is<MeshQueryRequest>(r => r.Query.Contains("path:pricing/MS-2024")), Arg.Any<CancellationToken>())
+            .Returns(ToAsyncEnumerableObject());
 
         // Act
         var agents = await _resolver.GetAgentsForContextAsync("pricing/MS-2024", TestContext.Current.CancellationToken);
@@ -117,11 +117,11 @@ public class AgentResolverTest
             DisplayOrder = 0
         });
 
-        _meshQuery.QueryAsync<MeshNode>(Arg.Is<string>(s => s.Contains("nodeType:Agent") && !s.Contains("path:")), ct: Arg.Any<CancellationToken>())
-            .Returns(ToAsyncEnumerable(rootMeshAgent));
+        _meshQuery.QueryAsync(Arg.Is<MeshQueryRequest>(r => r.Query.Contains("nodeType:Agent") && !r.Query.Contains("path:")), Arg.Any<CancellationToken>())
+            .Returns(ToAsyncEnumerableObject(rootMeshAgent));
 
-        _meshQuery.QueryAsync<MeshNode>(Arg.Is<string>(s => s.Contains("path:custom")), ct: Arg.Any<CancellationToken>())
-            .Returns(ToAsyncEnumerable(overriddenMeshAgent));
+        _meshQuery.QueryAsync(Arg.Is<MeshQueryRequest>(r => r.Query.Contains("path:custom")), Arg.Any<CancellationToken>())
+            .Returns(ToAsyncEnumerableObject(overriddenMeshAgent));
 
         // Act
         var agents = await _resolver.GetAgentsForContextAsync("custom", TestContext.Current.CancellationToken);
@@ -148,8 +148,8 @@ public class AgentResolverTest
             IsDefault = true
         });
 
-        _meshQuery.QueryAsync<MeshNode>(Arg.Is<string>(s => s.Contains("nodeType:Agent")), ct: Arg.Any<CancellationToken>())
-            .Returns(ToAsyncEnumerable(regularAgent, defaultAgent));
+        _meshQuery.QueryAsync(Arg.Is<MeshQueryRequest>(r => r.Query.Contains("nodeType:Agent")), Arg.Any<CancellationToken>())
+            .Returns(ToAsyncEnumerableObject(regularAgent, defaultAgent));
 
         // Act
         var agent = await _resolver.GetDefaultAgentAsync(null, TestContext.Current.CancellationToken);
@@ -176,8 +176,8 @@ public class AgentResolverTest
             ExposedInNavigator = false
         });
 
-        _meshQuery.QueryAsync<MeshNode>(Arg.Is<string>(s => s.Contains("nodeType:Agent")), ct: Arg.Any<CancellationToken>())
-            .Returns(ToAsyncEnumerable(exposedAgent, hiddenAgent));
+        _meshQuery.QueryAsync(Arg.Is<MeshQueryRequest>(r => r.Query.Contains("nodeType:Agent")), Arg.Any<CancellationToken>())
+            .Returns(ToAsyncEnumerableObject(exposedAgent, hiddenAgent));
 
         // Act
         var agents = await _resolver.GetExposedAgentsAsync(null, TestContext.Current.CancellationToken);
@@ -225,8 +225,8 @@ public class AgentResolverTest
             ContextMatchPattern = "address=like=*Todo*"
         });
 
-        _meshQuery.QueryAsync<MeshNode>(Arg.Is<string>(s => s.Contains("nodeType:Agent")), ct: Arg.Any<CancellationToken>())
-            .Returns(ToAsyncEnumerable(pricingAgent, todoAgent));
+        _meshQuery.QueryAsync(Arg.Is<MeshQueryRequest>(r => r.Query.Contains("nodeType:Agent")), Arg.Any<CancellationToken>())
+            .Returns(ToAsyncEnumerableObject(pricingAgent, todoAgent));
 
         var context = new AgentContext
         {
@@ -263,8 +263,8 @@ public class AgentResolverTest
             DisplayOrder = -5
         });
 
-        _meshQuery.QueryAsync<MeshNode>(Arg.Is<string>(s => s.Contains("nodeType:Agent")), ct: Arg.Any<CancellationToken>())
-            .Returns(ToAsyncEnumerable(agentB, agentA, agentC));
+        _meshQuery.QueryAsync(Arg.Is<MeshQueryRequest>(r => r.Query.Contains("nodeType:Agent")), Arg.Any<CancellationToken>())
+            .Returns(ToAsyncEnumerableObject(agentB, agentA, agentC));
 
         // Act
         var agents = await _resolver.GetAgentsForContextAsync(null, TestContext.Current.CancellationToken);
@@ -289,7 +289,7 @@ public class AgentResolverTest
         };
     }
 
-    private static async IAsyncEnumerable<MeshNode> ToAsyncEnumerable(params MeshNode[] nodes)
+    private static async IAsyncEnumerable<object> ToAsyncEnumerableObject(params MeshNode[] nodes)
     {
         foreach (var node in nodes)
         {
