@@ -182,9 +182,10 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
         deleteResponse.Message.Status.Should().Be(DataChangeStatus.Committed);
 
         // asserts
-        data = await GetClient()
+        var stream = GetClient()
             .GetWorkspace()
-            .GetObservable<MyData>()
+            .GetObservable<MyData>();
+        data = await stream
             .Timeout(10.Seconds())
             .FirstOrDefaultAsync(i => i.Count == 1);
         data.Should().BeEquivalentTo(expectedItems);
@@ -194,7 +195,7 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
             .Timeout(10.Seconds())
             .FirstOrDefaultAsync(i => i.Count == 1);
         data.Should().BeEquivalentTo(expectedItems);
-
+        await Task.Delay(100, TestContext.Current.CancellationToken);
         storage.Values.Should().BeEquivalentTo(expectedItems);
     }
 

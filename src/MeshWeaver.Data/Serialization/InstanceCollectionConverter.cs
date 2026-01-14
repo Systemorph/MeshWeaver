@@ -4,7 +4,6 @@ using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using Json.More;
 using MeshWeaver.Domain;
-using MeshWeaver.Messaging.Serialization;
 using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Data.Serialization;
@@ -31,10 +30,6 @@ public class InstanceCollectionConverter(ITypeRegistry typeRegistry, ILogger<Ins
     /// </summary>
     private static string ConvertKeyToString(object key, JsonSerializerOptions options)
     {
-        if (key is string s) return s;
-        if (key is int or long or short or byte or uint or ulong or ushort or sbyte or Guid or decimal or float or double)
-            return key.ToString()!;
-        // For complex keys (e.g., tuples), use JSON serialization
         return JsonSerializer.Serialize(key, options);
     }
 
@@ -45,15 +40,6 @@ public class InstanceCollectionConverter(ITypeRegistry typeRegistry, ILogger<Ins
     /// </summary>
     private static object ConvertStringToKey(string keyString, Type keyType, JsonSerializerOptions options)
     {
-        if (keyType == typeof(string) || keyType == typeof(object))
-            return keyString;
-        if (keyType == typeof(int)) return int.Parse(keyString);
-        if (keyType == typeof(long)) return long.Parse(keyString);
-        if (keyType == typeof(Guid)) return Guid.Parse(keyString);
-        if (keyType == typeof(decimal)) return decimal.Parse(keyString);
-        if (keyType == typeof(double)) return double.Parse(keyString);
-        if (keyType == typeof(float)) return float.Parse(keyString);
-        // For complex keys (e.g., tuples), use JSON deserialization
         return JsonSerializer.Deserialize(keyString, keyType, options) ?? keyString;
     }
 

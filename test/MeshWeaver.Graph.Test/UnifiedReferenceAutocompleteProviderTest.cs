@@ -199,7 +199,7 @@ public class UnifiedReferenceAutocompleteProviderTest : MonolithMeshTestBase
             navigationContext: null);
 
         // Act - query with "@Use" (partial match for User)
-        var items = await provider.GetItemsAsync("@Use");
+        var items = await provider.GetItemsAsync("@Use", TestContext.Current.CancellationToken);
 
         // Assert
         Output.WriteLine($"Got {items.Count()} suggestions for '@Use':");
@@ -224,7 +224,7 @@ public class UnifiedReferenceAutocompleteProviderTest : MonolithMeshTestBase
             navigationContext: null);
 
         // Act - query with lowercase "@sys"
-        var items = await provider.GetItemsAsync("@sys");
+        var items = await provider.GetItemsAsync("@sys", TestContext.Current.CancellationToken);
 
         // Assert
         Output.WriteLine($"Got {items.Count()} suggestions for '@sys' (lowercase):");
@@ -271,7 +271,7 @@ public class UnifiedReferenceAutocompleteProviderTest : MonolithMeshTestBase
         var provider = new UnifiedReferenceAutocompleteProvider(meshCatalog, meshQuery, null);
 
         // Act
-        var items = await provider.GetItemsAsync("@Sys");
+        var items = await provider.GetItemsAsync("@Sys", TestContext.Current.CancellationToken);
 
         // Assert
         Output.WriteLine($"Provider returned {items.Count()} suggestions for '@Sys':");
