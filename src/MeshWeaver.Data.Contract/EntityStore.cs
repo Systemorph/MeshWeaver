@@ -28,8 +28,11 @@ public record EntityStore
     internal object? ReduceImpl(EntityReference reference) =>
         GetCollection(reference.Collection)?.GetInstance(reference.Id);
 
-    internal InstanceCollection? ReduceImpl(CollectionReference reference) =>
-        GetCollection(reference.Name);
+    internal InstanceCollection? ReduceImpl(CollectionReference reference)
+    {
+        var collection = GetCollection(reference.Name);
+        return collection == null ? null : collection with { CollectionName = reference.Name };
+    }
     internal EntityStore ReduceImpl(PartitionedWorkspaceReference<EntityStore> reference) =>
         ReduceImpl((dynamic)reference.Reference);
     internal InstanceCollection ReduceImpl(PartitionedWorkspaceReference<InstanceCollection> reference) =>

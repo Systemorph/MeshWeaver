@@ -40,6 +40,49 @@ public record VirtualDataSource(object Id, IWorkspace Workspace)
         );
         return WithTypeSource(typeof(T), typeSource);
     }
+
+    protected override ISynchronizationStream<EntityStore> SetupDataSourceStream(
+        StreamIdentity identity,
+        Func<StreamConfiguration<EntityStore>, StreamConfiguration<EntityStore>> config)
+    {
+        var stream = base.SetupDataSourceStream(identity, config);
+
+        // Subscribe to each virtual type source's stream updates to propagate changes
+        foreach (var typeSource in TypeSources.Values)
+        {
+            var isFirst = true;
+            stream.RegisterForDisposal(
+                typeSource.GetStreamUpdates()
+                    .Subscribe(instances =>
+                    {
+                        // Skip the first emission since it's handled by initialization
+                        if (isFirst)
+                        {
+                            isFirst = false;
+                            return;
+                        }
+
+                        // Create an InstanceCollection from the new instances
+                        var collection = new InstanceCollection(
+                            instances.ToDictionary(typeSource.TypeDefinition.GetKey))
+                        {
+                            GetKey = typeSource.TypeDefinition.GetKey
+                        };
+
+                        // Update the stream with the new collection
+                        stream.Update((store, _) =>
+                        {
+                            var newStore = (store ?? new EntityStore())
+                                .WithCollection(typeSource.CollectionName, collection);
+                            return Task.FromResult<ChangeItem<EntityStore>?>(
+                                new ChangeItem<EntityStore>(newStore, Id.ToString()!, stream.StreamId, ChangeType.Full, stream.Hub.Version, []));
+                        }, _ => Task.CompletedTask);
+                    })
+            );
+        }
+
+        return stream;
+    }
 }
 
 /// <summary>

@@ -103,8 +103,7 @@ public static class DataExtensions
                         options.Converters.Insert(
                             0,
                             new InstanceCollectionConverter(
-                                serialization.Hub.ServiceProvider.GetRequiredService<ITypeRegistry>(),
-                                serialization.Hub.ServiceProvider.GetService<ILogger<InstanceCollectionConverter>>()
+                                serialization.Hub.ServiceProvider.GetRequiredService<ITypeRegistry>()
                             )
                         );
                 })).WithTypes(

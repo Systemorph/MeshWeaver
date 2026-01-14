@@ -56,7 +56,7 @@ public class EntityStoreConverter(ITypeRegistry typeRegistry) : JsonConverter<En
         return
             new(
                 collection,
-                node.Deserialize<InstanceCollection>(options) ?? new InstanceCollection() 
+                node.Deserialize<InstanceCollection>(options) ?? new InstanceCollection()
             );
     }
 

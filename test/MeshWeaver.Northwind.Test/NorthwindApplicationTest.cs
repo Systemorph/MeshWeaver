@@ -62,14 +62,14 @@ public class NorthwindApplicationTest(ITestOutputHelper output) : MonolithMeshTe
         var client = GetClient();
         var workspace = client.GetWorkspace();
 
-        var stream = workspace.GetRemoteStream<EntityStore, CollectionReference>(
+        var stream = workspace.GetRemoteStream<InstanceCollection, CollectionReference>(
             NorthwindAddress,
             new CollectionReference(nameof(NorthwindDataCube))
         );
 
         var result = await stream
-            .Where(x => x.Value != null && x.Value.Has(typeof(NorthwindDataCube)))
-            .Select(x => x.Value!.GetData<NorthwindDataCube>())
+            .Where(x => x.Value != null && x.Value.Instances.Count > 0)
+            .Select(x => x.Value!.Get<NorthwindDataCube>())
             .Timeout(TimeSpan.FromSeconds(30))
             .FirstAsync(x => x.Any());
 
