@@ -81,7 +81,7 @@
     flex: 1 1 0;
     min-width: 0;
     max-width: 100%;
-    overflow: hidden; /* Prevent children from overflowing horizontally */
+    overflow: visible; /* Allow dropdown menus to overflow */
 }
 
 /* Context field - larger min-width */
@@ -120,4 +120,34 @@
 
 ::deep fluent-select::part(control) {
     font-size: 0.85rem;
+}
+
+/* Agent option template styling */
+.agent-option {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 4px 0;
+    min-width: 200px;
+}
+
+.agent-option-name {
+    font-weight: 500;
+    font-size: 0.9rem;
+    color: var(--neutral-foreground-rest);
+}
+
+.agent-option-path {
+    font-size: 0.75rem;
+    color: var(--neutral-foreground-hint);
+    font-family: monospace;
+}
+
+.agent-option-desc {
+    font-size: 0.75rem;
+    color: var(--neutral-foreground-hint);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 300px;
 }
