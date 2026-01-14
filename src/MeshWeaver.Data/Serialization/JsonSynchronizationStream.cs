@@ -248,11 +248,12 @@ public static class JsonSynchronizationStream
         ITypeRegistry? typeRegistry = null)
         => patch.Operations.Select(p =>
             {
-                var id = p.Path.Skip(1).FirstOrDefault();
-                var rawCollection = p.Path.First();
+                var pathLength = GetPathLength(p.Path);
+                var id = pathLength > 1 ? p.Path[1].ToString() : null;
+                var rawCollection = p.Path[0].ToString();
 
                 // Normalize collection name using TypeRegistry to ensure consistency
-                // This fixes the bug where JsonPatch paths contain full type names 
+                // This fixes the bug where JsonPatch paths contain full type names
                 // but CollectionsReference expects short names from TypeRegistry
                 var collection = typeRegistry?.TryGetType(rawCollection, out var typeDefinition) == true
                     ? typeDefinition!.CollectionName
@@ -289,10 +290,10 @@ public static class JsonSynchronizationStream
         JsonSerializerOptions options)
         => patch.Operations.Select(p =>
         {
-            var id = p.Path.FirstOrDefault();
+            var id = GetPathLength(p.Path) > 0 ? p.Path[0].ToString() : null;
 
 
-            var pointer = id == null ? null : JsonPointer.Create(id);
+            JsonPointer? pointer = id == null ? null : JsonPointer.Create(id);
             return new EntityUpdate(
                 reference.Name,
                 id == null ? null : JsonSerializer.Deserialize<object>(id, options)!,
@@ -373,13 +374,9 @@ public static class JsonSynchronizationStream
             {
                 var first = g.First().OldValue;
                 var last = g.Last().Value;
-                PointerSegment[] pointerSegments = g.Key == null
-                    ? []
-                    :
-                    [
-                        JsonSerializer.Serialize(g.Key, options)
-                    ];
-                var parentPath = JsonPointer.Create(pointerSegments);
+                var parentPath = g.Key == null
+                    ? JsonPointer.Empty
+                    : JsonPointer.Create(JsonSerializer.Serialize(g.Key, options));
                 if (last == null && first == null)
                     return e;
                 if (first == null)
@@ -405,14 +402,9 @@ public static class JsonSynchronizationStream
                 var first = g.First().OldValue;
                 var last = g.Last().Value;
 
-                PointerSegment[] pointerSegments = g.Key.Id == null
-                    ? [g.Key.Collection]
-                    :
-                    [
-                        g.Key.Collection,
-                        JsonSerializer.Serialize(g.Key.Id, options)
-                    ];
-                var parentPath = JsonPointer.Create(pointerSegments);
+                var parentPath = g.Key.Id == null
+                    ? JsonPointer.Create(g.Key.Collection)
+                    : JsonPointer.Create(g.Key.Collection, JsonSerializer.Serialize(g.Key.Id, options));
                 if (last == null && first == null)
                     return e;
                 if (first == null)
@@ -447,5 +439,7 @@ public static class JsonSynchronizationStream
             _ => throw new InvalidOperationException($"Unsupported operation: {original.Op}")
         };
     }
+
+    private static int GetPathLength(JsonPointer path) => path.SegmentCount;
 
 }

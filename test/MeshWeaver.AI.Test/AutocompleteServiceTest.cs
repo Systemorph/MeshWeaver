@@ -444,6 +444,9 @@ public class AutocompleteServiceTest
 
         public Task<IReadOnlyList<AgentConfiguration>> GetHierarchyAgentsAsync(string? contextPath, CancellationToken ct = default)
             => Task.FromResult(agents);
+
+        public Task<IReadOnlyList<AgentWithPath>> GetAgentsWithPathsAsync(string? contextPath, CancellationToken ct = default)
+            => Task.FromResult<IReadOnlyList<AgentWithPath>>(agents.Select(a => new AgentWithPath(a, "/" + a.Id)).ToList());
     }
 
     private class MockMeshCatalog(System.Collections.Generic.IReadOnlyList<Mesh.MeshNode> nodes) : Mesh.Services.IMeshCatalog

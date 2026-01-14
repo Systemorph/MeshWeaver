@@ -96,7 +96,7 @@ public class AzureBlobStorageAdapter : IStorageAdapter
         var nodePaths = new List<string>();
         var directoryPaths = new HashSet<string>();
 
-        await foreach (var blobItem in _containerClient.GetBlobsAsync(prefix: prefix, cancellationToken: ct))
+        await foreach (var blobItem in _containerClient.GetBlobsAsync(BlobTraits.None, BlobStates.None, prefix, ct))
         {
             // Remove "nodes/" prefix and ".json" suffix
             var fullPath = blobItem.Name;
@@ -162,7 +162,7 @@ public class AzureBlobStorageAdapter : IStorageAdapter
     {
         var prefix = GetPartitionPrefix(nodePath, subPath);
 
-        await foreach (var blobItem in _containerClient.GetBlobsAsync(prefix: prefix, cancellationToken: ct))
+        await foreach (var blobItem in _containerClient.GetBlobsAsync(BlobTraits.None, BlobStates.None, prefix, ct))
         {
             if (!blobItem.Name.EndsWith(".json"))
                 continue;
@@ -225,7 +225,7 @@ public class AzureBlobStorageAdapter : IStorageAdapter
     {
         var prefix = GetPartitionPrefix(nodePath, subPath);
 
-        await foreach (var blobItem in _containerClient.GetBlobsAsync(prefix: prefix, cancellationToken: ct))
+        await foreach (var blobItem in _containerClient.GetBlobsAsync(BlobTraits.None, BlobStates.None, prefix, ct))
         {
             var blobClient = _containerClient.GetBlobClient(blobItem.Name);
             await blobClient.DeleteIfExistsAsync(cancellationToken: ct);
@@ -240,10 +240,7 @@ public class AzureBlobStorageAdapter : IStorageAdapter
         var prefix = GetPartitionPrefix(nodePath, subPath);
         DateTimeOffset? maxTimestamp = null;
 
-        await foreach (var blobItem in _containerClient.GetBlobsAsync(
-            traits: BlobTraits.Metadata,
-            prefix: prefix,
-            cancellationToken: ct))
+        await foreach (var blobItem in _containerClient.GetBlobsAsync(BlobTraits.Metadata, BlobStates.None, prefix, ct))
         {
             if (blobItem.Properties.LastModified.HasValue)
             {

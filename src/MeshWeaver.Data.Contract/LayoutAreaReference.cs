@@ -68,25 +68,33 @@ public record LayoutAreaReference : WorkspaceReference<EntityStore>
     /// <param name="id">The ID for the data pointer.</param>
     /// <param name="extraSegments">The extra segments for the data pointer.</param>
     /// <returns>A string representing the data pointer.</returns>
-    public static string GetDataPointer(string id, params string?[] extraSegments) =>
-        JsonPointer.Create(
-            new[] { Data, Encode(id) }
+    public static string GetDataPointer(string id, params string?[] extraSegments)
+    {
+        var segments = new[] { Data, Encode(id) }
             .Concat(extraSegments)
-            .Select(x => (PointerSegment)x!)
-            .ToArray()
-        )
-        .ToString();
+            .Where(x => x is not null);
+        return "/" + string.Join("/", segments.Select(EscapePointerSegment));
+    }
 
     public static string Encode(string id)
         => JsonSerializer.Serialize(id);
+
+    private static string EscapePointerSegment(string? segment)
+    {
+        if (segment is null) return string.Empty;
+        return segment.Replace("~", "~0").Replace("/", "~1");
+    }
 
     /// <summary>
     /// Gets the control pointer for the specified area.
     /// </summary>
     /// <param name="area">The area for the control pointer.</param>
     /// <returns>A string representing the control pointer.</returns>
-    public static string GetControlPointer(string area) =>
-        JsonPointer.Create(Areas, JsonSerializer.Serialize(area ?? string.Empty)).ToString();
+    public static string GetControlPointer(string area)
+    {
+        var encodedArea = JsonSerializer.Serialize(area ?? string.Empty);
+        return "/" + EscapePointerSegment(Areas) + "/" + EscapePointerSegment(encodedArea);
+    }
 
 
     /// <summary>
