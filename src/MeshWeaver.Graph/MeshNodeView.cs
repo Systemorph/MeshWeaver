@@ -12,6 +12,7 @@ using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Layout.DataGrid;
 using MeshWeaver.Layout.Domain;
+using MeshWeaver.Markdown;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
@@ -604,6 +605,10 @@ public static class MeshNodeView
     {
         if (node?.Content == null)
             return string.Empty;
+
+        // Handle MarkdownContent (from MarkdownFileParser)
+        if (node.Content is MarkdownContent markdownContent)
+            return markdownContent.Content;
 
         // Handle Article content
         if (node.Content is Article article)
