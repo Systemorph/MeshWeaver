@@ -70,31 +70,31 @@ public record LayoutAreaReference : WorkspaceReference<EntityStore>
     /// <returns>A string representing the data pointer.</returns>
     public static string GetDataPointer(string id, params string?[] extraSegments)
     {
+
         var segments = new[] { Data, Encode(id) }
             .Concat(extraSegments)
             .Where(x => x is not null);
-        return "/" + string.Join("/", segments.Select(EscapePointerSegment));
+        // Build JSON Pointer path manually: /segment1/segment2/...
+        return "/" + string.Join("/", segments.Select(EncodePointerSegment));
+    }
+
+    private static string EncodePointerSegment(string? segment)
+    {
+        if (segment is null) return string.Empty;
+        // RFC 6901: escape ~ as ~0 and / as ~1
+        return segment.Replace("~", "~0").Replace("/", "~1");
     }
 
     public static string Encode(string id)
         => JsonSerializer.Serialize(id);
-
-    private static string EscapePointerSegment(string? segment)
-    {
-        if (segment is null) return string.Empty;
-        return segment.Replace("~", "~0").Replace("/", "~1");
-    }
 
     /// <summary>
     /// Gets the control pointer for the specified area.
     /// </summary>
     /// <param name="area">The area for the control pointer.</param>
     /// <returns>A string representing the control pointer.</returns>
-    public static string GetControlPointer(string area)
-    {
-        var encodedArea = JsonSerializer.Serialize(area ?? string.Empty);
-        return "/" + EscapePointerSegment(Areas) + "/" + EscapePointerSegment(encodedArea);
-    }
+    public static string GetControlPointer(string? area) =>
+        JsonPointer.Create(Areas, JsonSerializer.Serialize(area ?? string.Empty)).ToString();
 
 
     /// <summary>
@@ -119,7 +119,7 @@ public record LayoutAreaReference : WorkspaceReference<EntityStore>
     public string ToHref(Address address)
     {
         if (Area is null)
-            return address.ToString()!;
+            return address.ToString();
         var ret = $"{address}/{WorkspaceReference.Encode(Area)}";
         if (Id?.ToString() is { } s)
             ret = $"{ret}/{WorkspaceReference.Encode(s)}";

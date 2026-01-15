@@ -131,13 +131,15 @@ public static class LayoutExtensions
     )
     {
         var first = true;
-        var collection = referencePointer[0].ToString();
-        var idString = referencePointer.SegmentCount > 1 ? referencePointer[1].ToString() : null;
+        var collection = referencePointer.GetSegment(0).ToString();
+        var idString = referencePointer.SegmentCount == 1 ? null : referencePointer.GetSegment(1).ToString();
+        // RFC 6901 unescape: ~1 -> / and ~0 -> ~ (order matters)
+        var unescapedIdString = idString?.Replace("~1", "/").Replace("~0", "~");
         // Deserialize the id as string directly to ensure consistent comparison
         var id =
-            idString == null ? null :
-                idString == string.Empty ? string.Empty
-                : JsonSerializer.Deserialize<string>(idString, stream.Hub.JsonSerializerOptions);
+            unescapedIdString == null ? null :
+                unescapedIdString == string.Empty ? string.Empty
+                : JsonSerializer.Deserialize<string>(unescapedIdString, stream.Hub.JsonSerializerOptions);
 
         return stream
             .Synchronize() // Ensure thread-safety for the 'first' closure variable
