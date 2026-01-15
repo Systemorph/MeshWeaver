@@ -3,6 +3,7 @@ using System.Reactive.Linq;
 using System.Text.Json;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
+using MeshWeaver.Markdown;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 
@@ -176,6 +177,10 @@ public static class ContentLayoutArea
     {
         if (node.Content == null)
             return string.Empty;
+
+        // Handle MarkdownContent (from MarkdownFileParser)
+        if (node.Content is MarkdownContent markdownContent)
+            return markdownContent.Content;
 
         // Handle MarkdownDocument content (JSON with $type and content fields)
         if (node.Content is JsonElement jsonElement)
