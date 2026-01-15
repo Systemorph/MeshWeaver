@@ -26,7 +26,7 @@ public class RlsDataValidator : IDataValidator
 
     /// <summary>
     /// This validator handles Create, Update, and Delete operations.
-    /// Read operations can be handled separately via IDataReadResultValidator
+    /// Read operations can be handled by separate IDataValidator implementations
     /// or by filtering results at query time.
     /// </summary>
     public IReadOnlyCollection<DataOperation> SupportedOperations =>

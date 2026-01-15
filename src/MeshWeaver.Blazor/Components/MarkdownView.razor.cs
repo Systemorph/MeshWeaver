@@ -210,7 +210,7 @@ public partial class MarkdownView
                     break;
                 case { Name: "div" } when node.GetAttributeValue("class", "").Contains(LayoutAreaMarkdownRenderer.LayoutArea):
                     // Layout area - check if it's a raw path (UCR) or pre-resolved address
-                    var rawPath = node.GetAttributeValue($"data-{LayoutAreaMarkdownRenderer.RawPath}", null);
+                    var rawPath = node.GetAttributeValue($"data-{LayoutAreaMarkdownRenderer.RawPath}", "");
                     if (!string.IsNullOrEmpty(rawPath))
                     {
                         // UCR inline content (@@ syntax) - render using path resolution
@@ -219,9 +219,9 @@ public partial class MarkdownView
                     else
                     {
                         // Pre-resolved address (executable code blocks)
-                        var address = node.GetAttributeValue($"data-{LayoutAreaMarkdownRenderer.Address}", null);
-                        var area = node.GetAttributeValue($"data-{LayoutAreaMarkdownRenderer.Area}", null);
-                        var areaId = node.GetAttributeValue($"data-{LayoutAreaMarkdownRenderer.AreaId}", null);
+                        var address = node.GetAttributeValue($"data-{LayoutAreaMarkdownRenderer.Address}", "");
+                        var area = node.GetAttributeValue($"data-{LayoutAreaMarkdownRenderer.Area}", "");
+                        var areaId = node.GetAttributeValue($"data-{LayoutAreaMarkdownRenderer.AreaId}", "");
                         RenderLayoutArea(builder, address, area, areaId);
                     }
                     break;

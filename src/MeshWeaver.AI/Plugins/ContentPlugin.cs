@@ -333,7 +333,7 @@ public class ContentPlugin
         try
         {
             using var wordDoc = WordprocessingDocument.Open(stream, false);
-            var body = wordDoc.MainDocumentPart?.Document.Body;
+            var body = wordDoc.MainDocumentPart?.Document?.Body;
 
             if (body == null)
                 return $"Word document '{filePath}' has no readable content.";

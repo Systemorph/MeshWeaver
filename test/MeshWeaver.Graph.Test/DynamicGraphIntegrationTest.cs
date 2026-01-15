@@ -820,7 +820,7 @@ public record Graph
     {
         // Act - query for all nodes with nodeType type/org
         var query = "nodeType:type/org scope:descendants";
-        var nodes = await MeshQuery.QueryAsync<MeshNode>(query).ToListAsync(TestContext.Current.CancellationToken);
+        var nodes = await MeshQuery.QueryAsync<MeshNode>(query, ct: TestContext.Current.CancellationToken).ToListAsync(TestContext.Current.CancellationToken);
         foreach (var node in nodes)
             Output.WriteLine($"Found: {node.Path}");
 

@@ -210,85 +210,6 @@ public class MeshPlugin(IMessageHub hub, IAgentChat chat)
         }
     }
 
-    [Obsolete]
-    [Description("Deletes a node at the specified path.")]
-    public async Task<string> Delete(
-        [Description("Path to delete (e.g., @graph/org1)")] string path,
-        [Description("If true, also deletes all child nodes")] bool recursive = false)
-    {
-        logger.LogInformation("Delete called with path={Path}, recursive={Recursive}", path, recursive);
-
-        if (persistence == null)
-            return "Persistence service not available.";
-
-        var resolvedPath = ResolvePath(path);
-
-        try
-        {
-            if (!await persistence.ExistsAsync(resolvedPath))
-                return $"Not found: {resolvedPath}";
-
-            await persistence.DeleteNodeAsync(resolvedPath, recursive);
-            return $"Deleted: {resolvedPath}" + (recursive ? " (including children)" : "");
-        }
-        catch (Exception ex)
-        {
-            logger.LogWarning(ex, "Error deleting at path {Path}", resolvedPath);
-            return $"Error: {ex.Message}";
-        }
-    }
-
-    [Obsolete]
-    [Description("Gets a document (markdown) by path. Returns title and content. " +
-                 "Use this to fetch documentation or markdown content.")]
-    public async Task<string> GetDocument(
-        [Description("Unified path (e.g., MeshWeaver/QuerySyntax, @graph/doc1)")] string path)
-    {
-        logger.LogInformation("GetDocument called with path={Path}", path);
-
-        if (persistence == null)
-            return "Persistence service not available.";
-
-        var resolvedPath = ResolvePath(path);
-
-        try
-        {
-            var node = await persistence.GetNodeAsync(resolvedPath);
-            if (node == null)
-                return $"Not found: {resolvedPath}";
-
-            // Extract title from node.Name (display name)
-            var title = node.Name ?? node.Id;
-
-            // Get content - if MarkdownDocument, extract content without redundant title
-            string? content = null;
-            if (node.Content is JsonElement je)
-            {
-                if (je.TryGetProperty("content", out var c))
-                    content = c.GetString();
-            }
-            else if (node.Content != null)
-            {
-                content = node.Content.ToString();
-            }
-
-            // Remove redundant H1 title if it matches node name
-            if (content != null && content.StartsWith($"# {title}"))
-            {
-                var newlineIndex = content.IndexOf('\n');
-                if (newlineIndex > 0)
-                    content = content[(newlineIndex + 1)..].TrimStart();
-            }
-
-            return JsonSerializer.Serialize(new { title, content }, hub.JsonSerializerOptions);
-        }
-        catch (Exception ex)
-        {
-            logger.LogWarning(ex, "Error getting document at path {Path}", resolvedPath);
-            return $"Error: {ex.Message}";
-        }
-    }
-
     /// <summary>
     /// Creates the standard tools for this plugin (read-only operations).
     /// </summary>
@@ -297,7 +218,6 @@ public class MeshPlugin(IMessageHub hub, IAgentChat chat)
         return
         [
             AIFunctionFactory.Create(Get),
-            AIFunctionFactory.Create(GetDocument),
             AIFunctionFactory.Create(Search),
             AIFunctionFactory.Create(NavigateTo)
         ];
@@ -311,11 +231,9 @@ public class MeshPlugin(IMessageHub hub, IAgentChat chat)
         return
         [
             AIFunctionFactory.Create(Get),
-            AIFunctionFactory.Create(GetDocument),
             AIFunctionFactory.Create(Search),
             AIFunctionFactory.Create(NavigateTo),
-            AIFunctionFactory.Create(Update),
-            AIFunctionFactory.Create(Delete)
+            AIFunctionFactory.Create(Update)
         ];
     }
 }

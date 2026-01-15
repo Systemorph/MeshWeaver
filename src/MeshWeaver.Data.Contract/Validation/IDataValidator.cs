@@ -4,7 +4,6 @@ namespace MeshWeaver.Data.Validation;
 
 /// <summary>
 /// Unified validator interface for all data operations.
-/// Replaces IDataChangeValidator, IDataReadValidator, IDataReadResultValidator.
 /// Mirrors the INodeValidator pattern from MeshWeaver.Mesh.
 /// </summary>
 public interface IDataValidator

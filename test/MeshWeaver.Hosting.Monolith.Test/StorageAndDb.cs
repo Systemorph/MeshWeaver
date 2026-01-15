@@ -52,8 +52,7 @@ public static class ContainerExtensions
         var queuePort = GetAvailablePort(blobPort + 1);
         var tablePort = GetAvailablePort(queuePort + 1);
 
-        var container = new ContainerBuilder()
-            .WithImage("mcr.microsoft.com/azure-storage/azurite:latest")
+        var container = new ContainerBuilder("mcr.microsoft.com/azure-storage/azurite:latest")
             .WithPortBinding(blobPort, 10000) // Blob storage
             .WithPortBinding(queuePort, 10001) // Queue storage
             .WithPortBinding(tablePort, 10002) // Table storage
@@ -69,8 +68,7 @@ public static class ContainerExtensions
     public static string AzuriteConnectionString =>
     "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://127.0.0.1:10000/devstoreaccount1;QueueEndpoint=http://127.0.0.1:10001/devstoreaccount1;TableEndpoint=http://127.0.0.1:10002/devstoreaccount1;";
 
-    public static IContainer Azurite() => new ContainerBuilder()
-        .WithImage("mcr.microsoft.com/azure-storage/azurite:latest")
+    public static IContainer Azurite() => new ContainerBuilder("mcr.microsoft.com/azure-storage/azurite:latest")
         .WithPortBinding(10000, 10000) // Blob storage
         .WithPortBinding(10001, 10001) // Queue storage
         .WithPortBinding(10002, 10002) // Table storage
@@ -78,8 +76,7 @@ public static class ContainerExtensions
         .WithCleanUp(true) // Ensure container is cleaned up
         .Build();
 
-    public static PostgreSqlContainer Postgres() => new PostgreSqlBuilder()
-        .WithImage(PostgreSqlBuilder.PostgreSqlImage)
+    public static PostgreSqlContainer Postgres() => new PostgreSqlBuilder("postgres:latest")
         .WithDatabase("TestDb")
         .WithUsername("postgres")
         .WithPassword("password")
