@@ -38,7 +38,10 @@ public class FileSystemStorageAdapter : IStorageAdapter
         if (filePath == null || !File.Exists(filePath))
             return null;
 
-        var content = await File.ReadAllTextAsync(filePath, ct);
+        // Use FileShare.ReadWrite | FileShare.Delete to allow concurrent access
+        await using var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+        using var reader = new StreamReader(stream);
+        var content = await reader.ReadToEndAsync(ct);
 
         // Try to use a parser for non-JSON formats
         var parser = _parserRegistry.GetParser(extension);
@@ -227,7 +230,7 @@ public class FileSystemStorageAdapter : IStorageAdapter
             object? obj = null;
             try
             {
-                var json = await File.ReadAllTextAsync(file, ct);
+                var json = await ReadFileWithSharingAsync(file, ct);
                 obj = JsonSerializer.Deserialize<object>(json, JsonOptions);
 
                 // Set Id from file name if the object has an Id property
@@ -256,7 +259,7 @@ public class FileSystemStorageAdapter : IStorageAdapter
                 CodeConfiguration? config = null;
                 try
                 {
-                    var content = await File.ReadAllTextAsync(file, ct);
+                    var content = await ReadFileWithSharingAsync(file, ct);
                     config = await _parserRegistry.CSharpParser.ParseCodeConfigurationAsync(file, content, ct);
                 }
                 catch
@@ -537,6 +540,16 @@ public class FileSystemStorageAdapter : IStorageAdapter
                 File.Delete(filePath);
             }
         }
+    }
+
+    /// <summary>
+    /// Reads file content with FileShare.ReadWrite | FileShare.Delete to allow concurrent access.
+    /// </summary>
+    private static async Task<string> ReadFileWithSharingAsync(string filePath, CancellationToken ct = default)
+    {
+        await using var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+        using var reader = new StreamReader(stream);
+        return await reader.ReadToEndAsync(ct);
     }
 
     #endregion
