@@ -26,7 +26,7 @@ public class FileSystemStreamProvider(string basePath) : IStreamProvider
             fullPath,
             FileMode.Open,
             FileAccess.Read,
-            FileShare.Read,
+            FileShare.ReadWrite | FileShare.Delete,
             4096,
             useAsync: true);
 
@@ -40,8 +40,9 @@ public class FileSystemStreamProvider(string basePath) : IStreamProvider
         {
             return Task.FromResult<(Stream? Stream, string Path, DateTime LastModified)>(default);
         }
+        var stream = new FileStream(fullPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
         return Task.FromResult<(Stream? Stream, string Path, DateTime LastModified)>(
-            (File.OpenRead(fullPath), path, File.GetLastWriteTime(fullPath)));
+            (stream, path, File.GetLastWriteTime(fullPath)));
     }
 
     public async Task WriteStreamAsync(string reference, Stream content, CancellationToken cancellationToken = default)
@@ -73,7 +74,7 @@ public class FileSystemStreamProvider(string basePath) : IStreamProvider
         var items = files
             .Where(File.Exists)
             .Select(file =>
-                (Stream: (Stream?)File.OpenRead(file), Path: Path.GetRelativePath(basePath, file), LastModified: File.GetLastWriteTime(file)));
+                (Stream: (Stream?)new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete), Path: Path.GetRelativePath(basePath, file), LastModified: File.GetLastWriteTime(file)));
 
         return items.ToAsyncEnumerable();
     }

@@ -290,6 +290,9 @@ public class KernelContainer(IServiceProvider serviceProvider)
 
         // Add default using directives for interactive markdown
         var defaultUsings = @"
+using System;
+using System.Linq;
+using System.Collections.Generic;
 using System.ComponentModel;
 using System.ComponentModel.DataAnnotations;
 using MeshWeaver.Layout;
