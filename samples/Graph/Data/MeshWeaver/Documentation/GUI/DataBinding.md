@@ -2,19 +2,10 @@
 Name: Data Binding
 Category: Documentation
 Description: How data flows between controls and the underlying data store
-Icon: /static/storage/content/MeshWeaver/GUI/Concepts/DataBinding/icon.svg
+Icon: /static/storage/content/MeshWeaver/Documentation/GUI/DataBinding/icon.svg
 ---
 
 Data binding in MeshWeaver connects UI controls to data through a reactive stream-based system. Understanding DataContext, data streams, and the binding flow is essential for building interactive forms.
-
-## Source Files
-
-| File | Purpose |
-|------|---------|
-| `src/MeshWeaver.Data.Contract/WorkspaceReference.cs` | JsonPointerReference definition (line 17-20) |
-| `src/MeshWeaver.Data.Contract/LayoutAreaReference.cs` | GetDataPointer method (line 71-78) |
-| `src/MeshWeaver.Layout/Template.cs` | Template.Bind methods |
-| `src/MeshWeaver.Layout/Composition/LayoutAreaHost.cs` | GetDataStream method (line 261-273) |
 
 ## Core Concepts
 
@@ -39,7 +30,7 @@ new JsonPointerReference("customers/123/name")
 
 ### GetDataStream
 
-Returns an observable of data at a specific ID (LayoutAreaHost.cs:261-273):
+Returns an observable of data at a specific ID:
 
 ```csharp
 // Get a stream of data updates
@@ -58,7 +49,7 @@ Controls.Stack
 
 ### UpdateData
 
-Updates data in the stream (LayoutAreaHost.cs:244-245):
+Updates data in the stream:
 
 ```csharp
 host.UpdateData("personId", new Person { Name = "Alice", Age = 30 });
@@ -127,7 +118,7 @@ Controls.Stack
 
 ## Template.Bind
 
-The `Template.Bind` method (Template.cs:17-20) connects data to control templates:
+The `Template.Bind` method connects data to control templates:
 
 ```csharp
 Template.Bind(
@@ -140,6 +131,6 @@ This creates a control with its DataContext pointing to the stored data.
 
 ## See Also
 
-- [WithView Patterns](MeshWeaver/GUI/Concepts/WithView) - How views subscribe to data
-- [Observables](MeshWeaver/GUI/Concepts/Observables) - Static vs dynamic views
-- [Editor Control](MeshWeaver/GUI/Controls/Editor) - Data-bound form generation
+- [WithView Patterns](MeshWeaver/Documentation/GUI/ContainerControl) - How views subscribe to data
+- [Observables](MeshWeaver/Documentation/GUI/Observables) - Static vs dynamic views
+- [Editor Control](MeshWeaver/Documentation/GUI/Editor) - Data-bound form generation

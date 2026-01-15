@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using System.Threading.Tasks;
 using FluentAssertions;
@@ -1027,6 +1028,17 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
         // Should contain layout-area divs with the placeholder (note: HTML uses single quotes)
         html.Should().Contain("data-address='__KERNEL_ADDRESS__'",
             "Rendered HTML should contain layout-area divs with kernel address placeholder");
+
+        // Should contain BOTH layout area divs - one for helloworld and one for helloworld2
+        html.Should().Contain("data-area='helloworld'",
+            "Rendered HTML should contain layout-area div for HelloWorld code block");
+        html.Should().Contain("data-area='helloworld2'",
+            "Rendered HTML should contain layout-area div for HelloWorld2 code block");
+
+        // Count how many layout-area divs are present
+        var layoutAreaCount = System.Text.RegularExpressions.Regex.Matches(html, @"class='layout-area'").Count;
+        Output.WriteLine($"Found {layoutAreaCount} layout-area divs in rendered HTML");
+        layoutAreaCount.Should().Be(2, "There should be exactly 2 layout-area divs for the two code blocks");
     }
 
     /// <summary>
@@ -1111,6 +1123,181 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
 
         Output.WriteLine($"Final control: {control?.GetType().Name}");
         control.Should().NotBeNull("Should receive a control from the kernel");
+    }
+
+    /// <summary>
+    /// Test that TWO code blocks submitted in sequence both produce results.
+    /// This replicates the exact behavior from InteractiveMarkdown.md which has
+    /// two code blocks: HelloWorld and HelloWorld2.
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task InteractiveMarkdown_TwoCodeBlocks_BothProduceResults()
+    {
+        // Use a unique kernel ID for each test run
+        var kernelId = $"test-two-blocks-{Guid.NewGuid().ToString("N")[..8]}";
+
+        // Get client
+        var client = GetClient();
+
+        // Create the kernel node first
+        var kernelAddress = AddressExtensions.CreateKernelAddress(kernelId);
+        Output.WriteLine($"Creating kernel node at: {kernelAddress}");
+
+        var kernelNode = new MeshNode(kernelId, AddressExtensions.KernelType)
+        {
+            Name = $"Kernel-{kernelId}"
+        };
+
+        var createResponse = await client.AwaitResponse(
+            new CreateNodeRequest(kernelNode),
+            o => o.WithTarget(Mesh.Address),
+            TestContext.Current.CancellationToken);
+
+        createResponse.Message.Success.Should().BeTrue($"Failed to create kernel node: {createResponse.Message.Error}");
+        Output.WriteLine($"Kernel node created successfully");
+
+        // Create TWO code submissions like the interactive markdown does
+        // This mimics the exact code from InteractiveMarkdown.md
+        var submission1 = new MeshWeaver.Kernel.SubmitCodeRequest("\"Hello World \" + DateTime.Now.ToString()")
+        {
+            Id = "helloworld"
+        };
+
+        var submission2 = new MeshWeaver.Kernel.SubmitCodeRequest("\"Hello World \" + DateTime.Now.ToString()")
+        {
+            Id = "helloworld2"
+        };
+
+        Output.WriteLine($"Submitting code block 1 with Id: {submission1.Id}");
+        Output.WriteLine($"Submitting code block 2 with Id: {submission2.Id}");
+
+        // Submit BOTH code blocks in sequence (like MarkdownView does in OnAfterRenderAsync)
+        client.Post(submission1, o => o.WithTarget(kernelAddress));
+        client.Post(submission2, o => o.WithTarget(kernelAddress));
+
+        // Get layout streams for BOTH areas
+        var reference1 = new LayoutAreaReference("helloworld");
+        var reference2 = new LayoutAreaReference("helloworld2");
+
+        var layoutStream1 = client.GetWorkspace()
+            .GetRemoteStream<JsonElement, LayoutAreaReference>(kernelAddress, reference1);
+        var layoutStream2 = client.GetWorkspace()
+            .GetRemoteStream<JsonElement, LayoutAreaReference>(kernelAddress, reference2);
+
+        Output.WriteLine("Waiting for control 1 (helloworld)...");
+
+        // Wait for FIRST control
+        var control1 = await layoutStream1.GetControlStream("helloworld")
+            .Do(x => Output.WriteLine($"Control 1 update: {x?.GetType().Name ?? "null"}"))
+            .Timeout(30.Seconds())
+            .FirstAsync(x => x is not null);
+
+        Output.WriteLine($"Control 1 received: {control1?.GetType().Name}");
+        control1.Should().NotBeNull("First code block should produce a control");
+
+        Output.WriteLine("Waiting for control 2 (helloworld2)...");
+
+        // Wait for SECOND control
+        var control2 = await layoutStream2.GetControlStream("helloworld2")
+            .Do(x => Output.WriteLine($"Control 2 update: {x?.GetType().Name ?? "null"}"))
+            .Timeout(30.Seconds())
+            .FirstAsync(x => x is not null);
+
+        Output.WriteLine($"Control 2 received: {control2?.GetType().Name}");
+        control2.Should().NotBeNull("Second code block should produce a control");
+
+        // Both controls should be received
+        Output.WriteLine("SUCCESS: Both code blocks produced controls");
+    }
+
+    /// <summary>
+    /// Test that mimics the exact UI behavior - both subscriptions are created BEFORE
+    /// submitting code. This is how MarkdownView works: LayoutAreaViews subscribe during
+    /// render, then code is submitted in OnAfterRenderAsync.
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task InteractiveMarkdown_SubscribeBeforeCodeSubmit()
+    {
+        // Use a unique kernel ID for each test run
+        var kernelId = $"test-subscribe-first-{Guid.NewGuid().ToString("N")[..8]}";
+
+        // Get client
+        var client = GetClient();
+
+        // Create the kernel node first
+        var kernelAddress = AddressExtensions.CreateKernelAddress(kernelId);
+        Output.WriteLine($"Creating kernel node at: {kernelAddress}");
+
+        var kernelNode = new MeshNode(kernelId, AddressExtensions.KernelType)
+        {
+            Name = $"Kernel-{kernelId}"
+        };
+
+        var createResponse = await client.AwaitResponse(
+            new CreateNodeRequest(kernelNode),
+            o => o.WithTarget(Mesh.Address),
+            TestContext.Current.CancellationToken);
+
+        createResponse.Message.Success.Should().BeTrue($"Failed to create kernel node: {createResponse.Message.Error}");
+        Output.WriteLine($"Kernel node created successfully");
+
+        // Create BOTH layout streams BEFORE submitting code (mimics UI behavior)
+        var reference1 = new LayoutAreaReference("helloworld");
+        var reference2 = new LayoutAreaReference("helloworld2");
+
+        Output.WriteLine("Creating layout streams BEFORE submitting code...");
+
+        var layoutStream1 = client.GetWorkspace()
+            .GetRemoteStream<JsonElement, LayoutAreaReference>(kernelAddress, reference1);
+        var layoutStream2 = client.GetWorkspace()
+            .GetRemoteStream<JsonElement, LayoutAreaReference>(kernelAddress, reference2);
+
+        // Subscribe to both streams BEFORE submitting code
+        var control1Task = layoutStream1.GetControlStream("helloworld")
+            .Do(x => Output.WriteLine($"Stream 1 update: {x?.GetType().Name ?? "null"}"))
+            .Timeout(30.Seconds())
+            .FirstAsync(x => x is not null)
+            .ToTask();
+
+        var control2Task = layoutStream2.GetControlStream("helloworld2")
+            .Do(x => Output.WriteLine($"Stream 2 update: {x?.GetType().Name ?? "null"}"))
+            .Timeout(30.Seconds())
+            .FirstAsync(x => x is not null)
+            .ToTask();
+
+        // Small delay to ensure subscriptions are established
+        await Task.Delay(100, TestContext.Current.CancellationToken);
+
+        // NOW submit the code (like OnAfterRenderAsync does)
+        var submission1 = new MeshWeaver.Kernel.SubmitCodeRequest("\"Hello World \" + DateTime.Now.ToString()")
+        {
+            Id = "helloworld"
+        };
+
+        var submission2 = new MeshWeaver.Kernel.SubmitCodeRequest("\"Hello World 2 \" + DateTime.Now.ToString()")
+        {
+            Id = "helloworld2"
+        };
+
+        Output.WriteLine($"Submitting code block 1 with Id: {submission1.Id}");
+        Output.WriteLine($"Submitting code block 2 with Id: {submission2.Id}");
+
+        // Submit both code blocks
+        client.Post(submission1, o => o.WithTarget(kernelAddress));
+        client.Post(submission2, o => o.WithTarget(kernelAddress));
+
+        Output.WriteLine("Waiting for both controls...");
+
+        // Wait for both controls
+        var results = await Task.WhenAll(control1Task, control2Task);
+
+        Output.WriteLine($"Control 1 received: {results[0]?.GetType().Name}");
+        Output.WriteLine($"Control 2 received: {results[1]?.GetType().Name}");
+
+        results[0].Should().NotBeNull("First code block should produce a control");
+        results[1].Should().NotBeNull("Second code block should produce a control");
+
+        Output.WriteLine("SUCCESS: Both code blocks produced controls when subscribed before code submit");
     }
 
     #endregion

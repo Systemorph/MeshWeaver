@@ -90,8 +90,6 @@ public partial class LayoutAreaView
     {
         if (AreaStream is null)
         {
-            //Logger.LogDebug("Disposing old stream for {Owner} and {Reference}", AreaStream.Owner, AreaStream.Reference);
-            //AreaStream.Dispose();
             Logger.LogDebug("Acquiring stream for {Owner} and {Reference}", Address!, ViewModel.Reference);
             AreaStream = Address!.Equals(Workspace.Hub.Address)
                 ? Workspace.GetStream(ViewModel.Reference)!.Reduce(new JsonPointerReference("/"))

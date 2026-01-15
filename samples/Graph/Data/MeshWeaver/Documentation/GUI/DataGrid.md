@@ -2,16 +2,10 @@
 Name: DataGrid Control
 Category: Documentation
 Description: Display collections of data with sortable, resizable columns
-Icon: /static/storage/content/MeshWeaver/GUI/Controls/DataGrid/icon.svg
+Icon: /static/storage/content/MeshWeaver/Documentation/GUI/DataGrid/icon.svg
 ---
 
 The DataGrid control displays collections of data in a tabular format with sortable, resizable columns and optional virtualization for large datasets.
-
-## Source Files
-
-| File | Purpose |
-|------|---------|
-| `src/MeshWeaver.Layout/DataGrid/DataGridControl.cs` | Control and column definitions |
 
 ## Basic Usage
 
@@ -87,7 +81,7 @@ new DataGridControl(thousandsOfItems)
 
 ### PropertyColumnControl
 
-Displays a property value from each row (DataGridControl.cs:120-167):
+Displays a property value from each row:
 
 ```csharp
 new PropertyColumnControl<string>()
@@ -101,7 +95,7 @@ new PropertyColumnControl<string>()
 
 ### TemplateColumnControl
 
-Custom content for each cell (DataGridControl.cs:175-191):
+Custom content for each cell:
 
 ```csharp
 new TemplateColumnControl(Controls.Button("View"))
@@ -111,8 +105,6 @@ new TemplateColumnControl(Controls.Button("View"))
 ```
 
 ## DataGrid Configuration
-
-Methods available on `DataGridControl` (DataGridControl.cs:56-78):
 
 | Method | Purpose | Default |
 |--------|---------|---------|
@@ -128,8 +120,6 @@ Methods available on `DataGridControl` (DataGridControl.cs:56-78):
 | `WithLoading(bool)` | Show loading state | false |
 
 ## Column Configuration
-
-Methods available on column controls (DataGridControl.cs:103-118):
 
 | Method | Purpose | Default |
 |--------|---------|---------|
@@ -177,5 +167,5 @@ new DataGridControl(reportData)
 
 ## See Also
 
-- [Editor Control](MeshWeaver/GUI/Controls/Editor) - Form generation
-- [Stack Control](MeshWeaver/GUI/Controls/Stack) - Layout container
+- [Editor Control](MeshWeaver/Documentation/GUI/Editor) - Form generation
+- [Stack Control](MeshWeaver/Documentation/GUI/Stack) - Layout container
