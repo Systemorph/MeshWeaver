@@ -6,8 +6,8 @@ using MeshWeaver.Kernel;
 using MeshWeaver.Layout;
 using MeshWeaver.Markdown;
 using MeshWeaver.Mesh;
-using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
+using MeshWeaver.ShortGuid;
 using Microsoft.AspNetCore.Components.Rendering;
 using Microsoft.JSInterop;
 using MarkdownExtensions = MeshWeaver.Markdown.MarkdownExtensions;
@@ -23,12 +23,12 @@ public partial class MarkdownView
 
     /// <summary>
     /// Unique kernel ID for this markdown view instance.
-    /// Uses a stable ID based on the stream owner to ensure consistent routing.
+    /// Each view instance gets its own unique kernel via a GUID.
     /// </summary>
-    private string? _kernelId;
+    private readonly string _kernelId = Guid.NewGuid().AsString();
     private Address? _kernelAddress;
-    private Address KernelAddress => _kernelAddress ??= AddressExtensions.CreateKernelAddress(KernelId);
-    private string KernelId => _kernelId ??= $"md-{(Stream?.Owner?.ToString() ?? Guid.NewGuid().ToString("N"))[..Math.Min(Stream?.Owner?.ToString().Length ?? 32, 32)].Replace('/', '-')}";
+    private Address KernelAddress => _kernelAddress ??= AddressExtensions.CreateKernelAddress(_kernelId);
+    private string? _kernelPath;
 
     private bool _codeSubmitted;
     private bool _kernelNodeCreated;
@@ -127,17 +127,18 @@ public partial class MarkdownView
             if (!_kernelNodeCreated)
             {
                 _kernelNodeCreated = true;
-                var kernelNode = new MeshNode(KernelId, AddressExtensions.KernelType)
+                var kernelNode = new MeshNode(_kernelId, AddressExtensions.KernelType)
                 {
-                    Name = $"Kernel-{KernelId}",
-                    NodeType = AddressExtensions.KernelType
+                    Name = $"Kernel-{_kernelId}",
+                    NodeType = AddressExtensions.KernelType,
+                    Description = $"Interactive markdown view kernel (scope: {Stream?.Owner?.ToString() ?? "anonymous"})"
                 };
 
                 try
                 {
                     var meshAddress = Hub.Configuration.ParentHub?.Address ?? Hub.Address;
                     var response = await Hub.AwaitResponse(
-                        new CreateNodeRequest(kernelNode),
+                        new CreateNodeRequest(kernelNode) { CreatedBy = Stream?.Owner?.ToString() },
                         o => o.WithTarget(meshAddress));
 
                     // If node already exists, that's fine - it means another instance already created it
@@ -145,6 +146,11 @@ public partial class MarkdownView
                     {
                         // Log error but continue - code will still be submitted
                         Console.WriteLine($"Warning: Failed to create kernel node: {response.Message.Error}");
+                    }
+                    else
+                    {
+                        // Store the path for cleanup on disposal
+                        _kernelPath = kernelNode.Path;
                     }
                 }
                 catch (Exception ex)
@@ -162,6 +168,39 @@ public partial class MarkdownView
         }
     }
 
+    public override async ValueTask DisposeAsync()
+    {
+        // Clean up the kernel node if one was created
+        if (_kernelPath != null)
+        {
+            try
+            {
+                var meshAddress = Hub.Configuration.ParentHub?.Address ?? Hub.Address;
+                await Hub.AwaitResponse(
+                    new DeleteNodeRequest(_kernelPath),
+                    o => o.WithTarget(meshAddress));
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Warning: Error deleting kernel node: {ex.Message}");
+            }
+        }
+
+        // Dispose JS module
+        if (_jsModule != null)
+        {
+            try
+            {
+                await _jsModule.DisposeAsync();
+            }
+            catch (JSException)
+            {
+                // JS not available during disposal
+            }
+        }
+
+        await base.DisposeAsync();
+    }
 
     private void RenderHtml(RenderTreeBuilder builder)
     {

@@ -182,7 +182,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         var yearTextBox = (TextFieldControl)await stream
             .GetControlStream(toolbarArea)
             .Timeout(10.Seconds())
-            .FirstAsync(x => x is not null)!;
+            .FirstAsync(x => x is not null);
         yearTextBox.DataContext.Should().Be("/data/\"toolbar\"");
 
         var dataPointer = yearTextBox.Data.Should().BeOfType<JsonPointerReference>().Which;

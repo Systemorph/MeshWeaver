@@ -26,7 +26,10 @@ public static class PersistenceJsonOptions
             WriteIndented = true,
             PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
             PropertyNameCaseInsensitive = true,
-            DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingDefault,
+            // Use WhenWritingNull instead of WhenWritingDefault to avoid issues with enums
+            // where the first value (0) is skipped even when it has semantic meaning.
+            // E.g., MeshNodeState.Transient=0 would be skipped, then deserialized as Active
+            DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
             UnmappedMemberHandling = JsonUnmappedMemberHandling.Skip,
             ReferenceHandler = null,
             ReadCommentHandling = JsonCommentHandling.Skip,
