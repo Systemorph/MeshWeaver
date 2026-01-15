@@ -2,17 +2,10 @@
 Name: Editor Control
 Category: Documentation
 Description: Generate editable forms from C# records with automatic field rendering
-Icon: /static/storage/content/MeshWeaver/GUI/Controls/Editor/icon.svg
+Icon: /static/storage/content/MeshWeaver/Documentation/GUI/Editor/icon.svg
 ---
 
 The Editor control automatically generates editable forms from C# records, mapping property types to appropriate input controls.
-
-## Source Files
-
-| File | Purpose |
-|------|---------|
-| `src/MeshWeaver.Layout/EditorControl.cs` | The control record definition |
-| `src/MeshWeaver.Layout/EditorExtensions.cs` | Extension methods and type mapping logic |
 
 ## Basic Usage
 
@@ -84,7 +77,7 @@ host.Edit(new UserProfile { Age = 25 })
 
 ## Property Type Mapping
 
-The editor automatically selects controls based on property type (see `EditorExtensions.cs:243-250`):
+The editor automatically selects controls based on property type:
 
 | Property Type | Rendered Control | Example |
 |--------------|------------------|---------|
@@ -95,7 +88,7 @@ The editor automatically selects controls based on property type (see `EditorExt
 
 ## Supported Attributes
 
-Customize field behavior with attributes (processed in `EditorExtensions.cs:264-310`):
+Customize field behavior with attributes:
 
 | Attribute | Effect | Example |
 |-----------|--------|---------|
@@ -108,7 +101,7 @@ Customize field behavior with attributes (processed in `EditorExtensions.cs:264-
 
 ## Control Override
 
-Use `[UiControl<T>]` to override the default control (see `EditorExtensions.cs:283-285`):
+Use `[UiControl<T>]` to override the default control:
 
 ```csharp
 public record Settings
@@ -129,7 +122,7 @@ host.Edit(new Settings { Theme = "System" })
 
 ## Dimension Dropdowns
 
-Use `[Dimension<T>]` to render a dropdown populated from a data source (see `EditorExtensions.cs:288-300`):
+Use `[Dimension<T>]` to render a dropdown populated from a data source:
 
 ```csharp
 public record Country
@@ -153,7 +146,7 @@ public record Address
 
 ## How It Works
 
-The `Edit<T>()` method (EditorExtensions.cs:71-79) reflects over all properties:
+The `Edit<T>()` method reflects over all properties:
 
 ```csharp
 typeof(T).GetProperties()                    // Get all public properties
@@ -161,11 +154,11 @@ typeof(T).GetProperties()                    // Get all public properties
         serviceProvider.MapToControl)        // Add a field for each property
 ```
 
-Each property becomes a named area in the `EditorControl`. The reactive variant (EditorExtensions.cs:88-102) wraps the editor in a `StackControl` and adds a view that subscribes to form changes via `GetDataStream<T>()`.
+Each property becomes a named area in the `EditorControl`. The reactive variant wraps the editor in a `StackControl` and adds a view that subscribes to form changes via `GetDataStream<T>()`.
 
 ## See Also
 
-- [Property Attributes](MeshWeaver/GUI/Concepts/Attributes) - All supported attributes in detail
-- [Data Binding](MeshWeaver/GUI/Concepts/DataBinding) - How form data flows
-- [Stack Control](MeshWeaver/GUI/Controls/Stack) - Container for layouts
-- [DataGrid Control](MeshWeaver/GUI/Controls/DataGrid) - Tabular data display
+- [Property Attributes](MeshWeaver/Documentation/GUI/Attributes) - All supported attributes in detail
+- [Data Binding](MeshWeaver/Documentation/GUI/DataBinding) - How form data flows
+- [Stack Control](MeshWeaver/Documentation/GUI/Stack) - Container for layouts
+- [DataGrid Control](MeshWeaver/Documentation/GUI/DataGrid) - Tabular data display

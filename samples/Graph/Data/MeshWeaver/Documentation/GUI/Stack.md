@@ -2,16 +2,10 @@
 Name: Stack Control
 Category: Documentation
 Description: Arrange controls vertically or horizontally with configurable spacing
-Icon: /static/storage/content/MeshWeaver/GUI/Controls/Stack/icon.svg
+Icon: /static/storage/content/MeshWeaver/Documentation/GUI/Stack/icon.svg
 ---
 
 The Stack control arranges child controls in a vertical or horizontal layout with configurable spacing and alignment.
-
-## Source Files
-
-| File | Purpose |
-|------|---------|
-| `src/MeshWeaver.Layout/StackControl.cs` | The control record and skin definition |
 
 ## Basic Usage
 
@@ -71,7 +65,7 @@ Controls.Stack
 
 ## Configuration Methods
 
-All methods return a new `StackControl` instance (immutable pattern). See `StackControl.cs:95-164` for extension methods.
+All methods return a new `StackControl` instance (immutable pattern).
 
 | Method | Purpose | Example Values |
 |--------|---------|----------------|
@@ -121,7 +115,7 @@ Controls.Stack
 
 ## LayoutStackSkin Properties
 
-The skin (StackControl.cs:21-93) defines visual properties:
+The skin defines visual properties:
 
 | Property | Type | Default |
 |----------|------|---------|
@@ -136,6 +130,6 @@ The skin (StackControl.cs:21-93) defines visual properties:
 
 ## See Also
 
-- [WithView Patterns](MeshWeaver/GUI/Concepts/WithView) - Understanding view patterns
-- [Editor Control](MeshWeaver/GUI/Controls/Editor) - Form generation
-- [DataGrid Control](MeshWeaver/GUI/Controls/DataGrid) - Tabular data display
+- [WithView Patterns](MeshWeaver/Documentation/GUI/ContainerControl) - Understanding view patterns
+- [Editor Control](MeshWeaver/Documentation/GUI/Editor) - Form generation
+- [DataGrid Control](MeshWeaver/Documentation/GUI/DataGrid) - Tabular data display

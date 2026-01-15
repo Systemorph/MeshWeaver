@@ -73,12 +73,15 @@
       "Bash(git pull:*)",
       "Bash(git check-ignore:*)",
       "Bash(echo:*)",
-      "Bash(source ~/.zshrc)"
+      "Bash(source ~/.zshrc)",
+      "Bash(pkill:*)",
+      "Bash(lsof:*)",
+      "Bash(xxd:*)"
     ],
     "deny": []
   },
+  "enableAllProjectMcpServers": true,
   "enabledMcpjsonServers": [
     "github"
-  ],
-  "enableAllProjectMcpServers": true
+  ]
 }

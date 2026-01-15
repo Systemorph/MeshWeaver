@@ -2,24 +2,16 @@
 Name: Property Attributes
 Category: Documentation
 Description: Attributes that control how properties are rendered and validated in editors
-Icon: /static/storage/content/MeshWeaver/GUI/Concepts/Attributes/icon.svg
+Icon: /static/storage/content/MeshWeaver/Documentation/GUI/Attributes/icon.svg
 ---
 
 Property attributes control how the Editor control renders and validates form fields. They provide metadata that influences field appearance, behavior, and validation.
-
-## Source Files
-
-| File | Purpose |
-|------|---------|
-| `src/MeshWeaver.Layout/UiControlAttribute.cs` | Custom control override attribute |
-| `src/MeshWeaver.Domain/DimensionAttribute.cs` | Dimension selector attribute |
-| `src/MeshWeaver.Layout/EditorExtensions.cs` | Attribute processing logic (line 264-310) |
 
 ## Display Attributes
 
 ### [Description]
 
-Adds help text below the field (EditorExtensions.cs:275-276):
+Adds help text below the field:
 
 ```csharp
 public record Person
@@ -33,7 +25,7 @@ public record Person
 
 ### [DisplayName]
 
-Overrides the label derived from property name (EditorExtensions.cs:267-268):
+Overrides the label derived from property name:
 
 ```csharp
 public record Settings
@@ -47,7 +39,7 @@ public record Settings
 
 ### [Browsable(false)]
 
-Hides the property from the editor (EditorExtensions.cs:264-265):
+Hides the property from the editor:
 
 ```csharp
 public record Entity
@@ -65,7 +57,7 @@ public record Entity
 
 ### [Required]
 
-Makes the field mandatory (EditorExtensions.cs:404-406):
+Makes the field mandatory:
 
 ```csharp
 public record User
@@ -96,7 +88,7 @@ public record Product
 
 ### [Editable(false)]
 
-Makes the field read-only (EditorExtensions.cs:408):
+Makes the field read-only:
 
 ```csharp
 public record Order
@@ -114,7 +106,7 @@ public record Order
 
 ### [UiControl<T>]
 
-Overrides the default control type (EditorExtensions.cs:283-285):
+Overrides the default control type:
 
 ```csharp
 public record Preferences
@@ -131,7 +123,7 @@ public record Preferences
 
 ### [Dimension<T>]
 
-Renders a dropdown populated from a data source (EditorExtensions.cs:288-300):
+Renders a dropdown populated from a data source:
 
 ```csharp
 public record Country
@@ -154,7 +146,7 @@ public record Address
 
 ## Property Type to Control Mapping
 
-Without attributes, the Editor maps types automatically (EditorExtensions.cs:243-250):
+Without attributes, the Editor maps types automatically:
 
 | Property Type | Default Control |
 |--------------|-----------------|
@@ -189,5 +181,5 @@ public record Employee
 
 ## See Also
 
-- [Editor Control](MeshWeaver/GUI/Controls/Editor) - How attributes are used in forms
-- [DataBinding](MeshWeaver/GUI/Concepts/DataBinding) - How data flows through forms
+- [Editor Control](MeshWeaver/Documentation/GUI/Editor) - How attributes are used in forms
+- [DataBinding](MeshWeaver/Documentation/GUI/DataBinding) - How data flows through forms

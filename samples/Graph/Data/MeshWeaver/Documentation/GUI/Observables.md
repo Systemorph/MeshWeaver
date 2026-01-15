@@ -2,17 +2,10 @@
 Name: Static vs Dynamic Views
 Category: Documentation
 Description: Understanding when and how UI areas update in response to data changes
-Icon: /static/storage/content/MeshWeaver/GUI/Concepts/Observables/icon.svg
+Icon: /static/storage/content/MeshWeaver/Documentation/GUI/Observables/icon.svg
 ---
 
 MeshWeaver distinguishes between **static** views (rendered once) and **dynamic** views (re-rendered when observables emit). Understanding this distinction is key for efficient UIs.
-
-## Source Files
-
-| File | Purpose |
-|------|---------|
-| `src/MeshWeaver.Layout/ContainerControl.cs` | WithView overloads (line 94-97, 145-160) |
-| `src/MeshWeaver.Layout/Composition/LayoutAreaHost.cs` | RenderArea and UpdateArea (line 210-228, 452-463) |
 
 ## Static Views
 
@@ -58,7 +51,7 @@ The header and button never re-render. Only the middle area updates when `metric
 
 ## How Re-rendering Works
 
-When a dynamic view receives a new value (LayoutAreaHost.cs:452-463):
+When a dynamic view receives a new value:
 
 1. Observable is subscribed with `DistinctUntilChanged()` to skip duplicates
 2. Each emission calls `UpdateArea`
@@ -137,6 +130,6 @@ Common Rx operators for UI:
 
 ## See Also
 
-- [WithView Patterns](MeshWeaver/GUI/Concepts/WithView) - All WithView overloads
-- [DataBinding](MeshWeaver/GUI/Concepts/DataBinding) - How data flows to controls
-- [Editor Control](MeshWeaver/GUI/Controls/Editor) - Real-world dynamic examples
+- [WithView Patterns](MeshWeaver/Documentation/GUI/ContainerControl) - All WithView overloads
+- [DataBinding](MeshWeaver/Documentation/GUI/DataBinding) - How data flows to controls
+- [Editor Control](MeshWeaver/Documentation/GUI/Editor) - Real-world dynamic examples
