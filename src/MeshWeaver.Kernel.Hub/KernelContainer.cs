@@ -277,6 +277,7 @@ public class KernelContainer(IServiceProvider serviceProvider)
             typeof(Address).Assembly.Location,
             typeof(UiControl).Assembly.Location,
             typeof(DataExtensions).Assembly.Location,
+            typeof(EntityStore).Assembly.Location, // MeshWeaver.Data.Contract - required for Layout types
             typeof(System.ComponentModel.DescriptionAttribute).Assembly.Location,
             typeof(System.ComponentModel.DataAnnotations.RequiredAttribute).Assembly.Location
         ]);
@@ -289,6 +290,8 @@ public class KernelContainer(IServiceProvider serviceProvider)
             .Select(k => k.SetValueAsync(nameof(Mesh), hub, typeof(IMessageHub))));
 
         // Add default using directives for interactive markdown
+        // Note: We don't include "using static MeshWeaver.Layout.Controls;" because
+        // Controls.DateTime() conflicts with System.DateTime
         var defaultUsings = @"
 using System;
 using System.Linq;
@@ -297,7 +300,6 @@ using System.ComponentModel;
 using System.ComponentModel.DataAnnotations;
 using MeshWeaver.Layout;
 using MeshWeaver.Messaging;
-using static MeshWeaver.Layout.Controls;
 ";
         await ret.SendAsync(new SubmitCode(defaultUsings));
         composite.KernelEvents.Subscribe(e => PublishEventToContext(hub, e));
