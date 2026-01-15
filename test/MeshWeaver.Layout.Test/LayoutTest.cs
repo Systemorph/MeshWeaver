@@ -173,7 +173,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         );
         var reportArea = $"{reference.Area}/Content";
         var content = await stream.GetControlStream(reportArea)
-            // .Timeout(10.Seconds())
+            .Timeout(10.Seconds())
             .FirstAsync(x => x is not null)!;
         content.Should().BeOfType<HtmlControl>().Which.Data.ToString().Should().Contain("2024");
 

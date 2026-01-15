@@ -45,12 +45,17 @@ public static class StandardReducers
     {
         var pointer = JsonPointer.Parse(reference.Pointer);
         var value = pointer.Evaluate(current.Value) ?? default;
-        var segmentCount = pointer.SegmentCount;
-        string? firstSegment = segmentCount > 0 ? pointer[0].ToString() : null;
-        string? secondSegment = segmentCount > 1 ? pointer[1].ToString() : null;
+
+        // Decode the pointer segments for comparison - segments may be JSON-encoded (e.g., "\"toolbar\"")
+        var collection = pointer.SegmentCount > 0 ? pointer.GetSegment(0).ToString() : null;
+        var idSegment = pointer.SegmentCount > 1 ? pointer.GetSegment(1).ToString() : null;
+        // Decode JSON-encoded id (e.g., "\"toolbar\"" -> "toolbar")
+        var id = idSegment != null ? JsonSerializer.Deserialize<object>(idSegment) : null;
+
         return new(value, current.ChangedBy, current.StreamId, current.ChangeType, current.Version, current.Updates
-            .Where(u => u.Collection == firstSegment
-                        && secondSegment != null && secondSegment.Equals(u.Id?.ToString())).ToArray());
+            .Where(u => collection != null && id != null
+                        && collection == u.Collection
+                        && (id.Equals(u.Id) || id.ToString() == u.Id?.ToString())).ToArray());
     }
 
     private static ChangeItem<JsonElement> PatchJsonElement(ISynchronizationStream<JsonElement> stream, JsonElement current, JsonElement updated, JsonPatch? patch, string changedBy)
@@ -211,13 +216,13 @@ public static class StandardReducers
         var updates = new List<EntityUpdate>();
         foreach (var g in
                  patch!.Operations
-                     .GroupBy(p => p.Path[0].ToString()))
+                     .GroupBy(p => p.Path.GetSegment(0).ToString()))
         {
             var allChanges = g.ToArray();
-            if (allChanges.Length == 1 && GetPathLength(allChanges[0].Path) == 1)
+            if (allChanges.Length == 1 && allChanges[0].Path.SegmentCount == 1)
             {
                 var change = allChanges[0];
-                var collection = change.Path[0].ToString();
+                var collection = change.Path.GetSegment(0).ToString();
                 switch (change.Op)
                 {
                     case OperationType.Add:
@@ -241,7 +246,7 @@ public static class StandardReducers
 
             foreach (var eg in allChanges.GroupBy(p => new
             {
-                Id = GetPathLength(p.Path) > 1 ? p.Path[1].ToString() : null,
+                Id = p.Path.GetSegment(1).ToString(),
                 Op = p.Op switch
                 {
                     OperationType.Add => OperationType.Add,
@@ -250,7 +255,7 @@ public static class StandardReducers
                 }
             }))
             {
-                var collection = allChanges[0].Path[0].ToString();
+                var collection = allChanges.First().Path.GetSegment(0).ToString();
                 var id = JsonSerializer.Deserialize<object>(eg.Key.Id, stream.Hub.JsonSerializerOptions)!;
                 var currentCollection = currentStore.GetCollection(collection);
                 if (currentCollection == null)
@@ -287,8 +292,6 @@ public static class StandardReducers
 
         return new(currentStore, changedBy, stream.StreamId, ChangeType.Patch, stream.Hub.Version, updates);
     }
-
-    private static int GetPathLength(JsonPointer path) => path.SegmentCount;
 
     private static object GetEntity(this ISynchronizationStream<EntityStore> stream, JsonPointer entityPointer, JsonElement updatedJson)
     {

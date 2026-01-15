@@ -7,6 +7,7 @@ using MeshWeaver.Insurance.Domain;
 using MeshWeaver.Insurance.Domain.Services;
 using MeshWeaver.Layout;
 using MeshWeaver.Mesh;
+using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.Insurance.Test;
@@ -19,6 +20,11 @@ public class PricingCatalogTests(ITestOutputHelper output) : InsuranceTestBase(o
             .ConfigureServices(services => services
                 .AddSingleton<IPricingService, InMemoryPricingService>()
             );
+    }
+
+    protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
+    {
+        return base.ConfigureClient(configuration).AddLayoutClient();
     }
 
     [Fact(Timeout = 30000)]
@@ -121,7 +127,8 @@ public class PricingCatalogTests(ITestOutputHelper output) : InsuranceTestBase(o
     {
         // Arrange
         var reference = new LayoutAreaReference("Pricings");
-        var workspace = Mesh.ServiceProvider.GetRequiredService<IWorkspace>();
+        var client = GetClient();
+        var workspace = client.GetWorkspace();
 
         // Act - Get the remote stream using LayoutAreaReference
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
