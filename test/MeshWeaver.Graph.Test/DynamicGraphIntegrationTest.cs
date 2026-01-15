@@ -1,5 +1,4 @@
 ﻿using System;
-using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reactive.Linq;
@@ -245,23 +244,6 @@ public record Graph
             .AddJsonGraphConfiguration(testDataDirectory);
     }
 
-    public override async ValueTask DisposeAsync()
-    {
-        await base.DisposeAsync();
-
-        // Clean up test directory
-        if (_testDirectory != null && Directory.Exists(_testDirectory))
-        {
-            try
-            {
-                Directory.Delete(_testDirectory, recursive: true);
-            }
-            catch
-            {
-                // Ignore cleanup errors
-            }
-        }
-    }
 
     #region Hub Initialization Tests
 
