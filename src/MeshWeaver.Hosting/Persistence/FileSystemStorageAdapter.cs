@@ -104,11 +104,7 @@ public class FileSystemStorageAdapter : IStorageAdapter
             Directory.CreateDirectory(directory);
         }
 
-        // Write to a temp file first, then atomically move to final location
-        // This ensures readers never see an empty or partial file
-        var tempFilePath = filePath + ".tmp";
-        await File.WriteAllTextAsync(tempFilePath, content, ct);
-        File.Move(tempFilePath, filePath, overwrite: true);
+        await File.WriteAllTextAsync(filePath, content, ct);
 
         // Clean up old files with different extensions
         CleanupOtherExtensions(node.Path, extension);
