@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Reactive.Linq;
 using System.Threading;
@@ -25,23 +26,20 @@ public record ValidatableData(
 
 #region Validators
 
-#pragma warning disable CS0618 // Testing deprecated interfaces
-
 /// <summary>
 /// A validator that rejects entities with "forbidden" in their name (for creations).
 /// </summary>
-public class ForbiddenNameValidator : IDataChangeValidator
+public class ForbiddenNameValidator : IDataValidator
 {
-    public Task<DataValidationResult> ValidateAsync(DataChangeRequest request, CancellationToken ct = default)
+    public IReadOnlyCollection<DataOperation> SupportedOperations => [DataOperation.Create];
+
+    public Task<DataValidationResult> ValidateAsync(DataValidationContext context, CancellationToken ct = default)
     {
-        foreach (var entity in request.Creations)
+        if (context.Entity is ValidatableData data && data.Name?.Contains("forbidden", StringComparison.OrdinalIgnoreCase) == true)
         {
-            if (entity is ValidatableData data && data.Name?.Contains("forbidden", StringComparison.OrdinalIgnoreCase) == true)
-            {
-                return Task.FromResult(DataValidationResult.Invalid(
-                    $"Entity name '{data.Name}' contains forbidden word",
-                    DataValidationRejectionReason.ValidationFailed));
-            }
+            return Task.FromResult(DataValidationResult.Invalid(
+                $"Entity name '{data.Name}' contains forbidden word",
+                DataValidationRejectionReason.ValidationFailed));
         }
         return Task.FromResult(DataValidationResult.Valid());
     }
@@ -50,18 +48,17 @@ public class ForbiddenNameValidator : IDataChangeValidator
 /// <summary>
 /// A validator that prevents changing category to "locked" (for updates).
 /// </summary>
-public class LockedCategoryValidator : IDataChangeValidator
+public class LockedCategoryValidator : IDataValidator
 {
-    public Task<DataValidationResult> ValidateAsync(DataChangeRequest request, CancellationToken ct = default)
+    public IReadOnlyCollection<DataOperation> SupportedOperations => [DataOperation.Update];
+
+    public Task<DataValidationResult> ValidateAsync(DataValidationContext context, CancellationToken ct = default)
     {
-        foreach (var entity in request.Updates)
+        if (context.Entity is ValidatableData data && data.Category?.Equals("locked", StringComparison.OrdinalIgnoreCase) == true)
         {
-            if (entity is ValidatableData data && data.Category?.Equals("locked", StringComparison.OrdinalIgnoreCase) == true)
-            {
-                return Task.FromResult(DataValidationResult.Invalid(
-                    "Cannot set category to 'locked'",
-                    DataValidationRejectionReason.ValidationFailed));
-            }
+            return Task.FromResult(DataValidationResult.Invalid(
+                "Cannot set category to 'locked'",
+                DataValidationRejectionReason.ValidationFailed));
         }
         return Task.FromResult(DataValidationResult.Valid());
     }
@@ -70,18 +67,17 @@ public class LockedCategoryValidator : IDataChangeValidator
 /// <summary>
 /// A validator that prevents deletion of protected entities (for deletions).
 /// </summary>
-public class ProtectedEntityValidator : IDataChangeValidator
+public class ProtectedEntityValidator : IDataValidator
 {
-    public Task<DataValidationResult> ValidateAsync(DataChangeRequest request, CancellationToken ct = default)
+    public IReadOnlyCollection<DataOperation> SupportedOperations => [DataOperation.Delete];
+
+    public Task<DataValidationResult> ValidateAsync(DataValidationContext context, CancellationToken ct = default)
     {
-        foreach (var entity in request.Deletions)
+        if (context.Entity is ValidatableData data && data.IsProtected)
         {
-            if (entity is ValidatableData data && data.IsProtected)
-            {
-                return Task.FromResult(DataValidationResult.Invalid(
-                    $"Entity '{data.Id}' is protected and cannot be deleted",
-                    DataValidationRejectionReason.Unauthorized));
-            }
+            return Task.FromResult(DataValidationResult.Invalid(
+                $"Entity '{data.Id}' is protected and cannot be deleted",
+                DataValidationRejectionReason.Unauthorized));
         }
         return Task.FromResult(DataValidationResult.Valid());
     }
@@ -90,11 +86,13 @@ public class ProtectedEntityValidator : IDataChangeValidator
 /// <summary>
 /// A read validator that blocks reads of entities with "secret" in ID.
 /// </summary>
-public class SecretCategoryReadValidator : IDataReadValidator
+public class SecretCategoryReadValidator : IDataValidator
 {
-    public Task<DataValidationResult> ValidateAsync(WorkspaceReference reference, CancellationToken ct = default)
+    public IReadOnlyCollection<DataOperation> SupportedOperations => [DataOperation.Read];
+
+    public Task<DataValidationResult> ValidateAsync(DataValidationContext context, CancellationToken ct = default)
     {
-        if (reference is EntityReference entityRef && entityRef.Id is string id && id.Contains("secret", StringComparison.OrdinalIgnoreCase))
+        if (context.Entity is EntityReference entityRef && entityRef.Id is string id && id.Contains("secret", StringComparison.OrdinalIgnoreCase))
         {
             return Task.FromResult(DataValidationResult.Invalid(
                 "Cannot read secret entities",
@@ -103,25 +101,6 @@ public class SecretCategoryReadValidator : IDataReadValidator
         return Task.FromResult(DataValidationResult.Valid());
     }
 }
-
-/// <summary>
-/// A read result validator that filters out hidden data.
-/// </summary>
-public class HiddenDataResultValidator : IDataReadResultValidator
-{
-    public Task<DataValidationResult> ValidateAsync(WorkspaceReference reference, object? data, CancellationToken ct = default)
-    {
-        if (data is ValidatableData entityData && entityData.Category == "hidden")
-        {
-            return Task.FromResult(DataValidationResult.Invalid(
-                "Entity is hidden",
-                DataValidationRejectionReason.EntityHidden));
-        }
-        return Task.FromResult(DataValidationResult.Valid());
-    }
-}
-
-#pragma warning restore CS0618
 
 #endregion
 
@@ -169,7 +148,7 @@ public class DataCreateValidatorTest(ITestOutputHelper output) : DataValidationT
     {
         return base.ConfigureClient(configuration)
             .WithServices(services =>
-                services.AddSingleton<IDataChangeValidator, ForbiddenNameValidator>());
+                services.AddSingleton<IDataValidator, ForbiddenNameValidator>());
     }
 
     [Fact]
@@ -230,7 +209,7 @@ public class DataUpdateValidatorTest(ITestOutputHelper output) : DataValidationT
     {
         return base.ConfigureClient(configuration)
             .WithServices(services =>
-                services.AddSingleton<IDataChangeValidator, LockedCategoryValidator>());
+                services.AddSingleton<IDataValidator, LockedCategoryValidator>());
     }
 
     [Fact]
@@ -291,7 +270,7 @@ public class DataDeleteValidatorTest(ITestOutputHelper output) : DataValidationT
     {
         return base.ConfigureClient(configuration)
             .WithServices(services =>
-                services.AddSingleton<IDataChangeValidator, ProtectedEntityValidator>());
+                services.AddSingleton<IDataValidator, ProtectedEntityValidator>());
     }
 
     [Fact]
@@ -372,7 +351,7 @@ public class DataReadValidatorTest(ITestOutputHelper output) : DataValidationTes
         // Register on host since GetDataRequest is sent to host
         return base.ConfigureHost(configuration)
             .WithServices(services =>
-                services.AddSingleton<IDataReadValidator, SecretCategoryReadValidator>());
+                services.AddSingleton<IDataValidator, SecretCategoryReadValidator>());
     }
 
     [Fact]
@@ -426,9 +405,9 @@ public class DataCombinedValidatorTest(ITestOutputHelper output) : DataValidatio
         return base.ConfigureClient(configuration)
             .WithServices(services =>
             {
-                services.AddSingleton<IDataChangeValidator, ForbiddenNameValidator>();
-                services.AddSingleton<IDataChangeValidator, LockedCategoryValidator>();
-                services.AddSingleton<IDataChangeValidator, ProtectedEntityValidator>();
+                services.AddSingleton<IDataValidator, ForbiddenNameValidator>();
+                services.AddSingleton<IDataValidator, LockedCategoryValidator>();
+                services.AddSingleton<IDataValidator, ProtectedEntityValidator>();
                 return services;
             });
     }

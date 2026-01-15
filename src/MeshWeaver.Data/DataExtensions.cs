@@ -1597,33 +1597,24 @@ public static class DataExtensions
         WorkspaceReference reference,
         CancellationToken ct)
     {
-#pragma warning disable CS0618 // Intentionally supporting legacy validators for backwards compatibility
-        var validators = hub.ServiceProvider.GetServices<IDataReadValidator>();
-#pragma warning restore CS0618
-        foreach (var validator in validators)
-        {
-            var result = await validator.ValidateAsync(reference, ct);
-            if (!result.IsValid)
-                return result;
-        }
-        return DataValidationResult.Valid();
-    }
+        var validators = hub.ServiceProvider.GetServices<IDataValidator>();
+        var accessService = hub.ServiceProvider.GetService<AccessService>();
 
-    /// <summary>
-    /// Runs all registered read result validators for the given reference and data.
-    /// </summary>
-    private static async Task<DataValidationResult> RunReadResultValidatorsAsync(
-        IMessageHub hub,
-        WorkspaceReference reference,
-        object? data,
-        CancellationToken ct)
-    {
-#pragma warning disable CS0618 // Intentionally supporting legacy validators for backwards compatibility
-        var validators = hub.ServiceProvider.GetServices<IDataReadResultValidator>();
-#pragma warning restore CS0618
         foreach (var validator in validators)
         {
-            var result = await validator.ValidateAsync(reference, data, ct);
+            if (!validator.SupportedOperations.Contains(DataOperation.Read) && validator.SupportedOperations.Count > 0)
+                continue;
+
+            var context = new DataValidationContext
+            {
+                Operation = DataOperation.Read,
+                Entity = reference,
+                EntityType = reference.GetType(),
+                AccessContext = accessService?.Context,
+                ServiceProvider = hub.ServiceProvider
+            };
+
+            var result = await validator.ValidateAsync(context, ct);
             if (!result.IsValid)
                 return result;
         }
@@ -1632,24 +1623,12 @@ public static class DataExtensions
 
     /// <summary>
     /// Runs all registered change validators for the given data change request.
-    /// This includes both legacy IDataChangeValidator and unified IDataValidator implementations.
     /// </summary>
     private static async Task<DataValidationResult> RunChangeValidatorsAsync(
         IMessageHub hub,
         DataChangeRequest request,
         CancellationToken ct)
     {
-        // Run legacy IDataChangeValidator instances
-#pragma warning disable CS0618 // Intentionally supporting legacy validators for backwards compatibility
-        var legacyValidators = hub.ServiceProvider.GetServices<IDataChangeValidator>();
-#pragma warning restore CS0618
-        foreach (var validator in legacyValidators)
-        {
-            var result = await validator.ValidateAsync(request, ct);
-            if (!result.IsValid)
-                return result;
-        }
-
         // Run unified IDataValidator instances
         var unifiedValidators = hub.ServiceProvider.GetServices<IDataValidator>();
         var accessService = hub.ServiceProvider.GetService<AccessService>();

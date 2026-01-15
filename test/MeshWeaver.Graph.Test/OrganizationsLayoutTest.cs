@@ -308,7 +308,7 @@ namespace MeshWeaver.Graph.Test
             var query = "nodeType:Organization scope:descendants";
 
             // Act - execute the query (from root to find all matching nodes)
-            var nodes = await meshQuery.QueryAsync<MeshNode>(query).ToListAsync(TestContext.Current.CancellationToken);
+            var nodes = await meshQuery.QueryAsync<MeshNode>(query, ct: TestContext.Current.CancellationToken).ToListAsync(TestContext.Current.CancellationToken);
 
             // Assert - should find all 3 Organization instances (Acme, Contoso, Fabrikam)
             nodes.Should().HaveCount(3, "Should find all 3 Organization instances");
