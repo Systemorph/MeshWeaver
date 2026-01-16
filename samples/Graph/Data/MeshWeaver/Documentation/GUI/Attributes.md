@@ -1,5 +1,5 @@
 ---
-Name: Property Attributes
+Name: Controlling Form Fields Through Attributes
 Category: Documentation
 Description: Attributes that control how properties are rendered and validated in editors
 Icon: /static/storage/content/MeshWeaver/Documentation/GUI/Attributes/icon.svg

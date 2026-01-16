@@ -1,5 +1,5 @@
 ---
-Name: Data Binding
+Name: Connecting UI Controls to Data
 Category: Documentation
 Description: How data flows between controls and the underlying data store
 Icon: /static/storage/content/MeshWeaver/Documentation/GUI/DataBinding/icon.svg

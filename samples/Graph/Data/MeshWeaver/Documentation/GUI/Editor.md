@@ -1,5 +1,5 @@
 ---
-Name: Editor Control
+Name: Adding Editable Forms to a UI
 Category: Documentation
 Description: Generate editable forms from C# records with automatic field rendering
 Icon: /static/storage/content/MeshWeaver/Documentation/GUI/Editor/icon.svg
@@ -160,5 +160,5 @@ Each property becomes a named area in the `EditorControl`. The reactive variant 
 
 - [Property Attributes](MeshWeaver/Documentation/GUI/Attributes) - All supported attributes in detail
 - [Data Binding](MeshWeaver/Documentation/GUI/DataBinding) - How form data flows
-- [Stack Control](MeshWeaver/Documentation/GUI/Stack) - Container for layouts
+- [Stack Control](MeshWeaver/Documentation/GUI/ContainerControl/Stack) - Container for layouts
 - [DataGrid Control](MeshWeaver/Documentation/GUI/DataGrid) - Tabular data display
