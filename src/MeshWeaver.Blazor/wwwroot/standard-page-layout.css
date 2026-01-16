@@ -200,6 +200,23 @@ code {
     --code-block-border-color: #444c56 !important; /* GitHub dark theme border color */
     --code-block-background-color: #2d333b !important; /* GitHub dark theme background color */
 }
+/* Sticky action menu button - stays in top right when scrolling */
+.sticky-action-menu {
+    position: fixed;
+    top: 70px;  /* Below the header bar */
+    right: 24px;
+    z-index: 100;
+}
+
+/* Hide the chevron/dropdown indicator in menu buttons */
+/* Target the SVG chevron with slot="end" inside fluent-button */
+.menu-button-container fluent-button [slot="end"],
+.menu-button-container fluent-button svg[slot="end"],
+.fluent-menubutton-container fluent-button [slot="end"],
+.fluent-menubutton-container fluent-button svg[slot="end"] {
+    display: none !important;
+}
+
 @media (max-width: 600px) {
     .header-gutters {
         margin: 0.5rem 3rem 0.5rem 1.5rem !important;

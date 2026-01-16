@@ -18,3 +18,8 @@
 ::deep .menu-button-container fluent-menu-button [aria-hidden="true"]:last-child {
     display: none;
 }
+
+/* Hide chevron indicator in icon-only menu buttons (no text) */
+::deep .menu-button-container fluent-menu-button fluent-button svg:last-child:not(:first-child) {
+    display: none;
+}

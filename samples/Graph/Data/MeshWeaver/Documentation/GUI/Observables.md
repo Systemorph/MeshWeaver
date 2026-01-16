@@ -1,5 +1,5 @@
 ---
-Name: Static vs Dynamic Views
+Name: Static vs. Dynamic Views
 Category: Documentation
 Description: Understanding when and how UI areas update in response to data changes
 Icon: /static/storage/content/MeshWeaver/Documentation/GUI/Observables/icon.svg
@@ -11,30 +11,52 @@ MeshWeaver distinguishes between **static** views (rendered once) and **dynamic*
 
 A static view is rendered once and never updates:
 
-```csharp
-Controls.Stack
-    .WithView(Controls.Label("Header"))         // Static - never changes
-    .WithView(Controls.Button("Submit"))        // Static - never changes
+```csharp --render StaticExample --show-code
+Controls.Stack                                              // Create a container
+    .WithView(Controls.Html("<h2>Dashboard</h2>"))          // Static heading
+    .WithView(Controls.Label("This text never changes"))    // Static label
 ```
+
+---
 
 **Characteristics:**
 - Rendered once at initial load
 - No subscriptions created
 - Most efficient for unchanging content
 
+---
+
 ## Dynamic Views
 
 A dynamic view updates when its observable emits:
 
-```csharp
-Controls.Stack
-    .WithView(counterStream.Select(n => Controls.Label($"Count: {n}")))
+```csharp --render DynamicExample --show-code
+var counter = Observable.Interval(TimeSpan.FromSeconds(1));  // Stream that emits every second
+
+Controls.Stack                                                   // Create a container
+    .WithView(Controls.Label("Page Title"))                      // Static - never changes
+    .WithView(counter.Select(n => Controls.Label($"Count: {n}"))) // Dynamic - updates each second
 ```
+
+---
 
 **Characteristics:**
 - Creates a subscription to the observable
 - Re-renders only that area on each emission
 - Subscription disposed when area removed
+
+---
+
+## Real-time Clock Example
+
+```csharp --render Clock --show-code
+var tick = Observable.Interval(TimeSpan.FromSeconds(1));  // Stream that emits every second
+
+Controls.Stack                                                                  // Container
+    .WithView(tick.Select(_ => Controls.Label(DateTime.Now.ToString("HH:mm:ss"))))  // Updates every second
+```
+
+---
 
 ## Combining Static and Dynamic
 
@@ -48,6 +70,35 @@ Controls.Stack
 ```
 
 The header and button never re-render. Only the middle area updates when `metricsStream` emits.
+
+---
+
+## Loading Data First
+
+When you need to fetch data before showing content:
+
+```csharp
+Controls.Stack                                      // Create a container
+    .WithView(async (host, ctx, ct) => {            // Async function - runs once when rendering
+        var user = await LoadUserAsync(ct);         // Fetch user data from server
+        return Controls.Label($"Hello, {user.Name}"); // Return control after data loaded
+    })
+```
+
+---
+
+## Reacting to Data Changes
+
+When content depends on data in the store:
+
+```csharp
+Controls.Stack                                          // Create a container
+    .WithView((host, ctx, store) =>                     // Function with access to data store
+        host.GetDataStream<User>("currentUser")         // Get stream of user updates
+            .Select(user => Controls.Label($"Logged in as {user.Name}")))  // Update when user changes
+```
+
+---
 
 ## How Re-rendering Works
 
@@ -65,6 +116,8 @@ generator
     .DistinctUntilChanged()
     .Subscribe(view => UpdateArea(context, view))
 ```
+
+---
 
 ## Common Patterns
 
@@ -99,6 +152,8 @@ searchStream
     .Select(term => BuildSearchResults(term))
 ```
 
+---
+
 ## Observable Operators
 
 Common Rx operators for UI:
@@ -110,6 +165,8 @@ Common Rx operators for UI:
 | `Debounce` | Reduce update frequency | `stream.Debounce(TimeSpan.FromMilliseconds(100))` |
 | `CombineLatest` | Combine multiple streams | `a.CombineLatest(b, (x, y) => ...)` |
 | `StartWith` | Provide initial value | `stream.StartWith(defaultValue)` |
+
+---
 
 ## Performance Guidelines
 
@@ -128,8 +185,10 @@ Common Rx operators for UI:
 - `Debounce()` for high-frequency streams
 - Minimal re-render scope (only the changing area)
 
+---
+
 ## See Also
 
-- [WithView Patterns](MeshWeaver/Documentation/GUI/ContainerControl) - All WithView overloads
-- [DataBinding](MeshWeaver/Documentation/GUI/DataBinding) - How data flows to controls
+- [Container Control](MeshWeaver/Documentation/GUI/ContainerControl) - Adding content to containers
+- [Data Binding](MeshWeaver/Documentation/GUI/DataBinding) - How data flows to controls
 - [Editor Control](MeshWeaver/Documentation/GUI/Editor) - Real-world dynamic examples

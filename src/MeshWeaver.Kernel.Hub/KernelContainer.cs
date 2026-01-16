@@ -1,5 +1,6 @@
 ﻿using System.Collections.Immutable;
 using System.Reactive.Linq;
+using MeshWeaver.Application.Styles;
 using MeshWeaver.Data;
 using MeshWeaver.Data.Serialization;
 using MeshWeaver.Kernel;
@@ -280,7 +281,8 @@ public class KernelContainer(IServiceProvider serviceProvider)
             typeof(EntityStore).Assembly.Location, // MeshWeaver.Data.Contract - required for Layout types
             typeof(System.ComponentModel.DescriptionAttribute).Assembly.Location,
             typeof(System.ComponentModel.DataAnnotations.RequiredAttribute).Assembly.Location,
-            typeof(System.Reactive.Linq.Observable).Assembly.Location // System.Reactive - for reactive UI examples
+            typeof(System.Reactive.Linq.Observable).Assembly.Location, // System.Reactive - for reactive UI examples
+            typeof(FluentIcons).Assembly.Location // MeshWeaver.Application.Styles - for icon support
         ]);
 
         var composite = new CompositeKernel("mesh")
@@ -300,7 +302,9 @@ using System.Collections.Generic;
 using System.ComponentModel;
 using System.ComponentModel.DataAnnotations;
 using System.Reactive.Linq;
+using MeshWeaver.Application.Styles;
 using MeshWeaver.Layout;
+using MeshWeaver.Layout.DataGrid;
 using MeshWeaver.Messaging;
 ";
         await ret.SendAsync(new SubmitCode(defaultUsings));
