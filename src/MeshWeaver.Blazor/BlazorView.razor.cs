@@ -240,7 +240,9 @@ public class BlazorView<TViewModel, TView> : ComponentBase, IAsyncDisposable
     {
         try
         {
-            return await JSRuntime.InvokeAsync<bool>("themeHandler.isDarkMode");
+            // Use getEffectiveTheme which considers both user preference and system settings
+            var theme = await JSRuntime.InvokeAsync<string>("themeHandler.getEffectiveTheme");
+            return theme == "dark";
         }
         catch (JSException)
         {

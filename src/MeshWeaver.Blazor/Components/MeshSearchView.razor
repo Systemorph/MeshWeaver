@@ -177,7 +177,7 @@
                 Label = node.Name ?? node.Id,
                 InsertText = node.Name ?? node.Id,
                 Description = node.Description ?? "",
-                Detail = node.NodeType ?? "",
+                Path = node.Path,
                 Category = node.Category ?? ""
             }).ToArray();
         }

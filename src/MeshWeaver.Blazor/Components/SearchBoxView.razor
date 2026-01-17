@@ -18,6 +18,7 @@
                           MaxHeight="38px"
                           ShowBorder="true"
                           CodeEditMode="false"
+                          CompletionProvider="@SearchCompletionConfig"
                           AsyncCompletionCallback="@GetCompletionsAsync" />
     </div>
     <button type="button" @onclick="HandleSearch"
@@ -30,6 +31,13 @@
     private MonacoEditorView? monacoEditor;
     private string _currentValue = "";
     private bool _initialized;
+
+    // Completion config with @ trigger for UCR autocomplete
+    private static readonly CompletionProviderConfig SearchCompletionConfig = new()
+    {
+        TriggerCharacters = ["@"],
+        Items = []
+    };
 
     [Parameter]
     public SearchBoxControl? ViewModel { get; set; }
@@ -84,6 +92,27 @@
 
         try
         {
+            // Handle @ reference mode with two-row display
+            if (query.StartsWith("@"))
+            {
+                var reference = query[1..]; // Strip @ prefix
+                var suggestions = await MeshQuery.AutocompleteAsync(
+                    BoundNamespace,
+                    reference,
+                    BoundMaxSuggestions
+                ).ToArrayAsync();
+
+                return suggestions.Select(s => new CompletionItem
+                {
+                    Label = s.Name ?? s.Path,           // Row 1: Node name
+                    InsertText = $"@{s.Path}",          // Insert with @ prefix
+                    Path = s.Path,                       // Row 2: Full path
+                    Description = s.NodeType ?? "",
+                    Category = "References"
+                }).ToArray();
+            }
+
+            // Generic search (existing behavior for non-@ queries)
             var searchQuery = string.IsNullOrEmpty(BoundNamespace)
                 ? $"*{query}* scope:descendants"
                 : $"namespace:{BoundNamespace} *{query}* scope:descendants";
@@ -98,10 +127,10 @@
 
             return results.Select(node => new CompletionItem
             {
-                Label = node.Name ?? node.Id,
+                Label = node.Name ?? node.Id,           // Row 1: Node name
                 InsertText = node.Name ?? node.Id,
+                Path = node.Path,                        // Row 2: Full path
                 Description = node.Description ?? "",
-                Detail = node.NodeType ?? "",
                 Category = node.Category ?? ""
             }).ToArray();
         }

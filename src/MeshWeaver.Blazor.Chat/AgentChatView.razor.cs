@@ -63,6 +63,7 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
     private AgentDisplayInfo? selectedAgentInfo;
     private string? selectedModel;
     private string? selectedContextPath;
+    private string? selectedContextDisplayName;
     private IReadOnlyList<AgentDisplayInfo> agentDisplayInfos = [];
     private IReadOnlyList<string> availableModels = [];
     private bool pendingModelChange;
@@ -101,6 +102,7 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
         lastNavigationContext = GetCurrentAgentContext();
         var initialPath = NavigationManager.ToBaseRelativePath(NavigationManager.Uri);
         selectedContextPath = string.IsNullOrEmpty(initialPath) ? null : initialPath;
+        selectedContextDisplayName = await ResolveContextDisplayNameAsync(selectedContextPath);
 
         // Initialize command system
         InitializeCommands();
@@ -190,7 +192,7 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
 
         try
         {
-            await InvokeAsync(() =>
+            await InvokeAsync(async () =>
             {
                 Logger.LogDebug("[Chat:{InstanceId}] Inside InvokeAsync callback", _instanceId);
 
@@ -216,6 +218,7 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
                     if (newPath != selectedContextPath)
                     {
                         selectedContextPath = string.IsNullOrEmpty(newPath) ? null : newPath;
+                        selectedContextDisplayName = await ResolveContextDisplayNameAsync(selectedContextPath);
                     }
 
                     // NOTE: We intentionally do NOT auto-select agents or reinstantiate on navigation
@@ -348,7 +351,7 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
         StateHasChanged();
     }
 
-    private void OnContextPathChanged(string? newContext)
+    private async Task OnContextPathChanged(string? newContext)
     {
         Logger.LogDebug("[Chat:{InstanceId}] OnContextPathChanged called with: {NewContext}, current: {Current}",
             _instanceId, newContext, selectedContextPath);
@@ -360,8 +363,10 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
         }
 
         selectedContextPath = newContext;
-        Logger.LogDebug("[Chat:{InstanceId}] Context changed to: {Context} - NOT reinstantiating agent to preserve chat",
-            _instanceId, newContext);
+        selectedContextDisplayName = await ResolveContextDisplayNameAsync(newContext);
+
+        Logger.LogDebug("[Chat:{InstanceId}] Context changed to: {Context} (display: {Display}) - NOT reinstantiating agent to preserve chat",
+            _instanceId, newContext, selectedContextDisplayName);
 
         // NOTE: Do NOT call ScheduleAgentReinstantiation here!
         // The chat should persist across context changes. The context is just metadata.
@@ -369,7 +374,32 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
         StateHasChanged();
     }
 
-    private async Task<IEnumerable<string>> GetContextAutocompleteAsync(string query)
+    private async Task<string?> ResolveContextDisplayNameAsync(string? path)
+    {
+        if (string.IsNullOrEmpty(path))
+            return null;
+
+        try
+        {
+            var meshCatalog = Hub.ServiceProvider.GetService<IMeshCatalog>();
+            if (meshCatalog == null)
+                return null;
+
+            var resolution = await meshCatalog.ResolvePathAsync(path);
+            if (resolution == null)
+                return null;
+
+            var node = await meshCatalog.GetNodeAsync((Address)resolution.Prefix);
+            return node?.Name ?? node?.Id;
+        }
+        catch (Exception ex)
+        {
+            Logger.LogDebug(ex, "Error resolving context display name for path: {Path}", path);
+            return null;
+        }
+    }
+
+    private async Task<CompletionItem[]> GetContextAutocompleteAsync(string query)
     {
         try
         {
@@ -381,33 +411,41 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
             }
 
             // Build query to search MeshNodes matching the typed text
-            // Search in namespace and id, or use general text search
             var searchQuery = string.IsNullOrWhiteSpace(query)
-                ? "nodeType:MeshNode"
-                : $"nodeType:MeshNode {query}";
+                ? "nodeType:MeshNode scope:descendants"
+                : $"*{query}* scope:descendants";
 
             var request = new MeshQueryRequest
             {
                 Query = searchQuery,
-                Limit = 10
+                Limit = 15
             };
 
-            var results = new List<string>();
+            var results = new List<CompletionItem>();
             await foreach (var item in meshQuery.QueryAsync(request))
             {
                 if (item is MeshNode node)
                 {
-                    // Return the full path as the suggestion
+                    // Build full path
                     var path = !string.IsNullOrEmpty(node.Namespace)
                         ? $"{node.Namespace}/{node.Id}"
                         : node.Id;
-                    results.Add(path);
+
+                    results.Add(new CompletionItem
+                    {
+                        Label = node.Name ?? node.Id,           // Node name (line 1)
+                        InsertText = path,                       // Full path to insert
+                        Path = path,                             // Full path (line 2)
+                        Description = node.Description ?? "",    // Description for detail pane
+                        Category = node.Category ?? "",
+                        IconUrl = node.Icon
+                    });
                 }
 
-                if (results.Count >= 10) break;
+                if (results.Count >= 15) break;
             }
 
-            return results;
+            return results.ToArray();
         }
         catch (Exception ex)
         {
@@ -580,9 +618,8 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
                     // Try to extract AgentContext from current conversation if there are any messages
                     if (lazyChat?.IsValueCreated == true)
                     {
-                        // TODO: Find a way to extract current context from the chat
-                        // For now, we'll use the current URL-based context
-                        agentContext = GetCurrentAgentContext();
+                        // Use async version to include MeshNode name in the saved context
+                        agentContext = await GetCurrentAgentContextAsync();
                     }
 
                     currentConversation = new ChatConversation
@@ -602,9 +639,8 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
                     // Try to extract AgentContext from current conversation if there are any messages
                     if (lazyChat?.IsValueCreated == true)
                     {
-                        // TODO: Find a way to extract current context from the chat
-                        // For now, we'll use the current URL-based context
-                        agentContext = GetCurrentAgentContext();
+                        // Use async version to include MeshNode name in the saved context
+                        agentContext = await GetCurrentAgentContextAsync();
                     }
                     currentConversation = currentConversation with
                     {
@@ -762,7 +798,7 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
         }
 
         Logger.LogDebug("[Chat:{InstanceId}] Setting agent context...", _instanceId);
-        SetAgentContext(chat);
+        await SetAgentContextAsync(chat);
         Logger.LogDebug("[Chat:{InstanceId}] Agent context set", _instanceId);
 
         // Add the user message to the conversation
@@ -912,10 +948,10 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
         // Delegation messages are now added immediately during streaming, no need to defer them
     }
 
-    private void SetAgentContext(IAgentChat chat)
+    private async Task SetAgentContextAsync(IAgentChat chat)
     {
-        // Get the current context (either from control binding or URL)
-        var context = GetCurrentAgentContext();
+        // Get the current context with MeshNode name resolution
+        var context = await GetCurrentAgentContextAsync();
 
         // Always set the context (even if null) to ensure it's updated
         chat.SetContext(context);
@@ -924,11 +960,22 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
     private AgentContext? GetCurrentAgentContext()
     {
         // If boundContext is set (via control binding), use it
-        // Otherwise, get it from the current URL
-        return boundContext ?? GetContextFromCurrentUrl();
+        // Otherwise, get it from the current URL (synchronous version without MeshNode name)
+        return boundContext ?? GetContextFromCurrentUrlSync();
     }
 
-    private AgentContext? GetContextFromCurrentUrl()
+    private async Task<AgentContext?> GetCurrentAgentContextAsync()
+    {
+        // If boundContext is set (via control binding), use it
+        // Otherwise, get it from the current URL with MeshNode name resolution
+        return boundContext ?? await GetContextFromCurrentUrlAsync();
+    }
+
+    /// <summary>
+    /// Synchronous version that returns basic context without MeshNode name.
+    /// Use GetContextFromCurrentUrlAsync for full context including MeshNode name.
+    /// </summary>
+    private AgentContext? GetContextFromCurrentUrlSync()
     {
         var path = NavigationManager.ToBaseRelativePath(NavigationManager.Uri);
         Logger.LogDebug("Current URL path: '{Path}'", path);
@@ -971,6 +1018,95 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
         Logger.LogDebug("Created context - Address: {Address}, LayoutArea: {LayoutArea}", address, layoutArea?.Area);
 
         return context;
+    }
+
+    /// <summary>
+    /// Async version that resolves the path using MeshCatalog and includes the MeshNode name.
+    /// Uses the same resolution logic as ApplicationPage.razor.cs.
+    /// </summary>
+    private async Task<AgentContext?> GetContextFromCurrentUrlAsync()
+    {
+        var path = NavigationManager.ToBaseRelativePath(NavigationManager.Uri);
+        Logger.LogDebug("Current URL path for async resolution: '{Path}'", path);
+
+        // Skip if path is empty or just "chat"
+        if (string.IsNullOrEmpty(path) || path == "chat")
+        {
+            Logger.LogDebug("Path is empty or 'chat', returning null context");
+            return null;
+        }
+
+        try
+        {
+            var meshCatalog = Hub.ServiceProvider.GetService<IMeshCatalog>();
+            if (meshCatalog == null)
+            {
+                Logger.LogDebug("IMeshCatalog not available, falling back to sync version");
+                return GetContextFromCurrentUrlSync();
+            }
+
+            // Resolve the path using MeshCatalog (same as ApplicationPage.razor.cs)
+            var resolution = await meshCatalog.ResolvePathAsync(path);
+            if (resolution == null)
+            {
+                Logger.LogDebug("Path resolution returned null, falling back to sync version");
+                return GetContextFromCurrentUrlSync();
+            }
+
+            // Get the address from the resolution prefix
+            var address = (Address)resolution.Prefix;
+
+            // Parse the remainder into area and id (same logic as ApplicationPage)
+            var (area, id) = ParseRemainder(resolution.Remainder);
+
+            // Decode area and id
+            area = area != null ? (string)WorkspaceReference.Decode(area) : null;
+            id = id != null ? (string)WorkspaceReference.Decode(id) : "";
+
+            var layoutArea = area != null ? new LayoutAreaReference(area) { Id = id } : null;
+
+            // Get the MeshNode to retrieve its name
+            string? meshNodeName = null;
+            var node = await meshCatalog.GetNodeAsync(address);
+            if (node != null)
+            {
+                meshNodeName = node.Name ?? node.Id;
+                Logger.LogDebug("Resolved MeshNode name: '{MeshNodeName}'", meshNodeName);
+            }
+
+            var context = new AgentContext
+            {
+                Address = address,
+                LayoutArea = layoutArea,
+                MeshNodeName = meshNodeName
+            };
+
+            Logger.LogDebug("Created async context - Address: {Address}, LayoutArea: {LayoutArea}, MeshNodeName: {MeshNodeName}",
+                address, layoutArea?.Area, meshNodeName);
+
+            return context;
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "Error resolving path async, falling back to sync version");
+            return GetContextFromCurrentUrlSync();
+        }
+    }
+
+    /// <summary>
+    /// Parses the remainder of a resolved path into area and id.
+    /// Same logic as ApplicationPage.razor.cs.
+    /// </summary>
+    private static (string? Area, string? Id) ParseRemainder(string? remainder)
+    {
+        if (string.IsNullOrEmpty(remainder))
+            return (null, null);
+
+        var slashIndex = remainder.IndexOf('/');
+        if (slashIndex >= 0)
+            return (remainder.Substring(0, slashIndex), remainder.Substring(slashIndex + 1));
+
+        return (remainder, null);
     }
 
     private void CancelAnyCurrentResponse()
@@ -1083,7 +1219,7 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
                     InsertText = s.Item.InsertText,
                     Description = s.Item.Description,
                     Category = s.Item.Category,
-                    Detail = s.Score > 0 ? $"Score: {s.Score}" : null,
+                    Path = s.Item.InsertText,  // Use InsertText as path for two-line display
                     Kind = MapAutocompleteKindToCompletionKind(s.Item.Kind)
                 })
                 .ToArray();

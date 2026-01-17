@@ -18,6 +18,11 @@ public record AgentContext
     public LayoutAreaReference? LayoutArea { get; init; }
 
     /// <summary>
+    /// The human-readable name of the MeshNode associated with this context.
+    /// </summary>
+    public string? MeshNodeName { get; init; }
+
+    /// <summary>
     /// The full unified reference path (e.g., "pricing/MS-2024/Summary" or "pricing/MS-2024/data/Collection").
     /// Format: addressType/addressId[/keyword[/remainingPath]]
     /// If no keyword specified, defaults to area.

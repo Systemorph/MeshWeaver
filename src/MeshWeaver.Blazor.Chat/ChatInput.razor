@@ -21,50 +21,64 @@
         @if (ShowSelectors)
         {
             <div class="chat-selectors">
-                @* 1. Context text field *@
-                <FluentTextField @bind-Value="@contextDisplayText"
-                                 @bind-Value:after="@OnContextTextChanged"
-                                 Placeholder="@ContextPlaceholder"
-                                 Class="selector-context"
-                                 Style="min-width: 50px;" />
+                @* 1. Context selector *@
+                <SimpleDropdown TOption="CompletionItem"
+                                SelectedItem="@selectedContextItem"
+                                SelectedItemChanged="@OnContextItemChanged"
+                                OnSearch="@OnContextSearchAsync"
+                                GetDisplayText="@(c => c?.Label ?? "Context...")"
+                                Placeholder="Context..."
+                                Tooltip="@(selectedContextItem?.Path ?? "Select context")"
+                                PanelWidth="320px"
+                                Class="selector-context">
+                    <ItemTemplate Context="item">
+                        <div class="simple-dropdown-item-name">@item.Label</div>
+                        @if (!string.IsNullOrEmpty(item.Path) && item.Path != item.Label)
+                        {
+                            <div class="simple-dropdown-item-path">@item.Path</div>
+                        }
+                    </ItemTemplate>
+                </SimpleDropdown>
 
-                @* 2. Agent dropdown - shows name only, expanded shows path and description *@
-                <FluentSelect TOption="AgentDisplayInfo"
-                              Items="@AgentDisplayInfos"
-                              Class="selector-agent"
-                              OptionText="@(a => a?.Name ?? "")"
-                              OptionValue="@(a => a?.Name ?? "")"
-                              SelectedOption="@SelectedAgentInfo"
-                              SelectedOptionChanged="@OnAgentSelectChanged"
-                              Style="min-width: 50px;"
-                              Height="200px">
-                    <OptionTemplate Context="agent">
-                        <div class="agent-option">
-                            <div class="agent-option-name">@agent.Name</div>
-                            @if (!string.IsNullOrEmpty(agent.Path) && agent.Path != agent.Name)
-                            {
-                                <div class="agent-option-path">@agent.Path</div>
-                            }
-                            @if (!string.IsNullOrEmpty(agent.Description))
-                            {
-                                <div class="agent-option-desc">@TruncateDescription(agent.Description, 60)</div>
-                            }
-                        </div>
-                    </OptionTemplate>
-                </FluentSelect>
+                @* 2. Agent selector *@
+                <SimpleDropdown TOption="AgentDisplayInfo"
+                                SelectedItem="@SelectedAgentInfo"
+                                SelectedItemChanged="@OnAgentItemChanged"
+                                Items="@AgentDisplayInfos"
+                                GetDisplayText="@(a => a?.Name ?? "Select agent...")"
+                                Placeholder="Select agent..."
+                                Tooltip="@(SelectedAgentInfo?.Path ?? "Select agent")"
+                                PanelWidth="320px"
+                                Class="selector-agent">
+                    <ItemTemplate Context="agent">
+                        <div class="simple-dropdown-item-name">@agent.Name</div>
+                        @if (!string.IsNullOrEmpty(agent.Path) && agent.Path != agent.Name)
+                        {
+                            <div class="simple-dropdown-item-path">@agent.Path</div>
+                        }
+                        @if (!string.IsNullOrEmpty(agent.Description))
+                        {
+                            <div class="simple-dropdown-item-description">@TruncateDescription(agent.Description, 80)</div>
+                        }
+                    </ItemTemplate>
+                </SimpleDropdown>
 
-                @* 3. Model dropdown *@
+                @* 3. Model selector *@
                 @if (AvailableModels.Count > 0)
                 {
-                    <FluentSelect TOption="string"
-                                  Items="@AvailableModels"
-                                  Class="selector-model"
-                                  OptionText="@(m => m)"
-                                  OptionValue="@(m => m)"
-                                  Value="@SelectedModel"
-                                  ValueChanged="@OnModelValueChanged"
-                                  Style="min-width: 50px;"
-                                  Height="200px" />
+                    <SimpleDropdown TOption="string"
+                                    SelectedItem="@SelectedModel"
+                                    SelectedItemChanged="@OnModelItemChanged"
+                                    Items="@AvailableModels"
+                                    GetDisplayText="@(m => m ?? "Select model...")"
+                                    Placeholder="Select model..."
+                                    ShowSearch="false"
+                                    PanelWidth="200px"
+                                    Class="selector-model">
+                        <ItemTemplate Context="model">
+                            <div class="simple-dropdown-item-name">@model</div>
+                        </ItemTemplate>
+                    </SimpleDropdown>
                 }
             </div>
         }
@@ -80,13 +94,11 @@
 </div>
 
 @code {
-    private const string ContextPlaceholder = "@context";
     private MonacoEditorView? monacoEditor;
     private string? MessageText;
 
-    // Display text for context (read-only, shows current path)
-    private string? contextDisplayText;
-    private bool isSettingFromParameter;
+    // Context selector state
+    private CompletionItem? selectedContextItem;
 
     [Parameter]
     public EventCallback<ChatMessage> OnSend { get; set; }
@@ -109,8 +121,17 @@
     [Parameter]
     public EventCallback<string?> SelectedContextChanged { get; set; }
 
+    /// <summary>
+    /// Display name for the selected context (e.g., node name instead of full path)
+    /// </summary>
     [Parameter]
-    public Func<string, Task<IEnumerable<string>>>? OnContextAutocomplete { get; set; }
+    public string? SelectedContextDisplayName { get; set; }
+
+    /// <summary>
+    /// Async callback for context autocomplete. Returns CompletionItem[] for two-line display.
+    /// </summary>
+    [Parameter]
+    public Func<string, Task<CompletionItem[]>>? OnContextAutocomplete { get; set; }
 
     [Parameter]
     public IReadOnlyList<AgentDisplayInfo> AgentDisplayInfos { get; set; } = [];
@@ -132,38 +153,59 @@
 
     protected override void OnParametersSet()
     {
-        // Sync context display text with parameter, but flag that we're setting from parameter
-        // to prevent the :after callback from triggering a circular update
-        if (contextDisplayText != SelectedContext)
+        base.OnParametersSet();
+
+        // Sync selected context to SimpleDropdown
+        if (!string.IsNullOrEmpty(SelectedContext))
         {
-            Logger.LogDebug("[ChatInput] OnParametersSet: context changed from '{Old}' to '{New}', setting flag",
-                contextDisplayText, SelectedContext);
-            isSettingFromParameter = true;
-            contextDisplayText = SelectedContext;
+            // Only update if different to avoid re-render loops
+            if (selectedContextItem?.Path != SelectedContext)
+            {
+                selectedContextItem = new CompletionItem
+                {
+                    Label = SelectedContextDisplayName ?? SelectedContext,
+                    InsertText = SelectedContext,
+                    Path = SelectedContext
+                };
+            }
+        }
+        else if (selectedContextItem != null)
+        {
+            selectedContextItem = null;
         }
     }
 
-    private async Task OnContextTextChanged()
+    private async Task<IEnumerable<CompletionItem>> OnContextSearchAsync(string searchText)
     {
-        Logger.LogDebug("[ChatInput] OnContextTextChanged called. isSettingFromParameter={Flag}, contextDisplayText='{Display}', SelectedContext='{Selected}'",
-            isSettingFromParameter, contextDisplayText, SelectedContext);
-
-        // Skip callback if this change came from parameter sync
-        if (isSettingFromParameter)
+        if (OnContextAutocomplete == null)
         {
-            Logger.LogDebug("[ChatInput] Skipping callback - change came from parameter sync");
-            isSettingFromParameter = false;
-            return;
+            return Enumerable.Empty<CompletionItem>();
         }
 
-        if (contextDisplayText != SelectedContext)
+        // Build query - add @ prefix for UCR-style autocomplete
+        var query = string.IsNullOrEmpty(searchText) ? "@" : $"@{searchText}";
+
+        try
         {
-            Logger.LogDebug("[ChatInput] Invoking SelectedContextChanged callback with '{Context}'", contextDisplayText);
-            await SelectedContextChanged.InvokeAsync(contextDisplayText);
+            var items = await OnContextAutocomplete(query);
+            return items;
+        }
+        catch
+        {
+            return Enumerable.Empty<CompletionItem>();
         }
     }
 
-    private async Task OnAgentSelectChanged(AgentDisplayInfo? agent)
+    private async Task OnContextItemChanged(CompletionItem? item)
+    {
+        var newContext = item?.Path;
+        if (newContext != SelectedContext)
+        {
+            await SelectedContextChanged.InvokeAsync(newContext);
+        }
+    }
+
+    private async Task OnAgentItemChanged(AgentDisplayInfo? agent)
     {
         if (agent != SelectedAgentInfo)
         {
@@ -171,7 +213,7 @@
         }
     }
 
-    private async Task OnModelValueChanged(string? model)
+    private async Task OnModelItemChanged(string? model)
     {
         if (model != SelectedModel)
         {

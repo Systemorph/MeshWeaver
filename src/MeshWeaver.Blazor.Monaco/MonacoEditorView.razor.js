@@ -44,11 +44,13 @@ function debounce(fn, delay) {
             width: 100% !important;
         }
 
-        /* Each row needs full width */
+        /* Each row - increased height for two-line display */
         .overflowingContentWidgets .suggest-widget .monaco-list-row,
         .monaco-editor .suggest-widget .monaco-list-row {
             width: 100% !important;
             display: flex !important;
+            height: 40px !important;
+            padding: 4px 0 !important;
         }
 
         /* The suggestion content */
@@ -73,12 +75,12 @@ function debounce(fn, delay) {
             align-items: center !important;
         }
 
-        /* Label and description inline */
+        /* Label and description - stack vertically for two-line display */
         .overflowingContentWidgets .suggest-widget .left,
         .monaco-editor .suggest-widget .left {
             flex: 1 !important;
             display: flex !important;
-            align-items: center !important;
+            align-items: flex-start !important;
             min-width: 0 !important;
         }
 
@@ -86,29 +88,45 @@ function debounce(fn, delay) {
         .monaco-editor .suggest-widget .monaco-icon-label {
             flex: 1 !important;
             display: flex !important;
-            align-items: center !important;
+            align-items: flex-start !important;
         }
 
+        /* Stack label parts vertically for two-line display */
         .overflowingContentWidgets .suggest-widget .monaco-icon-label-container,
         .monaco-editor .suggest-widget .monaco-icon-label-container {
             flex: 1 !important;
             display: flex !important;
-            align-items: center !important;
+            flex-direction: column !important;
+            align-items: flex-start !important;
+            justify-content: center !important;
+            gap: 2px !important;
         }
 
+        /* Primary label (node name) - bold */
         .overflowingContentWidgets .suggest-widget .monaco-icon-name-container,
         .monaco-editor .suggest-widget .monaco-icon-name-container {
             flex-shrink: 0 !important;
+            font-weight: 600 !important;
+            font-size: 13px !important;
         }
 
+        /* Secondary line (path) - muted, smaller */
         .overflowingContentWidgets .suggest-widget .monaco-icon-description-container,
         .monaco-editor .suggest-widget .monaco-icon-description-container {
             flex: 1 !important;
-            margin-left: 12px !important;
-            opacity: 0.7 !important;
+            margin-left: 0 !important;
+            font-size: 11px !important;
+            opacity: 0.6 !important;
             white-space: nowrap !important;
             overflow: hidden !important;
             text-overflow: ellipsis !important;
+            max-width: 480px !important;
+        }
+
+        /* Adjust list height calculation for two-line rows */
+        .overflowingContentWidgets .suggest-widget .monaco-list,
+        .monaco-editor .suggest-widget .monaco-list {
+            --monaco-list-row-height: 40px !important;
         }
     `;
     document.head.appendChild(style);
@@ -176,6 +194,35 @@ export function initEditor(editorId, placeholder, dotNetRef, codeEditMode = fals
             });
         }
         // In code edit mode, Enter naturally inserts newlines (default Monaco behavior)
+
+        // Handle blur event - delay to check if focus moved to autocomplete
+        editorInstance.onDidBlurEditorWidget(async () => {
+            // Small delay to allow focus to settle (autocomplete popup steals focus)
+            await new Promise(resolve => setTimeout(resolve, 100));
+
+            // Check if autocomplete is visible - don't fire blur if it is
+            const suggestController = editorInstance.getContribution('editor.contrib.suggestController');
+            const suggestState = suggestController?.model?.state;
+            const isSuggestVisible = typeof suggestState === 'number' && suggestState > 0;
+
+            if (isSuggestVisible) {
+                return; // Don't fire blur while autocomplete is open
+            }
+
+            // Also check if editor regained focus
+            if (editorInstance.hasTextFocus()) {
+                return; // Focus returned to editor
+            }
+
+            const currentState = editorState.get(editorId);
+            if (currentState?.dotNetRef) {
+                try {
+                    await currentState.dotNetRef.invokeMethodAsync('HandleBlur');
+                } catch (err) {
+                    // Ignore errors - component may have been disposed
+                }
+            }
+        });
 
         // Force layout after initialization
         setTimeout(() => {
@@ -308,22 +355,35 @@ export function registerCompletionProvider(editorId, config) {
             let fullQuery;
             let matchLength;
 
-            // Check if we're after a trigger character (e.g., @, /)
-            // We need different handling for @ vs / triggers:
-            // - @ can be followed by paths with slashes: @agent/Name, @content/path/file
-            // - / is only a trigger at word boundary (for commands like /agent)
+            // Get the configured trigger characters
+            const configuredTriggers = currentState?.completionConfig?.triggerCharacters || ['@'];
 
-            // First try to match @ followed by path (including slashes)
-            let triggerMatch = textUntilPosition.match(/@([\w\-\./]+)?$/);
+            // Check if we're after a configured trigger character
+            let triggerMatch = null;
 
-            // If no @ match, try / but only if it's at word boundary (start or after space)
-            if (!triggerMatch) {
-                triggerMatch = textUntilPosition.match(/(?:^|\s)\/([\w\-\.]+)?$/);
-                if (triggerMatch) {
-                    // Adjust match to not include the leading space
-                    const fullMatch = triggerMatch[0];
-                    const slashIndex = fullMatch.indexOf('/');
-                    triggerMatch[0] = fullMatch.substring(slashIndex);
+            for (const trigger of configuredTriggers) {
+                // Escape the trigger character for regex
+                const escapedTrigger = trigger.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+                // @ can be followed by paths with slashes: @agent/Name, @content/path/file
+                // / is only a trigger at word boundary (for commands like /agent)
+                let regex;
+                if (trigger === '/') {
+                    regex = new RegExp(`(?:^|\\s)${escapedTrigger}([\\w\\-\\.]+)?$`);
+                } else {
+                    regex = new RegExp(`${escapedTrigger}([\\w\\-\\./]+)?$`);
+                }
+
+                const match = textUntilPosition.match(regex);
+                if (match) {
+                    if (trigger === '/') {
+                        // Adjust match to not include the leading space
+                        const fullMatch = match[0];
+                        const slashIndex = fullMatch.indexOf('/');
+                        match[0] = fullMatch.substring(slashIndex);
+                    }
+                    triggerMatch = match;
+                    break;
                 }
             }
 
@@ -354,7 +414,7 @@ export function registerCompletionProvider(editorId, config) {
             } else {
                 // Sync mode: filter locally
                 const allItems = currentState?.completionConfig?.items || [];
-                const searchTermLower = searchTerm.toLowerCase();
+                const searchTermLower = afterTrigger.toLowerCase();
                 currentItems = allItems.filter(item =>
                     item && item.label &&
                     (item.label.toLowerCase().includes(searchTermLower) ||
@@ -371,12 +431,22 @@ export function registerCompletionProvider(editorId, config) {
                 // Use insertText as filterText since that's what matches the typed pattern
                 const filterText = item.insertText || item.label;
 
+                // Use CompletionItemLabel for two-line display when path is available
+                // Monaco supports: label (main), detail (after label), description (line 2)
+                const labelObj = item.path ? {
+                    label: item.label,                    // Node name (bold, line 1)
+                    description: item.path                // Full path (muted, line 2)
+                } : item.label;
+
                 return {
-                    label: item.label,
+                    label: labelObj,
                     kind: typeof item.kind === 'number' ? item.kind : monaco.languages.CompletionItemKind.Text,
                     insertText: item.insertText || item.label,
                     range: range,
-                    detail: item.description || item.category || item.detail || '',
+                    detail: item.category || '',          // Category in details pane
+                    documentation: item.description ? {   // Full description on hover
+                        value: item.description
+                    } : undefined,
                     filterText: filterText,
                     sortText: (item.category || 'zzz') + '_' + item.label.toLowerCase()
                 };
@@ -420,6 +490,32 @@ export function isAutocompleteVisible(editorId) {
         }
     }
 
+    return false;
+}
+
+// Trigger the suggestion/autocomplete popup programmatically
+export function triggerSuggest(editorId) {
+    const editorInstance = monaco.editor.getEditors().find(e => e.getContainerDomNode()?.id === editorId);
+    if (editorInstance) {
+        // Trigger the suggest action
+        editorInstance.trigger('keyboard', 'editor.action.triggerSuggest', {});
+        return true;
+    }
+    return false;
+}
+
+// Set cursor position to end of content
+export function setCursorToEnd(editorId) {
+    const editorInstance = monaco.editor.getEditors().find(e => e.getContainerDomNode()?.id === editorId);
+    if (editorInstance) {
+        const model = editorInstance.getModel();
+        if (model) {
+            const lastLine = model.getLineCount();
+            const lastColumn = model.getLineMaxColumn(lastLine);
+            editorInstance.setPosition({ lineNumber: lastLine, column: lastColumn });
+            return true;
+        }
+    }
     return false;
 }
 

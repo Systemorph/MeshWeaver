@@ -7,22 +7,21 @@
     padding: 0.5rem 0.75rem;
     margin-top: 0.75rem;
     color: var(--neutral-foreground-rest);
-    min-width: 0; /* Allow shrinking in flex context */
+    min-width: 0;
     width: 100%;
     max-width: 100%;
     box-sizing: border-box;
-    overflow: visible; /* Allow dropdown menus to overflow */
+    overflow: visible;
 }
 
 .input-container {
     position: relative;
     flex-grow: 1;
     width: 100%;
-    min-width: 0; /* Allow shrinking below content size */
+    min-width: 0;
     min-height: 60px;
-    overflow: hidden; /* Constrain Monaco */
+    overflow: hidden;
 }
-
 
 .input-box:focus-within {
     outline: 2px solid var(--accent-fill-rest);
@@ -35,10 +34,10 @@
     align-items: center;
     width: 100%;
     max-width: 100%;
-    min-width: 0; /* Allow shrinking */
+    min-width: 0;
     box-sizing: border-box;
     position: relative;
-    z-index: 100; /* Ensure dropdowns appear above other content */
+    z-index: 100;
 }
 
 .tool-icon {
@@ -81,73 +80,23 @@
     flex: 1 1 0;
     min-width: 0;
     max-width: 100%;
-    overflow: visible; /* Allow dropdown menus to overflow */
+    overflow: visible;
 }
 
-/* Context field - larger min-width */
+/* Context selector */
 .selector-context {
-    flex: 2 1 0;
-    min-width: 50px;
+    flex: 1 1 100px;
+    min-width: 100px;
 }
 
-/* Agent and model selectors */
-.selector-agent,
+/* Agent selector */
+.selector-agent {
+    flex: 2 1 150px;
+    min-width: 120px;
+}
+
+/* Model selector */
 .selector-model {
-    flex: 1 1 0;
-    min-width: 50px;
-}
-
-/* FluentTextField styling */
-::deep fluent-text-field {
-    --design-unit: 3;
-    width: 100%;
-}
-
-::deep fluent-text-field::part(root) {
-    min-height: 28px;
-}
-
-::deep fluent-text-field::part(control) {
-    font-size: 0.85rem;
-}
-
-/* FluentSelect styling */
-::deep fluent-select {
-    --design-unit: 3;
-    min-height: 28px;
-    width: 100%;
-}
-
-::deep fluent-select::part(control) {
-    font-size: 0.85rem;
-}
-
-/* Agent option template styling */
-.agent-option {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-    padding: 4px 0;
-    min-width: 200px;
-}
-
-.agent-option-name {
-    font-weight: 500;
-    font-size: 0.9rem;
-    color: var(--neutral-foreground-rest);
-}
-
-.agent-option-path {
-    font-size: 0.75rem;
-    color: var(--neutral-foreground-hint);
-    font-family: monospace;
-}
-
-.agent-option-desc {
-    font-size: 0.75rem;
-    color: var(--neutral-foreground-hint);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    max-width: 300px;
+    flex: 1 1 100px;
+    min-width: 100px;
 }

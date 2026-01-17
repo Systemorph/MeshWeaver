@@ -51,6 +51,16 @@ public class CompletionItem
     /// The kind of completion item (determines icon in Monaco).
     /// </summary>
     public CompletionItemKind Kind { get; init; } = CompletionItemKind.Text;
+
+    /// <summary>
+    /// The full path shown on the second line in two-line display mode.
+    /// </summary>
+    public string? Path { get; init; }
+
+    /// <summary>
+    /// Optional icon URL for custom icons.
+    /// </summary>
+    public string? IconUrl { get; init; }
 }
 
 /// <summary>
