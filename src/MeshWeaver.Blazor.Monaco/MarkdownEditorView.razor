@@ -215,10 +215,10 @@
         var suggestions = await MeshQuery!.AutocompleteAsync("", "", 20).ToArrayAsync();
         return suggestions.Select(s => new CompletionItem
         {
-            Label = $"{s.Path}/",
+            Label = s.Name ?? s.Path,
             InsertText = $"@{s.Path}/",
-            Description = s.NodeType ?? s.Name,
-            Detail = s.Name,
+            Description = s.NodeType ?? "",
+            Path = $"@{s.Path}/",
             Category = "Addresses"
         }).ToArray();
     }
@@ -228,10 +228,10 @@
         var suggestions = await MeshQuery!.AutocompleteAsync(basePath, "", 20).ToArrayAsync();
         return suggestions.Select(s => new CompletionItem
         {
-            Label = $"{s.Path}/",
+            Label = s.Name ?? s.Path,
             InsertText = $"@{s.Path}/",
             Description = s.NodeType ?? "",
-            Detail = s.Name,
+            Path = $"@{s.Path}/",
             Category = ""
         }).ToArray();
     }
@@ -241,10 +241,10 @@
         var suggestions = await MeshQuery!.AutocompleteAsync("", prefix, 20).ToArrayAsync();
         return suggestions.Select(s => new CompletionItem
         {
-            Label = $"{s.Path}/",
+            Label = s.Name ?? s.Path,
             InsertText = $"@{s.Path}/",
-            Description = s.NodeType ?? s.Name,
-            Detail = s.Name,
+            Description = s.NodeType ?? "",
+            Path = $"@{s.Path}/",
             Category = "Addresses"
         }).ToArray();
     }
@@ -254,10 +254,10 @@
         var suggestions = await MeshQuery!.AutocompleteAsync("", query, 20).ToArrayAsync();
         return suggestions.Select(s => new CompletionItem
         {
-            Label = s.Path,
+            Label = s.Name ?? s.Path,
             InsertText = s.Path,
             Description = s.NodeType ?? "",
-            Detail = s.Name,
+            Path = s.Path,
             Category = ""
         }).ToArray();
     }

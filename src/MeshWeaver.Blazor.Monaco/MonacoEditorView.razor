@@ -36,6 +36,9 @@
     public EventCallback OnSubmit { get; set; }
 
     [Parameter]
+    public EventCallback OnBlur { get; set; }
+
+    [Parameter]
     public bool IsDisabled { get; set; }
 
     [Parameter]
@@ -144,7 +147,9 @@
     {
         try
         {
-            return await JSRuntime.InvokeAsync<bool>("themeHandler.isDarkMode");
+            // Use getEffectiveTheme which considers both user preference and system settings
+            var theme = await JSRuntime.InvokeAsync<string>("themeHandler.getEffectiveTheme");
+            return theme == "dark";
         }
         catch (JSException)
         {
@@ -264,6 +269,12 @@
         await OnSubmit.InvokeAsync();
     }
 
+    [JSInvokable]
+    public async Task HandleBlur()
+    {
+        await OnBlur.InvokeAsync();
+    }
+
     /// <summary>
     /// JSInvokable method called from JavaScript to get async completions.
     /// </summary>
@@ -284,7 +295,9 @@
                 insertText = i.InsertText ?? i.Label,
                 description = i.Description ?? "",
                 detail = i.Detail ?? "",
-                category = i.Category ?? ""
+                category = i.Category ?? "",
+                path = i.Path ?? "",
+                iconUrl = i.IconUrl ?? ""
             }).ToArray<object>();
         }
         catch (Exception ex)
@@ -329,6 +342,42 @@
             catch (Exception ex)
             {
                 Logger.LogDebug(ex, "Error focusing editor - may not be fully initialized");
+            }
+        }
+    }
+
+    /// <summary>
+    /// Triggers the autocomplete/suggest popup programmatically.
+    /// </summary>
+    public async Task TriggerSuggestAsync()
+    {
+        if (jsModule != null && isInitialized)
+        {
+            try
+            {
+                await jsModule.InvokeVoidAsync("triggerSuggest", EditorId);
+            }
+            catch (Exception ex)
+            {
+                Logger.LogDebug(ex, "Error triggering suggest - may not be fully initialized");
+            }
+        }
+    }
+
+    /// <summary>
+    /// Sets the cursor position to the end of the content.
+    /// </summary>
+    public async Task SetCursorToEndAsync()
+    {
+        if (jsModule != null && isInitialized)
+        {
+            try
+            {
+                await jsModule.InvokeVoidAsync("setCursorToEnd", EditorId);
+            }
+            catch (Exception ex)
+            {
+                Logger.LogDebug(ex, "Error setting cursor position - may not be fully initialized");
             }
         }
     }
