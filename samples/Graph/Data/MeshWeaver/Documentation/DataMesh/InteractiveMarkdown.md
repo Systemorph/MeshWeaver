@@ -5,6 +5,8 @@ Description: Interactive markdown is the future of software engineering. With th
 Icon: /static/storage/content/MeshWeaver/Documentation/DataMesh/InteractiveMarkdown/icon.svg
 ---
 
+# Interactive Markdown
+
 In the previous blog posts, we have shown how to connect to Mesh Weaver using polyglot notebooks. This approach works quite well but has still a number of drawbacks:
 
 - The user interface is not properly integrated.

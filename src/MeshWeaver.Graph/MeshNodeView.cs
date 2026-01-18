@@ -160,7 +160,7 @@ public static class MeshNodeView
     private static UiControl BuildDetailsContent(this LayoutAreaHost host, MeshNode? node, IEnumerable<MeshNode> children, NodeTypeDefinition? typeDef)
     {
         var nodePath = node?.Namespace ?? host.Hub.Address.ToString();
-        var stack = Controls.Stack.WithWidth("100%");
+        var stack = Controls.Stack.WithWidth("100%").WithStyle("position: relative;");
 
         // Header: icon + title on left, menu button on right
         var title = node?.Name ?? host.Hub.Address.ToString();
@@ -186,9 +186,9 @@ public static class MeshNodeView
 
         titleContent = titleContent.WithView(Controls.Html($"<h1 style=\"margin: 0;\">{title}</h1>"));
 
-        // Action menu with fixed positioning (stays in top right when scrolling)
+        // Action menu positioned at top-right of content
         var actionMenu = Controls.Stack
-            .WithClass("sticky-action-menu action-menu-button")
+            .WithStyle("position: absolute; top: 0; right: 0; z-index: 10;")
             .WithView(BuildActionMenu(host, node));
 
         var headerStack = Controls.Stack
@@ -197,8 +197,8 @@ public static class MeshNodeView
             .WithStyle("align-items: center; padding-bottom: 24px; margin-bottom: 24px; border-bottom: 1px solid var(--neutral-stroke-rest);")
             .WithView(titleContent);
 
+        stack = stack.WithView(actionMenu);  // Add action menu first (positioned absolutely)
         stack = stack.WithView(headerStack);
-        stack = stack.WithView(actionMenu);  // Add action menu separately (it will be fixed positioned)
 
         // Main content based on node type
         // For Markdown type: renders content directly
@@ -273,7 +273,7 @@ public static class MeshNodeView
 
     /// <summary>
     /// Builds a dropdown action menu with Edit, Comments, Files, Metadata, NodeType, Catalog, Settings.
-    /// Each menu item is added individually so FluentMenuButton wraps each in a proper FluentMenuItem.
+    /// Uses icon-only mode to show just the ellipsis button without a chevron.
     /// Uses NavLinkControl for instant navigation via href.
     /// </summary>
     [Browsable(false)]
@@ -281,10 +281,10 @@ public static class MeshNodeView
     {
         var nodePath = node?.Namespace ?? host.Hub.Address.ToString();
 
-        // Start with the trigger button (MoreHorizontal icon)
+        // Start with the trigger button (MoreHorizontal icon) - icon-only mode hides the chevron
         var menu = Controls.MenuItem("", FluentIcons.MoreHorizontal(IconSize.Size20))
             .WithAppearance(Appearance.Stealth)
-            .WithStyle("border-radius: 4px;");
+            .WithIconOnly();
 
         // Edit option - goes to DefaultViews.Edit area
         if (node != null)
