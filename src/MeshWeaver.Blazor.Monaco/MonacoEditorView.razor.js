@@ -44,89 +44,94 @@ function debounce(fn, delay) {
             width: 100% !important;
         }
 
-        /* Each row - increased height for two-line display */
+        /* Each row - let Monaco calculate height, just ensure proper layout */
         .overflowingContentWidgets .suggest-widget .monaco-list-row,
         .monaco-editor .suggest-widget .monaco-list-row {
             width: 100% !important;
-            display: flex !important;
-            height: 40px !important;
-            padding: 4px 0 !important;
-        }
-
-        /* The suggestion content */
-        .overflowingContentWidgets .suggest-widget .suggest-icon,
-        .monaco-editor .suggest-widget .suggest-icon {
-            flex-shrink: 0 !important;
-        }
-
-        .overflowingContentWidgets .suggest-widget .contents,
-        .monaco-editor .suggest-widget .contents {
-            flex: 1 !important;
-            min-width: 0 !important;
-            display: flex !important;
-            align-items: center !important;
-        }
-
-        .overflowingContentWidgets .suggest-widget .main,
-        .monaco-editor .suggest-widget .main {
-            flex: 1 !important;
-            min-width: 0 !important;
-            display: flex !important;
-            align-items: center !important;
-        }
-
-        /* Label and description - stack vertically for two-line display */
-        .overflowingContentWidgets .suggest-widget .left,
-        .monaco-editor .suggest-widget .left {
-            flex: 1 !important;
-            display: flex !important;
-            align-items: flex-start !important;
-            min-width: 0 !important;
-        }
-
-        .overflowingContentWidgets .suggest-widget .monaco-icon-label,
-        .monaco-editor .suggest-widget .monaco-icon-label {
-            flex: 1 !important;
-            display: flex !important;
-            align-items: flex-start !important;
-        }
-
-        /* Stack label parts vertically for two-line display */
-        .overflowingContentWidgets .suggest-widget .monaco-icon-label-container,
-        .monaco-editor .suggest-widget .monaco-icon-label-container {
-            flex: 1 !important;
-            display: flex !important;
-            flex-direction: column !important;
-            align-items: flex-start !important;
-            justify-content: center !important;
-            gap: 2px !important;
+            box-sizing: border-box !important;
         }
 
         /* Primary label (node name) - bold */
         .overflowingContentWidgets .suggest-widget .monaco-icon-name-container,
         .monaco-editor .suggest-widget .monaco-icon-name-container {
-            flex-shrink: 0 !important;
             font-weight: 600 !important;
-            font-size: 13px !important;
         }
 
         /* Secondary line (path) - muted, smaller */
         .overflowingContentWidgets .suggest-widget .monaco-icon-description-container,
         .monaco-editor .suggest-widget .monaco-icon-description-container {
-            flex: 1 !important;
-            margin-left: 0 !important;
-            font-size: 11px !important;
-            opacity: 0.6 !important;
+            margin-left: 8px !important;
+            opacity: 0.7 !important;
             white-space: nowrap !important;
             overflow: hidden !important;
             text-overflow: ellipsis !important;
-            max-width: 480px !important;
         }
 
-        /* Adjust list height calculation for two-line rows */
-        .overflowingContentWidgets .suggest-widget .monaco-list,
-        .monaco-editor .suggest-widget .monaco-list {
-            --monaco-list-row-height: 40px !important;
+        /* Dark mode support for suggest widget - high specificity to override Monaco defaults */
+        html[data-theme="dark"] .monaco-editor .suggest-widget,
+        html[data-theme="dark"] .overflowingContentWidgets .suggest-widget,
+        html[data-theme="dark"] .suggest-widget.monaco-editor-overlaymessage,
+        :root[data-theme="dark"] .suggest-widget {
+            background-color: #252526 !important;
+            border: 1px solid #454545 !important;
+            color: #cccccc !important;
+        }
+
+        html[data-theme="dark"] .monaco-editor .suggest-widget .monaco-list,
+        html[data-theme="dark"] .overflowingContentWidgets .suggest-widget .monaco-list,
+        :root[data-theme="dark"] .suggest-widget .monaco-list {
+            background-color: #252526 !important;
+        }
+
+        html[data-theme="dark"] .monaco-editor .suggest-widget .monaco-list-row,
+        html[data-theme="dark"] .overflowingContentWidgets .suggest-widget .monaco-list-row,
+        :root[data-theme="dark"] .suggest-widget .monaco-list-row {
+            color: #cccccc !important;
+            background-color: transparent !important;
+        }
+
+        html[data-theme="dark"] .monaco-editor .suggest-widget .monaco-list-row.focused,
+        html[data-theme="dark"] .monaco-editor .suggest-widget .monaco-list-row.selected,
+        html[data-theme="dark"] .overflowingContentWidgets .suggest-widget .monaco-list-row.focused,
+        html[data-theme="dark"] .overflowingContentWidgets .suggest-widget .monaco-list-row.selected,
+        :root[data-theme="dark"] .suggest-widget .monaco-list-row.focused,
+        :root[data-theme="dark"] .suggest-widget .monaco-list-row.selected {
+            background-color: #094771 !important;
+            color: #ffffff !important;
+        }
+
+        html[data-theme="dark"] .monaco-editor .suggest-widget .details-label,
+        html[data-theme="dark"] .overflowingContentWidgets .suggest-widget .details-label,
+        :root[data-theme="dark"] .suggest-widget .details-label {
+            color: #8a8a8a !important;
+        }
+
+        /* Also apply dark mode via system preference as fallback */
+        @media (prefers-color-scheme: dark) {
+            .suggest-widget {
+                background-color: #252526 !important;
+                border: 1px solid #454545 !important;
+                color: #cccccc !important;
+            }
+
+            .suggest-widget .monaco-list {
+                background-color: #252526 !important;
+            }
+
+            .suggest-widget .monaco-list-row {
+                color: #cccccc !important;
+                background-color: transparent !important;
+            }
+
+            .suggest-widget .monaco-list-row.focused,
+            .suggest-widget .monaco-list-row.selected {
+                background-color: #094771 !important;
+                color: #ffffff !important;
+            }
+
+            .suggest-widget .details-label {
+                color: #8a8a8a !important;
+            }
         }
     `;
     document.head.appendChild(style);
@@ -431,28 +436,26 @@ export function registerCompletionProvider(editorId, config) {
                 // Use insertText as filterText since that's what matches the typed pattern
                 const filterText = item.insertText || item.label;
 
-                // Use CompletionItemLabel for two-line display when path is available
-                // Monaco supports: label (main), detail (after label), description (line 2)
-                const labelObj = item.path ? {
-                    label: item.label,                    // Node name (bold, line 1)
-                    description: item.path                // Full path (muted, line 2)
-                } : item.label;
+                // Simple single-line display: Path as label, category as detail
+                // This avoids row height calculation issues with multi-line labels
+                const displayLabel = item.path || item.label;
 
                 return {
-                    label: labelObj,
+                    label: displayLabel,
                     kind: typeof item.kind === 'number' ? item.kind : monaco.languages.CompletionItemKind.Text,
                     insertText: item.insertText || item.label,
                     range: range,
-                    detail: item.category || '',          // Category in details pane
+                    detail: item.category || '',          // Category shown on the right
                     documentation: item.description ? {   // Full description on hover
                         value: item.description
                     } : undefined,
                     filterText: filterText,
-                    sortText: (item.category || 'zzz') + '_' + item.label.toLowerCase()
+                    sortText: displayLabel.toLowerCase()  // Sort alphabetically by path
                 };
             });
 
-            return { suggestions, incomplete: false };
+            // Set incomplete: true for async mode to allow re-fetching as user types
+            return { suggestions, incomplete: isAsync };
         }
     });
 }

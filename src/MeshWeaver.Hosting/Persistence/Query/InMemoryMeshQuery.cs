@@ -257,9 +257,12 @@ public class InMemoryMeshQuery : IMeshQuery
         {
             var name = node.Name ?? node.Id;
             var nameLower = name.ToLowerInvariant();
+            var pathLower = node.Path.ToLowerInvariant();
 
-            // Calculate match score based on prefix match
+            // Calculate match score based on prefix match (check both name and path)
             double score = 0;
+
+            // Name matches (higher priority)
             if (nameLower.StartsWith(normalizedPrefix))
             {
                 score = 100 - (nameLower.Length - normalizedPrefix.Length); // Exact prefix match, shorter is better
@@ -268,9 +271,14 @@ public class InMemoryMeshQuery : IMeshQuery
             {
                 score = 50 - (nameLower.IndexOf(normalizedPrefix, StringComparison.OrdinalIgnoreCase)); // Contains match
             }
+            // Path matches (lower priority than name)
+            else if (pathLower.Contains(normalizedPrefix))
+            {
+                score = 30 - (pathLower.IndexOf(normalizedPrefix, StringComparison.OrdinalIgnoreCase) * 0.1); // Path contains match
+            }
             else if (FuzzyMatch(nameLower, normalizedPrefix))
             {
-                score = 25; // Fuzzy match
+                score = 25; // Fuzzy match on name
             }
 
             if (score > 0)
@@ -279,8 +287,12 @@ public class InMemoryMeshQuery : IMeshQuery
             }
         }
 
-        // Order by score descending and apply limit
-        foreach (var suggestion in suggestions.OrderByDescending(s => s.Score).Take(limit))
+        // Order by path length (shorter first), then score descending, then name alphabetically
+        foreach (var suggestion in suggestions
+            .OrderBy(s => s.Path.Length)
+            .ThenByDescending(s => s.Score)
+            .ThenBy(s => s.Name)
+            .Take(limit))
         {
             yield return suggestion;
         }

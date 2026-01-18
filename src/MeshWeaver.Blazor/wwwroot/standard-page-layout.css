@@ -200,6 +200,40 @@ code {
     --code-block-border-color: #444c56 !important; /* GitHub dark theme border color */
     --code-block-background-color: #2d333b !important; /* GitHub dark theme background color */
 }
+/* Monaco editor autocomplete widget - ensure it can overflow containers */
+.monaco-editor .suggest-widget,
+.monaco-editor .monaco-hover,
+.monaco-editor .parameter-hints-widget {
+    z-index: 10000 !important;
+}
+
+/* Monaco FixedOverflowWidgets container - rendered at body level */
+.overflowingContentWidgets {
+    z-index: 10000 !important;
+    position: fixed !important;
+}
+
+.overflowingContentWidgets .suggest-widget {
+    z-index: 10001 !important;
+}
+
+/* Ensure Monaco editor containers allow overflow for autocomplete */
+.monaco-editor-container,
+.search-container,
+.search-box-container,
+.search-bar-container,
+.links {
+    overflow: visible !important;
+}
+
+/* Header needs to allow Monaco autocomplete to overflow */
+header,
+fluent-header,
+.header-gutters,
+.header-gutters > * {
+    overflow: visible !important;
+}
+
 @media (max-width: 600px) {
     .header-gutters {
         margin: 0.5rem 3rem 0.5rem 1.5rem !important;

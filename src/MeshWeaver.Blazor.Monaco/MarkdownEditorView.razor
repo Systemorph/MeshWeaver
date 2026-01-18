@@ -212,45 +212,50 @@
 
     private async Task<CompletionItem[]> GetTopLevelNodesAsync()
     {
+        // Results come pre-ordered by relevance from IMeshQuery.AutocompleteAsync
+        // (path length first, then score, then name)
         var suggestions = await MeshQuery!.AutocompleteAsync("", "", 20).ToArrayAsync();
         return suggestions.Select(s => new CompletionItem
         {
             Label = s.Name ?? s.Path,
             InsertText = $"@{s.Path}/",
             Description = s.NodeType ?? "",
-            Path = $"@{s.Path}/",
+            Path = s.Path,
             Category = "Addresses"
         }).ToArray();
     }
 
     private async Task<CompletionItem[]> GetChildNodesAsync(string basePath)
     {
+        // Results come pre-ordered by relevance from IMeshQuery.AutocompleteAsync
         var suggestions = await MeshQuery!.AutocompleteAsync(basePath, "", 20).ToArrayAsync();
         return suggestions.Select(s => new CompletionItem
         {
             Label = s.Name ?? s.Path,
             InsertText = $"@{s.Path}/",
             Description = s.NodeType ?? "",
-            Path = $"@{s.Path}/",
+            Path = s.Path,
             Category = ""
         }).ToArray();
     }
 
     private async Task<CompletionItem[]> GetNodesMatchingPrefixAsync(string prefix)
     {
+        // Results come pre-ordered by relevance from IMeshQuery.AutocompleteAsync
         var suggestions = await MeshQuery!.AutocompleteAsync("", prefix, 20).ToArrayAsync();
         return suggestions.Select(s => new CompletionItem
         {
             Label = s.Name ?? s.Path,
             InsertText = $"@{s.Path}/",
             Description = s.NodeType ?? "",
-            Path = $"@{s.Path}/",
+            Path = s.Path,
             Category = "Addresses"
         }).ToArray();
     }
 
     private async Task<CompletionItem[]> SearchNodesAsync(string query)
     {
+        // Results come pre-ordered by relevance from IMeshQuery.AutocompleteAsync
         var suggestions = await MeshQuery!.AutocompleteAsync("", query, 20).ToArrayAsync();
         return suggestions.Select(s => new CompletionItem
         {

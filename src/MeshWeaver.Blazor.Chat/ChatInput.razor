@@ -187,8 +187,9 @@
 
         try
         {
-            var items = await OnContextAutocomplete(query);
-            return items;
+            // Results come pre-ordered by relevance from IMeshQuery.AutocompleteAsync
+            // (path length first, then score, then name)
+            return await OnContextAutocomplete(query);
         }
         catch
         {
@@ -198,6 +199,9 @@
 
     private async Task OnContextItemChanged(CompletionItem? item)
     {
+        // Update local state to preserve the Label for display
+        selectedContextItem = item;
+
         var newContext = item?.Path;
         if (newContext != SelectedContext)
         {

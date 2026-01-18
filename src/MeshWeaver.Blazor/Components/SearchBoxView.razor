@@ -96,6 +96,8 @@
             if (query.StartsWith("@"))
             {
                 var reference = query[1..]; // Strip @ prefix
+                // Results come pre-ordered by relevance from IMeshQuery.AutocompleteAsync
+                // (path length first, then score, then name)
                 var suggestions = await MeshQuery.AutocompleteAsync(
                     BoundNamespace,
                     reference,
