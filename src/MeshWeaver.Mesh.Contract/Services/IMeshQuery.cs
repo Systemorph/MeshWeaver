@@ -20,16 +20,32 @@ public interface IMeshQuery
 
     /// <summary>
     /// Autocomplete query - given a namespace, find best matching subnodes.
-    /// Returns suggestions ordered by relevance score.
+    /// Returns suggestions ordered by path length first (for path-based autocomplete).
     /// </summary>
     /// <param name="basePath">Base path to search from</param>
     /// <param name="prefix">Prefix to match (partial name/path)</param>
     /// <param name="limit">Maximum number of suggestions to return</param>
     /// <param name="ct">Cancellation token</param>
-    /// <returns>Suggestions ordered by relevance</returns>
+    /// <returns>Suggestions ordered by path length, then score, then name</returns>
     IAsyncEnumerable<QuerySuggestion> AutocompleteAsync(
         string basePath,
         string prefix,
+        int limit = 10,
+        CancellationToken ct = default);
+
+    /// <summary>
+    /// Autocomplete query with specified ordering mode.
+    /// </summary>
+    /// <param name="basePath">Base path to search from</param>
+    /// <param name="prefix">Prefix to match (partial name/path)</param>
+    /// <param name="mode">Ordering mode (PathFirst or RelevanceFirst)</param>
+    /// <param name="limit">Maximum number of suggestions to return</param>
+    /// <param name="ct">Cancellation token</param>
+    /// <returns>Suggestions ordered according to mode</returns>
+    IAsyncEnumerable<QuerySuggestion> AutocompleteAsync(
+        string basePath,
+        string prefix,
+        AutocompleteMode mode,
         int limit = 10,
         CancellationToken ct = default);
 }
@@ -87,3 +103,21 @@ public record MeshQueryRequest
 /// <param name="NodeType">Type of the node (may be null)</param>
 /// <param name="Score">Relevance score (higher is better match)</param>
 public record QuerySuggestion(string Path, string Name, string? NodeType, double Score);
+
+/// <summary>
+/// Autocomplete ordering mode.
+/// </summary>
+public enum AutocompleteMode
+{
+    /// <summary>
+    /// Order by path length first, then score, then name.
+    /// Best for path-based autocomplete (e.g., typing a path reference).
+    /// </summary>
+    PathFirst,
+
+    /// <summary>
+    /// Order by score first (name match > path match > other), then path length, then name.
+    /// Best for node search/selection (e.g., context selector).
+    /// </summary>
+    RelevanceFirst
+}

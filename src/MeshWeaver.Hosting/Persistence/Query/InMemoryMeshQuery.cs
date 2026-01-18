@@ -235,7 +235,16 @@ public class InMemoryMeshQuery : IMeshQuery
         string prefix,
         int limit = 10,
         CancellationToken ct = default)
-        => AutocompleteAsync(basePath, prefix, null, limit, ct);
+        => AutocompleteAsync(basePath, prefix, null, AutocompleteMode.PathFirst, limit, ct);
+
+    /// <inheritdoc />
+    public IAsyncEnumerable<QuerySuggestion> AutocompleteAsync(
+        string basePath,
+        string prefix,
+        AutocompleteMode mode,
+        int limit = 10,
+        CancellationToken ct = default)
+        => AutocompleteAsync(basePath, prefix, null, mode, limit, ct);
 
     /// <summary>
     /// Autocomplete with user ID for access control filtering.
@@ -244,6 +253,7 @@ public class InMemoryMeshQuery : IMeshQuery
         string basePath,
         string prefix,
         string? userId,
+        AutocompleteMode mode,
         int limit = 10,
         [EnumeratorCancellation] CancellationToken ct = default)
     {
@@ -287,12 +297,28 @@ public class InMemoryMeshQuery : IMeshQuery
             }
         }
 
-        // Order by path length (shorter first), then score descending, then name alphabetically
-        foreach (var suggestion in suggestions
-            .OrderBy(s => s.Path.Length)
-            .ThenByDescending(s => s.Score)
-            .ThenBy(s => s.Name)
-            .Take(limit))
+        // Order based on mode
+        IEnumerable<QuerySuggestion> ordered = mode switch
+        {
+            // PathFirst: path length first, then score, then name (for path-based autocomplete like @references)
+            AutocompleteMode.PathFirst => suggestions
+                .OrderBy(s => s.Path.Length)
+                .ThenByDescending(s => s.Score)
+                .ThenBy(s => s.Name),
+
+            // RelevanceFirst: score first (name match > path match > other), then path length, then name (for node selection)
+            AutocompleteMode.RelevanceFirst => suggestions
+                .OrderByDescending(s => s.Score)
+                .ThenBy(s => s.Path.Length)
+                .ThenBy(s => s.Name),
+
+            _ => suggestions
+                .OrderBy(s => s.Path.Length)
+                .ThenByDescending(s => s.Score)
+                .ThenBy(s => s.Name)
+        };
+
+        foreach (var suggestion in ordered.Take(limit))
         {
             yield return suggestion;
         }
