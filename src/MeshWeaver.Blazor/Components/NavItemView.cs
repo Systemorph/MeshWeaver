@@ -1,5 +1,6 @@
 ﻿using MeshWeaver.Domain;
 using MeshWeaver.Layout;
+using Microsoft.AspNetCore.Components;
 
 namespace MeshWeaver.Blazor.Components;
 
@@ -12,6 +13,13 @@ public abstract class NavItemView<TViewModel, TView> : BlazorView<TViewModel, TV
     protected string? Href { get; set; }
     protected string? Title { get; set; }
     protected Icon? Icon { get; set; }
+
+    /// <summary>
+    /// Cascading parameter indicating whether this component is rendered inside a dropdown menu.
+    /// When true, the component should render as a styled menu item.
+    /// </summary>
+    [CascadingParameter(Name = "IsInMenuContext")]
+    protected bool IsInMenuContext { get; set; }
 
     protected override void BindData()
     {

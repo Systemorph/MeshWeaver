@@ -28,6 +28,13 @@ public record MenuItemControl(object Title, object Icon)
     /// <param name="width">The width to apply.</param>
     /// <returns>A new MenuItemControl with the specified width.</returns>
     public MenuItemControl WithWidth(object width) => this with { Skin = Skin with { Width = width } };
+
+    /// <summary>
+    /// Sets the icon-only mode for the menu item (no chevron, just the icon button).
+    /// </summary>
+    /// <param name="iconOnly">Whether to show only the icon without chevron.</param>
+    /// <returns>A new MenuItemControl with the specified icon-only mode.</returns>
+    public MenuItemControl WithIconOnly(bool iconOnly = true) => this with { Skin = Skin with { IconOnly = iconOnly } };
 }
 
 /// <summary>
@@ -51,6 +58,12 @@ public record MenuItemSkin(object Title, object Icon) : Skin<MenuItemSkin>
     /// The width to apply to the menu item.
     /// </summary>
     public object? Width { get; init; }
+
+    /// <summary>
+    /// When true, renders as an icon-only button without chevron.
+    /// Uses FluentButton + FluentMenu pattern instead of FluentMenuButton.
+    /// </summary>
+    public bool IconOnly { get; init; }
 
     /// <summary>
     /// Sets the title of the menu item skin.

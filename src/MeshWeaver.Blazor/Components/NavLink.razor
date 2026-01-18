@@ -1,3 +1,17 @@
 @inherits NavItemView<NavLinkControl, NavLink>
-<FluentNavLink Href="@Href" Icon="@Icon?.ToFluentIcon()" OnClick="@OnClick">@Title</FluentNavLink>
+
+@if (IsInMenuContext)
+{
+    <a href="@Href" class="menu-item-link" @onclick="OnClick">
+        @if (Icon != null)
+        {
+            <FluentIcon Value="@Icon.ToFluentIcon()" Width="20px" Style="fill: var(--accent-fill-rest); flex-shrink: 0;" />
+        }
+        <span>@Title</span>
+    </a>
+}
+else
+{
+    <FluentNavLink Href="@Href" Icon="@Icon?.ToFluentIcon()" OnClick="@OnClick">@Title</FluentNavLink>
+}
 

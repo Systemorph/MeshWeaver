@@ -215,21 +215,14 @@ code {
 
 .overflowingContentWidgets .suggest-widget {
     z-index: 10001 !important;
+}
+
 /* Sticky action menu button - stays in top right when scrolling */
 .sticky-action-menu {
     position: fixed;
     top: 70px;  /* Below the header bar */
     right: 24px;
     z-index: 100;
-}
-
-/* Hide the chevron/dropdown indicator in menu buttons */
-/* Target the SVG chevron with slot="end" inside fluent-button */
-.menu-button-container fluent-button [slot="end"],
-.menu-button-container fluent-button svg[slot="end"],
-.fluent-menubutton-container fluent-button [slot="end"],
-.fluent-menubutton-container fluent-button svg[slot="end"] {
-    display: none !important;
 }
 
 /* Ensure Monaco editor containers allow overflow for autocomplete */

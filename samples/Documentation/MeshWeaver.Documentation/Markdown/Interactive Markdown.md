@@ -17,7 +17,6 @@ Tags:
   - "Conceptual"
   - "Markdown"
 ---
-
 In the previous blog posts, we have shown how to connect to Mesh Weaver using polyglot notebooks. This approach works quite well but has still a number of drawbacks:
 
 - The user interface is not properly integrated.

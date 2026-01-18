@@ -397,13 +397,27 @@
         }
     }
 
-    protected override async Task OnParametersSetAsync()
+    private bool pendingParameterUpdate = false;
+
+    protected override Task OnParametersSetAsync()
     {
-        // Only proceed if the editor is fully initialized
-        if (!isInitialized || editor == null || jsModule == null)
+        // Mark that we need to update the editor on next render
+        // JS interop is only safe in OnAfterRenderAsync
+        if (isInitialized)
+        {
+            pendingParameterUpdate = true;
+        }
+        return Task.CompletedTask;
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!pendingParameterUpdate || !isInitialized || editor == null || jsModule == null)
         {
             return;
         }
+
+        pendingParameterUpdate = false;
 
         try
         {
@@ -435,7 +449,7 @@
         }
         catch (Exception ex)
         {
-            Logger.LogDebug(ex, "Error in OnParametersSetAsync - editor may not be fully initialized");
+            Logger.LogDebug(ex, "Error in OnAfterRenderAsync - editor may not be fully initialized");
         }
     }
 

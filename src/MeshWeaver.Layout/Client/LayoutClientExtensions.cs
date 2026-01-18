@@ -102,6 +102,8 @@ public static class LayoutClientExtensions
             return default;
 
         // Use Convert.ChangeType for flexible conversion
+        if (typeof(T).IsValueType)
+            return (T?)value;
         return (T?)Convert.ChangeType(value, typeof(T));
     }
     private static T? GetDataBoundValue<T>(this ISynchronizationStream<JsonElement> stream, string pointer, string? dataContext = null)

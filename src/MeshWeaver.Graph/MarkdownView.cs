@@ -167,48 +167,23 @@ public static class MarkdownView
             _ => rawContent // Markup mode - keep annotations
         };
 
-        // Title
-        var title = node?.Name ?? "Document";
-
-        // Build header
-        var headerStack = Controls.Stack
-            .WithOrientation(Orientation.Horizontal)
-            .WithWidth("100%")
-            .WithStyle("align-items: center; justify-content: space-between; margin-bottom: 16px; padding-bottom: 16px; border-bottom: 1px solid var(--neutral-stroke-rest);");
-
-        var titleSection = Controls.Stack
-            .WithOrientation(Orientation.Horizontal)
-            .WithStyle("align-items: center; gap: 12px;");
-
-        if (!string.IsNullOrEmpty(node?.Icon))
-        {
-            titleSection = titleSection.WithView(
-                Controls.Html($"<fluent-icon name=\"{node.Icon}\" style=\"font-size: 28px; color: var(--accent-fill-rest);\"></fluent-icon>"));
-        }
-
-        titleSection = titleSection.WithView(
-            Controls.Html($"<h1 style=\"margin: 0; font-size: 1.75rem; font-weight: 600;\">{title}</h1>"));
-
-        headerStack = headerStack.WithView(titleSection);
-
-        // Action menu with fixed positioning (stays in top right when scrolling)
-        var actionMenu = Controls.Stack
-            .WithClass("sticky-action-menu action-menu-button")
-            .WithView(BuildActionMenu(host, node));
-        headerStack = headerStack.WithView(actionMenu);
-
         // If we have annotations and in markup mode, use a split layout (Word-style)
         if (hasAnnotations && annotations.Count > 0 && viewMode == AnnotationViewMode.Markup)
         {
-            return BuildSplitLayoutWithAnnotations(host, node, headerStack, content, containerId, annotations, viewModeSubject, viewMode, panelState, panelStateSubject, markdownChildren);
+            return BuildSplitLayoutWithAnnotations(host, node, content, containerId, annotations, viewModeSubject, viewMode, panelState, panelStateSubject, markdownChildren);
         }
 
-        // No annotations or non-markup mode - simple layout
+        // No annotations or non-markup mode - simple layout with menu positioned at top-right of content
         var container = Controls.Stack
             .WithWidth("100%")
-            .WithStyle("max-width: 1100px; margin: 0 auto; padding: 24px; background: var(--neutral-layer-1); overflow-y: auto;");
+            .WithStyle("max-width: 1100px; margin: 0 auto; padding: 24px; background: var(--neutral-layer-1); overflow-y: auto; position: relative;");
 
-        container = container.WithView(headerStack);
+        // Action menu positioned at top-right of content area
+        var actionMenu = Controls.Stack
+            .WithStyle("position: absolute; top: 24px; right: 24px; z-index: 10;")
+            .WithView(BuildActionMenu(host, node));
+
+        container = container.WithView(actionMenu);
 
         // Show view mode toolbar if document has annotations (even in non-markup view)
         if (hasAnnotations && annotations.Count > 0)
@@ -244,7 +219,7 @@ public static class MarkdownView
     /// Builds a section displaying child nodes grouped by Category (or NodeType as fallback).
     /// Uses MeshNodeThumbnailControl for consistent styling with the catalog.
     /// </summary>
-    private static UiControl BuildMarkdownChildrenSection(IReadOnlyList<MeshNode> children, string parentPath)
+    private static UiControl BuildMarkdownChildrenSection(IReadOnlyList<MeshNode> children, string _)
     {
         var section = Controls.Stack
             .WithWidth("100%")
@@ -303,7 +278,6 @@ public static class MarkdownView
     private static UiControl BuildSplitLayoutWithAnnotations(
         LayoutAreaHost host,
         MeshNode? node,
-        UiControl headerStack,
         string content,
         string containerId,
         List<ParsedAnnotation> annotations,
@@ -317,9 +291,14 @@ public static class MarkdownView
         // Outer container - centered with max width
         var outerContainer = Controls.Stack
             .WithWidth("100%")
-            .WithStyle("max-width: 1200px; margin: 0 auto; padding: 24px; background: var(--neutral-layer-1);");
+            .WithStyle("max-width: 1200px; margin: 0 auto; padding: 24px; background: var(--neutral-layer-1); position: relative;");
 
-        outerContainer = outerContainer.WithView(headerStack);
+        // Action menu positioned at top-right of content area
+        var actionMenu = Controls.Stack
+            .WithStyle("position: absolute; top: 24px; right: 24px; z-index: 10;")
+            .WithView(BuildActionMenu(host, node));
+
+        outerContainer = outerContainer.WithView(actionMenu);
 
         // Reactive view mode toolbar
         outerContainer = outerContainer.WithView(BuildReactiveViewModeToolbar(viewModeSubject, currentViewMode, annotations));
@@ -887,10 +866,10 @@ public static class MarkdownView
     {
         var nodePath = node?.Path ?? host.Hub.Address.ToString();
 
-        // Start with the trigger button (MoreHorizontal icon)
+        // Start with the trigger button (MoreHorizontal icon) - icon-only mode hides the chevron
         var menu = Controls.MenuItem("", FluentIcons.MoreHorizontal(IconSize.Size20))
             .WithAppearance(Appearance.Stealth)
-            .WithStyle("border-radius: 4px;");
+            .WithIconOnly();
 
         // Edit option
         var editHref = $"/{nodePath}/{EditArea}";
@@ -968,26 +947,18 @@ public static class MarkdownView
         // Get content - keep annotations in edit mode so user can see/edit them
         var content = GetMarkdownContent(node);
 
-        // Editor area - full width
+        // Editor area using MarkdownEditorControl
+        var editor = new MarkdownEditorControl()
+            .WithValue(content)
+            .WithDocumentId(nodePath)
+            .WithHeight("100%")
+            .WithTrackChanges(true)
+            .WithPlaceholder("Start writing your markdown content...");
+
         var editorArea = Controls.Stack
             .WithWidth("100%")
-            .WithStyle("flex: 1; padding: 16px; overflow: auto; box-sizing: border-box;")
-            .WithView(Controls.Html($@"
-                <div style=""width: 100%; height: 100%; min-height: 500px; display: flex; flex-direction: column; box-sizing: border-box;"">
-                    <div style=""display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;"">
-                        <span style=""color: var(--neutral-foreground-hint); font-size: 0.85rem;"">
-                            Edit your markdown content below. Annotations use the format: <code>&lt;!--comment:id:author:date--&gt;text&lt;!--/comment:id--&gt;</code>
-                        </span>
-                    </div>
-                    <textarea style=""width: 100%; flex: 1; min-height: 400px;
-                        font-family: 'Cascadia Code', 'Fira Code', Consolas, monospace; font-size: 14px;
-                        padding: 16px; border: 1px solid var(--neutral-stroke-rest);
-                        border-radius: 6px; background: var(--neutral-layer-1);
-                        color: var(--neutral-foreground-rest); resize: vertical;
-                        box-sizing: border-box; line-height: 1.5;""
-                        placeholder=""Start writing your markdown content..."">{System.Web.HttpUtility.HtmlEncode(content)}</textarea>
-                </div>
-            "));
+            .WithStyle("flex: 1; padding: 16px; overflow: hidden; box-sizing: border-box;")
+            .WithView(editor);
 
         container = container.WithView(editorArea);
 

@@ -7,6 +7,7 @@ using MeshWeaver.Blazor.Monaco;
 using MeshWeaver.Data;
 using MeshWeaver.Data.Completion;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Activity;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using MeshWeaver.ShortGuid;
@@ -403,15 +404,21 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
     {
         try
         {
+            // Strip @ prefix if present (from UCR-style autocomplete)
+            var searchPrefix = query?.TrimStart('@') ?? "";
+
+            // If no query, return recent items from user activity
+            if (string.IsNullOrWhiteSpace(searchPrefix))
+            {
+                return await GetRecentContextItemsAsync();
+            }
+
             var meshQuery = Hub.ServiceProvider.GetService<IMeshQuery>();
             if (meshQuery == null)
             {
                 Logger.LogDebug("IMeshQuery not available for context autocomplete");
                 return [];
             }
-
-            // Strip @ prefix if present (from UCR-style autocomplete)
-            var searchPrefix = query?.TrimStart('@') ?? "";
 
             // Use AutocompleteAsync with RelevanceFirst mode for context selection
             // This orders by: name matches first, then path matches, then other matches
@@ -434,6 +441,58 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
         catch (Exception ex)
         {
             Logger.LogWarning(ex, "Error getting context autocomplete suggestions");
+            return [];
+        }
+    }
+
+    private async Task<CompletionItem[]> GetRecentContextItemsAsync()
+    {
+        try
+        {
+            var accessService = Hub.ServiceProvider.GetService<AccessService>();
+            var persistence = Hub.ServiceProvider.GetService<IPersistenceService>();
+
+            if (accessService?.Context == null || persistence == null)
+            {
+                Logger.LogDebug("AccessService or IPersistenceService not available for recent items");
+                return [];
+            }
+
+            var userId = accessService.Context.ObjectId;
+            if (string.IsNullOrEmpty(userId))
+            {
+                return [];
+            }
+
+            // Query activity records for this user
+            var activityPath = $"_activity/{userId}";
+            var recentItems = new List<(UserActivityRecord Record, DateTimeOffset LastAccess)>();
+
+            await foreach (var obj in persistence.GetPartitionObjectsAsync(activityPath))
+            {
+                if (obj is UserActivityRecord record)
+                {
+                    recentItems.Add((record, record.LastAccessedAt));
+                }
+            }
+
+            // Order by last accessed (most recent first) and take top 15
+            return recentItems
+                .OrderByDescending(x => x.LastAccess)
+                .Take(15)
+                .Select(x => new CompletionItem
+                {
+                    Label = x.Record.NodeName ?? x.Record.NodePath,  // Node name
+                    InsertText = x.Record.NodePath,                   // Full path
+                    Path = x.Record.NodePath,                         // Full path (line 2)
+                    Description = x.Record.NodeType ?? "",            // Node type
+                    Category = "Recent"
+                })
+                .ToArray();
+        }
+        catch (Exception ex)
+        {
+            Logger.LogDebug(ex, "Error getting recent context items");
             return [];
         }
     }
