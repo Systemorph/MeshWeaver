@@ -3,7 +3,7 @@
     min-width: 0; /* Critical: allow shrinking in flex containers */
     max-width: 100%; /* Prevent overflow */
     border: none;
-    overflow: hidden;
+    overflow: visible; /* Changed from hidden - allow Monaco autocomplete to overflow */
     background: transparent;
     position: relative;
 }
@@ -59,11 +59,13 @@
 ::deep .monaco-editor-view .monaco-editor {
     width: 100% !important;
     height: 100% !important;
+    overflow: visible !important;
 }
 
 ::deep .monaco-editor-view .overflow-guard {
     width: 100% !important;
     height: 100% !important;
+    overflow: visible !important;
 }
 
 /* Monaco editor background - transparent to inherit from parent */
