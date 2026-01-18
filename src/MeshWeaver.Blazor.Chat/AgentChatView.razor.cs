@@ -410,42 +410,26 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
                 return [];
             }
 
-            // Build query to search MeshNodes matching the typed text
-            var searchQuery = string.IsNullOrWhiteSpace(query)
-                ? "nodeType:MeshNode scope:descendants"
-                : $"*{query}* scope:descendants";
+            // Strip @ prefix if present (from UCR-style autocomplete)
+            var searchPrefix = query?.TrimStart('@') ?? "";
 
-            var request = new MeshQueryRequest
+            // Use AutocompleteAsync with RelevanceFirst mode for context selection
+            // This orders by: name matches first, then path matches, then other matches
+            var suggestions = await meshQuery.AutocompleteAsync(
+                basePath: "",
+                prefix: searchPrefix,
+                mode: AutocompleteMode.RelevanceFirst,
+                limit: 15
+            ).ToArrayAsync();
+
+            return suggestions.Select(s => new CompletionItem
             {
-                Query = searchQuery,
-                Limit = 15
-            };
-
-            var results = new List<CompletionItem>();
-            await foreach (var item in meshQuery.QueryAsync(request))
-            {
-                if (item is MeshNode node)
-                {
-                    // Build full path
-                    var path = !string.IsNullOrEmpty(node.Namespace)
-                        ? $"{node.Namespace}/{node.Id}"
-                        : node.Id;
-
-                    results.Add(new CompletionItem
-                    {
-                        Label = node.Name ?? node.Id,           // Node name (line 1)
-                        InsertText = path,                       // Full path to insert
-                        Path = path,                             // Full path (line 2)
-                        Description = node.Description ?? "",    // Description for detail pane
-                        Category = node.Category ?? "",
-                        IconUrl = node.Icon
-                    });
-                }
-
-                if (results.Count >= 15) break;
-            }
-
-            return results.ToArray();
+                Label = s.Name,                          // Node name (line 1)
+                InsertText = s.Path,                     // Full path to insert
+                Path = s.Path,                           // Full path (line 2)
+                Description = s.NodeType ?? "",          // Node type for detail pane
+                Category = s.NodeType ?? ""
+            }).ToArray();
         }
         catch (Exception ex)
         {
