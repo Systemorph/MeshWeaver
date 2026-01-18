@@ -9,63 +9,94 @@ MeshWeaver provides a control-based GUI system that renders reactive user interf
 
 ---
 
-## Patterns and Principles for Building Reactive UIs
+## What do you want to do?
 
-### Key Principles
-
-| Principle | Description |
-|-----------|-------------|
-| Immutable Controls | Controls are records - each `With*` method returns a new instance |
-| Static Structure | Container structure is static; only area content can be dynamic |
-| Observable Updates | Use observables to create reactive, updating UI areas |
-| Declarative | Define what to render, not how to update it |
-
-### View Patterns
-
-- [Container Control](MeshWeaver/Documentation/GUI/ContainerControl) - Understanding the different `WithView` overloads for adding controls to containers
-
-### Reactivity
-
-- [Static vs Dynamic Views](MeshWeaver/Documentation/GUI/Observables) - Understanding when and how UI areas update in response to data changes
-
-### Data Flow
-
-- [Data Binding](MeshWeaver/Documentation/GUI/DataBinding) - How data flows through the UI with DataContext and UpdatePointer
-
-### Configuration
-
-- [Property Attributes](MeshWeaver/Documentation/GUI/Attributes) - Attributes for forms, validation, and control customization
+| I want to... | Go here |
+|--------------|---------|
+| Arrange controls on screen | [Container Controls](MeshWeaver/Documentation/GUI/ContainerControl) - Stack, Tabs, Toolbar |
+| Build responsive layouts | [Layout Grid](MeshWeaver/Documentation/GUI/LayoutGrid) - Adapt to phones, tablets, desktops |
+| Display data in a table | [DataGrid](MeshWeaver/Documentation/GUI/DataGrid) - Sortable columns, pagination |
+| Create an editable form | [Editor](MeshWeaver/Documentation/GUI/Editor) - Auto-generate forms from records |
+| Make content update automatically | [Static vs Dynamic Views](MeshWeaver/Documentation/GUI/Observables) - Observables, reactivity |
+| Control how data flows | [Data Binding](MeshWeaver/Documentation/GUI/DataBinding) - DataContext, UpdatePointer |
+| Customize field behavior | [Attributes](MeshWeaver/Documentation/GUI/Attributes) - Validation, display options |
 
 ---
 
-## UI Controls
+## How it works
 
-### Control Categories
+### Immutable Controls
 
-| Category | Controls | Purpose |
-|----------|----------|---------|
-| Container | Stack, Tabs, Splitter, Layout | Organize other controls |
-| Input | TextField, NumberField, CheckBox, Select | Accept user data |
-| Display | Label, Badge, Icon, Markdown, Html | Show information |
-| Data | DataGrid, Editor | Show and edit collections |
-| Action | Button, MenuItem, NavLink | Trigger operations |
+Every control is a C# record. When you call a `With*` method, you get a **new instance** - the original is unchanged:
 
-### Common Control Patterns
+```csharp
+var button1 = Controls.Button("Click me");
+var button2 = button1.WithId("myButton");  // button1 is unchanged
 
-All controls share common patterns:
+// button1 and button2 are different objects
+```
 
-- **Immutable records**: Each `With*` method returns a new instance
-- **Fluent API**: Chain methods for readable configuration
-- **Data binding**: Connect controls to observable data streams
+**Why this matters:** You can safely reuse and compose controls without side effects. A control definition is just data - it doesn't "do" anything until rendered.
 
-### Data Entry
+---
 
-- [Editor Control](MeshWeaver/Documentation/GUI/Editor) - Generate editable forms from C# records with automatic field rendering
+### Fluent API
 
-### Layout
+Chain methods for readable configuration:
 
-- [Stack Control](MeshWeaver/Documentation/GUI/Stack) - Arrange controls vertically or horizontally with configurable spacing
+```csharp
+Controls.Stack
+    .WithOrientation(Orientation.Horizontal)
+    .WithHorizontalGap("8px")
+    .WithView(Controls.Button("Save"))
+    .WithView(Controls.Button("Cancel"))
+```
 
-### Data Display
+**Why this matters:** Order of `With*` calls doesn't matter (each is independent). Every chain produces a complete control definition ready to render.
 
-- [DataGrid Control](MeshWeaver/Documentation/GUI/DataGrid) - Display tabular data with sorting, filtering, and selection
+---
+
+### Declarative Rendering
+
+Define *what* to show, not *how* to update it:
+
+```csharp
+// You declare the UI structure
+Controls.Stack
+    .WithView(Controls.Label($"Hello, {user.Name}"))
+    .WithView(Controls.Button("Logout"))
+
+// The framework handles rendering to the DOM
+```
+
+**Why this matters:** No manual DOM manipulation. You describe the desired state, MeshWeaver figures out how to make it happen.
+
+---
+
+### Area-based Updates
+
+The UI is divided into named areas. Only the affected area re-renders, not the whole UI:
+
+```csharp
+Controls.Stack
+    .WithView(Controls.Html("<h1>Dashboard</h1>"))     // Static - never re-renders
+    .WithView(liveDataStream.Select(d => ShowData(d))) // Dynamic - updates when stream emits
+    .WithView(Controls.Button("Refresh"))              // Static - never re-renders
+```
+
+**Why this matters:** Efficient updates. Changing one area doesn't affect siblings. Container structure is static; only area content can be dynamic.
+
+---
+
+### Observable-driven Reactivity
+
+Pass an `IObservable<T>` to make content update automatically:
+
+```csharp
+var counter = Observable.Interval(TimeSpan.FromSeconds(1));
+
+Controls.Stack
+    .WithView(counter.Select(n => Controls.Label($"Count: {n}")))
+```
+
+**Why this matters:** Each emission replaces the area content. Subscriptions are managed automatically - disposed when the area is removed. No manual subscription handling needed.

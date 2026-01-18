@@ -186,14 +186,19 @@ public static class MeshNodeView
 
         titleContent = titleContent.WithView(Controls.Html($"<h1 style=\"margin: 0;\">{title}</h1>"));
 
+        // Action menu with fixed positioning (stays in top right when scrolling)
+        var actionMenu = Controls.Stack
+            .WithClass("sticky-action-menu action-menu-button")
+            .WithView(BuildActionMenu(host, node));
+
         var headerStack = Controls.Stack
             .WithOrientation(Orientation.Horizontal)
             .WithWidth("100%")
-            .WithStyle("align-items: center; justify-content: space-between; padding-bottom: 24px; margin-bottom: 24px; border-bottom: 1px solid var(--neutral-stroke-rest);")
-            .WithView(titleContent)
-            .WithView(BuildActionMenu(host, node));
+            .WithStyle("align-items: center; padding-bottom: 24px; margin-bottom: 24px; border-bottom: 1px solid var(--neutral-stroke-rest);")
+            .WithView(titleContent);
 
         stack = stack.WithView(headerStack);
+        stack = stack.WithView(actionMenu);  // Add action menu separately (it will be fixed positioned)
 
         // Main content based on node type
         // For Markdown type: renders content directly

@@ -190,7 +190,12 @@ public static class MarkdownView
             Controls.Html($"<h1 style=\"margin: 0; font-size: 1.75rem; font-weight: 600;\">{title}</h1>"));
 
         headerStack = headerStack.WithView(titleSection);
-        headerStack = headerStack.WithView(BuildActionMenu(host, node));
+
+        // Action menu with fixed positioning (stays in top right when scrolling)
+        var actionMenu = Controls.Stack
+            .WithClass("sticky-action-menu action-menu-button")
+            .WithView(BuildActionMenu(host, node));
+        headerStack = headerStack.WithView(actionMenu);
 
         // If we have annotations and in markup mode, use a split layout (Word-style)
         if (hasAnnotations && annotations.Count > 0 && viewMode == AnnotationViewMode.Markup)
