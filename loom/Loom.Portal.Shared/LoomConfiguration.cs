@@ -15,12 +15,12 @@ using MeshWeaver.GoogleMaps;
 using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting;
-using MeshWeaver.Kernel.Hub;
 using MeshWeaver.Hosting.Activity;
 using MeshWeaver.Hosting.AzureBlob;
 using MeshWeaver.Hosting.Blazor;
 using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Hosting.Security;
+using MeshWeaver.Kernel.Hub;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using Microsoft.AspNetCore.Authentication.Cookies;
@@ -253,6 +253,7 @@ public static class LoomConfiguration
         /// </summary>
         public TBuilder ConfigureLoomPortal() => (TBuilder)builder
             .ConfigureHub(mesh => mesh
+                .AddMeshTypes()
                 .AddRadzenDataGrid()
                 .AddRadzenCharts()
                 .AddGoogleMaps()
