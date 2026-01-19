@@ -171,6 +171,21 @@ public static class NodeTypeView
             }
         });
 
+        // Query for Agent nodes under this namespace
+        var agentsStream = Observable.FromAsync(async () =>
+        {
+            if (meshQuery == null)
+                return Array.Empty<MeshNode>() as IReadOnlyList<MeshNode>;
+            try
+            {
+                return await meshQuery.QueryAsync<MeshNode>($"path:{hubPath} nodeType:Agent scope:descendants").ToListAsync() as IReadOnlyList<MeshNode>;
+            }
+            catch
+            {
+                return Array.Empty<MeshNode>();
+            }
+        });
+
         // Initialize selection to "configuration" (show node type definition by default)
         host.UpdateData(SelectionDataId, "configuration");
 
@@ -180,13 +195,13 @@ public static class NodeTypeView
             .WithView(
                 // Left menu - observable, updates when definition or code files load
                 (h, c) => definitionStream
-                    .CombineLatest(codeFilesStream, nodeTypesStream)
+                    .CombineLatest(codeFilesStream, nodeTypesStream, agentsStream)
                     .Select(tuple =>
                     {
-                        var (definition, codeFiles, nodeTypes) = tuple;
+                        var (definition, codeFiles, nodeTypes, agents) = tuple;
                         if (definition == null)
                             return RenderLoading("Loading...");
-                        return BuildLeftMenu(host, hubAddress, definition, codeFiles, nodeTypes);
+                        return BuildLeftMenu(host, hubAddress, definition, codeFiles, nodeTypes, agents);
                     }),
                 skin => skin.WithSize("280px").WithMin("200px").WithMax("400px").WithCollapsible(true)
             )
@@ -206,14 +221,15 @@ public static class NodeTypeView
     }
 
     /// <summary>
-    /// Builds the left navigation menu with Configuration, Code files, and Node Types entries.
+    /// Builds the left navigation menu with Configuration, Code files, Node Types, and Agents entries.
     /// </summary>
     private static UiControl BuildLeftMenu(
         LayoutAreaHost host,
         object hubAddress,
         NodeTypeDefinition content,
         IReadOnlyCollection<CodeConfiguration>? codeFiles,
-        IReadOnlyCollection<MeshNode>? nodeTypes = null)
+        IReadOnlyCollection<MeshNode>? nodeTypes = null,
+        IReadOnlyCollection<MeshNode>? agents = null)
     {
         var navMenu = Controls.NavMenu.WithSkin(s => s.WithWidth(280).WithCollapsible(false));
 
@@ -270,6 +286,24 @@ public static class NodeTypeView
             }
 
             navMenu = navMenu.WithNavGroup(typesGroup);
+        }
+
+        // Agents section (if any Agent nodes exist under this namespace)
+        if (agents != null && agents.Count > 0)
+        {
+            var agentsGroup = new NavGroupControl("Agents")
+                .WithIcon(FluentIcons.Bot())
+                .WithSkin(s => s.WithExpanded(true));
+
+            foreach (var agentNode in agents.OrderBy(n => n.DisplayOrder).ThenBy(n => n.Name))
+            {
+                var agentHref = $"/{agentNode.Path}";
+                agentsGroup = agentsGroup.WithView(
+                    new NavLinkControl(agentNode.Name ?? agentNode.Id, FluentIcons.Bot(), agentHref)
+                );
+            }
+
+            navMenu = navMenu.WithNavGroup(agentsGroup);
         }
 
         // Dependencies section (if any)

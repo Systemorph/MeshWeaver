@@ -43,12 +43,13 @@ public class FileSystemStorageAdapter : IStorageAdapter
         using var reader = new StreamReader(stream);
         var content = await reader.ReadToEndAsync(ct);
 
-        // Try to use a parser for non-JSON formats
-        var parser = _parserRegistry.GetParser(extension);
+        // Try to use parsers for non-JSON formats (with fallback support for .md files)
         MeshNode? node;
-        if (parser != null)
+        var parsers = _parserRegistry.GetParsers(extension);
+        if (parsers.Count > 0)
         {
-            node = await parser.ParseAsync(filePath, content, path, ct);
+            // Use TryParseAsync for fallback support (e.g., AgentFileParser -> MarkdownFileParser)
+            node = await _parserRegistry.TryParseAsync(extension, filePath, content, path, ct);
         }
         else
         {

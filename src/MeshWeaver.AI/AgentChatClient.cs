@@ -6,6 +6,7 @@ using MeshWeaver.AI.Persistence;
 using MeshWeaver.AI.Services;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Layout;
+using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using MeshWeaver.ShortGuid;
 using Microsoft.Agents.AI;
@@ -419,6 +420,35 @@ public class AgentChatClient(
                 }
 
                 logger.LogDebug("No agent matched the context");
+
+                // Try to find an agent from the node's NodeType namespace
+                // E.g., if at ACME/ProductLaunch with NodeType=ACME/Project, search ACME/Project for agents
+                var contextPath = Context.Address?.ToString();
+                if (!string.IsNullOrEmpty(contextPath))
+                {
+                    var meshQuery = serviceProvider.GetService<IMeshQuery>();
+                    if (meshQuery != null)
+                    {
+                        // Get the node at the context path to find its NodeType
+                        var nodes = await meshQuery.QueryAsync<MeshNode>($"path:{contextPath} scope:self").ToListAsync();
+                        var node = nodes.FirstOrDefault();
+                        if (node?.NodeType != null && node.NodeType != "Markdown" && node.NodeType != "Agent")
+                        {
+                            // The NodeType might be a path like "ACME/Project" - search for agents there
+                            logger.LogDebug("[AgentChatClient] Searching NodeType namespace: {NodeType}", node.NodeType);
+                            var typeAgents = await agentResolver.GetAgentsForContextAsync(node.NodeType);
+
+                            foreach (var agentConfig in typeAgents)
+                            {
+                                if (agents.TryGetValue(agentConfig.Id, out var agent))
+                                {
+                                    logger.LogDebug("Selected agent from NodeType namespace: {AgentName}", agentConfig.Id);
+                                    return agent;
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
 

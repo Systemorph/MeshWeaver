@@ -1,6 +1,7 @@
 #pragma warning disable CS1591 // Missing XML comment for publicly visible type or member
 
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
@@ -274,6 +275,86 @@ public class AgentResolverTest
         agents[0].Id.Should().Be("AgentC"); // DisplayOrder = -5
         agents[1].Id.Should().Be("AgentA"); // DisplayOrder = 10, alphabetically first
         agents[2].Id.Should().Be("AgentB"); // DisplayOrder = 10, alphabetically second
+    }
+
+    [Fact]
+    public async Task GetAgentsForContext_SearchesNodeTypeNamespace_FindsAgentInTypeNamespace()
+    {
+        // Arrange
+        // Scenario: ACME/ProductLaunch has NodeType="ACME/Project"
+        // TodoAgent is defined at ACME/Project/TodoAgent
+        // When getting agents for ACME/Project namespace, TodoAgent should be found
+
+        var todoAgent = CreateAgentNode("TodoAgent", "ACME/Project", new AgentConfiguration
+        {
+            Id = "TodoAgent",
+            DisplayName = "Project Task Agent",
+            Description = "Handles project tasks",
+            ContextMatchPattern = "address=like=*ProductLaunch*",
+            ExposedInNavigator = true
+        });
+
+        // Mock: Query for agents in ACME/Project namespace returns TodoAgent
+        _meshQuery.QueryAsync(Arg.Is<MeshQueryRequest>(r =>
+            r.Query.Contains("path:ACME/Project") && r.Query.Contains("nodeType:Agent") && r.Query.Contains("scope:children")),
+            Arg.Any<CancellationToken>())
+            .Returns(ToAsyncEnumerableObject(todoAgent));
+
+        // Mock: Other namespace queries return empty
+        _meshQuery.QueryAsync(Arg.Is<MeshQueryRequest>(r =>
+            r.Query.Contains("nodeType:Agent") && !r.Query.Contains("path:ACME/Project")),
+            Arg.Any<CancellationToken>())
+            .Returns(ToAsyncEnumerableObject());
+
+        // Act - Get agents for ACME/Project (the NodeType namespace of ProductLaunch)
+        var agents = await _resolver.GetAgentsForContextAsync("ACME/Project", TestContext.Current.CancellationToken);
+
+        // Assert - TodoAgent should be found
+        agents.Should().Contain(a => a.Id == "TodoAgent");
+        var foundAgent = agents.First(a => a.Id == "TodoAgent");
+        foundAgent.DisplayName.Should().Be("Project Task Agent");
+    }
+
+    [Fact]
+    public async Task FindMatchingAgents_ProductLaunchContext_MatchesTodAgentByContextPattern()
+    {
+        // Arrange
+        // Scenario: User is viewing ACME/ProductLaunch
+        // TodoAgent has ContextMatchPattern = "address=like=*ProductLaunch*"
+        // TodoAgent should be matched based on the context pattern
+
+        var todoAgent = CreateAgentNode("TodoAgent", "ACME/Project", new AgentConfiguration
+        {
+            Id = "TodoAgent",
+            DisplayName = "Project Task Agent",
+            Description = "Handles project tasks",
+            ContextMatchPattern = "address=like=*ProductLaunch*",
+            ExposedInNavigator = true
+        });
+
+        var navigatorAgent = CreateAgentNode("Navigator", null, new AgentConfiguration
+        {
+            Id = "Navigator",
+            DisplayName = "Navigator",
+            IsDefault = true,
+            ExposedInNavigator = false
+        });
+
+        // Mock: Query for agents returns both
+        _meshQuery.QueryAsync(Arg.Is<MeshQueryRequest>(r => r.Query.Contains("nodeType:Agent")),
+            Arg.Any<CancellationToken>())
+            .Returns(ToAsyncEnumerableObject(todoAgent, navigatorAgent));
+
+        // Act - Find agents matching the context (user at ACME/ProductLaunch)
+        var context = new AgentContext
+        {
+            Address = new Address("ACME", "ProductLaunch") // User is viewing ACME/ProductLaunch
+        };
+        var matchingAgents = await _resolver.FindMatchingAgentsAsync(context, null, TestContext.Current.CancellationToken);
+
+        // Assert - TodoAgent should match because address contains "ProductLaunch"
+        matchingAgents.Should().HaveCount(1);
+        matchingAgents[0].Id.Should().Be("TodoAgent");
     }
 
     #region Helper Methods
