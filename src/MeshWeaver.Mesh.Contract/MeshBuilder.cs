@@ -131,12 +131,10 @@ public record MeshBuilder
         // Hub-level type registries will inherit from this via ParentServiceProvider
         var meshTypeRegistry = MessageHubExtensions.CreateTypeRegistry();
 
-        // Register mesh types on the shared registry for JSON deserialization (e.g., Access partition files)
-        meshTypeRegistry.WithType(typeof(UserAccess), nameof(UserAccess));
-
-        // Capture the list reference - will be populated by ConfigureDefaultNodeHub calls later
-        // The lambda is evaluated when MeshConfiguration is resolved (after all builder calls)
+        // Capture the list references - will be populated by builder calls later
+        // The lambdas are evaluated when services are resolved (after all builder calls)
         var defaultNodeHubConfigs = DefaultNodeHubConfiguration;
+        var meshTypeRegs = MeshTypeRegistrations;
 
         ConfigureServices(services => services
             .AddSingleton(_ =>
@@ -148,7 +146,28 @@ public record MeshBuilder
                         : null;
                 return new MeshConfiguration(MeshNodes.ToDictionary(x => x.Path), combinedDefaultConfig);
             })
-            .AddSingleton<ITypeRegistry>(_ => meshTypeRegistry)
+            .AddSingleton<ITypeRegistry>(_ =>
+            {
+                // Register core mesh types on the shared registry so they're available to ALL hubs
+                // This ensures proper $type serialization across hub boundaries
+                meshTypeRegistry.WithType(typeof(UserAccess), nameof(UserAccess));
+                meshTypeRegistry.WithType(typeof(MeshNode), nameof(MeshNode));
+                meshTypeRegistry.WithType(typeof(MeshNodeState), nameof(MeshNodeState));
+                meshTypeRegistry.WithType(typeof(PingRequest), nameof(PingRequest));
+                meshTypeRegistry.WithType(typeof(PingResponse), nameof(PingResponse));
+                meshTypeRegistry.WithType(typeof(CreateNodeRequest), nameof(CreateNodeRequest));
+                meshTypeRegistry.WithType(typeof(CreateNodeResponse), nameof(CreateNodeResponse));
+                meshTypeRegistry.WithType(typeof(DeleteNodeRequest), nameof(DeleteNodeRequest));
+                meshTypeRegistry.WithType(typeof(DeleteNodeResponse), nameof(DeleteNodeResponse));
+                meshTypeRegistry.WithType(typeof(UpdateNodeRequest), nameof(UpdateNodeRequest));
+                meshTypeRegistry.WithType(typeof(UpdateNodeResponse), nameof(UpdateNodeResponse));
+
+                // Register additional types added via WithMeshType()
+                foreach (var (type, name) in meshTypeRegs)
+                    meshTypeRegistry.WithType(type, name);
+
+                return meshTypeRegistry;
+            })
             .AddSingleton(BuildHub)
             .AddSingleton<AccessService>()
             );
@@ -195,4 +214,32 @@ public record MeshBuilder
         MeshNodes.AddRange(nodes);
         return this;
     }
+
+    /// <summary>
+    /// Registers a type on the mesh-level TypeRegistry for cross-hub serialization.
+    /// Use this to register content types that need to be serialized across hub boundaries.
+    /// </summary>
+    /// <typeparam name="T">The type to register.</typeparam>
+    /// <param name="name">The short name for the type (defaults to type name).</param>
+    /// <returns>The builder for method chaining.</returns>
+    public MeshBuilder WithMeshType<T>(string? name = null)
+    {
+        MeshTypeRegistrations.Add((typeof(T), name ?? typeof(T).Name));
+        return this;
+    }
+
+    /// <summary>
+    /// Registers a type on the mesh-level TypeRegistry for cross-hub serialization.
+    /// Use this to register content types that need to be serialized across hub boundaries.
+    /// </summary>
+    /// <param name="type">The type to register.</param>
+    /// <param name="name">The short name for the type (defaults to type name).</param>
+    /// <returns>The builder for method chaining.</returns>
+    public MeshBuilder WithMeshType(Type type, string? name = null)
+    {
+        MeshTypeRegistrations.Add((type, name ?? type.Name));
+        return this;
+    }
+
+    private List<(Type Type, string Name)> MeshTypeRegistrations { get; } = new();
 }
