@@ -1,21 +1,30 @@
 {
   "id": "DemoVideo",
   "namespace": "ACME/ProductLaunch/Todo",
+  "path": "ACME/ProductLaunch/Todo/DemoVideo",
   "name": "Record product demo video",
   "nodeType": "ACME/Project/Todo",
-  "category": "Tasks",
   "description": "Produce a professional product walkthrough video",
-  "iconName": "Video",
+  "category": "Tasks",
+  "addressSegments": 0,
   "isPersistent": true,
+  "lastModified": "2026-01-12T07:43:17.8312475+00:00",
+  "version": 2,
+  "state": "Active",
+  "isVirtual": false,
   "content": {
-    "$type": "Todo",
     "id": "DemoVideo",
     "title": "Record product demo video",
-    "description": "Script and record a 3-minute product demo video showcasing MeshFlow's workflow builder, integrations, and automation capabilities. Include professional voiceover.",
+    "description": "Script and record a 3-minute product demo video showcasing MeshFlow\u0027s workflow builder, integrations, and automation capabilities. Include professional voiceover.",
     "category": "Marketing",
     "priority": "High",
     "assignee": "Roland",
+    "dueDate": "2026-02-18T00:00:00+01:00",
     "dueDateOffsetDays": 30,
-    "status": "Pending"
-  }
+    "status": "InProgress",
+    "icon": "TaskListSquare",
+    "createdAt": "2026-01-19T20:23:16.388293+00:00"
+  },
+  "routingType": "Shared",
+  "instantiationType": "HubConfiguration"
 }

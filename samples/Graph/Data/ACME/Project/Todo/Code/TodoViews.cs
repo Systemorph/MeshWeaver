@@ -67,6 +67,11 @@ public static class TodoViews
             BuildStatusPromotionMenu(host, todo),
             skin => skin.WithXs(12));
 
+        // CRUD buttons (Edit and Delete)
+        mainGrid = mainGrid.WithView(
+            BuildCrudButtons(host, todo),
+            skin => skin.WithXs(12));
+
         return mainGrid;
     }
 
@@ -119,6 +124,92 @@ public static class TodoViews
                     <div style=""font-size: 12px; color: var(--accent-foreground-rest);"">View Profile \u2192</div>
                 </a>
             </div>");
+    }
+
+    private static UiControl BuildCrudButtons(LayoutAreaHost host, Todo todo)
+    {
+        return Controls.Stack
+            .WithOrientation(Orientation.Horizontal)
+            .WithStyle(style => style.WithGap("8px").WithMarginTop("16px"))
+            .WithView(Controls.Button("Edit")
+                .WithAppearance(Appearance.Neutral)
+                .WithClickAction(_ =>
+                {
+                    OpenEditDialog(host, todo);
+                    return System.Threading.Tasks.Task.CompletedTask;
+                }))
+            .WithView(Controls.Button("Delete")
+                .WithAppearance(Appearance.Neutral)
+                .WithStyle(style => style.WithColor("#dc3545"))
+                .WithClickAction(_ =>
+                {
+                    DeleteTodo(host, todo);
+                    return System.Threading.Tasks.Task.CompletedTask;
+                }));
+    }
+
+    private static void OpenEditDialog(LayoutAreaHost host, Todo todo)
+    {
+        var editDataId = $"EditTodo_{todo.Id}";
+
+        var editForm = Controls.Stack
+            .WithView(Controls.H5("Edit Task")
+                .WithStyle(style => style.WithWidth("100%").WithTextAlign("center")))
+            .WithView(host.Edit(todo, editDataId)?
+                .WithStyle(style => style.WithWidth("100%").WithDisplay("block")), editDataId)
+            .WithView(Controls.Stack
+                .WithView(Controls.Button("Save")
+                    .WithAppearance(Appearance.Accent)
+                    .WithClickAction(_ =>
+                    {
+                        // Retrieve edited data from the store
+                        var store = host.Stream.Current?.Value;
+                        var dataCollection = store?.GetCollection(LayoutAreaReference.Data);
+                        var rawData = dataCollection?.Instances.GetValueOrDefault(editDataId);
+
+                        Todo? editedTodo = null;
+                        if (rawData is Todo t)
+                            editedTodo = t;
+                        else if (rawData is System.Text.Json.JsonElement jsonElement)
+                            editedTodo = System.Text.Json.JsonSerializer.Deserialize<Todo>(jsonElement.GetRawText());
+
+                        if (editedTodo != null)
+                        {
+                            // Ensure the ID is preserved
+                            editedTodo = editedTodo with { Id = todo.Id };
+
+                            // Post DataChangeRequest to persist the changes
+                            var changeRequest = new DataChangeRequest().WithUpdates(editedTodo);
+                            host.Hub.Post(changeRequest, o => o.WithTarget(host.Hub.Address));
+                        }
+
+                        host.UpdateArea(DialogControl.DialogArea, null!);
+                        return System.Threading.Tasks.Task.CompletedTask;
+                    }))
+                .WithView(Controls.Button("Cancel")
+                    .WithAppearance(Appearance.Neutral)
+                    .WithClickAction(_ =>
+                    {
+                        host.UpdateArea(DialogControl.DialogArea, null!);
+                        return System.Threading.Tasks.Task.CompletedTask;
+                    }))
+                .WithOrientation(Orientation.Horizontal)
+                .WithHorizontalGap(10)
+                .WithStyle(style => style.WithJustifyContent("center").WithWidth("100%")))
+            .WithVerticalGap(15)
+            .WithStyle(style => style.WithWidth("100%").WithDisplay("block").WithMargin("0 auto"));
+
+        var dialog = Controls.Dialog(editForm, "Edit Task")
+            .WithSize("M")
+            .WithClosable(false);
+
+        host.UpdateArea(DialogControl.DialogArea, dialog);
+    }
+
+    private static void DeleteTodo(LayoutAreaHost host, Todo todo)
+    {
+        var changeRequest = new DataChangeRequest().WithDeletions(todo);
+        host.Hub.Post(changeRequest, o => o.WithTarget(host.Hub.Address));
     }
 
     private static UiControl BuildStatusPromotionMenu(LayoutAreaHost host, Todo todo)
@@ -321,6 +412,30 @@ public static class TodoViews
                         return System.Threading.Tasks.Task.CompletedTask;
                     }));
         }
+
+        // Edit button
+        actionRow = actionRow.WithView(
+            Controls.Button("\u270f\ufe0f")
+                .WithLabel("Edit")
+                .WithAppearance(Appearance.Neutral)
+                .WithStyle(style => style.WithMinWidth("32px").WithPadding("4px 8px"))
+                .WithClickAction(_ =>
+                {
+                    OpenEditDialog(host, todo);
+                    return System.Threading.Tasks.Task.CompletedTask;
+                }));
+
+        // Delete button
+        actionRow = actionRow.WithView(
+            Controls.Button("\ud83d\uddd1\ufe0f")
+                .WithLabel("Delete")
+                .WithAppearance(Appearance.Neutral)
+                .WithStyle(style => style.WithMinWidth("32px").WithPadding("4px 8px").WithColor("#dc3545"))
+                .WithClickAction(_ =>
+                {
+                    DeleteTodo(host, todo);
+                    return System.Threading.Tasks.Task.CompletedTask;
+                }));
 
         stack = stack.WithView(actionRow);
 

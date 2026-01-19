@@ -5,6 +5,8 @@ Description: Organize content into switchable tabbed panels
 Icon: /static/storage/content/MeshWeaver/Documentation/GUI/ContainerControl/Tabs/icon.svg
 ---
 
+# Organizing Content Into Switchable Tabs
+
 The Tabs control organizes content into switchable panels. Each tab has a label and displays its content when selected.
 
 ## Basic Usage
