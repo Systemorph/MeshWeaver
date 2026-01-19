@@ -574,7 +574,7 @@ internal class NodeTypeService : INodeTypeService, IDisposable
     /// Global types that are always creatable everywhere.
     /// These are types with empty namespace (root-level types).
     /// </summary>
-    private static readonly string[] GlobalTypes = ["Markdown", "NodeType"];
+    private static readonly string[] GlobalTypes = ["Markdown", "NodeType", "Agent"];
 
     /// <inheritdoc />
     public async IAsyncEnumerable<CreatableTypeInfo> GetCreatableTypesAsync(
