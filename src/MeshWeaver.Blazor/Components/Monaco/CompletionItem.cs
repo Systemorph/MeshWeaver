@@ -1,4 +1,4 @@
-namespace MeshWeaver.Blazor.Monaco;
+namespace MeshWeaver.Blazor.Components.Monaco;
 
 /// <summary>
 /// Kind of completion item - maps to Monaco's CompletionItemKind.

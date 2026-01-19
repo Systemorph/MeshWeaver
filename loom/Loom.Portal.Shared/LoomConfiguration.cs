@@ -6,7 +6,6 @@ using MeshWeaver.AI.Persistence;
 using MeshWeaver.Blazor.GoogleMaps;
 using MeshWeaver.Blazor.Graph;
 using MeshWeaver.Blazor.Infrastructure;
-using MeshWeaver.Blazor.Monaco;
 using MeshWeaver.Blazor.Pages;
 using MeshWeaver.Blazor.Portal;
 using MeshWeaver.Blazor.Portal.Authentication;
@@ -258,7 +257,6 @@ public static class LoomConfiguration
                 .AddRadzenCharts()
                 .AddGoogleMaps()
                 .AddGraphViews()  // Also enables @ autocomplete in markdown editors
-                .AddMonacoViews()
             )
             .AddBlazor(layoutClient => layoutClient
                 .WithPortalConfiguration(c => c)

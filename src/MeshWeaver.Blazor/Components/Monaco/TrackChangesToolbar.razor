@@ -5,17 +5,17 @@
         <span class="toolbar-label">Track Changes</span>
     </div>
 
-    <FluentDivider Role="DividerRole.Presentation" Orientation="Orientation.Vertical" />
+    <FluentDivider Role="DividerRole.Presentation" Orientation="FluentOrientation.Vertical" />
 
     <div class="toolbar-section">
-        <FluentButton Appearance="Appearance.Lightweight"
+        <FluentButton Appearance="FluentAppearance.Lightweight"
                        Title="Accept current change"
                        OnClick="@OnAcceptClick">
             <FluentIcon Value="@(new Icons.Regular.Size16.Checkmark())" Color="Color.Success" Slot="start" />
             Accept
         </FluentButton>
 
-        <FluentButton Appearance="Appearance.Lightweight"
+        <FluentButton Appearance="FluentAppearance.Lightweight"
                        Title="Reject current change"
                        OnClick="@OnRejectClick">
             <FluentIcon Value="@(new Icons.Regular.Size16.Dismiss())" Color="Color.Error" Slot="start" />
@@ -23,33 +23,33 @@
         </FluentButton>
     </div>
 
-    <FluentDivider Role="DividerRole.Presentation" Orientation="Orientation.Vertical" />
+    <FluentDivider Role="DividerRole.Presentation" Orientation="FluentOrientation.Vertical" />
 
     <div class="toolbar-section">
-        <FluentButton Appearance="Appearance.Lightweight"
+        <FluentButton Appearance="FluentAppearance.Lightweight"
                        Title="Previous change"
                        OnClick="@OnPreviousChange">
             <FluentIcon Value="@(new Icons.Regular.Size16.ChevronUp())" />
         </FluentButton>
 
-        <FluentButton Appearance="Appearance.Lightweight"
+        <FluentButton Appearance="FluentAppearance.Lightweight"
                        Title="Next change"
                        OnClick="@OnNextChange">
             <FluentIcon Value="@(new Icons.Regular.Size16.ChevronDown())" />
         </FluentButton>
     </div>
 
-    <FluentDivider Role="DividerRole.Presentation" Orientation="Orientation.Vertical" />
+    <FluentDivider Role="DividerRole.Presentation" Orientation="FluentOrientation.Vertical" />
 
     <div class="toolbar-section">
-        <FluentButton Appearance="Appearance.Lightweight"
+        <FluentButton Appearance="FluentAppearance.Lightweight"
                        Title="Accept all changes"
                        OnClick="@OnAcceptAllClick">
             <FluentIcon Value="@(new Icons.Regular.Size16.CheckmarkCircle())" Color="Color.Success" Slot="start" />
             Accept All
         </FluentButton>
 
-        <FluentButton Appearance="Appearance.Lightweight"
+        <FluentButton Appearance="FluentAppearance.Lightweight"
                        Title="Reject all changes"
                        OnClick="@OnRejectAllClick">
             <FluentIcon Value="@(new Icons.Regular.Size16.DismissCircle())" Color="Color.Error" Slot="start" />

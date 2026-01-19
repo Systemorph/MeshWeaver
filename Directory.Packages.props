@@ -136,6 +136,7 @@
     <PackageVersion Include="OpenTelemetry.Instrumentation.Runtime" Version="1.14.0" />
     <PackageVersion Include="System.Interactive" Version="7.0.0" />
     <PackageVersion Include="System.Reactive" Version="6.1.0" />
+    <PackageVersion Include="Microsoft.Reactive.Testing" Version="6.1.0" />
     <PackageVersion Include="Roslynator.Analyzers" Version="4.13.1" />
     <PackageVersion Include="Roslynator.Formatting.Analyzers" Version="4.13.1" />
     <PackageVersion Include="Roslynator.CodeFixes" Version="4.13.1" />

@@ -102,6 +102,9 @@ public record MeshDataSource : GenericUnpartitionedDataSource<MeshDataSource>
     /// </summary>
     public MeshDataSource WithContentType(Type dataType)
     {
+        // Register the content type in TypeRegistry for JSON serialization
+        Workspace.Hub.TypeRegistry.WithType(dataType, dataType.Name);
+
         if (_persistence == null)
         {
             _logger?.LogWarning("MeshDataSource: No persistence service, using basic type source for {Type}", dataType.Name);

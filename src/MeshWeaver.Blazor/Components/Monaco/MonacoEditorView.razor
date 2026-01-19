@@ -168,7 +168,7 @@
 
         // Load custom JS module for placeholder and agent completion
         jsModule = await JSRuntime.InvokeAsync<IJSObjectReference>("import",
-            "./_content/MeshWeaver.Blazor.Monaco/MonacoEditorView.razor.js");
+            "./_content/MeshWeaver.Blazor/Components/Monaco/MonacoEditorView.razor.js");
 
         if (jsModule != null)
         {

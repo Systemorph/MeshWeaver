@@ -113,15 +113,35 @@ public partial class MarkdownFileParser : IFileFormatParser
     {
         var sb = new StringBuilder();
 
-        // Build YAML front matter
+        // Extract MarkdownContent if available to preserve article metadata
+        MarkdownContent? mdContent = node.Content switch
+        {
+            MarkdownContent doc => doc,
+            System.Text.Json.JsonElement jsonElement => ExtractMarkdownContentFromJsonElement(jsonElement),
+            _ => null
+        };
+
+        // Build YAML front matter from node properties and MarkdownContent metadata
         var frontMatter = new MarkdownFrontMatter
         {
+            // Node-level properties
             NodeType = node.NodeType != "Markdown" ? node.NodeType : null,
             Name = node.Name != node.Id ? node.Name : null,
             Category = node.Category,
             Description = node.Description,
             Icon = node.Icon != DefaultMarkdownIcon ? node.Icon : null,
-            State = node.State != MeshNodeState.Active ? node.State.ToString() : null
+            State = node.State != MeshNodeState.Active ? node.State.ToString() : null,
+
+            // Article metadata from MarkdownContent
+            Authors = mdContent?.Authors?.ToList(),
+            Tags = mdContent?.Tags?.ToList(),
+            Thumbnail = mdContent?.Thumbnail,
+            VideoUrl = mdContent?.VideoUrl,
+            VideoDuration = mdContent?.VideoDuration?.ToString(),
+            VideoTitle = mdContent?.VideoTitle,
+            VideoDescription = mdContent?.VideoDescription,
+            VideoTagLine = mdContent?.VideoTagLine,
+            VideoTranscript = mdContent?.VideoTranscript
         };
 
         // Only write YAML block if there's meaningful content
@@ -130,7 +150,11 @@ public partial class MarkdownFileParser : IFileFormatParser
                             frontMatter.Category != null ||
                             frontMatter.Description != null ||
                             frontMatter.Icon != null ||
-                            frontMatter.State != null;
+                            frontMatter.State != null ||
+                            frontMatter.Authors?.Count > 0 ||
+                            frontMatter.Tags?.Count > 0 ||
+                            frontMatter.Thumbnail != null ||
+                            frontMatter.VideoUrl != null;
 
         if (hasYamlContent)
         {
@@ -142,25 +166,135 @@ public partial class MarkdownFileParser : IFileFormatParser
         }
 
         // Append markdown content - extract from MarkdownContent if needed
-        var markdownContent = node.Content switch
+        // Handle JsonElement for cases where Content type was lost during JSON round-trip
+        var markdownText = node.Content switch
         {
             MarkdownContent doc => doc.Content,
             string str => str,
+            System.Text.Json.JsonElement jsonElement => ExtractContentFromJsonElement(jsonElement),
             _ => null
         };
 
-        if (markdownContent != null)
+        if (markdownText != null)
         {
-            sb.Append(markdownContent);
+            sb.Append(markdownText);
         }
 
         return Task.FromResult(sb.ToString());
     }
 
+    /// <summary>
+    /// Extracts MarkdownContent object from a JsonElement.
+    /// </summary>
+    private static MarkdownContent? ExtractMarkdownContentFromJsonElement(System.Text.Json.JsonElement element)
+    {
+        if (element.ValueKind != System.Text.Json.JsonValueKind.Object)
+            return null;
+
+        try
+        {
+            var content = element.TryGetProperty("content", out var contentProp) && contentProp.ValueKind == System.Text.Json.JsonValueKind.String
+                ? contentProp.GetString()
+                : null;
+
+            if (content == null)
+                return null;
+
+            return new MarkdownContent
+            {
+                Content = content,
+                Authors = ExtractStringList(element, "authors"),
+                Tags = ExtractStringList(element, "tags"),
+                Thumbnail = ExtractString(element, "thumbnail"),
+                VideoUrl = ExtractString(element, "videoUrl"),
+                VideoDuration = ExtractTimeSpan(element, "videoDuration"),
+                VideoTitle = ExtractString(element, "videoTitle"),
+                VideoDescription = ExtractString(element, "videoDescription"),
+                VideoTagLine = ExtractString(element, "videoTagLine"),
+                VideoTranscript = ExtractString(element, "videoTranscript")
+            };
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static string? ExtractString(System.Text.Json.JsonElement element, string propertyName)
+    {
+        return element.TryGetProperty(propertyName, out var prop) && prop.ValueKind == System.Text.Json.JsonValueKind.String
+            ? prop.GetString()
+            : null;
+    }
+
+    private static List<string>? ExtractStringList(System.Text.Json.JsonElement element, string propertyName)
+    {
+        if (!element.TryGetProperty(propertyName, out var prop) || prop.ValueKind != System.Text.Json.JsonValueKind.Array)
+            return null;
+
+        var list = new List<string>();
+        foreach (var item in prop.EnumerateArray())
+        {
+            if (item.ValueKind == System.Text.Json.JsonValueKind.String)
+                list.Add(item.GetString()!);
+        }
+        return list.Count > 0 ? list : null;
+    }
+
+    private static TimeSpan? ExtractTimeSpan(System.Text.Json.JsonElement element, string propertyName)
+    {
+        var str = ExtractString(element, propertyName);
+        return str != null && TimeSpan.TryParse(str, out var result) ? result : null;
+    }
+
     public bool CanSerialize(MeshNode node)
     {
-        // Handle nodes with NodeType "Markdown", MarkdownContent content, or string content
-        return node.NodeType == "Markdown" || node.Content is MarkdownContent || node.Content is string;
+        // Handle nodes with NodeType "Markdown", MarkdownContent content, string content,
+        // or JsonElement content (from JSON round-trip where type info was lost)
+        return node.NodeType == "Markdown"
+            || node.Content is MarkdownContent
+            || node.Content is string
+            || (node.Content is System.Text.Json.JsonElement je && HasMarkdownContent(je));
+    }
+
+    /// <summary>
+    /// Extracts the Content string from a JsonElement that represents a serialized MarkdownContent.
+    /// </summary>
+    private static string? ExtractContentFromJsonElement(System.Text.Json.JsonElement element)
+    {
+        // Try to get the "content" property (MarkdownContent.Content)
+        if (element.ValueKind == System.Text.Json.JsonValueKind.Object &&
+            element.TryGetProperty("content", out var contentProp))
+        {
+            if (contentProp.ValueKind == System.Text.Json.JsonValueKind.String)
+                return contentProp.GetString();
+        }
+
+        // If it's just a string, return it directly
+        if (element.ValueKind == System.Text.Json.JsonValueKind.String)
+            return element.GetString();
+
+        return null;
+    }
+
+    /// <summary>
+    /// Checks if a JsonElement looks like it contains markdown content.
+    /// </summary>
+    private static bool HasMarkdownContent(System.Text.Json.JsonElement element)
+    {
+        // Check for object with "content" property (MarkdownContent structure)
+        if (element.ValueKind == System.Text.Json.JsonValueKind.Object &&
+            element.TryGetProperty("content", out var contentProp) &&
+            contentProp.ValueKind == System.Text.Json.JsonValueKind.String)
+        {
+            return true;
+        }
+
+        // Check for plain string content
+        if (element.ValueKind == System.Text.Json.JsonValueKind.String)
+            return true;
+
+        return false;
     }
 
     private static (string Id, string? Namespace) DeriveIdAndNamespace(string relativePath, string filePath)

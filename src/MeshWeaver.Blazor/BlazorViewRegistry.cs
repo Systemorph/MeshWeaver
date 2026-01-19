@@ -77,6 +77,7 @@ public static class BlazorViewRegistry
             ItemTemplateControl itemTemplate
                 => StandardView<ItemTemplateControl, ItemTemplate>(itemTemplate, stream, area),
             MarkdownControl markdown => StandardView<MarkdownControl, Components.MarkdownView>(markdown, stream, area),
+            MarkdownEditorControl markdownEditor => StandardView<MarkdownEditorControl, MarkdownEditorView>(markdownEditor, stream, area),
             NamedAreaControl namedView => StandardView<NamedAreaControl, NamedAreaView>(namedView, stream, area),
             SpacerControl spacer => StandardView<SpacerControl, SpacerView>(spacer, stream, area),
             ArticleControl article => StandardView<ArticleControl, ArticleView>(article, stream, area),

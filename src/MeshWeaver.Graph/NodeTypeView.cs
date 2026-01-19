@@ -2,7 +2,6 @@
 using System.Reactive.Linq;
 using Humanizer;
 using MeshWeaver.Application.Styles;
-using MeshWeaver.Blazor.Monaco;
 using MeshWeaver.Data;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Layout;

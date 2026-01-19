@@ -1,4 +1,4 @@
-// JavaScript initializer for MeshWeaver.Blazor.Monaco
+// JavaScript initializer for MeshWeaver.Blazor
 // This file is automatically loaded by Blazor when the library is referenced.
 // It dynamically loads the BlazorMonaco scripts so they don't need to be
 // manually added to App.razor.
@@ -39,9 +39,9 @@ async function loadMonacoScripts() {
             await loadScript('_content/BlazorMonaco/lib/monaco-editor/min/vs/editor/editor.main.js');
 
             scriptsLoaded = true;
-            console.log('MeshWeaver.Blazor.Monaco: BlazorMonaco scripts loaded successfully');
+            console.log('MeshWeaver.Blazor: BlazorMonaco scripts loaded successfully');
         } catch (error) {
-            console.error('MeshWeaver.Blazor.Monaco: Failed to load BlazorMonaco scripts', error);
+            console.error('MeshWeaver.Blazor: Failed to load BlazorMonaco scripts', error);
             throw error;
         }
     })();

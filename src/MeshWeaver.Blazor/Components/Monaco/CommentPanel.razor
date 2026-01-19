@@ -58,13 +58,13 @@
                     <div class="comment-actions">
                         @if (comment.State != CommentState.Resolved)
                         {
-                            <FluentButton Appearance="Appearance.Lightweight"
+                            <FluentButton Appearance="FluentAppearance.Lightweight"
                                            OnClick="@(() => OnResolveClick(comment.Id))">
                                 <FluentIcon Value="@(new Icons.Regular.Size16.Checkmark())" Slot="start" />
                                 Resolve
                             </FluentButton>
                         }
-                        <FluentButton Appearance="Appearance.Lightweight"
+                        <FluentButton Appearance="FluentAppearance.Lightweight"
                                        OnClick="@(() => OnDeleteClick(comment.Id))">
                             <FluentIcon Value="@(new Icons.Regular.Size16.Delete())" Slot="start" />
                             Delete
@@ -77,7 +77,7 @@
                             <FluentTextField @bind-Value="replyText"
                                              Placeholder="Reply..."
                                              Style="flex: 1;" />
-                            <FluentButton Appearance="Appearance.Accent"
+                            <FluentButton Appearance="FluentAppearance.Accent"
                                            Disabled="@(string.IsNullOrWhiteSpace(replyText))"
                                            OnClick="@(() => OnReplyClick(comment.Id))">
                                 Reply

@@ -1,6 +1,7 @@
 ﻿using MeshWeaver.ContentCollections;
 using MeshWeaver.Data;
 using MeshWeaver.Domain;
+using MeshWeaver.Markdown;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
@@ -84,6 +85,7 @@ public static class GraphConfigurationExtensions
                     typeRegistry.WithType(typeof(AgentConfiguration), nameof(AgentConfiguration));
                     typeRegistry.WithType(typeof(AgentDelegation), nameof(AgentDelegation));
                     typeRegistry.WithType(typeof(Comment), nameof(Comment));
+                    typeRegistry.WithType(typeof(MarkdownContent), nameof(MarkdownContent));
                 }
 
                 // Register compilation cache options
