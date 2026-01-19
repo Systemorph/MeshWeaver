@@ -1,4 +1,4 @@
-﻿using MeshWeaver.ContentCollections;
+using MeshWeaver.ContentCollections;
 using MeshWeaver.Data;
 using MeshWeaver.Domain;
 using MeshWeaver.Markdown;

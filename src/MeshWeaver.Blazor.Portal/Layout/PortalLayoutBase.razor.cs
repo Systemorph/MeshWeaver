@@ -2,8 +2,12 @@
 using MeshWeaver.Blazor.Chat;
 using MeshWeaver.Blazor.Portal.Components;
 using MeshWeaver.Blazor.Portal.Resize;
+using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Services;
+using MeshWeaver.Messaging;
 using Microsoft.AspNetCore.Components;
 using Microsoft.AspNetCore.Components.Routing;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.FluentUI.AspNetCore.Components;
 using Microsoft.JSInterop;
 
@@ -14,6 +18,7 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
     [Inject] protected IJSRuntime JSRuntime { get; set; } = null!;
     [Inject] protected NavigationManager NavigationManager { get; set; } = null!;
     [Inject] protected ChatWindowStateService ChatState { get; set; } = null!;
+    [Inject] protected IMessageHub Hub { get; set; } = null!;
 
     // Splitter pane sizes - default 3:1 ratio (75% main, 25% chat)
     private string MainPaneSize => ChatState.Width.HasValue ? $"{100 - ChatState.Width.Value}%" : "75%";
@@ -44,6 +49,11 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
     private bool isNavMenuOpen;
     protected bool IsNavMenuOpen => isNavMenuOpen;
 
+    // Create menu state
+    protected bool isCreateMenuOpen;
+    protected List<CreatableTypeInfo> creatableTypes = new();
+    private string? lastLoadedPath;
+
     private readonly AgentChatControl chatControl = new();
     private IJSObjectReference? jsModule;
     private DotNetObjectReference<PortalLayoutBase>? dotNetRef;
@@ -53,6 +63,98 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
         base.OnInitialized();
         NavigationManager.LocationChanged += OnLocationChanged;
         ChatState.OnStateChanged += OnChatStateChanged;
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        await base.OnInitializedAsync();
+        await LoadCreatableTypesAsync();
+    }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        await base.OnParametersSetAsync();
+
+        // Reload types when URL changes
+        var currentPath = GetCurrentNodePath();
+        if (currentPath != lastLoadedPath)
+        {
+            await LoadCreatableTypesAsync();
+        }
+    }
+
+    /// <summary>
+    /// Loads the creatable types for the current node path.
+    /// </summary>
+    protected virtual async Task LoadCreatableTypesAsync()
+    {
+        var nodeTypeService = Hub?.ServiceProvider.GetService<INodeTypeService>();
+        if (nodeTypeService == null)
+            return;
+
+        var currentPath = GetCurrentNodePath();
+        lastLoadedPath = currentPath;
+
+        try
+        {
+            creatableTypes = await nodeTypeService
+                .GetCreatableTypesAsync(currentPath)
+                .ToListAsync();
+            StateHasChanged();
+        }
+        catch
+        {
+            // Fallback to empty list on error
+            creatableTypes = new();
+        }
+    }
+
+    /// <summary>
+    /// Extracts the current node path from the URL.
+    /// URLs are in format: /{nodePath}/{area} or /{nodePath}
+    /// Returns empty string for root level.
+    /// </summary>
+    protected virtual string GetCurrentNodePath()
+    {
+        var uri = new Uri(NavigationManager.Uri);
+        var path = uri.AbsolutePath.TrimStart('/');
+
+        if (string.IsNullOrEmpty(path))
+            return "";
+
+        // Known view areas that should be stripped from the path
+        var viewAreas = new[] { "Details", "Edit", "Create", "Thumbnail", "Catalog", "LayoutAreas", "Read", "Metadata", "Notebook", "Comments", "Attachments", "Settings" };
+
+        var segments = path.Split('/');
+
+        // If last segment is a known view area, remove it
+        if (segments.Length > 1 && viewAreas.Contains(segments[^1], StringComparer.OrdinalIgnoreCase))
+        {
+            return string.Join("/", segments[..^1]);
+        }
+
+        // Return full path as node path
+        return path;
+    }
+
+    /// <summary>
+    /// Navigates to the create page for the specified node type.
+    /// </summary>
+    protected virtual void NavigateToCreate(string nodeTypePath)
+    {
+        isCreateMenuOpen = false;
+
+        var currentPath = GetCurrentNodePath();
+        if (string.IsNullOrEmpty(currentPath))
+        {
+            // At root level - navigate to create with type parameter
+            NavigationManager.NavigateTo($"/create?type={Uri.EscapeDataString(nodeTypePath)}");
+        }
+        else
+        {
+            // Inside a node - navigate to create page with parent and type parameters
+            NavigationManager.NavigateTo($"/create?parent={Uri.EscapeDataString(currentPath)}&type={Uri.EscapeDataString(nodeTypePath)}");
+        }
     }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)

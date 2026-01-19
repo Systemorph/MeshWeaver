@@ -1,0 +1,313 @@
+@page "/create"
+@using MeshWeaver.Mesh
+@using MeshWeaver.Mesh.Services
+@using MeshWeaver.Markdown
+@using MeshWeaver.Messaging
+@using MeshWeaver.Graph.Configuration
+@using Microsoft.Extensions.DependencyInjection
+@namespace MeshWeaver.Blazor.Portal.Pages
+@inject IMessageHub Hub
+@inject IMeshCatalog Catalog
+@inject INavigationService NavigationService
+
+<PageTitle>Create Node</PageTitle>
+
+<div class="create-page" style="padding: 24px; max-width: 800px; margin: 0 auto; width: 100%;">
+    @if (selectedType == null)
+    {
+        <!-- Step 1: Select node type -->
+        <div style="display: flex; align-items: center; gap: 16px; margin-bottom: 24px;">
+            @if (!string.IsNullOrEmpty(ParentPath))
+            {
+                <FluentButton Appearance="Appearance.Stealth" OnClick="GoBack">
+                    <FluentIcon Value="@(new Icons.Regular.Size20.ArrowLeft())" />
+                </FluentButton>
+            }
+            <h1 style="margin: 0;">Create New</h1>
+        </div>
+
+        @if (!string.IsNullOrEmpty(ParentPath))
+        {
+            <p style="color: var(--neutral-foreground-hint); margin-bottom: 16px;">
+                Creating in: <strong>@ParentPath</strong>
+            </p>
+        }
+
+        @if (isLoadingTypes)
+        {
+            <FluentProgressRing />
+        }
+        else if (creatableTypes.Count == 0)
+        {
+            <FluentMessageBar Intent="MessageIntent.Warning">
+                No node types available for creation at this location.
+            </FluentMessageBar>
+        }
+        else
+        {
+            <p style="color: var(--neutral-foreground-hint); margin-bottom: 16px;">
+                Select the type of node to create:
+            </p>
+
+            <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 16px;">
+                @foreach (var typeInfo in creatableTypes)
+                {
+                    <div class="type-card" @onclick="@(() => SelectType(typeInfo))"
+                         style="padding: 16px; border: 1px solid var(--neutral-stroke-rest); border-radius: 8px; cursor: pointer; background: var(--neutral-layer-card-container); transition: all 0.15s ease;"
+                         onmouseover="this.style.borderColor='var(--accent-fill-rest)'; this.style.boxShadow='0 2px 8px rgba(0,0,0,0.1)';"
+                         onmouseout="this.style.borderColor='var(--neutral-stroke-rest)'; this.style.boxShadow='none';">
+                        <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 8px;">
+                            <FluentIcon Value="@GetFluentIcon(typeInfo.Icon)" Color="Color.Accent" />
+                            <strong>@(typeInfo.DisplayName ?? GetLastSegment(typeInfo.NodeTypePath))</strong>
+                        </div>
+                        @if (!string.IsNullOrEmpty(typeInfo.Description))
+                        {
+                            <div style="font-size: 14px; color: var(--neutral-foreground-hint);">
+                                @TruncateText(typeInfo.Description, 80)
+                            </div>
+                        }
+                    </div>
+                }
+            </div>
+        }
+    }
+    else
+    {
+        <!-- Step 2: Fill in details -->
+        <div style="display: flex; align-items: center; gap: 16px; margin-bottom: 24px;">
+            <FluentButton Appearance="Appearance.Stealth" OnClick="ClearTypeSelection">
+                <FluentIcon Value="@(new Icons.Regular.Size20.ArrowLeft())" />
+            </FluentButton>
+            <h1 style="margin: 0;">Create @(selectedType.DisplayName ?? GetLastSegment(selectedType.NodeTypePath))</h1>
+        </div>
+
+        <div style="background: var(--neutral-layer-1); padding: 8px 16px; border-radius: 8px; margin-bottom: 24px; display: flex; align-items: center; gap: 8px;">
+            <span style="color: var(--neutral-foreground-hint);">Type:</span>
+            <strong style="color: var(--accent-fill-rest);">@selectedType.NodeTypePath</strong>
+        </div>
+
+        <div style="display: flex; flex-direction: column; gap: 20px;">
+            <!-- Name field -->
+            <div>
+                <FluentTextField @bind-Value="nodeName"
+                                 Label="Name *"
+                                 Placeholder="Enter a name for the new node"
+                                 Style="width: 100%;" />
+            </div>
+
+            <!-- Icon field -->
+            <div>
+                <label style="font-weight: 600; display: block; margin-bottom: 4px;">Icon</label>
+                <div style="display: flex; gap: 8px; align-items: center;">
+                    <FluentTextField @bind-Value="nodeIcon"
+                                     Placeholder="Icon name (e.g., Document, Code, Bot)"
+                                     Style="flex: 1;" />
+                    @if (!string.IsNullOrEmpty(nodeIcon))
+                    {
+                        <div style="width: 40px; height: 40px; display: flex; align-items: center; justify-content: center; border: 1px solid var(--neutral-stroke-rest); border-radius: 4px;">
+                            <FluentIcon Value="@GetFluentIcon(nodeIcon)" />
+                        </div>
+                    }
+                </div>
+                <div style="font-size: 12px; color: var(--neutral-foreground-hint); margin-top: 4px;">
+                    Common icons: Document, Code, Bot, Briefcase, Building, Person, Settings, Star
+                </div>
+            </div>
+
+            <!-- Description field -->
+            <div>
+                <label style="font-weight: 600; display: block; margin-bottom: 4px;">Description</label>
+                <FluentTextArea @bind-Value="nodeDescription"
+                                Placeholder="Enter a description (supports Markdown)"
+                                Rows="4"
+                                Style="width: 100%;" />
+            </div>
+
+            <!-- Action buttons -->
+            <div style="display: flex; gap: 12px; margin-top: 8px;">
+                <FluentButton Appearance="Appearance.Accent" OnClick="CreateNodeAsync" Disabled="@(isCreating || string.IsNullOrWhiteSpace(nodeName))">
+                    @if (isCreating)
+                    {
+                        <FluentProgressRing Style="width: 16px; height: 16px; margin-right: 8px;" />
+                    }
+                    Create
+                </FluentButton>
+                <FluentButton Appearance="Appearance.Neutral" OnClick="ClearTypeSelection">
+                    Cancel
+                </FluentButton>
+            </div>
+
+            @if (!string.IsNullOrEmpty(errorMessage))
+            {
+                <FluentMessageBar Intent="MessageIntent.Error" Style="margin-top: 16px;">
+                    @errorMessage
+                </FluentMessageBar>
+            }
+        </div>
+    }
+</div>
+
+@code {
+    [SupplyParameterFromQuery(Name = "parent")]
+    public string? ParentPath { get; set; }
+
+    [SupplyParameterFromQuery(Name = "type")]
+    public string? TypeFromQuery { get; set; }
+
+    private List<CreatableTypeInfo> creatableTypes = new();
+    private CreatableTypeInfo? selectedType;
+    private bool isLoadingTypes = true;
+    private bool isCreating;
+    private string? errorMessage;
+
+    // Form fields
+    private string nodeName = "";
+    private string nodeIcon = "";
+    private string nodeDescription = "";
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadCreatableTypesAsync();
+
+        // If type is specified in query, pre-select it
+        if (!string.IsNullOrEmpty(TypeFromQuery))
+        {
+            selectedType = creatableTypes.FirstOrDefault(t => t.NodeTypePath == TypeFromQuery);
+        }
+    }
+
+    private async Task LoadCreatableTypesAsync()
+    {
+        isLoadingTypes = true;
+        try
+        {
+            var nodeTypeService = Hub?.ServiceProvider.GetService<INodeTypeService>();
+            if (nodeTypeService != null)
+            {
+                creatableTypes = await nodeTypeService
+                    .GetCreatableTypesAsync(ParentPath ?? "")
+                    .ToListAsync();
+            }
+        }
+        catch (Exception ex)
+        {
+            errorMessage = $"Failed to load node types: {ex.Message}";
+        }
+        finally
+        {
+            isLoadingTypes = false;
+        }
+    }
+
+    private void SelectType(CreatableTypeInfo typeInfo)
+    {
+        selectedType = typeInfo;
+        nodeIcon = typeInfo.Icon ?? "";
+        errorMessage = null;
+    }
+
+    private void ClearTypeSelection()
+    {
+        selectedType = null;
+        nodeName = "";
+        nodeIcon = "";
+        nodeDescription = "";
+        errorMessage = null;
+    }
+
+    private void GoBack()
+    {
+        NavigationService.NavigateTo($"/{ParentPath}");
+    }
+
+    private async Task CreateNodeAsync()
+    {
+        if (selectedType == null || string.IsNullOrWhiteSpace(nodeName))
+            return;
+
+        if (Catalog == null)
+        {
+            errorMessage = "Mesh catalog not available";
+            return;
+        }
+
+        isCreating = true;
+        errorMessage = null;
+
+        try
+        {
+            // Sanitize name for use as ID
+            var trimmedName = nodeName.Trim();
+            var nodeId = trimmedName
+                .Replace(" ", "-")
+                .Replace("/", "-")
+                .ToLowerInvariant();
+
+            var nodePath = string.IsNullOrEmpty(ParentPath) ? nodeId : $"{ParentPath}/{nodeId}";
+
+            // Determine content based on node type
+            object? content = null;
+            if (selectedType.NodeTypePath == GraphConfigurationExtensions.MarkdownNodeType)
+            {
+                // For Markdown types, create MarkdownContent with title heading
+                var markdownText = $"# {trimmedName}\n\n{nodeDescription ?? ""}";
+                content = MarkdownContent.Parse(markdownText, nodePath);
+            }
+
+            // Create the node
+            var node = MeshNode.FromPath(nodePath) with
+            {
+                Name = trimmedName,
+                Description = string.IsNullOrWhiteSpace(nodeDescription) ? null : nodeDescription.Trim(),
+                NodeType = selectedType.NodeTypePath,
+                Icon = string.IsNullOrWhiteSpace(nodeIcon) ? null : nodeIcon.Trim(),
+                IsPersistent = true,
+                Content = content
+            };
+
+            // Create node directly in catalog
+            await Catalog.CreateNodeAsync(node, ct: default);
+
+            // Navigate to the Edit view of the new node
+            NavigationService.NavigateTo($"/{nodePath}/Edit");
+        }
+        catch (Exception ex)
+        {
+            errorMessage = $"Error creating node: {ex.Message}";
+        }
+        finally
+        {
+            isCreating = false;
+        }
+    }
+
+    private Icon GetFluentIcon(string? iconName)
+    {
+        return iconName?.ToLowerInvariant() switch
+        {
+            "document" => new Icons.Regular.Size20.Document(),
+            "code" => new Icons.Regular.Size20.Code(),
+            "bot" => new Icons.Regular.Size20.Bot(),
+            "briefcase" => new Icons.Regular.Size20.Briefcase(),
+            "building" => new Icons.Regular.Size20.Building(),
+            "person" => new Icons.Regular.Size20.Person(),
+            "settings" => new Icons.Regular.Size20.Settings(),
+            "star" => new Icons.Regular.Size20.Star(),
+            "folder" => new Icons.Regular.Size20.Folder(),
+            "checkmark" => new Icons.Regular.Size20.Checkmark(),
+            "add" => new Icons.Regular.Size20.Add(),
+            _ => new Icons.Regular.Size20.Document()
+        };
+    }
+
+    private static string GetLastSegment(string path)
+    {
+        var lastSlash = path.LastIndexOf('/');
+        return lastSlash >= 0 ? path[(lastSlash + 1)..] : path;
+    }
+
+    private static string TruncateText(string text, int maxLength)
+    {
+        return text.Length > maxLength ? text[..(maxLength - 3)] + "..." : text;
+    }
+}

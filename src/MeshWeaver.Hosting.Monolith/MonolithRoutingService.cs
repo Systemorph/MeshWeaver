@@ -49,7 +49,9 @@ public class MonolithRoutingService(IMessageHub hub, ILogger<MonolithRoutingServ
 
     private IMessageHub? CreateHub(MeshNode? node, Address address)
     {
-        var hubConfig = node?.HubConfiguration ?? GetTemplateHubConfiguration(address);
+        var hubConfig = node?.HubConfiguration
+            ?? GetTemplateHubConfiguration(address)
+            ?? GetNodeTypeHubConfiguration(node);
 
         if (hubConfig is not null)
         {
@@ -60,6 +62,28 @@ public class MonolithRoutingService(IMessageHub hub, ILogger<MonolithRoutingServ
             }
             return hub;
         }
+        return null;
+    }
+
+    /// <summary>
+    /// Gets the HubConfiguration for a node by looking up its NodeType template.
+    /// This is used when the node itself doesn't have HubConfiguration and
+    /// there's no parent template (e.g., a root-level Markdown node).
+    /// </summary>
+    private Func<MessageHubConfiguration, MessageHubConfiguration>? GetNodeTypeHubConfiguration(MeshNode? node)
+    {
+        if (node?.NodeType == null)
+            return null;
+
+        // Look up the NodeType template in Configuration.Nodes
+        if (MeshCatalog.Configuration.Nodes.TryGetValue(node.NodeType, out var templateNode) &&
+            templateNode.HubConfiguration is not null)
+        {
+            logger.LogDebug("Using NodeType HubConfiguration from {NodeType} for node at {Address}",
+                node.NodeType, node.Path);
+            return templateNode.HubConfiguration;
+        }
+
         return null;
     }
 

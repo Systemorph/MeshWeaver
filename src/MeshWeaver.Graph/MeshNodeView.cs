@@ -51,6 +51,7 @@ public static class MeshNodeView
     public const string ChildrenArea = "Children";
     public const string NodeTypesArea = "NodeTypes";
     public const string AccessControlArea = "AccessControl";
+    public const string CreateNodeArea = "Create";
 
     // UCR (Unified Content Reference) special areas
     public const string ContentArea = "$Content";
@@ -80,6 +81,7 @@ public static class MeshNodeView
             .WithView(ChildrenArea, Children)
             .WithView(NodeTypesArea, NodeTypes)
             .WithView(AccessControlArea, AccessControl)
+            .WithView(CreateNodeArea, CreateNode)
             // UCR special areas - $Content is registered by ContentCollectionsExtensions.AddContentCollections
             .WithView(DataArea, Data)
             .WithView(SchemaArea, Schema)
@@ -285,6 +287,10 @@ public static class MeshNodeView
         var menu = Controls.MenuItem("", FluentIcons.MoreHorizontal(IconSize.Size20))
             .WithAppearance(Appearance.Stealth)
             .WithIconOnly();
+
+        // Create option - goes to CreateNode area (first item in menu)
+        var createHref = $"/{nodePath}/{CreateNodeArea}";
+        menu = menu.WithView(new NavLinkControl("Create", FluentIcons.Add(IconSize.Size16), createHref));
 
         // Edit option - goes to DefaultViews.Edit area
         if (node != null)
@@ -1635,6 +1641,301 @@ public static class MeshNodeView
             "</div>"));
 
         return stack;
+    }
+
+    #endregion
+
+    #region Create Node
+
+    /// <summary>
+    /// Renders the Create Node area showing available types to create.
+    /// If a type is selected via ?type= query param, shows a form for creating the node.
+    /// </summary>
+    [Browsable(false)]
+    public static IObservable<UiControl?> CreateNode(LayoutAreaHost host, RenderingContext _)
+    {
+        var hubPath = host.Hub.Address.ToString();
+        var nodeTypeService = host.Hub.ServiceProvider.GetService<INodeTypeService>();
+
+        if (nodeTypeService == null)
+        {
+            return Observable.Return<UiControl?>(
+                Controls.Stack.WithView(
+                    Controls.Html("<p style=\"color: var(--warning-color);\">NodeTypeService is not available.</p>")
+                )
+            );
+        }
+
+        // Check if a type is selected via query parameter
+        var selectedType = host.GetQueryStringParamValue("type")?.Trim();
+
+        return Observable.FromAsync(async ct =>
+        {
+            if (!string.IsNullOrEmpty(selectedType))
+            {
+                // Type is selected - show create form
+                return (UiControl?)await BuildCreateFormAsync(host, hubPath, selectedType, ct);
+            }
+            else
+            {
+                // No type selected - show type selection grid
+                return (UiControl?)await BuildTypeSelectionAsync(host, nodeTypeService, hubPath, ct);
+            }
+        });
+    }
+
+    /// <summary>
+    /// Builds the type selection grid showing all creatable types as cards.
+    /// </summary>
+    private static async Task<UiControl> BuildTypeSelectionAsync(
+        LayoutAreaHost host,
+        INodeTypeService nodeTypeService,
+        string nodePath,
+        CancellationToken ct)
+    {
+        var stack = Controls.Stack.WithWidth("100%").WithStyle("padding: 24px;");
+
+        // Header with back link
+        var backHref = $"/{nodePath}/{DetailsArea}";
+        stack = stack.WithView(Controls.Stack
+            .WithOrientation(Orientation.Horizontal)
+            .WithHorizontalGap(16)
+            .WithStyle("align-items: center; margin-bottom: 24px;")
+            .WithView(Controls.Button("Back")
+                .WithAppearance(Appearance.Lightweight)
+                .WithIconStart(FluentIcons.ArrowLeft())
+                .WithNavigateToHref(backHref))
+            .WithView(Controls.H2("Create New").WithStyle("margin: 0;")));
+
+        // Get creatable types
+        var creatableTypes = await nodeTypeService.GetCreatableTypesAsync(nodePath, ct).ToListAsync(ct);
+
+        if (creatableTypes.Count == 0)
+        {
+            stack = stack.WithView(Controls.Body("No types available for creation.")
+                .WithStyle("color: var(--neutral-foreground-hint);"));
+            return stack;
+        }
+
+        // Grid of type cards
+        var grid = Controls.LayoutGrid.WithSkin(s => s.WithSpacing(3));
+
+        foreach (var typeInfo in creatableTypes)
+        {
+            var typeCard = BuildTypeCard(nodePath, typeInfo);
+            grid = grid.WithView(typeCard, itemSkin => itemSkin.WithXs(12).WithSm(6).WithMd(4).WithLg(3));
+        }
+
+        stack = stack.WithView(grid);
+        return stack;
+    }
+
+    /// <summary>
+    /// Builds a card for a creatable type that navigates to the create form.
+    /// </summary>
+    private static UiControl BuildTypeCard(string nodePath, CreatableTypeInfo typeInfo)
+    {
+        var createHref = $"/{nodePath}/{CreateNodeArea}?type={Uri.EscapeDataString(typeInfo.NodeTypePath)}";
+        var displayName = typeInfo.DisplayName ?? GetLastPathSegment(typeInfo.NodeTypePath);
+        var iconName = typeInfo.Icon ?? "Document";
+        var description = string.IsNullOrEmpty(typeInfo.Description) ? "No description" : typeInfo.Description;
+
+        // Use NavLinkControl for navigation, wrapped in a styled stack for card appearance
+        return Controls.Stack
+            .WithStyle("padding: 16px; border: 1px solid var(--neutral-stroke-rest); border-radius: 8px; background: var(--neutral-layer-card-container);")
+            .WithView(new NavLinkControl(
+                Controls.Stack
+                    .WithView(Controls.Stack
+                        .WithOrientation(Orientation.Horizontal)
+                        .WithHorizontalGap(12)
+                        .WithStyle("align-items: center; margin-bottom: 8px;")
+                        .WithView(Controls.Icon(iconName).WithStyle("font-size: 24px; color: var(--accent-fill-rest);"))
+                        .WithView(Controls.H4(displayName).WithStyle("margin: 0; font-weight: 600;")))
+                    .WithView(Controls.Body(description).WithStyle("color: var(--neutral-foreground-hint); font-size: 14px;")),
+                null,
+                createHref));
+    }
+
+    /// <summary>
+    /// Builds the create form for a selected type with Name and Description fields.
+    /// Uses a view model and EditorExtensions for proper data binding.
+    /// For Markdown types, creates a MarkdownContent with a title heading.
+    /// </summary>
+    private static async Task<UiControl> BuildCreateFormAsync(
+        LayoutAreaHost host,
+        string parentPath,
+        string nodeTypePath,
+        CancellationToken ct)
+    {
+        var persistence = host.Hub.ServiceProvider.GetService<IPersistenceService>();
+        var stack = Controls.Stack.WithWidth("100%").WithStyle("padding: 24px;");
+
+        // Header with back link
+        var backHref = $"/{parentPath}/{CreateNodeArea}";
+        var typeName = GetLastPathSegment(nodeTypePath);
+        stack = stack.WithView(Controls.Stack
+            .WithOrientation(Orientation.Horizontal)
+            .WithHorizontalGap(16)
+            .WithStyle("align-items: center; margin-bottom: 24px;")
+            .WithView(Controls.Button("Back")
+                .WithAppearance(Appearance.Lightweight)
+                .WithIconStart(FluentIcons.ArrowLeft())
+                .WithNavigateToHref(backHref))
+            .WithView(Controls.H2($"Create {typeName}").WithStyle("margin: 0;")));
+
+        // Show NodeType being created
+        stack = stack.WithView(Controls.Stack
+            .WithOrientation(Orientation.Horizontal)
+            .WithHorizontalGap(8)
+            .WithStyle("margin-bottom: 16px; align-items: center;")
+            .WithView(Controls.Body("Node Type:").WithStyle("font-weight: 600; color: var(--neutral-foreground-hint);"))
+            .WithView(Controls.Body(nodeTypePath).WithStyle("color: var(--accent-fill-rest);")));
+
+        // Get type info for display
+        string? typeDescription = null;
+        if (persistence != null)
+        {
+            var typeNode = await persistence.GetNodeAsync(nodeTypePath, ct);
+            if (typeNode?.Content is NodeTypeDefinition typeDef)
+            {
+                typeDescription = typeDef.Description;
+            }
+            else
+            {
+                typeDescription = typeNode?.Description;
+            }
+        }
+
+        if (!string.IsNullOrEmpty(typeDescription))
+        {
+            stack = stack.WithView(Controls.Body(typeDescription)
+                .WithStyle("color: var(--neutral-foreground-hint); margin-bottom: 16px;"));
+        }
+
+        // Create data bindings for form fields
+        var nameDataId = Guid.NewGuid().AsString();
+        var descriptionDataId = $"{nameDataId}-description";
+        host.UpdateData(nameDataId, "");
+        host.UpdateData(descriptionDataId, "");
+
+        // Name field - using TextFieldControl
+        stack = stack.WithView(Controls.Stack
+            .WithStyle("margin-bottom: 16px;")
+            .WithView(Controls.Body("Name *").WithStyle("font-weight: 600; margin-bottom: 4px;"))
+            .WithView(new TextFieldControl(new JsonPointerReference(""))
+                .WithPlaceholder("Enter a name for the new node")
+                .WithImmediate(true)
+                .WithStyle("width: 100%;")
+                with { DataContext = LayoutAreaReference.GetDataPointer(nameDataId) }));
+
+        // Description field - using MarkdownEditorControl with proper data binding
+        stack = stack.WithView(Controls.Stack
+            .WithStyle("margin-bottom: 16px; width: 100%;")
+            .WithView(Controls.Body("Description").WithStyle("font-weight: 600; margin-bottom: 4px;"))
+            .WithView(new MarkdownEditorControl()
+            {
+                Value = new JsonPointerReference(""),
+                DocumentId = descriptionDataId,
+                Height = "200px",
+                Placeholder = "Enter a description (supports Markdown formatting)",
+                DataContext = LayoutAreaReference.GetDataPointer(descriptionDataId)
+            }));
+
+        // Button row
+        var buttonRow = Controls.Stack
+            .WithOrientation(Orientation.Horizontal)
+            .WithHorizontalGap(12)
+            .WithStyle("margin-top: 24px;");
+
+        // Create button
+        buttonRow = buttonRow.WithView(Controls.Button("Create")
+            .WithAppearance(Appearance.Accent)
+            .WithIconStart(FluentIcons.Add())
+            .WithClickAction(async actx =>
+            {
+                // Get form values from workspace
+                var name = await host.Stream.GetDataStream<string>(nameDataId).FirstAsync();
+                var description = await host.Stream.GetDataStream<string>(descriptionDataId).FirstAsync();
+
+                if (string.IsNullOrWhiteSpace(name))
+                {
+                    var errorDialog = Controls.Dialog(
+                        Controls.Markdown("**Name is required.**"),
+                        "Validation Error"
+                    ).WithSize("S");
+                    actx.Host.UpdateArea(DialogControl.DialogArea, errorDialog);
+                    return;
+                }
+
+                // Sanitize name for use as ID
+                var trimmedName = name.Trim();
+                var nodeId = trimmedName
+                    .Replace(" ", "-")
+                    .Replace("/", "-")
+                    .ToLowerInvariant();
+
+                var nodePath = string.IsNullOrEmpty(parentPath) ? nodeId : $"{parentPath}/{nodeId}";
+
+                // Determine content based on node type
+                object? content = null;
+                if (nodeTypePath == GraphConfigurationExtensions.MarkdownNodeType)
+                {
+                    // For Markdown types, create MarkdownContent with title heading
+                    var markdownText = $"# {trimmedName}\n\n{description ?? ""}";
+                    content = MarkdownContent.Parse(markdownText, nodePath);
+                }
+
+                // Create the node
+                var node = MeshNode.FromPath(nodePath) with
+                {
+                    Name = trimmedName,
+                    Description = string.IsNullOrWhiteSpace(description) ? null : description.Trim(),
+                    NodeType = nodeTypePath,
+                    IsPersistent = true,
+                    Content = content
+                };
+
+                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+                var meshAddress = host.Hub.Configuration.ParentHub?.Address ?? host.Hub.Address;
+                var response = await actx.Host.Hub.AwaitResponse(
+                    new CreateNodeRequest(node),
+                    o => o.WithTarget(meshAddress),
+                    cts.Token);
+
+                if (response.Message.Success)
+                {
+                    // Navigate to the new node's edit view
+                    var editHref = $"/{nodePath}/{DefaultViews.EditArea}";
+                    actx.Host.UpdateArea(actx.Area, new RedirectControl(editHref));
+                }
+                else
+                {
+                    var errorMsg = response.Message.Error ?? "Failed to create node";
+                    var errorDialog = Controls.Dialog(
+                        Controls.Markdown($"**Error creating node:**\n\n{errorMsg}"),
+                        "Creation Failed"
+                    ).WithSize("M");
+                    actx.Host.UpdateArea(DialogControl.DialogArea, errorDialog);
+                }
+            }));
+
+        // Cancel button
+        buttonRow = buttonRow.WithView(Controls.Button("Cancel")
+            .WithAppearance(Appearance.Neutral)
+            .WithNavigateToHref($"/{parentPath}/{DetailsArea}"));
+
+        stack = stack.WithView(buttonRow);
+
+        return stack;
+    }
+
+    /// <summary>
+    /// Gets the last segment of a path.
+    /// </summary>
+    private static string GetLastPathSegment(string path)
+    {
+        var lastSlash = path.LastIndexOf('/');
+        return lastSlash >= 0 ? path[(lastSlash + 1)..] : path;
     }
 
     #endregion
