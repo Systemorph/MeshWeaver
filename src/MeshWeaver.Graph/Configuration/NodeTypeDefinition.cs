@@ -97,4 +97,17 @@ public record NodeTypeDefinition
     /// Default: 10.
     /// </summary>
     public int DetailsChildrenLimit { get; init; } = 10;
+
+    /// <summary>
+    /// Explicit list of NodeType paths that can be created from instances of this type.
+    /// If null, computed automatically from hierarchy (child NodeTypes).
+    /// Example: ["ACME/Project/Todo", "ACME/Project/Story"]
+    /// </summary>
+    public List<string>? CreatableTypes { get; init; }
+
+    /// <summary>
+    /// If true, includes global types (Markdown, NodeType) in creatable list.
+    /// Default: true.
+    /// </summary>
+    public bool IncludeGlobalTypes { get; init; } = true;
 }

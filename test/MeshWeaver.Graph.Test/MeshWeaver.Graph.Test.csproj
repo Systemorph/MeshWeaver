@@ -9,6 +9,7 @@
 
   <ItemGroup>
     <PackageReference Include="Namotion.Reflection" />
+    <PackageReference Include="NSubstitute" />
   </ItemGroup>
 
   <ItemGroup>

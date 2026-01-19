@@ -1,0 +1,17 @@
+namespace MeshWeaver.Mesh;
+
+/// <summary>
+/// Represents a node type that can be created as a child of the current node.
+/// Contains display information for rendering type selection UI.
+/// </summary>
+/// <param name="NodeTypePath">The full path to the NodeType (e.g., "ACME/Project/Todo")</param>
+/// <param name="DisplayName">Optional display name for the type in UI</param>
+/// <param name="Icon">Optional icon URL or identifier for UI</param>
+/// <param name="Description">Optional description of this node type</param>
+/// <param name="DisplayOrder">Display order for sorting in UI lists</param>
+public record CreatableTypeInfo(
+    string NodeTypePath,
+    string? DisplayName = null,
+    string? Icon = null,
+    string? Description = null,
+    int DisplayOrder = 0);

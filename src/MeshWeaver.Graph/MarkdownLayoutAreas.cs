@@ -179,7 +179,7 @@ public static class MarkdownLayoutAreas
         // No annotations or non-markup mode - simple layout with menu positioned at top-right of content
         var container = Controls.Stack
             .WithWidth("100%")
-            .WithStyle("max-width: 1100px; margin: 0 auto; padding: 24px; background: var(--neutral-layer-1); overflow-y: auto; position: relative;");
+            .WithStyle("max-width: 1100px; margin: 0 auto; padding: 24px; background: var(--neutral-layer-1); position: relative;");
 
         // Action menu positioned at top-right of content area
         var actionMenu = Controls.Stack
@@ -947,14 +947,14 @@ public static class MarkdownLayoutAreas
             .WithWidth("100%")
             .WithHeight("100%");
 
-        // Header row with back button and node name
+        // Header row with back button and node name - minimal padding for full-width editor
         var headerRow = Controls.Stack
             .WithOrientation(Orientation.Horizontal)
             .WithWidth("100%")
             .WithHeight("48px")
             .WithVerticalAlignment(VerticalAlignment.Center)
             .WithHorizontalGap(12)
-            .WithStyle("padding: 0 16px; border-bottom: 1px solid var(--neutral-stroke-rest); flex-shrink: 0;");
+            .WithStyle("padding: 0 8px; border-bottom: 1px solid var(--neutral-stroke-rest); flex-shrink: 0;");
 
         // Back button (goes to /path, no area)
         headerRow = headerRow.WithView(Controls.Button("")
@@ -976,18 +976,23 @@ public static class MarkdownLayoutAreas
         container = container.WithView(headerRow);
 
         // MarkdownEditorControl - calc height to fill available space
-        // Subtract: app header (~64px) + breadcrumb (~48px) + edit header (48px) + padding (~90px) ≈ 250px
         // Configure auto-save with hub address and node path
         var editor = new MarkdownEditorControl()
             .WithDocumentId(hubPath)
             .WithValue(initialContent)
-            .WithHeight("calc(100vh - 200px)")
+            .WithHeight("calc(100vh - 150px)")
             .WithMaxHeight("none")
             .WithTrackChanges(true)
             .WithPlaceholder("Start writing your markdown content...")
             .WithAutoSave(hubAddress.ToString(), hubPath);
 
-        container = container.WithView(editor);
+        // Wrap editor in full-width container with no padding
+        var editorWrapper = Controls.Stack
+            .WithWidth("100%")
+            .WithStyle("flex: 1; width: 100%; padding: 0;")
+            .WithView(editor);
+
+        container = container.WithView(editorWrapper);
 
         return container;
     }

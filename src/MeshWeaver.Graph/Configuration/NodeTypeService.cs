@@ -568,6 +568,214 @@ internal class NodeTypeService : INodeTypeService, IDisposable
         InvalidateCache(nodeTypePath);
     }
 
+    #region Creatable Types
+
+    /// <summary>
+    /// Global types that are always creatable everywhere.
+    /// These are types with empty namespace (root-level types).
+    /// </summary>
+    private static readonly string[] GlobalTypes = ["Markdown", "NodeType"];
+
+    /// <inheritdoc />
+    public async IAsyncEnumerable<CreatableTypeInfo> GetCreatableTypesAsync(
+        string nodePath,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+    {
+        var persistence = meshHub.ServiceProvider.GetService<IPersistenceService>();
+        var meshQuery = meshHub.ServiceProvider.GetService<IMeshQuery>();
+
+        if (persistence == null || meshQuery == null)
+        {
+            logger.LogWarning("IPersistenceService or IMeshQuery not available for GetCreatableTypesAsync");
+            yield break;
+        }
+
+        var result = new List<CreatableTypeInfo>();
+        var addedPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        // Get the node to check its type and configuration
+        var node = await persistence.GetNodeAsync(nodePath, ct);
+        NodeTypeDefinition? typeDef = null;
+
+        // If node has a NodeType, get its definition
+        if (node?.NodeType != null)
+        {
+            var typeNode = await persistence.GetNodeAsync(node.NodeType, ct);
+            typeDef = typeNode?.Content as NodeTypeDefinition;
+        }
+
+        // Check for explicit CreatableTypes configuration (only if node exists and has type definition)
+        if (typeDef?.CreatableTypes != null && typeDef.CreatableTypes.Count > 0)
+        {
+            // Use explicit configuration
+            foreach (var typePath in typeDef.CreatableTypes)
+            {
+                var typeInfo = await GetCreatableTypeInfoAsync(persistence, typePath, ct);
+                if (typeInfo != null && addedPaths.Add(typeInfo.NodeTypePath))
+                {
+                    result.Add(typeInfo);
+                }
+            }
+        }
+        else
+        {
+            // Auto-compute from hierarchy (handles root level when node is null)
+            await AddComputedCreatableTypesAsync(result, addedPaths, node, meshQuery, ct);
+        }
+
+        // Add global types if configured (default: true)
+        var includeGlobal = typeDef?.IncludeGlobalTypes ?? true;
+        if (includeGlobal)
+        {
+            await AddGlobalTypesAsync(result, addedPaths, persistence, ct);
+        }
+
+        // Sort by display order, then by display name and yield
+        foreach (var typeInfo in result.OrderBy(t => t.DisplayOrder).ThenBy(t => t.DisplayName ?? t.NodeTypePath))
+        {
+            yield return typeInfo;
+        }
+    }
+
+    /// <summary>
+    /// Adds computed creatable types based on hierarchy.
+    /// 1. For root (empty path): find all root-level NodeTypes (no "/" in path)
+    /// 2. Query by node.Path to find types defined directly under this path
+    /// 3. If node has a NodeType, also query by node.NodeType to find types for instances
+    /// </summary>
+    private async Task AddComputedCreatableTypesAsync(
+        List<CreatableTypeInfo> result,
+        HashSet<string> addedPaths,
+        MeshNode? node,
+        IMeshQuery meshQuery,
+        CancellationToken ct)
+    {
+        // For root level (node is null or empty path), find root-level NodeTypes
+        if (node == null || string.IsNullOrEmpty(node.Path))
+        {
+            // Query all NodeTypes and filter to root-level (no "/" in path, excluding global types)
+            var rootQuery = "nodeType:NodeType";
+            await foreach (var typeNode in meshQuery.QueryAsync<MeshNode>(rootQuery, null, ct).WithCancellation(ct))
+            {
+                // Root-level NodeTypes have no "/" in their path (not global types which are handled separately)
+                if (!typeNode.Path.Contains('/') && !GlobalTypes.Contains(typeNode.Path))
+                {
+                    var typeInfo = CreateCreatableTypeInfoFromNode(typeNode);
+                    if (addedPaths.Add(typeInfo.NodeTypePath))
+                    {
+                        result.Add(typeInfo);
+                    }
+                }
+            }
+            return;
+        }
+
+        // 1. Query by node's path - find NodeTypes defined directly under this node
+        // This handles: ACME can create ACME/Project (namespace="ACME")
+        var pathQuery = $"path:{node.Path} nodeType:NodeType scope:children";
+        await foreach (var childType in meshQuery.QueryAsync<MeshNode>(pathQuery, null, ct).WithCancellation(ct))
+        {
+            var typeInfo = CreateCreatableTypeInfoFromNode(childType);
+            if (addedPaths.Add(typeInfo.NodeTypePath))
+            {
+                result.Add(typeInfo);
+            }
+        }
+
+        // 2. If node has a NodeType, query by NodeType to find types for instances
+        // This handles: ACME/ProductLaunch (NodeType=ACME/Project) can create ACME/Project/Todo
+        if (node.NodeType != null && node.NodeType != node.Path)
+        {
+            var typeQuery = $"path:{node.NodeType} nodeType:NodeType scope:children";
+            await foreach (var childType in meshQuery.QueryAsync<MeshNode>(typeQuery, null, ct).WithCancellation(ct))
+            {
+                var typeInfo = CreateCreatableTypeInfoFromNode(childType);
+                if (addedPaths.Add(typeInfo.NodeTypePath))
+                {
+                    result.Add(typeInfo);
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Adds global types (Markdown, NodeType) to the result.
+    /// </summary>
+    private async Task AddGlobalTypesAsync(
+        List<CreatableTypeInfo> result,
+        HashSet<string> addedPaths,
+        IPersistenceService persistence,
+        CancellationToken ct)
+    {
+        foreach (var globalType in GlobalTypes)
+        {
+            // Skip if already in result
+            if (!addedPaths.Add(globalType))
+                continue;
+
+            var typeInfo = await GetCreatableTypeInfoAsync(persistence, globalType, ct);
+            if (typeInfo != null)
+            {
+                result.Add(typeInfo);
+            }
+            else
+            {
+                // Fallback for global types that may not exist as nodes
+                result.Add(new CreatableTypeInfo(
+                    NodeTypePath: globalType,
+                    DisplayName: globalType,
+                    Icon: globalType == "Markdown" ? "Document" : "Code",
+                    Description: globalType == "Markdown"
+                        ? "Create a markdown document"
+                        : "Create a new node type definition",
+                    DisplayOrder: globalType == "Markdown" ? 1000 : 1001
+                ));
+            }
+        }
+    }
+
+    /// <summary>
+    /// Gets type information for a NodeType by its path.
+    /// </summary>
+    private async Task<CreatableTypeInfo?> GetCreatableTypeInfoAsync(
+        IPersistenceService persistence,
+        string nodeTypePath,
+        CancellationToken ct)
+    {
+        var typeNode = await persistence.GetNodeAsync(nodeTypePath, ct);
+        if (typeNode == null)
+            return null;
+
+        return CreateCreatableTypeInfoFromNode(typeNode);
+    }
+
+    /// <summary>
+    /// Creates CreatableTypeInfo from a MeshNode.
+    /// </summary>
+    private static CreatableTypeInfo CreateCreatableTypeInfoFromNode(MeshNode node)
+    {
+        var typeDef = node.Content as NodeTypeDefinition;
+
+        return new CreatableTypeInfo(
+            NodeTypePath: node.Path,
+            DisplayName: typeDef?.DisplayName ?? node.Name ?? GetLastPathSegment(node.Path),
+            Icon: typeDef?.Icon ?? node.Icon,
+            Description: typeDef?.Description ?? node.Description,
+            DisplayOrder: typeDef?.DisplayOrder ?? node.DisplayOrder ?? 0
+        );
+    }
+
+    /// <summary>
+    /// Gets the last segment of a path.
+    /// </summary>
+    private static string GetLastPathSegment(string path)
+    {
+        var lastSlash = path.LastIndexOf('/');
+        return lastSlash >= 0 ? path[(lastSlash + 1)..] : path;
+    }
+
+    #endregion
+
     public void Dispose()
     {
         foreach (var subscription in _subscriptions.Values)

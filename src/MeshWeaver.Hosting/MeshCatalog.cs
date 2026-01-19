@@ -268,7 +268,13 @@ public sealed class MeshCatalog(
         var confirmedNode = node with { State = MeshNodeState.Active };
         await Persistence.SaveNodeAsync(confirmedNode, ct);
 
-        // Update cache
+        // Enrich with HubConfiguration based on NodeType (same as cold start in GetNodeAsync)
+        if (NodeTypeService != null)
+        {
+            confirmedNode = await NodeTypeService.EnrichWithNodeTypeAsync(confirmedNode, ct);
+        }
+
+        // Update cache with enriched node
         cache.Set(confirmedNode.Path, confirmedNode, cacheOptions);
 
         logger.LogInformation("Confirmed node at path {Path}", confirmedNode.Path);
