@@ -5,6 +5,8 @@ Description: Display collections of data with sortable, resizable columns
 Icon: /static/storage/content/MeshWeaver/Documentation/GUI/DataGrid/icon.svg
 ---
 
+# Displaying Data in a UI
+
 The DataGrid control displays collections of data in a tabular format with sortable, resizable columns and optional virtualization for large datasets.
 
 ## Basic Usage

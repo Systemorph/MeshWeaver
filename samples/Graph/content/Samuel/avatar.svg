@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+  <defs>
+    <pattern id="samuel-pattern" patternUnits="userSpaceOnUse" width="12" height="12" patternTransform="rotate(45)">
+      <rect width="12" height="12" fill="#0D9488"/>
+      <circle cx="6" cy="6" r="3" fill="#14B8A6"/>
+    </pattern>
+    <clipPath id="samuel-clip">
+      <circle cx="64" cy="64" r="60"/>
+    </clipPath>
+  </defs>
+  <circle cx="64" cy="64" r="60" fill="url(#samuel-pattern)"/>
+  <g clip-path="url(#samuel-clip)">
+    <!-- Head -->
+    <circle cx="64" cy="42" r="20" fill="#F5D0C5"/>
+    <!-- Hair (short, neat) -->
+    <ellipse cx="64" cy="30" rx="17" ry="9" fill="#4A3728"/>
+    <rect x="48" y="28" width="32" height="7" rx="3" fill="#4A3728"/>
+    <!-- Face -->
+    <circle cx="64" cy="44" r="18" fill="#F5D0C5"/>
+    <!-- Eyes -->
+    <circle cx="57" cy="42" r="2.5" fill="#1F2937"/>
+    <circle cx="71" cy="42" r="2.5" fill="#1F2937"/>
+    <!-- Eyebrows -->
+    <path d="M53 37 L61 38" stroke="#4A3728" stroke-width="2" stroke-linecap="round"/>
+    <path d="M67 38 L75 37" stroke="#4A3728" stroke-width="2" stroke-linecap="round"/>
+    <!-- Smile -->
+    <path d="M58 50 Q64 55 70 50" stroke="#1F2937" stroke-width="1.5" fill="none" stroke-linecap="round"/>
+    <!-- Body/Shoulders (polo shirt style) -->
+    <ellipse cx="64" cy="95" rx="32" ry="28" fill="#5EEAD4"/>
+    <!-- Polo collar -->
+    <path d="M52 78 L64 85 L76 78" stroke="#14B8A6" stroke-width="3" fill="none"/>
+    <!-- Polo buttons -->
+    <circle cx="64" cy="90" r="2" fill="#0D9488"/>
+    <circle cx="64" cy="97" r="2" fill="#0D9488"/>
+  </g>
+  <circle cx="64" cy="64" r="60" fill="none" stroke="#0D9488" stroke-width="4"/>
+</svg>

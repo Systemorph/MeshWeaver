@@ -5,6 +5,8 @@ Description: How to add controls to containers and make them update automaticall
 Icon: /static/storage/content/MeshWeaver/Documentation/GUI/ContainerControl/icon.svg
 ---
 
+# Adding Controls to a UI
+
 When building a UI, you combine small pieces (buttons, labels, inputs) into larger structures called containers. The `WithView` method is how you add content to these containers.
 
 ## Container Types
@@ -14,6 +16,7 @@ When building a UI, you combine small pieces (buttons, labels, inputs) into larg
 | [Stack](MeshWeaver/Documentation/GUI/ContainerControl/Stack) | Arrange items vertically or horizontally | Building forms, lists, button groups |
 | [Tabs](MeshWeaver/Documentation/GUI/ContainerControl/Tabs) | Organize content into switchable tabs | Grouping related content, settings pages |
 | [Toolbar](MeshWeaver/Documentation/GUI/ContainerControl/Toolbar) | Group action buttons | Page headers, action bars |
+| [Splitter](MeshWeaver/Documentation/GUI/ContainerControl/Splitter) | Create resizable, collapsible panes | Sidebars, IDE layouts, adjustable panels |
 
 For responsive grid layouts, see [Layout Grid](MeshWeaver/Documentation/GUI/LayoutGrid).
 
