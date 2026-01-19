@@ -358,3 +358,4 @@ dist/
 
 # Kernel cache files
 samples/Graph/Data/kernel/
+samples/Graph/Data/test/

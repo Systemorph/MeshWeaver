@@ -1,4 +1,3 @@
-using MeshWeaver.Blazor.Monaco;
 using MeshWeaver.ContentCollections;
 using MeshWeaver.Data;
 using MeshWeaver.Mesh;
@@ -28,7 +27,6 @@ public static class MarkdownNodeType
         Icon = "Document",
         HubConfiguration = config => config
             .AddMarkdownViews()
-            .AddMonacoViews()
             .AddMeshDataSource()
             .AddContentCollections()
     };

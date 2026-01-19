@@ -1,5 +1,6 @@
 ﻿using System.Reactive.Linq;
 using System.Reactive.Subjects;
+using Humanizer;
 using MeshWeaver.Application.Styles;
 using MeshWeaver.Data;
 using MeshWeaver.Domain;
@@ -12,7 +13,7 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
-using ViewModeSubject = System.Reactive.Subjects.ISubject<MeshWeaver.Graph.MarkdownView.AnnotationViewMode>;
+using ViewModeSubject = System.Reactive.Subjects.ISubject<MeshWeaver.Graph.MarkdownLayoutAreas.AnnotationViewMode>;
 
 namespace MeshWeaver.Graph;
 
@@ -23,10 +24,11 @@ namespace MeshWeaver.Graph;
 /// - Menu button with options for Edit, Comments, Attachments, Settings
 /// - Clean typography and reading experience
 /// </summary>
-public static class MarkdownView
+public static class MarkdownLayoutAreas
 {
     public const string ReadArea = "Read";
     public const string EditArea = "Edit";
+    public const string MetadataArea = "Metadata";
     public const string NotebookArea = "Notebook";
     public const string CommentsArea = "Comments";
     public const string AttachmentsArea = "Attachments";
@@ -40,7 +42,8 @@ public static class MarkdownView
             .AddLayout(layout => layout
                 .WithDefaultArea(ReadArea)
                 .WithView(ReadArea, ReadView)
-                .WithView(EditArea, EditView)
+                .WithView(EditArea, MarkdownEdit)
+                .WithView(MetadataArea, MetadataView)
                 .WithView(NotebookArea, NotebookView)
                 .WithView(CommentsArea, CommentsView)
                 .WithView(AttachmentsArea, AttachmentsView)
@@ -871,9 +874,13 @@ public static class MarkdownView
             .WithAppearance(Appearance.Stealth)
             .WithIconOnly();
 
-        // Edit option
+        // Edit option - markdown editing with MarkdownEditorControl
         var editHref = $"/{nodePath}/{EditArea}";
         menu = menu.WithView(new NavLinkControl("Edit", FluentIcons.Edit(IconSize.Size16), editHref));
+
+        // Metadata option
+        var metadataHref = $"/{nodePath}/{MetadataArea}";
+        menu = menu.WithView(new NavLinkControl("Metadata", FluentIcons.DocumentEdit(IconSize.Size16), metadataHref));
 
         // Notebook option
         var notebookHref = $"/{nodePath}/{NotebookArea}";
@@ -891,76 +898,368 @@ public static class MarkdownView
         var settingsHref = $"/{nodePath}/{MeshNodeView.SettingsArea}";
         menu = menu.WithView(new NavLinkControl("Settings", FluentIcons.Settings(IconSize.Size16), settingsHref));
 
-        // Metadata option
-        var metadataHref = $"/{nodePath}/{MeshNodeView.MetadataArea}";
-        menu = menu.WithView(new NavLinkControl("Properties", FluentIcons.Info(IconSize.Size16), metadataHref));
+        // Properties option (node metadata from MeshNodeView)
+        var propertiesHref = $"/{nodePath}/{MeshNodeView.MetadataArea}";
+        menu = menu.WithView(new NavLinkControl("Properties", FluentIcons.Info(IconSize.Size16), propertiesHref));
 
         return menu;
     }
 
     /// <summary>
-    /// Renders the edit view for markdown content.
-    /// Uses Monaco editor with collaborative editing support.
+    /// Renders the markdown edit view with auto-save and back button.
+    /// Changes are saved automatically as you type (debounced).
     /// </summary>
-    public static IObservable<UiControl?> EditView(LayoutAreaHost host, RenderingContext _)
+    public static UiControl MarkdownEdit(LayoutAreaHost host, RenderingContext _)
     {
         var hubPath = host.Hub.Address.ToString();
+        var hubAddress = host.Hub.Address;
+        var readHref = $"/{hubPath}/{ReadArea}";
 
-        var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? Array.Empty<MeshNode>())
-            ?? Observable.Return<MeshNode[]>(Array.Empty<MeshNode>());
+        // Subscribe to node data
+        var nodeStream = host.Workspace.GetStream<MeshNode>()
+            ?? Observable.Return<MeshNode[]?>(null);
 
-        return nodeStream.Select(nodes =>
-        {
-            var node = nodes.FirstOrDefault(n => n.Path == hubPath);
-            return BuildEditView(host, node);
-        });
+        return Controls.Stack
+            .WithWidth("100%")
+            .WithHeight("100%")
+            .WithView((h, ctx) => nodeStream.Take(1).Select(nodes =>
+            {
+                var node = nodes?.FirstOrDefault(n => n.Path == hubPath);
+                var content = GetMarkdownContent(node);
+
+                return BuildMarkdownEditContent(host, node, hubPath, hubAddress, readHref, content);
+            }));
     }
 
-    private static UiControl BuildEditView(LayoutAreaHost host, MeshNode? node)
+    private static UiControl BuildMarkdownEditContent(
+        LayoutAreaHost host,
+        MeshNode? node,
+        string hubPath,
+        Address hubAddress,
+        string readHref,
+        string initialContent)
     {
-        var nodePath = node?.Path ?? host.Hub.Address.ToString();
-        var title = node?.Name ?? "Edit Document";
+        var nodeName = node?.Name ?? hubPath.Split('/').LastOrDefault() ?? "Document";
+        var backHref = $"/{hubPath}"; // Back to node without area (default Read view)
 
+        // Outer container fills 100% height
         var container = Controls.Stack
             .WithWidth("100%")
-            .WithStyle("height: 100%; display: flex; flex-direction: column;");
+            .WithHeight("100%");
 
-        // Header with back button and title
-        var headerStack = Controls.Stack
+        // Header row with back button and node name
+        var headerRow = Controls.Stack
             .WithOrientation(Orientation.Horizontal)
             .WithWidth("100%")
-            .WithStyle("align-items: center; gap: 16px; padding: 16px 24px; border-bottom: 1px solid var(--neutral-stroke-rest); flex-shrink: 0;");
+            .WithHeight("48px")
+            .WithVerticalAlignment(VerticalAlignment.Center)
+            .WithHorizontalGap(12)
+            .WithStyle("padding: 0 16px; border-bottom: 1px solid var(--neutral-stroke-rest); flex-shrink: 0;");
 
-        // Back button
-        var readHref = $"/{nodePath}/{ReadArea}";
-        headerStack = headerStack.WithView(
-            Controls.Button("")
-                .WithIconStart(FluentIcons.ArrowLeft(IconSize.Size16))
-                .WithAppearance(Appearance.Stealth)
-                .WithNavigateToHref(readHref));
+        // Back button (goes to /path, no area)
+        headerRow = headerRow.WithView(Controls.Button("")
+            .WithIconStart(FluentIcons.ArrowLeft(IconSize.Size16))
+            .WithAppearance(Appearance.Stealth)
+            .WithNavigateToHref(backHref));
 
-        headerStack = headerStack.WithView(
-            Controls.Html($"<h2 style=\"margin: 0; font-size: 1.25rem;\">Editing: {title}</h2>"));
+        // Node name
+        headerRow = headerRow.WithView(
+            Controls.Html($"<h2 style=\"margin: 0; font-size: 1.1rem; font-weight: 600;\">{System.Web.HttpUtility.HtmlEncode(nodeName)}</h2>"));
 
-        container = container.WithView(headerStack);
+        // Spacer
+        headerRow = headerRow.WithView(Controls.Html("<div style=\"flex: 1;\"></div>"));
 
-        // Get content - keep annotations in edit mode so user can see/edit them
-        var content = GetMarkdownContent(node);
+        // Auto-save indicator
+        headerRow = headerRow.WithView(
+            Controls.Html("<span style=\"color: var(--neutral-foreground-hint); font-size: 0.85rem;\">Changes are saved automatically</span>"));
 
-        // Editor area using MarkdownEditorControl
+        container = container.WithView(headerRow);
+
+        // MarkdownEditorControl - calc height to fill available space
+        // Subtract: app header (~64px) + breadcrumb (~48px) + edit header (48px) + padding (~90px) ≈ 250px
+        // Configure auto-save with hub address and node path
         var editor = new MarkdownEditorControl()
-            .WithValue(content)
-            .WithDocumentId(nodePath)
-            .WithHeight("100%")
+            .WithDocumentId(hubPath)
+            .WithValue(initialContent)
+            .WithHeight("calc(100vh - 200px)")
+            .WithMaxHeight("none")
             .WithTrackChanges(true)
-            .WithPlaceholder("Start writing your markdown content...");
+            .WithPlaceholder("Start writing your markdown content...")
+            .WithAutoSave(hubAddress.ToString(), hubPath);
 
-        var editorArea = Controls.Stack
+        container = container.WithView(editor);
+
+        return container;
+    }
+
+    /// <summary>
+    /// Edit mode tabs for metadata view.
+    /// </summary>
+    public enum EditTab
+    {
+        Markdown,
+        Metadata
+    }
+
+    /// <summary>
+    /// Renders the metadata edit view for editing node properties.
+    /// </summary>
+    public static UiControl MetadataView(LayoutAreaHost host, RenderingContext _)
+    {
+        var hubPath = host.Hub.Address.ToString();
+        var hubAddress = host.Hub.Address;
+        var readHref = $"/{hubPath}/{ReadArea}";
+
+        // Data IDs for editable fields
+        var nameDataId = $"edit-name-{hubPath.Replace("/", "-")}";
+        var contentDataId = $"edit-content-{hubPath.Replace("/", "-")}";
+        var descriptionDataId = $"edit-description-{hubPath.Replace("/", "-")}";
+        var categoryDataId = $"edit-category-{hubPath.Replace("/", "-")}";
+        var iconDataId = $"edit-icon-{hubPath.Replace("/", "-")}";
+
+        // Tab state
+        var tabSubject = new BehaviorSubject<EditTab>(EditTab.Markdown);
+        host.RegisterForDisposal(tabSubject);
+
+        // Subscribe to node data
+        var nodeStream = host.Workspace.GetStream<MeshNode>()
+            ?? Observable.Return<MeshNode[]?>(null);
+
+        return Controls.Stack
             .WithWidth("100%")
-            .WithStyle("flex: 1; padding: 16px; overflow: hidden; box-sizing: border-box;")
-            .WithView(editor);
+            .WithHeight("100%")
+            .WithView((h, ctx) => nodeStream.Take(1).CombineLatest(tabSubject, (nodes, tab) =>
+            {
+                var node = nodes?.FirstOrDefault(n => n.Path == hubPath);
 
-        container = container.WithView(editorArea);
+                // Initialize data streams on first load
+                var content = GetMarkdownContent(node);
+                host.UpdateData(nameDataId, node?.Name ?? "");
+                host.UpdateData(contentDataId, content);
+                host.UpdateData(descriptionDataId, node?.Description ?? "");
+                host.UpdateData(categoryDataId, node?.Category ?? "");
+                host.UpdateData(iconDataId, node?.Icon ?? "");
+
+                return BuildEditContent(host, node, hubPath, hubAddress, readHref, tab, tabSubject,
+                    nameDataId, contentDataId, descriptionDataId, categoryDataId, iconDataId);
+            }));
+    }
+
+    private static UiControl BuildEditContent(
+        LayoutAreaHost host,
+        MeshNode? node,
+        string hubPath,
+        Address hubAddress,
+        string readHref,
+        EditTab currentTab,
+        BehaviorSubject<EditTab> tabSubject,
+        string nameDataId,
+        string contentDataId,
+        string descriptionDataId,
+        string categoryDataId,
+        string iconDataId)
+    {
+        var container = Controls.Stack
+            .WithWidth("100%")
+            .WithHeight("100%");
+
+        // Header row: Name field
+        var headerRow = Controls.Stack
+            .WithOrientation(Orientation.Horizontal)
+            .WithWidth("100%")
+            .WithHeight("40px")
+            .WithVerticalAlignment(VerticalAlignment.Center)
+            .WithHorizontalGap(8);
+
+        headerRow = headerRow.WithView(
+            new TextFieldControl(new JsonPointerReference(""))
+                .WithPlaceholder("Document name...")
+                .WithImmediate(true)
+                .WithStyle("flex: 1; font-size: 1.1rem; font-weight: 600;")
+                with
+            { DataContext = LayoutAreaReference.GetDataPointer(nameDataId) });
+
+        container = container.WithView(headerRow);
+
+        // Toolbar row: Tabs and track changes
+        var toolbar = Controls.Stack
+            .WithOrientation(Orientation.Horizontal)
+            .WithWidth("100%")
+            .WithHeight("40px")
+            .WithVerticalAlignment(VerticalAlignment.Center)
+            .WithHorizontalGap(8);
+
+        // Tab buttons
+        toolbar = toolbar.WithView(
+            Controls.Button("Markdown")
+                .WithAppearance(currentTab == EditTab.Markdown ? Appearance.Accent : Appearance.Stealth)
+                .WithClickAction(_ => tabSubject.OnNext(EditTab.Markdown)));
+
+        toolbar = toolbar.WithView(
+            Controls.Button("Metadata")
+                .WithAppearance(currentTab == EditTab.Metadata ? Appearance.Accent : Appearance.Stealth)
+                .WithClickAction(_ => tabSubject.OnNext(EditTab.Metadata)));
+
+        container = container.WithView(toolbar);
+
+        // Content area based on tab
+        if (currentTab == EditTab.Markdown)
+        {
+            // Monaco editor for markdown - fill remaining space
+            var editor = new MarkdownEditorControl()
+                .WithValue(host.Stream.GetDataStream<string>(contentDataId).Take(1).Wait() ?? "")
+                .WithDocumentId(hubPath)
+                .WithHeight("100%")
+                .WithMaxHeight("none")
+                .WithTrackChanges(false)
+                .WithPlaceholder("Start writing your markdown content...");
+
+            var editorWrapper = Controls.Stack
+                .WithWidth("100%")
+                .WithHeight("calc(100% - 128px)")
+                .WithView(editor);
+
+            container = container.WithView(editorWrapper);
+        }
+        else
+        {
+            // Metadata form
+            var metadataForm = Controls.Stack
+                .WithWidth("100%")
+                .WithHeight("calc(100% - 128px)")
+                .WithStyle("overflow-y: auto; padding: 16px;");
+
+            var formStyle = "display: grid; grid-template-columns: 120px 1fr; gap: 12px; align-items: center; margin-bottom: 12px;";
+
+            // Description
+            metadataForm = metadataForm.WithView(Controls.Stack
+                .WithStyle(formStyle)
+                .WithView(Controls.Html("<label style=\"font-weight: 500;\">Description:</label>"))
+                .WithView(new TextAreaControl(new JsonPointerReference(""))
+                    .WithPlaceholder("Enter description...")
+                    .WithRows(3)
+                    .WithImmediate(true) with
+                { DataContext = LayoutAreaReference.GetDataPointer(descriptionDataId) }));
+
+            // Category
+            metadataForm = metadataForm.WithView(Controls.Stack
+                .WithStyle(formStyle)
+                .WithView(Controls.Html("<label style=\"font-weight: 500;\">Category:</label>"))
+                .WithView(new TextFieldControl(new JsonPointerReference(""))
+                    .WithPlaceholder("e.g., Documentation, Tutorial...")
+                    .WithImmediate(true) with
+                { DataContext = LayoutAreaReference.GetDataPointer(categoryDataId) }));
+
+            // Icon
+            metadataForm = metadataForm.WithView(Controls.Stack
+                .WithStyle(formStyle)
+                .WithView(Controls.Html("<label style=\"font-weight: 500;\">Icon:</label>"))
+                .WithView(new TextFieldControl(new JsonPointerReference(""))
+                    .WithPlaceholder("e.g., Document, Book...")
+                    .WithImmediate(true) with
+                { DataContext = LayoutAreaReference.GetDataPointer(iconDataId) }));
+
+            // Read-only info
+            metadataForm = metadataForm.WithView(Controls.Html($@"
+                <div style=""margin-top: 24px; padding: 16px; background: var(--neutral-layer-2); border-radius: 8px;"">
+                    <h4 style=""margin: 0 0 12px 0;"">Node Information</h4>
+                    <div style=""display: grid; grid-template-columns: 120px 1fr; gap: 8px; font-size: 0.9rem;"">
+                        <span style=""color: var(--neutral-foreground-hint);"">Path:</span>
+                        <span>{System.Web.HttpUtility.HtmlEncode(hubPath)}</span>
+                        <span style=""color: var(--neutral-foreground-hint);"">Node Type:</span>
+                        <span>{System.Web.HttpUtility.HtmlEncode(node?.NodeType ?? "Markdown")}</span>
+                        <span style=""color: var(--neutral-foreground-hint);"">ID:</span>
+                        <span>{System.Web.HttpUtility.HtmlEncode(node?.Id ?? "")}</span>
+                    </div>
+                </div>
+            "));
+
+            container = container.WithView(metadataForm);
+        }
+
+        // Button row at the bottom
+        var buttonRow = Controls.Stack
+            .WithOrientation(Orientation.Horizontal)
+            .WithWidth("100%")
+            .WithHeight("48px")
+            .WithVerticalAlignment(VerticalAlignment.Center)
+            .WithHorizontalGap(12);
+
+        // Save button
+        buttonRow = buttonRow.WithView(Controls.Button("Save")
+            .WithAppearance(Appearance.Accent)
+            .WithIconStart(FluentIcons.Save())
+            .WithClickAction(async actx =>
+            {
+                // Get all field values
+                var newName = await host.Stream.GetDataStream<string>(nameDataId).FirstAsync();
+                var newContent = await host.Stream.GetDataStream<string>(contentDataId).FirstAsync();
+                var newDescription = await host.Stream.GetDataStream<string>(descriptionDataId).FirstAsync();
+                var newCategory = await host.Stream.GetDataStream<string>(categoryDataId).FirstAsync();
+                var newIcon = await host.Stream.GetDataStream<string>(iconDataId).FirstAsync();
+
+                // Get the current node
+                var nodeStream = host.Workspace.GetStream<MeshNode>();
+                var nodes = nodeStream != null ? await nodeStream.FirstAsync() : null;
+                var currentNode = nodes?.FirstOrDefault(n => n.Path == hubPath);
+
+                if (currentNode == null)
+                {
+                    var errorDialog = Controls.Dialog(
+                        Controls.Markdown("**Error:** No document found to save."),
+                        "Save Failed"
+                    ).WithSize("M");
+                    actx.Host.UpdateArea(DialogControl.DialogArea, errorDialog);
+                    return;
+                }
+
+                // Create updated node
+                var updatedNode = currentNode with
+                {
+                    Name = string.IsNullOrWhiteSpace(newName) ? null : newName,
+                    Description = string.IsNullOrWhiteSpace(newDescription) ? null : newDescription,
+                    Category = string.IsNullOrWhiteSpace(newCategory) ? null : newCategory,
+                    Icon = string.IsNullOrWhiteSpace(newIcon) ? null : newIcon,
+                    Content = new MarkdownContent { Content = newContent ?? "" }
+                };
+
+                using var cts = new CancellationTokenSource(10.Seconds());
+                try
+                {
+                    var response = await actx.Host.Hub.AwaitResponse<DataChangeResponse>(
+                        new DataChangeRequest().WithUpdates(updatedNode),
+                        o => o.WithTarget(hubAddress),
+                        cts.Token);
+
+                    if (response.Message.Log.Status != ActivityStatus.Succeeded)
+                    {
+                        var errorDialog = Controls.Dialog(
+                            Controls.Markdown($"**Error saving:**\n\n{response.Message.Log}"),
+                            "Save Failed"
+                        ).WithSize("M");
+                        actx.Host.UpdateArea(DialogControl.DialogArea, errorDialog);
+                        return;
+                    }
+
+                    // Navigate back to read view
+                    actx.Host.UpdateArea(actx.Area, new RedirectControl(readHref));
+                }
+                catch (Exception ex)
+                {
+                    var errorDialog = Controls.Dialog(
+                        Controls.Markdown($"**Error saving:**\n\n{ex.Message}"),
+                        "Save Failed"
+                    ).WithSize("M");
+                    actx.Host.UpdateArea(DialogControl.DialogArea, errorDialog);
+                }
+            }));
+
+        // Cancel button
+        buttonRow = buttonRow.WithView(Controls.Button("Cancel")
+            .WithAppearance(Appearance.Neutral)
+            .WithNavigateToHref(readHref));
+
+        container = container.WithView(buttonRow);
 
         return container;
     }

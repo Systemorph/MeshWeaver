@@ -27,7 +27,7 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
         _persistence = persistence;
         _hubPath = hubPath;
         _logger = workspace.Hub.ServiceProvider.GetService<ILogger<MeshNodeTypeSource>>();
-        _logger?.LogWarning("MeshNodeTypeSource: Created for hubPath={HubPath}", hubPath);
+        _logger?.LogDebug("MeshNodeTypeSource: Created for hubPath={HubPath}", hubPath);
 
         // Register key function for MeshNode using Path as the key
         TypeDefinition = workspace.Hub.TypeRegistry.WithKeyFunction(
@@ -37,8 +37,9 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
 
     protected override InstanceCollection UpdateImpl(InstanceCollection instances)
     {
-        _logger?.LogWarning("MeshNodeTypeSource.UpdateImpl: Called with {Count} instances, _lastSaved has {LastSavedCount}",
-            instances.Instances.Count, _lastSaved.Instances.Count);
+        // Merge partial updates with existing nodes
+        // This handles the case where auto-save sends only Content updates
+        instances = MergePartialUpdates(instances);
 
         // Detect adds (new nodes)
         var adds = instances.Instances
@@ -59,7 +60,7 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
             .Select(x => (MeshNode)x.Value)
             .ToArray();
 
-        _logger?.LogWarning("MeshNodeTypeSource.UpdateImpl: adds={Adds}, updates={Updates}, deletes={Deletes}",
+        _logger?.LogDebug("MeshNodeTypeSource.UpdateImpl: adds={Adds}, updates={Updates}, deletes={Deletes}",
             adds.Length, updates.Length, deletes.Length);
 
         // Sync to persistence
@@ -71,9 +72,17 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
         {
             // Capture hub version when saving
             var nodeWithVersion = node with { Version = hubVersion };
-            _logger?.LogWarning("MeshNodeTypeSource.UpdateImpl: Saving node {Namespace} to persistence, Content={ContentType}, Version={Version}",
-                nodeWithVersion.Path, nodeWithVersion.Content?.GetType().Name ?? "null", nodeWithVersion.Version);
-            _ = _persistence.SaveNodeAsync(nodeWithVersion);
+
+            // Save synchronously to ensure it completes before returning
+            // TODO: Consider making this async with proper task tracking
+            try
+            {
+                _persistence.SaveNodeAsync(nodeWithVersion).GetAwaiter().GetResult();
+            }
+            catch (Exception ex)
+            {
+                _logger?.LogError(ex, "MeshNodeTypeSource: Save failed for {Path}", nodeWithVersion.Path);
+            }
         }
 
         foreach (var node in deletes)
@@ -84,6 +93,54 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
 
         _lastSaved = instances;
         return instances;
+    }
+
+    /// <summary>
+    /// Merges partial MeshNode updates with existing nodes.
+    /// When auto-save sends only Content updates, this preserves other fields like Name, Description, etc.
+    /// </summary>
+    private InstanceCollection MergePartialUpdates(InstanceCollection instances)
+    {
+        var mergedInstances = new Dictionary<object, object>(instances.Instances);
+        var anyMerged = false;
+
+        foreach (var kvp in instances.Instances)
+        {
+            if (kvp.Value is not MeshNode incomingNode)
+                continue;
+
+            // Check if we have an existing node to merge with
+            if (!_lastSaved.Instances.TryGetValue(kvp.Key, out var existingObj) ||
+                existingObj is not MeshNode existingNode)
+                continue;
+
+            // Check if this looks like a partial update (only Content and NodeType are set)
+            // A partial update typically has Content but is missing other metadata fields
+            var isPartialUpdate = incomingNode.Content != null &&
+                                  string.IsNullOrEmpty(incomingNode.Name) &&
+                                  string.IsNullOrEmpty(incomingNode.Description) &&
+                                  string.IsNullOrEmpty(incomingNode.Category) &&
+                                  string.IsNullOrEmpty(incomingNode.Icon);
+
+            if (!isPartialUpdate)
+                continue;
+
+            // Merge: preserve existing fields, update Content and NodeType
+            var mergedNode = existingNode with
+            {
+                NodeType = incomingNode.NodeType ?? existingNode.NodeType,
+                Content = incomingNode.Content ?? existingNode.Content
+            };
+
+            mergedInstances[kvp.Key] = mergedNode;
+            anyMerged = true;
+
+            _logger?.LogDebug("MeshNodeTypeSource: Merged partial update for {Path}", mergedNode.Path);
+        }
+
+        return anyMerged
+            ? new InstanceCollection(mergedInstances.Values, TypeDefinition.GetKey)
+            : instances;
     }
 
     private void PropagateContentChanges(MeshNode[] updates)

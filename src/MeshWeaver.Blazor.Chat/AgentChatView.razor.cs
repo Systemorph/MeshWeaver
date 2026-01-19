@@ -3,7 +3,7 @@ using MeshWeaver.AI.Commands;
 using MeshWeaver.AI.Completion;
 using MeshWeaver.AI.Parsing;
 using MeshWeaver.AI.Persistence;
-using MeshWeaver.Blazor.Monaco;
+using MeshWeaver.Blazor.Components.Monaco;
 using MeshWeaver.Data;
 using MeshWeaver.Data.Completion;
 using MeshWeaver.Mesh;
