@@ -3,7 +3,7 @@ using MeshWeaver.AI.Commands;
 using MeshWeaver.AI.Completion;
 using MeshWeaver.AI.Parsing;
 using MeshWeaver.AI.Persistence;
-using MeshWeaver.Blazor.Monaco;
+using MeshWeaver.Blazor.Components.Monaco;
 using MeshWeaver.Data;
 using MeshWeaver.Data.Completion;
 using MeshWeaver.Mesh;
@@ -150,17 +150,19 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
 
     private async Task InitializeAgentAndModelSelectionsAsync()
     {
-        // Initialize agent preferences based on IAgentWithModelPreference implementations
-        await AgentChatFactoryProvider.InitializeAgentPreferencesAsync();
+        // Get the initial context path from URL
+        var initialPath = NavigationManager.ToBaseRelativePath(NavigationManager.Uri);
+        var contextPath = string.IsNullOrEmpty(initialPath) ? null : initialPath;
 
-        // Get available agents with display info (grouping, icons, descriptions, indent levels)
-        agentDisplayInfos = await AgentChatFactoryProvider.GetAgentsWithDisplayInfoAsync();
-
-        // Try to select agent based on current context (IAgentWithContext.Matches)
-        selectedAgentInfo = SelectAgentByContext() ?? agentDisplayInfos.FirstOrDefault();
+        // Get available agents with display info for the current context (searches namespace hierarchy)
+        agentDisplayInfos = await AgentChatFactoryProvider.GetAgentsWithDisplayInfoAsync(contextPath);
 
         // Get available models (union from all factories, sorted by factory order)
         availableModels = AgentChatFactoryProvider.AllModels;
+
+        // Select agent using IMeshQuery-based hierarchical search
+        var context = GetCurrentAgentContext();
+        selectedAgentInfo = await FindClosestDefaultAgentAsync(contextPath, context);
 
         // Set initial model based on agent preference or default
         if (selectedAgentInfo != null)
@@ -176,9 +178,8 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
     }
 
     /// <summary>
-    /// Handles navigation changes to update context display.
-    /// NOTE: The chat persists across navigation and does NOT reinstantiate the agent.
-    /// The user can manually change context/agent if needed.
+    /// Handles navigation changes to update context display and agent selection.
+    /// When navigating to a new node, selects the best agent for that context.
     /// </summary>
     private async void OnLocationChanged(object? sender, Microsoft.AspNetCore.Components.Routing.LocationChangedEventArgs e)
     {
@@ -213,8 +214,7 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
 
                     lastNavigationContext = newContext;
 
-                    // Update the context path for the UI display only - do NOT reinstantiate the agent
-                    // The chat should persist across navigation without resetting
+                    // Update the context path
                     var newPath = NavigationManager.ToBaseRelativePath(NavigationManager.Uri);
                     if (newPath != selectedContextPath)
                     {
@@ -222,9 +222,10 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
                         selectedContextDisplayName = await ResolveContextDisplayNameAsync(selectedContextPath);
                     }
 
-                    // NOTE: We intentionally do NOT auto-select agents or reinstantiate on navigation
-                    // The chat is an integral part of the layout and should persist across page changes
-                    // Users can manually change context/agent if needed
+                    // Update agent selection for the new context
+                    // This finds the best agent based on context pattern matching,
+                    // node type namespace, or default agent for the hierarchy
+                    await UpdateAgentSelectionForContextAsync(newContext);
 
                     StateHasChanged();
                 }
@@ -315,6 +316,102 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
         }
 
         return false;
+    }
+
+    /// <summary>
+    /// Finds the closest default agent for the given context path.
+    /// Search order:
+    /// 1. Agent with ContextMatchPattern matching the current context
+    /// 2. Default agent from agentDisplayInfos (which already includes NodeType namespace and path hierarchy)
+    /// 3. Closest agent by path depth
+    /// 4. First available agent
+    /// </summary>
+    private Task<AgentDisplayInfo?> FindClosestDefaultAgentAsync(string? contextPath, AgentContext? context)
+    {
+        // 1. Try to find an agent matching by ContextMatchPattern
+        if (context != null)
+        {
+            var matchingAgent = SelectAgentByContext();
+            if (matchingAgent != null)
+            {
+                Logger.LogInformation("[Chat:{InstanceId}] Selected agent by context pattern: {Agent}", _instanceId, matchingAgent.Name);
+                return Task.FromResult<AgentDisplayInfo?>(matchingAgent);
+            }
+        }
+
+        // 2. Find default agent from the already-loaded agent list
+        // The agentDisplayInfos is populated from GetAgentsWithPathsAsync which searches
+        // both NodeType namespace and path namespace using scope:myselfAndAncestors
+        var defaultAgent = agentDisplayInfos
+            .Where(a => a.AgentConfiguration.IsDefault)
+            .OrderByDescending(a => a.Path?.Split('/').Length ?? 0)  // Closest (longest path) wins
+            .FirstOrDefault();
+
+        if (defaultAgent != null)
+        {
+            Logger.LogInformation("[Chat:{InstanceId}] Found closest default agent: {Agent} at path {Path}",
+                _instanceId, defaultAgent.Name, defaultAgent.Path);
+            return Task.FromResult<AgentDisplayInfo?>(defaultAgent);
+        }
+
+        // 3. Find closest agent by path depth (even if not marked as default)
+        var closestAgent = agentDisplayInfos
+            .OrderByDescending(a => a.Path?.Split('/').Length ?? 0)
+            .FirstOrDefault();
+
+        if (closestAgent != null)
+        {
+            Logger.LogInformation("[Chat:{InstanceId}] Falling back to closest agent: {Agent} at path {Path}",
+                _instanceId, closestAgent.Name, closestAgent.Path);
+            return Task.FromResult<AgentDisplayInfo?>(closestAgent);
+        }
+
+        // 4. Fall back to first available agent
+        var fallbackAgent = agentDisplayInfos.FirstOrDefault();
+        if (fallbackAgent != null)
+        {
+            Logger.LogInformation("[Chat:{InstanceId}] Falling back to first available agent: {Agent}", _instanceId, fallbackAgent.Name);
+        }
+        return Task.FromResult(fallbackAgent);
+    }
+
+    /// <summary>
+    /// Updates agent selection based on the current navigation context.
+    /// Uses IMeshQuery to find the closest default agent in the namespace hierarchy.
+    /// </summary>
+    private async Task UpdateAgentSelectionForContextAsync(AgentContext? context)
+    {
+        var contextPath = selectedContextPath;
+
+        Logger.LogDebug("[Chat:{InstanceId}] Updating agent selection for context path: {ContextPath}",
+            _instanceId, contextPath);
+
+        // Refresh agent list for the new context path (searches namespace hierarchy)
+        agentDisplayInfos = await AgentChatFactoryProvider.GetAgentsWithDisplayInfoAsync(contextPath);
+
+        Logger.LogDebug("[Chat:{InstanceId}] Found {Count} agents for context",
+            _instanceId, agentDisplayInfos.Count);
+
+        // Find the closest default agent using IMeshQuery
+        var newAgent = await FindClosestDefaultAgentAsync(contextPath, context);
+
+        // Update selection if changed
+        if (newAgent != null && newAgent.Name != selectedAgentInfo?.Name)
+        {
+            selectedAgentInfo = newAgent;
+            selectedModel = AgentChatFactoryProvider.GetPreferredModelForAgent(newAgent.Name);
+
+            Logger.LogInformation("[Chat:{InstanceId}] Agent changed to {Agent} with model {Model}",
+                _instanceId, newAgent.Name, selectedModel);
+
+            // Reinstantiate the agent with the new selection
+            ScheduleAgentReinstantiation();
+        }
+        else if (newAgent == null)
+        {
+            Logger.LogWarning("[Chat:{InstanceId}] No agents available for context path: {ContextPath}",
+                _instanceId, contextPath);
+        }
     }
 
     private void OnAgentInfoChanged(AgentDisplayInfo? newAgentInfo)

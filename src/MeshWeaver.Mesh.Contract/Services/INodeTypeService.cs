@@ -63,4 +63,19 @@ public interface INodeTypeService
     /// <param name="ct">Cancellation token.</param>
     /// <returns>The HubConfiguration function, or null if not found/compiled</returns>
     Task<Func<MessageHubConfiguration, MessageHubConfiguration>?> GetHubConfigurationAsync(Address address, CancellationToken ct = default);
+
+    /// <summary>
+    /// Gets the node types that can be created as children of the specified node.
+    ///
+    /// Algorithm:
+    /// 1. Query by node.Path to find NodeTypes defined directly under this path
+    ///    (types whose namespace matches the node's path)
+    /// 2. If node has a NodeType, also query by node.NodeType to find types
+    ///    that can be created in instances of this type
+    /// 3. Add global types (Markdown, NodeType) if IncludeGlobalTypes is true
+    /// </summary>
+    /// <param name="nodePath">The path of the node where we want to create children</param>
+    /// <param name="ct">Cancellation token</param>
+    /// <returns>Async enumerable of creatable type information, sorted by display order</returns>
+    IAsyncEnumerable<CreatableTypeInfo> GetCreatableTypesAsync(string nodePath, CancellationToken ct = default);
 }
