@@ -1,8 +1,5 @@
-using MeshWeaver.AI.Persistence;
 using MeshWeaver.AI.Plugins;
 using MeshWeaver.Graph.Configuration;
-using MeshWeaver.Mesh;
-using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
@@ -11,22 +8,26 @@ using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.AI;
 
-public abstract class AgentChatFactoryBase : IAgentChatFactory
+/// <summary>
+/// Base factory for creating ChatClientAgent instances.
+/// This is the single implementation for creating AI agents from configurations.
+/// Subclasses provide the specific IChatClient implementation (e.g., Azure OpenAI, Azure Foundry).
+/// </summary>
+public abstract class ChatClientAgentFactory : IChatClientFactory
 {
     protected readonly IMessageHub Hub;
+    protected readonly ILogger Logger;
 
     /// <summary>
-    /// The current model name being used for chat creation
+    /// The current model name being used for agent creation
     /// </summary>
     protected string? CurrentModelName { get; private set; }
 
-    protected AgentChatFactoryBase(IMessageHub hub)
+    protected ChatClientAgentFactory(IMessageHub hub)
     {
         Hub = hub;
         Logger = hub.ServiceProvider.GetRequiredService<ILoggerFactory>().CreateLogger(GetType());
     }
-
-    protected ILogger Logger { get; }
 
     /// <summary>
     /// Factory identifier (e.g., "Azure OpenAI", "Azure Claude")
@@ -43,47 +44,50 @@ public abstract class AgentChatFactoryBase : IAgentChatFactory
     /// </summary>
     public abstract int DisplayOrder { get; }
 
-    public virtual Task<IAgentChat> CreateAsync()
-    {
-        // Use default model (first in the list)
-        var defaultModel = Models.FirstOrDefault();
-        return CreateAsync(defaultModel ?? string.Empty);
-    }
-
-    public virtual Task<IAgentChat> CreateAsync(string modelName)
-    {
-        return CreateAsync(modelName, null);
-    }
-
-    public virtual async Task<IAgentChat> CreateAsync(string modelName, string? contextPath)
+    /// <summary>
+    /// Creates a ChatClientAgent for the given configuration.
+    /// </summary>
+    public Task<ChatClientAgent> CreateAgentAsync(
+        AgentConfiguration config,
+        IAgentChat chat,
+        IReadOnlyDictionary<string, ChatClientAgent> existingAgents,
+        IReadOnlyList<AgentConfiguration> hierarchyAgents,
+        string? modelName = null)
     {
         CurrentModelName = modelName;
 
-        // Create AgentChatClient with agent creator delegate
-        var chatClient = new AgentChatClient(Hub.ServiceProvider, CreateAgentAsync);
+        var name = config.Id;
+        var description = config.Description ?? string.Empty;
+        var instructions = GetAgentInstructions(config, hierarchyAgents);
 
-        // Initialize the client with the context path - this loads and creates agents
-        await chatClient.InitializeAsync(contextPath);
+        // Create a chat client for this agent using the derived class implementation
+        var chatClient = CreateChatClient(config);
 
-        return chatClient;
+        // Get tools for this agent, passing the chat instance so plugins can access context
+        var tools = GetToolsForAgent(config, chat, existingAgents, hierarchyAgents).ToArray();
+
+        // Add MeshPlugin tools for agents that need mesh operations
+        var meshPlugin = new MeshPlugin(Hub, chat);
+        tools = tools.Concat(meshPlugin.CreateTools()).ToArray();
+
+        // Create ChatClientAgent with all parameters
+        var agent = new ChatClientAgent(
+            chatClient: chatClient,
+            instructions: instructions,
+            name: name,
+            description: description,
+            tools: tools,
+            loggerFactory: null,
+            services: null
+        );
+
+        return Task.FromResult(agent);
     }
-
-    /// <summary>
-    /// Creates a ChatClientAgent for the specified configuration.
-    /// This is called by AgentChatClient during initialization.
-    /// </summary>
-    protected abstract Task<ChatClientAgent> CreateAgentAsync(
-        AgentConfiguration agentConfig,
-        IAgentChat chat,
-        IReadOnlyDictionary<string, ChatClientAgent> existingAgents,
-        IReadOnlyList<AgentConfiguration> hierarchyAgents);
 
     /// <summary>
     /// Creates a ChatClient instance for the specified agent configuration.
     /// Implementations should configure the chat client with their specific chat completion provider.
     /// </summary>
-    /// <param name="agentConfig">The agent configuration for which to create the chat client</param>
-    /// <returns>A configured IChatClient instance</returns>
     protected abstract IChatClient CreateChatClient(AgentConfiguration agentConfig);
 
     /// <summary>
@@ -118,8 +122,6 @@ public abstract class AgentChatFactoryBase : IAgentChatFactory
     /// <summary>
     /// Creates delegation tools for agents that can delegate to other agents.
     /// Uses a unified Delegate tool that includes all available agents in its description.
-    /// The tool combines explicit delegations from the agent's configuration with
-    /// hierarchy agents for escalation.
     /// </summary>
     protected virtual IEnumerable<AITool> GetAgentTools(
         AgentConfiguration agentConfig,
@@ -127,17 +129,14 @@ public abstract class AgentChatFactoryBase : IAgentChatFactory
         IReadOnlyDictionary<string, ChatClientAgent> allAgents,
         IReadOnlyList<AgentConfiguration> hierarchyAgents)
     {
-        // Check if this agent should have delegation capability
         var hasDelegations = agentConfig.Delegations is { Count: > 0 };
-        var hasHierarchyAgents = hierarchyAgents.Count > 1; // More than just this agent
+        var hasHierarchyAgents = hierarchyAgents.Count > 1;
 
         if (!hasDelegations && !hasHierarchyAgents && !agentConfig.IsDefault)
         {
-            // No delegation capability needed
             yield break;
         }
 
-        // Create unified delegation tool with all available agents
         var delegationTool = ChatPlugin.CreateUnifiedDelegationTool(
             agentConfig,
             hierarchyAgents,
@@ -149,38 +148,20 @@ public abstract class AgentChatFactoryBase : IAgentChatFactory
         yield return delegationTool;
     }
 
-    public abstract Task DeleteThreadAsync(string threadId);
-
-    public virtual async Task<IAgentChat> ResumeAsync(ChatConversation messages)
-    {
-        var ret = await CreateAsync();
-        await ret.ResumeAsync(messages);
-        return ret;
-    }
-
-    public Task<IReadOnlyList<AgentConfiguration>> GetAgentsAsync(string? contextPath = null)
-        => Task.FromResult<IReadOnlyList<AgentConfiguration>>(Array.Empty<AgentConfiguration>());
-
-    public Task<IReadOnlyList<AgentWithPath>> GetAgentsWithPathsAsync(string? contextPath = null)
-        => Task.FromResult<IReadOnlyList<AgentWithPath>>(Array.Empty<AgentWithPath>());
-
     protected string GetAgentInstructions(AgentConfiguration agentConfig, IReadOnlyList<AgentConfiguration> hierarchyAgents)
     {
         var baseInstructions = agentConfig.Instructions ?? string.Empty;
 
-        // Check if this agent has delegation capability
         var hasDelegations = agentConfig.Delegations is { Count: > 0 };
-        var hasHierarchyAgents = hierarchyAgents.Count > 1; // More than just this agent
+        var hasHierarchyAgents = hierarchyAgents.Count > 1;
 
         if (!hasDelegations && !hasHierarchyAgents && !agentConfig.IsDefault)
         {
             return baseInstructions;
         }
 
-        // Build list of available agents
         var agentList = new List<string>();
 
-        // Add explicit delegations first
         if (agentConfig.Delegations != null)
         {
             foreach (var d in agentConfig.Delegations)
@@ -190,7 +171,6 @@ public abstract class AgentChatFactoryBase : IAgentChatFactory
             }
         }
 
-        // Add hierarchy agents for escalation (excluding current agent and already listed)
         var listedIds = agentConfig.Delegations?.Select(d => d.AgentPath.Split('/').Last()).ToHashSet()
             ?? new HashSet<string>();
 

@@ -402,36 +402,6 @@ public class AutocompleteServiceTest
         }
     }
 
-    private class MockAgentChatFactoryProvider(IReadOnlyList<AgentConfiguration> agents) : IAgentChatFactoryProvider
-    {
-        public IReadOnlyList<IAgentChatFactory> Factories => [];
-        public IReadOnlyList<string> AllModels => [];
-        public IReadOnlyDictionary<string, string> AgentModelPreferences => new Dictionary<string, string>();
-
-        public IAgentChatFactory? GetFactoryForModel(string modelName) => null;
-        public Task<IAgentChat> CreateAsync(string modelName) => throw new System.NotImplementedException();
-        public Task<IAgentChat> CreateAsync(string modelName, string? contextPath) => throw new System.NotImplementedException();
-        public Task<IAgentChat> CreateAsync() => throw new System.NotImplementedException();
-
-        public Task<IReadOnlyList<AgentConfiguration>> GetAgentsAsync(string? contextPath = null)
-            => Task.FromResult(agents);
-
-        public Task<IReadOnlyList<AgentWithPath>> GetAgentsWithPathsAsync(string? contextPath = null)
-            => Task.FromResult<IReadOnlyList<AgentWithPath>>(agents.Select(a => new AgentWithPath(a, "/" + a.Id)).ToList());
-
-        public Task<IReadOnlyList<AgentDisplayInfo>> GetAgentsWithDisplayInfoAsync(string? contextPath = null)
-            => Task.FromResult<IReadOnlyList<AgentDisplayInfo>>(agents.Select(a => new AgentDisplayInfo
-            {
-                Name = a.Id,
-                Path = "/" + a.Id,
-                Description = a.Description ?? "",
-                AgentConfiguration = a
-            }).ToList());
-
-        public string GetPreferredModelForAgent(string agentName) => string.Empty;
-        public void SetModelPreferenceForAgent(string agentName, string modelName) { }
-        public Task InitializeAgentPreferencesAsync(string? contextPath = null) => Task.CompletedTask;
-    }
 
     private class MockMeshCatalog(System.Collections.Generic.IReadOnlyList<Mesh.MeshNode> nodes) : Mesh.Services.IMeshCatalog
     {

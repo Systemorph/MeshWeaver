@@ -13,7 +13,7 @@ public static class AzureFoundryExtensions
     /// </summary>
     public static IServiceCollection AddAzureFoundryClaude(this IServiceCollection services)
     {
-        return services.AddSingleton<IAgentChatFactory, AzureClaudeChatCompletionAgentChatFactory>();
+        return services.AddSingleton<IChatClientFactory, AzureClaudeChatClientAgentFactory>();
     }
 
     /// <summary>
@@ -24,7 +24,7 @@ public static class AzureFoundryExtensions
         Action<AzureClaudeConfiguration> configure)
     {
         services.Configure(configure);
-        return services.AddSingleton<IAgentChatFactory, AzureClaudeChatCompletionAgentChatFactory>();
+        return services.AddSingleton<IChatClientFactory, AzureClaudeChatClientAgentFactory>();
     }
 
     /// <summary>
@@ -33,7 +33,7 @@ public static class AzureFoundryExtensions
     /// </summary>
     public static IServiceCollection AddAzureFoundry(this IServiceCollection services)
     {
-        return services.AddSingleton<IAgentChatFactory, AzureFoundryChatCompletionAgentChatFactory>();
+        return services.AddSingleton<IChatClientFactory, AzureFoundryChatClientAgentFactory>();
     }
 
     /// <summary>
@@ -44,6 +44,6 @@ public static class AzureFoundryExtensions
         Action<AzureFoundryConfiguration> configure)
     {
         services.Configure(configure);
-        return services.AddSingleton<IAgentChatFactory, AzureFoundryChatCompletionAgentChatFactory>();
+        return services.AddSingleton<IChatClientFactory, AzureFoundryChatClientAgentFactory>();
     }
 }

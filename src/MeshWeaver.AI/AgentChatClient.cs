@@ -15,23 +15,13 @@ using TextContent = Microsoft.Extensions.AI.TextContent;
 
 namespace MeshWeaver.AI;
 
-/// <summary>
-/// Delegate for creating ChatClientAgent instances.
-/// Called by AgentChatClient when it needs to create agents for its context.
-/// </summary>
-public delegate Task<ChatClientAgent> AgentCreatorDelegate(
-    AgentConfiguration config,
-    IAgentChat chat,
-    IReadOnlyDictionary<string, ChatClientAgent> existingAgents,
-    IReadOnlyList<AgentConfiguration> hierarchyAgents);
-
 public class AgentChatClient : IAgentChat
 {
     private readonly IMessageHub hub;
     private readonly ILogger<AgentChatClient> logger;
     private readonly IChatPersistenceService persistenceService;
     private readonly IMeshQuery? meshQuery;
-    private readonly AgentCreatorDelegate? agentCreator;
+    private readonly IChatClientFactory? chatClientFactory;
     private readonly Dictionary<string, AIAgent> agents = new();
     private readonly Queue<ChatLayoutAreaContent> queuedLayoutAreaContent = new();
     private IReadOnlyList<AgentConfiguration> agentConfigurations = Array.Empty<AgentConfiguration>();
@@ -39,14 +29,16 @@ public class AgentChatClient : IAgentChat
     private string currentThreadId = Guid.NewGuid().AsString();
     private string? currentAgentName;
     private AgentThread? sharedThread;
+    private string? currentModelName;
+    private bool agentsInitialized;
 
-    public AgentChatClient(IServiceProvider serviceProvider, AgentCreatorDelegate? agentCreator = null)
+    public AgentChatClient(IServiceProvider serviceProvider)
     {
         hub = serviceProvider.GetRequiredService<IMessageHub>();
         logger = serviceProvider.GetRequiredService<ILogger<AgentChatClient>>();
         persistenceService = serviceProvider.GetRequiredService<IChatPersistenceService>();
         meshQuery = serviceProvider.GetService<IMeshQuery>();
-        this.agentCreator = agentCreator;
+        chatClientFactory = serviceProvider.GetService<IChatClientFactory>();
     }
 
     public AgentContext? Context { get; private set; }
@@ -624,9 +616,13 @@ public class AgentChatClient : IAgentChat
     /// Initializes the chat client by loading agents for the specified context path.
     /// This should be called after construction and before use.
     /// </summary>
-    public async Task InitializeAsync(string? contextPath)
+    /// <param name="contextPath">The context path for agent resolution</param>
+    /// <param name="modelName">Optional model name for agent creation</param>
+    public async Task InitializeAsync(string? contextPath, string? modelName = null)
     {
-        logger.LogDebug("[AgentChatClient] InitializeAsync called with contextPath: {ContextPath}", contextPath);
+        logger.LogDebug("[AgentChatClient] InitializeAsync called with contextPath: {ContextPath}, modelName: {ModelName}", contextPath, modelName);
+
+        currentModelName = modelName;
 
         // Load agent configurations from mesh
         agentConfigurations = await LoadAgentConfigurationsAsync(contextPath);
@@ -638,11 +634,8 @@ public class AgentChatClient : IAgentChat
 
         logger.LogDebug("[AgentChatClient] Loaded {Count} agent configurations", agentConfigurations.Count);
 
-        // Create agents if we have a creator
-        if (agentCreator != null)
-        {
-            await CreateAgentsAsync();
-        }
+        // Create agents using the factory
+        await CreateAgentsAsync();
     }
 
     /// <summary>
@@ -650,9 +643,15 @@ public class AgentChatClient : IAgentChat
     /// </summary>
     private async Task CreateAgentsAsync()
     {
-        if (agentCreator == null)
+        if (chatClientFactory == null)
         {
-            logger.LogWarning("[AgentChatClient] No agent creator provided, cannot create agents");
+            logger.LogWarning("[AgentChatClient] No IChatClientFactory available, cannot create agents");
+            return;
+        }
+
+        if (agentsInitialized)
+        {
+            logger.LogDebug("[AgentChatClient] Agents already initialized, skipping");
             return;
         }
 
@@ -664,7 +663,8 @@ public class AgentChatClient : IAgentChat
         // First pass: Create all agents in order
         foreach (var agentConfig in orderedAgents)
         {
-            var agent = await agentCreator(agentConfig, this, createdAgents, hierarchyAgents);
+            var agent = await chatClientFactory.CreateAgentAsync(
+                agentConfig, this, createdAgents, hierarchyAgents, currentModelName);
             createdAgents[agentConfig.Id] = agent;
             agents[agentConfig.Id] = agent;
             logger.LogDebug("[AgentChatClient] Created agent: {AgentId}", agentConfig.Id);
@@ -674,12 +674,14 @@ public class AgentChatClient : IAgentChat
         var cyclicAgents = FindCyclicDelegations(agentConfigurations);
         foreach (var agentConfig in cyclicAgents)
         {
-            var updatedAgent = await agentCreator(agentConfig, this, createdAgents, hierarchyAgents);
+            var updatedAgent = await chatClientFactory.CreateAgentAsync(
+                agentConfig, this, createdAgents, hierarchyAgents, currentModelName);
             createdAgents[agentConfig.Id] = updatedAgent;
             agents[agentConfig.Id] = updatedAgent;
             logger.LogDebug("[AgentChatClient] Updated cyclic agent: {AgentId}", agentConfig.Id);
         }
 
+        agentsInitialized = true;
         logger.LogInformation("[AgentChatClient] Created {Count} agents", agents.Count);
     }
 

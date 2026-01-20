@@ -88,8 +88,8 @@ public static class LoomConfiguration
             config.DisplayOrder = 20;  // Azure OpenAI last
         });
 
-        // Register the factory provider (must be after all factory registrations)
-        services.AddAgentChatFactoryProvider();
+        // Register the AI chat services (must be after all factory registrations)
+        services.AddAgentChatServices();
 
         // Configure GoogleMaps
         services.Configure<GoogleMapsConfiguration>(builder.Configuration.GetSection("GoogleMaps"));

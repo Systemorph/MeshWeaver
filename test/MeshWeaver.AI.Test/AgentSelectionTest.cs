@@ -16,7 +16,7 @@ using Xunit;
 namespace MeshWeaver.AI.Test;
 
 /// <summary>
-/// Tests for agent selection in AgentChatFactoryBase.
+/// Tests for agent selection in AgentChatClient.
 /// Verifies that agents are correctly resolved from NodeType namespace.
 /// </summary>
 public class AgentSelectionTest

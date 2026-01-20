@@ -7,16 +7,16 @@ namespace MeshWeaver.AI.Completion;
 
 /// <summary>
 /// Provides autocomplete items for AI models.
-/// Gets models from IAgentChatFactoryProvider when available.
+/// Gets models from IChatClientFactory when available.
 /// </summary>
 public class ModelAutocompleteProvider : IAutocompleteProvider
 {
-    private readonly IAgentChatFactoryProvider? _factoryProvider;
+    private readonly IChatClientFactory? _chatClientFactory;
     private IReadOnlyList<string>? _availableModels;
 
-    public ModelAutocompleteProvider(IAgentChatFactoryProvider factoryProvider)
+    public ModelAutocompleteProvider(IChatClientFactory chatClientFactory)
     {
-        _factoryProvider = factoryProvider;
+        _chatClientFactory = chatClientFactory;
     }
 
     public ModelAutocompleteProvider()
@@ -40,9 +40,9 @@ public class ModelAutocompleteProvider : IAutocompleteProvider
     {
         IReadOnlyList<string> models;
 
-        if (_factoryProvider != null)
+        if (_chatClientFactory != null)
         {
-            models = _factoryProvider.AllModels;
+            models = _chatClientFactory.Models;
         }
         else if (_availableModels != null)
         {

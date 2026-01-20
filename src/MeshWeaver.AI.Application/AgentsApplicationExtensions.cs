@@ -22,12 +22,12 @@ public static class AgentsApplicationExtensions
         => application
             .AddAIViews()
             .WithServices(services => services
-                // Model provider - uses factory provider if available
+                // Model provider - uses chat client factory if available
                 .AddScoped<IAutocompleteProvider>(sp =>
                 {
-                    var factoryProvider = sp.GetService<IAgentChatFactoryProvider>();
-                    if (factoryProvider != null)
-                        return new ModelAutocompleteProvider(factoryProvider);
+                    var chatClientFactory = sp.GetService<IChatClientFactory>();
+                    if (chatClientFactory != null)
+                        return new ModelAutocompleteProvider(chatClientFactory);
                     return new ModelAutocompleteProvider();
                 })
                 // Mesh catalog provider

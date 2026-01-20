@@ -41,7 +41,8 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
     private ChatConversation? currentConversation;
     private bool isLoadingConversation;
     private bool isGeneratingResponse;
-    private IAgentChatFactoryProvider AgentChatFactoryProvider => Hub.ServiceProvider.GetRequiredService<IAgentChatFactoryProvider>();
+    private IChatClientFactory? ChatClientFactory => Hub.ServiceProvider.GetService<IChatClientFactory>();
+    private readonly Dictionary<string, string> agentModelPreferences = new();
     // Bound context from the control
     private readonly AgentContext? boundContext;
     // Track last navigation context for agent reselection
@@ -154,11 +155,19 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
         var initialPath = NavigationManager.ToBaseRelativePath(NavigationManager.Uri);
         var contextPath = string.IsNullOrEmpty(initialPath) ? null : initialPath;
 
-        // Get available models (union from all factories, sorted by factory order)
-        availableModels = AgentChatFactoryProvider.AllModels;
+        // Get available models from the factory
+        availableModels = ChatClientFactory?.Models ?? [];
 
-        // Get available agents from factory provider (chat not created yet at this point)
-        agentDisplayInfos = await AgentChatFactoryProvider.GetAgentsWithDisplayInfoAsync(contextPath);
+        // Create a temporary chat to get ordered agents
+        var tempChat = new AgentChatClient(Hub.ServiceProvider);
+        await tempChat.InitializeAsync(contextPath, availableModels.FirstOrDefault());
+
+        // Set context for agent ordering
+        var context = await GetCurrentAgentContextAsync();
+        tempChat.SetContext(context);
+
+        // Get ordered agents from the chat
+        agentDisplayInfos = await tempChat.GetOrderedAgentsAsync();
 
         // First agent in the ordered list is the default
         selectedAgentInfo = agentDisplayInfos.FirstOrDefault();
@@ -166,7 +175,7 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
         // Set initial model based on agent preference or default
         if (selectedAgentInfo != null)
         {
-            selectedModel = AgentChatFactoryProvider.GetPreferredModelForAgent(selectedAgentInfo.Name);
+            selectedModel = GetPreferredModelForAgent(selectedAgentInfo.Name);
         }
         else
         {
@@ -174,6 +183,32 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
         }
 
         StateHasChanged();
+    }
+
+    private string GetPreferredModelForAgent(string agentName)
+    {
+        // Check if user has overridden the preference
+        if (agentModelPreferences.TryGetValue(agentName, out var preferredModel))
+            return preferredModel;
+
+        // Check agent configuration for preferred model
+        var agentConfig = agentDisplayInfos.FirstOrDefault(a => a.Name == agentName)?.AgentConfiguration;
+        if (!string.IsNullOrEmpty(agentConfig?.PreferredModel) &&
+            availableModels.Contains(agentConfig.PreferredModel))
+        {
+            return agentConfig.PreferredModel;
+        }
+
+        // Return default model
+        return availableModels.FirstOrDefault() ?? string.Empty;
+    }
+
+    private void SetModelPreferenceForAgent(string agentName, string modelName)
+    {
+        if (!availableModels.Contains(modelName))
+            return;
+
+        agentModelPreferences[agentName] = modelName;
     }
 
     /// <summary>
@@ -293,7 +328,7 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
         if (newAgent != null && newAgent.Name != selectedAgentInfo?.Name)
         {
             selectedAgentInfo = newAgent;
-            selectedModel = AgentChatFactoryProvider.GetPreferredModelForAgent(newAgent.Name);
+            selectedModel = GetPreferredModelForAgent(newAgent.Name);
 
             Logger.LogInformation("[Chat:{InstanceId}] Agent changed to {Agent} with model {Model}",
                 _instanceId, newAgent.Name, selectedModel);
@@ -316,7 +351,7 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
         selectedAgentInfo = newAgentInfo;
 
         // Update model to agent's preferred model
-        var preferredModel = AgentChatFactoryProvider.GetPreferredModelForAgent(newAgentInfo.Name);
+        var preferredModel = GetPreferredModelForAgent(newAgentInfo.Name);
         if (!string.IsNullOrEmpty(preferredModel) && preferredModel != selectedModel)
         {
             selectedModel = preferredModel;
@@ -336,7 +371,7 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
         // Update the agent's model preference
         if (selectedAgentInfo != null)
         {
-            AgentChatFactoryProvider.SetModelPreferenceForAgent(selectedAgentInfo.Name, newModel);
+            SetModelPreferenceForAgent(selectedAgentInfo.Name, newModel);
         }
 
         ScheduleAgentReinstantiation();
@@ -519,8 +554,13 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
     private async Task<IAgentChat> CreateChatAsync(string? contextPath)
     {
         // Use the selected model, or default if none selected
-        var model = selectedModel ?? AgentChatFactoryProvider.AllModels.FirstOrDefault() ?? string.Empty;
-        return await AgentChatFactoryProvider.CreateAsync(model, contextPath);
+        var model = selectedModel ?? availableModels.FirstOrDefault() ?? string.Empty;
+
+        // Create AgentChatClient directly
+        var chatClient = new AgentChatClient(Hub.ServiceProvider);
+        await chatClient.InitializeAsync(contextPath, model);
+
+        return chatClient;
     }
 
     // Public method to allow parent components to reset the conversation
@@ -1031,11 +1071,14 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
                     node.Name ?? node.Id, node.NodeType, node.Path);
             }
 
-            // Load available agents for this context
+            // Load available agents for this context using AgentOrderingHelper
             IReadOnlyList<AgentConfiguration>? availableAgents = null;
             try
             {
-                availableAgents = await AgentChatFactoryProvider.GetAgentsAsync(path);
+                var meshQuery = Hub.ServiceProvider.GetService<IMeshQuery>();
+                var nodeTypePath = node?.NodeType;
+                var agentDisplayInfoList = await AgentOrderingHelper.QueryAgentsAsync(meshQuery, path, nodeTypePath);
+                availableAgents = agentDisplayInfoList.Select(a => a.AgentConfiguration).ToList();
                 Logger.LogDebug("Loaded {Count} available agents for context path: {Path}", availableAgents?.Count ?? 0, path);
             }
             catch (Exception ex)
