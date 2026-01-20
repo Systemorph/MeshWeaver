@@ -176,87 +176,53 @@ public class AgentSelectionTest
     }
 
     /// <summary>
-    /// Tests agent ordering by path relevance.
-    /// Agents in the NodeType namespace should be prioritized.
+    /// Tests agent ordering by DisplayOrder then DisplayName.
     /// </summary>
     [Fact]
-    public void OrderByRelevance_NodeTypeNamespaceAgent_HasHigherPriority()
+    public void OrderByRelevance_OrdersByDisplayOrderThenDisplayName()
     {
         // Arrange
-        var contextPath = "ACME/ProductLaunch";
-        var nodeTypePath = "ACME/Project";
-
         var agents = new List<AgentDisplayInfo>
         {
             new()
             {
-                Name = "TodoAgent",
-                Path = "ACME/Project/TodoAgent", // In NodeType namespace
-                Description = "Project tasks",
-                AgentConfiguration = new AgentConfiguration { Id = "TodoAgent" }
+                Name = "Navigator",
+                DisplayOrder = -1,
+                Description = "Navigation",
+                AgentConfiguration = new AgentConfiguration { Id = "Navigator", DisplayName = "Navigator" }
             },
             new()
             {
-                Name = "Navigator",
-                Path = "Navigator", // Root level
-                Description = "Navigation",
-                AgentConfiguration = new AgentConfiguration { Id = "Navigator" }
+                Name = "TodoAgent",
+                DisplayOrder = -10, // Lower = first
+                Description = "Project tasks",
+                AgentConfiguration = new AgentConfiguration { Id = "TodoAgent", DisplayName = "Todo Agent" }
             },
             new()
             {
                 Name = "ACMEAgent",
-                Path = "ACME/ACMEAgent", // In context ancestor namespace
+                DisplayOrder = 0,
                 Description = "ACME specific",
-                AgentConfiguration = new AgentConfiguration { Id = "ACMEAgent" }
+                AgentConfiguration = new AgentConfiguration { Id = "ACMEAgent", DisplayName = "ACME Agent" }
             }
         };
 
-        // Act - Call the REAL AgentOrderingHelper implementation
-        var ordered = AgentOrderingHelper.OrderByRelevance(agents, contextPath, nodeTypePath);
+        // Act
+        var ordered = AgentOrderingHelper.OrderByRelevance(agents, null, null);
 
-        // Assert - TodoAgent should be first because it's in the NodeType namespace
+        // Assert - Ordered by DisplayOrder: -10, -1, 0
         ordered.Should().HaveCount(3);
-        ordered[0].Name.Should().Be("TodoAgent", "Agent in NodeType namespace has highest priority");
-        ordered[1].Name.Should().Be("ACMEAgent", "Agent in context ancestor path is second");
-        ordered[2].Name.Should().Be("Navigator", "Root-level agent is last");
-    }
-
-    /// <summary>
-    /// Tests CalculatePathRelevance scoring.
-    /// </summary>
-    [Fact]
-    public void CalculatePathRelevance_ReturnsCorrectScores()
-    {
-        var contextPath = "ACME/ProductLaunch";
-        var nodeTypePath = "ACME/Project";
-
-        // Agent in exact context namespace - highest score (1000)
-        AgentOrderingHelper.CalculatePathRelevance("ACME/ProductLaunch/LocalAgent", contextPath, nodeTypePath)
-            .Should().Be(1000);
-
-        // Agent in exact NodeType namespace - second highest (500)
-        AgentOrderingHelper.CalculatePathRelevance("ACME/Project/TodoAgent", contextPath, nodeTypePath)
-            .Should().Be(500);
-
-        // Agent in context ancestor - 200 minus hops
-        AgentOrderingHelper.CalculatePathRelevance("ACME/ACMEAgent", contextPath, nodeTypePath)
-            .Should().Be(199); // 200 - 1 hop
-
-        // Root level agent - ancestor of context
-        AgentOrderingHelper.CalculatePathRelevance("Navigator", contextPath, nodeTypePath)
-            .Should().Be(198); // 200 - 2 hops
-
-        // Agent not in any hierarchy - 0
-        AgentOrderingHelper.CalculatePathRelevance("Other/SomeAgent", contextPath, nodeTypePath)
-            .Should().Be(0);
+        ordered[0].Name.Should().Be("TodoAgent", "DisplayOrder -10 comes first");
+        ordered[1].Name.Should().Be("Navigator", "DisplayOrder -1 comes second");
+        ordered[2].Name.Should().Be("ACMEAgent", "DisplayOrder 0 comes last");
     }
 
     /// <summary>
     /// Scenario: When AgentContext has pre-loaded AvailableAgents,
-    /// the ordering should still work based on path relevance.
+    /// the ordering should work based on DisplayOrder.
     /// </summary>
     [Fact]
-    public void AgentContext_WithPreloadedAgents_OrdersByRelevance()
+    public void AgentContext_WithPreloadedAgents_OrdersByDisplayOrder()
     {
         // Arrange
         var todoAgentConfig = new AgentConfiguration
@@ -264,7 +230,7 @@ public class AgentSelectionTest
             Id = "TodoAgent",
             DisplayName = "Project Task Agent",
             Description = "Handles project tasks",
-            ContextMatchPattern = "address=like=*ProductLaunch*",
+            DisplayOrder = -10, // Lower = first
             IsDefault = true,
             ExposedInNavigator = true
         };
@@ -274,35 +240,36 @@ public class AgentSelectionTest
             Id = "Navigator",
             DisplayName = "Navigator",
             Description = "General navigation agent",
+            DisplayOrder = -1,
             IsDefault = false
         };
 
-        // Create context with pre-loaded agents and MeshNode
-        var context = new AgentContext
+        // Convert to display info for ordering
+        var displayInfos = new List<AgentDisplayInfo>
         {
-            Address = new MeshWeaver.Messaging.Address("ACME", "ProductLaunch"),
-            Node = new MeshNode("ProductLaunch", "ACME") { NodeType = "ACME/Project" },
-            AvailableAgents = new List<AgentConfiguration> { todoAgentConfig, navigatorConfig }
+            new()
+            {
+                Name = navigatorConfig.Id,
+                DisplayOrder = navigatorConfig.DisplayOrder,
+                Description = navigatorConfig.Description ?? "",
+                AgentConfiguration = navigatorConfig
+            },
+            new()
+            {
+                Name = todoAgentConfig.Id,
+                DisplayOrder = todoAgentConfig.DisplayOrder,
+                Description = todoAgentConfig.Description ?? "",
+                AgentConfiguration = todoAgentConfig
+            }
         };
 
-        // Convert to display info for ordering
-        var displayInfos = context.AvailableAgents.Select(a => new AgentDisplayInfo
-        {
-            Name = a.Id,
-            Path = a.Id == "TodoAgent" ? "ACME/Project/TodoAgent" : "Navigator",
-            Description = a.Description ?? "",
-            AgentConfiguration = a
-        }).ToList();
+        // Act - Order by DisplayOrder
+        var ordered = AgentOrderingHelper.OrderByRelevance(displayInfos, null, null);
 
-        // Act - Order by relevance using REAL implementation
-        var contextPath = context.Address?.ToString()?.TrimStart('/') ?? "";
-        var nodeTypePath = context.Node?.NodeType?.TrimStart('/') ?? "";
-        var ordered = AgentOrderingHelper.OrderByRelevance(displayInfos, contextPath, nodeTypePath);
-
-        // Assert
+        // Assert - TodoAgent (-10) comes before Navigator (-1)
         ordered.Should().HaveCount(2);
-        ordered[0].Name.Should().Be("TodoAgent", "TodoAgent is in NodeType namespace, should be first");
-        ordered[1].Name.Should().Be("Navigator", "Navigator is at root, should be second");
+        ordered[0].Name.Should().Be("TodoAgent", "DisplayOrder -10 comes first");
+        ordered[1].Name.Should().Be("Navigator", "DisplayOrder -1 comes second");
     }
 
     #region Helper Methods
