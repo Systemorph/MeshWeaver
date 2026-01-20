@@ -41,7 +41,7 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
     private ChatConversation? currentConversation;
     private bool isLoadingConversation;
     private bool isGeneratingResponse;
-    private IChatClientFactory? ChatClientFactory => Hub.ServiceProvider.GetService<IChatClientFactory>();
+    private IEnumerable<IChatClientFactory> ChatClientFactories => Hub.ServiceProvider.GetServices<IChatClientFactory>();
     private readonly Dictionary<string, string> agentModelPreferences = new();
     // Bound context from the control
     private readonly AgentContext? boundContext;
@@ -155,8 +155,11 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
         var initialPath = NavigationManager.ToBaseRelativePath(NavigationManager.Uri);
         var contextPath = string.IsNullOrEmpty(initialPath) ? null : initialPath;
 
-        // Get available models from the factory
-        availableModels = ChatClientFactory?.Models ?? [];
+        // Get available models from all factories, ordered by DisplayOrder
+        availableModels = ChatClientFactories
+            .OrderBy(f => f.DisplayOrder)
+            .SelectMany(f => f.Models)
+            .ToList();
 
         // Create a temporary chat to get ordered agents
         var tempChat = new AgentChatClient(Hub.ServiceProvider);

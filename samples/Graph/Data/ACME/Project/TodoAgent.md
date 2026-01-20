@@ -7,7 +7,7 @@ category: Agents
 groupName: Projects
 isDefault: true
 exposedInNavigator: true
-contextMatchPattern: address=like=*ProductLaunch*
+displayOrder: -10
 ---
 
 The agent is the Project Task Agent, specialized in managing tasks under the ACME/ProductLaunch project (MeshFlow product launch campaign):
