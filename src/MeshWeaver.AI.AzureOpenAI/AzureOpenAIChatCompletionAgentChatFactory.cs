@@ -1,6 +1,5 @@
 using Azure;
 using Azure.AI.OpenAI;
-using MeshWeaver.AI.Services;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.AI;
@@ -14,9 +13,8 @@ namespace MeshWeaver.AI.AzureOpenAI;
 /// </summary>
 public class AzureOpenAIChatCompletionAgentChatFactory(
     IMessageHub hub,
-    IAgentResolver agentResolver,
     IOptions<AzureOpenAIConfiguration> options)
-    : ChatCompletionAgentChatFactory(hub, agentResolver)
+    : ChatCompletionAgentChatFactory(hub)
 {
     private readonly AzureOpenAIConfiguration credentials = options.Value ?? throw new ArgumentNullException(nameof(options));
 

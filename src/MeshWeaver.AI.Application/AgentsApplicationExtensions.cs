@@ -1,6 +1,5 @@
 using MeshWeaver.AI.Application.Layout;
 using MeshWeaver.AI.Completion;
-using MeshWeaver.AI.Services;
 using MeshWeaver.Data.Completion;
 using MeshWeaver.Mesh.Completion;
 using MeshWeaver.Mesh.Services;
@@ -29,10 +28,7 @@ public static class AgentsApplicationExtensions
                     var factoryProvider = sp.GetService<IAgentChatFactoryProvider>();
                     if (factoryProvider != null)
                         return new AgentAutocompleteProvider(factoryProvider);
-                    var agentResolver = sp.GetService<IAgentResolver>();
-                    if (agentResolver != null)
-                        return new AgentAutocompleteProvider(agentResolver);
-                    // Return an empty provider if neither is available
+                    // Return an empty provider if factory provider is not available
                     return new EmptyAutocompleteProvider();
                 })
                 // Model provider - uses factory provider if available

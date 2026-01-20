@@ -1,6 +1,5 @@
 using Azure;
 using Azure.AI.Inference;
-using MeshWeaver.AI.Services;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.Logging;
@@ -14,10 +13,9 @@ namespace MeshWeaver.AI.AzureFoundry;
 /// </summary>
 public class AzureFoundryChatCompletionAgentChatFactory(
     IMessageHub hub,
-    IAgentResolver agentResolver,
     IOptions<AzureFoundryConfiguration> options,
     ILogger<AzureFoundryChatCompletionAgentChatFactory> logger)
-    : ChatCompletionAgentChatFactory(hub, agentResolver)
+    : ChatCompletionAgentChatFactory(hub)
 {
     private readonly AzureFoundryConfiguration configuration = options.Value ?? throw new ArgumentNullException(nameof(options));
 

@@ -3,7 +3,6 @@ using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using MeshWeaver.AI.Persistence;
-using MeshWeaver.AI.Services;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Layout;
 using MeshWeaver.Mesh.Services;
@@ -19,19 +18,18 @@ namespace MeshWeaver.AI;
 
 public class AgentChatClient(
     IReadOnlyList<AgentConfiguration> agentConfigurations,
-    IAgentResolver agentResolver,
     IServiceProvider serviceProvider)
     : IAgentChat
 {
     private readonly IMessageHub hub = serviceProvider.GetRequiredService<IMessageHub>();
     private readonly ILogger<AgentChatClient> logger = serviceProvider.GetRequiredService<ILogger<AgentChatClient>>();
     private readonly IChatPersistenceService persistenceService = serviceProvider.GetRequiredService<IChatPersistenceService>();
+    private readonly IMeshQuery? meshQuery = serviceProvider.GetService<IMeshQuery>();
     private readonly Dictionary<string, AIAgent> agents = new();
     private readonly Dictionary<string, AgentConfiguration> agentConfigsById = agentConfigurations.ToDictionary(a => a.Id);
     private readonly Queue<ChatLayoutAreaContent> queuedLayoutAreaContent = new();
     private string currentThreadId = Guid.NewGuid().AsString();
     private string? currentAgentName;
-    private readonly Address? lastContextAddress;
     private AgentThread? sharedThread;
 
     public void AddAgent(string name, AIAgent agent)
@@ -361,11 +359,8 @@ public class AgentChatClient(
     {
         logger.LogDebug("[AgentChatClient] SelectAgentAsync called. Context: {Context}",
             Context != null ? $"Address={Context.Address}, LayoutArea={Context.LayoutArea?.Area}" : "null");
-        logger.LogDebug("Available agents: {Agents}", string.Join(", ", agents.Keys));
-        logger.LogDebug("Agent configurations with ContextMatchPattern: {AgentConfigs}",
-            string.Join(", ", agentConfigurations.Where(a => !string.IsNullOrEmpty(a.ContextMatchPattern)).Select(a => a.Id)));
 
-        // Check for explicit agent mention using @agent/Name format
+        // 1. Check for explicit @agent/Name reference in message
         if (lastMessage != null)
         {
             var text = ExtractTextFromMessage(lastMessage);
@@ -373,7 +368,6 @@ public class AgentChatClient(
             if (agentMatch.Success)
             {
                 var agentName = agentMatch.Groups[1].Value;
-                // Try exact match first, then case-insensitive
                 if (agents.TryGetValue(agentName, out var agent))
                 {
                     logger.LogDebug("Selected agent by @agent/ reference: {AgentName}", agentName);
@@ -390,88 +384,179 @@ public class AgentChatClient(
             }
         }
 
-        // Check if we should reselect agent based on context
-        var currentAddress = Context?.Address;
-        var shouldReselectAgent = lastContextAddress != currentAddress || string.IsNullOrEmpty(currentAgentName);
-
-        logger.LogDebug("Should reselect agent: {ShouldReselect} (lastAddress={LastAddress}, currentAddress={CurrentAddress}, currentAgentName={CurrentAgentName})",
-            shouldReselectAgent, lastContextAddress, currentAddress, currentAgentName);
-
-        if (shouldReselectAgent)
+        // 2. Try to find agent based on context (using direct mesh query)
+        var contextPath = Context?.Address?.ToString();
+        if (!string.IsNullOrEmpty(contextPath) && meshQuery != null)
         {
-            // Try to find an agent that matches the context using ContextMatchPattern
-            if (Context != null)
-            {
-                logger.LogDebug("[AgentChatClient] Looking for agents matching context...");
-                var matchingAgents = await agentResolver.FindMatchingAgentsAsync(Context, null);
-                logger.LogDebug("[AgentChatClient] Found {Count} agents matching context", matchingAgents.Count);
-
-                foreach (var agentConfig in matchingAgents)
-                {
-                    if (agents.TryGetValue(agentConfig.Id, out var agent))
-                    {
-                        logger.LogDebug("Selected agent by context match: {AgentName}", agentConfig.Id);
-                        return agent;
-                    }
-                    else
-                    {
-                        logger.LogWarning("Agent {AgentName} matches context but not found in agents dictionary", agentConfig.Id);
-                    }
-                }
-
-                logger.LogDebug("No agent matched the context");
-
-                // Try to find an agent from the node's NodeType namespace
-                // E.g., if at ACME/ProductLaunch with NodeType=ACME/Project, search ACME/Project for agents
-                var contextPath = Context.Address?.ToString();
-                if (!string.IsNullOrEmpty(contextPath))
-                {
-                    var meshQuery = serviceProvider.GetService<IMeshQuery>();
-                    if (meshQuery != null)
-                    {
-                        // Get the node at the context path to find its NodeType
-                        var nodes = await meshQuery.QueryAsync<MeshNode>($"path:{contextPath} scope:self").ToListAsync();
-                        var node = nodes.FirstOrDefault();
-                        if (node?.NodeType != null && node.NodeType != "Markdown" && node.NodeType != "Agent")
-                        {
-                            // The NodeType might be a path like "ACME/Project" - search for agents there
-                            logger.LogDebug("[AgentChatClient] Searching NodeType namespace: {NodeType}", node.NodeType);
-                            var typeAgents = await agentResolver.GetAgentsForContextAsync(node.NodeType);
-
-                            foreach (var agentConfig in typeAgents)
-                            {
-                                if (agents.TryGetValue(agentConfig.Id, out var agent))
-                                {
-                                    logger.LogDebug("Selected agent from NodeType namespace: {AgentName}", agentConfig.Id);
-                                    return agent;
-                                }
-                            }
-                        }
-                    }
-                }
-            }
+            var selectedAgent = await FindAgentForContextAsync(contextPath);
+            if (selectedAgent != null)
+                return selectedAgent;
         }
 
-        // Use current agent if we have one
+        // 3. Use current agent if we have one
         if (!string.IsNullOrEmpty(currentAgentName) && agents.TryGetValue(currentAgentName, out var currentAgent))
         {
             logger.LogDebug("Using current agent: {AgentName}", currentAgentName);
             return currentAgent;
         }
 
-        // Find default agent (using IsDefault property)
+        // 4. Find default agent from configurations
         var defaultAgentConfig = agentConfigurations.FirstOrDefault(a => a.IsDefault);
-
         if (defaultAgentConfig != null && agents.TryGetValue(defaultAgentConfig.Id, out var defaultAgent))
         {
             logger.LogDebug("Selected default agent: {AgentName}", defaultAgentConfig.Id);
             return defaultAgent;
         }
 
-        // Return first agent as fallback
+        // 5. Return first agent as fallback
         var fallbackAgent = agents.Values.FirstOrDefault();
         logger.LogDebug("Using fallback agent: {AgentName}", fallbackAgent?.Name ?? "null");
         return fallbackAgent;
+    }
+
+    /// <summary>
+    /// Finds the best agent for a given context path by:
+    /// 1. Getting the node at the path to find its NodeType
+    /// 2. Querying for agents in the NodeType namespace (scope:myselfAndAncestors)
+    /// 3. Querying for agents in the path namespace (scope:myselfAndAncestors)
+    /// 4. Matching by ContextMatchPattern or returning closest default agent
+    /// </summary>
+    private async Task<AIAgent?> FindAgentForContextAsync(string contextPath)
+    {
+        if (meshQuery == null) return null;
+
+        // Get the current node to find its NodeType
+        string? nodeTypePath = null;
+        try
+        {
+            await foreach (var node in meshQuery.QueryAsync<MeshNode>($"path:{contextPath} scope:self"))
+            {
+                if (!string.IsNullOrEmpty(node.NodeType) && node.NodeType != "Markdown" && node.NodeType != "Agent")
+                {
+                    nodeTypePath = node.NodeType;
+                    logger.LogDebug("[AgentChatClient] Found NodeType {NodeType} for context {Context}", nodeTypePath, contextPath);
+                    break;
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            logger.LogDebug(ex, "[AgentChatClient] Error getting NodeType for context {Context}", contextPath);
+        }
+
+        var foundAgents = new List<(AgentConfiguration Config, string Path)>();
+
+        // Query agents from NodeType namespace (higher priority)
+        if (!string.IsNullOrEmpty(nodeTypePath))
+        {
+            try
+            {
+                var query = $"path:{nodeTypePath} nodeType:Agent scope:myselfAndAncestors";
+                logger.LogDebug("[AgentChatClient] Querying agents: {Query}", query);
+
+                await foreach (var node in meshQuery.QueryAsync<MeshNode>(query))
+                {
+                    if (node.Content is AgentConfiguration config)
+                    {
+                        foundAgents.Add((config, node.Path ?? ""));
+                        logger.LogDebug("[AgentChatClient] Found agent {AgentId} at {Path}", config.Id, node.Path);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                logger.LogDebug(ex, "[AgentChatClient] Error querying agents in NodeType namespace {NodeType}", nodeTypePath);
+            }
+        }
+
+        // Query agents from context path namespace
+        try
+        {
+            var query = $"path:{contextPath} nodeType:Agent scope:myselfAndAncestors";
+            logger.LogDebug("[AgentChatClient] Querying agents: {Query}", query);
+
+            await foreach (var node in meshQuery.QueryAsync<MeshNode>(query))
+            {
+                if (node.Content is AgentConfiguration config && !foundAgents.Any(a => a.Config.Id == config.Id))
+                {
+                    foundAgents.Add((config, node.Path ?? ""));
+                    logger.LogDebug("[AgentChatClient] Found agent {AgentId} at {Path}", config.Id, node.Path);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            logger.LogDebug(ex, "[AgentChatClient] Error querying agents in path namespace {ContextPath}", contextPath);
+        }
+
+        // First try to match by ContextMatchPattern
+        if (Context != null)
+        {
+            foreach (var (config, _) in foundAgents)
+            {
+                if (!string.IsNullOrEmpty(config.ContextMatchPattern) && MatchesContext(config.ContextMatchPattern, Context))
+                {
+                    if (agents.TryGetValue(config.Id, out var agent))
+                    {
+                        logger.LogDebug("[AgentChatClient] Selected agent by context pattern: {AgentName}", config.Id);
+                        return agent;
+                    }
+                }
+            }
+        }
+
+        // Return closest default agent (longest path)
+        var defaultAgent = foundAgents
+            .Where(a => a.Config.IsDefault)
+            .OrderByDescending(a => a.Path.Split('/').Length)
+            .FirstOrDefault();
+
+        if (defaultAgent.Config != null && agents.TryGetValue(defaultAgent.Config.Id, out var agent2))
+        {
+            logger.LogDebug("[AgentChatClient] Selected closest default agent: {AgentName} at {Path}", defaultAgent.Config.Id, defaultAgent.Path);
+            return agent2;
+        }
+
+        // Return any agent from NodeType namespace (closest first)
+        var anyAgent = foundAgents
+            .OrderByDescending(a => a.Path.Split('/').Length)
+            .FirstOrDefault();
+
+        if (anyAgent.Config != null && agents.TryGetValue(anyAgent.Config.Id, out var agent3))
+        {
+            logger.LogDebug("[AgentChatClient] Selected closest agent: {AgentName} at {Path}", anyAgent.Config.Id, anyAgent.Path);
+            return agent3;
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Simple RSQL-like pattern matching for context selection.
+    /// </summary>
+    private static bool MatchesContext(string pattern, AgentContext context)
+    {
+        if (context.Address == null)
+            return false;
+
+        var addressStr = context.Address.ToString();
+
+        // Handle address=like=*value* patterns
+        if (pattern.StartsWith("address=like="))
+        {
+            var likePattern = pattern["address=like=".Length..].Trim('*');
+            return addressStr.Contains(likePattern, StringComparison.OrdinalIgnoreCase);
+        }
+
+        // Handle address.type==value patterns
+        if (pattern.StartsWith("address.type=="))
+        {
+            var expectedType = pattern["address.type==".Length..];
+            return context.Address.Type?.Equals(expectedType, StringComparison.OrdinalIgnoreCase) == true;
+        }
+
+        // Fallback: simple contains check
+        return addressStr.Contains(pattern, StringComparison.OrdinalIgnoreCase);
     }
 
     public void SetContext(AgentContext? applicationContext)
