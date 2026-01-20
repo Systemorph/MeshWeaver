@@ -21,6 +21,26 @@
                 <div class="search-container">
                     <SearchBar />
                 </div>
+                @* Create menu - available in all portal layouts *@
+                <FluentButton Appearance="Appearance.Stealth" Id="create-menu-button"
+                    Title="Create new" aria-label="Create new" @onclick="@(() => isCreateMenuOpen = !isCreateMenuOpen)">
+                    <FluentIcon Value="@(new Icons.Regular.Size20.Add())" Color="Color.FillInverse" />
+                </FluentButton>
+                <FluentMenu Anchor="create-menu-button" @bind-Open="isCreateMenuOpen">
+                    @if (creatableTypes.Count == 0)
+                    {
+                        <FluentMenuItem Disabled="true">Loading...</FluentMenuItem>
+                    }
+                    else
+                    {
+                        @foreach (var typeInfo in creatableTypes)
+                        {
+                            <FluentMenuItem OnClick="@(() => NavigateToCreate(typeInfo.NodeTypePath))">
+                                New @(typeInfo.DisplayName ?? typeInfo.NodeTypePath)
+                            </FluentMenuItem>
+                        }
+                    }
+                </FluentMenu>
                 @HeaderLinks
             </div>
             <div class="notifications">

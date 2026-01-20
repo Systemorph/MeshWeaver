@@ -1,0 +1,466 @@
+@using MeshWeaver.Layout
+@using MeshWeaver.Layout.Client
+@using MeshWeaver.Data
+@using MeshWeaver.Data.Completion
+@using MeshWeaver.Blazor
+@using MeshWeaver.Blazor.Components.Monaco
+@using MeshWeaver.Markdown
+@using MeshWeaver.Markdown.Collaboration
+@using MeshWeaver.Messaging
+@using Microsoft.Extensions.Logging
+@using System.Reactive.Linq
+@using Microsoft.FluentUI.AspNetCore.Components
+@using MarkdownAnnotationType = MeshWeaver.Markdown.Collaboration.AnnotationType
+@namespace MeshWeaver.Blazor.Components
+@inherits BlazorView<MarkdownEditorControl, MarkdownEditorView>
+
+<div class="collaborative-editor-container">
+    @if (BoundShowCommentsPanel)
+    {
+        <div class="editor-main-content with-panel">
+            <div class="editor-area">
+                @if (BoundTrackChangesEnabled)
+                {
+                    <TrackChangesToolbar DocumentId="@BoundDocumentId"
+                                          OnAcceptChange="@OnAcceptChange"
+                                          OnRejectChange="@OnRejectChange"
+                                          OnAcceptAll="@OnAcceptAllChanges"
+                                          OnRejectAll="@OnRejectAllChanges" />
+                }
+                <MonacoEditorView @ref="editorRef"
+                                  Value="@BoundValue"
+                                  Language="markdown"
+                                  Height="@BoundHeight"
+                                  MaxHeight="@BoundMaxHeight"
+                                  IsDisabled="@BoundReadonly"
+                                  Placeholder="@BoundPlaceholder"
+                                  ShowLineNumbers="true"
+                                  ShowBorder="true"
+                                  CodeEditMode="true"
+                                  CompletionProvider="@GetCompletionConfig()"
+                                  AsyncCompletionCallback="@GetCompletionsAsync"
+                                  ValueChanged="@OnValueChanged" />
+            </div>
+            <CommentPanel DocumentId="@BoundDocumentId"
+                          Comments="@Comments"
+                          OnResolveComment="@OnResolveComment"
+                          OnDeleteComment="@OnDeleteComment"
+                          OnReplyToComment="@OnReplyToComment" />
+        </div>
+    }
+    else
+    {
+        <div class="editor-main-content">
+            <div class="editor-area">
+                @if (BoundTrackChangesEnabled)
+                {
+                    <TrackChangesToolbar DocumentId="@BoundDocumentId"
+                                          OnAcceptChange="@OnAcceptChange"
+                                          OnRejectChange="@OnRejectChange"
+                                          OnAcceptAll="@OnAcceptAllChanges"
+                                          OnRejectAll="@OnRejectAllChanges" />
+                }
+                <MonacoEditorView @ref="editorRef"
+                                  Value="@BoundValue"
+                                  Language="markdown"
+                                  Height="@BoundHeight"
+                                  MaxHeight="@BoundMaxHeight"
+                                  IsDisabled="@BoundReadonly"
+                                  Placeholder="@BoundPlaceholder"
+                                  ShowLineNumbers="true"
+                                  ShowBorder="true"
+                                  CodeEditMode="true"
+                                  CompletionProvider="@GetCompletionConfig()"
+                                  AsyncCompletionCallback="@GetCompletionsAsync"
+                                  ValueChanged="@OnValueChanged" />
+            </div>
+        </div>
+    }
+
+    @if (BoundShowPreview)
+    {
+        <div class="preview-panel">
+            <div class="preview-header">Preview</div>
+            <div class="preview-content">
+                @((MarkupString)RenderedPreview)
+            </div>
+        </div>
+    }
+</div>
+
+@code {
+    private MonacoEditorView? editorRef;
+    private AutoSaveHandler? autoSaveHandler;
+    private bool isUpdatingFromStream = false;
+    private static readonly TimeSpan AutoSaveThrottleInterval = TimeSpan.FromMilliseconds(500);
+
+    // Bound properties
+    private string BoundValue = "";
+    private string BoundDocumentId = "";
+    private string BoundHeight = "100%";
+    private string BoundMaxHeight = "none";
+    private bool BoundReadonly = false;
+    private string BoundPlaceholder = "Start typing markdown...";
+    private bool BoundTrackChangesEnabled = false;
+    private bool BoundShowCommentsPanel = false;
+    private bool BoundShowPreview = false;
+    private string? BoundAutoSaveAddress;
+    private string? BoundNodePath;
+
+    // Collaborative editing state
+    private List<RangeComment> Comments = new();
+    private List<TrackedChange> TrackedChanges = new();
+    private string RenderedPreview = "";
+
+    // Data pointer for two-way binding
+    private JsonPointerReference? ValuePointer;
+
+    protected override void BindData()
+    {
+        base.BindData();
+
+        // Store the value pointer for two-way binding
+        ValuePointer = ViewModel.Value as JsonPointerReference;
+
+        // Set up auto-save handler (throttled to avoid excessive saves)
+        // Note: No DistinctUntilChanged - Throttle already ensures we save the latest value after a pause
+        autoSaveHandler = new AutoSaveHandler(AutoSaveThrottleInterval, AutoSaveContent);
+        AddBinding(autoSaveHandler);
+
+        // Bind Value with reactive subscription
+        if (Stream != null && ValuePointer != null)
+        {
+            AddBinding(Stream
+                .DataBind<string>(ValuePointer, DataContext)
+                .Subscribe(value =>
+                {
+                    if (value != null && value != BoundValue)
+                    {
+                        isUpdatingFromStream = true;
+                        BoundValue = value;
+                        UpdatePreview(value);
+                        ExtractAnnotations(value);
+                        InvokeAsync(StateHasChanged);
+                        isUpdatingFromStream = false;
+                    }
+                }));
+        }
+
+        // Bind other properties using DataBind pattern
+        DataBind(ViewModel.DocumentId, x => x.BoundDocumentId, defaultValue: Guid.NewGuid().ToString());
+        DataBind(ViewModel.Height, x => x.BoundHeight, defaultValue: "100%");
+        DataBind(ViewModel.MaxHeight, x => x.BoundMaxHeight, defaultValue: "none");
+        DataBind(ViewModel.Readonly, x => x.BoundReadonly, defaultValue: false);
+        DataBind(ViewModel.Placeholder, x => x.BoundPlaceholder, defaultValue: "Start typing markdown...");
+        DataBind(ViewModel.TrackChangesEnabled, x => x.BoundTrackChangesEnabled, defaultValue: false);
+        DataBind(ViewModel.ShowCommentsPanel, x => x.BoundShowCommentsPanel, defaultValue: false);
+        DataBind(ViewModel.ShowPreview, x => x.BoundShowPreview, defaultValue: false);
+
+        // Auto-save configuration (direct assignment, not bindable)
+        BoundAutoSaveAddress = ViewModel.AutoSaveAddress;
+        BoundNodePath = ViewModel.NodePath;
+
+        // Initial content processing
+        var initialValue = GetInitialValue();
+        if (!string.IsNullOrEmpty(initialValue))
+        {
+            BoundValue = initialValue;
+            ExtractAnnotations(initialValue);
+            UpdatePreview(initialValue);
+        }
+    }
+
+    private string? GetInitialValue()
+    {
+        if (Stream == null || ViewModel.Value == null)
+            return null;
+
+        return Stream.GetDataBoundValue<string>(ViewModel.Value, DataContext);
+    }
+
+    private CompletionProviderConfig GetCompletionConfig()
+    {
+        // Default config for UCR autocomplete - trigger on @ for unified content references
+        return new CompletionProviderConfig
+        {
+            TriggerCharacters = ["@"],
+            Items = []
+        };
+    }
+
+    /// <summary>
+    /// Gets autocomplete suggestions via Hub messaging.
+    /// Sends AutocompleteRequest to the hub and converts the response to Monaco CompletionItems.
+    /// </summary>
+    private async Task<CompletionItem[]> GetCompletionsAsync(string query)
+    {
+        if (Hub == null || string.IsNullOrWhiteSpace(query))
+            return [];
+
+        try
+        {
+            // Use the hub to request autocomplete via messaging
+            var request = new AutocompleteRequest(query, BoundNodePath);
+            var response = await Hub.AwaitResponse(
+                request,
+                o => o.WithTarget(Hub.Address),
+                default);
+
+            if (response.Message is not AutocompleteResponse autocompleteResponse)
+                return [];
+
+            // Convert AutocompleteItems to Monaco CompletionItems
+            return autocompleteResponse.Items
+                .Select(item => new CompletionItem
+                {
+                    Label = item.Label,
+                    InsertText = item.InsertText,
+                    Description = item.Description,
+                    Category = item.Category,
+                    Kind = MapKind(item.Kind)
+                })
+                .ToArray();
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "Failed to get autocomplete suggestions for query: {Query}", query);
+            return [];
+        }
+    }
+
+    private static CompletionItemKind MapKind(AutocompleteKind kind) => kind switch
+    {
+        AutocompleteKind.Agent => CompletionItemKind.Module,
+        AutocompleteKind.File => CompletionItemKind.File,
+        AutocompleteKind.Command => CompletionItemKind.Function,
+        _ => CompletionItemKind.Text
+    };
+
+    private void ExtractAnnotations(string content)
+    {
+        if (string.IsNullOrEmpty(content))
+        {
+            Comments.Clear();
+            TrackedChanges.Clear();
+            return;
+        }
+
+        var annotations = MarkdownAnnotationParser.ExtractAllAnnotations(content);
+
+        Comments = annotations
+            .Where(a => a.Type == MarkdownAnnotationType.Comment)
+            .Select(a => new RangeComment
+            {
+                Id = a.MarkerId,
+                DocumentId = BoundDocumentId,
+                MarkerId = a.MarkerId,
+                Author = "Unknown",
+                Text = "",
+                CreatedAt = DateTimeOffset.UtcNow,
+                State = CommentState.Active,
+                OriginalSelectedText = a.AnnotatedText
+            })
+            .ToList();
+
+        TrackedChanges = annotations
+            .Where(a => a.Type == MarkdownAnnotationType.Insert || a.Type == MarkdownAnnotationType.Delete)
+            .Select(a => new TrackedChange
+            {
+                Id = a.MarkerId,
+                DocumentId = BoundDocumentId,
+                MarkerId = a.MarkerId,
+                Author = "Unknown",
+                Type = a.Type == MarkdownAnnotationType.Insert ? TrackedChangeType.Insertion : TrackedChangeType.Deletion,
+                Status = TrackedChangeStatus.Pending
+            })
+            .ToList();
+    }
+
+    private void UpdatePreview(string content)
+    {
+        if (string.IsNullOrEmpty(content))
+        {
+            RenderedPreview = "";
+            return;
+        }
+
+        var cleanContent = MarkdownAnnotationParser.StripAllMarkers(content);
+        RenderedPreview = $"<pre>{System.Web.HttpUtility.HtmlEncode(cleanContent)}</pre>";
+    }
+
+    private void OnValueChanged(string value)
+    {
+        // Don't write back if this change came from the stream subscription
+        if (isUpdatingFromStream)
+            return;
+
+        // Only update if value actually changed
+        if (BoundValue == value)
+            return;
+
+        BoundValue = value;
+        ExtractAnnotations(value);
+        UpdatePreview(value);
+
+        // Write back to stream via UpdatePointer
+        if (ValuePointer != null)
+        {
+            UpdatePointer(value, ValuePointer);
+        }
+
+        // Trigger throttled auto-save
+        autoSaveHandler?.OnValueChanged(value);
+    }
+
+    /// <summary>
+    /// Auto-saves content by posting a DataChangeRequest to the target hub.
+    /// </summary>
+    private void AutoSaveContent(string content)
+    {
+        if (string.IsNullOrEmpty(BoundAutoSaveAddress) || string.IsNullOrEmpty(BoundNodePath))
+            return;
+
+        try
+        {
+            // Create a partial MeshNode update with just NodeType and Content
+            var nodeUpdate = new MeshWeaver.Mesh.MeshNode(BoundNodePath)
+            {
+                NodeType = "Markdown",
+                Content = new MarkdownContent { Content = content }
+            };
+
+            // Post the DataChangeRequest to the target hub via messaging
+            Hub.Post(
+                new DataChangeRequest().WithUpdates(nodeUpdate),
+                o => o.WithTarget(new Address(BoundAutoSaveAddress)));
+
+            Logger.LogDebug("Auto-saved content to {Address} for node {Path}", BoundAutoSaveAddress, BoundNodePath);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "Failed to auto-save content to {Address}", BoundAutoSaveAddress);
+        }
+    }
+
+    private async Task OnAcceptChange(string changeId)
+    {
+        var change = TrackedChanges.FirstOrDefault(c => c.Id == changeId);
+        if (change == null) return;
+
+        string newContent = change.Type == TrackedChangeType.Insertion
+            ? MarkdownAnnotationParser.RemoveMarkers(BoundValue, changeId)
+            : MarkdownAnnotationParser.RemoveMarkersAndContent(BoundValue, changeId);
+
+        await UpdateContent(newContent);
+    }
+
+    private async Task OnRejectChange(string changeId)
+    {
+        var change = TrackedChanges.FirstOrDefault(c => c.Id == changeId);
+        if (change == null) return;
+
+        string newContent = change.Type == TrackedChangeType.Insertion
+            ? MarkdownAnnotationParser.RemoveMarkersAndContent(BoundValue, changeId)
+            : MarkdownAnnotationParser.RemoveMarkers(BoundValue, changeId);
+
+        await UpdateContent(newContent);
+    }
+
+    private async Task OnAcceptAllChanges()
+    {
+        var content = BoundValue;
+        foreach (var change in TrackedChanges.ToList())
+        {
+            content = change.Type == TrackedChangeType.Insertion
+                ? MarkdownAnnotationParser.RemoveMarkers(content, change.Id)
+                : MarkdownAnnotationParser.RemoveMarkersAndContent(content, change.Id);
+        }
+        await UpdateContent(content);
+    }
+
+    private async Task OnRejectAllChanges()
+    {
+        var content = BoundValue;
+        foreach (var change in TrackedChanges.ToList())
+        {
+            content = change.Type == TrackedChangeType.Insertion
+                ? MarkdownAnnotationParser.RemoveMarkersAndContent(content, change.Id)
+                : MarkdownAnnotationParser.RemoveMarkers(content, change.Id);
+        }
+        await UpdateContent(content);
+    }
+
+    private async Task OnResolveComment(string commentId)
+    {
+        var newContent = MarkdownAnnotationParser.RemoveMarkers(BoundValue, commentId);
+        await UpdateContent(newContent);
+    }
+
+    private async Task OnDeleteComment(string commentId)
+    {
+        var newContent = MarkdownAnnotationParser.RemoveMarkers(BoundValue, commentId);
+        await UpdateContent(newContent);
+    }
+
+    private Task OnReplyToComment((string commentId, string reply) args)
+    {
+        // TODO: Implement reply functionality via messaging
+        return Task.CompletedTask;
+    }
+
+    private async Task UpdateContent(string newContent)
+    {
+        BoundValue = newContent;
+        ExtractAnnotations(newContent);
+        UpdatePreview(newContent);
+
+        if (editorRef != null)
+        {
+            await editorRef.SetValueAsync(newContent);
+        }
+
+        if (ValuePointer != null)
+        {
+            UpdatePointer(newContent, ValuePointer);
+        }
+
+        // Auto-save immediately for track changes operations (no debounce)
+        AutoSaveContent(newContent);
+
+        StateHasChanged();
+    }
+
+    public async ValueTask<string> GetValueAsync()
+    {
+        return editorRef != null ? await editorRef.GetValueAsync() : string.Empty;
+    }
+
+    public async Task SetValueAsync(string value)
+    {
+        if (editorRef != null)
+        {
+            await editorRef.SetValueAsync(value);
+        }
+    }
+
+    public async Task InsertCommentAsync(int startPos, int endPos, string commentText)
+    {
+        var markerId = Guid.NewGuid().ToString("N")[..8];
+        var newContent = MarkdownAnnotationParser.InsertCommentMarker(BoundValue, startPos, endPos, markerId);
+        await UpdateContent(newContent);
+    }
+
+    public async Task InsertSuggestionAsync(int startPos, int endPos)
+    {
+        var markerId = Guid.NewGuid().ToString("N")[..8];
+        var newContent = MarkdownAnnotationParser.InsertInsertMarker(BoundValue, startPos, endPos, markerId);
+        await UpdateContent(newContent);
+    }
+
+    public async Task InsertDeletionAsync(int startPos, int endPos)
+    {
+        var markerId = Guid.NewGuid().ToString("N")[..8];
+        var newContent = MarkdownAnnotationParser.InsertDeleteMarker(BoundValue, startPos, endPos, markerId);
+        await UpdateContent(newContent);
+    }
+}

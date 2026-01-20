@@ -14,23 +14,19 @@
     <File Path="samples/Directory.Build.props" />
   </Folder>
   <Folder Name="/samples/Documentation/">
-    <Project Path="samples/Documentation/MeshWeaver.Documentation.AI/MeshWeaver.Documentation.AI.csproj" />
     <Project Path="samples/Documentation/MeshWeaver.Documentation/MeshWeaver.Documentation.csproj" />
   </Folder>
   <Folder Name="/samples/Insurance/">
-    <Project Path="samples/Insurance/MeshWeaver.Insurance.AI/MeshWeaver.Insurance.AI.csproj" />
     <Project Path="samples/Insurance/MeshWeaver.Insurance.Domain/MeshWeaver.Insurance.Domain.csproj" />
     <Project Path="samples/Insurance/MeshWeaver.Insurance.SampleData/MeshWeaver.Insurance.SampleData.csproj" />
     <Project Path="samples/Insurance/MeshWeaver.Insurance.Test/MeshWeaver.Insurance.Test.csproj" />
   </Folder>
   <Folder Name="/samples/Northwind/">
-    <Project Path="samples/Northwind/MeshWeaver.Northwind.AI/MeshWeaver.Northwind.AI.csproj" />
     <Project Path="samples/Northwind/MeshWeaver.Northwind.Application/MeshWeaver.Northwind.Application.csproj" />
     <Project Path="samples/Northwind/MeshWeaver.Northwind.Domain/MeshWeaver.Northwind.Domain.csproj" />
     <Project Path="samples/Northwind/MeshWeaver.Northwind.Model/MeshWeaver.Northwind.Model.csproj" />
   </Folder>
   <Folder Name="/samples/Todo/">
-    <Project Path="samples/Todo/MeshWeaver.Todo.AI/MeshWeaver.Todo.AI.csproj" />
     <Project Path="samples/Todo/MeshWeaver.Todo/MeshWeaver.Todo.csproj" />
   </Folder>
   <Folder Name="/samples/Graph/">
@@ -76,7 +72,6 @@
     <Project Path="src/MeshWeaver.Application.Styles/MeshWeaver.Application.Styles.csproj" />
     <Project Path="src/MeshWeaver.Blazor.Radzen/MeshWeaver.Blazor.Radzen.csproj" />
     <Project Path="src/MeshWeaver.Blazor.Chat/MeshWeaver.Blazor.Chat.csproj" />
-    <Project Path="src/MeshWeaver.Blazor.Monaco/MeshWeaver.Blazor.Monaco.csproj" />
     <Project Path="src/MeshWeaver.Blazor.GoogleMaps/MeshWeaver.Blazor.GoogleMaps.csproj" />
     <Project Path="src/MeshWeaver.Blazor.Graph/MeshWeaver.Blazor.Graph.csproj" />
     <Project Path="src/MeshWeaver.Blazor.Portal/MeshWeaver.Blazor.Portal.csproj" />
@@ -113,6 +108,7 @@
     <Project Path="src/MeshWeaver.Kernel/MeshWeaver.Kernel.csproj" />
     <Project Path="src/MeshWeaver.Layout/MeshWeaver.Layout.csproj" />
     <Project Path="src/MeshWeaver.Markdown/MeshWeaver.Markdown.csproj" />
+    <Project Path="src/MeshWeaver.Markdown.Collaboration/MeshWeaver.Markdown.Collaboration.csproj" />
     <Project Path="src/MeshWeaver.Mesh.Contract/MeshWeaver.Mesh.Contract.csproj" />
     <Project Path="src/MeshWeaver.Messaging.Contract/MeshWeaver.Messaging.Contract.csproj" />
     <Project Path="src/MeshWeaver.Messaging.Hub/MeshWeaver.Messaging.Hub.csproj" />

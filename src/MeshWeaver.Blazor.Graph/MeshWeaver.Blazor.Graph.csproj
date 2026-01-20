@@ -15,7 +15,6 @@
 
     <ItemGroup>
         <ProjectReference Include="..\MeshWeaver.Blazor\MeshWeaver.Blazor.csproj" />
-        <ProjectReference Include="..\MeshWeaver.Blazor.Monaco\MeshWeaver.Blazor.Monaco.csproj" />
         <ProjectReference Include="..\MeshWeaver.Graph\MeshWeaver.Graph.csproj" />
         <ProjectReference Include="..\MeshWeaver.Mesh.Contract\MeshWeaver.Mesh.Contract.csproj" />
         <ProjectReference Include="..\MeshWeaver.ContentCollections\MeshWeaver.ContentCollections.csproj" />

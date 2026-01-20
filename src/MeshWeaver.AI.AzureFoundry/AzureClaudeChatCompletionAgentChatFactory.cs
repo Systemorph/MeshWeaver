@@ -1,4 +1,3 @@
-using MeshWeaver.AI.Services;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.Logging;
@@ -12,10 +11,9 @@ namespace MeshWeaver.AI.AzureFoundry;
 /// </summary>
 public class AzureClaudeChatCompletionAgentChatFactory(
     IMessageHub hub,
-    IAgentResolver agentResolver,
     IOptions<AzureClaudeConfiguration> options,
     ILogger<AzureClaudeChatCompletionAgentChatFactory> logger)
-    : ChatCompletionAgentChatFactory(hub, agentResolver)
+    : ChatCompletionAgentChatFactory(hub)
 {
     private readonly AzureClaudeConfiguration configuration = options.Value ?? throw new ArgumentNullException(nameof(options));
 

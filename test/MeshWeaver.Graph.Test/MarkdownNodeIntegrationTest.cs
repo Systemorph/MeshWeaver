@@ -1062,7 +1062,7 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
 
     /// <summary>
     /// Test full kernel execution flow - submits code and verifies the layout area receives output.
-    /// This replicates the flow from MarkdownView.
+    /// This replicates the flow from MarkdownLayoutAreas.
     /// </summary>
     [Fact(Timeout = 60000)]
     public async Task InteractiveMarkdown_FullKernelFlow()
@@ -1171,7 +1171,7 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
         Output.WriteLine($"Submitting code block 1 with Id: {submission1.Id}");
         Output.WriteLine($"Submitting code block 2 with Id: {submission2.Id}");
 
-        // Submit BOTH code blocks in sequence (like MarkdownView does in OnAfterRenderAsync)
+        // Submit BOTH code blocks in sequence (like MarkdownLayoutAreas does in OnAfterRenderAsync)
         client.Post(submission1, o => o.WithTarget(kernelAddress));
         client.Post(submission2, o => o.WithTarget(kernelAddress));
 
@@ -1212,7 +1212,7 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
 
     /// <summary>
     /// Test that mimics the exact UI behavior - both subscriptions are created BEFORE
-    /// submitting code. This is how MarkdownView works: LayoutAreaViews subscribe during
+    /// submitting code. This is how MarkdownLayoutAreas works: LayoutAreaViews subscribe during
     /// render, then code is submitted in OnAfterRenderAsync.
     /// </summary>
     [Fact(Timeout = 60000)]
@@ -1298,6 +1298,472 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
         results[1].Should().NotBeNull("Second code block should produce a control");
 
         Output.WriteLine("SUCCESS: Both code blocks produced controls when subscribed before code submit");
+    }
+
+    #endregion
+
+    #region Markdown Edit/Save/Read Flow Tests
+
+    /// <summary>
+    /// Test that editing an existing markdown node's content via DataChangeRequest (auto-save),
+    /// and then reading it back through the workspace stream works correctly.
+    /// This verifies the edit flow doesn't corrupt the node and uses the proper reactive pattern.
+    /// Uses the existing CollaborativeEditing node which has proper routing.
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task MarkdownNode_EditContent_ThenReadBack_Succeeds()
+    {
+        var client = GetClient(c => c
+            .WithInitialization((h, _) => RoutingService.RegisterStreamAsync(h))
+            .AddLayoutClient(cc => cc)
+            .AddData(data => data)
+            // Register types with collection names to match the receiving hub's registration
+            // The receiving hub registers via DataContext with collection name "MeshNode", not full type name
+            .WithType<MeshNode>("MeshNode")
+            .WithType<MarkdownContent>("MarkdownContent"));
+
+        // Use existing CollaborativeEditing node which has proper routing
+        var nodePath = "MeshWeaver/Documentation/DataMesh/CollaborativeEditing";
+        var nodeAddress = new Address(nodePath);
+
+        Output.WriteLine($"Step 1: Setting up streams for node at {nodePath}");
+
+        var workspace = client.GetWorkspace();
+
+        // Step 2: Request the Edit layout to ensure the hub is activated
+        Output.WriteLine($"Step 2: Requesting Edit layout to activate hub");
+
+        var editReference = new LayoutAreaReference(MarkdownLayoutAreas.EditArea);
+        var editStream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(nodeAddress, editReference);
+        var editLayout = await editStream.Timeout(30.Seconds()).FirstAsync();
+
+        editLayout.Value.ValueKind.Should().NotBe(JsonValueKind.Undefined, "Should receive Edit layout");
+        Output.WriteLine($"Edit layout received, hub is now active");
+
+        // Step 3: Get the MeshNode stream from the hub's workspace to observe changes
+        Output.WriteLine($"Step 3: Getting MeshNode stream from hub workspace");
+
+        var meshNodeStream = workspace.GetRemoteStream<InstanceCollection, CollectionReference>(
+            nodeAddress,
+            new CollectionReference("MeshNode"));
+
+        // Get the current node state from the stream
+        var initialCollection = await meshNodeStream
+            .Where(x => x.Value?.Instances.Count > 0)
+            .Timeout(30.Seconds())
+            .Select(x => x.Value!)
+            .FirstAsync();
+
+        var initialNodes = initialCollection.Get<MeshNode>().ToList();
+        initialNodes.Should().NotBeEmpty("Should have at least one MeshNode");
+
+        var originalNode = initialNodes.First();
+        var originalName = originalNode.Name;
+        var originalContent = ExtractMarkdownContent(originalNode);
+
+        Output.WriteLine($"Original node: Name={originalName}, has content={!string.IsNullOrEmpty(originalContent)}");
+
+        // Step 4: Simulate auto-save by sending a DataChangeRequest with modified content
+        // Add a unique marker to verify content was updated
+        var testMarker = $"<!-- TEST_EDIT_MARKER_{Guid.NewGuid().ToString("N")[..8]} -->";
+        var updatedContent = originalContent + $"\n\n{testMarker}\n";
+
+        Output.WriteLine($"Step 4: Simulating auto-save with test marker: {testMarker}");
+
+        // Create a partial MeshNode update (like auto-save does)
+        var nodeUpdate = new MeshNode(nodePath)
+        {
+            NodeType = MarkdownNodeType.NodeType,
+            Content = new MarkdownContent { Content = updatedContent }
+        };
+
+        // Send DataChangeRequest like auto-save does - to the node's hub
+        Output.WriteLine($"Sending DataChangeRequest to {nodeAddress}...");
+        try
+        {
+            var updateResponse = await client.AwaitResponse(
+                new DataChangeRequest().WithUpdates(nodeUpdate),
+                o => o.WithTarget(nodeAddress),
+                TestContext.Current.CancellationToken);
+
+            Output.WriteLine($"DataChangeRequest response type: {updateResponse.Message?.GetType().Name}");
+            if (updateResponse.Message is DataChangeResponse dcr)
+            {
+                Output.WriteLine($"DataChangeResponse: Version={dcr.Version}, Status={dcr.Log?.Status}");
+                dcr.Log?.Status.Should().Be(ActivityStatus.Succeeded, "DataChangeRequest should succeed");
+            }
+        }
+        catch (Exception ex)
+        {
+            Output.WriteLine($"DataChangeRequest failed: {ex.Message}");
+            throw;
+        }
+
+        // Step 5: Wait for the stream to emit an updated node with the test marker
+        // The merged node should have the new content AND preserved metadata
+        Output.WriteLine($"Step 5: Waiting for stream to emit updated node with marker");
+
+        var readNode = await meshNodeStream
+            .Where(x => x.Value?.Instances.Count > 0)
+            .Select(x => x.Value!.Get<MeshNode>().FirstOrDefault())
+            .Where(n => n != null && ExtractMarkdownContent(n).Contains(testMarker))
+            .Timeout(10.Seconds())
+            .FirstAsync();
+
+        readNode.Should().NotBeNull("Node should be emitted after edit");
+        Output.WriteLine($"Got node from stream: Name={readNode?.Name}, Path={readNode?.Path}");
+
+        // The stream may return the partial update initially - check the final persisted state
+        // Wait a bit for persistence to complete
+        await Task.Delay(500, TestContext.Current.CancellationToken);
+
+        // Read from persistence to verify the merged result
+        var persistence = Mesh.ServiceProvider.GetRequiredService<IPersistenceService>();
+        var persistedNode = await persistence.GetNodeAsync(nodePath, TestContext.Current.CancellationToken);
+
+        persistedNode.Should().NotBeNull("Node should exist in persistence");
+        persistedNode!.Name.Should().Be(originalName, "Name should be preserved after merge");
+        persistedNode.NodeType.Should().Be(MarkdownNodeType.NodeType, "NodeType should be preserved after edit");
+
+        // Verify content was updated (contains our test marker)
+        var contentStr = ExtractMarkdownContent(persistedNode);
+        contentStr.Should().NotBeNullOrEmpty("Content should not be empty");
+        contentStr.Should().Contain(testMarker, "Content should contain the test marker we added");
+
+        Output.WriteLine($"SUCCESS: Node metadata preserved, content updated correctly");
+
+        // Cleanup: Restore original content
+        Output.WriteLine($"Cleanup: Restoring original content");
+        var restoreUpdate = new MeshNode(nodePath)
+        {
+            NodeType = MarkdownNodeType.NodeType,
+            Content = new MarkdownContent { Content = originalContent }
+        };
+        client.Post(
+            new DataChangeRequest().WithUpdates(restoreUpdate),
+            o => o.WithTarget(nodeAddress));
+        await Task.Delay(1000, TestContext.Current.CancellationToken);
+    }
+
+    /// <summary>
+    /// Test that requesting Edit layout area, making changes, then requesting Read layout works.
+    /// This tests the full UI flow: Edit -> DataChangeRequest -> Read (default view).
+    /// Uses an existing node to ensure proper routing is in place.
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task MarkdownNode_EditMode_ThenReadMode_Succeeds()
+    {
+        var client = GetClient(c => c
+            .WithInitialization((h, _) => RoutingService.RegisterStreamAsync(h))
+            .AddLayoutClient(cc => cc)
+            .AddData(data => data)
+            // Register types for proper serialization
+            .WithType<MeshNode>("MeshNode")
+            .WithType<MarkdownContent>("MarkdownContent"));
+
+        var persistence = Mesh.ServiceProvider.GetRequiredService<IPersistenceService>();
+
+        // Use existing CollaborativeEditing node which has proper routing
+        var nodePath = "MeshWeaver/Documentation/DataMesh/CollaborativeEditing";
+        var nodeAddress = new Address(nodePath);
+
+        // Step 1: Get original node state
+        Output.WriteLine($"Step 1: Getting original node state for {nodePath}");
+
+        var originalNode = await persistence.GetNodeAsync(nodePath, TestContext.Current.CancellationToken);
+        originalNode.Should().NotBeNull("CollaborativeEditing node should exist");
+
+        var originalName = originalNode!.Name;
+        var originalContent = ExtractMarkdownContent(originalNode);
+
+        Output.WriteLine($"Original node: Name={originalName}");
+
+        // Step 2: Request Edit layout area
+        Output.WriteLine($"Step 2: Requesting Edit layout area");
+
+        var workspace = client.GetWorkspace();
+        var editReference = new LayoutAreaReference(MarkdownLayoutAreas.EditArea);
+
+        var editStream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(nodeAddress, editReference);
+        var editLayout = await editStream.Timeout(30.Seconds()).FirstAsync();
+
+        editLayout.Value.ValueKind.Should().NotBe(JsonValueKind.Undefined, "Should receive Edit layout");
+        Output.WriteLine($"Edit layout received");
+
+        // Step 3: Simulate content change via auto-save with unique marker
+        var testMarker = $"<!-- EDIT_MODE_TEST_{Guid.NewGuid().ToString("N")[..8]} -->";
+        var updatedContent = originalContent + $"\n\n{testMarker}\n";
+
+        Output.WriteLine($"Step 3: Simulating auto-save with marker: {testMarker}");
+
+        var nodeUpdate = new MeshNode(nodePath)
+        {
+            NodeType = MarkdownNodeType.NodeType,
+            Content = new MarkdownContent { Content = updatedContent }
+        };
+
+        var updateResponse = await client.AwaitResponse(
+            new DataChangeRequest().WithUpdates(nodeUpdate),
+            o => o.WithTarget(nodeAddress),
+            TestContext.Current.CancellationToken);
+
+        if (updateResponse.Message is DataChangeResponse dcr)
+        {
+            Output.WriteLine($"DataChangeResponse: Status={dcr.Log?.Status}");
+            dcr.Log?.Status.Should().Be(ActivityStatus.Succeeded, "DataChangeRequest should succeed");
+        }
+
+        // Wait for update to propagate
+        await Task.Delay(500, TestContext.Current.CancellationToken);
+
+        // Step 4: Request default Read layout area (this is what the GUI does after edit)
+        Output.WriteLine($"Step 4: Requesting Read layout area (default view)");
+
+        var readReference = new LayoutAreaReference(MarkdownLayoutAreas.ReadArea);
+        var readStream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(nodeAddress, readReference);
+        var readLayout = await readStream.Timeout(30.Seconds()).FirstAsync();
+
+        readLayout.Value.ValueKind.Should().NotBe(JsonValueKind.Undefined, "Should receive Read layout");
+        Output.WriteLine($"Read layout received");
+
+        // Step 5: Verify node still exists with correct metadata
+        Output.WriteLine($"Step 5: Verifying node data from persistence");
+
+        var readNode = await persistence.GetNodeAsync(nodePath, TestContext.Current.CancellationToken);
+
+        readNode.Should().NotBeNull("Node should exist after edit");
+        readNode!.Name.Should().Be(originalName, "Name should be preserved after edit");
+        readNode.NodeType.Should().Be(MarkdownNodeType.NodeType, "NodeType should be preserved");
+
+        var contentStr = ExtractMarkdownContent(readNode);
+        contentStr.Should().Contain(testMarker, "Content should contain the test marker");
+
+        Output.WriteLine($"SUCCESS: Edit mode -> DataChangeRequest -> Read mode flow completed");
+
+        // Cleanup: Restore original content
+        Output.WriteLine($"Cleanup: Restoring original content");
+        var restoreUpdate = new MeshNode(nodePath)
+        {
+            NodeType = MarkdownNodeType.NodeType,
+            Content = new MarkdownContent { Content = originalContent }
+        };
+        client.Post(
+            new DataChangeRequest().WithUpdates(restoreUpdate),
+            o => o.WithTarget(nodeAddress));
+        await Task.Delay(500, TestContext.Current.CancellationToken);
+    }
+
+    /// <summary>
+    /// Test that MeshCatalog.ResolvePathAsync works correctly after editing.
+    /// This simulates exactly what the GUI's PathBasedLayoutArea does:
+    /// 1. ResolvePathAsync to find the node
+    /// 2. Request Edit layout
+    /// 3. DataChangeRequest to save changes
+    /// 4. ResolvePathAsync again (simulating navigation back)
+    /// The issue "node does not exist" suggests ResolvePathAsync fails after edit.
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task MarkdownNode_EditThenNavigate_ResolvePathStillWorks()
+    {
+        var client = GetClient(c => c
+            .WithInitialization((h, _) => RoutingService.RegisterStreamAsync(h))
+            .AddLayoutClient(cc => cc)
+            .AddData(data => data)
+            .WithType<MeshNode>("MeshNode")
+            .WithType<MarkdownContent>("MarkdownContent"));
+
+        var catalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
+        var persistence = Mesh.ServiceProvider.GetRequiredService<IPersistenceService>();
+
+        // Use existing CollaborativeEditing node
+        var nodePath = "MeshWeaver/Documentation/DataMesh/CollaborativeEditing";
+        var nodeAddress = new Address(nodePath);
+
+        // Step 1: Resolve path (like PathBasedLayoutArea does on initial load)
+        Output.WriteLine($"Step 1: ResolvePathAsync for {nodePath}");
+
+        var initialResolution = await catalog.ResolvePathAsync(nodePath);
+        initialResolution.Should().NotBeNull("Path should resolve initially");
+        Output.WriteLine($"Initial resolution: Prefix={initialResolution!.Prefix}, Remainder={initialResolution.Remainder}");
+
+        // Get original content for cleanup
+        var originalNode = await persistence.GetNodeAsync(nodePath, TestContext.Current.CancellationToken);
+        var originalContent = ExtractMarkdownContent(originalNode!);
+
+        // Step 2: Request Edit layout (like navigating to /path/Edit)
+        Output.WriteLine($"Step 2: Requesting Edit layout");
+
+        var workspace = client.GetWorkspace();
+        var editReference = new LayoutAreaReference(MarkdownLayoutAreas.EditArea);
+        var editStream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(nodeAddress, editReference);
+        var editLayout = await editStream.Timeout(30.Seconds()).FirstAsync();
+
+        editLayout.Value.ValueKind.Should().NotBe(JsonValueKind.Undefined, "Should receive Edit layout");
+        Output.WriteLine($"Edit layout received");
+
+        // Step 3: Simulate auto-save with DataChangeRequest
+        var testMarker = $"<!-- RESOLVE_PATH_TEST_{Guid.NewGuid().ToString("N")[..8]} -->";
+        var updatedContent = originalContent + $"\n\n{testMarker}\n";
+
+        Output.WriteLine($"Step 3: DataChangeRequest with marker: {testMarker}");
+
+        var nodeUpdate = new MeshNode(nodePath)
+        {
+            NodeType = MarkdownNodeType.NodeType,
+            Content = new MarkdownContent { Content = updatedContent }
+        };
+
+        var updateResponse = await client.AwaitResponse(
+            new DataChangeRequest().WithUpdates(nodeUpdate),
+            o => o.WithTarget(nodeAddress),
+            TestContext.Current.CancellationToken);
+
+        if (updateResponse.Message is DataChangeResponse dcr)
+        {
+            Output.WriteLine($"DataChangeResponse: Status={dcr.Log?.Status}");
+            dcr.Log?.Status.Should().Be(ActivityStatus.Succeeded);
+        }
+
+        // Wait for update to propagate to persistence
+        await Task.Delay(500, TestContext.Current.CancellationToken);
+
+        // Step 4: ResolvePathAsync again (like navigating back to /path or /path/Read)
+        // This is the key step - the GUI calls ResolvePathAsync when navigating
+        Output.WriteLine($"Step 4: ResolvePathAsync after edit");
+
+        var afterEditResolution = await catalog.ResolvePathAsync(nodePath);
+        afterEditResolution.Should().NotBeNull("Path should still resolve after edit");
+        Output.WriteLine($"After-edit resolution: Prefix={afterEditResolution!.Prefix}, Remainder={afterEditResolution.Remainder}");
+
+        // Also test with area suffix (like /path/Read)
+        var withAreaResolution = await catalog.ResolvePathAsync($"{nodePath}/{MarkdownLayoutAreas.ReadArea}");
+        withAreaResolution.Should().NotBeNull("Path with area should resolve after edit");
+        Output.WriteLine($"With-area resolution: Prefix={withAreaResolution!.Prefix}, Remainder={withAreaResolution.Remainder}");
+
+        // Step 5: Verify we can still get the Read layout
+        Output.WriteLine($"Step 5: Requesting Read layout after edit");
+
+        var readReference = new LayoutAreaReference(MarkdownLayoutAreas.ReadArea);
+        var readStream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(nodeAddress, readReference);
+        var readLayout = await readStream.Timeout(30.Seconds()).FirstAsync();
+
+        readLayout.Value.ValueKind.Should().NotBe(JsonValueKind.Undefined, "Should receive Read layout after edit");
+        Output.WriteLine($"Read layout received after edit");
+
+        // Step 6: Verify node data
+        Output.WriteLine($"Step 6: Verifying node data");
+
+        var verifyNode = await persistence.GetNodeAsync(nodePath, TestContext.Current.CancellationToken);
+        verifyNode.Should().NotBeNull("Node should exist in persistence");
+        verifyNode!.Name.Should().Be("Collaborative Editing", "Name should be preserved");
+
+        var contentStr = ExtractMarkdownContent(verifyNode);
+        contentStr.Should().Contain(testMarker, "Content should contain test marker");
+
+        Output.WriteLine($"SUCCESS: ResolvePathAsync works correctly after editing");
+
+        // Cleanup: Restore original content
+        Output.WriteLine($"Cleanup: Restoring original content");
+        var restoreUpdate = new MeshNode(nodePath)
+        {
+            NodeType = MarkdownNodeType.NodeType,
+            Content = new MarkdownContent { Content = originalContent }
+        };
+        client.Post(
+            new DataChangeRequest().WithUpdates(restoreUpdate),
+            o => o.WithTarget(nodeAddress));
+        await Task.Delay(500, TestContext.Current.CancellationToken);
+    }
+
+    /// <summary>
+    /// Test that multiple rapid content changes (simulating fast typing) don't corrupt the node.
+    /// Uses an existing node with proper routing to test rapid auto-save behavior.
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task MarkdownNode_RapidContentChanges_PreservesNodeMetadata()
+    {
+        var client = GetClient(c => c
+            .WithInitialization((h, _) => RoutingService.RegisterStreamAsync(h))
+            .AddLayoutClient(cc => cc)
+            .AddData(data => data)
+            .WithType<MeshNode>("MeshNode")
+            .WithType<MarkdownContent>("MarkdownContent"));
+
+        var persistence = Mesh.ServiceProvider.GetRequiredService<IPersistenceService>();
+
+        // Use existing CollaborativeEditing node which has proper routing
+        var nodePath = "MeshWeaver/Documentation/DataMesh/CollaborativeEditing";
+        var nodeAddress = new Address(nodePath);
+
+        // Get original state for cleanup
+        var originalNode = await persistence.GetNodeAsync(nodePath, TestContext.Current.CancellationToken);
+        originalNode.Should().NotBeNull("CollaborativeEditing node should exist");
+
+        var originalName = originalNode!.Name;
+        var originalContent = ExtractMarkdownContent(originalNode);
+
+        Output.WriteLine($"Starting rapid content changes test for {nodePath}");
+        Output.WriteLine($"Original name: {originalName}");
+
+        // First, request Edit layout to activate the hub
+        var workspace = client.GetWorkspace();
+        var editReference = new LayoutAreaReference(MarkdownLayoutAreas.EditArea);
+        var editStream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(nodeAddress, editReference);
+        await editStream.Timeout(30.Seconds()).FirstAsync();
+        Output.WriteLine("Hub activated via Edit layout");
+
+        // Simulate rapid content changes (like fast typing with debounced saves)
+        Output.WriteLine($"Simulating 5 rapid content changes");
+
+        var lastMarker = "";
+        for (int i = 1; i <= 5; i++)
+        {
+            lastMarker = $"<!-- RAPID_EDIT_{i}_{Guid.NewGuid().ToString("N")[..8]} -->";
+            var content = originalContent + $"\n\n{lastMarker}\n";
+
+            var nodeUpdate = new MeshNode(nodePath)
+            {
+                NodeType = MarkdownNodeType.NodeType,
+                Content = new MarkdownContent { Content = content }
+            };
+
+            client.Post(
+                new DataChangeRequest().WithUpdates(nodeUpdate),
+                o => o.WithTarget(nodeAddress));
+
+            await Task.Delay(100, TestContext.Current.CancellationToken); // Small delay between changes
+        }
+
+        Output.WriteLine($"Last marker: {lastMarker}");
+
+        // Wait for all updates to settle
+        await Task.Delay(1500, TestContext.Current.CancellationToken);
+
+        // Verify node still has all metadata
+        Output.WriteLine($"Verifying node metadata is preserved");
+
+        var finalNode = await persistence.GetNodeAsync(nodePath, TestContext.Current.CancellationToken);
+
+        finalNode.Should().NotBeNull("Node should exist");
+        finalNode!.Name.Should().Be(originalName, "Name must be preserved");
+        finalNode.NodeType.Should().Be(MarkdownNodeType.NodeType, "NodeType must be preserved");
+
+        var contentStr = ExtractMarkdownContent(finalNode);
+        contentStr.Should().Contain(lastMarker, "Should have the last edit's content");
+
+        Output.WriteLine($"SUCCESS: All metadata preserved after rapid edits");
+
+        // Cleanup: Restore original content
+        Output.WriteLine($"Cleanup: Restoring original content");
+        var restoreUpdate = new MeshNode(nodePath)
+        {
+            NodeType = MarkdownNodeType.NodeType,
+            Content = new MarkdownContent { Content = originalContent }
+        };
+        client.Post(
+            new DataChangeRequest().WithUpdates(restoreUpdate),
+            o => o.WithTarget(nodeAddress));
+        await Task.Delay(500, TestContext.Current.CancellationToken);
     }
 
     #endregion

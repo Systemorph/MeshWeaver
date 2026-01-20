@@ -1,4 +1,4 @@
-﻿using MeshWeaver.Blazor.Monaco;
+﻿using MeshWeaver.Blazor.Components.Monaco;
 using MeshWeaver.Blazor.Services;
 using Microsoft.AspNetCore.Components;
 using Microsoft.FluentUI.AspNetCore.Components;

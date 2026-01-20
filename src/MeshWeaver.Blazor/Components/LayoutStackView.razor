@@ -9,7 +9,7 @@
     Width="@Width"
     VerticalGap="@VerticalGap"
     HorizontalGap="@HorizontalGap"
-    Style="@Style"
+    Style="@ComputedStyle"
     Wrap="@Wrap"
     >
         <DispatchView ViewModel="@ViewModel" Stream="@Stream" Area="@Area"  />
@@ -24,6 +24,20 @@
     private Microsoft.FluentUI.AspNetCore.Components.VerticalAlignment Vertical { get; set; } = Microsoft.FluentUI.AspNetCore.Components.VerticalAlignment.Top;
     private Microsoft.FluentUI.AspNetCore.Components.HorizontalAlignment Horizontal { get; set; } = Microsoft.FluentUI.AspNetCore.Components.HorizontalAlignment.Left;
     private Orientation Orientation { get; set; } = Orientation.Vertical;
+
+    private string? ComputedStyle
+    {
+        get
+        {
+            var parts = new List<string>();
+            if (!string.IsNullOrEmpty(Height))
+                parts.Add($"height: {Height}");
+            if (!string.IsNullOrEmpty(Style))
+                parts.Add(Style);
+            return parts.Count > 0 ? string.Join("; ", parts) : null;
+        }
+    }
+
     protected override void BindData()
     {
         base.BindData();
@@ -35,8 +49,4 @@
         DataBind(Skin.HorizontalAlignment, x => x.Horizontal);
         DataBind(Skin?.Orientation, x => x.Orientation);
     }
-
-
-
-
 }

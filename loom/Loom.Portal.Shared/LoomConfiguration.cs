@@ -6,7 +6,6 @@ using MeshWeaver.AI.Persistence;
 using MeshWeaver.Blazor.GoogleMaps;
 using MeshWeaver.Blazor.Graph;
 using MeshWeaver.Blazor.Infrastructure;
-using MeshWeaver.Blazor.Monaco;
 using MeshWeaver.Blazor.Pages;
 using MeshWeaver.Blazor.Portal;
 using MeshWeaver.Blazor.Portal.Authentication;
@@ -16,12 +15,12 @@ using MeshWeaver.GoogleMaps;
 using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting;
-using MeshWeaver.Kernel.Hub;
 using MeshWeaver.Hosting.Activity;
 using MeshWeaver.Hosting.AzureBlob;
 using MeshWeaver.Hosting.Blazor;
 using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Hosting.Security;
+using MeshWeaver.Kernel.Hub;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using Microsoft.AspNetCore.Authentication.Cookies;
@@ -254,11 +253,11 @@ public static class LoomConfiguration
         /// </summary>
         public TBuilder ConfigureLoomPortal() => (TBuilder)builder
             .ConfigureHub(mesh => mesh
+                .AddMeshTypes()
                 .AddRadzenDataGrid()
                 .AddRadzenCharts()
                 .AddGoogleMaps()
                 .AddGraphViews()  // Also enables @ autocomplete in markdown editors
-                .AddMonacoViews()
             )
             .AddBlazor(layoutClient => layoutClient
                 .WithPortalConfiguration(c => c)

@@ -181,6 +181,10 @@ internal class TypeRegistry(ITypeRegistry? parent) : ITypeRegistry
         if (nameByType.TryGetValue(type, out var typeName))
             return typeName;
 
+        // Check parent registry for already registered type name
+        if (parent?.TryGetCollectionName(type, out var parentTypeName) == true && parentTypeName != null)
+            return parentTypeName;
+
         typeName = defaultName ?? FormatType(type);
         typeByName[typeName] = new(type, typeName, keyFunctionBuilder);
         return nameByType[type] = typeName;
@@ -242,7 +246,11 @@ internal class TypeRegistry(ITypeRegistry? parent) : ITypeRegistry
         // Check if the type is already registered with a name (e.g., basic types like "Int32")
         if (nameByType.TryGetValue(mainType, out var registeredName))
             return registeredName;
-            
+
+        // Check parent registry for already registered type name
+        if (parent?.TryGetCollectionName(mainType, out var parentTypeName) == true && parentTypeName != null)
+            return parentTypeName;
+
         var mainTypeName = (mainType.FullName ?? mainType.Name).Replace('\u002B', '.');
         if (!mainType.IsGenericType || mainType.IsGenericTypeDefinition)
             return mainTypeName;

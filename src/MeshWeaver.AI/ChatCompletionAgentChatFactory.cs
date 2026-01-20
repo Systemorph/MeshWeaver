@@ -1,4 +1,3 @@
-using MeshWeaver.AI.Services;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Messaging;
 using Microsoft.Agents.AI;
@@ -10,10 +9,8 @@ namespace MeshWeaver.AI;
 /// Base factory for creating agent chats using ChatClientAgent.
 /// ChatClientAgent is used for stateless chat completion scenarios without persistent assistant storage.
 /// </summary>
-public abstract class ChatCompletionAgentChatFactory(
-    IMessageHub hub,
-    IAgentResolver agentResolver)
-    : AgentChatFactoryBase(hub, agentResolver)
+public abstract class ChatCompletionAgentChatFactory(IMessageHub hub)
+    : AgentChatFactoryBase(hub)
 {
     protected override Task<IEnumerable<ChatClientAgent>> GetExistingAgentsAsync()
     {

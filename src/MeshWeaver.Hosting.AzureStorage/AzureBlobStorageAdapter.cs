@@ -3,6 +3,7 @@ using System.Text.Json;
 using Azure.Storage.Blobs;
 using Azure.Storage.Blobs.Models;
 using MeshWeaver.Hosting.Persistence;
+using MeshWeaver.Hosting.Persistence.Parsers;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 
@@ -10,12 +11,19 @@ namespace MeshWeaver.Hosting.AzureStorage;
 
 /// <summary>
 /// Azure Blob Storage implementation of IStorageAdapter.
-/// Stores MeshNodes and partition objects as JSON blobs in a container.
+/// Stores MeshNodes and partition objects in a container.
+/// Supports multiple file formats: .md (with YAML front matter), .json
 /// </summary>
 public class AzureBlobStorageAdapter : IStorageAdapter
 {
     private readonly BlobContainerClient _containerClient;
     private readonly JsonSerializerOptions _jsonOptions;
+    private readonly FileFormatParserRegistry _parserRegistry = new();
+
+    /// <summary>
+    /// Supported file extensions in priority order for reading.
+    /// </summary>
+    private static readonly string[] SupportedExtensions = [".md", ".json"];
 
     public AzureBlobStorageAdapter(
         BlobContainerClient containerClient)
@@ -27,28 +35,76 @@ public class AzureBlobStorageAdapter : IStorageAdapter
     private static string NormalizePath(string? path) =>
         path?.Trim('/').ToLowerInvariant() ?? "";
 
-    private static string GetBlobPath(string path) =>
-        $"nodes/{NormalizePath(path)}.json";
+    private static string GetBlobPath(string path, string extension) =>
+        $"nodes/{NormalizePath(path)}{extension}";
+
+    /// <summary>
+    /// Finds a blob with any supported extension for the given path.
+    /// Returns the first matching blob in priority order: .md, .json
+    /// </summary>
+    private async Task<(BlobClient? Client, string Extension)> FindBlobWithExtensionAsync(string path, CancellationToken ct)
+    {
+        foreach (var ext in SupportedExtensions)
+        {
+            var blobPath = GetBlobPath(path, ext);
+            var blobClient = _containerClient.GetBlobClient(blobPath);
+
+            try
+            {
+                var exists = await blobClient.ExistsAsync(ct);
+                if (exists.Value)
+                    return (blobClient, ext);
+            }
+            catch (Azure.RequestFailedException)
+            {
+                // Continue to next extension
+            }
+        }
+
+        return (null, ".json");
+    }
 
     public async Task<MeshNode?> ReadAsync(string path, CancellationToken ct = default)
     {
-        var blobPath = GetBlobPath(path);
-        var blobClient = _containerClient.GetBlobClient(blobPath);
+        var (blobClient, extension) = await FindBlobWithExtensionAsync(path, ct);
+        if (blobClient == null)
+            return null;
 
         try
         {
             var response = await blobClient.DownloadContentAsync(ct);
-            var node = JsonSerializer.Deserialize<MeshNode>(
-                response.Value.Content.ToString(),
-                _jsonOptions);
+            var content = response.Value.Content.ToString();
+
+            // Try to use parsers for non-JSON formats (with fallback support for .md files)
+            MeshNode? node;
+            var parsers = _parserRegistry.GetParsers(extension);
+            if (parsers.Count > 0)
+            {
+                // Use TryParseAsync for fallback support (e.g., AgentFileParser -> MarkdownFileParser)
+                node = await _parserRegistry.TryParseAsync(extension, blobClient.Name, content, path, ct);
+            }
+            else
+            {
+                // Default to JSON deserialization
+                node = JsonSerializer.Deserialize<MeshNode>(content, _jsonOptions);
+            }
 
             if (node != null)
             {
-                // Use blob last modified time
+                // Use blob last modified time if not set
                 var properties = await blobClient.GetPropertiesAsync(cancellationToken: ct);
                 if (node.LastModified == default && properties.Value.LastModified != default)
                 {
                     node = node with { LastModified = properties.Value.LastModified };
+                }
+
+                // Derive namespace from path if not set
+                var normalizedPath = path.Trim('/');
+                var lastSlash = normalizedPath.LastIndexOf('/');
+                if (lastSlash > 0 && string.IsNullOrEmpty(node.Namespace))
+                {
+                    var derivedNamespace = normalizedPath[..lastSlash];
+                    node = node with { Namespace = derivedNamespace };
                 }
             }
 
@@ -68,22 +124,60 @@ public class AzureBlobStorageAdapter : IStorageAdapter
             LastModified = node.LastModified == default ? DateTimeOffset.UtcNow : node.LastModified
         };
 
-        var blobPath = GetBlobPath(key);
+        // Determine the output format based on the node type
+        var serializer = _parserRegistry.GetSerializerFor(nodeToSave);
+        string content;
+        string extension;
+
+        if (serializer != null)
+        {
+            content = await serializer.SerializeAsync(nodeToSave, ct);
+            extension = serializer.SupportedExtensions[0]; // Use primary extension
+        }
+        else
+        {
+            content = JsonSerializer.Serialize(nodeToSave, _jsonOptions);
+            extension = ".json";
+        }
+
+        var blobPath = GetBlobPath(key, extension);
         var blobClient = _containerClient.GetBlobClient(blobPath);
 
-        var json = JsonSerializer.Serialize(nodeToSave, _jsonOptions);
         await blobClient.UploadAsync(
-            BinaryData.FromString(json),
+            BinaryData.FromString(content),
             overwrite: true,
             cancellationToken: ct);
+
+        // Clean up old blobs with different extensions
+        await CleanupOtherExtensionsAsync(key, extension, ct);
+    }
+
+    /// <summary>
+    /// Removes blobs with other extensions when a new blob is written.
+    /// This prevents having both .json and .md blobs for the same node.
+    /// </summary>
+    private async Task CleanupOtherExtensionsAsync(string path, string keepExtension, CancellationToken ct)
+    {
+        foreach (var ext in SupportedExtensions)
+        {
+            if (ext == keepExtension)
+                continue;
+
+            var blobPath = GetBlobPath(path, ext);
+            var blobClient = _containerClient.GetBlobClient(blobPath);
+            await blobClient.DeleteIfExistsAsync(cancellationToken: ct);
+        }
     }
 
     public async Task DeleteAsync(string path, CancellationToken ct = default)
     {
-        var blobPath = GetBlobPath(path);
-        var blobClient = _containerClient.GetBlobClient(blobPath);
-
-        await blobClient.DeleteIfExistsAsync(cancellationToken: ct);
+        // Delete blobs with all supported extensions
+        foreach (var ext in SupportedExtensions)
+        {
+            var blobPath = GetBlobPath(path, ext);
+            var blobClient = _containerClient.GetBlobClient(blobPath);
+            await blobClient.DeleteIfExistsAsync(cancellationToken: ct);
+        }
     }
 
     public async Task<(IEnumerable<string> NodePaths, IEnumerable<string> DirectoryPaths)> ListChildPathsAsync(
@@ -93,22 +187,36 @@ public class AzureBlobStorageAdapter : IStorageAdapter
         var normalizedParent = NormalizePath(parentPath);
         var prefix = string.IsNullOrEmpty(normalizedParent) ? "nodes/" : $"nodes/{normalizedParent}/";
 
-        var nodePaths = new List<string>();
-        var directoryPaths = new HashSet<string>();
+        var nodePaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var directoryPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         await foreach (var blobItem in _containerClient.GetBlobsAsync(BlobTraits.None, BlobStates.None, prefix, ct))
         {
-            // Remove "nodes/" prefix and ".json" suffix
             var fullPath = blobItem.Name;
-            if (!fullPath.StartsWith("nodes/") || !fullPath.EndsWith(".json"))
+            if (!fullPath.StartsWith("nodes/"))
                 continue;
 
-            var path = fullPath[6..^5]; // Remove "nodes/" and ".json"
+            // Check if this is a supported file extension
+            string? matchedExtension = null;
+            foreach (var ext in SupportedExtensions)
+            {
+                if (fullPath.EndsWith(ext, StringComparison.OrdinalIgnoreCase))
+                {
+                    matchedExtension = ext;
+                    break;
+                }
+            }
+
+            if (matchedExtension == null)
+                continue;
+
+            // Remove "nodes/" prefix and extension suffix
+            var path = fullPath[6..^matchedExtension.Length];
 
             // Check if this is a direct child
             var relativePath = string.IsNullOrEmpty(normalizedParent)
                 ? path
-                : path.StartsWith(normalizedParent + "/")
+                : path.StartsWith(normalizedParent + "/", StringComparison.OrdinalIgnoreCase)
                     ? path[(normalizedParent.Length + 1)..]
                     : null;
 
@@ -118,7 +226,7 @@ public class AzureBlobStorageAdapter : IStorageAdapter
             var slashIndex = relativePath.IndexOf('/');
             if (slashIndex == -1)
             {
-                // Direct child node
+                // Direct child node - add to set (deduplicates .md and .json)
                 nodePaths.Add(path);
             }
             else
@@ -131,16 +239,13 @@ public class AzureBlobStorageAdapter : IStorageAdapter
             }
         }
 
-        return (nodePaths, directoryPaths);
+        return (nodePaths.ToList(), directoryPaths.ToList());
     }
 
     public async Task<bool> ExistsAsync(string path, CancellationToken ct = default)
     {
-        var blobPath = GetBlobPath(path);
-        var blobClient = _containerClient.GetBlobClient(blobPath);
-
-        var response = await blobClient.ExistsAsync(ct);
-        return response.Value;
+        var (blobClient, _) = await FindBlobWithExtensionAsync(path, ct);
+        return blobClient != null;
     }
 
     #region Partition Storage

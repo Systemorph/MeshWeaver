@@ -9,6 +9,7 @@
   <ItemGroup>
     <ProjectReference Include="..\MeshWeaver.Blazor\MeshWeaver.Blazor.csproj" />
     <ProjectReference Include="..\MeshWeaver.Blazor.Chat\MeshWeaver.Blazor.Chat.csproj" />
+    <ProjectReference Include="..\MeshWeaver.Graph\MeshWeaver.Graph.csproj" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.AspNetCore.Components.Web" />

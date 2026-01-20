@@ -1,0 +1,123 @@
+@using Microsoft.FluentUI.AspNetCore.Components
+
+<div class="track-changes-toolbar">
+    <div class="toolbar-section">
+        <span class="toolbar-label">Track Changes</span>
+    </div>
+
+    <FluentDivider Role="DividerRole.Presentation" Orientation="FluentOrientation.Vertical" />
+
+    <div class="toolbar-section">
+        <FluentButton Appearance="FluentAppearance.Lightweight"
+                       Title="Accept current change"
+                       OnClick="@OnAcceptClick">
+            <FluentIcon Value="@(new Icons.Regular.Size16.Checkmark())" Color="Color.Success" Slot="start" />
+            Accept
+        </FluentButton>
+
+        <FluentButton Appearance="FluentAppearance.Lightweight"
+                       Title="Reject current change"
+                       OnClick="@OnRejectClick">
+            <FluentIcon Value="@(new Icons.Regular.Size16.Dismiss())" Color="Color.Error" Slot="start" />
+            Reject
+        </FluentButton>
+    </div>
+
+    <FluentDivider Role="DividerRole.Presentation" Orientation="FluentOrientation.Vertical" />
+
+    <div class="toolbar-section">
+        <FluentButton Appearance="FluentAppearance.Lightweight"
+                       Title="Previous change"
+                       OnClick="@OnPreviousChange">
+            <FluentIcon Value="@(new Icons.Regular.Size16.ChevronUp())" />
+        </FluentButton>
+
+        <FluentButton Appearance="FluentAppearance.Lightweight"
+                       Title="Next change"
+                       OnClick="@OnNextChange">
+            <FluentIcon Value="@(new Icons.Regular.Size16.ChevronDown())" />
+        </FluentButton>
+    </div>
+
+    <FluentDivider Role="DividerRole.Presentation" Orientation="FluentOrientation.Vertical" />
+
+    <div class="toolbar-section">
+        <FluentButton Appearance="FluentAppearance.Lightweight"
+                       Title="Accept all changes"
+                       OnClick="@OnAcceptAllClick">
+            <FluentIcon Value="@(new Icons.Regular.Size16.CheckmarkCircle())" Color="Color.Success" Slot="start" />
+            Accept All
+        </FluentButton>
+
+        <FluentButton Appearance="FluentAppearance.Lightweight"
+                       Title="Reject all changes"
+                       OnClick="@OnRejectAllClick">
+            <FluentIcon Value="@(new Icons.Regular.Size16.DismissCircle())" Color="Color.Error" Slot="start" />
+            Reject All
+        </FluentButton>
+    </div>
+</div>
+
+@code {
+    private string? currentChangeId;
+
+    [Parameter]
+    public string DocumentId { get; set; } = "";
+
+    [Parameter]
+    public EventCallback<string> OnAcceptChange { get; set; }
+
+    [Parameter]
+    public EventCallback<string> OnRejectChange { get; set; }
+
+    [Parameter]
+    public EventCallback OnAcceptAll { get; set; }
+
+    [Parameter]
+    public EventCallback OnRejectAll { get; set; }
+
+    private async Task OnAcceptClick()
+    {
+        if (!string.IsNullOrEmpty(currentChangeId))
+        {
+            await OnAcceptChange.InvokeAsync(currentChangeId);
+        }
+    }
+
+    private async Task OnRejectClick()
+    {
+        if (!string.IsNullOrEmpty(currentChangeId))
+        {
+            await OnRejectChange.InvokeAsync(currentChangeId);
+        }
+    }
+
+    private async Task OnAcceptAllClick()
+    {
+        await OnAcceptAll.InvokeAsync();
+    }
+
+    private async Task OnRejectAllClick()
+    {
+        await OnRejectAll.InvokeAsync();
+    }
+
+    private void OnPreviousChange()
+    {
+        // TODO: Navigate to previous change
+    }
+
+    private void OnNextChange()
+    {
+        // TODO: Navigate to next change
+    }
+
+    /// <summary>
+    /// Sets the currently selected change for accept/reject operations.
+    /// </summary>
+    public void SetCurrentChange(string changeId)
+    {
+        currentChangeId = changeId;
+        StateHasChanged();
+    }
+}

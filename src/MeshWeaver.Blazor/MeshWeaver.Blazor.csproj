@@ -12,6 +12,7 @@
     </ItemGroup>
 
     <ItemGroup>
+        <PackageReference Include="BlazorMonaco" />
         <PackageReference Include="HtmlAgilityPack" />
         <PackageReference Include="Microsoft.AspNetCore.Components.Web" />
         <PackageReference Include="Microsoft.EntityFrameworkCore" />
@@ -21,13 +22,16 @@
         <PackageReference Include="Microsoft.Identity.Web.Ui" />
         <PackageReference Include="Newtonsoft.Json" />
         <PackageReference Include="System.Composition.AttributedModel" />
-    </ItemGroup>    
+        <PackageReference Include="System.Reactive" />
+    </ItemGroup>
     <ItemGroup>
         <ProjectReference Include="..\MeshWeaver.Application.Styles\MeshWeaver.Application.Styles.csproj" />
-        <ProjectReference Include="..\MeshWeaver.Blazor.Monaco\MeshWeaver.Blazor.Monaco.csproj" />
         <ProjectReference Include="..\MeshWeaver.ContentCollections\MeshWeaver.ContentCollections.csproj" />
         <ProjectReference Include="..\MeshWeaver.Graph\MeshWeaver.Graph.csproj" />
+        <ProjectReference Include="..\MeshWeaver.Kernel\MeshWeaver.Kernel.csproj" />
         <ProjectReference Include="..\MeshWeaver.Markdown\MeshWeaver.Markdown.csproj" />
+        <ProjectReference Include="..\MeshWeaver.Markdown.Collaboration\MeshWeaver.Markdown.Collaboration.csproj" />
+        <ProjectReference Include="..\MeshWeaver.Mesh.Contract\MeshWeaver.Mesh.Contract.csproj" />
         <ProjectReference Include="..\MeshWeaver.Layout\MeshWeaver.Layout.csproj" />
     </ItemGroup>
 

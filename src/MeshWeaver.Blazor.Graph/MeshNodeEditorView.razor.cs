@@ -1,4 +1,4 @@
-using MeshWeaver.Blazor.Monaco;
+using MeshWeaver.Blazor.Components.Monaco;
 using MeshWeaver.ContentCollections;
 using MeshWeaver.Graph;
 using MeshWeaver.Mesh;

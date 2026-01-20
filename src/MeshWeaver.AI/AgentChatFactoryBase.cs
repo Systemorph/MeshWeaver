@@ -1,7 +1,8 @@
 using MeshWeaver.AI.Persistence;
 using MeshWeaver.AI.Plugins;
-using MeshWeaver.AI.Services;
 using MeshWeaver.Graph.Configuration;
+using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
@@ -13,7 +14,7 @@ namespace MeshWeaver.AI;
 public abstract class AgentChatFactoryBase : IAgentChatFactory
 {
     protected readonly IMessageHub Hub;
-    protected readonly IAgentResolver AgentResolver;
+    protected readonly IMeshQuery? MeshQuery;
 
     /// <summary>
     /// The current model name being used for chat creation
@@ -31,10 +32,10 @@ public abstract class AgentChatFactoryBase : IAgentChatFactory
     /// </summary>
     protected IReadOnlyList<AgentConfiguration> HierarchyAgents { get; private set; } = Array.Empty<AgentConfiguration>();
 
-    protected AgentChatFactoryBase(IMessageHub hub, IAgentResolver agentResolver)
+    protected AgentChatFactoryBase(IMessageHub hub)
     {
-        this.Hub = hub;
-        this.AgentResolver = agentResolver;
+        Hub = hub;
+        MeshQuery = hub.ServiceProvider.GetService<IMeshQuery>();
         Logger = hub.ServiceProvider.GetRequiredService<ILoggerFactory>().CreateLogger(GetType());
     }
 
@@ -72,16 +73,18 @@ public abstract class AgentChatFactoryBase : IAgentChatFactory
         CurrentModelName = modelName;
         CurrentContextPath = contextPath;
 
-        // Load agents from graph using hierarchical resolution
-        var agentConfigs = await AgentResolver.GetAgentsForContextAsync(contextPath);
+        // Load agents from graph using direct mesh query
+        var agentConfigs = await GetAgentsForContextAsync(contextPath);
 
         // Load hierarchy agents ordered by depth (closest first) for unified delegation
-        HierarchyAgents = await AgentResolver.GetHierarchyAgentsAsync(contextPath);
+        HierarchyAgents = agentConfigs
+            .OrderByDescending(a => a.Id.Split('/').Length) // Closest first by path depth
+            .ToList();
 
         var existingAgents = await GetExistingAgentsAsync();
 
         // Create AgentChatClient first so it can be passed to GetTools()
-        var chatClient = new AgentChatClient(agentConfigs, AgentResolver, Hub.ServiceProvider);
+        var chatClient = new AgentChatClient(agentConfigs, Hub.ServiceProvider);
 
         var agentsByName = existingAgents.ToDictionary(GetAgentName);
         var createdAgents = new Dictionary<string, ChatClientAgent>();
@@ -271,11 +274,103 @@ public abstract class AgentChatFactoryBase : IAgentChatFactory
         return ret;
     }
 
-    public async Task<IReadOnlyList<AgentConfiguration>> GetAgentsAsync(string? contextPath = null)
-        => await AgentResolver.GetAgentsForContextAsync(contextPath);
+    public Task<IReadOnlyList<AgentConfiguration>> GetAgentsAsync(string? contextPath = null)
+        => GetAgentsForContextAsync(contextPath);
 
-    public async Task<IReadOnlyList<AgentWithPath>> GetAgentsWithPathsAsync(string? contextPath = null)
-        => await AgentResolver.GetAgentsWithPathsAsync(contextPath);
+    public Task<IReadOnlyList<AgentWithPath>> GetAgentsWithPathsAsync(string? contextPath = null)
+        => GetAgentsWithPathsInternalAsync(contextPath);
+
+    /// <summary>
+    /// Gets agents for a context path using direct mesh queries.
+    /// Queries agents from NodeType namespace and path namespace using scope:myselfAndAncestors.
+    /// </summary>
+    private async Task<IReadOnlyList<AgentConfiguration>> GetAgentsForContextAsync(string? contextPath)
+    {
+        var agentsWithPaths = await GetAgentsWithPathsInternalAsync(contextPath);
+        return agentsWithPaths.Select(a => a.Configuration).ToList();
+    }
+
+    /// <summary>
+    /// Gets agents with their paths using direct mesh queries.
+    /// </summary>
+    private async Task<IReadOnlyList<AgentWithPath>> GetAgentsWithPathsInternalAsync(string? contextPath)
+    {
+        if (MeshQuery == null)
+        {
+            Logger.LogDebug("IMeshQuery not available, returning empty agent list");
+            return Array.Empty<AgentWithPath>();
+        }
+
+        var agents = new Dictionary<string, (AgentConfiguration Config, string Path)>();
+
+        // 1. First, try to get the NodeType of the current node (if contextPath is provided)
+        string? nodeTypePath = null;
+        if (!string.IsNullOrEmpty(contextPath))
+        {
+            try
+            {
+                await foreach (var node in MeshQuery.QueryAsync<MeshNode>($"path:{contextPath} scope:self"))
+                {
+                    if (!string.IsNullOrEmpty(node.NodeType) && node.NodeType != "Agent" && node.NodeType != "Markdown")
+                    {
+                        nodeTypePath = node.NodeType;
+                        Logger.LogDebug("Found NodeType {NodeType} for context {ContextPath}", nodeTypePath, contextPath);
+                        break;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.LogDebug(ex, "Error querying current node for NodeType at {ContextPath}", contextPath);
+            }
+        }
+
+        // 2. Query agents from the NodeType namespace (higher priority)
+        if (!string.IsNullOrEmpty(nodeTypePath))
+        {
+            try
+            {
+                var query = $"path:{nodeTypePath} nodeType:Agent scope:myselfAndAncestors";
+                await foreach (var node in MeshQuery.QueryAsync<MeshNode>(query))
+                {
+                    if (node.Content is AgentConfiguration config && !agents.ContainsKey(config.Id))
+                    {
+                        agents[config.Id] = (config, node.Path ?? "");
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.LogWarning(ex, "Error loading agents from NodeType namespace {NodeType}", nodeTypePath);
+            }
+        }
+
+        // 3. Query agents from the context path namespace
+        try
+        {
+            var query = string.IsNullOrEmpty(contextPath)
+                ? "nodeType:Agent scope:myselfAndAncestors"
+                : $"path:{contextPath} nodeType:Agent scope:myselfAndAncestors";
+
+            await foreach (var node in MeshQuery.QueryAsync<MeshNode>(query))
+            {
+                if (node.Content is AgentConfiguration config && !agents.ContainsKey(config.Id))
+                {
+                    agents[config.Id] = (config, node.Path ?? "");
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "Error loading agents from context namespace {ContextPath}", contextPath);
+        }
+
+        return agents.Values
+            .Select(x => new AgentWithPath(x.Config, x.Path))
+            .OrderBy(a => a.Configuration.DisplayOrder)
+            .ThenBy(a => a.Configuration.Id)
+            .ToList();
+    }
 
     protected string GetAgentInstructions(AgentConfiguration agentConfig)
     {

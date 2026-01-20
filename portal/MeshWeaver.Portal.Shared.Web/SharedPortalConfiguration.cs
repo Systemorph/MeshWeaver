@@ -15,6 +15,7 @@ using MeshWeaver.ContentCollections;
 using MeshWeaver.GoogleMaps;
 using MeshWeaver.Hosting.Blazor;
 using MeshWeaver.Insurance.Domain.Services;
+using MeshWeaver.Markdown;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 using MeshWeaver.Portal.AI;
@@ -167,7 +168,9 @@ public static class SharedPortalConfiguration
         where TBuilder : MeshBuilder
         =>
             (TBuilder)builder
+                .WithMeshType<MarkdownContent>()
                 .ConfigureHub(mesh => mesh
+                    .AddMeshTypes()
                     .AddContentCollections()
                     .AddRadzenDataGrid()
                     .AddRadzenCharts()

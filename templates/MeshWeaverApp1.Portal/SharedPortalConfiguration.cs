@@ -8,7 +8,6 @@ using MeshWeaver.Blazor.Pages;
 using MeshWeaver.ContentCollections;
 using MeshWeaver.Hosting.Blazor;
 using MeshWeaver.Mesh;
-using MeshWeaverApp1.Todo.AI;
 using MeshWeaverApp1.Portal.Infrastructure;
 using MeshWeaverApp1.Portal.Resize;
 using MeshWeaver.Blazor.Chat;
@@ -44,7 +43,6 @@ public static class SharedPortalConfiguration
             })
             .AddChatWindowState();
 
-        services.AddTodoAI();
         services.AddMemoryChatPersistence();
 
         // configure AzureOpenAI chat (supports Azure OpenAI, GitHub Models, and other OpenAI-compatible APIs)

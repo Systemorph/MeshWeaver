@@ -9,7 +9,6 @@
 
   <ItemGroup>
     <ProjectReference Include="..\MeshWeaverApp1.Todo\MeshWeaverApp1.Todo.csproj" />
-    <ProjectReference Include="..\MeshWeaverApp1.Todo.AI\MeshWeaverApp1.Todo.AI.csproj" />
   </ItemGroup>
 
   <ItemGroup>

@@ -1,6 +1,5 @@
 #nullable enable
 
-using MeshWeaver.AI.Services;
 using MeshWeaver.Data.Completion;
 using MeshWeaver.Graph.Configuration;
 
@@ -8,42 +7,16 @@ namespace MeshWeaver.AI.Completion;
 
 /// <summary>
 /// Provides autocomplete items for agents.
-/// Gets agents from IAgentChatFactoryProvider or IAgentResolver.
+/// Gets agents from IAgentChatFactoryProvider.
 /// </summary>
-public class AgentAutocompleteProvider : IAutocompleteProvider
+public class AgentAutocompleteProvider(IAgentChatFactoryProvider factoryProvider) : IAutocompleteProvider
 {
-    private readonly IAgentChatFactoryProvider? _factoryProvider;
-    private readonly IAgentResolver? _agentResolver;
-
-    public AgentAutocompleteProvider(IAgentChatFactoryProvider factoryProvider)
-    {
-        _factoryProvider = factoryProvider;
-    }
-
-    public AgentAutocompleteProvider(IAgentResolver agentResolver)
-    {
-        _agentResolver = agentResolver;
-    }
-
     /// <inheritdoc />
     public async Task<IEnumerable<AutocompleteItem>> GetItemsAsync(string query, CancellationToken ct = default)
     {
-        IReadOnlyList<AgentConfiguration> agents;
+        var agents = await factoryProvider.GetAgentsAsync();
 
-        if (_factoryProvider != null)
-        {
-            agents = await _factoryProvider.GetAgentsAsync();
-        }
-        else if (_agentResolver != null)
-        {
-            agents = await _agentResolver.GetAgentsForContextAsync(null, ct);
-        }
-        else
-        {
-            return [];
-        }
-
-        var items = agents
+        return agents
             .Select(agent => new AutocompleteItem(
                 Label: $"@agent/{agent.Id}",
                 InsertText: $"@agent/{agent.Id} ",
@@ -52,7 +25,5 @@ public class AgentAutocompleteProvider : IAutocompleteProvider
                 Priority: agent.DisplayOrder,
                 Kind: AutocompleteKind.Agent
             ));
-
-        return items;
     }
 }

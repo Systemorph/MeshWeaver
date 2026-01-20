@@ -1,0 +1,472 @@
+@using Microsoft.FluentUI.AspNetCore.Components
+@using Microsoft.Extensions.Logging
+@inject IJSRuntime JSRuntime
+@inject ILogger<MonacoEditorView> Logger
+
+<div class="monaco-editor-container @(ShowBorder ? "with-border" : "")" style="@ContainerStyle">
+    <StandaloneCodeEditor @ref="editor"
+                          Id="@EditorId"
+                          ConstructionOptions="GetEditorOptions"
+                          OnDidInit="OnEditorInit"
+                          OnDidChangeModelContent="OnContentChanged"
+                          CssClass="monaco-editor-view" />
+</div>
+
+@code {
+    private StandaloneCodeEditor? editor;
+    private string EditorId = $"monaco-editor-{Guid.NewGuid():N}";
+    private bool isInitialized = false;
+    private IJSObjectReference? jsModule;
+    private DotNetObjectReference<MonacoEditorView>? dotNetRef;
+    private bool isDarkMode = false;
+    private bool completionProviderRegistered = false;
+    private int lastCompletionItemCount = 0;
+    private string? lastSetValue; // Track last value set to editor to detect external changes
+
+    [CascadingParameter(Name = "ThemeMode")]
+    public DesignThemeModes Mode { get; set; }
+
+    [Parameter]
+    public string? Value { get; set; }
+
+    [Parameter]
+    public EventCallback<string> ValueChanged { get; set; }
+
+    [Parameter]
+    public EventCallback OnSubmit { get; set; }
+
+    [Parameter]
+    public EventCallback OnBlur { get; set; }
+
+    [Parameter]
+    public bool IsDisabled { get; set; }
+
+    [Parameter]
+    public string Placeholder { get; set; } = "Type your message...";
+
+    [Parameter]
+    public string Language { get; set; } = "plaintext";
+
+    [Parameter]
+    public string Height { get; set; } = "80px";
+
+    [Parameter]
+    public string MaxHeight { get; set; } = "200px";
+
+    [Parameter]
+    public CompletionProviderConfig? CompletionProvider { get; set; }
+
+    /// <summary>
+    /// Optional async callback for server-side completion with fuzzy scoring.
+    /// When provided, this will be called instead of using static CompletionProvider items.
+    /// </summary>
+    [Parameter]
+    public Func<string, Task<CompletionItem[]>>? AsyncCompletionCallback { get; set; }
+
+    /// <summary>
+    /// Show line numbers in the editor. Default is false (chat-style input).
+    /// </summary>
+    [Parameter]
+    public bool ShowLineNumbers { get; set; } = false;
+
+    /// <summary>
+    /// Show a border around the editor. Default is false.
+    /// </summary>
+    [Parameter]
+    public bool ShowBorder { get; set; } = false;
+
+    /// <summary>
+    /// Enable code editing mode. When true, Enter inserts a new line instead of submitting.
+    /// Default is false (chat input mode where Enter submits).
+    /// </summary>
+    [Parameter]
+    public bool CodeEditMode { get; set; } = false;
+
+    private string ContainerStyle => $"height: {Height}; max-height: {MaxHeight}; min-height: 40px;";
+
+    private string GetMonacoTheme() => isDarkMode ? "vs-dark" : "vs";
+
+    private StandaloneEditorConstructionOptions GetEditorOptions(StandaloneCodeEditor ed)
+    {
+        return new StandaloneEditorConstructionOptions
+        {
+            Value = Value ?? "",
+            Language = Language,
+            Theme = GetMonacoTheme(),
+            AutomaticLayout = true,
+            LineNumbers = ShowLineNumbers ? "on" : "off",
+            Minimap = new EditorMinimapOptions { Enabled = false },
+            ScrollBeyondLastLine = false,
+            WordWrap = "on",
+            WrappingIndent = "none",
+            FontSize = 14,
+            LineHeight = 20,
+            Padding = new EditorPaddingOptions { Top = 8, Bottom = 8 },
+            RenderLineHighlight = "none",
+            OverviewRulerLanes = 0,
+            HideCursorInOverviewRuler = true,
+            Scrollbar = new EditorScrollbarOptions
+            {
+                Vertical = "hidden",
+                Horizontal = "hidden",
+                HandleMouseWheel = true
+            },
+            QuickSuggestions = new QuickSuggestionsOptions { Other = "on", Comments = "off", Strings = "on" },
+            SuggestOnTriggerCharacters = true,
+            AcceptSuggestionOnEnter = "on",
+            TabCompletion = "on",
+            FixedOverflowWidgets = true,
+            ReadOnly = IsDisabled,
+            // Hide various UI elements
+            Folding = false,
+            GlyphMargin = false,
+            LineDecorationsWidth = ShowLineNumbers ? 10 : 0,
+            LineNumbersMinChars = ShowLineNumbers ? 3 : 0,
+            RenderWhitespace = "none",
+            Contextmenu = false
+        };
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        await base.OnInitializedAsync();
+        isDarkMode = await IsDarkModeAsync();
+    }
+
+    private async Task<bool> IsDarkModeAsync()
+    {
+        return Mode switch
+        {
+            DesignThemeModes.Dark => true,
+            DesignThemeModes.Light => false,
+            _ => await GetSystemDarkModeAsync()
+        };
+    }
+
+    private async Task<bool> GetSystemDarkModeAsync()
+    {
+        try
+        {
+            // Use getEffectiveTheme which considers both user preference and system settings
+            var theme = await JSRuntime.InvokeAsync<string>("themeHandler.getEffectiveTheme");
+            return theme == "dark";
+        }
+        catch (JSException)
+        {
+            // JS not available yet (prerendering) or themeHandler not loaded - default to light mode
+            return false;
+        }
+    }
+
+    private async Task OnEditorInit()
+    {
+        Logger.LogDebug("OnEditorInit called. CompletionProvider={HasProvider}, Items={ItemCount}",
+            CompletionProvider != null, CompletionProvider?.Items?.Count ?? 0);
+        isInitialized = true;
+        lastSetValue = Value ?? ""; // Track initial value
+        dotNetRef = DotNetObjectReference.Create(this);
+
+        // Load custom JS module for placeholder and agent completion
+        jsModule = await JSRuntime.InvokeAsync<IJSObjectReference>("import",
+            "./_content/MeshWeaver.Blazor/Components/Monaco/MonacoEditorView.razor.js");
+
+        if (jsModule != null)
+        {
+            await jsModule.InvokeVoidAsync("initEditor", EditorId, Placeholder, dotNetRef, CodeEditMode);
+
+            // Register completion provider if configured
+            await TryRegisterCompletionProvider();
+        }
+    }
+
+    private async Task TryRegisterCompletionProvider()
+    {
+        if (jsModule == null)
+            return;
+
+        // Check if async mode should be used
+        var useAsync = AsyncCompletionCallback != null;
+        var currentItemCount = CompletionProvider?.Items?.Count ?? 0;
+
+        // For async mode, we always register (the callback handles everything)
+        // For sync mode, we need items
+        if (!useAsync && currentItemCount == 0)
+        {
+            Logger.LogDebug("Skipping completion provider registration - no items and no async callback");
+            return;
+        }
+
+        // Skip if already registered - don't re-register as it disrupts in-flight completions
+        if (completionProviderRegistered)
+        {
+            // Only re-register for sync mode if item count changed
+            if (useAsync || currentItemCount == lastCompletionItemCount)
+            {
+                Logger.LogDebug("Skipping completion provider registration - already registered");
+                return;
+            }
+        }
+
+        var triggerCharacters = CompletionProvider?.TriggerCharacters ?? ["@"];
+
+        if (useAsync)
+        {
+            // Async mode - pass minimal config, JS will call back to C#
+            var config = new
+            {
+                triggerCharacters = triggerCharacters,
+                useAsync = true,
+                items = Array.Empty<object>(),
+                language = Language
+            };
+            Logger.LogDebug("Registering async completion provider for language '{Language}' with triggers: {Triggers}",
+                Language, string.Join(",", triggerCharacters));
+            await jsModule.InvokeVoidAsync("registerCompletionProvider", EditorId, config);
+        }
+        else if (CompletionProvider != null)
+        {
+            // Sync mode - pass all items
+            var config = new
+            {
+                triggerCharacters = triggerCharacters,
+                useAsync = false,
+                items = CompletionProvider.Items.Select(i => new
+                {
+                    label = i.Label,
+                    insertText = i.InsertText ?? i.Label,
+                    description = i.Description ?? "",
+                    detail = i.Detail ?? "",
+                    category = i.Category ?? ""
+                }).ToArray(),
+                language = Language
+            };
+            Logger.LogDebug("Registering sync completion provider for language '{Language}' with {ItemCount} items, triggers: {Triggers}",
+                Language, config.items.Length, string.Join(",", triggerCharacters));
+            await jsModule.InvokeVoidAsync("registerCompletionProvider", EditorId, config);
+        }
+
+        completionProviderRegistered = true;
+        lastCompletionItemCount = currentItemCount;
+    }
+
+    private async Task OnContentChanged(ModelContentChangedEvent e)
+    {
+        if (editor != null)
+        {
+            var value = await editor.GetValue();
+            if (value != Value)
+            {
+                Value = value;
+                lastSetValue = value; // Track user-typed value
+                await ValueChanged.InvokeAsync(value);
+            }
+        }
+    }
+
+    [JSInvokable]
+    public async Task HandleSubmit()
+    {
+        await OnSubmit.InvokeAsync();
+    }
+
+    [JSInvokable]
+    public async Task HandleBlur()
+    {
+        await OnBlur.InvokeAsync();
+    }
+
+    /// <summary>
+    /// JSInvokable method called from JavaScript to get async completions.
+    /// </summary>
+    [JSInvokable]
+    public async Task<object[]> GetAsyncCompletions(string query)
+    {
+        if (AsyncCompletionCallback == null)
+        {
+            return [];
+        }
+
+        try
+        {
+            var items = await AsyncCompletionCallback(query);
+            return items.Select(i => new
+            {
+                label = i.Label,
+                insertText = i.InsertText ?? i.Label,
+                description = i.Description ?? "",
+                detail = i.Detail ?? "",
+                category = i.Category ?? "",
+                path = i.Path ?? "",
+                iconUrl = i.IconUrl ?? ""
+            }).ToArray<object>();
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Error getting async completions for query: {Query}", query);
+            return [];
+        }
+    }
+
+    public async ValueTask<string> GetValueAsync()
+    {
+        if (editor != null)
+        {
+            return await editor.GetValue();
+        }
+        return string.Empty;
+    }
+
+    public async Task SetValueAsync(string value)
+    {
+        if (editor != null)
+        {
+            await editor.SetValue(value);
+            Value = value;
+            lastSetValue = value;
+        }
+    }
+
+    public async Task ClearAsync()
+    {
+        await SetValueAsync(string.Empty);
+    }
+
+    public async Task FocusAsync()
+    {
+        if (editor != null && isInitialized)
+        {
+            try
+            {
+                await editor.Focus();
+            }
+            catch (Exception ex)
+            {
+                Logger.LogDebug(ex, "Error focusing editor - may not be fully initialized");
+            }
+        }
+    }
+
+    /// <summary>
+    /// Triggers the autocomplete/suggest popup programmatically.
+    /// </summary>
+    public async Task TriggerSuggestAsync()
+    {
+        if (jsModule != null && isInitialized)
+        {
+            try
+            {
+                await jsModule.InvokeVoidAsync("triggerSuggest", EditorId);
+            }
+            catch (Exception ex)
+            {
+                Logger.LogDebug(ex, "Error triggering suggest - may not be fully initialized");
+            }
+        }
+    }
+
+    /// <summary>
+    /// Sets the cursor position to the end of the content.
+    /// </summary>
+    public async Task SetCursorToEndAsync()
+    {
+        if (jsModule != null && isInitialized)
+        {
+            try
+            {
+                await jsModule.InvokeVoidAsync("setCursorToEnd", EditorId);
+            }
+            catch (Exception ex)
+            {
+                Logger.LogDebug(ex, "Error setting cursor position - may not be fully initialized");
+            }
+        }
+    }
+
+    public async Task SetReadOnlyAsync(bool readOnly)
+    {
+        if (editor != null && isInitialized)
+        {
+            try
+            {
+                await editor.UpdateOptions(new EditorUpdateOptions { ReadOnly = readOnly });
+            }
+            catch (Exception ex)
+            {
+                Logger.LogDebug(ex, "Error setting read-only state - editor may not be fully initialized");
+            }
+        }
+    }
+
+    private bool pendingParameterUpdate = false;
+
+    protected override Task OnParametersSetAsync()
+    {
+        // Mark that we need to update the editor on next render
+        // JS interop is only safe in OnAfterRenderAsync
+        if (isInitialized)
+        {
+            pendingParameterUpdate = true;
+        }
+        return Task.CompletedTask;
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!pendingParameterUpdate || !isInitialized || editor == null || jsModule == null)
+        {
+            return;
+        }
+
+        pendingParameterUpdate = false;
+
+        try
+        {
+            // Check if dark mode changed
+            var newDarkMode = await IsDarkModeAsync();
+            var themeChanged = newDarkMode != isDarkMode;
+            isDarkMode = newDarkMode;
+
+            // Update read-only state and theme
+            await editor.UpdateOptions(new EditorUpdateOptions
+            {
+                ReadOnly = IsDisabled,
+                Theme = themeChanged ? GetMonacoTheme() : null
+            });
+
+            // Check if Value changed from an external source (e.g., data binding)
+            var currentValue = Value ?? "";
+            if (currentValue != lastSetValue)
+            {
+                Logger.LogDebug("Value changed externally from '{OldValue}' to '{NewValue}'",
+                    lastSetValue?.Substring(0, Math.Min(50, lastSetValue?.Length ?? 0)),
+                    currentValue.Substring(0, Math.Min(50, currentValue.Length)));
+                lastSetValue = currentValue;
+                await editor.SetValue(currentValue);
+            }
+
+            // Try to register completion provider (will skip if already registered with same items)
+            await TryRegisterCompletionProvider();
+        }
+        catch (Exception ex)
+        {
+            Logger.LogDebug(ex, "Error in OnAfterRenderAsync - editor may not be fully initialized");
+        }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (jsModule != null)
+        {
+            try
+            {
+                await jsModule.InvokeVoidAsync("dispose", EditorId);
+            }
+            catch
+            {
+                // Ignore errors during disposal
+            }
+            await jsModule.DisposeAsync();
+        }
+        dotNetRef?.Dispose();
+    }
+}

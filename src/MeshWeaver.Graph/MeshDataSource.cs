@@ -77,6 +77,9 @@ public record MeshDataSource : GenericUnpartitionedDataSource<MeshDataSource>
         if (TypeSources.ContainsKey(typeof(MeshNode)))
             return this;
 
+        // Register MeshNode in TypeRegistry for JSON serialization
+        Workspace.Hub.TypeRegistry.WithType(typeof(MeshNode), nameof(MeshNode));
+
         if (_persistence == null)
         {
             _logger?.LogWarning("MeshDataSource: No persistence service, using basic MeshNode type source");
@@ -102,6 +105,9 @@ public record MeshDataSource : GenericUnpartitionedDataSource<MeshDataSource>
     /// </summary>
     public MeshDataSource WithContentType(Type dataType)
     {
+        // Register the content type in TypeRegistry for JSON serialization
+        Workspace.Hub.TypeRegistry.WithType(dataType, dataType.Name);
+
         if (_persistence == null)
         {
             _logger?.LogWarning("MeshDataSource: No persistence service, using basic type source for {Type}", dataType.Name);

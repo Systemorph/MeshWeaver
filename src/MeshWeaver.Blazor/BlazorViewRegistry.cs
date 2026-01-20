@@ -11,6 +11,7 @@ using MeshWeaver.Layout;
 using MeshWeaver.Layout.Client;
 using MeshWeaver.Layout.DataGrid;
 using MeshWeaver.Layout.Views;
+using MeshWeaver.Markdown;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 using Microsoft.DotNet.Interactive.Formatting;
@@ -31,7 +32,17 @@ public static class BlazorViewRegistry
             (configuration ?? (x => x))
             .Invoke(c.WithView((i, s, a) => DefaultFormatting(c.Hub, i, s, a))))
         .AddMeshTypes()
+        .AddMarkdownTypes()
     ;
+
+    /// <summary>
+    /// Registers Markdown-related types for JSON serialization.
+    /// </summary>
+    private static MessageHubConfiguration AddMarkdownTypes(this MessageHubConfiguration config)
+    {
+        config.TypeRegistry.WithType(typeof(MarkdownContent), nameof(MarkdownContent));
+        return config;
+    }
     #region Standard Formatting
     private static ViewDescriptor? DefaultFormatting(
         IMessageHub hub,
@@ -77,6 +88,7 @@ public static class BlazorViewRegistry
             ItemTemplateControl itemTemplate
                 => StandardView<ItemTemplateControl, ItemTemplate>(itemTemplate, stream, area),
             MarkdownControl markdown => StandardView<MarkdownControl, Components.MarkdownView>(markdown, stream, area),
+            MarkdownEditorControl markdownEditor => StandardView<MarkdownEditorControl, MarkdownEditorView>(markdownEditor, stream, area),
             NamedAreaControl namedView => StandardView<NamedAreaControl, NamedAreaView>(namedView, stream, area),
             SpacerControl spacer => StandardView<SpacerControl, SpacerView>(spacer, stream, area),
             ArticleControl article => StandardView<ArticleControl, ArticleView>(article, stream, area),
