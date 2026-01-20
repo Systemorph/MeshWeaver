@@ -13,6 +13,7 @@
   "state": "Active",
   "isVirtual": false,
   "content": {
+    "$type": "Todo",
     "id": "DemoEnvironment",
     "title": "Set up demo environment",
     "description": "Deploy demo.meshflow.io with pre-configured workflows, sample integrations, and realistic data. Ensure 99.9% uptime during launch period.",

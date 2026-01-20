@@ -13,6 +13,7 @@
   "state": "Active",
   "isVirtual": false,
   "content": {
+    "$type": "Todo",
     "id": "BacklogItem2",
     "title": "Create ROI calculator tool",
     "description": "Develop an interactive web-based ROI calculator that helps prospects estimate time and cost savings from using MeshFlow.",

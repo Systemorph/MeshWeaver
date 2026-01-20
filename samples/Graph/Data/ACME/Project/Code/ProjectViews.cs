@@ -16,39 +16,49 @@ public enum TodoStatus
 }
 
 /// <summary>
-/// Task priority level.
-/// </summary>
-public enum TaskPriority
-{
-    Low,
-    Medium,
-    High,
-    Critical
-}
-
-/// <summary>
 /// Todo record for deserialization.
 /// </summary>
 public record Todo : IContentInitializable
 {
+    [Key]
+    [Browsable(false)]
     public string Id { get; init; } = string.Empty;
+
+    [Required]
     public string Title { get; init; } = string.Empty;
+
     public string? Description { get; init; }
+
+    [UiControl<SelectControl>(Options = new[] { "General", "Marketing", "Research", "Sales", "Engineering", "Support", "PR", "Partnerships", "Design", "Legal", "Strategy" })]
     public string Category { get; init; } = "General";
-    public TaskPriority Priority { get; init; } = TaskPriority.Medium;
+
+    [UiControl<SelectControl>(Options = new[] { "Low", "Medium", "High", "Critical" })]
+    public string Priority { get; init; } = "Medium";
+
     public string? Assignee { get; init; }
-    public DateTimeOffset? DueDate { get; init; }
+
+    [DisplayName("Created At")]
+    public DateTime CreatedAt { get; init; } = DateTime.UtcNow;
+
+    [DisplayName("Due Date")]
+    public DateTime? DueDate { get; init; }
+
+    [Browsable(false)]
     public int? DueDateOffsetDays { get; init; }
+
     public TodoStatus Status { get; init; } = TodoStatus.Pending;
+
+    [Browsable(false)]
     public string Icon { get; init; } = "TaskListSquare";
-    public DateTimeOffset CreatedAt { get; init; } = DateTimeOffset.UtcNow;
-    public DateTimeOffset? CompletedAt { get; init; }
+
+    [Browsable(false)]
+    public DateTime? CompletedAt { get; init; }
 
     public object Initialize()
     {
         if (DueDateOffsetDays.HasValue)
         {
-            return this with { DueDate = DateTimeOffset.UtcNow.Date.AddDays(DueDateOffsetDays.Value) };
+            return this with { DueDate = DateTime.UtcNow.Date.AddDays(DueDateOffsetDays.Value) };
         }
         return this;
     }
@@ -65,7 +75,7 @@ public static class ProjectViews
     /// <summary>
     /// Triggers a refresh of all views that subscribe to the refresh mechanism.
     /// </summary>
-    public static void TriggerRefresh() => _refreshTrigger.OnNext(DateTimeOffset.UtcNow.Ticks);
+    public static void TriggerRefresh() => _refreshTrigger.OnNext(DateTime.UtcNow.Ticks);
 
     /// <summary>
     /// Summary view showing aggregated statistics for all child Todo items.
@@ -166,7 +176,7 @@ public static class ProjectViews
                 skin => skin.WithXs(12));
 
         // Due date analysis
-        var now = DateTimeOffset.Now.Date;
+        var now = DateTime.Now.Date;
         var overdue = todos.Count(t => t.DueDate?.Date < now && t.Status != TodoStatus.Completed);
         var dueToday = todos.Count(t => t.DueDate?.Date == now && t.Status != TodoStatus.Completed);
         var dueSoon = todos.Count(t => t.DueDate?.Date > now && t.DueDate?.Date <= now.AddDays(7) && t.Status != TodoStatus.Completed);
@@ -186,8 +196,8 @@ public static class ProjectViews
                 skin => skin.WithXs(12));
 
         // Priority breakdown
-        var criticalCount = todos.Count(t => t.Priority == TaskPriority.Critical && t.Status != TodoStatus.Completed);
-        var highCount = todos.Count(t => t.Priority == TaskPriority.High && t.Status != TodoStatus.Completed);
+        var criticalCount = todos.Count(t => t.Priority == "Critical" && t.Status != TodoStatus.Completed);
+        var highCount = todos.Count(t => t.Priority == "High" && t.Status != TodoStatus.Completed);
 
         if (criticalCount > 0 || highCount > 0)
         {
@@ -238,10 +248,10 @@ public static class ProjectViews
     }
 
     /// <summary>
-    /// AllItems view listing all child Todo items with status grouping and actions.
+    /// AllTasks view listing all child Todo items with status grouping and actions.
     /// </summary>
     [Display(GroupName = "Overview", Order = 2)]
-    public static IObservable<UiControl?> AllItems(LayoutAreaHost host, RenderingContext _)
+    public static IObservable<UiControl?> AllTasks(LayoutAreaHost host, RenderingContext _)
     {
         var hubPath = host.Hub.Address.ToString();
         return _refreshTrigger
@@ -249,11 +259,12 @@ public static class ProjectViews
             .SelectMany(_ => Observable.FromAsync(async () =>
             {
                 var todos = await LoadChildTodos(hubPath, host);
-                return BuildAllItemsView(todos, host, hubPath);
+                var deletedTodos = await LoadDeletedTodos(hubPath, host);
+                return BuildAllTasksView(todos, deletedTodos, host, hubPath);
             }));
     }
 
-    private static UiControl BuildAllItemsView(List<Todo> todos, LayoutAreaHost host, string hubPath)
+    private static UiControl BuildAllTasksView(List<Todo> todos, List<Todo> deletedTodos, LayoutAreaHost host, string hubPath)
     {
         var mainGrid = Controls.LayoutGrid.WithSkin(skin => skin.WithSpacing(-1));
 
@@ -265,7 +276,7 @@ public static class ProjectViews
             .WithView(BuildNewTaskButton(host, hubPath),
                 skin => skin.WithXs(4).WithMd(2));
 
-        if (!todos.Any())
+        if (!todos.Any() && !deletedTodos.Any())
         {
             return mainGrid.WithView(
                 Controls.Markdown("*No tasks found.*"),
@@ -273,11 +284,11 @@ public static class ProjectViews
         }
 
         // Group by status
-        var statusOrder = new[] { TodoStatus.InProgress, TodoStatus.Pending, TodoStatus.InReview, TodoStatus.Blocked, TodoStatus.Completed };
+        var statusOrder = new[] { TodoStatus.Pending, TodoStatus.InProgress, TodoStatus.InReview, TodoStatus.Blocked, TodoStatus.Completed };
         foreach (var status in statusOrder)
         {
             var statusTodos = todos.Where(t => t.Status == status)
-                .OrderBy(t => t.DueDate ?? DateTimeOffset.MaxValue)
+                .OrderBy(t => t.DueDate ?? DateTime.MaxValue)
                 .ThenBy(t => t.CreatedAt)
                 .ToList();
 
@@ -291,7 +302,40 @@ public static class ProjectViews
                 skin => skin.WithXs(12));
         }
 
+        // Deleted section at the bottom
+        if (deletedTodos.Any())
+        {
+            mainGrid = mainGrid.WithView(
+                BuildDeletedSection(deletedTodos, hubPath, host),
+                skin => skin.WithXs(12));
+        }
+
         return mainGrid;
+    }
+
+    private static UiControl BuildDeletedSection(List<Todo> deletedTodos, string hubPath, LayoutAreaHost host)
+    {
+        var sectionStack = Controls.Stack
+            .WithStyle(style => style.WithMarginBottom("16px").WithMarginTop("8px"));
+
+        // Section header
+        sectionStack = sectionStack.WithView(Controls.Html($@"
+            <div style=""padding: 8px 12px; background: var(--neutral-layer-2); border-radius: 6px; font-weight: 600; margin-bottom: 4px; opacity: 0.8;"">
+                🗑️ Deleted ({deletedTodos.Count})
+            </div>"));
+
+        // Items container
+        var itemsStack = Controls.Stack
+            .WithStyle(style => style.WithBorder("1px solid var(--neutral-stroke-rest)").WithBorderRadius("6px"));
+
+        foreach (var todo in deletedTodos)
+        {
+            itemsStack = itemsStack.WithView(BuildDeletedTodoListItem(todo, hubPath, host));
+        }
+
+        sectionStack = sectionStack.WithView(itemsStack);
+
+        return sectionStack;
     }
 
     /// <summary>
@@ -339,7 +383,7 @@ public static class ProjectViews
             var statusIndicator = $"\u2705{completedCount} \ud83d\udd04{inProgressCount} \u23f3{pendingCount}";
             var categoryTodos = group
                 .OrderBy(t => (int)t.Status)
-                .ThenBy(t => t.DueDate ?? DateTimeOffset.MaxValue)
+                .ThenBy(t => t.DueDate ?? DateTime.MaxValue)
                 .ToList();
 
             mainGrid = mainGrid.WithView(
@@ -402,7 +446,7 @@ public static class ProjectViews
         foreach (var assignee in teamWorkload.Take(10))
         {
             var taskCount = assignee.Count();
-            var overdueCount = assignee.Count(t => t.DueDate?.Date < DateTimeOffset.Now.Date);
+            var overdueCount = assignee.Count(t => t.DueDate?.Date < DateTime.Now.Date);
             var workloadIndicator = taskCount <= 2 ? "\ud83d\udfe2" : taskCount <= 4 ? "\ud83d\udfe1" : "\ud83d\udd34";
             var overdueText = overdueCount > 0 ? $" (\ud83d\udea8 {overdueCount} overdue)" : "";
 
@@ -415,7 +459,7 @@ public static class ProjectViews
         // Unassigned tasks section
         var unassignedTasks = activeTodos
             .Where(t => string.IsNullOrEmpty(t.Assignee))
-            .OrderBy(t => t.DueDate ?? DateTimeOffset.MaxValue)
+            .OrderBy(t => t.DueDate ?? DateTime.MaxValue)
             .ToList();
 
         if (unassignedTasks.Any())
@@ -475,7 +519,7 @@ public static class ProjectViews
                 skin => skin.WithXs(12));
         }
 
-        var now = DateTimeOffset.Now.Date;
+        var now = DateTime.Now.Date;
 
         // Urgent tasks (overdue + due today)
         var urgentTasks = myTasks
@@ -491,7 +535,7 @@ public static class ProjectViews
         // Upcoming
         var upcomingTasks = myTasks
             .Where(t => !t.DueDate.HasValue || t.DueDate?.Date > now.AddDays(1))
-            .OrderBy(t => t.DueDate ?? DateTimeOffset.MaxValue)
+            .OrderBy(t => t.DueDate ?? DateTime.MaxValue)
             .ToList();
 
         // Summary
@@ -557,8 +601,8 @@ public static class ProjectViews
 
         var backlogTasks = todos
             .Where(t => string.IsNullOrEmpty(t.Assignee) && t.Status != TodoStatus.Completed)
-            .OrderBy(t => t.DueDate ?? DateTimeOffset.MaxValue)
-            .ThenBy(t => (int)t.Priority)
+            .OrderBy(t => t.DueDate ?? DateTime.MaxValue)
+            .ThenBy(t => GetPriorityOrder(t.Priority))
             .ToList();
 
         if (!backlogTasks.Any())
@@ -574,9 +618,9 @@ public static class ProjectViews
             skin => skin.WithXs(12));
 
         // Group by priority
-        var criticalTasks = backlogTasks.Where(t => t.Priority == TaskPriority.Critical).ToList();
-        var highTasks = backlogTasks.Where(t => t.Priority == TaskPriority.High).ToList();
-        var normalTasks = backlogTasks.Where(t => t.Priority == TaskPriority.Medium || t.Priority == TaskPriority.Low).ToList();
+        var criticalTasks = backlogTasks.Where(t => t.Priority == "Critical").ToList();
+        var highTasks = backlogTasks.Where(t => t.Priority == "High").ToList();
+        var normalTasks = backlogTasks.Where(t => t.Priority == "Medium" || t.Priority == "Low").ToList();
 
         if (criticalTasks.Any())
         {
@@ -600,6 +644,60 @@ public static class ProjectViews
         }
 
         return mainGrid;
+    }
+
+    private static UiControl BuildDeletedTodoListItem(Todo todo, string hubPath, LayoutAreaHost host)
+    {
+        var priorityBadge = GetPriorityBadge(todo.Priority);
+        var todoPath = $"{hubPath}/Todo/{todo.Id}";
+
+        // Main row with info and actions
+        var row = Controls.Stack
+            .WithOrientation(Orientation.Horizontal)
+            .WithStyle(style => style
+                .WithPadding("8px 12px")
+                .WithBorderBottom("1px solid var(--neutral-stroke-rest)")
+                .WithAlignItems("center")
+                .WithGap("8px")
+                .WithBackgroundColor("var(--neutral-layer-2)"));
+
+        // Deleted icon
+        row = row.WithView(Controls.Html("<span style=\"font-size: 16px; opacity: 0.5;\">🗑️</span>"));
+
+        // Title with strikethrough (clickable to view details)
+        row = row.WithView(Controls.Html($@"
+            <a href=""/{todoPath}"" style=""flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-decoration: line-through; opacity: 0.7; color: inherit;"">
+                {System.Web.HttpUtility.HtmlEncode(todo.Title)}
+            </a>"));
+
+        // Priority badge
+        if (!string.IsNullOrEmpty(priorityBadge))
+        {
+            row = row.WithView(Controls.Html($"<span style=\"opacity: 0.7;\">{priorityBadge}</span>"));
+        }
+
+        // Restore button
+        row = row.WithView(
+            Controls.Button("↩️ Restore")
+                .WithAppearance(Appearance.Accent)
+                .WithStyle(style => style.WithPadding("4px 12px"))
+                .WithClickAction(actx =>
+                {
+                    return RestoreTodo(actx.Host, todoPath).ContinueWith(_ => TriggerRefresh());
+                }));
+
+        // Permanent delete button
+        row = row.WithView(
+            Controls.Button("🔥 Delete Forever")
+                .WithAppearance(Appearance.Neutral)
+                .WithStyle(style => style.WithPadding("4px 12px").WithColor("#dc3545"))
+                .WithClickAction(actx =>
+                {
+                    ShowPermanentDeleteConfirmationDialog(actx.Host, todo, todoPath);
+                    return System.Threading.Tasks.Task.CompletedTask;
+                }));
+
+        return row;
     }
 
     /// <summary>
@@ -630,7 +728,7 @@ public static class ProjectViews
             .WithView(BuildNewTaskButton(host, hubPath),
                 skin => skin.WithXs(4).WithMd(2));
 
-        var now = DateTimeOffset.Now.Date;
+        var now = DateTime.Now.Date;
         var activeTodos = todos.Where(t => t.Status != TodoStatus.Completed).ToList();
 
         // Overdue items
@@ -642,13 +740,13 @@ public static class ProjectViews
         // Due today
         var dueToday = activeTodos
             .Where(t => t.DueDate?.Date == now)
-            .OrderBy(t => (int)t.Priority)
+            .OrderBy(t => GetPriorityOrder(t.Priority))
             .ToList();
 
         // In progress (regardless of due date)
         var inProgress = activeTodos
             .Where(t => t.Status == TodoStatus.InProgress && t.DueDate?.Date != now && t.DueDate?.Date >= now)
-            .OrderBy(t => t.DueDate ?? DateTimeOffset.MaxValue)
+            .OrderBy(t => t.DueDate ?? DateTime.MaxValue)
             .ToList();
 
         if (!overdue.Any() && !dueToday.Any() && !inProgress.Any())
@@ -700,7 +798,8 @@ public static class ProjectViews
         if (meshQuery == null)
             return todos;
 
-        var query = $"path:{hubPath}/Todo nodeType:ACME/Project/Todo scope:subtree";
+        // Filter to only return Active items (excludes Deleted items)
+        var query = $"path:{hubPath}/Todo nodeType:ACME/Project/Todo state:Active scope:subtree";
         var request = MeshQueryRequest.FromQuery(query);
 
         await foreach (var result in meshQuery.QueryAsync<MeshNode>(request))
@@ -709,6 +808,31 @@ public static class ProjectViews
             if (todo != null)
             {
                 // Initialize to compute DueDate from DueDateOffsetDays if set
+                todo = (Todo)todo.Initialize();
+                todos.Add(todo);
+            }
+        }
+
+        return todos;
+    }
+
+    private static async System.Threading.Tasks.Task<List<Todo>> LoadDeletedTodos(string hubPath, LayoutAreaHost host)
+    {
+        var todos = new List<Todo>();
+
+        var meshQuery = host.Hub.ServiceProvider.GetService<IMeshQuery>();
+        if (meshQuery == null)
+            return todos;
+
+        // Query for Deleted items only
+        var query = $"path:{hubPath}/Todo nodeType:ACME/Project/Todo state:Deleted scope:subtree";
+        var request = MeshQueryRequest.FromQuery(query);
+
+        await foreach (var result in meshQuery.QueryAsync<MeshNode>(request))
+        {
+            var todo = result.GetContent<Todo>();
+            if (todo != null)
+            {
                 todo = (Todo)todo.Initialize();
                 todos.Add(todo);
             }
@@ -812,6 +936,12 @@ public static class ProjectViews
                 {System.Web.HttpUtility.HtmlEncode(todo.Title)}
             </a>"));
 
+        // Category badge
+        if (!string.IsNullOrEmpty(todo.Category))
+        {
+            row = row.WithView(Controls.Html($"<span style=\"background: var(--neutral-layer-3); padding: 1px 6px; border-radius: 3px; font-size: 10px;\">{System.Web.HttpUtility.HtmlEncode(todo.Category)}</span>"));
+        }
+
         // Priority badge
         if (!string.IsNullOrEmpty(priorityBadge))
         {
@@ -841,7 +971,7 @@ public static class ProjectViews
                     var updatedTodo = todo with
                     {
                         Status = nextStatus,
-                        CompletedAt = nextStatus == TodoStatus.Completed ? DateTimeOffset.UtcNow : null
+                        CompletedAt = nextStatus == TodoStatus.Completed ? DateTime.UtcNow : null
                     };
                     return UpdateTodoViaNode(actx.Host, updatedTodo, todoPath).ContinueWith(_ => TriggerRefresh());
                 }));
@@ -858,7 +988,7 @@ public static class ProjectViews
                     return System.Threading.Tasks.Task.CompletedTask;
                 }));
 
-        // Quick action: Delete button
+        // Quick action: Delete button (soft delete with confirmation)
         row = row.WithView(
             Controls.Button("🗑️")
                 .WithLabel("Delete")
@@ -866,7 +996,8 @@ public static class ProjectViews
                 .WithStyle(style => style.WithMinWidth("28px").WithPadding("2px 6px").WithColor("#dc3545"))
                 .WithClickAction(actx =>
                 {
-                    return DeleteTodoViaNode(actx.Host, todoPath).ContinueWith(_ => TriggerRefresh());
+                    ShowDeleteConfirmationDialog(actx.Host, todo, todoPath);
+                    return System.Threading.Tasks.Task.CompletedTask;
                 }));
 
         return row;
@@ -896,12 +1027,87 @@ public static class ProjectViews
         await meshCatalog.Persistence.SaveNodeAsync(updatedNode);
     }
 
-    private static async System.Threading.Tasks.Task DeleteTodoViaNode(LayoutAreaHost host, string todoPath)
+    private static async System.Threading.Tasks.Task SoftDeleteTodo(LayoutAreaHost host, string todoPath)
     {
         var meshCatalog = host.Hub.ServiceProvider.GetService<IMeshCatalog>();
         if (meshCatalog == null) return;
 
+        var existingNode = await meshCatalog.GetNodeAsync(new Address(todoPath));
+        if (existingNode == null) return;
+
+        var deletedNode = existingNode with { State = MeshNodeState.Deleted };
+        await meshCatalog.Persistence.SaveNodeAsync(deletedNode);
+    }
+
+    private static async System.Threading.Tasks.Task RestoreTodo(LayoutAreaHost host, string todoPath)
+    {
+        var meshCatalog = host.Hub.ServiceProvider.GetService<IMeshCatalog>();
+        if (meshCatalog == null) return;
+
+        var existingNode = await meshCatalog.GetNodeAsync(new Address(todoPath));
+        if (existingNode == null) return;
+
+        var restoredNode = existingNode with { State = MeshNodeState.Active };
+        await meshCatalog.Persistence.SaveNodeAsync(restoredNode);
+    }
+
+    private static async System.Threading.Tasks.Task HardDeleteTodo(LayoutAreaHost host, string todoPath)
+    {
+        var meshCatalog = host.Hub.ServiceProvider.GetService<IMeshCatalog>();
+        if (meshCatalog == null) return;
         await meshCatalog.DeleteNodeAsync(todoPath);
+    }
+
+    private static void ShowDeleteConfirmationDialog(LayoutAreaHost host, Todo todo, string todoPath)
+    {
+        var content = Controls.Stack
+            .WithView(Controls.Html($@"
+                <div style=""text-align: center; padding: 16px;"">
+                    <div style=""font-size: 48px; margin-bottom: 16px;"">🗑️</div>
+                    <p>Delete <strong>{System.Web.HttpUtility.HtmlEncode(todo.Title)}</strong>?</p>
+                    <p style=""color: var(--neutral-foreground-hint); font-size: 14px;"">
+                        You can restore it later from the Deleted view.
+                    </p>
+                </div>"))
+            .WithView(Controls.Stack
+                .WithOrientation(Orientation.Horizontal)
+                .WithStyle(s => s.WithJustifyContent("center").WithGap("12px"))
+                .WithView(Controls.Button("Cancel").WithAppearance(Appearance.Neutral)
+                    .WithClickAction(_ => { host.UpdateArea(DialogControl.DialogArea, null!); return System.Threading.Tasks.Task.CompletedTask; }))
+                .WithView(Controls.Button("Delete").WithAppearance(Appearance.Accent)
+                    .WithStyle(s => s.WithBackgroundColor("#dc3545"))
+                    .WithClickAction(_ => {
+                        host.UpdateArea(DialogControl.DialogArea, null!);
+                        return SoftDeleteTodo(host, todoPath).ContinueWith(_ => TriggerRefresh());
+                    })));
+
+        host.UpdateArea(DialogControl.DialogArea, Controls.Dialog(content, "Delete Task").WithSize("S").WithClosable(false));
+    }
+
+    private static void ShowPermanentDeleteConfirmationDialog(LayoutAreaHost host, Todo todo, string todoPath)
+    {
+        var content = Controls.Stack
+            .WithView(Controls.Html($@"
+                <div style=""text-align: center; padding: 16px;"">
+                    <div style=""font-size: 48px; margin-bottom: 16px;"">⚠️</div>
+                    <p>Permanently delete <strong>{System.Web.HttpUtility.HtmlEncode(todo.Title)}</strong>?</p>
+                    <p style=""color: #dc3545; font-size: 14px; font-weight: 600;"">
+                        This action cannot be undone!
+                    </p>
+                </div>"))
+            .WithView(Controls.Stack
+                .WithOrientation(Orientation.Horizontal)
+                .WithStyle(s => s.WithJustifyContent("center").WithGap("12px"))
+                .WithView(Controls.Button("Cancel").WithAppearance(Appearance.Neutral)
+                    .WithClickAction(_ => { host.UpdateArea(DialogControl.DialogArea, null!); return System.Threading.Tasks.Task.CompletedTask; }))
+                .WithView(Controls.Button("Delete Permanently").WithAppearance(Appearance.Accent)
+                    .WithStyle(s => s.WithBackgroundColor("#dc3545"))
+                    .WithClickAction(_ => {
+                        host.UpdateArea(DialogControl.DialogArea, null!);
+                        return HardDeleteTodo(host, todoPath).ContinueWith(_ => TriggerRefresh());
+                    })));
+
+        host.UpdateArea(DialogControl.DialogArea, Controls.Dialog(content, "Permanent Delete").WithSize("S").WithClosable(false));
     }
 
     private static async System.Threading.Tasks.Task HandleSaveEditedTodo(LayoutAreaHost host, Todo originalTodo, string todoPath, string editDataId)
@@ -972,7 +1178,8 @@ public static class ProjectViews
                 NodeType = $"{hubPath.Split('/')[0]}/Project/Todo",
                 Content = editedTodo,
                 IsPersistent = true,
-                Category = "Tasks"
+                Category = "Tasks",
+                State = MeshNodeState.Active
             };
 
             System.Console.WriteLine($"MeshNode path: {meshNode.Path}, NodeType: {meshNode.NodeType}");
@@ -1045,8 +1252,6 @@ public static class ProjectViews
         var todoPath = todoAddress.ToString();
 
         var editForm = Controls.Stack
-            .WithView(Controls.H5("Edit Task")
-                .WithStyle(style => style.WithWidth("100%").WithTextAlign("center")))
             .WithView(host.Edit(todo, editDataId)?
                 .WithStyle(style => style.WithWidth("100%").WithDisplay("block")), editDataId)
             .WithView(Controls.Stack
@@ -1083,11 +1288,22 @@ public static class ProjectViews
         _ => "\u2753"
     };
 
-    private static string GetPriorityBadge(TaskPriority priority) => priority switch
+    private static string GetPriorityBadge(string priority) => priority switch
     {
-        TaskPriority.Critical => "<span style=\"background: #dc3545; color: white; padding: 1px 4px; border-radius: 3px; font-size: 10px;\">CRITICAL</span>",
-        TaskPriority.High => "<span style=\"background: #fd7e14; color: white; padding: 1px 4px; border-radius: 3px; font-size: 10px;\">HIGH</span>",
+        "Critical" => "<span style=\"background: #dc3545; color: white; padding: 1px 4px; border-radius: 3px; font-size: 10px;\">CRITICAL</span>",
+        "High" => "<span style=\"background: #fd7e14; color: white; padding: 1px 4px; border-radius: 3px; font-size: 10px;\">HIGH</span>",
+        "Medium" => "<span style=\"background: #17a2b8; color: white; padding: 1px 4px; border-radius: 3px; font-size: 10px;\">MEDIUM</span>",
+        "Low" => "<span style=\"background: #6c757d; color: white; padding: 1px 4px; border-radius: 3px; font-size: 10px;\">LOW</span>",
         _ => ""
+    };
+
+    private static int GetPriorityOrder(string priority) => priority switch
+    {
+        "Critical" => 0,
+        "High" => 1,
+        "Medium" => 2,
+        "Low" => 3,
+        _ => 4
     };
 
     private static UiControl BuildNewTaskButton(LayoutAreaHost host, string hubPath)
@@ -1112,16 +1328,14 @@ public static class ProjectViews
             Id = newId,
             Title = "New Task",
             Status = TodoStatus.Pending,
-            Priority = TaskPriority.Medium,
+            Priority = "Medium",
             Category = "General",
-            CreatedAt = DateTimeOffset.UtcNow
+            CreatedAt = DateTime.UtcNow
         };
 
         var createDataId = $"CreateTodo_{newId}";
 
         var createForm = Controls.Stack
-            .WithView(Controls.H5("Create New Task")
-                .WithStyle(style => style.WithWidth("100%").WithTextAlign("center")))
             .WithView(host.Edit(newTodo, createDataId)?
                 .WithStyle(style => style.WithWidth("100%").WithDisplay("block")), createDataId)
             .WithView(Controls.Stack
