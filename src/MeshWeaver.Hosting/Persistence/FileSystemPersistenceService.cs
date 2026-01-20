@@ -114,8 +114,7 @@ public class FileSystemPersistenceService(IStorageAdapter storageAdapter) : IPer
             StartupScript = sourceNode.StartupScript,
             RoutingType = sourceNode.RoutingType,
             InstantiationType = sourceNode.InstantiationType,
-            GlobalServiceConfigurations = sourceNode.GlobalServiceConfigurations,
-            AutocompleteAddress = sourceNode.AutocompleteAddress
+            GlobalServiceConfigurations = sourceNode.GlobalServiceConfigurations
         };
 
         await storageAdapter.WriteAsync(movedNode, ct);

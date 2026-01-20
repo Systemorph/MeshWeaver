@@ -139,7 +139,6 @@ builder.Services.AddLogging(logging =>
 
 - [MeshWeaver.AI](../MeshWeaver.AI/README.md) - Core AI services and abstractions
 - [MeshWeaver.AI.AzureFoundry](../MeshWeaver.AI.AzureFoundry/README.md) - Azure AI Foundry integration
-- [MeshWeaver.Portal.AI](../../portal/MeshWeaver.Portal.AI/README.md) - Portal-specific AI implementations
 - [MeshWeaver.Blazor.Chat](../MeshWeaver.Blazor.Chat/README.md) - Chat UI components
 
 ## Contributing

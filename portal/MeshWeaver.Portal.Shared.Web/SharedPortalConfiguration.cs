@@ -18,7 +18,6 @@ using MeshWeaver.Insurance.Domain.Services;
 using MeshWeaver.Markdown;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
-using MeshWeaver.Portal.AI;
 using Microsoft.AspNetCore.Authentication.OpenIdConnect;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.Extensions.Configuration;
@@ -59,7 +58,6 @@ public static class SharedPortalConfiguration
 
         // Configure Radzen
         services.AddRadzenServices();
-        services.AddPortalAI();
         services.AddMemoryChatPersistence();
 
         // Configure AI factories (ordered by DisplayOrder - Anthropic first)

@@ -10,13 +10,13 @@
         <ProjectReference Include="..\..\src\MeshWeaver.AI.AzureOpenAI\MeshWeaver.AI.AzureOpenAI.csproj" />
         <ProjectReference Include="..\..\src\MeshWeaver.Blazor.GoogleMaps\MeshWeaver.Blazor.GoogleMaps.csproj" />
         <ProjectReference Include="..\..\src\MeshWeaver.GoogleMaps\MeshWeaver.GoogleMaps.csproj" />
-        <ProjectReference Include="..\MeshWeaver.Portal.AI\MeshWeaver.Portal.AI.csproj" />
         <ProjectReference Include="..\..\src\MeshWeaver.Blazor.Radzen\MeshWeaver.Blazor.Radzen.csproj" />
         <ProjectReference Include="..\..\src\MeshWeaver.Blazor.Chat\MeshWeaver.Blazor.Chat.csproj" />
         <ProjectReference Include="..\..\src\MeshWeaver.Blazor.Portal\MeshWeaver.Blazor.Portal.csproj" />
         <ProjectReference Include="..\..\src\MeshWeaver.Blazor\MeshWeaver.Blazor.csproj" />
         <ProjectReference Include="..\..\src\MeshWeaver.Hosting.Blazor\MeshWeaver.Hosting.Blazor.csproj" />
         <ProjectReference Include="..\..\src\MeshWeaver.Kernel.Hub\MeshWeaver.Kernel.Hub.csproj" />
+        <ProjectReference Include="..\..\samples\Insurance\MeshWeaver.Insurance.Domain\MeshWeaver.Insurance.Domain.csproj" />
     </ItemGroup>
     <ItemGroup>
         <PackageReference Include="Microsoft.Identity.Web" />
