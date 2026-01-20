@@ -97,9 +97,6 @@ public class TemplateGenerator
         Console.WriteLine("Copying Todo module from samples...");
         CopyDirectory("samples/Todo/MeshWeaver.Todo", Path.Combine(_outputPath, "src", "MeshWeaverApp1.Todo"), ["bin", "obj", ".gitignore"]);
 
-        Console.WriteLine("Copying Todo.AI module from samples...");
-        CopyDirectory("samples/Todo/MeshWeaver.Todo.AI", Path.Combine(_outputPath, "src", "MeshWeaverApp1.Todo.AI"), ["bin", "obj", ".gitignore"]);
-
         Console.WriteLine("Copying Todo test project...");
         CopyDirectory("test/MeshWeaver.Todo.Test", Path.Combine(_outputPath, "test", "MeshWeaverApp1.Todo.Test"), ["bin", "obj", "TestResults", ".gitignore"]);
     }
@@ -113,11 +110,6 @@ public class TemplateGenerator
             ["namespace MeshWeaver.Todo", "using MeshWeaver.Todo"],
             ["namespace MeshWeaverApp1.Todo", "using MeshWeaverApp1.Todo"]);
 
-        // Update Todo.AI project namespaces
-        UpdateNamespacesInDirectory(Path.Combine(_outputPath, "src", "MeshWeaverApp1.Todo.AI"),
-            ["namespace MeshWeaver.Todo.AI", "using MeshWeaver.Todo"],
-            ["namespace MeshWeaverApp1.Todo.AI", "using MeshWeaverApp1.Todo"]);
-
         // Update Todo test project namespaces
         UpdateNamespacesInDirectory(Path.Combine(_outputPath, "test", "MeshWeaverApp1.Todo.Test"),
             ["namespace MeshWeaver.Todo", "using MeshWeaver.Todo", "typeof(TodoApplicationAttribute)"],
@@ -125,8 +117,8 @@ public class TemplateGenerator
 
         // Update Portal project namespaces
         UpdateNamespacesInDirectory(Path.Combine(_outputPath, "portal", "MeshWeaverApp1.Portal"),
-            ["namespace MeshWeaverApp1.Portal", "using MeshWeaverApp1.Portal", "using MeshWeaver.Todo", "MeshWeaver.Todo.AI", "typeof(TodoApplicationAttribute)", "typeof(AgentsApplicationAttribute)"],
-            ["namespace MeshWeaverApp1.Portal", "using MeshWeaverApp1.Portal", "using MeshWeaverApp1.Todo", "MeshWeaverApp1.Todo.AI", "typeof(MeshWeaverApp1.Todo.TodoApplicationAttribute)", "typeof(MeshWeaver.AI.Application.AgentsApplicationAttribute)"]);
+            ["namespace MeshWeaverApp1.Portal", "using MeshWeaverApp1.Portal", "using MeshWeaver.Todo", "typeof(TodoApplicationAttribute)", "typeof(AgentsApplicationAttribute)"],
+            ["namespace MeshWeaverApp1.Portal", "using MeshWeaverApp1.Portal", "using MeshWeaverApp1.Todo", "typeof(MeshWeaverApp1.Todo.TodoApplicationAttribute)", "typeof(MeshWeaver.AI.Application.AgentsApplicationAttribute)"]);
     }
 
     private void RenameProjectFiles()
@@ -136,10 +128,6 @@ public class TemplateGenerator
         File.Move(
             Path.Combine(_outputPath, "src", "MeshWeaverApp1.Todo", "MeshWeaver.Todo.csproj"),
             Path.Combine(_outputPath, "src", "MeshWeaverApp1.Todo", "MeshWeaverApp1.Todo.csproj"));
-
-        File.Move(
-            Path.Combine(_outputPath, "src", "MeshWeaverApp1.Todo.AI", "MeshWeaver.Todo.AI.csproj"),
-            Path.Combine(_outputPath, "src", "MeshWeaverApp1.Todo.AI", "MeshWeaverApp1.Todo.AI.csproj"));
 
         File.Move(
             Path.Combine(_outputPath, "test", "MeshWeaverApp1.Todo.Test", "MeshWeaver.Todo.Test.csproj"),
@@ -152,7 +140,7 @@ public class TemplateGenerator
         var content = File.ReadAllText(programCsPath);
 
         // Update the template portal structure to include Todo references
-        content = content.Replace("using MeshWeaver.Todo;", "using MeshWeaverApp1.Todo;\nusing MeshWeaverApp1.Todo.AI;");
+        content = content.Replace("using MeshWeaver.Todo;", "using MeshWeaverApp1.Todo;");
 
         File.WriteAllText(programCsPath, content);
     }
@@ -173,7 +161,6 @@ public class TemplateGenerator
 
               <ItemGroup>
                 <ProjectReference Include="..\..\src\MeshWeaverApp1.Todo\MeshWeaverApp1.Todo.csproj" />
-                <ProjectReference Include="..\..\src\MeshWeaverApp1.Todo.AI\MeshWeaverApp1.Todo.AI.csproj" />
               </ItemGroup>
 
               <ItemGroup>
@@ -219,25 +206,6 @@ public class TemplateGenerator
             </Project>
             """;
         File.WriteAllText(Path.Combine(_outputPath, "src", "MeshWeaverApp1.Todo", "MeshWeaverApp1.Todo.csproj"), todoCsproj);
-
-        Console.WriteLine("Updating Todo.AI project with package references...");
-        var todoAICsproj = $"""
-            <Project Sdk="Microsoft.NET.Sdk">
-
-              <PropertyGroup>
-                <TargetFramework>net9.0</TargetFramework>
-                <ImplicitUsings>enable</ImplicitUsings>
-                <Nullable>enable</Nullable>
-                <NoWarn>$(NoWarn);NU5111</NoWarn>
-              </PropertyGroup>
-
-              <ItemGroup>
-                <PackageReference Include="MeshWeaver.AI" />
-              </ItemGroup>
-
-            </Project>
-            """;
-        File.WriteAllText(Path.Combine(_outputPath, "src", "MeshWeaverApp1.Todo.AI", "MeshWeaverApp1.Todo.AI.csproj"), todoAICsproj);
 
         Console.WriteLine("Updating Test project with package references...");
         var testCsproj = $"""
@@ -480,7 +448,6 @@ dotnet run
 
 - **`portal/MeshWeaverApp1.Portal/`** - Web application (Blazor Server)
 - **`src/MeshWeaverApp1.Todo/`** - Todo business domain module (reference implementation)
-- **`src/MeshWeaverApp1.Todo.AI/`** - AI agents for Todo functionality
 - **`test/MeshWeaverApp1.Todo.Test/`** - Unit tests for Todo module
 
 ### Architectural Patterns
@@ -671,33 +638,6 @@ Current MeshWeaver version: {_version}
             PrimaryOutputs = new[] { new { path = "src/MeshWeaverApp1.Todo/MeshWeaverApp1.Todo.csproj" } }
         });
 
-        CreateTemplateConfig("MeshWeaverApp1.Todo.AI", new TemplateConfig
-        {
-            Schema = "http://json.schemastore.org/template",
-            Author = "Systemorph",
-            Classifications = ["Library", "MeshWeaver", "Todo", "AI"],
-            Name = "MeshWeaver Todo AI Library",
-            Identity = "MeshWeaver.Todo.AI.CSharp",
-            GroupIdentity = "MeshWeaver.Todo.AI",
-            ShortName = "meshweaver-todo-ai",
-            Tags = new { language = "C#", type = "project" },
-            SourceName = "MeshWeaverApp1.Todo.AI",
-            PreferNameDirectory = true,
-            Symbols = new
-            {
-                Framework = new
-                {
-                    type = "parameter",
-                    description = "The target framework for the project.",
-                    datatype = "choice",
-                    choices = new[] { new { choice = "net9.0", description = ".NET 9.0" } },
-                    defaultValue = "net9.0",
-                    replaces = "net9.0"
-                }
-            },
-            PrimaryOutputs = new[] { new { path = "src/MeshWeaverApp1.Todo.AI/MeshWeaverApp1.Todo.AI.csproj" } }
-        });
-
         CreateTemplateConfig("MeshWeaverApp1.Todo.Test", new TemplateConfig
         {
             Schema = "http://json.schemastore.org/template",
@@ -754,7 +694,6 @@ Current MeshWeaver version: {_version}
             {
                 new { path = "portal/MeshWeaverApp1.Portal/MeshWeaverApp1.Portal.csproj" },
                 new { path = "src/MeshWeaverApp1.Todo/MeshWeaverApp1.Todo.csproj" },
-                new { path = "src/MeshWeaverApp1.Todo.AI/MeshWeaverApp1.Todo.AI.csproj" },
                 new { path = "test/MeshWeaverApp1.Todo.Test/MeshWeaverApp1.Todo.Test.csproj" }
             },
             PostActions = new[]
@@ -781,8 +720,6 @@ Current MeshWeaver version: {_version}
             EndProject
             Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MeshWeaverApp1.Todo", "src\MeshWeaverApp1.Todo\MeshWeaverApp1.Todo.csproj", "{22222222-2222-2222-2222-222222222222}"
             EndProject
-            Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MeshWeaverApp1.Todo.AI", "src\MeshWeaverApp1.Todo.AI\MeshWeaverApp1.Todo.AI.csproj", "{44444444-4444-4444-4444-444444444444}"
-            EndProject
             Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MeshWeaverApp1.Todo.Test", "test\MeshWeaverApp1.Todo.Test\MeshWeaverApp1.Todo.Test.csproj", "{33333333-3333-3333-3333-333333333333}"
             EndProject
             Global
@@ -799,10 +736,6 @@ Current MeshWeaver version: {_version}
             		{22222222-2222-2222-2222-222222222222}.Debug|Any CPU.Build.0 = Debug|Any CPU
             		{22222222-2222-2222-2222-222222222222}.Release|Any CPU.ActiveCfg = Release|Any CPU
             		{22222222-2222-2222-2222-222222222222}.Release|Any CPU.Build.0 = Release|Any CPU
-            		{44444444-4444-4444-4444-444444444444}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
-            		{44444444-4444-4444-4444-444444444444}.Debug|Any CPU.Build.0 = Debug|Any CPU
-            		{44444444-4444-4444-4444-444444444444}.Release|Any CPU.ActiveCfg = Release|Any CPU
-            		{44444444-4444-4444-4444-444444444444}.Release|Any CPU.Build.0 = Release|Any CPU
             		{33333333-3333-3333-3333-333333333333}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
             		{33333333-3333-3333-3333-333333333333}.Debug|Any CPU.Build.0 = Debug|Any CPU
             		{33333333-3333-3333-3333-333333333333}.Release|Any CPU.ActiveCfg = Release|Any CPU
@@ -824,7 +757,6 @@ Current MeshWeaver version: {_version}
 
             - **MeshWeaverApp1.Portal**: The main web portal application
             - **MeshWeaverApp1.Todo**: A Todo module demonstrating MeshWeaver data management and layout areas
-            - **MeshWeaverApp1.Todo.AI**: AI agent for Todo management with natural language processing
             - **MeshWeaverApp1.Todo.Test**: Unit tests for the Todo module
 
             ## Getting Started
@@ -839,7 +771,7 @@ Current MeshWeaver version: {_version}
             - Complete portal infrastructure
             - Reactive data management
             - Layout areas with real-time updates
-            - AI-powered Todo assistant with natural language processing
+            - AI-powered chat with graph-based agents
             - Comprehensive testing setup
             - Sample Todo application with CRUD operations
 
@@ -849,7 +781,6 @@ Current MeshWeaver version: {_version}
 
             - Portal only: `dotnet new meshweaver-portal -n MyPortal`
             - Todo library only: `dotnet new meshweaver-todo -n MyTodo`
-            - Todo AI library only: `dotnet new meshweaver-todo-ai -n MyTodoAI`
             - Test project only: `dotnet new meshweaver-test -n MyTests`
 
             ## MeshWeaver Version

@@ -5,6 +5,7 @@ description: Handles all questions and actions related to project tasks, categor
 icon: TaskListSquare
 category: Agents
 groupName: Projects
+isDefault: true
 exposedInNavigator: true
 contextMatchPattern: address=like=*ProductLaunch*
 ---
