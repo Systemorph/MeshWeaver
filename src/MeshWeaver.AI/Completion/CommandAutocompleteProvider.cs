@@ -1,5 +1,6 @@
 #nullable enable
 
+using System.Runtime.CompilerServices;
 using MeshWeaver.AI.Commands;
 using MeshWeaver.Data.Completion;
 
@@ -24,20 +25,26 @@ public class CommandAutocompleteProvider : IAutocompleteProvider
     }
 
     /// <inheritdoc />
-    public Task<IEnumerable<AutocompleteItem>> GetItemsAsync(string query, CancellationToken ct = default)
+    public async IAsyncEnumerable<AutocompleteItem> GetItemsAsync(
+        string query,
+        string? contextPath = null,
+        [EnumeratorCancellation] CancellationToken ct = default)
     {
         if (_commandRegistry == null)
-            return Task.FromResult<IEnumerable<AutocompleteItem>>([]);
+            yield break;
 
-        var items = _commandRegistry.GetAllCommands().Select(cmd => new AutocompleteItem(
-            Label: $"/{cmd.Name}",
-            InsertText: $"/{cmd.Name} ",
-            Description: cmd.Description,
-            Category: "Commands",
-            Priority: CommandCategoryPriority,
-            Kind: AutocompleteKind.Command
-        ));
+        await Task.CompletedTask; // Satisfy async requirement
 
-        return Task.FromResult(items);
+        foreach (var cmd in _commandRegistry.GetAllCommands())
+        {
+            yield return new AutocompleteItem(
+                Label: $"/{cmd.Name}",
+                InsertText: $"/{cmd.Name} ",
+                Description: cmd.Description,
+                Category: "Commands",
+                Priority: CommandCategoryPriority,
+                Kind: AutocompleteKind.Command
+            );
+        }
     }
 }

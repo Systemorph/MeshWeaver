@@ -12,18 +12,6 @@ namespace MeshWeaver.AI;
 public abstract class ChatCompletionAgentChatFactory(IMessageHub hub)
     : AgentChatFactoryBase(hub)
 {
-    protected override Task<IEnumerable<ChatClientAgent>> GetExistingAgentsAsync()
-    {
-        // ChatClientAgent doesn't have persistent storage, so we return empty collection
-        // All agents will be created fresh each time
-        return Task.FromResult(Enumerable.Empty<ChatClientAgent>());
-    }
-
-    protected override string GetAgentName(ChatClientAgent agent)
-    {
-        return agent.Name!;
-    }
-
     public override async Task DeleteThreadAsync(string threadId)
     {
         // ChatCompletionAgent doesn't have persistent threads to delete
@@ -32,26 +20,24 @@ public abstract class ChatCompletionAgentChatFactory(IMessageHub hub)
         Logger.LogInformation("Thread deletion not applicable for ChatCompletionAgent: {ThreadId}", threadId);
     }
 
-    protected override Task<ChatClientAgent> CreateOrUpdateAgentAsync(
+    protected override Task<ChatClientAgent> CreateAgentAsync(
         AgentConfiguration agentConfig,
-        ChatClientAgent? existingAgent,
         IAgentChat chat,
-        IReadOnlyDictionary<string, ChatClientAgent> allAgents)
+        IReadOnlyDictionary<string, ChatClientAgent> existingAgents,
+        IReadOnlyList<AgentConfiguration> hierarchyAgents)
     {
-        // Since ChatClientAgent doesn't persist, we always create new agents
         var name = agentConfig.Id;
         var description = agentConfig.Description ?? string.Empty;
-        var instructions = GetAgentInstructions(agentConfig);
+        var instructions = GetAgentInstructions(agentConfig, hierarchyAgents);
 
         // Create a chat client for this agent using the derived class implementation
         var chatClient = CreateChatClient(agentConfig);
 
         // Get tools for this agent, passing the chat instance so plugins can access context
         // Get standard tools + delegation tools
-        var tools = GetToolsForAgent(agentConfig, chat, allAgents).ToArray();
+        var tools = GetToolsForAgent(agentConfig, chat, existingAgents, hierarchyAgents).ToArray();
 
         // Add MeshPlugin tools for agents that need mesh operations
-        // This replaces the IAgentWithTools pattern
         var meshPlugin = new MeshPlugin(Hub, chat);
         tools = tools.Concat(meshPlugin.CreateTools()).ToArray();
 
@@ -62,8 +48,8 @@ public abstract class ChatCompletionAgentChatFactory(IMessageHub hub)
             name: name,
             description: description,
             tools: tools,
-            loggerFactory: null,  // Optional: could be injected if needed
-            services: null        // Optional: could be injected if needed
+            loggerFactory: null,
+            services: null
         );
 
         return Task.FromResult(agent);

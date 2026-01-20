@@ -2,6 +2,7 @@
     position: relative;
     display: flex;
     width: 100%;
+    min-width: 0;
 }
 
 .simple-dropdown-button {
@@ -19,6 +20,7 @@
     transition: border-color 0.15s, background-color 0.15s;
     flex: 1;
     width: 100%;
+    min-width: 0;
     text-align: left;
 }
 

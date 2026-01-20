@@ -22,15 +22,6 @@ public static class AgentsApplicationExtensions
         => application
             .AddAIViews()
             .WithServices(services => services
-                // Agent provider - uses factory provider if available
-                .AddScoped<IAutocompleteProvider>(sp =>
-                {
-                    var factoryProvider = sp.GetService<IAgentChatFactoryProvider>();
-                    if (factoryProvider != null)
-                        return new AgentAutocompleteProvider(factoryProvider);
-                    // Return an empty provider if factory provider is not available
-                    return new EmptyAutocompleteProvider();
-                })
                 // Model provider - uses factory provider if available
                 .AddScoped<IAutocompleteProvider>(sp =>
                 {
@@ -56,14 +47,17 @@ public static class AgentsApplicationExtensions
     {
         var providers = hub.ServiceProvider.GetServices<IAutocompleteProvider>();
         var query = request.Message.Query;
+        var contextPath = request.Message.Context;
 
         var allItems = new List<AutocompleteItem>();
         foreach (var provider in providers)
         {
             try
             {
-                var items = await provider.GetItemsAsync(query, ct);
-                allItems.AddRange(items);
+                await foreach (var item in provider.GetItemsAsync(query, contextPath, ct))
+                {
+                    allItems.Add(item);
+                }
             }
             catch
             {
@@ -74,14 +68,5 @@ public static class AgentsApplicationExtensions
         var response = new AutocompleteResponse(allItems);
         hub.Post(response, o => o.ResponseFor(request));
         return request.Processed();
-    }
-
-    /// <summary>
-    /// Empty provider when no agent source is available
-    /// </summary>
-    private class EmptyAutocompleteProvider : IAutocompleteProvider
-    {
-        public Task<IEnumerable<AutocompleteItem>> GetItemsAsync(string query, CancellationToken ct = default)
-            => Task.FromResult(Enumerable.Empty<AutocompleteItem>());
     }
 }

@@ -1567,14 +1567,17 @@ public static class DataExtensions
     {
         var providers = hub.ServiceProvider.GetServices<IAutocompleteProvider>();
         var query = request.Message.Query;
+        var contextPath = request.Message.Context;
 
         var allItems = new List<AutocompleteItem>();
         foreach (var provider in providers)
         {
             try
             {
-                var items = await provider.GetItemsAsync(query, ct);
-                allItems.AddRange(items);
+                await foreach (var item in provider.GetItemsAsync(query, contextPath, ct))
+                {
+                    allItems.Add(item);
+                }
             }
             catch
             {

@@ -631,4 +631,55 @@ public class QueryParserTests
     }
 
     #endregion
+
+    #region Subtree and Self Scope
+
+    [Fact]
+    public void Parse_ScopeSubtree_SetsScope()
+    {
+        var result = _parser.Parse("scope:subtree");
+
+        result.Scope.Should().Be(QueryScope.Subtree);
+    }
+
+    [Fact]
+    public void Parse_ScopeSelf_SetsScopeExact()
+    {
+        var result = _parser.Parse("scope:self");
+
+        result.Scope.Should().Be(QueryScope.Exact);
+    }
+
+    [Fact]
+    public void Parse_ScopeMyselfAndAncestors_SetsAncestorsAndSelf()
+    {
+        // myselfAndAncestors should be an alias for ancestorsAndSelf
+        var result = _parser.Parse("scope:myselfAndAncestors");
+
+        result.Scope.Should().Be(QueryScope.AncestorsAndSelf);
+    }
+
+    [Fact]
+    public void Parse_ScopeAncestorsAndSelf_SetsScope()
+    {
+        var result = _parser.Parse("scope:ancestorsAndSelf");
+
+        result.Scope.Should().Be(QueryScope.AncestorsAndSelf);
+    }
+
+    [Fact]
+    public void Parse_PathWithSubtreeScope_FindsSelfAndDescendants()
+    {
+        // subtree = self + descendants - important for finding agents under a NodeType
+        var result = _parser.Parse("path:ACME/Project nodeType:Agent scope:subtree");
+
+        result.Path.Should().Be("ACME/Project");
+        result.Scope.Should().Be(QueryScope.Subtree);
+        result.Filter.Should().BeOfType<QueryComparison>();
+        var comparison = (QueryComparison)result.Filter!;
+        comparison.Condition.Selector.Should().Be("nodeType");
+        comparison.Condition.Value.Should().Be("Agent");
+    }
+
+    #endregion
 }

@@ -1,5 +1,6 @@
 #nullable enable
 
+using System.Runtime.CompilerServices;
 using MeshWeaver.Data.Completion;
 
 namespace MeshWeaver.AI.Completion;
@@ -32,7 +33,10 @@ public class ModelAutocompleteProvider : IAutocompleteProvider
     }
 
     /// <inheritdoc />
-    public Task<IEnumerable<AutocompleteItem>> GetItemsAsync(string query, CancellationToken ct = default)
+    public async IAsyncEnumerable<AutocompleteItem> GetItemsAsync(
+        string query,
+        string? contextPath = null,
+        [EnumeratorCancellation] CancellationToken ct = default)
     {
         IReadOnlyList<string> models;
 
@@ -46,19 +50,21 @@ public class ModelAutocompleteProvider : IAutocompleteProvider
         }
         else
         {
-            return Task.FromResult<IEnumerable<AutocompleteItem>>([]);
+            yield break;
         }
 
-        var items = models
-            .Select(model => new AutocompleteItem(
+        await Task.CompletedTask; // Satisfy async requirement
+
+        foreach (var model in models)
+        {
+            yield return new AutocompleteItem(
                 Label: $"@model/{model}",
                 InsertText: $"@model/{model} ",
                 Description: "AI Model",
                 Category: "Models",
                 Priority: 0,
                 Kind: AutocompleteKind.Other
-            ));
-
-        return Task.FromResult(items);
+            );
+        }
     }
 }

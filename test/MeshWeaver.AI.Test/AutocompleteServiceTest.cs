@@ -1,5 +1,6 @@
 ﻿using System.Collections.Generic;
 using System.Linq;
+using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
@@ -185,22 +186,18 @@ public class AutocompleteServiceTest
     [Fact]
     public async Task AutocompleteService_GetCompletions_AggregatesProviders()
     {
-        // arrange - create service with agent provider
-        var agents = new AgentConfiguration[]
-        {
-            new() { Id = "Agent1", Description = "First agent" }
-        };
-        var factoryProvider = new MockAgentChatFactoryProvider(agents);
-        var agentProvider = new AgentAutocompleteProvider(factoryProvider);
+        // arrange - create service with model provider
+        var modelProvider = new ModelAutocompleteProvider();
+        modelProvider.SetAvailableModels(["claude-opus"]);
         var fuzzyScorer = new FuzzyScorer();
-        var service = new AutocompleteService(fuzzyScorer, [agentProvider]);
+        var service = new AutocompleteService(fuzzyScorer, [modelProvider]);
 
         // act
-        var results = await service.GetCompletionsAsync("@agent/", 20, TestContext.Current.CancellationToken);
+        var results = await service.GetCompletionsAsync("@model/", 20, TestContext.Current.CancellationToken);
 
-        // assert - should return agent from provider
+        // assert - should return model from provider
         results.Should().NotBeEmpty();
-        results.Should().Contain(r => r.Label == "@agent/Agent1");
+        results.Should().Contain(r => r.Label == "@model/claude-opus");
     }
 
     [Fact]
@@ -210,7 +207,7 @@ public class AutocompleteServiceTest
         var fuzzyScorer = new FuzzyScorer();
         var service = new AutocompleteService(fuzzyScorer, []);
 
-        // act  
+        // act
         var results = await service.GetCompletionsAsync("@", 20, TestContext.Current.CancellationToken);
 
         // assert
@@ -221,43 +218,37 @@ public class AutocompleteServiceTest
     public async Task AutocompleteService_GetCompletions_FuzzyMatches()
     {
         // arrange
-        var agents = new AgentConfiguration[]
-        {
-            new() { Id = "TestAgent", Description = "A test agent" }
-        };
-        var factoryProvider = new MockAgentChatFactoryProvider(agents);
-        var agentProvider = new AgentAutocompleteProvider(factoryProvider);
+        var modelProvider = new ModelAutocompleteProvider();
+        modelProvider.SetAvailableModels(["TestModel"]);
         var fuzzyScorer = new FuzzyScorer();
-        var service = new AutocompleteService(fuzzyScorer, [agentProvider]);
+        var service = new AutocompleteService(fuzzyScorer, [modelProvider]);
 
         // act - partial query should fuzzy match
-        var results = await service.GetCompletionsAsync("@agent/Test", 20, TestContext.Current.CancellationToken);
+        var results = await service.GetCompletionsAsync("@model/Test", 20, TestContext.Current.CancellationToken);
 
         // assert
-        results.Should().Contain(r => r.Label == "@agent/TestAgent");
+        results.Should().Contain(r => r.Label == "@model/TestModel");
     }
 
     [Fact]
     public async Task AutocompleteService_GetCompletions_MultipleProviders()
     {
         // arrange
-        var agents = new AgentConfiguration[]
-        {
-            new() { Id = "TestAgent", Description = "A test agent" }
-        };
-        var factoryProvider = new MockAgentChatFactoryProvider(agents);
-        var agentProvider = new AgentAutocompleteProvider(factoryProvider);
         var modelProvider = new ModelAutocompleteProvider();
         modelProvider.SetAvailableModels(["claude-opus"]);
 
+        var commandProvider = new MockAutocompleteProvider([
+            new AutocompleteItem("@cmd/test", "@cmd/test", "A test command", "Commands", 0, AutocompleteKind.Other)
+        ]);
+
         var fuzzyScorer = new FuzzyScorer();
-        var service = new AutocompleteService(fuzzyScorer, [agentProvider, modelProvider]);
+        var service = new AutocompleteService(fuzzyScorer, [modelProvider, commandProvider]);
 
         // act
         var results = await service.GetCompletionsAsync("@", 20, TestContext.Current.CancellationToken);
 
         // assert - should have items from both providers
-        results.Should().Contain(r => r.Label == "@agent/TestAgent");
+        results.Should().Contain(r => r.Label == "@cmd/test");
         results.Should().Contain(r => r.Label == "@model/claude-opus");
     }
 
@@ -269,15 +260,11 @@ public class AutocompleteServiceTest
     public async Task AutocompleteService_GetCompletionsAsync_Request_ReturnsResponse()
     {
         // arrange
-        var agents = new AgentConfiguration[]
-        {
-            new() { Id = "Agent1", Description = "First agent" }
-        };
-        var factoryProvider = new MockAgentChatFactoryProvider(agents);
-        var agentProvider = new AgentAutocompleteProvider(factoryProvider);
+        var modelProvider = new ModelAutocompleteProvider();
+        modelProvider.SetAvailableModels(["claude-opus"]);
         var fuzzyScorer = new FuzzyScorer();
-        var service = new AutocompleteService(fuzzyScorer, [agentProvider]);
-        var request = new AutocompleteRequest("@agent/", null);
+        var service = new AutocompleteService(fuzzyScorer, [modelProvider]);
+        var request = new AutocompleteRequest("@model/", null);
 
         // act
         var response = await service.GetCompletionsAsync(request, TestContext.Current.CancellationToken);
@@ -285,7 +272,7 @@ public class AutocompleteServiceTest
         // assert
         response.Should().NotBeNull();
         response.Items.Should().NotBeEmpty();
-        response.Items.Should().Contain(i => i.Label == "@agent/Agent1");
+        response.Items.Should().Contain(i => i.Label == "@model/claude-opus");
     }
 
     [Fact]
@@ -329,7 +316,7 @@ public class AutocompleteServiceTest
         var provider = new MeshCatalogAutocompleteProvider(mockCatalog);
 
         // act
-        var items = (await provider.GetItemsAsync("@", TestContext.Current.CancellationToken)).ToList();
+        var items = await provider.GetItemsAsync("@", null, TestContext.Current.CancellationToken).ToArrayAsync(TestContext.Current.CancellationToken);
 
         // assert - includes catalog nodes + reserved prefixes (@agent/, @model/)
         items.Should().HaveCount(4);
@@ -366,28 +353,6 @@ public class AutocompleteServiceTest
     #region Provider Tests
 
     [Fact]
-    public async Task AgentAutocompleteProvider_GetItems_ReturnsAgents()
-    {
-        // arrange
-        var agents = new AgentConfiguration[]
-        {
-            new() { Id = "Agent1", Description = "First agent", GroupName = "Group1" },
-            new() { Id = "Agent2", Description = "Second agent", GroupName = "Group2" }
-        };
-        var factoryProvider = new MockAgentChatFactoryProvider(agents);
-        var provider = new AgentAutocompleteProvider(factoryProvider);
-
-        // act
-        var items = (await provider.GetItemsAsync("", TestContext.Current.CancellationToken)).ToList();
-
-        // assert
-        items.Should().HaveCount(2);
-        items.Should().Contain(i => i.Label == "@agent/Agent1");
-        items.Should().Contain(i => i.Label == "@agent/Agent2");
-        items.Should().OnlyContain(i => i.Kind == AutocompleteKind.Agent);
-    }
-
-    [Fact]
     public async Task ModelAutocompleteProvider_GetItems_ReturnsModels()
     {
         // arrange
@@ -395,7 +360,7 @@ public class AutocompleteServiceTest
         provider.SetAvailableModels(["model1", "model2", "model3"]);
 
         // act
-        var items = (await provider.GetItemsAsync("", TestContext.Current.CancellationToken)).ToList();
+        var items = await provider.GetItemsAsync("", null, TestContext.Current.CancellationToken).ToArrayAsync(TestContext.Current.CancellationToken);
 
         // assert
         items.Should().HaveCount(3);
@@ -412,7 +377,7 @@ public class AutocompleteServiceTest
         // Don't set any models
 
         // act
-        var items = (await provider.GetItemsAsync("", TestContext.Current.CancellationToken)).ToList();
+        var items = await provider.GetItemsAsync("", null, TestContext.Current.CancellationToken).ToArrayAsync(TestContext.Current.CancellationToken);
 
         // assert
         items.Should().BeEmpty();
@@ -421,6 +386,21 @@ public class AutocompleteServiceTest
     #endregion
 
     #region Helper Classes
+
+    private class MockAutocompleteProvider(IReadOnlyList<AutocompleteItem> items) : IAutocompleteProvider
+    {
+        public async IAsyncEnumerable<AutocompleteItem> GetItemsAsync(
+            string query,
+            string? contextPath = null,
+            [EnumeratorCancellation] CancellationToken ct = default)
+        {
+            await Task.CompletedTask;
+            foreach (var item in items)
+            {
+                yield return item;
+            }
+        }
+    }
 
     private class MockAgentChatFactoryProvider(IReadOnlyList<AgentConfiguration> agents) : IAgentChatFactoryProvider
     {

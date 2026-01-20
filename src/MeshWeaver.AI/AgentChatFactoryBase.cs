@@ -14,28 +14,15 @@ namespace MeshWeaver.AI;
 public abstract class AgentChatFactoryBase : IAgentChatFactory
 {
     protected readonly IMessageHub Hub;
-    protected readonly IMeshQuery? MeshQuery;
 
     /// <summary>
     /// The current model name being used for chat creation
     /// </summary>
     protected string? CurrentModelName { get; private set; }
 
-    /// <summary>
-    /// The current context path for agent resolution
-    /// </summary>
-    protected string? CurrentContextPath { get; private set; }
-
-    /// <summary>
-    /// All agents in the current hierarchy, ordered by depth (closest first).
-    /// Used for building unified delegation tools.
-    /// </summary>
-    protected IReadOnlyList<AgentConfiguration> HierarchyAgents { get; private set; } = Array.Empty<AgentConfiguration>();
-
     protected AgentChatFactoryBase(IMessageHub hub)
     {
         Hub = hub;
-        MeshQuery = hub.ServiceProvider.GetService<IMeshQuery>();
         Logger = hub.ServiceProvider.GetRequiredService<ILoggerFactory>().CreateLogger(GetType());
     }
 
@@ -71,130 +58,25 @@ public abstract class AgentChatFactoryBase : IAgentChatFactory
     public virtual async Task<IAgentChat> CreateAsync(string modelName, string? contextPath)
     {
         CurrentModelName = modelName;
-        CurrentContextPath = contextPath;
 
-        // Load agents from graph using direct mesh query
-        var agentConfigs = await GetAgentsForContextAsync(contextPath);
+        // Create AgentChatClient with agent creator delegate
+        var chatClient = new AgentChatClient(Hub.ServiceProvider, CreateAgentAsync);
 
-        // Load hierarchy agents ordered by depth (closest first) for unified delegation
-        HierarchyAgents = agentConfigs
-            .OrderByDescending(a => a.Id.Split('/').Length) // Closest first by path depth
-            .ToList();
-
-        var existingAgents = await GetExistingAgentsAsync();
-
-        // Create AgentChatClient first so it can be passed to GetTools()
-        var chatClient = new AgentChatClient(agentConfigs, Hub.ServiceProvider);
-
-        var agentsByName = existingAgents.ToDictionary(GetAgentName);
-        var createdAgents = new Dictionary<string, ChatClientAgent>();
-
-        // Order agents: non-delegating agents first, then delegating agents, then default agent last
-        var orderedAgents = OrderAgentsForCreation(agentConfigs);
-
-        // First pass: Create all agents in order without delegation tools
-        foreach (var agentConfig in orderedAgents)
-        {
-            var existingAgent = agentsByName.GetValueOrDefault(agentConfig.Id);
-            var agent = await CreateOrUpdateAgentAsync(
-                agentConfig,
-                existingAgent,
-                chatClient,
-                createdAgents); // Pass current dictionary - delegating agents get tools for agents created before them
-
-            createdAgents[agentConfig.Id] = agent;
-            chatClient.AddAgent(agentConfig.Id, agent);
-        }
-
-        // Second pass: Update agents that have cyclic dependencies
-        // Find agents that delegate to each other
-        var cyclicAgents = FindCyclicDelegations(agentConfigs);
-
-        foreach (var agentConfig in cyclicAgents)
-        {
-            var existingAgent = agentsByName.GetValueOrDefault(agentConfig.Id);
-            var updatedAgent = await CreateOrUpdateAgentAsync(
-                agentConfig,
-                existingAgent,
-                chatClient,
-                createdAgents); // Now all agents exist, so cyclic dependencies can be resolved
-
-            // Replace the agent in the chat client
-            createdAgents[agentConfig.Id] = updatedAgent;
-            chatClient.AddAgent(agentConfig.Id, updatedAgent);
-
-            Logger.LogInformation("Updated agent {AgentName} with cyclic delegation tools",
-                agentConfig.Id);
-        }
+        // Initialize the client with the context path - this loads and creates agents
+        await chatClient.InitializeAsync(contextPath);
 
         return chatClient;
     }
 
     /// <summary>
-    /// Orders agents for creation: non-delegating first, delegating second, default agent last
+    /// Creates a ChatClientAgent for the specified configuration.
+    /// This is called by AgentChatClient during initialization.
     /// </summary>
-    private IEnumerable<AgentConfiguration> OrderAgentsForCreation(IEnumerable<AgentConfiguration> agents)
-    {
-        var agentList = agents.ToList();
-
-        // 1. Non-delegating agents (no Delegations, not IsDefault)
-        var nonDelegating = agentList
-            .Where(a => (a.Delegations == null || a.Delegations.Count == 0) && !a.IsDefault);
-
-        // 2. Delegating agents (has Delegations but not IsDefault)
-        var delegating = agentList
-            .Where(a => a.Delegations is { Count: > 0 } && !a.IsDefault);
-
-        // 3. Default agent (has IsDefault)
-        var defaultAgent = agentList
-            .Where(a => a.IsDefault);
-
-        return nonDelegating.Concat(delegating).Concat(defaultAgent);
-    }
-
-    /// <summary>
-    /// Finds agents that have cyclic delegations (agents that delegate to each other)
-    /// </summary>
-    private IEnumerable<AgentConfiguration> FindCyclicDelegations(IEnumerable<AgentConfiguration> agents)
-    {
-        var delegatingAgents = agents.Where(a => a.Delegations is { Count: > 0 }).ToList();
-        var cyclicAgents = new HashSet<string>();
-
-        foreach (var agent in delegatingAgents)
-        {
-            var delegatedAgentPaths = agent.Delegations!.Select(d => d.AgentPath).ToHashSet();
-
-            // Check if any of the delegated agents also delegate back to this agent
-            foreach (var delegatedPath in delegatedAgentPaths)
-            {
-                // Extract agent ID from path (last segment)
-                var delegatedId = delegatedPath.Split('/').Last();
-                var delegatedAgent = delegatingAgents.FirstOrDefault(a => a.Id == delegatedId);
-
-                if (delegatedAgent?.Delegations != null)
-                {
-                    var backDelegations = delegatedAgent.Delegations.Select(d => d.AgentPath.Split('/').Last()).ToHashSet();
-                    if (backDelegations.Contains(agent.Id))
-                    {
-                        // Cyclic dependency found
-                        cyclicAgents.Add(agent.Id);
-                        cyclicAgents.Add(delegatedId);
-                    }
-                }
-            }
-        }
-
-        return agents.Where(a => cyclicAgents.Contains(a.Id));
-    }
-
-    protected abstract Task<ChatClientAgent> CreateOrUpdateAgentAsync(
+    protected abstract Task<ChatClientAgent> CreateAgentAsync(
         AgentConfiguration agentConfig,
-        ChatClientAgent? existingAgent,
         IAgentChat chat,
-        IReadOnlyDictionary<string, ChatClientAgent> allAgents);
-
-    protected abstract Task<IEnumerable<ChatClientAgent>> GetExistingAgentsAsync();
-    protected abstract string GetAgentName(ChatClientAgent agent);
+        IReadOnlyDictionary<string, ChatClientAgent> existingAgents,
+        IReadOnlyList<AgentConfiguration> hierarchyAgents);
 
     /// <summary>
     /// Creates a ChatClient instance for the specified agent configuration.
@@ -210,10 +92,11 @@ public abstract class AgentChatFactoryBase : IAgentChatFactory
     protected virtual IEnumerable<AITool> GetToolsForAgent(
         AgentConfiguration agentConfig,
         IAgentChat chat,
-        IReadOnlyDictionary<string, ChatClientAgent> allAgents)
+        IReadOnlyDictionary<string, ChatClientAgent> allAgents,
+        IReadOnlyList<AgentConfiguration> hierarchyAgents)
     {
         var nTools = 0;
-        var tools = GetStandardTools(chat).Concat(GetAgentTools(agentConfig, chat, allAgents));
+        var tools = GetStandardTools(chat).Concat(GetAgentTools(agentConfig, chat, allAgents, hierarchyAgents));
 
         foreach (var tool in tools)
         {
@@ -241,11 +124,12 @@ public abstract class AgentChatFactoryBase : IAgentChatFactory
     protected virtual IEnumerable<AITool> GetAgentTools(
         AgentConfiguration agentConfig,
         IAgentChat chat,
-        IReadOnlyDictionary<string, ChatClientAgent> allAgents)
+        IReadOnlyDictionary<string, ChatClientAgent> allAgents,
+        IReadOnlyList<AgentConfiguration> hierarchyAgents)
     {
         // Check if this agent should have delegation capability
         var hasDelegations = agentConfig.Delegations is { Count: > 0 };
-        var hasHierarchyAgents = HierarchyAgents.Count > 1; // More than just this agent
+        var hasHierarchyAgents = hierarchyAgents.Count > 1; // More than just this agent
 
         if (!hasDelegations && !hasHierarchyAgents && !agentConfig.IsDefault)
         {
@@ -256,11 +140,11 @@ public abstract class AgentChatFactoryBase : IAgentChatFactory
         // Create unified delegation tool with all available agents
         var delegationTool = ChatPlugin.CreateUnifiedDelegationTool(
             agentConfig,
-            HierarchyAgents,
+            hierarchyAgents,
             Logger);
 
         Logger.LogInformation("Created unified delegation tool for agent {AgentName} with {HierarchyCount} hierarchy agents",
-            agentConfig.Id, HierarchyAgents.Count);
+            agentConfig.Id, hierarchyAgents.Count);
 
         yield return delegationTool;
     }
@@ -275,110 +159,18 @@ public abstract class AgentChatFactoryBase : IAgentChatFactory
     }
 
     public Task<IReadOnlyList<AgentConfiguration>> GetAgentsAsync(string? contextPath = null)
-        => GetAgentsForContextAsync(contextPath);
+        => Task.FromResult<IReadOnlyList<AgentConfiguration>>(Array.Empty<AgentConfiguration>());
 
     public Task<IReadOnlyList<AgentWithPath>> GetAgentsWithPathsAsync(string? contextPath = null)
-        => GetAgentsWithPathsInternalAsync(contextPath);
+        => Task.FromResult<IReadOnlyList<AgentWithPath>>(Array.Empty<AgentWithPath>());
 
-    /// <summary>
-    /// Gets agents for a context path using direct mesh queries.
-    /// Queries agents from NodeType namespace and path namespace using scope:myselfAndAncestors.
-    /// </summary>
-    private async Task<IReadOnlyList<AgentConfiguration>> GetAgentsForContextAsync(string? contextPath)
-    {
-        var agentsWithPaths = await GetAgentsWithPathsInternalAsync(contextPath);
-        return agentsWithPaths.Select(a => a.Configuration).ToList();
-    }
-
-    /// <summary>
-    /// Gets agents with their paths using direct mesh queries.
-    /// </summary>
-    private async Task<IReadOnlyList<AgentWithPath>> GetAgentsWithPathsInternalAsync(string? contextPath)
-    {
-        if (MeshQuery == null)
-        {
-            Logger.LogDebug("IMeshQuery not available, returning empty agent list");
-            return Array.Empty<AgentWithPath>();
-        }
-
-        var agents = new Dictionary<string, (AgentConfiguration Config, string Path)>();
-
-        // 1. First, try to get the NodeType of the current node (if contextPath is provided)
-        string? nodeTypePath = null;
-        if (!string.IsNullOrEmpty(contextPath))
-        {
-            try
-            {
-                await foreach (var node in MeshQuery.QueryAsync<MeshNode>($"path:{contextPath} scope:self"))
-                {
-                    if (!string.IsNullOrEmpty(node.NodeType) && node.NodeType != "Agent" && node.NodeType != "Markdown")
-                    {
-                        nodeTypePath = node.NodeType;
-                        Logger.LogDebug("Found NodeType {NodeType} for context {ContextPath}", nodeTypePath, contextPath);
-                        break;
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                Logger.LogDebug(ex, "Error querying current node for NodeType at {ContextPath}", contextPath);
-            }
-        }
-
-        // 2. Query agents from the NodeType namespace (higher priority)
-        if (!string.IsNullOrEmpty(nodeTypePath))
-        {
-            try
-            {
-                var query = $"path:{nodeTypePath} nodeType:Agent scope:myselfAndAncestors";
-                await foreach (var node in MeshQuery.QueryAsync<MeshNode>(query))
-                {
-                    if (node.Content is AgentConfiguration config && !agents.ContainsKey(config.Id))
-                    {
-                        agents[config.Id] = (config, node.Path ?? "");
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                Logger.LogWarning(ex, "Error loading agents from NodeType namespace {NodeType}", nodeTypePath);
-            }
-        }
-
-        // 3. Query agents from the context path namespace
-        try
-        {
-            var query = string.IsNullOrEmpty(contextPath)
-                ? "nodeType:Agent scope:myselfAndAncestors"
-                : $"path:{contextPath} nodeType:Agent scope:myselfAndAncestors";
-
-            await foreach (var node in MeshQuery.QueryAsync<MeshNode>(query))
-            {
-                if (node.Content is AgentConfiguration config && !agents.ContainsKey(config.Id))
-                {
-                    agents[config.Id] = (config, node.Path ?? "");
-                }
-            }
-        }
-        catch (Exception ex)
-        {
-            Logger.LogWarning(ex, "Error loading agents from context namespace {ContextPath}", contextPath);
-        }
-
-        return agents.Values
-            .Select(x => new AgentWithPath(x.Config, x.Path))
-            .OrderBy(a => a.Configuration.DisplayOrder)
-            .ThenBy(a => a.Configuration.Id)
-            .ToList();
-    }
-
-    protected string GetAgentInstructions(AgentConfiguration agentConfig)
+    protected string GetAgentInstructions(AgentConfiguration agentConfig, IReadOnlyList<AgentConfiguration> hierarchyAgents)
     {
         var baseInstructions = agentConfig.Instructions ?? string.Empty;
 
         // Check if this agent has delegation capability
         var hasDelegations = agentConfig.Delegations is { Count: > 0 };
-        var hasHierarchyAgents = HierarchyAgents.Count > 1; // More than just this agent
+        var hasHierarchyAgents = hierarchyAgents.Count > 1; // More than just this agent
 
         if (!hasDelegations && !hasHierarchyAgents && !agentConfig.IsDefault)
         {
@@ -402,7 +194,7 @@ public abstract class AgentChatFactoryBase : IAgentChatFactory
         var listedIds = agentConfig.Delegations?.Select(d => d.AgentPath.Split('/').Last()).ToHashSet()
             ?? new HashSet<string>();
 
-        foreach (var agent in HierarchyAgents.Where(a => a.Id != agentConfig.Id && !listedIds.Contains(a.Id)))
+        foreach (var agent in hierarchyAgents.Where(a => a.Id != agentConfig.Id && !listedIds.Contains(a.Id)))
         {
             agentList.Add($"- {agent.Id}: {agent.Description ?? "Agent in hierarchy"}");
         }

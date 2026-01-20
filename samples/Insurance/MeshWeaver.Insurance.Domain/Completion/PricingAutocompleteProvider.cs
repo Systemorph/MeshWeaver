@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using MeshWeaver.Data.Completion;
 using MeshWeaver.Insurance.Domain.Services;
 
@@ -11,20 +12,26 @@ namespace MeshWeaver.Insurance.Domain.Completion;
 public class PricingAutocompleteProvider(IPricingService pricingService) : IAutocompleteProvider
 {
     /// <inheritdoc />
-    public Task<IEnumerable<AutocompleteItem>> GetItemsAsync(string query, CancellationToken ct = default)
+    public async IAsyncEnumerable<AutocompleteItem> GetItemsAsync(
+        string query,
+        string? contextPath = null,
+        [EnumeratorCancellation] CancellationToken ct = default)
     {
+        await Task.CompletedTask; // Satisfy async requirement
+
         var pricings = pricingService.GetCatalog();
 
         // p.Id is now in format "company/year" (e.g., "Microsoft/2026")
-        var items = pricings.Select(p => new AutocompleteItem(
-            Label: $"@{InsuranceApplicationAttribute.PricingType}/{p.Id}/",
-            InsertText: $"@{InsuranceApplicationAttribute.PricingType}/{p.Id}/",
-            Description: p.InsuredName ?? p.Id,
-            Category: "Pricing",
-            Priority: 1000,
-            Kind: AutocompleteKind.Other
-        ));
-
-        return Task.FromResult(items);
+        foreach (var p in pricings)
+        {
+            yield return new AutocompleteItem(
+                Label: $"@{InsuranceApplicationAttribute.PricingType}/{p.Id}/",
+                InsertText: $"@{InsuranceApplicationAttribute.PricingType}/{p.Id}/",
+                Description: p.InsuredName ?? p.Id,
+                Category: "Pricing",
+                Priority: 1000,
+                Kind: AutocompleteKind.Other
+            );
+        }
     }
 }

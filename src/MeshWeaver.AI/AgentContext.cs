@@ -20,11 +20,6 @@ public record AgentContext
     public LayoutAreaReference? LayoutArea { get; init; }
 
     /// <summary>
-    /// The human-readable name of the MeshNode associated with this context.
-    /// </summary>
-    public string? MeshNodeName { get; init; }
-
-    /// <summary>
     /// The full unified reference path (e.g., "pricing/MS-2024/Summary" or "pricing/MS-2024/data/Collection").
     /// Format: addressType/addressId[/keyword[/remainingPath]]
     /// If no keyword specified, defaults to area.
@@ -33,10 +28,17 @@ public record AgentContext
     public string? Context { get; init; }
 
     /// <summary>
-    /// The NodeType from the MeshNode at this context path.
-    /// Used for hierarchical agent resolution.
+    /// The MeshNode at this context path, loaded during navigation.
+    /// Contains Name, NodeType, Description, and other node properties.
     /// </summary>
-    public string? NodeType { get; init; }
+    public MeshNode? Node { get; init; }
+
+    /// <summary>
+    /// The path after the MeshNode path.
+    /// For example, if the full path is "ACME/ProjectA/Tasks/123" and the MeshNode is at "ACME/ProjectA",
+    /// the Path would be "Tasks/123".
+    /// </summary>
+    public string? Path { get; init; }
 
     /// <summary>
     /// Available agents for this context (pre-loaded during navigation).

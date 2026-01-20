@@ -1,5 +1,6 @@
 #nullable enable
 
+using System.Runtime.CompilerServices;
 using MeshWeaver.Data.Completion;
 
 namespace MeshWeaver.Mesh.Completion;
@@ -13,33 +14,39 @@ public class AddressCatalogAutocompleteProvider(IAddressCatalogService? addressC
     private const int AddressIdCategoryPriority = 1600;
 
     /// <inheritdoc />
-    public async Task<IEnumerable<AutocompleteItem>> GetItemsAsync(string query, CancellationToken ct = default)
+    public async IAsyncEnumerable<AutocompleteItem> GetItemsAsync(
+        string query,
+        string? contextPath = null,
+        [EnumeratorCancellation] CancellationToken ct = default)
     {
         if (addressCatalog == null)
-            return [];
+            yield break;
 
         // Extract address type from query (e.g., "@pricing/MS" → "pricing")
         if (!query.StartsWith("@"))
-            return [];
+            yield break;
 
         var pathPart = query.TrimStart('@');
         var segments = pathPart.Split('/');
         if (segments.Length < 1)
-            return [];
+            yield break;
 
         var addressType = segments[0];
         if (string.IsNullOrEmpty(addressType))
-            return [];
+            yield break;
 
         var addressIds = await addressCatalog.GetAddressIdsAsync(addressType, ct);
 
-        return addressIds.Select(id => new AutocompleteItem(
-            Label: $"@{addressType}/{id}/",
-            InsertText: $"@{addressType}/{id}/",
-            Description: $"{addressType} address",
-            Category: addressType,
-            Priority: AddressIdCategoryPriority,
-            Kind: AutocompleteKind.Other
-        ));
+        foreach (var id in addressIds)
+        {
+            yield return new AutocompleteItem(
+                Label: $"@{addressType}/{id}/",
+                InsertText: $"@{addressType}/{id}/",
+                Description: $"{addressType} address",
+                Category: addressType,
+                Priority: AddressIdCategoryPriority,
+                Kind: AutocompleteKind.Other
+            );
+        }
     }
 }

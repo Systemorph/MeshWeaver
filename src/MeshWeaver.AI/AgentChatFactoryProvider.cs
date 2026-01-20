@@ -1,4 +1,6 @@
 using MeshWeaver.Graph.Configuration;
+using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Services;
 
 namespace MeshWeaver.AI;
 
@@ -11,10 +13,13 @@ public class AgentChatFactoryProvider : IAgentChatFactoryProvider
     private readonly Dictionary<string, IAgentChatFactory> _modelToFactory;
     private readonly IReadOnlyList<string> _allModels;
     private readonly Dictionary<string, string> _agentModelPreferences = new();
+    private readonly IMeshQuery? _meshQuery;
     private bool _preferencesInitialized;
 
-    public AgentChatFactoryProvider(IEnumerable<IAgentChatFactory> factories)
+    public AgentChatFactoryProvider(IEnumerable<IAgentChatFactory> factories, IMeshQuery? meshQuery = null)
     {
+        _meshQuery = meshQuery;
+
         // Sort factories by DisplayOrder (lower = first)
         _factories = factories.OrderBy(f => f.DisplayOrder).ToList();
         _modelToFactory = new Dictionary<string, IAgentChatFactory>();
@@ -135,10 +140,9 @@ public class AgentChatFactoryProvider : IAgentChatFactoryProvider
     {
         var agentsWithPaths = await GetAgentsWithPathsAsync(contextPath);
         var agents = agentsWithPaths.Select(a => a.Configuration).ToList();
-        var pathsByAgentId = agentsWithPaths.ToDictionary(a => a.Configuration.Id, a => a.Path);
         var indentLevels = CalculateIndentLevels(agents);
 
-        // Build display info dictionary
+        // Build display info list
         var displayInfos = agentsWithPaths
             .Select(a => new AgentDisplayInfo
             {
@@ -152,108 +156,33 @@ public class AgentChatFactoryProvider : IAgentChatFactoryProvider
                 CustomIconSvg = a.Configuration.CustomIconSvg,
                 AgentConfiguration = a.Configuration
             })
-            .ToDictionary(a => a.Name);
-
-        // Build tree structure with depth-first ordering (children directly below parent)
-        return BuildHierarchicalOrder(agents, displayInfos);
-    }
-
-    /// <summary>
-    /// Builds a hierarchical ordering where children appear directly below their parent.
-    /// Root agents are ordered by DisplayOrder, children appear indented below their parent.
-    /// </summary>
-    private List<AgentDisplayInfo> BuildHierarchicalOrder(
-        IReadOnlyList<AgentConfiguration> agents,
-        Dictionary<string, AgentDisplayInfo> displayInfos)
-    {
-        var result = new List<AgentDisplayInfo>();
-        var visited = new HashSet<string>();
-        var agentsById = agents.ToDictionary(a => a.Id);
-
-        // Find root agents (not delegated to by any other agent)
-        var delegatedTo = new HashSet<string>();
-        foreach (var agent in agents.Where(a => a.Delegations is { Count: > 0 }))
-        {
-            foreach (var delegation in agent.Delegations!)
-            {
-                // Extract agent ID from path
-                var targetId = delegation.AgentPath.Split('/').Last();
-                delegatedTo.Add(targetId);
-            }
-        }
-
-        // Get root agents ordered by DisplayOrder
-        var rootAgents = displayInfos.Values
-            .Where(a => !delegatedTo.Contains(a.Name))
-            .OrderBy(a => a.DisplayOrder)
-            .ThenBy(a => GetGroupOrder(a.GroupName))
-            .ThenBy(a => a.Name)
             .ToList();
 
-        // Depth-first traversal from each root
-        foreach (var root in rootAgents)
+        // Get NodeType for context path (if MeshQuery available)
+        string? nodeTypePath = null;
+        if (_meshQuery != null && !string.IsNullOrEmpty(contextPath))
         {
-            AddAgentWithChildren(root.Name, agentsById, displayInfos, result, visited);
-        }
-
-        // Add any remaining agents that weren't reachable (orphans)
-        foreach (var agentInfo in displayInfos.Values.OrderBy(a => a.DisplayOrder).ThenBy(a => a.Name))
-        {
-            if (!visited.Contains(agentInfo.Name))
+            try
             {
-                result.Add(agentInfo);
-                visited.Add(agentInfo.Name);
+                var normalizedPath = contextPath.TrimStart('/');
+                await foreach (var node in _meshQuery.QueryAsync<MeshNode>($"path:{normalizedPath} scope:self"))
+                {
+                    if (!string.IsNullOrEmpty(node.NodeType) && node.NodeType != "Agent" && node.NodeType != "Markdown")
+                    {
+                        nodeTypePath = node.NodeType;
+                        break;
+                    }
+                }
+            }
+            catch
+            {
+                // Ignore query errors - fall back to no NodeType
             }
         }
 
-        return result;
+        // Order by relevance to context (uses shared helper - single implementation)
+        return AgentOrderingHelper.OrderByRelevance(displayInfos, contextPath, nodeTypePath);
     }
-
-    /// <summary>
-    /// Recursively adds an agent and its children (delegations) in depth-first order.
-    /// </summary>
-    private void AddAgentWithChildren(
-        string agentName,
-        Dictionary<string, AgentConfiguration> agents,
-        Dictionary<string, AgentDisplayInfo> displayInfos,
-        List<AgentDisplayInfo> result,
-        HashSet<string> visited)
-    {
-        if (visited.Contains(agentName) || !displayInfos.TryGetValue(agentName, out var agentInfo))
-            return;
-
-        visited.Add(agentName);
-        result.Add(agentInfo);
-
-        // Add children (delegations) directly after parent
-        if (agents.TryGetValue(agentName, out var agent) && agent.Delegations is { Count: > 0 })
-        {
-            var children = agent.Delegations
-                .Select(d => d.AgentPath.Split('/').Last())
-                .Where(id => displayInfos.ContainsKey(id))
-                .Select(id => displayInfos[id])
-                .OrderBy(c => c.DisplayOrder)
-                .ThenBy(c => c.Name)
-                .ToList();
-
-            foreach (var child in children)
-            {
-                AddAgentWithChildren(child.Name, agents, displayInfos, result, visited);
-            }
-        }
-    }
-
-    /// <summary>
-    /// Gets the display order for a group. Documentation is last.
-    /// </summary>
-    private static int GetGroupOrder(string? groupName) => groupName switch
-    {
-        "Insurance" => 0,
-        "Northwind" => 10,
-        "Todo" => 20,
-        "Documentation" => 100,
-        _ => 50  // Unknown groups in the middle
-    };
 
     /// <summary>
     /// Calculates indent levels based on delegation hierarchy.

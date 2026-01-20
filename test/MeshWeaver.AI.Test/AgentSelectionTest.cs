@@ -77,11 +77,12 @@ public class AgentSelectionTest
             .Returns(ToAsyncEnumerable<object>(productLaunchNode));
 
         // Mock: Query for agents in NodeType namespace returns TodoAgent
+        // Use subtree scope to find agents that are children of the NodeType path
         _meshQuery.QueryAsync(
                 Arg.Is<MeshQueryRequest>(r =>
                     r.Query.Contains($"path:{nodeTypePath}") &&
                     r.Query.Contains("nodeType:Agent") &&
-                    r.Query.Contains("scope:myselfAndAncestors") &&
+                    r.Query.Contains("scope:hierarchy") &&
                     r.Query.Contains("$type:MeshNode")),
                 Arg.Any<CancellationToken>())
             .Returns(ToAsyncEnumerable<object>(todoAgentNode));
@@ -91,7 +92,7 @@ public class AgentSelectionTest
                 Arg.Is<MeshQueryRequest>(r =>
                     r.Query.Contains($"path:{contextPath}") &&
                     r.Query.Contains("nodeType:Agent") &&
-                    r.Query.Contains("scope:myselfAndAncestors") &&
+                    r.Query.Contains("scope:selfAndAncestors") &&
                     r.Query.Contains("$type:MeshNode")),
                 Arg.Any<CancellationToken>())
             .Returns(ToAsyncEnumerable<object>());
@@ -110,10 +111,10 @@ public class AgentSelectionTest
             }
         }
 
-        // 2. Query agents from NodeType namespace
+        // 2. Query agents from NodeType namespace (use subtree to find children)
         if (!string.IsNullOrEmpty(detectedNodeType))
         {
-            var query = $"path:{detectedNodeType} nodeType:Agent scope:myselfAndAncestors";
+            var query = $"path:{detectedNodeType} nodeType:Agent scope:hierarchy";
             await foreach (var node in _meshQuery.QueryAsync<MeshNode>(query, null))
             {
                 if (node.Content is AgentConfiguration config)
@@ -124,7 +125,7 @@ public class AgentSelectionTest
         }
 
         // 3. Query agents from context path namespace
-        var pathQuery = $"path:{contextPath} nodeType:Agent scope:myselfAndAncestors";
+        var pathQuery = $"path:{contextPath} nodeType:Agent scope:selfAndAncestors";
         await foreach (var node in _meshQuery.QueryAsync<MeshNode>(pathQuery, null))
         {
             if (node.Content is AgentConfiguration config && !foundAgents.Any(a => a.Config.Id == config.Id))
@@ -190,7 +191,7 @@ public class AgentSelectionTest
                 Arg.Is<MeshQueryRequest>(r =>
                     r.Query.Contains($"path:{contextPath}") &&
                     r.Query.Contains("nodeType:Agent") &&
-                    r.Query.Contains("scope:myselfAndAncestors") &&
+                    r.Query.Contains("scope:selfAndAncestors") &&
                     r.Query.Contains("$type:MeshNode")),
                 Arg.Any<CancellationToken>())
             .Returns(ToAsyncEnumerable<object>(navigatorNode));
@@ -210,7 +211,7 @@ public class AgentSelectionTest
         }
 
         // 2. Query agents from context path namespace
-        var pathQuery = $"path:{contextPath} nodeType:Agent scope:myselfAndAncestors";
+        var pathQuery = $"path:{contextPath} nodeType:Agent scope:selfAndAncestors";
         await foreach (var node in _meshQuery.QueryAsync<MeshNode>(pathQuery, null))
         {
             if (node.Content is AgentConfiguration config && !foundAgents.Any(a => a.Config.Id == config.Id))
@@ -251,16 +252,16 @@ public class AgentSelectionTest
             IsDefault = false
         };
 
-        // Create context with pre-loaded agents and NodeType
+        // Create context with pre-loaded agents and MeshNode
         var context = new AgentContext
         {
             Address = new MeshWeaver.Messaging.Address("ACME", "ProductLaunch"),
-            NodeType = "ACME/Project",
+            Node = new MeshNode("ProductLaunch", "ACME") { NodeType = "ACME/Project" },
             AvailableAgents = new List<AgentConfiguration> { todoAgentConfig, navigatorConfig }
         };
 
         // Assert: Context has the expected properties
-        context.NodeType.Should().Be("ACME/Project");
+        context.Node?.NodeType.Should().Be("ACME/Project");
         context.AvailableAgents.Should().HaveCount(2);
         context.AvailableAgents.Should().ContainSingle(a => a.Id == "TodoAgent" && a.IsDefault);
         context.AvailableAgents.Should().ContainSingle(a => a.Id == "Navigator" && !a.IsDefault);
@@ -306,7 +307,7 @@ public class AgentSelectionTest
         var context = new AgentContext
         {
             Address = new MeshWeaver.Messaging.Address("ACME", "SomeNode"),
-            NodeType = "ACME/Project",
+            Node = new MeshNode("SomeNode", "ACME") { NodeType = "ACME/Project" },
             AvailableAgents = new List<AgentConfiguration> { otherAgentConfig, defaultAgentConfig }
         };
 
