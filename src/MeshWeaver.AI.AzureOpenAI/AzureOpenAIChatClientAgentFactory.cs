@@ -8,13 +8,12 @@ using Microsoft.Extensions.Options;
 namespace MeshWeaver.AI.AzureOpenAI;
 
 /// <summary>
-/// Factory for creating agent chats using ChatClientAgent with Azure OpenAI.
-/// ChatClientAgent is used for stateless chat completion scenarios without persistent assistant storage.
+/// Factory for creating ChatClientAgent instances with Azure OpenAI.
 /// </summary>
-public class AzureOpenAIChatCompletionAgentChatFactory(
+public class AzureOpenAIChatClientAgentFactory(
     IMessageHub hub,
     IOptions<AzureOpenAIConfiguration> options)
-    : ChatCompletionAgentChatFactory(hub)
+    : ChatClientAgentFactory(hub)
 {
     private readonly AzureOpenAIConfiguration credentials = options.Value ?? throw new ArgumentNullException(nameof(options));
 

@@ -12,7 +12,7 @@ public static class AzureOpenAIExtensions
     /// </summary>
     public static IServiceCollection AddAzureOpenAI(this IServiceCollection services)
     {
-        return services.AddSingleton<IAgentChatFactory, AzureOpenAIChatCompletionAgentChatFactory>();
+        return services.AddSingleton<IChatClientFactory, AzureOpenAIChatClientAgentFactory>();
     }
 
     /// <summary>
@@ -23,6 +23,6 @@ public static class AzureOpenAIExtensions
         Action<AzureOpenAIConfiguration> configure)
     {
         services.Configure(configure);
-        return services.AddSingleton<IAgentChatFactory, AzureOpenAIChatCompletionAgentChatFactory>();
+        return services.AddSingleton<IChatClientFactory, AzureOpenAIChatClientAgentFactory>();
     }
 }
