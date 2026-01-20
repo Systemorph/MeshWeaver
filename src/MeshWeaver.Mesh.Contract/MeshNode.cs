@@ -2,7 +2,6 @@
 using System.ComponentModel.DataAnnotations;
 using System.ComponentModel.DataAnnotations.Schema;
 using System.Text.Json.Serialization;
-using MeshWeaver.Data;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -306,15 +305,6 @@ public record MeshNode([property: Key] string Id, [property: Editable(false)] st
     /// <returns>A new MeshNode with the added service configuration.</returns>
     public MeshNode WithGlobalServiceRegistry(Func<IServiceCollection, IServiceCollection> services)
         => this with { GlobalServiceConfigurations = GlobalServiceConfigurations.Add(services) };
-
-    /// <summary>
-    /// Function that returns the address to route autocomplete requests to.
-    /// Receives the current AgentContext to determine the appropriate target.
-    /// Returns null if autocomplete should not be routed.
-    /// </summary>
-    [JsonIgnore, NotMapped]
-    [Editable(false)]
-    public Func<AgentContext?, Address?>? AutocompleteAddress { get; init; }
 }
 
 /// <summary>

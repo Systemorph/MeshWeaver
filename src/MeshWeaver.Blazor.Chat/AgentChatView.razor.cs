@@ -30,7 +30,7 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
 {
     private bool _isDisposed;
     private readonly string _instanceId = Guid.NewGuid().ToString("N")[..8];
-    private Lazy<Task<IAgentChat>>? lazyChat;
+    private Lazy<Task<IAgentChat>> lazyChat;
     private CancellationTokenSource currentResponseCancellation = new();
     private ChatMessage? currentResponseMessage;
     private ChatInput? chatInput;
@@ -154,15 +154,25 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
         var initialPath = NavigationManager.ToBaseRelativePath(NavigationManager.Uri);
         var contextPath = string.IsNullOrEmpty(initialPath) ? null : initialPath;
 
-        // Get available agents with display info for the current context (searches namespace hierarchy)
-        agentDisplayInfos = await AgentChatFactoryProvider.GetAgentsWithDisplayInfoAsync(contextPath);
-
         // Get available models (union from all factories, sorted by factory order)
         availableModels = AgentChatFactoryProvider.AllModels;
 
-        // Select agent using IMeshQuery-based hierarchical search
+        // Get available agents - use chat if available for context-aware ordering
         var context = GetCurrentAgentContext();
-        selectedAgentInfo = await FindClosestDefaultAgentAsync(contextPath, context);
+        if (lazyChat?.IsValueCreated == true)
+        {
+            var chat = await lazyChat.Value;
+            chat.SetContext(context);
+            agentDisplayInfos = await chat.GetOrderedAgentsAsync();
+        }
+        else
+        {
+            // Fall back to factory provider before chat is created
+            agentDisplayInfos = await AgentChatFactoryProvider.GetAgentsWithDisplayInfoAsync(contextPath);
+        }
+
+        // First agent in the ordered list is the default
+        selectedAgentInfo = agentDisplayInfos.FirstOrDefault();
 
         // Set initial model based on agent preference or default
         if (selectedAgentInfo != null)
@@ -267,133 +277,23 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
     }
 
     /// <summary>
-    /// Selects an agent based on the current context using ContextMatchPattern.
-    /// </summary>
-    private AgentDisplayInfo? SelectAgentByContext()
-    {
-        var context = GetCurrentAgentContext();
-        if (context == null)
-            return null;
-
-        // Find the first agent with a ContextMatchPattern that could match the context
-        foreach (var agentInfo in agentDisplayInfos)
-        {
-            var pattern = agentInfo.AgentConfiguration.ContextMatchPattern;
-            if (string.IsNullOrEmpty(pattern))
-                continue;
-
-            // Simple pattern matching: check if address type matches the pattern
-            // Pattern examples: "address.type==pricing", "address=like=*Todo*"
-            if (MatchesContextPattern(pattern, context))
-            {
-                Logger.LogDebug("Context-based agent selection: {AgentName} matches context {Context}",
-                    agentInfo.Name, context.Address);
-                return agentInfo;
-            }
-        }
-
-        return null;
-    }
-
-    /// <summary>
-    /// Simple RSQL-like pattern matching for context selection.
-    /// </summary>
-    private static bool MatchesContextPattern(string pattern, AgentContext context)
-    {
-        // Handle address.type==value patterns
-        if (pattern.StartsWith("address.type=="))
-        {
-            var expectedType = pattern["address.type==".Length..];
-            return context.Address?.Type?.Equals(expectedType, StringComparison.OrdinalIgnoreCase) == true;
-        }
-
-        // Handle address=like=*value* patterns
-        if (pattern.StartsWith("address=like="))
-        {
-            var likePattern = pattern["address=like=".Length..].Trim('*');
-            var addressString = context.Address?.ToString() ?? string.Empty;
-            return addressString.Contains(likePattern, StringComparison.OrdinalIgnoreCase);
-        }
-
-        return false;
-    }
-
-    /// <summary>
-    /// Finds the closest default agent for the given context path.
-    /// Search order:
-    /// 1. Agent with ContextMatchPattern matching the current context
-    /// 2. Default agent from agentDisplayInfos (which already includes NodeType namespace and path hierarchy)
-    /// 3. Closest agent by path depth
-    /// 4. First available agent
-    /// </summary>
-    private Task<AgentDisplayInfo?> FindClosestDefaultAgentAsync(string? contextPath, AgentContext? context)
-    {
-        // 1. Try to find an agent matching by ContextMatchPattern
-        if (context != null)
-        {
-            var matchingAgent = SelectAgentByContext();
-            if (matchingAgent != null)
-            {
-                Logger.LogInformation("[Chat:{InstanceId}] Selected agent by context pattern: {Agent}", _instanceId, matchingAgent.Name);
-                return Task.FromResult<AgentDisplayInfo?>(matchingAgent);
-            }
-        }
-
-        // 2. Find default agent from the already-loaded agent list
-        // The agentDisplayInfos is populated from GetAgentsWithPathsAsync which searches
-        // both NodeType namespace and path namespace using scope:myselfAndAncestors
-        var defaultAgent = agentDisplayInfos
-            .Where(a => a.AgentConfiguration.IsDefault)
-            .OrderByDescending(a => a.Path?.Split('/').Length ?? 0)  // Closest (longest path) wins
-            .FirstOrDefault();
-
-        if (defaultAgent != null)
-        {
-            Logger.LogInformation("[Chat:{InstanceId}] Found closest default agent: {Agent} at path {Path}",
-                _instanceId, defaultAgent.Name, defaultAgent.Path);
-            return Task.FromResult<AgentDisplayInfo?>(defaultAgent);
-        }
-
-        // 3. Find closest agent by path depth (even if not marked as default)
-        var closestAgent = agentDisplayInfos
-            .OrderByDescending(a => a.Path?.Split('/').Length ?? 0)
-            .FirstOrDefault();
-
-        if (closestAgent != null)
-        {
-            Logger.LogInformation("[Chat:{InstanceId}] Falling back to closest agent: {Agent} at path {Path}",
-                _instanceId, closestAgent.Name, closestAgent.Path);
-            return Task.FromResult<AgentDisplayInfo?>(closestAgent);
-        }
-
-        // 4. Fall back to first available agent
-        var fallbackAgent = agentDisplayInfos.FirstOrDefault();
-        if (fallbackAgent != null)
-        {
-            Logger.LogInformation("[Chat:{InstanceId}] Falling back to first available agent: {Agent}", _instanceId, fallbackAgent.Name);
-        }
-        return Task.FromResult(fallbackAgent);
-    }
-
-    /// <summary>
     /// Updates agent selection based on the current navigation context.
-    /// Uses IMeshQuery to find the closest default agent in the namespace hierarchy.
+    /// Delegates ordering logic to AgentChatClient - first agent in the list is the default.
     /// </summary>
     private async Task UpdateAgentSelectionForContextAsync(AgentContext? context)
     {
-        var contextPath = selectedContextPath;
+        Logger.LogDebug("[Chat:{InstanceId}] Updating agent selection for context: {Context}",
+            _instanceId, context?.Address?.ToString() ?? "null");
 
-        Logger.LogDebug("[Chat:{InstanceId}] Updating agent selection for context path: {ContextPath}",
-            _instanceId, contextPath);
-
-        // Refresh agent list for the new context path (searches namespace hierarchy)
-        agentDisplayInfos = await AgentChatFactoryProvider.GetAgentsWithDisplayInfoAsync(contextPath);
+        var chat = await lazyChat.Value;
+        chat.SetContext(context);
+        agentDisplayInfos = await chat.GetOrderedAgentsAsync();
 
         Logger.LogDebug("[Chat:{InstanceId}] Found {Count} agents for context",
             _instanceId, agentDisplayInfos.Count);
 
-        // Find the closest default agent using IMeshQuery
-        var newAgent = await FindClosestDefaultAgentAsync(contextPath, context);
+        // First agent in the ordered list is the default
+        var newAgent = agentDisplayInfos.FirstOrDefault();
 
         // Update selection if changed
         if (newAgent != null && newAgent.Name != selectedAgentInfo?.Name)
@@ -409,8 +309,8 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
         }
         else if (newAgent == null)
         {
-            Logger.LogWarning("[Chat:{InstanceId}] No agents available for context path: {ContextPath}",
-                _instanceId, contextPath);
+            Logger.LogWarning("[Chat:{InstanceId}] No agents available for context: {Context}",
+                _instanceId, context?.Address?.ToString() ?? "null");
         }
     }
 
@@ -1161,7 +1061,8 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
     }
 
     /// <summary>
-    /// Async version that resolves the path using MeshCatalog and includes the MeshNode name.
+    /// Async version that resolves the path using MeshCatalog and includes the MeshNode name,
+    /// NodeType, and available agents for the context.
     /// Uses the same resolution logic as ApplicationPage.razor.cs.
     /// </summary>
     private async Task<AgentContext?> GetContextFromCurrentUrlAsync()
@@ -1205,24 +1106,40 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
 
             var layoutArea = area != null ? new LayoutAreaReference(area) { Id = id } : null;
 
-            // Get the MeshNode to retrieve its name
+            // Get the MeshNode to retrieve its name and NodeType
             string? meshNodeName = null;
+            string? nodeType = null;
             var node = await meshCatalog.GetNodeAsync(address);
             if (node != null)
             {
                 meshNodeName = node.Name ?? node.Id;
-                Logger.LogDebug("Resolved MeshNode name: '{MeshNodeName}'", meshNodeName);
+                nodeType = node.NodeType;
+                Logger.LogDebug("Resolved MeshNode - Name: '{MeshNodeName}', NodeType: '{NodeType}'", meshNodeName, nodeType);
+            }
+
+            // Load available agents for this context
+            IReadOnlyList<AgentConfiguration>? availableAgents = null;
+            try
+            {
+                availableAgents = await AgentChatFactoryProvider.GetAgentsAsync(path);
+                Logger.LogDebug("Loaded {Count} available agents for context path: {Path}", availableAgents?.Count ?? 0, path);
+            }
+            catch (Exception ex)
+            {
+                Logger.LogDebug(ex, "Error loading available agents for context path: {Path}", path);
             }
 
             var context = new AgentContext
             {
                 Address = address,
                 LayoutArea = layoutArea,
-                MeshNodeName = meshNodeName
+                MeshNodeName = meshNodeName,
+                NodeType = nodeType,
+                AvailableAgents = availableAgents
             };
 
-            Logger.LogDebug("Created async context - Address: {Address}, LayoutArea: {LayoutArea}, MeshNodeName: {MeshNodeName}",
-                address, layoutArea?.Area, meshNodeName);
+            Logger.LogDebug("Created async context - Address: {Address}, LayoutArea: {LayoutArea}, MeshNodeName: {MeshNodeName}, NodeType: {NodeType}, AgentCount: {AgentCount}",
+                address, layoutArea?.Area, meshNodeName, nodeType, availableAgents?.Count ?? 0);
 
             return context;
         }
@@ -1333,13 +1250,10 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
             var context = GetCurrentAgentContext();
             var meshCatalog = Hub.ServiceProvider.GetService<IMeshCatalog>();
 
-            // Create autocomplete client with:
-            // - Base addresses: app/Agents (for agents, models, prefixes, commands)
-            // - MeshCatalog: for namespace address resolution (e.g., @pricing/ -> Insurance app)
+            // Create autocomplete client with base addresses for agents, models, prefixes, commands
             var client = new AutocompleteClient(
                 Hub,
-                _ => [AI.Application.ApplicationAddress.Agents],
-                meshCatalog);
+                _ => [AI.Application.ApplicationAddress.Agents]);
 
             // Get completions from dispatched addresses
             var response = await client.GetCompletionsAsync(query, context);

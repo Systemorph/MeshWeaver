@@ -4,7 +4,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
 using MeshWeaver.AI.Completion;
-using MeshWeaver.AI.Services;
+using MeshWeaver.AI.Persistence;
 using MeshWeaver.Data;
 using MeshWeaver.Data.Completion;
 using MeshWeaver.Graph.Configuration;
@@ -190,8 +190,8 @@ public class AutocompleteServiceTest
         {
             new() { Id = "Agent1", Description = "First agent" }
         };
-        var agentResolver = new MockAgentResolver(agents);
-        var agentProvider = new AgentAutocompleteProvider(agentResolver);
+        var factoryProvider = new MockAgentChatFactoryProvider(agents);
+        var agentProvider = new AgentAutocompleteProvider(factoryProvider);
         var fuzzyScorer = new FuzzyScorer();
         var service = new AutocompleteService(fuzzyScorer, [agentProvider]);
 
@@ -225,8 +225,8 @@ public class AutocompleteServiceTest
         {
             new() { Id = "TestAgent", Description = "A test agent" }
         };
-        var agentResolver = new MockAgentResolver(agents);
-        var agentProvider = new AgentAutocompleteProvider(agentResolver);
+        var factoryProvider = new MockAgentChatFactoryProvider(agents);
+        var agentProvider = new AgentAutocompleteProvider(factoryProvider);
         var fuzzyScorer = new FuzzyScorer();
         var service = new AutocompleteService(fuzzyScorer, [agentProvider]);
 
@@ -245,8 +245,8 @@ public class AutocompleteServiceTest
         {
             new() { Id = "TestAgent", Description = "A test agent" }
         };
-        var agentResolver = new MockAgentResolver(agents);
-        var agentProvider = new AgentAutocompleteProvider(agentResolver);
+        var factoryProvider = new MockAgentChatFactoryProvider(agents);
+        var agentProvider = new AgentAutocompleteProvider(factoryProvider);
         var modelProvider = new ModelAutocompleteProvider();
         modelProvider.SetAvailableModels(["claude-opus"]);
 
@@ -273,8 +273,8 @@ public class AutocompleteServiceTest
         {
             new() { Id = "Agent1", Description = "First agent" }
         };
-        var agentResolver = new MockAgentResolver(agents);
-        var agentProvider = new AgentAutocompleteProvider(agentResolver);
+        var factoryProvider = new MockAgentChatFactoryProvider(agents);
+        var agentProvider = new AgentAutocompleteProvider(factoryProvider);
         var fuzzyScorer = new FuzzyScorer();
         var service = new AutocompleteService(fuzzyScorer, [agentProvider]);
         var request = new AutocompleteRequest("@agent/", null);
@@ -374,8 +374,8 @@ public class AutocompleteServiceTest
             new() { Id = "Agent1", Description = "First agent", GroupName = "Group1" },
             new() { Id = "Agent2", Description = "Second agent", GroupName = "Group2" }
         };
-        var agentResolver = new MockAgentResolver(agents);
-        var provider = new AgentAutocompleteProvider(agentResolver);
+        var factoryProvider = new MockAgentChatFactoryProvider(agents);
+        var provider = new AgentAutocompleteProvider(factoryProvider);
 
         // act
         var items = (await provider.GetItemsAsync("", TestContext.Current.CancellationToken)).ToList();
@@ -422,31 +422,35 @@ public class AutocompleteServiceTest
 
     #region Helper Classes
 
-    private class MockAgentResolver(IReadOnlyList<AgentConfiguration> agents) : IAgentResolver
+    private class MockAgentChatFactoryProvider(IReadOnlyList<AgentConfiguration> agents) : IAgentChatFactoryProvider
     {
-        public Task<IReadOnlyList<AgentConfiguration>> GetAgentsForContextAsync(string? contextPath, CancellationToken ct = default)
+        public IReadOnlyList<IAgentChatFactory> Factories => [];
+        public IReadOnlyList<string> AllModels => [];
+        public IReadOnlyDictionary<string, string> AgentModelPreferences => new Dictionary<string, string>();
+
+        public IAgentChatFactory? GetFactoryForModel(string modelName) => null;
+        public Task<IAgentChat> CreateAsync(string modelName) => throw new System.NotImplementedException();
+        public Task<IAgentChat> CreateAsync(string modelName, string? contextPath) => throw new System.NotImplementedException();
+        public Task<IAgentChat> CreateAsync() => throw new System.NotImplementedException();
+
+        public Task<IReadOnlyList<AgentConfiguration>> GetAgentsAsync(string? contextPath = null)
             => Task.FromResult(agents);
 
-        public Task<AgentConfiguration?> GetAgentAsync(string agentPath, string? contextPath = null, CancellationToken ct = default)
-            => Task.FromResult(agents.FirstOrDefault(a => a.Id == agentPath || agentPath.EndsWith("/" + a.Id)));
-
-        public Task<AgentConfiguration?> GetDefaultAgentAsync(string? contextPath = null, CancellationToken ct = default)
-            => Task.FromResult(agents.FirstOrDefault(a => a.IsDefault));
-
-        public Task<IReadOnlyList<AgentConfiguration>> GetExposedAgentsAsync(string? contextPath = null, CancellationToken ct = default)
-            => Task.FromResult<IReadOnlyList<AgentConfiguration>>(agents.Where(a => a.ExposedInNavigator).ToList());
-
-        public Task<IReadOnlyList<AgentConfiguration>> FindMatchingAgentsAsync(AgentContext context, string? contextPath = null, CancellationToken ct = default)
-            => Task.FromResult<IReadOnlyList<AgentConfiguration>>(agents.Where(a => !string.IsNullOrEmpty(a.ContextMatchPattern)).ToList());
-
-        public Task<AgentConfiguration?> GetClosestAgentAsync(string? contextPath, CancellationToken ct = default)
-            => Task.FromResult(agents.FirstOrDefault());
-
-        public Task<IReadOnlyList<AgentConfiguration>> GetHierarchyAgentsAsync(string? contextPath, CancellationToken ct = default)
-            => Task.FromResult(agents);
-
-        public Task<IReadOnlyList<AgentWithPath>> GetAgentsWithPathsAsync(string? contextPath, CancellationToken ct = default)
+        public Task<IReadOnlyList<AgentWithPath>> GetAgentsWithPathsAsync(string? contextPath = null)
             => Task.FromResult<IReadOnlyList<AgentWithPath>>(agents.Select(a => new AgentWithPath(a, "/" + a.Id)).ToList());
+
+        public Task<IReadOnlyList<AgentDisplayInfo>> GetAgentsWithDisplayInfoAsync(string? contextPath = null)
+            => Task.FromResult<IReadOnlyList<AgentDisplayInfo>>(agents.Select(a => new AgentDisplayInfo
+            {
+                Name = a.Id,
+                Path = "/" + a.Id,
+                Description = a.Description ?? "",
+                AgentConfiguration = a
+            }).ToList());
+
+        public string GetPreferredModelForAgent(string agentName) => string.Empty;
+        public void SetModelPreferenceForAgent(string agentName, string modelName) { }
+        public Task InitializeAgentPreferencesAsync(string? contextPath = null) => Task.CompletedTask;
     }
 
     private class MockMeshCatalog(System.Collections.Generic.IReadOnlyList<Mesh.MeshNode> nodes) : Mesh.Services.IMeshCatalog

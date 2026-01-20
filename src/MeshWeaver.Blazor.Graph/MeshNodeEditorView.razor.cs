@@ -177,8 +177,7 @@ public partial class MeshNodeEditorView
                 StartupScript = _node.StartupScript,
                 RoutingType = _node.RoutingType,
                 InstantiationType = _node.InstantiationType,
-                GlobalServiceConfigurations = _node.GlobalServiceConfigurations,
-                AutocompleteAddress = _node.AutocompleteAddress
+                GlobalServiceConfigurations = _node.GlobalServiceConfigurations
             };
 
             _node = await persistence.SaveNodeAsync(updatedNode);
@@ -264,8 +263,7 @@ public partial class MeshNodeEditorView
                 StartupScript = _node.StartupScript,
                 RoutingType = _node.RoutingType,
                 InstantiationType = _node.InstantiationType,
-                GlobalServiceConfigurations = _node.GlobalServiceConfigurations,
-                AutocompleteAddress = _node.AutocompleteAddress
+                GlobalServiceConfigurations = _node.GlobalServiceConfigurations
             };
 
             _node = await persistence.SaveNodeAsync(updatedNode);

@@ -320,6 +320,9 @@ public class LayoutAreaPluginTest(ITestOutputHelper output) : HubTestBase(output
         {
         }
 
+        public Task<IReadOnlyList<AgentDisplayInfo>> GetOrderedAgentsAsync()
+            => Task.FromResult<IReadOnlyList<AgentDisplayInfo>>(new List<AgentDisplayInfo>());
+
         public AgentContext? Context { get; set; }
     }
 }

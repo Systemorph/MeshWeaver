@@ -1,21 +1,18 @@
 #nullable enable
 
-using MeshWeaver.Data;
 using MeshWeaver.Data.Completion;
-using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 
 namespace MeshWeaver.AI.Completion;
 
 /// <summary>
 /// Client that dispatches autocomplete requests to hub addresses.
-/// Always dispatches to base addresses plus all namespace addresses that have autocomplete configured.
+/// Always dispatches to base addresses plus context address.
 /// Each provider is responsible for filtering its results based on the query.
 /// </summary>
 public class AutocompleteClient(
     IMessageHub hub,
-    Func<AgentContext?, IReadOnlyCollection<Address>> getBaseAddresses,
-    IMeshCatalog? meshCatalog = null)
+    Func<AgentContext?, IReadOnlyCollection<Address>> getBaseAddresses)
 {
     private static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(2);
 
@@ -65,7 +62,7 @@ public class AutocompleteClient(
     }
 
     /// <summary>
-    /// Gets all addresses to dispatch to: base addresses + all node autocomplete addresses + context address.
+    /// Gets all addresses to dispatch to: base addresses + context address.
     /// </summary>
     private Task<IReadOnlyCollection<Address>> GetAllDispatchAddressesAsync(
         AgentContext? context,
@@ -77,19 +74,6 @@ public class AutocompleteClient(
         foreach (var addr in getBaseAddresses(context))
         {
             addresses.Add(addr);
-        }
-
-        // Add all node autocomplete addresses
-        if (meshCatalog != null)
-        {
-            foreach (var node in meshCatalog.Configuration.Nodes.Values)
-            {
-                var nodeAddress = node.AutocompleteAddress?.Invoke(context);
-                if (nodeAddress != null)
-                {
-                    addresses.Add(nodeAddress);
-                }
-            }
         }
 
         // Add context address if present

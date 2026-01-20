@@ -43,7 +43,6 @@
   </Folder>
   <Folder Name="/portal/">
     <File Path="portal/Directory.Build.props" />
-    <Project Path="portal/MeshWeaver.Portal.AI/MeshWeaver.Portal.AI.csproj" />
     <Project Path="portal/MeshWeaver.Portal.Shared.Mesh/MeshWeaver.Portal.Shared.Mesh.csproj" />
     <Project Path="portal/MeshWeaver.Portal.Shared.Web/MeshWeaver.Portal.Shared.Web.csproj" />
     <Project Path="portal/MeshWeaver.Portal/MeshWeaver.Portal.csproj" />

@@ -38,8 +38,7 @@ public class InsuranceApplicationAttribute : MeshNodeAttribute
             Icon = "Calculator",
             DisplayOrder = 100,
             AddressSegments = 3, // pricing/company/year
-            HubConfiguration = InsuranceApplicationExtensions.ConfigureSinglePricingApplication,
-            AutocompleteAddress = _ => Address
+            HubConfiguration = InsuranceApplicationExtensions.ConfigureSinglePricingApplication
         }
     ];
 }

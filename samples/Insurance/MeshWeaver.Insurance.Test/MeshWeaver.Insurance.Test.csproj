@@ -22,7 +22,6 @@
   <ItemGroup>
     <ProjectReference Include="..\..\..\src\MeshWeaver.Hosting.Monolith.TestBase\MeshWeaver.Hosting.Monolith.TestBase.csproj" />
     <ProjectReference Include="..\MeshWeaver.Insurance.Domain\MeshWeaver.Insurance.Domain.csproj" />
-    <ProjectReference Include="..\MeshWeaver.Insurance.AI\MeshWeaver.Insurance.AI.csproj" />
     <ProjectReference Include="..\..\..\src\MeshWeaver.Import\MeshWeaver.Import.csproj" />
   </ItemGroup>
 </Project>

@@ -140,6 +140,9 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
             throw new NotImplementedException();
         }
 
+        public Task<IReadOnlyList<AgentDisplayInfo>> GetOrderedAgentsAsync()
+            => Task.FromResult<IReadOnlyList<AgentDisplayInfo>>(new List<AgentDisplayInfo>());
+
     }
 
 }
