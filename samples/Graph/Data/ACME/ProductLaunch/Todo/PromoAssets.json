@@ -13,6 +13,7 @@
   "state": "Active",
   "isVirtual": false,
   "content": {
+    "$type": "Todo",
     "id": "PromoAssets",
     "title": "Design promotional assets",
     "description": "Design banner ads, social media graphics, email headers, and product screenshots. Ensure consistent branding across all touchpoints.",

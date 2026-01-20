@@ -13,6 +13,7 @@
   "state": "Active",
   "isVirtual": false,
   "content": {
+    "$type": "Todo",
     "id": "DemoVideo",
     "title": "Record product demo video",
     "description": "Script and record a 3-minute product demo video showcasing MeshFlow\u0027s workflow builder, integrations, and automation capabilities. Include professional voiceover.",

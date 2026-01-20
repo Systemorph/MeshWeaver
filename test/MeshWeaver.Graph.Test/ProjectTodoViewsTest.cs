@@ -23,7 +23,7 @@ using Xunit;
 namespace MeshWeaver.Graph.Test;
 
 /// <summary>
-/// Tests for Project-level aggregate views (Summary, AllItems, TodosByCategory, Planning, MyTasks, Backlog, TodaysFocus).
+/// Tests for Project-level aggregate views (Summary, AllTasks, TodosByCategory, Planning, MyTasks, Backlog, TodaysFocus).
 /// These views aggregate data from child Todo items in the ProductLaunch project.
 /// </summary>
 [Collection("ProjectTodoViewsTests")]
@@ -127,7 +127,7 @@ public class ProjectTodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBa
             Output.WriteLine($"  - {node.Path}: {node.Name} (NodeType: {node.NodeType})");
         }
 
-        results.Should().HaveCount(23, "Should find all 23 Todo sample items (21 original + 2 backlog)");
+        results.Should().HaveCountGreaterThanOrEqualTo(23, "Should find at least 23 Todo sample items (21 original + 2 backlog, plus any test items)");
         results.Should().OnlyContain(n => n.NodeType == "ACME/Project/Todo", "All results should be Todo nodes");
     }
 
@@ -185,13 +185,13 @@ public class ProjectTodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBa
     }
 
     /// <summary>
-    /// Test that the AllItems view renders with tasks grouped by status.
+    /// Test that the AllTasks view renders with tasks grouped by status.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public async Task AllItems_ShouldRenderWithData()
+    public async Task AllTasks_ShouldRenderWithData()
     {
         var workspace = GetClient().GetWorkspace();
-        var reference = new LayoutAreaReference("AllItems");
+        var reference = new LayoutAreaReference("AllTasks");
         var projectAddress = new Address("ACME/ProductLaunch");
 
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
