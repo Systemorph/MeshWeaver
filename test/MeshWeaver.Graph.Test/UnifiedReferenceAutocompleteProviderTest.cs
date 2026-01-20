@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
@@ -123,7 +124,7 @@ public class UnifiedReferenceAutocompleteProviderTest : MonolithMeshTestBase
             navigationContext: null);  // No navigation context for this test
 
         // Act - query with just "@"
-        var items = await provider.GetItemsAsync("@", TestContext.Current.CancellationToken);
+        var items = await provider.GetItemsAsync("@", null, TestContext.Current.CancellationToken).ToArrayAsync(TestContext.Current.CancellationToken);
 
         // Assert
         Output.WriteLine($"Got {items.Count()} suggestions for '@':");
@@ -145,7 +146,7 @@ public class UnifiedReferenceAutocompleteProviderTest : MonolithMeshTestBase
             navigationContext: null);
 
         // Act - query with "@Sys" (partial match for Systemorph)
-        var items = await provider.GetItemsAsync("@Sys", TestContext.Current.CancellationToken);
+        var items = await provider.GetItemsAsync("@Sys", null, TestContext.Current.CancellationToken).ToArrayAsync(TestContext.Current.CancellationToken);
 
         // Assert
         Output.WriteLine($"Got {items.Count()} suggestions for '@Sys':");
@@ -174,7 +175,7 @@ public class UnifiedReferenceAutocompleteProviderTest : MonolithMeshTestBase
             navigationContext: null);
 
         // Act - query with "@Org" (partial match for Organization)
-        var items = await provider.GetItemsAsync("@Org", TestContext.Current.CancellationToken);
+        var items = await provider.GetItemsAsync("@Org", null, TestContext.Current.CancellationToken).ToArrayAsync(TestContext.Current.CancellationToken);
 
         // Assert
         Output.WriteLine($"Got {items.Count()} suggestions for '@Org':");
@@ -199,7 +200,7 @@ public class UnifiedReferenceAutocompleteProviderTest : MonolithMeshTestBase
             navigationContext: null);
 
         // Act - query with "@Use" (partial match for User)
-        var items = await provider.GetItemsAsync("@Use", TestContext.Current.CancellationToken);
+        var items = await provider.GetItemsAsync("@Use", null, TestContext.Current.CancellationToken).ToArrayAsync(TestContext.Current.CancellationToken);
 
         // Assert
         Output.WriteLine($"Got {items.Count()} suggestions for '@Use':");
@@ -224,7 +225,7 @@ public class UnifiedReferenceAutocompleteProviderTest : MonolithMeshTestBase
             navigationContext: null);
 
         // Act - query with lowercase "@sys"
-        var items = await provider.GetItemsAsync("@sys", TestContext.Current.CancellationToken);
+        var items = await provider.GetItemsAsync("@sys", null, TestContext.Current.CancellationToken).ToArrayAsync(TestContext.Current.CancellationToken);
 
         // Assert
         Output.WriteLine($"Got {items.Count()} suggestions for '@sys' (lowercase):");
@@ -271,10 +272,10 @@ public class UnifiedReferenceAutocompleteProviderTest : MonolithMeshTestBase
         var provider = new UnifiedReferenceAutocompleteProvider(meshCatalog, meshQuery, null);
 
         // Act
-        var items = await provider.GetItemsAsync("@Sys", TestContext.Current.CancellationToken);
+        var items = await provider.GetItemsAsync("@Sys", null, TestContext.Current.CancellationToken).ToArrayAsync(TestContext.Current.CancellationToken);
 
         // Assert
-        Output.WriteLine($"Provider returned {items.Count()} suggestions for '@Sys':");
+        Output.WriteLine($"Provider returned {items.Length} suggestions for '@Sys':");
         foreach (var item in items)
         {
             Output.WriteLine($"  - {item.Label}: {item.InsertText}");

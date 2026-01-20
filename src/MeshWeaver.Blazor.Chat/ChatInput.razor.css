@@ -29,15 +29,14 @@
 }
 
 .tools {
-    display: flex;
     margin-top: 1rem;
-    align-items: center;
     width: 100%;
     max-width: 100%;
     min-width: 0;
     box-sizing: border-box;
     position: relative;
     z-index: 100;
+    overflow: visible;
 }
 
 .tool-icon {
@@ -73,30 +72,23 @@
     color: var(--neutral-foreground-rest);
 }
 
-.chat-selectors {
-    display: flex;
-    gap: 8px;
-    align-items: center;
-    flex: 1 1 0;
-    min-width: 0;
-    max-width: 100%;
-    overflow: visible;
-}
-
 /* Context selector */
 .selector-context {
     flex: 1 1 100px;
-    min-width: 100px;
+    min-width: 80px;
+    max-width: 220px;
 }
 
 /* Agent selector */
 .selector-agent {
-    flex: 2 1 150px;
-    min-width: 120px;
+    flex: 1 1 100px;
+    min-width: 80px;
+    max-width: 180px;
 }
 
 /* Model selector */
 .selector-model {
-    flex: 1 1 100px;
-    min-width: 100px;
+    flex: 1 1 80px;
+    min-width: 80px;
+    max-width: 160px;
 }

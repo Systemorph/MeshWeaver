@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using MeshWeaver.Data.Completion;
 using MeshWeaver.Mesh.Services;
 
@@ -33,11 +34,14 @@ public class UnifiedReferenceAutocompleteProvider(
     };
 
     /// <inheritdoc />
-    public async Task<IEnumerable<AutocompleteItem>> GetItemsAsync(string query, CancellationToken ct = default)
+    public async IAsyncEnumerable<AutocompleteItem> GetItemsAsync(
+        string query,
+        string? contextPath = null,
+        [EnumeratorCancellation] CancellationToken ct = default)
     {
         // Query format from Monaco: "@path" or "@path/" or "@path/keyword/" etc.
         if (string.IsNullOrEmpty(query) || !query.StartsWith("@"))
-            return [];
+            yield break;
 
         // Strip the @ prefix(es) - handle both @ and @@
         var path = query.TrimStart('@');
@@ -48,30 +52,33 @@ public class UnifiedReferenceAutocompleteProvider(
         var currentSegment = segments.LastOrDefault() ?? "";
         var endsWithSlash = path.EndsWith("/");
 
-        return await GetSuggestionsForStage(completedSegments, currentSegment, endsWithSlash, ct);
+        await foreach (var item in GetSuggestionsForStage(completedSegments, currentSegment, endsWithSlash, ct))
+        {
+            yield return item;
+        }
     }
 
-    private async Task<IEnumerable<AutocompleteItem>> GetSuggestionsForStage(
+    private async IAsyncEnumerable<AutocompleteItem> GetSuggestionsForStage(
         string[] completedSegments,
         string currentSegment,
         bool endsWithSlash,
-        CancellationToken ct)
+        [EnumeratorCancellation] CancellationToken ct)
     {
-        var items = new List<AutocompleteItem>();
-
         // Stage 1: No completed segments yet - suggest addresses
         if (completedSegments.Length == 0)
         {
-            items.AddRange(await GetAddressSuggestions(currentSegment, ct));
-            return items;
+            await foreach (var item in GetAddressSuggestions(currentSegment, ct))
+                yield return item;
+            yield break;
         }
 
         // Stage 2: Have addressType but maybe not addressId
         if (completedSegments.Length == 1 && !endsWithSlash)
         {
             // Still completing address, suggest address IDs
-            items.AddRange(await GetAddressIdSuggestions(completedSegments[0], currentSegment, ct));
-            return items;
+            await foreach (var item in GetAddressIdSuggestions(completedSegments[0], currentSegment, ct))
+                yield return item;
+            yield break;
         }
 
         // Have at least addressType/addressId
@@ -83,10 +90,12 @@ public class UnifiedReferenceAutocompleteProvider(
         if (completedSegments.Length == 2 && endsWithSlash)
         {
             // Just completed address, suggest keywords
-            items.AddRange(GetKeywordSuggestions(address, currentSegment));
+            foreach (var item in GetKeywordSuggestions(address, currentSegment))
+                yield return item;
             // Also suggest layout areas (default when no keyword)
-            items.AddRange(await GetLayoutAreaSuggestions(address, currentSegment, ct));
-            return items;
+            await foreach (var item in GetLayoutAreaSuggestions(address, currentSegment, ct))
+                yield return item;
+            yield break;
         }
 
         if (completedSegments.Length >= 3)
@@ -98,78 +107,90 @@ public class UnifiedReferenceAutocompleteProvider(
             {
                 // Stage 4: Have address and keyword, suggest specific items
                 var remainingPath = string.Join("/", completedSegments.Skip(3));
-                items.AddRange(await GetKeywordSpecificSuggestions(
-                    address, potentialKeyword, remainingPath, currentSegment, ct));
-                return items;
+                await foreach (var item in GetKeywordSpecificSuggestions(
+                    address, potentialKeyword, remainingPath, currentSegment, ct))
+                    yield return item;
+                yield break;
             }
         }
 
         // Default: treat as area reference
         if (completedSegments.Length >= 2)
         {
-            var areaPath = string.Join("/", completedSegments.Skip(2));
-            items.AddRange(await GetLayoutAreaSuggestions(address, currentSegment, ct));
+            await foreach (var item in GetLayoutAreaSuggestions(address, currentSegment, ct))
+                yield return item;
         }
-
-        return items;
     }
 
-    private async Task<IEnumerable<AutocompleteItem>> GetAddressSuggestions(string prefix, CancellationToken ct)
+    private async IAsyncEnumerable<AutocompleteItem> GetAddressSuggestions(
+        string prefix,
+        [EnumeratorCancellation] CancellationToken ct)
     {
-        var items = new List<AutocompleteItem>();
         var currentNamespace = navigationContext?.CurrentNamespace;
         var addedPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         // First, suggest items from current namespace context if available
         if (!string.IsNullOrEmpty(currentNamespace) && meshQuery != null)
         {
+            IAsyncEnumerable<QuerySuggestion>? suggestions = null;
             try
             {
-                await foreach (var suggestion in meshQuery.AutocompleteAsync(currentNamespace, prefix, 10, ct))
+                suggestions = meshQuery.AutocompleteAsync(currentNamespace, prefix, 10, ct);
+            }
+            catch
+            {
+                // Ignore errors from mesh query
+            }
+
+            if (suggestions != null)
+            {
+                await foreach (var suggestion in suggestions.WithCancellation(ct))
                 {
                     if (addedPaths.Add(suggestion.Path))
                     {
-                        items.Add(new AutocompleteItem(
+                        yield return new AutocompleteItem(
                             Label: suggestion.Name,
                             InsertText: $"@{suggestion.Path}/",
                             Description: $"From current context: {suggestion.NodeType ?? "Node"}",
                             Category: "Nearby",
                             Priority: ContextPriority,
                             Kind: AutocompleteKind.Other
-                        ));
+                        );
                     }
                 }
-            }
-            catch
-            {
-                // Ignore errors from mesh query
             }
         }
 
         // Then add top-level nodes from mesh query (root level)
         if (meshQuery != null)
         {
+            IAsyncEnumerable<QuerySuggestion>? suggestions = null;
             try
             {
                 // Query from root (empty base path) to get all top-level nodes
-                await foreach (var suggestion in meshQuery.AutocompleteAsync("", prefix, 15, ct))
+                suggestions = meshQuery.AutocompleteAsync("", prefix, 15, ct);
+            }
+            catch
+            {
+                // Ignore errors from mesh query
+            }
+
+            if (suggestions != null)
+            {
+                await foreach (var suggestion in suggestions.WithCancellation(ct))
                 {
                     if (addedPaths.Add(suggestion.Path))
                     {
-                        items.Add(new AutocompleteItem(
+                        yield return new AutocompleteItem(
                             Label: $"{suggestion.Name}/",
                             InsertText: $"@{suggestion.Path}/",
                             Description: suggestion.NodeType ?? suggestion.Name,
                             Category: "Addresses",
                             Priority: PrefixPriority,
                             Kind: AutocompleteKind.Other
-                        ));
+                        );
                     }
                 }
-            }
-            catch
-            {
-                // Ignore errors from mesh query
             }
         }
 
@@ -188,49 +209,51 @@ public class UnifiedReferenceAutocompleteProvider(
             {
                 if (addedPaths.Add(node.Path))
                 {
-                    items.Add(new AutocompleteItem(
+                    yield return new AutocompleteItem(
                         Label: $"{node.Path}/",
                         InsertText: $"@{node.Path}/",
                         Description: node.Description ?? node.Name,
                         Category: "Types",
                         Priority: PrefixPriority - (node.DisplayOrder ?? 0),
                         Kind: AutocompleteKind.Other
-                    ));
+                    );
                 }
             }
         }
-
-        return items;
     }
 
-    private async Task<IEnumerable<AutocompleteItem>> GetAddressIdSuggestions(
-        string addressType, string prefix, CancellationToken ct)
+    private async IAsyncEnumerable<AutocompleteItem> GetAddressIdSuggestions(
+        string addressType,
+        string prefix,
+        [EnumeratorCancellation] CancellationToken ct)
     {
-        var items = new List<AutocompleteItem>();
+        if (meshQuery == null)
+            yield break;
 
-        if (meshQuery != null)
+        IAsyncEnumerable<QuerySuggestion>? suggestions = null;
+        try
         {
-            try
-            {
-                await foreach (var suggestion in meshQuery.AutocompleteAsync(addressType, prefix, 15, ct))
-                {
-                    items.Add(new AutocompleteItem(
-                        Label: suggestion.Name,
-                        InsertText: $"@{suggestion.Path}/",
-                        Description: suggestion.NodeType ?? "Address",
-                        Category: addressType,
-                        Priority: ItemPriority,
-                        Kind: AutocompleteKind.Other
-                    ));
-                }
-            }
-            catch
-            {
-                // Ignore errors
-            }
+            suggestions = meshQuery.AutocompleteAsync(addressType, prefix, 15, ct);
+        }
+        catch
+        {
+            // Ignore errors
         }
 
-        return items;
+        if (suggestions != null)
+        {
+            await foreach (var suggestion in suggestions.WithCancellation(ct))
+            {
+                yield return new AutocompleteItem(
+                    Label: suggestion.Name,
+                    InsertText: $"@{suggestion.Path}/",
+                    Description: suggestion.NodeType ?? "Address",
+                    Category: addressType,
+                    Priority: ItemPriority,
+                    Kind: AutocompleteKind.Other
+                );
+            }
+        }
     }
 
     private IEnumerable<AutocompleteItem> GetKeywordSuggestions(string address, string prefix)
@@ -248,75 +271,85 @@ public class UnifiedReferenceAutocompleteProvider(
             ));
     }
 
-    private async Task<IEnumerable<AutocompleteItem>> GetLayoutAreaSuggestions(
-        string address, string prefix, CancellationToken ct)
+    private async IAsyncEnumerable<AutocompleteItem> GetLayoutAreaSuggestions(
+        string address,
+        string prefix,
+        [EnumeratorCancellation] CancellationToken ct)
     {
-        var items = new List<AutocompleteItem>();
+        if (meshQuery == null)
+            yield break;
 
-        // Use mesh query to find layout areas under this address
-        if (meshQuery != null)
+        IAsyncEnumerable<QuerySuggestion>? suggestions = null;
+        try
         {
-            try
-            {
-                await foreach (var suggestion in meshQuery.AutocompleteAsync(address, prefix, 15, ct))
-                {
-                    items.Add(new AutocompleteItem(
-                        Label: suggestion.Name,
-                        InsertText: $"@{suggestion.Path} ",
-                        Description: suggestion.NodeType ?? "Layout Area",
-                        Category: "Areas",
-                        Priority: ItemPriority,
-                        Kind: AutocompleteKind.Other
-                    ));
-                }
-            }
-            catch
-            {
-                // Ignore errors
-            }
+            suggestions = meshQuery.AutocompleteAsync(address, prefix, 15, ct);
+        }
+        catch
+        {
+            // Ignore errors
         }
 
-        return items;
+        if (suggestions != null)
+        {
+            await foreach (var suggestion in suggestions.WithCancellation(ct))
+            {
+                yield return new AutocompleteItem(
+                    Label: suggestion.Name,
+                    InsertText: $"@{suggestion.Path} ",
+                    Description: suggestion.NodeType ?? "Layout Area",
+                    Category: "Areas",
+                    Priority: ItemPriority,
+                    Kind: AutocompleteKind.Other
+                );
+            }
+        }
     }
 
-    private async Task<IEnumerable<AutocompleteItem>> GetKeywordSpecificSuggestions(
-        string address, string keyword, string basePath, string prefix, CancellationToken ct)
+    private async IAsyncEnumerable<AutocompleteItem> GetKeywordSpecificSuggestions(
+        string address,
+        string keyword,
+        string basePath,
+        string prefix,
+        [EnumeratorCancellation] CancellationToken ct)
     {
-        var items = new List<AutocompleteItem>();
+        if (meshQuery == null)
+            yield break;
+
         var searchPath = string.IsNullOrEmpty(basePath) ? address : $"{address}/{basePath}";
 
-        if (meshQuery != null)
+        IAsyncEnumerable<QuerySuggestion>? suggestions = null;
+        try
         {
-            try
-            {
-                await foreach (var suggestion in meshQuery.AutocompleteAsync(searchPath, prefix, 15, ct))
-                {
-                    var insertPath = string.IsNullOrEmpty(basePath)
-                        ? $"@{address}/{keyword}/{suggestion.Name}"
-                        : $"@{address}/{keyword}/{basePath}/{suggestion.Name}";
-
-                    // Add trailing space for completed items, slash for containers
-                    var isContainer = suggestion.NodeType != null &&
-                        (suggestion.NodeType.Contains("Collection") || suggestion.NodeType.Contains("Folder"));
-                    insertPath += isContainer ? "/" : " ";
-
-                    items.Add(new AutocompleteItem(
-                        Label: suggestion.Name,
-                        InsertText: insertPath,
-                        Description: suggestion.NodeType ?? GetKeywordItemDescription(keyword),
-                        Category: GetKeywordCategory(keyword),
-                        Priority: ItemPriority,
-                        Kind: GetKeywordKind(keyword)
-                    ));
-                }
-            }
-            catch
-            {
-                // Ignore errors
-            }
+            suggestions = meshQuery.AutocompleteAsync(searchPath, prefix, 15, ct);
+        }
+        catch
+        {
+            // Ignore errors
         }
 
-        return items;
+        if (suggestions != null)
+        {
+            await foreach (var suggestion in suggestions.WithCancellation(ct))
+            {
+                var insertPath = string.IsNullOrEmpty(basePath)
+                    ? $"@{address}/{keyword}/{suggestion.Name}"
+                    : $"@{address}/{keyword}/{basePath}/{suggestion.Name}";
+
+                // Add trailing space for completed items, slash for containers
+                var isContainer = suggestion.NodeType != null &&
+                    (suggestion.NodeType.Contains("Collection") || suggestion.NodeType.Contains("Folder"));
+                insertPath += isContainer ? "/" : " ";
+
+                yield return new AutocompleteItem(
+                    Label: suggestion.Name,
+                    InsertText: insertPath,
+                    Description: suggestion.NodeType ?? GetKeywordItemDescription(keyword),
+                    Category: GetKeywordCategory(keyword),
+                    Priority: ItemPriority,
+                    Kind: GetKeywordKind(keyword)
+                );
+            }
+        }
     }
 
     private static string GetKeywordItemDescription(string keyword) => keyword switch

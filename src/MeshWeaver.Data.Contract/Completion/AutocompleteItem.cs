@@ -26,11 +26,15 @@ public enum AutocompleteKind
 /// <param name="Category">Category for grouping (e.g., "Agents", "Files").</param>
 /// <param name="Priority">Sorting priority within the category (higher = shown first).</param>
 /// <param name="Kind">The kind of item (Agent, File, Command) - determines icon.</param>
+/// <param name="Icon">Optional icon URL or FluentUI icon name.</param>
+/// <param name="Path">Full path for display (shown after label if different).</param>
 public record AutocompleteItem(
     string Label,
     string InsertText,
     string? Description = null,
     string Category = "Files",
     int Priority = 0,
-    AutocompleteKind Kind = AutocompleteKind.Other
+    AutocompleteKind Kind = AutocompleteKind.Other,
+    string? Icon = null,
+    string? Path = null
 );

@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using MeshWeaver.Data.Completion;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
@@ -13,25 +14,25 @@ public class MeshNodeAutocompleteProvider(IMeshCatalog meshCatalog, IMessageHub 
     private const int DefaultMaxResults = 20;
 
     /// <inheritdoc />
-    public async Task<IEnumerable<AutocompleteItem>> GetItemsAsync(string query, CancellationToken ct = default)
+    public async IAsyncEnumerable<AutocompleteItem> GetItemsAsync(
+        string query,
+        string? contextPath = null,
+        [EnumeratorCancellation] CancellationToken ct = default)
     {
         // Use the hub's address as the parent path
         var parentPath = hub.Address.ToString();
 
-        // Query for child nodes and collect results
-        var items = new List<AutocompleteItem>();
+        // Query for child nodes and yield results
         await foreach (var node in meshCatalog.QueryAsync(parentPath, query, DefaultMaxResults, ct))
         {
-            items.Add(new AutocompleteItem(
+            yield return new AutocompleteItem(
                 Label: $"@{node.Path}/",
                 InsertText: $"@{node.Path}/",
                 Description: node.Name ?? node.Description ?? node.NodeType,
                 Category: node.NodeType ?? "Nodes",
                 Priority: 1000 - (node.DisplayOrder ?? 0),
                 Kind: AutocompleteKind.Other
-            ));
+            );
         }
-
-        return items;
     }
 }

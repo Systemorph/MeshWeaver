@@ -1,3 +1,5 @@
+using System.Runtime.CompilerServices;
+
 namespace MeshWeaver.Data.Completion;
 
 /// <summary>
@@ -7,23 +9,28 @@ namespace MeshWeaver.Data.Completion;
 public class DataAutocompleteProvider(IWorkspace workspace) : IAutocompleteProvider
 {
     /// <inheritdoc />
-    public Task<IEnumerable<AutocompleteItem>> GetItemsAsync(string query, CancellationToken ct = default)
+    public async IAsyncEnumerable<AutocompleteItem> GetItemsAsync(
+        string query,
+        string? contextPath = null,
+        [EnumeratorCancellation] CancellationToken ct = default)
     {
+        await Task.CompletedTask; // Satisfy async requirement
+
         var dataContext = workspace.DataContext;
         var address = workspace.Hub.Address;
 
         // Get all collection names from TypeSources
         // Format: addressType/addressId/data/collectionName
-        var items = dataContext.TypeSources.Keys
-            .Select(collectionName => new AutocompleteItem(
+        foreach (var collectionName in dataContext.TypeSources.Keys)
+        {
+            yield return new AutocompleteItem(
                 Label: collectionName,
                 InsertText: $"@{address}/data/{collectionName} ",
                 Description: $"Data collection: {collectionName}",
                 Category: "Data Collections",
                 Priority: 0,
                 Kind: AutocompleteKind.Other
-            ));
-
-        return Task.FromResult(items);
+            );
+        }
     }
 }
