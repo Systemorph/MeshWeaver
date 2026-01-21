@@ -23,7 +23,7 @@ public class AutocompleteService(
         AutocompleteRequest request,
         CancellationToken ct = default)
     {
-        var results = await GetCompletionsInternalAsync(request.Query, ct);
+        var results = await GetCompletionsInternalAsync(request.Query, request.Context, ct);
 
         // Convert AutocompleteResult to AutocompleteItem for the response
         var items = results.Select(r => new AutocompleteItem(
@@ -32,7 +32,9 @@ public class AutocompleteService(
             Description: r.Description,
             Category: r.Category,
             Priority: r.Score,
-            Kind: r.Kind
+            Kind: r.Kind,
+            Icon: r.Icon,
+            Path: r.Path
         )).ToList();
 
         return new AutocompleteResponse(items);
@@ -50,11 +52,12 @@ public class AutocompleteService(
         int maxResults = 20,
         CancellationToken ct = default)
     {
-        return await GetCompletionsInternalAsync(query, ct, maxResults);
+        return await GetCompletionsInternalAsync(query, null, ct, maxResults);
     }
 
     private async Task<IReadOnlyList<AutocompleteResult>> GetCompletionsInternalAsync(
         string query,
+        string? contextPath,
         CancellationToken ct,
         int maxResults = 20)
     {
@@ -65,8 +68,10 @@ public class AutocompleteService(
         {
             try
             {
-                var items = await provider.GetItemsAsync(query, ct);
-                allItems.AddRange(items);
+                await foreach (var item in provider.GetItemsAsync(query, contextPath, ct))
+                {
+                    allItems.Add(item);
+                }
             }
             catch
             {
@@ -99,7 +104,9 @@ public class AutocompleteService(
                 s.Item.Category,
                 s.Score,
                 s.MatchPositions,
-                s.Item.Kind
+                s.Item.Kind,
+                s.Item.Icon,
+                s.Item.Path
             ))
             .ToList();
 
@@ -117,5 +124,7 @@ public record AutocompleteResult(
     string Category,
     int Score,
     int[] MatchPositions,
-    AutocompleteKind Kind
+    AutocompleteKind Kind,
+    string? Icon = null,
+    string? Path = null
 );

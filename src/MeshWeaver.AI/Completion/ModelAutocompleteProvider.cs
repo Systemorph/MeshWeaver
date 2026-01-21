@@ -1,21 +1,22 @@
 #nullable enable
 
+using System.Runtime.CompilerServices;
 using MeshWeaver.Data.Completion;
 
 namespace MeshWeaver.AI.Completion;
 
 /// <summary>
 /// Provides autocomplete items for AI models.
-/// Gets models from IAgentChatFactoryProvider when available.
+/// Gets models from IChatClientFactory when available.
 /// </summary>
 public class ModelAutocompleteProvider : IAutocompleteProvider
 {
-    private readonly IAgentChatFactoryProvider? _factoryProvider;
+    private readonly IChatClientFactory? _chatClientFactory;
     private IReadOnlyList<string>? _availableModels;
 
-    public ModelAutocompleteProvider(IAgentChatFactoryProvider factoryProvider)
+    public ModelAutocompleteProvider(IChatClientFactory chatClientFactory)
     {
-        _factoryProvider = factoryProvider;
+        _chatClientFactory = chatClientFactory;
     }
 
     public ModelAutocompleteProvider()
@@ -32,13 +33,16 @@ public class ModelAutocompleteProvider : IAutocompleteProvider
     }
 
     /// <inheritdoc />
-    public Task<IEnumerable<AutocompleteItem>> GetItemsAsync(string query, CancellationToken ct = default)
+    public async IAsyncEnumerable<AutocompleteItem> GetItemsAsync(
+        string query,
+        string? contextPath = null,
+        [EnumeratorCancellation] CancellationToken ct = default)
     {
         IReadOnlyList<string> models;
 
-        if (_factoryProvider != null)
+        if (_chatClientFactory != null)
         {
-            models = _factoryProvider.AllModels;
+            models = _chatClientFactory.Models;
         }
         else if (_availableModels != null)
         {
@@ -46,19 +50,21 @@ public class ModelAutocompleteProvider : IAutocompleteProvider
         }
         else
         {
-            return Task.FromResult<IEnumerable<AutocompleteItem>>([]);
+            yield break;
         }
 
-        var items = models
-            .Select(model => new AutocompleteItem(
+        await Task.CompletedTask; // Satisfy async requirement
+
+        foreach (var model in models)
+        {
+            yield return new AutocompleteItem(
                 Label: $"@model/{model}",
                 InsertText: $"@model/{model} ",
                 Description: "AI Model",
                 Category: "Models",
                 Priority: 0,
                 Kind: AutocompleteKind.Other
-            ));
-
-        return Task.FromResult(items);
+            );
+        }
     }
 }

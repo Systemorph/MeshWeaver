@@ -18,15 +18,17 @@ public static class AgentDetailsArea
     {
         // Extract agent name from LayoutAreaReference.Id
         var agentName = ExtractAgentNameFromLayoutAreaId(host.Reference.Id);
-        var factory = host.Hub.ServiceProvider.GetService<IAgentChatFactory>();
-        if (factory == null)
+        var meshQuery = host.Hub.ServiceProvider.GetService<MeshWeaver.Mesh.Services.IMeshQuery>();
+        if (meshQuery == null)
         {
             return Controls.Stack
                 .WithView(Controls.Title("Agent Details", 2), "Title")
                 .WithView(Controls.Text("Agent service not available."), "ErrorMessage");
         }
 
-        var agents = await factory.GetAgentsAsync();
+        // Load agents using AgentOrderingHelper
+        var agentDisplayInfos = await AgentOrderingHelper.QueryAgentsAsync(meshQuery, null, null);
+        var agents = agentDisplayInfos.Select(a => a.AgentConfiguration).ToList();
         var agent = agents.FirstOrDefault(a => a.Id == agentName);
 
         if (agent == null)

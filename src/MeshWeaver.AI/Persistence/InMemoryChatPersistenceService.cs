@@ -8,7 +8,7 @@ namespace MeshWeaver.AI.Persistence;
 /// Stores conversations and agent chat states in memory for the duration of the application
 /// Supports per-user conversation isolation
 /// </summary>
-public class InMemoryChatPersistenceService(IAgentChatFactory agentChatFactory, AccessService accessService) : IChatPersistenceService
+public class InMemoryChatPersistenceService(IServiceProvider serviceProvider, AccessService accessService) : IChatPersistenceService
 {
     private readonly ConcurrentDictionary<string, ConcurrentDictionary<string, ChatConversation>> userConversations = new();
     private readonly ConcurrentDictionary<string, ConcurrentDictionary<string, IAgentChat>> userAgentChatStates = new();
@@ -68,9 +68,21 @@ public class InMemoryChatPersistenceService(IAgentChatFactory agentChatFactory, 
             return ret;
 
         var conversations = GetUserConversations();
-        return conversations.TryGetValue(conversationId, out var conv)
-            ? await agentChatFactory.ResumeAsync(conv!)
-            : await agentChatFactory.CreateAsync();
+        var chat = new AgentChatClient(serviceProvider);
+
+        if (conversations.TryGetValue(conversationId, out var conv))
+        {
+            // Initialize with the conversation's context path
+            var contextPath = conv.AgentContext?.ToUnifiedPath();
+            await chat.InitializeAsync(contextPath);
+            await chat.ResumeAsync(conv);
+        }
+        else
+        {
+            await chat.InitializeAsync(null);
+        }
+
+        return chat;
     }
     public Task<List<ChatConversation>> GetConversationsAsync()
     {

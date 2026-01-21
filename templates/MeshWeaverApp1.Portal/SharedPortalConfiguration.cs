@@ -64,8 +64,8 @@ public static class SharedPortalConfiguration
         });
         services.AddAzureOpenAI();
 
-        // Register the factory provider (must be after all factory registrations)
-        services.AddAgentChatFactoryProvider();
+        // Register the AI chat services (must be after all factory registrations)
+        services.AddAgentChatServices();
 
         // configure Azure Foundry chat
         //services.Configure<AzureAIFoundryConfiguration>(builder.Configuration.GetSection("AzureAIS"));

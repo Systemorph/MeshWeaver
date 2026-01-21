@@ -7,13 +7,13 @@ using Microsoft.Extensions.AI;
 namespace MeshWeaver.AI.AzureFoundry;
 
 /// <summary>
-/// Factory for creating agent chats using Azure AI Foundry Claude/Anthropic services.
+/// Factory for creating ChatClientAgent instances with Azure AI Foundry Claude/Anthropic services.
 /// </summary>
-public class AzureClaudeChatCompletionAgentChatFactory(
+public class AzureClaudeChatClientAgentFactory(
     IMessageHub hub,
     IOptions<AzureClaudeConfiguration> options,
-    ILogger<AzureClaudeChatCompletionAgentChatFactory> logger)
-    : ChatCompletionAgentChatFactory(hub)
+    ILogger<AzureClaudeChatClientAgentFactory> logger)
+    : ChatClientAgentFactory(hub)
 {
     private readonly AzureClaudeConfiguration configuration = options.Value ?? throw new ArgumentNullException(nameof(options));
 

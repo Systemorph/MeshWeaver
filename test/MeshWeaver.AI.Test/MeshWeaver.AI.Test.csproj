@@ -7,8 +7,14 @@
     <ProjectReference Include="..\..\src\MeshWeaver.AI\MeshWeaver.AI.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Layout\MeshWeaver.Layout.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Fixture\MeshWeaver.Fixture.csproj" />
+    <ProjectReference Include="..\..\src\MeshWeaver.Graph\MeshWeaver.Graph.csproj" />
+    <ProjectReference Include="..\..\src\MeshWeaver.Hosting.Monolith.TestBase\MeshWeaver.Hosting.Monolith.TestBase.csproj" />
+    <ProjectReference Include="..\..\src\MeshWeaver.Hosting\MeshWeaver.Hosting.csproj" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="NSubstitute" />
+  </ItemGroup>
+  <ItemGroup>
+    <Content Include="..\..\samples\Graph\Data\**\*" LinkBase="TestData" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

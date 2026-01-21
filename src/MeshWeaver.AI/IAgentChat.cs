@@ -9,6 +9,13 @@ public interface IAgentChat
     void SetContext(AgentContext? applicationContext);
     Task ResumeAsync(ChatConversation conversation);
 
+    /// <summary>
+    /// Returns an ordered list of agents for the current context.
+    /// The first agent is the recommended default for the current context.
+    /// Order: context-matching agents first, then default agents by path depth, then others.
+    /// </summary>
+    Task<IReadOnlyList<AgentDisplayInfo>> GetOrderedAgentsAsync();
+
     /// <summary>Sends chat messages and returns the response.</summary>
     /// <param name="messages">The sequence of chat messages to send.</param>
     /// <param name="cancellationToken">The <see cref="CancellationToken"/> to monitor for cancellation requests. The default is <see cref="CancellationToken.None"/>.</param>

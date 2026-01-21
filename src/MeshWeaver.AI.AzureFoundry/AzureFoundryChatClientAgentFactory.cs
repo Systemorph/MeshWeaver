@@ -9,13 +9,13 @@ using Microsoft.Extensions.AI;
 namespace MeshWeaver.AI.AzureFoundry;
 
 /// <summary>
-/// Factory for creating agent chats using Azure AI Foundry services.
+/// Factory for creating ChatClientAgent instances with Azure AI Foundry services.
 /// </summary>
-public class AzureFoundryChatCompletionAgentChatFactory(
+public class AzureFoundryChatClientAgentFactory(
     IMessageHub hub,
     IOptions<AzureFoundryConfiguration> options,
-    ILogger<AzureFoundryChatCompletionAgentChatFactory> logger)
-    : ChatCompletionAgentChatFactory(hub)
+    ILogger<AzureFoundryChatClientAgentFactory> logger)
+    : ChatClientAgentFactory(hub)
 {
     private readonly AzureFoundryConfiguration configuration = options.Value ?? throw new ArgumentNullException(nameof(options));
 

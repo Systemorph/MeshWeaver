@@ -12,7 +12,8 @@ public interface IAutocompleteProvider
     /// Gets autocomplete items from this provider.
     /// </summary>
     /// <param name="query">The search query (text being typed after the prefix).</param>
+    /// <param name="contextPath">Optional context path for proximity-based ordering.</param>
     /// <param name="ct">Cancellation token.</param>
-    /// <returns>Collection of autocomplete items.</returns>
-    Task<IEnumerable<AutocompleteItem>> GetItemsAsync(string query, CancellationToken ct = default);
+    /// <returns>Async enumerable of autocomplete items.</returns>
+    IAsyncEnumerable<AutocompleteItem> GetItemsAsync(string query, string? contextPath = null, CancellationToken ct = default);
 }
