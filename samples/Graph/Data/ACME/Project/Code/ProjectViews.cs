@@ -247,6 +247,7 @@ public static class ProjectViews
 
     /// <summary>
     /// Builds a collapsible section from TodoItems using LayoutAreaControl.
+    /// Uses a responsive grid layout: 3 columns on large, 2 on medium, 1 on small screens.
     /// </summary>
     private static UiControl BuildCollapsibleSectionFromItems(string title, List<TodoItem> items, bool defaultOpen)
     {
@@ -255,21 +256,22 @@ public static class ProjectViews
 
         // Section header
         sectionStack = sectionStack.WithView(Controls.Html($@"
-            <div style=""padding: 8px 12px; background: var(--neutral-layer-2); border-radius: 6px; font-weight: 600; margin-bottom: 4px;"">
+            <div style=""padding: 8px 12px; background: var(--neutral-layer-2); border-radius: 6px; font-weight: 600; margin-bottom: 8px;"">
                 {title}
             </div>"));
 
-        // Items container - each todo rendered via LayoutAreaControl pointing to TodoViews.Thumbnail
-        var itemsStack = Controls.Stack
-            .WithStyle(style => style.WithBorder("1px solid var(--neutral-stroke-rest)").WithBorderRadius("6px"));
+        // Items container - responsive grid layout: 3 cols on md+, 2 on sm, 1 on xs
+        var itemsGrid = Controls.LayoutGrid
+            .WithSkin(skin => skin.WithSpacing(8));
 
         foreach (var item in items)
         {
-            itemsStack = itemsStack.WithView(
-                Controls.LayoutArea(new Address(item.Path), "Thumbnail"));
+            itemsGrid = itemsGrid.WithView(
+                Controls.LayoutArea(new Address(item.Path), "Thumbnail"),
+                skin => skin.WithXs(12).WithSm(6).WithMd(4));
         }
 
-        sectionStack = sectionStack.WithView(itemsStack);
+        sectionStack = sectionStack.WithView(itemsGrid);
 
         return sectionStack;
     }
@@ -516,20 +518,22 @@ public static class ProjectViews
 
         // Section header
         sectionStack = sectionStack.WithView(Controls.Html($@"
-            <div style=""padding: 8px 12px; background: var(--neutral-layer-2); border-radius: 6px; font-weight: 600; margin-bottom: 4px; opacity: 0.8;"">
+            <div style=""padding: 8px 12px; background: var(--neutral-layer-2); border-radius: 6px; font-weight: 600; margin-bottom: 8px; opacity: 0.8;"">
                 🗑️ Deleted ({deletedTodos.Count})
             </div>"));
 
-        // Items container
-        var itemsStack = Controls.Stack
-            .WithStyle(style => style.WithBorder("1px solid var(--neutral-stroke-rest)").WithBorderRadius("6px"));
+        // Items container - responsive grid layout: 3 cols on md+, 2 on sm, 1 on xs
+        var itemsGrid = Controls.LayoutGrid
+            .WithSkin(skin => skin.WithSpacing(8));
 
         foreach (var todo in deletedTodos)
         {
-            itemsStack = itemsStack.WithView(BuildDeletedTodoListItem(todo, host));
+            itemsGrid = itemsGrid.WithView(
+                BuildDeletedTodoListItem(todo, host),
+                skin => skin.WithXs(12).WithSm(6).WithMd(4));
         }
 
-        sectionStack = sectionStack.WithView(itemsStack);
+        sectionStack = sectionStack.WithView(itemsGrid);
 
         return sectionStack;
     }
@@ -804,50 +808,52 @@ public static class ProjectViews
         var priorityBadge = GetPriorityBadge(todo.Priority);
         var todoPath = todo.Path;
 
-        // Main row with info and actions
-        var row = Controls.Stack
-            .WithOrientation(Orientation.Horizontal)
+        // Card layout for deleted item
+        var card = Controls.Stack
             .WithStyle(style => style
-                .WithPadding("8px 12px")
-                .WithBorderBottom("1px solid var(--neutral-stroke-rest)")
-                .WithAlignItems("center")
-                .WithGap("8px")
-                .WithBackgroundColor("var(--neutral-layer-2)"));
+                .WithPadding("12px")
+                .WithBorder("1px solid var(--neutral-stroke-rest)")
+                .WithBorderRadius("8px")
+                .WithBackgroundColor("var(--neutral-layer-2)")
+                .WithHeight("100%"));
 
-        // Deleted icon
-        row = row.WithView(Controls.Html("<span style=\"font-size: 16px; opacity: 0.5;\">🗑️</span>"));
+        // Header: icon + title + priority
+        card = card.WithView(Controls.Html($@"
+            <div style=""display: flex; align-items: center; gap: 8px; margin-bottom: 8px; opacity: 0.8;"">
+                <span style=""font-size: 16px;"">🗑️</span>
+                <a href=""/{todoPath}"" style=""flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-decoration: line-through; color: inherit; font-weight: 600;"">
+                    {System.Web.HttpUtility.HtmlEncode(todo.Title)}
+                </a>
+                {priorityBadge}
+            </div>"));
 
-        // Title with strikethrough (clickable to view details)
-        row = row.WithView(Controls.Html($@"
-            <a href=""/{todoPath}"" style=""flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-decoration: line-through; opacity: 0.7; color: inherit;"">
-                {System.Web.HttpUtility.HtmlEncode(todo.Title)}
-            </a>"));
-
-        // Priority badge
-        if (!string.IsNullOrEmpty(priorityBadge))
-        {
-            row = row.WithView(Controls.Html($"<span style=\"opacity: 0.7;\">{priorityBadge}</span>"));
-        }
+        // Action buttons row
+        var buttonRow = Controls.Stack
+            .WithOrientation(Orientation.Horizontal)
+            .WithStyle(style => style.WithGap("8px"));
 
         // Restore button
-        row = row.WithView(
+        buttonRow = buttonRow.WithView(
             Controls.Button("↩️ Restore")
                 .WithAppearance(Appearance.Accent)
-                .WithStyle(style => style.WithPadding("4px 12px"))
+                .WithStyle(style => style.WithPadding("4px 8px"))
                 .WithClickAction(actx => RestoreTodo(actx.Host, todoPath)));
 
         // Permanent delete button
-        row = row.WithView(
-            Controls.Button("🔥 Delete Forever")
+        buttonRow = buttonRow.WithView(
+            Controls.Button("🔥")
+                .WithLabel("Delete Forever")
                 .WithAppearance(Appearance.Neutral)
-                .WithStyle(style => style.WithPadding("4px 12px").WithColor("#dc3545"))
+                .WithStyle(style => style.WithPadding("4px 8px").WithColor("#dc3545"))
                 .WithClickAction(actx =>
                 {
                     ShowPermanentDeleteConfirmationDialog(actx.Host, todo, todoPath);
                     return System.Threading.Tasks.Task.CompletedTask;
                 }));
 
-        return row;
+        card = card.WithView(buttonRow);
+
+        return card;
     }
 
     /// <summary>
