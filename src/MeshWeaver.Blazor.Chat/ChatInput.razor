@@ -17,71 +17,70 @@
                           AsyncCompletionCallback="@AsyncCompletionCallback" />
     </div>
 
-    <div class="tools">
+    <FluentStack Orientation="Orientation.Horizontal" VerticalAlignment="VerticalAlignment.Center" HorizontalGap="8" Class="tools">
         @if (ShowSelectors)
         {
-            <div class="chat-selectors">
-                @* 1. Context selector *@
-                <SimpleDropdown TOption="CompletionItem"
-                                SelectedItem="@selectedContextItem"
-                                SelectedItemChanged="@OnContextItemChanged"
-                                OnSearch="@OnContextSearchAsync"
-                                GetDisplayText="@(c => c?.Label ?? "Context...")"
-                                Placeholder="Context..."
-                                Tooltip="@(selectedContextItem?.Path ?? "Select context")"
-                                PanelWidth="320px"
-                                Class="selector-context">
-                    <ItemTemplate Context="item">
-                        <div class="simple-dropdown-item-name">@item.Label</div>
-                        @if (!string.IsNullOrEmpty(item.Path) && item.Path != item.Label)
-                        {
-                            <div class="simple-dropdown-item-path">@item.Path</div>
-                        }
+            @* 1. Context selector *@
+            <SimpleDropdown TOption="CompletionItem"
+                            SelectedItem="@selectedContextItem"
+                            SelectedItemChanged="@OnContextItemChanged"
+                            OnSearch="@OnContextSearchAsync"
+                            GetDisplayText="@(c => c?.Label ?? "Context...")"
+                            Placeholder="Context..."
+                            Tooltip="@(selectedContextItem?.Path ?? "Select context")"
+                            PanelWidth="320px"
+                            Class="selector-context">
+                <ItemTemplate Context="item">
+                    <div class="simple-dropdown-item-name">@item.Label</div>
+                    @if (!string.IsNullOrEmpty(item.Path) && item.Path != item.Label)
+                    {
+                        <div class="simple-dropdown-item-path">@item.Path</div>
+                    }
+                </ItemTemplate>
+            </SimpleDropdown>
+
+            @* 2. Agent selector *@
+            <SimpleDropdown TOption="AgentDisplayInfo"
+                            SelectedItem="@SelectedAgentInfo"
+                            SelectedItemChanged="@OnAgentItemChanged"
+                            Items="@AgentDisplayInfos"
+                            GetDisplayText="@(a => a?.Name ?? "Select agent...")"
+                            Placeholder="Select agent..."
+                            Tooltip="@(SelectedAgentInfo?.Path ?? "Select agent")"
+                            PanelWidth="320px"
+                            Class="selector-agent">
+                <ItemTemplate Context="agent">
+                    <div class="simple-dropdown-item-name">@agent.Name</div>
+                    @if (!string.IsNullOrEmpty(agent.Path) && agent.Path != agent.Name)
+                    {
+                        <div class="simple-dropdown-item-path">@agent.Path</div>
+                    }
+                    @if (!string.IsNullOrEmpty(agent.Description))
+                    {
+                        <div class="simple-dropdown-item-description">@TruncateDescription(agent.Description, 80)</div>
+                    }
+                </ItemTemplate>
+            </SimpleDropdown>
+
+            @* 3. Model selector *@
+            @if (AvailableModels.Count > 0)
+            {
+                <SimpleDropdown TOption="string"
+                                SelectedItem="@SelectedModel"
+                                SelectedItemChanged="@OnModelItemChanged"
+                                Items="@AvailableModels"
+                                GetDisplayText="@(m => m ?? "Select model...")"
+                                Placeholder="Select model..."
+                                ShowSearch="false"
+                                PanelWidth="200px"
+                                Class="selector-model">
+                    <ItemTemplate Context="model">
+                        <div class="simple-dropdown-item-name">@model</div>
                     </ItemTemplate>
                 </SimpleDropdown>
-
-                @* 2. Agent selector *@
-                <SimpleDropdown TOption="AgentDisplayInfo"
-                                SelectedItem="@SelectedAgentInfo"
-                                SelectedItemChanged="@OnAgentItemChanged"
-                                Items="@AgentDisplayInfos"
-                                GetDisplayText="@(a => a?.Name ?? "Select agent...")"
-                                Placeholder="Select agent..."
-                                Tooltip="@(SelectedAgentInfo?.Path ?? "Select agent")"
-                                PanelWidth="320px"
-                                Class="selector-agent">
-                    <ItemTemplate Context="agent">
-                        <div class="simple-dropdown-item-name">@agent.Name</div>
-                        @if (!string.IsNullOrEmpty(agent.Path) && agent.Path != agent.Name)
-                        {
-                            <div class="simple-dropdown-item-path">@agent.Path</div>
-                        }
-                        @if (!string.IsNullOrEmpty(agent.Description))
-                        {
-                            <div class="simple-dropdown-item-description">@TruncateDescription(agent.Description, 80)</div>
-                        }
-                    </ItemTemplate>
-                </SimpleDropdown>
-
-                @* 3. Model selector *@
-                @if (AvailableModels.Count > 0)
-                {
-                    <SimpleDropdown TOption="string"
-                                    SelectedItem="@SelectedModel"
-                                    SelectedItemChanged="@OnModelItemChanged"
-                                    Items="@AvailableModels"
-                                    GetDisplayText="@(m => m ?? "Select model...")"
-                                    Placeholder="Select model..."
-                                    ShowSearch="false"
-                                    PanelWidth="200px"
-                                    Class="selector-model">
-                        <ItemTemplate Context="model">
-                            <div class="simple-dropdown-item-name">@model</div>
-                        </ItemTemplate>
-                    </SimpleDropdown>
-                }
-            </div>
+            }
         }
+        <FluentSpacer />
         <button type="button" title="Send" class="send-button" @onclick="@SendMessageAsync"
             disabled="@(IsDisabled || string.IsNullOrWhiteSpace(MessageText))">
             <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5"
@@ -90,7 +89,7 @@
                     d="M6 12 3.269 3.125A59.769 59.769 0 0 1 21.485 12 59.768 59.768 0 0 1 3.27 20.875L5.999 12Zm0 0h7.5" />
             </svg>
         </button>
-    </div>
+    </FluentStack>
 </div>
 
 @code {

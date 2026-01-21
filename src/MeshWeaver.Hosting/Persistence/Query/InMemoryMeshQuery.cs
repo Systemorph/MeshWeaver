@@ -140,6 +140,43 @@ public class InMemoryMeshQuery : IMeshQuery
             }
         }
 
+        // If scope includes ancestors (AncestorsAndSelf, Hierarchy), also search children of self and each ancestor path
+        // This allows finding agents like "TodoAgent" (child of self) and "Navigator" (child of root)
+        // when searching from "ACME/Project"
+        if (effectiveScope == QueryScope.AncestorsAndSelf || effectiveScope == QueryScope.Hierarchy || effectiveScope == QueryScope.Ancestors)
+        {
+            // Get self + ancestors for AncestorsAndSelf, just ancestors for Ancestors
+            var pathsToSearchChildren = effectiveScope == QueryScope.Ancestors
+                ? GetPathsForScope(basePath, QueryScope.Ancestors)
+                : GetPathsForScope(basePath, QueryScope.AncestorsAndSelf);
+
+            foreach (var ancestorPath in pathsToSearchChildren)
+            {
+                await foreach (var child in _persistence.GetChildrenSecureAsync(ancestorPath, userId).WithCancellation(ct))
+                {
+                    // Evaluate the node itself
+                    if (_evaluator.Matches(child, parsedQuery))
+                    {
+                        var score = _evaluator.GetFuzzyScore(child, parsedQuery.TextSearch);
+                        // Avoid duplicates
+                        if (!results.Any(r => ReferenceEquals(r.Item, child)))
+                            results.Add((child, score));
+                    }
+
+                    // Search partition objects under child
+                    var childPath = NormalizePath(child.Path);
+                    await foreach (var obj in _persistence.GetPartitionObjectsAsync(childPath).WithCancellation(ct))
+                    {
+                        if (_evaluator.Matches(obj, parsedQuery))
+                        {
+                            var score = _evaluator.GetFuzzyScore(obj, parsedQuery.TextSearch);
+                            results.Add((obj, score));
+                        }
+                    }
+                }
+            }
+        }
+
         // If we're doing scope=descendants, also search descendant paths recursively
         if (effectiveScope == QueryScope.Descendants || effectiveScope == QueryScope.Hierarchy || effectiveScope == QueryScope.Subtree)
         {

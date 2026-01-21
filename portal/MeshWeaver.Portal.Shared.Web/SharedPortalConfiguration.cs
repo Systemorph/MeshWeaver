@@ -18,7 +18,6 @@ using MeshWeaver.Insurance.Domain.Services;
 using MeshWeaver.Markdown;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
-using MeshWeaver.Portal.AI;
 using Microsoft.AspNetCore.Authentication.OpenIdConnect;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.Extensions.Configuration;
@@ -59,7 +58,6 @@ public static class SharedPortalConfiguration
 
         // Configure Radzen
         services.AddRadzenServices();
-        services.AddPortalAI();
         services.AddMemoryChatPersistence();
 
         // Configure AI factories (ordered by DisplayOrder - Anthropic first)
@@ -81,8 +79,8 @@ public static class SharedPortalConfiguration
             config.DisplayOrder = 20;  // Azure OpenAI last
         });
 
-        // Register the factory provider (must be after all factory registrations)
-        services.AddAgentChatFactoryProvider();
+        // Register the AI chat services (must be after all factory registrations)
+        services.AddAgentChatServices();
 
         // setting up google maps configuration
         services.Configure<GoogleMapsConfiguration>(builder.Configuration.GetSection("GoogleMaps"));

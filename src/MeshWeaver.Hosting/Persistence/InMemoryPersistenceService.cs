@@ -207,8 +207,7 @@ public class InMemoryPersistenceService(IStorageAdapter? storageAdapter = null) 
             StartupScript = sourceNode.StartupScript,
             RoutingType = sourceNode.RoutingType,
             InstantiationType = sourceNode.InstantiationType,
-            GlobalServiceConfigurations = sourceNode.GlobalServiceConfigurations,
-            AutocompleteAddress = sourceNode.AutocompleteAddress
+            GlobalServiceConfigurations = sourceNode.GlobalServiceConfigurations
         };
         await SaveNodeAsync(movedNode, ct);
 
@@ -239,8 +238,7 @@ public class InMemoryPersistenceService(IStorageAdapter? storageAdapter = null) 
                     StartupScript = descendantNode.StartupScript,
                     RoutingType = descendantNode.RoutingType,
                     InstantiationType = descendantNode.InstantiationType,
-                    GlobalServiceConfigurations = descendantNode.GlobalServiceConfigurations,
-                    AutocompleteAddress = descendantNode.AutocompleteAddress
+                    GlobalServiceConfigurations = descendantNode.GlobalServiceConfigurations
                 };
                 await SaveNodeAsync(movedDescendant, ct);
             }
