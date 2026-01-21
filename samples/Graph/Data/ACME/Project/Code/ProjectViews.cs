@@ -49,9 +49,6 @@ public record Todo : IContentInitializable
     public TodoStatus Status { get; init; } = TodoStatus.Pending;
 
     [Browsable(false)]
-    public string Icon { get; init; } = "TaskListSquare";
-
-    [Browsable(false)]
     public DateTime? CompletedAt { get; init; }
 
     public object Initialize()
@@ -69,14 +66,6 @@ public record Todo : IContentInitializable
 /// </summary>
 public static class ProjectViews
 {
-    // Shared refresh trigger for real-time updates across views
-    private static readonly System.Reactive.Subjects.Subject<long> _refreshTrigger = new();
-
-    /// <summary>
-    /// Triggers a refresh of all views that subscribe to the refresh mechanism.
-    /// </summary>
-    public static void TriggerRefresh() => _refreshTrigger.OnNext(DateTime.UtcNow.Ticks);
-
     /// <summary>
     /// Summary view showing aggregated statistics for all child Todo items.
     /// </summary>
@@ -85,13 +74,11 @@ public static class ProjectViews
     {
         var hubPath = host.Hub.Address.ToString();
 
-        return _refreshTrigger
-            .StartWith(0)
-            .SelectMany(_ => Observable.FromAsync(async () =>
-            {
-                var todos = await LoadChildTodos(hubPath, host);
-                return BuildSummaryView(todos, hubPath);
-            }));
+        return Observable.FromAsync(async () =>
+        {
+            var todos = await LoadChildTodos(hubPath, host);
+            return BuildSummaryView(todos, hubPath);
+        });
     }
 
     private static UiControl BuildSummaryView(List<Todo> todos, string hubPath)
@@ -254,14 +241,12 @@ public static class ProjectViews
     public static IObservable<UiControl?> AllTasks(LayoutAreaHost host, RenderingContext _)
     {
         var hubPath = host.Hub.Address.ToString();
-        return _refreshTrigger
-            .StartWith(0)
-            .SelectMany(_ => Observable.FromAsync(async () =>
-            {
-                var todos = await LoadChildTodos(hubPath, host);
-                var deletedTodos = await LoadDeletedTodos(hubPath, host);
-                return BuildAllTasksView(todos, deletedTodos, host, hubPath);
-            }));
+        return Observable.FromAsync(async () =>
+        {
+            var todos = await LoadChildTodos(hubPath, host);
+            var deletedTodos = await LoadDeletedTodos(hubPath, host);
+            return BuildAllTasksView(todos, deletedTodos, host, hubPath);
+        });
     }
 
     private static UiControl BuildAllTasksView(List<Todo> todos, List<Todo> deletedTodos, LayoutAreaHost host, string hubPath)
@@ -345,13 +330,11 @@ public static class ProjectViews
     public static IObservable<UiControl?> TodosByCategory(LayoutAreaHost host, RenderingContext _)
     {
         var hubPath = host.Hub.Address.ToString();
-        return _refreshTrigger
-            .StartWith(0)
-            .SelectMany(_ => Observable.FromAsync(async () =>
-            {
-                var todos = await LoadChildTodos(hubPath, host);
-                return BuildTodosByCategoryView(todos, hubPath, host);
-            }));
+        return Observable.FromAsync(async () =>
+        {
+            var todos = await LoadChildTodos(hubPath, host);
+            return BuildTodosByCategoryView(todos, hubPath, host);
+        });
     }
 
     private static UiControl BuildTodosByCategoryView(List<Todo> todos, string hubPath, LayoutAreaHost host)
@@ -401,13 +384,11 @@ public static class ProjectViews
     public static IObservable<UiControl?> Planning(LayoutAreaHost host, RenderingContext _)
     {
         var hubPath = host.Hub.Address.ToString();
-        return _refreshTrigger
-            .StartWith(0)
-            .SelectMany(_ => Observable.FromAsync(async () =>
-            {
-                var todos = await LoadChildTodos(hubPath, host);
-                return BuildPlanningView(todos, host, hubPath);
-            }));
+        return Observable.FromAsync(async () =>
+        {
+            var todos = await LoadChildTodos(hubPath, host);
+            return BuildPlanningView(todos, host, hubPath);
+        });
     }
 
     private static UiControl BuildPlanningView(List<Todo> todos, LayoutAreaHost host, string hubPath)
@@ -484,13 +465,11 @@ public static class ProjectViews
     public static IObservable<UiControl?> MyTasks(LayoutAreaHost host, RenderingContext _)
     {
         var hubPath = host.Hub.Address.ToString();
-        return _refreshTrigger
-            .StartWith(0)
-            .SelectMany(_ => Observable.FromAsync(async () =>
-            {
-                var todos = await LoadChildTodos(hubPath, host);
-                return BuildMyTasksView(todos, hubPath, host);
-            }));
+        return Observable.FromAsync(async () =>
+        {
+            var todos = await LoadChildTodos(hubPath, host);
+            return BuildMyTasksView(todos, hubPath, host);
+        });
     }
 
     private static UiControl BuildMyTasksView(List<Todo> todos, string hubPath, LayoutAreaHost host)
@@ -578,13 +557,11 @@ public static class ProjectViews
     public static IObservable<UiControl?> Backlog(LayoutAreaHost host, RenderingContext _)
     {
         var hubPath = host.Hub.Address.ToString();
-        return _refreshTrigger
-            .StartWith(0)
-            .SelectMany(_ => Observable.FromAsync(async () =>
-            {
-                var todos = await LoadChildTodos(hubPath, host);
-                return BuildBacklogView(todos, host, hubPath);
-            }));
+        return Observable.FromAsync(async () =>
+        {
+            var todos = await LoadChildTodos(hubPath, host);
+            return BuildBacklogView(todos, host, hubPath);
+        });
     }
 
     private static UiControl BuildBacklogView(List<Todo> todos, LayoutAreaHost host, string hubPath)
@@ -681,10 +658,7 @@ public static class ProjectViews
             Controls.Button("↩️ Restore")
                 .WithAppearance(Appearance.Accent)
                 .WithStyle(style => style.WithPadding("4px 12px"))
-                .WithClickAction(actx =>
-                {
-                    return RestoreTodo(actx.Host, todoPath).ContinueWith(_ => TriggerRefresh());
-                }));
+                .WithClickAction(actx => RestoreTodo(actx.Host, todoPath)));
 
         // Permanent delete button
         row = row.WithView(
@@ -707,13 +681,11 @@ public static class ProjectViews
     public static IObservable<UiControl?> TodaysFocus(LayoutAreaHost host, RenderingContext _)
     {
         var hubPath = host.Hub.Address.ToString();
-        return _refreshTrigger
-            .StartWith(0)
-            .SelectMany(_ => Observable.FromAsync(async () =>
-            {
-                var todos = await LoadChildTodos(hubPath, host);
-                return BuildTodaysFocusView(todos, hubPath, host);
-            }));
+        return Observable.FromAsync(async () =>
+        {
+            var todos = await LoadChildTodos(hubPath, host);
+            return BuildTodaysFocusView(todos, hubPath, host);
+        });
     }
 
     private static UiControl BuildTodaysFocusView(List<Todo> todos, string hubPath, LayoutAreaHost host)
@@ -885,7 +857,7 @@ public static class ProjectViews
                 </details>");
         }
 
-        // With host, create a Stack with section header and interactive items
+        // With host, create a Stack with section header and interactive items using LayoutAreaControl
         var sectionStack = Controls.Stack
             .WithStyle(style => style.WithMarginBottom("16px"));
 
@@ -895,148 +867,20 @@ public static class ProjectViews
                 {title}
             </div>"));
 
-        // Items container
+        // Items container - each todo rendered via LayoutAreaControl pointing to TodoViews.Thumbnail
         var itemsStack = Controls.Stack
             .WithStyle(style => style.WithBorder("1px solid var(--neutral-stroke-rest)").WithBorderRadius("6px"));
 
         foreach (var todo in todos)
         {
-            itemsStack = itemsStack.WithView(BuildTodoListItem(todo, hubPath, host));
+            var todoPath = $"{hubPath}/Todo/{todo.Id}";
+            itemsStack = itemsStack.WithView(
+                Controls.LayoutArea(new Address(todoPath), "Thumbnail"));
         }
 
         sectionStack = sectionStack.WithView(itemsStack);
 
         return sectionStack;
-    }
-
-    private static UiControl BuildTodoListItem(Todo todo, string hubPath, LayoutAreaHost host)
-    {
-        var statusIcon = GetStatusIcon(todo.Status);
-        var priorityBadge = GetPriorityBadge(todo.Priority);
-        var dueInfo = todo.DueDate.HasValue ? $"Due: {todo.DueDate.Value:MMM dd}" : "";
-        var assignee = todo.Assignee ?? "Unassigned";
-        var todoPath = $"{hubPath}/Todo/{todo.Id}";
-        var todoAddress = new Address(todoPath);
-
-        // Main row with info and actions
-        var row = Controls.Stack
-            .WithOrientation(Orientation.Horizontal)
-            .WithStyle(style => style
-                .WithPadding("8px 12px")
-                .WithBorderBottom("1px solid var(--neutral-stroke-rest)")
-                .WithAlignItems("center")
-                .WithGap("8px"));
-
-        // Status icon
-        row = row.WithView(Controls.Html($"<span style=\"font-size: 16px;\">{statusIcon}</span>"));
-
-        // Title as link (takes most space)
-        row = row.WithView(Controls.Html($@"
-            <a href=""/{todoPath}"" style=""text-decoration: none; color: inherit; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"">
-                {System.Web.HttpUtility.HtmlEncode(todo.Title)}
-            </a>"));
-
-        // Category badge
-        if (!string.IsNullOrEmpty(todo.Category))
-        {
-            row = row.WithView(Controls.Html($"<span style=\"background: var(--neutral-layer-3); padding: 1px 6px; border-radius: 3px; font-size: 10px;\">{System.Web.HttpUtility.HtmlEncode(todo.Category)}</span>"));
-        }
-
-        // Priority badge
-        if (!string.IsNullOrEmpty(priorityBadge))
-        {
-            row = row.WithView(Controls.Html(priorityBadge));
-        }
-
-        // Assignee
-        row = row.WithView(Controls.Html($"<span style=\"font-size: 12px; color: var(--neutral-foreground-hint); min-width: 70px;\">{assignee}</span>"));
-
-        // Due date
-        if (!string.IsNullOrEmpty(dueInfo))
-        {
-            row = row.WithView(Controls.Html($"<span style=\"font-size: 11px; color: var(--neutral-foreground-hint);\">{dueInfo}</span>"));
-        }
-
-        // Quick action: Status transition button
-        var nextStatus = GetNextStatus(todo.Status);
-        var statusButtonIcon = todo.Status == TodoStatus.Completed ? "↩️" : "✅";
-        var statusButtonTitle = todo.Status == TodoStatus.Completed ? "Reopen" : $"Mark {nextStatus}";
-        row = row.WithView(
-            Controls.Button(statusButtonIcon)
-                .WithLabel(statusButtonTitle)
-                .WithAppearance(Appearance.Stealth)
-                .WithStyle(style => style.WithMinWidth("28px").WithPadding("2px 6px"))
-                .WithClickAction(actx =>
-                {
-                    var updatedTodo = todo with
-                    {
-                        Status = nextStatus,
-                        CompletedAt = nextStatus == TodoStatus.Completed ? DateTime.UtcNow : null
-                    };
-                    return UpdateTodoViaNode(actx.Host, updatedTodo, todoPath).ContinueWith(_ => TriggerRefresh());
-                }));
-
-        // Edit button
-        row = row.WithView(
-            Controls.Button("✏️")
-                .WithLabel("Edit")
-                .WithAppearance(Appearance.Stealth)
-                .WithStyle(style => style.WithMinWidth("28px").WithPadding("2px 6px"))
-                .WithClickAction(actx =>
-                {
-                    OpenEditTodoDialog(actx.Host, todo, todoAddress);
-                    return System.Threading.Tasks.Task.CompletedTask;
-                }));
-
-        // Quick action: Delete button (soft delete with confirmation)
-        row = row.WithView(
-            Controls.Button("🗑️")
-                .WithLabel("Delete")
-                .WithAppearance(Appearance.Stealth)
-                .WithStyle(style => style.WithMinWidth("28px").WithPadding("2px 6px").WithColor("#dc3545"))
-                .WithClickAction(actx =>
-                {
-                    ShowDeleteConfirmationDialog(actx.Host, todo, todoPath);
-                    return System.Threading.Tasks.Task.CompletedTask;
-                }));
-
-        return row;
-    }
-
-    private static TodoStatus GetNextStatus(TodoStatus current) => current switch
-    {
-        TodoStatus.Pending => TodoStatus.InProgress,
-        TodoStatus.InProgress => TodoStatus.InReview,
-        TodoStatus.InReview => TodoStatus.Completed,
-        TodoStatus.Completed => TodoStatus.Pending,
-        TodoStatus.Blocked => TodoStatus.InProgress,
-        _ => TodoStatus.Pending
-    };
-
-    private static async System.Threading.Tasks.Task UpdateTodoViaNode(LayoutAreaHost host, Todo todo, string todoPath)
-    {
-        var meshCatalog = host.Hub.ServiceProvider.GetService<IMeshCatalog>();
-        if (meshCatalog == null) return;
-
-        // Get existing node
-        var existingNode = await meshCatalog.GetNodeAsync(new Address(todoPath));
-        if (existingNode == null) return;
-
-        // Update content and save via persistence
-        var updatedNode = existingNode with { Content = todo };
-        await meshCatalog.Persistence.SaveNodeAsync(updatedNode);
-    }
-
-    private static async System.Threading.Tasks.Task SoftDeleteTodo(LayoutAreaHost host, string todoPath)
-    {
-        var meshCatalog = host.Hub.ServiceProvider.GetService<IMeshCatalog>();
-        if (meshCatalog == null) return;
-
-        var existingNode = await meshCatalog.GetNodeAsync(new Address(todoPath));
-        if (existingNode == null) return;
-
-        var deletedNode = existingNode with { State = MeshNodeState.Deleted };
-        await meshCatalog.Persistence.SaveNodeAsync(deletedNode);
     }
 
     private static async System.Threading.Tasks.Task RestoreTodo(LayoutAreaHost host, string todoPath)
@@ -1056,32 +900,6 @@ public static class ProjectViews
         var meshCatalog = host.Hub.ServiceProvider.GetService<IMeshCatalog>();
         if (meshCatalog == null) return;
         await meshCatalog.DeleteNodeAsync(todoPath);
-    }
-
-    private static void ShowDeleteConfirmationDialog(LayoutAreaHost host, Todo todo, string todoPath)
-    {
-        var content = Controls.Stack
-            .WithView(Controls.Html($@"
-                <div style=""text-align: center; padding: 16px;"">
-                    <div style=""font-size: 48px; margin-bottom: 16px;"">🗑️</div>
-                    <p>Delete <strong>{System.Web.HttpUtility.HtmlEncode(todo.Title)}</strong>?</p>
-                    <p style=""color: var(--neutral-foreground-hint); font-size: 14px;"">
-                        You can restore it later from the Deleted view.
-                    </p>
-                </div>"))
-            .WithView(Controls.Stack
-                .WithOrientation(Orientation.Horizontal)
-                .WithStyle(s => s.WithJustifyContent("center").WithGap("12px"))
-                .WithView(Controls.Button("Cancel").WithAppearance(Appearance.Neutral)
-                    .WithClickAction(_ => { host.UpdateArea(DialogControl.DialogArea, null!); return System.Threading.Tasks.Task.CompletedTask; }))
-                .WithView(Controls.Button("Delete").WithAppearance(Appearance.Accent)
-                    .WithStyle(s => s.WithBackgroundColor("#dc3545"))
-                    .WithClickAction(_ => {
-                        host.UpdateArea(DialogControl.DialogArea, null!);
-                        return SoftDeleteTodo(host, todoPath).ContinueWith(_ => TriggerRefresh());
-                    })));
-
-        host.UpdateArea(DialogControl.DialogArea, Controls.Dialog(content, "Delete Task").WithSize("S").WithClosable(false));
     }
 
     private static void ShowPermanentDeleteConfirmationDialog(LayoutAreaHost host, Todo todo, string todoPath)
@@ -1104,38 +922,10 @@ public static class ProjectViews
                     .WithStyle(s => s.WithBackgroundColor("#dc3545"))
                     .WithClickAction(_ => {
                         host.UpdateArea(DialogControl.DialogArea, null!);
-                        return HardDeleteTodo(host, todoPath).ContinueWith(_ => TriggerRefresh());
+                        return HardDeleteTodo(host, todoPath);
                     })));
 
         host.UpdateArea(DialogControl.DialogArea, Controls.Dialog(content, "Permanent Delete").WithSize("S").WithClosable(false));
-    }
-
-    private static async System.Threading.Tasks.Task HandleSaveEditedTodo(LayoutAreaHost host, Todo originalTodo, string todoPath, string editDataId)
-    {
-        // Retrieve edited data from the store
-        var store = host.Stream.Current?.Value;
-        var dataCollection = store?.GetCollection(LayoutAreaReference.Data);
-        var rawData = dataCollection?.Instances.GetValueOrDefault(editDataId);
-
-        Todo? editedTodo = null;
-        if (rawData is Todo t)
-            editedTodo = t;
-        else if (rawData is System.Text.Json.JsonElement jsonElement)
-            editedTodo = System.Text.Json.JsonSerializer.Deserialize<Todo>(jsonElement.GetRawText());
-
-        if (editedTodo != null)
-        {
-            // Ensure the ID is preserved
-            editedTodo = editedTodo with { Id = originalTodo.Id };
-
-            // Save via persistence
-            await UpdateTodoViaNode(host, editedTodo, todoPath);
-
-            // Trigger refresh of all views after edit
-            TriggerRefresh();
-        }
-
-        host.UpdateArea(DialogControl.DialogArea, null!);
     }
 
     private static async System.Threading.Tasks.Task HandleCreateTodo(LayoutAreaHost host, string hubPath, string createDataId)
@@ -1213,9 +1003,6 @@ public static class ProjectViews
                         </div>");
                     host.UpdateArea("$Notification", notification);
 
-                    // Trigger refresh of all views
-                    TriggerRefresh();
-
                     // Auto-dismiss notification after 3 seconds
                     _ = System.Threading.Tasks.Task.Delay(3000).ContinueWith(_ =>
                         host.UpdateArea("$Notification", null!));
@@ -1244,38 +1031,6 @@ public static class ProjectViews
             System.Console.WriteLine("EditedTodo is null, cannot create node");
         }
         host.UpdateArea(DialogControl.DialogArea, null!);
-    }
-
-    private static void OpenEditTodoDialog(LayoutAreaHost host, Todo todo, Address todoAddress)
-    {
-        var editDataId = $"EditTodo_{todo.Id}";
-        var todoPath = todoAddress.ToString();
-
-        var editForm = Controls.Stack
-            .WithView(host.Edit(todo, editDataId)?
-                .WithStyle(style => style.WithWidth("100%").WithDisplay("block")), editDataId)
-            .WithView(Controls.Stack
-                .WithView(Controls.Button("Save")
-                    .WithAppearance(Appearance.Accent)
-                    .WithClickAction(_ => HandleSaveEditedTodo(host, todo, todoPath, editDataId)))
-                .WithView(Controls.Button("Cancel")
-                    .WithAppearance(Appearance.Neutral)
-                    .WithClickAction(_ =>
-                    {
-                        host.UpdateArea(DialogControl.DialogArea, null!);
-                        return System.Threading.Tasks.Task.CompletedTask;
-                    }))
-                .WithOrientation(Orientation.Horizontal)
-                .WithHorizontalGap(10)
-                .WithStyle(style => style.WithJustifyContent("center").WithWidth("100%")))
-            .WithVerticalGap(15)
-            .WithStyle(style => style.WithWidth("100%").WithDisplay("block").WithMargin("0 auto"));
-
-        var dialog = Controls.Dialog(editForm, "Edit Task")
-            .WithSize("M")
-            .WithClosable(false);
-
-        host.UpdateArea(DialogControl.DialogArea, dialog);
     }
 
     private static string GetStatusIcon(TodoStatus status) => status switch
