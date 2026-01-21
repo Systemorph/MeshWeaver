@@ -75,11 +75,6 @@ public interface IMeshCatalog
     Task<AddressResolution?> ResolvePathAsync(string path);
 
     /// <summary>
-    /// Gets the persistence service for graph operations.
-    /// </summary>
-    IPersistenceService Persistence { get; }
-
-    /// <summary>
     /// Queries for child nodes under a parent path, filtered by query string.
     /// Used for autocomplete and node discovery.
     /// </summary>

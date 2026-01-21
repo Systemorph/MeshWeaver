@@ -61,6 +61,9 @@ public static class PersistenceExtensions
         services.AddKeyedSingleton<IStorageAdapterFactory, FileSystemStorageAdapterFactory>(
             FileSystemStorageAdapterFactory.StorageType);
 
+        // Register the data change notifier as singleton
+        services.AddSingleton<IDataChangeNotifier, DataChangeNotifier>();
+
         // Register the storage adapter using the factory
         services.AddSingleton<IStorageAdapter>(sp =>
         {
@@ -85,7 +88,8 @@ public static class PersistenceExtensions
                 sp.GetRequiredService<IPersistenceService>(),
                 sp.GetService<INavigationService>(),
                 sp.GetService<ISecurityService>(),
-                sp.GetService<AccessService>()));
+                sp.GetService<AccessService>(),
+                sp.GetService<IDataChangeNotifier>()));
 
         return services;
     }
@@ -143,13 +147,21 @@ public static class PersistenceExtensions
     /// <returns>The service collection for chaining</returns>
     public static IServiceCollection AddInMemoryPersistence(this IServiceCollection services)
     {
-        services.AddSingleton<IPersistenceService>(new InMemoryPersistenceService());
+        // Register the data change notifier as singleton
+        services.AddSingleton<IDataChangeNotifier, DataChangeNotifier>();
+
+        services.AddSingleton<IPersistenceService>(sp =>
+            new InMemoryPersistenceService(
+                storageAdapter: null,
+                changeNotifier: sp.GetService<IDataChangeNotifier>()));
+
         services.AddSingleton<IMeshQuery>(sp =>
             new InMemoryMeshQuery(
                 sp.GetRequiredService<IPersistenceService>(),
                 sp.GetService<INavigationService>(),
                 sp.GetService<ISecurityService>(),
-                sp.GetService<AccessService>()));
+                sp.GetService<AccessService>(),
+                sp.GetService<IDataChangeNotifier>()));
         return services;
     }
 
@@ -162,6 +174,9 @@ public static class PersistenceExtensions
     /// <returns>The service collection for chaining</returns>
     public static IServiceCollection AddFileSystemPersistence(this IServiceCollection services, string baseDirectory)
     {
+        // Register the data change notifier as singleton
+        services.AddSingleton<IDataChangeNotifier, DataChangeNotifier>();
+
         // Use factory registration to get ITypeRegistry from the resolved service provider
         services.AddSingleton<IStorageAdapter>(sp =>
             new FileSystemStorageAdapter(
@@ -176,7 +191,8 @@ public static class PersistenceExtensions
                 sp.GetRequiredService<IPersistenceService>(),
                 sp.GetService<INavigationService>(),
                 sp.GetService<ISecurityService>(),
-                sp.GetService<AccessService>()));
+                sp.GetService<AccessService>(),
+                sp.GetService<IDataChangeNotifier>()));
 
         return services;
     }
@@ -189,15 +205,22 @@ public static class PersistenceExtensions
     /// <returns>The service collection for chaining</returns>
     public static IServiceCollection AddPersistence(this IServiceCollection services, IStorageAdapter storageAdapter)
     {
-        var persistenceService = new InMemoryPersistenceService(storageAdapter);
+        // Register the data change notifier as singleton
+        services.AddSingleton<IDataChangeNotifier, DataChangeNotifier>();
+
         services.AddSingleton(storageAdapter);
-        services.AddSingleton<IPersistenceService>(persistenceService);
+        services.AddSingleton<IPersistenceService>(sp =>
+            new InMemoryPersistenceService(
+                storageAdapter,
+                sp.GetService<IDataChangeNotifier>()));
+
         services.AddSingleton<IMeshQuery>(sp =>
             new InMemoryMeshQuery(
                 sp.GetRequiredService<IPersistenceService>(),
                 sp.GetService<INavigationService>(),
                 sp.GetService<ISecurityService>(),
-                sp.GetService<AccessService>()));
+                sp.GetService<AccessService>(),
+                sp.GetService<IDataChangeNotifier>()));
         return services;
     }
 
@@ -209,13 +232,17 @@ public static class PersistenceExtensions
     /// <returns>The service collection for chaining</returns>
     public static IServiceCollection AddPersistence(this IServiceCollection services, IPersistenceService persistenceService)
     {
+        // Register the data change notifier as singleton
+        services.AddSingleton<IDataChangeNotifier, DataChangeNotifier>();
+
         services.AddSingleton(persistenceService);
         services.AddSingleton<IMeshQuery>(sp =>
             new InMemoryMeshQuery(
                 sp.GetRequiredService<IPersistenceService>(),
                 sp.GetService<INavigationService>(),
                 sp.GetService<ISecurityService>(),
-                sp.GetService<AccessService>()));
+                sp.GetService<AccessService>(),
+                sp.GetService<IDataChangeNotifier>()));
         return services;
     }
 }

@@ -351,14 +351,15 @@ public static class TodoViews
     private static async System.Threading.Tasks.Task SoftDeleteTodo(LayoutAreaHost host)
     {
         var meshCatalog = host.Hub.ServiceProvider.GetService<MeshWeaver.Mesh.Services.IMeshCatalog>();
-        if (meshCatalog == null) return;
+        var persistence = host.Hub.ServiceProvider.GetService<MeshWeaver.Mesh.Services.IPersistenceService>();
+        if (meshCatalog == null || persistence == null) return;
 
         var todoPath = host.Hub.Address.ToString();
         var existingNode = await meshCatalog.GetNodeAsync(host.Hub.Address);
         if (existingNode == null) return;
 
         var deletedNode = existingNode with { State = MeshWeaver.Mesh.MeshNodeState.Deleted };
-        await meshCatalog.Persistence.SaveNodeAsync(deletedNode);
+        await persistence.SaveNodeAsync(deletedNode);
     }
 
     private static UiControl BuildStatusPromotionMenu(LayoutAreaHost host, Todo todo)

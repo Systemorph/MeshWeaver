@@ -1,4 +1,5 @@
 using System.Runtime.CompilerServices;
+using MeshWeaver.Mesh.Query;
 
 namespace MeshWeaver.Mesh.Services;
 
@@ -48,6 +49,28 @@ public interface IMeshQuery
         AutocompleteMode mode,
         int limit = 10,
         CancellationToken ct = default);
+
+    /// <summary>
+    /// Creates an observable query that monitors data sources for changes and emits updates.
+    /// The first emission contains the full initial result set (ChangeType = Initial).
+    /// Subsequent emissions contain incremental changes (Added, Updated, Removed).
+    /// </summary>
+    /// <typeparam name="T">The type of objects to query (typically MeshNode).</typeparam>
+    /// <param name="request">Query request with filters, path, scope, and options.</param>
+    /// <returns>An observable that emits query result changes.</returns>
+    /// <example>
+    /// <code>
+    /// var subscription = meshQuery
+    ///     .ObserveQuery&lt;MeshNode&gt;(MeshQueryRequest.FromQuery("path:ACME nodeType:Story scope:descendants"))
+    ///     .Subscribe(change =&gt;
+    ///     {
+    ///         Console.WriteLine($"Change: {change.ChangeType}, Items: {change.Items.Count}");
+    ///     });
+    /// // Later: dispose to stop watching
+    /// subscription.Dispose();
+    /// </code>
+    /// </example>
+    IObservable<QueryResultChange<T>> ObserveQuery<T>(MeshQueryRequest request);
 }
 
 /// <summary>

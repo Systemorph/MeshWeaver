@@ -43,16 +43,16 @@ public class TypeRegistryTest(ITestOutputHelper output) : HubTestBase(output)
         // Test List<int?>
         var canMap = typeRegistry.TryGetCollectionName(typeof(List<int?>), out var typeName);
         canMap.Should().BeTrue();
-        typeName.Should().Be("System.Collections.Generic.List`1[Int32?]");
+        typeName.Should().Be("System.Collections.Generic.List`1[System.Nullable`1[Int32]]");
 
         canMap = typeRegistry.TryGetType(typeName, out var mappedType);
         canMap.Should().BeTrue();
         mappedType!.Type.Should().Be(typeof(List<int?>));
-        
+
         // Test GenericRequest<int?>
         canMap = typeRegistry.TryGetCollectionName(typeof(GenericRequest<int?>), out typeName);
         canMap.Should().BeTrue();
-        typeName.Should().Be("MeshWeaver.Messaging.Hub.Test.TypeRegistryTest.GenericRequest`1[Int32?]");
+        typeName.Should().Be("MeshWeaver.Messaging.Hub.Test.TypeRegistryTest.GenericRequest`1[System.Nullable`1[Int32]]");
 
         canMap = typeRegistry.TryGetType(typeName, out mappedType);
         canMap.Should().BeTrue();
