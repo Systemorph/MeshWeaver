@@ -16,7 +16,7 @@ public enum TodoStatus
 }
 
 /// <summary>
-/// Todo record for deserialization.
+/// Todo record for deserialization and editing.
 /// </summary>
 public record Todo : IContentInitializable
 {
@@ -62,26 +62,235 @@ public record Todo : IContentInitializable
 }
 
 /// <summary>
+/// Minimal Todo projection for project views.
+/// Contains only properties needed for display, with Path for navigation.
+/// </summary>
+internal record TodoItem(
+    string Path,
+    string Id,
+    string Title,
+    TodoStatus Status,
+    string? Priority,
+    string? Category,
+    string? Assignee,
+    DateTime? DueDate,
+    DateTime CreatedAt
+);
+
+/// <summary>
 /// Custom views for Project nodes showing aggregated Todo item statistics and management.
 /// </summary>
 public static class ProjectViews
 {
+    #region View Configuration
+
+    /// <summary>
+    /// Configuration for rendering a todo view with grouping logic.
+    /// </summary>
+    private record ViewConfig(
+        string Title,
+        string Icon,
+        Func<List<TodoItem>, IEnumerable<(string Section, List<TodoItem> Items, bool Open)>> GroupItems,
+        bool ShowNewTaskButton = true,
+        Func<List<TodoItem>, string>? Summary = null
+    );
+
+    #endregion
+
+    #region Observable Query Helpers
+
+    /// <summary>
+    /// Creates an observable stream of TodoItems from the mesh query.
+    /// Uses Scan to maintain cumulative state from incremental changes.
+    /// </summary>
+    private static IObservable<List<TodoItem>> ObserveTodos(
+        LayoutAreaHost host,
+        string basePath,
+        MeshNodeState? stateFilter = MeshNodeState.Active)
+    {
+        var meshQuery = host.Hub.ServiceProvider.GetService<IMeshQuery>();
+        if (meshQuery == null)
+            return Observable.Return(new List<TodoItem>());
+
+        var stateClause = stateFilter.HasValue ? $"state:{stateFilter}" : "";
+        var query = $"path:{basePath}/Todo nodeType:ACME/Project/Todo {stateClause} scope:subtree";
+
+        return meshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(query))
+            .Scan(new Dictionary<string, MeshNode>(StringComparer.OrdinalIgnoreCase),
+                  (current, change) => ApplyChanges(current, change))
+            .Select(dict => dict.Values
+                .Select(ProjectToTodoItem)
+                .Where(t => t != null)
+                .Cast<TodoItem>()
+                .ToList());
+    }
+
+    /// <summary>
+    /// Applies query result changes to the cumulative node dictionary.
+    /// </summary>
+    private static Dictionary<string, MeshNode> ApplyChanges(
+        Dictionary<string, MeshNode> current,
+        QueryResultChange<MeshNode> change)
+    {
+        var result = change.ChangeType == QueryChangeType.Initial || change.ChangeType == QueryChangeType.Reset
+            ? new Dictionary<string, MeshNode>(StringComparer.OrdinalIgnoreCase)
+            : new Dictionary<string, MeshNode>(current, StringComparer.OrdinalIgnoreCase);
+
+        foreach (var item in change.Items)
+        {
+            if (change.ChangeType == QueryChangeType.Removed)
+                result.Remove(item.Path);
+            else
+                result[item.Path] = item;
+        }
+        return result;
+    }
+
+    /// <summary>
+    /// Projects a MeshNode to a minimal TodoItem for display.
+    /// </summary>
+    private static TodoItem? ProjectToTodoItem(MeshNode node)
+    {
+        var todo = node.GetContent<Todo>();
+        if (todo == null) return null;
+
+        // Initialize to compute DueDate from DueDateOffsetDays if set
+        todo = (Todo)todo.Initialize();
+
+        return new TodoItem(
+            Path: node.Path,
+            Id: todo.Id,
+            Title: todo.Title,
+            Status: todo.Status,
+            Priority: todo.Priority,
+            Category: todo.Category,
+            Assignee: todo.Assignee,
+            DueDate: todo.DueDate,
+            CreatedAt: todo.CreatedAt
+        );
+    }
+
+    #endregion
+
+    #region Reactive View Rendering
+
+    /// <summary>
+    /// Renders a todo view using the reactive pattern with ViewConfig.
+    /// </summary>
+    private static IObservable<UiControl?> RenderTodoView(
+        LayoutAreaHost host,
+        ViewConfig config,
+        MeshNodeState? stateFilter = MeshNodeState.Active)
+    {
+        var hubPath = host.Hub.Address.ToString();
+        return ObserveTodos(host, hubPath, stateFilter)
+            .Select(todos => BuildViewFromConfig(todos, host, hubPath, config));
+    }
+
+    /// <summary>
+    /// Builds a view from TodoItems using the ViewConfig.
+    /// </summary>
+    private static UiControl BuildViewFromConfig(
+        List<TodoItem> todos,
+        LayoutAreaHost host,
+        string hubPath,
+        ViewConfig config)
+    {
+        var mainGrid = Controls.LayoutGrid.WithSkin(skin => skin.WithSpacing(-1));
+
+        // Header row with title and optional New Task button
+        if (config.ShowNewTaskButton)
+        {
+            mainGrid = mainGrid
+                .WithView(Controls.H4($"{config.Icon} {config.Title}")
+                    .WithStyle(style => style.WithMarginBottom("16px")),
+                    skin => skin.WithXs(8).WithMd(10))
+                .WithView(BuildNewTaskButton(host, hubPath),
+                    skin => skin.WithXs(4).WithMd(2));
+        }
+        else
+        {
+            mainGrid = mainGrid
+                .WithView(Controls.H4($"{config.Icon} {config.Title}")
+                    .WithStyle(style => style.WithMarginBottom("16px")),
+                    skin => skin.WithXs(12));
+        }
+
+        if (!todos.Any())
+        {
+            return mainGrid.WithView(
+                Controls.Markdown("*No tasks found.*"),
+                skin => skin.WithXs(12));
+        }
+
+        // Optional summary line
+        if (config.Summary != null)
+        {
+            mainGrid = mainGrid.WithView(
+                Controls.Markdown(config.Summary(todos))
+                    .WithStyle(style => style.WithMarginBottom("16px")),
+                skin => skin.WithXs(12));
+        }
+
+        // Grouped sections
+        foreach (var (section, items, open) in config.GroupItems(todos))
+        {
+            if (!items.Any()) continue;
+
+            mainGrid = mainGrid.WithView(
+                BuildCollapsibleSectionFromItems(section, items, open),
+                skin => skin.WithXs(12));
+        }
+
+        return mainGrid;
+    }
+
+    /// <summary>
+    /// Builds a collapsible section from TodoItems using LayoutAreaControl.
+    /// </summary>
+    private static UiControl BuildCollapsibleSectionFromItems(string title, List<TodoItem> items, bool defaultOpen)
+    {
+        var sectionStack = Controls.Stack
+            .WithStyle(style => style.WithMarginBottom("16px"));
+
+        // Section header
+        sectionStack = sectionStack.WithView(Controls.Html($@"
+            <div style=""padding: 8px 12px; background: var(--neutral-layer-2); border-radius: 6px; font-weight: 600; margin-bottom: 4px;"">
+                {title}
+            </div>"));
+
+        // Items container - each todo rendered via LayoutAreaControl pointing to TodoViews.Thumbnail
+        var itemsStack = Controls.Stack
+            .WithStyle(style => style.WithBorder("1px solid var(--neutral-stroke-rest)").WithBorderRadius("6px"));
+
+        foreach (var item in items)
+        {
+            itemsStack = itemsStack.WithView(
+                Controls.LayoutArea(new Address(item.Path), "Thumbnail"));
+        }
+
+        sectionStack = sectionStack.WithView(itemsStack);
+
+        return sectionStack;
+    }
+
+    #endregion
+
+    #region Public View Methods
+
     /// <summary>
     /// Summary view showing aggregated statistics for all child Todo items.
+    /// Uses reactive ObserveQuery for live updates.
     /// </summary>
     [Display(GroupName = "Overview", Order = 1)]
     public static IObservable<UiControl?> Summary(LayoutAreaHost host, RenderingContext _)
     {
         var hubPath = host.Hub.Address.ToString();
-
-        return Observable.FromAsync(async () =>
-        {
-            var todos = await LoadChildTodos(hubPath, host);
-            return BuildSummaryView(todos, hubPath);
-        });
+        return ObserveTodos(host, hubPath)
+            .Select(todos => BuildSummaryView(todos, hubPath));
     }
 
-    private static UiControl BuildSummaryView(List<Todo> todos, string hubPath)
+    private static UiControl BuildSummaryView(List<TodoItem> todos, string hubPath)
     {
         var mainGrid = Controls.LayoutGrid.WithSkin(skin => skin.WithSpacing(-1));
 
@@ -236,20 +445,22 @@ public static class ProjectViews
 
     /// <summary>
     /// AllTasks view listing all child Todo items with status grouping and actions.
+    /// Uses reactive ObserveQuery for live updates of both active and deleted items.
     /// </summary>
     [Display(GroupName = "Overview", Order = 2)]
     public static IObservable<UiControl?> AllTasks(LayoutAreaHost host, RenderingContext _)
     {
         var hubPath = host.Hub.Address.ToString();
-        return Observable.FromAsync(async () =>
-        {
-            var todos = await LoadChildTodos(hubPath, host);
-            var deletedTodos = await LoadDeletedTodos(hubPath, host);
-            return BuildAllTasksView(todos, deletedTodos, host, hubPath);
-        });
+
+        // Combine active and deleted todo streams for reactive updates
+        var activeTodos = ObserveTodos(host, hubPath, MeshNodeState.Active);
+        var deletedTodos = ObserveTodos(host, hubPath, MeshNodeState.Deleted);
+
+        return activeTodos.CombineLatest(deletedTodos, (active, deleted) =>
+            BuildAllTasksView(active, deleted, host, hubPath));
     }
 
-    private static UiControl BuildAllTasksView(List<Todo> todos, List<Todo> deletedTodos, LayoutAreaHost host, string hubPath)
+    private static UiControl BuildAllTasksView(List<TodoItem> todos, List<TodoItem> deletedTodos, LayoutAreaHost host, string hubPath)
     {
         var mainGrid = Controls.LayoutGrid.WithSkin(skin => skin.WithSpacing(-1));
 
@@ -283,7 +494,7 @@ public static class ProjectViews
             var isExpanded = status != TodoStatus.Completed;
 
             mainGrid = mainGrid.WithView(
-                BuildCollapsibleSectionWithActions($"{icon} {status} ({statusTodos.Count})", statusTodos, hubPath, isExpanded, host),
+                BuildCollapsibleSectionFromItems($"{icon} {status} ({statusTodos.Count})", statusTodos, isExpanded),
                 skin => skin.WithXs(12));
         }
 
@@ -298,7 +509,7 @@ public static class ProjectViews
         return mainGrid;
     }
 
-    private static UiControl BuildDeletedSection(List<Todo> deletedTodos, string hubPath, LayoutAreaHost host)
+    private static UiControl BuildDeletedSection(List<TodoItem> deletedTodos, string hubPath, LayoutAreaHost host)
     {
         var sectionStack = Controls.Stack
             .WithStyle(style => style.WithMarginBottom("16px").WithMarginTop("8px"));
@@ -315,7 +526,7 @@ public static class ProjectViews
 
         foreach (var todo in deletedTodos)
         {
-            itemsStack = itemsStack.WithView(BuildDeletedTodoListItem(todo, hubPath, host));
+            itemsStack = itemsStack.WithView(BuildDeletedTodoListItem(todo, host));
         }
 
         sectionStack = sectionStack.WithView(itemsStack);
@@ -325,73 +536,42 @@ public static class ProjectViews
 
     /// <summary>
     /// TodosByCategory view grouping items by category.
+    /// Uses reactive ObserveQuery for live updates.
     /// </summary>
     [Display(GroupName = "Overview", Order = 3)]
     public static IObservable<UiControl?> TodosByCategory(LayoutAreaHost host, RenderingContext _)
-    {
-        var hubPath = host.Hub.Address.ToString();
-        return Observable.FromAsync(async () =>
-        {
-            var todos = await LoadChildTodos(hubPath, host);
-            return BuildTodosByCategoryView(todos, hubPath, host);
-        });
-    }
-
-    private static UiControl BuildTodosByCategoryView(List<Todo> todos, string hubPath, LayoutAreaHost host)
-    {
-        var mainGrid = Controls.LayoutGrid.WithSkin(skin => skin.WithSpacing(-1));
-
-        mainGrid = mainGrid
-            .WithView(Controls.H4("\ud83d\udcc2 Tasks by Category")
-                .WithStyle(style => style.WithMarginBottom("16px")),
-                skin => skin.WithXs(12));
-
-        if (!todos.Any())
-        {
-            return mainGrid.WithView(
-                Controls.Markdown("*No tasks found.*"),
-                skin => skin.WithXs(12));
-        }
-
-        var categoryGroups = todos
-            .GroupBy(t => string.IsNullOrEmpty(t.Category) ? "Uncategorized" : t.Category)
-            .OrderByDescending(g => g.Count());
-
-        foreach (var group in categoryGroups)
-        {
-            var completedCount = group.Count(t => t.Status == TodoStatus.Completed);
-            var inProgressCount = group.Count(t => t.Status == TodoStatus.InProgress);
-            var pendingCount = group.Count(t => t.Status == TodoStatus.Pending);
-
-            var statusIndicator = $"\u2705{completedCount} \ud83d\udd04{inProgressCount} \u23f3{pendingCount}";
-            var categoryTodos = group
-                .OrderBy(t => (int)t.Status)
-                .ThenBy(t => t.DueDate ?? DateTime.MaxValue)
-                .ToList();
-
-            mainGrid = mainGrid.WithView(
-                BuildCollapsibleSectionWithActions($"\ud83d\udcc1 {group.Key} ({group.Count()}) - {statusIndicator}", categoryTodos, hubPath, true, host),
-                skin => skin.WithXs(12));
-        }
-
-        return mainGrid;
-    }
+        => RenderTodoView(host, new ViewConfig(
+            Title: "Tasks by Category",
+            Icon: "\ud83d\udcc2",
+            ShowNewTaskButton: false,
+            GroupItems: todos => todos
+                .GroupBy(t => string.IsNullOrEmpty(t.Category) ? "Uncategorized" : t.Category)
+                .OrderByDescending(g => g.Count())
+                .Select(g =>
+                {
+                    var completedCount = g.Count(t => t.Status == TodoStatus.Completed);
+                    var inProgressCount = g.Count(t => t.Status == TodoStatus.InProgress);
+                    var pendingCount = g.Count(t => t.Status == TodoStatus.Pending);
+                    var statusIndicator = $"\u2705{completedCount} \ud83d\udd04{inProgressCount} \u23f3{pendingCount}";
+                    return ($"\ud83d\udcc1 {g.Key} ({g.Count()}) - {statusIndicator}",
+                            g.OrderBy(t => (int)t.Status).ThenBy(t => t.DueDate ?? DateTime.MaxValue).ToList(),
+                            true);
+                })
+        ));
 
     /// <summary>
     /// Planning view for workload management and task assignment.
+    /// Uses reactive ObserveQuery for live updates.
     /// </summary>
     [Display(GroupName = "Planning")]
     public static IObservable<UiControl?> Planning(LayoutAreaHost host, RenderingContext _)
     {
         var hubPath = host.Hub.Address.ToString();
-        return Observable.FromAsync(async () =>
-        {
-            var todos = await LoadChildTodos(hubPath, host);
-            return BuildPlanningView(todos, host, hubPath);
-        });
+        return ObserveTodos(host, hubPath)
+            .Select(todos => BuildPlanningView(todos, host, hubPath));
     }
 
-    private static UiControl BuildPlanningView(List<Todo> todos, LayoutAreaHost host, string hubPath)
+    private static UiControl BuildPlanningView(List<TodoItem> todos, LayoutAreaHost host, string hubPath)
     {
         var mainGrid = Controls.LayoutGrid.WithSkin(skin => skin.WithSpacing(-1));
 
@@ -451,7 +631,7 @@ public static class ProjectViews
                     skin => skin.WithXs(12));
 
             mainGrid = mainGrid.WithView(
-                BuildCollapsibleSectionWithActions("View unassigned tasks", unassignedTasks, hubPath, true, host),
+                BuildCollapsibleSectionFromItems("View unassigned tasks", unassignedTasks, true),
                 skin => skin.WithXs(12));
         }
 
@@ -460,19 +640,17 @@ public static class ProjectViews
 
     /// <summary>
     /// MyTasks view showing current user's active tasks.
+    /// Uses reactive ObserveQuery for live updates.
     /// </summary>
     [Display(GroupName = "My Work")]
     public static IObservable<UiControl?> MyTasks(LayoutAreaHost host, RenderingContext _)
     {
         var hubPath = host.Hub.Address.ToString();
-        return Observable.FromAsync(async () =>
-        {
-            var todos = await LoadChildTodos(hubPath, host);
-            return BuildMyTasksView(todos, hubPath, host);
-        });
+        return ObserveTodos(host, hubPath)
+            .Select(todos => BuildMyTasksView(todos, hubPath, host));
     }
 
-    private static UiControl BuildMyTasksView(List<Todo> todos, string hubPath, LayoutAreaHost host)
+    private static UiControl BuildMyTasksView(List<TodoItem> todos, string hubPath, LayoutAreaHost host)
     {
         var mainGrid = Controls.LayoutGrid.WithSkin(skin => skin.WithSpacing(-1));
 
@@ -529,21 +707,21 @@ public static class ProjectViews
         if (urgentTasks.Any())
         {
             mainGrid = mainGrid.WithView(
-                BuildCollapsibleSectionWithActions($"\ud83d\udea8 Urgent ({urgentTasks.Count})", urgentTasks, hubPath, true, host),
+                BuildCollapsibleSectionFromItems($"\ud83d\udea8 Urgent ({urgentTasks.Count})", urgentTasks, true),
                 skin => skin.WithXs(12));
         }
 
         if (tomorrowTasks.Any())
         {
             mainGrid = mainGrid.WithView(
-                BuildCollapsibleSectionWithActions($"\ud83d\udcc5 Tomorrow ({tomorrowTasks.Count})", tomorrowTasks, hubPath, true, host),
+                BuildCollapsibleSectionFromItems($"\ud83d\udcc5 Tomorrow ({tomorrowTasks.Count})", tomorrowTasks, true),
                 skin => skin.WithXs(12));
         }
 
         if (upcomingTasks.Any())
         {
             mainGrid = mainGrid.WithView(
-                BuildCollapsibleSectionWithActions($"\ud83d\uddd3\ufe0f Upcoming ({upcomingTasks.Count})", upcomingTasks, hubPath, true, host),
+                BuildCollapsibleSectionFromItems($"\ud83d\uddd3\ufe0f Upcoming ({upcomingTasks.Count})", upcomingTasks, true),
                 skin => skin.WithXs(12));
         }
 
@@ -552,19 +730,17 @@ public static class ProjectViews
 
     /// <summary>
     /// Backlog view showing unassigned tasks.
+    /// Uses reactive ObserveQuery for live updates.
     /// </summary>
     [Display(GroupName = "Planning")]
     public static IObservable<UiControl?> Backlog(LayoutAreaHost host, RenderingContext _)
     {
         var hubPath = host.Hub.Address.ToString();
-        return Observable.FromAsync(async () =>
-        {
-            var todos = await LoadChildTodos(hubPath, host);
-            return BuildBacklogView(todos, host, hubPath);
-        });
+        return ObserveTodos(host, hubPath)
+            .Select(todos => BuildBacklogView(todos, host, hubPath));
     }
 
-    private static UiControl BuildBacklogView(List<Todo> todos, LayoutAreaHost host, string hubPath)
+    private static UiControl BuildBacklogView(List<TodoItem> todos, LayoutAreaHost host, string hubPath)
     {
         var mainGrid = Controls.LayoutGrid.WithSkin(skin => skin.WithSpacing(-1));
 
@@ -602,31 +778,31 @@ public static class ProjectViews
         if (criticalTasks.Any())
         {
             mainGrid = mainGrid.WithView(
-                BuildCollapsibleSectionWithActions($"\ud83d\udea8 Critical Priority ({criticalTasks.Count})", criticalTasks, hubPath, true, host),
+                BuildCollapsibleSectionFromItems($"\ud83d\udea8 Critical Priority ({criticalTasks.Count})", criticalTasks, true),
                 skin => skin.WithXs(12));
         }
 
         if (highTasks.Any())
         {
             mainGrid = mainGrid.WithView(
-                BuildCollapsibleSectionWithActions($"\ud83d\udd25 High Priority ({highTasks.Count})", highTasks, hubPath, true, host),
+                BuildCollapsibleSectionFromItems($"\ud83d\udd25 High Priority ({highTasks.Count})", highTasks, true),
                 skin => skin.WithXs(12));
         }
 
         if (normalTasks.Any())
         {
             mainGrid = mainGrid.WithView(
-                BuildCollapsibleSectionWithActions($"\u2796 Normal Priority ({normalTasks.Count})", normalTasks, hubPath, false, host),
+                BuildCollapsibleSectionFromItems($"\u2796 Normal Priority ({normalTasks.Count})", normalTasks, false),
                 skin => skin.WithXs(12));
         }
 
         return mainGrid;
     }
 
-    private static UiControl BuildDeletedTodoListItem(Todo todo, string hubPath, LayoutAreaHost host)
+    private static UiControl BuildDeletedTodoListItem(TodoItem todo, LayoutAreaHost host)
     {
         var priorityBadge = GetPriorityBadge(todo.Priority);
-        var todoPath = $"{hubPath}/Todo/{todo.Id}";
+        var todoPath = todo.Path;
 
         // Main row with info and actions
         var row = Controls.Stack
@@ -676,19 +852,17 @@ public static class ProjectViews
 
     /// <summary>
     /// TodaysFocus view showing urgent items (overdue + due today + in-progress).
+    /// Uses reactive ObserveQuery for live updates.
     /// </summary>
     [Display(GroupName = "Overview", Order = 0)]
     public static IObservable<UiControl?> TodaysFocus(LayoutAreaHost host, RenderingContext _)
     {
         var hubPath = host.Hub.Address.ToString();
-        return Observable.FromAsync(async () =>
-        {
-            var todos = await LoadChildTodos(hubPath, host);
-            return BuildTodaysFocusView(todos, hubPath, host);
-        });
+        return ObserveTodos(host, hubPath)
+            .Select(todos => BuildTodaysFocusView(todos, hubPath, host));
     }
 
-    private static UiControl BuildTodaysFocusView(List<Todo> todos, string hubPath, LayoutAreaHost host)
+    private static UiControl BuildTodaysFocusView(List<TodoItem> todos, string hubPath, LayoutAreaHost host)
     {
         var mainGrid = Controls.LayoutGrid.WithSkin(skin => skin.WithSpacing(-1));
 
@@ -738,155 +912,35 @@ public static class ProjectViews
         if (overdue.Any())
         {
             mainGrid = mainGrid.WithView(
-                BuildCollapsibleSectionWithActions($"\ud83d\udea8 Overdue ({overdue.Count})", overdue, hubPath, true, host),
+                BuildCollapsibleSectionFromItems($"\ud83d\udea8 Overdue ({overdue.Count})", overdue, true),
                 skin => skin.WithXs(12));
         }
 
         if (dueToday.Any())
         {
             mainGrid = mainGrid.WithView(
-                BuildCollapsibleSectionWithActions($"\u23f0 Due Today ({dueToday.Count})", dueToday, hubPath, true, host),
+                BuildCollapsibleSectionFromItems($"\u23f0 Due Today ({dueToday.Count})", dueToday, true),
                 skin => skin.WithXs(12));
         }
 
         if (inProgress.Any())
         {
             mainGrid = mainGrid.WithView(
-                BuildCollapsibleSectionWithActions($"\ud83d\udd04 In Progress ({inProgress.Count})", inProgress, hubPath, true, host),
+                BuildCollapsibleSectionFromItems($"\ud83d\udd04 In Progress ({inProgress.Count})", inProgress, true),
                 skin => skin.WithXs(12));
         }
 
         return mainGrid;
     }
 
-    // Helper methods
+    #endregion
 
-    private static async System.Threading.Tasks.Task<List<Todo>> LoadChildTodos(string hubPath, LayoutAreaHost host)
-    {
-        var todos = new List<Todo>();
-
-        // Use IMeshQuery directly to query for child Todo items
-        var meshQuery = host.Hub.ServiceProvider.GetService<IMeshQuery>();
-        if (meshQuery == null)
-            return todos;
-
-        // Filter to only return Active items (excludes Deleted items)
-        var query = $"path:{hubPath}/Todo nodeType:ACME/Project/Todo state:Active scope:subtree";
-        var request = MeshQueryRequest.FromQuery(query);
-
-        await foreach (var result in meshQuery.QueryAsync<MeshNode>(request))
-        {
-            var todo = result.GetContent<Todo>();
-            if (todo != null)
-            {
-                // Initialize to compute DueDate from DueDateOffsetDays if set
-                todo = (Todo)todo.Initialize();
-                todos.Add(todo);
-            }
-        }
-
-        return todos;
-    }
-
-    private static async System.Threading.Tasks.Task<List<Todo>> LoadDeletedTodos(string hubPath, LayoutAreaHost host)
-    {
-        var todos = new List<Todo>();
-
-        var meshQuery = host.Hub.ServiceProvider.GetService<IMeshQuery>();
-        if (meshQuery == null)
-            return todos;
-
-        // Query for Deleted items only
-        var query = $"path:{hubPath}/Todo nodeType:ACME/Project/Todo state:Deleted scope:subtree";
-        var request = MeshQueryRequest.FromQuery(query);
-
-        await foreach (var result in meshQuery.QueryAsync<MeshNode>(request))
-        {
-            var todo = result.GetContent<Todo>();
-            if (todo != null)
-            {
-                todo = (Todo)todo.Initialize();
-                todos.Add(todo);
-            }
-        }
-
-        return todos;
-    }
-
-    private static UiControl BuildCollapsibleSection(string title, List<Todo> todos, string hubPath, bool defaultOpen)
-    {
-        return BuildCollapsibleSectionWithActions(title, todos, hubPath, defaultOpen, null);
-    }
-
-    private static UiControl BuildCollapsibleSectionWithActions(string title, List<Todo> todos, string hubPath, bool defaultOpen, LayoutAreaHost? host)
-    {
-        var openAttr = defaultOpen ? " open" : "";
-
-        // If no host provided, fall back to simple HTML links (no action buttons)
-        if (host == null)
-        {
-            var itemsHtml = new System.Text.StringBuilder();
-            foreach (var todo in todos)
-            {
-                var statusIcon = GetStatusIcon(todo.Status);
-                var priorityBadge = GetPriorityBadge(todo.Priority);
-                var dueInfo = todo.DueDate.HasValue ? $"Due: {todo.DueDate.Value:MMM dd}" : "";
-                var assignee = todo.Assignee ?? "Unassigned";
-                var todoPath = $"{hubPath}/Todo/{todo.Id}";
-
-                itemsHtml.AppendLine($@"
-                    <a href=""/{todoPath}"" style=""text-decoration: none; color: inherit; display: block;"">
-                        <div style=""padding: 8px 12px; border-bottom: 1px solid var(--neutral-stroke-rest); display: flex; align-items: center; gap: 8px;"">
-                            <span>{statusIcon}</span>
-                            <span style=""flex: 1;"">{System.Web.HttpUtility.HtmlEncode(todo.Title)}</span>
-                            {priorityBadge}
-                            <span style=""font-size: 12px; color: var(--neutral-foreground-hint);"">{assignee}</span>
-                            <span style=""font-size: 11px; color: var(--neutral-foreground-hint);"">{dueInfo}</span>
-                        </div>
-                    </a>");
-            }
-
-            return Controls.Html($@"
-                <details{openAttr} style=""margin-bottom: 16px;"">
-                    <summary style=""cursor: pointer; padding: 8px 12px; background: var(--neutral-layer-2); border-radius: 6px; font-weight: 600;"">
-                        {title}
-                    </summary>
-                    <div style=""border: 1px solid var(--neutral-stroke-rest); border-radius: 0 0 6px 6px; margin-top: -1px;"">
-                        {itemsHtml}
-                    </div>
-                </details>");
-        }
-
-        // With host, create a Stack with section header and interactive items using LayoutAreaControl
-        var sectionStack = Controls.Stack
-            .WithStyle(style => style.WithMarginBottom("16px"));
-
-        // Section header
-        sectionStack = sectionStack.WithView(Controls.Html($@"
-            <div style=""padding: 8px 12px; background: var(--neutral-layer-2); border-radius: 6px; font-weight: 600; margin-bottom: 4px;"">
-                {title}
-            </div>"));
-
-        // Items container - each todo rendered via LayoutAreaControl pointing to TodoViews.Thumbnail
-        var itemsStack = Controls.Stack
-            .WithStyle(style => style.WithBorder("1px solid var(--neutral-stroke-rest)").WithBorderRadius("6px"));
-
-        foreach (var todo in todos)
-        {
-            var todoPath = $"{hubPath}/Todo/{todo.Id}";
-            itemsStack = itemsStack.WithView(
-                Controls.LayoutArea(new Address(todoPath), "Thumbnail"));
-        }
-
-        sectionStack = sectionStack.WithView(itemsStack);
-
-        return sectionStack;
-    }
+    #region Action Handlers
 
     private static async System.Threading.Tasks.Task RestoreTodo(LayoutAreaHost host, string todoPath)
     {
         var meshCatalog = host.Hub.ServiceProvider.GetService<IMeshCatalog>();
-        var persistence = host.Hub.ServiceProvider.GetService<IPersistenceService>();
+        var persistence = host.Hub.ServiceProvider.GetService<MeshWeaver.Mesh.Services.IPersistenceService>();
         if (meshCatalog == null || persistence == null) return;
 
         var existingNode = await meshCatalog.GetNodeAsync(new Address(todoPath));
@@ -903,7 +957,7 @@ public static class ProjectViews
         await meshCatalog.DeleteNodeAsync(todoPath);
     }
 
-    private static void ShowPermanentDeleteConfirmationDialog(LayoutAreaHost host, Todo todo, string todoPath)
+    private static void ShowPermanentDeleteConfirmationDialog(LayoutAreaHost host, TodoItem todo, string todoPath)
     {
         var content = Controls.Stack
             .WithView(Controls.Html($@"
@@ -987,8 +1041,7 @@ public static class ProjectViews
                     var result = await meshCatalog.CreateNodeAsync(meshNode);
                     System.Console.WriteLine($"CreateNodeAsync completed, result path: {result?.Path}");
 
-                    // Show success notification with updated count
-                    var updatedTodos = await LoadChildTodos(hubPath, host);
+                    // Show success notification (view updates reactively via ObserveQuery)
                     var notification = Controls.Html($@"
                         <div style=""position: fixed; top: 20px; right: 20px; padding: 12px 20px;
                                     background: #28a745; color: white; border-radius: 6px;
@@ -1000,7 +1053,7 @@ public static class ProjectViews
                                     to {{ transform: translateX(0); opacity: 1; }}
                                 }}
                             </style>
-                            ✅ Task created! Total tasks: {updatedTodos.Count}
+                            ✅ Task created!
                         </div>");
                     host.UpdateArea("$Notification", notification);
 
@@ -1044,7 +1097,7 @@ public static class ProjectViews
         _ => "\u2753"
     };
 
-    private static string GetPriorityBadge(string priority) => priority switch
+    private static string GetPriorityBadge(string? priority) => priority switch
     {
         "Critical" => "<span style=\"background: #dc3545; color: white; padding: 1px 4px; border-radius: 3px; font-size: 10px;\">CRITICAL</span>",
         "High" => "<span style=\"background: #fd7e14; color: white; padding: 1px 4px; border-radius: 3px; font-size: 10px;\">HIGH</span>",
@@ -1053,7 +1106,7 @@ public static class ProjectViews
         _ => ""
     };
 
-    private static int GetPriorityOrder(string priority) => priority switch
+    private static int GetPriorityOrder(string? priority) => priority switch
     {
         "Critical" => 0,
         "High" => 1,
@@ -1115,4 +1168,6 @@ public static class ProjectViews
 
         host.UpdateArea(DialogControl.DialogArea, dialog);
     }
+
+    #endregion
 }

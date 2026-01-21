@@ -6,6 +6,8 @@
 /// <summary>
 /// Custom views for Todo items.
 /// </summary>
+using MeshWeaver.Application.Styles;
+using MeshWeaver.Domain;
 public static class TodoViews
 {
     /// <summary>
@@ -137,15 +139,15 @@ public static class TodoViews
         var priorityBadge = GetPriorityBadge(todo.Priority);
         var statusBadge = GetStatusBadge(todo.Status);
 
-        mainGrid = mainGrid.WithView(
-            Controls.Html($@"
-                <div style=""display: flex; align-items: center; gap: 12px; margin-bottom: 16px; flex-wrap: wrap;"">
-                    <span style=""font-size: 28px;"">{statusIcon}</span>
-                    <h1 style=""margin: 0; flex: 1; min-width: 200px;"">{System.Web.HttpUtility.HtmlEncode(todo.Title)}</h1>
-                    {priorityBadge}
-                    {statusBadge}
-                </div>"),
-            skin => skin.WithXs(12));
+        var headerStack = Controls.Stack
+            .WithOrientation(Orientation.Horizontal)
+            .WithStyle(style => style.WithAlignItems("center").WithGap("12px").WithMarginBottom("16px").WithFlexWrap("wrap"))
+            .WithView(Controls.Icon(statusIcon).WithStyle(s => s.WithFontSize("28px")))
+            .WithView(Controls.Html($"<h1 style=\"margin: 0; flex: 1; min-width: 200px;\">{System.Web.HttpUtility.HtmlEncode(todo.Title)}</h1>"))
+            .WithView(Controls.Html(priorityBadge))
+            .WithView(Controls.Html(statusBadge));
+
+        mainGrid = mainGrid.WithView(headerStack, skin => skin.WithXs(12));
 
         // Description if present
         if (!string.IsNullOrEmpty(todo.Description))
@@ -332,9 +334,11 @@ public static class TodoViews
                     .WithClickAction(_ => { host.UpdateArea(DialogControl.DialogArea, null!); return System.Threading.Tasks.Task.CompletedTask; }))
                 .WithView(Controls.Button("Delete").WithAppearance(Appearance.Accent)
                     .WithStyle(s => s.WithBackgroundColor("#dc3545"))
-                    .WithClickAction(_ => {
+                    .WithClickAction(_ =>
+                    {
                         host.UpdateArea(DialogControl.DialogArea, null!);
-                        return SoftDeleteTodo(host).ContinueWith(_ => {
+                        return SoftDeleteTodo(host).ContinueWith(_ =>
+                        {
                             // Navigate back to parent after soft delete
                             var segments = host.Hub.Address.Segments;
                             if (segments.Length > 1)
@@ -377,7 +381,8 @@ public static class TodoViews
             if (status == todo.Status) continue; // Skip current status
 
             buttonStack = buttonStack.WithView(
-                Controls.Button($"{icon} {label}")
+                Controls.Button(label)
+                    .WithIconStart(icon)
                     .WithAppearance(isFirst ? Appearance.Accent : Appearance.Neutral)
                     .WithClickAction(_ =>
                     {
@@ -392,41 +397,41 @@ public static class TodoViews
             .WithView(buttonStack);
     }
 
-    private static IEnumerable<(string Label, TodoStatus Status, string Icon)> GetOrderedStatusTransitions(TodoStatus currentStatus)
+    private static IEnumerable<(string Label, TodoStatus Status, Icon Icon)> GetOrderedStatusTransitions(TodoStatus currentStatus)
     {
         // Return all statuses ordered by likelihood based on current status
         // Most likely transition first, then others
         switch (currentStatus)
         {
             case TodoStatus.Pending:
-                yield return ("Start", TodoStatus.InProgress, "\ud83d\udd04");
-                yield return ("Complete", TodoStatus.Completed, "\u2705");
-                yield return ("Block", TodoStatus.Blocked, "\ud83d\udeab");
-                yield return ("Review", TodoStatus.InReview, "\ud83d\udc41\ufe0f");
+                yield return ("Start", TodoStatus.InProgress, FluentIcons.Play());
+                yield return ("Complete", TodoStatus.Completed, FluentIcons.CheckmarkCircle());
+                yield return ("Block", TodoStatus.Blocked, FluentIcons.Prohibited());
+                yield return ("Review", TodoStatus.InReview, FluentIcons.Eye());
                 break;
             case TodoStatus.InProgress:
-                yield return ("Complete", TodoStatus.Completed, "\u2705");
-                yield return ("Send for Review", TodoStatus.InReview, "\ud83d\udc41\ufe0f");
-                yield return ("Pause", TodoStatus.Pending, "\u23f3");
-                yield return ("Block", TodoStatus.Blocked, "\ud83d\udeab");
+                yield return ("Complete", TodoStatus.Completed, FluentIcons.CheckmarkCircle());
+                yield return ("Send for Review", TodoStatus.InReview, FluentIcons.Eye());
+                yield return ("Pause", TodoStatus.Pending, FluentIcons.Pause());
+                yield return ("Block", TodoStatus.Blocked, FluentIcons.Prohibited());
                 break;
             case TodoStatus.InReview:
-                yield return ("Approve", TodoStatus.Completed, "\u2705");
-                yield return ("Return to Progress", TodoStatus.InProgress, "\ud83d\udd04");
-                yield return ("Block", TodoStatus.Blocked, "\ud83d\udeab");
-                yield return ("Back to Pending", TodoStatus.Pending, "\u23f3");
+                yield return ("Approve", TodoStatus.Completed, FluentIcons.CheckmarkCircle());
+                yield return ("Return to Progress", TodoStatus.InProgress, FluentIcons.ArrowSync());
+                yield return ("Block", TodoStatus.Blocked, FluentIcons.Prohibited());
+                yield return ("Back to Pending", TodoStatus.Pending, FluentIcons.Pause());
                 break;
             case TodoStatus.Blocked:
-                yield return ("Unblock", TodoStatus.InProgress, "\ud83d\udd04");
-                yield return ("Return to Pending", TodoStatus.Pending, "\u23f3");
-                yield return ("Complete Anyway", TodoStatus.Completed, "\u2705");
-                yield return ("Review", TodoStatus.InReview, "\ud83d\udc41\ufe0f");
+                yield return ("Unblock", TodoStatus.InProgress, FluentIcons.ArrowSync());
+                yield return ("Return to Pending", TodoStatus.Pending, FluentIcons.Pause());
+                yield return ("Complete Anyway", TodoStatus.Completed, FluentIcons.CheckmarkCircle());
+                yield return ("Review", TodoStatus.InReview, FluentIcons.Eye());
                 break;
             case TodoStatus.Completed:
-                yield return ("Reopen", TodoStatus.InProgress, "\ud83d\udd04");
-                yield return ("Back to Pending", TodoStatus.Pending, "\u23f3");
-                yield return ("Review Again", TodoStatus.InReview, "\ud83d\udc41\ufe0f");
-                yield return ("Mark Blocked", TodoStatus.Blocked, "\ud83d\udeab");
+                yield return ("Reopen", TodoStatus.InProgress, FluentIcons.ArrowUndo());
+                yield return ("Back to Pending", TodoStatus.Pending, FluentIcons.Pause());
+                yield return ("Review Again", TodoStatus.InReview, FluentIcons.Eye());
+                yield return ("Mark Blocked", TodoStatus.Blocked, FluentIcons.Prohibited());
                 break;
         }
     }
@@ -545,7 +550,7 @@ public static class TodoViews
 
         // Status dropdown menu - primary action as main button, other statuses as sub-menu items
         var (primaryLabel, primaryStatus, primaryIcon) = GetPrimaryTransition(todo.Status);
-        var statusMenu = Controls.MenuItem($"{primaryIcon} {primaryLabel}")
+        var statusMenu = Controls.MenuItem(primaryLabel, primaryIcon)
             .WithAppearance(Appearance.Neutral)
             .WithStyle(style => style.WithMinWidth("32px").WithPadding("4px 8px"))
             .WithClickAction(_ =>
@@ -561,7 +566,7 @@ public static class TodoViews
             if (status == todo.Status) continue; // Skip current status
 
             statusMenu = statusMenu.WithView(
-                Controls.MenuItem($"{icon} {label}")
+                Controls.MenuItem(label, icon)
                     .WithClickAction(_ =>
                     {
                         UpdateTodoStatus(host, todo, status);
@@ -631,13 +636,13 @@ public static class TodoViews
         return stack;
     }
 
-    private static (string Label, TodoStatus Status, string Icon) GetPrimaryTransition(TodoStatus currentStatus) => currentStatus switch
+    private static (string Label, TodoStatus Status, Icon Icon) GetPrimaryTransition(TodoStatus currentStatus) => currentStatus switch
     {
-        TodoStatus.Pending => ("Start", TodoStatus.InProgress, "\ud83d\udd04"),
-        TodoStatus.InProgress => ("Complete", TodoStatus.Completed, "\u2705"),
-        TodoStatus.InReview => ("Approve", TodoStatus.Completed, "\u2705"),
-        TodoStatus.Blocked => ("Unblock", TodoStatus.InProgress, "\ud83d\udd04"),
-        _ => ("Reopen", TodoStatus.InProgress, "\ud83d\udd04")
+        TodoStatus.Pending => ("Start", TodoStatus.InProgress, FluentIcons.Play()),
+        TodoStatus.InProgress => ("Complete", TodoStatus.Completed, FluentIcons.CheckmarkCircle()),
+        TodoStatus.InReview => ("Approve", TodoStatus.Completed, FluentIcons.CheckmarkCircle()),
+        TodoStatus.Blocked => ("Unblock", TodoStatus.InProgress, FluentIcons.ArrowSync()),
+        _ => ("Reopen", TodoStatus.InProgress, FluentIcons.ArrowUndo())
     };
 
     private static string? GetNextAssignee(string? currentAssignee)
@@ -679,14 +684,14 @@ public static class TodoViews
         // For now, just log - the UI framework would handle toast display
     }
 
-    private static string GetStatusIcon(TodoStatus status) => status switch
+    private static Icon GetStatusIcon(TodoStatus status) => status switch
     {
-        TodoStatus.Pending => "\u23f3",
-        TodoStatus.InProgress => "\ud83d\udd04",
-        TodoStatus.InReview => "\ud83d\udc41\ufe0f",
-        TodoStatus.Completed => "\u2705",
-        TodoStatus.Blocked => "\ud83d\udeab",
-        _ => "\u2753"
+        TodoStatus.Pending => FluentIcons.Clock(),
+        TodoStatus.InProgress => FluentIcons.ArrowSync(),
+        TodoStatus.InReview => FluentIcons.Eye(),
+        TodoStatus.Completed => FluentIcons.CheckmarkCircle(),
+        TodoStatus.Blocked => FluentIcons.Prohibited(),
+        _ => FluentIcons.Question()
     };
 
     private static string GetStatusColor(TodoStatus status) => status switch

@@ -1,4 +1,4 @@
-namespace MeshWeaver.Mesh.Query;
+namespace MeshWeaver.Mesh;
 
 /// <summary>
 /// Defines the scope of a query relative to a path.

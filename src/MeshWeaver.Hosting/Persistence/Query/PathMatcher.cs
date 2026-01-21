@@ -1,4 +1,4 @@
-using MeshWeaver.Mesh.Query;
+using MeshWeaver.Mesh;
 
 namespace MeshWeaver.Hosting.Persistence.Query;
 

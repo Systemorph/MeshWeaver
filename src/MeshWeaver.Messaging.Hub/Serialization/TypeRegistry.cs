@@ -247,17 +247,18 @@ internal class TypeRegistry(ITypeRegistry? parent) : ITypeRegistry
         if (nameByType.TryGetValue(mainType, out var registeredName))
             return registeredName;
 
-        // Check parent registry for already registered type name
-        if (parent?.TryGetCollectionName(mainType, out var parentTypeName) == true && parentTypeName != null)
-            return parentTypeName;
-
         var mainTypeName = (mainType.FullName ?? mainType.Name).Replace('\u002B', '.');
         if (!mainType.IsGenericType || mainType.IsGenericTypeDefinition)
             return mainTypeName;
 
+        // Handle nullable types specially BEFORE checking parent registry
         var typeDefinition = mainType.GetGenericTypeDefinition();
         if (typeDefinition == typeof(Nullable<>))
             return FormatType(mainType.GetGenericArguments()[0]) + "?";
+
+        // Check parent registry for already registered type name (after nullable handling)
+        if (parent?.TryGetCollectionName(mainType, out var parentTypeName) == true && parentTypeName != null)
+            return parentTypeName;
 
         var text =
             $"{GetOrAddType(typeDefinition)}[{string.Join(',', mainType.GetGenericArguments().Select(valueType => GetOrAddType(valueType)))}]";

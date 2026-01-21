@@ -23,7 +23,6 @@
     "dueDate": "2026-02-18T00:00:00+01:00",
     "dueDateOffsetDays": 30,
     "status": "InProgress",
-    "icon": "TaskListSquare",
     "createdAt": "2026-01-19T20:23:16.388293+00:00"
   },
   "routingType": "Shared",

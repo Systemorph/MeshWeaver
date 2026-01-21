@@ -502,7 +502,7 @@ public class SearchQueryTests : MonolithMeshTestBase
     public void QueryParser_ParsesTextSearchFromCatalogQuery()
     {
         // Arrange - this is the exact query pattern from Catalog
-        var parser = new MeshWeaver.Mesh.Query.QueryParser();
+        var parser = new MeshWeaver.Mesh.QueryParser();
         var query = "namespace:Systemorph scope:descendants Claims";
 
         // Act
@@ -516,13 +516,13 @@ public class SearchQueryTests : MonolithMeshTestBase
 
         parsed.TextSearch.Should().Be("Claims", "The search term should be extracted as TextSearch");
         parsed.Path.Should().Be("Systemorph");
-        parsed.Scope.Should().Be(MeshWeaver.Mesh.Query.QueryScope.Descendants);
+        parsed.Scope.Should().Be(MeshWeaver.Mesh.QueryScope.Descendants);
     }
 
     [Fact]
     public void QueryParser_MultipleTextTerms_JoinedWithSpace()
     {
-        var parser = new MeshWeaver.Mesh.Query.QueryParser();
+        var parser = new MeshWeaver.Mesh.QueryParser();
         var query = "namespace:Systemorph scope:descendants hello world";
 
         var parsed = parser.Parse(query);

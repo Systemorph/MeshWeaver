@@ -1,4 +1,4 @@
-namespace MeshWeaver.Mesh.Query;
+namespace MeshWeaver.Mesh;
 
 /// <summary>
 /// Represents a change in query results for observable queries.

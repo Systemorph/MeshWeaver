@@ -1,4 +1,4 @@
-namespace MeshWeaver.Mesh.Query;
+namespace MeshWeaver.Mesh;
 
 /// <summary>
 /// Represents a fully parsed query with reserved parameters.

@@ -212,7 +212,7 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
     /// <summary>
     /// Tests that UnifiedReference with "content:attachments/test.txt" prefix resolves file content from ACME.
     /// </summary>
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 10000)]
     public async Task UnifiedReference_ContentPrefix_ReturnsFileContent()
     {
         var acmeAddress = new Address("ACME");
@@ -267,7 +267,7 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
     /// to verify thread-safe hub initialization with collection:name format.
     /// Both ACME and Systemorph are Organizations which have the "attachments" collection.
     /// </summary>
-    [Fact(Timeout = 60000)]
+    [Fact(Timeout = 10000)]
     public async Task ConcurrentCollectionRequests_WithUnifiedReference_AllSucceed()
     {
         var acmeAddress = new Address("ACME");

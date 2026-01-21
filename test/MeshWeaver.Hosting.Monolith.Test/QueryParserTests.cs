@@ -1,5 +1,5 @@
 using FluentAssertions;
-using MeshWeaver.Mesh.Query;
+using MeshWeaver.Mesh;
 using Xunit;
 
 namespace MeshWeaver.Hosting.Monolith.Test;
