@@ -1,5 +1,4 @@
 using System.Runtime.CompilerServices;
-using MeshWeaver.Mesh.Query;
 
 namespace MeshWeaver.Mesh.Services;
 

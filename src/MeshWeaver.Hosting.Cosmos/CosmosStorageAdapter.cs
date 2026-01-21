@@ -3,7 +3,7 @@ using System.Text.Json;
 using Microsoft.Azure.Cosmos;
 using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Mesh;
-using MeshWeaver.Mesh.Query;
+
 using MeshWeaver.Mesh.Services;
 
 namespace MeshWeaver.Hosting.Cosmos;

@@ -1,6 +1,6 @@
 using FluentAssertions;
 using MeshWeaver.Hosting.Persistence.Query;
-using MeshWeaver.Mesh.Query;
+using MeshWeaver.Mesh;
 using Xunit;
 
 namespace MeshWeaver.Hosting.Monolith.Test;

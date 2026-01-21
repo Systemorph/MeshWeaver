@@ -1,4 +1,4 @@
-namespace MeshWeaver.Mesh.Query;
+namespace MeshWeaver.Mesh;
 
 /// <summary>
 /// Query comparison operators (GitHub-style syntax).

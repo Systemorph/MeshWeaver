@@ -1,4 +1,4 @@
-namespace MeshWeaver.Mesh.Query;
+namespace MeshWeaver.Mesh;
 
 /// <summary>
 /// Parser for GitHub-style query strings.

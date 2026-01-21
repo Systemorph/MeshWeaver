@@ -4,7 +4,7 @@ using System.Text;
 using System.Text.Json;
 using MeshWeaver.AI.Completion;
 using MeshWeaver.Mesh;
-using MeshWeaver.Mesh.Query;
+
 
 namespace MeshWeaver.Hosting.Persistence.Query;
 

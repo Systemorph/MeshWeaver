@@ -7,7 +7,7 @@ using FluentAssertions;
 using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Hosting.Persistence.Query;
 using MeshWeaver.Mesh;
-using MeshWeaver.Mesh.Query;
+
 using MeshWeaver.Mesh.Services;
 using Xunit;
 

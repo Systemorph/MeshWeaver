@@ -29,6 +29,9 @@ internal class DynamicMeshNodeAttributeGenerator
         var code = codeFile?.Code;
         var hasCode = !string.IsNullOrWhiteSpace(code);
 
+        // Extract using statements from user code (they must go at the top)
+        var (userUsings, userCodeWithoutUsings) = ExtractUsingStatements(code);
+
         var sb = new StringBuilder();
 
         // Header comment
@@ -37,7 +40,7 @@ internal class DynamicMeshNodeAttributeGenerator
         sb.AppendLine("// Source file for debugging support - do not edit manually");
         sb.AppendLine();
 
-        // Using statements
+        // Using statements (standard ones)
         sb.AppendLine("using System;");
         sb.AppendLine("using System.Collections.Generic;");
         sb.AppendLine("using System.ComponentModel;");
@@ -48,6 +51,7 @@ internal class DynamicMeshNodeAttributeGenerator
         sb.AppendLine("using MeshWeaver.Mesh;");
         sb.AppendLine("using MeshWeaver.Messaging;");
         sb.AppendLine("using MeshWeaver.Data;");
+        sb.AppendLine("using MeshWeaver.Domain;");
         sb.AppendLine("using MeshWeaver.Graph;");
         sb.AppendLine("using MeshWeaver.Graph.Configuration;");
         sb.AppendLine("using MeshWeaver.Layout;");
@@ -59,6 +63,12 @@ internal class DynamicMeshNodeAttributeGenerator
         sb.AppendLine("using MeshWeaver.Mesh.Services;");
         sb.AppendLine("using Microsoft.Extensions.DependencyInjection;");
         sb.AppendLine("using Microsoft.Extensions.Configuration;");
+
+        // User-defined using statements (extracted from code files)
+        foreach (var userUsing in userUsings)
+        {
+            sb.AppendLine(userUsing);
+        }
         sb.AppendLine();
 
         // Assembly attribute - MUST come before any namespace declarations
@@ -66,10 +76,10 @@ internal class DynamicMeshNodeAttributeGenerator
         sb.AppendLine();
 
         // User code directly (no namespace wrapper so types are accessible by simple name)
-        if (hasCode)
+        if (!string.IsNullOrWhiteSpace(userCodeWithoutUsings))
         {
             sb.AppendLine("// User-defined types");
-            sb.AppendLine(code!);
+            sb.AppendLine(userCodeWithoutUsings);
             sb.AppendLine();
         }
 
@@ -209,6 +219,57 @@ internal class DynamicMeshNodeAttributeGenerator
             sanitized = "DynamicNode";
 
         return sanitized;
+    }
+
+    /// <summary>
+    /// Extracts using statements from user code and returns them separately.
+    /// Using statements must be at the top of the generated file.
+    /// </summary>
+    private static (List<string> Usings, string CodeWithoutUsings) ExtractUsingStatements(string? code)
+    {
+        var usings = new List<string>();
+
+        if (string.IsNullOrWhiteSpace(code))
+            return (usings, code ?? "");
+
+        var lines = code.Split('\n');
+        var codeLines = new List<string>();
+        var inCommentBlock = false;
+
+        foreach (var rawLine in lines)
+        {
+            var line = rawLine.TrimEnd('\r');
+            var trimmed = line.Trim();
+
+            // Track multi-line comments
+            if (trimmed.StartsWith("/*"))
+                inCommentBlock = true;
+            if (trimmed.EndsWith("*/"))
+            {
+                inCommentBlock = false;
+                codeLines.Add(line);
+                continue;
+            }
+
+            if (inCommentBlock)
+            {
+                codeLines.Add(line);
+                continue;
+            }
+
+            // Check if this is a using statement (not inside a class/struct/etc)
+            if (trimmed.StartsWith("using ") && trimmed.EndsWith(";") && !trimmed.Contains("("))
+            {
+                // This is a using directive, extract it
+                usings.Add(line);
+            }
+            else
+            {
+                codeLines.Add(line);
+            }
+        }
+
+        return (usings, string.Join("\n", codeLines));
     }
 
     /// <summary>
