@@ -76,7 +76,12 @@
       "Bash(source ~/.zshrc)",
       "Bash(pkill:*)",
       "Bash(lsof:*)",
-      "Bash(xxd:*)"
+      "Bash(xxd:*)",
+      "Bash(for f in /Users/samuelglauser/Documents/work/2026_Systemorph/projekte/MeshWeaver/samples/Graph/Data/MeshWeaver/Documentation/GUI.md /Users/samuelglauser/Documents/work/2026_Systemorph/projekte/MeshWeaver/samples/Graph/Data/MeshWeaver/Documentation/GUI/*.md)",
+      "Bash(for f in /Users/samuelglauser/Documents/work/2026_Systemorph/projekte/MeshWeaver/samples/Graph/Data/MeshWeaver/Documentation/GUI/ContainerControl/*.md)",
+      "Bash(brew install:*)",
+      "Bash(brew:*)",
+      "Bash(kill:*)"
     ],
     "deny": []
   },

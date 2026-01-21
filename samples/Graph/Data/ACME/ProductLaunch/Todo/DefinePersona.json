@@ -1,12 +1,17 @@
 {
   "id": "DefinePersona",
   "namespace": "ACME/ProductLaunch/Todo",
+  "path": "ACME/ProductLaunch/Todo/DefinePersona",
   "name": "Define target customer persona",
   "nodeType": "ACME/Project/Todo",
-  "category": "Tasks",
   "description": "Create detailed buyer persona for MeshFlow targeting operations managers at mid-market companies",
-  "iconName": "Person",
+  "category": "Tasks",
+  "addressSegments": 0,
   "isPersistent": true,
+  "lastModified": "2026-01-20T10:05:06.1472369+00:00",
+  "version": 0,
+  "state": "Active",
+  "isVirtual": false,
   "content": {
     "$type": "Todo",
     "id": "DefinePersona",
@@ -18,5 +23,7 @@
     "dueDateOffsetDays": -10,
     "status": "Completed",
     "completedAt": "2025-01-18T14:30:00Z"
-  }
+  },
+  "routingType": "Shared",
+  "instantiationType": "HubConfiguration"
 }

@@ -1,0 +1,17 @@
+{
+  "id": "Samuel",
+  "name": "Samuel Glauser",
+  "nodeType": "User",
+  "description": "Solution Architect at Systemorph",
+  "iconName": "Person",
+  "isPersistent": true,
+  "content": {
+    "id": "Samuel",
+    "name": "Samuel Glauser",
+    "email": "sglauser@systemorph.com",
+    "avatar": "/static/storage/content/Samuel/avatar.svg",
+    "bio": "Solution Architect at Systemorph, building & rolling out MeshWeaver.",
+    "role": "Solution Architect",
+    "iconName": "Person"
+  }
+}

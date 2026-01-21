@@ -1,0 +1,13 @@
+{
+  "$type": "UserAccess",
+  "userId": "Samuel",
+  "displayName": "Samuel Glauser",
+  "roles": [
+    {
+      "roleId": "Admin",
+      "namespace": null,
+      "assignedAt": "2025-01-01T00:00:00Z",
+      "assignedBy": "system"
+    }
+  ]
+}

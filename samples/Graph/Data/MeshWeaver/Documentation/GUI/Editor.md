@@ -5,6 +5,8 @@ Description: Generate editable forms from C# records with automatic field render
 Icon: /static/storage/content/MeshWeaver/Documentation/GUI/Editor/icon.svg
 ---
 
+# Adding Editable Forms to a UI
+
 The Editor control automatically generates editable forms from C# records, mapping property types to appropriate input controls.
 
 ## Basic Usage

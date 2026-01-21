@@ -5,6 +5,8 @@ Description: Group action buttons horizontally or vertically
 Icon: /static/storage/content/MeshWeaver/Documentation/GUI/ContainerControl/Toolbar/icon.svg
 ---
 
+# Organizing Buttons in a Toolbar
+
 The Toolbar control groups action buttons in a horizontal (default) or vertical layout, typically used for page headers and action bars.
 
 ## Basic Usage

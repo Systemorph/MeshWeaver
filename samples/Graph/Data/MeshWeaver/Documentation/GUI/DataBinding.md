@@ -5,6 +5,8 @@ Description: How data flows between controls and the underlying data store
 Icon: /static/storage/content/MeshWeaver/Documentation/GUI/DataBinding/icon.svg
 ---
 
+# Connecting UI Controls to Data
+
 Data binding in MeshWeaver connects UI controls to data through a reactive stream-based system. Understanding DataContext, data streams, and the binding flow is essential for building interactive forms.
 
 ## Core Concepts
