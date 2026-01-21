@@ -12,6 +12,7 @@ public record Todo : IContentInitializable
     /// Unique identifier for the task.
     /// </summary>
     [Key]
+    [Browsable(false)]
     public string Id { get; init; } = string.Empty;
 
     /// <summary>
@@ -28,12 +29,14 @@ public record Todo : IContentInitializable
     /// <summary>
     /// Category for grouping related tasks.
     /// </summary>
+    [UiControl<SelectControl>(Options = new[] { "General", "Marketing", "Research", "Sales", "Engineering", "Support", "PR", "Partnerships", "Design", "Legal", "Strategy" })]
     public string Category { get; init; } = "General";
 
     /// <summary>
     /// Priority level of the task.
     /// </summary>
-    public TaskPriority Priority { get; init; } = TaskPriority.Medium;
+    [UiControl<SelectControl>(Options = new[] { "Low", "Medium", "High", "Critical" })]
+    public string Priority { get; init; } = "Medium";
 
     /// <summary>
     /// Person responsible for completing the task.
@@ -41,14 +44,22 @@ public record Todo : IContentInitializable
     public string? Assignee { get; init; }
 
     /// <summary>
+    /// Timestamp when the task was created.
+    /// </summary>
+    [DisplayName("Created At")]
+    public DateTime CreatedAt { get; init; } = DateTime.UtcNow;
+
+    /// <summary>
     /// Deadline for task completion.
     /// </summary>
-    public DateTimeOffset? DueDate { get; init; }
+    [DisplayName("Due Date")]
+    public DateTime? DueDate { get; init; }
 
     /// <summary>
     /// Offset in days from DateTime.UtcNow for calculating DueDate.
     /// If set, DueDate is computed as DateTime.UtcNow.Date.AddDays(DueDateOffsetDays).
     /// </summary>
+    [Browsable(false)]
     public int? DueDateOffsetDays { get; init; }
 
     /// <summary>
@@ -59,17 +70,14 @@ public record Todo : IContentInitializable
     /// <summary>
     /// Icon name for visual representation.
     /// </summary>
+    [Browsable(false)]
     public string Icon { get; init; } = "TaskListSquare";
-
-    /// <summary>
-    /// Timestamp when the task was created.
-    /// </summary>
-    public DateTimeOffset CreatedAt { get; init; } = DateTimeOffset.UtcNow;
 
     /// <summary>
     /// Timestamp when the task was completed.
     /// </summary>
-    public DateTimeOffset? CompletedAt { get; init; }
+    [Browsable(false)]
+    public DateTime? CompletedAt { get; init; }
 
     /// <summary>
     /// Initializes the Todo, computing DueDate from DueDateOffsetDays if set.
@@ -78,7 +86,7 @@ public record Todo : IContentInitializable
     {
         if (DueDateOffsetDays.HasValue)
         {
-            return this with { DueDate = DateTimeOffset.UtcNow.Date.AddDays(DueDateOffsetDays.Value) };
+            return this with { DueDate = DateTime.UtcNow.Date.AddDays(DueDateOffsetDays.Value) };
         }
         return this;
     }
@@ -109,27 +117,4 @@ public enum TodoStatus
     /// Task is blocked by dependencies.
     /// </summary>
     Blocked
-}
-
-/// <summary>
-/// Task priority level.
-/// </summary>
-public enum TaskPriority
-{
-    /// <summary>
-    /// Low priority - can be done later.
-    /// </summary>
-    Low,
-    /// <summary>
-    /// Medium priority - normal workflow.
-    /// </summary>
-    Medium,
-    /// <summary>
-    /// High priority - should be done soon.
-    /// </summary>
-    High,
-    /// <summary>
-    /// Critical priority - requires immediate attention.
-    /// </summary>
-    Critical
 }

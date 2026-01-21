@@ -9,21 +9,126 @@
 public static class TodoViews
 {
     /// <summary>
+    /// Extracts Todo from MeshNode content, handling various serialization formats
+    /// and cross-assembly type mismatches.
+    /// </summary>
+    private static Todo? ExtractTodo(MeshNode? node)
+    {
+        if (node?.Content == null)
+            return null;
+
+        var options = new System.Text.Json.JsonSerializerOptions
+        {
+            PropertyNameCaseInsensitive = true,
+            Converters = { new System.Text.Json.Serialization.JsonStringEnumConverter() }
+        };
+
+        // Direct type match
+        if (node.Content is Todo todo)
+            return todo;
+
+        // JsonElement - deserialize to Todo
+        if (node.Content is System.Text.Json.JsonElement json)
+        {
+            try
+            {
+                return System.Text.Json.JsonSerializer.Deserialize<Todo>(json.GetRawText(), options);
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        // Dictionary - convert to JSON then deserialize
+        if (node.Content is System.Collections.IDictionary dict)
+        {
+            try
+            {
+                var jsonStr = System.Text.Json.JsonSerializer.Serialize(dict);
+                return System.Text.Json.JsonSerializer.Deserialize<Todo>(jsonStr, options);
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        // Fallback: Content might be a Todo from a different assembly
+        // Serialize to JSON and deserialize to local Todo type
+        var contentTypeName = node.Content.GetType().Name;
+        if (contentTypeName == "Todo" || contentTypeName.EndsWith(".Todo"))
+        {
+            try
+            {
+                var jsonStr = System.Text.Json.JsonSerializer.Serialize(node.Content);
+                System.Console.WriteLine($"[ExtractTodo] Fallback serialization: {jsonStr.Substring(0, Math.Min(200, jsonStr.Length))}...");
+                return System.Text.Json.JsonSerializer.Deserialize<Todo>(jsonStr, options);
+            }
+            catch (Exception ex)
+            {
+                System.Console.WriteLine($"[ExtractTodo] Fallback failed: {ex.Message}");
+                return null;
+            }
+        }
+
+        // Try GetContent as last resort
+        return node.GetContent<Todo>();
+    }
+
+    /// <summary>
     /// Details view showing the Todo item with status, metadata, and action buttons.
     /// Enhanced with status promotion menu and assignee thumbnail.
     /// </summary>
     public static IObservable<UiControl?> Details(LayoutAreaHost host, RenderingContext _)
     {
-        return host.Workspace.GetStream<Todo>()
-            ?.Select(todos => todos?.FirstOrDefault())
-            .Select(todo => BuildTodoDetails(host, todo))
-            ?? Observable.Return<UiControl?>(Controls.Markdown("*Loading...*"));
+        var todoPath = host.Hub.Address.ToString();
+
+        // Try MeshNode stream first (works with workspace/test infrastructure)
+        var meshNodeStream = host.Workspace.GetStream<MeshNode>();
+        if (meshNodeStream != null)
+        {
+            return meshNodeStream
+                .Select(nodes => nodes?.FirstOrDefault())
+                .Select(node =>
+                {
+                    System.Console.WriteLine($"[TodoViews.Details] MeshNode stream: {node?.Path}, Content type: {node?.Content?.GetType().Name ?? "null"}");
+                    var todo = ExtractTodo(node);
+                    System.Console.WriteLine($"[TodoViews.Details] Extracted Todo: {todo?.Title ?? "null"}");
+                    return BuildTodoDetails(host, todo);
+                });
+        }
+
+        // Fallback: try Todo stream directly
+        var todoStream = host.Workspace.GetStream<Todo>();
+        if (todoStream != null)
+        {
+            return todoStream
+                .Select(todos => todos?.FirstOrDefault())
+                .Select(todo =>
+                {
+                    System.Console.WriteLine($"[TodoViews.Details] Todo stream: {todo?.Title ?? "null"}");
+                    return BuildTodoDetails(host, todo);
+                });
+        }
+
+        // Last resort: load directly from IMeshCatalog
+        System.Console.WriteLine($"[TodoViews.Details] No stream available, loading from IMeshCatalog: {todoPath}");
+        return Observable.FromAsync(async () =>
+        {
+            var meshCatalog = host.Hub.ServiceProvider.GetService<IMeshCatalog>();
+            if (meshCatalog == null)
+                return BuildTodoDetails(host, null);
+
+            var node = await meshCatalog.GetNodeAsync(new Address(todoPath));
+            return BuildTodoDetails(host, ExtractTodo(node));
+        });
     }
 
     private static UiControl BuildTodoDetails(LayoutAreaHost host, Todo? todo)
     {
         if (todo == null)
-            return Controls.Markdown("*Todo not found*");
+            return Controls.Markdown("*Task not found*");
 
         var mainGrid = Controls.LayoutGrid.WithSkin(skin => skin.WithSpacing(-1));
 
@@ -65,6 +170,11 @@ public static class TodoViews
         // Status promotion menu - all statuses with most likely first
         mainGrid = mainGrid.WithView(
             BuildStatusPromotionMenu(host, todo),
+            skin => skin.WithXs(12));
+
+        // CRUD buttons (Edit and Delete)
+        mainGrid = mainGrid.WithView(
+            BuildCrudButtons(host, todo),
             skin => skin.WithXs(12));
 
         return mainGrid;
@@ -119,6 +229,136 @@ public static class TodoViews
                     <div style=""font-size: 12px; color: var(--accent-foreground-rest);"">View Profile \u2192</div>
                 </a>
             </div>");
+    }
+
+    private static UiControl BuildCrudButtons(LayoutAreaHost host, Todo todo)
+    {
+        return Controls.Stack
+            .WithOrientation(Orientation.Horizontal)
+            .WithStyle(style => style.WithGap("8px").WithMarginTop("16px"))
+            .WithView(Controls.Button("Edit")
+                .WithAppearance(Appearance.Neutral)
+                .WithClickAction(_ =>
+                {
+                    OpenEditDialog(host, todo);
+                    return System.Threading.Tasks.Task.CompletedTask;
+                }))
+            .WithView(Controls.Button("Delete")
+                .WithAppearance(Appearance.Neutral)
+                .WithStyle(style => style.WithColor("#dc3545"))
+                .WithClickAction(_ =>
+                {
+                    DeleteTodo(host, todo);
+                    return System.Threading.Tasks.Task.CompletedTask;
+                }));
+    }
+
+    private static void OpenEditDialog(LayoutAreaHost host, Todo todo)
+    {
+        var editDataId = $"EditTodo_{todo.Id}";
+
+        var editForm = Controls.Stack
+            .WithView(host.Edit(todo, editDataId)?
+                .WithStyle(style => style.WithWidth("100%").WithDisplay("block")), editDataId)
+            .WithView(Controls.Stack
+                .WithView(Controls.Button("Save")
+                    .WithAppearance(Appearance.Accent)
+                    .WithClickAction(_ =>
+                    {
+                        // Retrieve edited data from the store
+                        var store = host.Stream.Current?.Value;
+                        var dataCollection = store?.GetCollection(LayoutAreaReference.Data);
+                        var rawData = dataCollection?.Instances.GetValueOrDefault(editDataId);
+
+                        Todo? editedTodo = null;
+                        if (rawData is Todo t)
+                            editedTodo = t;
+                        else if (rawData is System.Text.Json.JsonElement jsonElement)
+                            editedTodo = System.Text.Json.JsonSerializer.Deserialize<Todo>(jsonElement.GetRawText());
+
+                        if (editedTodo != null)
+                        {
+                            // Ensure the ID is preserved
+                            editedTodo = editedTodo with { Id = todo.Id };
+
+                            // Post DataChangeRequest to persist the changes
+                            var changeRequest = new DataChangeRequest().WithUpdates(editedTodo);
+                            host.Hub.Post(changeRequest, o => o.WithTarget(host.Hub.Address));
+                        }
+
+                        host.UpdateArea(DialogControl.DialogArea, null!);
+                        return System.Threading.Tasks.Task.CompletedTask;
+                    }))
+                .WithView(Controls.Button("Cancel")
+                    .WithAppearance(Appearance.Neutral)
+                    .WithClickAction(_ =>
+                    {
+                        host.UpdateArea(DialogControl.DialogArea, null!);
+                        return System.Threading.Tasks.Task.CompletedTask;
+                    }))
+                .WithOrientation(Orientation.Horizontal)
+                .WithHorizontalGap(10)
+                .WithStyle(style => style.WithJustifyContent("center").WithWidth("100%")))
+            .WithVerticalGap(15)
+            .WithStyle(style => style.WithWidth("100%").WithDisplay("block").WithMargin("0 auto"));
+
+        var dialog = Controls.Dialog(editForm, "Edit Task")
+            .WithSize("M")
+            .WithClosable(false);
+
+        host.UpdateArea(DialogControl.DialogArea, dialog);
+    }
+
+    private static void DeleteTodo(LayoutAreaHost host, Todo todo)
+    {
+        ShowDeleteConfirmationDialog(host, todo);
+    }
+
+    private static void ShowDeleteConfirmationDialog(LayoutAreaHost host, Todo todo)
+    {
+        var content = Controls.Stack
+            .WithView(Controls.Html($@"
+                <div style=""text-align: center; padding: 16px;"">
+                    <div style=""font-size: 48px; margin-bottom: 16px;"">🗑️</div>
+                    <p>Delete <strong>{System.Web.HttpUtility.HtmlEncode(todo.Title)}</strong>?</p>
+                    <p style=""color: var(--neutral-foreground-hint); font-size: 14px;"">
+                        You can restore it later from the Deleted view.
+                    </p>
+                </div>"))
+            .WithView(Controls.Stack
+                .WithOrientation(Orientation.Horizontal)
+                .WithStyle(s => s.WithJustifyContent("center").WithGap("12px"))
+                .WithView(Controls.Button("Cancel").WithAppearance(Appearance.Neutral)
+                    .WithClickAction(_ => { host.UpdateArea(DialogControl.DialogArea, null!); return System.Threading.Tasks.Task.CompletedTask; }))
+                .WithView(Controls.Button("Delete").WithAppearance(Appearance.Accent)
+                    .WithStyle(s => s.WithBackgroundColor("#dc3545"))
+                    .WithClickAction(_ => {
+                        host.UpdateArea(DialogControl.DialogArea, null!);
+                        return SoftDeleteTodo(host).ContinueWith(_ => {
+                            // Navigate back to parent after soft delete
+                            var segments = host.Hub.Address.Segments;
+                            if (segments.Length > 1)
+                            {
+                                var parentPath = string.Join("/", segments.Take(segments.Length - 1));
+                                host.Hub.ServiceProvider.GetService<MeshWeaver.Mesh.Services.INavigationService>()?.NavigateTo($"/{parentPath}");
+                            }
+                        });
+                    })));
+
+        host.UpdateArea(DialogControl.DialogArea, Controls.Dialog(content, "Delete Task").WithSize("S").WithClosable(false));
+    }
+
+    private static async System.Threading.Tasks.Task SoftDeleteTodo(LayoutAreaHost host)
+    {
+        var meshCatalog = host.Hub.ServiceProvider.GetService<MeshWeaver.Mesh.Services.IMeshCatalog>();
+        if (meshCatalog == null) return;
+
+        var todoPath = host.Hub.Address.ToString();
+        var existingNode = await meshCatalog.GetNodeAsync(host.Hub.Address);
+        if (existingNode == null) return;
+
+        var deletedNode = existingNode with { State = MeshWeaver.Mesh.MeshNodeState.Deleted };
+        await meshCatalog.Persistence.SaveNodeAsync(deletedNode);
     }
 
     private static UiControl BuildStatusPromotionMenu(LayoutAreaHost host, Todo todo)
@@ -209,7 +449,7 @@ public static class TodoViews
         var updatedTodo = todo with
         {
             Status = newStatus,
-            CompletedAt = newStatus == TodoStatus.Completed ? DateTimeOffset.UtcNow : null
+            CompletedAt = newStatus == TodoStatus.Completed ? DateTime.UtcNow : null
         };
 
         var changeRequest = new DataChangeRequest().WithUpdates(updatedTodo);
@@ -224,12 +464,36 @@ public static class TodoViews
     /// </summary>
     public static IObservable<UiControl?> Thumbnail(LayoutAreaHost host, RenderingContext _)
     {
-        var hubPath = host.Hub.Address.ToString();
+        var todoPath = host.Hub.Address.ToString();
 
-        return host.Workspace.GetStream<Todo>()
-            ?.Select(todos => todos?.FirstOrDefault())
-            .Select(todo => BuildThumbnail(host, todo, hubPath))
-            ?? Observable.Return<UiControl?>(null);
+        // Try MeshNode stream first (works with workspace/test infrastructure)
+        var meshNodeStream = host.Workspace.GetStream<MeshNode>();
+        if (meshNodeStream != null)
+        {
+            return meshNodeStream
+                .Select(nodes => nodes?.FirstOrDefault())
+                .Select(node => BuildThumbnail(host, ExtractTodo(node), todoPath));
+        }
+
+        // Fallback: try Todo stream directly
+        var todoStream = host.Workspace.GetStream<Todo>();
+        if (todoStream != null)
+        {
+            return todoStream
+                .Select(todos => todos?.FirstOrDefault())
+                .Select(todo => BuildThumbnail(host, todo, todoPath));
+        }
+
+        // Last resort: load directly from IMeshCatalog
+        return Observable.FromAsync(async () =>
+        {
+            var meshCatalog = host.Hub.ServiceProvider.GetService<IMeshCatalog>();
+            if (meshCatalog == null)
+                return BuildThumbnail(host, null, todoPath);
+
+            var node = await meshCatalog.GetNodeAsync(new Address(todoPath));
+            return BuildThumbnail(host, ExtractTodo(node), todoPath);
+        });
     }
 
     private static UiControl BuildThumbnail(LayoutAreaHost host, Todo? todo, string hubPath)
@@ -322,6 +586,30 @@ public static class TodoViews
                     }));
         }
 
+        // Edit button
+        actionRow = actionRow.WithView(
+            Controls.Button("\u270f\ufe0f")
+                .WithLabel("Edit")
+                .WithAppearance(Appearance.Neutral)
+                .WithStyle(style => style.WithMinWidth("32px").WithPadding("4px 8px"))
+                .WithClickAction(_ =>
+                {
+                    OpenEditDialog(host, todo);
+                    return System.Threading.Tasks.Task.CompletedTask;
+                }));
+
+        // Delete button
+        actionRow = actionRow.WithView(
+            Controls.Button("\ud83d\uddd1\ufe0f")
+                .WithLabel("Delete")
+                .WithAppearance(Appearance.Neutral)
+                .WithStyle(style => style.WithMinWidth("32px").WithPadding("4px 8px").WithColor("#dc3545"))
+                .WithClickAction(_ =>
+                {
+                    DeleteTodo(host, todo);
+                    return System.Threading.Tasks.Task.CompletedTask;
+                }));
+
         stack = stack.WithView(actionRow);
 
         return stack;
@@ -358,7 +646,7 @@ public static class TodoViews
     {
         if (todo.Status == TodoStatus.Completed || !todo.DueDate.HasValue)
             return false;
-        return todo.DueDate.Value.Date < DateTimeOffset.Now.Date;
+        return todo.DueDate.Value.Date < DateTime.Now.Date;
     }
 
     private static void SendReminder(LayoutAreaHost host, Todo todo)
@@ -395,29 +683,29 @@ public static class TodoViews
         _ => "#6c757d"
     };
 
-    private static string GetPriorityBadge(TaskPriority priority) => priority switch
+    private static string GetPriorityBadge(string priority) => priority switch
     {
-        TaskPriority.Critical => "<span style=\"background: #dc3545; color: white; padding: 2px 6px; border-radius: 4px; font-size: 10px; font-weight: 600;\">CRITICAL</span>",
-        TaskPriority.High => "<span style=\"background: #fd7e14; color: white; padding: 2px 6px; border-radius: 4px; font-size: 10px; font-weight: 600;\">HIGH</span>",
-        TaskPriority.Medium => "",
-        TaskPriority.Low => "<span style=\"background: #6c757d; color: white; padding: 2px 6px; border-radius: 4px; font-size: 10px;\">LOW</span>",
+        "Critical" => "<span style=\"background: #dc3545; color: white; padding: 2px 6px; border-radius: 4px; font-size: 10px; font-weight: 600;\">CRITICAL</span>",
+        "High" => "<span style=\"background: #fd7e14; color: white; padding: 2px 6px; border-radius: 4px; font-size: 10px; font-weight: 600;\">HIGH</span>",
+        "Medium" => "",
+        "Low" => "<span style=\"background: #6c757d; color: white; padding: 2px 6px; border-radius: 4px; font-size: 10px;\">LOW</span>",
         _ => ""
     };
 
-    private static string GetPriorityLabel(TaskPriority priority) => priority switch
+    private static string GetPriorityLabel(string priority) => priority switch
     {
-        TaskPriority.Critical => "\ud83d\udea8 Critical",
-        TaskPriority.High => "\ud83d\udd25 High",
-        TaskPriority.Medium => "\u2796 Medium",
-        TaskPriority.Low => "\u2b07\ufe0f Low",
-        _ => priority.ToString()
+        "Critical" => "\ud83d\udea8 Critical",
+        "High" => "\ud83d\udd25 High",
+        "Medium" => "\u2796 Medium",
+        "Low" => "\u2b07\ufe0f Low",
+        _ => priority
     };
 
-    private static string GetDueDateIndicator(DateTimeOffset dueDate, TodoStatus status)
+    private static string GetDueDateIndicator(DateTime dueDate, TodoStatus status)
     {
         if (status == TodoStatus.Completed) return "";
 
-        var today = DateTimeOffset.Now.Date;
+        var today = DateTime.Now.Date;
         var dueDateOnly = dueDate.Date;
 
         if (dueDateOnly < today)

@@ -5,6 +5,8 @@ Description: Build responsive layouts that adapt beautifully to any screen size
 Icon: /static/storage/content/MeshWeaver/Documentation/GUI/LayoutGrid/icon.svg
 ---
 
+# Adapting to Different Screens With Layout Grid
+
 The LayoutGrid control creates responsive layouts that automatically adapt to different screen sizes - from smartphones to large desktop monitors.
 
 ---

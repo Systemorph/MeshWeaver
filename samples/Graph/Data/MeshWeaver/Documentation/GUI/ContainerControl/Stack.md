@@ -5,6 +5,8 @@ Description: Arrange controls vertically or horizontally with configurable spaci
 Icon: /static/storage/content/MeshWeaver/Documentation/GUI/ContainerControl/Stack/icon.svg
 ---
 
+# Arranging UI Controls in a Stack
+
 The Stack control arranges child controls in a vertical or horizontal layout with configurable spacing and alignment.
 
 ## Basic Usage

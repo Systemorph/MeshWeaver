@@ -1,12 +1,17 @@
 {
   "id": "PromoAssets",
   "namespace": "ACME/ProductLaunch/Todo",
+  "path": "ACME/ProductLaunch/Todo/PromoAssets",
   "name": "Design promotional assets",
   "nodeType": "ACME/Project/Todo",
-  "category": "Tasks",
   "description": "Create graphics and visuals for marketing campaigns",
-  "iconName": "Image",
+  "category": "Tasks",
+  "addressSegments": 0,
   "isPersistent": true,
+  "lastModified": "2026-01-12T07:43:17.8322177+00:00",
+  "version": 2,
+  "state": "Active",
+  "isVirtual": false,
   "content": {
     "$type": "Todo",
     "id": "PromoAssets",
@@ -15,7 +20,12 @@
     "category": "Design",
     "priority": "Medium",
     "assignee": "David",
+    "dueDate": "2026-02-21T00:00:00+01:00",
     "dueDateOffsetDays": 33,
-    "status": "Pending"
-  }
+    "status": "InReview",
+    "icon": "TaskListSquare",
+    "createdAt": "2026-01-19T20:23:16.387193+00:00"
+  },
+  "routingType": "Shared",
+  "instantiationType": "HubConfiguration"
 }
