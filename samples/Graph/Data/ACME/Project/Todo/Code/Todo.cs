@@ -68,12 +68,6 @@ public record Todo : IContentInitializable
     public TodoStatus Status { get; init; } = TodoStatus.Pending;
 
     /// <summary>
-    /// Icon name for visual representation.
-    /// </summary>
-    [Browsable(false)]
-    public string Icon { get; init; } = "TaskListSquare";
-
-    /// <summary>
     /// Timestamp when the task was completed.
     /// </summary>
     [Browsable(false)]

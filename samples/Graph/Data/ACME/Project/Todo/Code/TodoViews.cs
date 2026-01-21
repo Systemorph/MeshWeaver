@@ -472,7 +472,7 @@ public static class TodoViews
         {
             return meshNodeStream
                 .Select(nodes => nodes?.FirstOrDefault())
-                .Select(node => BuildThumbnail(host, ExtractTodo(node), todoPath));
+                .Select(node => BuildThumbnail(host, node, todoPath));
         }
 
         // Fallback: try Todo stream directly
@@ -481,7 +481,7 @@ public static class TodoViews
         {
             return todoStream
                 .Select(todos => todos?.FirstOrDefault())
-                .Select(todo => BuildThumbnail(host, todo, todoPath));
+                .Select(todo => BuildThumbnail(host, null, todo, todoPath));
         }
 
         // Last resort: load directly from IMeshCatalog
@@ -489,19 +489,22 @@ public static class TodoViews
         {
             var meshCatalog = host.Hub.ServiceProvider.GetService<IMeshCatalog>();
             if (meshCatalog == null)
-                return BuildThumbnail(host, null, todoPath);
+                return BuildThumbnail(host, null, null, todoPath);
 
             var node = await meshCatalog.GetNodeAsync(new Address(todoPath));
-            return BuildThumbnail(host, ExtractTodo(node), todoPath);
+            return BuildThumbnail(host, node, todoPath);
         });
     }
 
-    private static UiControl BuildThumbnail(LayoutAreaHost host, Todo? todo, string hubPath)
+    private static UiControl BuildThumbnail(LayoutAreaHost host, MeshNode? node, string hubPath)
+        => BuildThumbnail(host, node, ExtractTodo(node), hubPath);
+
+    private static UiControl BuildThumbnail(LayoutAreaHost host, MeshNode? node, Todo? todo, string hubPath)
     {
         if (todo == null)
             return Controls.Html("");
 
-        var statusIcon = GetStatusIcon(todo.Status);
+        var nodeIcon = node?.Icon ?? "/static/storage/content/ACME/Project/Todo/icon.svg";
         var priorityBadge = GetPriorityBadge(todo.Priority);
         var statusColor = GetStatusColor(todo.Status);
         var isOverdue = IsOverdue(todo);
@@ -514,10 +517,10 @@ public static class TodoViews
             .WithBackgroundColor("var(--neutral-layer-2)")
             .WithBorderLeft($"3px solid {statusColor}"));
 
-        // Header row: Status icon, title, priority badge, and link
+        // Header row: Node icon, title, priority badge, and link
         stack = stack.WithView(Controls.Html($@"
             <div style=""display: flex; align-items: center; gap: 8px; margin-bottom: 8px;"">
-                <span style=""font-size: 16px;"">{statusIcon}</span>
+                <img src=""{nodeIcon}"" style=""width: 16px; height: 16px;"" />
                 <a href=""/{hubPath}"" style=""text-decoration: none; color: inherit; font-weight: 600; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"">
                     {System.Web.HttpUtility.HtmlEncode(todo.Title)}
                 </a>
@@ -539,21 +542,33 @@ public static class TodoViews
             .WithOrientation(Orientation.Horizontal)
             .WithStyle(style => style.WithGap("8px").WithFlexWrap("wrap").WithAlignItems("center"));
 
-        // Compact status menu - show next likely action as primary button
-        if (todo.Status != TodoStatus.Completed)
+        // Status dropdown menu - primary action as main button, other statuses as sub-menu items
+        var (primaryLabel, primaryStatus, primaryIcon) = GetPrimaryTransition(todo.Status);
+        var statusMenu = Controls.MenuItem($"{primaryIcon} {primaryLabel}")
+            .WithAppearance(Appearance.Neutral)
+            .WithStyle(style => style.WithMinWidth("32px").WithPadding("4px 8px"))
+            .WithClickAction(_ =>
+            {
+                UpdateTodoStatus(host, todo, primaryStatus);
+                return System.Threading.Tasks.Task.CompletedTask;
+            });
+
+        // Add all other status transitions as sub-menu items
+        foreach (var (label, status, icon) in GetOrderedStatusTransitions(todo.Status))
         {
-            var (nextLabel, nextStatus, nextIcon) = GetPrimaryTransition(todo.Status);
-            actionRow = actionRow.WithView(
-                Controls.Button($"{nextIcon}")
-                    .WithLabel($"{nextLabel}")
-                    .WithAppearance(Appearance.Neutral)
-                    .WithStyle(style => style.WithMinWidth("32px").WithPadding("4px 8px"))
+            if (status == primaryStatus) continue; // Skip primary (already the main button)
+            if (status == todo.Status) continue; // Skip current status
+
+            statusMenu = statusMenu.WithView(
+                Controls.MenuItem($"{icon} {label}")
                     .WithClickAction(_ =>
                     {
-                        UpdateTodoStatus(host, todo, nextStatus);
+                        UpdateTodoStatus(host, todo, status);
                         return System.Threading.Tasks.Task.CompletedTask;
                     }));
         }
+
+        actionRow = actionRow.WithView(statusMenu);
 
         // Assignment indicator with quick-assign action
         var assigneeDisplay = string.IsNullOrEmpty(todo.Assignee) ? "\ud83d\udc64" : todo.Assignee.Substring(0, 1);
