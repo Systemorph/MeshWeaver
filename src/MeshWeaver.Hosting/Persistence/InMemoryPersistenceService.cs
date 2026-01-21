@@ -9,18 +9,28 @@ namespace MeshWeaver.Hosting.Persistence;
 /// Suitable for development and testing.
 /// Optionally backs to an IStorageAdapter for file system persistence.
 /// </summary>
-public class InMemoryPersistenceService(IStorageAdapter? storageAdapter = null) : IPersistenceService
+public class InMemoryPersistenceService : IPersistenceService
 {
+    private readonly IStorageAdapter? _storageAdapter;
+    private readonly IDataChangeNotifier? _changeNotifier;
     private readonly ConcurrentDictionary<string, MeshNode> _nodes = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, Comment> _comments = new(StringComparer.OrdinalIgnoreCase);
     private bool _initialized;
+
+    public InMemoryPersistenceService(
+        IStorageAdapter? storageAdapter = null,
+        IDataChangeNotifier? changeNotifier = null)
+    {
+        _storageAdapter = storageAdapter;
+        _changeNotifier = changeNotifier;
+    }
 
     public async Task InitializeAsync(CancellationToken ct = default)
     {
         if (_initialized)
             return;
 
-        if (storageAdapter != null)
+        if (_storageAdapter != null)
         {
             await LoadFromStorageAsync("", ct);
         }
@@ -30,12 +40,12 @@ public class InMemoryPersistenceService(IStorageAdapter? storageAdapter = null) 
 
     private async Task LoadFromStorageAsync(string parentPath, CancellationToken ct)
     {
-        var (nodePaths, directoryPaths) = await storageAdapter!.ListChildPathsAsync(parentPath, ct);
+        var (nodePaths, directoryPaths) = await _storageAdapter!.ListChildPathsAsync(parentPath, ct);
 
         // Load nodes from JSON files
         foreach (var path in nodePaths)
         {
-            var node = await storageAdapter.ReadAsync(path, ct);
+            var node = await _storageAdapter.ReadAsync(path, ct);
             if (node != null)
             {
                 var normalizedPath = NormalizePath(path);
@@ -124,6 +134,7 @@ public class InMemoryPersistenceService(IStorageAdapter? storageAdapter = null) 
     public async Task<MeshNode> SaveNodeAsync(MeshNode node, CancellationToken ct = default)
     {
         var normalizedPath = NormalizePath(node.Path);
+        var isNew = !_nodes.ContainsKey(normalizedPath);
 
         // Set LastModified to UtcNow if not specified (for in-memory case without file system)
         var savedNode = node with
@@ -133,10 +144,15 @@ public class InMemoryPersistenceService(IStorageAdapter? storageAdapter = null) 
 
         _nodes[normalizedPath] = savedNode;
 
-        if (storageAdapter != null)
+        if (_storageAdapter != null)
         {
-            await storageAdapter.WriteAsync(savedNode, ct);
+            await _storageAdapter.WriteAsync(savedNode, ct);
         }
+
+        // Notify change
+        _changeNotifier?.NotifyChange(isNew
+            ? DataChangeNotification.Created(normalizedPath, savedNode)
+            : DataChangeNotification.Updated(normalizedPath, savedNode));
 
         return savedNode;
     }
@@ -154,20 +170,24 @@ public class InMemoryPersistenceService(IStorageAdapter? storageAdapter = null) 
 
             foreach (var key in toDelete)
             {
-                _nodes.TryRemove(key, out _);
-                if (storageAdapter != null)
+                _nodes.TryRemove(key, out var removedNode);
+                if (_storageAdapter != null)
                 {
-                    await storageAdapter.DeleteAsync(key, ct);
+                    await _storageAdapter.DeleteAsync(key, ct);
                 }
+                // Notify deletion
+                _changeNotifier?.NotifyChange(DataChangeNotification.Deleted(key, removedNode));
             }
         }
         else
         {
-            _nodes.TryRemove(normalizedPath, out _);
-            if (storageAdapter != null)
+            _nodes.TryRemove(normalizedPath, out var removedNode);
+            if (_storageAdapter != null)
             {
-                await storageAdapter.DeleteAsync(normalizedPath, ct);
+                await _storageAdapter.DeleteAsync(normalizedPath, ct);
             }
+            // Notify deletion
+            _changeNotifier?.NotifyChange(DataChangeNotification.Deleted(normalizedPath, removedNode));
         }
     }
 
@@ -265,17 +285,17 @@ public class InMemoryPersistenceService(IStorageAdapter? storageAdapter = null) 
 
         // Delete originals (the main node and all descendants)
         _nodes.TryRemove(normalizedSource, out _);
-        if (storageAdapter != null)
+        if (_storageAdapter != null)
         {
-            await storageAdapter.DeleteAsync(normalizedSource, ct);
+            await _storageAdapter.DeleteAsync(normalizedSource, ct);
         }
 
         foreach (var descendantPath in descendants)
         {
             _nodes.TryRemove(descendantPath, out _);
-            if (storageAdapter != null)
+            if (_storageAdapter != null)
             {
-                await storageAdapter.DeleteAsync(descendantPath, ct);
+                await _storageAdapter.DeleteAsync(descendantPath, ct);
             }
         }
 
@@ -402,10 +422,10 @@ public class InMemoryPersistenceService(IStorageAdapter? storageAdapter = null) 
         }
 
         // Otherwise, load from storage adapter if available
-        if (storageAdapter != null)
+        if (_storageAdapter != null)
         {
             var objects = new List<object>();
-            await foreach (var obj in storageAdapter.GetPartitionObjectsAsync(nodePath, subPath))
+            await foreach (var obj in _storageAdapter.GetPartitionObjectsAsync(nodePath, subPath))
             {
                 objects.Add(obj);
                 yield return obj;
@@ -422,14 +442,27 @@ public class InMemoryPersistenceService(IStorageAdapter? storageAdapter = null) 
         CancellationToken ct = default)
     {
         var key = GetPartitionKey(nodePath, subPath);
+        var hadExisting = _partitionData.ContainsKey(key);
 
         // Update in-memory cache
         _partitionData[key] = objects.ToList();
 
         // Persist to storage adapter if available
-        if (storageAdapter != null)
+        if (_storageAdapter != null)
         {
-            await storageAdapter.SavePartitionObjectsAsync(nodePath, subPath, objects, ct);
+            await _storageAdapter.SavePartitionObjectsAsync(nodePath, subPath, objects, ct);
+        }
+
+        // Notify change for each object in the partition
+        if (_changeNotifier != null)
+        {
+            foreach (var obj in objects)
+            {
+                var notification = hadExisting
+                    ? DataChangeNotification.Updated(key, obj)
+                    : DataChangeNotification.Created(key, obj);
+                _changeNotifier.NotifyChange(notification);
+            }
         }
     }
 
@@ -440,13 +473,22 @@ public class InMemoryPersistenceService(IStorageAdapter? storageAdapter = null) 
     {
         var key = GetPartitionKey(nodePath, subPath);
 
-        // Remove from in-memory cache
-        _partitionData.TryRemove(key, out _);
+        // Get existing objects for notification before removal
+        _partitionData.TryRemove(key, out var removedObjects);
 
         // Delete from storage adapter if available
-        if (storageAdapter != null)
+        if (_storageAdapter != null)
         {
-            await storageAdapter.DeletePartitionObjectsAsync(nodePath, subPath, ct);
+            await _storageAdapter.DeletePartitionObjectsAsync(nodePath, subPath, ct);
+        }
+
+        // Notify deletion
+        if (_changeNotifier != null && removedObjects != null)
+        {
+            foreach (var obj in removedObjects)
+            {
+                _changeNotifier.NotifyChange(DataChangeNotification.Deleted(key, obj));
+            }
         }
     }
 
@@ -456,9 +498,9 @@ public class InMemoryPersistenceService(IStorageAdapter? storageAdapter = null) 
         CancellationToken ct = default)
     {
         // Delegate to storage adapter if available
-        if (storageAdapter != null)
+        if (_storageAdapter != null)
         {
-            return storageAdapter.GetPartitionMaxTimestampAsync(nodePath, subPath, ct);
+            return _storageAdapter.GetPartitionMaxTimestampAsync(nodePath, subPath, ct);
         }
 
         // For pure in-memory storage without adapter, return UtcNow as we can't track file timestamps

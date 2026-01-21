@@ -81,7 +81,7 @@ public static class MeshExtensions
             if (!string.IsNullOrEmpty(node.NodeType))
             {
                 var nodeTypeExists = catalog.Configuration.Nodes.ContainsKey(node.NodeType)
-                    || await catalog.Persistence.ExistsAsync(node.NodeType, ct);
+                    || await catalog.GetNodeAsync(new Address(node.NodeType)) != null;
                 if (!nodeTypeExists)
                 {
                     hub.Post(

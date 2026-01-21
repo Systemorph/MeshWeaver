@@ -886,13 +886,14 @@ public static class ProjectViews
     private static async System.Threading.Tasks.Task RestoreTodo(LayoutAreaHost host, string todoPath)
     {
         var meshCatalog = host.Hub.ServiceProvider.GetService<IMeshCatalog>();
-        if (meshCatalog == null) return;
+        var persistence = host.Hub.ServiceProvider.GetService<IPersistenceService>();
+        if (meshCatalog == null || persistence == null) return;
 
         var existingNode = await meshCatalog.GetNodeAsync(new Address(todoPath));
         if (existingNode == null) return;
 
         var restoredNode = existingNode with { State = MeshNodeState.Active };
-        await meshCatalog.Persistence.SaveNodeAsync(restoredNode);
+        await persistence.SaveNodeAsync(restoredNode);
     }
 
     private static async System.Threading.Tasks.Task HardDeleteTodo(LayoutAreaHost host, string todoPath)

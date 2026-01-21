@@ -18,7 +18,7 @@ namespace MeshWeaver.AI;
 public class MeshPlugin(IMessageHub hub, IAgentChat chat)
 {
     private readonly ILogger<MeshPlugin> logger = hub.ServiceProvider.GetRequiredService<ILogger<MeshPlugin>>();
-    private readonly IPersistenceService? persistence = hub.ServiceProvider.GetService<IMeshCatalog>()?.Persistence;
+    private readonly IPersistenceService? persistence = hub.ServiceProvider.GetService<IPersistenceService>();
     private readonly IMeshQuery? meshQuery = hub.ServiceProvider.GetService<IMeshQuery>();
 
     private const string NodesArea = "_Nodes";

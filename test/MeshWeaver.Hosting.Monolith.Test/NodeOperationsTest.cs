@@ -461,7 +461,8 @@ public class NodeOperationsWithValidatorTest(ITestOutputHelper output) : Monolit
         nodeAfterRejection.Should().BeNull("transient node should be deleted after rejection");
 
         // Also verify via persistence directly
-        var existsInPersistence = await catalog.Persistence.ExistsAsync(nodePath);
+        var persistence = Mesh.ServiceProvider.GetRequiredService<IPersistenceService>();
+        var existsInPersistence = await persistence.ExistsAsync(nodePath);
         existsInPersistence.Should().BeFalse("transient node should be removed from persistence after rejection");
     }
 }

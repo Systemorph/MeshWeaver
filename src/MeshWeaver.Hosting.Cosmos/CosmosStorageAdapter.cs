@@ -18,6 +18,17 @@ public class CosmosStorageAdapter : IStorageAdapter, IAsyncDisposable
     private readonly Container _partitionsContainer;
     private readonly CosmosSqlGenerator _sqlGenerator = new();
     private readonly JsonSerializerOptions _jsonOptions;
+    private CosmosChangeFeedProcessor? _changeFeedProcessor;
+
+    /// <summary>
+    /// Gets the nodes container for external use (e.g., change feed processing).
+    /// </summary>
+    public Container NodesContainer => _nodesContainer;
+
+    /// <summary>
+    /// Gets the partitions container.
+    /// </summary>
+    public Container PartitionsContainer => _partitionsContainer;
 
     public CosmosStorageAdapter(
         Container nodesContainer,
@@ -26,6 +37,37 @@ public class CosmosStorageAdapter : IStorageAdapter, IAsyncDisposable
         _nodesContainer = nodesContainer;
         _partitionsContainer = partitionsContainer;
         _jsonOptions = PersistenceJsonOptions.CreateForPersistence();
+    }
+
+    /// <summary>
+    /// Attaches a change feed processor to this storage adapter.
+    /// </summary>
+    /// <param name="processor">The change feed processor to attach.</param>
+    public void AttachChangeFeedProcessor(CosmosChangeFeedProcessor processor)
+    {
+        _changeFeedProcessor = processor;
+    }
+
+    /// <summary>
+    /// Starts the attached change feed processor if one is attached.
+    /// </summary>
+    public async Task StartChangeFeedProcessorAsync(CancellationToken cancellationToken = default)
+    {
+        if (_changeFeedProcessor != null)
+        {
+            await _changeFeedProcessor.StartAsync(cancellationToken);
+        }
+    }
+
+    /// <summary>
+    /// Stops the attached change feed processor if one is attached.
+    /// </summary>
+    public async Task StopChangeFeedProcessorAsync()
+    {
+        if (_changeFeedProcessor != null)
+        {
+            await _changeFeedProcessor.StopAsync();
+        }
     }
 
     private static string NormalizePath(string? path) =>
@@ -309,9 +351,15 @@ public class CosmosStorageAdapter : IStorageAdapter, IAsyncDisposable
         return id ?? Guid.NewGuid().ToString();
     }
 
-    public ValueTask DisposeAsync()
+    public async ValueTask DisposeAsync()
     {
+        // Stop and dispose the change feed processor if attached
+        if (_changeFeedProcessor != null)
+        {
+            await _changeFeedProcessor.DisposeAsync();
+            _changeFeedProcessor = null;
+        }
+
         // CosmosClient is typically shared and disposed elsewhere
-        return ValueTask.CompletedTask;
     }
 }

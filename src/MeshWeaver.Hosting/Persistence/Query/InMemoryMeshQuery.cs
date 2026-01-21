@@ -1,3 +1,6 @@
+using System.Reactive.Disposables;
+using System.Reactive.Linq;
+using System.Reactive.Subjects;
 using System.Runtime.CompilerServices;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Query;
@@ -17,19 +20,28 @@ public class InMemoryMeshQuery : IMeshQuery
     private readonly INavigationService? _navigationContext;
     private readonly ISecurityService? _securityService;
     private readonly AccessService? _accessService;
+    private readonly IDataChangeNotifier? _changeNotifier;
     private readonly QueryParser _parser = new();
     private readonly QueryEvaluator _evaluator = new();
+    private long _version;
+
+    /// <summary>
+    /// Default debounce interval for batching rapid changes.
+    /// </summary>
+    public static readonly TimeSpan DefaultDebounceInterval = TimeSpan.FromMilliseconds(100);
 
     public InMemoryMeshQuery(
         IPersistenceService persistence,
         INavigationService? navigationContext = null,
         ISecurityService? securityService = null,
-        AccessService? accessService = null)
+        AccessService? accessService = null,
+        IDataChangeNotifier? changeNotifier = null)
     {
         _persistence = persistence;
         _navigationContext = navigationContext;
         _securityService = securityService;
         _accessService = accessService;
+        _changeNotifier = changeNotifier;
     }
 
     /// <summary>
@@ -420,5 +432,199 @@ public class InMemoryMeshQuery : IMeshQuery
         }
 
         return paths;
+    }
+
+    /// <inheritdoc />
+    public IObservable<QueryResultChange<T>> ObserveQuery<T>(MeshQueryRequest request)
+    {
+        return Observable.Create<QueryResultChange<T>>(async (observer, ct) =>
+        {
+            var parsedQuery = _parser.Parse(request.Query);
+
+            // Determine the effective path and scope
+            var effectivePath = parsedQuery.Path;
+            var effectiveScope = parsedQuery.Scope;
+            if (string.IsNullOrEmpty(effectivePath))
+            {
+                effectivePath = _navigationContext?.CurrentNamespace ?? "";
+                if (parsedQuery.Scope == QueryScope.Exact)
+                {
+                    effectiveScope = QueryScope.Children;
+                }
+            }
+            var normalizedBasePath = NormalizePath(effectivePath);
+
+            // Track current result set for detecting changes
+            var currentItems = new Dictionary<string, T>();
+
+            // Emit initial results
+            try
+            {
+                var initialItems = new List<T>();
+                await foreach (var item in QueryAsync(request, ct))
+                {
+                    if (item is T typedItem)
+                    {
+                        initialItems.Add(typedItem);
+                        var itemPath = GetItemPath(item);
+                        if (!string.IsNullOrEmpty(itemPath))
+                            currentItems[itemPath.ToLowerInvariant()] = typedItem;
+                    }
+                }
+
+                var initialChange = new QueryResultChange<T>
+                {
+                    ChangeType = QueryChangeType.Initial,
+                    Items = initialItems,
+                    Query = parsedQuery,
+                    Version = Interlocked.Increment(ref _version),
+                    Timestamp = DateTimeOffset.UtcNow
+                };
+                observer.OnNext(initialChange);
+            }
+            catch (Exception ex)
+            {
+                observer.OnError(ex);
+                return Disposable.Empty;
+            }
+
+            // If no change notifier is available, complete after initial results
+            if (_changeNotifier == null)
+            {
+                observer.OnCompleted();
+                return Disposable.Empty;
+            }
+
+            // Subscribe to changes with debouncing
+            var changeBuffer = new Subject<DataChangeNotification>();
+            var subscription = new CompositeDisposable();
+
+            // Subscribe to the change notifier and filter by path/scope
+            var notifierSubscription = _changeNotifier
+                .Where(n => PathMatcher.ShouldNotify(n.Path, normalizedBasePath, effectiveScope))
+                .Subscribe(changeBuffer);
+            subscription.Add(notifierSubscription);
+
+            // Process debounced changes
+            var debounceSubscription = changeBuffer
+                .Buffer(DefaultDebounceInterval)
+                .Where(batch => batch.Count > 0)
+                .Subscribe(async batch =>
+                {
+                    try
+                    {
+                        await ProcessChangeBatchAsync(batch, request, parsedQuery, currentItems, observer, ct);
+                    }
+                    catch (Exception ex)
+                    {
+                        observer.OnError(ex);
+                    }
+                });
+            subscription.Add(debounceSubscription);
+            subscription.Add(changeBuffer);
+
+            return subscription;
+        });
+    }
+
+    private async Task ProcessChangeBatchAsync<T>(
+        IList<DataChangeNotification> batch,
+        MeshQueryRequest request,
+        ParsedQuery parsedQuery,
+        Dictionary<string, T> currentItems,
+        IObserver<QueryResultChange<T>> observer,
+        CancellationToken ct)
+    {
+        var addedItems = new List<T>();
+        var updatedItems = new List<T>();
+        var removedItems = new List<T>();
+
+        // Group changes by path to handle multiple changes to the same item
+        var changesByPath = batch
+            .GroupBy(c => c.Path.ToLowerInvariant())
+            .ToDictionary(g => g.Key, g => g.Last());
+
+        // Re-query to get current matching items
+        var newItems = new Dictionary<string, T>();
+        await foreach (var item in QueryAsync(request, ct))
+        {
+            if (item is T typedItem)
+            {
+                var itemPath = GetItemPath(item);
+                if (!string.IsNullOrEmpty(itemPath))
+                    newItems[itemPath.ToLowerInvariant()] = typedItem;
+            }
+        }
+
+        // Detect added and updated items
+        foreach (var (path, item) in newItems)
+        {
+            if (currentItems.TryGetValue(path, out var existingItem))
+            {
+                // Item existed before - check if it changed
+                if (changesByPath.ContainsKey(path))
+                {
+                    updatedItems.Add(item);
+                }
+            }
+            else
+            {
+                // New item
+                addedItems.Add(item);
+            }
+        }
+
+        // Detect removed items
+        foreach (var (path, item) in currentItems)
+        {
+            if (!newItems.ContainsKey(path))
+            {
+                removedItems.Add(item);
+            }
+        }
+
+        // Update current items
+        currentItems.Clear();
+        foreach (var (path, item) in newItems)
+        {
+            currentItems[path] = item;
+        }
+
+        // Emit changes
+        if (addedItems.Count > 0)
+        {
+            observer.OnNext(new QueryResultChange<T>
+            {
+                ChangeType = QueryChangeType.Added,
+                Items = addedItems,
+                Query = parsedQuery,
+                Version = Interlocked.Increment(ref _version),
+                Timestamp = DateTimeOffset.UtcNow
+            });
+        }
+
+        if (updatedItems.Count > 0)
+        {
+            observer.OnNext(new QueryResultChange<T>
+            {
+                ChangeType = QueryChangeType.Updated,
+                Items = updatedItems,
+                Query = parsedQuery,
+                Version = Interlocked.Increment(ref _version),
+                Timestamp = DateTimeOffset.UtcNow
+            });
+        }
+
+        if (removedItems.Count > 0)
+        {
+            observer.OnNext(new QueryResultChange<T>
+            {
+                ChangeType = QueryChangeType.Removed,
+                Items = removedItems,
+                Query = parsedQuery,
+                Version = Interlocked.Increment(ref _version),
+                Timestamp = DateTimeOffset.UtcNow
+            });
+        }
     }
 }
