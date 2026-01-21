@@ -21,7 +21,7 @@
     box-shadow: 0 0 0 1px var(--accent-fill-rest, #0078d4);
 }
 
-/* Dark mode support using CSS custom properties */
+/* Dark mode support using CSS custom properties 
 :global([data-theme="dark"]) .monaco-editor-container.with-border,
 :global(.dark) .monaco-editor-container.with-border,
 :global(.fluent-dark) .monaco-editor-container.with-border {
@@ -34,7 +34,7 @@
 :global(.fluent-dark) .monaco-editor-container.with-border:focus-within {
     border-color: var(--accent-fill-rest, #479ef5);
     box-shadow: 0 0 0 1px var(--accent-fill-rest, #479ef5);
-}
+}*/
 
 /* Note: Removed @media (prefers-color-scheme: dark) fallback because it responds to OS settings,
    not app theme. Use [data-theme] selectors above which are controlled by the app. */
@@ -86,21 +86,21 @@
     border: none !important;
 }
 
-/* Selected text styling */
+/* Selected text styling 
 ::deep .monaco-editor-view .monaco-editor .selected-text {
     background-color: var(--accent-fill-rest) !important;
     opacity: 0.3;
 }
 
-/* Hide scrollbars but allow scrolling */
+/* Hide scrollbars but allow scrolling
 ::deep .monaco-editor-view .monaco-scrollable-element > .scrollbar {
     display: none !important;
-}
+}*/
 
 /* Note: Suggest widget styles are applied globally via JavaScript
    because FixedOverflowWidgets renders the widget outside the component's DOM tree */
 
-/* Placeholder styling */
+/* Placeholder styling 
 ::deep .monaco-placeholder {
     color: var(--neutral-foreground-hint, #767676) !important;
     font-family: var(--body-font, "Segoe UI", sans-serif);
@@ -110,28 +110,4 @@
 
 :global([data-theme="dark"]) ::deep .monaco-placeholder {
     color: var(--neutral-foreground-hint, #9a9a9a) !important;
-}
-
-/* Editor text color - light mode (default) */
-::deep .monaco-editor .view-line,
-::deep .monaco-editor .view-line span,
-::deep .monaco-editor .mtk1 {
-    color: var(--neutral-foreground-rest, #323130) !important;
-}
-
-/* Editor text color - dark mode (uses app's data-theme, not OS preference) */
-:global([data-theme="dark"]) ::deep .monaco-editor .view-line,
-:global([data-theme="dark"]) ::deep .monaco-editor .view-line span,
-:global([data-theme="dark"]) ::deep .monaco-editor .mtk1 {
-    color: var(--neutral-foreground-rest, #d4d4d4) !important;
-}
-
-/* Cursor color - light mode */
-::deep .monaco-editor .cursor {
-    background-color: var(--neutral-foreground-rest, #323130) !important;
-}
-
-/* Cursor color - dark mode */
-:global([data-theme="dark"]) ::deep .monaco-editor .cursor {
-    background-color: var(--neutral-foreground-rest, #d4d4d4) !important;
-}
+}*/

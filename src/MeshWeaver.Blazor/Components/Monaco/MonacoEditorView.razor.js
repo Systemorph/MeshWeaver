@@ -1,6 +1,41 @@
 // Monaco Editor View JavaScript module
 const editorState = new Map();
 
+// =============================================================================
+// Monaco Theme Synchronization
+// =============================================================================
+
+let themeCallbackRegistered = false;
+
+// Update all Monaco editors to match the app theme
+function syncMonacoTheme(effectiveTheme) {
+    const monacoTheme = effectiveTheme === 'dark' ? 'vs-dark' : 'vs';
+
+    // Check if Monaco is available
+    if (typeof monaco !== 'undefined' && monaco.editor) {
+        // Set the global Monaco theme - this affects all editors
+        monaco.editor.setTheme(monacoTheme);
+    }
+}
+
+// Register theme change callback (called from initEditor when Monaco is ready)
+function ensureThemeCallbackRegistered() {
+    if (themeCallbackRegistered) return;
+
+    if (typeof window.themeHandler !== 'undefined' && window.themeHandler.registerThemeChangeCallback) {
+        window.themeHandler.registerThemeChangeCallback((effectiveTheme, isDark) => {
+            syncMonacoTheme(effectiveTheme);
+        });
+        themeCallbackRegistered = true;
+
+        // Apply current theme immediately
+        const currentTheme = window.themeHandler.getEffectiveTheme();
+        syncMonacoTheme(currentTheme);
+    }
+}
+
+// =============================================================================
+
 // Debounce utility function
 function debounce(fn, delay) {
     let timeoutId = null;
@@ -143,6 +178,9 @@ export function initEditor(editorId, placeholder, dotNetRef, codeEditMode = fals
         console.error('Container not found:', editorId);
         return;
     }
+
+    // Register theme sync callback (only once, when first editor initializes)
+    ensureThemeCallbackRegistered();
 
     // Store state for this editor
     editorState.set(editorId, {

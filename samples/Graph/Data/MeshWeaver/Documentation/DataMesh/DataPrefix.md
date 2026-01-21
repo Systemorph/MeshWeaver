@@ -2,7 +2,7 @@
 Name: Data Prefix
 Category: Documentation
 Description: Embed data collections and entities
-Icon: Database
+Icon: /static/storage/content/MeshWeaver/Documentation/DataMesh/DataPrefix/icon.svg
 ---
 
 # Data Prefix
