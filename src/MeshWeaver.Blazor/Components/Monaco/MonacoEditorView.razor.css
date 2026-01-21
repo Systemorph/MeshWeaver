@@ -96,11 +96,6 @@
     border: none !important;
 }
 
-/* Ensure cursor color matches theme */
-::deep .monaco-editor-view .monaco-editor .cursor {
-    background-color: var(--neutral-foreground-rest) !important;
-}
-
 /* Selected text styling */
 ::deep .monaco-editor-view .monaco-editor .selected-text {
     background-color: var(--accent-fill-rest) !important;
@@ -115,49 +110,26 @@
 /* Note: Suggest widget styles are applied globally via JavaScript
    because FixedOverflowWidgets renders the widget outside the component's DOM tree */
 
-/* Placeholder styling */
+/* Placeholder styling - fixed color that works on both light and dark backgrounds */
 ::deep .monaco-placeholder {
-    color: var(--neutral-foreground-hint, #707070) !important;
+    color: #707070 !important;
     font-family: var(--body-font, "Segoe UI", sans-serif);
     font-size: 14px;
     padding-left: 2px;
 }
 
-/* Dark mode placeholder */
-:global([data-theme="dark"]) ::deep .monaco-placeholder,
-:global(.dark) ::deep .monaco-placeholder,
-:global(.fluent-dark) ::deep .monaco-placeholder {
-    color: var(--neutral-foreground-hint, #a0a0a0) !important;
+/*
+ * Fixed font color for Monaco editor text - works on both light and dark backgrounds
+ * Using #686868 (medium gray) for balanced contrast on both light and dark backgrounds.
+ * This avoids theme-switching issues.
+ */
+::deep .monaco-editor .view-line,
+::deep .monaco-editor .view-line span,
+::deep .monaco-editor .mtk1 {
+    color: #686868 !important;
 }
 
-@media (prefers-color-scheme: dark) {
-    ::deep .monaco-placeholder {
-        color: var(--neutral-foreground-hint, #a0a0a0) !important;
-    }
-}
-
-/* Editor text color for dark mode */
-:global([data-theme="dark"]) ::deep .monaco-editor .view-line,
-:global(.dark) ::deep .monaco-editor .view-line,
-:global(.fluent-dark) ::deep .monaco-editor .view-line {
-    color: var(--neutral-foreground-rest, #e0e0e0) !important;
-}
-
-@media (prefers-color-scheme: dark) {
-    ::deep .monaco-editor .view-line {
-        color: var(--neutral-foreground-rest, #e0e0e0) !important;
-    }
-}
-
-/* Cursor color for dark mode */
-:global([data-theme="dark"]) ::deep .monaco-editor .cursor,
-:global(.dark) ::deep .monaco-editor .cursor,
-:global(.fluent-dark) ::deep .monaco-editor .cursor {
-    background-color: var(--neutral-foreground-rest, #ffffff) !important;
-}
-
-@media (prefers-color-scheme: dark) {
-    ::deep .monaco-editor .cursor {
-        background-color: var(--neutral-foreground-rest, #ffffff) !important;
-    }
+/* Cursor color - medium gray to match text */
+::deep .monaco-editor .cursor {
+    background-color: #686868 !important;
 }
