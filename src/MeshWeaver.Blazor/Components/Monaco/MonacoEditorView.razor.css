@@ -21,7 +21,7 @@
     box-shadow: 0 0 0 1px var(--accent-fill-rest, #0078d4);
 }
 
-/* Dark mode support using CSS custom properties */
+/* Dark mode support using CSS custom properties 
 :global([data-theme="dark"]) .monaco-editor-container.with-border,
 :global(.dark) .monaco-editor-container.with-border,
 :global(.fluent-dark) .monaco-editor-container.with-border {
@@ -34,20 +34,10 @@
 :global(.fluent-dark) .monaco-editor-container.with-border:focus-within {
     border-color: var(--accent-fill-rest, #479ef5);
     box-shadow: 0 0 0 1px var(--accent-fill-rest, #479ef5);
-}
+}*/
 
-/* Fallback dark mode via media query */
-@media (prefers-color-scheme: dark) {
-    .monaco-editor-container.with-border {
-        border-color: var(--neutral-stroke-rest, #505050);
-        background: var(--neutral-layer-1, #2d2d2d);
-    }
-
-    .monaco-editor-container.with-border:focus-within {
-        border-color: var(--accent-fill-rest, #479ef5);
-        box-shadow: 0 0 0 1px var(--accent-fill-rest, #479ef5);
-    }
-}
+/* Note: Removed @media (prefers-color-scheme: dark) fallback because it responds to OS settings,
+   not app theme. Use [data-theme] selectors above which are controlled by the app. */
 
 /* Ensure the editor fills its container */
 ::deep .monaco-editor-view {
@@ -96,68 +86,28 @@
     border: none !important;
 }
 
-/* Ensure cursor color matches theme */
-::deep .monaco-editor-view .monaco-editor .cursor {
-    background-color: var(--neutral-foreground-rest) !important;
-}
-
-/* Selected text styling */
+/* Selected text styling 
 ::deep .monaco-editor-view .monaco-editor .selected-text {
     background-color: var(--accent-fill-rest) !important;
     opacity: 0.3;
 }
 
-/* Hide scrollbars but allow scrolling */
+/* Hide scrollbars but allow scrolling
 ::deep .monaco-editor-view .monaco-scrollable-element > .scrollbar {
     display: none !important;
-}
+}*/
 
 /* Note: Suggest widget styles are applied globally via JavaScript
    because FixedOverflowWidgets renders the widget outside the component's DOM tree */
 
-/* Placeholder styling */
+/* Placeholder styling 
 ::deep .monaco-placeholder {
-    color: var(--neutral-foreground-hint, #707070) !important;
+    color: var(--neutral-foreground-hint, #767676) !important;
     font-family: var(--body-font, "Segoe UI", sans-serif);
     font-size: 14px;
     padding-left: 2px;
 }
 
-/* Dark mode placeholder */
-:global([data-theme="dark"]) ::deep .monaco-placeholder,
-:global(.dark) ::deep .monaco-placeholder,
-:global(.fluent-dark) ::deep .monaco-placeholder {
-    color: var(--neutral-foreground-hint, #a0a0a0) !important;
-}
-
-@media (prefers-color-scheme: dark) {
-    ::deep .monaco-placeholder {
-        color: var(--neutral-foreground-hint, #a0a0a0) !important;
-    }
-}
-
-/* Editor text color for dark mode */
-:global([data-theme="dark"]) ::deep .monaco-editor .view-line,
-:global(.dark) ::deep .monaco-editor .view-line,
-:global(.fluent-dark) ::deep .monaco-editor .view-line {
-    color: var(--neutral-foreground-rest, #e0e0e0) !important;
-}
-
-@media (prefers-color-scheme: dark) {
-    ::deep .monaco-editor .view-line {
-        color: var(--neutral-foreground-rest, #e0e0e0) !important;
-    }
-}
-
-/* Cursor color for dark mode */
-:global([data-theme="dark"]) ::deep .monaco-editor .cursor,
-:global(.dark) ::deep .monaco-editor .cursor,
-:global(.fluent-dark) ::deep .monaco-editor .cursor {
-    background-color: var(--neutral-foreground-rest, #ffffff) !important;
-}
-
-@media (prefers-color-scheme: dark) {
-    ::deep .monaco-editor .cursor {
-        background-color: var(--neutral-foreground-rest, #ffffff) !important;
-    }
-}
+:global([data-theme="dark"]) ::deep .monaco-placeholder {
+    color: var(--neutral-foreground-hint, #9a9a9a) !important;
+}*/

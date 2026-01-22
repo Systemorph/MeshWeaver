@@ -2,7 +2,7 @@
 Name: Content Prefix
 Category: Documentation
 Description: Embed files like images, markdown, and documents
-Icon: Document
+Icon: /static/storage/content/MeshWeaver/Documentation/DataMesh/ContentPrefix/icon.svg
 ---
 
 # Content Prefix
