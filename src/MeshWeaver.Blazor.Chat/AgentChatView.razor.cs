@@ -99,12 +99,28 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
         selectedContextDisplayName = await ResolveContextDisplayNameAsync(selectedContextPath);
 
         // Initialize agent and model selections first (needs to happen before chat creation for model selection)
-        await InitializeAgentAndModelSelectionsAsync();
-        Logger.LogInformation("[Chat:{InstanceId}] Agent and model selections initialized", _instanceId);
+        try
+        {
+            await InitializeAgentAndModelSelectionsAsync();
+            Logger.LogInformation("[Chat:{InstanceId}] Agent and model selections initialized", _instanceId);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "[Chat:{InstanceId}] Failed to initialize agent/model selections. AI features may be unavailable. Check AI configuration.", _instanceId);
+            // Continue without AI - the chat will be limited but won't crash
+        }
 
         // Create chat with the context path
-        chat = await CreateChatAsync(lastNavigationContext?.ToUnifiedPath());
-        Logger.LogInformation("[Chat:{InstanceId}] Chat initialized", _instanceId);
+        try
+        {
+            chat = await CreateChatAsync(lastNavigationContext?.ToUnifiedPath());
+            Logger.LogInformation("[Chat:{InstanceId}] Chat initialized", _instanceId);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "[Chat:{InstanceId}] Failed to create chat. AI features may be unavailable. Check AI configuration.", _instanceId);
+            // Continue without chat - UI will show but AI won't work
+        }
 
         // Initialize command system
         InitializeCommands();

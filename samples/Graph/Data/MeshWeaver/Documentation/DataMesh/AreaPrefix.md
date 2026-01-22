@@ -2,7 +2,7 @@
 Name: Area Prefix
 Category: Documentation
 Description: Embed layout areas like Thumbnail, Details, or Catalog
-Icon: GridDots
+Icon: /static/storage/content/MeshWeaver/Documentation/DataMesh/AreaPrefix/icon.svg
 ---
 
 # Area Prefix
