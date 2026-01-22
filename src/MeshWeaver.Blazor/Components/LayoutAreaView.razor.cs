@@ -18,7 +18,7 @@ public partial class LayoutAreaView
 
 
     private NamedAreaControl NamedArea =>
-        new(Area) { ShowProgress = showProgress, ProgressMessage = progressMessage };
+        new(Area) { ShowProgress = showProgress, ProgressMessage = progressMessage, SpinnerType = ViewModel.SpinnerType };
 
     public override async Task SetParametersAsync(ParameterView parameters)
     {

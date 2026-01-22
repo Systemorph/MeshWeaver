@@ -13,6 +13,7 @@ public partial class NamedAreaView
 
     private string? ProgressMessage;
     private bool ShowProgress;
+    private SpinnerType SpinnerType;
 
     private IDisposable? subscription;
     private string? PageTitle;
@@ -28,6 +29,7 @@ public partial class NamedAreaView
         base.BindData();
         DataBind(ViewModel.ProgressMessage, x => x.ProgressMessage);
         DataBind(ViewModel.ShowProgress, x => x.ShowProgress);
+        DataBind(ViewModel.SpinnerType, x => x.SpinnerType);
 
         if (Stream is null)
             return;

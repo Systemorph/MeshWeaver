@@ -262,12 +262,13 @@ public static class ProjectViews
 
         // Items container - responsive grid layout: 3 cols on md+, 2 on sm, 1 on xs
         var itemsGrid = Controls.LayoutGrid
-            .WithSkin(skin => skin.WithSpacing(8));
+            .WithSkin(skin => skin.WithSpacing(8))
+            .WithStyle(style => style.WithWidth("100%"));
 
         foreach (var item in items)
         {
             itemsGrid = itemsGrid.WithView(
-                Controls.LayoutArea(new Address(item.Path), "Thumbnail"),
+                Controls.LayoutArea(new Address(item.Path), "Thumbnail").WithSpinnerType(SpinnerType.Dots),
                 skin => skin.WithXs(12).WithSm(6).WithMd(4));
         }
 
@@ -524,7 +525,8 @@ public static class ProjectViews
 
         // Items container - responsive grid layout: 3 cols on md+, 2 on sm, 1 on xs
         var itemsGrid = Controls.LayoutGrid
-            .WithSkin(skin => skin.WithSpacing(8));
+            .WithSkin(skin => skin.WithSpacing(8))
+            .WithStyle(style => style.WithWidth("100%"));
 
         foreach (var todo in deletedTodos)
         {

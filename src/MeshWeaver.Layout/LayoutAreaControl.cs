@@ -2,11 +2,28 @@
 using MeshWeaver.Messaging;
 
 namespace MeshWeaver.Layout;
+
+/// <summary>
+/// Defines the type of loading spinner to display.
+/// </summary>
+public enum SpinnerType
+{
+    /// <summary>
+    /// Full spinning ring indicator (default).
+    /// </summary>
+    Ring,
+
+    /// <summary>
+    /// Discreet three blinking dots indicator.
+    /// </summary>
+    Dots
+}
+
 /// <summary>
 /// Represents a layout area control with customizable properties.
 /// </summary>
 /// <remarks>
-/// For more information, visit the 
+/// For more information, visit the
 /// <a href="https://www.fluentui-blazor.net/layout">Fluent UI Blazor Layout documentation</a>.
 /// </remarks>
 /// <param name="Address">The address associated with the layout area control.</param>
@@ -57,20 +74,34 @@ public record LayoutAreaControl(object Address, LayoutAreaReference Reference)
         => new(hub.Address, new LayoutAreaReference(NodeTypesArea));
 
     /// <summary>
-    /// Gets or initializes the display area of the layout area control.
+    /// Gets or initializes the progress message of the layout area control.
     /// </summary>
     public object? ProgressMessage { get; init; }
+
     /// <summary>
     /// Gets or initializes the progress display state of the layout area control.
     /// </summary>
     public object? ShowProgress { get; init; } = true;
-    /// <summary>
-    /// Sets the display area of the layout area control.
-    /// </summary>
-    /// <param name="progressMessage">The display area to set.</param>
-    /// <returns>A new <see cref="LayoutAreaControl"/> instance with the specified display area.</returns>
 
+    /// <summary>
+    /// Gets or initializes the spinner type. Defaults to Ring.
+    /// Use Dots for a more discreet loading indicator.
+    /// </summary>
+    public SpinnerType SpinnerType { get; init; } = SpinnerType.Ring;
+
+    /// <summary>
+    /// Sets the progress message of the layout area control.
+    /// </summary>
+    /// <param name="progressMessage">The progress message to set.</param>
+    /// <returns>A new <see cref="LayoutAreaControl"/> instance with the specified progress message.</returns>
     public LayoutAreaControl WithProgressMessage(string progressMessage) => this with { ProgressMessage = progressMessage };
+
+    /// <summary>
+    /// Sets the spinner type for the loading indicator.
+    /// </summary>
+    /// <param name="spinnerType">The spinner type to use.</param>
+    /// <returns>A new <see cref="LayoutAreaControl"/> instance with the specified spinner type.</returns>
+    public LayoutAreaControl WithSpinnerType(SpinnerType spinnerType) => this with { SpinnerType = spinnerType };
 
     public virtual bool Equals(LayoutAreaControl? other)
     {
@@ -80,6 +111,7 @@ public record LayoutAreaControl(object Address, LayoutAreaReference Reference)
         return base.Equals(other)
                && ProgressMessage == other.ProgressMessage
                && ShowProgress == other.ShowProgress
+               && SpinnerType == other.SpinnerType
                && Equals(Reference, other.Reference)
                && Address.Equals(other.Address)
                 ;
@@ -102,6 +134,7 @@ public record LayoutAreaControl(object Address, LayoutAreaReference Reference)
             base.GetHashCode(),
             ProgressMessage,
             ShowProgress,
+            SpinnerType,
             Reference,
             Address
         );

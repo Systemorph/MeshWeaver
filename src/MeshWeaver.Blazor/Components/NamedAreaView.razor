@@ -1,4 +1,5 @@
 @inherits BlazorView<NamedAreaControl, NamedAreaView>
+@using MeshWeaver.Layout
 @using HorizontalAlignment = Microsoft.FluentUI.AspNetCore.Components.HorizontalAlignment
 @using Orientation = Microsoft.FluentUI.AspNetCore.Components.Orientation
 @using VerticalAlignment = Microsoft.FluentUI.AspNetCore.Components.VerticalAlignment
@@ -22,8 +23,22 @@
 {
     <FluentStack HorizontalAlignment="HorizontalAlignment.Center" VerticalAlignment="VerticalAlignment.Center"
         Orientation="Orientation.Vertical">
-        <h3>@ProgressMessage</h3>
-        <FluentProgressRing style="width: 102px; height: 102px;" />
+        @if (!string.IsNullOrEmpty(ProgressMessage))
+        {
+            <h3>@ProgressMessage</h3>
+        }
+        @if (SpinnerType == SpinnerType.Dots)
+        {
+            <div class="dots-spinner">
+                <span class="dot"></span>
+                <span class="dot"></span>
+                <span class="dot"></span>
+            </div>
+        }
+        else
+        {
+            <FluentProgressRing style="width: 102px; height: 102px;" />
+        }
     </FluentStack>
 }
 @if (@RootControl != null)
