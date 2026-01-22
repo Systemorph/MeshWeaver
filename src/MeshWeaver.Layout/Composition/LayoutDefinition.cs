@@ -11,6 +11,9 @@ public record LayoutDefinition(IMessageHub Hub)
 {
     private ImmutableList<(Func<RenderingContext, bool> Filter, AsyncRenderer Renderer)> AsyncRenderers { get; init; } = [];
 
+    private ImmutableDictionary<string, AsyncRenderer> NamedRenderers { get; init; }
+        = ImmutableDictionary<string, AsyncRenderer>.Empty;
+
     /// <summary>
     /// The default area to display when no area is specified in the URL.
     /// </summary>
@@ -33,6 +36,19 @@ public record LayoutDefinition(IMessageHub Hub)
             AsyncRenderers = AsyncRenderers.Add((filter, renderer))
         };
 
+    public LayoutDefinition WithNamedRenderer(string area, Renderer renderer)
+        => this with
+        {
+            NamedRenderers = NamedRenderers.SetItem(area, (h, ctx, s) =>
+                Task.FromResult(renderer.Invoke(h, ctx, s)))
+        };
+
+    public LayoutDefinition WithNamedRenderer(string area, AsyncRenderer renderer)
+        => this with
+        {
+            NamedRenderers = NamedRenderers.SetItem(area, renderer)
+        };
+
     public async ValueTask<EntityStoreAndUpdates> RenderAsync(
         LayoutAreaHost host,
         RenderingContext context,
@@ -40,6 +56,14 @@ public record LayoutDefinition(IMessageHub Hub)
     {
         var result = new EntityStoreAndUpdates(store, [], host.Stream.StreamId);
 
+        // Execute named renderer if one exists for this area
+        if (NamedRenderers.TryGetValue(context.Area, out var namedRenderer))
+        {
+            var ret = await namedRenderer.Invoke(host, context, result.Store);
+            result = ret with { Updates = result.Updates.Concat(ret.Updates) };
+        }
+
+        // Execute predicate-based renderers (existing behavior)
         await foreach (var x in AsyncRenderers.ToAsyncEnumerable().Where(r => r.Filter(context)))
         {
             var ret = await x.Renderer.Invoke(host, context, result.Store);
@@ -49,7 +73,7 @@ public record LayoutDefinition(IMessageHub Hub)
         return result;
     }
 
-    public int Count => AsyncRenderers.Count;
+    public int Count => AsyncRenderers.Count + NamedRenderers.Count;
 
     public LayoutDefinition AddRendering(Func<object, UiControl?> rule)
     {
