@@ -1,0 +1,30 @@
+{
+  "id": "a7c862b6",
+  "namespace": "ACME/ProductLaunch/Todo",
+  "path": "ACME/ProductLaunch/Todo/a7c862b6",
+  "name": "TEST007",
+  "nodeType": "ACME/Project/Todo",
+  "category": "Tasks",
+  "addressSegments": 0,
+  "isPersistent": true,
+  "lastModified": "2026-01-20T14:52:41.048555+00:00",
+  "version": 0,
+  "state": "Active",
+  "isVirtual": false,
+  "content": {
+    "$type": "Todo",
+    "id": "a7c862b6",
+    "title": "TEST007",
+    "description": "Test 007",
+    "category": "Support",
+    "priority": "Low",
+    "assignee": "Samuel Glauser",
+    "createdAt": "2026-01-20T14:52:15.809783Z",
+    "dueDate": "2026-01-29T00:00:00",
+    "status": "Pending",
+    "icon": "TaskListSquare",
+    "completedAt": null
+  },
+  "routingType": "Shared",
+  "instantiationType": "HubConfiguration"
+}

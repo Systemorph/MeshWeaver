@@ -3,11 +3,12 @@
 // DisplayName: Todo Views
 // </meshweaver>
 
+using MeshWeaver.Application.Styles;
+using MeshWeaver.Domain;
+
 /// <summary>
 /// Custom views for Todo items.
 /// </summary>
-using MeshWeaver.Application.Styles;
-using MeshWeaver.Domain;
 public static class TodoViews
 {
     /// <summary>
@@ -577,13 +578,13 @@ public static class TodoViews
         actionRow = actionRow.WithView(statusMenu);
 
         // Assignment indicator with quick-assign action
-        var assigneeDisplay = string.IsNullOrEmpty(todo.Assignee) ? "\ud83d\udc64" : todo.Assignee.Substring(0, 1);
-        var assigneeTitle = string.IsNullOrEmpty(todo.Assignee) ? "Unassigned - Click to assign" : $"Assigned to {todo.Assignee} - Click to reassign";
+        var assigneeDisplay = string.IsNullOrEmpty(todo.Assignee) ? "\ud83d\udc64 Unassigned" : $"\ud83d\udc64 {todo.Assignee}";
+        var assigneeTitle = string.IsNullOrEmpty(todo.Assignee) ? "Click to assign" : "Click to reassign";
         actionRow = actionRow.WithView(
             Controls.Button(assigneeDisplay)
                 .WithLabel(assigneeTitle)
                 .WithAppearance(string.IsNullOrEmpty(todo.Assignee) ? Appearance.Neutral : Appearance.Accent)
-                .WithStyle(style => style.WithMinWidth("32px").WithPadding("4px 8px").WithBorderRadius("50%"))
+                .WithStyle(style => style.WithMinWidth("100px").WithPadding("6px 12px").WithBorderRadius("6px"))
                 .WithClickAction(_ =>
                 {
                     // Cycle through team members or unassign

@@ -252,19 +252,10 @@ public static class ProjectViews
     private static UiControl BuildCollapsibleSectionFromItems(string title, List<TodoItem> items, bool defaultOpen)
     {
         var sectionStack = Controls.Stack
-            .WithStyle(style => style.WithMarginBottom("16px"));
+            .WithStyle(style => style.WithMarginBottom("32px"))
+            .WithView(BuildSectionHeader(title));
 
-        // Section header
-        sectionStack = sectionStack.WithView(Controls.Html($@"
-            <div style=""padding: 8px 12px; background: var(--neutral-layer-2); border-radius: 6px; font-weight: 600; margin-bottom: 8px;"">
-                {title}
-            </div>"));
-
-        // Items container - responsive grid layout: 3 cols on md+, 2 on sm, 1 on xs
-        var itemsGrid = Controls.LayoutGrid
-            .WithSkin(skin => skin.WithSpacing(8))
-            .WithStyle(style => style.WithWidth("100%"));
-
+        var itemsGrid = CreateItemsGrid();
         foreach (var item in items)
         {
             itemsGrid = itemsGrid.WithView(
@@ -272,9 +263,7 @@ public static class ProjectViews
                 skin => skin.WithXs(12).WithSm(6).WithMd(4));
         }
 
-        sectionStack = sectionStack.WithView(itemsGrid);
-
-        return sectionStack;
+        return sectionStack.WithView(itemsGrid);
     }
 
     #endregion
@@ -344,33 +333,9 @@ public static class ProjectViews
         mainGrid = mainGrid
             .WithView(Controls.Html($@"
                 <div style=""margin: 16px 0; padding: 12px; background: var(--neutral-layer-2); border-radius: 8px;"">
-                    <div style=""margin-bottom: 12px;"">
-                        <div style=""display: flex; justify-content: space-between; font-size: 12px; margin-bottom: 4px;"">
-                            <span>✅ Completion</span>
-                            <span>{completionRate:F0}%</span>
-                        </div>
-                        <div style=""width: 100%; background: var(--neutral-layer-3); border-radius: 4px; height: 8px;"">
-                            <div style=""width: {completionRate}%; background: #28a745; border-radius: 4px; height: 100%; transition: width 0.3s;""></div>
-                        </div>
-                    </div>
-                    <div style=""margin-bottom: 12px;"">
-                        <div style=""display: flex; justify-content: space-between; font-size: 12px; margin-bottom: 4px;"">
-                            <span>🔄 In Progress</span>
-                            <span>{inProgressRate:F0}%</span>
-                        </div>
-                        <div style=""width: 100%; background: var(--neutral-layer-3); border-radius: 4px; height: 8px;"">
-                            <div style=""width: {inProgressRate}%; background: #007bff; border-radius: 4px; height: 100%; transition: width 0.3s;""></div>
-                        </div>
-                    </div>
-                    <div>
-                        <div style=""display: flex; justify-content: space-between; font-size: 12px; margin-bottom: 4px;"">
-                            <span>🚫 Blocked</span>
-                            <span>{blockedRate:F0}%</span>
-                        </div>
-                        <div style=""width: 100%; background: var(--neutral-layer-3); border-radius: 4px; height: 8px;"">
-                            <div style=""width: {blockedRate}%; background: #dc3545; border-radius: 4px; height: 100%; transition: width 0.3s;""></div>
-                        </div>
-                    </div>
+                    {BuildProgressBar("✅", "Completion", completionRate, "#28a745")}
+                    {BuildProgressBar("🔄", "In Progress", inProgressRate, "#007bff")}
+                    {BuildProgressBar("🚫", "Blocked", blockedRate, "#dc3545").Replace("margin-bottom: 12px;", "")}
                 </div>"),
                 skin => skin.WithXs(12));
 
@@ -466,14 +431,7 @@ public static class ProjectViews
     private static UiControl BuildAllTasksView(List<TodoItem> todos, List<TodoItem> deletedTodos, LayoutAreaHost host, string hubPath)
     {
         var mainGrid = Controls.LayoutGrid.WithSkin(skin => skin.WithSpacing(-1));
-
-        // Header row with title and New Task button
-        mainGrid = mainGrid
-            .WithView(Controls.H4("\ud83d\udcdd All Tasks")
-                .WithStyle(style => style.WithMarginBottom("16px")),
-                skin => skin.WithXs(8).WithMd(10))
-            .WithView(BuildNewTaskButton(host, hubPath),
-                skin => skin.WithXs(4).WithMd(2));
+        mainGrid = AddPageHeader(mainGrid, "\ud83d\udcdd", "All Tasks", host, hubPath);
 
         if (!todos.Any() && !deletedTodos.Any())
         {
@@ -515,19 +473,10 @@ public static class ProjectViews
     private static UiControl BuildDeletedSection(List<TodoItem> deletedTodos, string hubPath, LayoutAreaHost host)
     {
         var sectionStack = Controls.Stack
-            .WithStyle(style => style.WithMarginBottom("16px").WithMarginTop("8px"));
+            .WithStyle(style => style.WithMarginBottom("32px").WithMarginTop("8px"))
+            .WithView(BuildSectionHeader($"🗑️ Deleted ({deletedTodos.Count})", 0.8));
 
-        // Section header
-        sectionStack = sectionStack.WithView(Controls.Html($@"
-            <div style=""padding: 8px 12px; background: var(--neutral-layer-2); border-radius: 6px; font-weight: 600; margin-bottom: 8px; opacity: 0.8;"">
-                🗑️ Deleted ({deletedTodos.Count})
-            </div>"));
-
-        // Items container - responsive grid layout: 3 cols on md+, 2 on sm, 1 on xs
-        var itemsGrid = Controls.LayoutGrid
-            .WithSkin(skin => skin.WithSpacing(8))
-            .WithStyle(style => style.WithWidth("100%"));
-
+        var itemsGrid = CreateItemsGrid();
         foreach (var todo in deletedTodos)
         {
             itemsGrid = itemsGrid.WithView(
@@ -535,9 +484,7 @@ public static class ProjectViews
                 skin => skin.WithXs(12).WithSm(6).WithMd(4));
         }
 
-        sectionStack = sectionStack.WithView(itemsGrid);
-
-        return sectionStack;
+        return sectionStack.WithView(itemsGrid);
     }
 
     /// <summary>
@@ -580,14 +527,7 @@ public static class ProjectViews
     private static UiControl BuildPlanningView(List<TodoItem> todos, LayoutAreaHost host, string hubPath)
     {
         var mainGrid = Controls.LayoutGrid.WithSkin(skin => skin.WithSpacing(-1));
-
-        // Header row with title and New Task button
-        mainGrid = mainGrid
-            .WithView(Controls.H4("\ud83c\udfaf Planning & Assignment")
-                .WithStyle(style => style.WithMarginBottom("16px")),
-                skin => skin.WithXs(8).WithMd(10))
-            .WithView(BuildNewTaskButton(host, hubPath),
-                skin => skin.WithXs(4).WithMd(2));
+        mainGrid = AddPageHeader(mainGrid, "\ud83c\udfaf", "Planning & Assignment", host, hubPath);
 
         if (!todos.Any())
         {
@@ -659,14 +599,7 @@ public static class ProjectViews
     private static UiControl BuildMyTasksView(List<TodoItem> todos, string hubPath, LayoutAreaHost host)
     {
         var mainGrid = Controls.LayoutGrid.WithSkin(skin => skin.WithSpacing(-1));
-
-        // Header row with title and New Task button
-        mainGrid = mainGrid
-            .WithView(Controls.H4("\ud83d\udfe2 My Tasks")
-                .WithStyle(style => style.WithMarginBottom("16px")),
-                skin => skin.WithXs(8).WithMd(10))
-            .WithView(BuildNewTaskButton(host, hubPath),
-                skin => skin.WithXs(4).WithMd(2));
+        mainGrid = AddPageHeader(mainGrid, "\ud83d\udfe2", "My Tasks", host, hubPath);
 
         // Get current user from AccessService
         var accessService = host.Hub.ServiceProvider.GetService<AccessService>();
@@ -749,14 +682,7 @@ public static class ProjectViews
     private static UiControl BuildBacklogView(List<TodoItem> todos, LayoutAreaHost host, string hubPath)
     {
         var mainGrid = Controls.LayoutGrid.WithSkin(skin => skin.WithSpacing(-1));
-
-        // Header row with title and New Task button
-        mainGrid = mainGrid
-            .WithView(Controls.H4("\ud83d\udccb Backlog - Unassigned Tasks")
-                .WithStyle(style => style.WithMarginBottom("16px")),
-                skin => skin.WithXs(8).WithMd(10))
-            .WithView(BuildNewTaskButton(host, hubPath),
-                skin => skin.WithXs(4).WithMd(2));
+        mainGrid = AddPageHeader(mainGrid, "\ud83d\udccb", "Backlog - Unassigned Tasks", host, hubPath);
 
         var backlogTasks = todos
             .Where(t => string.IsNullOrEmpty(t.Assignee) && t.Status != TodoStatus.Completed)
@@ -873,14 +799,7 @@ public static class ProjectViews
     private static UiControl BuildTodaysFocusView(List<TodoItem> todos, string hubPath, LayoutAreaHost host)
     {
         var mainGrid = Controls.LayoutGrid.WithSkin(skin => skin.WithSpacing(-1));
-
-        // Header row with title and New Task button
-        mainGrid = mainGrid
-            .WithView(Controls.H4("\ud83c\udfaf Today's Focus")
-                .WithStyle(style => style.WithMarginBottom("16px")),
-                skin => skin.WithXs(8).WithMd(10))
-            .WithView(BuildNewTaskButton(host, hubPath),
-                skin => skin.WithXs(4).WithMd(2));
+        mainGrid = AddPageHeader(mainGrid, "\ud83c\udfaf", "Today's Focus", host, hubPath);
 
         var now = DateTime.Now.Date;
         var activeTodos = todos.Where(t => t.Status != TodoStatus.Completed).ToList();
@@ -943,6 +862,99 @@ public static class ProjectViews
 
     #endregion
 
+    #region Helper Methods
+
+    private static string GetStatusIcon(TodoStatus status) => status switch
+    {
+        TodoStatus.Pending => "\u23f3",
+        TodoStatus.InProgress => "\ud83d\udd04",
+        TodoStatus.InReview => "\ud83d\udc41\ufe0f",
+        TodoStatus.Completed => "\u2705",
+        TodoStatus.Blocked => "\ud83d\udeab",
+        _ => "\u2753"
+    };
+
+    private static string GetPriorityBadge(string? priority) => priority switch
+    {
+        "Critical" => "<span style=\"background: #dc3545; color: white; padding: 1px 4px; border-radius: 3px; font-size: 10px;\">CRITICAL</span>",
+        "High" => "<span style=\"background: #fd7e14; color: white; padding: 1px 4px; border-radius: 3px; font-size: 10px;\">HIGH</span>",
+        "Medium" => "<span style=\"background: #17a2b8; color: white; padding: 1px 4px; border-radius: 3px; font-size: 10px;\">MEDIUM</span>",
+        "Low" => "<span style=\"background: #6c757d; color: white; padding: 1px 4px; border-radius: 3px; font-size: 10px;\">LOW</span>",
+        _ => ""
+    };
+
+    private static int GetPriorityOrder(string? priority) => priority switch
+    {
+        "Critical" => 0,
+        "High" => 1,
+        "Medium" => 2,
+        "Low" => 3,
+        _ => 4
+    };
+
+    private static LayoutGridControl AddPageHeader(LayoutGridControl grid, string icon, string title, LayoutAreaHost host, string hubPath)
+    {
+        return grid
+            .WithView(Controls.H4($"{icon} {title}")
+                .WithStyle(style => style.WithMarginBottom("16px")),
+                skin => skin.WithXs(8).WithMd(10))
+            .WithView(BuildNewTaskButton(host, hubPath),
+                skin => skin.WithXs(4).WithMd(2));
+    }
+
+    private static UiControl BuildSectionHeader(string title, double opacity = 1.0)
+    {
+        var opacityStyle = opacity < 1.0 ? $" opacity: {opacity};" : "";
+        return Controls.Html($@"
+            <div style=""padding: 10px 14px; background: var(--neutral-layer-2); border-radius: 6px; font-weight: 600; font-size: 1.1rem; margin-bottom: 8px;{opacityStyle}"">
+                {title}
+            </div>");
+    }
+
+    private static LayoutGridControl CreateItemsGrid()
+    {
+        return Controls.LayoutGrid
+            .WithSkin(skin => skin.WithSpacing(1))
+            .WithStyle(style => style.WithWidth("100%"));
+    }
+
+    private static string BuildProgressBar(string icon, string label, double percentage, string color)
+    {
+        return $@"
+            <div style=""margin-bottom: 12px;"">
+                <div style=""display: flex; justify-content: space-between; font-size: 12px; margin-bottom: 4px;"">
+                    <span>{icon} {label}</span>
+                    <span>{percentage:F0}%</span>
+                </div>
+                <div style=""width: 100%; background: var(--neutral-layer-3); border-radius: 4px; height: 8px;"">
+                    <div style=""width: {percentage}%; background: {color}; border-radius: 4px; height: 100%; transition: width 0.3s;""></div>
+                </div>
+            </div>";
+    }
+
+    private static void ShowNotification(LayoutAreaHost host, string message, string backgroundColor, int dismissAfterMs = 3000)
+    {
+        var notification = Controls.Html($@"
+            <div style=""position: fixed; top: 20px; right: 20px; padding: 12px 20px;
+                        background: {backgroundColor}; color: white; border-radius: 6px;
+                        box-shadow: 0 4px 12px rgba(0,0,0,0.3); z-index: 10000;
+                        animation: slideIn 0.3s ease-out;"">
+                <style>
+                    @keyframes slideIn {{
+                        from {{ transform: translateX(100%); opacity: 0; }}
+                        to {{ transform: translateX(0); opacity: 1; }}
+                    }}
+                </style>
+                {message}
+            </div>");
+        host.UpdateArea("$Notification", notification);
+
+        _ = System.Threading.Tasks.Task.Delay(dismissAfterMs).ContinueWith(_ =>
+            host.UpdateArea("$Notification", null!));
+    }
+
+    #endregion
+
     #region Action Handlers
 
     private static async System.Threading.Tasks.Task RestoreTodo(LayoutAreaHost host, string todoPath)
@@ -993,37 +1005,19 @@ public static class ProjectViews
 
     private static async System.Threading.Tasks.Task HandleCreateTodo(LayoutAreaHost host, string hubPath, string createDataId)
     {
-        System.Console.WriteLine($"Create button clicked, createDataId: {createDataId}");
-
-        // Get the edited todo from the stream's current EntityStore
         var store = host.Stream.Current?.Value;
-        System.Console.WriteLine($"Store is null: {store == null}");
-
-        // Get data from the "data" collection by id
         var dataCollection = store?.GetCollection(LayoutAreaReference.Data);
-        System.Console.WriteLine($"DataCollection is null: {dataCollection == null}");
-
         var rawData = dataCollection?.Instances.GetValueOrDefault(createDataId);
-        System.Console.WriteLine($"RawData is null: {rawData == null}, type: {rawData?.GetType().Name}");
 
-        // Convert the raw data to Todo
-        Todo? editedTodo = null;
-        if (rawData is Todo todo)
+        Todo? editedTodo = rawData switch
         {
-            editedTodo = todo;
-        }
-        else if (rawData is System.Text.Json.JsonElement jsonElement)
-        {
-            editedTodo = System.Text.Json.JsonSerializer.Deserialize<Todo>(jsonElement.GetRawText());
-        }
-
-        System.Console.WriteLine($"EditedTodo is null: {editedTodo == null}");
+            Todo todo => todo,
+            System.Text.Json.JsonElement jsonElement => System.Text.Json.JsonSerializer.Deserialize<Todo>(jsonElement.GetRawText()),
+            _ => null
+        };
 
         if (editedTodo != null)
         {
-            System.Console.WriteLine($"Creating todo: {editedTodo.Id} - {editedTodo.Title}");
-
-            // Create the MeshNode at the correct path: {hubPath}/Todo/{id}
             var todoPath = $"{hubPath}/Todo";
             var meshNode = new MeshNode(editedTodo.Id, todoPath)
             {
@@ -1035,93 +1029,22 @@ public static class ProjectViews
                 State = MeshNodeState.Active
             };
 
-            System.Console.WriteLine($"MeshNode path: {meshNode.Path}, NodeType: {meshNode.NodeType}");
-
-            // Use IMeshCatalog to create the node
             var meshCatalog = host.Hub.ServiceProvider.GetService<IMeshCatalog>();
-            System.Console.WriteLine($"MeshCatalog is null: {meshCatalog == null}");
-
             if (meshCatalog != null)
             {
                 try
                 {
-                    System.Console.WriteLine("Calling CreateNodeAsync...");
-                    var result = await meshCatalog.CreateNodeAsync(meshNode);
-                    System.Console.WriteLine($"CreateNodeAsync completed, result path: {result?.Path}");
-
-                    // Show success notification (view updates reactively via ObserveQuery)
-                    var notification = Controls.Html($@"
-                        <div style=""position: fixed; top: 20px; right: 20px; padding: 12px 20px;
-                                    background: #28a745; color: white; border-radius: 6px;
-                                    box-shadow: 0 4px 12px rgba(0,0,0,0.3); z-index: 10000;
-                                    animation: slideIn 0.3s ease-out;"">
-                            <style>
-                                @keyframes slideIn {{
-                                    from {{ transform: translateX(100%); opacity: 0; }}
-                                    to {{ transform: translateX(0); opacity: 1; }}
-                                }}
-                            </style>
-                            ✅ Task created!
-                        </div>");
-                    host.UpdateArea("$Notification", notification);
-
-                    // Auto-dismiss notification after 3 seconds
-                    _ = System.Threading.Tasks.Task.Delay(3000).ContinueWith(_ =>
-                        host.UpdateArea("$Notification", null!));
+                    await meshCatalog.CreateNodeAsync(meshNode);
+                    ShowNotification(host, "✅ Task created!", "#28a745");
                 }
                 catch (System.Exception ex)
                 {
-                    System.Console.WriteLine($"Error creating node: {ex.Message}");
-                    System.Console.WriteLine($"Stack trace: {ex.StackTrace}");
-
-                    // Show error notification
-                    var errorNotification = Controls.Html($@"
-                        <div style=""position: fixed; top: 20px; right: 20px; padding: 12px 20px;
-                                    background: #dc3545; color: white; border-radius: 6px;
-                                    box-shadow: 0 4px 12px rgba(0,0,0,0.3); z-index: 10000;"">
-                            ❌ Failed to create task: {System.Web.HttpUtility.HtmlEncode(ex.Message)}
-                        </div>");
-                    host.UpdateArea("$Notification", errorNotification);
-
-                    _ = System.Threading.Tasks.Task.Delay(5000).ContinueWith(_ =>
-                        host.UpdateArea("$Notification", null!));
+                    ShowNotification(host, $"❌ Failed to create task: {System.Web.HttpUtility.HtmlEncode(ex.Message)}", "#dc3545", 5000);
                 }
             }
         }
-        else
-        {
-            System.Console.WriteLine("EditedTodo is null, cannot create node");
-        }
         host.UpdateArea(DialogControl.DialogArea, null!);
     }
-
-    private static string GetStatusIcon(TodoStatus status) => status switch
-    {
-        TodoStatus.Pending => "\u23f3",
-        TodoStatus.InProgress => "\ud83d\udd04",
-        TodoStatus.InReview => "\ud83d\udc41\ufe0f",
-        TodoStatus.Completed => "\u2705",
-        TodoStatus.Blocked => "\ud83d\udeab",
-        _ => "\u2753"
-    };
-
-    private static string GetPriorityBadge(string? priority) => priority switch
-    {
-        "Critical" => "<span style=\"background: #dc3545; color: white; padding: 1px 4px; border-radius: 3px; font-size: 10px;\">CRITICAL</span>",
-        "High" => "<span style=\"background: #fd7e14; color: white; padding: 1px 4px; border-radius: 3px; font-size: 10px;\">HIGH</span>",
-        "Medium" => "<span style=\"background: #17a2b8; color: white; padding: 1px 4px; border-radius: 3px; font-size: 10px;\">MEDIUM</span>",
-        "Low" => "<span style=\"background: #6c757d; color: white; padding: 1px 4px; border-radius: 3px; font-size: 10px;\">LOW</span>",
-        _ => ""
-    };
-
-    private static int GetPriorityOrder(string? priority) => priority switch
-    {
-        "Critical" => 0,
-        "High" => 1,
-        "Medium" => 2,
-        "Low" => 3,
-        _ => 4
-    };
 
     private static UiControl BuildNewTaskButton(LayoutAreaHost host, string hubPath)
     {

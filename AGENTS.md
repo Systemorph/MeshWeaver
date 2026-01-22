@@ -2,6 +2,32 @@
 
 This file provides guidance to AI agents when working with code in this repository.
 
+## Documentation
+
+### Architecture 
+
+The documentation on the architecure is accessible via samples/Graph/Data/MeshWeaver/Documentation/Architecture/
+
+
+
+
+### DataMesh
+
+The documentation on the data mesh is accessible via samples/Graph/Data/MeshWeaver/Documentation/DataMesh/
+
+
+
+
+
+### GUI
+
+The documentation on the GUI is accessible via samples/Graph/Data/MeshWeaver/Documentation/GUI/
+
+
+
+
+
+
 ## Development Commands
 
 ### Build and Test
