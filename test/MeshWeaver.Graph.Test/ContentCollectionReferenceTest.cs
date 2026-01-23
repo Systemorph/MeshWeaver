@@ -71,7 +71,7 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
             .ConfigureHub(hub => hub.AddContentCollections([storageConfig]))
             // Configure default content collections for all node hubs
             // Order matters: AddContentCollections registers $Content area first,
-            // then AddDefaultViews sets CatalogArea as default (can be overridden by node type config)
+            // then AddDefaultViews sets DetailsArea as default (can be overridden by node type config)
             .ConfigureDefaultNodeHub(config =>
             {
                 var nodePath = config.Address.ToString();
@@ -80,7 +80,7 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
                     .MapContentCollection("attachments", "storage", $"attachments/{nodePath}")
                     .MapContentCollection("content", "storage", $"content/{nodePath}");
 
-                // Add mesh node views last (sets CatalogArea as default, can be overridden by node type)
+                // Add mesh node views last (sets DetailsArea as default, can be overridden by node type)
                 return config.AddDefaultViews();
             })
             .AddJsonGraphConfiguration(dataDirectory);

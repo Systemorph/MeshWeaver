@@ -4,6 +4,7 @@ using System.IO;
 using System.Linq;
 using System.Reactive.Linq;
 using System.Text.Json;
+using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
 using FluentAssertions.Extensions;
@@ -12,6 +13,7 @@ using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Monolith;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Hosting.Persistence;
+using MeshWeaver.Hosting.Persistence.Query;
 using MeshWeaver.Layout;
 using MeshWeaver.Markdown;
 using MeshWeaver.Mesh;
@@ -208,6 +210,45 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
         creatableTypes.Should().Contain(t => t.NodeTypePath == "ACME/Project/Todo");
         // Should also include global types
         creatableTypes.Should().Contain(t => t.NodeTypePath == "Markdown");
+    }
+
+    /// <summary>
+    /// Test that verifies the full creatable types algorithm for a Project instance:
+    /// 1. Query by node's path to find types defined directly under the node
+    /// 2. Query by node's NodeType to find types for instances of that type
+    /// This is the critical test case for the bug where "Add Todo" is not shown
+    /// when viewing a Project (like ProductLaunch).
+    /// </summary>
+    [Fact(Timeout = 30000)]
+    public async Task ProductLaunch_CreatableTypes_VerifyFullAlgorithm()
+    {
+        // Arrange - Verify the data setup is correct
+        var productLaunchNode = await Persistence.GetNodeAsync("ACME/ProductLaunch", TestContext.Current.CancellationToken);
+        productLaunchNode.Should().NotBeNull("ProductLaunch node should exist");
+        productLaunchNode!.NodeType.Should().Be("ACME/Project", "ProductLaunch should be of NodeType ACME/Project");
+
+        var projectTypeNode = await Persistence.GetNodeAsync("ACME/Project", TestContext.Current.CancellationToken);
+        projectTypeNode.Should().NotBeNull("ACME/Project NodeType should exist");
+        projectTypeNode!.NodeType.Should().Be("NodeType", "ACME/Project should be a NodeType");
+
+        var todoTypeNode = await Persistence.GetNodeAsync("ACME/Project/Todo", TestContext.Current.CancellationToken);
+        todoTypeNode.Should().NotBeNull("ACME/Project/Todo NodeType should exist");
+        todoTypeNode!.NodeType.Should().Be("NodeType", "ACME/Project/Todo should be a NodeType");
+
+        // Act - Get creatable types for ProductLaunch
+        var creatableTypes = await NodeTypeService.GetCreatableTypesAsync("ACME/ProductLaunch", TestContext.Current.CancellationToken).ToListAsync(TestContext.Current.CancellationToken);
+
+        // Assert - Should include Todo (from ACME/Project's children) and global types
+        Output.WriteLine($"Found {creatableTypes.Count} creatable types for ACME/ProductLaunch:");
+        foreach (var t in creatableTypes)
+        {
+            Output.WriteLine($"  - {t.NodeTypePath}: {t.DisplayName}");
+        }
+
+        creatableTypes.Should().Contain(t => t.NodeTypePath == "ACME/Project/Todo",
+            "ProductLaunch (instance of ACME/Project) should be able to create ACME/Project/Todo");
+        creatableTypes.Should().Contain(t => t.NodeTypePath == "Markdown", "Should include global Markdown type");
+        creatableTypes.Should().Contain(t => t.NodeTypePath == "NodeType", "Should include global NodeType type");
     }
 
     [Fact(Timeout = 30000)]
@@ -553,4 +594,260 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
 [CollectionDefinition("CreatableTypesIntegrationTests", DisableParallelization = true)]
 public class CreatableTypesIntegrationTestsCollection
 {
+}
+
+/// <summary>
+/// Integration tests that use the actual FileSystem sample data from samples/Graph/Data.
+/// These tests verify the creatable types algorithm works with real data on disk.
+/// Uses FileSystemPersistenceService for lazy loading (not InitializeAsync) to match real app behavior.
+/// </summary>
+public class CreatableTypesFileSystemTest : IDisposable
+{
+    private readonly ITestOutputHelper _output;
+    private readonly FileSystemStorageAdapter _storageAdapter;
+    private readonly FileSystemPersistenceService _persistence;
+    private readonly InMemoryMeshQuery _meshQuery;
+
+    public CreatableTypesFileSystemTest(ITestOutputHelper output)
+    {
+        _output = output;
+
+        // Find the samples/Graph/Data directory relative to the test assembly
+        var assemblyLocation = Path.GetDirectoryName(typeof(CreatableTypesFileSystemTest).Assembly.Location)!;
+        var sampleDataPath = Path.GetFullPath(Path.Combine(assemblyLocation, "..", "..", "..", "..", "..", "samples", "Graph", "Data"));
+
+        if (!Directory.Exists(sampleDataPath))
+        {
+            throw new DirectoryNotFoundException($"Sample data directory not found at: {sampleDataPath}");
+        }
+
+        _output.WriteLine($"Using sample data from: {sampleDataPath}");
+
+        _storageAdapter = new FileSystemStorageAdapter(sampleDataPath);
+        _persistence = new FileSystemPersistenceService(_storageAdapter);
+        _meshQuery = new InMemoryMeshQuery(_persistence);
+    }
+
+    public void Dispose()
+    {
+        // No cleanup needed - we're reading from real sample data
+    }
+
+    [Fact(Timeout = 30000)]
+    public async Task FileSystem_VerifyDataStructure()
+    {
+        // No InitializeAsync needed - FileSystemPersistenceService uses lazy loading
+
+        // Verify expected nodes exist
+        var acmeProject = await _persistence.GetNodeAsync("ACME/Project");
+        acmeProject.Should().NotBeNull("ACME/Project should exist in sample data");
+        _output.WriteLine($"ACME/Project: NodeType={acmeProject?.NodeType}, Content={acmeProject?.Content?.GetType().Name}");
+
+        var acmeProjectTodo = await _persistence.GetNodeAsync("ACME/Project/Todo");
+        acmeProjectTodo.Should().NotBeNull("ACME/Project/Todo should exist in sample data");
+        _output.WriteLine($"ACME/Project/Todo: NodeType={acmeProjectTodo?.NodeType}, Content={acmeProjectTodo?.Content?.GetType().Name}");
+
+        var productLaunch = await _persistence.GetNodeAsync("ACME/ProductLaunch");
+        productLaunch.Should().NotBeNull("ACME/ProductLaunch should exist in sample data");
+        _output.WriteLine($"ACME/ProductLaunch: NodeType={productLaunch?.NodeType}, Content={productLaunch?.Content?.GetType().Name}");
+    }
+
+    [Fact(Timeout = 30000)]
+    public async Task FileSystem_GetChildrenOfACMEProject_ShouldIncludeTodo()
+    {
+        // Get children of ACME/Project - uses lazy loading
+        var children = await _persistence.GetChildrenAsync("ACME/Project").ToListAsync();
+
+        _output.WriteLine($"Children of ACME/Project ({children.Count} total):");
+        foreach (var child in children)
+        {
+            _output.WriteLine($"  - {child.Path}: NodeType={child.NodeType}");
+        }
+
+        // Should include Todo
+        children.Should().Contain(c => c.Path == "ACME/Project/Todo",
+            "ACME/Project/Todo should be a child of ACME/Project");
+    }
+
+    [Fact(Timeout = 30000)]
+    public async Task FileSystem_QueryChildNodeTypes_ShouldFindTodo()
+    {
+        // This is the exact query used by GetCreatableTypesAsync
+        var query = "path:ACME/Project nodeType:NodeType scope:children";
+        var results = await _meshQuery.QueryAsync<MeshNode>(query).ToListAsync();
+
+        _output.WriteLine($"Query '{query}' returned {results.Count} results:");
+        foreach (var result in results)
+        {
+            _output.WriteLine($"  - {result.Path}: NodeType={result.NodeType}");
+        }
+
+        // Should find ACME/Project/Todo
+        results.Should().Contain(r => r.Path == "ACME/Project/Todo",
+            "Query should find ACME/Project/Todo as a child NodeType of ACME/Project");
+    }
+
+    [Fact(Timeout = 30000)]
+    public async Task FileSystem_ProductLaunch_CreatableTypes_ShouldIncludeTodo()
+    {
+        // Create the NodeTypeService with the real data
+        var nodeTypeService = new NodeTypeServiceTestHelper(_persistence, _meshQuery);
+
+        // Get creatable types for ProductLaunch
+        var creatableTypes = await nodeTypeService.GetCreatableTypesAsync("ACME/ProductLaunch").ToListAsync();
+
+        _output.WriteLine($"Creatable types for ACME/ProductLaunch ({creatableTypes.Count} total):");
+        foreach (var ct in creatableTypes)
+        {
+            _output.WriteLine($"  - {ct.NodeTypePath}: {ct.DisplayName}");
+        }
+
+        // Should include ACME/Project/Todo
+        creatableTypes.Should().Contain(t => t.NodeTypePath == "ACME/Project/Todo",
+            "ProductLaunch (instance of ACME/Project) should be able to create ACME/Project/Todo");
+    }
+}
+
+/// <summary>
+/// Minimal NodeTypeService implementation for testing without full MeshHub setup.
+/// </summary>
+internal class NodeTypeServiceTestHelper
+{
+    private readonly IPersistenceService _persistence;
+    private readonly IMeshQuery _meshQuery;
+    private static readonly string[] GlobalTypes = ["Markdown", "NodeType", "Agent"];
+
+    public NodeTypeServiceTestHelper(IPersistenceService persistence, IMeshQuery meshQuery)
+    {
+        _persistence = persistence;
+        _meshQuery = meshQuery;
+    }
+
+    public async IAsyncEnumerable<CreatableTypeInfo> GetCreatableTypesAsync(
+        string nodePath,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+    {
+        var result = new List<CreatableTypeInfo>();
+        var addedPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        // Get the node to check its type
+        var node = await _persistence.GetNodeAsync(nodePath, ct);
+        NodeTypeDefinition? typeDef = null;
+
+        // If node has a NodeType, get its definition
+        if (node?.NodeType != null)
+        {
+            var typeNode = await _persistence.GetNodeAsync(node.NodeType, ct);
+            typeDef = typeNode?.Content as NodeTypeDefinition;
+        }
+
+        // Check for explicit CreatableTypes configuration
+        if (typeDef?.CreatableTypes != null && typeDef.CreatableTypes.Count > 0)
+        {
+            foreach (var typePath in typeDef.CreatableTypes)
+            {
+                var typeInfo = await GetCreatableTypeInfoAsync(typePath, ct);
+                if (typeInfo != null && addedPaths.Add(typeInfo.NodeTypePath))
+                {
+                    result.Add(typeInfo);
+                }
+            }
+        }
+        else
+        {
+            // Auto-compute from hierarchy
+            await AddComputedCreatableTypesAsync(result, addedPaths, node, ct);
+        }
+
+        // Add global types
+        var includeGlobal = typeDef?.IncludeGlobalTypes ?? true;
+        if (includeGlobal)
+        {
+            foreach (var globalType in GlobalTypes)
+            {
+                if (!addedPaths.Add(globalType))
+                    continue;
+
+                var typeInfo = await GetCreatableTypeInfoAsync(globalType, ct);
+                if (typeInfo != null)
+                    result.Add(typeInfo);
+            }
+        }
+
+        foreach (var typeInfo in result.OrderBy(t => t.DisplayOrder).ThenBy(t => t.DisplayName ?? t.NodeTypePath))
+        {
+            yield return typeInfo;
+        }
+    }
+
+    private async Task AddComputedCreatableTypesAsync(
+        List<CreatableTypeInfo> result,
+        HashSet<string> addedPaths,
+        MeshNode? node,
+        CancellationToken ct)
+    {
+        if (node == null || string.IsNullOrEmpty(node.Path))
+        {
+            // Root level - find root NodeTypes
+            var rootQuery = "nodeType:NodeType";
+            await foreach (var typeNode in _meshQuery.QueryAsync<MeshNode>(rootQuery, null, ct).WithCancellation(ct))
+            {
+                if (!typeNode.Path.Contains('/') && !GlobalTypes.Contains(typeNode.Path))
+                {
+                    var typeInfo = CreateCreatableTypeInfoFromNode(typeNode);
+                    if (addedPaths.Add(typeInfo.NodeTypePath))
+                    {
+                        result.Add(typeInfo);
+                    }
+                }
+            }
+            return;
+        }
+
+        // 1. Query by node's path - find NodeTypes defined directly under this node
+        var pathQuery = $"path:{node.Path} nodeType:NodeType scope:children";
+        await foreach (var childType in _meshQuery.QueryAsync<MeshNode>(pathQuery, null, ct).WithCancellation(ct))
+        {
+            var typeInfo = CreateCreatableTypeInfoFromNode(childType);
+            if (addedPaths.Add(typeInfo.NodeTypePath))
+            {
+                result.Add(typeInfo);
+            }
+        }
+
+        // 2. If node has a NodeType, query by NodeType to find types for instances
+        if (node.NodeType != null && node.NodeType != node.Path)
+        {
+            var typeQuery = $"path:{node.NodeType} nodeType:NodeType scope:children";
+            await foreach (var childType in _meshQuery.QueryAsync<MeshNode>(typeQuery, null, ct).WithCancellation(ct))
+            {
+                var typeInfo = CreateCreatableTypeInfoFromNode(childType);
+                if (addedPaths.Add(typeInfo.NodeTypePath))
+                {
+                    result.Add(typeInfo);
+                }
+            }
+        }
+    }
+
+    private async Task<CreatableTypeInfo?> GetCreatableTypeInfoAsync(string nodeTypePath, CancellationToken ct)
+    {
+        var typeNode = await _persistence.GetNodeAsync(nodeTypePath, ct);
+        if (typeNode == null)
+            return null;
+
+        return CreateCreatableTypeInfoFromNode(typeNode);
+    }
+
+    private static CreatableTypeInfo CreateCreatableTypeInfoFromNode(MeshNode typeNode)
+    {
+        var typeDef = typeNode.Content as NodeTypeDefinition;
+        return new CreatableTypeInfo(
+            NodeTypePath: typeNode.Path,
+            DisplayName: typeDef?.DisplayName ?? typeNode.Name ?? typeNode.Id,
+            Icon: typeNode.Icon ?? typeDef?.Icon,
+            Description: typeNode.Description ?? typeDef?.Description,
+            DisplayOrder: typeDef?.DisplayOrder ?? typeNode.DisplayOrder ?? 0
+        );
+    }
 }

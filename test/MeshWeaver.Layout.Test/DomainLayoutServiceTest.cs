@@ -36,7 +36,7 @@ public class DomainLayoutServiceTest(ITestOutputHelper output) : HubTestBase(out
                         )
                 )
             )
-            .AddLayout(l => l.AddDomainViews());
+            .AddLayout(l => l.AddDomainLayoutAreas());
     }
 
     protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
@@ -51,7 +51,7 @@ public class DomainLayoutServiceTest(ITestOutputHelper output) : HubTestBase(out
     [HubFact]
     public async Task TestEntityView()
     {
-        var reference = DomainViews.GetDetailsReference(nameof(DataRecord), "Hello");
+        var reference = DomainLayoutAreas.GetDetailsReference(nameof(DataRecord), "Hello");
         var client = GetClient();
         var workspace = client.GetWorkspace();
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
@@ -128,7 +128,7 @@ public class DomainLayoutServiceTest(ITestOutputHelper output) : HubTestBase(out
     public async Task TestCatalog()
     {
         var host = GetHost();
-        var reference = DomainViews.GetCatalogReference(nameof(DataRecord));
+        var reference = DomainLayoutAreas.GetCatalogReference(nameof(DataRecord));
         var client = GetClient();
         var workspace = client.GetWorkspace();
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(

@@ -40,13 +40,12 @@ public record NodeTypeCatalogMode;
 /// </summary>
 public static class MeshNodeView
 {
-    public const string DetailsArea = "Details";
+    public const string OverviewArea = "Overview";
     public const string ThumbnailArea = "Thumbnail";
     public const string MetadataArea = "Metadata";
     public const string SettingsArea = "Settings";
     public const string CommentsArea = "Comments";
-    public const string CatalogArea = "Catalog";
-    public const string CalendarArea = "Calendar";
+    public const string SearchArea = "Search";
     public const string FilesArea = "Files";
     public const string ChildrenArea = "Children";
     public const string NodeTypesArea = "NodeTypes";
@@ -71,12 +70,12 @@ public static class MeshNodeView
 
     public static LayoutDefinition AddDefaultViews(this LayoutDefinition layout)
         => layout
-            .WithDefaultArea(DetailsArea)
-            .WithView(DetailsArea, Details)
+            .WithDefaultArea(OverviewArea)
+            .WithView(OverviewArea, Overview)
             .WithView(ThumbnailArea, Thumbnail)
             .WithView(MetadataArea, Metadata)
             .WithView(SettingsArea, Settings)
-            .WithView(CatalogArea, Catalog)
+            .WithView(SearchArea, Search)
             .WithView(FilesArea, Files)
             .WithView(ChildrenArea, Children)
             .WithView(NodeTypesArea, NodeTypes)
@@ -86,16 +85,17 @@ public static class MeshNodeView
             .WithView(DataArea, Data)
             .WithView(SchemaArea, Schema)
             .WithView(DefaultViews.EditArea, DefaultViews.Edit)
-            .WithView(ModelArea, DataModelLayoutArea.DataModel);
+            .WithView(ModelArea, DataModelLayoutArea.DataModel)
+            .AddDomainLayoutAreas();
 
     /// <summary>
-    /// Renders the Details area showing the node's main content with action menu.
+    /// Renders the Overview area showing the node's main content with action menu.
     /// This is the default view for a node, showing content and providing navigation.
     /// Uses GetStream for node data. Children are loaded via ChildrenQuery from NodeTypeDefinition
     /// if set, otherwise via IMeshQuery with scope:children.
     /// </summary>
     [Browsable(false)]
-    public static IObservable<UiControl?> Details(LayoutAreaHost host, RenderingContext _)
+    public static IObservable<UiControl?> Overview(LayoutAreaHost host, RenderingContext _)
     {
         var hubPath = host.Hub.Address.ToString();
         var meshQuery = host.Hub.ServiceProvider.GetService<IMeshQuery>();
@@ -315,9 +315,9 @@ public static class MeshNodeView
         menu = menu.WithView(new NavLinkControl("Metadata", FluentIcons.Info(IconSize.Size16), metadataHref));
 
 
-        // Catalog option
-        var catalogHref = $"/{nodePath}/{CatalogArea}";
-        menu = menu.WithView(new NavLinkControl("Catalog", FluentIcons.Grid(IconSize.Size16), catalogHref));
+        // Search option
+        var searchHref = $"/{nodePath}/{SearchArea}";
+        menu = menu.WithView(new NavLinkControl("Search", FluentIcons.Grid(IconSize.Size16), searchHref));
 
         // Node Types option
         var nodeTypesHref = $"/{nodePath}/{NodeTypesArea}";
@@ -457,7 +457,7 @@ public static class MeshNodeView
 
         // Header with back link
         var nodePath = node?.Namespace ?? host.Hub.Address.ToString();
-        var backHref = $"/{nodePath}/{DetailsArea}";
+        var backHref = $"/{nodePath}/{OverviewArea}";
         stack = stack.WithView(Controls.Stack
             .WithOrientation(Orientation.Horizontal)
             .WithView(Controls.Html("<h2>Metadata</h2>"))
@@ -486,7 +486,7 @@ public static class MeshNodeView
 
         if (!string.IsNullOrEmpty(node.ParentPath))
         {
-            var parentHref = $"/{node.ParentPath}/{DetailsArea}";
+            var parentHref = $"/{node.ParentPath}/{OverviewArea}";
             stack = stack.WithView(Controls.Stack
                 .WithOrientation(Orientation.Horizontal)
                 .WithView(Controls.Html("<p><strong>Parent:</strong> </p>"))
@@ -835,7 +835,7 @@ public static class MeshNodeView
     }
 
     /// <summary>
-    /// Renders the Catalog view showing nodes as thumbnails with search.
+    /// Renders the Search view showing nodes as thumbnails with search.
     /// Uses MeshSearchControl for unified search and display.
     /// For NodeType nodes, shows instances of that type (nodeType:name scope:subtree).
     /// For instance nodes, uses CatalogQuery if set, otherwise defaults to scope:children.
@@ -844,7 +844,7 @@ public static class MeshNodeView
     /// Reads search term from ?q= query parameter.
     /// </summary>
     [Browsable(false)]
-    public static IObservable<UiControl?> Catalog(LayoutAreaHost host, RenderingContext ctx)
+    public static IObservable<UiControl?> Search(LayoutAreaHost host, RenderingContext ctx)
     {
         var hubPath = host.Hub.Address.ToString();
         var isNodeTypeMode = host.Hub.Configuration.Get<NodeTypeCatalogMode>() != null;
@@ -885,7 +885,7 @@ public static class MeshNodeView
                 ? MeshSearchRenderMode.Grouped
                 : MeshSearchRenderMode.Hierarchical;
 
-            return (UiControl?)Controls.MeshSearch
+            return Controls.MeshSearch
                 .WithHiddenQuery(instanceHiddenQuery)
                 .WithVisibleQuery(searchTerm ?? "")
                 .WithNamespace(hubPath)
@@ -1696,7 +1696,7 @@ public static class MeshNodeView
         var stack = Controls.Stack.WithWidth("100%").WithStyle("padding: 24px;");
 
         // Header with back link
-        var backHref = $"/{nodePath}/{DetailsArea}";
+        var backHref = $"/{nodePath}/{OverviewArea}";
         stack = stack.WithView(Controls.Stack
             .WithOrientation(Orientation.Horizontal)
             .WithHorizontalGap(16)
@@ -1826,7 +1826,8 @@ public static class MeshNodeView
                 .WithPlaceholder("Enter a name for the new node")
                 .WithImmediate(true)
                 .WithStyle("width: 100%;")
-                with { DataContext = LayoutAreaReference.GetDataPointer(nameDataId) }));
+                with
+            { DataContext = LayoutAreaReference.GetDataPointer(nameDataId) }));
 
         // Description field - using MarkdownEditorControl with proper data binding
         stack = stack.WithView(Controls.Stack
@@ -1922,7 +1923,7 @@ public static class MeshNodeView
         // Cancel button
         buttonRow = buttonRow.WithView(Controls.Button("Cancel")
             .WithAppearance(Appearance.Neutral)
-            .WithNavigateToHref($"/{parentPath}/{DetailsArea}"));
+            .WithNavigateToHref($"/{parentPath}/{OverviewArea}"));
 
         stack = stack.WithView(buttonRow);
 
