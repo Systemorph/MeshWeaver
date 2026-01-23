@@ -139,6 +139,7 @@ public static class DataExtensions
                 typeof(DataPathReference),
                 typeof(ContentWorkspaceReference),
                 typeof(NodeTypeReference),
+                typeof(MetadataReference),
                 typeof(UpdateUnifiedReferenceRequest),
                 typeof(UpdateUnifiedReferenceResponse),
                 typeof(DeleteUnifiedReferenceRequest),
@@ -636,7 +637,8 @@ public static class DataExtensions
 
     /// <summary>
     /// Handler for SchemaReference which returns JSON schema for a type.
-    /// If Type is null/empty, returns schema for the hub's primary type (first registered TypeSource).
+    /// If Type is null/empty, returns schema for the hub's ContentType (first non-MeshNode type),
+    /// falling back to MeshNode if no other type is registered.
     /// </summary>
     private static Task<IMessageDelivery> HandleGetDataRequestCore(
         IMessageHub hub,
@@ -648,14 +650,20 @@ public static class DataExtensions
         {
             var typeName = reference.Type;
 
-            // If no type specified, try to get default type from first TypeSource
+            // If no type specified, prefer ContentType over MeshNode for default schema
             if (string.IsNullOrWhiteSpace(typeName))
             {
                 var workspace = hub.GetWorkspace();
-                var firstTypeSource = workspace.DataContext.TypeSources.Values.FirstOrDefault();
-                if (firstTypeSource != null)
+                // Find first non-MeshNode type source (the ContentType)
+                var contentTypeSource = workspace.DataContext.TypeSources.Values
+                    .FirstOrDefault(ts => ts.TypeDefinition.Type.FullName != "MeshWeaver.Mesh.MeshNode");
+
+                // Fall back to first type source if no ContentType found
+                var typeSource = contentTypeSource ?? workspace.DataContext.TypeSources.Values.FirstOrDefault();
+
+                if (typeSource != null)
                 {
-                    typeName = firstTypeSource.TypeDefinition.CollectionName;
+                    typeName = typeSource.TypeDefinition.CollectionName;
                 }
                 else
                 {
@@ -797,6 +805,7 @@ public static class DataExtensions
             "type" => (new NodeTypeReference(), null),
             "schema" => (new SchemaReference(remainingPath), null),
             "model" => (new DataModelReference(), null),
+            "metadata" => (new MetadataReference(), null),
             _ => (null, new GetDataResponse(null, 0) { Error = $"Unknown prefix: {prefix}" })
         };
     }
