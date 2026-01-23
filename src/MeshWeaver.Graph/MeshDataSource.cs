@@ -1,3 +1,4 @@
+using System.Reactive.Linq;
 using MeshWeaver.Data;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Mesh;
@@ -17,22 +18,158 @@ public static class MeshDataSourceExtensions
     /// <summary>
     /// Adds a MeshDataSource to the data context, configured via the provided function.
     /// MeshNodes are always included automatically (own node only, not children).
+    /// DataReference(string.Empty) returns Content of the MeshNode, not the MeshNode itself.
+    /// For NodeType nodes, SchemaReference returns the ContentType schema via subhub forwarding.
+    /// MetadataReference returns MeshNode with Content stripped.
     /// </summary>
     public static MessageHubConfiguration AddMeshDataSource(
         this MessageHubConfiguration config,
         Func<MeshDataSource, MeshDataSource> configuration)
     {
-        return config.AddData(data => data.WithDataSource(_ =>
-            configuration(new MeshDataSource(Guid.NewGuid().AsString(), data.Workspace).WithMeshNodes())));
+        return config
+            .AddData(data =>
+            {
+                var dataSource = configuration(new MeshDataSource(Guid.NewGuid().AsString(), data.Workspace).WithMeshNodes());
+                return data
+                    .WithDataSource(_ => dataSource)
+                    .WithDefaultDataReference(workspace =>
+                    {
+                        var hubPath = workspace.Hub.Address.ToString();
+                        return workspace.GetStream<MeshNode>()
+                            ?.Select(nodes => nodes?.FirstOrDefault(n => n.Path == hubPath)?.Content)
+                            ?? Observable.Return<object?>(null);
+                    });
+            })
+            .WithHandler<GetDataRequest>(HandleNodeTypeSchemaRequest)
+            .WithHandler<GetDataRequest>(HandleMetadataRequest);
     }
 
     /// <summary>
     /// Adds a MeshDataSource with default configuration (MeshNodes only).
+    /// DataReference(string.Empty) returns Content of the MeshNode, not the MeshNode itself.
+    /// For NodeType nodes, SchemaReference returns the ContentType schema via subhub forwarding.
+    /// MetadataReference returns MeshNode with Content stripped.
     /// </summary>
     public static MessageHubConfiguration AddMeshDataSource(this MessageHubConfiguration config)
     {
-        return config.AddData(data => data.WithDataSource(_ =>
-            new MeshDataSource(Guid.NewGuid().AsString(), data.Workspace).WithMeshNodes()));
+        return config
+            .AddData(data => data
+                .WithDataSource(_ => new MeshDataSource(Guid.NewGuid().AsString(), data.Workspace).WithMeshNodes())
+                .WithDefaultDataReference(workspace =>
+                {
+                    var hubPath = workspace.Hub.Address.ToString();
+                    return workspace.GetStream<MeshNode>()
+                        ?.Select(nodes => nodes?.FirstOrDefault(n => n.Path == hubPath)?.Content)
+                        ?? Observable.Return<object?>(null);
+                }))
+            .WithHandler<GetDataRequest>(HandleNodeTypeSchemaRequest)
+            .WithHandler<GetDataRequest>(HandleMetadataRequest);
+    }
+
+    /// <summary>
+    /// Handler for GetDataRequest with SchemaReference on NodeType nodes.
+    /// For NodeType nodes (node.NodeType == "NodeType"), forwards SchemaReference to a subhub
+    /// configured with the NodeType's configuration to get the ContentType schema.
+    /// For non-NodeType nodes or non-SchemaReference requests, returns delivery unchanged
+    /// to let the default handler process it.
+    /// </summary>
+    private static async Task<IMessageDelivery> HandleNodeTypeSchemaRequest(
+        IMessageHub hub,
+        IMessageDelivery<GetDataRequest> request,
+        CancellationToken ct)
+    {
+        // Only handle SchemaReference with empty type
+        if (request.Message.Reference is not SchemaReference { Type: null or "" })
+            return request; // Let default handler process it
+
+        var nodeTypeService = hub.ServiceProvider.GetService<INodeTypeService>();
+        var persistence = hub.ServiceProvider.GetService<IPersistenceService>();
+        var hubPath = hub.Address.ToString();
+
+        if (nodeTypeService == null || persistence == null)
+            return request; // Let default handler process it
+
+        try
+        {
+            var node = await persistence.GetNodeAsync(hubPath, ct);
+
+            // Only handle NodeType nodes
+            if (node?.NodeType != MeshNode.NodeTypePath)
+                return request; // Let default handler process it
+
+            // Get the compiled hub configuration for this NodeType
+            var nodeTypeConfig = nodeTypeService.GetCachedConfiguration(hubPath);
+
+            if (nodeTypeConfig?.HubConfiguration == null)
+                return request; // Let default handler process it
+
+            // Create temporary subhub with the NodeType's configuration
+            var dummyAddress = new Address($"$schema-probe/{Guid.NewGuid():N}");
+            var subHub = hub.GetHostedHub(dummyAddress, c =>
+                nodeTypeConfig.HubConfiguration(c.AddData()));
+
+            try
+            {
+                var subResponse = await subHub.AwaitResponse(
+                    new GetDataRequest(new SchemaReference()),
+                    ct);
+
+                hub.Post(subResponse.Message, o => o.ResponseFor(request));
+                return request.Processed();
+            }
+            finally
+            {
+                subHub.Dispose();
+            }
+        }
+        catch
+        {
+            // Fall through to default handler on any error
+            return request;
+        }
+    }
+
+    /// <summary>
+    /// Handler for GetDataRequest with MetadataReference.
+    /// Returns MeshNode with Content stripped to reduce payload size.
+    /// For non-MetadataReference requests, returns delivery unchanged
+    /// to let the default handler process it.
+    /// </summary>
+    private static async Task<IMessageDelivery> HandleMetadataRequest(
+        IMessageHub hub,
+        IMessageDelivery<GetDataRequest> request,
+        CancellationToken ct)
+    {
+        // Only handle MetadataReference
+        if (request.Message.Reference is not MetadataReference)
+            return request; // Let default handler process it
+
+        try
+        {
+            var workspace = hub.GetWorkspace();
+            var hubPath = hub.Address.ToString();
+
+            var nodeStream = workspace.GetStream<MeshNode>();
+            if (nodeStream == null)
+            {
+                hub.Post(new GetDataResponse(null, 0) { Error = "MeshNode stream not available" },
+                    o => o.ResponseFor(request));
+                return request.Processed();
+            }
+
+            var nodes = await nodeStream.Timeout(TimeSpan.FromSeconds(30)).FirstAsync();
+            var node = nodes?.FirstOrDefault(n => n.Path == hubPath);
+
+            // Return node with Content stripped
+            var metadata = node != null ? node with { Content = null } : null;
+            hub.Post(new GetDataResponse(metadata, hub.Version), o => o.ResponseFor(request));
+        }
+        catch (Exception ex)
+        {
+            hub.Post(new GetDataResponse(null, 0) { Error = ex.Message }, o => o.ResponseFor(request));
+        }
+
+        return request.Processed();
     }
 
     /// <summary>

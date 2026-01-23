@@ -3,6 +3,7 @@ using System.Reactive.Linq;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Schema;
+using Humanizer;
 using MeshWeaver.Application.Styles;
 using MeshWeaver.ContentCollections;
 using MeshWeaver.Data;
@@ -51,6 +52,7 @@ public static class MeshNodeView
     public const string NodeTypesArea = "NodeTypes";
     public const string AccessControlArea = "AccessControl";
     public const string CreateNodeArea = "Create";
+    public const string EditArea = "Edit";
 
     // UCR (Unified Content Reference) special areas
     public const string ContentArea = "$Content";
@@ -84,7 +86,7 @@ public static class MeshNodeView
             // UCR special areas - $Content is registered by ContentCollectionsExtensions.AddContentCollections
             .WithView(DataArea, Data)
             .WithView(SchemaArea, Schema)
-            .WithView(DefaultViews.EditArea, DefaultViews.Edit)
+            .WithView(EditArea, Edit)
             .WithView(ModelArea, DataModelLayoutArea.DataModel)
             .AddDomainLayoutAreas();
 
@@ -292,10 +294,10 @@ public static class MeshNodeView
         var createHref = $"/{nodePath}/{CreateNodeArea}";
         menu = menu.WithView(new NavLinkControl("Create", FluentIcons.Add(IconSize.Size16), createHref));
 
-        // Edit option - goes to DefaultViews.Edit area
+        // Edit option - goes to Edit area
         if (node != null)
         {
-            var editHref = $"/{nodePath}/{DefaultViews.EditArea}";
+            var editHref = $"/{nodePath}/{EditArea}";
             menu = menu.WithView(new NavLinkControl("Edit", FluentIcons.Edit(IconSize.Size16), editHref));
         }
 
@@ -1106,6 +1108,135 @@ public static class MeshNodeView
 
     }
 
+    /// <summary>
+    /// Renders the Edit area using EditorExtensions for the ContentType.
+    /// If a ContentType is registered, uses EditorExtensions to generate a form.
+    /// Falls back to MeshNodeEditorControl if no ContentType is found.
+    /// Includes a back button to return to Overview.
+    /// </summary>
+    [Browsable(false)]
+    public static IObservable<UiControl> Edit(LayoutAreaHost host, RenderingContext _)
+    {
+        var nodePath = host.Hub.Address.ToString();
+        var persistence = host.Hub.ServiceProvider.GetService<IPersistenceService>();
+        var dataContext = host.Workspace.DataContext;
+
+        return Observable.FromAsync(async ct =>
+        {
+            var node = await persistence?.GetNodeAsync(nodePath, ct)!;
+            var stack = Controls.Stack.WithWidth("100%");
+
+            // Back button
+            var overviewHref = $"/{nodePath}/{OverviewArea}";
+            stack = stack.WithView(Controls.Stack
+                .WithOrientation(Orientation.Horizontal)
+                .WithStyle("margin-bottom: 16px;")
+                .WithView(Controls.Button("← Back to Overview").WithNavigateToHref(overviewHref)));
+
+            // Get ContentType from DataContext's TypeSources (first non-MeshNode type)
+            var contentTypeSource = dataContext.TypeSources.Values
+                .FirstOrDefault(ts => ts.TypeDefinition.Type != typeof(MeshNode));
+
+            if (contentTypeSource != null && node?.Content != null)
+            {
+                var contentType = contentTypeSource.TypeDefinition.Type;
+                var dataId = Guid.NewGuid().AsString();
+
+                // Use EditorExtensions to generate editor for ContentType
+                var editor = host.Hub.ServiceProvider.Edit(contentType, dataId);
+                host.UpdateData(dataId, node.Content);
+                stack = stack.WithView(editor);
+
+                // Save button with DataChangeRequest
+                stack = stack.WithView(BuildSaveButton(host, dataId, contentType, nodePath));
+            }
+            else
+            {
+                // Fallback to MeshNodeEditorControl
+                stack = stack.WithView(new MeshNodeEditorControl { NodePath = nodePath, NodeType = node?.NodeType });
+            }
+
+            return (UiControl)stack;
+        });
+    }
+
+    /// <summary>
+    /// Builds a save button that updates the node's Content via DataChangeRequest.
+    /// </summary>
+    private static UiControl BuildSaveButton(LayoutAreaHost host, string dataId, Type contentType, string nodePath)
+    {
+        var hubAddress = host.Hub.Configuration.ParentHub?.Address ?? host.Hub.Address;
+
+        return Controls.Button("Save")
+            .WithAppearance(Appearance.Accent)
+            .WithStyle("margin-top: 16px;")
+            .WithClickAction(async actx =>
+            {
+                // Get the updated content from the workspace data stream
+                var stream = actx.Host.Stream.GetDataStream<object>(dataId);
+                var updatedContent = await stream.FirstAsync();
+
+                if (updatedContent == null)
+                {
+                    var errorDialog = Controls.Dialog(
+                        Controls.Markdown("**No changes to save.**"),
+                        "Info"
+                    ).WithSize("S");
+                    actx.Host.UpdateArea(DialogControl.DialogArea, errorDialog);
+                    return;
+                }
+
+                // Get the current node to update its Content
+                var persistence = actx.Host.Hub.ServiceProvider.GetService<IPersistenceService>();
+                var node = await persistence?.GetNodeAsync(nodePath, CancellationToken.None)!;
+
+                if (node == null)
+                {
+                    var errorDialog = Controls.Dialog(
+                        Controls.Markdown("**Node not found.**"),
+                        "Error"
+                    ).WithSize("S");
+                    actx.Host.UpdateArea(DialogControl.DialogArea, errorDialog);
+                    return;
+                }
+
+                // Update the node with new content
+                var updatedNode = node with { Content = updatedContent };
+
+                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+                try
+                {
+                    var response = await actx.Host.Hub.AwaitResponse<DataChangeResponse>(
+                        new DataChangeRequest().WithUpdates(updatedNode),
+                        o => o.WithTarget(hubAddress),
+                        cts.Token);
+
+                    if (response.Message.Log.Status != ActivityStatus.Succeeded)
+                    {
+                        var errorMsg = response.Message.Log.Messages.LastOrDefault()?.Message ?? "Save failed";
+                        var errorDialog = Controls.Dialog(
+                            Controls.Markdown($"**Error saving:**\n\n{errorMsg}"),
+                            "Save Failed"
+                        ).WithSize("M");
+                        actx.Host.UpdateArea(DialogControl.DialogArea, errorDialog);
+                    }
+                    else
+                    {
+                        // Navigate back to overview on success
+                        actx.Host.UpdateArea(actx.Area, new RedirectControl($"/{nodePath}/{OverviewArea}"));
+                    }
+                }
+                catch (Exception ex)
+                {
+                    var errorDialog = Controls.Dialog(
+                        Controls.Markdown($"**Error saving:**\n\n{ex.Message}"),
+                        "Save Failed"
+                    ).WithSize("M");
+                    actx.Host.UpdateArea(DialogControl.DialogArea, errorDialog);
+                }
+            });
+    }
+
     #region UCR Special Areas
 
     /// <summary>
@@ -1906,7 +2037,7 @@ public static class MeshNodeView
                 if (response.Message.Success)
                 {
                     // Navigate to the new node's edit view
-                    var editHref = $"/{nodePath}/{DefaultViews.EditArea}";
+                    var editHref = $"/{nodePath}/{EditArea}";
                     actx.Host.UpdateArea(actx.Area, new RedirectControl(editHref));
                 }
                 else
