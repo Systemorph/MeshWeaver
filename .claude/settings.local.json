@@ -81,7 +81,11 @@
       "Bash(for f in /Users/samuelglauser/Documents/work/2026_Systemorph/projekte/MeshWeaver/samples/Graph/Data/MeshWeaver/Documentation/GUI/ContainerControl/*.md)",
       "Bash(brew install:*)",
       "Bash(brew:*)",
-      "Bash(kill:*)"
+      "Bash(kill:*)",
+      "Bash(git fetch:*)",
+      "Bash(do sed -i '' 's/\"\"nodeType\"\": \"\"ACME\\\\/Project\\\\/Todo\"\"/\"\"nodeType\"\": \"\"Type\\\\/Project\\\\/Todo\"\"/g' \"$f\")",
+      "Bash(head:*)",
+      "Bash(pgrep:*)"
     ],
     "deny": []
   },

@@ -1,0 +1,28 @@
+{
+  "id": "f56a0f6d",
+  "namespace": "ACME/ProductLaunch/Todo",
+  "path": "ACME/ProductLaunch/Todo/f56a0f6d",
+  "name": "TEST006",
+  "nodeType": "ACME/Project/Todo",
+  "category": "Tasks",
+  "addressSegments": 0,
+  "isPersistent": true,
+  "lastModified": "2026-01-20T14:46:06.628013+00:00",
+  "version": 0,
+  "state": "Deleted",
+  "isVirtual": false,
+  "content": {
+    "id": "f56a0f6d",
+    "title": "TEST006",
+    "description": "Test 006.",
+    "category": "Engineering",
+    "priority": "Low",
+    "assignee": "Samuel Glauser",
+    "createdAt": "2026-01-20T14:45:41.563422Z",
+    "dueDate": "2026-01-30T00:00:00",
+    "status": "Pending",
+    "icon": "TaskListSquare"
+  },
+  "routingType": "Shared",
+  "instantiationType": "HubConfiguration"
+}

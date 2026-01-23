@@ -1,0 +1,28 @@
+{
+  "id": "4f03a52d",
+  "namespace": "ACME/ProductLaunch/Todo",
+  "path": "ACME/ProductLaunch/Todo/4f03a52d",
+  "name": "TEST010",
+  "nodeType": "ACME/Project/Todo",
+  "category": "Tasks",
+  "addressSegments": 0,
+  "isPersistent": true,
+  "lastModified": "2026-01-20T15:17:59.387868+00:00",
+  "version": 0,
+  "state": "Active",
+  "isVirtual": false,
+  "content": {
+    "id": "4f03a52d",
+    "title": "TEST010",
+    "description": "Test 010.",
+    "category": "General",
+    "priority": "Medium",
+    "assignee": "Samuel Glauser",
+    "createdAt": "2026-01-20T15:17:33.681172Z",
+    "dueDate": "2026-01-27T00:00:00",
+    "status": "Pending",
+    "icon": "TaskListSquare"
+  },
+  "routingType": "Shared",
+  "instantiationType": "HubConfiguration"
+}
