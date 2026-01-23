@@ -43,13 +43,13 @@ public static class DefaultViews
             var stack = Controls.Stack.WithWidth("100%");
 
             // Back button
-            var detailsHref = $"/{nodePath}/{MeshNodeView.DetailsArea}";
+            var overviewHref = $"/{nodePath}/{MeshNodeView.OverviewArea}";
             stack = stack.WithView(
                 Controls.Stack
                     .WithOrientation(Orientation.Horizontal)
                     .WithStyle("margin-bottom: 16px;")
-                    .WithView(Controls.Button("← Back to Details")
-                        .WithNavigateToHref(detailsHref)));
+                    .WithView(Controls.Button("← Back to Overview")
+                        .WithNavigateToHref(overviewHref)));
 
             // Editor control
             stack = stack.WithView(new MeshNodeEditorControl

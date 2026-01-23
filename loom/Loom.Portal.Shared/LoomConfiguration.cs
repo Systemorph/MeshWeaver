@@ -232,7 +232,7 @@ public static class LoomConfiguration
                 })
                 // Configure default views and content collections for each node hub
                 // Order matters: AddContentCollections registers $Content area first,
-                // then AddDefaultViews sets CatalogArea as default (can be overridden by node type config)
+                // then AddDefaultViews sets DetailsArea as default (can be overridden by node type config)
                 .ConfigureDefaultNodeHub(config =>
                 {
                     if (contentStorageConfig != null)
