@@ -180,7 +180,19 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
 
     private void OnLocationChanged(object? sender, LocationChangedEventArgs e)
     {
-        StateHasChanged();
+        // Reload creatable types when URL changes to a different node path
+        var currentPath = GetCurrentNodePath();
+        if (currentPath != lastLoadedPath)
+        {
+            _ = InvokeAsync(async () =>
+            {
+                await LoadCreatableTypesAsync();
+            });
+        }
+        else
+        {
+            StateHasChanged();
+        }
     }
 
     protected override void OnParametersSet()
