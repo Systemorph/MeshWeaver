@@ -107,9 +107,9 @@ public static class MeshCatalogView
     {
         if (context.Payload is DataGridCellClick { Item: MeshNodeViewModel node })
         {
-            // Navigate to child node's Details (main content view)
+            // Navigate to child node's Overview (main content view)
             context.Host.UpdateArea(context.Area,
-                new RedirectControl($"/{node.Path}/{MeshNodeView.DetailsArea}"));
+                new RedirectControl($"/{node.Path}/{MeshNodeView.OverviewArea}"));
         }
     }
 
@@ -130,12 +130,12 @@ public static class MeshCatalogView
             var stack = Controls.Stack.WithWidth("100%");
 
             // Back button
-            var detailsHref = $"/{nodePath}/{MeshNodeView.DetailsArea}";
+            var overviewHref = $"/{nodePath}/{MeshNodeView.OverviewArea}";
             stack = stack.WithView(
                 Controls.Stack
                     .WithOrientation(Orientation.Horizontal)
                     .WithView(Controls.Button("← Back to Content")
-                        .WithNavigateToHref(detailsHref)));
+                        .WithNavigateToHref(overviewHref)));
 
             // Editor control
             stack = stack.WithView(new MeshNodeEditorControl

@@ -56,3 +56,10 @@ Create dynamic documents with embedded data and interactive components.
 Enable real-time collaboration and concurrent editing features.
 
 [Read Guide](MeshWeaver/Documentation/DataMesh/CollaborativeEditing)
+
+---
+
+### Data Configuration
+Configure data sources, initialization, and hub-to-hub synchronization.
+
+[Read Guide](MeshWeaver/Documentation/DataMesh/DataConfiguration)

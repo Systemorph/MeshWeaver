@@ -153,7 +153,7 @@ public static class InsuranceApplicationExtensions
                         LayoutAreas.ReinsuranceAcceptanceLayoutArea.Structure)
                     .WithView(nameof(LayoutAreas.ImportConfigsLayoutArea.ImportConfigs),
                         LayoutAreas.ImportConfigsLayoutArea.ImportConfigs)
-                    .AddDomainViews()
+                    .AddDomainLayoutAreas()
                 )
                 .AddImport()
                 .WithHandler<GeocodingRequest>(HandleGeocodingRequest);
