@@ -18,7 +18,7 @@ UCR allows you to **reference** and **embed** content from anywhere in your Mesh
 | Component | Description |
 |-----------|-------------|
 | `address` | MeshNode path (resolved via MeshCatalog) |
-| `prefix` | Content type: `content:`, `data:`, `area:`, `schema:`, `model:` |
+| `prefix` | Content type: `content:`, `data:`, `area:`, `schema:`, `model:`, `metadata:` |
 | `path` | Resource within the address |
 
 ## @ vs @@
@@ -99,7 +99,22 @@ UCR allows you to **reference** and **embed** content from anywhere in your Mesh
 
 ---
 
-### 6. Hyperlinks
+### 6. Metadata (MeshNode without Content)
+
+**Syntax:**
+```
+@@MeshWeaver/Documentation/DataMesh/UnifiedContentReferences/metadata:
+```
+
+Returns the MeshNode with `Content` set to null, reducing payload size when you only need node metadata (Path, NodeType, etc.).
+
+**Result:**
+
+@@MeshWeaver/Documentation/DataMesh/UnifiedContentReferences/metadata:
+
+---
+
+### 7. Hyperlinks
 
 **Syntax:**
 ```
