@@ -14,7 +14,7 @@ This section covers the practical aspects of setting up, configuring, and operat
 The Data Mesh operational guides provide hands-on documentation for:
 - **Node Type Configuration** - Defining and customizing mesh node types
 - **Query Syntax** - Filtering and retrieving data from the mesh
-- **Unified Content References** - Working with UCR links and references
+- **Unified Path** - Working with Unified Path links and references
 - **Interactive Markdown** - Creating dynamic, data-driven documents
 - **Collaborative Editing** - Enabling real-time collaboration features
 
@@ -38,10 +38,10 @@ Master the query syntax for filtering and retrieving mesh data.
 
 ---
 
-### Unified Content References
-Understand how UCR links work and how to create references between content.
+### Unified Path
+Understand how Unified Path links work and how to create references between content.
 
-[Read Guide](MeshWeaver/Documentation/DataMesh/UnifiedContentReferences)
+[Read Guide](MeshWeaver/Documentation/DataMesh/UnifiedPath)
 
 ---
 

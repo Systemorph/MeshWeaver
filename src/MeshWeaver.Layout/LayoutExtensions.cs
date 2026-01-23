@@ -91,6 +91,7 @@ public static class LayoutExtensions
         => layout
             .AddLayoutAreaCatalog()
             .AddDataReferenceView();
+    // Note: $Content area is handled by ContentLayoutArea.UnifiedContent from AddContentCollections()
 
     public static MessageHubConfiguration AddLayoutTypes(
         this MessageHubConfiguration configuration

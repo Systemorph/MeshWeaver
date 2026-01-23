@@ -20,6 +20,7 @@ public class UcrPrefixResolverTest
     [InlineData("schema:", "$Schema", null)]
     [InlineData("model:MyModel", "$Model", "MyModel")]
     [InlineData("model:", "$Model", null)]
+    [InlineData("metadata:", "$Metadata", null)]
     public void TryResolve_WithValidPrefix_ReturnsExpectedAreaAndPath(
         string input, string expectedArea, string? expectedPath)
     {
@@ -41,6 +42,8 @@ public class UcrPrefixResolverTest
     [InlineData("SCHEMA:", "$Schema", null)]
     [InlineData("Model:Test", "$Model", "Test")]
     [InlineData("MODEL:", "$Model", null)]
+    [InlineData("Metadata:", "$Metadata", null)]
+    [InlineData("METADATA:", "$Metadata", null)]
     public void TryResolve_IsCaseInsensitive(
         string input, string expectedArea, string? expectedPath)
     {
@@ -79,6 +82,7 @@ public class UcrPrefixResolverTest
     [InlineData("data:", "$Data", null)]
     [InlineData("schema:Person", "$Schema", "Person")]
     [InlineData("model:MyModel", "$Model", "MyModel")]
+    [InlineData("metadata:", "$Metadata", null)]
     public void ResolveToLayoutAreaReference_WithValidPrefix_ReturnsLayoutAreaReference(
         string input, string expectedArea, string? expectedId)
     {
@@ -113,11 +117,13 @@ public class UcrPrefixResolverTest
         UcrPrefixResolver.PrefixToAreaMap.Should().ContainKey("data");
         UcrPrefixResolver.PrefixToAreaMap.Should().ContainKey("schema");
         UcrPrefixResolver.PrefixToAreaMap.Should().ContainKey("model");
+        UcrPrefixResolver.PrefixToAreaMap.Should().ContainKey("metadata");
 
         UcrPrefixResolver.PrefixToAreaMap["content"].Should().Be("$Content");
         UcrPrefixResolver.PrefixToAreaMap["data"].Should().Be("$Data");
         UcrPrefixResolver.PrefixToAreaMap["schema"].Should().Be("$Schema");
         UcrPrefixResolver.PrefixToAreaMap["model"].Should().Be("$Model");
+        UcrPrefixResolver.PrefixToAreaMap["metadata"].Should().Be("$Metadata");
     }
 
     [Fact]
@@ -128,6 +134,8 @@ public class UcrPrefixResolverTest
         UcrPrefixResolver.PrefixToAreaMap.Should().ContainKey("Content");
         UcrPrefixResolver.PrefixToAreaMap.Should().ContainKey("DATA");
         UcrPrefixResolver.PrefixToAreaMap.Should().ContainKey("Data");
+        UcrPrefixResolver.PrefixToAreaMap.Should().ContainKey("METADATA");
+        UcrPrefixResolver.PrefixToAreaMap.Should().ContainKey("Metadata");
     }
 
     [Theory]

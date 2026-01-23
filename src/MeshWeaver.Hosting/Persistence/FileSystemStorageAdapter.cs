@@ -1,4 +1,4 @@
-using System.Text.Json;
+﻿using System.Text.Json;
 using MeshWeaver.Domain;
 using MeshWeaver.Hosting.Persistence.Parsers;
 using MeshWeaver.Mesh;
@@ -462,9 +462,9 @@ public class FileSystemStorageAdapter : IStorageAdapter
     /// Finds a file with any supported extension for the given path.
     /// Returns the first matching file in priority order: .md, .cs, .json
     /// </summary>
-    private (string? FilePath, string Extension) FindFileWithExtension(string path)
+    private (string? FilePath, string Extension) FindFileWithExtension(string? path)
     {
-        var normalizedPath = path.Trim('/');
+        var normalizedPath = path?.Trim('/');
         if (string.IsNullOrEmpty(normalizedPath))
         {
             // For root, check for index files

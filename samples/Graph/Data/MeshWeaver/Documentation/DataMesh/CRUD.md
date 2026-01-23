@@ -396,6 +396,6 @@ sequenceDiagram
 ## See Also
 
 - [Query Syntax](MeshWeaver/Documentation/DataMesh/QuerySyntax) - Search and filter nodes
-- [Unified Content References](MeshWeaver/Documentation/DataMesh/UnifiedContentReferences) - Path-based data addressing
+- [Unified Path](MeshWeaver/Documentation/DataMesh/UnifiedPath) - Path-based data addressing
 - [Data Binding](MeshWeaver/Documentation/GUI/DataBinding) - Connect UI controls to data
 - [Editor Control](MeshWeaver/Documentation/GUI/Editor) - Generate forms from records

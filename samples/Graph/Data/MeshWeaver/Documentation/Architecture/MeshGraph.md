@@ -180,7 +180,7 @@ Virtual nodes inherit the template's configuration.
 
 ## Query Patterns
 
-Navigate the hierarchy with queries. See [Unified Content References](MeshWeaver/Documentation/DataMesh/UnifiedContentReferences) for complete syntax.
+Navigate the hierarchy with queries. See [Unified Path](MeshWeaver/Documentation/DataMesh/UnifiedPath) for complete syntax.
 
 ```
 // All children of Claims

@@ -17,7 +17,8 @@ public static class UcrPrefixResolver
         { "content", "$Content" },
         { "data", "$Data" },
         { "schema", "$Schema" },
-        { "model", "$Model" }
+        { "model", "$Model" },
+        { "metadata", "$Metadata" }
     }.ToFrozenDictionary(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>

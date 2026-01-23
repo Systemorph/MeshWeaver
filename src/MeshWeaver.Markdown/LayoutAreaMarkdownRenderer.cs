@@ -87,12 +87,18 @@ public class LayoutAreaMarkdownRenderer : HtmlObjectRenderer<LayoutAreaComponent
     internal static string GetLayoutAreaLink(string rawPath, object address, string? area, object? id)
     {
         // Generate href: /{address}/{area}[/{id}]
+        // All areas including $Content use the same URL format
         var href = $"/{address}";
         if (!string.IsNullOrEmpty(area))
         {
             href += $"/{HttpUtility.UrlEncode(area)}";
             if (id != null && !string.IsNullOrEmpty(id.ToString()))
-                href += $"/{HttpUtility.UrlEncode(id.ToString()!)}";
+            {
+                // Encode each path segment separately to preserve '/' as path separators
+                var idPath = id.ToString()!;
+                var encodedSegments = idPath.Split('/').Select(HttpUtility.UrlEncode);
+                href += $"/{string.Join("/", encodedSegments)}";
+            }
         }
 
         // Display text: @ prefix with original path (preserves original syntax like content:logo.svg)

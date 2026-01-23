@@ -643,7 +643,7 @@ public static class ContentCollectionsExtensions
             string sourceCollectionName,
             string subdirectory)
             => configuration
-                .AddContentCollectionsInfrastructure() // Infrastructure only, no layout areas
+                .AddContentCollections() // Registers $Content, $FileBrowser, $Collection layout areas
                 .WithServices(services =>
                 {
                     // Register a lazy mapping provider that defers source lookup

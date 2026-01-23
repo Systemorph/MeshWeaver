@@ -2,7 +2,7 @@
 Name: Schema Prefix
 Category: Documentation
 Description: Embed type schemas and data models
-Icon: DataArea
+Icon: /static/storage/content/MeshWeaver/Documentation/DataMesh/UnifiedPath/SchemaPrefix/icon.svg
 ---
 
 # Schema Prefix
@@ -30,12 +30,12 @@ Embed the schema definition of MeshNode:
 
 **Syntax:**
 ```
-@@MeshWeaver/Documentation/DataMesh/UnifiedContentReferences/schema:MeshNode
+@@MeshWeaver/Documentation/DataMesh/UnifiedPath/schema:MeshNode
 ```
 
 **Result:**
 
-@@MeshWeaver/Documentation/DataMesh/UnifiedContentReferences/schema:MeshNode
+@@MeshWeaver/Documentation/DataMesh/UnifiedPath/schema:MeshNode
 
 ## Example: Self Schema
 
@@ -43,12 +43,12 @@ Show the schema of this node (empty path means self-reference):
 
 **Syntax:**
 ```
-@@MeshWeaver/Documentation/DataMesh/UnifiedContentReferences/SchemaPrefix/schema:
+@@MeshWeaver/Documentation/DataMesh/UnifiedPath/SchemaPrefix/schema:
 ```
 
 **Result:**
 
-@@MeshWeaver/Documentation/DataMesh/UnifiedContentReferences/SchemaPrefix/schema:
+@@MeshWeaver/Documentation/DataMesh/UnifiedPath/SchemaPrefix/schema:
 
 ## Schema Rendering
 

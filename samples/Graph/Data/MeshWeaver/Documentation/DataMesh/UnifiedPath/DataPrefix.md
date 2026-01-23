@@ -2,7 +2,7 @@
 Name: Data Prefix
 Category: Documentation
 Description: Embed data collections and entities
-Icon: /static/storage/content/MeshWeaver/Documentation/DataMesh/DataPrefix/icon.svg
+Icon: /static/storage/content/MeshWeaver/Documentation/DataMesh/UnifiedPath/DataPrefix/icon.svg
 ---
 
 # Data Prefix
@@ -30,14 +30,14 @@ Embed the data collections of this node:
 
 **Syntax:**
 ```
-@@MeshWeaver/Documentation/DataMesh/UnifiedContentReferences/DataPrefix/data:
+@@MeshWeaver/Documentation/DataMesh/UnifiedPath/DataPrefix/data:
 ```
 
 Empty path after `data:` means self-reference - shows available data collections.
 
 **Result:**
 
-@@MeshWeaver/Documentation/DataMesh/UnifiedContentReferences/DataPrefix/data:
+@@MeshWeaver/Documentation/DataMesh/UnifiedPath/DataPrefix/data:
 
 ## Example: Collection Reference
 

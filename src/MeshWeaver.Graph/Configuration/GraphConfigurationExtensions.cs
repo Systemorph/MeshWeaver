@@ -37,8 +37,12 @@ public static class GraphConfigurationExtensions
         ///
         /// Content collections are configured per node type via NodeTypeDefinition.ContentCollections.
         /// All configuration loading and service initialization happens at mesh startup.
+        ///
+        /// Note: This method does NOT configure content collections. Callers should configure
+        /// storage collections and default node hub mappings separately based on their needs.
+        /// See LoomConfiguration.ConfigureLoomMesh for an example.
         /// </summary>
-        public TBuilder AddJsonGraphConfiguration(string _)
+        public TBuilder AddJsonGraphConfiguration(string dataDirectory)
         {
             // Register the built-in "NodeType" MeshNode
             // This provides HubConfiguration for nodes with nodeType="NodeType" (type definition nodes).
@@ -101,6 +105,7 @@ public static class GraphConfigurationExtensions
             // Note: MeshDataSource is added automatically via NodeTypeService.WrapWithMeshDataSource
             // Node types are compiled on-demand via IMeshNodeCompilationService.
             // MeshCatalog loads NodeTypeConfiguration from compiled assemblies when nodes are accessed.
+            // Content collections should be configured by the caller (e.g., LoomConfiguration.ConfigureLoomMesh).
             builder.ConfigureHub(config => MeshNodeView.AddDefaultViews(config)
                 .WithServices(services =>
                 {

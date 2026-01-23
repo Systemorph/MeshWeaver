@@ -19,6 +19,7 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
     [Inject] protected NavigationManager NavigationManager { get; set; } = null!;
     [Inject] protected ChatWindowStateService ChatState { get; set; } = null!;
     [Inject] protected IMessageHub Hub { get; set; } = null!;
+    [Inject] protected INavigationService NavigationService { get; set; } = null!;
 
     // Splitter pane sizes - default 3:1 ratio (75% main, 25% chat)
     private string MainPaneSize => ChatState.Width.HasValue ? $"{100 - ChatState.Width.Value}%" : "75%";
@@ -76,7 +77,7 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
         await base.OnParametersSetAsync();
 
         // Reload types when URL changes
-        var currentPath = GetCurrentNodePath();
+        var currentPath = NavigationService.CurrentNamespace;
         if (currentPath != lastLoadedPath)
         {
             await LoadCreatableTypesAsync();
@@ -92,7 +93,7 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
         if (nodeTypeService == null)
             return;
 
-        var currentPath = GetCurrentNodePath();
+        var currentPath = NavigationService.CurrentNamespace;
         lastLoadedPath = currentPath;
 
         try
@@ -110,50 +111,13 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
     }
 
     /// <summary>
-    /// Extracts the current node path from the URL.
-    /// URLs are in format: /{nodePath}/{area} or /{nodePath}
-    /// Returns empty string for root level.
-    /// </summary>
-    protected virtual string GetCurrentNodePath()
-    {
-        var uri = new Uri(NavigationManager.Uri);
-        var path = uri.AbsolutePath.TrimStart('/');
-
-        if (string.IsNullOrEmpty(path))
-            return "";
-
-        // Known view areas that should be stripped from the path
-        // Note: "Overview" and "Search" are the renamed versions of "Details" and "Catalog"
-        // Include common custom view names and framework areas to handle all URL patterns
-        var viewAreas = new[] {
-            // Framework areas
-            "Details", "Overview", "Edit", "Create", "Thumbnail", "Catalog", "Search",
-            "LayoutAreas", "Read", "Metadata", "Notebook", "Comments", "Attachments", "Settings",
-            "Files", "Children", "NodeTypes", "AccessControl", "Code", "CodeEdit", "HubConfig", "HubConfigEdit",
-            // Common custom view names (used in Project, Todo, etc.)
-            "Summary", "AllTasks", "TodosByCategory", "Planning", "MyTasks", "Backlog", "TodaysFocus"
-        };
-
-        var segments = path.Split('/');
-
-        // If last segment is a known view area, remove it
-        if (segments.Length > 1 && viewAreas.Contains(segments[^1], StringComparer.OrdinalIgnoreCase))
-        {
-            return string.Join("/", segments[..^1]);
-        }
-
-        // Return full path as node path
-        return path;
-    }
-
-    /// <summary>
     /// Navigates to the create page for the specified node type.
     /// </summary>
     protected virtual void NavigateToCreate(string nodeTypePath)
     {
         isCreateMenuOpen = false;
 
-        var currentPath = GetCurrentNodePath();
+        var currentPath = NavigationService.CurrentNamespace;
         if (string.IsNullOrEmpty(currentPath))
         {
             // At root level - navigate to create with type parameter
@@ -190,7 +154,7 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
     private void OnLocationChanged(object? sender, LocationChangedEventArgs e)
     {
         // Reload creatable types when URL changes to a different node path
-        var currentPath = GetCurrentNodePath();
+        var currentPath = NavigationService.CurrentNamespace;
         if (currentPath != lastLoadedPath)
         {
             _ = InvokeAsync(async () =>

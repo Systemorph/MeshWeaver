@@ -826,12 +826,12 @@ Console.WriteLine(""Hello World"");
     public void PrefixColonSyntax_Content()
     {
         // New prefix:path format: address/content:file.svg
-        var markdown = "@@MeshWeaver/UnifiedContentReferences/content:logo.svg";
+        var markdown = "@@MeshWeaver/UnifiedPath/content:logo.svg";
         var extension = new LayoutAreaMarkdownExtension();
         var document = ParseMarkdown(markdown, extension);
 
         var layoutArea = document.Descendants<LayoutAreaComponentInfo>().Single();
-        layoutArea.Address.Should().Be("MeshWeaver/UnifiedContentReferences");
+        layoutArea.Address.Should().Be("MeshWeaver/UnifiedPath");
         layoutArea.Area.Should().Be(LayoutAreaMarkdownParser.ContentAreaName);
         layoutArea.Id.Should().Be("logo.svg");
         layoutArea.IsInline.Should().BeTrue();
@@ -841,12 +841,12 @@ Console.WriteLine(""Hello World"");
     public void PrefixColonSyntax_Data()
     {
         // New prefix:path format: address/data:collection
-        var markdown = "@MeshWeaver/UnifiedContentReferences/data:Posts";
+        var markdown = "@MeshWeaver/UnifiedPath/data:Posts";
         var extension = new LayoutAreaMarkdownExtension();
         var document = ParseMarkdown(markdown, extension);
 
         var layoutArea = document.Descendants<LayoutAreaComponentInfo>().Single();
-        layoutArea.Address.Should().Be("MeshWeaver/UnifiedContentReferences");
+        layoutArea.Address.Should().Be("MeshWeaver/UnifiedPath");
         layoutArea.Area.Should().Be(LayoutAreaMarkdownParser.DataAreaName);
         layoutArea.Id.Should().Be("Posts");
         layoutArea.IsInline.Should().BeFalse();
@@ -871,12 +871,12 @@ Console.WriteLine(""Hello World"");
     public void PrefixColonSyntax_DataSelfReference()
     {
         // Self reference: address/data: (nothing after colon means self)
-        var markdown = "@@MeshWeaver/UnifiedContentReferences/data:";
+        var markdown = "@@MeshWeaver/UnifiedPath/data:";
         var extension = new LayoutAreaMarkdownExtension();
         var document = ParseMarkdown(markdown, extension);
 
         var layoutArea = document.Descendants<LayoutAreaComponentInfo>().Single();
-        layoutArea.Address.Should().Be("MeshWeaver/UnifiedContentReferences");
+        layoutArea.Address.Should().Be("MeshWeaver/UnifiedPath");
         layoutArea.Area.Should().Be(LayoutAreaMarkdownParser.DataAreaName);
         layoutArea.Id.Should().BeNull(); // Empty after colon means self-reference
         layoutArea.IsInline.Should().BeTrue();
@@ -901,12 +901,12 @@ Console.WriteLine(""Hello World"");
     public void PrefixColonSyntax_ContentSelfReference()
     {
         // Self reference: address/content: (show content of current node)
-        var markdown = "@@MeshWeaver/UnifiedContentReferences/content:";
+        var markdown = "@@MeshWeaver/UnifiedPath/content:";
         var extension = new LayoutAreaMarkdownExtension();
         var document = ParseMarkdown(markdown, extension);
 
         var layoutArea = document.Descendants<LayoutAreaComponentInfo>().Single();
-        layoutArea.Address.Should().Be("MeshWeaver/UnifiedContentReferences");
+        layoutArea.Address.Should().Be("MeshWeaver/UnifiedPath");
         layoutArea.Area.Should().Be(LayoutAreaMarkdownParser.ContentAreaName);
         layoutArea.Id.Should().BeNull();
         layoutArea.IsInline.Should().BeTrue();
