@@ -1,5 +1,4 @@
 using System.Text;
-using System.Text.RegularExpressions;
 using Markdig;
 using Markdig.Extensions.Yaml;
 using Markdig.Syntax;
@@ -69,18 +68,11 @@ public partial class MarkdownFileParser : IFileFormatParser
         }
 
         // Parse markdown and create MarkdownContent with pre-rendered HTML and code submissions
-        // Include article metadata in the MarkdownContent
         var markdownDocument = MarkdownContent.Parse(markdownContent, relativePath) with
         {
             Authors = frontMatter?.Authors,
             Tags = frontMatter?.Tags,
-            Thumbnail = frontMatter?.Thumbnail,
-            VideoUrl = frontMatter?.VideoUrl,
-            VideoDuration = ParseTimeSpan(frontMatter?.VideoDuration),
-            VideoTitle = frontMatter?.VideoTitle,
-            VideoDescription = frontMatter?.VideoDescription,
-            VideoTagLine = frontMatter?.VideoTagLine,
-            VideoTranscript = frontMatter?.VideoTranscript
+            Thumbnail = frontMatter?.Thumbnail
         };
 
         var node = new MeshNode(id, ns)
@@ -102,46 +94,25 @@ public partial class MarkdownFileParser : IFileFormatParser
         return Task.FromResult<MeshNode?>(node);
     }
 
-    private static TimeSpan? ParseTimeSpan(string? value)
-    {
-        if (string.IsNullOrEmpty(value))
-            return null;
-        return TimeSpan.TryParse(value, out var result) ? result : null;
-    }
-
     public Task<string> SerializeAsync(MeshNode node, CancellationToken ct = default)
     {
         var sb = new StringBuilder();
 
-        // Extract MarkdownContent if available to preserve article metadata
-        MarkdownContent? mdContent = node.Content switch
-        {
-            MarkdownContent doc => doc,
-            System.Text.Json.JsonElement jsonElement => ExtractMarkdownContentFromJsonElement(jsonElement),
-            _ => null
-        };
+        // Extract MarkdownContent if available
+        var mdContent = node.Content as MarkdownContent;
 
         // Build YAML front matter from node properties and MarkdownContent metadata
         var frontMatter = new MarkdownFrontMatter
         {
-            // Node-level properties
             NodeType = node.NodeType != "Markdown" ? node.NodeType : null,
             Name = node.Name != node.Id ? node.Name : null,
             Category = node.Category,
             Description = node.Description,
             Icon = node.Icon != DefaultMarkdownIcon ? node.Icon : null,
             State = node.State != MeshNodeState.Active ? node.State.ToString() : null,
-
-            // Article metadata from MarkdownContent
             Authors = mdContent?.Authors?.ToList(),
             Tags = mdContent?.Tags?.ToList(),
-            Thumbnail = mdContent?.Thumbnail,
-            VideoUrl = mdContent?.VideoUrl,
-            VideoDuration = mdContent?.VideoDuration?.ToString(),
-            VideoTitle = mdContent?.VideoTitle,
-            VideoDescription = mdContent?.VideoDescription,
-            VideoTagLine = mdContent?.VideoTagLine,
-            VideoTranscript = mdContent?.VideoTranscript
+            Thumbnail = mdContent?.Thumbnail
         };
 
         // Only write YAML block if there's meaningful content
@@ -153,8 +124,7 @@ public partial class MarkdownFileParser : IFileFormatParser
                             frontMatter.State != null ||
                             frontMatter.Authors?.Count > 0 ||
                             frontMatter.Tags?.Count > 0 ||
-                            frontMatter.Thumbnail != null ||
-                            frontMatter.VideoUrl != null;
+                            frontMatter.Thumbnail != null;
 
         if (hasYamlContent)
         {
@@ -181,70 +151,6 @@ public partial class MarkdownFileParser : IFileFormatParser
         }
 
         return Task.FromResult(sb.ToString());
-    }
-
-    /// <summary>
-    /// Extracts MarkdownContent object from a JsonElement.
-    /// </summary>
-    private static MarkdownContent? ExtractMarkdownContentFromJsonElement(System.Text.Json.JsonElement element)
-    {
-        if (element.ValueKind != System.Text.Json.JsonValueKind.Object)
-            return null;
-
-        try
-        {
-            var content = element.TryGetProperty("content", out var contentProp) && contentProp.ValueKind == System.Text.Json.JsonValueKind.String
-                ? contentProp.GetString()
-                : null;
-
-            if (content == null)
-                return null;
-
-            return new MarkdownContent
-            {
-                Content = content,
-                Authors = ExtractStringList(element, "authors"),
-                Tags = ExtractStringList(element, "tags"),
-                Thumbnail = ExtractString(element, "thumbnail"),
-                VideoUrl = ExtractString(element, "videoUrl"),
-                VideoDuration = ExtractTimeSpan(element, "videoDuration"),
-                VideoTitle = ExtractString(element, "videoTitle"),
-                VideoDescription = ExtractString(element, "videoDescription"),
-                VideoTagLine = ExtractString(element, "videoTagLine"),
-                VideoTranscript = ExtractString(element, "videoTranscript")
-            };
-        }
-        catch
-        {
-            return null;
-        }
-    }
-
-    private static string? ExtractString(System.Text.Json.JsonElement element, string propertyName)
-    {
-        return element.TryGetProperty(propertyName, out var prop) && prop.ValueKind == System.Text.Json.JsonValueKind.String
-            ? prop.GetString()
-            : null;
-    }
-
-    private static List<string>? ExtractStringList(System.Text.Json.JsonElement element, string propertyName)
-    {
-        if (!element.TryGetProperty(propertyName, out var prop) || prop.ValueKind != System.Text.Json.JsonValueKind.Array)
-            return null;
-
-        var list = new List<string>();
-        foreach (var item in prop.EnumerateArray())
-        {
-            if (item.ValueKind == System.Text.Json.JsonValueKind.String)
-                list.Add(item.GetString()!);
-        }
-        return list.Count > 0 ? list : null;
-    }
-
-    private static TimeSpan? ExtractTimeSpan(System.Text.Json.JsonElement element, string propertyName)
-    {
-        var str = ExtractString(element, propertyName);
-        return str != null && TimeSpan.TryParse(str, out var result) ? result : null;
     }
 
     public bool CanSerialize(MeshNode node)
@@ -339,20 +245,14 @@ public partial class MarkdownFileParser : IFileFormatParser
         public string? Icon { get; set; }
         public string? State { get; set; }
 
-        // Legacy Article properties (for backwards compatibility)
+        // Legacy Article properties (for backwards compatibility when reading)
         public string? Title { get; set; }          // Maps to Name
         public string? Abstract { get; set; }       // Maps to Description
-        public string? Thumbnail { get; set; }      // Maps to Icon, also stored in MarkdownContent
         public string? Published { get; set; }      // Maps to LastModified
-        public List<string>? Authors { get; set; }  // Stored in MarkdownContent
-        public List<string>? Tags { get; set; }     // Stored in MarkdownContent
 
-        // Video-related properties (stored in MarkdownContent)
-        public string? VideoUrl { get; set; }
-        public string? VideoDuration { get; set; }
-        public string? VideoTitle { get; set; }
-        public string? VideoDescription { get; set; }
-        public string? VideoTagLine { get; set; }
-        public string? VideoTranscript { get; set; }
+        // Article metadata (stored in MarkdownContent)
+        public List<string>? Authors { get; set; }
+        public List<string>? Tags { get; set; }
+        public string? Thumbnail { get; set; }
     }
 }

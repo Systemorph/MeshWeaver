@@ -634,13 +634,13 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
     [Fact]
     public void KeywordWithoutColon_Schema_ParsesCorrectly()
     {
-        var markdown = "@@MeshWeaver/Documentation/DataMesh/UnifiedContentReferences/schema";
+        var markdown = "@@MeshWeaver/Documentation/DataMesh/UnifiedPath/schema";
         var extension = new LayoutAreaMarkdownExtension();
         var pipeline = new MarkdownPipelineBuilder().Use(extension).Build();
         var document = Markdig.Markdown.Parse(markdown, pipeline);
 
         var layoutArea = document.Descendants<LayoutAreaComponentInfo>().Single();
-        layoutArea.Address.Should().Be("MeshWeaver/Documentation/DataMesh/UnifiedContentReferences");
+        layoutArea.Address.Should().Be("MeshWeaver/Documentation/DataMesh/UnifiedPath");
         layoutArea.Area.Should().Be(LayoutAreaMarkdownParser.SchemaAreaName);
         layoutArea.Id.Should().BeNull();
         layoutArea.IsInline.Should().BeTrue();
@@ -652,13 +652,13 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
     [Fact]
     public void KeywordWithoutColon_Content_ParsesCorrectly()
     {
-        var markdown = "@MeshWeaver/Documentation/DataMesh/UnifiedContentReferences/content";
+        var markdown = "@MeshWeaver/Documentation/DataMesh/UnifiedPath/content";
         var extension = new LayoutAreaMarkdownExtension();
         var pipeline = new MarkdownPipelineBuilder().Use(extension).Build();
         var document = Markdig.Markdown.Parse(markdown, pipeline);
 
         var layoutArea = document.Descendants<LayoutAreaComponentInfo>().Single();
-        layoutArea.Address.Should().Be("MeshWeaver/Documentation/DataMesh/UnifiedContentReferences");
+        layoutArea.Address.Should().Be("MeshWeaver/Documentation/DataMesh/UnifiedPath");
         layoutArea.Area.Should().Be(LayoutAreaMarkdownParser.ContentAreaName);
         layoutArea.Id.Should().BeNull();
         layoutArea.IsInline.Should().BeFalse();
@@ -825,13 +825,13 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
     [Fact]
     public void DataColonSelfReference_ParsesCorrectly()
     {
-        var markdown = "@@MeshWeaver/Documentation/DataMesh/UnifiedContentReferences/data:";
+        var markdown = "@@MeshWeaver/Documentation/DataMesh/UnifiedPath/data:";
         var extension = new LayoutAreaMarkdownExtension();
         var pipeline = new MarkdownPipelineBuilder().Use(extension).Build();
         var document = Markdig.Markdown.Parse(markdown, pipeline);
 
         var layoutArea = document.Descendants<LayoutAreaComponentInfo>().Single();
-        layoutArea.Address.Should().Be("MeshWeaver/Documentation/DataMesh/UnifiedContentReferences");
+        layoutArea.Address.Should().Be("MeshWeaver/Documentation/DataMesh/UnifiedPath");
         layoutArea.Area.Should().Be(LayoutAreaMarkdownParser.DataAreaName);
         layoutArea.Id.Should().BeNull("Self-reference (empty path) should have null Id");
         layoutArea.IsInline.Should().BeTrue();
@@ -844,13 +844,13 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
     [Fact]
     public void SchemaColonSelfReference_ParsesCorrectly()
     {
-        var markdown = "@@MeshWeaver/Documentation/DataMesh/UnifiedContentReferences/schema:";
+        var markdown = "@@MeshWeaver/Documentation/DataMesh/UnifiedPath/schema:";
         var extension = new LayoutAreaMarkdownExtension();
         var pipeline = new MarkdownPipelineBuilder().Use(extension).Build();
         var document = Markdig.Markdown.Parse(markdown, pipeline);
 
         var layoutArea = document.Descendants<LayoutAreaComponentInfo>().Single();
-        layoutArea.Address.Should().Be("MeshWeaver/Documentation/DataMesh/UnifiedContentReferences");
+        layoutArea.Address.Should().Be("MeshWeaver/Documentation/DataMesh/UnifiedPath");
         layoutArea.Area.Should().Be(LayoutAreaMarkdownParser.SchemaAreaName);
         layoutArea.Id.Should().BeNull("Self-reference (empty path) should have null Id");
         layoutArea.IsInline.Should().BeTrue();
@@ -863,13 +863,13 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
     [Fact]
     public void ContentColonSelfReference_ParsesCorrectly()
     {
-        var markdown = "@@MeshWeaver/Documentation/DataMesh/UnifiedContentReferences/content:";
+        var markdown = "@@MeshWeaver/Documentation/DataMesh/UnifiedPath/content:";
         var extension = new LayoutAreaMarkdownExtension();
         var pipeline = new MarkdownPipelineBuilder().Use(extension).Build();
         var document = Markdig.Markdown.Parse(markdown, pipeline);
 
         var layoutArea = document.Descendants<LayoutAreaComponentInfo>().Single();
-        layoutArea.Address.Should().Be("MeshWeaver/Documentation/DataMesh/UnifiedContentReferences");
+        layoutArea.Address.Should().Be("MeshWeaver/Documentation/DataMesh/UnifiedPath");
         layoutArea.Area.Should().Be(LayoutAreaMarkdownParser.ContentAreaName);
         layoutArea.Id.Should().BeNull("Self-reference (empty path) should have null Id");
         layoutArea.IsInline.Should().BeTrue();
@@ -882,13 +882,13 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
     [Fact]
     public void ModelColonSelfReference_ParsesCorrectly()
     {
-        var markdown = "@@MeshWeaver/Documentation/DataMesh/UnifiedContentReferences/model:";
+        var markdown = "@@MeshWeaver/Documentation/DataMesh/UnifiedPath/model:";
         var extension = new LayoutAreaMarkdownExtension();
         var pipeline = new MarkdownPipelineBuilder().Use(extension).Build();
         var document = Markdig.Markdown.Parse(markdown, pipeline);
 
         var layoutArea = document.Descendants<LayoutAreaComponentInfo>().Single();
-        layoutArea.Address.Should().Be("MeshWeaver/Documentation/DataMesh/UnifiedContentReferences");
+        layoutArea.Address.Should().Be("MeshWeaver/Documentation/DataMesh/UnifiedPath");
         layoutArea.Area.Should().Be(LayoutAreaMarkdownParser.ModelAreaName);
         layoutArea.Id.Should().BeNull("Self-reference (empty path) should have null Id");
         layoutArea.IsInline.Should().BeTrue();

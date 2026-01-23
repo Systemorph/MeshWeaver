@@ -28,9 +28,12 @@ public class ContentService : IContentService
         this.hub = hub;
         this.accessService = accessService;
 
-        // Add collections from providers
+        // Add collections from providers (later registrations override earlier ones)
         var providers = hub.ServiceProvider.GetServices<IContentCollectionConfigProvider>();
-        collectionConfigs = new(providers.SelectMany(p => p.GetCollections()).ToDictionary(c => c.Name));
+        collectionConfigs = new(providers
+            .SelectMany(p => p.GetCollections())
+            .GroupBy(c => c.Name)
+            .ToDictionary(g => g.Key, g => g.Last()));
         logger = hub.ServiceProvider.GetRequiredService<ILogger<ContentService>>();
     }
 

@@ -706,6 +706,24 @@ public static class DataExtensions
         return Task.FromResult(request.Processed());
     }
 
+    /// <summary>
+    /// Handler for MetadataReference - this is a fallback that returns an error.
+    /// The actual handler should be in MeshDataSource.HandleMetadataRequest which should execute first.
+    /// If this handler runs, it means AddMeshDataSource() wasn't called on the hub.
+    /// </summary>
+    private static Task<IMessageDelivery> HandleGetDataRequestCore(
+        IMessageHub hub,
+        MetadataReference _,
+        IMessageDelivery<GetDataRequest> request,
+        CancellationToken __)
+    {
+        // This is a fallback - if we get here, HandleMetadataRequest in MeshDataSource didn't handle it
+        // This can happen if AddMeshDataSource() wasn't called on this hub
+        hub.Post(new GetDataResponse(null, 0) { Error = "MetadataReference requires AddMeshDataSource() to be configured on the hub" },
+            o => o.ResponseFor(request));
+        return Task.FromResult(request.Processed());
+    }
+
     private static async Task<IMessageDelivery> HandleGetDataRequestCore<TReference>(IMessageHub hub,
         WorkspaceReference<TReference> reference, IMessageDelivery<GetDataRequest> request, CancellationToken _)
     {

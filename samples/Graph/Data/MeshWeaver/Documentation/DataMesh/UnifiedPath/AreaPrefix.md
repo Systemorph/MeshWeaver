@@ -2,7 +2,7 @@
 Name: Area Prefix
 Category: Documentation
 Description: Embed layout areas like Thumbnail, Details, or Catalog
-Icon: /static/storage/content/MeshWeaver/Documentation/DataMesh/AreaPrefix/icon.svg
+Icon: /static/storage/content/MeshWeaver/Documentation/DataMesh/UnifiedPath/AreaPrefix/icon.svg
 ---
 
 # Area Prefix
@@ -34,12 +34,12 @@ Embed the thumbnail card of this documentation:
 
 **Syntax:**
 ```
-@@MeshWeaver/Documentation/DataMesh/UnifiedContentReferences/Thumbnail
+@@MeshWeaver/Documentation/DataMesh/UnifiedPath/Thumbnail
 ```
 
 **Result:**
 
-@@MeshWeaver/Documentation/DataMesh/UnifiedContentReferences/Thumbnail
+@@MeshWeaver/Documentation/DataMesh/UnifiedPath/Thumbnail
 
 ## Example: Catalog Area
 

@@ -786,11 +786,15 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         var singleSerialized = JsonSerializer.Serialize(singleColumn, client.JsonSerializerOptions);
         Output.WriteLine($"Single object serialized: {singleSerialized}");
 
-        var singleClientDeserialized = JsonSerializer.Deserialize<PropertyColumnControl>(singleSerialized, client.JsonSerializerOptions);
-        var singleHostedDeserialized = JsonSerializer.Deserialize<PropertyColumnControl>(singleSerialized, hosted.JsonSerializerOptions);
+        var singleClientDeserialized = JsonSerializer.Deserialize<object>(singleSerialized, client.JsonSerializerOptions);
+        var singleHostedDeserialized = JsonSerializer.Deserialize<object>(singleSerialized, hosted.JsonSerializerOptions);
 
         Output.WriteLine($"Single - Client deserialized type: {singleClientDeserialized?.GetType().FullName}");
         Output.WriteLine($"Single - Hosted deserialized type: {singleHostedDeserialized?.GetType().FullName}");
+
+        // Both should deserialize to the concrete PropertyColumnControl<string> type
+        singleClientDeserialized.Should().BeOfType<PropertyColumnControl<string>>();
+        singleHostedDeserialized.Should().BeOfType<PropertyColumnControl<string>>();
 
         // Test 2: Collection of polymorphic objects
         var columnCollection = new List<object>
@@ -823,6 +827,15 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
                 Output.WriteLine($"Collection - Hosted item {i} type: {collectionHostedDeserialized[i].GetType().FullName}");
             }
         }
+
+        // Both should deserialize collections the same way
+        collectionClientDeserialized.Should().NotBeNull();
+        collectionHostedDeserialized.Should().NotBeNull();
+        collectionClientDeserialized.Count.Should().Be(collectionHostedDeserialized.Count);
+
+        // Each item should be properly deserialized as PropertyColumnControl<string>
+        collectionClientDeserialized.Should().AllBeOfType<PropertyColumnControl<string>>();
+        collectionHostedDeserialized.Should().AllBeOfType<PropertyColumnControl<string>>();
     }
 
     [HubFact]

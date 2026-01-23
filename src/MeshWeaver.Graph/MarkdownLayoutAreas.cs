@@ -1458,6 +1458,7 @@ public static class MarkdownLayoutAreas
 
     /// <summary>
     /// Renders a compact thumbnail for markdown nodes in catalogs.
+    /// Uses MeshNodeThumbnailControl for consistent styling with the catalog.
     /// </summary>
     public static UiControl Thumbnail(LayoutAreaHost host, RenderingContext ctx)
     {
@@ -1470,37 +1471,8 @@ public static class MarkdownLayoutAreas
             .WithView((h, c) => nodeStream.Select(nodes =>
             {
                 var node = nodes.FirstOrDefault(n => n.Path == hubPath);
-                return BuildThumbnail(node, hubPath);
+                return MeshNodeThumbnailControl.FromNode(node, hubPath);
             }));
-    }
-
-    private static UiControl BuildThumbnail(MeshNode? node, string hubPath)
-    {
-        var title = node?.Name ?? hubPath.Split('/').LastOrDefault() ?? "Document";
-        var description = node?.Description ?? "";
-        var iconName = node?.Icon ?? "Document";
-
-        // Truncate description for thumbnail
-        if (description.Length > 100)
-            description = description[..97] + "...";
-
-        var href = $"/{hubPath}";
-
-        return Controls.Html($@"
-            <a href=""{href}"" style=""text-decoration: none; color: inherit; display: block;"">
-                <div style=""background: var(--neutral-layer-2); border-radius: 8px; padding: 16px;
-                    border: 1px solid var(--neutral-stroke-rest); transition: all 0.2s ease;
-                    cursor: pointer;""
-                    onmouseover=""this.style.borderColor='var(--accent-fill-rest)'; this.style.transform='translateY(-2px)';""
-                    onmouseout=""this.style.borderColor='var(--neutral-stroke-rest)'; this.style.transform='none';"">
-                    <div style=""display: flex; align-items: center; gap: 12px; margin-bottom: 8px;"">
-                        <fluent-icon name=""{iconName}"" style=""font-size: 24px; color: var(--accent-fill-rest);""></fluent-icon>
-                        <span style=""font-weight: 600; font-size: 1rem;"">{title}</span>
-                    </div>
-                    {(string.IsNullOrEmpty(description) ? "" : $"<p style=\"margin: 0; color: var(--neutral-foreground-hint); font-size: 0.875rem; line-height: 1.4;\">{description}</p>")}
-                </div>
-            </a>
-        ");
     }
 
     /// <summary>

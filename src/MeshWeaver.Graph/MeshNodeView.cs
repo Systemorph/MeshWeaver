@@ -83,7 +83,7 @@ public static class MeshNodeView
             .WithView(NodeTypesArea, NodeTypes)
             .WithView(AccessControlArea, AccessControl)
             .WithView(CreateNodeArea, CreateNode)
-            // UCR special areas - $Content is registered by ContentCollectionsExtensions.AddContentCollections
+            // UCR special areas
             .WithView(DataArea, Data)
             .WithView(SchemaArea, Schema)
             .WithView(EditArea, Edit)

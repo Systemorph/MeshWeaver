@@ -1,13 +1,13 @@
 ---
-Name: UCR Syntax
+Name: Unified Path Syntax
 Category: Documentation
 Description: The address/prefix:path pattern explained
-Icon: Code
+Icon: /static/storage/content/MeshWeaver/Documentation/DataMesh/UnifiedPath/Syntax/icon.svg
 ---
 
-# UCR Syntax
+# Unified Path Syntax
 
-Unified Content References use the pattern:
+Unified Path references use the pattern:
 
 ```
 {address}/{prefix}:{path}
@@ -72,8 +72,8 @@ Result:
 
 ## Related
 
-@MeshWeaver/Documentation/DataMesh/UnifiedContentReferences/ContentPrefix
+@MeshWeaver/Documentation/DataMesh/UnifiedPath/ContentPrefix
 
-@MeshWeaver/Documentation/DataMesh/UnifiedContentReferences/DataPrefix
+@MeshWeaver/Documentation/DataMesh/UnifiedPath/DataPrefix
 
-@MeshWeaver/Documentation/DataMesh/UnifiedContentReferences/AreaPrefix
+@MeshWeaver/Documentation/DataMesh/UnifiedPath/AreaPrefix
