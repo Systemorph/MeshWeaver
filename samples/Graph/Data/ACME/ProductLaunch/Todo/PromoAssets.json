@@ -9,21 +9,21 @@
   "addressSegments": 0,
   "isPersistent": true,
   "lastModified": "2026-01-12T07:43:17.8322177+00:00",
-  "version": 49,
+  "version": 2,
   "state": "Active",
   "isVirtual": false,
   "content": {
+    "$type": "Todo",
     "id": "PromoAssets",
     "title": "Design promotional assets",
     "description": "Design banner ads, social media graphics, email headers, and product screenshots. Ensure consistent branding across all touchpoints.",
     "category": "Design",
     "priority": "Medium",
     "assignee": "David",
-    "createdAt": "2026-01-19T21:23:16.387193+01:00",
     "dueDate": "2026-02-21T00:00:00+01:00",
     "dueDateOffsetDays": 33,
-    "status": "Completed",
-    "completedAt": "2026-01-22T22:09:01.3226Z"
+    "status": "InReview",
+    "createdAt": "2026-01-19T20:23:16.387193+00:00"
   },
   "routingType": "Shared",
   "instantiationType": "HubConfiguration"
