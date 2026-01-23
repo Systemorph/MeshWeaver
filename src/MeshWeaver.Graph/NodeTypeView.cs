@@ -18,7 +18,7 @@ namespace MeshWeaver.Graph;
 
 /// <summary>
 /// Layout views for NodeType definition nodes.
-/// Uses standard MeshNodeView.Catalog with NodeTypeCatalogMode for showing instances.
+/// Uses standard MeshNodeView.Search with NodeTypeCatalogMode for showing instances.
 /// - Details: Overview of the NodeType
 /// - CodeView: Split view with left menu and code display
 /// - CodeEdit: Monaco editor for code editing
@@ -27,7 +27,7 @@ namespace MeshWeaver.Graph;
 /// </summary>
 public static class NodeTypeView
 {
-    public const string CatalogArea = "Catalog";
+    public const string SearchArea = "Search";
     public const string DetailsArea = "Details";
     public const string CodeViewArea = "Code";
     public const string CodeEditArea = "CodeEdit";
@@ -42,7 +42,7 @@ public static class NodeTypeView
 
     /// <summary>
     /// Adds the NodeType views to the hub's layout for NodeType nodes.
-    /// Uses the standard MeshNodeView.Catalog with NodeTypeCatalogMode to dynamically query instances.
+    /// Uses the standard MeshNodeView.Search with NodeTypeCatalogMode to dynamically query instances.
     /// Includes UCR areas ($Data, $Schema, $Model) for unified content references.
     /// Note: $Content is registered by ContentCollectionsExtensions.AddContentCollections.
     /// </summary>
@@ -51,7 +51,7 @@ public static class NodeTypeView
             .Set(new NodeTypeCatalogMode())  // Enable NodeType catalog mode
             .AddLayout(layout => layout
                 .WithDefaultArea(CodeViewArea)
-                .WithView(CatalogArea, MeshNodeView.Catalog)  // Use standard catalog
+                .WithView(SearchArea, MeshNodeView.Search)  // Use standard search
                 .WithView(DetailsArea, Details)
                 .WithView(CodeViewArea, CodeView)
                 .WithView(CodeEditArea, CodeEdit)
@@ -233,10 +233,10 @@ public static class NodeTypeView
     {
         var navMenu = Controls.NavMenu.WithSkin(s => s.WithWidth(280).WithCollapsible(false));
 
-        // Back to Catalog link
-        var catalogHref = new LayoutAreaReference(CatalogArea).ToHref(hubAddress);
+        // Back to Search link
+        var searchHref = new LayoutAreaReference(SearchArea).ToHref(hubAddress);
         navMenu = navMenu.WithView(
-            new NavLinkControl("← Back to Catalog", FluentIcons.ArrowLeft(), catalogHref)
+            new NavLinkControl("← Back to Search", FluentIcons.ArrowLeft(), searchHref)
         );
 
         // Node type definition entry - switches main view to configuration

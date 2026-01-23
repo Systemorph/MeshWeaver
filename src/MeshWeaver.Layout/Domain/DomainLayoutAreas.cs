@@ -8,9 +8,9 @@ using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.Layout.Domain;
 
-public static class DomainViews
+public static class DomainLayoutAreas
 {
-    public static LayoutDefinition AddDomainViews(this LayoutDefinition layout)
+    public static LayoutDefinition AddDomainLayoutAreas(this LayoutDefinition layout)
         => layout
             .WithView(nameof(Catalog), Catalog)
             .WithView(nameof(Details), Details)

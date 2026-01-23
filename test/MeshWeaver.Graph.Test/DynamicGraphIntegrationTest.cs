@@ -684,10 +684,10 @@ public record Graph
             o => o.WithTarget(orgAddress),
             TestContext.Current.CancellationToken);
 
-        // Act: Request the default layout area (Details) using stream
+        // Act: Request the default layout area (Overview) using stream
         // This should not hang if default views are properly configured
         var workspace = client.GetWorkspace();
-        var reference = new LayoutAreaReference(MeshNodeView.DetailsArea);
+        var reference = new LayoutAreaReference(MeshNodeView.OverviewArea);
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(orgAddress, reference);
 
         // Wait for the stream to emit a value (with timeout from test attribute)
@@ -756,9 +756,9 @@ public record Graph
             o => o.WithTarget(typeOrgAddress),
             TestContext.Current.CancellationToken);
 
-        // Act: Request Catalog area directly (the default view for NodeType)
+        // Act: Request Search area directly (the default view for NodeType)
         var workspace = client.GetWorkspace();
-        var reference = new LayoutAreaReference(MeshNodeView.CatalogArea);
+        var reference = new LayoutAreaReference(MeshNodeView.SearchArea);
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(typeOrgAddress, reference);
 
         // Wait for multiple emissions - first one may be loading state, later ones have data
@@ -784,18 +784,18 @@ public record Graph
             Output.WriteLine($"Emission {i}: {emissionJson.Substring(0, Math.Min(500, emissionJson.Length))}...");
         }
 
-        // The catalog should render as a MeshSearchControl
-        var hasCatalogStructure = json.Contains("Catalog") && json.Contains("MeshSearchControl");
-        hasCatalogStructure.Should().BeTrue($"Catalog should have MeshSearchControl. JSON: {json.Substring(0, Math.Min(1000, json.Length))}");
+        // The search should render as a MeshSearchControl
+        var hasSearchStructure = json.Contains("Search") && json.Contains("MeshSearchControl");
+        hasSearchStructure.Should().BeTrue($"Search should have MeshSearchControl. JSON: {json.Substring(0, Math.Min(1000, json.Length))}");
 
         // The MeshSearchControl should have the correct query for nodeType filtering
         var hasCorrectQuery = json.Contains("nodeType:type/org") && json.Contains("scope:subtree");
-        hasCorrectQuery.Should().BeTrue($"Catalog should have nodeType filter in query. JSON: {json.Substring(0, Math.Min(1000, json.Length))}");
+        hasCorrectQuery.Should().BeTrue($"Search should have nodeType filter in query. JSON: {json.Substring(0, Math.Min(1000, json.Length))}");
     }
 
     /// <summary>
     /// Tests that QueryAsync with nodeType filter returns organizations.
-    /// This tests the underlying query that the catalog uses.
+    /// This tests the underlying query that the search uses.
     /// </summary>
     [Fact(Timeout = 10000)]
     public async Task QueryAsync_NodeTypeOrg_ReturnsOrganizations()
@@ -1640,14 +1640,14 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
             o => o.WithTarget(organizationAddress),
             TestContext.Current.CancellationToken);
 
-        // Request the Details view area
-        var reference = new LayoutAreaReference(MeshNodeView.DetailsArea);
+        // Request the Overview view area
+        var reference = new LayoutAreaReference(MeshNodeView.OverviewArea);
 
-        Output.WriteLine("Getting Details area for Systemorph organization...");
+        Output.WriteLine("Getting Overview area for Systemorph organization...");
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(organizationAddress, reference);
 
         var control = await stream
-            .GetControlStream(MeshNodeView.DetailsArea)
+            .GetControlStream(MeshNodeView.OverviewArea)
             .Timeout(30.Seconds())
             .FirstAsync(x => x != null);
 
@@ -1667,10 +1667,10 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
     }
 
     /// <summary>
-    /// Test that loading the Catalog area from MeshWeaver node works.
+    /// Test that loading the Search area from MeshWeaver node works.
     /// </summary>
     [Fact(Timeout = 30000)]
-    public async Task MeshWeaver_GetCatalogArea_ShouldNotHang()
+    public async Task MeshWeaver_GetSearchArea_ShouldNotHang()
     {
         // Arrange
         var meshWeaverAddress = new Address("MeshWeaver");
@@ -1686,19 +1686,19 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
             o => o.WithTarget(meshWeaverAddress),
             TestContext.Current.CancellationToken);
 
-        // Act: Request the Catalog area
+        // Act: Request the Search area
         var workspace = client.GetWorkspace();
-        var reference = new LayoutAreaReference(MeshNodeView.CatalogArea);
+        var reference = new LayoutAreaReference(MeshNodeView.SearchArea);
 
-        Output.WriteLine("Getting Catalog area for MeshWeaver...");
+        Output.WriteLine("Getting Search area for MeshWeaver...");
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(meshWeaverAddress, reference);
 
         var value = await stream.FirstAsync();
-        Output.WriteLine($"Received Catalog area value");
+        Output.WriteLine($"Received Search area value");
 
         // Assert
         value.Should().NotBe(default(JsonElement),
-            "MeshWeaver Catalog area should return content");
+            "MeshWeaver Search area should return content");
     }
 }
 

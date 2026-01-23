@@ -25,7 +25,7 @@ namespace MeshWeaver.Northwind.Application
                     .AddNorthwindDocumentation()
                     .AddLayout(layout =>
                         layout
-                            .AddDomainViews()
+                            .AddDomainLayoutAreas()
                             .AddAnnualReport()
                             .AddDashboard()
                             .AddOrdersSummary()
