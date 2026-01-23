@@ -123,7 +123,16 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
             return "";
 
         // Known view areas that should be stripped from the path
-        var viewAreas = new[] { "Details", "Edit", "Create", "Thumbnail", "Catalog", "LayoutAreas", "Read", "Metadata", "Notebook", "Comments", "Attachments", "Settings" };
+        // Note: "Overview" and "Search" are the renamed versions of "Details" and "Catalog"
+        // Include common custom view names and framework areas to handle all URL patterns
+        var viewAreas = new[] {
+            // Framework areas
+            "Details", "Overview", "Edit", "Create", "Thumbnail", "Catalog", "Search",
+            "LayoutAreas", "Read", "Metadata", "Notebook", "Comments", "Attachments", "Settings",
+            "Files", "Children", "NodeTypes", "AccessControl", "Code", "CodeEdit", "HubConfig", "HubConfigEdit",
+            // Common custom view names (used in Project, Todo, etc.)
+            "Summary", "AllTasks", "TodosByCategory", "Planning", "MyTasks", "Backlog", "TodaysFocus"
+        };
 
         var segments = path.Split('/');
 
