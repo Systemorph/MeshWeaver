@@ -1,0 +1,27 @@
+{
+  "id": "300220f2",
+  "namespace": "ACME/ProductLaunch/Todo",
+  "path": "ACME/ProductLaunch/Todo/300220f2",
+  "name": "TEST009",
+  "nodeType": "ACME/Project/Todo",
+  "category": "Tasks",
+  "addressSegments": 0,
+  "isPersistent": true,
+  "lastModified": "2026-01-20T15:09:15.806516+00:00",
+  "version": 126,
+  "state": "Active",
+  "isVirtual": false,
+  "content": {
+    "id": "300220f2",
+    "title": "TEST009",
+    "description": "Test 009.",
+    "category": "General",
+    "priority": "Medium",
+    "assignee": "Carol",
+    "createdAt": "2026-01-20T15:08:42.879119Z",
+    "dueDate": "2026-01-21T00:00:00",
+    "status": "InProgress"
+  },
+  "routingType": "Shared",
+  "instantiationType": "HubConfiguration"
+}

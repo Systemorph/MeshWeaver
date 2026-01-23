@@ -1,0 +1,30 @@
+{
+  "id": "5428acd7",
+  "namespace": "ACME/ProductLaunch/Todo",
+  "path": "ACME/ProductLaunch/Todo/5428acd7",
+  "name": "TEST008",
+  "nodeType": "ACME/Project/Todo",
+  "category": "Tasks",
+  "addressSegments": 0,
+  "isPersistent": true,
+  "lastModified": "2026-01-20T14:58:07.302902+00:00",
+  "version": 0,
+  "state": "Active",
+  "isVirtual": false,
+  "content": {
+    "$type": "Todo",
+    "id": "5428acd7",
+    "title": "TEST008",
+    "description": "Test 008.",
+    "category": "Partnerships",
+    "priority": "Low",
+    "assignee": "Samuel Glauser",
+    "createdAt": "2026-01-20T14:57:40.045772Z",
+    "dueDate": "2026-01-30T00:00:00",
+    "status": "Pending",
+    "icon": "TaskListSquare",
+    "completedAt": null
+  },
+  "routingType": "Shared",
+  "instantiationType": "HubConfiguration"
+}

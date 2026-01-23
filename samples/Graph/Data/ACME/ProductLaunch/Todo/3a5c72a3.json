@@ -1,0 +1,28 @@
+{
+  "id": "3a5c72a3",
+  "namespace": "ACME/ProductLaunch/Todo",
+  "path": "ACME/ProductLaunch/Todo/3a5c72a3",
+  "name": "TEST005",
+  "nodeType": "ACME/Project/Todo",
+  "category": "Tasks",
+  "addressSegments": 0,
+  "isPersistent": true,
+  "lastModified": "2026-01-20T14:35:24.356196+00:00",
+  "version": 0,
+  "state": "Deleted",
+  "isVirtual": false,
+  "content": {
+    "id": "3a5c72a3",
+    "title": "TEST005",
+    "description": "Test 005.",
+    "category": "Design",
+    "priority": "High",
+    "assignee": "Samuel Glauser",
+    "createdAt": "2026-01-20T14:34:54.915928Z",
+    "dueDate": "2026-01-28T00:00:00",
+    "status": "Pending",
+    "icon": "TaskListSquare"
+  },
+  "routingType": "Shared",
+  "instantiationType": "HubConfiguration"
+}

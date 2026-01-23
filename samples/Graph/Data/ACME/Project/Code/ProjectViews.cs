@@ -4,64 +4,6 @@
 // </meshweaver>
 
 /// <summary>
-/// Task completion status.
-/// </summary>
-public enum TodoStatus
-{
-    Pending,
-    InProgress,
-    InReview,
-    Completed,
-    Blocked
-}
-
-/// <summary>
-/// Todo record for deserialization and editing.
-/// </summary>
-public record Todo : IContentInitializable
-{
-    [Key]
-    [Browsable(false)]
-    public string Id { get; init; } = string.Empty;
-
-    [Required]
-    public string Title { get; init; } = string.Empty;
-
-    public string? Description { get; init; }
-
-    [UiControl<SelectControl>(Options = new[] { "General", "Marketing", "Research", "Sales", "Engineering", "Support", "PR", "Partnerships", "Design", "Legal", "Strategy" })]
-    public string Category { get; init; } = "General";
-
-    [UiControl<SelectControl>(Options = new[] { "Low", "Medium", "High", "Critical" })]
-    public string Priority { get; init; } = "Medium";
-
-    public string? Assignee { get; init; }
-
-    [DisplayName("Created At")]
-    public DateTime CreatedAt { get; init; } = DateTime.UtcNow;
-
-    [DisplayName("Due Date")]
-    public DateTime? DueDate { get; init; }
-
-    [Browsable(false)]
-    public int? DueDateOffsetDays { get; init; }
-
-    public TodoStatus Status { get; init; } = TodoStatus.Pending;
-
-    [Browsable(false)]
-    public DateTime? CompletedAt { get; init; }
-
-    public object Initialize()
-    {
-        if (DueDateOffsetDays.HasValue)
-        {
-            return this with { DueDate = DateTime.UtcNow.Date.AddDays(DueDateOffsetDays.Value) };
-        }
-        return this;
-    }
-}
-
-/// <summary>
 /// Minimal Todo projection for project views.
 /// Contains only properties needed for display, with Path for navigation.
 /// </summary>
@@ -69,7 +11,7 @@ internal record TodoItem(
     string Path,
     string Id,
     string Title,
-    TodoStatus Status,
+    string Status,  // string instead of enum to avoid dependency on Todo module
     string? Priority,
     string? Category,
     string? Assignee,
@@ -86,13 +28,44 @@ public static class ProjectViews
 
     /// <summary>
     /// Configuration for rendering a todo view with grouping logic.
+    /// Supports both JsonPointer-based grouping and custom grouping functions.
     /// </summary>
     private record ViewConfig(
         string Title,
         string Icon,
-        Func<List<TodoItem>, IEnumerable<(string Section, List<TodoItem> Items, bool Open)>> GroupItems,
-        bool ShowNewTaskButton = true,
-        Func<List<TodoItem>, string>? Summary = null
+        string? GroupByPointer = null,  // e.g., "/category", "/assignee", "/status"
+        Func<string?, string>? GroupKeyFormatter = null,
+        Func<string?, int>? GroupKeyOrder = null,
+        Func<string?, bool>? GroupOpenPredicate = null,
+        Func<List<TodoItem>, string>? Summary = null,
+        // Legacy support for complex grouping
+        Func<List<TodoItem>, IEnumerable<(string Section, List<TodoItem> Items, bool Open)>>? CustomGroupItems = null
+    );
+
+    private static readonly string[] StatusOrder = { "Pending", "InProgress", "InReview", "Blocked", "Completed" };
+
+    private static readonly ViewConfig ByStatusConfig = new(
+        Title: "All Tasks",
+        Icon: "\ud83d\udcdd",
+        GroupByPointer: "/status",
+        GroupKeyFormatter: key => $"{GetStatusIcon(key)} {key ?? "Unknown"}",
+        GroupKeyOrder: key => Array.IndexOf(StatusOrder, key) is var idx && idx >= 0 ? idx : 99,
+        GroupOpenPredicate: key => key != "Completed"
+    );
+
+    private static readonly ViewConfig ByCategoryConfig = new(
+        Title: "Tasks by Category",
+        Icon: "\ud83d\udcc2",
+        GroupByPointer: "/category",
+        GroupKeyFormatter: key => $"\ud83d\udcc1 {key ?? "Uncategorized"}"
+    );
+
+    private static readonly ViewConfig BacklogByPriorityConfig = new(
+        Title: "Backlog - Unassigned Tasks",
+        Icon: "\ud83d\udccb",
+        GroupByPointer: "/priority",
+        GroupKeyFormatter: key => GetPriorityLabel(key),
+        GroupKeyOrder: key => GetPriorityOrder(key)
     );
 
     #endregion
@@ -148,27 +121,123 @@ public static class ProjectViews
 
     /// <summary>
     /// Projects a MeshNode to a minimal TodoItem for display.
+    /// Uses JsonPointer-based property extraction to avoid dependency on Todo types.
     /// </summary>
     private static TodoItem? ProjectToTodoItem(MeshNode node)
     {
-        var todo = node.GetContent<Todo>();
-        if (todo == null) return null;
+        if (node.Content == null) return null;
 
-        // Initialize to compute DueDate from DueDateOffsetDays if set
-        todo = (Todo)todo.Initialize();
+        var dueDate = GetPointerDateTime(node.Content, "/DueDate");
+        if (!dueDate.HasValue)
+        {
+            var offset = GetPointerInt(node.Content, "/DueDateOffsetDays");
+            if (offset.HasValue)
+                dueDate = DateTime.UtcNow.Date.AddDays(offset.Value);
+        }
 
         return new TodoItem(
             Path: node.Path,
-            Id: todo.Id,
-            Title: todo.Title,
-            Status: todo.Status,
-            Priority: todo.Priority,
-            Category: todo.Category,
-            Assignee: todo.Assignee,
-            DueDate: todo.DueDate,
-            CreatedAt: todo.CreatedAt
+            Id: GetPointerString(node.Content, "/Id") ?? "",
+            Title: GetPointerString(node.Content, "/Title") ?? "",
+            Status: GetPointerString(node.Content, "/Status") ?? "Pending",
+            Priority: GetPointerString(node.Content, "/Priority"),
+            Category: GetPointerString(node.Content, "/Category"),
+            Assignee: GetPointerString(node.Content, "/Assignee"),
+            DueDate: dueDate,
+            CreatedAt: GetPointerDateTime(node.Content, "/CreatedAt") ?? DateTime.UtcNow
         );
     }
+
+    private static string ToCamelCase(string s) =>
+        string.IsNullOrEmpty(s) ? s : char.ToLowerInvariant(s[0]) + s.Substring(1);
+
+    #endregion
+
+    #region JsonPointer Helpers
+
+    private static System.Text.Json.JsonElement? EvaluatePointer(object? content, string pointerPath)
+    {
+        if (content == null) return null;
+        var pointer = Json.Pointer.JsonPointer.Parse(pointerPath);
+        if (content is System.Text.Json.JsonElement jsonElement)
+            return pointer.Evaluate(jsonElement);
+        var serialized = System.Text.Json.JsonSerializer.SerializeToElement(content);
+        return pointer.Evaluate(serialized);
+    }
+
+    private static string? GetPointerString(object? content, string pointerPath)
+    {
+        var result = EvaluatePointer(content, pointerPath)
+                  ?? EvaluatePointer(content, ToCamelCasePointer(pointerPath));
+        return result?.ValueKind switch
+        {
+            System.Text.Json.JsonValueKind.String => result.Value.GetString(),
+            System.Text.Json.JsonValueKind.Null or null => null,
+            _ => result.Value.ToString()
+        };
+    }
+
+    private static DateTime? GetPointerDateTime(object? content, string pointerPath)
+    {
+        var str = GetPointerString(content, pointerPath);
+        return DateTime.TryParse(str, out var dt) ? dt : null;
+    }
+
+    private static int? GetPointerInt(object? content, string pointerPath)
+    {
+        var result = EvaluatePointer(content, pointerPath)
+                  ?? EvaluatePointer(content, ToCamelCasePointer(pointerPath));
+        return result?.ValueKind switch
+        {
+            System.Text.Json.JsonValueKind.Number => result.Value.GetInt32(),
+            System.Text.Json.JsonValueKind.String when int.TryParse(result.Value.GetString(), out var i) => i,
+            _ => null
+        };
+    }
+
+    private static string ToCamelCasePointer(string pointer)
+    {
+        if (string.IsNullOrEmpty(pointer) || pointer.Length < 2) return pointer;
+        var idx = pointer.IndexOf('/');
+        if (idx < 0 || idx + 1 >= pointer.Length) return pointer;
+        return pointer[..(idx + 1)] + char.ToLowerInvariant(pointer[idx + 1]) + pointer[(idx + 2)..];
+    }
+
+    #endregion
+
+    #region Pointer-Based Grouping
+
+    private static IEnumerable<(string Section, List<TodoItem> Items, bool Open)> GroupByPointer(
+        List<TodoItem> todos,
+        ViewConfig config)
+    {
+        if (string.IsNullOrEmpty(config.GroupByPointer))
+        {
+            yield return (config.Title, todos, true);
+            yield break;
+        }
+
+        var grouped = todos
+            .GroupBy(t => GetTodoProperty(t, config.GroupByPointer))
+            .OrderBy(g => config.GroupKeyOrder?.Invoke(g.Key) ?? 0)
+            .ThenByDescending(g => g.Count());
+
+        foreach (var group in grouped)
+        {
+            var label = config.GroupKeyFormatter?.Invoke(group.Key) ?? group.Key ?? "Unknown";
+            var isOpen = config.GroupOpenPredicate?.Invoke(group.Key) ?? true;
+            yield return ($"{label} ({group.Count()})", group.ToList(), isOpen);
+        }
+    }
+
+    private static string? GetTodoProperty(TodoItem item, string pointerPath) => pointerPath switch
+    {
+        "/status" or "/Status" => item.Status,
+        "/category" or "/Category" => item.Category,
+        "/assignee" or "/Assignee" => item.Assignee,
+        "/priority" or "/Priority" => item.Priority,
+        _ => null
+    };
 
     #endregion
 
@@ -198,23 +267,11 @@ public static class ProjectViews
     {
         var mainGrid = Controls.LayoutGrid.WithSkin(skin => skin.WithSpacing(-1));
 
-        // Header row with title and optional New Task button
-        if (config.ShowNewTaskButton)
-        {
-            mainGrid = mainGrid
-                .WithView(Controls.H4($"{config.Icon} {config.Title}")
-                    .WithStyle(style => style.WithMarginBottom("16px")),
-                    skin => skin.WithXs(8).WithMd(10))
-                .WithView(BuildNewTaskButton(host, hubPath),
-                    skin => skin.WithXs(4).WithMd(2));
-        }
-        else
-        {
-            mainGrid = mainGrid
-                .WithView(Controls.H4($"{config.Icon} {config.Title}")
-                    .WithStyle(style => style.WithMarginBottom("16px")),
-                    skin => skin.WithXs(12));
-        }
+        // Header row with title
+        mainGrid = mainGrid
+            .WithView(Controls.H4($"{config.Icon} {config.Title}")
+                .WithStyle(style => style.WithMarginBottom("16px")),
+                skin => skin.WithXs(12));
 
         if (!todos.Any())
         {
@@ -232,8 +289,12 @@ public static class ProjectViews
                 skin => skin.WithXs(12));
         }
 
-        // Grouped sections
-        foreach (var (section, items, open) in config.GroupItems(todos))
+        // Determine grouping strategy
+        var groupedSections = config.CustomGroupItems != null
+            ? config.CustomGroupItems(todos)
+            : GroupByPointer(todos, config);
+
+        foreach (var (section, items, open) in groupedSections)
         {
             if (!items.Any()) continue;
 
@@ -252,19 +313,10 @@ public static class ProjectViews
     private static UiControl BuildCollapsibleSectionFromItems(string title, List<TodoItem> items, bool defaultOpen)
     {
         var sectionStack = Controls.Stack
-            .WithStyle(style => style.WithMarginBottom("16px"));
+            .WithStyle(style => style.WithMarginBottom("32px"))
+            .WithView(BuildSectionHeader(title));
 
-        // Section header
-        sectionStack = sectionStack.WithView(Controls.Html($@"
-            <div style=""padding: 8px 12px; background: var(--neutral-layer-2); border-radius: 6px; font-weight: 600; margin-bottom: 8px;"">
-                {title}
-            </div>"));
-
-        // Items container - responsive grid layout: 3 cols on md+, 2 on sm, 1 on xs
-        var itemsGrid = Controls.LayoutGrid
-            .WithSkin(skin => skin.WithSpacing(8))
-            .WithStyle(style => style.WithWidth("100%"));
-
+        var itemsGrid = CreateItemsGrid();
         foreach (var item in items)
         {
             itemsGrid = itemsGrid.WithView(
@@ -272,9 +324,7 @@ public static class ProjectViews
                 skin => skin.WithXs(12).WithSm(6).WithMd(4));
         }
 
-        sectionStack = sectionStack.WithView(itemsGrid);
-
-        return sectionStack;
+        return sectionStack.WithView(itemsGrid);
     }
 
     #endregion
@@ -311,7 +361,7 @@ public static class ProjectViews
 
         // Overall statistics
         var totalCount = todos.Count;
-        var completedCount = todos.Count(t => t.Status == TodoStatus.Completed);
+        var completedCount = todos.Count(t => t.Status == "Completed");
         var completionRate = totalCount > 0 ? (completedCount * 100.0 / totalCount) : 0;
 
         mainGrid = mainGrid
@@ -324,7 +374,8 @@ public static class ProjectViews
                 .WithStyle(style => style.WithMarginTop("20px").WithMarginBottom("8px")),
                 skin => skin.WithXs(12));
 
-        var statusGroups = todos.GroupBy(t => t.Status).OrderBy(g => (int)g.Key);
+        var statusOrder = new[] { "Pending", "InProgress", "InReview", "Blocked", "Completed" };
+        var statusGroups = todos.GroupBy(t => t.Status).OrderBy(g => Array.IndexOf(statusOrder, g.Key));
         foreach (var group in statusGroups)
         {
             var icon = GetStatusIcon(group.Key);
@@ -336,49 +387,25 @@ public static class ProjectViews
         }
 
         // Visual progress bars
-        var inProgressCount = todos.Count(t => t.Status == TodoStatus.InProgress);
-        var blockedCount = todos.Count(t => t.Status == TodoStatus.Blocked);
+        var inProgressCount = todos.Count(t => t.Status == "InProgress");
+        var blockedCount = todos.Count(t => t.Status == "Blocked");
         var inProgressRate = totalCount > 0 ? (inProgressCount * 100.0 / totalCount) : 0;
         var blockedRate = totalCount > 0 ? (blockedCount * 100.0 / totalCount) : 0;
 
         mainGrid = mainGrid
             .WithView(Controls.Html($@"
                 <div style=""margin: 16px 0; padding: 12px; background: var(--neutral-layer-2); border-radius: 8px;"">
-                    <div style=""margin-bottom: 12px;"">
-                        <div style=""display: flex; justify-content: space-between; font-size: 12px; margin-bottom: 4px;"">
-                            <span>✅ Completion</span>
-                            <span>{completionRate:F0}%</span>
-                        </div>
-                        <div style=""width: 100%; background: var(--neutral-layer-3); border-radius: 4px; height: 8px;"">
-                            <div style=""width: {completionRate}%; background: #28a745; border-radius: 4px; height: 100%; transition: width 0.3s;""></div>
-                        </div>
-                    </div>
-                    <div style=""margin-bottom: 12px;"">
-                        <div style=""display: flex; justify-content: space-between; font-size: 12px; margin-bottom: 4px;"">
-                            <span>🔄 In Progress</span>
-                            <span>{inProgressRate:F0}%</span>
-                        </div>
-                        <div style=""width: 100%; background: var(--neutral-layer-3); border-radius: 4px; height: 8px;"">
-                            <div style=""width: {inProgressRate}%; background: #007bff; border-radius: 4px; height: 100%; transition: width 0.3s;""></div>
-                        </div>
-                    </div>
-                    <div>
-                        <div style=""display: flex; justify-content: space-between; font-size: 12px; margin-bottom: 4px;"">
-                            <span>🚫 Blocked</span>
-                            <span>{blockedRate:F0}%</span>
-                        </div>
-                        <div style=""width: 100%; background: var(--neutral-layer-3); border-radius: 4px; height: 8px;"">
-                            <div style=""width: {blockedRate}%; background: #dc3545; border-radius: 4px; height: 100%; transition: width 0.3s;""></div>
-                        </div>
-                    </div>
+                    {BuildProgressBar("✅", "Completion", completionRate, "#28a745")}
+                    {BuildProgressBar("🔄", "In Progress", inProgressRate, "#007bff")}
+                    {BuildProgressBar("🚫", "Blocked", blockedRate, "#dc3545").Replace("margin-bottom: 12px;", "")}
                 </div>"),
                 skin => skin.WithXs(12));
 
         // Due date analysis
         var now = DateTime.Now.Date;
-        var overdue = todos.Count(t => t.DueDate?.Date < now && t.Status != TodoStatus.Completed);
-        var dueToday = todos.Count(t => t.DueDate?.Date == now && t.Status != TodoStatus.Completed);
-        var dueSoon = todos.Count(t => t.DueDate?.Date > now && t.DueDate?.Date <= now.AddDays(7) && t.Status != TodoStatus.Completed);
+        var overdue = todos.Count(t => t.DueDate?.Date < now && t.Status != "Completed");
+        var dueToday = todos.Count(t => t.DueDate?.Date == now && t.Status != "Completed");
+        var dueSoon = todos.Count(t => t.DueDate?.Date > now && t.DueDate?.Date <= now.AddDays(7) && t.Status != "Completed");
 
         mainGrid = mainGrid
             .WithView(Controls.H5("\u23f0 Due Date Insights")
@@ -395,8 +422,8 @@ public static class ProjectViews
                 skin => skin.WithXs(12));
 
         // Priority breakdown
-        var criticalCount = todos.Count(t => t.Priority == "Critical" && t.Status != TodoStatus.Completed);
-        var highCount = todos.Count(t => t.Priority == "High" && t.Status != TodoStatus.Completed);
+        var criticalCount = todos.Count(t => t.Priority == "Critical" && t.Status != "Completed");
+        var highCount = todos.Count(t => t.Priority == "High" && t.Status != "Completed");
 
         if (criticalCount > 0 || highCount > 0)
         {
@@ -417,12 +444,12 @@ public static class ProjectViews
         }
 
         // Team workload
-        var assignees = todos.Where(t => !string.IsNullOrEmpty(t.Assignee) && t.Status != TodoStatus.Completed)
+        var assignees = todos.Where(t => !string.IsNullOrEmpty(t.Assignee) && t.Status != "Completed")
             .GroupBy(t => t.Assignee!)
             .OrderByDescending(g => g.Count())
             .Take(5);
 
-        var unassigned = todos.Count(t => string.IsNullOrEmpty(t.Assignee) && t.Status != TodoStatus.Completed);
+        var unassigned = todos.Count(t => string.IsNullOrEmpty(t.Assignee) && t.Status != "Completed");
 
         mainGrid = mainGrid
             .WithView(Controls.H5("\ud83d\udc65 Team Workload")
@@ -466,14 +493,7 @@ public static class ProjectViews
     private static UiControl BuildAllTasksView(List<TodoItem> todos, List<TodoItem> deletedTodos, LayoutAreaHost host, string hubPath)
     {
         var mainGrid = Controls.LayoutGrid.WithSkin(skin => skin.WithSpacing(-1));
-
-        // Header row with title and New Task button
-        mainGrid = mainGrid
-            .WithView(Controls.H4("\ud83d\udcdd All Tasks")
-                .WithStyle(style => style.WithMarginBottom("16px")),
-                skin => skin.WithXs(8).WithMd(10))
-            .WithView(BuildNewTaskButton(host, hubPath),
-                skin => skin.WithXs(4).WithMd(2));
+        mainGrid = AddPageHeader(mainGrid, "\ud83d\udcdd", "All Tasks");
 
         if (!todos.Any() && !deletedTodos.Any())
         {
@@ -483,8 +503,8 @@ public static class ProjectViews
         }
 
         // Group by status
-        var statusOrder = new[] { TodoStatus.Pending, TodoStatus.InProgress, TodoStatus.InReview, TodoStatus.Blocked, TodoStatus.Completed };
-        foreach (var status in statusOrder)
+        var allStatusOrder = new[] { "Pending", "InProgress", "InReview", "Blocked", "Completed" };
+        foreach (var status in allStatusOrder)
         {
             var statusTodos = todos.Where(t => t.Status == status)
                 .OrderBy(t => t.DueDate ?? DateTime.MaxValue)
@@ -494,7 +514,7 @@ public static class ProjectViews
             if (!statusTodos.Any()) continue;
 
             var icon = GetStatusIcon(status);
-            var isExpanded = status != TodoStatus.Completed;
+            var isExpanded = status != "Completed";
 
             mainGrid = mainGrid.WithView(
                 BuildCollapsibleSectionFromItems($"{icon} {status} ({statusTodos.Count})", statusTodos, isExpanded),
@@ -515,19 +535,10 @@ public static class ProjectViews
     private static UiControl BuildDeletedSection(List<TodoItem> deletedTodos, string hubPath, LayoutAreaHost host)
     {
         var sectionStack = Controls.Stack
-            .WithStyle(style => style.WithMarginBottom("16px").WithMarginTop("8px"));
+            .WithStyle(style => style.WithMarginBottom("32px").WithMarginTop("8px"))
+            .WithView(BuildSectionHeader($"🗑️ Deleted ({deletedTodos.Count})", 0.8));
 
-        // Section header
-        sectionStack = sectionStack.WithView(Controls.Html($@"
-            <div style=""padding: 8px 12px; background: var(--neutral-layer-2); border-radius: 6px; font-weight: 600; margin-bottom: 8px; opacity: 0.8;"">
-                🗑️ Deleted ({deletedTodos.Count})
-            </div>"));
-
-        // Items container - responsive grid layout: 3 cols on md+, 2 on sm, 1 on xs
-        var itemsGrid = Controls.LayoutGrid
-            .WithSkin(skin => skin.WithSpacing(8))
-            .WithStyle(style => style.WithWidth("100%"));
-
+        var itemsGrid = CreateItemsGrid();
         foreach (var todo in deletedTodos)
         {
             itemsGrid = itemsGrid.WithView(
@@ -535,9 +546,7 @@ public static class ProjectViews
                 skin => skin.WithXs(12).WithSm(6).WithMd(4));
         }
 
-        sectionStack = sectionStack.WithView(itemsGrid);
-
-        return sectionStack;
+        return sectionStack.WithView(itemsGrid);
     }
 
     /// <summary>
@@ -546,24 +555,7 @@ public static class ProjectViews
     /// </summary>
     [Display(GroupName = "Overview", Order = 3)]
     public static IObservable<UiControl?> TodosByCategory(LayoutAreaHost host, RenderingContext _)
-        => RenderTodoView(host, new ViewConfig(
-            Title: "Tasks by Category",
-            Icon: "\ud83d\udcc2",
-            ShowNewTaskButton: false,
-            GroupItems: todos => todos
-                .GroupBy(t => string.IsNullOrEmpty(t.Category) ? "Uncategorized" : t.Category)
-                .OrderByDescending(g => g.Count())
-                .Select(g =>
-                {
-                    var completedCount = g.Count(t => t.Status == TodoStatus.Completed);
-                    var inProgressCount = g.Count(t => t.Status == TodoStatus.InProgress);
-                    var pendingCount = g.Count(t => t.Status == TodoStatus.Pending);
-                    var statusIndicator = $"\u2705{completedCount} \ud83d\udd04{inProgressCount} \u23f3{pendingCount}";
-                    return ($"\ud83d\udcc1 {g.Key} ({g.Count()}) - {statusIndicator}",
-                            g.OrderBy(t => (int)t.Status).ThenBy(t => t.DueDate ?? DateTime.MaxValue).ToList(),
-                            true);
-                })
-        ));
+        => RenderTodoView(host, ByCategoryConfig);
 
     /// <summary>
     /// Planning view for workload management and task assignment.
@@ -580,14 +572,7 @@ public static class ProjectViews
     private static UiControl BuildPlanningView(List<TodoItem> todos, LayoutAreaHost host, string hubPath)
     {
         var mainGrid = Controls.LayoutGrid.WithSkin(skin => skin.WithSpacing(-1));
-
-        // Header row with title and New Task button
-        mainGrid = mainGrid
-            .WithView(Controls.H4("\ud83c\udfaf Planning & Assignment")
-                .WithStyle(style => style.WithMarginBottom("16px")),
-                skin => skin.WithXs(8).WithMd(10))
-            .WithView(BuildNewTaskButton(host, hubPath),
-                skin => skin.WithXs(4).WithMd(2));
+        mainGrid = AddPageHeader(mainGrid, "\ud83c\udfaf", "Planning & Assignment");
 
         if (!todos.Any())
         {
@@ -596,7 +581,7 @@ public static class ProjectViews
                 skin => skin.WithXs(12));
         }
 
-        var activeTodos = todos.Where(t => t.Status != TodoStatus.Completed).ToList();
+        var activeTodos = todos.Where(t => t.Status != "Completed").ToList();
 
         // Team workload section
         var teamWorkload = activeTodos
@@ -659,20 +644,13 @@ public static class ProjectViews
     private static UiControl BuildMyTasksView(List<TodoItem> todos, string hubPath, LayoutAreaHost host)
     {
         var mainGrid = Controls.LayoutGrid.WithSkin(skin => skin.WithSpacing(-1));
-
-        // Header row with title and New Task button
-        mainGrid = mainGrid
-            .WithView(Controls.H4("\ud83d\udfe2 My Tasks")
-                .WithStyle(style => style.WithMarginBottom("16px")),
-                skin => skin.WithXs(8).WithMd(10))
-            .WithView(BuildNewTaskButton(host, hubPath),
-                skin => skin.WithXs(4).WithMd(2));
+        mainGrid = AddPageHeader(mainGrid, "\ud83d\udfe2", "My Tasks");
 
         // Get current user from AccessService
         var accessService = host.Hub.ServiceProvider.GetService<AccessService>();
         var currentUser = accessService?.Context?.Name ?? accessService?.Context?.ObjectId ?? "Guest";
         var myTasks = todos
-            .Where(t => t.Assignee == currentUser && t.Status != TodoStatus.Completed)
+            .Where(t => t.Assignee == currentUser && t.Status != "Completed")
             .ToList();
 
         if (!myTasks.Any())
@@ -702,7 +680,7 @@ public static class ProjectViews
             .ToList();
 
         // Summary
-        var inProgressCount = myTasks.Count(t => t.Status == TodoStatus.InProgress);
+        var inProgressCount = myTasks.Count(t => t.Status == "InProgress");
         var overdueCount = urgentTasks.Count(t => t.DueDate?.Date < now);
 
         mainGrid = mainGrid.WithView(
@@ -735,74 +713,43 @@ public static class ProjectViews
     }
 
     /// <summary>
-    /// Backlog view showing unassigned tasks.
-    /// Uses reactive ObserveQuery for live updates.
+    /// Backlog view showing unassigned tasks grouped by priority.
+    /// Uses reactive ObserveQuery for live updates with pre-filter for unassigned tasks.
     /// </summary>
     [Display(GroupName = "Planning")]
     public static IObservable<UiControl?> Backlog(LayoutAreaHost host, RenderingContext _)
     {
-        var hubPath = host.Hub.Address.ToString();
-        return ObserveTodos(host, hubPath)
-            .Select(todos => BuildBacklogView(todos, host, hubPath));
-    }
-
-    private static UiControl BuildBacklogView(List<TodoItem> todos, LayoutAreaHost host, string hubPath)
-    {
-        var mainGrid = Controls.LayoutGrid.WithSkin(skin => skin.WithSpacing(-1));
-
-        // Header row with title and New Task button
-        mainGrid = mainGrid
-            .WithView(Controls.H4("\ud83d\udccb Backlog - Unassigned Tasks")
-                .WithStyle(style => style.WithMarginBottom("16px")),
-                skin => skin.WithXs(8).WithMd(10))
-            .WithView(BuildNewTaskButton(host, hubPath),
-                skin => skin.WithXs(4).WithMd(2));
-
-        var backlogTasks = todos
-            .Where(t => string.IsNullOrEmpty(t.Assignee) && t.Status != TodoStatus.Completed)
-            .OrderBy(t => t.DueDate ?? DateTime.MaxValue)
-            .ThenBy(t => GetPriorityOrder(t.Priority))
-            .ToList();
-
-        if (!backlogTasks.Any())
+        // Use BacklogByPriorityConfig with CustomGroupItems to pre-filter unassigned tasks
+        var backlogConfig = BacklogByPriorityConfig with
         {
-            return mainGrid.WithView(
-                Controls.Markdown("*No unassigned tasks. All tasks have been assigned!*"),
-                skin => skin.WithXs(12));
-        }
+            Summary = todos =>
+            {
+                var count = todos.Count(t => string.IsNullOrEmpty(t.Assignee) && t.Status != "Completed");
+                return count > 0 ? $"**{count} tasks** waiting to be assigned" : "*No unassigned tasks. All tasks have been assigned!*";
+            },
+            CustomGroupItems = todos =>
+            {
+                var backlogTasks = todos
+                    .Where(t => string.IsNullOrEmpty(t.Assignee) && t.Status != "Completed")
+                    .ToList();
 
-        mainGrid = mainGrid.WithView(
-            Controls.Markdown($"**{backlogTasks.Count} tasks** waiting to be assigned")
-                .WithStyle(style => style.WithMarginBottom("16px")),
-            skin => skin.WithXs(12));
+                if (!backlogTasks.Any())
+                    return Enumerable.Empty<(string, List<TodoItem>, bool)>();
 
-        // Group by priority
-        var criticalTasks = backlogTasks.Where(t => t.Priority == "Critical").ToList();
-        var highTasks = backlogTasks.Where(t => t.Priority == "High").ToList();
-        var normalTasks = backlogTasks.Where(t => t.Priority == "Medium" || t.Priority == "Low").ToList();
-
-        if (criticalTasks.Any())
-        {
-            mainGrid = mainGrid.WithView(
-                BuildCollapsibleSectionFromItems($"\ud83d\udea8 Critical Priority ({criticalTasks.Count})", criticalTasks, true),
-                skin => skin.WithXs(12));
-        }
-
-        if (highTasks.Any())
-        {
-            mainGrid = mainGrid.WithView(
-                BuildCollapsibleSectionFromItems($"\ud83d\udd25 High Priority ({highTasks.Count})", highTasks, true),
-                skin => skin.WithXs(12));
-        }
-
-        if (normalTasks.Any())
-        {
-            mainGrid = mainGrid.WithView(
-                BuildCollapsibleSectionFromItems($"\u2796 Normal Priority ({normalTasks.Count})", normalTasks, false),
-                skin => skin.WithXs(12));
-        }
-
-        return mainGrid;
+                return backlogTasks
+                    .GroupBy(t => t.Priority switch
+                    {
+                        "Critical" => "Critical",
+                        "High" => "High",
+                        _ => "Normal"
+                    })
+                    .OrderBy(g => g.Key switch { "Critical" => 0, "High" => 1, _ => 2 })
+                    .Select(g => (GetPriorityLabel(g.Key == "Normal" ? "Medium" : g.Key) + $" ({g.Count()})",
+                                  g.OrderBy(t => t.DueDate ?? DateTime.MaxValue).ToList(),
+                                  g.Key != "Normal"));
+            }
+        };
+        return RenderTodoView(host, backlogConfig);
     }
 
     private static UiControl BuildDeletedTodoListItem(TodoItem todo, LayoutAreaHost host)
@@ -873,17 +820,10 @@ public static class ProjectViews
     private static UiControl BuildTodaysFocusView(List<TodoItem> todos, string hubPath, LayoutAreaHost host)
     {
         var mainGrid = Controls.LayoutGrid.WithSkin(skin => skin.WithSpacing(-1));
-
-        // Header row with title and New Task button
-        mainGrid = mainGrid
-            .WithView(Controls.H4("\ud83c\udfaf Today's Focus")
-                .WithStyle(style => style.WithMarginBottom("16px")),
-                skin => skin.WithXs(8).WithMd(10))
-            .WithView(BuildNewTaskButton(host, hubPath),
-                skin => skin.WithXs(4).WithMd(2));
+        mainGrid = AddPageHeader(mainGrid, "\ud83c\udfaf", "Today's Focus");
 
         var now = DateTime.Now.Date;
-        var activeTodos = todos.Where(t => t.Status != TodoStatus.Completed).ToList();
+        var activeTodos = todos.Where(t => t.Status != "Completed").ToList();
 
         // Overdue items
         var overdue = activeTodos
@@ -899,7 +839,7 @@ public static class ProjectViews
 
         // In progress (regardless of due date)
         var inProgress = activeTodos
-            .Where(t => t.Status == TodoStatus.InProgress && t.DueDate?.Date != now && t.DueDate?.Date >= now)
+            .Where(t => t.Status == "InProgress" && t.DueDate?.Date != now && t.DueDate?.Date >= now)
             .OrderBy(t => t.DueDate ?? DateTime.MaxValue)
             .ToList();
 
@@ -939,6 +879,105 @@ public static class ProjectViews
         }
 
         return mainGrid;
+    }
+
+    #endregion
+
+    #region Helper Methods
+
+    private static string GetStatusIcon(string? status) => status switch
+    {
+        "Pending" => "\u23f3",
+        "InProgress" => "\ud83d\udd04",
+        "InReview" => "\ud83d\udc41\ufe0f",
+        "Completed" => "\u2705",
+        "Blocked" => "\ud83d\udeab",
+        _ => "\u2753"
+    };
+
+    private static string GetPriorityBadge(string? priority) => priority switch
+    {
+        "Critical" => "<span style=\"background: #dc3545; color: white; padding: 1px 4px; border-radius: 3px; font-size: 10px;\">CRITICAL</span>",
+        "High" => "<span style=\"background: #fd7e14; color: white; padding: 1px 4px; border-radius: 3px; font-size: 10px;\">HIGH</span>",
+        "Medium" => "<span style=\"background: #17a2b8; color: white; padding: 1px 4px; border-radius: 3px; font-size: 10px;\">MEDIUM</span>",
+        "Low" => "<span style=\"background: #6c757d; color: white; padding: 1px 4px; border-radius: 3px; font-size: 10px;\">LOW</span>",
+        _ => ""
+    };
+
+    private static int GetPriorityOrder(string? priority) => priority switch
+    {
+        "Critical" => 0,
+        "High" => 1,
+        "Medium" => 2,
+        "Low" => 3,
+        _ => 4
+    };
+
+    private static string GetPriorityLabel(string? priority) => priority switch
+    {
+        "Critical" => "\ud83d\udea8 Critical Priority",
+        "High" => "\ud83d\udd25 High Priority",
+        "Medium" or "Low" => "\u2796 Normal Priority",
+        _ => "\u2753 Unknown Priority"
+    };
+
+    private static LayoutGridControl AddPageHeader(LayoutGridControl grid, string icon, string title)
+    {
+        return grid
+            .WithView(Controls.H4($"{icon} {title}")
+                .WithStyle(style => style.WithMarginBottom("16px")),
+                skin => skin.WithXs(12));
+    }
+
+    private static UiControl BuildSectionHeader(string title, double opacity = 1.0)
+    {
+        var opacityStyle = opacity < 1.0 ? $" opacity: {opacity};" : "";
+        return Controls.Html($@"
+            <div style=""padding: 10px 14px; background: var(--neutral-layer-2); border-radius: 6px; font-weight: 600; font-size: 1.1rem; margin-bottom: 8px;{opacityStyle}"">
+                {title}
+            </div>");
+    }
+
+    private static LayoutGridControl CreateItemsGrid()
+    {
+        return Controls.LayoutGrid
+            .WithSkin(skin => skin.WithSpacing(1))
+            .WithStyle(style => style.WithWidth("100%"));
+    }
+
+    private static string BuildProgressBar(string icon, string label, double percentage, string color)
+    {
+        return $@"
+            <div style=""margin-bottom: 12px;"">
+                <div style=""display: flex; justify-content: space-between; font-size: 12px; margin-bottom: 4px;"">
+                    <span>{icon} {label}</span>
+                    <span>{percentage:F0}%</span>
+                </div>
+                <div style=""width: 100%; background: var(--neutral-layer-3); border-radius: 4px; height: 8px;"">
+                    <div style=""width: {percentage}%; background: {color}; border-radius: 4px; height: 100%; transition: width 0.3s;""></div>
+                </div>
+            </div>";
+    }
+
+    private static void ShowNotification(LayoutAreaHost host, string message, string backgroundColor, int dismissAfterMs = 3000)
+    {
+        var notification = Controls.Html($@"
+            <div style=""position: fixed; top: 20px; right: 20px; padding: 12px 20px;
+                        background: {backgroundColor}; color: white; border-radius: 6px;
+                        box-shadow: 0 4px 12px rgba(0,0,0,0.3); z-index: 10000;
+                        animation: slideIn 0.3s ease-out;"">
+                <style>
+                    @keyframes slideIn {{
+                        from {{ transform: translateX(100%); opacity: 0; }}
+                        to {{ transform: translateX(0); opacity: 1; }}
+                    }}
+                </style>
+                {message}
+            </div>");
+        host.UpdateArea("$Notification", notification);
+
+        _ = System.Threading.Tasks.Task.Delay(dismissAfterMs).ContinueWith(_ =>
+            host.UpdateArea("$Notification", null!));
     }
 
     #endregion
@@ -989,192 +1028,6 @@ public static class ProjectViews
                     })));
 
         host.UpdateArea(DialogControl.DialogArea, Controls.Dialog(content, "Permanent Delete").WithSize("S").WithClosable(false));
-    }
-
-    private static async System.Threading.Tasks.Task HandleCreateTodo(LayoutAreaHost host, string hubPath, string createDataId)
-    {
-        System.Console.WriteLine($"Create button clicked, createDataId: {createDataId}");
-
-        // Get the edited todo from the stream's current EntityStore
-        var store = host.Stream.Current?.Value;
-        System.Console.WriteLine($"Store is null: {store == null}");
-
-        // Get data from the "data" collection by id
-        var dataCollection = store?.GetCollection(LayoutAreaReference.Data);
-        System.Console.WriteLine($"DataCollection is null: {dataCollection == null}");
-
-        var rawData = dataCollection?.Instances.GetValueOrDefault(createDataId);
-        System.Console.WriteLine($"RawData is null: {rawData == null}, type: {rawData?.GetType().Name}");
-
-        // Convert the raw data to Todo
-        Todo? editedTodo = null;
-        if (rawData is Todo todo)
-        {
-            editedTodo = todo;
-        }
-        else if (rawData is System.Text.Json.JsonElement jsonElement)
-        {
-            editedTodo = System.Text.Json.JsonSerializer.Deserialize<Todo>(jsonElement.GetRawText());
-        }
-
-        System.Console.WriteLine($"EditedTodo is null: {editedTodo == null}");
-
-        if (editedTodo != null)
-        {
-            System.Console.WriteLine($"Creating todo: {editedTodo.Id} - {editedTodo.Title}");
-
-            // Create the MeshNode at the correct path: {hubPath}/Todo/{id}
-            var todoPath = $"{hubPath}/Todo";
-            var meshNode = new MeshNode(editedTodo.Id, todoPath)
-            {
-                Name = editedTodo.Title,
-                NodeType = $"{hubPath.Split('/')[0]}/Project/Todo",
-                Content = editedTodo,
-                IsPersistent = true,
-                Category = "Tasks",
-                State = MeshNodeState.Active
-            };
-
-            System.Console.WriteLine($"MeshNode path: {meshNode.Path}, NodeType: {meshNode.NodeType}");
-
-            // Use IMeshCatalog to create the node
-            var meshCatalog = host.Hub.ServiceProvider.GetService<IMeshCatalog>();
-            System.Console.WriteLine($"MeshCatalog is null: {meshCatalog == null}");
-
-            if (meshCatalog != null)
-            {
-                try
-                {
-                    System.Console.WriteLine("Calling CreateNodeAsync...");
-                    var result = await meshCatalog.CreateNodeAsync(meshNode);
-                    System.Console.WriteLine($"CreateNodeAsync completed, result path: {result?.Path}");
-
-                    // Show success notification (view updates reactively via ObserveQuery)
-                    var notification = Controls.Html($@"
-                        <div style=""position: fixed; top: 20px; right: 20px; padding: 12px 20px;
-                                    background: #28a745; color: white; border-radius: 6px;
-                                    box-shadow: 0 4px 12px rgba(0,0,0,0.3); z-index: 10000;
-                                    animation: slideIn 0.3s ease-out;"">
-                            <style>
-                                @keyframes slideIn {{
-                                    from {{ transform: translateX(100%); opacity: 0; }}
-                                    to {{ transform: translateX(0); opacity: 1; }}
-                                }}
-                            </style>
-                            ✅ Task created!
-                        </div>");
-                    host.UpdateArea("$Notification", notification);
-
-                    // Auto-dismiss notification after 3 seconds
-                    _ = System.Threading.Tasks.Task.Delay(3000).ContinueWith(_ =>
-                        host.UpdateArea("$Notification", null!));
-                }
-                catch (System.Exception ex)
-                {
-                    System.Console.WriteLine($"Error creating node: {ex.Message}");
-                    System.Console.WriteLine($"Stack trace: {ex.StackTrace}");
-
-                    // Show error notification
-                    var errorNotification = Controls.Html($@"
-                        <div style=""position: fixed; top: 20px; right: 20px; padding: 12px 20px;
-                                    background: #dc3545; color: white; border-radius: 6px;
-                                    box-shadow: 0 4px 12px rgba(0,0,0,0.3); z-index: 10000;"">
-                            ❌ Failed to create task: {System.Web.HttpUtility.HtmlEncode(ex.Message)}
-                        </div>");
-                    host.UpdateArea("$Notification", errorNotification);
-
-                    _ = System.Threading.Tasks.Task.Delay(5000).ContinueWith(_ =>
-                        host.UpdateArea("$Notification", null!));
-                }
-            }
-        }
-        else
-        {
-            System.Console.WriteLine("EditedTodo is null, cannot create node");
-        }
-        host.UpdateArea(DialogControl.DialogArea, null!);
-    }
-
-    private static string GetStatusIcon(TodoStatus status) => status switch
-    {
-        TodoStatus.Pending => "\u23f3",
-        TodoStatus.InProgress => "\ud83d\udd04",
-        TodoStatus.InReview => "\ud83d\udc41\ufe0f",
-        TodoStatus.Completed => "\u2705",
-        TodoStatus.Blocked => "\ud83d\udeab",
-        _ => "\u2753"
-    };
-
-    private static string GetPriorityBadge(string? priority) => priority switch
-    {
-        "Critical" => "<span style=\"background: #dc3545; color: white; padding: 1px 4px; border-radius: 3px; font-size: 10px;\">CRITICAL</span>",
-        "High" => "<span style=\"background: #fd7e14; color: white; padding: 1px 4px; border-radius: 3px; font-size: 10px;\">HIGH</span>",
-        "Medium" => "<span style=\"background: #17a2b8; color: white; padding: 1px 4px; border-radius: 3px; font-size: 10px;\">MEDIUM</span>",
-        "Low" => "<span style=\"background: #6c757d; color: white; padding: 1px 4px; border-radius: 3px; font-size: 10px;\">LOW</span>",
-        _ => ""
-    };
-
-    private static int GetPriorityOrder(string? priority) => priority switch
-    {
-        "Critical" => 0,
-        "High" => 1,
-        "Medium" => 2,
-        "Low" => 3,
-        _ => 4
-    };
-
-    private static UiControl BuildNewTaskButton(LayoutAreaHost host, string hubPath)
-    {
-        return Controls.Button("+ New Task")
-            .WithAppearance(Appearance.Accent)
-            .WithStyle(style => style.WithMarginBottom("16px"))
-            .WithClickAction(_ =>
-            {
-                OpenCreateTodoDialog(host, hubPath);
-                return System.Threading.Tasks.Task.CompletedTask;
-            });
-    }
-
-    private static void OpenCreateTodoDialog(LayoutAreaHost host, string hubPath)
-    {
-        var newId = Guid.NewGuid().ToString("N").Substring(0, 8);
-
-        // Create a temporary Todo object to use with host.Edit()
-        var newTodo = new Todo
-        {
-            Id = newId,
-            Title = "New Task",
-            Status = TodoStatus.Pending,
-            Priority = "Medium",
-            Category = "General",
-            CreatedAt = DateTime.UtcNow
-        };
-
-        var createDataId = $"CreateTodo_{newId}";
-
-        var createForm = Controls.Stack
-            .WithView(host.Edit(newTodo, createDataId)?
-                .WithStyle(style => style.WithWidth("100%").WithDisplay("block")), createDataId)
-            .WithView(Controls.Stack
-                .WithView(Controls.Button("Create")
-                    .WithClickAction(_ => HandleCreateTodo(host, hubPath, createDataId)))
-                .WithView(Controls.Button("Cancel")
-                    .WithClickAction(_ =>
-                    {
-                        host.UpdateArea(DialogControl.DialogArea, null!);
-                        return System.Threading.Tasks.Task.CompletedTask;
-                    }))
-                .WithOrientation(Orientation.Horizontal)
-                .WithHorizontalGap(10)
-                .WithStyle(style => style.WithJustifyContent("center").WithWidth("100%")))
-            .WithVerticalGap(15)
-            .WithStyle(style => style.WithWidth("100%").WithDisplay("block").WithMargin("0 auto"));
-
-        var dialog = Controls.Dialog(createForm, "Create Task")
-            .WithSize("M")
-            .WithClosable(false);
-
-        host.UpdateArea(DialogControl.DialogArea, dialog);
     }
 
     #endregion
