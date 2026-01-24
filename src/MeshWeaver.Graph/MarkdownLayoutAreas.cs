@@ -932,11 +932,11 @@ public static class MarkdownLayoutAreas
     }
 
     private static UiControl BuildMarkdownEditContent(
-        LayoutAreaHost host,
+        LayoutAreaHost _,
         MeshNode? node,
         string hubPath,
         Address hubAddress,
-        string readHref,
+        string _1,
         string initialContent)
     {
         var nodeName = node?.Name ?? hubPath.Split('/').LastOrDefault() ?? "Document";

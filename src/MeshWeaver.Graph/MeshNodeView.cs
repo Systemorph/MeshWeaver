@@ -347,7 +347,7 @@ public static class MeshNodeView
     /// <returns>A LayoutGrid control with children, or null if no children.</returns>
     [Browsable(false)]
     public static UiControl? BuildChildrenSection(
-        LayoutAreaHost host,
+        LayoutAreaHost _,
         IEnumerable<MeshNode> children,
         string nodePath,
         int childrenLimit = 10)
@@ -819,7 +819,7 @@ public static class MeshNodeView
     /// <summary>
     /// Formats a property value for display in markdown.
     /// </summary>
-    private static string FormatPropertyValue(object? value, JsonSerializerOptions jsonOptions)
+    private static string FormatPropertyValue(object? value, JsonSerializerOptions _)
     {
         if (value == null)
             return "*null*";
@@ -1163,7 +1163,7 @@ public static class MeshNodeView
     /// <summary>
     /// Builds a save button that updates the node's Content via DataChangeRequest.
     /// </summary>
-    private static UiControl BuildSaveButton(LayoutAreaHost host, string dataId, Type contentType, string nodePath)
+    private static UiControl BuildSaveButton(LayoutAreaHost host, string dataId, Type contentType, string _)
     {
         var hubAddress = host.Hub.Configuration.ParentHub?.Address ?? host.Hub.Address;
 
@@ -1246,7 +1246,7 @@ public static class MeshNodeView
     /// For self-reference (no path): shows the node's icon/logo.
     /// </summary>
     [Browsable(false)]
-    public static IObservable<UiControl?> Content(LayoutAreaHost host, RenderingContext context)
+    public static IObservable<UiControl?> Content(LayoutAreaHost host, RenderingContext _)
     {
         var contentPath = host.Reference.Id?.ToString();
         var hubPath = host.Hub.Address.ToString();
@@ -1288,7 +1288,7 @@ public static class MeshNodeView
     /// Renders the node's icon/logo for content self-reference.
     /// Priority: content.avatar > content.logo > node.Icon
     /// </summary>
-    private static UiControl RenderNodeIcon(MeshNode node, string hubPath)
+    private static UiControl RenderNodeIcon(MeshNode node, string _)
     {
         var imageUrl = GetNodeImageUrl(node);
 
@@ -1393,7 +1393,7 @@ public static class MeshNodeView
         return null;
     }
 
-    private static IObservable<UiControl?> RenderImageAsync(LayoutAreaHost host, string contentPath, string extension)
+    private static IObservable<UiControl?> RenderImageAsync(LayoutAreaHost host, string contentPath, string _)
     {
         // Build static content URL: /static/{address}/content/{filePath}
         var address = host.Hub.Address.ToString();
@@ -1434,7 +1434,7 @@ public static class MeshNodeView
         return Controls.Markdown($"```json\n// Loading {contentPath}...\n```");
     }
 
-    private static UiControl RenderDownloadLink(LayoutAreaHost host, string contentPath, string extension)
+    private static UiControl RenderDownloadLink(LayoutAreaHost host, string contentPath, string _1)
     {
         var contentUrl = $"/api/content/{host.Hub.Address}/{contentPath}";
         var fileName = Path.GetFileName(contentPath);
@@ -1563,7 +1563,7 @@ public static class MeshNodeView
         return Observable.Return<UiControl?>(new MarkdownControl($"## JSON Schema: {typeName}\n\n```json\n{schema}\n```"));
     }
 
-    private static UiControl RenderNodeSchema(MeshNode? node, string hubPath, JsonSerializerOptions? jsonOptions = null)
+    private static UiControl RenderNodeSchema(MeshNode? node, string _, JsonSerializerOptions? jsonOptions = null)
     {
         var sb = new System.Text.StringBuilder();
         sb.AppendLine("## Schema");
@@ -1822,7 +1822,7 @@ public static class MeshNodeView
         LayoutAreaHost host,
         INodeTypeService nodeTypeService,
         string nodePath,
-        CancellationToken ct)
+        CancellationToken _)
     {
         var stack = Controls.Stack.WithWidth("100%").WithStyle("padding: 24px;");
 
