@@ -2,6 +2,7 @@
 using MeshWeaver.AI;
 using MeshWeaver.AI.AzureFoundry;
 using MeshWeaver.AI.AzureOpenAI;
+using MeshWeaver.AI.Copilot;
 using MeshWeaver.AI.Persistence;
 using MeshWeaver.Blazor.GoogleMaps;
 using MeshWeaver.Blazor.Graph;
@@ -86,6 +87,12 @@ public static class LoomConfiguration
         {
             builder.Configuration.GetSection("AzureOpenAIS").Bind(config);
             config.DisplayOrder = 20;  // Azure OpenAI last
+        });
+
+        services.AddCopilot(config =>
+        {
+            builder.Configuration.GetSection("Copilot").Bind(config);
+            config.DisplayOrder = 30;  // GitHub Copilot
         });
 
         // Register the AI chat services (must be after all factory registrations)

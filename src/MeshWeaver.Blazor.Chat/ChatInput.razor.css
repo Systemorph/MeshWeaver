@@ -88,7 +88,7 @@
 
 /* Model selector */
 .selector-model {
-    flex: 1 1 80px;
-    min-width: 80px;
-    max-width: 160px;
+    flex: 1 1 120px;
+    min-width: 100px;
+    max-width: 200px;
 }

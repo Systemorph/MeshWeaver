@@ -21,12 +21,22 @@ public class ModelCommand : IChatCommand
     {
         if (context.ParsedCommand.Arguments.Length == 0)
         {
-            // List available models
-            var modelNames = context.AvailableModels != null
-                ? string.Join(", ", context.AvailableModels.OrderBy(m => m))
-                : "No models available";
+            // List available models grouped by provider
+            if (context.AvailableModels == null || !context.AvailableModels.Any())
+            {
+                return Task.FromResult(CommandResult.Error(
+                    $"Usage: {Usage}\n\nNo models available."));
+            }
+
+            var grouped = context.AvailableModels
+                .GroupBy(m => m.Provider)
+                .OrderBy(g => g.First().DisplayOrder);
+
+            var modelList = string.Join("\n", grouped.Select(g =>
+                $"**{g.Key}**: {string.Join(", ", g.Select(m => m.Name))}"));
+
             return Task.FromResult(CommandResult.Error(
-                $"Usage: {Usage}\n\nAvailable models: {modelNames}"));
+                $"Usage: {Usage}\n\nAvailable models:\n{modelList}"));
         }
 
         // Parse model name from argument
@@ -51,19 +61,25 @@ public class ModelCommand : IChatCommand
         }
 
         var found = context.AvailableModels
-            .FirstOrDefault(m => m.Equals(modelName, StringComparison.OrdinalIgnoreCase));
+            .FirstOrDefault(m => m.Name.Equals(modelName, StringComparison.OrdinalIgnoreCase));
 
         if (found == null)
         {
-            var availableNames = string.Join(", ", context.AvailableModels.OrderBy(m => m));
+            var grouped = context.AvailableModels
+                .GroupBy(m => m.Provider)
+                .OrderBy(g => g.First().DisplayOrder);
+
+            var modelList = string.Join("\n", grouped.Select(g =>
+                $"**{g.Key}**: {string.Join(", ", g.Select(m => m.Name))}"));
+
             return Task.FromResult(CommandResult.Error(
-                $"Model '{modelName}' not found.\n\nAvailable models: {availableNames}"));
+                $"Model '{modelName}' not found.\n\nAvailable models:\n{modelList}"));
         }
 
         // Switch to the model
         context.SetCurrentModel?.Invoke(found);
 
         return Task.FromResult(CommandResult.Ok(
-            $"Switched to model: **{found}**"));
+            $"Switched to model: **{found.Name}** ({found.Provider})"));
     }
 }

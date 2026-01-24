@@ -1,4 +1,5 @@
 @using ChatMessage = Microsoft.Extensions.AI.ChatMessage
+@using MeshWeaver.AI
 @using MeshWeaver.Blazor.Components.Monaco
 @using Microsoft.Extensions.Logging
 @inject IJSRuntime JS
@@ -65,17 +66,18 @@
             @* 3. Model selector *@
             @if (AvailableModels.Count > 0)
             {
-                <SimpleDropdown TOption="string"
-                                SelectedItem="@SelectedModel"
-                                SelectedItemChanged="@OnModelItemChanged"
+                <SimpleDropdown TOption="ModelInfo"
+                                SelectedItem="@SelectedModelInfo"
+                                SelectedItemChanged="@OnModelInfoItemChanged"
                                 Items="@AvailableModels"
-                                GetDisplayText="@(m => m ?? "Select model...")"
+                                GetDisplayText="@(m => m?.Name ?? "Select model...")"
                                 Placeholder="Select model..."
                                 ShowSearch="false"
-                                PanelWidth="200px"
+                                PanelWidth="280px"
                                 Class="selector-model">
                     <ItemTemplate Context="model">
-                        <div class="simple-dropdown-item-name">@model</div>
+                        <div class="simple-dropdown-item-provider">@model.Provider</div>
+                        <div class="simple-dropdown-item-name">@model.Name</div>
                     </ItemTemplate>
                 </SimpleDropdown>
             }
@@ -142,13 +144,13 @@
     public EventCallback<AgentDisplayInfo?> SelectedAgentInfoChanged { get; set; }
 
     [Parameter]
-    public IReadOnlyList<string> AvailableModels { get; set; } = [];
+    public IReadOnlyList<ModelInfo> AvailableModels { get; set; } = [];
 
     [Parameter]
-    public string? SelectedModel { get; set; }
+    public ModelInfo? SelectedModelInfo { get; set; }
 
     [Parameter]
-    public EventCallback<string?> SelectedModelChanged { get; set; }
+    public EventCallback<ModelInfo?> SelectedModelInfoChanged { get; set; }
 
     protected override void OnParametersSet()
     {
@@ -216,11 +218,11 @@
         }
     }
 
-    private async Task OnModelItemChanged(string? model)
+    private async Task OnModelInfoItemChanged(ModelInfo? model)
     {
-        if (model != SelectedModel)
+        if (model?.Name != SelectedModelInfo?.Name)
         {
-            await SelectedModelChanged.InvokeAsync(model);
+            await SelectedModelInfoChanged.InvokeAsync(model);
         }
     }
 
