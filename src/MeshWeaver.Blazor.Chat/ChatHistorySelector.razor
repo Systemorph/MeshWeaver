@@ -1,10 +1,12 @@
 @using MeshWeaver.AI.Persistence
+@using MeshWeaver.AI.Threading
 @namespace MeshWeaver.Blazor.Chat
 @inject IChatPersistenceService ChatPersistenceService
+@inject IThreadManager ThreadManager
 
 <div class="chat-history-container @(IsRightPanel ? "right-panel" : "")">
     <div class="chat-history-header">
-        <h4>@("Chat History")</h4> 
+        <h4>@("Chat History")</h4>
         @if (!IsRightPanel)
                 {
             <FluentButton BackgroundColor="transparent" OnClick="StartNewConversation">
@@ -13,24 +15,28 @@
             </FluentButton>
         }
     </div>
-    @if (!Conversations.Any())
+    @if (!Threads.Any())
     {
         <div class="no-conversations">No previous conversations</div>
     }
     else
     {
         <div class="conversation-list">
-            @foreach (var conversation in Conversations.OrderByDescending(c => c.LastModifiedAt))
+            @foreach (var thread in Threads.OrderByDescending(t => t.LastActivityAt))
             {
-                <div class="conversation-item @(conversation.Id == SelectedConversationId ? "selected" : "")"
-                    @onclick="() => SelectConversation(conversation.Id)">
-                    <div class="conversation-title">@conversation.DisplayTitle</div>
+                <div class="conversation-item @(thread.Id == SelectedConversationId ? "selected" : "")"
+                    @onclick="() => SelectConversation(thread.Id)">
+                    <div class="conversation-title">@thread.DisplayTitle</div>
                     <div class="conversation-meta">
                         <small class="text-muted">
-                            @FormatDate(conversation.LastModifiedAt) • @conversation.Messages.Count messages
+                            @FormatDate(thread.LastActivityAt)
+                            @if (!string.IsNullOrEmpty(thread.ProviderId))
+                            {
+                                <span> • @thread.ProviderId</span>
+                            }
                         </small>
                     </div>
-                    <FluentButton BackgroundColor="transparent" OnClick="() => DeleteConversation(conversation.Id)"
+                    <FluentButton BackgroundColor="transparent" OnClick="() => DeleteConversation(thread.Id)"
                         title="Delete conversation" Class="delete-btn">
                         <FluentIcon Value="@(new Icons.Regular.Size16.Delete())" Color="Color.Error" />
                     </FluentButton>
@@ -143,18 +149,20 @@
     [Parameter] public EventCallback<string> SelectedConversationIdChanged { get; set; }
     [Parameter] public EventCallback OnNewConversation { get; set; }
     [Parameter] public bool IsRightPanel { get; set; }
+    [Parameter] public string? Scope { get; set; }
 
-    private List<ChatConversation> Conversations = new();
+    private IReadOnlyList<ChatThread> Threads = [];
 
     protected override async Task OnInitializedAsync()
     {
         await LoadConversations();
     }
+
     private async Task LoadConversations()
     {
         try
         {
-            Conversations = await ChatPersistenceService.GetConversationsAsync();
+            Threads = await ThreadManager.ListThreadsAsync(Scope);
             StateHasChanged();
         }
         catch (Exception ex)
@@ -172,20 +180,22 @@
             await SelectedConversationIdChanged.InvokeAsync(conversationId);
         }
     }
+
     private async Task StartNewConversation()
     {
         SelectedConversationId = null;
         await SelectedConversationIdChanged.InvokeAsync(null);
         await OnNewConversation.InvokeAsync();
     }
+
     private async Task DeleteConversation(string conversationId)
     {
         try
         {
-            await ChatPersistenceService.DeleteConversationAsync(conversationId);
+            await ThreadManager.DeleteThreadAsync(conversationId);
 
             // Remove from local list
-            Conversations = Conversations.Where(c => c.Id != conversationId).ToList();
+            Threads = Threads.Where(t => t.Id != conversationId).ToList();
 
             // If this was the selected conversation, start a new one
             if (SelectedConversationId == conversationId)
@@ -220,6 +230,7 @@
             return date.ToString("MM/dd");
         }
     }
+
     public async Task RefreshConversations()
     {
         await LoadConversations();

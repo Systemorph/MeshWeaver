@@ -76,6 +76,11 @@ public class ChatPlugin
     /// <param name="targetAgentDescription">Description of when to use this agent</param>
     /// <param name="logger">Optional logger for delegation events</param>
     /// <returns>An AITool that can be used to delegate to the target agent</returns>
+    /// <remarks>
+    /// DEPRECATED: Use <see cref="DelegationTool.CreateDelegationTool"/> instead for proper
+    /// isolated thread handling and activity-based delegation.
+    /// </remarks>
+    [Obsolete("Use DelegationTool.CreateDelegationTool for isolated thread handling")]
     public static AITool CreateHandoffTool(
         string targetAgentName,
         string targetAgentDescription,
@@ -114,6 +119,11 @@ public class ChatPlugin
     /// <param name="hierarchyAgents">All agents in the namespace hierarchy (ordered closest first)</param>
     /// <param name="logger">Optional logger for delegation events</param>
     /// <returns>An AITool for unified delegation</returns>
+    /// <remarks>
+    /// DEPRECATED: Use <see cref="DelegationTool.CreateUnifiedDelegationTool"/> instead for proper
+    /// isolated thread handling and activity-based delegation.
+    /// </remarks>
+    [Obsolete("Use DelegationTool.CreateUnifiedDelegationTool for isolated thread handling")]
     public static AITool CreateUnifiedDelegationTool(
         AgentConfiguration currentAgent,
         IReadOnlyList<AgentConfiguration> hierarchyAgents,

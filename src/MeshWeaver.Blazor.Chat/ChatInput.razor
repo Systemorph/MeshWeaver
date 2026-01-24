@@ -83,14 +83,29 @@
             }
         }
         <FluentSpacer />
-        <button type="button" title="Send" class="send-button" @onclick="@SendMessageAsync"
-            disabled="@(IsDisabled || string.IsNullOrWhiteSpace(MessageText))">
-            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5"
-                stroke="currentColor" class="tool-icon">
-                <path stroke-linecap="round" stroke-linejoin="round"
-                    d="M6 12 3.269 3.125A59.769 59.769 0 0 1 21.485 12 59.768 59.768 0 0 1 3.27 20.875L5.999 12Zm0 0h7.5" />
-            </svg>
-        </button>
+        @if (IsStreaming && !string.IsNullOrWhiteSpace(MessageText))
+        {
+            @* When streaming and user has typed, show send button to interrupt and send *@
+            <button type="button" title="Interrupt and send" class="send-button interrupt" @onclick="@SendMessageAsync"
+                disabled="@IsDisabled">
+                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5"
+                    stroke="currentColor" class="tool-icon">
+                    <path stroke-linecap="round" stroke-linejoin="round"
+                        d="M6 12 3.269 3.125A59.769 59.769 0 0 1 21.485 12 59.768 59.768 0 0 1 3.27 20.875L5.999 12Zm0 0h7.5" />
+                </svg>
+            </button>
+        }
+        else
+        {
+            <button type="button" title="Send" class="send-button" @onclick="@SendMessageAsync"
+                disabled="@(IsDisabled || string.IsNullOrWhiteSpace(MessageText))">
+                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5"
+                    stroke="currentColor" class="tool-icon">
+                    <path stroke-linecap="round" stroke-linejoin="round"
+                        d="M6 12 3.269 3.125A59.769 59.769 0 0 1 21.485 12 59.768 59.768 0 0 1 3.27 20.875L5.999 12Zm0 0h7.5" />
+                </svg>
+            </button>
+        }
     </FluentStack>
 </div>
 
@@ -106,6 +121,14 @@
 
     [Parameter]
     public bool IsDisabled { get; set; }
+
+    /// <summary>
+    /// Indicates whether a response is currently being streamed.
+    /// When true, the input is still enabled but shows visual indication
+    /// that sending will interrupt the current response.
+    /// </summary>
+    [Parameter]
+    public bool IsStreaming { get; set; }
 
     [Parameter]
     public CompletionProviderConfig? CompletionProvider { get; set; }

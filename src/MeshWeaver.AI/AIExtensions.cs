@@ -1,4 +1,5 @@
 using MeshWeaver.AI.Persistence;
+using MeshWeaver.AI.Threading;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.AI;
@@ -9,13 +10,35 @@ namespace MeshWeaver.AI;
 public static class AIExtensions
 {
     /// <summary>
-    /// Adds the AI chat services including persistence.
+    /// Adds the AI chat services including persistence and thread management.
+    /// Uses in-memory thread manager by default.
     /// Call this after registering individual factory implementations (e.g., AddAzureOpenAI, AddAzureFoundryClaude).
     /// </summary>
     public static IServiceCollection AddAgentChatServices(this IServiceCollection services)
     {
         // Ensure ChatPersistenceService is registered
         services.AddMemoryChatPersistence();
+
+        // Add thread manager (uses in-memory by default)
+        services.AddInMemoryThreadManager();
+
+        return services;
+    }
+
+    /// <summary>
+    /// Adds the AI chat services with MeshDataSource persistence for threads.
+    /// Stores chats in the parent object's namespace:
+    /// - Chat metadata: {scope}/chats/{userId}/{threadId}
+    /// - Messages: {scope}/chats/{userId}/{threadId}/messages/
+    /// Requires IPersistenceService to be registered.
+    /// </summary>
+    public static IServiceCollection AddAgentChatServicesWithPersistence(this IServiceCollection services)
+    {
+        // Ensure ChatPersistenceService is registered
+        services.AddMemoryChatPersistence();
+
+        // Add MeshDataSource thread manager for persistent storage
+        services.AddMeshDataSourceThreadManager();
 
         return services;
     }

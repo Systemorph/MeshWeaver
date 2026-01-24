@@ -1,8 +1,10 @@
 @inherits BlazorView<AgentChatControl, AgentChatView>
 
 @using MeshWeaver.AI.Persistence
+@using MeshWeaver.AI.Threading
 @inject NavigationManager NavigationManager
 @inject IChatPersistenceService ChatPersistenceService
+@inject IThreadManager ThreadManager
 
 <div class="chat-app-container">
     <!-- Sticky Chat Header -->
@@ -88,7 +90,8 @@
         </div>
         <div class="chat-container">
             <MeshWeaver.Blazor.Chat.ChatInput OnSend="@AddUserMessageAsync" @ref="@chatInput"
-                IsDisabled="@isGeneratingResponse"
+                IsDisabled="false"
+                IsStreaming="@isGeneratingResponse"
                 CompletionProvider="@GetAgentCompletionConfig()"
                 AsyncCompletionCallback="@GetCompletionsForEditorAsync"
                 SelectedContext="@selectedContextPath"

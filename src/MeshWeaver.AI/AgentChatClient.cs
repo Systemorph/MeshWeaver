@@ -81,13 +81,13 @@ public class AgentChatClient : IAgentChat
         return sharedThread;
     }
 
-    private async Task SaveThreadAsync(AIAgent _, AgentThread thread)
+    private async Task SaveThreadAsync(AIAgent _, AgentThread thread, string? threadId = null)
     {
-        // Save the shared thread with a common key
+        // Save the thread with the specified key or current thread ID
         var serialized = thread.Serialize(hub.JsonSerializerOptions);
-        await persistenceService.SaveThreadAsync(currentThreadId, "shared", serialized);
-        logger.LogInformation("Saved shared thread: {ThreadId}",
-            currentThreadId);
+        var id = threadId ?? currentThreadId;
+        await persistenceService.SaveThreadAsync(id, "shared", serialized);
+        logger.LogInformation("Saved thread: {ThreadId}", id);
     }
 
     private string BuildMessageWithContext(IReadOnlyCollection<ChatMessage> messages)
@@ -267,14 +267,21 @@ public class AgentChatClient : IAgentChat
                                     AuthorName = currentAgentName ?? "Assistant"
                                 };
 
-                                // Invoke the target agent in streaming mode
+                                // Invoke the target agent in streaming mode with ISOLATED thread
                                 if (agents.TryGetValue(targetAgentName, out var targetAgent))
                                 {
-                                    // Use the same shared thread - it already contains the full conversation history
-                                    var targetThread = thread; // Same thread instance
+                                    // Create a NEW isolated thread for the delegated agent
+                                    // This gives the agent its own context window without parent conversation history
+                                    var isolatedThreadId = $"{currentThreadId}_delegation_{Guid.NewGuid().AsString()}";
+                                    var targetThread = targetAgent.GetNewThread();
+                                    logger.LogInformation("Created isolated thread {ThreadId} for delegated agent {AgentName}",
+                                        isolatedThreadId, targetAgentName);
 
                                     // Build message with context for the target agent
                                     var targetMessage = BuildMessageWithContext([new ChatMessage(ChatRole.User, delegationMessage)]);
+
+                                    // Collect the delegated agent's response for potential return to parent
+                                    var delegatedResponseBuilder = new StringBuilder();
 
                                     // Stream the target agent's response
                                     await foreach (var targetUpdate in targetAgent.RunStreamingAsync(
@@ -301,6 +308,7 @@ public class AgentChatClient : IAgentChat
                                         // Yield target agent's text updates with their name
                                         if (!string.IsNullOrEmpty(targetUpdate.Text))
                                         {
+                                            delegatedResponseBuilder.Append(targetUpdate.Text);
                                             yield return new ChatResponseUpdate(ChatRole.Assistant, targetUpdate.Text)
                                             {
                                                 AuthorName = targetAgentName
@@ -308,9 +316,13 @@ public class AgentChatClient : IAgentChat
                                         }
                                     }
 
+                                    // Save the isolated thread for potential future reference
+                                    await SaveThreadAsync(targetAgent, targetThread, isolatedThreadId);
+                                    logger.LogDebug("Saved isolated thread {ThreadId} for delegated agent {AgentName}",
+                                        isolatedThreadId, targetAgentName);
+
                                     // NOTE: After target agent completes, the original agent's stream will continue
                                     // and any remaining updates from the original agent will be yielded below
-                                    // Thread is already saved at the end of the outer streaming loop
                                 }
                                 else
                                 {
