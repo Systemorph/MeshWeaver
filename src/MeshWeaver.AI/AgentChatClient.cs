@@ -21,7 +21,7 @@ public class AgentChatClient : IAgentChat
     private readonly ILogger<AgentChatClient> logger;
     private readonly IChatPersistenceService persistenceService;
     private readonly IMeshQuery? meshQuery;
-    private readonly IChatClientFactory? chatClientFactory;
+    private readonly IReadOnlyList<IChatClientFactory> chatClientFactories;
     private readonly Dictionary<string, AIAgent> agents = new();
     private readonly Queue<ChatLayoutAreaContent> queuedLayoutAreaContent = new();
     private List<AgentDisplayInfo> loadedAgents = [];
@@ -38,7 +38,7 @@ public class AgentChatClient : IAgentChat
         logger = serviceProvider.GetRequiredService<ILogger<AgentChatClient>>();
         persistenceService = serviceProvider.GetRequiredService<IChatPersistenceService>();
         meshQuery = serviceProvider.GetService<IMeshQuery>();
-        chatClientFactory = serviceProvider.GetService<IChatClientFactory>();
+        chatClientFactories = serviceProvider.GetServices<IChatClientFactory>().ToList();
     }
 
     public AgentContext? Context { get; private set; }
@@ -477,23 +477,24 @@ public class AgentChatClient : IAgentChat
             }
         }
 
-        // 2. Query agents from context path hierarchy
-        if (!string.IsNullOrEmpty(contextPath))
+        // 2. Query agents from context path hierarchy (or root if no context)
+        try
         {
-            try
+            var pathQuery = string.IsNullOrEmpty(contextPath)
+                ? "nodeType:Agent scope:children"  // Root level: get direct children agents
+                : $"path:{contextPath} nodeType:Agent scope:selfAndAncestors";
+
+            await foreach (var node in meshQuery.QueryAsync<MeshNode>(pathQuery))
             {
-                await foreach (var node in meshQuery.QueryAsync<MeshNode>($"path:{contextPath} nodeType:Agent scope:selfAndAncestors"))
+                if (node.Content is AgentConfiguration config && !agentsDict.ContainsKey(config.Id))
                 {
-                    if (node.Content is AgentConfiguration config && !agentsDict.ContainsKey(config.Id))
-                    {
-                        agentsDict[config.Id] = (config, node.Path ?? "");
-                    }
+                    agentsDict[config.Id] = (config, node.Path ?? "");
                 }
             }
-            catch (Exception ex)
-            {
-                logger.LogDebug(ex, "[AgentChatClient] Error querying path hierarchy {ContextPath}", contextPath);
-            }
+        }
+        catch (Exception ex)
+        {
+            logger.LogDebug(ex, "[AgentChatClient] Error querying path hierarchy {ContextPath}", contextPath ?? "root");
         }
 
         // 3. Query agents from NodeType hierarchy
@@ -540,7 +541,7 @@ public class AgentChatClient : IAgentChat
     /// </summary>
     private async Task CreateAgentsAsync()
     {
-        if (chatClientFactory == null)
+        if (chatClientFactories.Count == 0)
         {
             logger.LogWarning("[AgentChatClient] No IChatClientFactory available, cannot create agents");
             return;
@@ -552,6 +553,17 @@ public class AgentChatClient : IAgentChat
             return;
         }
 
+        // Select the appropriate factory based on the requested model
+        var factory = GetFactoryForModel(currentModelName);
+        if (factory == null)
+        {
+            logger.LogWarning("[AgentChatClient] No factory can serve model: {ModelName}", currentModelName);
+            throw new ArgumentException($"No factory can serve model: {currentModelName}");
+        }
+
+        logger.LogInformation("[AgentChatClient] Using factory {FactoryName} for model {ModelName}",
+            factory.Name, currentModelName ?? "default");
+
         var configs = loadedAgents.Select(a => a.AgentConfiguration).ToList();
         var createdAgents = new Dictionary<string, ChatClientAgent>();
 
@@ -561,7 +573,7 @@ public class AgentChatClient : IAgentChat
         // First pass: Create all agents in order
         foreach (var agentConfig in orderedConfigs)
         {
-            var agent = await chatClientFactory.CreateAgentAsync(
+            var agent = await factory.CreateAgentAsync(
                 agentConfig, this, createdAgents, configs, currentModelName);
             createdAgents[agentConfig.Id] = agent;
             agents[agentConfig.Id] = agent;
@@ -572,7 +584,7 @@ public class AgentChatClient : IAgentChat
         var cyclicAgents = FindCyclicDelegations(configs);
         foreach (var agentConfig in cyclicAgents)
         {
-            var updatedAgent = await chatClientFactory.CreateAgentAsync(
+            var updatedAgent = await factory.CreateAgentAsync(
                 agentConfig, this, createdAgents, configs, currentModelName);
             createdAgents[agentConfig.Id] = updatedAgent;
             agents[agentConfig.Id] = updatedAgent;
@@ -581,6 +593,35 @@ public class AgentChatClient : IAgentChat
 
         agentsInitialized = true;
         logger.LogInformation("[AgentChatClient] Created {Count} agents", agents.Count);
+    }
+
+    /// <summary>
+    /// Finds the appropriate factory that can serve the requested model.
+    /// </summary>
+    private IChatClientFactory? GetFactoryForModel(string? modelName)
+    {
+        if (string.IsNullOrEmpty(modelName))
+        {
+            // Return first factory ordered by DisplayOrder
+            return chatClientFactories
+                .OrderBy(f => f.DisplayOrder)
+                .FirstOrDefault();
+        }
+
+        // Find factory that has this model
+        var factory = chatClientFactories
+            .FirstOrDefault(f => f.Models.Contains(modelName));
+
+        if (factory != null)
+        {
+            return factory;
+        }
+
+        // Fallback: return first factory
+        logger.LogWarning("[AgentChatClient] Model {ModelName} not found in any factory, using first available", modelName);
+        return chatClientFactories
+            .OrderBy(f => f.DisplayOrder)
+            .FirstOrDefault();
     }
 
     /// <summary>
