@@ -1163,7 +1163,7 @@ public static class MeshNodeView
     /// <summary>
     /// Builds a save button that updates the node's Content via DataChangeRequest.
     /// </summary>
-    private static UiControl BuildSaveButton(LayoutAreaHost host, string dataId, Type contentType, string _)
+    private static UiControl BuildSaveButton(LayoutAreaHost host, string dataId, Type contentType, string nodePath)
     {
         var hubAddress = host.Hub.Configuration.ParentHub?.Address ?? host.Hub.Address;
 
@@ -1822,7 +1822,7 @@ public static class MeshNodeView
         LayoutAreaHost host,
         INodeTypeService nodeTypeService,
         string nodePath,
-        CancellationToken _)
+        CancellationToken ct)
     {
         var stack = Controls.Stack.WithWidth("100%").WithStyle("padding: 24px;");
 
