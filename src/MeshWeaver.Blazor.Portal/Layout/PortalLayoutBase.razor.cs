@@ -96,6 +96,12 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
         var currentPath = NavigationService.CurrentNamespace;
         lastLoadedPath = currentPath;
 
+        if (currentPath == null)
+        {
+            creatableTypes = new();
+            return;
+        }
+
         try
         {
             creatableTypes = await nodeTypeService
