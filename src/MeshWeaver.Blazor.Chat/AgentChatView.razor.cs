@@ -63,11 +63,11 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
 
     // Agent, model, and context selection state
     private AgentDisplayInfo? selectedAgentInfo;
-    private string? selectedModel;
+    private ModelInfo? selectedModelInfo;
     private string? selectedContextPath;
     private string? selectedContextDisplayName;
     private IReadOnlyList<AgentDisplayInfo> agentDisplayInfos = [];
-    private IReadOnlyList<string> availableModels = [];
+    private IReadOnlyList<ModelInfo> availableModels = [];
     private bool pendingModelChange;
 
     // Pre-parser and command system
@@ -172,14 +172,20 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
         var contextPath = string.IsNullOrEmpty(initialPath) ? null : initialPath;
 
         // Get available models from all factories, ordered by DisplayOrder
+        // Include provider name for display in dropdown
         availableModels = ChatClientFactories
             .OrderBy(f => f.DisplayOrder)
-            .SelectMany(f => f.Models)
+            .SelectMany(f => f.Models.Select(m => new ModelInfo
+            {
+                Name = m,
+                Provider = f.Name,
+                DisplayOrder = f.DisplayOrder
+            }))
             .ToList();
 
         // Create a temporary chat to get ordered agents
         var tempChat = new AgentChatClient(Hub.ServiceProvider);
-        await tempChat.InitializeAsync(contextPath, availableModels.FirstOrDefault());
+        await tempChat.InitializeAsync(contextPath, availableModels.FirstOrDefault()?.Name);
 
         // Set context for agent ordering
         var context = await GetCurrentAgentContextAsync();
@@ -194,37 +200,38 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
         // Set initial model based on agent preference or default
         if (selectedAgentInfo != null)
         {
-            selectedModel = GetPreferredModelForAgent(selectedAgentInfo.Name);
+            selectedModelInfo = GetPreferredModelInfoForAgent(selectedAgentInfo.Name);
         }
         else
         {
-            selectedModel = availableModels.FirstOrDefault();
+            selectedModelInfo = availableModels.FirstOrDefault();
         }
 
         StateHasChanged();
     }
 
-    private string GetPreferredModelForAgent(string agentName)
+    private ModelInfo? GetPreferredModelInfoForAgent(string agentName)
     {
         // Check if user has overridden the preference
-        if (agentModelPreferences.TryGetValue(agentName, out var preferredModel))
-            return preferredModel;
+        if (agentModelPreferences.TryGetValue(agentName, out var preferredModelName))
+            return availableModels.FirstOrDefault(m => m.Name == preferredModelName);
 
         // Check agent configuration for preferred model
         var agentConfig = agentDisplayInfos.FirstOrDefault(a => a.Name == agentName)?.AgentConfiguration;
-        if (!string.IsNullOrEmpty(agentConfig?.PreferredModel) &&
-            availableModels.Contains(agentConfig.PreferredModel))
+        if (!string.IsNullOrEmpty(agentConfig?.PreferredModel))
         {
-            return agentConfig.PreferredModel;
+            var configuredModel = availableModels.FirstOrDefault(m => m.Name == agentConfig.PreferredModel);
+            if (configuredModel != null)
+                return configuredModel;
         }
 
         // Return default model
-        return availableModels.FirstOrDefault() ?? string.Empty;
+        return availableModels.FirstOrDefault();
     }
 
     private void SetModelPreferenceForAgent(string agentName, string modelName)
     {
-        if (!availableModels.Contains(modelName))
+        if (!availableModels.Any(m => m.Name == modelName))
             return;
 
         agentModelPreferences[agentName] = modelName;
@@ -347,10 +354,10 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
         if (newAgent != null && newAgent.Name != selectedAgentInfo?.Name)
         {
             selectedAgentInfo = newAgent;
-            selectedModel = GetPreferredModelForAgent(newAgent.Name);
+            selectedModelInfo = GetPreferredModelInfoForAgent(newAgent.Name);
 
             Logger.LogInformation("[Chat:{InstanceId}] Agent changed to {Agent} with model {Model}",
-                _instanceId, newAgent.Name, selectedModel);
+                _instanceId, newAgent.Name, selectedModelInfo?.Name);
 
             // Reinstantiate the agent with the new selection
             ScheduleAgentReinstantiation();
@@ -370,27 +377,27 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
         selectedAgentInfo = newAgentInfo;
 
         // Update model to agent's preferred model
-        var preferredModel = GetPreferredModelForAgent(newAgentInfo.Name);
-        if (!string.IsNullOrEmpty(preferredModel) && preferredModel != selectedModel)
+        var preferredModel = GetPreferredModelInfoForAgent(newAgentInfo.Name);
+        if (preferredModel != null && preferredModel.Name != selectedModelInfo?.Name)
         {
-            selectedModel = preferredModel;
+            selectedModelInfo = preferredModel;
             ScheduleAgentReinstantiation();
         }
 
         StateHasChanged();
     }
 
-    private void OnModelChanged(string? newModel)
+    private void OnModelInfoChanged(ModelInfo? newModel)
     {
-        if (newModel == selectedModel || string.IsNullOrEmpty(newModel))
+        if (newModel?.Name == selectedModelInfo?.Name || newModel == null)
             return;
 
-        selectedModel = newModel;
+        selectedModelInfo = newModel;
 
         // Update the agent's model preference
         if (selectedAgentInfo != null)
         {
-            SetModelPreferenceForAgent(selectedAgentInfo.Name, newModel);
+            SetModelPreferenceForAgent(selectedAgentInfo.Name, newModel.Name);
         }
 
         ScheduleAgentReinstantiation();
@@ -573,7 +580,7 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
     private async Task<IAgentChat> CreateChatAsync(string? contextPath)
     {
         // Use the selected model, or default if none selected
-        var model = selectedModel ?? availableModels.FirstOrDefault() ?? string.Empty;
+        var model = selectedModelInfo?.Name ?? availableModels.FirstOrDefault()?.Name ?? string.Empty;
 
         // Create AgentChatClient directly
         var chatClient = new AgentChatClient(Hub.ServiceProvider);
@@ -773,11 +780,11 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
         // Handle model reference (set as current model for this and future messages)
         if (!string.IsNullOrEmpty(parsed.ModelReference))
         {
-            var modelName = availableModels.FirstOrDefault(
-                m => m.Equals(parsed.ModelReference, StringComparison.OrdinalIgnoreCase));
-            if (modelName != null)
+            var modelInfo = availableModels.FirstOrDefault(
+                m => m.Name.Equals(parsed.ModelReference, StringComparison.OrdinalIgnoreCase));
+            if (modelInfo != null)
             {
-                OnModelChanged(modelName);
+                OnModelInfoChanged(modelInfo);
             }
         }
 
@@ -1306,8 +1313,8 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
             CurrentAgent = selectedAgentInfo,
             SetCurrentAgent = agent => OnAgentInfoChanged(agent),
             AvailableModels = availableModels,
-            CurrentModel = selectedModel,
-            SetCurrentModel = model => OnModelChanged(model),
+            CurrentModel = selectedModelInfo,
+            SetCurrentModel = model => OnModelInfoChanged(model),
             AgentContext = agentContext,
             CommandRegistry = commandRegistry
         };

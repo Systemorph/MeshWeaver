@@ -100,6 +100,16 @@
     background: var(--neutral-fill-secondary-hover);
 }
 
+.simple-dropdown-item-provider {
+    font-size: 0.7rem;
+    color: var(--accent-foreground-rest, var(--neutral-foreground-hint));
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    line-height: 1.2;
+    margin-bottom: 2px;
+}
+
 .simple-dropdown-item-name {
     font-weight: 600;
     font-size: 0.9rem;
