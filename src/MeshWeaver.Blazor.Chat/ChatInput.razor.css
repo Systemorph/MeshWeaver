@@ -58,6 +58,14 @@
     color: var(--accent-fill-hover);
 }
 
+.send-button.interrupt {
+    color: var(--warning-fill-rest, #ff9800);
+}
+
+.send-button.interrupt:hover {
+    color: var(--warning-fill-hover, #ffa726);
+}
+
 .attach {
     background-color: transparent;
     border-style: dashed;
