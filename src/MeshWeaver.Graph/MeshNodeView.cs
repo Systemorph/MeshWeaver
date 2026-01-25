@@ -898,69 +898,23 @@ public static class MeshNodeView
 
     /// <summary>
     /// Renders the Children view showing child nodes as thumbnails without search.
-    /// Groups children by Category (or NodeType if no Category), excludes NodeType nodes.
-    /// Use this for embedding children in custom views via LayoutAreaControl.
+    /// Groups children by NodeType (default) or Category if set, excludes NodeType nodes.
+    /// Uses MeshSearchControl for unified search/catalog functionality.
     /// </summary>
     [Browsable(false)]
-    public static IObservable<UiControl?> Children(LayoutAreaHost host, RenderingContext ctx)
+    public static UiControl Children(LayoutAreaHost host, RenderingContext _)
     {
         var hubPath = host.Hub.Address.ToString();
-        var meshQuery = host.Hub.ServiceProvider.GetService<IMeshQuery>();
 
-        if (meshQuery == null)
-        {
-            return Observable.Return<UiControl?>(Controls.Html("<p style=\"color: #888;\">Query service not available.</p>"));
-        }
-
-        return Observable.FromAsync(async () =>
-        {
-            IReadOnlyList<MeshNode> children;
-            try
-            {
-                children = await meshQuery.QueryAsync<MeshNode>($"path:{hubPath} scope:children -nodeType:NodeType").ToListAsync();
-            }
-            catch
-            {
-                children = Array.Empty<MeshNode>();
-            }
-
-            if (children.Count == 0)
-            {
-                return (UiControl?)Controls.Html("<p style=\"color: var(--neutral-foreground-hint);\">No children found.</p>");
-            }
-
-            // Group by Category if set, otherwise by NodeType
-            var childGroups = children
-                .GroupBy(c => c.Category ?? c.NodeType ?? "")
-                .OrderBy(g => g.Key)
-                .ToList();
-
-            var grid = Controls.LayoutGrid.WithSkin(s => s.WithSpacing(2));
-
-            foreach (var group in childGroups)
-            {
-                var groupKey = group.Key;
-                var groupChildren = group.OrderBy(n => n.DisplayOrder).ThenBy(n => n.Name).ToList();
-
-                // Add section header if there's a group key
-                if (!string.IsNullOrEmpty(groupKey))
-                {
-                    var displayName = GetGroupDisplayName(groupKey, groupChildren.Count);
-                    grid = grid.WithView(
-                        Controls.Html($"<h3 style=\"margin: 24px 0 8px 0;\">{displayName}</h3>"),
-                        itemSkin => itemSkin.WithXs(12));
-                }
-
-                foreach (var child in groupChildren)
-                {
-                    grid = grid.WithView(
-                        MeshNodeThumbnailControl.FromNode(child, child.Path),
-                        itemSkin => itemSkin.WithXs(12).WithSm(6).WithMd(4).WithLg(4));
-                }
-            }
-
-            return (UiControl?)grid;
-        });
+        return Controls.MeshSearch
+            .WithHiddenQuery($"path:{hubPath} scope:children -nodeType:NodeType")
+            .WithShowSearchBox(false)
+            .WithRenderMode(MeshSearchRenderMode.Grouped)
+            // No explicit grouping - defaults to NodeType which gives meaningful labels
+            .WithSectionCounts(true)
+            .WithItemLimit(10)
+            .WithShowMoreHref(key => $"/{hubPath}/{MeshCatalogView.NodesArea}/{key}")
+            .WithCollapsibleSections(true);
     }
 
     /// <summary>

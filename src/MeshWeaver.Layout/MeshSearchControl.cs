@@ -1,3 +1,5 @@
+using MeshWeaver.Layout.Catalog;
+
 namespace MeshWeaver.Layout;
 
 /// <summary>
@@ -80,6 +82,40 @@ public record MeshSearchControl()
     /// </summary>
     public object? LiveSearch { get; init; }
 
+    /// <summary>
+    /// Configuration for grouping results by a property.
+    /// </summary>
+    public GroupingConfig? Grouping { get; init; }
+
+    /// <summary>
+    /// Configuration for section display (counts, limits, collapsibility).
+    /// </summary>
+    public SectionConfig? Sections { get; init; }
+
+    /// <summary>
+    /// Configuration for sorting results.
+    /// </summary>
+    public SortConfig? Sorting { get; init; }
+
+    /// <summary>
+    /// Configuration for responsive grid layout.
+    /// </summary>
+    public GridConfig? Grid { get; init; }
+
+    /// <summary>
+    /// Whether to use ObserveQuery for reactive updates (default false).
+    /// When true, results automatically update when underlying data changes.
+    /// </summary>
+    public object? ReactiveMode { get; init; }
+
+    /// <summary>
+    /// Pre-computed grouped search results. When set, the Blazor component
+    /// uses these groups directly instead of computing them from lambdas.
+    /// This is the serializable output of ProcessResults().
+    /// </summary>
+    public GroupedSearchResult? PrecomputedGroups { get; init; }
+
+    // Basic fluent methods
     public MeshSearchControl WithHiddenQuery(string query) => this with { HiddenQuery = query };
     public MeshSearchControl WithVisibleQuery(string query) => this with { VisibleQuery = query };
     public MeshSearchControl WithPlaceholder(string placeholder) => this with { Placeholder = placeholder };
@@ -89,4 +125,50 @@ public record MeshSearchControl()
     public MeshSearchControl WithShowSearchBox(bool show) => this with { ShowSearchBox = show };
     public MeshSearchControl WithExcludeBasePath(bool exclude) => this with { ExcludeBasePath = exclude };
     public MeshSearchControl WithLiveSearch(bool live) => this with { LiveSearch = live };
+
+    // Grouping fluent methods
+    public MeshSearchControl WithGroupBy(string property) =>
+        this with { Grouping = (Grouping ?? new GroupingConfig()) with { GroupByProperty = property } };
+
+    public MeshSearchControl WithGroupKeyFormatter(Func<string?, string> formatter) =>
+        this with { Grouping = (Grouping ?? new GroupingConfig()) with { GroupKeyFormatter = formatter } };
+
+    public MeshSearchControl WithGroupKeyOrder(Func<string?, int> orderFunc) =>
+        this with { Grouping = (Grouping ?? new GroupingConfig()) with { GroupKeyOrder = orderFunc } };
+
+    public MeshSearchControl WithGroupExpanded(Func<string?, bool> predicate) =>
+        this with { Grouping = (Grouping ?? new GroupingConfig()) with { GroupExpandedPredicate = predicate } };
+
+    // Section fluent methods
+    public MeshSearchControl WithSectionCounts(bool showCounts) =>
+        this with { Sections = (Sections ?? new SectionConfig()) with { ShowCounts = showCounts } };
+
+    public MeshSearchControl WithItemLimit(int limit) =>
+        this with { Sections = (Sections ?? new SectionConfig()) with { ItemLimit = limit } };
+
+    public MeshSearchControl WithCollapsibleSections(bool collapsible) =>
+        this with { Sections = (Sections ?? new SectionConfig()) with { Collapsible = collapsible } };
+
+    public MeshSearchControl WithShowMoreHref(Func<string, string> hrefBuilder) =>
+        this with { Sections = (Sections ?? new SectionConfig()) with { ShowMoreHrefBuilder = hrefBuilder } };
+
+    // Sorting fluent methods
+    public MeshSearchControl WithSortBy(string property, bool ascending = true) =>
+        this with { Sorting = (Sorting ?? new SortConfig()) with { SortByProperty = property, Ascending = ascending } };
+
+    public MeshSearchControl WithThenBy(string property, bool ascending = true) =>
+        this with { Sorting = (Sorting ?? new SortConfig()) with { ThenByProperty = property, ThenByAscending = ascending } };
+
+    // Grid fluent methods
+    public MeshSearchControl WithGridBreakpoints(int xs = 12, int sm = 6, int md = 4, int lg = 4) =>
+        this with { Grid = new GridConfig { Xs = xs, Sm = sm, Md = md, Lg = lg, Spacing = Grid?.Spacing ?? 2 } };
+
+    public MeshSearchControl WithGridSpacing(int spacing) =>
+        this with { Grid = (Grid ?? new GridConfig()) with { Spacing = spacing } };
+
+    // Reactive mode
+    public MeshSearchControl WithReactiveMode(bool reactive) => this with { ReactiveMode = reactive };
+
+    // Pre-computed groups
+    public MeshSearchControl WithPrecomputedGroups(GroupedSearchResult groups) => this with { PrecomputedGroups = groups };
 }

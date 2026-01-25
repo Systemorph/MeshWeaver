@@ -1,11 +1,15 @@
+@using MeshWeaver.Blazor
 @using MeshWeaver.Blazor.Components.Monaco
 @using MeshWeaver.Layout
+@using MeshWeaver.Layout.Catalog
 @using MeshWeaver.Layout.Client
 @using MeshWeaver.Data
 @using MeshWeaver.Mesh
 @using MeshWeaver.Mesh.Services
 @using System.Text.Json
+@using System.Reactive.Linq
 @using Microsoft.FluentUI.AspNetCore.Components
+@implements IDisposable
 @inject NavigationManager NavigationManager
 @inject IMeshQuery MeshQuery
 
@@ -39,13 +43,13 @@
         {
             <FluentProgressRing />
         }
-        else if (_nodes.Count == 0)
+        else if (!HasResults())
         {
             <FluentLabel Typo="Microsoft.FluentUI.AspNetCore.Components.Typography.Body" Style="color: var(--neutral-foreground-hint);">No items found.</FluentLabel>
         }
         else
         {
-            @RenderHierarchicalResults()
+            @RenderGroupedResults()
         }
     </div>
 </div>
@@ -56,6 +60,9 @@
     private bool _initialized;
     private bool _isLoading = true;
     private List<MeshNode> _nodes = new();
+    private GroupedSearchResult? _computedGroups;
+    private IDisposable? _reactiveSubscription;
+    private HashSet<string> _collapsedGroups = new();
 
     [Parameter]
     public MeshSearchControl? ViewModel { get; set; }
@@ -66,6 +73,7 @@
     [Parameter]
     public string? Area { get; set; }
 
+    // Basic properties
     private string BoundHiddenQuery => ViewModel?.HiddenQuery?.ToString() ?? "";
     private string BoundVisibleQuery => ViewModel?.VisibleQuery?.ToString() ?? "";
     private string BoundPlaceholder => ViewModel?.Placeholder?.ToString() ?? "Search...";
@@ -74,6 +82,22 @@
     private bool BoundShowSearchBox => ViewModel?.ShowSearchBox is bool show ? show : true;
     private bool BoundExcludeBasePath => ViewModel?.ExcludeBasePath is bool exclude ? exclude : true;
     private bool BoundLiveSearch => ViewModel?.LiveSearch is bool live ? live : true;
+    private bool BoundReactiveMode => ViewModel?.ReactiveMode is bool reactive && reactive;
+    private MeshSearchRenderMode BoundRenderMode => ViewModel?.RenderMode is MeshSearchRenderMode mode ? mode : MeshSearchRenderMode.Grouped;
+
+    // Config objects
+    private SectionConfig? BoundSections => ViewModel?.Sections;
+    private GridConfig BoundGrid => ViewModel?.Grid ?? new GridConfig();
+
+    // Pre-computed groups (from ViewModel or computed locally)
+    private GroupedSearchResult? BoundPrecomputedGroups => ViewModel?.PrecomputedGroups;
+
+    private bool HasResults()
+    {
+        if (BoundPrecomputedGroups != null)
+            return BoundPrecomputedGroups.TotalItems > 0;
+        return _nodes.Count > 0;
+    }
 
     protected override void OnParametersSet()
     {
@@ -81,6 +105,15 @@
         if (!_initialized && !string.IsNullOrEmpty(BoundVisibleQuery))
         {
             _currentValue = BoundVisibleQuery;
+        }
+
+        // Initialize collapsed state from pre-computed groups
+        if (BoundPrecomputedGroups != null && !_initialized)
+        {
+            foreach (var group in BoundPrecomputedGroups.Groups.Where(g => !g.IsExpanded))
+            {
+                _collapsedGroups.Add(group.GroupKey);
+            }
         }
     }
 
@@ -93,9 +126,80 @@
             {
                 await monacoEditor.SetValueAsync(BoundVisibleQuery);
             }
-            await LoadResultsAsync();
+
+            // If we have pre-computed groups, no need to fetch
+            if (BoundPrecomputedGroups != null)
+            {
+                _isLoading = false;
+                StateHasChanged();
+                return;
+            }
+
+            if (BoundReactiveMode)
+            {
+                SetupReactiveSubscription();
+            }
+            else
+            {
+                await LoadResultsAsync();
+            }
             StateHasChanged();
         }
+    }
+
+    private void SetupReactiveSubscription()
+    {
+        _reactiveSubscription?.Dispose();
+        var query = BuildFullQuery();
+
+        _reactiveSubscription = MeshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(query))
+            .Subscribe(change =>
+            {
+                _nodes = ApplyChangesToList(_nodes, change);
+
+                // Apply exclusion filter
+                if (BoundExcludeBasePath && !string.IsNullOrEmpty(BoundNamespace))
+                {
+                    var basePath = BoundNamespace.Trim('/');
+                    _nodes = _nodes.Where(n => n.Path != basePath).ToList();
+                }
+
+                // Compute groups using extension method
+                if (ViewModel != null)
+                {
+                    _computedGroups = ViewModel.ProcessResults(_nodes);
+                    InitializeCollapsedState(_computedGroups);
+                }
+
+                _isLoading = false;
+                InvokeAsync(StateHasChanged);
+            });
+    }
+
+    private List<MeshNode> ApplyChangesToList(List<MeshNode> current, QueryResultChange<MeshNode> change)
+    {
+        if (change.ChangeType == QueryChangeType.Initial || change.ChangeType == QueryChangeType.Reset)
+        {
+            return change.Items.ToList();
+        }
+
+        var result = new List<MeshNode>(current);
+        foreach (var item in change.Items)
+        {
+            if (change.ChangeType == QueryChangeType.Removed)
+            {
+                result.RemoveAll(n => n.Path == item.Path);
+            }
+            else
+            {
+                var existingIndex = result.FindIndex(n => n.Path == item.Path);
+                if (existingIndex >= 0)
+                    result[existingIndex] = item;
+                else
+                    result.Add(item);
+            }
+        }
+        return result;
     }
 
     private Task OnValueChanged(string value)
@@ -103,7 +207,14 @@
         _currentValue = value;
         if (BoundLiveSearch)
         {
-            _ = LoadResultsAsync();
+            if (BoundReactiveMode)
+            {
+                SetupReactiveSubscription();
+            }
+            else
+            {
+                _ = LoadResultsAsync();
+            }
         }
         return Task.CompletedTask;
     }
@@ -114,7 +225,15 @@
         {
             _currentValue = await monacoEditor.GetValueAsync();
         }
-        await LoadResultsAsync();
+
+        if (BoundReactiveMode)
+        {
+            SetupReactiveSubscription();
+        }
+        else
+        {
+            await LoadResultsAsync();
+        }
     }
 
     private async Task LoadResultsAsync()
@@ -133,15 +252,33 @@
                 var basePath = BoundNamespace.Trim('/');
                 _nodes = _nodes.Where(n => n.Path != basePath).ToList();
             }
+
+            // Compute groups using extension method
+            if (ViewModel != null)
+            {
+                _computedGroups = ViewModel.ProcessResults(_nodes);
+                InitializeCollapsedState(_computedGroups);
+            }
         }
         catch
         {
             _nodes = new List<MeshNode>();
+            _computedGroups = null;
         }
         finally
         {
             _isLoading = false;
             StateHasChanged();
+        }
+    }
+
+    private void InitializeCollapsedState(GroupedSearchResult? groups)
+    {
+        if (groups == null || _initialized) return;
+
+        foreach (var group in groups.Groups.Where(g => !g.IsExpanded))
+        {
+            _collapsedGroups.Add(group.GroupKey);
         }
     }
 
@@ -187,55 +324,152 @@
         }
     }
 
-    private RenderFragment RenderHierarchicalResults() => builder =>
+    /// <summary>
+    /// Gets the groups to render, preferring pre-computed over locally computed.
+    /// </summary>
+    private IReadOnlyList<SearchResultGroup> GetGroups()
     {
-        // Find root nodes (those without a parent in the result set)
-        var allPaths = _nodes.Select(n => n.Path).ToHashSet();
-        var rootNodes = _nodes.Where(n => !HasParentInSet(n.Path, allPaths)).ToList();
+        // Prefer pre-computed groups from ViewModel
+        if (BoundPrecomputedGroups != null)
+            return BoundPrecomputedGroups.Groups;
 
-        // Group by category of the top (root) item
-        var groups = rootNodes
-            .GroupBy(n => n.Category ?? "Uncategorized")
-            .OrderBy(g => g.Key)
-            .ToList();
+        // Fall back to locally computed groups
+        return _computedGroups?.Groups ?? [];
+    }
 
+    /// <summary>
+    /// Renders grouped results using SearchResultGroup.
+    /// </summary>
+    private RenderFragment RenderGroupedResults() => builder =>
+    {
+        var groups = GetGroups();
         var seq = 0;
+
+        // Skip headers entirely if there's only one group (cleaner single-category display)
+        var skipHeaders = groups.Count == 1;
+
         foreach (var group in groups)
         {
-            // Category heading
-            builder.OpenElement(seq++, "h3");
-            builder.AddAttribute(seq++, "style", "margin: 24px 0 12px 0;");
-            builder.AddContent(seq++, group.Key);
-            builder.CloseElement();
+            var isCollapsed = _collapsedGroups.Contains(group.GroupKey);
+            var showCollapsible = (BoundSections?.Collapsible ?? true) && !skipHeaders;
+            var showCounts = BoundSections?.ShowCounts ?? true;
 
-            // FluentGrid for this category - each root node + its subtree is one cell
-            builder.OpenComponent<FluentGrid>(seq++);
-            builder.AddAttribute(seq++, "Spacing", 3);
-            builder.AddAttribute(seq++, "Justify", Microsoft.FluentUI.AspNetCore.Components.JustifyContent.FlexStart);
-            builder.AddAttribute(seq++, "ChildContent", (RenderFragment)(gridBuilder =>
+            // Section header - use TotalCount for accurate count display
+            var headerLabel = showCounts ? $"{group.Label} ({group.TotalCount})" : group.Label;
+
+            builder.OpenElement(seq++, "div");
+            builder.AddAttribute(seq++, "style", "margin-bottom: 24px;");
+
+            // Header with collapse toggle - skip if only one group
+            if (!skipHeaders)
             {
-                var gridSeq = 0;
-                foreach (var rootNode in group)
+                if (showCollapsible)
                 {
-                    // Each root with its subtree goes into one FluentGridItem
-                    gridBuilder.OpenComponent<FluentGridItem>(gridSeq++);
-                    gridBuilder.AddAttribute(gridSeq++, "xs", 12);
-                    gridBuilder.AddAttribute(gridSeq++, "sm", 6);
-                    gridBuilder.AddAttribute(gridSeq++, "md", 4);
-                    gridBuilder.AddAttribute(gridSeq++, "ChildContent", (RenderFragment)(itemBuilder =>
-                    {
-                        RenderNodeTree(itemBuilder, rootNode, 0);
-                    }));
-                    gridBuilder.CloseComponent();
+                    builder.OpenElement(seq++, "div");
+                    builder.AddAttribute(seq++, "style", "display: flex; align-items: center; gap: 8px; cursor: pointer; padding: 10px 14px; background: var(--neutral-layer-2); border-radius: 6px; margin-bottom: 8px;");
+                    var groupKey = group.GroupKey;
+                    builder.AddAttribute(seq++, "onclick", EventCallback.Factory.Create(this, () => ToggleGroup(groupKey)));
+
+                    // Collapse icon
+                    builder.OpenElement(seq++, "span");
+                    builder.AddAttribute(seq++, "style", $"transition: transform 0.2s; transform: rotate({(isCollapsed ? "0" : "90")}deg);");
+                    builder.AddContent(seq++, "▶");
+                    builder.CloseElement();
+
+                    // Label
+                    builder.OpenElement(seq++, "span");
+                    builder.AddAttribute(seq++, "style", "font-weight: 600; font-size: 1.1rem;");
+                    builder.AddContent(seq++, headerLabel);
+                    builder.CloseElement();
+
+                    builder.CloseElement(); // header div
                 }
-            }));
-            builder.CloseComponent();
+                else
+                {
+                    builder.OpenElement(seq++, "h3");
+                    builder.AddAttribute(seq++, "style", "margin: 24px 0 12px 0;");
+                    builder.AddContent(seq++, headerLabel);
+                    builder.CloseElement();
+                }
+            }
+
+            // Content (items grid)
+            if (!isCollapsed)
+            {
+                // Items are already limited in SearchResultGroup
+                builder.OpenComponent<FluentGrid>(seq++);
+                builder.AddAttribute(seq++, "Spacing", BoundGrid.Spacing);
+                builder.AddAttribute(seq++, "Justify", Microsoft.FluentUI.AspNetCore.Components.JustifyContent.FlexStart);
+                builder.AddAttribute(seq++, "ChildContent", (RenderFragment)(gridBuilder =>
+                {
+                    var gridSeq = 0;
+
+                    foreach (var item in group.Items)
+                    {
+                        if (item is not MeshNode node) continue;
+
+                        gridBuilder.OpenComponent<FluentGridItem>(gridSeq++);
+                        // Use same breakpoints as original MeshNodeView.Children: xs=12, sm=6, md=4, lg=4
+                        gridBuilder.AddAttribute(gridSeq++, "xs", BoundGrid.Xs);
+                        gridBuilder.AddAttribute(gridSeq++, "sm", BoundGrid.Sm);
+                        gridBuilder.AddAttribute(gridSeq++, "md", BoundGrid.Md);
+                        gridBuilder.AddAttribute(gridSeq++, "lg", BoundGrid.Lg);
+                        gridBuilder.AddAttribute(gridSeq++, "ChildContent", (RenderFragment)(itemBuilder =>
+                        {
+                            RenderNodeCard(itemBuilder, node);
+                        }));
+                        gridBuilder.CloseComponent();
+                    }
+                }));
+                builder.CloseComponent();
+
+                // Show more button if items were limited
+                if (group.Items.Count < group.TotalCount)
+                {
+                    var showMoreHref = ViewModel?.GetShowMoreHref(group.GroupKey);
+                    if (!string.IsNullOrEmpty(showMoreHref))
+                    {
+                        builder.OpenElement(seq++, "div");
+                        builder.AddAttribute(seq++, "style", "margin-top: 8px;");
+                        builder.OpenElement(seq++, "a");
+                        builder.AddAttribute(seq++, "href", showMoreHref);
+                        builder.AddAttribute(seq++, "style", "color: var(--accent-fill-rest); text-decoration: none; font-weight: 500;");
+                        builder.AddContent(seq++, $"Show all {group.TotalCount} →");
+                        builder.CloseElement();
+                        builder.CloseElement();
+                    }
+                }
+            } // end if (!isCollapsed)
+
+            builder.CloseElement(); // section div
         }
     };
 
-    private void RenderNodeTree(Microsoft.AspNetCore.Components.Rendering.RenderTreeBuilder builder, MeshNode node, int indentLevel)
+    private void ToggleGroup(string groupKey)
+    {
+        if (_collapsedGroups.Contains(groupKey))
+            _collapsedGroups.Remove(groupKey);
+        else
+            _collapsedGroups.Add(groupKey);
+        StateHasChanged();
+    }
+
+    private void RenderNodeCard(Microsoft.AspNetCore.Components.Rendering.RenderTreeBuilder builder, MeshNode node)
     {
         var seq = 0;
+
+        if (BoundRenderMode == MeshSearchRenderMode.Hierarchical)
+        {
+            RenderNodeTree(builder, node, 0, ref seq);
+        }
+        else
+        {
+            RenderThumbnailCard(builder, node, ref seq);
+        }
+    }
+
+    private void RenderNodeTree(Microsoft.AspNetCore.Components.Rendering.RenderTreeBuilder builder, MeshNode node, int indentLevel, ref int seq)
+    {
         var marginLeft = indentLevel * 20;
 
         // Container for this node and its children
@@ -249,7 +483,7 @@
         var children = FindDirectChildren(node);
         foreach (var child in children)
         {
-            RenderNodeTree(builder, child, indentLevel + 1);
+            RenderNodeTree(builder, child, indentLevel + 1, ref seq);
         }
 
         builder.CloseElement();
@@ -262,9 +496,12 @@
         var description = node.Description ?? "";
         var initial = !string.IsNullOrEmpty(title) ? title[0].ToString().ToUpper() : "?";
 
+        // Match the min-width from MeshNodeThumbnailView.razor (320px)
+        var cardStyle = "min-width: 320px; cursor: pointer; margin: 8px;";
+
         builder.OpenComponent<FluentCard>(seq++);
         builder.AddAttribute(seq++, "Class", "mesh-search-card");
-        builder.AddAttribute(seq++, "Style", "width: 100%; margin-bottom: 8px; cursor: pointer;");
+        builder.AddAttribute(seq++, "Style", cardStyle);
         builder.AddAttribute(seq++, "onclick", EventCallback.Factory.Create(this, () => NavigateTo(node.Path)));
         builder.AddAttribute(seq++, "ChildContent", (RenderFragment)(cardBuilder =>
         {
@@ -376,5 +613,10 @@
     private string Truncate(string text, int maxLength)
     {
         return text.Length > maxLength ? text.Substring(0, maxLength - 3) + "..." : text;
+    }
+
+    public void Dispose()
+    {
+        _reactiveSubscription?.Dispose();
     }
 }
