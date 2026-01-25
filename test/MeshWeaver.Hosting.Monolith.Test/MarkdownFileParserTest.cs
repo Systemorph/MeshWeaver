@@ -36,9 +36,6 @@ public class MarkdownFileParserTest
               - tutorial
               - beginner
             Thumbnail: /images/thumb.png
-            VideoUrl: https://youtube.com/watch?v=123
-            VideoDuration: "00:15:30"
-            VideoTitle: Tutorial Video
             ---
 
             # My Article
@@ -64,9 +61,6 @@ public class MarkdownFileParserTest
         mdContent.Authors.Should().BeEquivalentTo(["John Doe", "Jane Smith"]);
         mdContent.Tags.Should().BeEquivalentTo(["tutorial", "beginner"]);
         mdContent.Thumbnail.Should().Be("/images/thumb.png");
-        mdContent.VideoUrl.Should().Be("https://youtube.com/watch?v=123");
-        mdContent.VideoDuration.Should().Be(TimeSpan.FromMinutes(15) + TimeSpan.FromSeconds(30));
-        mdContent.VideoTitle.Should().Be("Tutorial Video");
         mdContent.Content.Should().Contain("# My Article");
     }
 
@@ -172,8 +166,7 @@ public class MarkdownFileParserTest
                 Content = "# Hello World\n\nContent here.",
                 Authors = ["Author 1", "Author 2"],
                 Tags = ["tag1", "tag2"],
-                Thumbnail = "/thumb.png",
-                VideoUrl = "https://video.com/123"
+                Thumbnail = "/thumb.png"
             }
         };
 
@@ -193,7 +186,6 @@ public class MarkdownFileParserTest
         result.Should().Contain("tag1");
         result.Should().Contain("tag2");
         result.Should().Contain("Thumbnail: /thumb.png");
-        result.Should().Contain("VideoUrl: https://video.com/123");
         result.Should().Contain("# Hello World");
         result.Should().Contain("Content here.");
     }
@@ -308,39 +300,6 @@ public class MarkdownFileParserTest
         mdContent.Tags.Should().BeEquivalentTo(["advanced"]);
         mdContent.Content.Should().Contain("# Tutorial Title");
         mdContent.Content.Should().Contain("Step 1: Do this.");
-    }
-
-    [Fact]
-    public async Task RoundTrip_WithVideoMetadata_PreservesAll()
-    {
-        // Arrange
-        var node = new MeshNode("video", "content")
-        {
-            Name = "Video Tutorial",
-            Content = new MarkdownContent
-            {
-                Content = "# Video Content",
-                VideoUrl = "https://youtube.com/watch?v=abc123",
-                VideoDuration = TimeSpan.FromMinutes(10) + TimeSpan.FromSeconds(30),
-                VideoTitle = "My Video",
-                VideoDescription = "Video description",
-                VideoTagLine = "Learn something new",
-                VideoTranscript = "Full transcript here"
-            }
-        };
-
-        // Act
-        var serialized = await _parser.SerializeAsync(node);
-        var reparsed = await _parser.ParseAsync("/content/video.md", serialized, "content/video.md");
-
-        // Assert
-        var mdContent = reparsed!.Content.Should().BeOfType<MarkdownContent>().Subject;
-        mdContent.VideoUrl.Should().Be("https://youtube.com/watch?v=abc123");
-        mdContent.VideoDuration.Should().Be(TimeSpan.FromMinutes(10) + TimeSpan.FromSeconds(30));
-        mdContent.VideoTitle.Should().Be("My Video");
-        mdContent.VideoDescription.Should().Be("Video description");
-        mdContent.VideoTagLine.Should().Be("Learn something new");
-        mdContent.VideoTranscript.Should().Be("Full transcript here");
     }
 
     #endregion

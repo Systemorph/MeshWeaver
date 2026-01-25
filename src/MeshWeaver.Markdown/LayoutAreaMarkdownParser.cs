@@ -422,39 +422,22 @@ public class LayoutAreaMarkdownParser : BlockParser
         string keyword;
         string? remainingPath;
 
-        if (partsNoEmpty.Length >= 3)
+        if (partsNoEmpty.Length >= 3 && ReservedKeywords.Contains(partsNoEmpty[2].ToLowerInvariant()))
         {
-            var potentialKeywordLower = partsNoEmpty[2].ToLowerInvariant();
-            var potentialKeywordOriginal = partsNoEmpty[2];
-            if (ReservedKeywords.Contains(potentialKeywordLower))
-            {
-                // Reserved keyword specified (e.g., host/1/data/Collection)
-                keyword = potentialKeywordLower;
-                remainingPath = partsNoEmpty.Length > 3
-                    ? string.Join("/", partsNoEmpty.Skip(3))
-                    : null;
-            }
-            else if (partsNoEmpty.Length >= 4 && potentialKeywordLower == "content")
-            {
-                // "content" is special: treated as content collection (e.g., app/test/content/file.pdf)
-                keyword = "content";
-                remainingPath = string.Join("/", partsNoEmpty.Skip(3));
-            }
-            else
-            {
-                // Non-reserved keyword = area reference (e.g., app/test/Dashboard or app/test/Todo/item1)
-                // Preserve original case for area names
-                keyword = "area";
-                remainingPath = partsNoEmpty.Length > 2
-                    ? string.Join("/", partsNoEmpty.Skip(2))
-                    : null;
-            }
+            // Reserved keyword specified (e.g., host/1/data/Collection)
+            keyword = partsNoEmpty[2].ToLowerInvariant();
+            remainingPath = partsNoEmpty.Length > 3
+                ? string.Join("/", partsNoEmpty.Skip(3))
+                : null;
         }
         else
         {
-            // Less than 3 segments - default to area with no path
+            // No reserved keyword - default to area
+            // Content collections require colon syntax (e.g., "content:" or "assets:")
             keyword = "area";
-            remainingPath = null;
+            remainingPath = partsNoEmpty.Length > 2
+                ? string.Join("/", partsNoEmpty.Skip(2))
+                : null;
         }
 
         return (fullAddress, keyword, remainingPath);
