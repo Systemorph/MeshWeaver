@@ -10,13 +10,23 @@ namespace MeshWeaver.Hosting.Persistence;
 /// File system persistence service with in-memory caching.
 /// Reads from file system on cache miss, with 10-minute sliding expiration.
 /// </summary>
-public class FileSystemPersistenceService(IStorageAdapter storageAdapter) : IPersistenceService
+public class FileSystemPersistenceService : IPersistenceService
 {
+    private readonly IStorageAdapter _storageAdapter;
+    private readonly IDataChangeNotifier? _changeNotifier;
     private readonly IMemoryCache _cache = new MemoryCache(new MemoryCacheOptions());
     private readonly MemoryCacheEntryOptions _cacheOptions = new()
     {
         SlidingExpiration = TimeSpan.FromMinutes(10)
     };
+
+    public FileSystemPersistenceService(
+        IStorageAdapter storageAdapter,
+        IDataChangeNotifier? changeNotifier = null)
+    {
+        _storageAdapter = storageAdapter;
+        _changeNotifier = changeNotifier;
+    }
 
     private static string NormalizePath(string? path) =>
         path?.Trim('/').ToLowerInvariant() ?? "";
@@ -30,7 +40,7 @@ public class FileSystemPersistenceService(IStorageAdapter storageAdapter) : IPer
         if (_cache.TryGetValue(key, out MeshNode? cached))
             return cached;
 
-        var node = await storageAdapter.ReadAsync(path, ct);
+        var node = await _storageAdapter.ReadAsync(path, ct);
         if (node != null)
         {
             _cache.Set(key, node, _cacheOptions);
@@ -40,11 +50,11 @@ public class FileSystemPersistenceService(IStorageAdapter storageAdapter) : IPer
 
     public async IAsyncEnumerable<MeshNode> GetChildrenAsync(string? parentPath)
     {
-        var (nodePaths, _) = await storageAdapter.ListChildPathsAsync(parentPath ?? "", default);
+        var (nodePaths, _) = await _storageAdapter.ListChildPathsAsync(parentPath ?? "", default);
 
         foreach (var path in nodePaths)
         {
-            var node = await storageAdapter.ReadAsync(path, default);
+            var node = await _storageAdapter.ReadAsync(path, default);
             if (node != null)
                 yield return node;
         }
@@ -66,35 +76,53 @@ public class FileSystemPersistenceService(IStorageAdapter storageAdapter) : IPer
 
     public async Task<MeshNode> SaveNodeAsync(MeshNode node, CancellationToken ct = default)
     {
+        var key = NormalizePath(node.Path);
+        var isNew = !_cache.TryGetValue(key, out MeshNode? _) && !await _storageAdapter.ExistsAsync(node.Path, ct);
+
         var savedNode = node with
         {
             LastModified = node.LastModified == default ? DateTimeOffset.UtcNow : node.LastModified
         };
 
-        await storageAdapter.WriteAsync(savedNode, ct);
+        await _storageAdapter.WriteAsync(savedNode, ct);
 
         // Update cache
-        var key = NormalizePath(savedNode.Path);
         _cache.Set(key, savedNode, _cacheOptions);
+
+        // Notify change
+        _changeNotifier?.NotifyChange(isNew
+            ? DataChangeNotification.Created(key, savedNode)
+            : DataChangeNotification.Updated(key, savedNode));
 
         return savedNode;
     }
 
     public async Task DeleteNodeAsync(string path, bool recursive = false, CancellationToken ct = default)
     {
-        await storageAdapter.DeleteAsync(path, ct);
+        var key = NormalizePath(path);
+
+        // Get the node before deletion for notification
+        MeshNode? deletedNode = null;
+        if (_cache.TryGetValue(key, out MeshNode? cached))
+            deletedNode = cached;
+        else
+            deletedNode = await _storageAdapter.ReadAsync(path, ct);
+
+        await _storageAdapter.DeleteAsync(path, ct);
 
         // Invalidate cache
-        var key = NormalizePath(path);
         _cache.Remove(key);
+
+        // Notify deletion
+        _changeNotifier?.NotifyChange(DataChangeNotification.Deleted(key, deletedNode));
     }
 
     public async Task<MeshNode> MoveNodeAsync(string sourcePath, string targetPath, CancellationToken ct = default)
     {
-        var sourceNode = await storageAdapter.ReadAsync(sourcePath, ct)
+        var sourceNode = await _storageAdapter.ReadAsync(sourcePath, ct)
             ?? throw new InvalidOperationException($"Source node not found: {sourcePath}");
 
-        if (await storageAdapter.ExistsAsync(targetPath, ct))
+        if (await _storageAdapter.ExistsAsync(targetPath, ct))
             throw new InvalidOperationException($"Target path already exists: {targetPath}");
 
         var movedNode = MeshNode.FromPath(targetPath) with
@@ -117,14 +145,18 @@ public class FileSystemPersistenceService(IStorageAdapter storageAdapter) : IPer
             GlobalServiceConfigurations = sourceNode.GlobalServiceConfigurations
         };
 
-        await storageAdapter.WriteAsync(movedNode, ct);
-        await storageAdapter.DeleteAsync(sourcePath, ct);
+        await _storageAdapter.WriteAsync(movedNode, ct);
+        await _storageAdapter.DeleteAsync(sourcePath, ct);
 
         // Update cache: remove old path, add new path
         var sourceKey = NormalizePath(sourcePath);
         var targetKey = NormalizePath(targetPath);
         _cache.Remove(sourceKey);
         _cache.Set(targetKey, movedNode, _cacheOptions);
+
+        // Notify changes: deletion at source, creation at target
+        _changeNotifier?.NotifyChange(DataChangeNotification.Deleted(sourceKey, sourceNode));
+        _changeNotifier?.NotifyChange(DataChangeNotification.Created(targetKey, movedNode));
 
         return movedNode;
     }
@@ -143,13 +175,13 @@ public class FileSystemPersistenceService(IStorageAdapter storageAdapter) : IPer
     }
 
     public Task<bool> ExistsAsync(string path, CancellationToken ct = default)
-        => storageAdapter.ExistsAsync(path, ct);
+        => _storageAdapter.ExistsAsync(path, ct);
 
     #region Comments - stored in separate files
 
     public async IAsyncEnumerable<Comment> GetCommentsAsync(string nodePath)
     {
-        await foreach (var obj in storageAdapter.GetPartitionObjectsAsync(nodePath, "comments"))
+        await foreach (var obj in _storageAdapter.GetPartitionObjectsAsync(nodePath, "comments"))
         {
             if (obj is Comment comment)
                 yield return comment;
@@ -171,7 +203,7 @@ public class FileSystemPersistenceService(IStorageAdapter storageAdapter) : IPer
         }
         comments.Add(savedComment);
 
-        await storageAdapter.SavePartitionObjectsAsync(comment.NodePath, "comments", comments.Cast<object>().ToList(), ct);
+        await _storageAdapter.SavePartitionObjectsAsync(comment.NodePath, "comments", comments.Cast<object>().ToList(), ct);
         return savedComment;
     }
 
@@ -194,16 +226,16 @@ public class FileSystemPersistenceService(IStorageAdapter storageAdapter) : IPer
     #region Partition Storage
 
     public IAsyncEnumerable<object> GetPartitionObjectsAsync(string nodePath, string? subPath = null)
-        => storageAdapter.GetPartitionObjectsAsync(nodePath, subPath);
+        => _storageAdapter.GetPartitionObjectsAsync(nodePath, subPath);
 
     public Task SavePartitionObjectsAsync(string nodePath, string? subPath, IReadOnlyCollection<object> objects, CancellationToken ct = default)
-        => storageAdapter.SavePartitionObjectsAsync(nodePath, subPath, objects, ct);
+        => _storageAdapter.SavePartitionObjectsAsync(nodePath, subPath, objects, ct);
 
     public Task DeletePartitionObjectsAsync(string nodePath, string? subPath = null, CancellationToken ct = default)
-        => storageAdapter.DeletePartitionObjectsAsync(nodePath, subPath, ct);
+        => _storageAdapter.DeletePartitionObjectsAsync(nodePath, subPath, ct);
 
     public Task<DateTimeOffset?> GetPartitionMaxTimestampAsync(string nodePath, string? subPath = null, CancellationToken ct = default)
-        => storageAdapter.GetPartitionMaxTimestampAsync(nodePath, subPath, ct);
+        => _storageAdapter.GetPartitionMaxTimestampAsync(nodePath, subPath, ct);
 
     #endregion
 

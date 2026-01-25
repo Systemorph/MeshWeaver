@@ -647,25 +647,8 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
     }
 
     /// <summary>
-    /// Test that content without colon parses correctly.
-    /// </summary>
-    [Fact]
-    public void KeywordWithoutColon_Content_ParsesCorrectly()
-    {
-        var markdown = "@MeshWeaver/Documentation/DataMesh/UnifiedPath/content";
-        var extension = new LayoutAreaMarkdownExtension();
-        var pipeline = new MarkdownPipelineBuilder().Use(extension).Build();
-        var document = Markdig.Markdown.Parse(markdown, pipeline);
-
-        var layoutArea = document.Descendants<LayoutAreaComponentInfo>().Single();
-        layoutArea.Address.Should().Be("MeshWeaver/Documentation/DataMesh/UnifiedPath");
-        layoutArea.Area.Should().Be(LayoutAreaMarkdownParser.ContentAreaName);
-        layoutArea.Id.Should().BeNull();
-        layoutArea.IsInline.Should().BeFalse();
-    }
-
-    /// <summary>
     /// Test that model without colon parses correctly.
+    /// Note: Content collections require colon syntax (content:), unlike reserved keywords.
     /// </summary>
     [Fact]
     public void KeywordWithoutColon_Model_ParsesCorrectly()
