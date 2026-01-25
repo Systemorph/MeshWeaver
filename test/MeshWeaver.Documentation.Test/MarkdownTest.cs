@@ -142,12 +142,12 @@ Console.WriteLine(""Hello World"");
     [Fact]
     public void ParseFileContentReference()
     {
-        // New format: addressType/addressId/keyword/path
-        var markdown = "@(\"app/test/content/Documents/report.pdf\")";
+        // Colon syntax for content collections: address/content:path
+        var markdown = "@(\"app/test/content:Documents/report.pdf\")";
         var extension = new LayoutAreaMarkdownExtension();
         var document = ParseMarkdown(markdown, extension);
 
-        // File references are now translated to LayoutAreaComponentInfo with $Content area
+        // File references are translated to LayoutAreaComponentInfo with $Content area
         var layoutAreas = document.Descendants<LayoutAreaComponentInfo>().ToArray();
         layoutAreas.Should().HaveCount(1);
 
@@ -160,8 +160,8 @@ Console.WriteLine(""Hello World"");
     [Fact]
     public void ParseFileContentReferenceWithPartition()
     {
-        // New format: addressType/addressId/keyword/path
-        var markdown = "@(\"app/test/content/Documents@2024/report.pdf\")";
+        // Colon syntax for content collections: address/content:path
+        var markdown = "@(\"app/test/content:Documents@2024/report.pdf\")";
         var extension = new LayoutAreaMarkdownExtension();
         var document = ParseMarkdown(markdown, extension);
 
@@ -177,8 +177,8 @@ Console.WriteLine(""Hello World"");
     [Fact]
     public void ParseFileContentReferenceWithNestedPath()
     {
-        // New format: addressType/addressId/keyword/path
-        var markdown = "@(\"app/test/content/Documents/folder/subfolder/file.txt\")";
+        // Colon syntax for content collections: address/content:path
+        var markdown = "@(\"app/test/content:Documents/folder/subfolder/file.txt\")";
         var extension = new LayoutAreaMarkdownExtension();
         var document = ParseMarkdown(markdown, extension);
 
@@ -253,8 +253,8 @@ Console.WriteLine(""Hello World"");
     [Fact]
     public void RenderFileContentBlock()
     {
-        // New format: addressType/addressId/keyword/path
-        var markdown = "@(\"app/test/content/Docs/readme.md\")";
+        // Colon syntax for content collections: address/content:path
+        var markdown = "@(\"app/test/content:Docs/readme.md\")";
         var extension = new LayoutAreaMarkdownExtension();
         var html = RenderMarkdown(markdown, extension);
 
@@ -266,10 +266,10 @@ Console.WriteLine(""Hello World"");
     [Fact]
     public void MixedReferenceTypes()
     {
-        // New format: addressType/addressId/keyword/path
+        // Colon syntax for content collections, slash syntax for reserved keywords
         var markdown = @"
 @(""app/test/data/Users"")
-@(""app/test/content/Docs/file.txt"")
+@(""app/test/content:Docs/file.txt"")
 @(""app/test/area/Dashboard"")
 ";
         var extension = new LayoutAreaMarkdownExtension();
@@ -303,8 +303,8 @@ Console.WriteLine(""Hello World"");
     [Fact]
     public void FileContentBlockPath()
     {
-        // New format: addressType/addressId/keyword/path
-        var markdown = "@(\"host/1/content/Submissions@MS-2024/folder/file.xlsx\")";
+        // Colon syntax for content collections: address/content:path
+        var markdown = "@(\"host/1/content:Submissions@MS-2024/folder/file.xlsx\")";
         var extension = new LayoutAreaMarkdownExtension();
         var document = ParseMarkdown(markdown, extension);
 
@@ -381,8 +381,8 @@ Console.WriteLine(""Hello World"");
     [Fact]
     public void DirectPathSyntax_ContentReference()
     {
-        // New format: addressType/addressId/keyword/path
-        var markdown = "@app/test/content/Docs/readme.md";
+        // Colon syntax for content collections: address/content:path
+        var markdown = "@app/test/content:Docs/readme.md";
         var extension = new LayoutAreaMarkdownExtension();
         var document = ParseMarkdown(markdown, extension);
 
@@ -396,11 +396,11 @@ Console.WriteLine(""Hello World"");
     [Fact]
     public void DirectPathSyntax_MultipleReferences()
     {
-        // New format: addressType/addressId/keyword/path (keyword defaults to "area" if not specified)
+        // Colon syntax for content collections, slash syntax for reserved keywords
         var markdown = @"
 @app/test/Dashboard
 @app/test/data/Users
-@app/test/content/Docs/file.txt
+@app/test/content:Docs/file.txt
 ";
         var extension = new LayoutAreaMarkdownExtension();
         var document = ParseMarkdown(markdown, extension);
@@ -445,8 +445,8 @@ Console.WriteLine(""Hello World"");
     [Fact]
     public void QuotedSyntax_ContentReferenceWithSpaces()
     {
-        // New format: addressType/addressId/keyword/path
-        var markdown = "@\"app/test/content/Docs/My Report 2025.pdf\"";
+        // Colon syntax for content collections: address/content:path
+        var markdown = "@\"app/test/content:Docs/My Report 2025.pdf\"";
         var extension = new LayoutAreaMarkdownExtension();
         var document = ParseMarkdown(markdown, extension);
 
@@ -475,10 +475,10 @@ Console.WriteLine(""Hello World"");
     [Fact]
     public void QuotedSyntax_MixedWithDirect()
     {
-        // New format: addressType/addressId/keyword/path (keyword defaults to "area" if not specified)
+        // Colon syntax for content collections, slash syntax for reserved keywords
         var markdown = @"
 @app/test/SimpleArea
-@""app/test/content/Docs/Report with spaces.pdf""
+@""app/test/content:Docs/Report with spaces.pdf""
 @app/test/data/Products
 ";
         var extension = new LayoutAreaMarkdownExtension();
@@ -540,7 +540,8 @@ Console.WriteLine(""Hello World"");
     [Fact]
     public void DoubleAt_WithContentReference()
     {
-        var markdown = "@@app/test/content/Docs/report.pdf";
+        // Colon syntax for content collections: address/content:path
+        var markdown = "@@app/test/content:Docs/report.pdf";
         var extension = new LayoutAreaMarkdownExtension();
         var document = ParseMarkdown(markdown, extension);
 
@@ -554,7 +555,8 @@ Console.WriteLine(""Hello World"");
     [Fact]
     public void DoubleAt_WithQuotedPath()
     {
-        var markdown = "@@\"app/test/content/Docs/My Report.pdf\"";
+        // Colon syntax for content collections: address/content:path
+        var markdown = "@@\"app/test/content:Docs/My Report.pdf\"";
         var extension = new LayoutAreaMarkdownExtension();
         var document = ParseMarkdown(markdown, extension);
 
