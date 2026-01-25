@@ -109,7 +109,7 @@ config => config
     .AddData(data => data
         .AddSource(source => source
             .WithType<Status>(t => t.WithInitialData(Status.All))))
-    .AddLayout(layout => layout.AddDefaultViews())
+    .AddLayout(layout => layout.AddDefaultLayoutAreas())
 ```
 
 ## Hub-to-Hub Data Synchronization
@@ -139,8 +139,7 @@ config => config
         .AddHubSource(
             new Address(config.Address.Segments.Take(config.Address.Segments.Length - 2).ToArray()),
             source => source.WithType<Status>()))
-    .AddDefaultViews()
-```
+    ```
 
 ### Synchronization Flow
 
@@ -191,7 +190,7 @@ When a `DataChangeRequest` arrives at the Todo hub, changes are persisted to sto
   "nodeType": "NodeType",
   "content": {
     "$type": "NodeTypeDefinition",
-    "configuration": "config => config.WithContentType<Project>().AddData(data => data.AddSource(source => source.WithType<Status>(t => t.WithInitialData(Status.All)))).AddLayout(layout => layout.AddDefaultViews())"
+    "configuration": "config => config.WithContentType<Project>().AddData(data => data.AddSource(source => source.WithType<Status>(t => t.WithInitialData(Status.All)))).AddLayout(layout => layout.AddDefaultLayoutAreas())"
   }
 }
 ```
@@ -205,7 +204,7 @@ When a `DataChangeRequest` arrives at the Todo hub, changes are persisted to sto
   "nodeType": "NodeType",
   "content": {
     "$type": "NodeTypeDefinition",
-    "configuration": "config => config.WithContentType<Todo>().AddData(data => data.AddHubSource(new Address(config.Address.Segments.Take(config.Address.Segments.Length - 2).ToArray()), source => source.WithType<Status>())).AddDefaultViews()"
+    "configuration": "config => config.WithContentType<Todo>().AddData(data => data.AddHubSource(new Address(config.Address.Segments.Take(config.Address.Segments.Length - 2).ToArray()), source => source.WithType<Status>())).AddDefaultLayoutAreas()"
   }
 }
 ```

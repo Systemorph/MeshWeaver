@@ -143,7 +143,7 @@ public record Organization
                 Icon = "Building",
                 Description = "An organization",
                 DisplayOrder = 10,
-                Configuration = "config => config.WithContentType<Organization>().AddDefaultViews()"
+                Configuration = "config => config.WithContentType<Organization>().AddDefaultLayoutAreas()"
             }
         };
         await persistence.SaveNodeAsync(orgNode);

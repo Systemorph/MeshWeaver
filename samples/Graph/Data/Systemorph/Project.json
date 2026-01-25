@@ -14,6 +14,6 @@
     "displayName": "Project",
     "icon": "/static/storage/content/Systemorph/icons/briefcase.svg",
     "description": "A project containing stories",
-    "configuration": "config => config.WithContentType<Project>().AddDefaultViews()"
+    "configuration": "config => config.WithContentType<Project>()"
   }
 }

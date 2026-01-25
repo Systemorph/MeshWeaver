@@ -44,7 +44,7 @@ A NodeType is itself a node with `nodeType: "NodeType"`. It consists of:
   "icon": "Building",
   "description": "An organization containing projects",
   "displayOrder": 10,
-  "configuration": "config => config.WithContentType<Organization>().AddDefaultViews()"
+  "configuration": "config => config.WithContentType<Organization>().AddDefaultLayoutAreas()"
 }
 ```
 
@@ -58,23 +58,23 @@ Specifies the content record type:
 config.WithContentType<Organization>()
 ```
 
-### AddDefaultViews()
+### AddDefaultLayoutAreas()
 Adds standard views (Details, Catalog, Thumbnail, Metadata, Settings):
 ```csharp
-config.WithContentType<Organization>().AddDefaultViews()
+config.WithContentType<Organization>().AddDefaultLayoutAreas()
 ```
 
-### AddDefaultViews()
+### AddDefaultLayoutAreas()
 Same as AddMeshNodeViews but chainable:
 ```csharp
-config.WithContentType<Organization>().AddDefaultViews()
+config.WithContentType<Organization>().AddDefaultLayoutAreas()
 ```
 
 ### MapContentCollection()
 Maps a property to a content collection (files, images):
 ```csharp
 config.WithContentType<Organization>()
-  .AddDefaultViews()
+  .AddDefaultLayoutAreas()
   .MapContentCollection("logos", "storage", $"logos/{config.Address.Segments.Last()}")
 ```
 
@@ -132,7 +132,7 @@ Add custom views in the configuration:
 ```csharp
 config
   .WithContentType<Story>()
-  .AddDefaultViews()
+  .AddDefaultLayoutAreas()
   .AddLayout(layout => layout
     .WithView("Timeline", StoryViews.Timeline))
 ```
@@ -151,7 +151,7 @@ config
     "id": "Story",
     "namespace": "Systemorph/Marketing",
     "displayName": "Story",
-    "configuration": "config => config.WithContentType<Story>().AddDefaultViews()"
+    "configuration": "config => config.WithContentType<Story>().AddDefaultLayoutAreas()"
   }
 }
 ```

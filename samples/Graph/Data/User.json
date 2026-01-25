@@ -16,6 +16,6 @@
     "displayName": "User",
     "iconName": "User",
     "description": "A person with profile and avatar",
-    "configuration": "config => config.WithContentType<Person>().AddDefaultViews()"
+    "configuration": "config => config.WithContentType<Person>()"
   }
 }

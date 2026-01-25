@@ -45,7 +45,7 @@ public class AgentChatClientTest : MonolithMeshTestBase
                 return services;
             })
             .AddJsonGraphConfiguration(TestDataPath)
-            .ConfigureDefaultNodeHub(config => config.AddDefaultViews());
+            .ConfigureDefaultNodeHub(config => config.AddDefaultLayoutAreas());
     }
 
     /// <summary>

@@ -6,6 +6,7 @@ using MeshWeaver.AI.AzureOpenAI;
 using MeshWeaver.AI.ClaudeCode;
 #endif
 using MeshWeaver.AI.Copilot;
+using MeshWeaver.AI.Layout;
 using MeshWeaver.AI.Persistence;
 using MeshWeaver.Blazor.GoogleMaps;
 using MeshWeaver.Blazor.Graph;
@@ -250,7 +251,7 @@ public static class LoomConfiguration
                 })
                 // Configure default views and content collections for each node hub
                 // Order matters: AddContentCollections registers $Content area first,
-                // then AddDefaultViews sets DetailsArea as default (can be overridden by node type config)
+                // then AddDefaultLayoutAreas sets DetailsArea as default (can be overridden by node type config)
                 .ConfigureDefaultNodeHub(config =>
                 {
                     if (contentStorageConfig != null)
@@ -260,7 +261,7 @@ public static class LoomConfiguration
                             .MapContentCollection("content", contentStorageConfig.Name, $"content/{nodePath}");
                     }
 
-                    return config.AddDefaultViews();
+                    return config.AddDefaultLayoutAreas().AddChatsLayoutArea();
                 })
                 // Add activity tracking to record user access patterns
                 .AddActivityTracking();
