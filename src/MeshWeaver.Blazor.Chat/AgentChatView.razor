@@ -2,8 +2,9 @@
 
 @using MeshWeaver.AI.Persistence
 @using MeshWeaver.AI.Threading
+@using MeshWeaver.Mesh.Services
 @inject NavigationManager NavigationManager
-@inject IChatPersistenceService ChatPersistenceService
+@inject IPersistenceService PersistenceService
 @inject IThreadManager ThreadManager
 
 <div class="chat-app-container">

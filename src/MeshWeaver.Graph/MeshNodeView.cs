@@ -3,7 +3,6 @@ using System.Reactive.Linq;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Schema;
-using Humanizer;
 using MeshWeaver.Application.Styles;
 using MeshWeaver.ContentCollections;
 using MeshWeaver.Data;
@@ -66,11 +65,11 @@ public static class MeshNodeView
     /// Catalog is set as the default area for browsing children with search.
     /// For comments support, call AddComments() after this method.
     /// </summary>
-    public static MessageHubConfiguration AddDefaultViews(this MessageHubConfiguration configuration)
+    public static MessageHubConfiguration AddDefaultLayoutAreas(this MessageHubConfiguration configuration)
         => configuration
-            .AddLayout(layout => layout.AddDefaultViews());
+            .AddLayout(layout => layout.AddDefaultLayoutAreas());
 
-    public static LayoutDefinition AddDefaultViews(this LayoutDefinition layout)
+    public static LayoutDefinition AddDefaultLayoutAreas(this LayoutDefinition layout)
         => layout
             .WithDefaultArea(OverviewArea)
             .WithView(OverviewArea, Overview)

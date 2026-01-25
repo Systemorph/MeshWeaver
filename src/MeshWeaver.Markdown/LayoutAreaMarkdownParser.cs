@@ -293,19 +293,14 @@ public class LayoutAreaMarkdownParser : BlockParser
     /// <param name="isInline">True for @@ (inline rendering), false for @ (hyperlink)</param>
     private ContainerBlock CreateContentCollectionBlock(string originalToken, string address, string collectionName, string? remainingPath, bool isInline)
     {
-        // Combine collection name and path: {collectionName}/{path}
-        var fullPath = string.IsNullOrEmpty(remainingPath)
-            ? collectionName
-            : $"{collectionName}/{remainingPath}";
-
-        // Links (@) go to $Collection (file browser), inline (@@) goes to $Content (rendered content)
-        var areaName = isInline ? ContentAreaName : CollectionAreaName;
-
+        // Content collections always use $Content area
+        // Id is just the path within the collection (not including collection name)
+        // For self-reference (empty remainingPath), Id is null
         return new LayoutAreaComponentInfo(
             originalToken,
             address,
-            areaName,
-            fullPath,
+            ContentAreaName,
+            remainingPath,
             this,
             isInline);
     }
@@ -427,21 +422,39 @@ public class LayoutAreaMarkdownParser : BlockParser
         string keyword;
         string? remainingPath;
 
-        if (partsNoEmpty.Length >= 3 && ReservedKeywords.Contains(partsNoEmpty[2].ToLowerInvariant()))
+        if (partsNoEmpty.Length >= 3)
         {
-            // Explicit keyword specified (e.g., host/1/data/Collection)
-            keyword = partsNoEmpty[2].ToLowerInvariant();
-            remainingPath = partsNoEmpty.Length > 3
-                ? string.Join("/", partsNoEmpty.Skip(3))
-                : null;
+            var potentialKeywordLower = partsNoEmpty[2].ToLowerInvariant();
+            var potentialKeywordOriginal = partsNoEmpty[2];
+            if (ReservedKeywords.Contains(potentialKeywordLower))
+            {
+                // Reserved keyword specified (e.g., host/1/data/Collection)
+                keyword = potentialKeywordLower;
+                remainingPath = partsNoEmpty.Length > 3
+                    ? string.Join("/", partsNoEmpty.Skip(3))
+                    : null;
+            }
+            else if (partsNoEmpty.Length >= 4 && potentialKeywordLower == "content")
+            {
+                // "content" is special: treated as content collection (e.g., app/test/content/file.pdf)
+                keyword = "content";
+                remainingPath = string.Join("/", partsNoEmpty.Skip(3));
+            }
+            else
+            {
+                // Non-reserved keyword = area reference (e.g., app/test/Dashboard or app/test/Todo/item1)
+                // Preserve original case for area names
+                keyword = "area";
+                remainingPath = partsNoEmpty.Length > 2
+                    ? string.Join("/", partsNoEmpty.Skip(2))
+                    : null;
+            }
         }
         else
         {
-            // No keyword or unrecognized keyword - default to area
+            // Less than 3 segments - default to area with no path
             keyword = "area";
-            remainingPath = partsNoEmpty.Length > 2
-                ? string.Join("/", partsNoEmpty.Skip(2))
-                : null;
+            remainingPath = null;
         }
 
         return (fullAddress, keyword, remainingPath);

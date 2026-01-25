@@ -16,6 +16,7 @@ using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using TextContent = Microsoft.Extensions.AI.TextContent;
+using ChatRecord = MeshWeaver.AI.Threading.Chat;
 
 namespace MeshWeaver.Blazor.Chat;
 
@@ -128,8 +129,13 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
         // Try to load the most recent conversation on startup
         try
         {
-            var conversations = await ChatPersistenceService.GetConversationsAsync();
-            var mostRecent = conversations.OrderByDescending(c => c.LastModifiedAt).FirstOrDefault();
+            var userPartition = GetUserChatPartition();
+            var chats = new List<ChatRecord>();
+            await foreach (var c in ChatPersistenceHelper.ListChatsAsync(PersistenceService, userPartition))
+            {
+                chats.Add(c);
+            }
+            var mostRecent = chats.OrderByDescending(c => c.LastActivityAt).FirstOrDefault();
 
             if (mostRecent != null)
             {
@@ -549,6 +555,16 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
         }
     }
 
+    /// <summary>
+    /// Gets the partition path for the current user's chats.
+    /// </summary>
+    private string GetUserChatPartition()
+    {
+        var accessService = Hub.ServiceProvider.GetService<AccessService>();
+        var userId = accessService?.Context?.ObjectId ?? "anonymous";
+        return ChatPersistenceHelper.GetUserChatPartition(userId);
+    }
+
     private void ScheduleAgentReinstantiation()
     {
         // If currently generating a response, mark that we need to reinstantiate after it finishes
@@ -665,25 +681,46 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
     }
     private async Task LoadConversation(string conversationId)
     {
-        if (isLoadingConversation) return; try
+        if (isLoadingConversation) return;
+        try
         {
             isLoadingConversation = true;
             StateHasChanged(); // Show loading spinner immediately
             CancelAnyCurrentResponse();
 
-            var conversation = await ChatPersistenceService.LoadConversationAsync(conversationId);
-            if (conversation != null)
+            var userPartition = GetUserChatPartition();
+            var chatRecord = await ChatPersistenceHelper.LoadChatAsync(PersistenceService, userPartition, conversationId);
+
+            if (chatRecord != null)
             {
                 currentConversationId = conversationId;
-                currentConversation = conversation;
+                currentConversation = ConvertChatToConversation(chatRecord);
 
-                // Load messages from the conversation
+                // Load messages from the chat record
                 messages.Clear();
-                foreach (var persistedMessage in conversation.Messages)
+                if (chatRecord.Messages.HasValue)
                 {
-                    messages.Add(persistedMessage);
-                } // Restore AgentChat with proper conversation history using the new persistence method
-                chat = await ChatPersistenceService.RestoreAgentChatAsync(conversationId);
+                    var loadedMessages = System.Text.Json.JsonSerializer.Deserialize<List<ChatMessage>>(
+                        chatRecord.Messages.Value.GetRawText(),
+                        Hub.JsonSerializerOptions);
+                    if (loadedMessages != null)
+                    {
+                        foreach (var msg in loadedMessages)
+                        {
+                            messages.Add(msg);
+                        }
+                    }
+                }
+
+                // Restore AgentChat - create new instance and resume with loaded messages
+                var context = await GetCurrentAgentContextAsync();
+                chat = await CreateChatAsync(context?.ToUnifiedPath());
+
+                // Resume the chat with the loaded conversation
+                if (currentConversation != null && chat is AgentChatClient agentChatClient)
+                {
+                    await agentChatClient.ResumeAsync(currentConversation);
+                }
 
                 // Set the thread ID to match the conversation ID
                 chat.SetThreadId(conversationId);
@@ -702,39 +739,82 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
             StateHasChanged();
         }
     }
+
+    /// <summary>
+    /// Converts a ChatRecord to a ChatConversation for compatibility.
+    /// </summary>
+    private ChatConversation ConvertChatToConversation(ChatRecord chatRecord)
+    {
+        var loadedMessages = new List<ChatMessage>();
+        if (chatRecord.Messages.HasValue)
+        {
+            var deserialized = System.Text.Json.JsonSerializer.Deserialize<List<ChatMessage>>(
+                chatRecord.Messages.Value.GetRawText(),
+                Hub.JsonSerializerOptions);
+            if (deserialized != null)
+            {
+                loadedMessages = deserialized;
+            }
+        }
+
+        return new ChatConversation
+        {
+            Id = chatRecord.Id,
+            Title = chatRecord.Title ?? "New Chat",
+            CreatedAt = chatRecord.CreatedAt,
+            LastModifiedAt = chatRecord.LastActivityAt,
+            Messages = loadedMessages
+        };
+    }
     private async Task SaveCurrentConversation()
     {
         if (messages.Any())
         {
-
             try
             {
                 // Get agent context for saving
                 var agentContext = await GetCurrentAgentContextAsync();
 
-                if (currentConversation == null)
+                // Generate title from first user message
+                var title = GetConversationTitle();
+
+                // Serialize messages to JsonElement
+                var messagesJson = System.Text.Json.JsonSerializer.SerializeToElement(messages.ToList(), Hub.JsonSerializerOptions);
+
+                // Create or update the Chat record
+                var chatId = currentConversationId ?? Guid.NewGuid().AsString();
+                var isNew = currentConversationId == null;
+
+                var chatRecord = new ChatRecord
                 {
-                    currentConversation = new ChatConversation
-                    {
-                        Id = Guid.NewGuid().ToString(),
-                        Messages = messages,
-                        CreatedAt = DateTime.UtcNow,
-                        LastModifiedAt = DateTime.UtcNow,
-                        AgentContext = agentContext
-                    };
-                    currentConversationId = currentConversation.Id;
-                }
-                else
+                    Id = chatId,
+                    Title = title,
+                    Scope = agentContext?.Address?.ToString(),
+                    CreatedAt = currentConversation?.CreatedAt ?? DateTime.UtcNow,
+                    LastActivityAt = DateTime.UtcNow,
+                    ProviderId = selectedModelInfo?.Name,
+                    Messages = messagesJson
+                };
+
+                // Save to user's chat partition
+                var userPartition = GetUserChatPartition();
+                await ChatPersistenceHelper.SaveChatAsync(PersistenceService, userPartition, chatRecord);
+
+                // Update local state
+                if (isNew)
                 {
-                    currentConversation = currentConversation with
-                    {
-                        Messages = messages,
-                        LastModifiedAt = DateTime.UtcNow,
-                        AgentContext = agentContext
-                    };
+                    currentConversationId = chatId;
                 }
 
-                await ChatPersistenceService.SaveConversationAsync(currentConversation, chat);
+                currentConversation = new ChatConversation
+                {
+                    Id = chatId,
+                    Title = title ?? "New Chat",
+                    CreatedAt = chatRecord.CreatedAt,
+                    LastModifiedAt = chatRecord.LastActivityAt,
+                    Messages = messages.ToList(),
+                    AgentContext = agentContext
+                };
 
                 // Refresh the conversation list in the sidebar
                 if (chatHistorySelector != null)
@@ -747,6 +827,26 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
                 Console.WriteLine($"Error saving conversation: {ex.Message}");
             }
         }
+    }
+
+    /// <summary>
+    /// Gets a title for the conversation from the first user message.
+    /// </summary>
+    private string? GetConversationTitle()
+    {
+        var firstUserMessage = messages.FirstOrDefault(m =>
+            m.Role.Value.Equals("User", StringComparison.OrdinalIgnoreCase) &&
+            !string.IsNullOrWhiteSpace(m.Text));
+
+        if (firstUserMessage != null)
+        {
+            // Take first 50 characters of the first user message
+            return firstUserMessage.Text!.Length > 50
+                ? firstUserMessage.Text[..50] + "..."
+                : firstUserMessage.Text;
+        }
+
+        return null;
     }
     private async Task AddUserMessageAsync(ChatMessage userMessage)
     {
