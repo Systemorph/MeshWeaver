@@ -54,6 +54,7 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
     protected bool isCreateMenuOpen;
     protected List<CreatableTypeInfo> creatableTypes = new();
     private string? lastLoadedPath;
+    private CancellationTokenSource? loadingCts;
 
     private readonly AgentChatControl chatControl = new();
     private IJSObjectReference? jsModule;
@@ -69,7 +70,8 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
     protected override async Task OnInitializedAsync()
     {
         await base.OnInitializedAsync();
-        await LoadCreatableTypesAsync();
+        // Start loading creatable types without blocking - will await when menu opens
+        StartLoadingCreatableTypes();
     }
 
     protected override async Task OnParametersSetAsync()
@@ -80,39 +82,55 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
         var currentPath = NavigationService.CurrentNamespace;
         if (currentPath != lastLoadedPath)
         {
-            await LoadCreatableTypesAsync();
+            StartLoadingCreatableTypes();
         }
     }
 
     /// <summary>
-    /// Loads the creatable types for the current node path.
+    /// Starts loading creatable types without blocking. Items are added as they arrive.
     /// </summary>
-    protected virtual async Task LoadCreatableTypesAsync()
+    protected virtual void StartLoadingCreatableTypes()
     {
         var nodeTypeService = Hub?.ServiceProvider.GetService<INodeTypeService>();
         if (nodeTypeService == null)
             return;
 
         var currentPath = NavigationService.CurrentNamespace;
+
+        // Cancel any previous loading
+        loadingCts?.Cancel();
+        loadingCts = new CancellationTokenSource();
+
         lastLoadedPath = currentPath;
+        creatableTypes = new(); // Clear existing items
 
-        if (currentPath == null)
-        {
-            creatableTypes = new();
-            return;
-        }
+        // Fire and forget - load items incrementally
+        _ = LoadCreatableTypesIncrementallyAsync(nodeTypeService, currentPath ?? string.Empty, loadingCts.Token);
+    }
 
+    /// <summary>
+    /// Loads creatable types incrementally, updating the UI as each item arrives.
+    /// </summary>
+    private async Task LoadCreatableTypesIncrementallyAsync(
+        INodeTypeService nodeTypeService,
+        string currentPath,
+        CancellationToken ct)
+    {
         try
         {
-            creatableTypes = await nodeTypeService
-                .GetCreatableTypesAsync(currentPath)
-                .ToListAsync();
-            StateHasChanged();
+            await foreach (var typeInfo in nodeTypeService.GetCreatableTypesAsync(currentPath, ct).WithCancellation(ct))
+            {
+                creatableTypes.Add(typeInfo);
+                await InvokeAsync(StateHasChanged);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // Path changed, loading was cancelled - this is expected
         }
         catch
         {
-            // Fallback to empty list on error
-            creatableTypes = new();
+            // Fallback on error - keep whatever items we loaded
         }
     }
 
@@ -163,9 +181,9 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
         var currentPath = NavigationService.CurrentNamespace;
         if (currentPath != lastLoadedPath)
         {
-            _ = InvokeAsync(async () =>
+            _ = InvokeAsync(() =>
             {
-                await LoadCreatableTypesAsync();
+                StartLoadingCreatableTypes();
             });
         }
         else
@@ -257,6 +275,8 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
 
     public void Dispose()
     {
+        loadingCts?.Cancel();
+        loadingCts?.Dispose();
         NavigationManager.LocationChanged -= OnLocationChanged;
         ChatState.OnStateChanged -= OnChatStateChanged;
         dotNetRef?.Dispose();
