@@ -16,6 +16,6 @@
     "iconName": "Folder",
     "description": "A project containing tasks and deliverables",
     "childrenQuery": "nodeType:ACME/Project/Todo scope:children",
-    "configuration": "config => config.WithContentType<Project>().AddData(data => data.AddSource(source => source.WithType<Status>(t => t.WithInitialData(Status.All)))).AddLayout(layout => layout.AddLayoutAreaCatalog().WithThumbnailPattern(area => $\"/static/storage/content/ACME/Project/thumbnails/{area}.svg\", area => $\"/static/storage/content/ACME/Project/thumbnails/{area}.svg\").WithView(\"Summary\", ProjectViews.Summary).WithView(\"AllTasks\", ProjectViews.AllTasks).WithView(\"TodosByCategory\", ProjectViews.TodosByCategory).WithView(\"Planning\", ProjectViews.Planning).WithView(\"MyTasks\", ProjectViews.MyTasks).WithView(\"Backlog\", ProjectViews.Backlog).WithView(\"TodaysFocus\", ProjectViews.TodaysFocus).WithDefaultArea(\"LayoutAreas\"))"
+    "configuration": "config => config.WithContentType<Project>().AddData(data => data.AddSource(source => source.WithType<Status>(t => t.WithInitialData(Status.All)))).AddLayout(layout => layout.AddLayoutAreaCatalog().WithThumbnailPattern(area => $\"/static/storage/content/ACME/Project/thumbnails/{area}.svg\", area => $\"/static/storage/content/ACME/Project/thumbnails/{area}.svg\").WithView(\"TodosByCategory\", ProjectViews.TodosByCategory).WithView(\"Backlog\", ProjectViews.Backlog).WithDefaultArea(\"LayoutAreas\"))"
   }
 }

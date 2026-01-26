@@ -130,15 +130,6 @@ public record MeshSearchControl()
     public MeshSearchControl WithGroupBy(string property) =>
         this with { Grouping = (Grouping ?? new GroupingConfig()) with { GroupByProperty = property } };
 
-    public MeshSearchControl WithGroupKeyFormatter(Func<string?, string> formatter) =>
-        this with { Grouping = (Grouping ?? new GroupingConfig()) with { GroupKeyFormatter = formatter } };
-
-    public MeshSearchControl WithGroupKeyOrder(Func<string?, int> orderFunc) =>
-        this with { Grouping = (Grouping ?? new GroupingConfig()) with { GroupKeyOrder = orderFunc } };
-
-    public MeshSearchControl WithGroupExpanded(Func<string?, bool> predicate) =>
-        this with { Grouping = (Grouping ?? new GroupingConfig()) with { GroupExpandedPredicate = predicate } };
-
     // Section fluent methods
     public MeshSearchControl WithSectionCounts(bool showCounts) =>
         this with { Sections = (Sections ?? new SectionConfig()) with { ShowCounts = showCounts } };
@@ -148,9 +139,6 @@ public record MeshSearchControl()
 
     public MeshSearchControl WithCollapsibleSections(bool collapsible) =>
         this with { Sections = (Sections ?? new SectionConfig()) with { Collapsible = collapsible } };
-
-    public MeshSearchControl WithShowMoreHref(Func<string, string> hrefBuilder) =>
-        this with { Sections = (Sections ?? new SectionConfig()) with { ShowMoreHrefBuilder = hrefBuilder } };
 
     // Sorting fluent methods
     public MeshSearchControl WithSortBy(string property, bool ascending = true) =>

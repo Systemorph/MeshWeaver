@@ -65,11 +65,9 @@ function ensureMermaidLoaded() {
         const script = document.createElement('script');
         script.src = 'https://unpkg.com/mermaid/dist/mermaid.min.js'; // Alternative CDN
         script.onload = () => {
-            console.log("Mermaid script loaded successfully");
             setTimeout(resolve, 100); // Small delay to ensure initialization
         };
         script.onerror = (e) => {
-            console.error("Failed to load Mermaid library", e);
             reject(new Error("Mermaid library failed to load"));
         };
         document.head.appendChild(script);

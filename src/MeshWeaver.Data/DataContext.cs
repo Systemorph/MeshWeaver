@@ -131,23 +131,23 @@ public sealed record DataContext : IDisposable
         // This ensures GetCollectionName returns the correct collection name
         foreach (var typeSource in TypeSources.Values)
         {
-            logger.LogWarning("DataContext: Registering type {Type} with collection name {CollectionName}",
+            logger.LogDebug("DataContext: Registering type {Type} with collection name {CollectionName}",
                 typeSource.TypeDefinition.Type.Name, typeSource.TypeDefinition.CollectionName);
             TypeRegistry.WithType(typeSource.TypeDefinition.Type, typeSource.TypeDefinition.CollectionName);
         }
 
         DataSourcesByType = DataSourcesById.Values
             .SelectMany(ds => ds.MappedTypes.Select(t => new KeyValuePair<Type, IDataSource>(t, ds))).ToDictionary();
-        logger.LogWarning("DataContext: DataSourcesByType has {Count} entries: {Types}",
+        logger.LogDebug("DataContext: DataSourcesByType has {Count} entries: {Types}",
             DataSourcesByType.Count, string.Join(", ", DataSourcesByType.Keys.Select(t => t.Name)));
         DataSourcesByCollection = DataSourcesByType.Select(kvp =>
         {
             var collectionName = TypeRegistry.GetCollectionName(kvp.Key);
-            logger.LogWarning("DataContext: Type {Type} -> CollectionName {CollectionName}",
+            logger.LogTrace("DataContext: Type {Type} -> CollectionName {CollectionName}",
                 kvp.Key.Name, collectionName ?? "NULL");
             return new KeyValuePair<string, IDataSource>(collectionName!, kvp.Value);
         }).ToDictionary();
-        logger.LogWarning("DataContext: DataSourcesByCollection has {Count} entries: {Collections}",
+        logger.LogDebug("DataContext: DataSourcesByCollection has {Count} entries: {Collections}",
             DataSourcesByCollection.Count, string.Join(", ", DataSourcesByCollection.Keys));
 
         // Initialize each data source

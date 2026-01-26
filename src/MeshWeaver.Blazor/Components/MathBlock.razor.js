@@ -4,7 +4,6 @@
  * @returns {Promise<boolean>} - A promise that resolves when typesetting is complete
  */
 export async function loadAndTypeset(element) {
-    console.log("Starting MathJax loading and typesetting process");
 
     // Check if MathJax is already loaded and initialized
     if (!window.MathJax || !window.MathJax.typesetPromise) {
@@ -53,15 +52,12 @@ export async function loadAndTypeset(element) {
     // Now typeset the element
     try {
         if (element && window.MathJax && window.MathJax.typesetPromise) {
-            console.log("Typesetting element");
             await window.MathJax.typesetPromise([element]);
             return true;
         } else {
-            console.warn("Cannot typeset: element or MathJax not ready");
             return false;
         }
     } catch (error) {
-        console.error('Error typesetting MathJax elements:', error);
         return false;
     }
 }

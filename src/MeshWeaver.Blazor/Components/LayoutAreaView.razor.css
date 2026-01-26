@@ -1,3 +1,7 @@
 ﻿.layout-area > * {
     display: block;
 }
+
+.layout-area-container {
+    width: 100%;
+}

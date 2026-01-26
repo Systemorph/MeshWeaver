@@ -1,10 +1,10 @@
-using System.Text.Json.Serialization;
-
 namespace MeshWeaver.Layout.Catalog;
 
 /// <summary>
 /// Configuration for grouping search/catalog results by a property.
-/// Supports dynamic property-based grouping with custom formatting and ordering.
+/// Supports dynamic property-based grouping.
+/// Note: Lambda-based formatting/ordering is now handled via extension methods on IMessageHub
+/// (see ObserveMeshSearch/ObserveMeshSearchByProperty in MeshSearchExtensions).
 /// </summary>
 public record GroupingConfig
 {
@@ -13,31 +13,10 @@ public record GroupingConfig
     /// Can be a MeshNode property or a Content property.
     /// </summary>
     public string? GroupByProperty { get; init; }
-
-    /// <summary>
-    /// Optional formatter to transform group keys into display labels.
-    /// Type: Func&lt;string?, string&gt;
-    /// Server-side only - not serialized.
-    /// </summary>
-    [JsonIgnore]
-    public object? GroupKeyFormatter { get; init; }
-
-    /// <summary>
-    /// Optional function to determine sort order of groups.
-    /// Type: Func&lt;string?, int&gt;
-    /// Server-side only - not serialized.
-    /// </summary>
-    [JsonIgnore]
-    public object? GroupKeyOrder { get; init; }
-
-    /// <summary>
-    /// Optional predicate to determine which groups are expanded by default.
-    /// Type: Func&lt;string?, bool&gt;
-    /// Server-side only - not serialized.
-    /// </summary>
-    [JsonIgnore]
-    public object? GroupExpandedPredicate { get; init; }
 }
+
+// FilterConfig removed - filtering is now handled via lambda predicates
+// passed to extension methods (see ObserveMeshSearch in MeshSearchExtensions).
 
 /// <summary>
 /// Configuration for section display including counts, limits, and collapsibility.
@@ -59,14 +38,6 @@ public record SectionConfig
     /// Whether sections can be collapsed/expanded (default true).
     /// </summary>
     public bool Collapsible { get; init; } = true;
-
-    /// <summary>
-    /// Optional function to build the "Show more" href for a group.
-    /// Type: Func&lt;string, string&gt;
-    /// Server-side only - not serialized.
-    /// </summary>
-    [JsonIgnore]
-    public object? ShowMoreHrefBuilder { get; init; }
 }
 
 /// <summary>
@@ -123,7 +94,7 @@ public record GridConfig
     public int Lg { get; init; } = 4;
 
     /// <summary>
-    /// Grid spacing between items (default 2).
+    /// Grid spacing between items (default 3).
     /// </summary>
-    public int Spacing { get; init; } = 2;
+    public int Spacing { get; init; } = 3;
 }
