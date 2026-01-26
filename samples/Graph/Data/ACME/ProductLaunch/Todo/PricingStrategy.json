@@ -5,7 +5,7 @@
   "nodeType": "ACME/Project/Todo",
   "category": "Tasks",
   "description": "Define pricing strategy and tier structure for MeshFlow",
-  "iconName": "Money",
+  "icon": "/static/content/ACME/Project/Todo/icon.svg",
   "isPersistent": true,
   "content": {
     "$type": "Todo",

@@ -5,7 +5,7 @@
   "nodeType": "ACME/Project/Todo",
   "category": "Tasks",
   "description": "Arrange briefings with key industry analysts",
-  "iconName": "PeopleTeam",
+  "icon": "/static/content/ACME/Project/Todo/icon.svg",
   "isPersistent": true,
   "content": {
     "$type": "Todo",

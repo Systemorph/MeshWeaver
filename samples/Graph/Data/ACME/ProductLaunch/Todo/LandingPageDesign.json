@@ -4,6 +4,7 @@
   "path": "ACME/ProductLaunch/Todo/LandingPageDesign",
   "name": "Design landing page wireframes",
   "nodeType": "ACME/Project/Todo",
+  "icon": "/static/content/ACME/Project/Todo/icon.svg",
   "description": "Create wireframes for the MeshFlow product landing page",
   "category": "Tasks",
   "addressSegments": 0,

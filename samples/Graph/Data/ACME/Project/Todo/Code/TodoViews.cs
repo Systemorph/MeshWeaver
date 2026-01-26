@@ -158,25 +158,15 @@ public static class TodoViews
 
         mainGrid = mainGrid.WithView(headerStack, skin => skin.WithXs(12));
 
-        // Description if present
-        if (!string.IsNullOrEmpty(todo.Description))
-        {
-            mainGrid = mainGrid.WithView(
-                Controls.Markdown(todo.Description)
-                    .WithStyle(style => style.WithMarginBottom("20px").WithColor("var(--neutral-foreground-hint)")),
-                skin => skin.WithXs(12));
-        }
-
-        // Two-column layout: Details card (left) and Assignee card (right)
-        // Details card
+        // Properties grid (compact layout)
         mainGrid = mainGrid.WithView(
-            BuildDetailsCard(todo),
-            skin => skin.WithXs(12).WithMd(8));
+            BuildPropertiesGrid(host, todo),
+            skin => skin.WithXs(12));
 
-        // Assignee card
+        // Description section with edit button (below properties)
         mainGrid = mainGrid.WithView(
-            BuildAssigneeCard(host, todo.Assignee),
-            skin => skin.WithXs(12).WithMd(4));
+            BuildDescriptionSection(host, todo),
+            skin => skin.WithXs(12));
 
         // Status promotion menu - all statuses with most likely first
         mainGrid = mainGrid.WithView(
@@ -184,6 +174,78 @@ public static class TodoViews
             skin => skin.WithXs(12));
 
         return mainGrid;
+    }
+
+    private static UiControl BuildPropertiesGrid(LayoutAreaHost host, Todo todo)
+    {
+        var grid = Controls.LayoutGrid.WithSkin(skin => skin.WithSpacing(2));
+
+        // Category
+        grid = grid.WithView(
+            Controls.Html($"<div style=\"font-size: 12px; color: var(--neutral-foreground-hint);\">Category</div><div>{todo.Category}</div>"),
+            skin => skin.WithXs(6).WithMd(3));
+
+        // Priority
+        grid = grid.WithView(
+            Controls.Html($"<div style=\"font-size: 12px; color: var(--neutral-foreground-hint);\">Priority</div><div>{GetPriorityLabel(todo.Priority)}</div>"),
+            skin => skin.WithXs(6).WithMd(3));
+
+        // Assignee
+        var assigneeDisplay = string.IsNullOrEmpty(todo.Assignee) ? "<em>Unassigned</em>" : System.Web.HttpUtility.HtmlEncode(todo.Assignee);
+        grid = grid.WithView(
+            Controls.Html($"<div style=\"font-size: 12px; color: var(--neutral-foreground-hint);\">Assignee</div><div>{assigneeDisplay}</div>"),
+            skin => skin.WithXs(6).WithMd(3));
+
+        // Due Date
+        var dueDateDisplay = todo.DueDate.HasValue
+            ? $"{todo.DueDate.Value:MMM dd, yyyy} {GetDueDateIndicator(todo.DueDate.Value, todo.Status)}"
+            : "<em>Not set</em>";
+        grid = grid.WithView(
+            Controls.Html($"<div style=\"font-size: 12px; color: var(--neutral-foreground-hint);\">Due Date</div><div>{dueDateDisplay}</div>"),
+            skin => skin.WithXs(6).WithMd(3));
+
+        // Created date (second row)
+        grid = grid.WithView(
+            Controls.Html($"<div style=\"font-size: 12px; color: var(--neutral-foreground-hint);\">Created</div><div>{todo.CreatedAt:MMM dd, yyyy}</div>"),
+            skin => skin.WithXs(6).WithMd(3));
+
+        // Completed date (if applicable)
+        if (todo.CompletedAt.HasValue)
+        {
+            grid = grid.WithView(
+                Controls.Html($"<div style=\"font-size: 12px; color: var(--neutral-foreground-hint);\">Completed</div><div>{todo.CompletedAt.Value:MMM dd, yyyy}</div>"),
+                skin => skin.WithXs(6).WithMd(3));
+        }
+
+        return Controls.Stack
+            .WithStyle(style => style.WithPadding("16px").WithBorder("1px solid var(--neutral-stroke-rest)").WithBorderRadius("8px").WithMarginBottom("16px"))
+            .WithView(grid);
+    }
+
+    private static UiControl BuildDescriptionSection(LayoutAreaHost host, Todo todo)
+    {
+        var nodePath = host.Hub.Address.ToString();
+        var editHref = $"/{nodePath}/Edit";
+
+        var headerStack = Controls.Stack
+            .WithOrientation(Orientation.Horizontal)
+            .WithStyle(style => style.WithAlignItems("center").WithJustifyContent("space-between").WithMarginBottom("8px"))
+            .WithView(Controls.Html("<div style=\"font-size: 14px; font-weight: 600;\">Description</div>"))
+            .WithView(Controls.Button("Edit")
+                .WithIconStart(FluentIcons.Edit(IconSize.Size16))
+                .WithAppearance(Appearance.Neutral)
+                .WithNavigateToHref(editHref));
+
+        UiControl descriptionContent;
+        if (string.IsNullOrEmpty(todo.Description))
+            descriptionContent = Controls.Html("<div style=\"color: var(--neutral-foreground-hint); font-style: italic;\">No description provided</div>");
+        else
+            descriptionContent = Controls.Markdown(todo.Description);
+
+        return Controls.Stack
+            .WithStyle(style => style.WithPadding("16px").WithBorder("1px solid var(--neutral-stroke-rest)").WithBorderRadius("8px").WithMarginBottom("16px"))
+            .WithView(headerStack)
+            .WithView(descriptionContent);
     }
 
     private static UiControl BuildTodoActionMenu(LayoutAreaHost host, Todo todo)
@@ -224,52 +286,6 @@ public static class TodoViews
         menu = menu.WithView(new NavLinkControl("Settings", FluentIcons.Settings(IconSize.Size16), settingsHref));
 
         return menu;
-    }
-
-    private static UiControl BuildDetailsCard(Todo todo)
-    {
-        var content = new System.Text.StringBuilder();
-        content.AppendLine($"**Category:** {todo.Category}");
-        content.AppendLine();
-        content.AppendLine($"**Priority:** {GetPriorityLabel(todo.Priority)}");
-        if (todo.DueDate.HasValue)
-        {
-            content.AppendLine();
-            content.AppendLine($"**Due Date:** {todo.DueDate.Value:MMMM dd, yyyy} {GetDueDateIndicator(todo.DueDate.Value, todo.Status)}");
-        }
-        content.AppendLine();
-        content.AppendLine($"**Created:** {todo.CreatedAt:MMMM dd, yyyy}");
-        if (todo.CompletedAt.HasValue)
-        {
-            content.AppendLine();
-            content.AppendLine($"**Completed:** {todo.CompletedAt.Value:MMMM dd, yyyy}");
-        }
-
-        return Controls.Stack
-            .WithStyle("padding: 16px; border: 1px solid var(--neutral-stroke-rest); border-radius: 8px; background: var(--neutral-layer-2); margin-bottom: 16px;")
-            .WithView(Controls.Html("<h3 style=\"margin: 0 0 12px 0; font-size: 14px; color: var(--neutral-foreground-hint); text-transform: uppercase;\">Details</h3>"))
-            .WithView(Controls.Markdown(content.ToString()));
-    }
-
-    private static UiControl BuildAssigneeCard(LayoutAreaHost host, string? assignee)
-    {
-        var card = Controls.Stack
-            .WithStyle("padding: 16px; border: 1px solid var(--neutral-stroke-rest); border-radius: 8px; background: var(--neutral-layer-2);");
-
-        card = card.WithView(Controls.Html("<h3 style=\"margin: 0 0 12px 0; font-size: 14px; color: var(--neutral-foreground-hint); text-transform: uppercase;\">Assignee</h3>"));
-
-        if (string.IsNullOrEmpty(assignee))
-        {
-            card = card.WithView(Controls.Html("<div style=\"text-align: center; color: var(--neutral-foreground-hint);\">Unassigned</div>"));
-        }
-        else
-        {
-            // Embed Person's Thumbnail view using LayoutAreaControl
-            card = card.WithView(new LayoutAreaControl(assignee, new LayoutAreaReference("Thumbnail"))
-                .WithShowProgress(false));
-        }
-
-        return card;
     }
 
     private static void DeleteTodo(LayoutAreaHost host, Todo todo)

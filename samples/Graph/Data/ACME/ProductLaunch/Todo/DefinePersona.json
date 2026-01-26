@@ -6,6 +6,7 @@
   "nodeType": "ACME/Project/Todo",
   "description": "Create detailed buyer persona for MeshFlow targeting operations managers at mid-market companies",
   "category": "Tasks",
+  "icon": "/static/content/ACME/Project/Todo/icon.svg",
   "addressSegments": 0,
   "isPersistent": true,
   "lastModified": "2026-01-20T10:05:06.1472369+00:00",

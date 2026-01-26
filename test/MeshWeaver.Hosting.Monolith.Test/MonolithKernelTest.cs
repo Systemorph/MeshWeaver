@@ -20,6 +20,7 @@ using Xunit;
 
 namespace MeshWeaver.Hosting.Monolith.Test;
 
+[Collection("KernelTests")]
 public class MonolithKernelTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
     private const string Test = nameof(Test);
