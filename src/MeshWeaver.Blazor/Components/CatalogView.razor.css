@@ -1,0 +1,47 @@
+.catalog-container {
+    width: 100%;
+}
+
+.catalog-section {
+    width: 100%;
+}
+
+.catalog-section-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 0;
+    font-weight: 600;
+    font-size: 1.1rem;
+}
+
+.catalog-section-emoji {
+    font-size: 1.25rem;
+}
+
+.catalog-section-title {
+    flex: 1;
+}
+
+.catalog-section-count {
+    margin-left: auto;
+}
+
+.catalog-grid {
+    padding: 0;
+}
+
+/* Remove default accordion padding */
+::deep fluent-accordion-item::part(heading) {
+    padding: 0;
+}
+
+::deep fluent-accordion-item::part(region) {
+    padding: 4px 0 0 0;
+}
+
+/* Ensure layout areas fill the card */
+::deep .layout-area-container {
+    height: 100%;
+    width: 100%;
+}

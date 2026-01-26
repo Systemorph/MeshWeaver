@@ -1,0 +1,68 @@
+@using MeshWeaver.Layout
+@using MeshWeaver.Layout.Catalog
+@inherits BlazorView<CatalogControl, CatalogView>
+
+<div class="catalog-container" style="@ContainerStyle">
+    @foreach (var group in Groups)
+    {
+        var isExpanded = expandedGroups.GetValueOrDefault(group.Key, group.IsExpanded);
+        <div class="catalog-section" style="margin-bottom: @(SectionGap)px;">
+            @if (CollapsibleSections)
+            {
+                <FluentAccordion>
+                    <FluentAccordionItem Expanded="@isExpanded" ExpandedChanged="@(e => OnExpandedChanged(group.Key, e))">
+                        <HeadingTemplate>
+                            <div class="catalog-section-header">
+                                @if (!string.IsNullOrEmpty(group.Emoji))
+                                {
+                                    <span class="catalog-section-emoji">@group.Emoji</span>
+                                }
+                                <span class="catalog-section-title">@group.Label</span>
+                                @if (ShowCounts)
+                                {
+                                    <FluentBadge Appearance="Microsoft.FluentUI.AspNetCore.Components.Appearance.Neutral" class="catalog-section-count">
+                                        @group.TotalCount
+                                    </FluentBadge>
+                                }
+                            </div>
+                        </HeadingTemplate>
+                        <ChildContent>
+                            <FluentGrid Spacing="@Spacing" class="catalog-grid">
+                                @foreach (var item in group.Items)
+                                {
+                                    <FluentGridItem xs="@Xs" sm="@Sm" md="@Md" lg="@Lg" Style="@CardStyle">
+                                        <DispatchView ViewModel="@item" Stream="@Stream" Area="@Area" />
+                                    </FluentGridItem>
+                                }
+                            </FluentGrid>
+                        </ChildContent>
+                    </FluentAccordionItem>
+                </FluentAccordion>
+            }
+            else
+            {
+                <div class="catalog-section-header">
+                    @if (!string.IsNullOrEmpty(group.Emoji))
+                    {
+                        <span class="catalog-section-emoji">@group.Emoji</span>
+                    }
+                    <span class="catalog-section-title">@group.Label</span>
+                    @if (ShowCounts)
+                    {
+                        <FluentBadge Appearance="Microsoft.FluentUI.AspNetCore.Components.Appearance.Neutral" class="catalog-section-count">
+                            @group.TotalCount
+                        </FluentBadge>
+                    }
+                </div>
+                <FluentGrid Spacing="@Spacing" class="catalog-grid">
+                    @foreach (var item in group.Items)
+                    {
+                        <FluentGridItem xs="@Xs" sm="@Sm" md="@Md" lg="@Lg" Style="@CardStyle">
+                            <DispatchView ViewModel="@item" Stream="@Stream" Area="@Area" />
+                        </FluentGridItem>
+                    }
+                </FluentGrid>
+            }
+        </div>
+    }
+</div>

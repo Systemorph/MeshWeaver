@@ -22,7 +22,7 @@
 @if (ShowProgress && RootControl == null)
 {
     <FluentStack HorizontalAlignment="HorizontalAlignment.Center" VerticalAlignment="VerticalAlignment.Center"
-        Orientation="Orientation.Vertical">
+        Orientation="Orientation.Vertical" Style="height: 100%">
         @if (!string.IsNullOrEmpty(ProgressMessage))
         {
             <h3>@ProgressMessage</h3>

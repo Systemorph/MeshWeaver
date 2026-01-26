@@ -8,6 +8,7 @@ using MeshWeaver.ContentCollections;
 using MeshWeaver.Data;
 using MeshWeaver.Domain;
 using MeshWeaver.Layout;
+using MeshWeaver.Layout.Catalog;
 using MeshWeaver.Layout.Client;
 using MeshWeaver.Layout.DataGrid;
 using MeshWeaver.Layout.Views;
@@ -70,6 +71,7 @@ public static class BlazorViewRegistry
             //PropertyControl property => StandardView<PropertyControl, PropertyColumnView>(property, stream, area),
             MenuItemControl menu => StandardView<MenuItemControl, MenuItemView>(menu, stream, area),
             DataGridControl dataGrid => StandardView<DataGridControl, DataGridView>(dataGrid, stream, area),
+            CatalogControl catalog => StandardView<CatalogControl, CatalogView>(catalog, stream, area),
             IContainerControl container => StandardView<IContainerControl, ContainerView>(container, stream, area),
             NumberFieldControl number => StandardView(number, typeof(NumberFieldView<>).MakeGenericType(typeRegistry.GetType(number.Type.ToString()!) ?? throw new InvalidOperationException($"Type not found: {number.Type}")), stream, area),
             TextFieldControl textbox => StandardView<TextFieldControl, TextFieldView>(textbox, stream, area),
