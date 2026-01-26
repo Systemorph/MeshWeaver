@@ -26,7 +26,7 @@ namespace MeshWeaver.Graph.Test;
 /// and that task instances can be loaded and accessed.
 /// Theme: MeshFlow B2B SaaS product launch campaign.
 /// </summary>
-[Collection("TodoGraphTests")]
+[Collection("SamplesGraphData")]
 public class TodoGraphIntegrationTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
     // Shared cache directory for all tests - compiled assemblies are reused

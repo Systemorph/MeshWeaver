@@ -27,7 +27,7 @@ namespace MeshWeaver.Graph.Test;
 /// Tests for Project-level aggregate views (Summary, AllTasks, TodosByCategory, Planning, MyTasks, Backlog, TodaysFocus).
 /// These views aggregate data from child Todo items in the ProductLaunch project.
 /// </summary>
-[Collection("ProjectTodoViewsTests")]
+[Collection("SamplesGraphData")]
 public class ProjectTodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
     // Shared cache - tests run sequentially in this collection

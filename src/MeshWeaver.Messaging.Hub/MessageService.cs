@@ -105,7 +105,7 @@ public class MessageService : IMessageService
                         logger.LogDebug("Linking deferred buffer to main buffer for hub {Address}", Address);
                         deferredBuffer.LinkTo(buffer, new DataflowLinkOptions { PropagateCompletion = false });
 
-                        logger.LogInformation("Message hub {address} fully initialized (all gates opened)", Address);
+                        logger.LogDebug("Message hub {address} fully initialized (all gates opened)", Address);
                     }
                 }
 

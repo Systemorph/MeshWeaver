@@ -28,7 +28,7 @@ namespace MeshWeaver.Graph.Test;
 /// Integration tests for creatable types functionality in NodeTypeService using ACME-like sample data.
 /// Tests the full algorithm with real persistence and queries.
 /// </summary>
-[Collection("CreatableTypesIntegrationTests")]
+[Collection("SamplesGraphData")]
 public class CreatableTypesIntegrationTest : MonolithMeshTestBase
 {
     private static readonly string TestDirectoryBase = Path.Combine(Path.GetTempPath(), "MeshWeaverCreatableTypesTests");

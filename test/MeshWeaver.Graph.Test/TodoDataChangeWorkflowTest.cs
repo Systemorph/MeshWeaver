@@ -26,7 +26,7 @@ namespace MeshWeaver.Graph.Test;
 /// Verifies that status changes, assignments, and other mutations work correctly
 /// through the DataChangeRequest mechanism.
 /// </summary>
-[Collection("TodoDataChangeWorkflowTests")]
+[Collection("SamplesGraphData")]
 public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
     // Shared cache - tests run sequentially in this collection
