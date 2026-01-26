@@ -65,6 +65,7 @@ public class FileFormatParserRegistry
     /// <summary>
     /// Attempts to parse content using parsers for the given extension.
     /// Tries each parser in priority order until one succeeds.
+    /// Exceptions from individual parsers are caught and logged, allowing fallback to next parser.
     /// </summary>
     /// <param name="extension">File extension including the dot.</param>
     /// <param name="filePath">Full path to the file.</param>
@@ -82,9 +83,16 @@ public class FileFormatParserRegistry
         var parsers = GetParsers(extension);
         foreach (var parser in parsers)
         {
-            var node = await parser.ParseAsync(filePath, content, relativePath, ct);
-            if (node != null)
-                return node;
+            try
+            {
+                var node = await parser.ParseAsync(filePath, content, relativePath, ct);
+                if (node != null)
+                    return node;
+            }
+            catch
+            {
+                // Parser failed, try next parser in chain
+            }
         }
         return null;
     }

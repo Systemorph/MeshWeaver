@@ -5,7 +5,7 @@
   "nodeType": "ACME/Project/Todo",
   "category": "Tasks",
   "description": "Recruit integration and channel partners for launch",
-  "iconName": "Handshake",
+  "icon": "/static/content/ACME/Project/Todo/icon.svg",
   "isPersistent": true,
   "content": {
     "$type": "Todo",

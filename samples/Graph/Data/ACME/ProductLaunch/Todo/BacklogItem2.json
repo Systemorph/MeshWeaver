@@ -4,6 +4,7 @@
   "path": "ACME/ProductLaunch/Todo/BacklogItem2",
   "name": "Create ROI calculator tool",
   "nodeType": "ACME/Project/Todo",
+  "icon": "/static/content/ACME/Project/Todo/icon.svg",
   "description": "Build an interactive ROI calculator for prospects to estimate savings",
   "category": "Tasks",
   "addressSegments": 0,

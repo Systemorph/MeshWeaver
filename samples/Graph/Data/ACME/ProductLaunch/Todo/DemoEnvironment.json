@@ -4,6 +4,7 @@
   "path": "ACME/ProductLaunch/Todo/DemoEnvironment",
   "name": "Set up demo environment",
   "nodeType": "ACME/Project/Todo",
+  "icon": "/static/content/ACME/Project/Todo/icon.svg",
   "description": "Configure a stable demo instance with sample data",
   "category": "Tasks",
   "addressSegments": 0,

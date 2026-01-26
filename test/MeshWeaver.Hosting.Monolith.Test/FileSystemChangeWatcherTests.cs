@@ -17,6 +17,7 @@ namespace MeshWeaver.Hosting.Monolith.Test;
 /// Tests for FileSystemChangeWatcher that monitors external file changes
 /// and publishes notifications to ObserveQuery.
 /// </summary>
+[Collection("FileSystemWatcherTests")]
 public class FileSystemChangeWatcherTests : IDisposable
 {
     private readonly string _testDirectory;
@@ -260,7 +261,7 @@ public class FileSystemChangeWatcherTests : IDisposable
             This file was created externally.
             """);
 
-        // Wait for file system events and debounce
+        // Wait for file system events and debounce (increased for reliability)
         await Task.Delay(500);
 
         // Assert - On Windows, file creation + write may result in Created or Changed/Updated event

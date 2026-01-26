@@ -354,25 +354,40 @@ public static class EditorExtensions
         JsonPointerReference reference,
         object? parameter = null)
     {
-        // Special handling for MarkdownEditorControl (doesn't implement IFormControl)
-        if (controlType == typeof(MarkdownEditorControl))
-        {
-            var control = new MarkdownEditorControl()
-            {
-                Value = reference,
-                Height = "200px",
-                Placeholder = "Enter description (supports Markdown formatting)",
-                Readonly = propertyInfo.GetCustomAttribute<EditableAttribute>()?.AllowEdit == false
-            };
-            return control;
-        }
-
         if (BasicControls.TryGetValue(controlType, out var factory))
             return (UiControl)((IFormControl)factory.Invoke(reference, propertyInfo, parameter!)).WithLabel(label!);
         if (ListControls.TryGetValue(controlType, out var factory2))
             return (UiControl)((IListControl)factory2.Invoke(host, propertyInfo, reference, parameter!)).WithLabel(label!);
+        if (SpecialControls.TryGetValue(controlType, out var specialFactory))
+            return specialFactory.Invoke(propertyInfo, reference);
 
         throw new ArgumentException($"Cannot convert type {controlType.FullName} to an editor field.");
+    }
+
+    private static readonly Dictionary<Type, Func<PropertyInfo, JsonPointerReference, UiControl>>
+        SpecialControls = new()
+        {
+            { typeof(MarkdownEditorControl), RenderMarkdownEditor },
+            { typeof(MarkdownControl), RenderMarkdownDisplay },
+        };
+
+    private static UiControl RenderMarkdownEditor(PropertyInfo property, JsonPointerReference reference)
+    {
+        var markdownAttr = property.GetCustomAttribute<MarkdownAttribute>();
+        return new MarkdownEditorControl()
+        {
+            Value = reference,
+            Height = markdownAttr?.EditorHeight ?? "200px",
+            Placeholder = markdownAttr?.Placeholder ?? "Enter content (supports Markdown formatting)",
+            ShowPreview = markdownAttr?.ShowPreview ?? false,
+            TrackChangesEnabled = markdownAttr?.TrackChanges ?? false,
+            Readonly = property.GetCustomAttribute<EditableAttribute>()?.AllowEdit == false
+        };
+    }
+
+    private static UiControl RenderMarkdownDisplay(PropertyInfo property, JsonPointerReference reference)
+    {
+        return new MarkdownControl(reference);
     }
     private static readonly Dictionary<Type, Func<LayoutAreaHost, PropertyInfo, JsonPointerReference, object, UiControl>>
         ListControls = new()

@@ -1,5 +1,7 @@
 ﻿using System.ComponentModel;
+using System.ComponentModel.DataAnnotations;
 using System.Reactive.Linq;
+using System.Reflection;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Schema;
@@ -204,12 +206,25 @@ public static class MeshNodeView
         stack = stack.WithView(headerStack);
 
         // Main content based on node type
-        // For Markdown type: renders content directly
-        // For other types: generates markdown table from properties
-        var content = GetNodeContentDisplay(node, host.Hub.JsonSerializerOptions);
-        if (!string.IsNullOrWhiteSpace(content))
+        // Check if we have a ContentType - if so, render properties in a grid
+        var dataContext = host.Workspace.DataContext;
+        var contentTypeSource = dataContext.TypeSources.Values
+            .FirstOrDefault(ts => ts.TypeDefinition.Type != typeof(MeshNode));
+
+        if (contentTypeSource != null && node?.Content != null)
         {
-            stack = stack.WithView(new MarkdownControl(content));
+            // Render content type properties using BuildContentTypeDisplay
+            var contentDisplay = BuildContentTypeDisplay(host, node, contentTypeSource.TypeDefinition.Type);
+            stack = stack.WithView(contentDisplay);
+        }
+        else
+        {
+            // Fall back to markdown display for Markdown nodes or plain content
+            var content = GetNodeContentDisplay(node, host.Hub.JsonSerializerOptions);
+            if (!string.IsNullOrWhiteSpace(content))
+            {
+                stack = stack.WithView(new MarkdownControl(content));
+            }
         }
 
         // Child node sections using a unified grid
@@ -662,6 +677,184 @@ public static class MeshNodeView
     }
 
     /// <summary>
+    /// Builds a UI display for content type properties.
+    /// Renders regular properties in a grid, markdown fields with SeparateEditView as sections with edit buttons.
+    /// </summary>
+    private static UiControl BuildContentTypeDisplay(LayoutAreaHost host, MeshNode node, Type contentType)
+    {
+        var nodePath = node.Namespace ?? host.Hub.Address.ToString();
+        var editHref = $"/{nodePath}/{EditArea}";
+        var stack = Controls.Stack;
+
+        // Deserialize content to the actual type if it's a JsonElement
+        object? content = node.Content;
+        if (content is JsonElement jsonElement)
+        {
+            try
+            {
+                content = jsonElement.Deserialize(contentType, host.Hub.JsonSerializerOptions);
+            }
+            catch
+            {
+                // If deserialization fails, keep as JsonElement
+            }
+        }
+
+        // Get all browsable properties
+        var properties = contentType.GetProperties()
+            .Where(p => p.CanRead && p.GetCustomAttribute<BrowsableAttribute>()?.Browsable != false)
+            .ToList();
+
+        // Separate properties into regular and markdown with SeparateEditView
+        var regularProperties = new List<PropertyInfo>();
+        var separateViewProperties = new List<PropertyInfo>();
+
+        foreach (var prop in properties)
+        {
+            var uiControlAttr = prop.GetCustomAttribute<UiControlAttribute>();
+            if (uiControlAttr?.SeparateEditView == true)
+            {
+                separateViewProperties.Add(prop);
+            }
+            else
+            {
+                regularProperties.Add(prop);
+            }
+        }
+
+        // Render regular properties in a two-column grid (label | value per row)
+        if (regularProperties.Any())
+        {
+            var grid = Controls.LayoutGrid.WithSkin(s => s.WithSpacing(2));
+
+            foreach (var prop in regularProperties)
+            {
+                var displayName = prop.GetCustomAttribute<DisplayAttribute>()?.Name
+                    ?? prop.GetCustomAttribute<DisplayNameAttribute>()?.DisplayName
+                    ?? prop.Name.Wordify();
+
+                var value = GetPropertyValue(content, prop);
+                var displayValue = FormatDisplayValue(value, prop);
+
+                // Label column (left)
+                grid = grid.WithView(
+                    Controls.Html($"<div style=\"font-size: 14px; font-weight: 500; color: var(--neutral-foreground-hint); padding: 8px 0;\">{displayName}</div>"),
+                    itemSkin => itemSkin.WithXs(4).WithMd(2));
+
+                // Value column (right)
+                grid = grid.WithView(
+                    Controls.Html($"<div style=\"font-size: 14px; padding: 8px 0;\">{displayValue}</div>"),
+                    itemSkin => itemSkin.WithXs(8).WithMd(4));
+            }
+
+            stack = stack.WithView(
+                Controls.Stack
+                    .WithStyle("padding: 16px; border: 1px solid var(--neutral-stroke-rest); border-radius: 8px; margin-bottom: 16px;")
+                    .WithView(grid));
+        }
+
+        // Render markdown/separate view fields as full-width sections below
+        foreach (var prop in separateViewProperties)
+        {
+            var displayName = prop.GetCustomAttribute<DisplayAttribute>()?.Name
+                ?? prop.GetCustomAttribute<DisplayNameAttribute>()?.DisplayName
+                ?? prop.Name.Wordify();
+
+            var value = GetPropertyValue(content, prop);
+            var uiControlAttr = prop.GetCustomAttribute<UiControlAttribute>();
+
+            var headerStack = Controls.Stack
+                .WithOrientation(Orientation.Horizontal)
+                .WithStyle("align-items: center; justify-content: space-between; margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px solid var(--neutral-stroke-rest);")
+                .WithView(Controls.Html($"<div style=\"font-size: 16px; font-weight: 600;\">{displayName}</div>"))
+                .WithView(Controls.Button("Edit")
+                    .WithIconStart(FluentIcons.Edit(IconSize.Size16))
+                    .WithAppearance(Appearance.Neutral)
+                    .WithNavigateToHref(editHref));
+
+            // Render using display control type if available
+            UiControl contentControl;
+            if (uiControlAttr?.DisplayControlType == typeof(MarkdownControl) && value is string markdownText)
+            {
+                if (string.IsNullOrEmpty(markdownText))
+                    contentControl = Controls.Html("<div style=\"color: var(--neutral-foreground-hint); font-style: italic; padding: 16px 0;\">No content provided</div>");
+                else
+                    contentControl = new MarkdownControl(markdownText);
+            }
+            else
+            {
+                var displayValue = value?.ToString() ?? string.Empty;
+                if (string.IsNullOrEmpty(displayValue))
+                    contentControl = Controls.Html("<div style=\"color: var(--neutral-foreground-hint); font-style: italic; padding: 16px 0;\">No content provided</div>");
+                else
+                    contentControl = Controls.Html($"<div style=\"font-size: 14px;\">{System.Web.HttpUtility.HtmlEncode(displayValue)}</div>");
+            }
+
+            stack = stack.WithView(
+                Controls.Stack
+                    .WithWidth("100%")
+                    .WithStyle("padding: 16px; border: 1px solid var(--neutral-stroke-rest); border-radius: 8px; margin-bottom: 16px;")
+                    .WithView(headerStack)
+                    .WithView(contentControl));
+        }
+
+        return stack;
+    }
+
+    private static object? GetPropertyValue(object? content, PropertyInfo prop)
+    {
+        if (content == null) return null;
+
+        // Handle JsonElement content
+        if (content is JsonElement jsonElement)
+        {
+            var propName = prop.Name.ToCamelCase();
+            if (propName != null && jsonElement.TryGetProperty(propName, out var propValue))
+            {
+                return propValue.ValueKind switch
+                {
+                    JsonValueKind.String => propValue.GetString(),
+                    JsonValueKind.Number => propValue.GetDouble(),
+                    JsonValueKind.True => true,
+                    JsonValueKind.False => false,
+                    JsonValueKind.Null => null,
+                    _ => propValue.ToString()
+                };
+            }
+            return null;
+        }
+
+        // Handle direct property access
+        try
+        {
+            return prop.GetValue(content);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static string FormatDisplayValue(object? value, PropertyInfo prop)
+    {
+        if (value == null) return "<em>Not set</em>";
+
+        // Format DateTime
+        if (value is DateTime dt)
+            return dt.ToString("MMM dd, yyyy");
+
+        // Format enum
+        if (value.GetType().IsEnum)
+            return value.ToString()!.Wordify();
+
+        // Format boolean
+        if (value is bool b)
+            return b ? "Yes" : "No";
+
+        return System.Web.HttpUtility.HtmlEncode(value.ToString() ?? string.Empty);
+    }
+
+    /// <summary>
     /// Gets the content display for a node.
     /// For Markdown type: renders content directly as markdown.
     /// For other types: generates markdown table from properties.
@@ -1094,9 +1287,23 @@ public static class MeshNodeView
                 var contentType = contentTypeSource.TypeDefinition.Type;
                 var dataId = Guid.NewGuid().AsString();
 
+                // Deserialize content to the actual type if it's a JsonElement
+                object content = node.Content;
+                if (content is JsonElement jsonElement)
+                {
+                    try
+                    {
+                        content = jsonElement.Deserialize(contentType, host.Hub.JsonSerializerOptions) ?? content;
+                    }
+                    catch
+                    {
+                        // If deserialization fails, keep as JsonElement
+                    }
+                }
+
                 // Use EditorExtensions to generate editor for ContentType
                 var editor = host.Hub.ServiceProvider.Edit(contentType, dataId);
-                host.UpdateData(dataId, node.Content);
+                host.UpdateData(dataId, content);
                 stack = stack.WithView(editor);
 
                 // Save button with DataChangeRequest
