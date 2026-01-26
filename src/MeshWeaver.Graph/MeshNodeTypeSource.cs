@@ -193,7 +193,7 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
         // Restore hub version from persisted MeshNode
         if (ownNode is { Version: > 0 })
         {
-            _logger?.LogInformation("MeshNodeTypeSource: Restoring hub {Address} to version {Version}",
+            _logger?.LogDebug("MeshNodeTypeSource: Restoring hub {Address} to version {Version}",
                 _workspace.Hub.Address, ownNode.Version);
             _workspace.Hub.SetInitialVersion(ownNode.Version);
         }

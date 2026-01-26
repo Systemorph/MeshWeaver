@@ -425,7 +425,7 @@ public class MessageService : IMessageService
                 return null;
             var ret = PostImpl(message, opt);
             if (ShouldLogMessage(message))
-                logger.LogInformation("Posting message {Delivery} (ID: {MessageId}) in {Address}",
+                logger.LogDebug("Posting message {Delivery} (ID: {MessageId}) in {Address}",
                     JsonSerializer.Serialize(ret, LoggingSerializerOptions), ret.Id, Address);
             return ret;
         }
@@ -491,7 +491,7 @@ public class MessageService : IMessageService
     public async ValueTask DisposeAsync()
     {
         var totalStopwatch = Stopwatch.StartNew();
-        logger.LogInformation("Starting disposal of message service in {Address}", Address);
+        logger.LogDebug("Starting disposal of message service in {Address}", Address);
         // Open all remaining initialization gates to release any buffered messages
         foreach (var gateName in gates.Keys.ToArray())
         {
@@ -560,7 +560,7 @@ public class MessageService : IMessageService
         }
 
         totalStopwatch.Stop();
-        logger.LogInformation("Finished disposing message service in {Address} - total disposal time: {elapsed}ms",
+        logger.LogDebug("Finished disposing message service in {Address} - total disposal time: {elapsed}ms",
             Address, totalStopwatch.ElapsedMilliseconds);
     }
 

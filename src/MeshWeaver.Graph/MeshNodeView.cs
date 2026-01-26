@@ -913,7 +913,6 @@ public static class MeshNodeView
             // No explicit grouping - defaults to NodeType which gives meaningful labels
             .WithSectionCounts(true)
             .WithItemLimit(10)
-            .WithShowMoreHref(key => $"/{hubPath}/{MeshCatalogView.NodesArea}/{key}")
             .WithCollapsibleSections(true);
     }
 
