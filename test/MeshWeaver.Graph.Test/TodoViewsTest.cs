@@ -24,7 +24,7 @@ namespace MeshWeaver.Graph.Test;
 /// Tests for Todo-level views (Details, Thumbnail).
 /// These views display individual Todo items with their metadata and action buttons.
 /// </summary>
-[Collection("TodoViewsTests")]
+[Collection("SamplesGraphData")]
 public class TodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
     // Shared cache - tests run sequentially in this collection

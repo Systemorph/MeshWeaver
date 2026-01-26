@@ -25,7 +25,7 @@ namespace MeshWeaver.Graph.Test;
 /// <summary>
 /// Tests for ContentCollectionReference resolution via GetDataRequest.
 /// </summary>
-[Collection("ContentCollectionTests")]
+[Collection("SamplesGraphData")]
 public class ContentCollectionReferenceTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
     private static string GetSamplesGraphPath()

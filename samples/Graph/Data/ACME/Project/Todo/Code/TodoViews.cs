@@ -135,6 +135,14 @@ public static class TodoViews
 
         var mainGrid = Controls.LayoutGrid.WithSkin(skin => skin.WithSpacing(-1));
 
+        // Action menu positioned at top-right
+        mainGrid = mainGrid.WithView(
+            Controls.Stack
+                .WithOrientation(Orientation.Horizontal)
+                .WithStyle(style => style.WithJustifyContent("flex-end").WithMarginBottom("8px"))
+                .WithView(BuildTodoActionMenu(host, todo)),
+            skin => skin.WithXs(12));
+
         // Header row with status icon, title, priority and status badges
         var statusIcon = GetStatusIcon(todo.Status);
         var priorityBadge = GetPriorityBadge(todo.Priority);
@@ -175,141 +183,93 @@ public static class TodoViews
             BuildStatusPromotionMenu(host, todo),
             skin => skin.WithXs(12));
 
-        // CRUD buttons (Edit and Delete)
-        mainGrid = mainGrid.WithView(
-            BuildCrudButtons(host, todo),
-            skin => skin.WithXs(12));
-
         return mainGrid;
+    }
+
+    private static UiControl BuildTodoActionMenu(LayoutAreaHost host, Todo todo)
+    {
+        var nodePath = host.Hub.Address.ToString();
+
+        // Start with the trigger button (MoreHorizontal icon) - icon-only mode hides the chevron
+        var menu = Controls.MenuItem("", FluentIcons.MoreHorizontal(IconSize.Size20))
+            .WithAppearance(Appearance.Stealth)
+            .WithIconOnly();
+
+        // Edit option - navigates to Edit area
+        var editHref = $"/{nodePath}/Edit";
+        menu = menu.WithView(new NavLinkControl("Edit", FluentIcons.Edit(IconSize.Size16), editHref));
+
+        // Delete option
+        menu = menu.WithView(
+            Controls.MenuItem("Delete", FluentIcons.Delete(IconSize.Size16))
+                .WithClickAction(_ => { DeleteTodo(host, todo); return System.Threading.Tasks.Task.CompletedTask; }));
+
+        // Comments option (only if comments are enabled)
+        if (host.Hub.Configuration.HasComments())
+        {
+            var commentsHref = $"/{nodePath}/Comments";
+            menu = menu.WithView(new NavLinkControl("Comments", FluentIcons.Comment(IconSize.Size16), commentsHref));
+        }
+
+        // Files option
+        var filesHref = $"/{nodePath}/Files";
+        menu = menu.WithView(new NavLinkControl("Files", FluentIcons.Folder(IconSize.Size16), filesHref));
+
+        // Metadata option
+        var metadataHref = $"/{nodePath}/Metadata";
+        menu = menu.WithView(new NavLinkControl("Metadata", FluentIcons.Info(IconSize.Size16), metadataHref));
+
+        // Settings option
+        var settingsHref = $"/{nodePath}/Settings";
+        menu = menu.WithView(new NavLinkControl("Settings", FluentIcons.Settings(IconSize.Size16), settingsHref));
+
+        return menu;
     }
 
     private static UiControl BuildDetailsCard(Todo todo)
     {
-        var cardContent = new System.Text.StringBuilder();
-        cardContent.AppendLine($"**Category:** {todo.Category}\n");
-        cardContent.AppendLine($"**Priority:** {GetPriorityLabel(todo.Priority)}\n");
+        var content = new System.Text.StringBuilder();
+        content.AppendLine($"**Category:** {todo.Category}");
+        content.AppendLine();
+        content.AppendLine($"**Priority:** {GetPriorityLabel(todo.Priority)}");
         if (todo.DueDate.HasValue)
-            cardContent.AppendLine($"**Due Date:** {todo.DueDate.Value:MMMM dd, yyyy} {GetDueDateIndicator(todo.DueDate.Value, todo.Status)}\n");
-        cardContent.AppendLine($"**Created:** {todo.CreatedAt:MMMM dd, yyyy}\n");
+        {
+            content.AppendLine();
+            content.AppendLine($"**Due Date:** {todo.DueDate.Value:MMMM dd, yyyy} {GetDueDateIndicator(todo.DueDate.Value, todo.Status)}");
+        }
+        content.AppendLine();
+        content.AppendLine($"**Created:** {todo.CreatedAt:MMMM dd, yyyy}");
         if (todo.CompletedAt.HasValue)
-            cardContent.AppendLine($"**Completed:** {todo.CompletedAt.Value:MMMM dd, yyyy}\n");
+        {
+            content.AppendLine();
+            content.AppendLine($"**Completed:** {todo.CompletedAt.Value:MMMM dd, yyyy}");
+        }
 
-        return Controls.Html($@"
-            <div style=""padding: 16px; border: 1px solid var(--neutral-stroke-rest); border-radius: 8px; background: var(--neutral-layer-2); margin-bottom: 16px;"">
-                <h3 style=""margin: 0 0 12px 0; font-size: 14px; color: var(--neutral-foreground-hint); text-transform: uppercase; letter-spacing: 0.5px;"">Details</h3>
-                <div style=""line-height: 1.8;"">
-                    <div><strong>Category:</strong> {todo.Category}</div>
-                    <div><strong>Priority:</strong> {GetPriorityLabel(todo.Priority)}</div>
-                    {(todo.DueDate.HasValue ? $"<div><strong>Due Date:</strong> {todo.DueDate.Value:MMMM dd, yyyy} {GetDueDateIndicator(todo.DueDate.Value, todo.Status)}</div>" : "")}
-                    <div><strong>Created:</strong> {todo.CreatedAt:MMMM dd, yyyy}</div>
-                    {(todo.CompletedAt.HasValue ? $"<div><strong>Completed:</strong> {todo.CompletedAt.Value:MMMM dd, yyyy}</div>" : "")}
-                </div>
-            </div>");
+        return Controls.Stack
+            .WithStyle("padding: 16px; border: 1px solid var(--neutral-stroke-rest); border-radius: 8px; background: var(--neutral-layer-2); margin-bottom: 16px;")
+            .WithView(Controls.Html("<h3 style=\"margin: 0 0 12px 0; font-size: 14px; color: var(--neutral-foreground-hint); text-transform: uppercase;\">Details</h3>"))
+            .WithView(Controls.Markdown(content.ToString()));
     }
 
     private static UiControl BuildAssigneeCard(LayoutAreaHost host, string? assignee)
     {
+        var card = Controls.Stack
+            .WithStyle("padding: 16px; border: 1px solid var(--neutral-stroke-rest); border-radius: 8px; background: var(--neutral-layer-2);");
+
+        card = card.WithView(Controls.Html("<h3 style=\"margin: 0 0 12px 0; font-size: 14px; color: var(--neutral-foreground-hint); text-transform: uppercase;\">Assignee</h3>"));
+
         if (string.IsNullOrEmpty(assignee))
         {
-            return Controls.Html($@"
-                <div style=""padding: 16px; border: 1px solid var(--neutral-stroke-rest); border-radius: 8px; background: var(--neutral-layer-2); margin-bottom: 16px; text-align: center;"">
-                    <h3 style=""margin: 0 0 12px 0; font-size: 14px; color: var(--neutral-foreground-hint); text-transform: uppercase; letter-spacing: 0.5px;"">Assignee</h3>
-                    <div style=""width: 64px; height: 64px; border-radius: 50%; background: var(--neutral-layer-3); margin: 0 auto 12px; display: flex; align-items: center; justify-content: center; font-size: 24px;"">\ud83d\udc64</div>
-                    <div style=""color: var(--neutral-foreground-hint);"">Unassigned</div>
-                </div>");
+            card = card.WithView(Controls.Html("<div style=\"text-align: center; color: var(--neutral-foreground-hint);\">Unassigned</div>"));
+        }
+        else
+        {
+            // Embed Person's Thumbnail view using LayoutAreaControl
+            card = card.WithView(new LayoutAreaControl(assignee, new LayoutAreaReference("Thumbnail"))
+                .WithShowProgress(false));
         }
 
-        // Try to get user info from User namespace
-        // For now, display basic info with link to user profile
-        var avatarUrl = $"/static/storage/content/{assignee}/avatar.svg";
-        return Controls.Html($@"
-            <div style=""padding: 16px; border: 1px solid var(--neutral-stroke-rest); border-radius: 8px; background: var(--neutral-layer-2); margin-bottom: 16px; text-align: center;"">
-                <h3 style=""margin: 0 0 12px 0; font-size: 14px; color: var(--neutral-foreground-hint); text-transform: uppercase; letter-spacing: 0.5px;"">Assignee</h3>
-                <a href=""/User/{assignee}"" style=""text-decoration: none; color: inherit;"">
-                    <img src=""{avatarUrl}"" alt=""{assignee}"" style=""width: 64px; height: 64px; border-radius: 50%; margin-bottom: 12px; background: var(--neutral-layer-3);"" onerror=""this.style.display='none'; this.nextElementSibling.style.display='flex';""/>
-                    <div style=""width: 64px; height: 64px; border-radius: 50%; background: var(--neutral-layer-3); margin: 0 auto 12px; display: none; align-items: center; justify-content: center; font-size: 24px;"">\ud83d\udc64</div>
-                    <div style=""font-weight: 600;"">{assignee}</div>
-                    <div style=""font-size: 12px; color: var(--accent-foreground-rest);"">View Profile \u2192</div>
-                </a>
-            </div>");
-    }
-
-    private static UiControl BuildCrudButtons(LayoutAreaHost host, Todo todo)
-    {
-        return Controls.Stack
-            .WithOrientation(Orientation.Horizontal)
-            .WithStyle(style => style.WithGap("8px").WithMarginTop("16px"))
-            .WithView(Controls.Button("Edit")
-                .WithAppearance(Appearance.Neutral)
-                .WithClickAction(_ =>
-                {
-                    OpenEditDialog(host, todo);
-                    return System.Threading.Tasks.Task.CompletedTask;
-                }))
-            .WithView(Controls.Button("Delete")
-                .WithAppearance(Appearance.Neutral)
-                .WithStyle(style => style.WithColor("#dc3545"))
-                .WithClickAction(_ =>
-                {
-                    DeleteTodo(host, todo);
-                    return System.Threading.Tasks.Task.CompletedTask;
-                }));
-    }
-
-    private static void OpenEditDialog(LayoutAreaHost host, Todo todo)
-    {
-        var editDataId = $"EditTodo_{todo.Id}";
-
-        var editForm = Controls.Stack
-            .WithView(host.Edit(todo, editDataId)?
-                .WithStyle(style => style.WithWidth("100%").WithDisplay("block")), editDataId)
-            .WithView(Controls.Stack
-                .WithView(Controls.Button("Save")
-                    .WithAppearance(Appearance.Accent)
-                    .WithClickAction(_ =>
-                    {
-                        // Retrieve edited data from the store
-                        var store = host.Stream.Current?.Value;
-                        var dataCollection = store?.GetCollection(LayoutAreaReference.Data);
-                        var rawData = dataCollection?.Instances.GetValueOrDefault(editDataId);
-
-                        Todo? editedTodo = null;
-                        if (rawData is Todo t)
-                            editedTodo = t;
-                        else if (rawData is System.Text.Json.JsonElement jsonElement)
-                            editedTodo = System.Text.Json.JsonSerializer.Deserialize<Todo>(jsonElement.GetRawText());
-
-                        if (editedTodo != null)
-                        {
-                            // Ensure the ID is preserved
-                            editedTodo = editedTodo with { Id = todo.Id };
-
-                            // Post DataChangeRequest to persist the changes
-                            var changeRequest = new DataChangeRequest().WithUpdates(editedTodo);
-                            host.Hub.Post(changeRequest, o => o.WithTarget(host.Hub.Address));
-                        }
-
-                        host.UpdateArea(DialogControl.DialogArea, null!);
-                        return System.Threading.Tasks.Task.CompletedTask;
-                    }))
-                .WithView(Controls.Button("Cancel")
-                    .WithAppearance(Appearance.Neutral)
-                    .WithClickAction(_ =>
-                    {
-                        host.UpdateArea(DialogControl.DialogArea, null!);
-                        return System.Threading.Tasks.Task.CompletedTask;
-                    }))
-                .WithOrientation(Orientation.Horizontal)
-                .WithHorizontalGap(10)
-                .WithStyle(style => style.WithJustifyContent("center").WithWidth("100%")))
-            .WithVerticalGap(15)
-            .WithStyle(style => style.WithWidth("100%").WithDisplay("block").WithMargin("0 auto"));
-
-        var dialog = Controls.Dialog(editForm, "Edit Task")
-            .WithSize("M")
-            .WithClosable(false);
-
-        host.UpdateArea(DialogControl.DialogArea, dialog);
+        return card;
     }
 
     private static void DeleteTodo(LayoutAreaHost host, Todo todo)
@@ -463,11 +423,8 @@ public static class TodoViews
         host.Hub.Post(changeRequest, o => o.WithTarget(host.Hub.Address));
     }
 
-    // Team members for assignment dropdown
-    private static readonly string[] TeamMembers = { "Alice", "Bob", "Carol", "David", "Emma", "Roland" };
-
     /// <summary>
-    /// Thumbnail view for catalog listings - enhanced with status menu, assignment dropdown, and reminder button.
+    /// Thumbnail view for catalog listings - enhanced with status menu and reminder button.
     /// </summary>
     public static IObservable<UiControl?> Thumbnail(LayoutAreaHost host, RenderingContext _)
     {
@@ -577,21 +534,12 @@ public static class TodoViews
 
         actionRow = actionRow.WithView(statusMenu);
 
-        // Assignment indicator with quick-assign action
-        var assigneeDisplay = string.IsNullOrEmpty(todo.Assignee) ? "\ud83d\udc64 Unassigned" : $"\ud83d\udc64 {todo.Assignee}";
-        var assigneeTitle = string.IsNullOrEmpty(todo.Assignee) ? "Click to assign" : "Click to reassign";
-        actionRow = actionRow.WithView(
-            Controls.Button(assigneeDisplay)
-                .WithLabel(assigneeTitle)
-                .WithAppearance(string.IsNullOrEmpty(todo.Assignee) ? Appearance.Neutral : Appearance.Accent)
-                .WithStyle(style => style.WithMinWidth("100px").WithPadding("6px 12px").WithBorderRadius("6px"))
-                .WithClickAction(_ =>
-                {
-                    // Cycle through team members or unassign
-                    var nextAssignee = GetNextAssignee(todo.Assignee);
-                    UpdateTodoAssignee(host, todo, nextAssignee);
-                    return System.Threading.Tasks.Task.CompletedTask;
-                }));
+        // Assignee display (read-only, edit via Edit dialog)
+        var assigneeDisplay = string.IsNullOrEmpty(todo.Assignee) ? "Unassigned" : todo.Assignee;
+        actionRow = actionRow.WithView(Controls.Html($@"
+            <span style=""font-size: 12px; color: var(--neutral-foreground-hint); padding: 4px 8px;"">
+                {System.Web.HttpUtility.HtmlEncode(assigneeDisplay)}
+            </span>"));
 
         // Reminder button for overdue items only
         if (isOverdue)
@@ -608,17 +556,13 @@ public static class TodoViews
                     }));
         }
 
-        // Edit button
+        // Edit button - navigates to Edit area
         actionRow = actionRow.WithView(
             Controls.Button("\u270f\ufe0f")
                 .WithLabel("Edit")
                 .WithAppearance(Appearance.Neutral)
                 .WithStyle(style => style.WithMinWidth("32px").WithPadding("4px 8px"))
-                .WithClickAction(_ =>
-                {
-                    OpenEditDialog(host, todo);
-                    return System.Threading.Tasks.Task.CompletedTask;
-                }));
+                .WithNavigateToHref($"/{hubPath}/Edit"));
 
         // Delete button
         actionRow = actionRow.WithView(
@@ -645,24 +589,6 @@ public static class TodoViews
         TodoStatus.Blocked => ("Unblock", TodoStatus.InProgress, FluentIcons.ArrowSync()),
         _ => ("Reopen", TodoStatus.InProgress, FluentIcons.ArrowUndo())
     };
-
-    private static string? GetNextAssignee(string? currentAssignee)
-    {
-        if (string.IsNullOrEmpty(currentAssignee))
-            return TeamMembers[0];
-
-        var currentIndex = Array.IndexOf(TeamMembers, currentAssignee);
-        if (currentIndex < 0 || currentIndex >= TeamMembers.Length - 1)
-            return null; // Unassign after cycling through all
-        return TeamMembers[currentIndex + 1];
-    }
-
-    private static void UpdateTodoAssignee(LayoutAreaHost host, Todo todo, string? newAssignee)
-    {
-        var updatedTodo = todo with { Assignee = newAssignee };
-        var changeRequest = new DataChangeRequest().WithUpdates(updatedTodo);
-        host.Hub.Post(changeRequest, o => o.WithTarget(host.Hub.Address));
-    }
 
     private static bool IsOverdue(Todo todo)
     {

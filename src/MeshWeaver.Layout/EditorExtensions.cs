@@ -354,6 +354,19 @@ public static class EditorExtensions
         JsonPointerReference reference,
         object? parameter = null)
     {
+        // Special handling for MarkdownEditorControl (doesn't implement IFormControl)
+        if (controlType == typeof(MarkdownEditorControl))
+        {
+            var control = new MarkdownEditorControl()
+            {
+                Value = reference,
+                Height = "200px",
+                Placeholder = "Enter description (supports Markdown formatting)",
+                Readonly = propertyInfo.GetCustomAttribute<EditableAttribute>()?.AllowEdit == false
+            };
+            return control;
+        }
+
         if (BasicControls.TryGetValue(controlType, out var factory))
             return (UiControl)((IFormControl)factory.Invoke(reference, propertyInfo, parameter!)).WithLabel(label!);
         if (ListControls.TryGetValue(controlType, out var factory2))

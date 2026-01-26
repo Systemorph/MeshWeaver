@@ -24,6 +24,7 @@ public record Todo : IContentInitializable
     /// <summary>
     /// Detailed description of what needs to be done.
     /// </summary>
+    [UiControl<MarkdownEditorControl>]
     public string? Description { get; init; }
 
     /// <summary>
