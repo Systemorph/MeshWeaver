@@ -30,13 +30,13 @@ public record Todo : IContentInitializable
     /// <summary>
     /// Category for grouping related tasks.
     /// </summary>
-    [UiControl<SelectControl>(Options = new[] { "General", "Marketing", "Research", "Sales", "Engineering", "Support", "PR", "Partnerships", "Design", "Legal", "Strategy" })]
+    [Dimension<Category>]
     public string Category { get; init; } = "General";
 
     /// <summary>
     /// Priority level of the task.
     /// </summary>
-    [UiControl<SelectControl>(Options = new[] { "Low", "Medium", "High", "Critical" })]
+    [Dimension<Priority>]
     public string Priority { get; init; } = "Medium";
 
     /// <summary>
