@@ -1,10 +1,13 @@
-﻿using System.ComponentModel;
+﻿using System.Collections;
+using System.ComponentModel;
 using System.ComponentModel.DataAnnotations;
 using System.Reactive.Linq;
 using System.Reflection;
+using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Schema;
+using Json.More;
 using MeshWeaver.Application.Styles;
 using MeshWeaver.ContentCollections;
 using MeshWeaver.Data;
@@ -12,6 +15,7 @@ using MeshWeaver.Domain;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
+using MeshWeaver.Layout.DataBinding;
 using MeshWeaver.Layout.DataGrid;
 using MeshWeaver.Layout.Domain;
 using MeshWeaver.Markdown;
@@ -19,9 +23,11 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
+using MeshWeaver.Reflection;
 using MeshWeaver.ShortGuid;
 using MeshWeaver.Utils;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Namotion.Reflection;
 
 namespace MeshWeaver.Graph;
@@ -33,14 +39,14 @@ namespace MeshWeaver.Graph;
 public record NodeTypeCatalogMode;
 
 /// <summary>
-/// Layout views for mesh node content.
-/// - Details: Main content display with action menu (readonly content + navigation)
+/// Layout areas for mesh node content.
+/// - Overview: Main content display with action menu (readonly content + navigation)
 /// - Thumbnail: Compact card view for use in catalogs and lists
 /// - Metadata: Node metadata display (name, type, description, path)
 /// - Settings: Node settings with NodeType link navigation
-/// - Comments: Comments section (Facebook-style)
+/// - Children: Child nodes grouped by type
 /// </summary>
-public static class MeshNodeView
+public static class MeshNodeLayoutAreas
 {
     public const string OverviewArea = "Overview";
     public const string ThumbnailArea = "Thumbnail";
@@ -94,82 +100,37 @@ public static class MeshNodeView
     /// <summary>
     /// Renders the Overview area showing the node's main content with action menu.
     /// This is the default view for a node, showing content and providing navigation.
-    /// Uses GetStream for node data. Children are loaded via ChildrenQuery from NodeTypeDefinition
-    /// if set, otherwise via IMeshQuery with scope:children.
+    /// Uses GetStream for node data. Children are displayed via LayoutAreaControl.Children.
     /// </summary>
     [Browsable(false)]
     public static IObservable<UiControl?> Overview(LayoutAreaHost host, RenderingContext _)
     {
         var hubPath = host.Hub.Address.ToString();
-        var meshQuery = host.Hub.ServiceProvider.GetService<IMeshQuery>();
 
         // Get the node from the workspace stream
         var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? Array.Empty<MeshNode>())
             ?? Observable.Return<MeshNode[]>(Array.Empty<MeshNode>());
 
-        // Get the NodeTypeDefinition from the workspace stream (for ChildrenQuery)
+        // Get the NodeTypeDefinition from the workspace stream (for ShowChildrenInDetails)
         var nodeTypeDefStream = host.Workspace.GetStream<NodeTypeDefinition>()?.Select(defs => defs?.FirstOrDefault())
             ?? Observable.Return<NodeTypeDefinition?>(null);
 
         // Combine streams to get both node and type definition
-        var combinedStream = nodeStream.CombineLatest(nodeTypeDefStream, (nodes, typeDef) =>
+        return nodeStream.CombineLatest(nodeTypeDefStream, (nodes, typeDef) =>
         {
             var node = nodes.FirstOrDefault(n => n.Path == hubPath);
-            return (Node: node, TypeDef: typeDef);
-        });
-
-        // Load children based on ChildrenQuery or default IMeshQuery with scope:children
-        return combinedStream.SelectMany(async data =>
-        {
-            var childrenQuery = data.TypeDef?.ChildrenQuery;
-            IReadOnlyList<MeshNode> children;
-
-            if (!string.IsNullOrEmpty(childrenQuery) && meshQuery != null)
-            {
-                // Use QueryAsync with ChildrenQuery
-                // Replace {path} placeholder with actual path
-                var query = childrenQuery.Replace("{path}", hubPath);
-                try
-                {
-                    children = await meshQuery.QueryAsync<MeshNode>(query).ToListAsync();
-                }
-                catch
-                {
-                    children = Array.Empty<MeshNode>();
-                }
-            }
-            else
-            {
-                // Default: use IMeshQuery with scope:children
-                if (meshQuery != null)
-                {
-                    try
-                    {
-                        children = await meshQuery.QueryAsync<MeshNode>($"path:{hubPath} scope:children -nodeType:NodeType").ToListAsync();
-                    }
-                    catch
-                    {
-                        children = Array.Empty<MeshNode>();
-                    }
-                }
-                else
-                {
-                    children = Array.Empty<MeshNode>();
-                }
-            }
-
-            return BuildDetailsContent(host, data.Node, children, data.TypeDef);
+            return BuildDetailsContent(host, node, typeDef);
         });
     }
 
-    private static UiControl BuildDetailsContent(this LayoutAreaHost host, MeshNode? node, IEnumerable<MeshNode> children, NodeTypeDefinition? typeDef)
+    private static UiControl BuildDetailsContent(this LayoutAreaHost host, MeshNode? node, NodeTypeDefinition? typeDef)
     {
         var nodePath = node?.Namespace ?? host.Hub.Address.ToString();
         var stack = Controls.Stack.WithWidth("100%").WithStyle("position: relative;");
 
         // Header: icon + title on left, menu button on right
         var title = node?.Name ?? host.Hub.Address.ToString();
-        var imageUrl = node != null ? GetNodeImageUrl(node) : null;
+        var iconValue = node?.Icon;
 
         // Build title with icon
         var titleContent = Controls.Stack
@@ -177,16 +138,26 @@ public static class MeshNodeView
             .WithStyle("align-items: center; gap: 16px;");
 
         // Add icon/image if available
-        if (!string.IsNullOrEmpty(imageUrl))
+        if (!string.IsNullOrEmpty(iconValue))
         {
-            titleContent = titleContent.WithView(Controls.Html(
-                $"<img src=\"{imageUrl}\" alt=\"\" style=\"width: 48px; height: 48px; border-radius: 8px; object-fit: cover;\" />"));
-        }
-        else if (!string.IsNullOrEmpty(node?.Icon) && !node.Icon.StartsWith("data:") && !node.Icon.StartsWith("http"))
-        {
-            // FluentUI icon name
-            titleContent = titleContent.WithView(Controls.Html(
-                $"<fluent-icon name=\"{node.Icon}\" style=\"font-size: 48px; color: var(--accent-fill-rest);\"></fluent-icon>"));
+            if (iconValue.StartsWith("data:") || iconValue.StartsWith("http") || iconValue.StartsWith("/"))
+            {
+                // Data URI, HTTP URL, or relative path - use as image
+                titleContent = titleContent.WithView(Controls.Html(
+                    $"<img src=\"{iconValue}\" alt=\"\" style=\"width: 48px; height: 48px; border-radius: 8px; object-fit: cover;\" />"));
+            }
+            else if (iconValue.TrimStart().StartsWith("<svg", StringComparison.OrdinalIgnoreCase))
+            {
+                // Inline SVG - render directly with size constraints
+                titleContent = titleContent.WithView(Controls.Html(
+                    $"<div style=\"width: 48px; height: 48px; display: flex; align-items: center; justify-content: center;\">{iconValue}</div>"));
+            }
+            else
+            {
+                // FluentUI icon name - use Controls.Icon
+                titleContent = titleContent.WithView(
+                    Controls.Icon(iconValue).WithStyle("font-size: 48px; color: var(--accent-fill-rest);"));
+            }
         }
 
         titleContent = titleContent.WithView(Controls.Html($"<h1 style=\"margin: 0;\">{title}</h1>"));
@@ -206,15 +177,35 @@ public static class MeshNodeView
         stack = stack.WithView(headerStack);
 
         // Main content based on node type
-        // Check if we have a ContentType - if so, render properties in a grid
-        var dataContext = host.Workspace.DataContext;
-        var contentTypeSource = dataContext.TypeSources.Values
-            .FirstOrDefault(ts => ts.TypeDefinition.Type != typeof(MeshNode));
+        // Resolve content type from the actual content using $type property
+        Type? contentType = null;
+        var typeRegistry = host.Hub.ServiceProvider.GetService<ITypeRegistry>();
 
-        if (contentTypeSource != null && node?.Content != null)
+        if (node?.Content != null)
         {
-            // Render content type properties using BuildContentTypeDisplay
-            var contentDisplay = BuildContentTypeDisplay(host, node, contentTypeSource.TypeDefinition.Type);
+            if (node.Content is JsonElement jsonElement)
+            {
+                // Get $type from JSON and resolve via TypeRegistry
+                if (jsonElement.TryGetProperty("$type", out var typeProperty))
+                {
+                    var typeName = typeProperty.GetString();
+                    if (!string.IsNullOrEmpty(typeName) && typeRegistry != null)
+                    {
+                        contentType = typeRegistry.GetType(typeName);
+                    }
+                }
+            }
+            else
+            {
+                // Content is already deserialized - use its runtime type
+                contentType = node.Content.GetType();
+            }
+        }
+
+        // Render content display if we have a valid content type (not MeshNode itself)
+        if (contentType != null && contentType != typeof(MeshNode) && node?.Content != null)
+        {
+            var contentDisplay = BuildContentTypeDisplay(host, node, contentType);
             stack = stack.WithView(contentDisplay);
         }
         else
@@ -227,57 +218,13 @@ public static class MeshNodeView
             }
         }
 
-        // Child node sections using a unified grid
-        // Controlled by NodeTypeDefinition.ShowChildrenInDetails and DetailsChildrenLimit
+        // Child node sections using LayoutAreaControl.Children
+        // Controlled by NodeTypeDefinition.ShowChildrenInDetails
         var showChildren = typeDef?.ShowChildrenInDetails ?? true;
-        var childrenLimit = typeDef?.DetailsChildrenLimit ?? 10;
 
         if (showChildren)
         {
-            // Group by Category if set, otherwise by NodeType
-            var childGroups = children
-                .Where(c => !string.IsNullOrEmpty(c.Category) || !string.IsNullOrEmpty(c.NodeType))
-                .GroupBy(c => c.Category ?? c.NodeType!)
-                .OrderBy(g => g.Key)
-                .ToList();
-
-            if (childGroups.Count > 0)
-            {
-                // Single unified grid for all child types
-                var grid = Controls.LayoutGrid.WithSkin(s => s.WithSpacing(2));
-
-                foreach (var group in childGroups)
-                {
-                    var recentNodes = group.Take(childrenLimit).ToList();
-                    var displayName = GetGroupDisplayName(group.Key, group.Count());
-
-                    // Section header spans full width
-                    grid = grid.WithView(
-                        Controls.Html($"<h3 style=\"margin: 24px 0 8px 0;\">{displayName}</h3>"),
-                        itemSkin => itemSkin.WithXs(12));
-
-                    // Thumbnails in grid: xs=12, sm=6, md=4, lg=3
-                    foreach (var child in recentNodes)
-                    {
-                        grid = grid.WithView(
-                            BuildThumbnailContent(child, child.Namespace ?? ""),
-                            itemSkin => itemSkin.WithXs(12).WithSm(6).WithMd(4).WithLg(4));
-                    }
-
-                    // "Show more" button if there are more than the limit
-                    if (group.Count() > childrenLimit)
-                    {
-                        var showMoreHref = $"/{nodePath}/{MeshCatalogView.NodesArea}/{group.Key}";
-                        grid = grid.WithView(
-                            Controls.Button($"Show all {group.Count()}")
-                                .WithAppearance(Appearance.Lightweight)
-                                .WithNavigateToHref(showMoreHref),
-                            itemSkin => itemSkin.WithXs(12));
-                    }
-                }
-
-                stack = stack.WithView(grid);
-            }
+            stack = stack.WithView(LayoutAreaControl.Children(host.Hub));
         }
 
         // Comments section at the bottom (only if comments are enabled)
@@ -348,68 +295,6 @@ public static class MeshNodeView
         menu = menu.WithView(new NavLinkControl("Access Control", FluentIcons.Shield(IconSize.Size16), accessControlHref));
 
         return menu;
-    }
-
-    /// <summary>
-    /// Builds a children section showing child nodes grouped by type in a responsive grid.
-    /// Use this in custom views to display subnodes below your custom header.
-    /// </summary>
-    /// <param name="host">The layout area host.</param>
-    /// <param name="children">The list of child nodes to display.</param>
-    /// <param name="nodePath">The parent node path (for "show more" links).</param>
-    /// <param name="childrenLimit">Maximum children per type to show (default 10).</param>
-    /// <returns>A LayoutGrid control with children, or null if no children.</returns>
-    [Browsable(false)]
-    public static UiControl? BuildChildrenSection(
-        LayoutAreaHost _,
-        IEnumerable<MeshNode> children,
-        string nodePath,
-        int childrenLimit = 10)
-    {
-        // Group by Category if set, otherwise by NodeType
-        var childGroups = children
-            .Where(c => !string.IsNullOrEmpty(c.Category) || !string.IsNullOrEmpty(c.NodeType))
-            .GroupBy(c => c.Category ?? c.NodeType!)
-            .OrderBy(g => g.Key)
-            .ToList();
-
-        if (childGroups.Count == 0)
-            return null;
-
-        // Single unified grid for all child types
-        var grid = Controls.LayoutGrid.WithSkin(s => s.WithSpacing(2));
-
-        foreach (var group in childGroups)
-        {
-            var recentNodes = group.Take(childrenLimit).ToList();
-            var displayName = GetGroupDisplayName(group.Key, group.Count());
-
-            // Section header spans full width
-            grid = grid.WithView(
-                Controls.Html($"<h3 style=\"margin: 24px 0 8px 0;\">{displayName}</h3>"),
-                itemSkin => itemSkin.WithXs(12));
-
-            // Thumbnails in grid: xs=12, sm=6, md=4, lg=3
-            foreach (var child in recentNodes)
-            {
-                grid = grid.WithView(
-                    MeshNodeThumbnailControl.FromNode(child, child.Namespace ?? ""),
-                    itemSkin => itemSkin.WithXs(12).WithSm(6).WithMd(4).WithLg(4));
-            }
-
-            // "Show more" button if there are more than the limit
-            if (group.Count() > childrenLimit)
-            {
-                var showMoreHref = $"/{nodePath}/{MeshCatalogView.NodesArea}/{group.Key}";
-                grid = grid.WithView(
-                    Controls.Button($"Show all {group.Count()}")
-                        .WithAppearance(Appearance.Lightweight)
-                        .WithNavigateToHref(showMoreHref),
-                    itemSkin => itemSkin.WithXs(12));
-            }
-        }
-
-        return grid;
     }
 
     /// <summary>
@@ -677,14 +562,14 @@ public static class MeshNodeView
     }
 
     /// <summary>
-    /// Builds a UI display for content type properties.
-    /// Renders regular properties in a grid, markdown fields with SeparateEditView as sections with edit buttons.
+    /// Builds a UI display for content type properties with inline editing support.
+    /// Regular properties use inline click-to-edit pattern with auto-save on blur.
+    /// Markdown/SeparateEditView properties use click-to-edit (MarkdownControl -> MarkdownEditorControl).
     /// </summary>
     private static UiControl BuildContentTypeDisplay(LayoutAreaHost host, MeshNode node, Type contentType)
     {
         var nodePath = node.Namespace ?? host.Hub.Address.ToString();
-        var editHref = $"/{nodePath}/{EditArea}";
-        var stack = Controls.Stack;
+        var stack = Controls.Stack.WithWidth("100%");
 
         // Deserialize content to the actual type if it's a JsonElement
         object? content = node.Content;
@@ -706,11 +591,17 @@ public static class MeshNodeView
             .ToList();
 
         // Separate properties into regular and markdown with SeparateEditView
+        // Skip "Title" and "Name" properties since they're already shown in the header
+        var titlePropertyNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "Title", "Name", "DisplayName" };
         var regularProperties = new List<PropertyInfo>();
         var separateViewProperties = new List<PropertyInfo>();
 
         foreach (var prop in properties)
         {
+            // Skip title-like properties (already shown in header)
+            if (titlePropertyNames.Contains(prop.Name))
+                continue;
+
             var uiControlAttr = prop.GetCustomAttribute<UiControlAttribute>();
             if (uiControlAttr?.SeparateEditView == true)
             {
@@ -722,10 +613,21 @@ public static class MeshNodeView
             }
         }
 
-        // Render regular properties in a two-column grid (label | value per row)
-        if (regularProperties.Any())
+        // Render regular properties with inline editing (click-to-edit pattern)
+        if (regularProperties.Any() && content != null)
         {
-            var grid = Controls.LayoutGrid.WithSkin(s => s.WithSpacing(2));
+            var dataId = $"content_{node.Path?.Replace("/", "_") ?? Guid.NewGuid().ToString("N")}";
+
+            // Initialize data stream with current content
+            host.UpdateData(dataId, content);
+
+            // Create a stack layout for properties - each property gets label + value in a row
+            var propsContainer = Controls.Stack
+                .WithWidth("100%")
+                .WithStyle(s => s
+                    .WithBackgroundColor("var(--neutral-fill-rest)")
+                    .WithBorderRadius("8px")
+                    .WithPadding("12px 16px")) with { DataContext = LayoutAreaReference.GetDataPointer(dataId) };
 
             foreach (var prop in regularProperties)
             {
@@ -733,27 +635,35 @@ public static class MeshNodeView
                     ?? prop.GetCustomAttribute<DisplayNameAttribute>()?.DisplayName
                     ?? prop.Name.Wordify();
 
-                var value = GetPropertyValue(content, prop);
-                var displayValue = FormatDisplayValue(value, prop);
+                // Create a horizontal stack for each property row
+                var row = Controls.Stack
+                    .WithOrientation(Orientation.Horizontal)
+                    .WithWidth("100%")
+                    .WithStyle(s => s.WithAlignItems("center").WithGap("12px").WithPadding("4px 0"));
 
-                // Label column (left)
-                grid = grid.WithView(
-                    Controls.Html($"<div style=\"font-size: 14px; font-weight: 500; color: var(--neutral-foreground-hint); padding: 8px 0;\">{displayName}</div>"),
-                    itemSkin => itemSkin.WithXs(4).WithMd(2));
+                // Label (fixed width)
+                row = row.WithView(
+                    Controls.Label($"{displayName}:")
+                        .WithStyle(s => s
+                            .WithFontWeight("600")
+                            .WithColor("var(--neutral-foreground-hint)")
+                            .WithMinWidth("120px")
+                            .WithWidth("120px")));
 
-                // Value column (right)
-                grid = grid.WithView(
-                    Controls.Html($"<div style=\"font-size: 14px; padding: 8px 0;\">{displayValue}</div>"),
-                    itemSkin => itemSkin.WithXs(8).WithMd(4));
+                // Value - inline editable control (flex grow)
+                var propControl = CreateInlineEditableProperty(host, prop, content, contentType, nodePath, node, dataId);
+                row = row.WithView(propControl.WithStyle(s => s.WithFlexGrow("1")));
+
+                propsContainer = propsContainer.WithView(row);
             }
 
-            stack = stack.WithView(
-                Controls.Stack
-                    .WithStyle("padding: 16px; border: 1px solid var(--neutral-stroke-rest); border-radius: 8px; margin-bottom: 16px;")
-                    .WithView(grid));
+            stack = stack.WithView(propsContainer);
+
+            // Set up auto-save when data stream changes (debounced)
+            SetupAutoSave(host, dataId, node, nodePath, contentType);
         }
 
-        // Render markdown/separate view fields as full-width sections below
+        // Render markdown/separate view fields - click-to-edit pattern (control type changes)
         foreach (var prop in separateViewProperties)
         {
             var displayName = prop.GetCustomAttribute<DisplayAttribute>()?.Name
@@ -763,42 +673,475 @@ public static class MeshNodeView
             var value = GetPropertyValue(content, prop);
             var uiControlAttr = prop.GetCustomAttribute<UiControlAttribute>();
 
-            var headerStack = Controls.Stack
-                .WithOrientation(Orientation.Horizontal)
-                .WithStyle("align-items: center; justify-content: space-between; margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px solid var(--neutral-stroke-rest);")
-                .WithView(Controls.Html($"<div style=\"font-size: 16px; font-weight: 600;\">{displayName}</div>"))
-                .WithView(Controls.Button("Edit")
-                    .WithIconStart(FluentIcons.Edit(IconSize.Size16))
-                    .WithAppearance(Appearance.Neutral)
-                    .WithNavigateToHref(editHref));
+            // Section header
+            var headerLabel = Controls.Label(displayName)
+                .WithStyle("font-size: 16px; font-weight: 600; margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px solid var(--neutral-stroke-rest); display: block;");
 
-            // Render using display control type if available
-            UiControl contentControl;
-            if (uiControlAttr?.DisplayControlType == typeof(MarkdownControl) && value is string markdownText)
-            {
-                if (string.IsNullOrEmpty(markdownText))
-                    contentControl = Controls.Html("<div style=\"color: var(--neutral-foreground-hint); font-style: italic; padding: 16px 0;\">No content provided</div>");
-                else
-                    contentControl = new MarkdownControl(markdownText);
-            }
-            else
-            {
-                var displayValue = value?.ToString() ?? string.Empty;
-                if (string.IsNullOrEmpty(displayValue))
-                    contentControl = Controls.Html("<div style=\"color: var(--neutral-foreground-hint); font-style: italic; padding: 16px 0;\">No content provided</div>");
-                else
-                    contentControl = Controls.Html($"<div style=\"font-size: 14px;\">{System.Web.HttpUtility.HtmlEncode(displayValue)}</div>");
-            }
+            // Render read control directly with click action
+            var readControl = CreateSeparatePropertyReadControl(prop, value, uiControlAttr, content, contentType, nodePath);
 
             stack = stack.WithView(
                 Controls.Stack
                     .WithWidth("100%")
-                    .WithStyle("padding: 16px; border: 1px solid var(--neutral-stroke-rest); border-radius: 8px; margin-bottom: 16px;")
-                    .WithView(headerStack)
-                    .WithView(contentControl));
+                    .WithStyle("background: var(--neutral-fill-rest); border-radius: 8px; padding: 16px 20px; margin-bottom: 16px;")
+                    .WithView(headerLabel)
+                    .WithView(readControl));
         }
 
         return stack;
+    }
+
+    /// <summary>
+    /// Creates an inline editable property control.
+    /// Shows a data-bound label that can be clicked to switch to edit mode.
+    /// The label displays the current value from the data stream.
+    /// </summary>
+    private static UiControl CreateInlineEditableProperty(
+        LayoutAreaHost host,
+        PropertyInfo prop,
+        object? content,
+        Type contentType,
+        string nodePath,
+        MeshNode node,
+        string dataId)
+    {
+        // Check if property is editable
+        var isReadonly = prop.GetCustomAttribute<EditableAttribute>()?.AllowEdit == false
+                         || prop.HasAttribute<KeyAttribute>();
+
+        var propName = prop.Name.ToCamelCase()!;
+        var jsonPointerReference = new JsonPointerReference(propName);
+        var value = content != null ? prop.GetValue(content) : null;
+        var displayValue = FormatDisplayValue(value, prop);
+
+        if (isReadonly)
+        {
+            // Render readonly label - data-bound but no click action
+            return new LabelControl(jsonPointerReference)
+                .WithStyle("padding: 6px 0;");
+        }
+
+        // For editable fields, show the data-bound value with click-to-edit
+        return new LabelControl(jsonPointerReference)
+            .WithStyle("padding: 6px 0; cursor: pointer; min-height: 24px;")
+            .WithClickAction(ctx =>
+            {
+                // Switch to edit mode - replace with editable control
+                var editControl = CreateInlineEditControl(host, prop, jsonPointerReference, content, contentType, nodePath, node, dataId, ctx.Area);
+                ctx.Host.UpdateArea(ctx.Area, editControl);
+                return Task.CompletedTask;
+            });
+    }
+
+    /// <summary>
+    /// Creates the inline edit control (TextField, NumberField, etc.) for a property.
+    /// The control is data-bound and automatically commits changes via the data stream.
+    /// Server-side auto-save subscription handles persistence.
+    /// </summary>
+    private static UiControl CreateInlineEditControl(
+        LayoutAreaHost host,
+        PropertyInfo prop,
+        JsonPointerReference jsonPointerReference,
+        object? content,
+        Type contentType,
+        string nodePath,
+        MeshNode node,
+        string dataId,
+        string area)
+    {
+        var isRequired = prop.HasAttribute<RequiredMemberAttribute>() || prop.HasAttribute<RequiredAttribute>();
+        var propType = prop.PropertyType;
+
+        UiControl editControl;
+
+        // Check for UiControlAttribute first
+        var uiControlAttr = prop.GetCustomAttribute<UiControlAttribute>();
+        if (uiControlAttr != null)
+        {
+            editControl = CreateControlFromUiControlAttribute(host, uiControlAttr, prop, jsonPointerReference, isRequired);
+        }
+        // Check for DimensionAttribute
+        else if (prop.GetCustomAttribute<DimensionAttribute>() is { } dimensionAttr)
+        {
+            editControl = CreateDimensionSelectControl(host, prop, jsonPointerReference, dimensionAttr, isRequired, dataId);
+        }
+        // Handle based on property type
+        else if (propType.IsNumber())
+        {
+            var typeRegistry = host.Hub.ServiceProvider.GetRequiredService<ITypeRegistry>();
+            editControl = new NumberFieldControl(jsonPointerReference, typeRegistry.GetOrAddType(propType))
+            {
+                Required = isRequired,
+                Readonly = false,
+                AutoFocus = true,
+                Immediate = true
+            };
+        }
+        else if (propType == typeof(DateTime) || propType == typeof(DateTime?))
+        {
+            editControl = new DateTimeControl(jsonPointerReference)
+            {
+                Required = isRequired,
+                Readonly = false
+            };
+        }
+        else if (propType == typeof(bool) || propType == typeof(bool?))
+        {
+            editControl = new CheckBoxControl(jsonPointerReference)
+            {
+                Required = isRequired,
+                Readonly = false
+            };
+        }
+        else
+        {
+            // Default to TextField for strings and other types
+            editControl = new TextFieldControl(jsonPointerReference)
+            {
+                Required = isRequired,
+                Readonly = false,
+                AutoFocus = true,
+                Immediate = true
+            };
+        }
+
+        return editControl.WithStyle(s => s.WithWidth("100%"));
+    }
+
+    /// <summary>
+    /// Creates a control based on UiControlAttribute.
+    /// </summary>
+    private static UiControl CreateControlFromUiControlAttribute(
+        LayoutAreaHost host,
+        UiControlAttribute uiControlAttr,
+        PropertyInfo prop,
+        JsonPointerReference jsonPointerReference,
+        bool isRequired)
+    {
+        var controlType = uiControlAttr.ControlType;
+
+        if (controlType == typeof(TextAreaControl))
+        {
+            return new TextAreaControl(jsonPointerReference) { Required = isRequired, Readonly = false };
+        }
+
+        if (controlType == typeof(SelectControl) && uiControlAttr.Options != null)
+        {
+            var optionsId = Guid.NewGuid().AsString();
+            host.UpdateData(optionsId, ConvertOptionsToCollection(uiControlAttr.Options));
+            return new SelectControl(jsonPointerReference, new JsonPointerReference(LayoutAreaReference.GetDataPointer(optionsId)))
+            {
+                Required = isRequired,
+                Readonly = false
+            };
+        }
+
+        if (controlType == typeof(RadioGroupControl) && uiControlAttr.Options != null)
+        {
+            var optionsId = Guid.NewGuid().AsString();
+            host.UpdateData(optionsId, ConvertOptionsToCollection(uiControlAttr.Options));
+            return Controls.RadioGroup(jsonPointerReference, new JsonPointerReference(LayoutAreaReference.GetDataPointer(optionsId)), prop.Name);
+        }
+
+        // Default to TextField
+        return new TextFieldControl(jsonPointerReference) { Required = isRequired, Readonly = false, AutoFocus = true };
+    }
+
+    /// <summary>
+    /// Creates a SelectControl for dimension properties.
+    /// </summary>
+    private static UiControl CreateDimensionSelectControl(
+        LayoutAreaHost host,
+        PropertyInfo prop,
+        JsonPointerReference jsonPointerReference,
+        DimensionAttribute dimensionAttr,
+        bool isRequired,
+        string parentDataId)
+    {
+        var optionsId = Guid.NewGuid().AsString();
+        host.RegisterForDisposal(parentDataId,
+            host.Workspace
+                .GetStream(new CollectionReference(host.Workspace.DataContext.GetCollectionName(dimensionAttr.Type)!))!
+                .Select(x => ConvertDimensionToOptions(x.Value!, host.Workspace.DataContext.TypeRegistry.GetTypeDefinition(dimensionAttr.Type)!))
+                .Subscribe(options => host.UpdateData(optionsId, options)));
+
+        return new SelectControl(jsonPointerReference, new JsonPointerReference(LayoutAreaReference.GetDataPointer(optionsId)))
+        {
+            Required = isRequired,
+            Readonly = false
+        };
+    }
+
+    /// <summary>
+    /// Converts options array to a collection of Option objects.
+    /// </summary>
+    private static IReadOnlyCollection<Option> ConvertOptionsToCollection(object options)
+    {
+        if (options is IEnumerable<Option> optionCollection)
+        {
+            return optionCollection.ToArray();
+        }
+
+        if (options is string[] stringOptions)
+        {
+            return stringOptions.Select(s => (Option)new Option<string>(s, s.Wordify())).ToArray();
+        }
+
+        if (options is IEnumerable enumerable)
+        {
+            return enumerable.Cast<object>().Select(o => (Option)new Option<string>(o.ToString()!, o.ToString()!.Wordify())).ToArray();
+        }
+
+        return Array.Empty<Option>();
+    }
+
+    /// <summary>
+    /// Sets up auto-save when the data stream changes.
+    /// Debounces changes by 500ms before persisting.
+    /// </summary>
+    private static void SetupAutoSave(LayoutAreaHost host, string dataId, MeshNode node, string nodePath, Type contentType)
+    {
+        // Keep track of the initial serialized value to detect real changes
+        var initialJson = JsonSerializer.Serialize(node.Content, host.Hub.JsonSerializerOptions);
+
+        host.RegisterForDisposal(dataId,
+            host.Stream.GetDataStream<object>(dataId)
+                .Debounce(TimeSpan.FromMilliseconds(500)) // Wait 500ms after last change
+                .Subscribe(async updatedContent =>
+                {
+                    if (updatedContent == null) return;
+
+                    // Serialize to compare - skip if no actual change
+                    var currentJson = JsonSerializer.Serialize(updatedContent, host.Hub.JsonSerializerOptions);
+                    if (currentJson == initialJson) return;
+
+                    // Update the initial value to prevent re-saving
+                    initialJson = currentJson;
+
+                    // Persist via DataChangeRequest
+                    var updatedNode = node with { Content = updatedContent };
+                    var hubAddress = host.Hub.Configuration.ParentHub?.Address ?? host.Hub.Address;
+
+                    using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+                    try
+                    {
+                        await host.Hub.AwaitResponse<DataChangeResponse>(
+                            new DataChangeRequest().WithUpdates(updatedNode),
+                            o => o.WithTarget(hubAddress),
+                            cts.Token);
+                    }
+                    catch (Exception ex)
+                    {
+                        // Log the error - in the future could show a toast notification
+                        host.Hub.ServiceProvider.GetService<ILoggerFactory>()?
+                            .CreateLogger(typeof(MeshNodeLayoutAreas))
+                            .LogWarning(ex, "Failed to auto-save node {NodePath}", node.Path);
+                    }
+                }));
+    }
+
+    /// <summary>
+    /// Creates a read control for markdown/separate view fields with click action to switch to edit mode.
+    /// </summary>
+    private static UiControl CreateSeparatePropertyReadControl(
+        PropertyInfo prop,
+        object? value,
+        UiControlAttribute? uiControlAttr,
+        object? content,
+        Type contentType,
+        string nodePath)
+    {
+        UiControl readControl;
+
+        if (uiControlAttr?.DisplayControlType == typeof(MarkdownControl) && value is string markdownText)
+        {
+            if (string.IsNullOrEmpty(markdownText))
+            {
+                readControl = Controls.Body("No content provided")
+                    .WithStyle("color: var(--neutral-foreground-hint); font-style: italic; padding: 16px 0; cursor: pointer;");
+            }
+            else
+            {
+                readControl = Controls.Stack
+                    .WithStyle("cursor: pointer;")
+                    .WithView(new MarkdownControl(markdownText));
+            }
+        }
+        else
+        {
+            var displayValue = value?.ToString() ?? string.Empty;
+            readControl = string.IsNullOrEmpty(displayValue)
+                ? Controls.Body("No content provided")
+                    .WithStyle("color: var(--neutral-foreground-hint); font-style: italic; padding: 16px 0; cursor: pointer;")
+                : Controls.Body(displayValue)
+                    .WithStyle("cursor: pointer;");
+        }
+
+        // Check if property is editable
+        var isReadonly = prop.GetCustomAttribute<EditableAttribute>()?.AllowEdit == false
+                         || prop.HasAttribute<KeyAttribute>();
+
+        if (isReadonly)
+        {
+            return readControl;
+        }
+
+        // Add click action to switch to edit mode
+        return readControl.WithClickAction(ctx =>
+        {
+            var dataId = $"edit_{prop.Name}_{Guid.NewGuid():N}";
+            var currentValue = content != null ? prop.GetValue(content) : null;
+
+            // Set initial data (null is valid for empty fields)
+            ctx.Host.UpdateData(dataId, currentValue!);
+
+            // Create editor control
+            var editorControl = CreatePropertyEditor(ctx.Host, prop, dataId);
+
+            // Create save button
+            var saveButton = Controls.Button("Save")
+                .WithAppearance(Appearance.Accent)
+                .WithClickAction(async saveCtx =>
+                {
+                    var stream = saveCtx.Host.Stream.GetDataStream<object>(dataId);
+                    var newValue = await stream.FirstAsync();
+                    await SavePropertyChange(saveCtx, prop, content, contentType, nodePath, newValue);
+
+                    // Update read control with new value
+                    var newReadControl = CreateSeparatePropertyReadControl(prop, newValue, uiControlAttr, content, contentType, nodePath);
+                    saveCtx.Host.UpdateArea(ctx.Area, newReadControl);
+                });
+
+            // Create cancel button
+            var cancelButton = Controls.Button("Cancel")
+                .WithAppearance(Appearance.Neutral)
+                .WithStyle("margin-left: 8px;")
+                .WithClickAction(cancelCtx =>
+                {
+                    // Revert to read control
+                    var originalReadControl = CreateSeparatePropertyReadControl(prop, currentValue, uiControlAttr, content, contentType, nodePath);
+                    cancelCtx.Host.UpdateArea(ctx.Area, originalReadControl);
+                    return Task.CompletedTask;
+                });
+
+            // Build edit view - for markdown, stack vertically
+            UiControl editView;
+            if (uiControlAttr?.ControlType == typeof(MarkdownEditorControl))
+            {
+                editView = Controls.Stack
+                    .WithStyle("width: 100%;")
+                    .WithView(editorControl)
+                    .WithView(Controls.Stack
+                        .WithOrientation(Orientation.Horizontal)
+                        .WithStyle("gap: 8px; margin-top: 12px;")
+                        .WithView(saveButton)
+                        .WithView(cancelButton));
+            }
+            else
+            {
+                editView = Controls.Stack
+                    .WithOrientation(Orientation.Horizontal)
+                    .WithStyle("align-items: center; gap: 8px; width: 100%;")
+                    .WithView(editorControl)
+                    .WithView(saveButton)
+                    .WithView(cancelButton);
+            }
+
+            ctx.Host.UpdateArea(ctx.Area, editView);
+            return Task.CompletedTask;
+        });
+    }
+
+    /// <summary>
+    /// Saves a property change to the node's content using DataChangeRequest via workspace stream.
+    /// </summary>
+    private static async Task SavePropertyChange(
+        UiActionContext actx,
+        PropertyInfo prop,
+        object? content,
+        Type contentType,
+        string nodePath,
+        object? newValue)
+    {
+        // Get the node from workspace stream (not IPersistenceService)
+        var nodeStream = actx.Host.Workspace.GetStream<MeshNode>();
+        if (nodeStream == null) return;
+
+        var nodes = await nodeStream.FirstAsync();
+        var node = nodes?.FirstOrDefault(n => n.Path == nodePath || n.Namespace == nodePath);
+        if (node == null) return;
+
+        // Create updated content with the new property value
+        object? updatedContent;
+        if (content != null && contentType.IsClass)
+        {
+            // For records/classes, try to create a copy with the updated property
+            // This works for records with 'with' expressions
+            updatedContent = CreateUpdatedContent(content, prop, newValue);
+        }
+        else
+        {
+            updatedContent = content;
+        }
+
+        // Update the node via DataChangeRequest
+        var updatedNode = node with { Content = updatedContent };
+        var hubAddress = actx.Host.Hub.Configuration.ParentHub?.Address ?? actx.Host.Hub.Address;
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        try
+        {
+            await actx.Host.Hub.AwaitResponse<DataChangeResponse>(
+                new DataChangeRequest().WithUpdates(updatedNode),
+                o => o.WithTarget(hubAddress),
+                cts.Token);
+        }
+        catch
+        {
+            // Log or handle error - for now silently fail
+        }
+    }
+
+    /// <summary>
+    /// Creates an updated copy of the content with a changed property value.
+    /// </summary>
+    private static object? CreateUpdatedContent(object content, PropertyInfo prop, object? newValue)
+    {
+        var contentType = content.GetType();
+
+        // Check if the type is a record (has a copy constructor pattern)
+        // Try to find a with-style cloning approach
+        if (prop.CanWrite)
+        {
+            // For mutable properties, just set the value
+            prop.SetValue(content, newValue);
+            return content;
+        }
+
+        // For immutable records, we need to create a new instance
+        // Use reflection to find the constructor and create a copy
+        var constructor = contentType.GetConstructors().FirstOrDefault();
+        if (constructor == null) return content;
+
+        var parameters = constructor.GetParameters();
+        var args = new object?[parameters.Length];
+
+        for (int i = 0; i < parameters.Length; i++)
+        {
+            var param = parameters[i];
+            var matchingProp = contentType.GetProperty(param.Name!, BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase);
+
+            if (matchingProp != null)
+            {
+                args[i] = matchingProp.Name == prop.Name ? newValue : matchingProp.GetValue(content);
+            }
+            else if (param.HasDefaultValue)
+            {
+                args[i] = param.DefaultValue;
+            }
+        }
+
+        return constructor.Invoke(args);
     }
 
     private static object? GetPropertyValue(object? content, PropertyInfo prop)
@@ -837,7 +1180,7 @@ public static class MeshNodeView
 
     private static string FormatDisplayValue(object? value, PropertyInfo prop)
     {
-        if (value == null) return "<em>Not set</em>";
+        if (value == null) return "";
 
         // Format DateTime
         if (value is DateTime dt)
@@ -851,7 +1194,110 @@ public static class MeshNodeView
         if (value is bool b)
             return b ? "Yes" : "No";
 
-        return System.Web.HttpUtility.HtmlEncode(value.ToString() ?? string.Empty);
+        return value.ToString() ?? string.Empty;
+    }
+
+    /// <summary>
+    /// Creates an editor control for a property based on its type, using data binding.
+    /// Follows the pattern from EditorExtensions.cs.
+    /// </summary>
+    private static UiControl CreatePropertyEditor(LayoutAreaHost host, PropertyInfo prop, string dataId)
+    {
+        var jsonPointerReference = new JsonPointerReference(LayoutAreaReference.GetDataPointer(dataId));
+        var isReadonly = prop.GetCustomAttribute<EditableAttribute>()?.AllowEdit == false
+                         || prop.HasAttribute<KeyAttribute>();
+        var isRequired = prop.HasAttribute<RequiredMemberAttribute>() || prop.HasAttribute<RequiredAttribute>();
+
+        // Check for UiControlAttribute
+        var uiControlAttr = prop.GetCustomAttribute<UiControlAttribute>();
+        if (uiControlAttr != null)
+        {
+            // Handle markdown editor
+            if (uiControlAttr.ControlType == typeof(MarkdownEditorControl))
+            {
+                var markdownAttr = prop.GetCustomAttribute<MarkdownAttribute>();
+                return new MarkdownEditorControl
+                {
+                    Value = jsonPointerReference,
+                    Height = markdownAttr?.EditorHeight ?? "200px",
+                    Placeholder = markdownAttr?.Placeholder ?? "Enter content (supports Markdown formatting)",
+                    ShowPreview = markdownAttr?.ShowPreview ?? false,
+                    TrackChangesEnabled = markdownAttr?.TrackChanges ?? false,
+                    Readonly = isReadonly
+                };
+            }
+
+            // Handle TextArea
+            if (uiControlAttr.ControlType == typeof(TextAreaControl))
+            {
+                return new TextAreaControl(jsonPointerReference) { Required = isRequired, Readonly = isReadonly };
+            }
+        }
+
+        // Check for DimensionAttribute
+        var dimensionAttr = prop.GetCustomAttribute<DimensionAttribute>();
+        if (dimensionAttr != null)
+        {
+            var optionsId = Guid.NewGuid().AsString();
+            host.RegisterForDisposal(dataId,
+                host.Workspace
+                    .GetStream(new CollectionReference(host.Workspace.DataContext.GetCollectionName(dimensionAttr.Type)!))!
+                    .Select(x => ConvertDimensionToOptions(x.Value!, host.Workspace.DataContext.TypeRegistry.GetTypeDefinition(dimensionAttr.Type)!))
+                    .Subscribe(options => host.UpdateData(optionsId, options)));
+
+            return new SelectControl(jsonPointerReference, new JsonPointerReference(LayoutAreaReference.GetDataPointer(optionsId)))
+            {
+                Required = isRequired,
+                Readonly = isReadonly
+            };
+        }
+
+        // Handle based on property type
+        var propType = prop.PropertyType;
+
+        // Number types
+        if (propType.IsNumber())
+        {
+            var typeRegistry = host.Hub.ServiceProvider.GetRequiredService<ITypeRegistry>();
+            return new NumberFieldControl(jsonPointerReference, typeRegistry.GetOrAddType(propType))
+            {
+                Required = isRequired,
+                Readonly = isReadonly
+            };
+        }
+
+        // DateTime
+        if (propType == typeof(DateTime) || propType == typeof(DateTime?))
+        {
+            return new DateTimeControl(jsonPointerReference) { Required = isRequired, Readonly = isReadonly };
+        }
+
+        // Boolean
+        if (propType == typeof(bool) || propType == typeof(bool?))
+        {
+            return new CheckBoxControl(jsonPointerReference) { Required = isRequired, Readonly = isReadonly };
+        }
+
+        // Default to TextField for strings and other types
+        return new TextFieldControl(jsonPointerReference) { Required = isRequired, Readonly = isReadonly };
+    }
+
+    /// <summary>
+    /// Converts dimension instances to options for select controls.
+    /// </summary>
+    private static IReadOnlyCollection<Option> ConvertDimensionToOptions(InstanceCollection instances, ITypeDefinition dimensionType)
+    {
+        var displayNameSelector =
+            typeof(INamed).IsAssignableFrom(dimensionType.Type)
+                ? (Func<object, string>)(x => ((INamed)x).DisplayName)
+                : o => o.ToString()!;
+
+        var keyType = dimensionType.GetKeyType();
+        var optionType = typeof(Option<>).MakeGenericType(keyType);
+
+        return instances.Instances
+            .Select(kvp => (Option)Activator.CreateInstance(optionType, [kvp.Key, displayNameSelector(kvp.Value)])!)
+            .ToArray();
     }
 
     /// <summary>
@@ -1345,9 +1791,20 @@ public static class MeshNodeView
                     return;
                 }
 
-                // Get the current node to update its Content
-                var persistence = actx.Host.Hub.ServiceProvider.GetService<IPersistenceService>();
-                var node = await persistence?.GetNodeAsync(nodePath, CancellationToken.None)!;
+                // Get the current node from workspace stream (not IPersistenceService)
+                var nodeStream = actx.Host.Workspace.GetStream<MeshNode>();
+                if (nodeStream == null)
+                {
+                    var errorDialog = Controls.Dialog(
+                        Controls.Markdown("**Node stream not available.**"),
+                        "Error"
+                    ).WithSize("S");
+                    actx.Host.UpdateArea(DialogControl.DialogArea, errorDialog);
+                    return;
+                }
+
+                var nodes = await nodeStream.FirstAsync();
+                var node = nodes?.FirstOrDefault(n => n.Path == nodePath || n.Namespace == nodePath);
 
                 if (node == null)
                 {

@@ -3,10 +3,12 @@
 // DisplayName: Project Priority Data Model
 // </meshweaver>
 
+using MeshWeaver.Domain;
+
 /// <summary>
-/// Represents a task priority with display metadata.
+/// Represents a task priority with display metadata and styling.
 /// </summary>
-public record Priority
+public record Priority : INamed
 {
     [Key]
     public string Id { get; init; } = string.Empty;
@@ -16,6 +18,16 @@ public record Priority
 
     public string Emoji { get; init; } = string.Empty;
 
+    /// <summary>
+    /// Background color for priority badges (hex format).
+    /// </summary>
+    public string BackgroundColor { get; init; } = "#6c757d";
+
+    /// <summary>
+    /// Text color for priority badges (hex format).
+    /// </summary>
+    public string TextColor { get; init; } = "#fff";
+
     public int Order { get; init; }
 
     /// <summary>
@@ -23,29 +35,40 @@ public record Priority
     /// </summary>
     public bool IsExpandedByDefault { get; init; } = true;
 
+    /// <summary>
+    /// Display name with emoji prefix for UI display.
+    /// </summary>
+    [Browsable(false)]
+    public string DisplayName => string.IsNullOrEmpty(Emoji) ? Name : $"{Emoji} {Name}";
+
     public static readonly Priority Critical = new()
     {
-        Id = "Critical", Name = "Critical Priority", Emoji = "\ud83d\udea8", Order = 0, IsExpandedByDefault = true
+        Id = "Critical", Name = "Critical", Emoji = "🚨", Order = 0,
+        BackgroundColor = "#dc3545", TextColor = "#fff", IsExpandedByDefault = true
     };
 
     public static readonly Priority High = new()
     {
-        Id = "High", Name = "High Priority", Emoji = "\ud83d\udd25", Order = 1, IsExpandedByDefault = true
+        Id = "High", Name = "High", Emoji = "🔥", Order = 1,
+        BackgroundColor = "#fd7e14", TextColor = "#fff", IsExpandedByDefault = true
     };
 
     public static readonly Priority Medium = new()
     {
-        Id = "Medium", Name = "Medium Priority", Emoji = "\ud83d\udfe1", Order = 2, IsExpandedByDefault = false
+        Id = "Medium", Name = "Medium", Emoji = "🟡", Order = 2,
+        BackgroundColor = "#ffc107", TextColor = "#000", IsExpandedByDefault = false
     };
 
     public static readonly Priority Low = new()
     {
-        Id = "Low", Name = "Low Priority", Emoji = "\ud83d\udfe2", Order = 3, IsExpandedByDefault = false
+        Id = "Low", Name = "Low", Emoji = "🟢", Order = 3,
+        BackgroundColor = "#198754", TextColor = "#fff", IsExpandedByDefault = false
     };
 
     public static readonly Priority Unset = new()
     {
-        Id = "Unset", Name = "Unset Priority", Emoji = "\u2753", Order = 4, IsExpandedByDefault = false
+        Id = "Unset", Name = "Unset", Emoji = "❓", Order = 4,
+        BackgroundColor = "#6c757d", TextColor = "#fff", IsExpandedByDefault = false
     };
 
     public static readonly Priority[] All = [Critical, High, Medium, Low, Unset];

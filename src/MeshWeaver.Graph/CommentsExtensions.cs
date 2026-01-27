@@ -58,7 +58,7 @@ public static class CommentsExtensions
                 new MeshDataSource(Guid.NewGuid().AsString(), data.Workspace)
                     .WithType<Comment>(CommentPartition, nameof(Comment))))
             .AddLayout(layout => layout
-                .WithView(MeshNodeView.CommentsArea, CommentsView.Comments));
+                .WithView(MeshNodeLayoutAreas.CommentsArea, CommentsView.Comments));
     }
 
     /// <summary>
@@ -101,7 +101,7 @@ public static class CommentsView
         section = section.WithView(Controls.Html("<h3>Comments</h3>"));
         section = section.WithView(Controls.Html("<p style=\"color: #888; font-size: 0.9em; margin-bottom: 16px;\">Use the AI agent to add comments. Example: \"Add a comment saying 'This looks good'\"</p>"));
 
-        section = section.WithView(Controls.LayoutArea(host.Hub.Address, MeshNodeView.CommentsArea));
+        section = section.WithView(Controls.LayoutArea(host.Hub.Address, MeshNodeLayoutAreas.CommentsArea));
 
         return section;
     }

@@ -66,7 +66,8 @@ public record Todo : IContentInitializable
     /// <summary>
     /// Current status of the task.
     /// </summary>
-    public TodoStatus Status { get; init; } = TodoStatus.Pending;
+    [Dimension<TodoStatus>]
+    public string Status { get; init; } = "Pending";
 
     /// <summary>
     /// Timestamp when the task was completed.
@@ -85,31 +86,4 @@ public record Todo : IContentInitializable
         }
         return this;
     }
-}
-
-/// <summary>
-/// Task completion status.
-/// </summary>
-public enum TodoStatus
-{
-    /// <summary>
-    /// Task is waiting to be started.
-    /// </summary>
-    Pending,
-    /// <summary>
-    /// Task is actively being worked on.
-    /// </summary>
-    InProgress,
-    /// <summary>
-    /// Task is awaiting review.
-    /// </summary>
-    InReview,
-    /// <summary>
-    /// Task has been completed.
-    /// </summary>
-    Completed,
-    /// <summary>
-    /// Task is blocked by dependencies.
-    /// </summary>
-    Blocked
 }

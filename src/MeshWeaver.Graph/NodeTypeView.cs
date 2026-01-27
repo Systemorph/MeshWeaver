@@ -42,7 +42,7 @@ public static class NodeTypeView
 
     /// <summary>
     /// Adds the NodeType views to the hub's layout for NodeType nodes.
-    /// Uses the standard MeshNodeView.Search with NodeTypeCatalogMode to dynamically query instances.
+    /// Uses the standard MeshNodeLayoutAreas.Search with NodeTypeCatalogMode to dynamically query instances.
     /// Includes UCR areas ($Data, $Schema, $Model) for unified content references.
     /// Note: $Content is registered by ContentCollectionsExtensions.AddContentCollections.
     /// </summary>
@@ -51,16 +51,16 @@ public static class NodeTypeView
             .Set(new NodeTypeCatalogMode())  // Enable NodeType catalog mode
             .AddLayout(layout => layout
                 .WithDefaultArea(CodeViewArea)
-                .WithView(SearchArea, MeshNodeView.Search)  // Use standard search
+                .WithView(SearchArea, MeshNodeLayoutAreas.Search)  // Use standard search
                 .WithView(DetailsArea, Details)
                 .WithView(CodeViewArea, CodeView)
                 .WithView(CodeEditArea, CodeEdit)
                 .WithView(HubConfigViewArea, HubConfigView)
                 .WithView(HubConfigEditArea, HubConfigEdit)
                 // UCR special areas for unified content references
-                .WithView(MeshNodeView.DataArea, MeshNodeView.Data)
-                .WithView(MeshNodeView.SchemaArea, MeshNodeView.Schema)
-                .WithView(MeshNodeView.ModelArea, DataModelLayoutArea.DataModel));
+                .WithView(MeshNodeLayoutAreas.DataArea, MeshNodeLayoutAreas.Data)
+                .WithView(MeshNodeLayoutAreas.SchemaArea, MeshNodeLayoutAreas.Schema)
+                .WithView(MeshNodeLayoutAreas.ModelArea, DataModelLayoutArea.DataModel));
 
     /// <summary>
     /// Renders the main Details area for a NodeType.

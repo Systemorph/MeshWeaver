@@ -680,9 +680,9 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
 
         // Request the $Data layout area with no Id (self-reference)
         var workspace = client.GetWorkspace();
-        var reference = new LayoutAreaReference(MeshNodeView.DataArea); // "$Data"
+        var reference = new LayoutAreaReference(MeshNodeLayoutAreas.DataArea); // "$Data"
 
-        Output.WriteLine($"Getting {MeshNodeView.DataArea} layout for MeshWeaver/Documentation/DataMesh/CollaborativeEditing...");
+        Output.WriteLine($"Getting {MeshNodeLayoutAreas.DataArea} layout for MeshWeaver/Documentation/DataMesh/CollaborativeEditing...");
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(nodeAddress, reference);
 
         var changeItem = await stream.Timeout(30.Seconds()).FirstAsync();
@@ -714,9 +714,9 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
 
         // Request the $Schema layout area with no Id (self-reference)
         var workspace = client.GetWorkspace();
-        var reference = new LayoutAreaReference(MeshNodeView.SchemaArea); // "$Schema"
+        var reference = new LayoutAreaReference(MeshNodeLayoutAreas.SchemaArea); // "$Schema"
 
-        Output.WriteLine($"Getting {MeshNodeView.SchemaArea} layout for MeshWeaver/Documentation/DataMesh/CollaborativeEditing...");
+        Output.WriteLine($"Getting {MeshNodeLayoutAreas.SchemaArea} layout for MeshWeaver/Documentation/DataMesh/CollaborativeEditing...");
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(nodeAddress, reference);
 
         var changeItem = await stream.Timeout(30.Seconds()).FirstAsync();
@@ -748,9 +748,9 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
 
         // Request the $Model layout area
         var workspace = client.GetWorkspace();
-        var reference = new LayoutAreaReference(MeshNodeView.ModelArea); // "$Model"
+        var reference = new LayoutAreaReference(MeshNodeLayoutAreas.ModelArea); // "$Model"
 
-        Output.WriteLine($"Getting {MeshNodeView.ModelArea} layout for MeshWeaver/Documentation/DataMesh/CollaborativeEditing...");
+        Output.WriteLine($"Getting {MeshNodeLayoutAreas.ModelArea} layout for MeshWeaver/Documentation/DataMesh/CollaborativeEditing...");
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(nodeAddress, reference);
 
         var changeItem = await stream.Timeout(30.Seconds()).FirstAsync();
@@ -782,9 +782,9 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
 
         // Request the $Content layout area with no Id (self-reference)
         var workspace = client.GetWorkspace();
-        var reference = new LayoutAreaReference(MeshNodeView.ContentArea); // "$Content"
+        var reference = new LayoutAreaReference(MeshNodeLayoutAreas.ContentArea); // "$Content"
 
-        Output.WriteLine($"Getting {MeshNodeView.ContentArea} layout for MeshWeaver/Documentation/DataMesh/CollaborativeEditing...");
+        Output.WriteLine($"Getting {MeshNodeLayoutAreas.ContentArea} layout for MeshWeaver/Documentation/DataMesh/CollaborativeEditing...");
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(nodeAddress, reference);
 
         var changeItem = await stream.Timeout(30.Seconds()).FirstAsync();

@@ -27,7 +27,7 @@ public static class MeshCatalogView
     /// This enables browsing child mesh nodes and editing.
     /// </summary>
     public static MessageHubConfiguration AddMeshCatalogView(this MessageHubConfiguration configuration)
-        => MeshNodeView.AddDefaultLayoutAreas(configuration) // Add Overview, Details, and Comments views
+        => MeshNodeLayoutAreas.AddDefaultLayoutAreas(configuration) // Add Overview, Details, and Comments views
             .AddLayout(layout => layout
                 .WithView(NodesArea, Nodes)
                 .WithView(EditorArea, Editor));
@@ -109,7 +109,7 @@ public static class MeshCatalogView
         {
             // Navigate to child node's Overview (main content view)
             context.Host.UpdateArea(context.Area,
-                new RedirectControl($"/{node.Path}/{MeshNodeView.OverviewArea}"));
+                new RedirectControl($"/{node.Path}/{MeshNodeLayoutAreas.OverviewArea}"));
         }
     }
 
@@ -130,7 +130,7 @@ public static class MeshCatalogView
             var stack = Controls.Stack.WithWidth("100%");
 
             // Back button
-            var overviewHref = $"/{nodePath}/{MeshNodeView.OverviewArea}";
+            var overviewHref = $"/{nodePath}/{MeshNodeLayoutAreas.OverviewArea}";
             stack = stack.WithView(
                 Controls.Stack
                     .WithOrientation(Orientation.Horizontal)

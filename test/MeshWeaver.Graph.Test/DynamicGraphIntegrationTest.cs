@@ -687,7 +687,7 @@ public record Graph
         // Act: Request the default layout area (Overview) using stream
         // This should not hang if default views are properly configured
         var workspace = client.GetWorkspace();
-        var reference = new LayoutAreaReference(MeshNodeView.OverviewArea);
+        var reference = new LayoutAreaReference(MeshNodeLayoutAreas.OverviewArea);
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(orgAddress, reference);
 
         // Wait for the stream to emit a value (with timeout from test attribute)
@@ -758,7 +758,7 @@ public record Graph
 
         // Act: Request Search area directly (the default view for NodeType)
         var workspace = client.GetWorkspace();
-        var reference = new LayoutAreaReference(MeshNodeView.SearchArea);
+        var reference = new LayoutAreaReference(MeshNodeLayoutAreas.SearchArea);
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(typeOrgAddress, reference);
 
         // Wait for multiple emissions - first one may be loading state, later ones have data
@@ -1641,13 +1641,13 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
             TestContext.Current.CancellationToken);
 
         // Request the Overview view area
-        var reference = new LayoutAreaReference(MeshNodeView.OverviewArea);
+        var reference = new LayoutAreaReference(MeshNodeLayoutAreas.OverviewArea);
 
         Output.WriteLine("Getting Overview area for Systemorph organization...");
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(organizationAddress, reference);
 
         var control = await stream
-            .GetControlStream(MeshNodeView.OverviewArea)
+            .GetControlStream(MeshNodeLayoutAreas.OverviewArea)
             .Timeout(30.Seconds())
             .FirstAsync(x => x != null);
 
@@ -1688,7 +1688,7 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
 
         // Act: Request the Search area
         var workspace = client.GetWorkspace();
-        var reference = new LayoutAreaReference(MeshNodeView.SearchArea);
+        var reference = new LayoutAreaReference(MeshNodeLayoutAreas.SearchArea);
 
         Output.WriteLine("Getting Search area for MeshWeaver...");
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(meshWeaverAddress, reference);
