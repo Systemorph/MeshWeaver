@@ -1,0 +1,22 @@
+{
+  "id": "SendWelcomePacket",
+  "namespace": "ACME/CustomerOnboarding/Todo",
+  "name": "Send welcome packet with checklist",
+  "nodeType": "ACME/Project/Todo",
+  "category": "Tasks",
+  "description": "Deliver welcome materials to client",
+  "icon": "/static/content/ACME/Project/Todo/icon.svg",
+  "isPersistent": true,
+  "content": {
+    "$type": "Todo",
+    "id": "SendWelcomePacket",
+    "title": "Send welcome packet with checklist",
+    "description": "Send branded welcome packet to Apex Manufacturing including document checklist, process timeline, key contacts, and secure upload portal instructions.",
+    "category": "Support",
+    "priority": "Medium",
+    "assignee": "OnboardBot",
+    "dueDateOffsetDays": -8,
+    "status": "Completed",
+    "completedAt": "2026-01-19T09:15:00Z"
+  }
+}
