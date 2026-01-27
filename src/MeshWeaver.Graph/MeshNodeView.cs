@@ -1474,82 +1474,10 @@ public static class MeshNodeView
 
     /// <summary>
     /// Gets the image URL for a node.
-    /// Priority: content.avatar > content.logo > node.Icon (if URL/data URI)
     /// </summary>
     private static string? GetNodeImageUrl(MeshNode node)
     {
-        // Check content properties (avatar, logo)
-        if (node.Content != null)
-        {
-            if (node.Content is System.Text.Json.JsonElement jsonElement)
-            {
-                // Try avatar
-                if (jsonElement.TryGetProperty("avatar", out var avatarProp) && avatarProp.ValueKind == System.Text.Json.JsonValueKind.String)
-                {
-                    var avatar = avatarProp.GetString();
-                    if (!string.IsNullOrEmpty(avatar))
-                        return avatar;
-                }
-                if (jsonElement.TryGetProperty("Avatar", out var avatarPascalProp) && avatarPascalProp.ValueKind == System.Text.Json.JsonValueKind.String)
-                {
-                    var avatar = avatarPascalProp.GetString();
-                    if (!string.IsNullOrEmpty(avatar))
-                        return avatar;
-                }
-                // Try logo
-                if (jsonElement.TryGetProperty("logo", out var logoProp) && logoProp.ValueKind == System.Text.Json.JsonValueKind.String)
-                {
-                    var logo = logoProp.GetString();
-                    if (!string.IsNullOrEmpty(logo))
-                        return logo;
-                }
-                if (jsonElement.TryGetProperty("Logo", out var logoPascalProp) && logoPascalProp.ValueKind == System.Text.Json.JsonValueKind.String)
-                {
-                    var logo = logoPascalProp.GetString();
-                    if (!string.IsNullOrEmpty(logo))
-                        return logo;
-                }
-            }
-            else if (node.Content is IDictionary<string, object> dict)
-            {
-                if (dict.TryGetValue("avatar", out var avatar) || dict.TryGetValue("Avatar", out avatar))
-                {
-                    var avatarStr = avatar?.ToString();
-                    if (!string.IsNullOrEmpty(avatarStr))
-                        return avatarStr;
-                }
-                if (dict.TryGetValue("logo", out var logo) || dict.TryGetValue("Logo", out logo))
-                {
-                    var logoStr = logo?.ToString();
-                    if (!string.IsNullOrEmpty(logoStr))
-                        return logoStr;
-                }
-            }
-            else
-            {
-                // Reflection for typed objects
-                var avatarProperty = node.Content.GetType().GetProperty("Avatar");
-                if (avatarProperty != null)
-                {
-                    var avatarValue = avatarProperty.GetValue(node.Content) as string;
-                    if (!string.IsNullOrEmpty(avatarValue))
-                        return avatarValue;
-                }
-                var logoProperty = node.Content.GetType().GetProperty("Logo");
-                if (logoProperty != null)
-                {
-                    var logoValue = logoProperty.GetValue(node.Content) as string;
-                    if (!string.IsNullOrEmpty(logoValue))
-                        return logoValue;
-                }
-            }
-        }
-
-        // Fall back to node.Icon if it's a URL or data URI
-        if (!string.IsNullOrEmpty(node.Icon) && (node.Icon.StartsWith("data:") || node.Icon.StartsWith("http")))
-            return node.Icon;
-
-        return null;
+        return node.Icon;
     }
 
     private static IObservable<UiControl?> RenderImageAsync(LayoutAreaHost host, string contentPath, string _)
