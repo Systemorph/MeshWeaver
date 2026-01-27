@@ -24,38 +24,6 @@ public static class ProjectViews
             .WithView("Backlog", Backlog)
             .WithView("MyTasks", MyTasks);
 
-    private static readonly string[] StatusOrder = { "Pending", "InProgress", "InReview", "Blocked", "Completed" };
-
-    private static string GetStatusEmoji(string? status) => status switch
-    {
-        "Pending" => "\u23f3",
-        "InProgress" => "\ud83d\udd04",
-        "InReview" => "\ud83d\udc41\ufe0f",
-        "Completed" => "\u2705",
-        "Blocked" => "\ud83d\udeab",
-        _ => "\u2753"
-    };
-
-    private static int GetStatusOrder(string? status) =>
-        Array.IndexOf(StatusOrder, status) is var idx && idx >= 0 ? idx : 99;
-
-    private static int GetPriorityOrder(string? priority) => priority switch
-    {
-        "Critical" => 0, "High" => 1, "Medium" => 2, "Low" => 3, _ => 4
-    };
-
-    private static string GetPriorityLabel(string? priority) => priority switch
-    {
-        "Critical" => "Critical Priority", "High" => "High Priority",
-        "Medium" => "Medium Priority", "Low" => "Low Priority", _ => "Unset Priority"
-    };
-
-    private static string GetPriorityEmoji(string? priority) => priority switch
-    {
-        "Critical" => "\ud83d\udea8", "High" => "\ud83d\udd25",
-        "Medium" => "\ud83d\udfe1", "Low" => "\ud83d\udfe2", _ => "\u2753"
-    };
-
     private static Dictionary<string, MeshNode> ApplyChanges(
         Dictionary<string, MeshNode> current, QueryResultChange<MeshNode> change)
     {
@@ -100,27 +68,34 @@ public static class ProjectViews
     public static IObservable<UiControl?> AllTasks(LayoutAreaHost host, RenderingContext _)
     {
         var hubPath = host.Hub.Address.ToString();
-        return host.Hub.ServiceProvider.GetRequiredService<IMeshQuery>()
+        var statuses = host.Workspace.GetObservable<Status>()
+            .Select(s => s.OrderBy(x => x.Order).ToList());
+        var nodes = host.Hub.ServiceProvider.GetRequiredService<IMeshQuery>()
             .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
                 $"path:{hubPath}/Todo nodeType:ACME/Project/Todo state:Active scope:subtree"))
-            .Scan(new Dictionary<string, MeshNode>(StringComparer.OrdinalIgnoreCase), ApplyChanges)
-            .Select(dict =>
+            .Scan(new Dictionary<string, MeshNode>(StringComparer.OrdinalIgnoreCase), ApplyChanges);
+
+        return nodes.CombineLatest(statuses, (dict, statusList) =>
+        {
+            var groups = statusList.Select(status =>
             {
-                var groups = StatusOrder.Select(status =>
+                var items = dict.Values
+                    .Where(n => (GetProp(n, "status") ?? "Pending") == status.Id)
+                    .OrderBy(n => GetDate(n, "dueDate") ?? DateTime.MaxValue)
+                    .ThenBy(n => n.Name).ToList();
+                return items.Any() ? new CatalogGroup
                 {
-                    var items = dict.Values
-                        .Where(n => (GetProp(n, "status") ?? "Pending") == status)
-                        .OrderBy(n => GetDate(n, "dueDate") ?? DateTime.MaxValue)
-                        .ThenBy(n => n.Name).ToList();
-                    return items.Any() ? new CatalogGroup
-                    {
-                        Key = status, Label = status, Emoji = GetStatusEmoji(status),
-                        Order = GetStatusOrder(status), IsExpanded = status != "Completed",
-                        Items = Thumbnails(items), TotalCount = items.Count
-                    } : null;
-                }).Where(g => g != null).Cast<CatalogGroup>().ToImmutableList();
-                return (UiControl?)new CatalogControl().WithGroups(groups);
-            });
+                    Key = status.Id,
+                    Label = status.Name,
+                    Emoji = status.Emoji,
+                    Order = status.Order,
+                    IsExpanded = status.IsExpandedByDefault,
+                    Items = Thumbnails(items),
+                    TotalCount = items.Count
+                } : null;
+            }).Where(g => g != null).Cast<CatalogGroup>().ToImmutableList();
+            return (UiControl?)new CatalogControl().WithGroups(groups);
+        });
     }
 
     /// <summary>Tasks grouped by category.</summary>
@@ -144,8 +119,13 @@ public static class ProjectViews
                     var cat = cats.GetValueOrDefault(g.Key) ?? Category.Uncategorized;
                     return new CatalogGroup
                     {
-                        Key = g.Key, Label = cat.Name, Emoji = cat.Emoji, Order = cat.Order,
-                        IsExpanded = true, Items = Thumbnails(g), TotalCount = g.Count()
+                        Key = g.Key,
+                        Label = cat.Name,
+                        Emoji = cat.Emoji,
+                        Order = cat.Order,
+                        IsExpanded = true,
+                        Items = Thumbnails(g),
+                        TotalCount = g.Count()
                     };
                 }).OrderBy(g => g.Order).ToImmutableList();
             return (UiControl?)new CatalogControl().WithGroups(groups);
@@ -157,40 +137,75 @@ public static class ProjectViews
     public static IObservable<UiControl?> TodaysFocus(LayoutAreaHost host, RenderingContext _)
     {
         var hubPath = host.Hub.Address.ToString();
-        return host.Hub.ServiceProvider.GetRequiredService<IMeshQuery>()
+        var statuses = host.Workspace.GetObservable<Status>()
+            .Select(s => s.ToDictionary(x => x.Id, x => x));
+        var priorities = host.Workspace.GetObservable<Priority>()
+            .Select(p => p.ToDictionary(x => x.Id, x => x));
+        var nodes = host.Hub.ServiceProvider.GetRequiredService<IMeshQuery>()
             .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
                 $"path:{hubPath}/Todo nodeType:ACME/Project/Todo state:Active scope:subtree"))
-            .Scan(new Dictionary<string, MeshNode>(StringComparer.OrdinalIgnoreCase), ApplyChanges)
-            .Select(dict =>
-            {
-                var now = DateTime.Now.Date;
-                var active = dict.Values.Where(n => GetProp(n, "status") != "Completed").ToList();
-                var groups = new List<CatalogGroup>();
+            .Scan(new Dictionary<string, MeshNode>(StringComparer.OrdinalIgnoreCase), ApplyChanges);
 
-                var overdue = active.Where(n => GetDate(n, "dueDate")?.Date < now)
-                    .OrderBy(n => GetDate(n, "dueDate")).ToList();
-                if (overdue.Any())
-                    groups.Add(new CatalogGroup { Key = "overdue", Label = "Overdue", Emoji = "\ud83d\udea8",
-                        Order = 0, IsExpanded = true, Items = Thumbnails(overdue), TotalCount = overdue.Count });
+        return nodes.CombineLatest(statuses, priorities, (dict, sts, pris) =>
+        {
+            var completedId = sts.Values.FirstOrDefault(s => s.Id == "Completed")?.Id ?? "Completed";
+            var inProgressId = sts.Values.FirstOrDefault(s => s.Id == "InProgress")?.Id ?? "InProgress";
+            var inProgress = sts.GetValueOrDefault("InProgress");
+            var completed = sts.GetValueOrDefault("Completed");
+            var critical = pris.GetValueOrDefault("Critical");
 
-                var today = active.Where(n => GetDate(n, "dueDate")?.Date == now)
-                    .OrderBy(n => GetPriorityOrder(GetProp(n, "priority"))).ToList();
-                if (today.Any())
-                    groups.Add(new CatalogGroup { Key = "today", Label = "Due Today", Emoji = "\u23f0",
-                        Order = 1, IsExpanded = true, Items = Thumbnails(today), TotalCount = today.Count });
+            var now = DateTime.Now.Date;
+            var active = dict.Values.Where(n => GetProp(n, "status") != completedId).ToList();
+            var groups = new List<CatalogGroup>();
 
-                var inProg = active.Where(n => GetProp(n, "status") == "InProgress" &&
-                        GetDate(n, "dueDate")?.Date != now &&
-                        (GetDate(n, "dueDate")?.Date >= now || !GetDate(n, "dueDate").HasValue))
-                    .OrderBy(n => GetDate(n, "dueDate") ?? DateTime.MaxValue).ToList();
-                if (inProg.Any())
-                    groups.Add(new CatalogGroup { Key = "inProgress", Label = "In Progress", Emoji = "\ud83d\udd04",
-                        Order = 2, IsExpanded = true, Items = Thumbnails(inProg), TotalCount = inProg.Count });
+            var overdue = active.Where(n => GetDate(n, "dueDate")?.Date < now)
+                .OrderBy(n => GetDate(n, "dueDate")).ToList();
+            if (overdue.Any())
+                groups.Add(new CatalogGroup
+                {
+                    Key = "overdue",
+                    Label = "Overdue",
+                    Emoji = critical?.Emoji ?? "\ud83d\udea8",
+                    Order = 0,
+                    IsExpanded = true,
+                    Items = Thumbnails(overdue),
+                    TotalCount = overdue.Count
+                });
 
-                return groups.Any()
-                    ? (UiControl?)new CatalogControl().WithGroups(groups.ToImmutableList())
-                    : Controls.Markdown("\u2705 **All caught up!** No urgent tasks.");
-            });
+            var today = active.Where(n => GetDate(n, "dueDate")?.Date == now)
+                .OrderBy(n => pris.GetValueOrDefault(GetProp(n, "priority") ?? "")?.Order ?? 99).ToList();
+            if (today.Any())
+                groups.Add(new CatalogGroup
+                {
+                    Key = "today",
+                    Label = "Due Today",
+                    Emoji = "\u23f0",
+                    Order = 1,
+                    IsExpanded = true,
+                    Items = Thumbnails(today),
+                    TotalCount = today.Count
+                });
+
+            var inProg = active.Where(n => GetProp(n, "status") == inProgressId &&
+                    GetDate(n, "dueDate")?.Date != now &&
+                    (GetDate(n, "dueDate")?.Date >= now || !GetDate(n, "dueDate").HasValue))
+                .OrderBy(n => GetDate(n, "dueDate") ?? DateTime.MaxValue).ToList();
+            if (inProg.Any())
+                groups.Add(new CatalogGroup
+                {
+                    Key = "inProgress",
+                    Label = inProgress?.Name ?? "In Progress",
+                    Emoji = inProgress?.Emoji ?? "\ud83d\udd04",
+                    Order = 2,
+                    IsExpanded = true,
+                    Items = Thumbnails(inProg),
+                    TotalCount = inProg.Count
+                });
+
+            return groups.Any()
+                ? (UiControl?)new CatalogControl().WithGroups(groups.ToImmutableList())
+                : Controls.Markdown($"{completed?.Emoji ?? "\u2705"} **All caught up!** No urgent tasks.");
+        });
     }
 
     /// <summary>Unassigned tasks by priority.</summary>
@@ -198,28 +213,43 @@ public static class ProjectViews
     public static IObservable<UiControl?> Backlog(LayoutAreaHost host, RenderingContext _)
     {
         var hubPath = host.Hub.Address.ToString();
-        return host.Hub.ServiceProvider.GetRequiredService<IMeshQuery>()
+        var statuses = host.Workspace.GetObservable<Status>()
+            .Select(s => s.ToDictionary(x => x.Id, x => x));
+        var priorities = host.Workspace.GetObservable<Priority>()
+            .Select(p => p.ToDictionary(x => x.Id, x => x));
+        var nodes = host.Hub.ServiceProvider.GetRequiredService<IMeshQuery>()
             .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
                 $"path:{hubPath}/Todo nodeType:ACME/Project/Todo state:Active scope:subtree"))
-            .Scan(new Dictionary<string, MeshNode>(StringComparer.OrdinalIgnoreCase), ApplyChanges)
-            .Select(dict =>
-            {
-                var backlog = dict.Values
-                    .Where(n => string.IsNullOrEmpty(GetProp(n, "assignee")) && GetProp(n, "status") != "Completed")
-                    .ToList();
-                if (!backlog.Any())
-                    return (UiControl?)Controls.Markdown("*No unassigned tasks.*");
+            .Scan(new Dictionary<string, MeshNode>(StringComparer.OrdinalIgnoreCase), ApplyChanges);
 
-                var groups = backlog.GroupBy(n => GetProp(n, "priority") ?? "Unset")
-                    .Select(g => new CatalogGroup
+        return nodes.CombineLatest(statuses, priorities, (dict, sts, pris) =>
+        {
+            var completedId = sts.Values.FirstOrDefault(s => s.Id == "Completed")?.Id ?? "Completed";
+            var defaultPriority = pris.Values.FirstOrDefault(p => p.Id == "Unset") ?? new Priority { Id = "Unset", Name = "Unset", Order = 99 };
+
+            var backlog = dict.Values
+                .Where(n => string.IsNullOrEmpty(GetProp(n, "assignee")) && GetProp(n, "status") != completedId)
+                .ToList();
+            if (!backlog.Any())
+                return (UiControl?)Controls.Markdown("*No unassigned tasks.*");
+
+            var groups = backlog.GroupBy(n => GetProp(n, "priority") ?? defaultPriority.Id)
+                .Select(g =>
+                {
+                    var priority = pris.GetValueOrDefault(g.Key) ?? defaultPriority;
+                    return new CatalogGroup
                     {
-                        Key = g.Key, Label = GetPriorityLabel(g.Key), Emoji = GetPriorityEmoji(g.Key),
-                        Order = GetPriorityOrder(g.Key), IsExpanded = g.Key == "Critical" || g.Key == "High",
+                        Key = g.Key,
+                        Label = priority.Name,
+                        Emoji = priority.Emoji,
+                        Order = priority.Order,
+                        IsExpanded = priority.IsExpandedByDefault,
                         Items = Thumbnails(g.OrderBy(n => n.DisplayOrder).ThenBy(n => n.Name)),
                         TotalCount = g.Count()
-                    }).OrderBy(g => g.Order).ToImmutableList();
-                return (UiControl?)new CatalogControl().WithGroups(groups);
-            });
+                    };
+                }).OrderBy(g => g.Order).ToImmutableList();
+            return (UiControl?)new CatalogControl().WithGroups(groups);
+        });
     }
 
     /// <summary>Current user's tasks by urgency.</summary>
@@ -228,39 +258,71 @@ public static class ProjectViews
     {
         var hubPath = host.Hub.Address.ToString();
         var user = host.Hub.ServiceProvider.GetService<AccessService>()?.Context?.Name ?? "Guest";
-        return host.Hub.ServiceProvider.GetRequiredService<IMeshQuery>()
+        var statuses = host.Workspace.GetObservable<Status>()
+            .Select(s => s.ToDictionary(x => x.Id, x => x));
+        var priorities = host.Workspace.GetObservable<Priority>()
+            .Select(p => p.ToDictionary(x => x.Id, x => x));
+        var nodes = host.Hub.ServiceProvider.GetRequiredService<IMeshQuery>()
             .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
                 $"path:{hubPath}/Todo nodeType:ACME/Project/Todo state:Active scope:subtree"))
-            .Scan(new Dictionary<string, MeshNode>(StringComparer.OrdinalIgnoreCase), ApplyChanges)
-            .Select(dict =>
-            {
-                var now = DateTime.Now.Date;
-                var my = dict.Values
-                    .Where(n => GetProp(n, "assignee") == user && GetProp(n, "status") != "Completed")
-                    .ToList();
-                if (!my.Any())
-                    return (UiControl?)Controls.Markdown($"*No active tasks for {user}.*");
+            .Scan(new Dictionary<string, MeshNode>(StringComparer.OrdinalIgnoreCase), ApplyChanges);
 
-                var groups = new List<CatalogGroup>();
+        return nodes.CombineLatest(statuses, priorities, (dict, sts, pris) =>
+        {
+            var completedId = sts.Values.FirstOrDefault(s => s.Id == "Completed")?.Id ?? "Completed";
+            var critical = pris.GetValueOrDefault("Critical");
 
-                var urgent = my.Where(n => GetDate(n, "dueDate")?.Date <= now)
-                    .OrderBy(n => GetDate(n, "dueDate")).ToList();
-                if (urgent.Any())
-                    groups.Add(new CatalogGroup { Key = "urgent", Label = "Urgent", Emoji = "\ud83d\udea8",
-                        Order = 0, IsExpanded = true, Items = Thumbnails(urgent), TotalCount = urgent.Count });
+            var now = DateTime.Now.Date;
+            var my = dict.Values
+                .Where(n => GetProp(n, "assignee") == user && GetProp(n, "status") != completedId)
+                .ToList();
+            if (!my.Any())
+                return (UiControl?)Controls.Markdown($"*No active tasks for {user}.*");
 
-                var tomorrow = my.Where(n => GetDate(n, "dueDate")?.Date == now.AddDays(1)).ToList();
-                if (tomorrow.Any())
-                    groups.Add(new CatalogGroup { Key = "tomorrow", Label = "Tomorrow", Emoji = "\ud83d\udcc5",
-                        Order = 1, IsExpanded = true, Items = Thumbnails(tomorrow), TotalCount = tomorrow.Count });
+            var groups = new List<CatalogGroup>();
 
-                var upcoming = my.Where(n => !GetDate(n, "dueDate").HasValue || GetDate(n, "dueDate")?.Date > now.AddDays(1))
-                    .OrderBy(n => GetDate(n, "dueDate") ?? DateTime.MaxValue).ToList();
-                if (upcoming.Any())
-                    groups.Add(new CatalogGroup { Key = "upcoming", Label = "Upcoming", Emoji = "\ud83d\uddd3\ufe0f",
-                        Order = 2, IsExpanded = true, Items = Thumbnails(upcoming), TotalCount = upcoming.Count });
+            var urgent = my.Where(n => GetDate(n, "dueDate")?.Date <= now)
+                .OrderBy(n => GetDate(n, "dueDate")).ToList();
+            if (urgent.Any())
+                groups.Add(new CatalogGroup
+                {
+                    Key = "urgent",
+                    Label = "Urgent",
+                    Emoji = critical?.Emoji ?? "\ud83d\udea8",
+                    Order = 0,
+                    IsExpanded = true,
+                    Items = Thumbnails(urgent),
+                    TotalCount = urgent.Count
+                });
 
-                return (UiControl?)new CatalogControl().WithGroups(groups.ToImmutableList());
-            });
+            var tomorrow = my.Where(n => GetDate(n, "dueDate")?.Date == now.AddDays(1)).ToList();
+            if (tomorrow.Any())
+                groups.Add(new CatalogGroup
+                {
+                    Key = "tomorrow",
+                    Label = "Tomorrow",
+                    Emoji = "\ud83d\udcc5",
+                    Order = 1,
+                    IsExpanded = true,
+                    Items = Thumbnails(tomorrow),
+                    TotalCount = tomorrow.Count
+                });
+
+            var upcoming = my.Where(n => !GetDate(n, "dueDate").HasValue || GetDate(n, "dueDate")?.Date > now.AddDays(1))
+                .OrderBy(n => GetDate(n, "dueDate") ?? DateTime.MaxValue).ToList();
+            if (upcoming.Any())
+                groups.Add(new CatalogGroup
+                {
+                    Key = "upcoming",
+                    Label = "Upcoming",
+                    Emoji = "\ud83d\uddd3\ufe0f",
+                    Order = 2,
+                    IsExpanded = true,
+                    Items = Thumbnails(upcoming),
+                    TotalCount = upcoming.Count
+                });
+
+            return (UiControl?)new CatalogControl().WithGroups(groups.ToImmutableList());
+        });
     }
 }

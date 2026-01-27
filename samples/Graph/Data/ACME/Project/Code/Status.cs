@@ -4,7 +4,7 @@
 // </meshweaver>
 
 /// <summary>
-/// Represents a project status with display metadata.
+/// Represents a task status with display metadata.
 /// </summary>
 public record Status
 {
@@ -16,37 +16,47 @@ public record Status
 
     public string? Description { get; init; }
 
+    public string Emoji { get; init; } = string.Empty;
+
     public int Order { get; init; }
 
-    public static readonly Status Planning = new()
+    /// <summary>
+    /// Whether groups with this status should be expanded by default in catalog views.
+    /// </summary>
+    public bool IsExpandedByDefault { get; init; } = true;
+
+    public static readonly Status Pending = new()
     {
-        Id = "Planning", Name = "Planning",
-        Description = "Project is in planning phase", Order = 1
+        Id = "Pending", Name = "Pending", Emoji = "\u23f3",
+        Description = "Task is waiting to be started", Order = 0, IsExpandedByDefault = true
     };
 
-    public static readonly Status Active = new()
+    public static readonly Status InProgress = new()
     {
-        Id = "Active", Name = "Active",
-        Description = "Project is actively being worked on", Order = 2
+        Id = "InProgress", Name = "In Progress", Emoji = "\ud83d\udd04",
+        Description = "Task is actively being worked on", Order = 1, IsExpandedByDefault = true
     };
 
-    public static readonly Status OnHold = new()
+    public static readonly Status InReview = new()
     {
-        Id = "OnHold", Name = "On Hold",
-        Description = "Project is temporarily paused", Order = 3
+        Id = "InReview", Name = "In Review", Emoji = "\ud83d\udc41\ufe0f",
+        Description = "Task is being reviewed", Order = 2, IsExpandedByDefault = true
+    };
+
+    public static readonly Status Blocked = new()
+    {
+        Id = "Blocked", Name = "Blocked", Emoji = "\ud83d\udeab",
+        Description = "Task is blocked by dependencies", Order = 3, IsExpandedByDefault = true
     };
 
     public static readonly Status Completed = new()
     {
-        Id = "Completed", Name = "Completed",
-        Description = "Project has been completed", Order = 4
+        Id = "Completed", Name = "Completed", Emoji = "\u2705",
+        Description = "Task has been completed", Order = 4, IsExpandedByDefault = false
     };
 
-    public static readonly Status Cancelled = new()
-    {
-        Id = "Cancelled", Name = "Cancelled",
-        Description = "Project has been cancelled", Order = 5
-    };
+    public static readonly Status[] All = [Pending, InProgress, InReview, Blocked, Completed];
 
-    public static readonly Status[] All = [Planning, Active, OnHold, Completed, Cancelled];
+    public static Status GetById(string? id) =>
+        All.FirstOrDefault(s => s.Id == id) ?? Pending;
 }
