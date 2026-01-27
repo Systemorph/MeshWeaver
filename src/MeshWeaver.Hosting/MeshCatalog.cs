@@ -90,67 +90,7 @@ public sealed class MeshCatalog(
             return persistenceNode;
         }
 
-        // Try to find a template node that matches this address
-        var templateNode = FindTemplateNode(address);
-        if (templateNode != null)
-        {
-            // Create a virtual node based on the template with the requested address
-            // Virtual nodes are marked with IsVirtual=true so CreateTransientNodeAsync can skip them
-            var virtualNode = CreateVirtualNodeFromTemplate(templateNode, address);
-            cache.Set(virtualNode.Path, virtualNode, cacheOptions);
-            if (!await ValidateReadAsync(virtualNode))
-                return null;
-            return virtualNode;
-        }
-
         return null;
-    }
-
-    /// <summary>
-    /// Finds a template node that matches the given address based on AddressSegments.
-    /// </summary>
-    private MeshNode? FindTemplateNode(Address address)
-    {
-        var segments = address.Segments;
-        if (segments.Length == 0)
-            return null;
-
-        // Look for template nodes in Configuration.Nodes that match the first segment
-        // and have AddressSegments >= the address length
-        foreach (var configNode in Configuration.Nodes.Values)
-        {
-            if (configNode.AddressSegments > 0 &&
-                configNode.Segments.Count > 0 &&
-                segments[0].Equals(configNode.Segments[0], StringComparison.OrdinalIgnoreCase) &&
-                configNode.AddressSegments >= segments.Length)
-            {
-                return configNode;
-            }
-        }
-
-        return null;
-    }
-
-    /// <summary>
-    /// Creates a virtual node from a template, inheriting key properties.
-    /// </summary>
-    private MeshNode CreateVirtualNodeFromTemplate(MeshNode template, Address address)
-    {
-        var segments = address.Segments;
-        var id = segments.Length > 0 ? segments[^1] : template.Id;
-        var ns = segments.Length > 1 ? string.Join("/", segments.Take(segments.Length - 1)) : "";
-
-        return new MeshNode(id, ns)
-        {
-            Name = template.Name,
-            Description = template.Description,
-            Icon = template.Icon,
-            DisplayOrder = template.DisplayOrder,
-            HubConfiguration = template.HubConfiguration,
-            AddressSegments = template.AddressSegments,
-            AssemblyLocation = template.AssemblyLocation,
-            IsVirtual = true
-        };
     }
 
     /// <summary>
@@ -419,28 +359,12 @@ public sealed class MeshCatalog(
             return new AddressResolution(matchedNode.Path, configRemainder);
         }
 
-        // Legacy behavior for nodes with AddressSegments
-        var addressSegmentCount = matchedNode.AddressSegments > 0
-            ? matchedNode.AddressSegments
-            : matchedNode.Segments.Count;
-
-        // Build the full address: use node's Namespace (preserves case) + additional segments from path
-        var nodeSegments = matchedNode.Segments;
-        var addressParts = new List<string>(nodeSegments); // Start with node's Namespace segments
-
-        // Add additional segments from path (beyond the Namespace match)
-        for (int i = nodeSegments.Count; i < addressSegmentCount && i < segments.Length; i++)
-        {
-            addressParts.Add(segments[i]);
-        }
-
-        var addressNamespace = string.Join("/", addressParts);
-
-        var remainder = addressSegmentCount < segments.Length
-            ? string.Join("/", segments.Skip(addressSegmentCount))
+        // Use the node's path as the address
+        var remainder = segments.Length > matchedNode.Segments.Count
+            ? string.Join("/", segments.Skip(matchedNode.Segments.Count))
             : null;
 
-        return new AddressResolution(addressNamespace, remainder);
+        return new AddressResolution(matchedNode.Path, remainder);
     }
 
     private static int ScoreMatch(MeshNode node, string[] pathSegments)

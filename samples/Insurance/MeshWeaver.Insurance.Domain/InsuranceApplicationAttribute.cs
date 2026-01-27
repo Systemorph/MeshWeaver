@@ -37,7 +37,6 @@ public class InsuranceApplicationAttribute : MeshNodeAttribute
             Description = "Insurance pricing submissions",
             Icon = "Calculator",
             DisplayOrder = 100,
-            AddressSegments = 3, // pricing/company/year
             HubConfiguration = InsuranceApplicationExtensions.ConfigureSinglePricingApplication
         }
     ];

@@ -167,7 +167,6 @@ public partial class MeshNodeEditorView
                 Description = _description,
                 Icon = _node.Icon,
                 DisplayOrder = _node.DisplayOrder,
-                AddressSegments = _node.AddressSegments,
                 IsPersistent = _node.IsPersistent,
                 Content = _node.Content,
                 ThumbNail = _node.ThumbNail,
@@ -175,8 +174,6 @@ public partial class MeshNodeEditorView
                 AssemblyLocation = _node.AssemblyLocation,
                 HubConfiguration = _node.HubConfiguration,
                 StartupScript = _node.StartupScript,
-                RoutingType = _node.RoutingType,
-                InstantiationType = _node.InstantiationType,
                 GlobalServiceConfigurations = _node.GlobalServiceConfigurations
             };
 
@@ -253,7 +250,6 @@ public partial class MeshNodeEditorView
                 Description = _node.Description,
                 Icon = _node.Icon,
                 DisplayOrder = _node.DisplayOrder,
-                AddressSegments = _node.AddressSegments,
                 IsPersistent = _node.IsPersistent,
                 Content = newContent,
                 ThumbNail = _node.ThumbNail,
@@ -261,8 +257,6 @@ public partial class MeshNodeEditorView
                 AssemblyLocation = _node.AssemblyLocation,
                 HubConfiguration = _node.HubConfiguration,
                 StartupScript = _node.StartupScript,
-                RoutingType = _node.RoutingType,
-                InstantiationType = _node.InstantiationType,
                 GlobalServiceConfigurations = _node.GlobalServiceConfigurations
             };
 

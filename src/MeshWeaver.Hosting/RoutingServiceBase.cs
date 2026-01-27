@@ -69,15 +69,7 @@ namespace MeshWeaver.Hosting
         }
 
         protected virtual string GetKernelId(IMessageDelivery delivery, MeshNode node, Address address)
-        {
-            return node.RoutingType switch
-            {
-                RoutingType.Shared => $"{address}".Replace('/', '-'),
-                RoutingType.Individual =>
-                    $"{address}/{TypeRegistry.GetTypeName(delivery.Sender)}/{delivery.Sender}".Replace('/', '-'),
-                _ => throw new NotSupportedException($"The routing type {node.RoutingType} is currently not supported.")
-            };
-        }
+            => $"{address}".Replace('/', '-');
 
         private async Task<IMessageDelivery> RouteMessageAsync(
             IMessageDelivery delivery,

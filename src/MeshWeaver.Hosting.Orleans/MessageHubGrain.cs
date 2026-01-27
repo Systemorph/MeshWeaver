@@ -35,11 +35,7 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
         // This compiles/caches the node's DataModel type and generates MeshNodeAttribute
         await EnsureNodeAssemblyAsync(node, cancellationToken);
 
-        Hub = node.InstantiationType switch
-        {
-            InstantiationType.HubConfiguration => await InstantiateFromHubConfiguration(address, node),
-            _ => throw new NotSupportedException()
-        };
+        Hub = await InstantiateFromHubConfiguration(address, node);
 
         //var route = await routingService.RegisterStreamAsync(Hub.Address, Hub.DeliverMessage);
         //Hub.RegisterForDisposal(async (_, _) => await route.DisposeAsync());
