@@ -3,10 +3,12 @@
 // DisplayName: Task Category Data Model
 // </meshweaver>
 
+using MeshWeaver.Domain;
+
 /// <summary>
 /// Represents a task category with display metadata and emoji.
 /// </summary>
-public record Category
+public record Category : INamed
 {
     [Key]
     public string Id { get; init; } = string.Empty;
@@ -19,6 +21,12 @@ public record Category
     public string Emoji { get; init; } = "\ud83d\udcc1";
 
     public int Order { get; init; }
+
+    /// <summary>
+    /// Display name with emoji prefix for UI display.
+    /// </summary>
+    [Browsable(false)]
+    public string DisplayName => $"{Emoji} {Name}";
 
     public static readonly Category Design = new()
     {

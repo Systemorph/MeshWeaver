@@ -374,70 +374,41 @@ public static class TodoViews
             .WithView(buttonStack);
     }
 
-    private static IEnumerable<(string Label, TodoStatus Status, Icon Icon)> GetOrderedStatusTransitions(TodoStatus currentStatus)
+    private static IEnumerable<(string Label, string StatusId, Icon Icon)> GetOrderedStatusTransitions(string currentStatus)
     {
-        // Return all statuses ordered by likelihood based on current status
-        // Most likely transition first, then others
-        switch (currentStatus)
+        var status = TodoStatus.GetById(currentStatus);
+        if (status == null) yield break;
+
+        foreach (var (label, targetId, iconName) in status.Transitions)
         {
-            case TodoStatus.Pending:
-                yield return ("Start", TodoStatus.InProgress, FluentIcons.Play());
-                yield return ("Complete", TodoStatus.Completed, FluentIcons.CheckmarkCircle());
-                yield return ("Block", TodoStatus.Blocked, FluentIcons.Prohibited());
-                yield return ("Review", TodoStatus.InReview, FluentIcons.Eye());
-                break;
-            case TodoStatus.InProgress:
-                yield return ("Complete", TodoStatus.Completed, FluentIcons.CheckmarkCircle());
-                yield return ("Send for Review", TodoStatus.InReview, FluentIcons.Eye());
-                yield return ("Pause", TodoStatus.Pending, FluentIcons.Pause());
-                yield return ("Block", TodoStatus.Blocked, FluentIcons.Prohibited());
-                break;
-            case TodoStatus.InReview:
-                yield return ("Approve", TodoStatus.Completed, FluentIcons.CheckmarkCircle());
-                yield return ("Return to Progress", TodoStatus.InProgress, FluentIcons.ArrowSync());
-                yield return ("Block", TodoStatus.Blocked, FluentIcons.Prohibited());
-                yield return ("Back to Pending", TodoStatus.Pending, FluentIcons.Pause());
-                break;
-            case TodoStatus.Blocked:
-                yield return ("Unblock", TodoStatus.InProgress, FluentIcons.ArrowSync());
-                yield return ("Return to Pending", TodoStatus.Pending, FluentIcons.Pause());
-                yield return ("Complete Anyway", TodoStatus.Completed, FluentIcons.CheckmarkCircle());
-                yield return ("Review", TodoStatus.InReview, FluentIcons.Eye());
-                break;
-            case TodoStatus.Completed:
-                yield return ("Reopen", TodoStatus.InProgress, FluentIcons.ArrowUndo());
-                yield return ("Back to Pending", TodoStatus.Pending, FluentIcons.Pause());
-                yield return ("Review Again", TodoStatus.InReview, FluentIcons.Eye());
-                yield return ("Mark Blocked", TodoStatus.Blocked, FluentIcons.Prohibited());
-                break;
+            yield return (label, targetId, GetIconByName(iconName));
         }
     }
 
-    private static string GetStatusBadge(TodoStatus status)
+    private static string GetStatusBadge(string statusId)
     {
-        var (bg, text) = status switch
-        {
-            TodoStatus.Pending => ("#ffc107", "#000"),
-            TodoStatus.InProgress => ("#0d6efd", "#fff"),
-            TodoStatus.InReview => ("#6f42c1", "#fff"),
-            TodoStatus.Completed => ("#198754", "#fff"),
-            TodoStatus.Blocked => ("#dc3545", "#fff"),
-            _ => ("#6c757d", "#fff")
-        };
-        return $"<span style=\"background: {bg}; color: {text}; padding: 4px 12px; border-radius: 20px; font-size: 12px; font-weight: 600;\">{status}</span>";
+        var status = TodoStatus.GetById(statusId);
+        var bg = status?.BackgroundColor ?? "#6c757d";
+        var text = status?.TextColor ?? "#fff";
+        var displayName = status?.DisplayName ?? statusId;
+        return $"<span style=\"background: {bg}; color: {text}; padding: 4px 12px; border-radius: 20px; font-size: 12px; font-weight: 600;\">{displayName}</span>";
     }
 
-    private static void UpdateTodoStatus(LayoutAreaHost host, Todo todo, TodoStatus newStatus)
+    private static void UpdateTodoStatus(LayoutAreaHost host, Todo todo, string newStatus)
     {
+        var newStatusObj = TodoStatus.GetById(newStatus);
         var updatedTodo = todo with
         {
             Status = newStatus,
-            CompletedAt = newStatus == TodoStatus.Completed ? DateTime.UtcNow : null
+            CompletedAt = newStatusObj?.IsCompleted == true ? DateTime.UtcNow : null
         };
 
         var changeRequest = new DataChangeRequest().WithUpdates(updatedTodo);
         host.Hub.Post(changeRequest, o => o.WithTarget(host.Hub.Address));
     }
+
+    private static Icon GetIconByName(string iconName) =>
+        new Icon(FluentIcons.Provider, iconName);
 
     /// <summary>
     /// Thumbnail view for catalog listings - enhanced with status menu and reminder button.
@@ -597,18 +568,18 @@ public static class TodoViews
         return stack;
     }
 
-    private static (string Label, TodoStatus Status, Icon Icon) GetPrimaryTransition(TodoStatus currentStatus) => currentStatus switch
+    private static (string Label, string StatusId, Icon Icon) GetPrimaryTransition(string currentStatus)
     {
-        TodoStatus.Pending => ("Start", TodoStatus.InProgress, FluentIcons.Play()),
-        TodoStatus.InProgress => ("Complete", TodoStatus.Completed, FluentIcons.CheckmarkCircle()),
-        TodoStatus.InReview => ("Approve", TodoStatus.Completed, FluentIcons.CheckmarkCircle()),
-        TodoStatus.Blocked => ("Unblock", TodoStatus.InProgress, FluentIcons.ArrowSync()),
-        _ => ("Reopen", TodoStatus.InProgress, FluentIcons.ArrowUndo())
-    };
+        var status = TodoStatus.GetById(currentStatus);
+        if (status == null) return ("Update", "InProgress", FluentIcons.ArrowSync());
+        var (label, targetId, iconName) = status.PrimaryTransition;
+        return (label, targetId, GetIconByName(iconName));
+    }
 
     private static bool IsOverdue(Todo todo)
     {
-        if (todo.Status == TodoStatus.Completed || !todo.DueDate.HasValue)
+        var status = TodoStatus.GetById(todo.Status);
+        if (status?.IsCompleted == true || !todo.DueDate.HasValue)
             return false;
         return todo.DueDate.Value.Date < DateTime.Now.Date;
     }
@@ -627,47 +598,35 @@ public static class TodoViews
         // For now, just log - the UI framework would handle toast display
     }
 
-    private static Icon GetStatusIcon(TodoStatus status) => status switch
+    private static Icon GetStatusIcon(string statusId)
     {
-        TodoStatus.Pending => FluentIcons.Clock(),
-        TodoStatus.InProgress => FluentIcons.ArrowSync(),
-        TodoStatus.InReview => FluentIcons.Eye(),
-        TodoStatus.Completed => FluentIcons.CheckmarkCircle(),
-        TodoStatus.Blocked => FluentIcons.Prohibited(),
-        _ => FluentIcons.Question()
-    };
+        var status = TodoStatus.GetById(statusId);
+        return GetIconByName(status?.Icon ?? "Question");
+    }
 
-    private static string GetStatusColor(TodoStatus status) => status switch
+    private static string GetStatusColor(string statusId)
     {
-        TodoStatus.Pending => "#ffc107",
-        TodoStatus.InProgress => "#0d6efd",
-        TodoStatus.InReview => "#6f42c1",
-        TodoStatus.Completed => "#198754",
-        TodoStatus.Blocked => "#dc3545",
-        _ => "#6c757d"
-    };
+        var status = TodoStatus.GetById(statusId);
+        return status?.BackgroundColor ?? "#6c757d";
+    }
 
-    private static string GetPriorityBadge(string priority) => priority switch
+    private static string GetPriorityBadge(string priorityId)
     {
-        "Critical" => "<span style=\"background: #dc3545; color: white; padding: 2px 6px; border-radius: 4px; font-size: 10px; font-weight: 600;\">CRITICAL</span>",
-        "High" => "<span style=\"background: #fd7e14; color: white; padding: 2px 6px; border-radius: 4px; font-size: 10px; font-weight: 600;\">HIGH</span>",
-        "Medium" => "",
-        "Low" => "<span style=\"background: #6c757d; color: white; padding: 2px 6px; border-radius: 4px; font-size: 10px;\">LOW</span>",
-        _ => ""
-    };
+        var priority = Priority.GetById(priorityId);
+        if (priority == null || priority.Id == "Medium") return ""; // Medium has no badge
+        return $"<span style=\"background: {priority.BackgroundColor}; color: {priority.TextColor}; padding: 2px 6px; border-radius: 4px; font-size: 10px; font-weight: 600;\">{priority.Id.ToUpperInvariant()}</span>";
+    }
 
-    private static string GetPriorityLabel(string priority) => priority switch
+    private static string GetPriorityLabel(string priorityId)
     {
-        "Critical" => "\ud83d\udea8 Critical",
-        "High" => "\ud83d\udd25 High",
-        "Medium" => "\u2796 Medium",
-        "Low" => "\u2b07\ufe0f Low",
-        _ => priority
-    };
+        var priority = Priority.GetById(priorityId);
+        return priority?.DisplayName ?? priorityId;
+    }
 
-    private static string GetDueDateIndicator(DateTime dueDate, TodoStatus status)
+    private static string GetDueDateIndicator(DateTime dueDate, string statusId)
     {
-        if (status == TodoStatus.Completed) return "";
+        var status = TodoStatus.GetById(statusId);
+        if (status?.IsCompleted == true) return "";
 
         var today = DateTime.Now.Date;
         var dueDateOnly = dueDate.Date;

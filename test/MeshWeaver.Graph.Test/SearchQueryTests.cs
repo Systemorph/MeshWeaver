@@ -536,7 +536,7 @@ public class SearchQueryTests : MonolithMeshTestBase
     #region Catalog Query Pattern Tests
 
     /// <summary>
-    /// Tests the exact query pattern used by the Catalog function in MeshNodeView.cs.
+    /// Tests the exact query pattern used by the Catalog function in MeshNodeLayoutAreas.cs.
     /// The Catalog builds queries like: "namespace:X scope:descendants searchTerm" for hierarchical mode
     /// or "namespace:X searchTerm" which adds scope:descendants when search term is present.
     /// </summary>

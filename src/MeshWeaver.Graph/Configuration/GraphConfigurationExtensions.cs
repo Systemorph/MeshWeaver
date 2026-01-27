@@ -106,7 +106,7 @@ public static class GraphConfigurationExtensions
             // Node types are compiled on-demand via IMeshNodeCompilationService.
             // MeshCatalog loads NodeTypeConfiguration from compiled assemblies when nodes are accessed.
             // Content collections should be configured by the caller (e.g., LoomConfiguration.ConfigureLoomMesh).
-            builder.ConfigureHub(config => MeshNodeView.AddDefaultLayoutAreas(config)
+            builder.ConfigureHub(config => MeshNodeLayoutAreas.AddDefaultLayoutAreas(config)
                 .WithServices(services =>
                 {
                     // Register MeshNodeCompilationService as both concrete and interface
