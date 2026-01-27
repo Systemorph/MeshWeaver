@@ -1,0 +1,21 @@
+{
+  "id": "ComplianceFinalReview",
+  "namespace": "ACME/CustomerOnboarding/Todo",
+  "name": "Compliance final review",
+  "nodeType": "ACME/Project/Todo",
+  "category": "Tasks",
+  "description": "Final compliance sign-off before binding",
+  "icon": "/static/content/ACME/Project/Todo/icon.svg",
+  "isPersistent": true,
+  "content": {
+    "$type": "Todo",
+    "id": "ComplianceFinalReview",
+    "title": "Compliance final review",
+    "description": "Final compliance review and sign-off. Verify all KYC requirements satisfied, no outstanding compliance flags, and all regulatory requirements met for binding coverage.",
+    "category": "Legal",
+    "priority": "Critical",
+    "assignee": "Carol",
+    "dueDateOffsetDays": 1,
+    "status": "Pending"
+  }
+}

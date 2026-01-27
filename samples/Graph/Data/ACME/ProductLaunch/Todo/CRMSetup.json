@@ -11,7 +11,7 @@
     "$type": "Todo",
     "id": "CRMSetup",
     "title": "Configure CRM pipeline",
-    "description": "Configure Salesforce pipeline for MeshFlow leads: Demo Request → Qualified → Demo Scheduled → Proposal → Negotiation → Closed Won/Lost.",
+    "description": "Configure Salesforce pipeline for TaskFlow leads: Demo Request → Qualified → Demo Scheduled → Proposal → Negotiation → Closed Won/Lost.",
     "category": "Sales",
     "priority": "Medium",
     "assignee": "Bob",

@@ -4,7 +4,7 @@
   "name": "Develop pricing tiers",
   "nodeType": "ACME/Project/Todo",
   "category": "Tasks",
-  "description": "Define pricing strategy and tier structure for MeshFlow",
+  "description": "Define pricing strategy and tier structure for TaskFlow",
   "icon": "/static/content/ACME/Project/Todo/icon.svg",
   "isPersistent": true,
   "content": {
