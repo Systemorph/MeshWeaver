@@ -363,7 +363,7 @@ public static class TodoViews
                     .WithAppearance(isFirst ? Appearance.Accent : Appearance.Neutral)
                     .WithClickAction(_ =>
                     {
-                        UpdateTodoStatus(host, todo, status);
+                        UpdateStatus(host, todo, status);
                         return System.Threading.Tasks.Task.CompletedTask;
                     }));
             isFirst = false;
@@ -376,31 +376,29 @@ public static class TodoViews
 
     private static IEnumerable<(string Label, string StatusId, Icon Icon)> GetOrderedStatusTransitions(string currentStatus)
     {
-        var status = TodoStatus.GetById(currentStatus);
-        if (status == null) yield break;
-
-        foreach (var (label, targetId, iconName) in status.Transitions)
+        // Return all statuses as possible transitions (simplified from TodoStatus which had explicit transitions)
+        foreach (var status in Status.All.Where(s => s.Id != currentStatus))
         {
-            yield return (label, targetId, GetIconByName(iconName));
+            yield return (status.Name, status.Id, GetIconByName("Circle"));
         }
     }
 
     private static string GetStatusBadge(string statusId)
     {
-        var status = TodoStatus.GetById(statusId);
-        var bg = status?.BackgroundColor ?? "#6c757d";
-        var text = status?.TextColor ?? "#fff";
+        var status = Status.GetById(statusId);
         var displayName = status?.DisplayName ?? statusId;
-        return $"<span style=\"background: {bg}; color: {text}; padding: 4px 12px; border-radius: 20px; font-size: 12px; font-weight: 600;\">{displayName}</span>";
+        // Use neutral styling since Status doesn't have colors
+        return $"<span style=\"background: #6c757d; color: #fff; padding: 4px 12px; border-radius: 20px; font-size: 12px; font-weight: 600;\">{displayName}</span>";
     }
 
-    private static void UpdateTodoStatus(LayoutAreaHost host, Todo todo, string newStatus)
+    private static void UpdateStatus(LayoutAreaHost host, Todo todo, string newStatus)
     {
-        var newStatusObj = TodoStatus.GetById(newStatus);
+        var newStatusObj = Status.GetById(newStatus);
         var updatedTodo = todo with
         {
             Status = newStatus,
-            CompletedAt = newStatusObj?.IsCompleted == true ? DateTime.UtcNow : null
+            // Mark as completed if status is "Completed"
+            CompletedAt = newStatusObj?.Id == "Completed" ? DateTime.UtcNow : null
         };
 
         var changeRequest = new DataChangeRequest().WithUpdates(updatedTodo);
@@ -500,7 +498,7 @@ public static class TodoViews
             .WithStyle(style => style.WithMinWidth("32px").WithPadding("4px 8px"))
             .WithClickAction(_ =>
             {
-                UpdateTodoStatus(host, todo, primaryStatus);
+                UpdateStatus(host, todo, primaryStatus);
                 return System.Threading.Tasks.Task.CompletedTask;
             });
 
@@ -514,7 +512,7 @@ public static class TodoViews
                 Controls.MenuItem(label, icon)
                     .WithClickAction(_ =>
                     {
-                        UpdateTodoStatus(host, todo, status);
+                        UpdateStatus(host, todo, status);
                         return System.Threading.Tasks.Task.CompletedTask;
                     }));
         }
@@ -570,16 +568,22 @@ public static class TodoViews
 
     private static (string Label, string StatusId, Icon Icon) GetPrimaryTransition(string currentStatus)
     {
-        var status = TodoStatus.GetById(currentStatus);
-        if (status == null) return ("Update", "InProgress", FluentIcons.ArrowSync());
-        var (label, targetId, iconName) = status.PrimaryTransition;
-        return (label, targetId, GetIconByName(iconName));
+        // Return next logical status transition (simplified from TodoStatus which had explicit transitions)
+        return currentStatus switch
+        {
+            "Planning" => ("Start", "Active", FluentIcons.Play()),
+            "Active" => ("Complete", "Completed", FluentIcons.CheckmarkCircle()),
+            "OnHold" => ("Resume", "Active", FluentIcons.Play()),
+            "Completed" => ("Reopen", "Active", FluentIcons.ArrowUndo()),
+            "Cancelled" => ("Reopen", "Planning", FluentIcons.ArrowUndo()),
+            _ => ("Update", "Active", FluentIcons.ArrowSync())
+        };
     }
 
     private static bool IsOverdue(Todo todo)
     {
-        var status = TodoStatus.GetById(todo.Status);
-        if (status?.IsCompleted == true || !todo.DueDate.HasValue)
+        // Completed or Cancelled tasks are not overdue
+        if (todo.Status == "Completed" || todo.Status == "Cancelled" || !todo.DueDate.HasValue)
             return false;
         return todo.DueDate.Value.Date < DateTime.Now.Date;
     }
@@ -600,14 +604,30 @@ public static class TodoViews
 
     private static Icon GetStatusIcon(string statusId)
     {
-        var status = TodoStatus.GetById(statusId);
-        return GetIconByName(status?.Icon ?? "Question");
+        // Return icon based on status (Status doesn't have Icon property)
+        return statusId switch
+        {
+            "Planning" => FluentIcons.Clipboard(),
+            "Active" => FluentIcons.Play(),
+            "OnHold" => FluentIcons.Pause(),
+            "Completed" => FluentIcons.CheckmarkCircle(),
+            "Cancelled" => FluentIcons.Dismiss(),
+            _ => FluentIcons.Circle()
+        };
     }
 
     private static string GetStatusColor(string statusId)
     {
-        var status = TodoStatus.GetById(statusId);
-        return status?.BackgroundColor ?? "#6c757d";
+        // Return color based on status (Status doesn't have BackgroundColor property)
+        return statusId switch
+        {
+            "Planning" => "#ffc107",
+            "Active" => "#0d6efd",
+            "OnHold" => "#6c757d",
+            "Completed" => "#198754",
+            "Cancelled" => "#dc3545",
+            _ => "#6c757d"
+        };
     }
 
     private static string GetPriorityBadge(string priorityId)
@@ -625,8 +645,8 @@ public static class TodoViews
 
     private static string GetDueDateIndicator(DateTime dueDate, string statusId)
     {
-        var status = TodoStatus.GetById(statusId);
-        if (status?.IsCompleted == true) return "";
+        // Completed or Cancelled tasks don't show due date indicators
+        if (statusId == "Completed" || statusId == "Cancelled") return "";
 
         var today = DateTime.Now.Date;
         var dueDateOnly = dueDate.Date;
