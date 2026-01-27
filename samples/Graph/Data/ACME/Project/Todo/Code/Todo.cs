@@ -66,8 +66,8 @@ public record Todo : IContentInitializable
     /// <summary>
     /// Current status of the task.
     /// </summary>
-    [Dimension<TodoStatus>]
-    public string Status { get; init; } = "Pending";
+    [Dimension<Status>]
+    public string Status { get; init; } = "Planning";
 
     /// <summary>
     /// Timestamp when the task was completed.

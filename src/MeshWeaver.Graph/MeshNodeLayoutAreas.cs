@@ -613,7 +613,8 @@ public static class MeshNodeLayoutAreas
             }
         }
 
-        // Render regular properties with inline editing (click-to-edit pattern)
+        // Render regular properties with inline editing
+        // Use a responsive grid layout: 3 columns on large screens, 2 on medium, 1 on small
         if (regularProperties.Any() && content != null)
         {
             var dataId = $"content_{node.Path?.Replace("/", "_") ?? Guid.NewGuid().ToString("N")}";
@@ -621,13 +622,13 @@ public static class MeshNodeLayoutAreas
             // Initialize data stream with current content
             host.UpdateData(dataId, content);
 
-            // Create a stack layout for properties - each property gets label + value in a row
-            var propsContainer = Controls.Stack
-                .WithWidth("100%")
+            // Create a responsive grid for properties (label + control stacked within each cell)
+            // Using LayoutGrid with responsive columns: xs=12 (1 per row), md=6 (2 per row), lg=4 (3 per row)
+            var propsGrid = Controls.LayoutGrid
+                .WithSkin(s => s.WithSpacing(2))
                 .WithStyle(s => s
-                    .WithBackgroundColor("var(--neutral-fill-rest)")
-                    .WithBorderRadius("8px")
-                    .WithPadding("12px 16px")) with { DataContext = LayoutAreaReference.GetDataPointer(dataId) };
+                    .WithPadding("12px 0")
+                    .WithWidth("100%")) with { DataContext = LayoutAreaReference.GetDataPointer(dataId) };
 
             foreach (var prop in regularProperties)
             {
@@ -635,29 +636,28 @@ public static class MeshNodeLayoutAreas
                     ?? prop.GetCustomAttribute<DisplayNameAttribute>()?.DisplayName
                     ?? prop.Name.Wordify();
 
-                // Create a horizontal stack for each property row
-                var row = Controls.Stack
-                    .WithOrientation(Orientation.Horizontal)
-                    .WithWidth("100%")
-                    .WithStyle(s => s.WithAlignItems("center").WithGap("12px").WithPadding("4px 0"));
+                // Each property gets a cell with label on top, control below
+                var propCell = Controls.Stack
+                    .WithStyle(s => s.WithPadding("4px 8px"));
 
-                // Label (fixed width)
-                row = row.WithView(
-                    Controls.Label($"{displayName}:")
+                // Label
+                propCell = propCell.WithView(
+                    Controls.Label($"{displayName}")
                         .WithStyle(s => s
                             .WithFontWeight("600")
                             .WithColor("var(--neutral-foreground-hint)")
-                            .WithMinWidth("120px")
-                            .WithWidth("120px")));
+                            .WithFontSize("0.875rem")
+                            .WithPadding("0 0 4px 0")));
 
-                // Value - inline editable control (flex grow)
-                var propControl = CreateInlineEditableProperty(host, prop, content, contentType, nodePath, node, dataId);
-                row = row.WithView(propControl.WithStyle(s => s.WithFlexGrow("1")));
+                // Form control - starts in readonly mode, click enables editing
+                var propControl = CreateInlineEditableFormControl(host, prop, content, contentType, nodePath, node, dataId);
+                propCell = propCell.WithView(propControl);
 
-                propsContainer = propsContainer.WithView(row);
+                // Responsive: 1 column on xs, 2 on md, 3 on lg
+                propsGrid = propsGrid.WithView(propCell, itemSkin => itemSkin.WithXs(12).WithMd(6).WithLg(4));
             }
 
-            stack = stack.WithView(propsContainer);
+            stack = stack.WithView(propsGrid);
 
             // Set up auto-save when data stream changes (debounced)
             SetupAutoSave(host, dataId, node, nodePath, contentType);
@@ -692,11 +692,11 @@ public static class MeshNodeLayoutAreas
     }
 
     /// <summary>
-    /// Creates an inline editable property control.
-    /// Shows a data-bound label that can be clicked to switch to edit mode.
-    /// The label displays the current value from the data stream.
+    /// Creates an inline editable form control for a property.
+    /// The control starts in readonly mode and becomes editable on click.
+    /// This provides a consistent look (always shows the form control) and avoids visual switching.
     /// </summary>
-    private static UiControl CreateInlineEditableProperty(
+    private static UiControl CreateInlineEditableFormControl(
         LayoutAreaHost host,
         PropertyInfo prop,
         object? content,
@@ -711,47 +711,91 @@ public static class MeshNodeLayoutAreas
 
         var propName = prop.Name.ToCamelCase()!;
         var jsonPointerReference = new JsonPointerReference(propName);
-        var value = content != null ? prop.GetValue(content) : null;
-        var displayValue = FormatDisplayValue(value, prop);
+        var isRequired = prop.HasAttribute<RequiredMemberAttribute>() || prop.HasAttribute<RequiredAttribute>();
+        var propType = prop.PropertyType;
 
-        if (isReadonly)
+        // Create the form control based on type
+        UiControl formControl;
+
+        // Check for UiControlAttribute first
+        var uiControlAttr = prop.GetCustomAttribute<UiControlAttribute>();
+        if (uiControlAttr != null)
         {
-            // Render readonly label - data-bound but no click action
-            return new LabelControl(jsonPointerReference)
-                .WithStyle("padding: 6px 0;");
+            formControl = CreateControlFromUiControlAttribute(host, uiControlAttr, prop, jsonPointerReference, isRequired);
+        }
+        // Check for DimensionAttribute
+        else if (prop.GetCustomAttribute<DimensionAttribute>() is { } dimensionAttr)
+        {
+            formControl = CreateDimensionSelectControl(host, prop, jsonPointerReference, dimensionAttr, isRequired, dataId);
+        }
+        // Handle based on property type
+        else if (propType.IsNumber())
+        {
+            var typeRegistry = host.Hub.ServiceProvider.GetRequiredService<ITypeRegistry>();
+            formControl = new NumberFieldControl(jsonPointerReference, typeRegistry.GetOrAddType(propType))
+            {
+                Required = isRequired,
+                Readonly = isReadonly, // Start in readonly mode
+                Immediate = true
+            };
+        }
+        else if (propType == typeof(DateTime) || propType == typeof(DateTime?))
+        {
+            formControl = new DateTimeControl(jsonPointerReference)
+            {
+                Required = isRequired,
+                Readonly = isReadonly
+            };
+        }
+        else if (propType == typeof(bool) || propType == typeof(bool?))
+        {
+            formControl = new CheckBoxControl(jsonPointerReference)
+            {
+                Required = isRequired,
+                Readonly = isReadonly
+            };
+        }
+        else
+        {
+            // Default to TextField for strings and other types
+            formControl = new TextFieldControl(jsonPointerReference)
+            {
+                Required = isRequired,
+                Readonly = isReadonly, // Start in readonly mode
+                Immediate = true
+            };
         }
 
-        // For editable fields, show the data-bound value with click-to-edit
-        return new LabelControl(jsonPointerReference)
-            .WithStyle("padding: 6px 0; cursor: pointer; min-height: 24px;")
+        // If truly readonly, just return the control
+        if (isReadonly)
+        {
+            return formControl.WithStyle(s => s.WithWidth("100%"));
+        }
+
+        // For editable controls, add click action to enable editing
+        // The form control starts readonly and becomes editable on click
+        return formControl
+            .WithStyle(s => s.WithWidth("100%"))
             .WithClickAction(ctx =>
             {
-                // Switch to edit mode - replace with editable control
-                var editControl = CreateInlineEditControl(host, prop, jsonPointerReference, content, contentType, nodePath, node, dataId, ctx.Area);
-                ctx.Host.UpdateArea(ctx.Area, editControl);
+                // Switch to editable mode - replace with the same control type but editable
+                var editableControl = CreateEditableFormControl(host, prop, jsonPointerReference, propType, isRequired, dataId);
+                ctx.Host.UpdateArea(ctx.Area, editableControl);
                 return Task.CompletedTask;
             });
     }
 
     /// <summary>
-    /// Creates the inline edit control (TextField, NumberField, etc.) for a property.
-    /// The control is data-bound and automatically commits changes via the data stream.
-    /// Server-side auto-save subscription handles persistence.
+    /// Creates an editable form control (readonly = false) for inline editing.
     /// </summary>
-    private static UiControl CreateInlineEditControl(
+    private static UiControl CreateEditableFormControl(
         LayoutAreaHost host,
         PropertyInfo prop,
         JsonPointerReference jsonPointerReference,
-        object? content,
-        Type contentType,
-        string nodePath,
-        MeshNode node,
-        string dataId,
-        string area)
+        Type propType,
+        bool isRequired,
+        string dataId)
     {
-        var isRequired = prop.HasAttribute<RequiredMemberAttribute>() || prop.HasAttribute<RequiredAttribute>();
-        var propType = prop.PropertyType;
-
         UiControl editControl;
 
         // Check for UiControlAttribute first
@@ -759,6 +803,11 @@ public static class MeshNodeLayoutAreas
         if (uiControlAttr != null)
         {
             editControl = CreateControlFromUiControlAttribute(host, uiControlAttr, prop, jsonPointerReference, isRequired);
+            // Make it editable
+            if (editControl is TextAreaControl ta)
+                editControl = ta with { Readonly = false };
+            else if (editControl is SelectControl sc)
+                editControl = sc with { Readonly = false };
         }
         // Check for DimensionAttribute
         else if (prop.GetCustomAttribute<DimensionAttribute>() is { } dimensionAttr)
@@ -858,10 +907,20 @@ public static class MeshNodeLayoutAreas
         bool isRequired,
         string parentDataId)
     {
+        var collectionName = host.Workspace.DataContext.GetCollectionName(dimensionAttr.Type);
+
+        // Dimension type must be registered in DataContext
+        if (string.IsNullOrEmpty(collectionName))
+        {
+            throw new InvalidOperationException(
+                $"Dimension type '{dimensionAttr.Type.FullName}' used on property '{prop.DeclaringType?.Name}.{prop.Name}' " +
+                $"is not registered in the DataContext. Please register it using AddData(data => data.AddSource(source => source.WithType<{dimensionAttr.Type.Name}>(...))).");
+        }
+
         var optionsId = Guid.NewGuid().AsString();
         host.RegisterForDisposal(parentDataId,
             host.Workspace
-                .GetStream(new CollectionReference(host.Workspace.DataContext.GetCollectionName(dimensionAttr.Type)!))!
+                .GetStream(new CollectionReference(collectionName))!
                 .Select(x => ConvertDimensionToOptions(x.Value!, host.Workspace.DataContext.TypeRegistry.GetTypeDefinition(dimensionAttr.Type)!))
                 .Subscribe(options => host.UpdateData(optionsId, options)));
 
@@ -901,41 +960,58 @@ public static class MeshNodeLayoutAreas
     /// </summary>
     private static void SetupAutoSave(LayoutAreaHost host, string dataId, MeshNode node, string nodePath, Type contentType)
     {
+        var logger = host.Hub.ServiceProvider.GetService<ILoggerFactory>()?
+            .CreateLogger(typeof(MeshNodeLayoutAreas));
+
         // Keep track of the initial serialized value to detect real changes
         var initialJson = JsonSerializer.Serialize(node.Content, host.Hub.JsonSerializerOptions);
+        logger?.LogDebug("SetupAutoSave for {DataId}, initial content hash: {HashCode}", dataId, initialJson.GetHashCode());
 
         host.RegisterForDisposal(dataId,
             host.Stream.GetDataStream<object>(dataId)
+                .Do(content => logger?.LogDebug("Data stream emitted for {DataId}: {ContentType}", dataId, content?.GetType().Name ?? "null"))
                 .Debounce(TimeSpan.FromMilliseconds(500)) // Wait 500ms after last change
                 .Subscribe(async updatedContent =>
                 {
-                    if (updatedContent == null) return;
+                    if (updatedContent == null)
+                    {
+                        logger?.LogDebug("Auto-save skipped for {DataId}: null content", dataId);
+                        return;
+                    }
 
                     // Serialize to compare - skip if no actual change
                     var currentJson = JsonSerializer.Serialize(updatedContent, host.Hub.JsonSerializerOptions);
-                    if (currentJson == initialJson) return;
+                    logger?.LogDebug("Auto-save comparing for {DataId}: current hash {CurrentHash}, initial hash {InitialHash}",
+                        dataId, currentJson.GetHashCode(), initialJson.GetHashCode());
+
+                    if (currentJson == initialJson)
+                    {
+                        logger?.LogDebug("Auto-save skipped for {DataId}: no change detected", dataId);
+                        return;
+                    }
 
                     // Update the initial value to prevent re-saving
                     initialJson = currentJson;
+                    logger?.LogInformation("Auto-save triggered for {NodePath}", node.Path);
 
                     // Persist via DataChangeRequest
+                    // Target the node's own hub address (where MeshNodeTypeSource is registered)
                     var updatedNode = node with { Content = updatedContent };
-                    var hubAddress = host.Hub.Configuration.ParentHub?.Address ?? host.Hub.Address;
+                    var targetAddress = new Address(node.Path);
+                    logger?.LogDebug("Auto-save targeting {TargetAddress} for node {NodePath}", targetAddress, node.Path);
 
                     using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
                     try
                     {
-                        await host.Hub.AwaitResponse<DataChangeResponse>(
+                        var response = await host.Hub.AwaitResponse<DataChangeResponse>(
                             new DataChangeRequest().WithUpdates(updatedNode),
-                            o => o.WithTarget(hubAddress),
+                            o => o.WithTarget(targetAddress),
                             cts.Token);
+                        logger?.LogInformation("Auto-save completed for {NodePath}, status: {Status}", node.Path, response.Message.Status);
                     }
                     catch (Exception ex)
                     {
-                        // Log the error - in the future could show a toast notification
-                        host.Hub.ServiceProvider.GetService<ILoggerFactory>()?
-                            .CreateLogger(typeof(MeshNodeLayoutAreas))
-                            .LogWarning(ex, "Failed to auto-save node {NodePath}", node.Path);
+                        logger?.LogWarning(ex, "Failed to auto-save node {NodePath}", node.Path);
                     }
                 }));
     }
@@ -1238,10 +1314,20 @@ public static class MeshNodeLayoutAreas
         var dimensionAttr = prop.GetCustomAttribute<DimensionAttribute>();
         if (dimensionAttr != null)
         {
+            var collectionName = host.Workspace.DataContext.GetCollectionName(dimensionAttr.Type);
+
+            // Dimension type must be registered in DataContext
+            if (string.IsNullOrEmpty(collectionName))
+            {
+                throw new InvalidOperationException(
+                    $"Dimension type '{dimensionAttr.Type.FullName}' used on property '{prop.DeclaringType?.Name}.{prop.Name}' " +
+                    $"is not registered in the DataContext. Please register it using AddData(data => data.AddSource(source => source.WithType<{dimensionAttr.Type.Name}>(...))).");
+            }
+
             var optionsId = Guid.NewGuid().AsString();
             host.RegisterForDisposal(dataId,
                 host.Workspace
-                    .GetStream(new CollectionReference(host.Workspace.DataContext.GetCollectionName(dimensionAttr.Type)!))!
+                    .GetStream(new CollectionReference(collectionName))!
                     .Select(x => ConvertDimensionToOptions(x.Value!, host.Workspace.DataContext.TypeRegistry.GetTypeDefinition(dimensionAttr.Type)!))
                     .Subscribe(options => host.UpdateData(optionsId, options)));
 

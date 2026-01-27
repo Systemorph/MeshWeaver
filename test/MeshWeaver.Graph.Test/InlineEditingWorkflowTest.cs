@@ -185,26 +185,15 @@ public class InlineEditingWorkflowTest(ITestOutputHelper output) : MonolithMeshT
             Output.WriteLine($"Updated content: {updatedContentJson}");
 
             using var doc = JsonDocument.Parse(updatedContentJson);
-            if (doc.RootElement.TryGetProperty("title", out var updatedTitleProp))
-            {
-                var updatedTitle = updatedTitleProp.GetString();
-                Output.WriteLine($"Persisted title: {updatedTitle}");
+            doc.RootElement.TryGetProperty("title", out var updatedTitleProp).Should().BeTrue("Content should have title property");
 
-                if (updatedTitle == newTitle)
-                {
-                    Output.WriteLine("SUCCESS: Title was persisted correctly via auto-save!");
-                }
-                else if (updatedTitle == originalTitle)
-                {
-                    Output.WriteLine("Title was not updated - checking if data context was set up");
-                    // This might happen if the content doesn't trigger inline editing
-                    // or if the data context pattern is different
-                }
-                else
-                {
-                    Output.WriteLine($"Title has different value than expected: {updatedTitle}");
-                }
-            }
+            var updatedTitle = updatedTitleProp.GetString();
+            Output.WriteLine($"Persisted title: {updatedTitle}");
+            Output.WriteLine($"Expected title: {newTitle}");
+            Output.WriteLine($"Original title: {originalTitle}");
+
+            // ASSERTION: The title must be the new value, not the original
+            updatedTitle.Should().Be(newTitle, "DataChangeRequest should have persisted the new title via auto-save");
         }
         finally
         {
