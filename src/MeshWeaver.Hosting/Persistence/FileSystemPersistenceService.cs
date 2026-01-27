@@ -132,7 +132,6 @@ public class FileSystemPersistenceService : IPersistenceService
             Description = sourceNode.Description,
             Icon = sourceNode.Icon,
             DisplayOrder = sourceNode.DisplayOrder,
-            AddressSegments = sourceNode.AddressSegments,
             IsPersistent = sourceNode.IsPersistent,
             Content = sourceNode.Content,
             ThumbNail = sourceNode.ThumbNail,
@@ -140,8 +139,6 @@ public class FileSystemPersistenceService : IPersistenceService
             AssemblyLocation = sourceNode.AssemblyLocation,
             HubConfiguration = sourceNode.HubConfiguration,
             StartupScript = sourceNode.StartupScript,
-            RoutingType = sourceNode.RoutingType,
-            InstantiationType = sourceNode.InstantiationType,
             GlobalServiceConfigurations = sourceNode.GlobalServiceConfigurations
         };
 

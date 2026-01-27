@@ -217,7 +217,6 @@ public class InMemoryPersistenceService : IPersistenceService
             Description = sourceNode.Description,
             Icon = sourceNode.Icon,
             DisplayOrder = sourceNode.DisplayOrder,
-            AddressSegments = sourceNode.AddressSegments,
             IsPersistent = sourceNode.IsPersistent,
             Content = sourceNode.Content,
             ThumbNail = sourceNode.ThumbNail,
@@ -225,8 +224,6 @@ public class InMemoryPersistenceService : IPersistenceService
             AssemblyLocation = sourceNode.AssemblyLocation,
             HubConfiguration = sourceNode.HubConfiguration,
             StartupScript = sourceNode.StartupScript,
-            RoutingType = sourceNode.RoutingType,
-            InstantiationType = sourceNode.InstantiationType,
             GlobalServiceConfigurations = sourceNode.GlobalServiceConfigurations
         };
         await SaveNodeAsync(movedNode, ct);
@@ -248,7 +245,6 @@ public class InMemoryPersistenceService : IPersistenceService
                     Description = descendantNode.Description,
                     Icon = descendantNode.Icon,
                     DisplayOrder = descendantNode.DisplayOrder,
-                    AddressSegments = descendantNode.AddressSegments,
                     IsPersistent = descendantNode.IsPersistent,
                     Content = descendantNode.Content,
                     ThumbNail = descendantNode.ThumbNail,
@@ -256,8 +252,6 @@ public class InMemoryPersistenceService : IPersistenceService
                     AssemblyLocation = descendantNode.AssemblyLocation,
                     HubConfiguration = descendantNode.HubConfiguration,
                     StartupScript = descendantNode.StartupScript,
-                    RoutingType = descendantNode.RoutingType,
-                    InstantiationType = descendantNode.InstantiationType,
                     GlobalServiceConfigurations = descendantNode.GlobalServiceConfigurations
                 };
                 await SaveNodeAsync(movedDescendant, ct);
