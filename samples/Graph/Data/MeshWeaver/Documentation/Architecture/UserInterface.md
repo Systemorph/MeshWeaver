@@ -21,46 +21,46 @@ In MessageHubs, we define UI using a **Controls Language** - an immutable, decla
 
 ```csharp
 // Server-side control definition
-Controls.Stack()
-    .WithChildren(
-        Controls.Text("Welcome!"),
-        Controls.Button("Click Me").WithClickAction(OnClick),
-        Controls.DataGrid(salesData)
-    )
+Controls.Stack
+    .WithView(Controls.Text("Welcome!"), "Welcome")
+    .WithView(Controls.Button("Click Me").WithClickAction(OnClick), "Button")
+    .WithView(Controls.DataGrid(salesData), "Sales")
 ```
 
-This serializes to JSON and streams to the browser for rendering.
+This serializes to JSON and streams to the Portal, which renders it as HTML for the browser.
 
 ## Two-Way Data Binding
+
+The synchronization uses a "walkie-talkie" pattern where both sides hold an `ISynchronizationStream`:
 
 ```mermaid
 flowchart TB
     subgraph Hub["MessageHub"]
         C[Controls Language]
         C --> J[JSON Serialization]
+        J --> HS[ISynchronizationStream]
         CH[Click Handler]
         DH[Data Change Handler]
     end
     subgraph Portal["Portal"]
-        S[Stream Manager]
+        PS[ISynchronizationStream]
+        PS --> R[HTML Renderer]
     end
     subgraph Browser["Browser"]
-        R[Renderer]
-        V[View]
+        V[View Display]
     end
-    J -->|JSON / JSON Patch| S
-    S -->|HTML| R
-    R --> V
-    V -->|OnClick| S
-    V -->|OnChange| S
-    S -->|ClickedEvent| CH
-    S -->|DataChangedEvent| DH
+    HS <-->|JSON / JSON Patch| PS
+    R -->|HTML| V
+    V -->|OnClick / OnChange| PS
+    PS -->|ClickedEvent| CH
+    PS -->|DataChangedEvent| DH
 ```
 
 **Key Features:**
 - Controls defined server-side where data resides
-- JSON serialization for transport to Portal
-- HTML rendering in browser
+- `ISynchronizationStream` on both Hub and Portal sides (walkie-talkie pattern)
+- HTML rendering happens in the Portal
+- Browser is a thin display layer showing HTML and forwarding user events
 - Two-way binding: UI changes stream back to hubs as events
 
 ## Control Lifecycle
@@ -71,8 +71,9 @@ sequenceDiagram
     participant Portal
     participant Browser
     Hub->>Portal: Stream (controls + data via JSON)
+    Portal->>Portal: Render to HTML
     Portal->>Browser: HTML
-    Browser->>Browser: Render Controls
+    Browser->>Browser: Display
     Browser->>Portal: OnClick
     Portal->>Hub: ClickedEvent
     Hub->>Hub: Execute ClickAction
