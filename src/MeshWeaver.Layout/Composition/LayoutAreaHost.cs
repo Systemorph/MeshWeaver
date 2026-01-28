@@ -107,6 +107,12 @@ public record LayoutAreaHost : IDisposable
                 delivery => Stream.ClientId.Equals(delivery.Message.StreamId)
             )
         );
+        Stream.RegisterForDisposal(
+            Stream.Hub.Register<BlurEvent>(
+                OnBlur,
+                delivery => Stream.ClientId.Equals(delivery.Message.StreamId)
+            )
+        );
 
         logger = Stream.Hub.ServiceProvider.GetRequiredService<ILogger<LayoutAreaHost>>();
     }
@@ -136,6 +142,22 @@ public record LayoutAreaHost : IDisposable
             InvokeAsync(() => control.CloseAction.Invoke(
                 new(request.Message.Area, request.Message.State, request.Message.Payload ?? new object(), Hub, this)
             ), ex => FailRequest(ex, request));
+        return request.Processed();
+    }
+
+    private IMessageDelivery OnBlur(IMessageDelivery<BlurEvent> request)
+    {
+        if (GetControl(request.Message.Area) is IFormControl { OnBlur: Func<UiActionContext, Task> blurAction })
+            try
+            {
+                blurAction.Invoke(
+                    new(request.Message.Area, request.Message.Payload ?? new object(), Hub, this)
+                );
+            }
+            catch (Exception ex)
+            {
+                FailRequest(ex, request);
+            }
         return request.Processed();
     }
 

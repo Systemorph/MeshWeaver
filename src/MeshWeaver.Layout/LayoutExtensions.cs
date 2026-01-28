@@ -288,9 +288,31 @@ public static class LayoutExtensions
         string id
     ) => stream.Reduce(new EntityReference(LayoutAreaReference.Data, id))!
         .Where(x => x.Value != null)
-        .Select(x => (T)x.Value!)
+        .Select(x => ConvertDataValue<T>(x.Value!, stream.Hub.JsonSerializerOptions))
         .DistinctUntilChanged()
     ;
+
+    private static T ConvertDataValue<T>(object value, JsonSerializerOptions options)
+    {
+        // Direct cast if already the right type
+        if (value is T t)
+            return t;
+
+        // Handle JsonNode to JsonElement conversion
+        if (typeof(T) == typeof(JsonElement) && value is JsonNode node)
+            return (T)(object)JsonSerializer.SerializeToElement(node, options);
+
+        // Handle JsonElement to other types via deserialization
+        if (value is JsonElement je)
+            return je.Deserialize<T>(options)!;
+
+        // Handle arbitrary object to JsonElement conversion (e.g., Todo -> JsonElement)
+        if (typeof(T) == typeof(JsonElement))
+            return (T)(object)JsonSerializer.SerializeToElement(value, options);
+
+        // Fallback: try direct cast (may throw if incompatible)
+        return (T)value;
+    }
 
 
     public static void SetData(
