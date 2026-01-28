@@ -15,7 +15,8 @@
     Required="@Required"
     Size="@Size"
     MinLength="@MinLength"
-    MaxLength="@MaxLength">
+    MaxLength="@MaxLength"
+    @onfocusout="OnBlur">
     @if (IconStart is not null)
     {
         <FluentIcon Value="@IconStart.ToFluentIcon()" Slot="start" />

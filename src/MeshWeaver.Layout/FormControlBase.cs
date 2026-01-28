@@ -56,6 +56,38 @@ public abstract record FormControlBase <TControl>(object Data)
     /// Placeholder to be put in the control.
     /// </summary>
     public object? Placeholder { get; init; }
+
+    private readonly Func<UiActionContext, Task>? blurAction;
+
+    /// <summary>
+    /// Whether the control has a blur action.
+    /// </summary>
+    public bool IsBlurable { get; init; }
+
+    /// <summary>
+    /// Action to invoke when the control loses focus.
+    /// Internal to prevent serialization.
+    /// </summary>
+    internal Func<UiActionContext, Task>? BlurAction
+    {
+        get => blurAction;
+        init
+        {
+            blurAction = value;
+            IsBlurable = value != null;
+        }
+    }
+
+    object? IFormControl.OnBlur => BlurAction;
+
+    /// <summary>
+    /// Sets the blur action for the control.
+    /// </summary>
+    /// <param name="onBlur">The blur action to set.</param>
+    /// <returns>A new instance with the specified blur action.</returns>
+    public TControl WithBlurAction(Func<UiActionContext, Task> onBlur) =>
+        This with { BlurAction = onBlur };
+
     /// <summary>
     /// Sets the start icon of the text field control.
     /// </summary>

@@ -17,6 +17,19 @@ public record ClickedEvent(string Area, string StreamId) : StreamMessage(StreamI
 }
 
 /// <summary>
+/// Represents an event that occurs when a form control loses focus.
+/// </summary>
+/// <param name="Area">The area that lost focus.</param>
+/// <param name="StreamId">The stream identifier.</param>
+public record BlurEvent(string Area, string StreamId) : StreamMessage(StreamId)
+{
+    /// <summary>
+    /// Gets or initializes the payload associated with the blur event.
+    /// </summary>
+    public object? Payload { get; init; }
+}
+
+/// <summary>
 /// Represents an event that occurs when a dialog is closed.
 /// </summary>
 /// <param name="Area">The area where the dialog was displayed.</param>

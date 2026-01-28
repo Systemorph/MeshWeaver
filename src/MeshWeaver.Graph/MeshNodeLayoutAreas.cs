@@ -156,7 +156,7 @@ public static class MeshNodeLayoutAreas
     }
 
     /// <summary>
-    /// Builds the header with icon and editable title.
+    /// Builds the header with icon and click-to-edit title.
     /// </summary>
     private static UiControl BuildHeader(LayoutAreaHost host, MeshNode? node)
     {
@@ -189,29 +189,41 @@ public static class MeshNodeLayoutAreas
             }
         }
 
-        // Check if content has Title property for inline editing
-        string? dataId = null;
+        // Check if content has Title property for click-to-edit
+        bool hasTitleProperty = false;
+        bool canEdit = true;
         if (node?.Content is JsonElement jsonElement && jsonElement.TryGetProperty("$type", out var typeProperty))
         {
             var typeName = typeProperty.GetString();
             var typeRegistry = host.Hub.ServiceProvider.GetService<ITypeRegistry>();
             var contentType = !string.IsNullOrEmpty(typeName) ? typeRegistry?.GetType(typeName) : null;
-            if (contentType?.GetProperty("Title") != null)
+            hasTitleProperty = contentType?.GetProperty("Title") != null;
+
+            // Check edit permissions
+            if (hasTitleProperty)
             {
-                dataId = $"content_{nodePath.Replace("/", "_")}";
-                host.UpdateData(dataId, jsonElement);
+                var securityService = host.Hub.ServiceProvider.GetService<ISecurityService>();
+                if (securityService != null)
+                {
+                    try
+                    {
+                        var permissions = securityService.GetEffectivePermissionsAsync(nodePath).GetAwaiter().GetResult();
+                        canEdit = permissions.HasFlag(Permission.Update);
+                    }
+                    catch
+                    {
+                        canEdit = true; // fallback
+                    }
+                }
             }
         }
 
-        // Title - editable if we have data binding, otherwise static
-        if (dataId != null)
+        // Title - click-to-edit if we have Title property, otherwise static
+        if (hasTitleProperty && node != null)
         {
-            var titleField = new TextFieldControl(new JsonPointerReference("title"))
-            {
-                Readonly = false,
-                DataContext = LayoutAreaReference.GetDataPointer(dataId)
-            }.WithStyle("font-size: 2rem; font-weight: bold; border: none; background: transparent; min-width: 300px;");
-            titleContent = titleContent.WithView(titleField);
+            var dataId = OverviewLayoutArea.GetDataId(nodePath);
+            // Data will be set up by OverviewLayoutArea.BuildPropertyOverview, just use the same ID
+            titleContent = titleContent.WithView(OverviewLayoutArea.BuildTitle(host, node, dataId, canEdit));
         }
         else
         {

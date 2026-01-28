@@ -4,6 +4,7 @@ using System.Reactive.Linq;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Json.More;
 using MeshWeaver.Data;
 using MeshWeaver.Domain;
@@ -11,7 +12,9 @@ using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Layout.DataBinding;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Security;
 using MeshWeaver.Messaging;
+using MeshWeaver.Messaging.Serialization;
 using MeshWeaver.Reflection;
 using MeshWeaver.ShortGuid;
 using MeshWeaver.Utils;
@@ -21,11 +24,17 @@ namespace MeshWeaver.Graph;
 
 /// <summary>
 /// Builds an overview layout for MeshNode content with read-only display and click-to-edit.
-/// Shows read-only views by default, click switches to edit mode, and data changes auto-switch back.
+/// Shows read-only views by default, click switches to edit mode, blur auto-switches back.
 /// Markdown properties are handled separately with full width and Done button.
+/// Uses workspace stream pattern for automatic bidirectional data binding.
 /// </summary>
 public static class OverviewLayoutArea
 {
+    /// <summary>
+    /// Gets the consistent data ID for a node path. Used by both header and property overview.
+    /// </summary>
+    public static string GetDataId(string nodePath) => $"content_{nodePath.Replace("/", "_")}";
+
     /// <summary>
     /// Builds the property overview for a MeshNode, showing read-only views with click-to-edit.
     /// </summary>
@@ -47,17 +56,62 @@ public static class OverviewLayoutArea
         if (contentType == null)
             return Controls.Stack;
 
-        // 2. Store JsonElement in data stream (NO deserialization)
-        var dataId = $"content_{nodePath.Replace("/", "_")}";
-        host.UpdateData(dataId, jsonContent);
+        // 2. Check access permissions
+        var canEdit = CheckEditAccess(host, node);
 
-        // 3. Get browsable properties (skip Title - shown in header)
+        // 3. Set up workspace stream for bidirectional data binding (DomainDetails pattern)
+        // Use consistent dataId so header and properties share the same data
+        var dataId = GetDataId(nodePath);
+        var collectionName = host.Workspace.DataContext.GetCollectionName(contentType);
+        var entityId = GetEntityId(jsonContent, contentType, typeRegistry);
+
+        if (!string.IsNullOrEmpty(collectionName) && entityId != null)
+        {
+            // Subscribe to workspace stream for bidirectional sync
+            var stream = host.Workspace.GetStream(new EntityReference(collectionName, entityId));
+            if (stream != null)
+            {
+                var typeDefinition = host.Workspace.DataContext.TypeRegistry.GetTypeDefinition(contentType);
+                if (typeDefinition != null)
+                {
+                    host.RegisterForDisposal(stream
+                        .Where(e => e?.Value != null)
+                        .Select(e => typeDefinition.SerializeEntityAndId(e!.Value!, host.Hub.JsonSerializerOptions))
+                        .Where(e => e != null)
+                        .Subscribe(e => host.UpdateData(dataId, e!))
+                    );
+
+                    // Set up auto-save: persist changes from local data back to workspace
+                    if (canEdit)
+                    {
+                        SetupAutoSave(host, dataId, contentType, jsonContent);
+                    }
+                }
+                else
+                {
+                    // Fallback: store JsonElement directly
+                    host.UpdateData(dataId, jsonContent);
+                }
+            }
+            else
+            {
+                // Fallback: store JsonElement directly
+                host.UpdateData(dataId, jsonContent);
+            }
+        }
+        else
+        {
+            // Fallback: store JsonElement directly
+            host.UpdateData(dataId, jsonContent);
+        }
+
+        // 4. Get browsable properties (skip Title - shown in header)
         var properties = contentType.GetProperties()
             .Where(p => p.GetCustomAttribute<BrowsableAttribute>()?.Browsable != false)
             .Where(p => !IsTitleProperty(p.Name))
             .ToList();
 
-        // 4. Separate properties into regular vs markdown (SeparateEditView)
+        // 5. Separate properties into regular vs markdown (SeparateEditView)
         var regularProps = properties
             .Where(p => p.GetCustomAttribute<UiControlAttribute>()?.SeparateEditView != true)
             .ToList();
@@ -68,31 +122,149 @@ public static class OverviewLayoutArea
 
         var stack = Controls.Stack.WithWidth("100%");
 
-        // 5. Build grid for regular properties (read-only with click-to-edit)
+        // 6. Build grid for regular properties (read-only with click-to-edit)
         if (regularProps.Count > 0)
         {
             var propsGrid = Controls.LayoutGrid.WithSkin(s => s.WithSpacing(2));
 
             foreach (var prop in regularProps)
             {
-                var propCell = BuildPropertyCell(host, prop, dataId, nodePath, node);
+                var propCell = BuildPropertyCell(host, prop, dataId, nodePath, node, canEdit);
                 propsGrid = propsGrid.WithView(propCell, s => s.WithXs(12).WithMd(6).WithLg(4));
             }
 
             stack = stack.WithView(propsGrid);
-
-            // 6. Set up stream subscription for auto-switch-back
-            SetupAutoSwitchBack(host, dataId, nodePath, regularProps, node);
         }
 
         // 7. Build markdown sections (full width, title + MarkdownControl)
         foreach (var prop in markdownProps)
         {
-            var markdownSection = BuildMarkdownSection(host, prop, dataId, nodePath, node);
+            var markdownSection = BuildMarkdownSection(host, prop, dataId, nodePath, node, canEdit);
             stack = stack.WithView(markdownSection);
         }
 
         return stack;
+    }
+
+    /// <summary>
+    /// Builds a clickable title that switches to edit mode on click.
+    /// </summary>
+    public static UiControl BuildTitle(LayoutAreaHost host, MeshNode node, string dataId, bool canEdit)
+    {
+        var editStateId = $"editState_{dataId}_title";
+        var editStateStream = host.Stream.GetDataStream<bool>(editStateId);
+
+        return Controls.Stack
+            .WithView((h, ctx) =>
+                editStateStream
+                    .StartWith(false)
+                    .DistinctUntilChanged()
+                    .Select(isEditing =>
+                        isEditing && canEdit
+                            ? BuildTitleEditView(h, dataId, editStateId)
+                            : BuildTitleReadView(h, node, dataId, editStateId, canEdit)));
+    }
+
+    private static UiControl BuildTitleReadView(
+        LayoutAreaHost host,
+        MeshNode node,
+        string dataId,
+        string editStateId,
+        bool canEdit)
+    {
+        var title = node.Name ?? node.Id ?? "";
+
+        // Use StackControl which supports click actions (HtmlControl doesn't have click handling in Blazor)
+        var titleStack = Controls.Stack
+            .WithStyle($"cursor: {(canEdit ? "pointer" : "default")};")
+            .WithView(Controls.Html($"<h1 style=\"margin: 0;\">{System.Web.HttpUtility.HtmlEncode(title)}</h1>"));
+
+        if (canEdit)
+        {
+            titleStack = titleStack.WithClickAction(ctx =>
+            {
+                ctx.Host.UpdateData(editStateId, true);
+                return Task.CompletedTask;
+            });
+        }
+
+        return titleStack;
+    }
+
+    private static UiControl BuildTitleEditView(
+        LayoutAreaHost host,
+        string dataId,
+        string editStateId)
+    {
+        var titleField = new TextFieldControl(new JsonPointerReference("title"))
+        {
+            Immediate = true,
+            AutoFocus = true,
+            DataContext = LayoutAreaReference.GetDataPointer(dataId)
+        }
+        .WithStyle("font-size: 2rem; font-weight: bold; border: none; background: transparent; min-width: 300px;")
+        .WithBlurAction(ctx =>
+        {
+            ctx.Host.UpdateData(editStateId, false);
+            return Task.CompletedTask;
+        });
+
+        return titleField;
+    }
+
+    private static object? GetEntityId(JsonElement jsonContent, Type contentType, ITypeRegistry typeRegistry)
+    {
+        // Try to get the key property from the type
+        var keyProperty = contentType.GetProperties()
+            .FirstOrDefault(p => p.HasAttribute<KeyAttribute>());
+
+        if (keyProperty == null)
+        {
+            // Try common ID property names
+            keyProperty = contentType.GetProperty("Id") ?? contentType.GetProperty("ID");
+        }
+
+        if (keyProperty == null)
+            return null;
+
+        var propName = keyProperty.Name.ToCamelCase();
+        if (propName != null && jsonContent.TryGetProperty(propName, out var idElement))
+        {
+            return idElement.ValueKind switch
+            {
+                JsonValueKind.String => idElement.GetString(),
+                JsonValueKind.Number => idElement.TryGetInt64(out var longVal) ? longVal : idElement.GetDouble(),
+                _ => null
+            };
+        }
+
+        return null;
+    }
+
+    private static bool CheckEditAccess(LayoutAreaHost host, MeshNode node)
+    {
+        // Base editability - check if security service denies access
+        var baseEditable = true;
+
+        // Check user permissions via security service
+        var securityService = host.Hub.ServiceProvider.GetService<ISecurityService>();
+        if (securityService != null)
+        {
+            var nodePath = node.Path;
+            try
+            {
+                // Use synchronous check (cached permissions should be fast)
+                var permissions = securityService.GetEffectivePermissionsAsync(nodePath).GetAwaiter().GetResult();
+                return permissions.HasFlag(Permission.Update);
+            }
+            catch
+            {
+                // If security check fails, fall back to base editability
+                return baseEditable;
+            }
+        }
+
+        return baseEditable;
     }
 
     private static bool IsTitleProperty(string name) =>
@@ -101,22 +273,85 @@ public static class OverviewLayoutArea
         name.Equals("DisplayName", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
-    /// Builds a property cell with label and read-only value that switches to edit on click.
+    /// Sets up auto-save: when local data changes, persist via DataChangeRequest.
+    /// </summary>
+    private static void SetupAutoSave(
+        LayoutAreaHost host,
+        string dataId,
+        Type contentType,
+        JsonElement initialContent)
+    {
+        var initialJson = initialContent.GetRawText();
+        var autoSaveId = $"autoSave_{dataId}";
+
+        host.RegisterForDisposal(autoSaveId,
+            host.Stream.GetDataStream<object>(dataId)
+                .Debounce(TimeSpan.FromMilliseconds(300))
+                .Subscribe(async updatedContent =>
+                {
+                    if (updatedContent == null)
+                        return;
+
+                    // Serialize current content to JSON for comparison
+                    string currentJson;
+                    if (updatedContent is JsonElement je)
+                        currentJson = je.GetRawText();
+                    else if (updatedContent is JsonNode jn)
+                        currentJson = jn.ToJsonString(host.Hub.JsonSerializerOptions);
+                    else
+                        currentJson = JsonSerializer.Serialize(updatedContent, host.Hub.JsonSerializerOptions);
+
+                    // Skip if no changes
+                    if (currentJson == initialJson)
+                        return;
+
+                    // Update initial to prevent re-sending same change
+                    initialJson = currentJson;
+
+                    // Deserialize to the correct type for DataChangeRequest
+                    object? typedContent;
+                    if (updatedContent.GetType() == contentType)
+                    {
+                        typedContent = updatedContent;
+                    }
+                    else
+                    {
+                        typedContent = JsonSerializer.Deserialize(currentJson, contentType, host.Hub.JsonSerializerOptions);
+                    }
+
+                    if (typedContent != null)
+                    {
+                        // Send DataChangeRequest to persist the change
+                        await host.Hub.AwaitResponse<DataChangeResponse>(
+                            new DataChangeRequest().WithUpdates(typedContent),
+                            o => o.WithTarget(host.Hub.Address));
+                    }
+                }));
+    }
+
+    /// <summary>
+    /// Builds a property cell with label and reactive read/edit view.
+    /// Uses state-based switching and blur action for auto-save.
     /// </summary>
     private static UiControl BuildPropertyCell(
         LayoutAreaHost host,
         PropertyInfo prop,
         string dataId,
         string nodePath,
-        MeshNode node)
+        MeshNode node,
+        bool canEdit)
     {
         var displayName = prop.GetCustomAttribute<DisplayAttribute>()?.Name
             ?? prop.GetCustomAttribute<DisplayNameAttribute>()?.DisplayName
             ?? prop.Name.Wordify();
 
         var propName = prop.Name.ToCamelCase()!;
-        var areaId = $"{nodePath}/prop_{propName}";
-        var editingPropertyId = $"{dataId}_editing";
+        var editStateId = $"editState_{dataId}_{propName}";
+        var editStateStream = host.Stream.GetDataStream<bool>(editStateId);
+
+        var isEditable = canEdit
+                         && prop.GetCustomAttribute<EditableAttribute>()?.AllowEdit != false
+                         && !prop.HasAttribute<KeyAttribute>();
 
         var stack = Controls.Stack.WithStyle("padding: 4px 8px;");
 
@@ -124,77 +359,236 @@ public static class OverviewLayoutArea
         stack = stack.WithView(Controls.Label(displayName)
             .WithStyle("font-weight: 600; color: var(--neutral-foreground-hint); font-size: 0.875rem;"));
 
-        // Read-only control area with click-to-edit
+        // Reactive view that switches between read-only and edit mode
         stack = stack.WithView((h, ctx) =>
-        {
-            // Create named area for this property value
-            var readOnlyControl = BuildReadOnlyControl(h, prop, dataId, node);
-
-            var isEditable = prop.GetCustomAttribute<EditableAttribute>()?.AllowEdit != false
-                             && !prop.HasAttribute<KeyAttribute>();
-
-            if (!isEditable)
-                return Observable.Return<UiControl?>(readOnlyControl);
-
-            return Observable.Return<UiControl?>(readOnlyControl.WithClickAction(ctx2 =>
-            {
-                // Track which property is being edited
-                ctx2.Host.UpdateData(editingPropertyId, propName);
-
-                var editControl = BuildEditControl(h, prop, dataId, ctx2.Area, node);
-                ctx2.Host.UpdateArea(ctx2.Area, editControl);
-                return Task.CompletedTask;
-            }));
-        });
+            editStateStream
+                .StartWith(false)
+                .DistinctUntilChanged()
+                .Select(isEditing =>
+                    isEditing && isEditable
+                        ? BuildPropertyEditView(h, prop, dataId, editStateId)
+                        : BuildPropertyReadView(h, prop, dataId, editStateId, isEditable)));
 
         return stack;
     }
 
     /// <summary>
-    /// Builds a read-only control for a property using LabelControl with data binding.
+    /// Builds the read-only view for a property.
+    /// For select/dimension fields, we resolve the display name and show it in a label.
     /// </summary>
-    private static UiControl BuildReadOnlyControl(
+    private static UiControl BuildPropertyReadView(
         LayoutAreaHost host,
         PropertyInfo prop,
         string dataId,
-        MeshNode node)
+        string editStateId,
+        bool isEditable)
     {
         var propName = prop.Name.ToCamelCase()!;
         var propType = prop.PropertyType;
 
+        // Check for DimensionAttribute or UiControlAttribute with options
+        var dimAttr = prop.GetCustomAttribute<DimensionAttribute>();
+        var uiAttr = prop.GetCustomAttribute<UiControlAttribute>();
+        var displayFormatAttr = prop.GetCustomAttribute<DisplayFormatAttribute>();
+
         UiControl readOnlyControl;
 
-        if (propType == typeof(bool) || propType == typeof(bool?))
+        if (dimAttr != null)
         {
-            // For booleans, show a disabled checkbox or a Yes/No label
-            readOnlyControl = new LabelControl(new JsonPointerReference(propName))
-                .WithStyle("cursor: pointer; padding: 8px; min-height: 32px;");
+            // For dimensions, resolve the display name from the dimension collection
+            readOnlyControl = BuildDimensionReadOnlyLabel(host, propName, dataId, dimAttr);
+        }
+        else if (uiAttr?.Options != null)
+        {
+            // For select with static options, resolve the display name
+            readOnlyControl = BuildOptionsReadOnlyLabel(host, propName, dataId, uiAttr.Options);
         }
         else if (propType == typeof(DateTime) || propType == typeof(DateTime?))
         {
-            // For dates, show formatted date
+            // Format DateTime using DisplayFormatAttribute or default to date only
+            var format = displayFormatAttr?.DataFormatString ?? "{0:d}"; // Short date by default
+            readOnlyControl = BuildFormattedDateLabel(host, propName, dataId, format);
+        }
+        else if (propType == typeof(bool) || propType == typeof(bool?))
+        {
             readOnlyControl = new LabelControl(new JsonPointerReference(propName))
-                .WithStyle("cursor: pointer; padding: 8px; min-height: 32px;");
+            {
+                DataContext = LayoutAreaReference.GetDataPointer(dataId)
+            }.WithStyle("padding: 8px; min-height: 32px;");
         }
         else
         {
-            // For strings and numbers, use Label with data binding
             readOnlyControl = new LabelControl(new JsonPointerReference(propName))
-                .WithStyle("cursor: pointer; padding: 8px; min-height: 32px; background: var(--neutral-fill-rest); border-radius: 4px;");
+            {
+                DataContext = LayoutAreaReference.GetDataPointer(dataId)
+            }.WithStyle("padding: 8px; min-height: 32px; background: var(--neutral-fill-rest); border-radius: 4px;");
         }
 
-        return readOnlyControl with { DataContext = LayoutAreaReference.GetDataPointer(dataId) };
+        if (isEditable)
+        {
+            // Wrap in a StackControl for click handling
+            var clickableStack = Controls.Stack
+                .WithStyle("cursor: pointer;")
+                .WithView(readOnlyControl)
+                .WithClickAction(ctx =>
+                {
+                    ctx.Host.UpdateData(editStateId, true);
+                    return Task.CompletedTask;
+                });
+            return clickableStack;
+        }
+
+        return readOnlyControl;
+    }
+
+    private static UiControl BuildDimensionReadOnlyLabel(
+        LayoutAreaHost host,
+        string propName,
+        string dataId,
+        DimensionAttribute dimensionAttr)
+    {
+        var collectionName = host.Workspace.DataContext.GetCollectionName(dimensionAttr.Type);
+
+        if (string.IsNullOrEmpty(collectionName))
+        {
+            return new LabelControl(new JsonPointerReference(propName))
+            {
+                DataContext = LayoutAreaReference.GetDataPointer(dataId)
+            }.WithStyle("padding: 8px; min-height: 32px;");
+        }
+
+        // Create a computed label that resolves the dimension display name
+        var displayLabelId = $"displayLabel_{dataId}_{propName}";
+
+        // Subscribe to both the data and the dimension collection to resolve display names
+        var dataStream = host.Stream.GetDataStream<JsonElement>(dataId);
+        var collectionStream = host.Workspace.GetStream(new CollectionReference(collectionName));
+
+        if (collectionStream != null)
+        {
+            host.RegisterForDisposal(displayLabelId,
+                dataStream.CombineLatest(collectionStream, (data, collection) =>
+                {
+                    if (data.ValueKind == JsonValueKind.Undefined || collection?.Value == null)
+                        return "";
+
+                    // Get the property value
+                    if (!data.TryGetProperty(propName, out var valueElement))
+                        return "";
+
+                    var keyValue = valueElement.ValueKind switch
+                    {
+                        JsonValueKind.String => valueElement.GetString(),
+                        JsonValueKind.Number => valueElement.TryGetInt64(out var l) ? (object)l : valueElement.GetDouble(),
+                        _ => null
+                    };
+
+                    if (keyValue == null)
+                        return "";
+
+                    // Find the matching instance and get its display name
+                    if (collection.Value.Instances.TryGetValue(keyValue, out var instance))
+                    {
+                        if (instance is INamed named)
+                            return named.DisplayName;
+                        return instance.ToString() ?? "";
+                    }
+
+                    return keyValue.ToString() ?? "";
+                }).Subscribe(displayName => host.UpdateData(displayLabelId, displayName)));
+        }
+        else
+        {
+            host.UpdateData(displayLabelId, "");
+        }
+
+        return new LabelControl(new JsonPointerReference(LayoutAreaReference.GetDataPointer(displayLabelId)))
+            .WithStyle("padding: 8px; min-height: 32px;");
+    }
+
+    private static UiControl BuildOptionsReadOnlyLabel(
+        LayoutAreaHost host,
+        string propName,
+        string dataId,
+        object options)
+    {
+        var displayLabelId = $"displayLabel_{dataId}_{propName}";
+        var optionsList = ConvertOptions(options);
+
+        // Subscribe to data changes and resolve display name from options
+        var dataStream = host.Stream.GetDataStream<JsonElement>(dataId);
+        host.RegisterForDisposal(displayLabelId,
+            dataStream.Select(data =>
+            {
+                if (data.ValueKind == JsonValueKind.Undefined)
+                    return "";
+
+                if (!data.TryGetProperty(propName, out var valueElement))
+                    return "";
+
+                var keyValue = valueElement.ValueKind == JsonValueKind.String
+                    ? valueElement.GetString()
+                    : valueElement.ToString();
+
+                // Find matching option and return its display text
+                var option = optionsList.FirstOrDefault(o => o.GetItem()?.ToString() == keyValue);
+                return option?.Text ?? keyValue ?? "";
+            }).Subscribe(displayName => host.UpdateData(displayLabelId, displayName)));
+
+        return new LabelControl(new JsonPointerReference(LayoutAreaReference.GetDataPointer(displayLabelId)))
+            .WithStyle("padding: 8px; min-height: 32px;");
+    }
+
+    private static UiControl BuildFormattedDateLabel(
+        LayoutAreaHost host,
+        string propName,
+        string dataId,
+        string format)
+    {
+        var displayLabelId = $"displayLabel_{dataId}_{propName}";
+
+        // Subscribe to data changes and format the date
+        var dataStream = host.Stream.GetDataStream<JsonElement>(dataId);
+        host.RegisterForDisposal(displayLabelId,
+            dataStream.Select(data =>
+            {
+                if (data.ValueKind == JsonValueKind.Undefined)
+                    return "";
+
+                if (!data.TryGetProperty(propName, out var valueElement))
+                    return "";
+
+                if (valueElement.ValueKind == JsonValueKind.Null)
+                    return "";
+
+                if (valueElement.TryGetDateTime(out var dateTime))
+                {
+                    try
+                    {
+                        return string.Format(format, dateTime);
+                    }
+                    catch
+                    {
+                        return dateTime.ToShortDateString();
+                    }
+                }
+
+                return valueElement.ToString();
+            }).Subscribe(formattedDate => host.UpdateData(displayLabelId, formattedDate)));
+
+        return new LabelControl(new JsonPointerReference(LayoutAreaReference.GetDataPointer(displayLabelId)))
+            .WithStyle("padding: 8px; min-height: 32px;");
     }
 
     /// <summary>
-    /// Builds an editable control for a property when clicked.
+    /// Builds the edit view for a property with blur action for auto-switching back.
+    /// No Save/Cancel buttons - changes are saved automatically via Immediate binding.
     /// </summary>
-    private static UiControl BuildEditControl(
+    private static UiControl BuildPropertyEditView(
         LayoutAreaHost host,
         PropertyInfo prop,
         string dataId,
-        string areaId,
-        MeshNode node)
+        string editStateId)
     {
         var propName = prop.Name.ToCamelCase()!;
         var jsonPointer = new JsonPointerReference(propName);
@@ -208,12 +602,12 @@ public static class OverviewLayoutArea
         var uiAttr = prop.GetCustomAttribute<UiControlAttribute>();
         if (uiAttr != null && uiAttr.SeparateEditView != true)
         {
-            editCtrl = CreateFromUiControlAttribute(host, uiAttr, prop, jsonPointer, isRequired, dataId);
+            editCtrl = CreateFromUiControlAttribute(host, uiAttr, prop, jsonPointer, isRequired, dataId, editStateId);
         }
         // Check for DimensionAttribute
         else if (prop.GetCustomAttribute<DimensionAttribute>() is { } dimAttr)
         {
-            editCtrl = CreateDimensionSelect(host, jsonPointer, dimAttr, isRequired, dataId);
+            editCtrl = CreateDimensionSelect(host, jsonPointer, dimAttr, isRequired, dataId, editStateId);
         }
         // Type-based control
         else if (propType.IsNumber())
@@ -223,14 +617,18 @@ public static class OverviewLayoutArea
                 Required = isRequired,
                 Immediate = true,
                 AutoFocus = true
-            };
+            }.WithBlurAction(ctx => SwitchToReadOnly(ctx, editStateId));
         }
         else if (propType == typeof(DateTime) || propType == typeof(DateTime?))
         {
-            editCtrl = new DateTimeControl(jsonPointer) { Required = isRequired };
+            editCtrl = new DateTimeControl(jsonPointer)
+            {
+                Required = isRequired
+            }.WithBlurAction(ctx => SwitchToReadOnly(ctx, editStateId));
         }
         else if (propType == typeof(bool) || propType == typeof(bool?))
         {
+            // Checkbox doesn't really need blur - immediate is fine
             editCtrl = new CheckBoxControl(jsonPointer) { Required = isRequired };
         }
         else
@@ -240,69 +638,22 @@ public static class OverviewLayoutArea
                 Required = isRequired,
                 Immediate = true,
                 AutoFocus = true
-            };
+            }.WithBlurAction(ctx => SwitchToReadOnly(ctx, editStateId));
         }
 
-        return editCtrl with { DataContext = LayoutAreaReference.GetDataPointer(dataId) };
+        editCtrl = editCtrl with
+        {
+            DataContext = LayoutAreaReference.GetDataPointer(dataId),
+            Style = "width: 100%; max-width: 300px;"
+        };
+
+        return editCtrl;
     }
 
-    /// <summary>
-    /// Sets up a stream subscription to auto-switch back to read-only when data changes.
-    /// </summary>
-    private static void SetupAutoSwitchBack(
-        LayoutAreaHost host,
-        string dataId,
-        string nodePath,
-        List<PropertyInfo> regularProps,
-        MeshNode node)
+    private static Task SwitchToReadOnly(UiActionContext ctx, string editStateId)
     {
-        var editingPropertyId = $"{dataId}_editing";
-
-        host.RegisterForDisposal(dataId,
-            host.Stream.GetDataStream<JsonElement>(dataId)
-                .Skip(1) // Skip initial value
-                .Subscribe(jsonElement =>
-                {
-                    // Get the currently editing property
-                    var editingPropStream = host.Stream.GetDataStream<string?>(editingPropertyId);
-                    var editingProp = editingPropStream
-                        .Take(1)
-                        .Wait();
-
-                    if (!string.IsNullOrEmpty(editingProp))
-                    {
-                        var prop = regularProps.FirstOrDefault(p =>
-                            p.Name.ToCamelCase() == editingProp);
-
-                        if (prop != null)
-                        {
-                            // Build the area ID for this property
-                            var propAreaId = $"{nodePath}/prop_{editingProp}";
-
-                            // Switch back to read-only
-                            var readOnlyCtrl = BuildReadOnlyControl(host, prop, dataId, node);
-
-                            var isEditable = prop.GetCustomAttribute<EditableAttribute>()?.AllowEdit != false
-                                             && !prop.HasAttribute<KeyAttribute>();
-
-                            if (isEditable)
-                            {
-                                readOnlyCtrl = readOnlyCtrl.WithClickAction(ctx =>
-                                {
-                                    ctx.Host.UpdateData(editingPropertyId, prop.Name.ToCamelCase() ?? string.Empty);
-                                    var editControl = BuildEditControl(host, prop, dataId, ctx.Area, node);
-                                    ctx.Host.UpdateArea(ctx.Area, editControl);
-                                    return Task.CompletedTask;
-                                });
-                            }
-
-                            // We need to find the actual area and update it
-                            // The area is a child of the property cell stack
-                            // For now, clear the editing state
-                            host.UpdateData(editingPropertyId, string.Empty);
-                        }
-                    }
-                }));
+        ctx.Host.UpdateData(editStateId, false);
+        return Task.CompletedTask;
     }
 
     /// <summary>
@@ -313,7 +664,8 @@ public static class OverviewLayoutArea
         PropertyInfo prop,
         string dataId,
         string nodePath,
-        MeshNode node)
+        MeshNode node,
+        bool canEdit)
     {
         var propName = prop.Name.ToCamelCase()!;
         var displayName = prop.GetCustomAttribute<DisplayAttribute>()?.Name
@@ -322,22 +674,21 @@ public static class OverviewLayoutArea
         var editStateId = $"editState_{dataId}_{propName}";
         var editStateStream = host.Stream.GetDataStream<bool>(editStateId);
 
+        var isEditable = canEdit
+                         && prop.GetCustomAttribute<EditableAttribute>()?.AllowEdit != false
+                         && !prop.HasAttribute<KeyAttribute>();
+
         return Controls.Stack
             .WithWidth("100%")
             .WithStyle("margin-top: 24px;")
             .WithView((h, ctx) =>
-            {
-                return editStateStream
+                editStateStream
                     .StartWith(false)
                     .DistinctUntilChanged()
                     .Select(isEditing =>
-                    {
-                        if (isEditing)
-                            return BuildMarkdownEditView(h, prop, dataId, nodePath, editStateId);
-                        else
-                            return BuildMarkdownReadView(h, prop, dataId, displayName, editStateId);
-                    });
-            });
+                        isEditing && isEditable
+                            ? BuildMarkdownEditView(h, prop, dataId, nodePath, editStateId)
+                            : BuildMarkdownReadView(h, prop, dataId, displayName, editStateId, isEditable)));
     }
 
     /// <summary>
@@ -348,37 +699,37 @@ public static class OverviewLayoutArea
         PropertyInfo prop,
         string dataId,
         string displayName,
-        string editStateId)
+        string editStateId,
+        bool isEditable)
     {
         var propName = prop.Name.ToCamelCase()!;
-        var isEditable = prop.GetCustomAttribute<EditableAttribute>()?.AllowEdit != false
-                         && !prop.HasAttribute<KeyAttribute>();
 
         var markdownControl = new MarkdownControl(new JsonPointerReference(propName))
         {
             DataContext = LayoutAreaReference.GetDataPointer(dataId)
         };
 
-        if (isEditable)
-        {
-            markdownControl = markdownControl
-                .WithStyle("cursor: pointer;")
-                .WithClickAction(ctx =>
-                {
-                    ctx.Host.UpdateData(editStateId, true);
-                    return Task.CompletedTask;
-                });
-        }
-
-        return Controls.Stack
+        var contentStack = Controls.Stack
             .WithWidth("100%")
-            .WithStyle("background: var(--neutral-fill-rest); border-radius: 8px; padding: 16px 20px;")
+            .WithStyle("background: var(--neutral-fill-rest); border-radius: 8px; padding: 16px 20px;" + (isEditable ? " cursor: pointer;" : ""))
             .WithView(Controls.H3(displayName).WithStyle("margin-bottom: 12px;"))
             .WithView(markdownControl);
+
+        if (isEditable)
+        {
+            contentStack = contentStack.WithClickAction(ctx =>
+            {
+                ctx.Host.UpdateData(editStateId, true);
+                return Task.CompletedTask;
+            });
+        }
+
+        return contentStack;
     }
 
     /// <summary>
     /// Builds the edit view for a markdown property with Done button.
+    /// Binds directly to the main data - AutoSave handles persistence.
     /// </summary>
     private static UiControl BuildMarkdownEditView(
         LayoutAreaHost host,
@@ -396,9 +747,9 @@ public static class OverviewLayoutArea
             .WithHeight(markdownAttr?.EditorHeight ?? "400px")
             .WithMaxHeight("none")
             .WithTrackChanges(markdownAttr?.TrackChanges ?? false)
-            .WithPlaceholder(markdownAttr?.Placeholder ?? "Enter content...")
-            .WithAutoSave(hubAddress, nodePath) with
+            .WithPlaceholder(markdownAttr?.Placeholder ?? "Enter content...") with
         {
+            // Bind directly to the main data via JsonPointer
             Value = new JsonPointerReference(propName),
             DataContext = LayoutAreaReference.GetDataPointer(dataId)
         };
@@ -425,10 +776,15 @@ public static class OverviewLayoutArea
         PropertyInfo prop,
         JsonPointerReference jsonPointer,
         bool isRequired,
-        string dataId)
+        string dataId,
+        string editStateId)
     {
         if (attr.ControlType == typeof(TextAreaControl))
-            return new TextAreaControl(jsonPointer) { Required = isRequired, AutoFocus = true };
+            return new TextAreaControl(jsonPointer)
+            {
+                Required = isRequired,
+                AutoFocus = true
+            }.WithBlurAction(ctx => SwitchToReadOnly(ctx, editStateId));
 
         if (attr.ControlType == typeof(SelectControl) && attr.Options != null)
         {
@@ -436,11 +792,17 @@ public static class OverviewLayoutArea
             host.UpdateData(optionsId, ConvertOptions(attr.Options));
             return new SelectControl(jsonPointer, new JsonPointerReference(LayoutAreaReference.GetDataPointer(optionsId)))
             {
-                Required = isRequired
-            };
+                Required = isRequired,
+                Style = "width: 100%; max-width: 300px;"
+            }.WithBlurAction(ctx => SwitchToReadOnly(ctx, editStateId));
         }
 
-        return new TextFieldControl(jsonPointer) { Required = isRequired, Immediate = true, AutoFocus = true };
+        return new TextFieldControl(jsonPointer)
+        {
+            Required = isRequired,
+            Immediate = true,
+            AutoFocus = true
+        }.WithBlurAction(ctx => SwitchToReadOnly(ctx, editStateId));
     }
 
     private static UiControl CreateDimensionSelect(
@@ -448,11 +810,17 @@ public static class OverviewLayoutArea
         JsonPointerReference jsonPointer,
         DimensionAttribute dimensionAttr,
         bool isRequired,
-        string dataId)
+        string dataId,
+        string editStateId)
     {
         var collectionName = host.Workspace.DataContext.GetCollectionName(dimensionAttr.Type);
         if (string.IsNullOrEmpty(collectionName))
-            return new TextFieldControl(jsonPointer) { Required = isRequired, Immediate = true, AutoFocus = true };
+            return new TextFieldControl(jsonPointer)
+            {
+                Required = isRequired,
+                Immediate = true,
+                AutoFocus = true
+            }.WithBlurAction(ctx => SwitchToReadOnly(ctx, editStateId));
 
         var optionsId = Guid.NewGuid().AsString();
         host.RegisterForDisposal(dataId,
@@ -463,14 +831,16 @@ public static class OverviewLayoutArea
 
         return new SelectControl(jsonPointer, new JsonPointerReference(LayoutAreaReference.GetDataPointer(optionsId)))
         {
-            Required = isRequired
-        };
+            Required = isRequired,
+            Style = "width: 100%; max-width: 300px;"
+        }.WithBlurAction(ctx => SwitchToReadOnly(ctx, editStateId));
     }
 
     private static IReadOnlyCollection<Option> ConvertOptions(object options)
     {
         if (options is string[] strings)
-            return strings.Select(s => (Option)new Option<string>(s, s.Wordify())).ToArray();
+            // Keep original text (may contain emojis)
+            return strings.Select(s => (Option)new Option<string>(s, s)).ToArray();
         if (options is IEnumerable<Option> opts)
             return opts.ToArray();
         return Array.Empty<Option>();
