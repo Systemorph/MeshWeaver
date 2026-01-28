@@ -4,8 +4,6 @@ using System.Reactive.Linq;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
-using System.Text.Json.Nodes;
-using Json.More;
 using MeshWeaver.Data;
 using MeshWeaver.Domain;
 using MeshWeaver.Layout;
@@ -13,7 +11,6 @@ using MeshWeaver.Layout.Composition;
 using MeshWeaver.Layout.DataBinding;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
-using MeshWeaver.Messaging;
 using MeshWeaver.Messaging.Serialization;
 using MeshWeaver.Reflection;
 using MeshWeaver.ShortGuid;
@@ -26,7 +23,7 @@ namespace MeshWeaver.Graph;
 /// Builds an overview layout for MeshNode content with read-only display and click-to-edit.
 /// Shows read-only views by default, click switches to edit mode, blur auto-switches back.
 /// Markdown properties are handled separately with full width and Done button.
-/// Uses workspace stream pattern for automatic bidirectional data binding.
+/// Uses workspace stream pattern (like DomainDetails) for automatic bidirectional data binding.
 /// </summary>
 public static class OverviewLayoutArea
 {
@@ -60,32 +57,24 @@ public static class OverviewLayoutArea
         var canEdit = CheckEditAccess(host, node);
 
         // 3. Set up workspace stream for bidirectional data binding (DomainDetails pattern)
-        // Use consistent dataId so header and properties share the same data
         var dataId = GetDataId(nodePath);
-        var collectionName = host.Workspace.DataContext.GetCollectionName(contentType);
-        var entityId = GetEntityId(jsonContent, contentType, typeRegistry);
+        var typeDefinition = host.Workspace.DataContext.TypeRegistry.GetTypeDefinition(contentType);
 
-        if (!string.IsNullOrEmpty(collectionName) && entityId != null)
+        if (typeDefinition != null && !string.IsNullOrEmpty(typeDefinition.CollectionName))
         {
-            // Subscribe to workspace stream for bidirectional sync
-            var stream = host.Workspace.GetStream(new EntityReference(collectionName, entityId));
-            if (stream != null)
+            var entityId = GetEntityId(jsonContent, contentType, typeRegistry);
+            if (entityId != null)
             {
-                var typeDefinition = host.Workspace.DataContext.TypeRegistry.GetTypeDefinition(contentType);
-                if (typeDefinition != null)
+                var stream = host.Workspace.GetStream(new EntityReference(typeDefinition.CollectionName, entityId));
+                if (stream != null)
                 {
+                    // Subscribe to workspace stream - this handles bidirectional sync automatically
                     host.RegisterForDisposal(stream
                         .Where(e => e?.Value != null)
                         .Select(e => typeDefinition.SerializeEntityAndId(e!.Value!, host.Hub.JsonSerializerOptions))
                         .Where(e => e != null)
                         .Subscribe(e => host.UpdateData(dataId, e!))
                     );
-
-                    // Set up auto-save: persist changes from local data back to workspace
-                    if (canEdit)
-                    {
-                        SetupAutoSave(host, dataId, contentType, jsonContent);
-                    }
                 }
                 else
                 {
@@ -95,23 +84,35 @@ public static class OverviewLayoutArea
             }
             else
             {
-                // Fallback: store JsonElement directly
                 host.UpdateData(dataId, jsonContent);
             }
         }
         else
         {
-            // Fallback: store JsonElement directly
             host.UpdateData(dataId, jsonContent);
         }
 
-        // 4. Get browsable properties (skip Title - shown in header)
+        // 4. Build property form with readonly/edit toggle
+        return BuildPropertyForm(host, contentType, dataId, nodePath, canEdit);
+    }
+
+    /// <summary>
+    /// Builds the property form with grid for regular properties and separate sections for markdown.
+    /// </summary>
+    private static UiControl BuildPropertyForm(
+        LayoutAreaHost host,
+        Type contentType,
+        string dataId,
+        string nodePath,
+        bool canEdit)
+    {
+        // Get browsable properties (skip Title - shown in header)
         var properties = contentType.GetProperties()
             .Where(p => p.GetCustomAttribute<BrowsableAttribute>()?.Browsable != false)
             .Where(p => !IsTitleProperty(p.Name))
             .ToList();
 
-        // 5. Separate properties into regular vs markdown (SeparateEditView)
+        // Separate properties into regular vs markdown (SeparateEditView)
         var regularProps = properties
             .Where(p => p.GetCustomAttribute<UiControlAttribute>()?.SeparateEditView != true)
             .ToList();
@@ -122,24 +123,24 @@ public static class OverviewLayoutArea
 
         var stack = Controls.Stack.WithWidth("100%");
 
-        // 6. Build grid for regular properties (read-only with click-to-edit)
+        // Build grid for regular properties (read-only with click-to-edit)
         if (regularProps.Count > 0)
         {
             var propsGrid = Controls.LayoutGrid.WithSkin(s => s.WithSpacing(2));
 
             foreach (var prop in regularProps)
             {
-                var propCell = BuildPropertyCell(host, prop, dataId, nodePath, node, canEdit);
+                var propCell = BuildPropertyCell(host, prop, dataId, canEdit);
                 propsGrid = propsGrid.WithView(propCell, s => s.WithXs(12).WithMd(6).WithLg(4));
             }
 
             stack = stack.WithView(propsGrid);
         }
 
-        // 7. Build markdown sections (full width, title + MarkdownControl)
+        // Build markdown sections (full width, title + MarkdownControl)
         foreach (var prop in markdownProps)
         {
-            var markdownSection = BuildMarkdownSection(host, prop, dataId, nodePath, node, canEdit);
+            var markdownSection = BuildMarkdownSection(host, prop, dataId, nodePath, canEdit);
             stack = stack.WithView(markdownSection);
         }
 
@@ -174,7 +175,6 @@ public static class OverviewLayoutArea
     {
         var title = node.Name ?? node.Id ?? "";
 
-        // Use StackControl which supports click actions (HtmlControl doesn't have click handling in Blazor)
         var titleStack = Controls.Stack
             .WithStyle($"cursor: {(canEdit ? "pointer" : "default")};")
             .WithView(Controls.Html($"<h1 style=\"margin: 0;\">{System.Web.HttpUtility.HtmlEncode(title)}</h1>"));
@@ -214,13 +214,11 @@ public static class OverviewLayoutArea
 
     private static object? GetEntityId(JsonElement jsonContent, Type contentType, ITypeRegistry typeRegistry)
     {
-        // Try to get the key property from the type
         var keyProperty = contentType.GetProperties()
             .FirstOrDefault(p => p.HasAttribute<KeyAttribute>());
 
         if (keyProperty == null)
         {
-            // Try common ID property names
             keyProperty = contentType.GetProperty("Id") ?? contentType.GetProperty("ID");
         }
 
@@ -243,23 +241,19 @@ public static class OverviewLayoutArea
 
     private static bool CheckEditAccess(LayoutAreaHost host, MeshNode node)
     {
-        // Base editability - check if security service denies access
         var baseEditable = true;
 
-        // Check user permissions via security service
         var securityService = host.Hub.ServiceProvider.GetService<ISecurityService>();
         if (securityService != null)
         {
             var nodePath = node.Path;
             try
             {
-                // Use synchronous check (cached permissions should be fast)
                 var permissions = securityService.GetEffectivePermissionsAsync(nodePath).GetAwaiter().GetResult();
                 return permissions.HasFlag(Permission.Update);
             }
             catch
             {
-                // If security check fails, fall back to base editability
                 return baseEditable;
             }
         }
@@ -273,72 +267,12 @@ public static class OverviewLayoutArea
         name.Equals("DisplayName", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
-    /// Sets up auto-save: when local data changes, persist via DataChangeRequest.
-    /// </summary>
-    private static void SetupAutoSave(
-        LayoutAreaHost host,
-        string dataId,
-        Type contentType,
-        JsonElement initialContent)
-    {
-        var initialJson = initialContent.GetRawText();
-        var autoSaveId = $"autoSave_{dataId}";
-
-        host.RegisterForDisposal(autoSaveId,
-            host.Stream.GetDataStream<object>(dataId)
-                .Debounce(TimeSpan.FromMilliseconds(300))
-                .Subscribe(async updatedContent =>
-                {
-                    if (updatedContent == null)
-                        return;
-
-                    // Serialize current content to JSON for comparison
-                    string currentJson;
-                    if (updatedContent is JsonElement je)
-                        currentJson = je.GetRawText();
-                    else if (updatedContent is JsonNode jn)
-                        currentJson = jn.ToJsonString(host.Hub.JsonSerializerOptions);
-                    else
-                        currentJson = JsonSerializer.Serialize(updatedContent, host.Hub.JsonSerializerOptions);
-
-                    // Skip if no changes
-                    if (currentJson == initialJson)
-                        return;
-
-                    // Update initial to prevent re-sending same change
-                    initialJson = currentJson;
-
-                    // Deserialize to the correct type for DataChangeRequest
-                    object? typedContent;
-                    if (updatedContent.GetType() == contentType)
-                    {
-                        typedContent = updatedContent;
-                    }
-                    else
-                    {
-                        typedContent = JsonSerializer.Deserialize(currentJson, contentType, host.Hub.JsonSerializerOptions);
-                    }
-
-                    if (typedContent != null)
-                    {
-                        // Send DataChangeRequest to persist the change
-                        await host.Hub.AwaitResponse<DataChangeResponse>(
-                            new DataChangeRequest().WithUpdates(typedContent),
-                            o => o.WithTarget(host.Hub.Address));
-                    }
-                }));
-    }
-
-    /// <summary>
     /// Builds a property cell with label and reactive read/edit view.
-    /// Uses state-based switching and blur action for auto-save.
     /// </summary>
     private static UiControl BuildPropertyCell(
         LayoutAreaHost host,
         PropertyInfo prop,
         string dataId,
-        string nodePath,
-        MeshNode node,
         bool canEdit)
     {
         var displayName = prop.GetCustomAttribute<DisplayAttribute>()?.Name
@@ -374,7 +308,6 @@ public static class OverviewLayoutArea
 
     /// <summary>
     /// Builds the read-only view for a property.
-    /// For select/dimension fields, we resolve the display name and show it in a label.
     /// </summary>
     private static UiControl BuildPropertyReadView(
         LayoutAreaHost host,
@@ -386,7 +319,6 @@ public static class OverviewLayoutArea
         var propName = prop.Name.ToCamelCase()!;
         var propType = prop.PropertyType;
 
-        // Check for DimensionAttribute or UiControlAttribute with options
         var dimAttr = prop.GetCustomAttribute<DimensionAttribute>();
         var uiAttr = prop.GetCustomAttribute<UiControlAttribute>();
         var displayFormatAttr = prop.GetCustomAttribute<DisplayFormatAttribute>();
@@ -395,18 +327,15 @@ public static class OverviewLayoutArea
 
         if (dimAttr != null)
         {
-            // For dimensions, resolve the display name from the dimension collection
             readOnlyControl = BuildDimensionReadOnlyLabel(host, propName, dataId, dimAttr);
         }
         else if (uiAttr?.Options != null)
         {
-            // For select with static options, resolve the display name
             readOnlyControl = BuildOptionsReadOnlyLabel(host, propName, dataId, uiAttr.Options);
         }
         else if (propType == typeof(DateTime) || propType == typeof(DateTime?))
         {
-            // Format DateTime using DisplayFormatAttribute or default to date only
-            var format = displayFormatAttr?.DataFormatString ?? "{0:d}"; // Short date by default
+            var format = displayFormatAttr?.DataFormatString ?? "{0:d}";
             readOnlyControl = BuildFormattedDateLabel(host, propName, dataId, format);
         }
         else if (propType == typeof(bool) || propType == typeof(bool?))
@@ -426,7 +355,6 @@ public static class OverviewLayoutArea
 
         if (isEditable)
         {
-            // Wrap in a StackControl for click handling
             var clickableStack = Controls.Stack
                 .WithStyle("cursor: pointer;")
                 .WithView(readOnlyControl)
@@ -457,10 +385,8 @@ public static class OverviewLayoutArea
             }.WithStyle("padding: 8px; min-height: 32px;");
         }
 
-        // Create a computed label that resolves the dimension display name
         var displayLabelId = $"displayLabel_{dataId}_{propName}";
 
-        // Subscribe to both the data and the dimension collection to resolve display names
         var dataStream = host.Stream.GetDataStream<JsonElement>(dataId);
         var collectionStream = host.Workspace.GetStream(new CollectionReference(collectionName));
 
@@ -472,7 +398,6 @@ public static class OverviewLayoutArea
                     if (data.ValueKind == JsonValueKind.Undefined || collection?.Value == null)
                         return "";
 
-                    // Get the property value
                     if (!data.TryGetProperty(propName, out var valueElement))
                         return "";
 
@@ -486,7 +411,6 @@ public static class OverviewLayoutArea
                     if (keyValue == null)
                         return "";
 
-                    // Find the matching instance and get its display name
                     if (collection.Value.Instances.TryGetValue(keyValue, out var instance))
                     {
                         if (instance is INamed named)
@@ -515,7 +439,6 @@ public static class OverviewLayoutArea
         var displayLabelId = $"displayLabel_{dataId}_{propName}";
         var optionsList = ConvertOptions(options);
 
-        // Subscribe to data changes and resolve display name from options
         var dataStream = host.Stream.GetDataStream<JsonElement>(dataId);
         host.RegisterForDisposal(displayLabelId,
             dataStream.Select(data =>
@@ -530,7 +453,6 @@ public static class OverviewLayoutArea
                     ? valueElement.GetString()
                     : valueElement.ToString();
 
-                // Find matching option and return its display text
                 var option = optionsList.FirstOrDefault(o => o.GetItem()?.ToString() == keyValue);
                 return option?.Text ?? keyValue ?? "";
             }).Subscribe(displayName => host.UpdateData(displayLabelId, displayName)));
@@ -547,7 +469,6 @@ public static class OverviewLayoutArea
     {
         var displayLabelId = $"displayLabel_{dataId}_{propName}";
 
-        // Subscribe to data changes and format the date
         var dataStream = host.Stream.GetDataStream<JsonElement>(dataId);
         host.RegisterForDisposal(displayLabelId,
             dataStream.Select(data =>
@@ -582,7 +503,6 @@ public static class OverviewLayoutArea
 
     /// <summary>
     /// Builds the edit view for a property with blur action for auto-switching back.
-    /// No Save/Cancel buttons - changes are saved automatically via Immediate binding.
     /// </summary>
     private static UiControl BuildPropertyEditView(
         LayoutAreaHost host,
@@ -598,19 +518,16 @@ public static class OverviewLayoutArea
 
         UiControl editCtrl;
 
-        // Check for UiControlAttribute
         var uiAttr = prop.GetCustomAttribute<UiControlAttribute>();
         if (uiAttr != null && uiAttr.SeparateEditView != true)
         {
             editCtrl = CreateFromUiControlAttribute(host, uiAttr, prop, jsonPointer, isRequired, dataId, editStateId);
         }
-        // Check for DimensionAttribute
         else if (prop.GetCustomAttribute<DimensionAttribute>() is { } dimAttr)
         {
             editCtrl = CreateDimensionSelect(host, jsonPointer, dimAttr, isRequired, dataId, editStateId);
         }
-        // Type-based control
-        else if (propType.IsNumber())
+        else if (propType.IsIntegerType() || propType.IsRealType())
         {
             editCtrl = new NumberFieldControl(jsonPointer, typeRegistry.GetOrAddType(propType))
             {
@@ -628,7 +545,6 @@ public static class OverviewLayoutArea
         }
         else if (propType == typeof(bool) || propType == typeof(bool?))
         {
-            // Checkbox doesn't really need blur - immediate is fine
             editCtrl = new CheckBoxControl(jsonPointer) { Required = isRequired };
         }
         else
@@ -664,7 +580,6 @@ public static class OverviewLayoutArea
         PropertyInfo prop,
         string dataId,
         string nodePath,
-        MeshNode node,
         bool canEdit)
     {
         var propName = prop.Name.ToCamelCase()!;
@@ -691,9 +606,6 @@ public static class OverviewLayoutArea
                             : BuildMarkdownReadView(h, prop, dataId, displayName, editStateId, isEditable)));
     }
 
-    /// <summary>
-    /// Builds the read-only view for a markdown property.
-    /// </summary>
     private static UiControl BuildMarkdownReadView(
         LayoutAreaHost host,
         PropertyInfo prop,
@@ -727,10 +639,6 @@ public static class OverviewLayoutArea
         return contentStack;
     }
 
-    /// <summary>
-    /// Builds the edit view for a markdown property with Done button.
-    /// Binds directly to the main data - AutoSave handles persistence.
-    /// </summary>
     private static UiControl BuildMarkdownEditView(
         LayoutAreaHost host,
         PropertyInfo prop,
@@ -739,7 +647,6 @@ public static class OverviewLayoutArea
         string editStateId)
     {
         var propName = prop.Name.ToCamelCase()!;
-        var hubAddress = host.Hub.Address.ToString();
         var markdownAttr = prop.GetCustomAttribute<MarkdownAttribute>();
 
         var editor = new MarkdownEditorControl()
@@ -749,7 +656,6 @@ public static class OverviewLayoutArea
             .WithTrackChanges(markdownAttr?.TrackChanges ?? false)
             .WithPlaceholder(markdownAttr?.Placeholder ?? "Enter content...") with
         {
-            // Bind directly to the main data via JsonPointer
             Value = new JsonPointerReference(propName),
             DataContext = LayoutAreaReference.GetDataPointer(dataId)
         };
@@ -839,7 +745,6 @@ public static class OverviewLayoutArea
     private static IReadOnlyCollection<Option> ConvertOptions(object options)
     {
         if (options is string[] strings)
-            // Keep original text (may contain emojis)
             return strings.Select(s => (Option)new Option<string>(s, s)).ToArray();
         if (options is IEnumerable<Option> opts)
             return opts.ToArray();
