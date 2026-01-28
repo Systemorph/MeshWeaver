@@ -92,7 +92,13 @@ public static class OverviewLayoutArea
             host.UpdateData(dataId, jsonContent);
         }
 
-        // 4. Build property form with readonly/edit toggle
+        // 4. Setup auto-save to persist changes via DataChangeRequest
+        if (canEdit)
+        {
+            SetupAutoSave(host, dataId, jsonContent, node);
+        }
+
+        // 5. Build property form with readonly/edit toggle
         return BuildPropertyForm(host, contentType, dataId, nodePath, canEdit);
     }
 
@@ -237,6 +243,44 @@ public static class OverviewLayoutArea
         }
 
         return null;
+    }
+
+    /// <summary>
+    /// Sets up auto-save: watches local data stream for changes and persists via DataChangeRequest.
+    /// Follows the exact pattern from InlineEditingTest.cs but for MeshNode content.
+    /// </summary>
+    private static void SetupAutoSave(
+        LayoutAreaHost host,
+        string dataId,
+        JsonElement originalContent,
+        MeshNode node)
+    {
+        var initialJson = originalContent.GetRawText();
+
+        host.RegisterForDisposal($"autosave_{dataId}",
+            host.Stream.GetDataStream<JsonElement>(dataId)
+                .Debounce(TimeSpan.FromMilliseconds(300))
+                .Subscribe(async updatedContent =>
+                {
+                    if (updatedContent.ValueKind == JsonValueKind.Undefined)
+                        return;
+
+                    var currentJson = updatedContent.GetRawText();
+
+                    if (currentJson == initialJson)
+                        return;
+
+                    // Update initial to prevent re-sending
+                    initialJson = currentJson;
+
+                    // Create updated MeshNode with new content
+                    var updatedNode = node with { Content = updatedContent };
+
+                    // Issue DataChangeRequest to persist the change
+                    await host.Hub.AwaitResponse<DataChangeResponse>(
+                        new DataChangeRequest().WithUpdates(updatedNode),
+                        o => o.WithTarget(host.Hub.Address));
+                }));
     }
 
     private static bool CheckEditAccess(LayoutAreaHost host, MeshNode node)
