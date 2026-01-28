@@ -15,6 +15,7 @@ using MeshWeaver.ShortGuid;
 using MeshWeaver.Utils;
 using Microsoft.Extensions.DependencyInjection;
 using Namotion.Reflection;
+using System.Text.Json;
 
 namespace MeshWeaver.Layout;
 
@@ -519,4 +520,513 @@ public static class EditorExtensions
             _ => throw new ArgumentOutOfRangeException()
         };
     }
+
+    #region MapToToggleableControl
+
+    /// <summary>
+    /// Creates a control that toggles between read-only and edit modes.
+    /// Read-only displays a LabelControl; click switches to edit mode.
+    /// Edit mode shows an appropriate input control; blur switches back to read-only.
+    /// Markdown properties (SeparateEditView) use a Done button instead of blur.
+    /// </summary>
+    /// <param name="serviceProvider">Service provider for resolving dependencies.</param>
+    /// <param name="property">The property to create the control for.</param>
+    /// <param name="dataId">The data ID used for data binding.</param>
+    /// <param name="canEdit">Whether editing is allowed based on permissions.</param>
+    /// <param name="host">The layout area host.</param>
+    /// <returns>A reactive control that switches between read and edit modes.</returns>
+    public static UiControl MapToToggleableControl(
+        this IServiceProvider serviceProvider,
+        PropertyInfo property,
+        string dataId,
+        bool canEdit,
+        LayoutAreaHost host)
+    {
+        var propName = property.Name.ToCamelCase()!;
+        var editStateId = $"editState_{dataId}_{propName}";
+        var editStateStream = host.Stream.GetDataStream<bool>(editStateId);
+
+        var isEditable = canEdit &&
+                         property.GetCustomAttribute<EditableAttribute>()?.AllowEdit != false &&
+                         !property.HasAttribute<KeyAttribute>();
+
+        // Handle SeparateEditView (Markdown) differently - full width with Done button
+        var uiControlAttr = property.GetCustomAttribute<UiControlAttribute>();
+        if (uiControlAttr?.SeparateEditView == true)
+        {
+            return BuildMarkdownToggle(host, property, dataId, editStateId, editStateStream, isEditable);
+        }
+
+        // Regular property: Label + reactive read/edit view
+        var displayName = GetToggleableDisplayName(property);
+
+        return Controls.Stack
+            .WithStyle("padding: 4px 8px;")
+            .WithView(Controls.Label(displayName)
+                .WithStyle("font-weight: 600; color: var(--neutral-foreground-hint); font-size: 0.875rem;"))
+            .WithView((h, _) => editStateStream
+                .StartWith(false)
+                .DistinctUntilChanged()
+                .Select(isEditing => isEditing && isEditable
+                    ? BuildEditControl(h, property, dataId, editStateId)
+                    : BuildReadonlyControl(h, property, dataId, editStateId, isEditable)));
+    }
+
+    private static string GetToggleableDisplayName(PropertyInfo property)
+    {
+        return property.GetCustomAttribute<DisplayAttribute>()?.Name
+               ?? property.GetCustomAttribute<DescriptionAttribute>()?.Description
+               ?? property.Name.Wordify();
+    }
+
+    /// <summary>
+    /// Builds the read-only view for a property with click-to-edit support.
+    /// </summary>
+    private static UiControl BuildReadonlyControl(
+        LayoutAreaHost host,
+        PropertyInfo property,
+        string dataId,
+        string editStateId,
+        bool isEditable)
+    {
+        var propName = property.Name.ToCamelCase()!;
+        var propType = property.PropertyType;
+
+        var dimAttr = property.GetCustomAttribute<DimensionAttribute>();
+        var uiAttr = property.GetCustomAttribute<UiControlAttribute>();
+        var displayFormatAttr = property.GetCustomAttribute<DisplayFormatAttribute>();
+
+        UiControl readOnlyControl;
+
+        if (dimAttr != null)
+        {
+            readOnlyControl = BuildDimensionReadOnlyLabel(host, propName, dataId, dimAttr);
+        }
+        else if (uiAttr?.Options != null)
+        {
+            readOnlyControl = BuildOptionsReadOnlyLabel(host, propName, dataId, uiAttr.Options);
+        }
+        else if (propType == typeof(DateTime) || propType == typeof(DateTime?))
+        {
+            var format = displayFormatAttr?.DataFormatString ?? "{0:d}";
+            readOnlyControl = BuildFormattedDateLabel(host, propName, dataId, format);
+        }
+        else if (propType == typeof(bool) || propType == typeof(bool?))
+        {
+            readOnlyControl = new LabelControl(new JsonPointerReference(propName))
+            {
+                DataContext = LayoutAreaReference.GetDataPointer(dataId)
+            }.WithStyle("padding: 8px; min-height: 32px;");
+        }
+        else
+        {
+            readOnlyControl = new LabelControl(new JsonPointerReference(propName))
+            {
+                DataContext = LayoutAreaReference.GetDataPointer(dataId)
+            }.WithStyle("padding: 8px; min-height: 32px; background: var(--neutral-fill-rest); border-radius: 4px;");
+        }
+
+        if (isEditable)
+        {
+            var clickableStack = Controls.Stack
+                .WithStyle("cursor: pointer;")
+                .WithView(readOnlyControl)
+                .WithClickAction(ctx =>
+                {
+                    ctx.Host.UpdateData(editStateId, true);
+                    return Task.CompletedTask;
+                });
+            return clickableStack;
+        }
+
+        return readOnlyControl;
+    }
+
+    private static UiControl BuildDimensionReadOnlyLabel(
+        LayoutAreaHost host,
+        string propName,
+        string dataId,
+        DimensionAttribute dimensionAttr)
+    {
+        var collectionName = host.Workspace.DataContext.GetCollectionName(dimensionAttr.Type);
+
+        if (string.IsNullOrEmpty(collectionName))
+        {
+            return new LabelControl(new JsonPointerReference(propName))
+            {
+                DataContext = LayoutAreaReference.GetDataPointer(dataId)
+            }.WithStyle("padding: 8px; min-height: 32px;");
+        }
+
+        var displayLabelId = $"displayLabel_{dataId}_{propName}";
+
+        var dataStream = host.Stream.GetDataStream<JsonElement>(dataId);
+        var collectionStream = host.Workspace.GetStream(new CollectionReference(collectionName));
+
+        if (collectionStream != null)
+        {
+            host.RegisterForDisposal(displayLabelId,
+                dataStream.CombineLatest(collectionStream, (data, collection) =>
+                {
+                    if (data.ValueKind == JsonValueKind.Undefined || collection?.Value == null)
+                        return "";
+
+                    if (!data.TryGetProperty(propName, out var valueElement))
+                        return "";
+
+                    var keyValue = valueElement.ValueKind switch
+                    {
+                        JsonValueKind.String => valueElement.GetString(),
+                        JsonValueKind.Number => valueElement.TryGetInt64(out var l) ? (object)l : valueElement.GetDouble(),
+                        _ => null
+                    };
+
+                    if (keyValue == null)
+                        return "";
+
+                    if (collection.Value.Instances.TryGetValue(keyValue, out var instance))
+                    {
+                        if (instance is INamed named)
+                            return named.DisplayName;
+                        return instance.ToString() ?? "";
+                    }
+
+                    return keyValue.ToString() ?? "";
+                }).Subscribe(displayName => host.UpdateData(displayLabelId, displayName)));
+        }
+        else
+        {
+            host.UpdateData(displayLabelId, "");
+        }
+
+        return new LabelControl(new JsonPointerReference(LayoutAreaReference.GetDataPointer(displayLabelId)))
+            .WithStyle("padding: 8px; min-height: 32px;");
+    }
+
+    private static UiControl BuildOptionsReadOnlyLabel(
+        LayoutAreaHost host,
+        string propName,
+        string dataId,
+        object options)
+    {
+        var displayLabelId = $"displayLabel_{dataId}_{propName}";
+        var optionsList = ConvertOptionsForToggle(options);
+
+        var dataStream = host.Stream.GetDataStream<JsonElement>(dataId);
+        host.RegisterForDisposal(displayLabelId,
+            dataStream.Select(data =>
+            {
+                if (data.ValueKind == JsonValueKind.Undefined)
+                    return "";
+
+                if (!data.TryGetProperty(propName, out var valueElement))
+                    return "";
+
+                var keyValue = valueElement.ValueKind == JsonValueKind.String
+                    ? valueElement.GetString()
+                    : valueElement.ToString();
+
+                var option = optionsList.FirstOrDefault(o => o.GetItem()?.ToString() == keyValue);
+                return option?.Text ?? keyValue ?? "";
+            }).Subscribe(displayName => host.UpdateData(displayLabelId, displayName)));
+
+        return new LabelControl(new JsonPointerReference(LayoutAreaReference.GetDataPointer(displayLabelId)))
+            .WithStyle("padding: 8px; min-height: 32px;");
+    }
+
+    private static UiControl BuildFormattedDateLabel(
+        LayoutAreaHost host,
+        string propName,
+        string dataId,
+        string format)
+    {
+        var displayLabelId = $"displayLabel_{dataId}_{propName}";
+
+        var dataStream = host.Stream.GetDataStream<JsonElement>(dataId);
+        host.RegisterForDisposal(displayLabelId,
+            dataStream.Select(data =>
+            {
+                if (data.ValueKind == JsonValueKind.Undefined)
+                    return "";
+
+                if (!data.TryGetProperty(propName, out var valueElement))
+                    return "";
+
+                if (valueElement.ValueKind == JsonValueKind.Null)
+                    return "";
+
+                if (valueElement.TryGetDateTime(out var dateTime))
+                {
+                    try
+                    {
+                        return string.Format(format, dateTime);
+                    }
+                    catch
+                    {
+                        return dateTime.ToShortDateString();
+                    }
+                }
+
+                return valueElement.ToString();
+            }).Subscribe(formattedDate => host.UpdateData(displayLabelId, formattedDate)));
+
+        return new LabelControl(new JsonPointerReference(LayoutAreaReference.GetDataPointer(displayLabelId)))
+            .WithStyle("padding: 8px; min-height: 32px;");
+    }
+
+    /// <summary>
+    /// Builds the edit view for a property with blur action for auto-switching back to read mode.
+    /// </summary>
+    private static UiControl BuildEditControl(
+        LayoutAreaHost host,
+        PropertyInfo property,
+        string dataId,
+        string editStateId)
+    {
+        var propName = property.Name.ToCamelCase()!;
+        var jsonPointer = new JsonPointerReference(propName);
+        var propType = property.PropertyType;
+        var isRequired = property.HasAttribute<RequiredMemberAttribute>() || property.HasAttribute<RequiredAttribute>();
+        var typeRegistry = host.Hub.ServiceProvider.GetRequiredService<ITypeRegistry>();
+
+        UiControl editCtrl;
+
+        var uiAttr = property.GetCustomAttribute<UiControlAttribute>();
+        if (uiAttr != null && uiAttr.SeparateEditView != true)
+        {
+            editCtrl = CreateEditControlFromUiAttribute(host, uiAttr, property, jsonPointer, isRequired, editStateId);
+        }
+        else if (property.GetCustomAttribute<DimensionAttribute>() is { } dimAttr)
+        {
+            editCtrl = CreateDimensionSelectControl(host, jsonPointer, dimAttr, isRequired, dataId, editStateId);
+        }
+        else if (propType.IsIntegerType() || propType.IsRealType())
+        {
+            editCtrl = new NumberFieldControl(jsonPointer, typeRegistry.GetOrAddType(propType))
+            {
+                Required = isRequired,
+                Immediate = true,
+                AutoFocus = true
+            }.WithBlurAction(ctx => SwitchToReadOnlyMode(ctx, editStateId));
+        }
+        else if (propType == typeof(DateTime) || propType == typeof(DateTime?))
+        {
+            editCtrl = new DateTimeControl(jsonPointer)
+            {
+                Required = isRequired
+            }.WithBlurAction(ctx => SwitchToReadOnlyMode(ctx, editStateId));
+        }
+        else if (propType == typeof(bool) || propType == typeof(bool?))
+        {
+            editCtrl = new CheckBoxControl(jsonPointer) { Required = isRequired };
+        }
+        else
+        {
+            editCtrl = new TextFieldControl(jsonPointer)
+            {
+                Required = isRequired,
+                Immediate = true,
+                AutoFocus = true
+            }.WithBlurAction(ctx => SwitchToReadOnlyMode(ctx, editStateId));
+        }
+
+        editCtrl = editCtrl with
+        {
+            DataContext = LayoutAreaReference.GetDataPointer(dataId),
+            Style = "width: 100%; max-width: 300px;"
+        };
+
+        return editCtrl;
+    }
+
+    private static Task SwitchToReadOnlyMode(UiActionContext ctx, string editStateId)
+    {
+        ctx.Host.UpdateData(editStateId, false);
+        return Task.CompletedTask;
+    }
+
+    private static UiControl CreateEditControlFromUiAttribute(
+        LayoutAreaHost host,
+        UiControlAttribute attr,
+        PropertyInfo property,
+        JsonPointerReference jsonPointer,
+        bool isRequired,
+        string editStateId)
+    {
+        if (attr.ControlType == typeof(TextAreaControl))
+            return new TextAreaControl(jsonPointer)
+            {
+                Required = isRequired,
+                AutoFocus = true
+            }.WithBlurAction(ctx => SwitchToReadOnlyMode(ctx, editStateId));
+
+        if (attr.ControlType == typeof(SelectControl) && attr.Options != null)
+        {
+            var optionsId = Guid.NewGuid().AsString();
+            host.UpdateData(optionsId, ConvertOptionsForToggle(attr.Options));
+            return new SelectControl(jsonPointer, new JsonPointerReference(LayoutAreaReference.GetDataPointer(optionsId)))
+            {
+                Required = isRequired,
+                Style = "width: 100%; max-width: 300px;"
+            }.WithBlurAction(ctx => SwitchToReadOnlyMode(ctx, editStateId));
+        }
+
+        return new TextFieldControl(jsonPointer)
+        {
+            Required = isRequired,
+            Immediate = true,
+            AutoFocus = true
+        }.WithBlurAction(ctx => SwitchToReadOnlyMode(ctx, editStateId));
+    }
+
+    private static UiControl CreateDimensionSelectControl(
+        LayoutAreaHost host,
+        JsonPointerReference jsonPointer,
+        DimensionAttribute dimensionAttr,
+        bool isRequired,
+        string dataId,
+        string editStateId)
+    {
+        var collectionName = host.Workspace.DataContext.GetCollectionName(dimensionAttr.Type);
+        if (string.IsNullOrEmpty(collectionName))
+            return new TextFieldControl(jsonPointer)
+            {
+                Required = isRequired,
+                Immediate = true,
+                AutoFocus = true
+            }.WithBlurAction(ctx => SwitchToReadOnlyMode(ctx, editStateId));
+
+        var optionsId = Guid.NewGuid().AsString();
+        var registrationKey = $"dimensionOptions_{dataId}_{jsonPointer.Pointer}";
+        host.RegisterForDisposal(registrationKey,
+            host.Workspace.GetStream(new CollectionReference(collectionName))!
+                .Select(x => ConvertDimensionToOptionsForToggle(x.Value!,
+                    host.Workspace.DataContext.TypeRegistry.GetTypeDefinition(dimensionAttr.Type)!))
+                .Subscribe(opts => host.UpdateData(optionsId, opts)));
+
+        return new SelectControl(jsonPointer, new JsonPointerReference(LayoutAreaReference.GetDataPointer(optionsId)))
+        {
+            Required = isRequired,
+            Style = "width: 100%; max-width: 300px;"
+        }.WithBlurAction(ctx => SwitchToReadOnlyMode(ctx, editStateId));
+    }
+
+    /// <summary>
+    /// Builds a markdown section with full width, title, and Done button for edit mode.
+    /// </summary>
+    private static UiControl BuildMarkdownToggle(
+        LayoutAreaHost host,
+        PropertyInfo property,
+        string dataId,
+        string editStateId,
+        IObservable<bool> editStateStream,
+        bool isEditable)
+    {
+        var propName = property.Name.ToCamelCase()!;
+        var displayName = GetToggleableDisplayName(property);
+
+        return Controls.Stack
+            .WithWidth("100%")
+            .WithStyle("margin-top: 24px;")
+            .WithView((h, _) =>
+                editStateStream
+                    .StartWith(false)
+                    .DistinctUntilChanged()
+                    .Select(isEditing =>
+                        isEditing && isEditable
+                            ? BuildMarkdownEditView(h, property, dataId, editStateId)
+                            : BuildMarkdownReadView(h, property, dataId, displayName, editStateId, isEditable)));
+    }
+
+    private static UiControl BuildMarkdownReadView(
+        LayoutAreaHost host,
+        PropertyInfo property,
+        string dataId,
+        string displayName,
+        string editStateId,
+        bool isEditable)
+    {
+        var propName = property.Name.ToCamelCase()!;
+
+        var markdownControl = new MarkdownControl(new JsonPointerReference(propName))
+        {
+            DataContext = LayoutAreaReference.GetDataPointer(dataId)
+        };
+
+        var contentStack = Controls.Stack
+            .WithWidth("100%")
+            .WithStyle("background: var(--neutral-fill-rest); border-radius: 8px; padding: 16px 20px;" + (isEditable ? " cursor: pointer;" : ""))
+            .WithView(Controls.H3(displayName).WithStyle("margin-bottom: 12px;"))
+            .WithView(markdownControl);
+
+        if (isEditable)
+        {
+            contentStack = contentStack.WithClickAction(ctx =>
+            {
+                ctx.Host.UpdateData(editStateId, true);
+                return Task.CompletedTask;
+            });
+        }
+
+        return contentStack;
+    }
+
+    private static UiControl BuildMarkdownEditView(
+        LayoutAreaHost host,
+        PropertyInfo property,
+        string dataId,
+        string editStateId)
+    {
+        var propName = property.Name.ToCamelCase()!;
+        var markdownAttr = property.GetCustomAttribute<MarkdownAttribute>();
+
+        var editor = new MarkdownEditorControl()
+            .WithHeight(markdownAttr?.EditorHeight ?? "400px")
+            .WithMaxHeight("none")
+            .WithTrackChanges(markdownAttr?.TrackChanges ?? false)
+            .WithPlaceholder(markdownAttr?.Placeholder ?? "Enter content...") with
+        {
+            Value = new JsonPointerReference(propName),
+            DataContext = LayoutAreaReference.GetDataPointer(dataId)
+        };
+
+        return Controls.Stack
+            .WithWidth("100%")
+            .WithStyle("background: var(--neutral-fill-rest); border-radius: 8px; padding: 16px 20px;")
+            .WithView(editor)
+            .WithView(Controls.Stack
+                .WithOrientation(Orientation.Horizontal)
+                .WithStyle("margin-top: 12px;")
+                .WithView(Controls.Button("Done")
+                    .WithAppearance(Appearance.Accent)
+                    .WithClickAction(ctx =>
+                    {
+                        ctx.Host.UpdateData(editStateId, false);
+                        return Task.CompletedTask;
+                    })));
+    }
+
+    private static IReadOnlyCollection<Option> ConvertOptionsForToggle(object options)
+    {
+        if (options is string[] strings)
+            return strings.Select(s => (Option)new Option<string>(s, s)).ToArray();
+        if (options is IEnumerable<Option> opts)
+            return opts.ToArray();
+        return Array.Empty<Option>();
+    }
+
+    private static IReadOnlyCollection<Option> ConvertDimensionToOptionsForToggle(InstanceCollection instances, ITypeDefinition dimType)
+    {
+        var displayName = typeof(INamed).IsAssignableFrom(dimType.Type)
+            ? (Func<object, string>)(x => ((INamed)x).DisplayName)
+            : o => o.ToString()!;
+        var keyType = dimType.GetKeyType();
+        var optionType = typeof(Option<>).MakeGenericType(keyType);
+
+        return instances.Instances
+            .Select(kvp => (Option)Activator.CreateInstance(optionType, kvp.Key, displayName(kvp.Value))!)
+            .ToArray();
+    }
+
+    #endregion
 }
