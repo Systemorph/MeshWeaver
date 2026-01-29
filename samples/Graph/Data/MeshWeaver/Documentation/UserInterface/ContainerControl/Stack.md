@@ -2,7 +2,7 @@
 Name: Arranging UI Controls in a Stack
 Category: Documentation
 Description: Arrange controls vertically or horizontally with configurable spacing
-Icon: /static/storage/content/MeshWeaver/Documentation/GUI/ContainerControl/Stack/icon.svg
+Icon: /static/storage/content/MeshWeaver/Documentation/UserInterface/ContainerControl/Stack/icon.svg
 ---
 
 # Arranging UI Controls in a Stack
@@ -138,6 +138,6 @@ The `LayoutStackSkin` defines visual properties:
 
 ## See Also
 
-- [Container Control](MeshWeaver/Documentation/GUI/ContainerControl) - Overview of all containers
-- [Editor Control](MeshWeaver/Documentation/GUI/Editor) - Form generation
-- [DataGrid Control](MeshWeaver/Documentation/GUI/DataGrid) - Tabular data display
+- [Container Control](MeshWeaver/Documentation/UserInterface/ContainerControl) - Overview of all containers
+- [Editor Control](MeshWeaver/Documentation/UserInterface/Editor) - Form generation
+- [DataGrid Control](MeshWeaver/Documentation/UserInterface/DataGrid) - Tabular data display
