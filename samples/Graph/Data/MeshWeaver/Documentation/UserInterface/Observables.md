@@ -2,7 +2,7 @@
 Name: Static vs. Dynamic Views
 Category: Documentation
 Description: Understanding when and how UI areas update in response to data changes
-Icon: /static/storage/content/MeshWeaver/Documentation/GUI/Observables/icon.svg
+Icon: /static/storage/content/MeshWeaver/Documentation/UserInterface/Observables/icon.svg
 ---
 
 # Static vs. Dynamic Views
@@ -191,6 +191,6 @@ Common Rx operators for UI:
 
 ## See Also
 
-- [Container Control](MeshWeaver/Documentation/GUI/ContainerControl) - Adding content to containers
-- [Data Binding](MeshWeaver/Documentation/GUI/DataBinding) - How data flows to controls
-- [Editor Control](MeshWeaver/Documentation/GUI/Editor) - Real-world dynamic examples
+- [Container Control](MeshWeaver/Documentation/UserInterface/ContainerControl) - Adding content to containers
+- [Data Binding](MeshWeaver/Documentation/UserInterface/DataBinding) - How data flows to controls
+- [Editor Control](MeshWeaver/Documentation/UserInterface/Editor) - Real-world dynamic examples

@@ -2,7 +2,7 @@
 Name: Organizing Buttons in a Toolbar
 Category: Documentation
 Description: Group action buttons horizontally or vertically
-Icon: /static/storage/content/MeshWeaver/Documentation/GUI/ContainerControl/Toolbar/icon.svg
+Icon: /static/storage/content/MeshWeaver/Documentation/UserInterface/ContainerControl/Toolbar/icon.svg
 ---
 
 # Organizing Buttons in a Toolbar
@@ -96,5 +96,5 @@ The `ToolbarSkin` defines:
 
 ## See Also
 
-- [Container Control](MeshWeaver/Documentation/GUI/ContainerControl) - Overview of all containers
-- [Stack Control](MeshWeaver/Documentation/GUI/ContainerControl/Stack) - General-purpose layout container
+- [Container Control](MeshWeaver/Documentation/UserInterface/ContainerControl) - Overview of all containers
+- [Stack Control](MeshWeaver/Documentation/UserInterface/ContainerControl/Stack) - General-purpose layout container
