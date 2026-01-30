@@ -4,6 +4,7 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using MeshWeaver.AI.Persistence;
 using MeshWeaver.Layout;
+using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using MeshWeaver.ShortGuid;
@@ -17,18 +18,21 @@ namespace MeshWeaver.AI;
 
 public class AgentChatClient : IAgentChat
 {
+    // Pattern to match @@path references (e.g., @@MeshWeaver/Documentation/AI/Tools/MeshPlugin#Get)
+    private static readonly Regex InlineReferencePattern =
+        new(@"@@([^\s#]+)(?:#(\w+))?", RegexOptions.Compiled);
     private readonly IMessageHub hub;
     private readonly ILogger<AgentChatClient> logger;
     private readonly IChatPersistenceService persistenceService;
     private readonly IMeshQuery? meshQuery;
     private readonly IReadOnlyList<IChatClientFactory> chatClientFactories;
-    private readonly Dictionary<string, AIAgent> agents = new();
+    private readonly Dictionary<string, ChatClientAgent> agents = new();
     private readonly Queue<ChatLayoutAreaContent> queuedLayoutAreaContent = new();
     private List<AgentDisplayInfo> loadedAgents = [];
     private string? lastLoadedContextPath;
     private string currentThreadId = Guid.NewGuid().AsString();
     private string? currentAgentName;
-    private AgentThread? sharedThread;
+    private AgentSession? sharedThread;
     private string? currentModelName;
     private bool agentsInitialized;
 
@@ -53,7 +57,7 @@ public class AgentChatClient : IAgentChat
         logger.LogInformation("Switched to thread: {ThreadId}", threadId);
     }
 
-    private async Task<AgentThread> GetOrCreateThreadAsync(AIAgent agent)
+    private async Task<AgentSession> GetOrCreateThreadAsync(ChatClientAgent agent)
     {
         logger.LogDebug("[AgentChatClient] GetOrCreateThreadAsync called for agent: {AgentName}", agent.Name);
 
@@ -71,17 +75,17 @@ public class AgentChatClient : IAgentChat
         if (serializedThread.HasValue)
         {
             logger.LogDebug("[AgentChatClient] Found persisted thread, deserializing...");
-            sharedThread = agent.DeserializeThread(serializedThread.Value, hub.JsonSerializerOptions);
+            sharedThread = await agent.DeserializeSessionAsync(serializedThread.Value, hub.JsonSerializerOptions);
             logger.LogDebug("[AgentChatClient] Thread deserialized successfully");
             return sharedThread;
         }
 
         logger.LogDebug("[AgentChatClient] Creating new shared thread: {ThreadId}", currentThreadId);
-        sharedThread = agent.GetNewThread();
+        sharedThread = await agent.GetNewSessionAsync();
         return sharedThread;
     }
 
-    private async Task SaveThreadAsync(AIAgent _, AgentThread thread, string? threadId = null)
+    private async Task SaveThreadAsync(ChatClientAgent _, AgentSession thread, string? threadId = null)
     {
         // Save the thread with the specified key or current thread ID
         var serialized = thread.Serialize(hub.JsonSerializerOptions);
@@ -90,7 +94,7 @@ public class AgentChatClient : IAgentChat
         logger.LogInformation("Saved thread: {ThreadId}", id);
     }
 
-    private string BuildMessageWithContext(IReadOnlyCollection<ChatMessage> messages)
+    private async Task<string> BuildMessageWithContextAsync(IReadOnlyCollection<ChatMessage> messages)
     {
         var messageText = new StringBuilder();
 
@@ -116,6 +120,16 @@ public class AgentChatClient : IAgentChat
             messageText.AppendLine();
         }
 
+        // Add resolved tool documentation
+        var toolDocs = await LoadToolDocumentationAsync();
+        if (!string.IsNullOrEmpty(toolDocs))
+        {
+            messageText.AppendLine("# Available Tools Documentation");
+            messageText.AppendLine();
+            messageText.AppendLine(toolDocs);
+            messageText.AppendLine();
+        }
+
         // Add user messages
         foreach (var message in messages)
         {
@@ -123,6 +137,80 @@ public class AgentChatClient : IAgentChat
         }
 
         return messageText.ToString();
+    }
+
+    /// <summary>
+    /// Loads tool documentation from the mesh.
+    /// </summary>
+    private async Task<string> LoadToolDocumentationAsync()
+    {
+        var meshPlugin = new MeshPlugin(hub, this);
+        var docs = await meshPlugin.Get("@MeshWeaver/Documentation/AI/Tools/MeshPlugin");
+
+        if (docs.StartsWith("Not found") || docs.StartsWith("Error"))
+            return string.Empty;
+
+        // Try to extract just the markdown content from the JSON response
+        try
+        {
+            var node = JsonSerializer.Deserialize<MeshNode>(docs, hub.JsonSerializerOptions);
+            if (node?.Content is JsonElement contentElement && contentElement.ValueKind == JsonValueKind.String)
+            {
+                return contentElement.GetString() ?? string.Empty;
+            }
+            // If content is not a simple string, return the description or fallback
+            return node?.Description ?? string.Empty;
+        }
+        catch
+        {
+            // If parsing fails, the content might be raw markdown
+            return docs;
+        }
+    }
+
+    /// <summary>
+    /// Resolves @@path references in text and returns expanded content.
+    /// Uses MeshPlugin.Get to load referenced documents.
+    /// </summary>
+    private async Task<string> ResolveInlineReferencesAsync(string text)
+    {
+        var matches = InlineReferencePattern.Matches(text);
+        if (matches.Count == 0)
+            return text;
+
+        var result = text;
+        var meshPlugin = new MeshPlugin(hub, this);
+
+        foreach (Match match in matches)
+        {
+            var path = match.Groups[1].Value;
+            var section = match.Groups[2].Success ? match.Groups[2].Value : null;
+
+            // Load the document using Get
+            var content = await meshPlugin.Get($"@{path}");
+
+            // If section specified, extract just that section
+            if (!string.IsNullOrEmpty(section) && !content.StartsWith("Not found"))
+            {
+                content = ExtractSection(content, section);
+            }
+
+            // Replace the reference with the content
+            result = result.Replace(match.Value, content);
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// Extracts a markdown section by heading name.
+    /// </summary>
+    private static string ExtractSection(string markdown, string sectionName)
+    {
+        // Find ## SectionName and extract until next ## or end
+        var pattern = $@"##\s+{Regex.Escape(sectionName)}[^\n]*\n([\s\S]*?)(?=\n##|\z)";
+        var match = Regex.Match(markdown, pattern, RegexOptions.IgnoreCase);
+        return match.Success ? match.Groups[1].Value.Trim() : markdown;
     }
 
     public async IAsyncEnumerable<ChatMessage> GetResponseAsync(
@@ -143,7 +231,7 @@ public class AgentChatClient : IAgentChat
         var thread = await GetOrCreateThreadAsync(agent);
 
         // Build the user message with context
-        var userMessage = BuildMessageWithContext(messages);
+        var userMessage = await BuildMessageWithContextAsync(messages);
 
         // Get response from the agent with thread
         var response = await agent.RunAsync(userMessage, thread, cancellationToken: cancellationToken);
@@ -208,7 +296,7 @@ public class AgentChatClient : IAgentChat
         logger.LogDebug("[AgentChatClient] Got thread: {ThreadId}", currentThreadId);
 
         // Build the user message with context
-        var userMessage = BuildMessageWithContext(messages);
+        var userMessage = await BuildMessageWithContextAsync(messages);
         logger.LogDebug("[AgentChatClient] Built message with context, length: {Length}", userMessage.Length);
 
         // Get streaming response from the agent with thread
@@ -273,12 +361,12 @@ public class AgentChatClient : IAgentChat
                                     // Create a NEW isolated thread for the delegated agent
                                     // This gives the agent its own context window without parent conversation history
                                     var isolatedThreadId = $"{currentThreadId}_delegation_{Guid.NewGuid().AsString()}";
-                                    var targetThread = targetAgent.GetNewThread();
+                                    var targetThread = await targetAgent.GetNewSessionAsync();
                                     logger.LogInformation("Created isolated thread {ThreadId} for delegated agent {AgentName}",
                                         isolatedThreadId, targetAgentName);
 
                                     // Build message with context for the target agent
-                                    var targetMessage = BuildMessageWithContext([new ChatMessage(ChatRole.User, delegationMessage)]);
+                                    var targetMessage = await BuildMessageWithContextAsync([new ChatMessage(ChatRole.User, delegationMessage)]);
 
                                     // Collect the delegated agent's response for potential return to parent
                                     var delegatedResponseBuilder = new StringBuilder();
@@ -371,7 +459,7 @@ public class AgentChatClient : IAgentChat
     private static readonly Regex AgentReferencePattern =
         new(@"@agent/(\w+)", RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
-    private async Task<AIAgent?> SelectAgentAsync(ChatMessage? lastMessage)
+    private async Task<ChatClientAgent?> SelectAgentAsync(ChatMessage? lastMessage)
     {
         logger.LogDebug("[AgentChatClient] SelectAgentAsync called. Context: {Context}",
             Context != null ? $"Address={Context.Address}, LayoutArea={Context.LayoutArea?.Area}" : "null");
@@ -717,7 +805,7 @@ public class AgentChatClient : IAgentChat
 
     public Task ResumeAsync(ChatConversation conversation)
     {
-        // With AgentThread, we don't need to manually restore history
+        // With AgentSession, we don't need to manually restore history
         // The thread already contains the conversation state
         return Task.CompletedTask;
     }
