@@ -180,7 +180,7 @@
             var fullQuery = string.Join(" ", queryParts);
 
             // Execute query
-            Nodes = await MeshQuery.QueryAsync<MeshNode>(fullQuery, Hub.JsonSerializerOptions).ToListAsync();
+            Nodes = await MeshQuery.QueryAsync<MeshNode>(fullQuery).ToListAsync();
         }
         catch
         {

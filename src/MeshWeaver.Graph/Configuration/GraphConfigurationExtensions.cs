@@ -152,7 +152,7 @@ public static class GraphConfigurationExtensions
 
             // Get CodeConfiguration from the partition
             CodeConfiguration? codeFile = null;
-            await foreach (var obj in persistence.GetPartitionObjectsAsync(nodeTypePath, null, hub.JsonSerializerOptions).WithCancellation(ct))
+            await foreach (var obj in persistence.GetPartitionObjectsAsync(nodeTypePath, null).WithCancellation(ct))
             {
                 if (obj is CodeConfiguration cf)
                 {

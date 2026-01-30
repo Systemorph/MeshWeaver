@@ -340,7 +340,7 @@ public static class TodoViews
         if (existingNode == null) return;
 
         var deletedNode = existingNode with { State = MeshWeaver.Mesh.MeshNodeState.Deleted };
-        await persistence.SaveNodeAsync(deletedNode, host.Hub.JsonSerializerOptions);
+        await persistence.SaveNodeAsync(deletedNode);
     }
 
     private static UiControl BuildStatusPromotionMenu(LayoutAreaHost host, Todo todo)

@@ -75,7 +75,7 @@ public static class PersistenceExtensions
         var persistenceService = new InMemoryPersistenceService(storageAdapter);
 
         services.AddSingleton<IStorageAdapter>(storageAdapter);
-        services.AddSingleton<IPersistenceService>(persistenceService);
+        services.AddSingleton<IPersistenceServiceCore>(persistenceService);
 
         return services;
     }
@@ -147,15 +147,15 @@ public static class PersistenceExtensions
         services.AddSingleton(storageAdapter); // Also register as concrete type for change feed setup
 
         // Register persistence service with change notifier
-        services.AddSingleton<IPersistenceService>(sp =>
+        services.AddSingleton<IPersistenceServiceCore>(sp =>
             new InMemoryPersistenceService(
                 storageAdapter,
                 sp.GetService<IDataChangeNotifier>()));
 
-        // Register IMeshQuery with change notifier
-        services.AddSingleton<IMeshQuery>(sp =>
+        // Register IMeshQueryCore with change notifier
+        services.AddSingleton<IMeshQueryCore>(sp =>
             new InMemoryMeshQuery(
-                sp.GetRequiredService<IPersistenceService>(),
+                sp.GetRequiredService<IPersistenceServiceCore>(),
                 sp.GetService<INavigationService>(),
                 sp.GetService<ISecurityService>(),
                 sp.GetService<AccessService>(),

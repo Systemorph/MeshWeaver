@@ -473,7 +473,7 @@ public class AgentChatClient : IAgentChat
         {
             try
             {
-                await foreach (var node in meshQuery.QueryAsync<MeshNode>($"path:{contextPath} scope:self", hub.JsonSerializerOptions))
+                await foreach (var node in meshQuery.QueryAsync<MeshNode>($"path:{contextPath} scope:self"))
                 {
                     if (!string.IsNullOrEmpty(node.NodeType) && node.NodeType != "Agent" && node.NodeType != "Markdown")
                     {
@@ -496,7 +496,7 @@ public class AgentChatClient : IAgentChat
                 ? "nodeType:Agent scope:children"  // Root level: get direct children agents
                 : $"path:{contextPath} nodeType:Agent scope:selfAndAncestors";
 
-            await foreach (var node in meshQuery.QueryAsync<MeshNode>(pathQuery, hub.JsonSerializerOptions))
+            await foreach (var node in meshQuery.QueryAsync<MeshNode>(pathQuery))
             {
                 if (node.Content is AgentConfiguration config && !agentsDict.ContainsKey(config.Id))
                 {
@@ -514,7 +514,7 @@ public class AgentChatClient : IAgentChat
         {
             try
             {
-                await foreach (var node in meshQuery.QueryAsync<MeshNode>($"path:{nodeTypePath} nodeType:Agent scope:selfAndAncestors", hub.JsonSerializerOptions))
+                await foreach (var node in meshQuery.QueryAsync<MeshNode>($"path:{nodeTypePath} nodeType:Agent scope:selfAndAncestors"))
                 {
                     if (node.Content is AgentConfiguration config && !agentsDict.ContainsKey(config.Id))
                     {

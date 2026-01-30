@@ -122,7 +122,7 @@ public static class MarkdownLayoutAreas
 
             try
             {
-                return await meshQuery.QueryAsync<MeshNode>($"path:{hubPath} nodeType:{GraphConfigurationExtensions.MarkdownNodeType} scope:children", host.Hub.JsonSerializerOptions).ToListAsync() as IReadOnlyList<MeshNode>;
+                return await meshQuery.QueryAsync<MeshNode>($"path:{hubPath} nodeType:{GraphConfigurationExtensions.MarkdownNodeType} scope:children").ToListAsync() as IReadOnlyList<MeshNode>;
             }
             catch
             {

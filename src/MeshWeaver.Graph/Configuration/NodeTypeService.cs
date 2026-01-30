@@ -420,7 +420,7 @@ internal class NodeTypeService : INodeTypeService, IDisposable
         }
 
         // Get the node from persistence
-        var node = await persistence.GetNodeAsync(nodeTypePath, meshHub.JsonSerializerOptions, ct);
+        var node = await persistence.GetNodeAsync(nodeTypePath, ct);
         if (node == null)
         {
             logger.LogDebug("No node found in persistence for {NodeTypePath}", nodeTypePath);
@@ -439,7 +439,7 @@ internal class NodeTypeService : INodeTypeService, IDisposable
         // Collect ALL CodeConfiguration files (dataModel.json, views.json, etc.) and combine them
         var codeFiles = new List<string>();
         var codePartition = $"{nodeTypePath}/Code";
-        await foreach (var obj in persistence.GetPartitionObjectsAsync(codePartition, null, meshHub.JsonSerializerOptions).WithCancellation(ct))
+        await foreach (var obj in persistence.GetPartitionObjectsAsync(codePartition, null).WithCancellation(ct))
         {
             if (obj is CodeConfiguration codeConfig && !string.IsNullOrEmpty(codeConfig.Code))
             {
@@ -597,7 +597,7 @@ internal class NodeTypeService : INodeTypeService, IDisposable
         if (!string.IsNullOrEmpty(nodePath))
         {
             var nodeQuery = $"path:{nodePath}";
-            await foreach (var node in meshQuery.QueryAsync<MeshNode>(nodeQuery, meshHub.JsonSerializerOptions, ct: ct).WithCancellation(ct))
+            await foreach (var node in meshQuery.QueryAsync<MeshNode>(nodeQuery, ct: ct).WithCancellation(ct))
             {
                 currentNodeType = node.NodeType;
 
@@ -605,7 +605,7 @@ internal class NodeTypeService : INodeTypeService, IDisposable
                 if (currentNodeType != null && currentNodeType != "NodeType")
                 {
                     var nodeTypeQuery = $"path:{currentNodeType}";
-                    await foreach (var nodeTypeNode in meshQuery.QueryAsync<MeshNode>(nodeTypeQuery, meshHub.JsonSerializerOptions, ct: ct).WithCancellation(ct))
+                    await foreach (var nodeTypeNode in meshQuery.QueryAsync<MeshNode>(nodeTypeQuery, ct: ct).WithCancellation(ct))
                     {
                         if (nodeTypeNode.Content is NodeTypeDefinition nodeTypeDef && nodeTypeDef.CreatableTypes != null)
                         {
@@ -623,7 +623,7 @@ internal class NodeTypeService : INodeTypeService, IDisposable
                                 // Query for the type node to get its info
                                 var typeQuery = $"path:{typePath}";
                                 var foundType = false;
-                                await foreach (var typeNode in meshQuery.QueryAsync<MeshNode>(typeQuery, meshHub.JsonSerializerOptions, ct: ct).WithCancellation(ct))
+                                await foreach (var typeNode in meshQuery.QueryAsync<MeshNode>(typeQuery, ct: ct).WithCancellation(ct))
                                 {
                                     yield return CreateCreatableTypeInfoFromNode(typeNode);
                                     foundType = true;
@@ -678,7 +678,7 @@ internal class NodeTypeService : INodeTypeService, IDisposable
         logger.LogDebug("Querying creatable types with: {Query}", query);
 
         // Stream results as they come in - non-blocking
-        await foreach (var typeNode in meshQuery.QueryAsync<MeshNode>(query, meshHub.JsonSerializerOptions, ct: ct).WithCancellation(ct))
+        await foreach (var typeNode in meshQuery.QueryAsync<MeshNode>(query, ct: ct).WithCancellation(ct))
         {
             // Skip global types (handled separately) and already-added types
             if (GlobalTypes.Contains(typeNode.Path) || !addedPaths.Add(typeNode.Path))
@@ -698,7 +698,7 @@ internal class NodeTypeService : INodeTypeService, IDisposable
             var childQuery = $"path:{nodePath} nodeType:NodeType scope:children";
             logger.LogDebug("Querying child types with: {Query}", childQuery);
 
-            await foreach (var childType in meshQuery.QueryAsync<MeshNode>(childQuery, meshHub.JsonSerializerOptions, ct: ct).WithCancellation(ct))
+            await foreach (var childType in meshQuery.QueryAsync<MeshNode>(childQuery, ct: ct).WithCancellation(ct))
             {
                 if (addedPaths.Add(childType.Path))
                 {
@@ -715,7 +715,7 @@ internal class NodeTypeService : INodeTypeService, IDisposable
                 var nodeTypeChildQuery = $"path:{currentNodeType} nodeType:NodeType scope:children";
                 logger.LogDebug("Querying NodeType child types with: {Query}", nodeTypeChildQuery);
 
-                await foreach (var childType in meshQuery.QueryAsync<MeshNode>(nodeTypeChildQuery, meshHub.JsonSerializerOptions, ct: ct).WithCancellation(ct))
+                await foreach (var childType in meshQuery.QueryAsync<MeshNode>(nodeTypeChildQuery, ct: ct).WithCancellation(ct))
                 {
                     if (addedPaths.Add(childType.Path))
                     {

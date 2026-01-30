@@ -34,8 +34,6 @@ namespace MeshWeaver.Graph.Test;
 [Collection("SamplesGraphData")]
 public class InlineEditingWorkflowTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
-    private JsonSerializerOptions _jsonOptions => Mesh.ServiceProvider.GetRequiredService<IMessageHub>().JsonSerializerOptions;
-
     // Shared cache - tests run sequentially in this collection
     private static readonly string SharedCacheDirectory = Path.Combine(
         Path.GetTempPath(),
@@ -186,7 +184,7 @@ public class InlineEditingWorkflowTest(ITestOutputHelper output) : MonolithMeshT
         var reference = new LayoutAreaReference("Overview");
 
         // Get original content for comparison
-        var originalNode = await persistence.GetNodeAsync(todoPath, _jsonOptions, TestContext.Current.CancellationToken);
+        var originalNode = await persistence.GetNodeAsync(todoPath, TestContext.Current.CancellationToken);
         originalNode.Should().NotBeNull("Todo node should exist");
 
         // Serialize original content for later comparison
@@ -252,7 +250,7 @@ public class InlineEditingWorkflowTest(ITestOutputHelper output) : MonolithMeshT
         await Task.Delay(500);
 
         // Verify the data was persisted
-        var persistedNode = await persistence.GetNodeAsync(todoPath, _jsonOptions, TestContext.Current.CancellationToken);
+        var persistedNode = await persistence.GetNodeAsync(todoPath, TestContext.Current.CancellationToken);
         persistedNode.Should().NotBeNull("Todo should still exist");
 
         // Check if the content was updated
@@ -549,7 +547,7 @@ public class InlineEditingWorkflowTest(ITestOutputHelper output) : MonolithMeshT
         var reference = new LayoutAreaReference("Overview");
 
         // Get original content for comparison
-        var originalNode = await persistence.GetNodeAsync(todoPath, _jsonOptions, TestContext.Current.CancellationToken);
+        var originalNode = await persistence.GetNodeAsync(todoPath, TestContext.Current.CancellationToken);
         originalNode.Should().NotBeNull("Todo node should exist");
 
         var originalContentJson = JsonSerializer.Serialize(originalNode!.Content, Mesh.ServiceProvider.GetRequiredService<IMessageHub>().JsonSerializerOptions);

@@ -1,4 +1,3 @@
-using System.Text.Json;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
@@ -17,7 +16,6 @@ public static class AgentOrderingHelper
     /// </summary>
     public static async Task<IReadOnlyList<AgentDisplayInfo>> QueryAgentsAsync(
         IMeshQuery? meshQuery,
-        JsonSerializerOptions jsonOptions,
         string? contextPath,
         string? nodeTypePath)
     {
@@ -30,7 +28,7 @@ public static class AgentOrderingHelper
             try
             {
                 var query = $"path:{nodeTypePath} nodeType:Agent scope:hierarchy";
-                await foreach (var node in meshQuery.QueryAsync<MeshNode>(query, jsonOptions))
+                await foreach (var node in meshQuery.QueryAsync<MeshNode>(query))
                 {
                     if (node.Content is AgentConfiguration config && !agentsDict.ContainsKey(config.Id))
                     {
@@ -53,7 +51,7 @@ public static class AgentOrderingHelper
                     ? "nodeType:Agent scope:selfAndAncestors"
                     : $"path:{contextPath} nodeType:Agent scope:selfAndAncestors";
 
-                await foreach (var node in meshQuery.QueryAsync<MeshNode>(query, jsonOptions))
+                await foreach (var node in meshQuery.QueryAsync<MeshNode>(query))
                 {
                     if (node.Content is AgentConfiguration config && !agentsDict.ContainsKey(config.Id))
                     {
@@ -87,14 +85,14 @@ public static class AgentOrderingHelper
     /// <summary>
     /// Gets the NodeType for a given context path.
     /// </summary>
-    public static async Task<string?> GetNodeTypeAsync(IMeshQuery? meshQuery, JsonSerializerOptions jsonOptions, string? contextPath)
+    public static async Task<string?> GetNodeTypeAsync(IMeshQuery? meshQuery, string? contextPath)
     {
         if (meshQuery == null || string.IsNullOrEmpty(contextPath))
             return null;
 
         try
         {
-            await foreach (var node in meshQuery.QueryAsync<MeshNode>($"path:{contextPath} scope:self", jsonOptions))
+            await foreach (var node in meshQuery.QueryAsync<MeshNode>($"path:{contextPath} scope:self"))
             {
                 if (!string.IsNullOrEmpty(node.NodeType) && node.NodeType != "Agent" && node.NodeType != "Markdown")
                 {

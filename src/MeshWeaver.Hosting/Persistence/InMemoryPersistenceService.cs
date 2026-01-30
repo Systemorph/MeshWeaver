@@ -10,7 +10,7 @@ namespace MeshWeaver.Hosting.Persistence;
 /// Suitable for development and testing.
 /// Optionally backs to an IStorageAdapter for file system persistence.
 /// </summary>
-public class InMemoryPersistenceService : IPersistenceService
+public class InMemoryPersistenceService : IPersistenceServiceCore
 {
     private readonly IStorageAdapter? _storageAdapter;
     private readonly IDataChangeNotifier? _changeNotifier;

@@ -4,10 +4,8 @@
 @using MeshWeaver.Data
 @using MeshWeaver.Mesh
 @using MeshWeaver.Mesh.Services
-@using MeshWeaver.Messaging
 @using System.Text.Json
 @inject NavigationManager NavigationManager
-@inject IMessageHub Hub
 
 <div class="search-box-container" style="display: flex; gap: 8px; align-items: center; width: 100%;">
     <div style="flex: 1;">
@@ -103,7 +101,6 @@
                 var suggestions = await MeshQuery.AutocompleteAsync(
                     BoundNamespace,
                     reference,
-                    Hub.JsonSerializerOptions,
                     BoundMaxSuggestions
                 ).ToArrayAsync();
 
@@ -128,7 +125,7 @@
                 Limit = BoundMaxSuggestions
             };
 
-            var results = await MeshQuery.QueryAsync<MeshNode>(request, Hub.JsonSerializerOptions).ToArrayAsync();
+            var results = await MeshQuery.QueryAsync<MeshNode>(request).ToArrayAsync();
 
             return results.Select(node => new CompletionItem
             {

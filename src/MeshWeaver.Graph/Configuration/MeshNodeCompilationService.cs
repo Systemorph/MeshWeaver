@@ -108,7 +108,7 @@ internal class MeshNodeCompilationService(
         var codePartition = node.Content is NodeTypeDefinition
             ? $"{node.Path}/Code"    // NodeType node - use its own Code partition
             : $"{node.NodeType}/Code"; // Instance node - use NodeType's Code partition
-        await foreach (var obj in persistence.GetPartitionObjectsAsync(codePartition, null, JsonOptions).WithCancellation(ct))
+        await foreach (var obj in persistence.GetPartitionObjectsAsync(codePartition, null).WithCancellation(ct))
         {
             if (obj is CodeConfiguration cf && !string.IsNullOrWhiteSpace(cf.Code))
             {
@@ -139,7 +139,7 @@ internal class MeshNodeCompilationService(
         else
         {
             // Instance node - look up the NodeType to get its Configuration
-            var nodeTypeNode = await persistence.GetNodeAsync(node.NodeType, JsonOptions, ct);
+            var nodeTypeNode = await persistence.GetNodeAsync(node.NodeType, ct);
             if (nodeTypeNode?.Content is NodeTypeDefinition ntd)
             {
                 configuration = ntd.Configuration;

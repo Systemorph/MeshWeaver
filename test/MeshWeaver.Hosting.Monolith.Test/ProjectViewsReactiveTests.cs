@@ -24,11 +24,11 @@ public class ProjectViewsReactiveTests(ITestOutputHelper output) : MonolithMeshT
 {
     private readonly DataChangeNotifier _changeNotifier = new();
     private InMemoryPersistenceService? _persistence;
-    private IMeshQuery? _meshQuery;
+    private IMeshQueryCore? _meshQuery;
     private JsonSerializerOptions JsonOptions => Mesh.ServiceProvider.GetRequiredService<IMessageHub>().JsonSerializerOptions;
 
     private InMemoryPersistenceService Persistence => _persistence ??= new InMemoryPersistenceService(changeNotifier: _changeNotifier);
-    private IMeshQuery MeshQuery => _meshQuery ??= new InMemoryMeshQuery(Persistence, changeNotifier: _changeNotifier);
+    private IMeshQueryCore MeshQuery => _meshQuery ??= new InMemoryMeshQuery(Persistence, changeNotifier: _changeNotifier);
 
     [Fact]
     public async Task ObserveQuery_EmitsAddedOnNewTodo()

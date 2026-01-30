@@ -14,9 +14,9 @@ namespace MeshWeaver.Hosting.Persistence.Query;
 /// In-memory implementation of IMeshQuery.
 /// Extracts query functionality from InMemoryPersistenceService for use as a standalone service.
 /// </summary>
-public class InMemoryMeshQuery : IMeshQuery
+public class InMemoryMeshQuery : IMeshQueryCore
 {
-    private readonly IPersistenceService _persistence;
+    private readonly IPersistenceServiceCore _persistence;
     private readonly INavigationService? _navigationContext;
     private readonly ISecurityService? _securityService;
     private readonly AccessService? _accessService;
@@ -31,7 +31,7 @@ public class InMemoryMeshQuery : IMeshQuery
     public static readonly TimeSpan DefaultDebounceInterval = TimeSpan.FromMilliseconds(100);
 
     public InMemoryMeshQuery(
-        IPersistenceService persistence,
+        IPersistenceServiceCore persistence,
         INavigationService? navigationContext = null,
         ISecurityService? securityService = null,
         AccessService? accessService = null,
@@ -318,7 +318,7 @@ public class InMemoryMeshQuery : IMeshQuery
         // Search descendants for matching nodes (with security filtering)
         await foreach (var node in _persistence.GetDescendantsSecureAsync(normalizedPath, userId, options).WithCancellation(ct))
         {
-            var name = node.Name ?? node.Id ?? node.Path;
+            var name = node.Name ?? node.Id ?? node.Path ?? "";
             var nameLower = name?.ToLowerInvariant() ?? "";
             var pathLower = node.Path.ToLowerInvariant();
 

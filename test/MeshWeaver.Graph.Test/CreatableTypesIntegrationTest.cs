@@ -73,7 +73,7 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
             Content = orgTypeDef,
             IsPersistent = true
         };
-        persistence.SaveNodeAsync(orgTypeNode, SetupJsonOptions).GetAwaiter().GetResult();
+        ((IPersistenceServiceCore)persistence).SaveNodeAsync(orgTypeNode, SetupJsonOptions).GetAwaiter().GetResult();
 
         // Create ACME organization (instance of Organization)
         var acmeNode = MeshNode.FromPath("ACME") with
@@ -83,7 +83,7 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
             Description = "A sample organization",
             IsPersistent = true
         };
-        persistence.SaveNodeAsync(acmeNode, SetupJsonOptions).GetAwaiter().GetResult();
+        ((IPersistenceServiceCore)persistence).SaveNodeAsync(acmeNode, SetupJsonOptions).GetAwaiter().GetResult();
 
         // Create ACME/Project type (can be created inside ACME)
         var projectTypeDef = new NodeTypeDefinition
@@ -101,7 +101,7 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
             Content = projectTypeDef,
             IsPersistent = true
         };
-        persistence.SaveNodeAsync(projectTypeNode, SetupJsonOptions).GetAwaiter().GetResult();
+        ((IPersistenceServiceCore)persistence).SaveNodeAsync(projectTypeNode, SetupJsonOptions).GetAwaiter().GetResult();
 
         // Create ACME/Project/Todo type (can be created inside ACME/Project instances)
         var todoTypeDef = new NodeTypeDefinition
@@ -119,7 +119,7 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
             Content = todoTypeDef,
             IsPersistent = true
         };
-        persistence.SaveNodeAsync(todoTypeNode, SetupJsonOptions).GetAwaiter().GetResult();
+        ((IPersistenceServiceCore)persistence).SaveNodeAsync(todoTypeNode, SetupJsonOptions).GetAwaiter().GetResult();
 
         // Create ACME/ProductLaunch (instance of ACME/Project)
         var productLaunchNode = MeshNode.FromPath("ACME/ProductLaunch") with
@@ -129,7 +129,7 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
             Description = "2024 Product Launch Project",
             IsPersistent = true
         };
-        persistence.SaveNodeAsync(productLaunchNode, SetupJsonOptions).GetAwaiter().GetResult();
+        ((IPersistenceServiceCore)persistence).SaveNodeAsync(productLaunchNode, SetupJsonOptions).GetAwaiter().GetResult();
 
         // Create global Markdown type
         var markdownTypeDef = new NodeTypeDefinition
@@ -148,7 +148,7 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
             Content = markdownTypeDef,
             IsPersistent = true
         };
-        persistence.SaveNodeAsync(markdownTypeNode, SetupJsonOptions).GetAwaiter().GetResult();
+        ((IPersistenceServiceCore)persistence).SaveNodeAsync(markdownTypeNode, SetupJsonOptions).GetAwaiter().GetResult();
 
         // Create global NodeType type
         var nodeTypeTypeDef = new NodeTypeDefinition
@@ -167,7 +167,7 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
             Content = nodeTypeTypeDef,
             IsPersistent = true
         };
-        persistence.SaveNodeAsync(nodeTypeTypeNode, SetupJsonOptions).GetAwaiter().GetResult();
+        ((IPersistenceServiceCore)persistence).SaveNodeAsync(nodeTypeTypeNode, SetupJsonOptions).GetAwaiter().GetResult();
     }
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
@@ -226,15 +226,15 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
     public async Task ProductLaunch_CreatableTypes_VerifyFullAlgorithm()
     {
         // Arrange - Verify the data setup is correct
-        var productLaunchNode = await Persistence.GetNodeAsync("ACME/ProductLaunch", _jsonOptions, TestContext.Current.CancellationToken);
+        var productLaunchNode = await Persistence.GetNodeAsync("ACME/ProductLaunch", TestContext.Current.CancellationToken);
         productLaunchNode.Should().NotBeNull("ProductLaunch node should exist");
         productLaunchNode!.NodeType.Should().Be("ACME/Project", "ProductLaunch should be of NodeType ACME/Project");
 
-        var projectTypeNode = await Persistence.GetNodeAsync("ACME/Project", _jsonOptions, TestContext.Current.CancellationToken);
+        var projectTypeNode = await Persistence.GetNodeAsync("ACME/Project", TestContext.Current.CancellationToken);
         projectTypeNode.Should().NotBeNull("ACME/Project NodeType should exist");
         projectTypeNode!.NodeType.Should().Be("NodeType", "ACME/Project should be a NodeType");
 
-        var todoTypeNode = await Persistence.GetNodeAsync("ACME/Project/Todo", _jsonOptions, TestContext.Current.CancellationToken);
+        var todoTypeNode = await Persistence.GetNodeAsync("ACME/Project/Todo", TestContext.Current.CancellationToken);
         todoTypeNode.Should().NotBeNull("ACME/Project/Todo NodeType should exist");
         todoTypeNode!.NodeType.Should().Be("NodeType", "ACME/Project/Todo should be a NodeType");
 
@@ -267,10 +267,10 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
         };
 
         // Act
-        await Persistence.SaveNodeAsync(newTodoNode, _jsonOptions, TestContext.Current.CancellationToken);
+        await Persistence.SaveNodeAsync(newTodoNode, TestContext.Current.CancellationToken);
 
         // Assert - Verify the node was created
-        var createdNode = await Persistence.GetNodeAsync("ACME/ProductLaunch/my-todo", _jsonOptions, TestContext.Current.CancellationToken);
+        var createdNode = await Persistence.GetNodeAsync("ACME/ProductLaunch/my-todo", TestContext.Current.CancellationToken);
         createdNode.Should().NotBeNull();
         createdNode!.Name.Should().Be("My Todo");
         createdNode.NodeType.Should().Be("ACME/Project/Todo");
@@ -296,7 +296,7 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
             Content = restrictedTypeDef,
             IsPersistent = true
         };
-        await Persistence.SaveNodeAsync(restrictedTypeNode, _jsonOptions, TestContext.Current.CancellationToken);
+        await Persistence.SaveNodeAsync(restrictedTypeNode, TestContext.Current.CancellationToken);
 
         // Create an instance of the restricted type
         var restrictedInstance = MeshNode.FromPath("ACME/MyRestrictedProject") with
@@ -305,7 +305,7 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
             NodeType = "ACME/RestrictedProject",
             IsPersistent = true
         };
-        await Persistence.SaveNodeAsync(restrictedInstance, _jsonOptions, TestContext.Current.CancellationToken);
+        await Persistence.SaveNodeAsync(restrictedInstance, TestContext.Current.CancellationToken);
 
         // Act
         var creatableTypes = await NodeTypeService.GetCreatableTypesAsync("ACME/MyRestrictedProject", TestContext.Current.CancellationToken).ToListAsync(TestContext.Current.CancellationToken);
@@ -374,7 +374,7 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
 
         // Step 2: Verify node exists in persistence
         Output.WriteLine($"Step 2: Verifying node exists in persistence");
-        var persistedNode = await Persistence.GetNodeAsync(nodePath, _jsonOptions, TestContext.Current.CancellationToken);
+        var persistedNode = await Persistence.GetNodeAsync(nodePath, TestContext.Current.CancellationToken);
         persistedNode.Should().NotBeNull($"Node {nodePath} should exist in persistence after CreateNodeAsync");
         Output.WriteLine($"Node exists in persistence: Name={persistedNode!.Name}, NodeType={persistedNode.NodeType}");
 
@@ -555,7 +555,7 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
             Output.WriteLine($"Catalog.GetNodeAsync result: {(catalogNode != null ? $"Found: {catalogNode.Path}" : "NULL")}");
 
             // Check persistence
-            var persistenceNode = await Persistence.GetNodeAsync(nodePath, _jsonOptions, TestContext.Current.CancellationToken);
+            var persistenceNode = await Persistence.GetNodeAsync(nodePath, TestContext.Current.CancellationToken);
             Output.WriteLine($"Persistence.GetNodeAsync result: {(persistenceNode != null ? $"Found: {persistenceNode.Path}" : "NULL")}");
 
             // Check resolution
@@ -678,7 +678,7 @@ public class CreatableTypesFileSystemTest : IDisposable
     {
         // This is the exact query used by GetCreatableTypesAsync
         var query = "path:ACME/Project nodeType:NodeType scope:children";
-        var results = await _meshQuery.QueryAsync<MeshNode>(query, _jsonOptions, null).ToListAsync();
+        var results = await _meshQuery.QueryAsync(MeshQueryRequest.FromQuery(query), _jsonOptions).OfType<MeshNode>().ToListAsync();
 
         _output.WriteLine($"Query '{query}' returned {results.Count} results:");
         foreach (var result in results)
@@ -717,12 +717,12 @@ public class CreatableTypesFileSystemTest : IDisposable
 /// </summary>
 internal class NodeTypeServiceTestHelper
 {
-    private readonly IPersistenceService _persistence;
-    private readonly IMeshQuery _meshQuery;
+    private readonly IPersistenceServiceCore _persistence;
+    private readonly IMeshQueryCore _meshQuery;
     private readonly JsonSerializerOptions _jsonOptions = new JsonSerializerOptions();
     private static readonly string[] GlobalTypes = ["Markdown", "NodeType", "Agent"];
 
-    public NodeTypeServiceTestHelper(IPersistenceService persistence, IMeshQuery meshQuery)
+    public NodeTypeServiceTestHelper(IPersistenceServiceCore persistence, IMeshQueryCore meshQuery)
     {
         _persistence = persistence;
         _meshQuery = meshQuery;
@@ -795,8 +795,10 @@ internal class NodeTypeServiceTestHelper
         {
             // Root level - find root NodeTypes
             var rootQuery = "nodeType:NodeType";
-            await foreach (var typeNode in _meshQuery.QueryAsync<MeshNode>(rootQuery, _jsonOptions, null, ct).WithCancellation(ct))
+            await foreach (var obj in _meshQuery.QueryAsync(MeshQueryRequest.FromQuery(rootQuery), _jsonOptions, ct).WithCancellation(ct))
             {
+                if (obj is not MeshNode typeNode)
+                    continue;
                 if (!typeNode.Path.Contains('/') && !GlobalTypes.Contains(typeNode.Path))
                 {
                     var typeInfo = CreateCreatableTypeInfoFromNode(typeNode);
@@ -811,8 +813,10 @@ internal class NodeTypeServiceTestHelper
 
         // 1. Query by node's path - find NodeTypes defined directly under this node
         var pathQuery = $"path:{node.Path} nodeType:NodeType scope:children";
-        await foreach (var childType in _meshQuery.QueryAsync<MeshNode>(pathQuery, _jsonOptions, null, ct).WithCancellation(ct))
+        await foreach (var obj in _meshQuery.QueryAsync(MeshQueryRequest.FromQuery(pathQuery), _jsonOptions, ct).WithCancellation(ct))
         {
+            if (obj is not MeshNode childType)
+                continue;
             var typeInfo = CreateCreatableTypeInfoFromNode(childType);
             if (addedPaths.Add(typeInfo.NodeTypePath))
             {
@@ -824,8 +828,10 @@ internal class NodeTypeServiceTestHelper
         if (node.NodeType != null && node.NodeType != node.Path)
         {
             var typeQuery = $"path:{node.NodeType} nodeType:NodeType scope:children";
-            await foreach (var childType in _meshQuery.QueryAsync<MeshNode>(typeQuery, _jsonOptions, null, ct).WithCancellation(ct))
+            await foreach (var obj in _meshQuery.QueryAsync(MeshQueryRequest.FromQuery(typeQuery), _jsonOptions, ct).WithCancellation(ct))
             {
+                if (obj is not MeshNode childType)
+                    continue;
                 var typeInfo = CreateCreatableTypeInfoFromNode(childType);
                 if (addedPaths.Add(typeInfo.NodeTypePath))
                 {

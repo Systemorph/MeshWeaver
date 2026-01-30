@@ -5,6 +5,7 @@ using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace MeshWeaver.Hosting.Persistence;
 
@@ -60,9 +61,6 @@ public static class PersistenceExtensions
         services.AddKeyedSingleton<IStorageAdapterFactory, FileSystemStorageAdapterFactory>(
             FileSystemStorageAdapterFactory.StorageType);
 
-        // Register the data change notifier as singleton
-        services.AddSingleton<IDataChangeNotifier, DataChangeNotifier>();
-
         // Register the storage adapter using the factory
         services.AddSingleton<IStorageAdapter>(sp =>
         {
@@ -79,18 +77,8 @@ public static class PersistenceExtensions
             return factory.Create(config, sp);
         });
 
-        services.AddSingleton<IPersistenceService>(sp =>
-            new FileSystemPersistenceService(sp.GetRequiredService<IStorageAdapter>()));
-
-        services.AddSingleton<IMeshQuery>(sp =>
-            new InMemoryMeshQuery(
-                sp.GetRequiredService<IPersistenceService>(),
-                sp.GetService<INavigationService>(),
-                sp.GetService<ISecurityService>(),
-                sp.GetService<AccessService>(),
-                sp.GetService<IDataChangeNotifier>()));
-
-        return services;
+        // Register common services and wrapper services
+        return services.AddCoreAndWrapperServices<FileSystemPersistenceService>();
     }
 
     /// <summary>
@@ -146,22 +134,8 @@ public static class PersistenceExtensions
     /// <returns>The service collection for chaining</returns>
     public static IServiceCollection AddInMemoryPersistence(this IServiceCollection services)
     {
-        // Register the data change notifier as singleton
-        services.AddSingleton<IDataChangeNotifier, DataChangeNotifier>();
-
-        services.AddSingleton<IPersistenceService>(sp =>
-            new InMemoryPersistenceService(
-                storageAdapter: null,
-                changeNotifier: sp.GetService<IDataChangeNotifier>()));
-
-        services.AddSingleton<IMeshQuery>(sp =>
-            new InMemoryMeshQuery(
-                sp.GetRequiredService<IPersistenceService>(),
-                sp.GetService<INavigationService>(),
-                sp.GetService<ISecurityService>(),
-                sp.GetService<AccessService>(),
-                sp.GetService<IDataChangeNotifier>()));
-        return services;
+        // Register common services and wrapper services
+        return services.AddCoreAndWrapperServices<InMemoryPersistenceService>();
     }
 
     /// <summary>
@@ -173,25 +147,11 @@ public static class PersistenceExtensions
     /// <returns>The service collection for chaining</returns>
     public static IServiceCollection AddFileSystemPersistence(this IServiceCollection services, string baseDirectory)
     {
-        // Register the data change notifier as singleton
-        services.AddSingleton<IDataChangeNotifier, DataChangeNotifier>();
-
         // Storage adapter now receives options per-call, no need for service provider
-        services.AddSingleton<IStorageAdapter>(sp =>
-            new FileSystemStorageAdapter(baseDirectory));
+        services.AddSingleton<IStorageAdapter>(new FileSystemStorageAdapter(baseDirectory));
 
-        services.AddSingleton<IPersistenceService>(sp =>
-            new FileSystemPersistenceService(sp.GetRequiredService<IStorageAdapter>()));
-
-        services.AddSingleton<IMeshQuery>(sp =>
-            new InMemoryMeshQuery(
-                sp.GetRequiredService<IPersistenceService>(),
-                sp.GetService<INavigationService>(),
-                sp.GetService<ISecurityService>(),
-                sp.GetService<AccessService>(),
-                sp.GetService<IDataChangeNotifier>()));
-
-        return services;
+        // Register common services and wrapper services
+        return services.AddCoreAndWrapperServices<FileSystemPersistenceService>();
     }
 
     /// <summary>
@@ -202,44 +162,51 @@ public static class PersistenceExtensions
     /// <returns>The service collection for chaining</returns>
     public static IServiceCollection AddPersistence(this IServiceCollection services, IStorageAdapter storageAdapter)
     {
-        // Register the data change notifier as singleton
-        services.AddSingleton<IDataChangeNotifier, DataChangeNotifier>();
-
         services.AddSingleton(storageAdapter);
-        services.AddSingleton<IPersistenceService>(sp =>
-            new InMemoryPersistenceService(
-                storageAdapter,
-                sp.GetService<IDataChangeNotifier>()));
 
-        services.AddSingleton<IMeshQuery>(sp =>
-            new InMemoryMeshQuery(
-                sp.GetRequiredService<IPersistenceService>(),
-                sp.GetService<INavigationService>(),
-                sp.GetService<ISecurityService>(),
-                sp.GetService<AccessService>(),
-                sp.GetService<IDataChangeNotifier>()));
+        // Register common services and wrapper services
+        return services.AddCoreAndWrapperServices<InMemoryPersistenceService>();
+    }
+
+    /// <summary>
+    /// Adds a custom persistence core service.
+    /// </summary>
+    /// <param name="services">The service collection</param>
+    /// <param name="persistenceServiceCore">The custom persistence core service</param>
+    /// <returns>The service collection for chaining</returns>
+    public static IServiceCollection AddPersistence(this IServiceCollection services, IPersistenceServiceCore persistenceServiceCore)
+    {
+        // Register the data change notifier as singleton
+        services.TryAddSingleton<IDataChangeNotifier, DataChangeNotifier>();
+
+        // Core services remain singletons (for shared caches)
+        services.AddSingleton(persistenceServiceCore);
+        services.AddSingleton<IMeshQueryCore, InMemoryMeshQuery>();
+
+        // Wrapper services are scoped (per hub)
+        services.AddScoped<IPersistenceService, PersistenceService>();
+        services.AddScoped<IMeshQuery, MeshQueryService>();
+
         return services;
     }
 
     /// <summary>
-    /// Adds a custom persistence service.
+    /// Helper method to register common services and wrapper services.
     /// </summary>
-    /// <param name="services">The service collection</param>
-    /// <param name="persistenceService">The custom persistence service</param>
-    /// <returns>The service collection for chaining</returns>
-    public static IServiceCollection AddPersistence(this IServiceCollection services, IPersistenceService persistenceService)
+    private static IServiceCollection AddCoreAndWrapperServices<TPersistenceCore>(this IServiceCollection services)
+        where TPersistenceCore : class, IPersistenceServiceCore
     {
-        // Register the data change notifier as singleton
-        services.AddSingleton<IDataChangeNotifier, DataChangeNotifier>();
+        // Register the data change notifier as singleton (use TryAdd to avoid duplicates)
+        services.TryAddSingleton<IDataChangeNotifier, DataChangeNotifier>();
 
-        services.AddSingleton(persistenceService);
-        services.AddSingleton<IMeshQuery>(sp =>
-            new InMemoryMeshQuery(
-                sp.GetRequiredService<IPersistenceService>(),
-                sp.GetService<INavigationService>(),
-                sp.GetService<ISecurityService>(),
-                sp.GetService<AccessService>(),
-                sp.GetService<IDataChangeNotifier>()));
+        // Core services remain singletons (for shared caches)
+        services.AddSingleton<IPersistenceServiceCore, TPersistenceCore>();
+        services.AddSingleton<IMeshQueryCore, InMemoryMeshQuery>();
+
+        // Wrapper services are scoped (per hub)
+        services.AddScoped<IPersistenceService, PersistenceService>();
+        services.AddScoped<IMeshQuery, MeshQueryService>();
+
         return services;
     }
 }

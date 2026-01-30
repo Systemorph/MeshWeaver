@@ -1,7 +1,5 @@
-using System.Text.Json;
 using MeshWeaver.Blazor.Components.Monaco;
 using MeshWeaver.Mesh.Services;
-using MeshWeaver.Messaging;
 
 namespace MeshWeaver.Blazor.Services;
 
@@ -9,9 +7,8 @@ namespace MeshWeaver.Blazor.Services;
 /// Centralized autocomplete service for Blazor components.
 /// Provides @ autocomplete for unified content references across all editors.
 /// </summary>
-public class BlazorAutocompleteService(IMeshQuery meshQuery, IMessageHub hub)
+public class BlazorAutocompleteService(IMeshQuery meshQuery)
 {
-    private JsonSerializerOptions Options => hub.JsonSerializerOptions;
     /// <summary>
     /// Gets completions for a query starting with @.
     /// Used by SearchBar, Monaco editors, and any component needing @ autocomplete.
@@ -55,7 +52,7 @@ public class BlazorAutocompleteService(IMeshQuery meshQuery, IMessageHub hub)
 
     private async Task<CompletionItem[]> GetTopLevelNodesAsync()
     {
-        var suggestions = await meshQuery.AutocompleteAsync("", "", Options, 20).ToArrayAsync();
+        var suggestions = await meshQuery.AutocompleteAsync("", "", 20).ToArrayAsync();
         return suggestions.Select(s => new CompletionItem
         {
             Label = $"{s.Path}/",
@@ -68,7 +65,7 @@ public class BlazorAutocompleteService(IMeshQuery meshQuery, IMessageHub hub)
 
     private async Task<CompletionItem[]> GetChildNodesAsync(string basePath)
     {
-        var suggestions = await meshQuery.AutocompleteAsync(basePath, "", Options, 20).ToArrayAsync();
+        var suggestions = await meshQuery.AutocompleteAsync(basePath, "", 20).ToArrayAsync();
         return suggestions.Select(s => new CompletionItem
         {
             Label = $"{s.Path}/",
@@ -99,7 +96,7 @@ public class BlazorAutocompleteService(IMeshQuery meshQuery, IMessageHub hub)
             namePrefix = prefix;
         }
 
-        var suggestions = await meshQuery.AutocompleteAsync(basePath, namePrefix, Options, 20).ToArrayAsync();
+        var suggestions = await meshQuery.AutocompleteAsync(basePath, namePrefix, 20).ToArrayAsync();
         return suggestions.Select(s => new CompletionItem
         {
             Label = $"{s.Path}/",
@@ -113,7 +110,7 @@ public class BlazorAutocompleteService(IMeshQuery meshQuery, IMessageHub hub)
     private async Task<CompletionItem[]> SearchNodesAsync(string query)
     {
         // Use wildcard search for general queries
-        var suggestions = await meshQuery.AutocompleteAsync("", query, Options, 20).ToArrayAsync();
+        var suggestions = await meshQuery.AutocompleteAsync("", query, 20).ToArrayAsync();
         return suggestions.Select(s => new CompletionItem
         {
             Label = s.Path,

@@ -22,8 +22,6 @@ public class MeshDataSourceThreadManager : IThreadManager
     private readonly IMessageHub _hub;
     private readonly ILogger<MeshDataSourceThreadManager>? _logger;
 
-    private JsonSerializerOptions JsonOptions => _hub.JsonSerializerOptions;
-
     private const string DefaultChatRoot = "_chats";
 
     public MeshDataSourceThreadManager(
@@ -87,7 +85,7 @@ public class MeshDataSourceThreadManager : IThreadManager
             Timestamp = DateTime.UtcNow
         };
 
-        await _persistence.SavePartitionObjectsAsync(messagesPath, null, [messageRecord], JsonOptions);
+        await _persistence.SavePartitionObjectsAsync(messagesPath, null, [messageRecord]);
         _logger?.LogDebug("Saved message {MessageId} to thread {ThreadId}", messageRecord.Id, threadId);
 
         // Update thread metadata
@@ -121,7 +119,7 @@ public class MeshDataSourceThreadManager : IThreadManager
 
         if (messageRecords.Count > 0)
         {
-            await _persistence.SavePartitionObjectsAsync(messagesPath, null, messageRecords.Cast<object>().ToArray(), JsonOptions);
+            await _persistence.SavePartitionObjectsAsync(messagesPath, null, messageRecords.Cast<object>().ToArray());
             _logger?.LogDebug("Saved {Count} messages to thread {ThreadId}", messageRecords.Count, threadId);
         }
 
@@ -154,7 +152,7 @@ public class MeshDataSourceThreadManager : IThreadManager
         var messagesPath = GetMessagesPath(thread.Scope, threadId);
         var messages = new List<ChatMessage>();
 
-        await foreach (var obj in _persistence.GetPartitionObjectsAsync(messagesPath, null, JsonOptions).WithCancellation(ct))
+        await foreach (var obj in _persistence.GetPartitionObjectsAsync(messagesPath, null).WithCancellation(ct))
         {
             if (obj is ChatMessageRecord record)
             {
@@ -189,7 +187,7 @@ public class MeshDataSourceThreadManager : IThreadManager
         var basePath = GetChatsBasePath(scope);
         var threads = new List<ChatThread>();
 
-        await foreach (var obj in _persistence.GetPartitionObjectsAsync(basePath, null, JsonOptions).WithCancellation(ct))
+        await foreach (var obj in _persistence.GetPartitionObjectsAsync(basePath, null).WithCancellation(ct))
         {
             if (obj is ChatThreadMetadata metadata)
             {
@@ -220,7 +218,7 @@ public class MeshDataSourceThreadManager : IThreadManager
         // Try to find the thread in default scope first, then with scope
         var basePath = GetChatsBasePath(null);
 
-        await foreach (var obj in _persistence.GetPartitionObjectsAsync(basePath, null, JsonOptions).WithCancellation(ct))
+        await foreach (var obj in _persistence.GetPartitionObjectsAsync(basePath, null).WithCancellation(ct))
         {
             if (obj is ChatThreadMetadata metadata && metadata.Id == threadId)
             {
@@ -251,7 +249,7 @@ public class MeshDataSourceThreadManager : IThreadManager
     {
         var basePath = GetChatsBasePath(thread.Scope);
         var metadata = ChatThreadMetadata.FromThread(thread);
-        await _persistence.SavePartitionObjectsAsync(basePath, null, [metadata], JsonOptions);
+        await _persistence.SavePartitionObjectsAsync(basePath, null, [metadata]);
         _logger?.LogDebug("Saved thread metadata {ThreadId}", thread.Id);
     }
 
@@ -262,7 +260,7 @@ public class MeshDataSourceThreadManager : IThreadManager
 
         try
         {
-            return JsonSerializer.Serialize(contents, JsonOptions);
+            return JsonSerializer.Serialize(contents, _hub.JsonSerializerOptions);
         }
         catch
         {
@@ -278,7 +276,7 @@ public class MeshDataSourceThreadManager : IThreadManager
 
         try
         {
-            return JsonSerializer.Deserialize<List<AIContent>>(json, JsonOptions) ?? [];
+            return JsonSerializer.Deserialize<List<AIContent>>(json, _hub.JsonSerializerOptions) ?? [];
         }
         catch
         {

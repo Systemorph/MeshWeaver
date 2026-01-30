@@ -55,7 +55,7 @@ public partial class MeshNodeEditorView
 
             var path = ViewModel.NodePath;
             _originalPath = path;
-            _node = await persistence.GetNodeAsync(path, Hub.JsonSerializerOptions);
+            _node = await persistence.GetNodeAsync(path);
 
             if (_node != null)
             {
@@ -155,7 +155,7 @@ public partial class MeshNodeEditorView
             {
                 // Move the node to new path
                 Logger.LogInformation("Moving node from {OldPath} to {NewPath}", _originalPath, newPath);
-                _node = await persistence.MoveNodeAsync(_originalPath, newPath, Hub.JsonSerializerOptions);
+                _node = await persistence.MoveNodeAsync(_originalPath, newPath);
                 _originalPath = newPath;
             }
 
@@ -177,7 +177,7 @@ public partial class MeshNodeEditorView
                 GlobalServiceConfigurations = _node.GlobalServiceConfigurations
             };
 
-            _node = await persistence.SaveNodeAsync(updatedNode, Hub.JsonSerializerOptions);
+            _node = await persistence.SaveNodeAsync(updatedNode);
 
             _metadataMessage = pathChanged
                 ? $"Metadata saved. Node moved to {newPath}"
@@ -260,7 +260,7 @@ public partial class MeshNodeEditorView
                 GlobalServiceConfigurations = _node.GlobalServiceConfigurations
             };
 
-            _node = await persistence.SaveNodeAsync(updatedNode, Hub.JsonSerializerOptions);
+            _node = await persistence.SaveNodeAsync(updatedNode);
 
             _contentMessage = "Content saved successfully";
             _contentSuccess = true;

@@ -82,8 +82,6 @@
     private bool isLoading;
     private bool isInitialized;
 
-    private JsonSerializerOptions JsonOptions => Hub.JsonSerializerOptions;
-
     protected override async Task OnParametersSetAsync()
     {
         // Only update searchInput from URL on initial load or when URL changes externally
@@ -230,7 +228,7 @@
                 Limit = 100
             };
 
-            var searchResults = await MeshQuery.QueryAsync<MeshNode>(request, JsonOptions).ToArrayAsync();
+            var searchResults = await MeshQuery.QueryAsync<MeshNode>(request).ToArrayAsync();
 
             // Filter out the excluded namespace (the parent node itself)
             if (!string.IsNullOrWhiteSpace(ExcludeNamespace))

@@ -1,13 +1,9 @@
 using System.Linq;
-using System.Text.Json;
 using System.Threading.Tasks;
 using FluentAssertions;
 using MeshWeaver.Hosting.Monolith.TestBase;
-using MeshWeaver.Hosting.Persistence;
-using MeshWeaver.Hosting.Persistence.Query;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
-using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
@@ -15,24 +11,20 @@ namespace MeshWeaver.Hosting.Monolith.Test;
 
 public class QueryAsyncIntegrationTests(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
-    private InMemoryPersistenceService? _persistence;
-    private IMeshQuery? _meshQuery;
-    private JsonSerializerOptions JsonOptions => Mesh.ServiceProvider.GetRequiredService<IMessageHub>().JsonSerializerOptions;
-
-    private InMemoryPersistenceService Persistence => _persistence ??= new InMemoryPersistenceService();
-    private IMeshQuery MeshQuery => _meshQuery ??= new InMemoryMeshQuery(Persistence);
+    protected IPersistenceService Persistence => Mesh.ServiceProvider.GetRequiredService<IPersistenceService>();
+    protected IMeshQuery MeshQuery => Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
 
     [Fact]
     public async Task QueryAsync_FilterByProperty_ReturnsMatchingNodes()
     {
         // Arrange
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("products/laptop") with { Name = "Laptop", NodeType = "Electronics" }, JsonOptions);
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("products/phone") with { Name = "Phone", NodeType = "Electronics" }, JsonOptions);
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("products/chair") with { Name = "Chair", NodeType = "Furniture" }, JsonOptions);
+        await Persistence.SaveNodeAsync(MeshNode.FromPath("products/laptop") with { Name = "Laptop", NodeType = "Electronics" });
+        await Persistence.SaveNodeAsync(MeshNode.FromPath("products/phone") with { Name = "Phone", NodeType = "Electronics" });
+        await Persistence.SaveNodeAsync(MeshNode.FromPath("products/chair") with { Name = "Chair", NodeType = "Furniture" });
 
         // Act - use path: in query string with scope:descendants
         var query = "path:products nodeType:Electronics scope:descendants";
-        var results = await MeshQuery.QueryAsync(MeshQueryRequest.FromQuery(query), JsonOptions).ToListAsync();
+        var results = await MeshQuery.QueryAsync(MeshQueryRequest.FromQuery(query)).ToListAsync();
 
         // Assert
         results.Should().HaveCount(2);
@@ -43,12 +35,12 @@ public class QueryAsyncIntegrationTests(ITestOutputHelper output) : MonolithMesh
     public async Task QueryAsync_FilterWithTextSearch_ReturnsFuzzyMatches()
     {
         // Arrange
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("products/laptop") with { Name = "Gaming Laptop Pro", Description = "High performance gaming laptop" }, JsonOptions);
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("products/desktop") with { Name = "Desktop Computer", Description = "Standard desktop" }, JsonOptions);
+        await Persistence.SaveNodeAsync(MeshNode.FromPath("products/laptop") with { Name = "Gaming Laptop Pro", Description = "High performance gaming laptop" });
+        await Persistence.SaveNodeAsync(MeshNode.FromPath("products/desktop") with { Name = "Desktop Computer", Description = "Standard desktop" });
 
         // Act - use path: in query string with scope:descendants
         var query = "path:products laptop scope:descendants";
-        var results = await MeshQuery.QueryAsync(MeshQueryRequest.FromQuery(query), JsonOptions).ToListAsync();
+        var results = await MeshQuery.QueryAsync(MeshQueryRequest.FromQuery(query)).ToListAsync();
 
         // Assert
         results.Should().HaveCount(1);
@@ -60,13 +52,13 @@ public class QueryAsyncIntegrationTests(ITestOutputHelper output) : MonolithMesh
     public async Task QueryAsync_CombinedFilterAndSearch_ReturnsMatchingResults()
     {
         // Arrange
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("products/laptop1") with { Name = "Gaming Laptop", NodeType = "Electronics" }, JsonOptions);
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("products/laptop2") with { Name = "Business Laptop", NodeType = "Electronics" }, JsonOptions);
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("products/chair") with { Name = "Gaming Chair", NodeType = "Furniture" }, JsonOptions);
+        await Persistence.SaveNodeAsync(MeshNode.FromPath("products/laptop1") with { Name = "Gaming Laptop", NodeType = "Electronics" });
+        await Persistence.SaveNodeAsync(MeshNode.FromPath("products/laptop2") with { Name = "Business Laptop", NodeType = "Electronics" });
+        await Persistence.SaveNodeAsync(MeshNode.FromPath("products/chair") with { Name = "Gaming Chair", NodeType = "Furniture" });
 
         // Act - use path: in query string with scope:descendants
         var query = "path:products nodeType:Electronics gaming scope:descendants";
-        var results = await MeshQuery.QueryAsync(MeshQueryRequest.FromQuery(query), JsonOptions).ToListAsync();
+        var results = await MeshQuery.QueryAsync(MeshQueryRequest.FromQuery(query)).ToListAsync();
 
         // Assert
         results.Should().HaveCount(1);
@@ -78,14 +70,14 @@ public class QueryAsyncIntegrationTests(ITestOutputHelper output) : MonolithMesh
     public async Task QueryAsync_ScopeDescendants_SearchesAllChildren()
     {
         // Arrange
-        await Persistence.SaveNodeAsync(new MeshNode("org") { Name = "Organization", NodeType = "container" }, JsonOptions);
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("org/acme") with { Name = "Acme Corp", NodeType = "company" }, JsonOptions);
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("org/acme/project") with { Name = "Project X", NodeType = "project" }, JsonOptions);
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("other/company") with { Name = "Other Company", NodeType = "company" }, JsonOptions);
+        await Persistence.SaveNodeAsync(new MeshNode("org") { Name = "Organization", NodeType = "container" });
+        await Persistence.SaveNodeAsync(MeshNode.FromPath("org/acme") with { Name = "Acme Corp", NodeType = "company" });
+        await Persistence.SaveNodeAsync(MeshNode.FromPath("org/acme/project") with { Name = "Project X", NodeType = "project" });
+        await Persistence.SaveNodeAsync(MeshNode.FromPath("other/company") with { Name = "Other Company", NodeType = "company" });
 
         // Act
         var query = "path:org nodeType:company scope:descendants";
-        var results = await MeshQuery.QueryAsync(MeshQueryRequest.FromQuery(query), JsonOptions).ToListAsync();
+        var results = await MeshQuery.QueryAsync(MeshQueryRequest.FromQuery(query)).ToListAsync();
 
         // Assert
         results.Should().HaveCount(1);
@@ -97,13 +89,13 @@ public class QueryAsyncIntegrationTests(ITestOutputHelper output) : MonolithMesh
     public async Task QueryAsync_ScopeAncestors_SearchesParentPaths()
     {
         // Arrange
-        await Persistence.SaveNodeAsync(new MeshNode("org") { Name = "Organization Root", NodeType = "root" }, JsonOptions);
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("org/acme") with { Name = "Acme Corp", NodeType = "company" }, JsonOptions);
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("org/acme/project") with { Name = "Project X", NodeType = "project" }, JsonOptions);
+        await Persistence.SaveNodeAsync(new MeshNode("org") { Name = "Organization Root", NodeType = "root" });
+        await Persistence.SaveNodeAsync(MeshNode.FromPath("org/acme") with { Name = "Acme Corp", NodeType = "company" });
+        await Persistence.SaveNodeAsync(MeshNode.FromPath("org/acme/project") with { Name = "Project X", NodeType = "project" });
 
         // Act
         var query = "path:org/acme/project nodeType:root scope:ancestors";
-        var results = await MeshQuery.QueryAsync(MeshQueryRequest.FromQuery(query), JsonOptions).ToListAsync();
+        var results = await MeshQuery.QueryAsync(MeshQueryRequest.FromQuery(query)).ToListAsync();
 
         // Assert
         results.Should().HaveCount(1);
@@ -115,14 +107,14 @@ public class QueryAsyncIntegrationTests(ITestOutputHelper output) : MonolithMesh
     public async Task QueryAsync_InOperator_MatchesMultipleValues()
     {
         // Arrange
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("products/laptop") with { Name = "Laptop", NodeType = "Electronics" }, JsonOptions);
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("products/phone") with { Name = "Phone", NodeType = "Electronics" }, JsonOptions);
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("products/chair") with { Name = "Chair", NodeType = "Furniture" }, JsonOptions);
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("products/food") with { Name = "Food", NodeType = "Groceries" }, JsonOptions);
+        await Persistence.SaveNodeAsync(MeshNode.FromPath("products/laptop") with { Name = "Laptop", NodeType = "Electronics" });
+        await Persistence.SaveNodeAsync(MeshNode.FromPath("products/phone") with { Name = "Phone", NodeType = "Electronics" });
+        await Persistence.SaveNodeAsync(MeshNode.FromPath("products/chair") with { Name = "Chair", NodeType = "Furniture" });
+        await Persistence.SaveNodeAsync(MeshNode.FromPath("products/food") with { Name = "Food", NodeType = "Groceries" });
 
         // Act - use path: in query string with scope:descendants
         var query = "path:products nodeType:(Electronics OR Furniture) scope:descendants";
-        var results = await MeshQuery.QueryAsync(MeshQueryRequest.FromQuery(query), JsonOptions).ToListAsync();
+        var results = await MeshQuery.QueryAsync(MeshQueryRequest.FromQuery(query)).ToListAsync();
 
         // Assert
         results.Should().HaveCount(3);
@@ -133,13 +125,13 @@ public class QueryAsyncIntegrationTests(ITestOutputHelper output) : MonolithMesh
     public async Task QueryAsync_LikeOperator_MatchesWildcard()
     {
         // Arrange
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("products/laptop-pro") with { Name = "Laptop Pro", NodeType = "Electronics" }, JsonOptions);
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("products/laptop-basic") with { Name = "Laptop Basic", NodeType = "Electronics" }, JsonOptions);
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("products/desktop") with { Name = "Desktop Computer", NodeType = "Electronics" }, JsonOptions);
+        await Persistence.SaveNodeAsync(MeshNode.FromPath("products/laptop-pro") with { Name = "Laptop Pro", NodeType = "Electronics" });
+        await Persistence.SaveNodeAsync(MeshNode.FromPath("products/laptop-basic") with { Name = "Laptop Basic", NodeType = "Electronics" });
+        await Persistence.SaveNodeAsync(MeshNode.FromPath("products/desktop") with { Name = "Desktop Computer", NodeType = "Electronics" });
 
         // Act - use path: in query string with scope:descendants
         var query = "path:products name:*Laptop* scope:descendants";
-        var results = await MeshQuery.QueryAsync(MeshQueryRequest.FromQuery(query), JsonOptions).ToListAsync();
+        var results = await MeshQuery.QueryAsync(MeshQueryRequest.FromQuery(query)).ToListAsync();
 
         // Assert
         results.Should().HaveCount(2);
@@ -150,13 +142,13 @@ public class QueryAsyncIntegrationTests(ITestOutputHelper output) : MonolithMesh
     public async Task QueryAsync_OrLogic_MatchesEitherCondition()
     {
         // Arrange
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("products/laptop") with { Name = "Laptop", NodeType = "Electronics" }, JsonOptions);
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("products/chair") with { Name = "Chair", NodeType = "Furniture" }, JsonOptions);
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("products/food") with { Name = "Food", NodeType = "Groceries" }, JsonOptions);
+        await Persistence.SaveNodeAsync(MeshNode.FromPath("products/laptop") with { Name = "Laptop", NodeType = "Electronics" });
+        await Persistence.SaveNodeAsync(MeshNode.FromPath("products/chair") with { Name = "Chair", NodeType = "Furniture" });
+        await Persistence.SaveNodeAsync(MeshNode.FromPath("products/food") with { Name = "Food", NodeType = "Groceries" });
 
         // Act - use path: in query string with scope:descendants
         var query = "path:products (nodeType:Electronics OR nodeType:Furniture) scope:descendants";
-        var results = await MeshQuery.QueryAsync(MeshQueryRequest.FromQuery(query), JsonOptions).ToListAsync();
+        var results = await MeshQuery.QueryAsync(MeshQueryRequest.FromQuery(query)).ToListAsync();
 
         // Assert
         results.Should().HaveCount(2);
@@ -167,13 +159,13 @@ public class QueryAsyncIntegrationTests(ITestOutputHelper output) : MonolithMesh
     public async Task QueryAsync_EmptyQuery_ReturnsAllAtPath()
     {
         // Arrange
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("products/laptop") with { Name = "Laptop" }, JsonOptions);
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("products/phone") with { Name = "Phone" }, JsonOptions);
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("other/chair") with { Name = "Chair" }, JsonOptions);
+        await Persistence.SaveNodeAsync(MeshNode.FromPath("products/laptop") with { Name = "Laptop" });
+        await Persistence.SaveNodeAsync(MeshNode.FromPath("products/phone") with { Name = "Phone" });
+        await Persistence.SaveNodeAsync(MeshNode.FromPath("other/chair") with { Name = "Chair" });
 
         // Act - Empty query with path should return the node at the exact path only
         var query = "path:products";
-        var results = await MeshQuery.QueryAsync(MeshQueryRequest.FromQuery(query), JsonOptions).ToListAsync();
+        var results = await MeshQuery.QueryAsync(MeshQueryRequest.FromQuery(query)).ToListAsync();
 
         // Assert - products node doesn't exist, so empty result for exact path
         results.Should().BeEmpty();
@@ -183,13 +175,13 @@ public class QueryAsyncIntegrationTests(ITestOutputHelper output) : MonolithMesh
     public async Task QueryAsync_NotEqualOperator_ExcludesMatches()
     {
         // Arrange
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("products/laptop") with { Name = "Laptop", NodeType = "Electronics" }, JsonOptions);
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("products/phone") with { Name = "Phone", NodeType = "Electronics" }, JsonOptions);
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("products/chair") with { Name = "Chair", NodeType = "Furniture" }, JsonOptions);
+        await Persistence.SaveNodeAsync(MeshNode.FromPath("products/laptop") with { Name = "Laptop", NodeType = "Electronics" });
+        await Persistence.SaveNodeAsync(MeshNode.FromPath("products/phone") with { Name = "Phone", NodeType = "Electronics" });
+        await Persistence.SaveNodeAsync(MeshNode.FromPath("products/chair") with { Name = "Chair", NodeType = "Furniture" });
 
         // Act
         var query = "path:products -nodeType:Electronics scope:descendants";
-        var results = await MeshQuery.QueryAsync(MeshQueryRequest.FromQuery(query), JsonOptions).ToListAsync();
+        var results = await MeshQuery.QueryAsync(MeshQueryRequest.FromQuery(query)).ToListAsync();
 
         // Assert
         results.Should().HaveCount(1);
@@ -203,14 +195,14 @@ public class QueryAsyncIntegrationTests(ITestOutputHelper output) : MonolithMesh
     public async Task QueryAsync_NamespaceWithoutScope_SearchesImmediateChildrenOnly()
     {
         // Arrange
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("org/acme") with { Name = "Acme Corp", NodeType = "company" }, JsonOptions);
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("org/beta") with { Name = "Beta Inc", NodeType = "company" }, JsonOptions);
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("org/acme/project") with { Name = "Project X", NodeType = "project" }, JsonOptions);
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("other/company") with { Name = "Other Company", NodeType = "company" }, JsonOptions);
+        await Persistence.SaveNodeAsync(MeshNode.FromPath("org/acme") with { Name = "Acme Corp", NodeType = "company" });
+        await Persistence.SaveNodeAsync(MeshNode.FromPath("org/beta") with { Name = "Beta Inc", NodeType = "company" });
+        await Persistence.SaveNodeAsync(MeshNode.FromPath("org/acme/project") with { Name = "Project X", NodeType = "project" });
+        await Persistence.SaveNodeAsync(MeshNode.FromPath("other/company") with { Name = "Other Company", NodeType = "company" });
 
         // Act - namespace:org without scope defaults to children (immediate only, not recursive)
         var query = "namespace:org";
-        var results = await MeshQuery.QueryAsync(MeshQueryRequest.FromQuery(query), JsonOptions).ToListAsync();
+        var results = await MeshQuery.QueryAsync(MeshQueryRequest.FromQuery(query)).ToListAsync();
 
         // Assert - should find only immediate children under org (acme, beta), not nested (project) or other
         results.Should().HaveCount(2);
@@ -223,14 +215,14 @@ public class QueryAsyncIntegrationTests(ITestOutputHelper output) : MonolithMesh
     public async Task QueryAsync_NamespaceWithDescendants_SearchesRecursively()
     {
         // Arrange
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("org/acme") with { Name = "Acme Corp", NodeType = "company" }, JsonOptions);
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("org/acme/project") with { Name = "Project X", NodeType = "project" }, JsonOptions);
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("org/acme/project/task") with { Name = "Task A", NodeType = "task" }, JsonOptions);
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("other/company") with { Name = "Other Company", NodeType = "company" }, JsonOptions);
+        await Persistence.SaveNodeAsync(MeshNode.FromPath("org/acme") with { Name = "Acme Corp", NodeType = "company" });
+        await Persistence.SaveNodeAsync(MeshNode.FromPath("org/acme/project") with { Name = "Project X", NodeType = "project" });
+        await Persistence.SaveNodeAsync(MeshNode.FromPath("org/acme/project/task") with { Name = "Task A", NodeType = "task" });
+        await Persistence.SaveNodeAsync(MeshNode.FromPath("other/company") with { Name = "Other Company", NodeType = "company" });
 
         // Act - namespace:org with scope:descendants should find all nested nodes
         var query = "namespace:org scope:descendants";
-        var results = await MeshQuery.QueryAsync(MeshQueryRequest.FromQuery(query), JsonOptions).ToListAsync();
+        var results = await MeshQuery.QueryAsync(MeshQueryRequest.FromQuery(query)).ToListAsync();
 
         // Assert - should find all nested nodes under org, but not other
         results.Should().HaveCount(3);
@@ -242,14 +234,14 @@ public class QueryAsyncIntegrationTests(ITestOutputHelper output) : MonolithMesh
     public async Task QueryAsync_NamespaceWithFilter_SearchesImmediateChildrenWithFilter()
     {
         // Arrange
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("org/acme") with { Name = "Acme Corp", NodeType = "company" }, JsonOptions);
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("org/beta") with { Name = "Beta Inc", NodeType = "company" }, JsonOptions);
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("org/project") with { Name = "Org Project", NodeType = "project" }, JsonOptions);
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("org/acme/child") with { Name = "Acme Child", NodeType = "company" }, JsonOptions);
+        await Persistence.SaveNodeAsync(MeshNode.FromPath("org/acme") with { Name = "Acme Corp", NodeType = "company" });
+        await Persistence.SaveNodeAsync(MeshNode.FromPath("org/beta") with { Name = "Beta Inc", NodeType = "company" });
+        await Persistence.SaveNodeAsync(MeshNode.FromPath("org/project") with { Name = "Org Project", NodeType = "project" });
+        await Persistence.SaveNodeAsync(MeshNode.FromPath("org/acme/child") with { Name = "Acme Child", NodeType = "company" });
 
         // Act - namespace:org with filter searches immediate children only and applies filter
         var query = "namespace:org nodeType:company";
-        var results = await MeshQuery.QueryAsync(MeshQueryRequest.FromQuery(query), JsonOptions).ToListAsync();
+        var results = await MeshQuery.QueryAsync(MeshQueryRequest.FromQuery(query)).ToListAsync();
 
         // Assert - should find only immediate children that match filter (acme, beta), not nested (child)
         results.Should().HaveCount(2);
@@ -262,14 +254,14 @@ public class QueryAsyncIntegrationTests(ITestOutputHelper output) : MonolithMesh
     public async Task QueryAsync_ScopeChildren_SearchesImmediateChildrenOnly()
     {
         // Arrange
-        await Persistence.SaveNodeAsync(new MeshNode("products") { Name = "Products", NodeType = "container" }, JsonOptions);
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("products/laptop") with { Name = "Laptop", NodeType = "Electronics" }, JsonOptions);
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("products/phone") with { Name = "Phone", NodeType = "Electronics" }, JsonOptions);
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("products/laptop/accessories") with { Name = "Accessories", NodeType = "Electronics" }, JsonOptions);
+        await Persistence.SaveNodeAsync(new MeshNode("products") { Name = "Products", NodeType = "container" });
+        await Persistence.SaveNodeAsync(MeshNode.FromPath("products/laptop") with { Name = "Laptop", NodeType = "Electronics" });
+        await Persistence.SaveNodeAsync(MeshNode.FromPath("products/phone") with { Name = "Phone", NodeType = "Electronics" });
+        await Persistence.SaveNodeAsync(MeshNode.FromPath("products/laptop/accessories") with { Name = "Accessories", NodeType = "Electronics" });
 
         // Act - path:products with scope:children should find immediate children only
         var query = "path:products scope:children";
-        var results = await MeshQuery.QueryAsync(MeshQueryRequest.FromQuery(query), JsonOptions).ToListAsync();
+        var results = await MeshQuery.QueryAsync(MeshQueryRequest.FromQuery(query)).ToListAsync();
 
         // Assert - should find laptop and phone, not accessories (nested) or products itself
         results.Should().HaveCount(2);
@@ -281,13 +273,13 @@ public class QueryAsyncIntegrationTests(ITestOutputHelper output) : MonolithMesh
     public async Task QueryAsync_NamespaceWithScopeChildren_LimitsToImmediateChildren()
     {
         // Arrange
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("org/acme") with { Name = "Acme Corp", NodeType = "company" }, JsonOptions);
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("org/beta") with { Name = "Beta Inc", NodeType = "company" }, JsonOptions);
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("org/acme/project") with { Name = "Project X", NodeType = "project" }, JsonOptions);
+        await Persistence.SaveNodeAsync(MeshNode.FromPath("org/acme") with { Name = "Acme Corp", NodeType = "company" });
+        await Persistence.SaveNodeAsync(MeshNode.FromPath("org/beta") with { Name = "Beta Inc", NodeType = "company" });
+        await Persistence.SaveNodeAsync(MeshNode.FromPath("org/acme/project") with { Name = "Project X", NodeType = "project" });
 
         // Act - namespace:org with scope:children limits to immediate children
         var query = "namespace:org scope:children";
-        var results = await MeshQuery.QueryAsync(MeshQueryRequest.FromQuery(query), JsonOptions).ToListAsync();
+        var results = await MeshQuery.QueryAsync(MeshQueryRequest.FromQuery(query)).ToListAsync();
 
         // Assert - should find only immediate children (acme, beta), not nested (project)
         results.Should().HaveCount(2);
@@ -320,7 +312,7 @@ public class QueryAsyncIntegrationTests(ITestOutputHelper output) : MonolithMesh
             Name = "Project",
             NodeType = "NodeType",
             Description = "A project containing tasks and deliverables"
-        }, JsonOptions);
+        });
 
         // Agent defined as a child of the NodeType
         await Persistence.SaveNodeAsync(MeshNode.FromPath("ACME/Project/TodoAgent") with
@@ -328,7 +320,7 @@ public class QueryAsyncIntegrationTests(ITestOutputHelper output) : MonolithMesh
             Name = "Project Task Agent",
             NodeType = "Agent",
             Description = "Handles all questions and actions related to project tasks"
-        }, JsonOptions);
+        });
 
         // Instance of the NodeType
         await Persistence.SaveNodeAsync(MeshNode.FromPath("ACME/ProductLaunch") with
@@ -336,12 +328,12 @@ public class QueryAsyncIntegrationTests(ITestOutputHelper output) : MonolithMesh
             Name = "MeshFlow Product Launch",
             NodeType = "ACME/Project",  // This points to the NodeType
             Description = "Launch campaign for MeshFlow"
-        }, JsonOptions);
+        });
 
         // Act - Simulate the agent discovery flow
         // Step 1: Get the ProductLaunch node to find its NodeType
         var nodeQuery = "path:ACME/ProductLaunch scope:self";
-        var nodeResults = await MeshQuery.QueryAsync(MeshQueryRequest.FromQuery(nodeQuery), JsonOptions).ToListAsync();
+        var nodeResults = await MeshQuery.QueryAsync(MeshQueryRequest.FromQuery(nodeQuery)).ToListAsync();
         nodeResults.Should().HaveCount(1);
         var productLaunchNode = nodeResults.First() as MeshNode;
         productLaunchNode!.NodeType.Should().Be("ACME/Project");
@@ -349,7 +341,7 @@ public class QueryAsyncIntegrationTests(ITestOutputHelper output) : MonolithMesh
         // Step 2: Query for agents under the NodeType with scope:hierarchy
         var nodeTypePath = productLaunchNode.NodeType;
         var agentQuery = $"path:{nodeTypePath} nodeType:Agent scope:hierarchy";
-        var agentResults = await MeshQuery.QueryAsync(MeshQueryRequest.FromQuery(agentQuery), JsonOptions).ToListAsync();
+        var agentResults = await MeshQuery.QueryAsync(MeshQueryRequest.FromQuery(agentQuery)).ToListAsync();
 
         // Assert - Should find the TodoAgent
         agentResults.Should().HaveCount(1);
@@ -366,30 +358,30 @@ public class QueryAsyncIntegrationTests(ITestOutputHelper output) : MonolithMesh
         {
             Name = "Project",
             NodeType = "NodeType"
-        }, JsonOptions);
+        });
 
         await Persistence.SaveNodeAsync(MeshNode.FromPath("ACME/Project/TodoAgent") with
         {
             Name = "Project Task Agent",
             NodeType = "Agent"
-        }, JsonOptions);
+        });
 
         await Persistence.SaveNodeAsync(MeshNode.FromPath("ACME/Project/ReportAgent") with
         {
             Name = "Project Report Agent",
             NodeType = "Agent"
-        }, JsonOptions);
+        });
 
         // A non-agent child should not be included
         await Persistence.SaveNodeAsync(MeshNode.FromPath("ACME/Project/Todo") with
         {
             Name = "Todo NodeType",
             NodeType = "NodeType"
-        }, JsonOptions);
+        });
 
         // Act
         var agentQuery = "path:ACME/Project nodeType:Agent scope:hierarchy";
-        var agentResults = await MeshQuery.QueryAsync(MeshQueryRequest.FromQuery(agentQuery), JsonOptions).ToListAsync();
+        var agentResults = await MeshQuery.QueryAsync(MeshQueryRequest.FromQuery(agentQuery)).ToListAsync();
 
         // Assert - Should find both agents but not the Todo NodeType
         agentResults.Should().HaveCount(2);
@@ -407,17 +399,17 @@ public class QueryAsyncIntegrationTests(ITestOutputHelper output) : MonolithMesh
         {
             Name = "Project Agent",
             NodeType = "Agent"  // The path itself is an Agent
-        }, JsonOptions);
+        });
 
         await Persistence.SaveNodeAsync(MeshNode.FromPath("ACME/Project/TodoAgent") with
         {
             Name = "Project Task Agent",
             NodeType = "Agent"
-        }, JsonOptions);
+        });
 
         // Act
         var agentQuery = "path:ACME/Project nodeType:Agent scope:hierarchy";
-        var agentResults = await MeshQuery.QueryAsync(MeshQueryRequest.FromQuery(agentQuery), JsonOptions).ToListAsync();
+        var agentResults = await MeshQuery.QueryAsync(MeshQueryRequest.FromQuery(agentQuery)).ToListAsync();
 
         // Assert - Should find both the path itself (if it's an agent) and its children
         agentResults.Should().HaveCount(2);
@@ -441,40 +433,40 @@ public class QueryAsyncIntegrationTests(ITestOutputHelper output) : MonolithMesh
             Name = "Navigator",
             NodeType = "Agent",
             Description = "Global navigation agent"
-        }, JsonOptions);
+        });
 
         // ACME namespace agent
         await Persistence.SaveNodeAsync(MeshNode.FromPath("ACME") with
         {
             Name = "ACME Organization",
             NodeType = "Organization"
-        }, JsonOptions);
+        });
 
         await Persistence.SaveNodeAsync(MeshNode.FromPath("ACME/ACMEAgent") with
         {
             Name = "ACME Agent",
             NodeType = "Agent",
             Description = "ACME-level agent"
-        }, JsonOptions);
+        });
 
         // NodeType at ACME/Project
         await Persistence.SaveNodeAsync(MeshNode.FromPath("ACME/Project") with
         {
             Name = "Project",
             NodeType = "NodeType"
-        }, JsonOptions);
+        });
 
         // Agent under the NodeType
         await Persistence.SaveNodeAsync(MeshNode.FromPath("ACME/Project/TodoAgent") with
         {
             Name = "Project Task Agent",
             NodeType = "Agent"
-        }, JsonOptions);
+        });
 
         // Act - Query with hierarchy scope from ACME/Project
         // Should find: Navigator (root), ACME/ACMEAgent (ancestor's child via hierarchy), ACME/Project/TodoAgent (descendant)
         var agentQuery = "path:ACME/Project nodeType:Agent scope:hierarchy";
-        var agentResults = await MeshQuery.QueryAsync(MeshQueryRequest.FromQuery(agentQuery), JsonOptions).ToListAsync();
+        var agentResults = await MeshQuery.QueryAsync(MeshQueryRequest.FromQuery(agentQuery)).ToListAsync();
 
         // Assert - Should find agents both above and below ACME/Project
         var agentNames = agentResults.Cast<MeshNode>().Select(n => n.Name).ToList();
@@ -498,18 +490,18 @@ public class QueryAsyncIntegrationTests(ITestOutputHelper output) : MonolithMesh
         {
             Name = "ACME Root Agent",
             NodeType = "Agent"  // The ACME node itself is an Agent
-        }, JsonOptions);
+        });
 
         await Persistence.SaveNodeAsync(MeshNode.FromPath("ACME/ProductLaunch") with
         {
             Name = "MeshFlow Product Launch",
             NodeType = "Project"
-        }, JsonOptions);
+        });
 
         // Act - Query for agents looking up the tree from ProductLaunch
         // This checks: ACME/ProductLaunch (self), ACME (parent)
         var agentQuery = "path:ACME/ProductLaunch nodeType:Agent scope:selfAndAncestors";
-        var agentResults = await MeshQuery.QueryAsync(MeshQueryRequest.FromQuery(agentQuery), JsonOptions).ToListAsync();
+        var agentResults = await MeshQuery.QueryAsync(MeshQueryRequest.FromQuery(agentQuery)).ToListAsync();
 
         // Assert - Should find the ACME root agent because it's at the exact parent path
         agentResults.Should().HaveCount(1);
@@ -528,7 +520,7 @@ public class QueryAsyncIntegrationTests(ITestOutputHelper output) : MonolithMesh
         {
             Name = "ACME Root",
             NodeType = "Organization"
-        }, JsonOptions);
+        });
 
         // GlobalAgent is a CHILD of ACME - should be found when searching from ACME/ProductLaunch
         // because ACME is an ancestor, and we search children of ancestors
@@ -536,19 +528,19 @@ public class QueryAsyncIntegrationTests(ITestOutputHelper output) : MonolithMesh
         {
             Name = "Global Agent",
             NodeType = "Agent"
-        }, JsonOptions);
+        });
 
         await Persistence.SaveNodeAsync(MeshNode.FromPath("ACME/ProductLaunch") with
         {
             Name = "MeshFlow Product Launch",
             NodeType = "Project"
-        }, JsonOptions);
+        });
 
         // Act - Query for agents looking up the tree
         // This checks children of: ACME/ProductLaunch (self), ACME (parent), and root
         // GlobalAgent is a child of ACME, so it should be found
         var agentQuery = "path:ACME/ProductLaunch nodeType:Agent scope:selfAndAncestors";
-        var agentResults = await MeshQuery.QueryAsync(MeshQueryRequest.FromQuery(agentQuery), JsonOptions).ToListAsync();
+        var agentResults = await MeshQuery.QueryAsync(MeshQueryRequest.FromQuery(agentQuery)).ToListAsync();
 
         // Assert - Should find GlobalAgent because we search children of ancestors
         agentResults.Should().ContainSingle();

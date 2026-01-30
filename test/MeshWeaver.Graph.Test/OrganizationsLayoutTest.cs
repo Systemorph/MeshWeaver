@@ -28,8 +28,6 @@ namespace MeshWeaver.Graph.Test
     [Collection("OrganizationsLayoutTests")]
     public class OrganizationsLayoutTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
     {
-        private static readonly JsonSerializerOptions SetupJsonOptions = new JsonSerializerOptions();
-        private JsonSerializerOptions _jsonOptions => Mesh.ServiceProvider.GetRequiredService<IMessageHub>().JsonSerializerOptions;
         private static readonly string TestDirectoryBase = Path.Combine(Path.GetTempPath(), "MeshWeaverOrganizationsTests");
         private string? _testDirectory;
 
@@ -85,7 +83,7 @@ namespace MeshWeaver.Graph.Test
                     ChildrenQuery = "$source=activity;nodeType==Organization;$orderBy=lastAccessedAt:desc;$limit=20"
                 }
             };
-            await persistence.SaveNodeAsync(organizationTypeNode, SetupJsonOptions);
+            await persistence.SaveNodeAsync(organizationTypeNode);
 
             // 2. Create some Organization instances that will be found by ChildrenQuery
             var acme = new MeshNode("Acme")
@@ -97,7 +95,7 @@ namespace MeshWeaver.Graph.Test
                 IsPersistent = true,
                 Content = new { Id = "Acme", Name = "Acme Corporation", Description = "A famous company", Logo = "/static/Organization/logos/acme.png" }
             };
-            await persistence.SaveNodeAsync(acme, SetupJsonOptions);
+            await persistence.SaveNodeAsync(acme);
 
             var contoso = new MeshNode("Contoso")
             {
@@ -108,7 +106,7 @@ namespace MeshWeaver.Graph.Test
                 IsPersistent = true,
                 Content = new { Id = "Contoso", Name = "Contoso Ltd", Description = "Another company", Logo = "/static/Organization/logos/contoso.png" }
             };
-            await persistence.SaveNodeAsync(contoso, SetupJsonOptions);
+            await persistence.SaveNodeAsync(contoso);
 
             var fabrikam = new MeshNode("Fabrikam")
             {
@@ -119,7 +117,7 @@ namespace MeshWeaver.Graph.Test
                 IsPersistent = true,
                 Content = new { Id = "Fabrikam", Name = "Fabrikam Inc", Description = "Yet another company", Logo = "/static/Organization/logos/fabrikam.png" }
             };
-            await persistence.SaveNodeAsync(fabrikam, SetupJsonOptions);
+            await persistence.SaveNodeAsync(fabrikam);
 
             // 3. Create the graph root node (needed for initialization)
             var graphNode = MeshNode.FromPath("graph") with
@@ -128,7 +126,7 @@ namespace MeshWeaver.Graph.Test
                 NodeType = "type/graph",
                 IsPersistent = true
             };
-            await persistence.SaveNodeAsync(graphNode, SetupJsonOptions);
+            await persistence.SaveNodeAsync(graphNode);
 
             // 4. Create type/graph type definition
             var graphTypeNode = new MeshNode("graph", "type")
@@ -144,13 +142,13 @@ namespace MeshWeaver.Graph.Test
                     Configuration = "config => config"
                 }
             };
-            await persistence.SaveNodeAsync(graphTypeNode, SetupJsonOptions);
+            await persistence.SaveNodeAsync(graphTypeNode);
 
             var graphCodeConfig = new CodeConfiguration
             {
                 Code = "public record Graph { }"
             };
-            await persistence.SavePartitionObjectsAsync("type/graph", null, [graphCodeConfig], SetupJsonOptions);
+            await persistence.SavePartitionObjectsAsync("type/graph", null, [graphCodeConfig]);
         }
 
         protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
@@ -240,7 +238,7 @@ namespace MeshWeaver.Graph.Test
             var persistence = Mesh.ServiceProvider.GetRequiredService<IPersistenceService>();
 
             // Act - get the Organization node directly from persistence
-            var nodeTypeNode = await persistence.GetNodeAsync("Organization", _jsonOptions, TestContext.Current.CancellationToken);
+            var nodeTypeNode = await persistence.GetNodeAsync("Organization", TestContext.Current.CancellationToken);
 
             // Assert
             nodeTypeNode.Should().NotBeNull(
@@ -260,7 +258,7 @@ namespace MeshWeaver.Graph.Test
             var persistence = Mesh.ServiceProvider.GetRequiredService<IPersistenceService>();
 
             // Act - get the Organization node
-            var nodeTypeNode = await persistence.GetNodeAsync("Organization", _jsonOptions, TestContext.Current.CancellationToken);
+            var nodeTypeNode = await persistence.GetNodeAsync("Organization", TestContext.Current.CancellationToken);
 
             // Assert
             nodeTypeNode.Should().NotBeNull("Organization should exist");
@@ -284,7 +282,7 @@ namespace MeshWeaver.Graph.Test
             var persistence = Mesh.ServiceProvider.GetRequiredService<IPersistenceService>();
 
             // Act - get the Organization node
-            var nodeTypeNode = await persistence.GetNodeAsync("Organization", _jsonOptions, TestContext.Current.CancellationToken);
+            var nodeTypeNode = await persistence.GetNodeAsync("Organization", TestContext.Current.CancellationToken);
 
             // Assert
             nodeTypeNode.Should().NotBeNull("Organization should exist");
@@ -310,7 +308,7 @@ namespace MeshWeaver.Graph.Test
             var query = "nodeType:Organization scope:descendants";
 
             // Act - execute the query (from root to find all matching nodes)
-            var nodes = await meshQuery.QueryAsync<MeshNode>(query, _jsonOptions, null, TestContext.Current.CancellationToken).ToListAsync(TestContext.Current.CancellationToken);
+            var nodes = await meshQuery.QueryAsync<MeshNode>(query, ct: TestContext.Current.CancellationToken).ToListAsync(TestContext.Current.CancellationToken);
 
             // Assert - should find all 3 Organization instances (Acme, Contoso, Fabrikam)
             nodes.Should().HaveCount(3, "Should find all 3 Organization instances");
@@ -329,7 +327,7 @@ namespace MeshWeaver.Graph.Test
             var persistence = Mesh.ServiceProvider.GetRequiredService<IPersistenceService>();
 
             // Act - get an organization instance
-            var acmeNode = await persistence.GetNodeAsync("Acme", _jsonOptions, TestContext.Current.CancellationToken);
+            var acmeNode = await persistence.GetNodeAsync("Acme", TestContext.Current.CancellationToken);
 
             // Assert
             acmeNode.Should().NotBeNull("Acme should exist");

@@ -140,7 +140,7 @@ public class UnifiedReferenceAutocompleteProvider(
             IAsyncEnumerable<QuerySuggestion>? suggestions = null;
             try
             {
-                suggestions = meshQuery.AutocompleteAsync(currentNamespace, prefix, JsonOptions, 10, ct);
+                suggestions = meshQuery.AutocompleteAsync(currentNamespace, prefix, 10, ct);
             }
             catch
             {
@@ -173,7 +173,7 @@ public class UnifiedReferenceAutocompleteProvider(
             try
             {
                 // Query from root (empty base path) to get all top-level nodes
-                suggestions = meshQuery.AutocompleteAsync("", prefix, JsonOptions, 15, ct);
+                suggestions = meshQuery.AutocompleteAsync("", prefix, 15, ct);
             }
             catch
             {
@@ -238,7 +238,7 @@ public class UnifiedReferenceAutocompleteProvider(
         IAsyncEnumerable<QuerySuggestion>? suggestions = null;
         try
         {
-            suggestions = meshQuery.AutocompleteAsync(addressType, prefix, JsonOptions, 15, ct);
+            suggestions = meshQuery.AutocompleteAsync(addressType, prefix, 15, ct);
         }
         catch
         {
@@ -287,7 +287,7 @@ public class UnifiedReferenceAutocompleteProvider(
         IAsyncEnumerable<QuerySuggestion>? suggestions = null;
         try
         {
-            suggestions = meshQuery.AutocompleteAsync(address, prefix, JsonOptions, 15, ct);
+            suggestions = meshQuery.AutocompleteAsync(address, prefix, 15, ct);
         }
         catch
         {
@@ -325,7 +325,7 @@ public class UnifiedReferenceAutocompleteProvider(
         IAsyncEnumerable<QuerySuggestion>? suggestions = null;
         try
         {
-            suggestions = meshQuery.AutocompleteAsync(searchPath, prefix, JsonOptions, 15, ct);
+            suggestions = meshQuery.AutocompleteAsync(searchPath, prefix, 15, ct);
         }
         catch
         {

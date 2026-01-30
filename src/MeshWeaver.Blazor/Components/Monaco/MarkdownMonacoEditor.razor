@@ -109,7 +109,7 @@
 
     private async Task<CompletionItem[]> GetTopLevelNodesAsync()
     {
-        var suggestions = await MeshQuery!.AutocompleteAsync("", "", Hub.JsonSerializerOptions, 20).ToArrayAsync();
+        var suggestions = await MeshQuery!.AutocompleteAsync("", "", 20).ToArrayAsync();
         return suggestions.Select(s => new CompletionItem
         {
             Label = $"{s.Path}/",
@@ -122,7 +122,7 @@
 
     private async Task<CompletionItem[]> GetChildNodesAsync(string basePath)
     {
-        var suggestions = await MeshQuery!.AutocompleteAsync(basePath, "", Hub.JsonSerializerOptions, 20).ToArrayAsync();
+        var suggestions = await MeshQuery!.AutocompleteAsync(basePath, "", 20).ToArrayAsync();
         return suggestions.Select(s => new CompletionItem
         {
             Label = $"{s.Path}/",
@@ -135,7 +135,7 @@
 
     private async Task<CompletionItem[]> GetNodesMatchingPrefixAsync(string prefix)
     {
-        var suggestions = await MeshQuery!.AutocompleteAsync("", prefix, Hub.JsonSerializerOptions, 20).ToArrayAsync();
+        var suggestions = await MeshQuery!.AutocompleteAsync("", prefix, 20).ToArrayAsync();
         return suggestions.Select(s => new CompletionItem
         {
             Label = $"{s.Path}/",
@@ -148,7 +148,7 @@
 
     private async Task<CompletionItem[]> SearchNodesAsync(string query)
     {
-        var suggestions = await MeshQuery!.AutocompleteAsync("", query, Hub.JsonSerializerOptions, 20).ToArrayAsync();
+        var suggestions = await MeshQuery!.AutocompleteAsync("", query, 20).ToArrayAsync();
         return suggestions.Select(s => new CompletionItem
         {
             Label = s.Path,

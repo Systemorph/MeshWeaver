@@ -9,7 +9,6 @@ using MeshWeaver.Layout;
 using MeshWeaver.Layout.Catalog;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
-using MeshWeaver.Messaging;
 
 namespace MeshWeaver.Blazor.Components;
 
@@ -34,11 +33,6 @@ public partial class MeshSearchView : IDisposable
 
     [Inject]
     private IMeshQuery MeshQuery { get; set; } = default!;
-
-    [Inject]
-    private IMessageHub Hub { get; set; } = default!;
-
-    private JsonSerializerOptions Options => Stream?.Hub.JsonSerializerOptions ?? Hub.JsonSerializerOptions;
 
     [Parameter]
     public MeshSearchControl? ViewModel { get; set; }
@@ -149,7 +143,7 @@ public partial class MeshSearchView : IDisposable
         try
         {
             var query = BuildFullQuery();
-            _nodes = await MeshQuery.QueryAsync<MeshNode>(query, Options).ToListAsync();
+            _nodes = await MeshQuery.QueryAsync<MeshNode>(query).ToListAsync();
 
             // Exclude base path node if configured
             if (BoundExcludeBasePath && !string.IsNullOrEmpty(BoundNamespace))
@@ -340,7 +334,7 @@ public partial class MeshSearchView : IDisposable
                 : $"namespace:{BoundNamespace} *{query}* scope:descendants";
 
             var request = new MeshQueryRequest { Query = searchQuery, Limit = 10 };
-            var results = await MeshQuery.QueryAsync<MeshNode>(request, Options).ToArrayAsync();
+            var results = await MeshQuery.QueryAsync<MeshNode>(request).ToArrayAsync();
 
             return results.Select(node => new CompletionItem
             {

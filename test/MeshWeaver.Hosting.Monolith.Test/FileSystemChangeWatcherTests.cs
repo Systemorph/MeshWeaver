@@ -28,10 +28,8 @@ public class FileSystemChangeWatcherTests(ITestOutputHelper output) : MonolithMe
     private readonly DataChangeNotifier _changeNotifier = new();
     private FileSystemStorageAdapter? _storageAdapterInstance;
     private FileSystemStorageAdapter _storageAdapter => _storageAdapterInstance ??= CreateStorageAdapter();
-    private FileSystemPersistenceService? _persistenceInstance;
-    private FileSystemPersistenceService _persistence => _persistenceInstance ??= new(_storageAdapter, _changeNotifier);
-    private IMeshQuery? _meshQueryInstance;
-    private IMeshQuery _meshQuery => _meshQueryInstance ??= new InMemoryMeshQuery(_persistence, changeNotifier: _changeNotifier);
+    protected IPersistenceService Persistence => Mesh.ServiceProvider.GetRequiredService<IPersistenceService>();
+    protected IMeshQuery MeshQuery => Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
     private FileSystemChangeWatcher? _watcherInstance;
     private FileSystemChangeWatcher _watcher => _watcherInstance ??= new(_testDirectory, _storageAdapter, _changeNotifier, JsonOptions) { DebounceIntervalMs = 50 };
     private JsonSerializerOptions JsonOptions => Mesh.ServiceProvider.GetRequiredService<IMessageHub>().JsonSerializerOptions;
@@ -91,8 +89,8 @@ public class FileSystemChangeWatcherTests(ITestOutputHelper output) : MonolithMe
         // Arrange
         var receivedChanges = new List<QueryResultChange<MeshNode>>();
 
-        var subscription = _meshQuery
-            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery("path:external scope:descendants"), JsonOptions)
+        var subscription = MeshQuery
+            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery("path:external scope:descendants"))
             .Subscribe(change => receivedChanges.Add(change));
 
         await Task.Delay(200);
@@ -206,12 +204,12 @@ public class FileSystemChangeWatcherTests(ITestOutputHelper output) : MonolithMe
     public async Task ExternalFileDeletion_ObserveQueryReceivesRemoval()
     {
         // Arrange - Create a node first
-        await _persistence.SaveNodeAsync(MeshNode.FromPath("external/node1") with { Name = "Node 1", NodeType = "Test" }, JsonOptions);
+        await Persistence.SaveNodeAsync(MeshNode.FromPath("external/node1") with { Name = "Node 1", NodeType = "Test" });
 
         var receivedChanges = new List<QueryResultChange<MeshNode>>();
 
-        var subscription = _meshQuery
-            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery("path:external scope:descendants"), JsonOptions)
+        var subscription = MeshQuery
+            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery("path:external scope:descendants"))
             .Subscribe(change => receivedChanges.Add(change));
 
         await Task.Delay(200);

@@ -1,5 +1,4 @@
 using System.Runtime.CompilerServices;
-using System.Text.Json;
 using MeshWeaver.AI.Threading;
 using MeshWeaver.Mesh.Services;
 
@@ -18,17 +17,15 @@ public static class ChatPersistenceHelper
     /// <param name="persistence">The persistence service.</param>
     /// <param name="partitionPath">The partition path (e.g., "User/{userId}/Chat").</param>
     /// <param name="chat">The chat to save.</param>
-    /// <param name="options">JSON serializer options for type polymorphism.</param>
     /// <param name="ct">Cancellation token.</param>
     public static async Task SaveChatAsync(
         IPersistenceService persistence,
         string partitionPath,
         Chat chat,
-        JsonSerializerOptions options,
         CancellationToken ct = default)
     {
         // Save the chat as a partition object
-        await persistence.SavePartitionObjectsAsync(partitionPath, null, [chat], options, ct);
+        await persistence.SavePartitionObjectsAsync(partitionPath, null, [chat], ct);
     }
 
     /// <summary>
@@ -37,17 +34,15 @@ public static class ChatPersistenceHelper
     /// <param name="persistence">The persistence service.</param>
     /// <param name="partitionPath">The partition path.</param>
     /// <param name="chatId">The chat ID to load.</param>
-    /// <param name="options">JSON serializer options for type polymorphism.</param>
     /// <param name="ct">Cancellation token.</param>
     /// <returns>The chat if found, null otherwise.</returns>
     public static async Task<Chat?> LoadChatAsync(
         IPersistenceService persistence,
         string partitionPath,
         string chatId,
-        JsonSerializerOptions options,
         CancellationToken ct = default)
     {
-        await foreach (var obj in persistence.GetPartitionObjectsAsync(partitionPath, null, options).WithCancellation(ct))
+        await foreach (var obj in persistence.GetPartitionObjectsAsync(partitionPath, null).WithCancellation(ct))
         {
             if (obj is Chat chat && chat.Id == chatId)
             {
@@ -63,16 +58,14 @@ public static class ChatPersistenceHelper
     /// </summary>
     /// <param name="persistence">The persistence service.</param>
     /// <param name="partitionPath">The partition path.</param>
-    /// <param name="options">JSON serializer options for type polymorphism.</param>
     /// <param name="ct">Cancellation token.</param>
     /// <returns>Async enumerable of chats.</returns>
     public static async IAsyncEnumerable<Chat> ListChatsAsync(
         IPersistenceService persistence,
         string partitionPath,
-        JsonSerializerOptions options,
         [EnumeratorCancellation] CancellationToken ct = default)
     {
-        await foreach (var obj in persistence.GetPartitionObjectsAsync(partitionPath, null, options).WithCancellation(ct))
+        await foreach (var obj in persistence.GetPartitionObjectsAsync(partitionPath, null).WithCancellation(ct))
         {
             if (obj is Chat chat)
             {
@@ -87,18 +80,16 @@ public static class ChatPersistenceHelper
     /// <param name="persistence">The persistence service.</param>
     /// <param name="partitionPath">The partition path.</param>
     /// <param name="chatId">The chat ID to delete.</param>
-    /// <param name="options">JSON serializer options for type polymorphism.</param>
     /// <param name="ct">Cancellation token.</param>
     public static async Task DeleteChatAsync(
         IPersistenceService persistence,
         string partitionPath,
         string chatId,
-        JsonSerializerOptions options,
         CancellationToken ct = default)
     {
         // Load all chats except the one to delete, then save back
         var remainingChats = new List<Chat>();
-        await foreach (var obj in persistence.GetPartitionObjectsAsync(partitionPath, null, options).WithCancellation(ct))
+        await foreach (var obj in persistence.GetPartitionObjectsAsync(partitionPath, null).WithCancellation(ct))
         {
             if (obj is Chat chat && chat.Id != chatId)
             {
@@ -110,7 +101,7 @@ public static class ChatPersistenceHelper
         await persistence.DeletePartitionObjectsAsync(partitionPath, null, ct);
         if (remainingChats.Count > 0)
         {
-            await persistence.SavePartitionObjectsAsync(partitionPath, null, remainingChats.Cast<object>().ToArray(), options, ct);
+            await persistence.SavePartitionObjectsAsync(partitionPath, null, remainingChats.Cast<object>().ToArray(), ct);
         }
     }
 

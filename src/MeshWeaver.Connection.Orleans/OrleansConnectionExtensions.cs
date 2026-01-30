@@ -36,8 +36,8 @@ public static class OrleansConnectionExtensions
 
     private static IServiceCollection AddOrleansMeshServices(this IServiceCollection services)
     {
-        // Register defaults - MeshCatalog requires IPersistenceService
-        services.TryAddSingleton<IPersistenceService>(new InMemoryPersistenceService());
+        // Register defaults - MeshCatalog requires IPersistenceServiceCore
+        services.TryAddSingleton<IPersistenceServiceCore>(new InMemoryPersistenceService());
         services.TryAddSingleton<IRoutingService, OrleansRoutingService>();
         return services;
     }

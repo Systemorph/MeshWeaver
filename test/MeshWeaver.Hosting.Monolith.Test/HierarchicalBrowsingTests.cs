@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Text.Json;
 using System.Threading.Tasks;
 using FluentAssertions;
 using MeshWeaver.Domain;
@@ -10,7 +9,6 @@ using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Hosting.Persistence.Query;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
-using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
@@ -22,28 +20,8 @@ namespace MeshWeaver.Hosting.Monolith.Test;
 /// </summary>
 public class HierarchicalBrowsingTests(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
-    private InMemoryPersistenceService? _persistence;
-    private IMeshQuery? _meshQuery;
-    private bool _setupDone;
-    private JsonSerializerOptions JsonOptions => Mesh.ServiceProvider.GetRequiredService<IMessageHub>().JsonSerializerOptions;
-
-    private InMemoryPersistenceService Persistence => _persistence ??= InitPersistence();
-    private IMeshQuery MeshQuery => _meshQuery ??= new InMemoryMeshQuery(Persistence);
-
-    private InMemoryPersistenceService InitPersistence()
-    {
-        var persistence = new InMemoryPersistenceService();
-        _persistence = persistence;
-        EnsureSetup();
-        return persistence;
-    }
-
-    private void EnsureSetup()
-    {
-        if (_setupDone) return;
-        _setupDone = true;
-        SetupMarketingHierarchy().GetAwaiter().GetResult();
-    }
+    protected IPersistenceService Persistence => Mesh.ServiceProvider.GetRequiredService<IPersistenceService>();
+    protected IMeshQuery MeshQuery => Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
 
     private async Task SetupMarketingHierarchy()
     {
@@ -54,21 +32,21 @@ public class HierarchicalBrowsingTests(ITestOutputHelper output) : MonolithMeshT
             Name = "Marketing",
             NodeType = "Namespace",
             Description = "Marketing namespace"
-        }, JsonOptions);
+        });
 
         await Persistence.SaveNodeAsync(MeshNode.FromPath("Systemorph/Marketing/ClaimsProcessing") with
         {
             Name = "Claims Processing",
             NodeType = "Systemorph/Marketing/Story",
             Description = "Claims processing and email management use case"
-        }, JsonOptions);
+        });
 
         await Persistence.SaveNodeAsync(MeshNode.FromPath("Systemorph/Marketing/DataIngestionStrategy") with
         {
             Name = "Data Ingestion Strategy",
             NodeType = "Systemorph/Marketing/Story",
             Description = "Data ingestion and integration patterns"
-        }, JsonOptions);
+        });
 
         // Sub-stories of ClaimsProcessing
         await Persistence.SaveNodeAsync(MeshNode.FromPath("Systemorph/Marketing/ClaimsProcessing/EmailTriage") with
@@ -76,21 +54,21 @@ public class HierarchicalBrowsingTests(ITestOutputHelper output) : MonolithMeshT
             Name = "Email Triage",
             NodeType = "Systemorph/Marketing/Story",
             Description = "AI-driven email classification, prioritization, and routing"
-        }, JsonOptions);
+        });
 
         await Persistence.SaveNodeAsync(MeshNode.FromPath("Systemorph/Marketing/ClaimsProcessing/DocumentExtraction") with
         {
             Name = "Document Extraction",
             NodeType = "Systemorph/Marketing/Story",
             Description = "Extract structured data from claims documents"
-        }, JsonOptions);
+        });
 
         await Persistence.SaveNodeAsync(MeshNode.FromPath("Systemorph/Marketing/ClaimsProcessing/ClientCorrespondence") with
         {
             Name = "Client Correspondence",
             NodeType = "Systemorph/Marketing/Story",
             Description = "AI-assisted client communication"
-        }, JsonOptions);
+        });
 
         // Sub-stories of DataIngestionStrategy
         await Persistence.SaveNodeAsync(MeshNode.FromPath("Systemorph/Marketing/DataIngestionStrategy/AnnotatedDataModel") with
@@ -98,14 +76,14 @@ public class HierarchicalBrowsingTests(ITestOutputHelper output) : MonolithMeshT
             Name = "Annotated Data Model",
             NodeType = "Systemorph/Marketing/Story",
             Description = "Self-documenting data models"
-        }, JsonOptions);
+        });
 
         await Persistence.SaveNodeAsync(MeshNode.FromPath("Systemorph/Marketing/DataIngestionStrategy/HistoricIngestion") with
         {
             Name = "Historic Ingestion",
             NodeType = "Systemorph/Marketing/Story",
             Description = "Batch ingestion of historical data"
-        }, JsonOptions);
+        });
     }
 
     [Fact]
@@ -113,7 +91,7 @@ public class HierarchicalBrowsingTests(ITestOutputHelper output) : MonolithMeshT
     {
         // Query all Story nodes under Marketing using path: in query string
         var query = "path:Systemorph/Marketing nodeType:Systemorph/Marketing/Story scope:descendants";
-        var results = await MeshQuery.QueryAsync(MeshQueryRequest.FromQuery(query), JsonOptions).ToListAsync();
+        var results = await MeshQuery.QueryAsync(MeshQueryRequest.FromQuery(query)).ToListAsync();
 
         // Should find all 7 stories (2 parent + 5 sub-stories)
         results.Should().HaveCount(7);
@@ -134,7 +112,7 @@ public class HierarchicalBrowsingTests(ITestOutputHelper output) : MonolithMeshT
         // Query stories under ClaimsProcessing only using path: in query string
         // scope:subtree includes the base path itself plus all descendants
         var query = "path:Systemorph/Marketing/ClaimsProcessing nodeType:Systemorph/Marketing/Story scope:subtree";
-        var results = await MeshQuery.QueryAsync(MeshQueryRequest.FromQuery(query), JsonOptions).ToListAsync();
+        var results = await MeshQuery.QueryAsync(MeshQueryRequest.FromQuery(query)).ToListAsync();
 
         // Should find ClaimsProcessing + 3 sub-stories (4 total)
         results.Should().HaveCount(4);
@@ -155,7 +133,7 @@ public class HierarchicalBrowsingTests(ITestOutputHelper output) : MonolithMeshT
         // Use IMeshQuery with path: in query string (replaces old Namespace property)
         // scope:subtree includes the base path itself plus all descendants
         var query = "path:Systemorph/Marketing/ClaimsProcessing nodeType:Systemorph/Marketing/Story scope:subtree";
-        var results = await MeshQuery.QueryAsync(MeshQueryRequest.FromQuery(query), JsonOptions).ToListAsync();
+        var results = await MeshQuery.QueryAsync(MeshQueryRequest.FromQuery(query)).ToListAsync();
 
         // Should only return nodes under ClaimsProcessing path (ClaimsProcessing + 3 sub-stories = 4)
         results.Should().HaveCount(4);
@@ -167,11 +145,11 @@ public class HierarchicalBrowsingTests(ITestOutputHelper output) : MonolithMeshT
     public async Task Query_ParentStory_HasCorrectChildren()
     {
         // Get ClaimsProcessing node
-        var claimsNode = await Persistence.GetNodeAsync("Systemorph/Marketing/ClaimsProcessing", JsonOptions);
+        var claimsNode = await Persistence.GetNodeAsync("Systemorph/Marketing/ClaimsProcessing");
         claimsNode.Should().NotBeNull();
 
         // Get direct children
-        var children = await Persistence.GetChildrenAsync(claimsNode!.Path, JsonOptions).ToListAsync();
+        var children = await Persistence.GetChildrenAsync(claimsNode!.Path).ToListAsync();
 
         children.Should().HaveCount(3);
         children.Select(n => n.Name).Should().Contain([
@@ -185,14 +163,14 @@ public class HierarchicalBrowsingTests(ITestOutputHelper output) : MonolithMeshT
     public async Task Query_SubStory_HasCorrectParent()
     {
         // Get a sub-story
-        var emailTriageNode = await Persistence.GetNodeAsync("Systemorph/Marketing/ClaimsProcessing/EmailTriage", JsonOptions);
+        var emailTriageNode = await Persistence.GetNodeAsync("Systemorph/Marketing/ClaimsProcessing/EmailTriage");
         emailTriageNode.Should().NotBeNull();
 
         // Verify parent path
         emailTriageNode!.ParentPath.Should().Be("Systemorph/Marketing/ClaimsProcessing");
 
         // Get parent
-        var parentNode = await Persistence.GetNodeAsync(emailTriageNode.ParentPath, JsonOptions);
+        var parentNode = await Persistence.GetNodeAsync(emailTriageNode.ParentPath);
         parentNode.Should().NotBeNull();
         parentNode!.Name.Should().Be("Claims Processing");
     }
@@ -201,7 +179,7 @@ public class HierarchicalBrowsingTests(ITestOutputHelper output) : MonolithMeshT
     public async Task Autocomplete_ReturnsMatchingNodes()
     {
         // Test autocomplete for "Email"
-        var suggestions = await MeshQuery.AutocompleteAsync("Systemorph/Marketing", "Email", JsonOptions, 10).ToListAsync();
+        var suggestions = await MeshQuery.AutocompleteAsync("Systemorph/Marketing", "Email", 10).ToListAsync();
 
         suggestions.Should().HaveCount(1);
         suggestions[0].Name.Should().Be("Email Triage");
@@ -212,7 +190,7 @@ public class HierarchicalBrowsingTests(ITestOutputHelper output) : MonolithMeshT
     public async Task Autocomplete_FuzzyMatching_FindsPartialMatches()
     {
         // Test autocomplete with partial match
-        var suggestions = await MeshQuery.AutocompleteAsync("Systemorph/Marketing", "claim", JsonOptions, 10).ToListAsync();
+        var suggestions = await MeshQuery.AutocompleteAsync("Systemorph/Marketing", "claim", 10).ToListAsync();
 
         // Should find Claims Processing and its sub-stories
         suggestions.Should().Contain(s => s.Name == "Claims Processing");
@@ -223,7 +201,7 @@ public class HierarchicalBrowsingTests(ITestOutputHelper output) : MonolithMeshT
     {
         // Search for "AI" in descriptions using path: in query string
         var query = "path:Systemorph/Marketing AI scope:descendants";
-        var results = await MeshQuery.QueryAsync(MeshQueryRequest.FromQuery(query), JsonOptions).ToListAsync();
+        var results = await MeshQuery.QueryAsync(MeshQueryRequest.FromQuery(query)).ToListAsync();
 
         // Should find Email Triage and Client Correspondence which mention AI
         results.Should().HaveCountGreaterThanOrEqualTo(2);
@@ -237,7 +215,7 @@ public class HierarchicalBrowsingTests(ITestOutputHelper output) : MonolithMeshT
     {
         // Use limit: in query string
         var query = "path:Systemorph/Marketing nodeType:Systemorph/Marketing/Story scope:descendants limit:3";
-        var results = await MeshQuery.QueryAsync(MeshQueryRequest.FromQuery(query), JsonOptions).ToListAsync();
+        var results = await MeshQuery.QueryAsync(MeshQueryRequest.FromQuery(query)).ToListAsync();
 
         results.Should().HaveCount(3);
     }
@@ -251,7 +229,7 @@ public class HierarchicalBrowsingTests(ITestOutputHelper output) : MonolithMeshT
             Query = "path:Systemorph/Marketing nodeType:Systemorph/Marketing/Story scope:descendants limit:10",
             Limit = 2
         };
-        var results = await MeshQuery.QueryAsync(request, JsonOptions).ToListAsync();
+        var results = await MeshQuery.QueryAsync(request).ToListAsync();
 
         // Limit property (2) overrides query string limit (10)
         results.Should().HaveCount(2);
@@ -262,7 +240,7 @@ public class HierarchicalBrowsingTests(ITestOutputHelper output) : MonolithMeshT
     {
         // Query all 7 stories to get consistent ordering
         var allQuery = "path:Systemorph/Marketing nodeType:Systemorph/Marketing/Story scope:descendants";
-        var allResults = await MeshQuery.QueryAsync(MeshQueryRequest.FromQuery(allQuery), JsonOptions).ToListAsync();
+        var allResults = await MeshQuery.QueryAsync(MeshQueryRequest.FromQuery(allQuery)).ToListAsync();
         allResults.Should().HaveCount(7);
 
         // Get first page (skip 0, limit 3)
@@ -272,7 +250,7 @@ public class HierarchicalBrowsingTests(ITestOutputHelper output) : MonolithMeshT
             Skip = 0,
             Limit = 3
         };
-        var page1 = await MeshQuery.QueryAsync(page1Request, JsonOptions).ToListAsync();
+        var page1 = await MeshQuery.QueryAsync(page1Request).ToListAsync();
         page1.Should().HaveCount(3);
 
         // Get second page (skip 3, limit 3)
@@ -282,7 +260,7 @@ public class HierarchicalBrowsingTests(ITestOutputHelper output) : MonolithMeshT
             Skip = 3,
             Limit = 3
         };
-        var page2 = await MeshQuery.QueryAsync(page2Request, JsonOptions).ToListAsync();
+        var page2 = await MeshQuery.QueryAsync(page2Request).ToListAsync();
         page2.Should().HaveCount(3);
 
         // Get third page (skip 6, limit 3) - only 1 item left
@@ -292,7 +270,7 @@ public class HierarchicalBrowsingTests(ITestOutputHelper output) : MonolithMeshT
             Skip = 6,
             Limit = 3
         };
-        var page3 = await MeshQuery.QueryAsync(page3Request, JsonOptions).ToListAsync();
+        var page3 = await MeshQuery.QueryAsync(page3Request).ToListAsync();
         page3.Should().HaveCount(1);
 
         // All pages should contain different items
@@ -306,7 +284,7 @@ public class HierarchicalBrowsingTests(ITestOutputHelper output) : MonolithMeshT
     {
         // Query with hierarchy scope from a sub-story using path: in query string
         var query = "path:Systemorph/Marketing/ClaimsProcessing/EmailTriage scope:hierarchy";
-        var results = await MeshQuery.QueryAsync(MeshQueryRequest.FromQuery(query), JsonOptions).ToListAsync();
+        var results = await MeshQuery.QueryAsync(MeshQueryRequest.FromQuery(query)).ToListAsync();
 
         // Should include the node itself, ancestors, and any descendants
         var paths = results.Cast<MeshNode>().Select(n => n.Path).ToList();
@@ -322,12 +300,8 @@ public class HierarchicalBrowsingTests(ITestOutputHelper output) : MonolithMeshT
 /// </summary>
 public class TypedQueryTests(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
-    private InMemoryPersistenceService? _persistence;
-    private IMeshQuery? _meshQuery;
-    private JsonSerializerOptions JsonOptions => Mesh.ServiceProvider.GetRequiredService<IMessageHub>().JsonSerializerOptions;
-
-    private InMemoryPersistenceService Persistence => _persistence ??= new InMemoryPersistenceService();
-    private IMeshQuery MeshQuery => _meshQuery ??= new InMemoryMeshQuery(Persistence);
+    protected IPersistenceService Persistence => Mesh.ServiceProvider.GetRequiredService<IPersistenceService>();
+    protected IMeshQuery MeshQuery => Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
 
     [Fact]
     public async Task QueryAsync_Generic_ReturnsTypedResults()
@@ -339,12 +313,12 @@ public class TypedQueryTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
             new TestProduct { Id = "2", Name = "Phone", Price = 499.99m },
             new TestOrder { Id = "order-1", CustomerId = "cust-1", Total = 1500m }
         };
-        await Persistence.SavePartitionObjectsAsync("shop/inventory", null, products, JsonOptions);
+        await Persistence.SavePartitionObjectsAsync("shop/inventory", null, products);
 
         // Act - query for TestProduct type only
         // Use scope:subtree to include the base path where partition objects are stored
         var results = await MeshQuery.QueryAsync<TestProduct>(
-            "path:shop/inventory scope:subtree", JsonOptions
+            "path:shop/inventory scope:subtree"
         ).ToListAsync();
 
         // Assert - should only return TestProduct items
@@ -362,12 +336,12 @@ public class TypedQueryTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
             new TestProduct { Id = "1", Name = "Laptop", Price = 999.99m },
             new TestOrder { Id = "order-1", CustomerId = "cust-1", Total = 1500m }
         };
-        await Persistence.SavePartitionObjectsAsync("shop/data", null, products, JsonOptions);
+        await Persistence.SavePartitionObjectsAsync("shop/data", null, products);
 
         // Act - query without type registry (uses CLR type name "TestProduct")
         // Use scope:subtree to include the base path where partition objects are stored
         var results = await MeshQuery.QueryAsync<TestProduct>(
-            "path:shop/data scope:subtree", JsonOptions
+            "path:shop/data scope:subtree"
         ).ToListAsync();
 
         // Assert - should find TestProduct by CLR type name
@@ -383,12 +357,12 @@ public class TypedQueryTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
             .Select(i => new TestProduct { Id = i.ToString(), Name = $"Product {i}", Price = i * 10m })
             .Cast<object>()
             .ToList();
-        await Persistence.SavePartitionObjectsAsync("catalog/products", null, products, JsonOptions);
+        await Persistence.SavePartitionObjectsAsync("catalog/products", null, products);
 
         // Act - get page 2 (skip 3, take 3)
         // Use scope:subtree to include the base path where partition objects are stored
         var results = await MeshQuery.QueryAsync<TestProduct>(
-            "path:catalog/products scope:subtree", JsonOptions,
+            "path:catalog/products scope:subtree",
             skip: 3,
             limit: 3
         ).ToListAsync();
@@ -409,12 +383,12 @@ public class TypedQueryTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
             new TestProduct { Id = "3", Name = "Phone", Price = 499.99m },
             new TestOrder { Id = "order-1", CustomerId = "cust-1", Total = 1500m }
         };
-        await Persistence.SavePartitionObjectsAsync("shop/all", null, products, JsonOptions);
+        await Persistence.SavePartitionObjectsAsync("shop/all", null, products);
 
         // Act - query for TestProduct with name filter
         // Use scope:subtree to include the base path where partition objects are stored
         var results = await MeshQuery.QueryAsync<TestProduct>(
-            "path:shop/all name:*Laptop* scope:subtree", JsonOptions
+            "path:shop/all name:*Laptop* scope:subtree"
         ).ToListAsync();
 
         // Assert - should only return laptops (both gaming and business)
@@ -431,12 +405,12 @@ public class TypedQueryTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
             new TestOrder { Id = "order-1", CustomerId = "cust-1", Total = 100m },
             new TestOrder { Id = "order-2", CustomerId = "cust-2", Total = 200m }
         };
-        await Persistence.SavePartitionObjectsAsync("shop/orders", null, orders, JsonOptions);
+        await Persistence.SavePartitionObjectsAsync("shop/orders", null, orders);
 
         // Act - query for TestProduct (none exist)
         // Use scope:subtree to include the base path where partition objects are stored
         var results = await MeshQuery.QueryAsync<TestProduct>(
-            "path:shop/orders scope:subtree", JsonOptions
+            "path:shop/orders scope:subtree"
         ).ToListAsync();
 
         // Assert - no TestProduct objects exist, only TestOrder
@@ -447,12 +421,12 @@ public class TypedQueryTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
     public async Task QueryAsync_Generic_MeshNode_WorksWithNodes()
     {
         // Arrange
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("org/acme") with { Name = "Acme Corp" }, JsonOptions);
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("org/contoso") with { Name = "Contoso Ltd" }, JsonOptions);
+        await Persistence.SaveNodeAsync(MeshNode.FromPath("org/acme") with { Name = "Acme Corp" });
+        await Persistence.SaveNodeAsync(MeshNode.FromPath("org/contoso") with { Name = "Contoso Ltd" });
 
         // Act - query for MeshNode type
         var results = await MeshQuery.QueryAsync<MeshNode>(
-            "path:org scope:descendants", JsonOptions
+            "path:org scope:descendants"
         ).ToListAsync();
 
         // Assert

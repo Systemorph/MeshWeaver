@@ -3,7 +3,6 @@
 using System;
 using System.IO;
 using System.Linq;
-using System.Text.Json;
 using System.Threading.Tasks;
 using FluentAssertions;
 using MeshWeaver.AI;
@@ -30,7 +29,6 @@ public class AgentChatClientTest : MonolithMeshTestBase
 {
     // Path to the deployed test data (samples/Graph/Data copied to bin/TestData)
     private static readonly string TestDataPath = Path.Combine(AppContext.BaseDirectory, "TestData");
-    private JsonSerializerOptions _jsonOptions => Mesh.ServiceProvider.GetRequiredService<IMessageHub>().JsonSerializerOptions;
 
     public AgentChatClientTest(ITestOutputHelper output) : base(output)
     {
@@ -70,7 +68,7 @@ public class AgentChatClientTest : MonolithMeshTestBase
         // Load the actual node from the file system
         var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
         MeshNode? productLaunchNode = null;
-        await foreach (var node in meshQuery.QueryAsync<MeshNode>($"path:{contextPath} scope:self", _jsonOptions))
+        await foreach (var node in meshQuery.QueryAsync<MeshNode>($"path:{contextPath} scope:self"))
         {
             productLaunchNode = node;
             break;
@@ -123,7 +121,7 @@ public class AgentChatClientTest : MonolithMeshTestBase
         // Load the actual node from the file system
         var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
         MeshNode? acmeNode = null;
-        await foreach (var node in meshQuery.QueryAsync<MeshNode>($"path:{contextPath} scope:self", _jsonOptions))
+        await foreach (var node in meshQuery.QueryAsync<MeshNode>($"path:{contextPath} scope:self"))
         {
             acmeNode = node;
             break;
