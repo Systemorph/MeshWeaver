@@ -89,6 +89,8 @@ public class HierarchicalBrowsingTests(ITestOutputHelper output) : MonolithMeshT
     [Fact]
     public async Task Query_TopLevel_ShowsAllStories()
     {
+        await SetupMarketingHierarchy();
+
         // Query all Story nodes under Marketing using path: in query string
         var query = "path:Systemorph/Marketing nodeType:Systemorph/Marketing/Story scope:descendants";
         var results = await MeshQuery.QueryAsync(MeshQueryRequest.FromQuery(query)).ToListAsync();
@@ -109,6 +111,8 @@ public class HierarchicalBrowsingTests(ITestOutputHelper output) : MonolithMeshT
     [Fact]
     public async Task Query_SubStories_OnlyReturnsChildrenOfParent()
     {
+        await SetupMarketingHierarchy();
+
         // Query stories under ClaimsProcessing only using path: in query string
         // scope:subtree includes the base path itself plus all descendants
         var query = "path:Systemorph/Marketing/ClaimsProcessing nodeType:Systemorph/Marketing/Story scope:subtree";
@@ -130,6 +134,8 @@ public class HierarchicalBrowsingTests(ITestOutputHelper output) : MonolithMeshT
     [Fact]
     public async Task Query_ByPath_RestrictsResults()
     {
+        await SetupMarketingHierarchy();
+
         // Use IMeshQuery with path: in query string (replaces old Namespace property)
         // scope:subtree includes the base path itself plus all descendants
         var query = "path:Systemorph/Marketing/ClaimsProcessing nodeType:Systemorph/Marketing/Story scope:subtree";
@@ -144,6 +150,8 @@ public class HierarchicalBrowsingTests(ITestOutputHelper output) : MonolithMeshT
     [Fact]
     public async Task Query_ParentStory_HasCorrectChildren()
     {
+        await SetupMarketingHierarchy();
+
         // Get ClaimsProcessing node
         var claimsNode = await Persistence.GetNodeAsync("Systemorph/Marketing/ClaimsProcessing");
         claimsNode.Should().NotBeNull();
@@ -162,6 +170,8 @@ public class HierarchicalBrowsingTests(ITestOutputHelper output) : MonolithMeshT
     [Fact]
     public async Task Query_SubStory_HasCorrectParent()
     {
+        await SetupMarketingHierarchy();
+
         // Get a sub-story
         var emailTriageNode = await Persistence.GetNodeAsync("Systemorph/Marketing/ClaimsProcessing/EmailTriage");
         emailTriageNode.Should().NotBeNull();
@@ -178,6 +188,8 @@ public class HierarchicalBrowsingTests(ITestOutputHelper output) : MonolithMeshT
     [Fact]
     public async Task Autocomplete_ReturnsMatchingNodes()
     {
+        await SetupMarketingHierarchy();
+
         // Test autocomplete for "Email"
         var suggestions = await MeshQuery.AutocompleteAsync("Systemorph/Marketing", "Email", 10).ToListAsync();
 
@@ -189,6 +201,8 @@ public class HierarchicalBrowsingTests(ITestOutputHelper output) : MonolithMeshT
     [Fact]
     public async Task Autocomplete_FuzzyMatching_FindsPartialMatches()
     {
+        await SetupMarketingHierarchy();
+
         // Test autocomplete with partial match
         var suggestions = await MeshQuery.AutocompleteAsync("Systemorph/Marketing", "claim", 10).ToListAsync();
 
@@ -199,6 +213,8 @@ public class HierarchicalBrowsingTests(ITestOutputHelper output) : MonolithMeshT
     [Fact]
     public async Task Query_TextSearch_FindsMatchingDescriptions()
     {
+        await SetupMarketingHierarchy();
+
         // Search for "AI" in descriptions using path: in query string
         var query = "path:Systemorph/Marketing AI scope:descendants";
         var results = await MeshQuery.QueryAsync(MeshQueryRequest.FromQuery(query)).ToListAsync();
@@ -213,6 +229,8 @@ public class HierarchicalBrowsingTests(ITestOutputHelper output) : MonolithMeshT
     [Fact]
     public async Task Query_WithLimit_RespectsLimit()
     {
+        await SetupMarketingHierarchy();
+
         // Use limit: in query string
         var query = "path:Systemorph/Marketing nodeType:Systemorph/Marketing/Story scope:descendants limit:3";
         var results = await MeshQuery.QueryAsync(MeshQueryRequest.FromQuery(query)).ToListAsync();
@@ -223,6 +241,8 @@ public class HierarchicalBrowsingTests(ITestOutputHelper output) : MonolithMeshT
     [Fact]
     public async Task Query_WithLimitProperty_OverridesQueryLimit()
     {
+        await SetupMarketingHierarchy();
+
         // Limit property takes precedence over limit in query string
         var request = new MeshQueryRequest
         {
@@ -238,6 +258,8 @@ public class HierarchicalBrowsingTests(ITestOutputHelper output) : MonolithMeshT
     [Fact]
     public async Task Query_WithSkipAndLimit_ReturnsPaginatedResults()
     {
+        await SetupMarketingHierarchy();
+
         // Query all 7 stories to get consistent ordering
         var allQuery = "path:Systemorph/Marketing nodeType:Systemorph/Marketing/Story scope:descendants";
         var allResults = await MeshQuery.QueryAsync(MeshQueryRequest.FromQuery(allQuery)).ToListAsync();
@@ -282,6 +304,8 @@ public class HierarchicalBrowsingTests(ITestOutputHelper output) : MonolithMeshT
     [Fact]
     public async Task Query_Hierarchy_IncludesAncestorsAndDescendants()
     {
+        await SetupMarketingHierarchy();
+
         // Query with hierarchy scope from a sub-story using path: in query string
         var query = "path:Systemorph/Marketing/ClaimsProcessing/EmailTriage scope:hierarchy";
         var results = await MeshQuery.QueryAsync(MeshQueryRequest.FromQuery(query)).ToListAsync();
