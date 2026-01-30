@@ -1,11 +1,15 @@
 using System;
 using System.IO;
 using System.Linq;
+using System.Text.Json;
 using System.Threading.Tasks;
 using FluentAssertions;
+using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Markdown;
 using MeshWeaver.Mesh;
+using MeshWeaver.Messaging;
+using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
 namespace MeshWeaver.Hosting.Monolith.Test;
@@ -14,22 +18,24 @@ namespace MeshWeaver.Hosting.Monolith.Test;
 /// Tests for file system persistence with CRUD operations on MeshNodes.
 /// Uses a temporary directory for each test to ensure isolation.
 /// </summary>
-public class FileSystemPersistenceTest : IDisposable
+public class FileSystemPersistenceTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
-    private readonly string _testDirectory;
-    private readonly FileSystemStorageAdapter _storageAdapter;
-    private readonly InMemoryPersistenceService _persistence;
+    private readonly string _testDirectory = Path.Combine(Path.GetTempPath(), "MeshWeaverTests", Guid.NewGuid().ToString());
+    private FileSystemStorageAdapter? _storageAdapterInstance;
+    private FileSystemStorageAdapter _storageAdapter => _storageAdapterInstance ??= CreateStorageAdapter();
+    private InMemoryPersistenceService? _persistenceInstance;
+    private InMemoryPersistenceService _persistence => _persistenceInstance ??= new(_storageAdapter);
+    private JsonSerializerOptions JsonOptions => Mesh.ServiceProvider.GetRequiredService<IMessageHub>().JsonSerializerOptions;
 
-    public FileSystemPersistenceTest()
+    private FileSystemStorageAdapter CreateStorageAdapter()
     {
-        _testDirectory = Path.Combine(Path.GetTempPath(), "MeshWeaverTests", Guid.NewGuid().ToString());
         Directory.CreateDirectory(_testDirectory);
-        _storageAdapter = new FileSystemStorageAdapter(_testDirectory);
-        _persistence = new InMemoryPersistenceService(_storageAdapter);
+        return new FileSystemStorageAdapter(_testDirectory);
     }
 
-    public void Dispose()
+    public override void Dispose()
     {
+        base.Dispose();
         // Clean up test directory
         if (Directory.Exists(_testDirectory))
         {
@@ -53,14 +59,14 @@ public class FileSystemPersistenceTest : IDisposable
         };
 
         // Act
-        await _persistence.SaveNodeAsync(node);
+        await _persistence.SaveNodeAsync(node, JsonOptions);
 
         // Assert - verify file was created
         var filePath = Path.Combine(_testDirectory, "graph", "org1.json");
         File.Exists(filePath).Should().BeTrue("file should be created at expected path");
 
         // Verify content
-        var savedNode = await _persistence.GetNodeAsync("graph/org1");
+        var savedNode = await _persistence.GetNodeAsync("graph/org1", JsonOptions);
         savedNode.Should().NotBeNull();
         savedNode!.Name.Should().Be("Organization 1");
         savedNode.Description.Should().Be("First organization");
@@ -71,9 +77,9 @@ public class FileSystemPersistenceTest : IDisposable
     public async Task Create_HierarchicalNodes_CreatesDirectoryStructure()
     {
         // Arrange & Act
-        await _persistence.SaveNodeAsync(MeshNode.FromPath("graph/org1") with { Name = "Org 1" });
-        await _persistence.SaveNodeAsync(MeshNode.FromPath("graph/org1/project1") with { Name = "Project 1" });
-        await _persistence.SaveNodeAsync(MeshNode.FromPath("graph/org1/project1/story1") with { Name = "Story 1" });
+        await _persistence.SaveNodeAsync(MeshNode.FromPath("graph/org1") with { Name = "Org 1" }, JsonOptions);
+        await _persistence.SaveNodeAsync(MeshNode.FromPath("graph/org1/project1") with { Name = "Project 1" }, JsonOptions);
+        await _persistence.SaveNodeAsync(MeshNode.FromPath("graph/org1/project1/story1") with { Name = "Story 1" }, JsonOptions);
 
         // Assert - verify directory structure
         Directory.Exists(Path.Combine(_testDirectory, "graph")).Should().BeTrue();
@@ -97,10 +103,10 @@ public class FileSystemPersistenceTest : IDisposable
         };
 
         // Act
-        await _persistence.SaveNodeAsync(node);
+        await _persistence.SaveNodeAsync(node, JsonOptions);
 
         // Assert
-        var savedNode = await _persistence.GetNodeAsync("graph/org1");
+        var savedNode = await _persistence.GetNodeAsync("graph/org1", JsonOptions);
         savedNode.Should().NotBeNull();
         savedNode!.Content.Should().NotBeNull();
     }
@@ -113,10 +119,10 @@ public class FileSystemPersistenceTest : IDisposable
     public async Task Read_ExistingNode_ReturnsNode()
     {
         // Arrange
-        await _persistence.SaveNodeAsync(MeshNode.FromPath("graph/org1") with { Name = "Org 1", Description = "Test org" });
+        await _persistence.SaveNodeAsync(MeshNode.FromPath("graph/org1") with { Name = "Org 1", Description = "Test org" }, JsonOptions);
 
         // Act
-        var node = await _persistence.GetNodeAsync("graph/org1");
+        var node = await _persistence.GetNodeAsync("graph/org1", JsonOptions);
 
         // Assert
         node.Should().NotBeNull();
@@ -128,7 +134,7 @@ public class FileSystemPersistenceTest : IDisposable
     public async Task Read_NonExistentNode_ReturnsNull()
     {
         // Act
-        var node = await _persistence.GetNodeAsync("graph/nonexistent");
+        var node = await _persistence.GetNodeAsync("graph/nonexistent", JsonOptions);
 
         // Assert
         node.Should().BeNull();
@@ -138,12 +144,12 @@ public class FileSystemPersistenceTest : IDisposable
     public async Task Read_GetChildren_ReturnsDirectChildrenOnly()
     {
         // Arrange
-        await _persistence.SaveNodeAsync(MeshNode.FromPath("graph/org1") with { Name = "Org 1" });
-        await _persistence.SaveNodeAsync(MeshNode.FromPath("graph/org2") with { Name = "Org 2" });
-        await _persistence.SaveNodeAsync(MeshNode.FromPath("graph/org1/project1") with { Name = "Project 1" });
+        await _persistence.SaveNodeAsync(MeshNode.FromPath("graph/org1") with { Name = "Org 1" }, JsonOptions);
+        await _persistence.SaveNodeAsync(MeshNode.FromPath("graph/org2") with { Name = "Org 2" }, JsonOptions);
+        await _persistence.SaveNodeAsync(MeshNode.FromPath("graph/org1/project1") with { Name = "Project 1" }, JsonOptions);
 
         // Act
-        var children = await _persistence.GetChildrenAsync("graph").ToListAsync(TestContext.Current.CancellationToken);
+        var children = await _persistence.GetChildrenAsync("graph", JsonOptions).ToListAsync(TestContext.Current.CancellationToken);
 
         // Assert
         children.Should().HaveCount(2);
@@ -155,13 +161,13 @@ public class FileSystemPersistenceTest : IDisposable
     public async Task Read_GetDescendants_ReturnsAllDescendants()
     {
         // Arrange
-        await _persistence.SaveNodeAsync(MeshNode.FromPath("graph/org1") with { Name = "Org 1" });
-        await _persistence.SaveNodeAsync(MeshNode.FromPath("graph/org1/project1") with { Name = "Project 1" });
-        await _persistence.SaveNodeAsync(MeshNode.FromPath("graph/org1/project1/story1") with { Name = "Story 1" });
-        await _persistence.SaveNodeAsync(MeshNode.FromPath("graph/org2") with { Name = "Org 2" });
+        await _persistence.SaveNodeAsync(MeshNode.FromPath("graph/org1") with { Name = "Org 1" }, JsonOptions);
+        await _persistence.SaveNodeAsync(MeshNode.FromPath("graph/org1/project1") with { Name = "Project 1" }, JsonOptions);
+        await _persistence.SaveNodeAsync(MeshNode.FromPath("graph/org1/project1/story1") with { Name = "Story 1" }, JsonOptions);
+        await _persistence.SaveNodeAsync(MeshNode.FromPath("graph/org2") with { Name = "Org 2" }, JsonOptions);
 
         // Act
-        var descendants = await _persistence.GetDescendantsAsync("graph/org1").ToListAsync(TestContext.Current.CancellationToken);
+        var descendants = await _persistence.GetDescendantsAsync("graph/org1", JsonOptions).ToListAsync(TestContext.Current.CancellationToken);
 
         // Assert
         descendants.Should().HaveCount(2);
@@ -173,7 +179,7 @@ public class FileSystemPersistenceTest : IDisposable
     public async Task Read_Exists_ReturnsCorrectResult()
     {
         // Arrange
-        await _persistence.SaveNodeAsync(MeshNode.FromPath("graph/org1") with { Name = "Org 1" });
+        await _persistence.SaveNodeAsync(MeshNode.FromPath("graph/org1") with { Name = "Org 1" }, JsonOptions);
 
         // Assert
         (await _persistence.ExistsAsync("graph/org1")).Should().BeTrue();
@@ -184,12 +190,12 @@ public class FileSystemPersistenceTest : IDisposable
     public async Task Read_Search_FindsMatchingNodes()
     {
         // Arrange
-        await _persistence.SaveNodeAsync(MeshNode.FromPath("graph/acme") with { Name = "Acme Corporation", Description = "Tech company" });
-        await _persistence.SaveNodeAsync(MeshNode.FromPath("graph/contoso") with { Name = "Contoso Ltd", Description = "Software company" });
-        await _persistence.SaveNodeAsync(MeshNode.FromPath("graph/fabrikam") with { Name = "Fabrikam Inc", Description = "Hardware manufacturer" });
+        await _persistence.SaveNodeAsync(MeshNode.FromPath("graph/acme") with { Name = "Acme Corporation", Description = "Tech company" }, JsonOptions);
+        await _persistence.SaveNodeAsync(MeshNode.FromPath("graph/contoso") with { Name = "Contoso Ltd", Description = "Software company" }, JsonOptions);
+        await _persistence.SaveNodeAsync(MeshNode.FromPath("graph/fabrikam") with { Name = "Fabrikam Inc", Description = "Hardware manufacturer" }, JsonOptions);
 
         // Act
-        var results = await _persistence.SearchAsync(null, "software").ToListAsync(TestContext.Current.CancellationToken);
+        var results = await _persistence.SearchAsync(null, "software", JsonOptions).ToListAsync(TestContext.Current.CancellationToken);
 
         // Assert
         results.Should().HaveCount(1);
@@ -204,13 +210,13 @@ public class FileSystemPersistenceTest : IDisposable
     public async Task Update_ExistingNode_UpdatesFile()
     {
         // Arrange
-        await _persistence.SaveNodeAsync(MeshNode.FromPath("graph/org1") with { Name = "Original Name" });
+        await _persistence.SaveNodeAsync(MeshNode.FromPath("graph/org1") with { Name = "Original Name" }, JsonOptions);
 
         // Act
-        await _persistence.SaveNodeAsync(MeshNode.FromPath("graph/org1") with { Name = "Updated Name", Description = "New description" });
+        await _persistence.SaveNodeAsync(MeshNode.FromPath("graph/org1") with { Name = "Updated Name", Description = "New description" }, JsonOptions);
 
         // Assert
-        var node = await _persistence.GetNodeAsync("graph/org1");
+        var node = await _persistence.GetNodeAsync("graph/org1", JsonOptions);
         node.Should().NotBeNull();
         node!.Name.Should().Be("Updated Name");
         node.Description.Should().Be("New description");
@@ -221,14 +227,14 @@ public class FileSystemPersistenceTest : IDisposable
     {
         // Arrange
         var originalContent = new TestOrganization { Id = "org1", Name = "Original", Website = "https://original.com" };
-        await _persistence.SaveNodeAsync(MeshNode.FromPath("graph/org1") with { Name = "Org 1", Content = originalContent });
+        await _persistence.SaveNodeAsync(MeshNode.FromPath("graph/org1") with { Name = "Org 1", Content = originalContent }, JsonOptions);
 
         // Act
         var updatedContent = new TestOrganization { Id = "org1", Name = "Updated", Website = "https://updated.com" };
-        await _persistence.SaveNodeAsync(MeshNode.FromPath("graph/org1") with { Name = "Org 1", Content = updatedContent });
+        await _persistence.SaveNodeAsync(MeshNode.FromPath("graph/org1") with { Name = "Org 1", Content = updatedContent }, JsonOptions);
 
         // Assert
-        var node = await _persistence.GetNodeAsync("graph/org1");
+        var node = await _persistence.GetNodeAsync("graph/org1", JsonOptions);
         node.Should().NotBeNull();
         node!.Content.Should().NotBeNull();
     }
@@ -237,11 +243,11 @@ public class FileSystemPersistenceTest : IDisposable
     public async Task Update_NodeDisplayOrder_AffectsSortOrder()
     {
         // Arrange
-        await _persistence.SaveNodeAsync(MeshNode.FromPath("graph/org1") with { Name = "First", DisplayOrder = 20 });
-        await _persistence.SaveNodeAsync(MeshNode.FromPath("graph/org2") with { Name = "Second", DisplayOrder = 10 });
+        await _persistence.SaveNodeAsync(MeshNode.FromPath("graph/org1") with { Name = "First", DisplayOrder = 20 }, JsonOptions);
+        await _persistence.SaveNodeAsync(MeshNode.FromPath("graph/org2") with { Name = "Second", DisplayOrder = 10 }, JsonOptions);
 
         // Act
-        var children = await _persistence.GetChildrenAsync("graph").ToListAsync(TestContext.Current.CancellationToken);
+        var children = await _persistence.GetChildrenAsync("graph", JsonOptions).ToListAsync(TestContext.Current.CancellationToken);
 
         // Assert - should be ordered by DisplayOrder
         children.Should().HaveCount(2);
@@ -257,7 +263,7 @@ public class FileSystemPersistenceTest : IDisposable
     public async Task Delete_SingleNode_RemovesFromFileSystem()
     {
         // Arrange
-        await _persistence.SaveNodeAsync(MeshNode.FromPath("graph/org1") with { Name = "Org 1" });
+        await _persistence.SaveNodeAsync(MeshNode.FromPath("graph/org1") with { Name = "Org 1" }, JsonOptions);
         var filePath = Path.Combine(_testDirectory, "graph", "org1.json");
         File.Exists(filePath).Should().BeTrue();
 
@@ -266,7 +272,7 @@ public class FileSystemPersistenceTest : IDisposable
 
         // Assert
         File.Exists(filePath).Should().BeFalse();
-        (await _persistence.GetNodeAsync("graph/org1")).Should().BeNull();
+        (await _persistence.GetNodeAsync("graph/org1", JsonOptions)).Should().BeNull();
         (await _persistence.ExistsAsync("graph/org1")).Should().BeFalse();
     }
 
@@ -274,41 +280,41 @@ public class FileSystemPersistenceTest : IDisposable
     public async Task Delete_NonRecursive_LeavesChildren()
     {
         // Arrange
-        await _persistence.SaveNodeAsync(MeshNode.FromPath("graph/org1") with { Name = "Org 1" });
-        await _persistence.SaveNodeAsync(MeshNode.FromPath("graph/org1/project1") with { Name = "Project 1" });
+        await _persistence.SaveNodeAsync(MeshNode.FromPath("graph/org1") with { Name = "Org 1" }, JsonOptions);
+        await _persistence.SaveNodeAsync(MeshNode.FromPath("graph/org1/project1") with { Name = "Project 1" }, JsonOptions);
 
         // Act
         await _persistence.DeleteNodeAsync("graph/org1", recursive: false);
 
         // Assert
-        (await _persistence.GetNodeAsync("graph/org1")).Should().BeNull();
-        (await _persistence.GetNodeAsync("graph/org1/project1")).Should().NotBeNull(); // Child still exists
+        (await _persistence.GetNodeAsync("graph/org1", JsonOptions)).Should().BeNull();
+        (await _persistence.GetNodeAsync("graph/org1/project1", JsonOptions)).Should().NotBeNull(); // Child still exists
     }
 
     [Fact]
     public async Task Delete_Recursive_RemovesAllDescendants()
     {
         // Arrange
-        await _persistence.SaveNodeAsync(MeshNode.FromPath("graph/org1") with { Name = "Org 1" });
-        await _persistence.SaveNodeAsync(MeshNode.FromPath("graph/org1/project1") with { Name = "Project 1" });
-        await _persistence.SaveNodeAsync(MeshNode.FromPath("graph/org1/project1/story1") with { Name = "Story 1" });
-        await _persistence.SaveNodeAsync(MeshNode.FromPath("graph/org2") with { Name = "Org 2" });
+        await _persistence.SaveNodeAsync(MeshNode.FromPath("graph/org1") with { Name = "Org 1" }, JsonOptions);
+        await _persistence.SaveNodeAsync(MeshNode.FromPath("graph/org1/project1") with { Name = "Project 1" }, JsonOptions);
+        await _persistence.SaveNodeAsync(MeshNode.FromPath("graph/org1/project1/story1") with { Name = "Story 1" }, JsonOptions);
+        await _persistence.SaveNodeAsync(MeshNode.FromPath("graph/org2") with { Name = "Org 2" }, JsonOptions);
 
         // Act
         await _persistence.DeleteNodeAsync("graph/org1", recursive: true);
 
         // Assert
-        (await _persistence.GetNodeAsync("graph/org1")).Should().BeNull();
-        (await _persistence.GetNodeAsync("graph/org1/project1")).Should().BeNull();
-        (await _persistence.GetNodeAsync("graph/org1/project1/story1")).Should().BeNull();
-        (await _persistence.GetNodeAsync("graph/org2")).Should().NotBeNull(); // Sibling unaffected
+        (await _persistence.GetNodeAsync("graph/org1", JsonOptions)).Should().BeNull();
+        (await _persistence.GetNodeAsync("graph/org1/project1", JsonOptions)).Should().BeNull();
+        (await _persistence.GetNodeAsync("graph/org1/project1/story1", JsonOptions)).Should().BeNull();
+        (await _persistence.GetNodeAsync("graph/org2", JsonOptions)).Should().NotBeNull(); // Sibling unaffected
     }
 
     [Fact]
     public async Task Delete_CleansUpEmptyDirectories()
     {
         // Arrange
-        await _persistence.SaveNodeAsync(MeshNode.FromPath("graph/org1/project1/story1") with { Name = "Story 1" });
+        await _persistence.SaveNodeAsync(MeshNode.FromPath("graph/org1/project1/story1") with { Name = "Story 1" }, JsonOptions);
         Directory.Exists(Path.Combine(_testDirectory, "graph", "org1", "project1")).Should().BeTrue();
 
         // Act
@@ -366,10 +372,10 @@ public class FileSystemPersistenceTest : IDisposable
         // Act - Create a new persistence service and initialize it
         var newStorageAdapter = new FileSystemStorageAdapter(_testDirectory);
         var newPersistence = new InMemoryPersistenceService(newStorageAdapter);
-        await newPersistence.InitializeAsync();
+        await newPersistence.InitializeAsync(JsonOptions);
 
         // Assert
-        var children = await newPersistence.GetChildrenAsync("graph").ToListAsync(TestContext.Current.CancellationToken);
+        var children = await newPersistence.GetChildrenAsync("graph", JsonOptions).ToListAsync(TestContext.Current.CancellationToken);
         children.Should().HaveCount(2);
         children.Select(c => c.Name).Should().Contain(new[] { "Loaded Org 1", "Loaded Org 2" });
     }
@@ -420,14 +426,14 @@ public class FileSystemPersistenceTest : IDisposable
         // Act
         var newStorageAdapter = new FileSystemStorageAdapter(_testDirectory);
         var newPersistence = new InMemoryPersistenceService(newStorageAdapter);
-        await newPersistence.InitializeAsync();
+        await newPersistence.InitializeAsync(JsonOptions);
 
         // Assert
-        (await newPersistence.GetNodeAsync("graph/org1")).Should().NotBeNull();
-        (await newPersistence.GetNodeAsync("graph/org1/project1")).Should().NotBeNull();
-        (await newPersistence.GetNodeAsync("graph/org1/project1/story1")).Should().NotBeNull();
+        (await newPersistence.GetNodeAsync("graph/org1", JsonOptions)).Should().NotBeNull();
+        (await newPersistence.GetNodeAsync("graph/org1/project1", JsonOptions)).Should().NotBeNull();
+        (await newPersistence.GetNodeAsync("graph/org1/project1/story1", JsonOptions)).Should().NotBeNull();
 
-        var org1Children = await newPersistence.GetChildrenAsync("graph/org1").ToListAsync(TestContext.Current.CancellationToken);
+        var org1Children = await newPersistence.GetChildrenAsync("graph/org1", JsonOptions).ToListAsync(TestContext.Current.CancellationToken);
         org1Children.Should().HaveCount(1);
         org1Children.First().Name.Should().Be("Project 1");
     }
@@ -441,10 +447,10 @@ public class FileSystemPersistenceTest : IDisposable
         // Act
         var newStorageAdapter = new FileSystemStorageAdapter(_testDirectory);
         var newPersistence = new InMemoryPersistenceService(newStorageAdapter);
-        await newPersistence.InitializeAsync();
+        await newPersistence.InitializeAsync(JsonOptions);
 
         // Assert
-        var children = await newPersistence.GetChildrenAsync(null).ToListAsync(TestContext.Current.CancellationToken);
+        var children = await newPersistence.GetChildrenAsync(null, JsonOptions).ToListAsync(TestContext.Current.CancellationToken);
         children.Should().BeEmpty();
     }
 
@@ -456,24 +462,24 @@ public class FileSystemPersistenceTest : IDisposable
     public async Task PathNormalization_CaseInsensitive()
     {
         // Arrange
-        await _persistence.SaveNodeAsync(MeshNode.FromPath("Graph/ORG1") with { Name = "Org 1" });
+        await _persistence.SaveNodeAsync(MeshNode.FromPath("Graph/ORG1") with { Name = "Org 1" }, JsonOptions);
 
         // Act & Assert - should find regardless of case
-        (await _persistence.GetNodeAsync("graph/org1")).Should().NotBeNull();
-        (await _persistence.GetNodeAsync("GRAPH/ORG1")).Should().NotBeNull();
-        (await _persistence.GetNodeAsync("Graph/Org1")).Should().NotBeNull();
+        (await _persistence.GetNodeAsync("graph/org1", JsonOptions)).Should().NotBeNull();
+        (await _persistence.GetNodeAsync("GRAPH/ORG1", JsonOptions)).Should().NotBeNull();
+        (await _persistence.GetNodeAsync("Graph/Org1", JsonOptions)).Should().NotBeNull();
     }
 
     [Fact]
     public async Task PathNormalization_TrimsSlashes()
     {
         // Arrange
-        await _persistence.SaveNodeAsync(MeshNode.FromPath("/graph/org1/") with { Name = "Org 1" });
+        await _persistence.SaveNodeAsync(MeshNode.FromPath("/graph/org1/") with { Name = "Org 1" }, JsonOptions);
 
         // Act & Assert
-        (await _persistence.GetNodeAsync("graph/org1")).Should().NotBeNull();
-        (await _persistence.GetNodeAsync("/graph/org1")).Should().NotBeNull();
-        (await _persistence.GetNodeAsync("graph/org1/")).Should().NotBeNull();
+        (await _persistence.GetNodeAsync("graph/org1", JsonOptions)).Should().NotBeNull();
+        (await _persistence.GetNodeAsync("/graph/org1", JsonOptions)).Should().NotBeNull();
+        (await _persistence.GetNodeAsync("graph/org1/", JsonOptions)).Should().NotBeNull();
     }
 
     #endregion
@@ -484,8 +490,8 @@ public class FileSystemPersistenceTest : IDisposable
     public async Task EdgeCase_EmptyPath_HandledGracefully()
     {
         // Act
-        var node = await _persistence.GetNodeAsync("");
-        var children = await _persistence.GetChildrenAsync("").ToListAsync(TestContext.Current.CancellationToken);
+        var node = await _persistence.GetNodeAsync("", JsonOptions);
+        var children = await _persistence.GetChildrenAsync("", JsonOptions).ToListAsync(TestContext.Current.CancellationToken);
 
         // Assert
         node.Should().BeNull();
@@ -503,8 +509,8 @@ public class FileSystemPersistenceTest : IDisposable
         };
 
         // Act
-        await _persistence.SaveNodeAsync(node);
-        var loaded = await _persistence.GetNodeAsync("graph/org1");
+        await _persistence.SaveNodeAsync(node, JsonOptions);
+        var loaded = await _persistence.GetNodeAsync("graph/org1", JsonOptions);
 
         // Assert
         loaded.Should().NotBeNull();
@@ -520,8 +526,8 @@ public class FileSystemPersistenceTest : IDisposable
         var node = MeshNode.FromPath(deepPath) with { Name = "Deep Node" };
 
         // Act
-        await _persistence.SaveNodeAsync(node);
-        var loaded = await _persistence.GetNodeAsync(deepPath);
+        await _persistence.SaveNodeAsync(node, JsonOptions);
+        var loaded = await _persistence.GetNodeAsync(deepPath, JsonOptions);
 
         // Assert
         loaded.Should().NotBeNull();
@@ -554,7 +560,7 @@ public class FileSystemPersistenceTest : IDisposable
             """);
 
         // Act
-        var node = await _storageAdapter.ReadAsync("docs/readme");
+        var node = await _storageAdapter.ReadAsync("docs/readme", JsonOptions);
 
         // Assert
         node.Should().NotBeNull();
@@ -584,7 +590,7 @@ public class FileSystemPersistenceTest : IDisposable
             """);
 
         // Act
-        var node = await _storageAdapter.ReadAsync("docs/simple");
+        var node = await _storageAdapter.ReadAsync("docs/simple", JsonOptions);
 
         // Assert
         node.Should().NotBeNull();
@@ -608,7 +614,7 @@ public class FileSystemPersistenceTest : IDisposable
             """);
 
         // Act
-        var node = await _storageAdapter.ReadAsync("docs/plain");
+        var node = await _storageAdapter.ReadAsync("docs/plain", JsonOptions);
 
         // Assert
         node.Should().NotBeNull();
@@ -633,7 +639,7 @@ public class FileSystemPersistenceTest : IDisposable
         };
 
         // Act
-        await _storageAdapter.WriteAsync(node);
+        await _storageAdapter.WriteAsync(node, JsonOptions);
 
         // Assert
         var mdPath = Path.Combine(_testDirectory, "docs", "mydoc.md");
@@ -684,7 +690,7 @@ public class FileSystemPersistenceTest : IDisposable
             """);
 
         // Act
-        var objects = await _storageAdapter.GetPartitionObjectsAsync("Type/Person", "Code").ToListAsync();
+        var objects = await _storageAdapter.GetPartitionObjectsAsync("Type/Person", "Code", JsonOptions).ToListAsync();
 
         // Assert
         objects.Should().HaveCount(1);
@@ -714,7 +720,7 @@ public class FileSystemPersistenceTest : IDisposable
             """);
 
         // Act
-        var objects = await _storageAdapter.GetPartitionObjectsAsync("Type/Org", "Code").ToListAsync();
+        var objects = await _storageAdapter.GetPartitionObjectsAsync("Type/Org", "Code", JsonOptions).ToListAsync();
 
         // Assert
         objects.Should().HaveCount(1);
@@ -737,7 +743,7 @@ public class FileSystemPersistenceTest : IDisposable
         };
 
         // Act
-        await _storageAdapter.SavePartitionObjectsAsync("Type/Test", "Code", [codeConfig]);
+        await _storageAdapter.SavePartitionObjectsAsync("Type/Test", "Code", [codeConfig], JsonOptions);
 
         // Assert
         var csPath = Path.Combine(_testDirectory, "Type", "Test", "Code", "MyClass.cs");
@@ -764,7 +770,7 @@ public class FileSystemPersistenceTest : IDisposable
             """);
 
         // Act
-        var objects = await _storageAdapter.GetPartitionObjectsAsync("Type/Mixed", "Code").ToListAsync();
+        var objects = await _storageAdapter.GetPartitionObjectsAsync("Type/Mixed", "Code", JsonOptions).ToListAsync();
 
         // Assert
         objects.Should().HaveCount(2);
@@ -791,7 +797,7 @@ public class FileSystemPersistenceTest : IDisposable
             """);
 
         // Act
-        var node = await _storageAdapter.ReadAsync("priority/doc");
+        var node = await _storageAdapter.ReadAsync("priority/doc", JsonOptions);
 
         // Assert - should read from .md (higher priority)
         node.Should().NotBeNull();

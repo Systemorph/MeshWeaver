@@ -2,7 +2,7 @@
 Name: Organizing Content Into Switchable Tabs
 Category: Documentation
 Description: Organize content into switchable tabbed panels
-Icon: /static/storage/content/MeshWeaver/Documentation/GUI/ContainerControl/Tabs/icon.svg
+Icon: /static/storage/content/MeshWeaver/Documentation/UserInterface/ContainerControl/Tabs/icon.svg
 ---
 
 # Organizing Content Into Switchable Tabs
@@ -80,5 +80,5 @@ Configure individual tabs via the skin function:
 
 ## See Also
 
-- [Container Control](MeshWeaver/Documentation/GUI/ContainerControl) - Overview of all containers
-- [Stack Control](MeshWeaver/Documentation/GUI/ContainerControl/Stack) - Vertical/horizontal layouts
+- [Container Control](MeshWeaver/Documentation/UserInterface/ContainerControl) - Overview of all containers
+- [Stack Control](MeshWeaver/Documentation/UserInterface/ContainerControl/Stack) - Vertical/horizontal layouts

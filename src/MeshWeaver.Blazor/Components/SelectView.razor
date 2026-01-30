@@ -1,7 +1,7 @@
 @using SelectPosition = Microsoft.FluentUI.AspNetCore.Components.SelectPosition
 @inherits ListBase<SelectControl, SelectView>
 
-<FluentSelect 
+<FluentSelect
     Label="@Label"
     Items="@Options"
     TOption="Option"
@@ -9,7 +9,9 @@
     OptionValue="@(x => x.ItemString)"
     Position="@Position"
     Class="@Class"
+    Style="@Style"
     @bind-SelectedOption="Value"
+    @onfocusout="OnBlur"
 />
 
 @code

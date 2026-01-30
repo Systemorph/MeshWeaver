@@ -1,4 +1,5 @@
-﻿using System.Collections.Concurrent;
+using System.Collections.Concurrent;
+using System.Text.Json;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Activity;
 using MeshWeaver.Mesh.Services;
@@ -10,71 +11,64 @@ namespace MeshWeaver.Hosting.Activity;
 /// <summary>
 /// Decorator that tracks user activity on persistence operations.
 /// Records reads and writes to _activity/{userId} partition storage.
-/// Uses in-memory buffering with periodic flush for performance.
+/// Flushes activity records synchronously on each save operation.
 /// </summary>
-public class ActivityTrackingPersistenceDecorator : IPersistenceService, IDisposable
+public class ActivityTrackingPersistenceDecorator : IPersistenceServiceCore
 {
-    private readonly IPersistenceService _inner;
+    private readonly IPersistenceServiceCore _inner;
     private readonly AccessService _accessService;
     private readonly ILogger<ActivityTrackingPersistenceDecorator> _logger;
 
     // In-memory buffer for batching writes
     private readonly ConcurrentDictionary<string, UserActivityRecord> _pendingUpdates = new();
     private readonly SemaphoreSlim _flushLock = new(1, 1);
-    private readonly Timer _flushTimer;
-    private readonly TimeSpan _flushInterval = TimeSpan.FromSeconds(5);
-    private bool _disposed;
 
     public ActivityTrackingPersistenceDecorator(
-        IPersistenceService inner,
+        IPersistenceServiceCore inner,
         AccessService accessService,
         ILogger<ActivityTrackingPersistenceDecorator> logger)
     {
         _inner = inner;
         _accessService = accessService;
         _logger = logger;
-
-        // Start periodic flush timer
-        _flushTimer = new Timer(FlushTimerCallback, null, _flushInterval, _flushInterval);
-    }
-
-    private void FlushTimerCallback(object? state)
-    {
-        _ = FlushPendingActivitiesAsync();
     }
 
     #region Tracked Operations
 
-    public async Task<MeshNode?> GetNodeAsync(string path, CancellationToken ct = default)
+    public async Task<MeshNode?> GetNodeAsync(string path, JsonSerializerOptions options, CancellationToken ct = default)
     {
-        var result = await _inner.GetNodeAsync(path, ct);
+        var result = await _inner.GetNodeAsync(path, options, ct);
         if (result != null)
             TrackActivity(path, result, ActivityType.Read);
         return result;
     }
 
-    public async IAsyncEnumerable<MeshNode> GetChildrenAsync(string? parentPath)
+    public async IAsyncEnumerable<MeshNode> GetChildrenAsync(string? parentPath, JsonSerializerOptions options)
     {
-        await foreach (var node in _inner.GetChildrenAsync(parentPath))
+        await foreach (var node in _inner.GetChildrenAsync(parentPath, options))
         {
             TrackActivity(node.Path, node, ActivityType.Read);
             yield return node;
         }
     }
 
-    public async IAsyncEnumerable<MeshNode> GetDescendantsAsync(string? parentPath)
+    public async IAsyncEnumerable<MeshNode> GetDescendantsAsync(string? parentPath, JsonSerializerOptions options)
     {
-        await foreach (var node in _inner.GetDescendantsAsync(parentPath))
+        await foreach (var node in _inner.GetDescendantsAsync(parentPath, options))
         {
             TrackActivity(node.Path, node, ActivityType.Read);
             yield return node;
         }
     }
 
-    public async Task<MeshNode> SaveNodeAsync(MeshNode node, CancellationToken ct = default)
+    public async Task<MeshNode> SaveNodeAsync(MeshNode node, JsonSerializerOptions options, CancellationToken ct = default)
     {
-        var result = await _inner.SaveNodeAsync(node, ct);
+        var result = await _inner.SaveNodeAsync(node, options, ct);
         TrackActivity(result.Path, result, ActivityType.Write);
+
+        // Flush pending activities on save
+        await FlushPendingActivitiesAsync(options);
+
         return result;
     }
 
@@ -132,7 +126,11 @@ public class ActivityTrackingPersistenceDecorator : IPersistenceService, IDispos
             });
     }
 
-    private async Task FlushPendingActivitiesAsync()
+    /// <summary>
+    /// Flushes any pending activity records to persistence.
+    /// Call this explicitly when activities need to be persisted immediately.
+    /// </summary>
+    public async Task FlushPendingActivitiesAsync(JsonSerializerOptions options)
     {
         if (_pendingUpdates.IsEmpty)
             return;
@@ -156,7 +154,7 @@ public class ActivityTrackingPersistenceDecorator : IPersistenceService, IDispos
 
                     // Load existing activities
                     var existing = new Dictionary<string, UserActivityRecord>(StringComparer.OrdinalIgnoreCase);
-                    await foreach (var obj in _inner.GetPartitionObjectsAsync(activityPath))
+                    await foreach (var obj in _inner.GetPartitionObjectsAsync(activityPath, null, options))
                     {
                         if (obj is UserActivityRecord record)
                             existing[record.NodePath] = record;
@@ -187,7 +185,8 @@ public class ActivityTrackingPersistenceDecorator : IPersistenceService, IDispos
                     // Save merged activities
                     await _inner.SavePartitionObjectsAsync(
                         activityPath, null,
-                        existing.Values.Cast<object>().ToList());
+                        existing.Values.Cast<object>().ToList(),
+                        options);
 
                     _logger.LogDebug("Flushed {Count} activity records for user {UserId}", group.Count(), userId);
                 }
@@ -207,11 +206,11 @@ public class ActivityTrackingPersistenceDecorator : IPersistenceService, IDispos
 
     #region Delegated Methods (pass-through to inner service)
 
-    public Task<MeshNode> MoveNodeAsync(string sourcePath, string targetPath, CancellationToken ct = default)
-        => _inner.MoveNodeAsync(sourcePath, targetPath, ct);
+    public Task<MeshNode> MoveNodeAsync(string sourcePath, string targetPath, JsonSerializerOptions options, CancellationToken ct = default)
+        => _inner.MoveNodeAsync(sourcePath, targetPath, options, ct);
 
-    public IAsyncEnumerable<MeshNode> SearchAsync(string? parentPath, string query)
-        => _inner.SearchAsync(parentPath, query);
+    public IAsyncEnumerable<MeshNode> SearchAsync(string? parentPath, string query, JsonSerializerOptions options)
+        => _inner.SearchAsync(parentPath, query, options);
 
     public Task<bool> ExistsAsync(string path, CancellationToken ct = default)
         => _inner.ExistsAsync(path, ct);
@@ -219,11 +218,11 @@ public class ActivityTrackingPersistenceDecorator : IPersistenceService, IDispos
     public Task InitializeAsync(CancellationToken ct = default)
         => _inner.InitializeAsync(ct);
 
-    public IAsyncEnumerable<Comment> GetCommentsAsync(string nodePath)
-        => _inner.GetCommentsAsync(nodePath);
+    public IAsyncEnumerable<Comment> GetCommentsAsync(string nodePath, JsonSerializerOptions options)
+        => _inner.GetCommentsAsync(nodePath, options);
 
-    public Task<Comment> AddCommentAsync(Comment comment, CancellationToken ct = default)
-        => _inner.AddCommentAsync(comment, ct);
+    public Task<Comment> AddCommentAsync(Comment comment, JsonSerializerOptions options, CancellationToken ct = default)
+        => _inner.AddCommentAsync(comment, options, ct);
 
     public Task DeleteCommentAsync(string commentId, CancellationToken ct = default)
         => _inner.DeleteCommentAsync(commentId, ct);
@@ -231,11 +230,11 @@ public class ActivityTrackingPersistenceDecorator : IPersistenceService, IDispos
     public Task<Comment?> GetCommentAsync(string commentId, CancellationToken ct = default)
         => _inner.GetCommentAsync(commentId, ct);
 
-    public IAsyncEnumerable<object> GetPartitionObjectsAsync(string nodePath, string? subPath = null)
-        => _inner.GetPartitionObjectsAsync(nodePath, subPath);
+    public IAsyncEnumerable<object> GetPartitionObjectsAsync(string nodePath, string? subPath, JsonSerializerOptions options)
+        => _inner.GetPartitionObjectsAsync(nodePath, subPath, options);
 
-    public Task SavePartitionObjectsAsync(string nodePath, string? subPath, IReadOnlyCollection<object> objects, CancellationToken ct = default)
-        => _inner.SavePartitionObjectsAsync(nodePath, subPath, objects, ct);
+    public Task SavePartitionObjectsAsync(string nodePath, string? subPath, IReadOnlyCollection<object> objects, JsonSerializerOptions options, CancellationToken ct = default)
+        => _inner.SavePartitionObjectsAsync(nodePath, subPath, objects, options, ct);
 
     public Task DeletePartitionObjectsAsync(string nodePath, string? subPath = null, CancellationToken ct = default)
         => _inner.DeletePartitionObjectsAsync(nodePath, subPath, ct);
@@ -244,32 +243,14 @@ public class ActivityTrackingPersistenceDecorator : IPersistenceService, IDispos
         => _inner.GetPartitionMaxTimestampAsync(nodePath, subPath, ct);
 
     // Secure operations delegate to inner
-    public Task<MeshNode?> GetNodeSecureAsync(string path, string? userId, CancellationToken ct = default)
-        => _inner.GetNodeSecureAsync(path, userId, ct);
+    public Task<MeshNode?> GetNodeSecureAsync(string path, string? userId, JsonSerializerOptions options, CancellationToken ct = default)
+        => _inner.GetNodeSecureAsync(path, userId, options, ct);
 
-    public IAsyncEnumerable<MeshNode> GetChildrenSecureAsync(string? parentPath, string? userId)
-        => _inner.GetChildrenSecureAsync(parentPath, userId);
+    public IAsyncEnumerable<MeshNode> GetChildrenSecureAsync(string? parentPath, string? userId, JsonSerializerOptions options)
+        => _inner.GetChildrenSecureAsync(parentPath, userId, options);
 
-    public IAsyncEnumerable<MeshNode> GetDescendantsSecureAsync(string? parentPath, string? userId)
-        => _inner.GetDescendantsSecureAsync(parentPath, userId);
-
-    #endregion
-
-    #region IDisposable
-
-    public void Dispose()
-    {
-        if (_disposed)
-            return;
-
-        _disposed = true;
-        _flushTimer.Dispose();
-
-        // Final flush
-        FlushPendingActivitiesAsync().GetAwaiter().GetResult();
-
-        _flushLock.Dispose();
-    }
+    public IAsyncEnumerable<MeshNode> GetDescendantsSecureAsync(string? parentPath, string? userId, JsonSerializerOptions options)
+        => _inner.GetDescendantsSecureAsync(parentPath, userId, options);
 
     #endregion
 }

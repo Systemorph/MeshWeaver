@@ -1,4 +1,5 @@
 ﻿using System.Collections.Concurrent;
+using System.Text.Json;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 
@@ -9,7 +10,7 @@ namespace MeshWeaver.Hosting.Persistence;
 /// Suitable for development and testing.
 /// Optionally backs to an IStorageAdapter for file system persistence.
 /// </summary>
-public class InMemoryPersistenceService : IPersistenceService
+public class InMemoryPersistenceService : IPersistenceServiceCore
 {
     private readonly IStorageAdapter? _storageAdapter;
     private readonly IDataChangeNotifier? _changeNotifier;
@@ -25,51 +26,64 @@ public class InMemoryPersistenceService : IPersistenceService
         _changeNotifier = changeNotifier;
     }
 
-    public async Task InitializeAsync(CancellationToken ct = default)
+    public Task InitializeAsync(CancellationToken ct = default)
     {
-        if (_initialized)
-            return;
-
-        if (_storageAdapter != null)
-        {
-            await LoadFromStorageAsync("", ct);
-        }
-
         _initialized = true;
+        return Task.CompletedTask;
     }
 
-    private async Task LoadFromStorageAsync(string parentPath, CancellationToken ct)
+    /// <summary>
+    /// Initializes the service and loads existing data from storage adapter.
+    /// </summary>
+    /// <param name="options">JSON serializer options for deserialization</param>
+    /// <param name="ct">Cancellation token</param>
+    public async Task InitializeAsync(JsonSerializerOptions options, CancellationToken ct = default)
     {
-        var (nodePaths, directoryPaths) = await _storageAdapter!.ListChildPathsAsync(parentPath, ct);
+        _initialized = true;
 
-        // Load nodes from JSON files
-        foreach (var path in nodePaths)
+        if (_storageAdapter == null)
+            return;
+
+        // Load nodes recursively from storage
+        await LoadNodesRecursivelyAsync(null, options, ct);
+    }
+
+    private async Task LoadNodesRecursivelyAsync(string? parentPath, JsonSerializerOptions options, CancellationToken ct)
+    {
+        if (_storageAdapter == null)
+            return;
+
+        var (nodePaths, directoryPaths) = await _storageAdapter.ListChildPathsAsync(parentPath, ct);
+
+        // Load nodes
+        foreach (var nodePath in nodePaths)
         {
-            var node = await _storageAdapter.ReadAsync(path, ct);
+            var node = await _storageAdapter.ReadAsync(nodePath, options, ct);
             if (node != null)
             {
-                var normalizedPath = NormalizePath(path);
+                var normalizedPath = NormalizePath(nodePath);
                 _nodes[normalizedPath] = node;
-                // Recursively load children under this node
-                await LoadFromStorageAsync(path, ct);
+
+                // Recursively load children
+                await LoadNodesRecursivelyAsync(nodePath, options, ct);
             }
         }
 
-        // Also recursively scan directories that don't have nodes
+        // Scan directories that aren't nodes
         foreach (var dirPath in directoryPaths)
         {
-            await LoadFromStorageAsync(dirPath, ct);
+            await LoadNodesRecursivelyAsync(dirPath, options, ct);
         }
     }
 
-    public Task<MeshNode?> GetNodeAsync(string path, CancellationToken ct = default)
+    public Task<MeshNode?> GetNodeAsync(string path, JsonSerializerOptions options, CancellationToken ct = default)
     {
         var normalizedPath = NormalizePath(path);
         _nodes.TryGetValue(normalizedPath, out var node);
         return Task.FromResult(node);
     }
 
-    public async IAsyncEnumerable<MeshNode> GetChildrenAsync(string? parentPath)
+    public async IAsyncEnumerable<MeshNode> GetChildrenAsync(string? parentPath, JsonSerializerOptions options)
     {
         var normalizedParent = NormalizePath(parentPath);
         var parentSegments = string.IsNullOrEmpty(normalizedParent)
@@ -105,7 +119,7 @@ public class InMemoryPersistenceService : IPersistenceService
         await Task.CompletedTask; // Keep async signature
     }
 
-    public async IAsyncEnumerable<MeshNode> GetDescendantsAsync(string? parentPath)
+    public async IAsyncEnumerable<MeshNode> GetDescendantsAsync(string? parentPath, JsonSerializerOptions options)
     {
         var normalizedParent = NormalizePath(parentPath);
 
@@ -131,7 +145,7 @@ public class InMemoryPersistenceService : IPersistenceService
         await Task.CompletedTask; // Keep async signature
     }
 
-    public async Task<MeshNode> SaveNodeAsync(MeshNode node, CancellationToken ct = default)
+    public async Task<MeshNode> SaveNodeAsync(MeshNode node, JsonSerializerOptions options, CancellationToken ct = default)
     {
         var normalizedPath = NormalizePath(node.Path);
         var isNew = !_nodes.ContainsKey(normalizedPath);
@@ -146,7 +160,7 @@ public class InMemoryPersistenceService : IPersistenceService
 
         if (_storageAdapter != null)
         {
-            await _storageAdapter.WriteAsync(savedNode, ct);
+            await _storageAdapter.WriteAsync(savedNode, options, ct);
         }
 
         // Notify change
@@ -191,7 +205,7 @@ public class InMemoryPersistenceService : IPersistenceService
         }
     }
 
-    public async Task<MeshNode> MoveNodeAsync(string sourcePath, string targetPath, CancellationToken ct = default)
+    public async Task<MeshNode> MoveNodeAsync(string sourcePath, string targetPath, JsonSerializerOptions options, CancellationToken ct = default)
     {
         var normalizedSource = NormalizePath(sourcePath);
         var normalizedTarget = NormalizePath(targetPath);
@@ -217,7 +231,6 @@ public class InMemoryPersistenceService : IPersistenceService
             Description = sourceNode.Description,
             Icon = sourceNode.Icon,
             DisplayOrder = sourceNode.DisplayOrder,
-            AddressSegments = sourceNode.AddressSegments,
             IsPersistent = sourceNode.IsPersistent,
             Content = sourceNode.Content,
             ThumbNail = sourceNode.ThumbNail,
@@ -225,11 +238,9 @@ public class InMemoryPersistenceService : IPersistenceService
             AssemblyLocation = sourceNode.AssemblyLocation,
             HubConfiguration = sourceNode.HubConfiguration,
             StartupScript = sourceNode.StartupScript,
-            RoutingType = sourceNode.RoutingType,
-            InstantiationType = sourceNode.InstantiationType,
             GlobalServiceConfigurations = sourceNode.GlobalServiceConfigurations
         };
-        await SaveNodeAsync(movedNode, ct);
+        await SaveNodeAsync(movedNode, options, ct);
 
         // Move descendants with updated paths
         foreach (var descendantPath in descendants)
@@ -248,7 +259,6 @@ public class InMemoryPersistenceService : IPersistenceService
                     Description = descendantNode.Description,
                     Icon = descendantNode.Icon,
                     DisplayOrder = descendantNode.DisplayOrder,
-                    AddressSegments = descendantNode.AddressSegments,
                     IsPersistent = descendantNode.IsPersistent,
                     Content = descendantNode.Content,
                     ThumbNail = descendantNode.ThumbNail,
@@ -256,11 +266,9 @@ public class InMemoryPersistenceService : IPersistenceService
                     AssemblyLocation = descendantNode.AssemblyLocation,
                     HubConfiguration = descendantNode.HubConfiguration,
                     StartupScript = descendantNode.StartupScript,
-                    RoutingType = descendantNode.RoutingType,
-                    InstantiationType = descendantNode.InstantiationType,
                     GlobalServiceConfigurations = descendantNode.GlobalServiceConfigurations
                 };
-                await SaveNodeAsync(movedDescendant, ct);
+                await SaveNodeAsync(movedDescendant, options, ct);
             }
         }
 
@@ -302,7 +310,7 @@ public class InMemoryPersistenceService : IPersistenceService
         return movedNode;
     }
 
-    public async IAsyncEnumerable<MeshNode> SearchAsync(string? parentPath, string query)
+    public async IAsyncEnumerable<MeshNode> SearchAsync(string? parentPath, string query, JsonSerializerOptions options)
     {
         var normalizedParent = NormalizePath(parentPath);
 
@@ -351,7 +359,7 @@ public class InMemoryPersistenceService : IPersistenceService
 
     #region Comments
 
-    public async IAsyncEnumerable<Comment> GetCommentsAsync(string nodePath)
+    public async IAsyncEnumerable<Comment> GetCommentsAsync(string nodePath, JsonSerializerOptions options)
     {
         var normalizedPath = NormalizePath(nodePath);
         var comments = _comments.Values
@@ -365,7 +373,7 @@ public class InMemoryPersistenceService : IPersistenceService
         await Task.CompletedTask; // Keep async signature
     }
 
-    public Task<Comment> AddCommentAsync(Comment comment, CancellationToken ct = default)
+    public Task<Comment> AddCommentAsync(Comment comment, JsonSerializerOptions options, CancellationToken ct = default)
     {
         var savedComment = comment with
         {
@@ -407,7 +415,8 @@ public class InMemoryPersistenceService : IPersistenceService
 
     public async IAsyncEnumerable<object> GetPartitionObjectsAsync(
         string nodePath,
-        string? subPath = null)
+        string? subPath,
+        JsonSerializerOptions options)
     {
         var key = GetPartitionKey(nodePath, subPath);
 
@@ -425,7 +434,7 @@ public class InMemoryPersistenceService : IPersistenceService
         if (_storageAdapter != null)
         {
             var objects = new List<object>();
-            await foreach (var obj in _storageAdapter.GetPartitionObjectsAsync(nodePath, subPath))
+            await foreach (var obj in _storageAdapter.GetPartitionObjectsAsync(nodePath, subPath, options))
             {
                 objects.Add(obj);
                 yield return obj;
@@ -439,6 +448,7 @@ public class InMemoryPersistenceService : IPersistenceService
         string nodePath,
         string? subPath,
         IReadOnlyCollection<object> objects,
+        JsonSerializerOptions options,
         CancellationToken ct = default)
     {
         var key = GetPartitionKey(nodePath, subPath);
@@ -450,7 +460,7 @@ public class InMemoryPersistenceService : IPersistenceService
         // Persist to storage adapter if available
         if (_storageAdapter != null)
         {
-            await _storageAdapter.SavePartitionObjectsAsync(nodePath, subPath, objects, ct);
+            await _storageAdapter.SavePartitionObjectsAsync(nodePath, subPath, objects, options, ct);
         }
 
         // Notify change for each object in the partition

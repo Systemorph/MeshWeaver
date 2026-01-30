@@ -1,5 +1,7 @@
 @using MeshWeaver.Mesh.Services
+@using MeshWeaver.Messaging
 @inject IMeshQuery? MeshQuery
+@inject IMessageHub Hub
 
 <MonacoEditorView @ref="editorRef"
                   Value="@Value"

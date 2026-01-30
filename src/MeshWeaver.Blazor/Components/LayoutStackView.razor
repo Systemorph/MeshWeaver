@@ -1,19 +1,37 @@
 @using Orientation = Microsoft.FluentUI.AspNetCore.Components.Orientation
 @inherits SkinnedView<StackControl, LayoutStackSkin, LayoutStackView>
 
-<FluentStack
-    Class="@Class"
-    Orientation="@Orientation"
-    HorizontalAlignment="@Horizontal"
-    VerticalAlignment="@Vertical"
-    Width="@Width"
-    VerticalGap="@VerticalGap"
-    HorizontalGap="@HorizontalGap"
-    Style="@ComputedStyle"
-    Wrap="@Wrap"
-    >
-        <DispatchView ViewModel="@ViewModel" Stream="@Stream" Area="@Area"  />
-</FluentStack>
+@if (ViewModel.IsClickable)
+{
+    <FluentStack
+        Class="@Class"
+        Orientation="@Orientation"
+        HorizontalAlignment="@Horizontal"
+        VerticalAlignment="@Vertical"
+        Width="@Width"
+        VerticalGap="@VerticalGap"
+        HorizontalGap="@HorizontalGap"
+        Style="@ComputedStyle"
+        Wrap="@Wrap"
+        @onclick="OnClick">
+            <DispatchView ViewModel="@ViewModel" Stream="@Stream" Area="@Area"  />
+    </FluentStack>
+}
+else
+{
+    <FluentStack
+        Class="@Class"
+        Orientation="@Orientation"
+        HorizontalAlignment="@Horizontal"
+        VerticalAlignment="@Vertical"
+        Width="@Width"
+        VerticalGap="@VerticalGap"
+        HorizontalGap="@HorizontalGap"
+        Style="@ComputedStyle"
+        Wrap="@Wrap">
+            <DispatchView ViewModel="@ViewModel" Stream="@Stream" Area="@Area"  />
+    </FluentStack>
+}
 
 @code{
     private string? Width { get; set; }

@@ -1,6 +1,15 @@
 @inherits BlazorView<HtmlControl, HtmlView>
 
-@Html
+@if (ViewModel.IsClickable)
+{
+    <div @onclick="OnClick" style="@Style" class="@Class">
+        @Html
+    </div>
+}
+else
+{
+    @Html
+}
 
 @code
 {

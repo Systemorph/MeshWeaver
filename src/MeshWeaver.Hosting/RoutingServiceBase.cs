@@ -3,6 +3,7 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Hosting
 {
@@ -44,7 +45,6 @@ namespace MeshWeaver.Hosting
                 }
 
                 var hostAddress = GetHostAddress(address);
-
                 await RouteMessageAsync(delivery, hostAddress, cancellationToken);
             }
             catch (Exception e)
@@ -69,15 +69,7 @@ namespace MeshWeaver.Hosting
         }
 
         protected virtual string GetKernelId(IMessageDelivery delivery, MeshNode node, Address address)
-        {
-            return node.RoutingType switch
-            {
-                RoutingType.Shared => $"{address}".Replace('/', '-'),
-                RoutingType.Individual =>
-                    $"{address}/{TypeRegistry.GetTypeName(delivery.Sender)}/{delivery.Sender}".Replace('/', '-'),
-                _ => throw new NotSupportedException($"The routing type {node.RoutingType} is currently not supported.")
-            };
-        }
+            => $"{address}".Replace('/', '-');
 
         private async Task<IMessageDelivery> RouteMessageAsync(
             IMessageDelivery delivery,
@@ -85,6 +77,8 @@ namespace MeshWeaver.Hosting
             CancellationToken cancellationToken
         )
         {
+            var originalAddress = address;
+
             // Use ResolvePath to find the deepest matching node in persistence
             var resolution = await MeshCatalog.ResolvePathAsync(address.ToString());
             if (resolution != null)
@@ -101,6 +95,21 @@ namespace MeshWeaver.Hosting
 
             // Get node - HubConfiguration is now an IObservable so no deadlock
             var node = await MeshCatalog.GetNodeAsync(address);
+
+            // If the node is a template and we have a remainder, try to get/create a virtual node at the original address
+            // This handles auto-kernel addresses like kernel/app-Kernel that need their own hub
+            if (node != null && resolution?.Remainder != null && !originalAddress.Equals(address))
+            {
+                var virtualNode = await MeshCatalog.GetNodeAsync(originalAddress);
+                if (virtualNode != null && virtualNode.IsVirtual)
+                {
+                    // Use the virtual node and original address instead
+                    node = virtualNode;
+                    address = originalAddress;
+                    // Clear the remainder since we're using the full address
+                    delivery = delivery.WithProperty("UnifiedPath", null);
+                }
+            }
 
             if (!string.IsNullOrWhiteSpace(node?.StartupScript))
                 return await RouteToKernel(delivery, node, address, cancellationToken);

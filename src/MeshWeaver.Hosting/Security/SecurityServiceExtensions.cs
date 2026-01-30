@@ -19,7 +19,7 @@ public static class SecurityServiceExtensions
     /// - ISecurityService for permission evaluation
     /// - RlsNodeValidator for enforcing permissions on CRUD operations
     /// - SecurePersistenceServiceDecorator for filtering query results
-    /// - Per-namespace Access partition storage via IPersistenceService
+    /// - Per-namespace Access partition storage via IPersistenceServiceCore
     ///
     /// Storage structure:
     /// - Access/ - Global roles (Admin with null namespace) and custom role definitions
@@ -35,7 +35,7 @@ public static class SecurityServiceExtensions
             // Register RLS validator
             services.AddSingleton<INodeValidator, RlsNodeValidator>();
 
-            // Decorate IPersistenceService with security filtering
+            // Decorate IPersistenceServiceCore with security filtering
             DecorateWithSecurity(services);
 
             return services;
@@ -43,12 +43,12 @@ public static class SecurityServiceExtensions
     }
 
     /// <summary>
-    /// Decorates IPersistenceService with SecurePersistenceServiceDecorator.
+    /// Decorates IPersistenceServiceCore with SecurePersistenceServiceDecorator.
     /// </summary>
     private static void DecorateWithSecurity(IServiceCollection services)
     {
-        // Find the existing IPersistenceService registration
-        var descriptor = services.FirstOrDefault(d => d.ServiceType == typeof(IPersistenceService));
+        // Find the existing IPersistenceServiceCore registration
+        var descriptor = services.FirstOrDefault(d => d.ServiceType == typeof(IPersistenceServiceCore));
         if (descriptor == null)
             return; // No persistence service registered yet
 
@@ -57,15 +57,15 @@ public static class SecurityServiceExtensions
 
         // Add the decorator that wraps the original
         services.Add(ServiceDescriptor.Describe(
-            typeof(IPersistenceService),
+            typeof(IPersistenceServiceCore),
             sp =>
             {
                 // Create the original service
                 var inner = descriptor.ImplementationFactory != null
-                    ? (IPersistenceService)descriptor.ImplementationFactory(sp)
+                    ? (IPersistenceServiceCore)descriptor.ImplementationFactory(sp)
                     : descriptor.ImplementationInstance != null
-                        ? (IPersistenceService)descriptor.ImplementationInstance
-                        : (IPersistenceService)ActivatorUtilities.CreateInstance(sp, descriptor.ImplementationType!);
+                        ? (IPersistenceServiceCore)descriptor.ImplementationInstance
+                        : (IPersistenceServiceCore)ActivatorUtilities.CreateInstance(sp, descriptor.ImplementationType!);
 
                 // Wrap it with the security decorator (use Lazy to avoid circular dependency)
                 return new SecurePersistenceServiceDecorator(

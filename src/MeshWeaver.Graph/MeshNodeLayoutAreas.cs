@@ -1,10 +1,13 @@
-﻿using System.ComponentModel;
+﻿using System.Collections;
+using System.ComponentModel;
 using System.ComponentModel.DataAnnotations;
 using System.Reactive.Linq;
 using System.Reflection;
+using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Schema;
+using Json.More;
 using MeshWeaver.Application.Styles;
 using MeshWeaver.ContentCollections;
 using MeshWeaver.Data;
@@ -12,6 +15,7 @@ using MeshWeaver.Domain;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
+using MeshWeaver.Layout.DataBinding;
 using MeshWeaver.Layout.DataGrid;
 using MeshWeaver.Layout.Domain;
 using MeshWeaver.Markdown;
@@ -19,9 +23,11 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
+using MeshWeaver.Reflection;
 using MeshWeaver.ShortGuid;
 using MeshWeaver.Utils;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Namotion.Reflection;
 
 namespace MeshWeaver.Graph;
@@ -33,14 +39,14 @@ namespace MeshWeaver.Graph;
 public record NodeTypeCatalogMode;
 
 /// <summary>
-/// Layout views for mesh node content.
-/// - Details: Main content display with action menu (readonly content + navigation)
+/// Layout areas for mesh node content.
+/// - Overview: Main content display with action menu (readonly content + navigation)
 /// - Thumbnail: Compact card view for use in catalogs and lists
 /// - Metadata: Node metadata display (name, type, description, path)
 /// - Settings: Node settings with NodeType link navigation
-/// - Comments: Comments section (Facebook-style)
+/// - Children: Child nodes grouped by type
 /// </summary>
-public static class MeshNodeView
+public static class MeshNodeLayoutAreas
 {
     public const string OverviewArea = "Overview";
     public const string ThumbnailArea = "Thumbnail";
@@ -53,7 +59,6 @@ public static class MeshNodeView
     public const string NodeTypesArea = "NodeTypes";
     public const string AccessControlArea = "AccessControl";
     public const string CreateNodeArea = "Create";
-    public const string EditArea = "Edit";
 
     // UCR (Unified Content Reference) special areas
     public const string ContentArea = "$Content";
@@ -87,89 +92,77 @@ public static class MeshNodeView
             // UCR special areas
             .WithView(DataArea, Data)
             .WithView(SchemaArea, Schema)
-            .WithView(EditArea, Edit)
             .WithView(ModelArea, DataModelLayoutArea.DataModel)
             .AddDomainLayoutAreas();
 
     /// <summary>
     /// Renders the Overview area showing the node's main content with action menu.
     /// This is the default view for a node, showing content and providing navigation.
-    /// Uses GetStream for node data. Children are loaded via ChildrenQuery from NodeTypeDefinition
-    /// if set, otherwise via IMeshQuery with scope:children.
+    /// Uses GetStream for node data. Children are displayed via LayoutAreaControl.Children.
     /// </summary>
     [Browsable(false)]
     public static IObservable<UiControl?> Overview(LayoutAreaHost host, RenderingContext _)
     {
         var hubPath = host.Hub.Address.ToString();
-        var meshQuery = host.Hub.ServiceProvider.GetService<IMeshQuery>();
 
         // Get the node from the workspace stream
         var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? Array.Empty<MeshNode>())
             ?? Observable.Return<MeshNode[]>(Array.Empty<MeshNode>());
 
-        // Get the NodeTypeDefinition from the workspace stream (for ChildrenQuery)
+        // Get the NodeTypeDefinition from the workspace stream (for ShowChildrenInDetails)
         var nodeTypeDefStream = host.Workspace.GetStream<NodeTypeDefinition>()?.Select(defs => defs?.FirstOrDefault())
             ?? Observable.Return<NodeTypeDefinition?>(null);
 
         // Combine streams to get both node and type definition
-        var combinedStream = nodeStream.CombineLatest(nodeTypeDefStream, (nodes, typeDef) =>
+        return nodeStream.CombineLatest(nodeTypeDefStream, (nodes, typeDef) =>
         {
             var node = nodes.FirstOrDefault(n => n.Path == hubPath);
-            return (Node: node, TypeDef: typeDef);
-        });
-
-        // Load children based on ChildrenQuery or default IMeshQuery with scope:children
-        return combinedStream.SelectMany(async data =>
-        {
-            var childrenQuery = data.TypeDef?.ChildrenQuery;
-            IReadOnlyList<MeshNode> children;
-
-            if (!string.IsNullOrEmpty(childrenQuery) && meshQuery != null)
-            {
-                // Use QueryAsync with ChildrenQuery
-                // Replace {path} placeholder with actual path
-                var query = childrenQuery.Replace("{path}", hubPath);
-                try
-                {
-                    children = await meshQuery.QueryAsync<MeshNode>(query).ToListAsync();
-                }
-                catch
-                {
-                    children = Array.Empty<MeshNode>();
-                }
-            }
-            else
-            {
-                // Default: use IMeshQuery with scope:children
-                if (meshQuery != null)
-                {
-                    try
-                    {
-                        children = await meshQuery.QueryAsync<MeshNode>($"path:{hubPath} scope:children -nodeType:NodeType").ToListAsync();
-                    }
-                    catch
-                    {
-                        children = Array.Empty<MeshNode>();
-                    }
-                }
-                else
-                {
-                    children = Array.Empty<MeshNode>();
-                }
-            }
-
-            return BuildDetailsContent(host, data.Node, children, data.TypeDef);
+            return BuildDetailsContent(host, node, typeDef);
         });
     }
 
-    private static UiControl BuildDetailsContent(this LayoutAreaHost host, MeshNode? node, IEnumerable<MeshNode> children, NodeTypeDefinition? typeDef)
+    private static UiControl BuildDetailsContent(this LayoutAreaHost host, MeshNode? node, NodeTypeDefinition? typeDef)
     {
         var nodePath = node?.Namespace ?? host.Hub.Address.ToString();
         var stack = Controls.Stack.WithWidth("100%").WithStyle("position: relative;");
 
-        // Header: icon + title on left, menu button on right
+        // Action menu (top-right)
+        stack = stack.WithView(Controls.Stack
+            .WithStyle("position: absolute; top: 0; right: 0; z-index: 10;")
+            .WithView(BuildActionMenu(host, node)));
+
+        // Header with title/icon
+        stack = stack.WithView(BuildHeader(host, node));
+
+        // Property overview (read-only with click-to-edit)
+        if (node != null)
+        {
+            stack = stack.WithView(OverviewLayoutArea.BuildPropertyOverview(host, node));
+        }
+
+        // Children
+        if (typeDef?.ShowChildrenInDetails ?? true)
+        {
+            stack = stack.WithView(LayoutAreaControl.Children(host.Hub));
+        }
+
+        // Comments
+        if (host.Hub.Configuration.HasComments())
+        {
+            stack = stack.WithView(CommentsView.BuildInlineCommentsSection(host));
+        }
+
+        return stack;
+    }
+
+    /// <summary>
+    /// Builds the header with icon and click-to-edit title.
+    /// </summary>
+    private static UiControl BuildHeader(LayoutAreaHost host, MeshNode? node)
+    {
+        var nodePath = node?.Namespace ?? host.Hub.Address.ToString();
         var title = node?.Name ?? host.Hub.Address.ToString();
-        var imageUrl = node != null ? GetNodeImageUrl(node) : null;
+        var iconValue = node?.Icon;
 
         // Build title with icon
         var titleContent = Controls.Stack
@@ -177,116 +170,71 @@ public static class MeshNodeView
             .WithStyle("align-items: center; gap: 16px;");
 
         // Add icon/image if available
-        if (!string.IsNullOrEmpty(imageUrl))
+        if (!string.IsNullOrEmpty(iconValue))
         {
-            titleContent = titleContent.WithView(Controls.Html(
-                $"<img src=\"{imageUrl}\" alt=\"\" style=\"width: 48px; height: 48px; border-radius: 8px; object-fit: cover;\" />"));
+            if (iconValue.StartsWith("data:") || iconValue.StartsWith("http") || iconValue.StartsWith("/"))
+            {
+                titleContent = titleContent.WithView(Controls.Html(
+                    $"<img src=\"{iconValue}\" alt=\"\" style=\"width: 48px; height: 48px; border-radius: 8px; object-fit: cover;\" />"));
+            }
+            else if (iconValue.TrimStart().StartsWith("<svg", StringComparison.OrdinalIgnoreCase))
+            {
+                titleContent = titleContent.WithView(Controls.Html(
+                    $"<div style=\"width: 48px; height: 48px; display: flex; align-items: center; justify-content: center;\">{iconValue}</div>"));
+            }
+            else
+            {
+                titleContent = titleContent.WithView(
+                    Controls.Icon(iconValue).WithStyle("font-size: 48px; color: var(--accent-fill-rest);"));
+            }
         }
-        else if (!string.IsNullOrEmpty(node?.Icon) && !node.Icon.StartsWith("data:") && !node.Icon.StartsWith("http"))
+
+        // Check if content has Title property for click-to-edit
+        bool hasTitleProperty = false;
+        bool canEdit = true;
+        if (node?.Content is JsonElement jsonElement && jsonElement.TryGetProperty("$type", out var typeProperty))
         {
-            // FluentUI icon name
-            titleContent = titleContent.WithView(Controls.Html(
-                $"<fluent-icon name=\"{node.Icon}\" style=\"font-size: 48px; color: var(--accent-fill-rest);\"></fluent-icon>"));
+            var typeName = typeProperty.GetString();
+            var typeRegistry = host.Hub.ServiceProvider.GetService<ITypeRegistry>();
+            var contentType = !string.IsNullOrEmpty(typeName) ? typeRegistry?.GetType(typeName) : null;
+            hasTitleProperty = contentType?.GetProperty("Title") != null;
+
+            // Check edit permissions
+            if (hasTitleProperty)
+            {
+                var securityService = host.Hub.ServiceProvider.GetService<ISecurityService>();
+                if (securityService != null)
+                {
+                    try
+                    {
+                        var permissions = securityService.GetEffectivePermissionsAsync(nodePath).GetAwaiter().GetResult();
+                        canEdit = permissions.HasFlag(Permission.Update);
+                    }
+                    catch
+                    {
+                        canEdit = true; // fallback
+                    }
+                }
+            }
         }
 
-        titleContent = titleContent.WithView(Controls.Html($"<h1 style=\"margin: 0;\">{title}</h1>"));
+        // Title - click-to-edit if we have Title property, otherwise static
+        if (hasTitleProperty && node != null)
+        {
+            var dataId = OverviewLayoutArea.GetDataId(nodePath);
+            // Data will be set up by OverviewLayoutArea.BuildPropertyOverview, just use the same ID
+            titleContent = titleContent.WithView(OverviewLayoutArea.BuildTitle(host, node, dataId, canEdit));
+        }
+        else
+        {
+            titleContent = titleContent.WithView(Controls.Html($"<h1 style=\"margin: 0;\">{System.Web.HttpUtility.HtmlEncode(title)}</h1>"));
+        }
 
-        // Action menu positioned at top-right of content
-        var actionMenu = Controls.Stack
-            .WithStyle("position: absolute; top: 0; right: 0; z-index: 10;")
-            .WithView(BuildActionMenu(host, node));
-
-        var headerStack = Controls.Stack
+        return Controls.Stack
             .WithOrientation(Orientation.Horizontal)
             .WithWidth("100%")
             .WithStyle("align-items: center; padding-bottom: 24px; margin-bottom: 24px; border-bottom: 1px solid var(--neutral-stroke-rest);")
             .WithView(titleContent);
-
-        stack = stack.WithView(actionMenu);  // Add action menu first (positioned absolutely)
-        stack = stack.WithView(headerStack);
-
-        // Main content based on node type
-        // Check if we have a ContentType - if so, render properties in a grid
-        var dataContext = host.Workspace.DataContext;
-        var contentTypeSource = dataContext.TypeSources.Values
-            .FirstOrDefault(ts => ts.TypeDefinition.Type != typeof(MeshNode));
-
-        if (contentTypeSource != null && node?.Content != null)
-        {
-            // Render content type properties using BuildContentTypeDisplay
-            var contentDisplay = BuildContentTypeDisplay(host, node, contentTypeSource.TypeDefinition.Type);
-            stack = stack.WithView(contentDisplay);
-        }
-        else
-        {
-            // Fall back to markdown display for Markdown nodes or plain content
-            var content = GetNodeContentDisplay(node, host.Hub.JsonSerializerOptions);
-            if (!string.IsNullOrWhiteSpace(content))
-            {
-                stack = stack.WithView(new MarkdownControl(content));
-            }
-        }
-
-        // Child node sections using a unified grid
-        // Controlled by NodeTypeDefinition.ShowChildrenInDetails and DetailsChildrenLimit
-        var showChildren = typeDef?.ShowChildrenInDetails ?? true;
-        var childrenLimit = typeDef?.DetailsChildrenLimit ?? 10;
-
-        if (showChildren)
-        {
-            // Group by Category if set, otherwise by NodeType
-            var childGroups = children
-                .Where(c => !string.IsNullOrEmpty(c.Category) || !string.IsNullOrEmpty(c.NodeType))
-                .GroupBy(c => c.Category ?? c.NodeType!)
-                .OrderBy(g => g.Key)
-                .ToList();
-
-            if (childGroups.Count > 0)
-            {
-                // Single unified grid for all child types
-                var grid = Controls.LayoutGrid.WithSkin(s => s.WithSpacing(2));
-
-                foreach (var group in childGroups)
-                {
-                    var recentNodes = group.Take(childrenLimit).ToList();
-                    var displayName = GetGroupDisplayName(group.Key, group.Count());
-
-                    // Section header spans full width
-                    grid = grid.WithView(
-                        Controls.Html($"<h3 style=\"margin: 24px 0 8px 0;\">{displayName}</h3>"),
-                        itemSkin => itemSkin.WithXs(12));
-
-                    // Thumbnails in grid: xs=12, sm=6, md=4, lg=3
-                    foreach (var child in recentNodes)
-                    {
-                        grid = grid.WithView(
-                            BuildThumbnailContent(child, child.Namespace ?? ""),
-                            itemSkin => itemSkin.WithXs(12).WithSm(6).WithMd(4).WithLg(4));
-                    }
-
-                    // "Show more" button if there are more than the limit
-                    if (group.Count() > childrenLimit)
-                    {
-                        var showMoreHref = $"/{nodePath}/{MeshCatalogView.NodesArea}/{group.Key}";
-                        grid = grid.WithView(
-                            Controls.Button($"Show all {group.Count()}")
-                                .WithAppearance(Appearance.Lightweight)
-                                .WithNavigateToHref(showMoreHref),
-                            itemSkin => itemSkin.WithXs(12));
-                    }
-                }
-
-                stack = stack.WithView(grid);
-            }
-        }
-
-        // Comments section at the bottom (only if comments are enabled)
-        if (host.Hub.Configuration.HasComments())
-        {
-            stack = stack.WithView(CommentsView.BuildInlineCommentsSection(host));
-        }
-
-        return stack;
     }
 
     /// <summary>
@@ -307,13 +255,6 @@ public static class MeshNodeView
         // Create option - goes to CreateNode area (first item in menu)
         var createHref = $"/{nodePath}/{CreateNodeArea}";
         menu = menu.WithView(new NavLinkControl("Create", FluentIcons.Add(IconSize.Size16), createHref));
-
-        // Edit option - goes to Edit area
-        if (node != null)
-        {
-            var editHref = $"/{nodePath}/{EditArea}";
-            menu = menu.WithView(new NavLinkControl("Edit", FluentIcons.Edit(IconSize.Size16), editHref));
-        }
 
         // Comments option (only if comments are enabled)
         if (host.Hub.Configuration.HasComments())
@@ -348,68 +289,6 @@ public static class MeshNodeView
         menu = menu.WithView(new NavLinkControl("Access Control", FluentIcons.Shield(IconSize.Size16), accessControlHref));
 
         return menu;
-    }
-
-    /// <summary>
-    /// Builds a children section showing child nodes grouped by type in a responsive grid.
-    /// Use this in custom views to display subnodes below your custom header.
-    /// </summary>
-    /// <param name="host">The layout area host.</param>
-    /// <param name="children">The list of child nodes to display.</param>
-    /// <param name="nodePath">The parent node path (for "show more" links).</param>
-    /// <param name="childrenLimit">Maximum children per type to show (default 10).</param>
-    /// <returns>A LayoutGrid control with children, or null if no children.</returns>
-    [Browsable(false)]
-    public static UiControl? BuildChildrenSection(
-        LayoutAreaHost _,
-        IEnumerable<MeshNode> children,
-        string nodePath,
-        int childrenLimit = 10)
-    {
-        // Group by Category if set, otherwise by NodeType
-        var childGroups = children
-            .Where(c => !string.IsNullOrEmpty(c.Category) || !string.IsNullOrEmpty(c.NodeType))
-            .GroupBy(c => c.Category ?? c.NodeType!)
-            .OrderBy(g => g.Key)
-            .ToList();
-
-        if (childGroups.Count == 0)
-            return null;
-
-        // Single unified grid for all child types
-        var grid = Controls.LayoutGrid.WithSkin(s => s.WithSpacing(2));
-
-        foreach (var group in childGroups)
-        {
-            var recentNodes = group.Take(childrenLimit).ToList();
-            var displayName = GetGroupDisplayName(group.Key, group.Count());
-
-            // Section header spans full width
-            grid = grid.WithView(
-                Controls.Html($"<h3 style=\"margin: 24px 0 8px 0;\">{displayName}</h3>"),
-                itemSkin => itemSkin.WithXs(12));
-
-            // Thumbnails in grid: xs=12, sm=6, md=4, lg=3
-            foreach (var child in recentNodes)
-            {
-                grid = grid.WithView(
-                    MeshNodeThumbnailControl.FromNode(child, child.Namespace ?? ""),
-                    itemSkin => itemSkin.WithXs(12).WithSm(6).WithMd(4).WithLg(4));
-            }
-
-            // "Show more" button if there are more than the limit
-            if (group.Count() > childrenLimit)
-            {
-                var showMoreHref = $"/{nodePath}/{MeshCatalogView.NodesArea}/{group.Key}";
-                grid = grid.WithView(
-                    Controls.Button($"Show all {group.Count()}")
-                        .WithAppearance(Appearance.Lightweight)
-                        .WithNavigateToHref(showMoreHref),
-                    itemSkin => itemSkin.WithXs(12));
-            }
-        }
-
-        return grid;
     }
 
     /// <summary>
@@ -607,9 +486,6 @@ public static class MeshNodeView
         sb.AppendLine($"| **LastModified** | {node.LastModified:yyyy-MM-dd HH:mm:ss} |");
         sb.AppendLine($"| **Version** | {node.Version} |");
 
-        if (node.AddressSegments > 0)
-            sb.AppendLine($"| **AddressSegments** | {node.AddressSegments} |");
-
         if (!string.IsNullOrEmpty(node.StreamProvider))
             sb.AppendLine($"| **StreamProvider** | {node.StreamProvider} |");
 
@@ -676,357 +552,6 @@ public static class MeshNodeView
         return node.Description ?? string.Empty;
     }
 
-    /// <summary>
-    /// Builds a UI display for content type properties.
-    /// Renders regular properties in a grid, markdown fields with SeparateEditView as sections with edit buttons.
-    /// </summary>
-    private static UiControl BuildContentTypeDisplay(LayoutAreaHost host, MeshNode node, Type contentType)
-    {
-        var nodePath = node.Namespace ?? host.Hub.Address.ToString();
-        var editHref = $"/{nodePath}/{EditArea}";
-        var stack = Controls.Stack;
-
-        // Deserialize content to the actual type if it's a JsonElement
-        object? content = node.Content;
-        if (content is JsonElement jsonElement)
-        {
-            try
-            {
-                content = jsonElement.Deserialize(contentType, host.Hub.JsonSerializerOptions);
-            }
-            catch
-            {
-                // If deserialization fails, keep as JsonElement
-            }
-        }
-
-        // Get all browsable properties
-        var properties = contentType.GetProperties()
-            .Where(p => p.CanRead && p.GetCustomAttribute<BrowsableAttribute>()?.Browsable != false)
-            .ToList();
-
-        // Separate properties into regular and markdown with SeparateEditView
-        var regularProperties = new List<PropertyInfo>();
-        var separateViewProperties = new List<PropertyInfo>();
-
-        foreach (var prop in properties)
-        {
-            var uiControlAttr = prop.GetCustomAttribute<UiControlAttribute>();
-            if (uiControlAttr?.SeparateEditView == true)
-            {
-                separateViewProperties.Add(prop);
-            }
-            else
-            {
-                regularProperties.Add(prop);
-            }
-        }
-
-        // Render regular properties in a two-column grid (label | value per row)
-        if (regularProperties.Any())
-        {
-            var grid = Controls.LayoutGrid.WithSkin(s => s.WithSpacing(2));
-
-            foreach (var prop in regularProperties)
-            {
-                var displayName = prop.GetCustomAttribute<DisplayAttribute>()?.Name
-                    ?? prop.GetCustomAttribute<DisplayNameAttribute>()?.DisplayName
-                    ?? prop.Name.Wordify();
-
-                var value = GetPropertyValue(content, prop);
-                var displayValue = FormatDisplayValue(value, prop);
-
-                // Label column (left)
-                grid = grid.WithView(
-                    Controls.Html($"<div style=\"font-size: 14px; font-weight: 500; color: var(--neutral-foreground-hint); padding: 8px 0;\">{displayName}</div>"),
-                    itemSkin => itemSkin.WithXs(4).WithMd(2));
-
-                // Value column (right)
-                grid = grid.WithView(
-                    Controls.Html($"<div style=\"font-size: 14px; padding: 8px 0;\">{displayValue}</div>"),
-                    itemSkin => itemSkin.WithXs(8).WithMd(4));
-            }
-
-            stack = stack.WithView(
-                Controls.Stack
-                    .WithStyle("padding: 16px; border: 1px solid var(--neutral-stroke-rest); border-radius: 8px; margin-bottom: 16px;")
-                    .WithView(grid));
-        }
-
-        // Render markdown/separate view fields as full-width sections below
-        foreach (var prop in separateViewProperties)
-        {
-            var displayName = prop.GetCustomAttribute<DisplayAttribute>()?.Name
-                ?? prop.GetCustomAttribute<DisplayNameAttribute>()?.DisplayName
-                ?? prop.Name.Wordify();
-
-            var value = GetPropertyValue(content, prop);
-            var uiControlAttr = prop.GetCustomAttribute<UiControlAttribute>();
-
-            var headerStack = Controls.Stack
-                .WithOrientation(Orientation.Horizontal)
-                .WithStyle("align-items: center; justify-content: space-between; margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px solid var(--neutral-stroke-rest);")
-                .WithView(Controls.Html($"<div style=\"font-size: 16px; font-weight: 600;\">{displayName}</div>"))
-                .WithView(Controls.Button("Edit")
-                    .WithIconStart(FluentIcons.Edit(IconSize.Size16))
-                    .WithAppearance(Appearance.Neutral)
-                    .WithNavigateToHref(editHref));
-
-            // Render using display control type if available
-            UiControl contentControl;
-            if (uiControlAttr?.DisplayControlType == typeof(MarkdownControl) && value is string markdownText)
-            {
-                if (string.IsNullOrEmpty(markdownText))
-                    contentControl = Controls.Html("<div style=\"color: var(--neutral-foreground-hint); font-style: italic; padding: 16px 0;\">No content provided</div>");
-                else
-                    contentControl = new MarkdownControl(markdownText);
-            }
-            else
-            {
-                var displayValue = value?.ToString() ?? string.Empty;
-                if (string.IsNullOrEmpty(displayValue))
-                    contentControl = Controls.Html("<div style=\"color: var(--neutral-foreground-hint); font-style: italic; padding: 16px 0;\">No content provided</div>");
-                else
-                    contentControl = Controls.Html($"<div style=\"font-size: 14px;\">{System.Web.HttpUtility.HtmlEncode(displayValue)}</div>");
-            }
-
-            stack = stack.WithView(
-                Controls.Stack
-                    .WithWidth("100%")
-                    .WithStyle("padding: 16px; border: 1px solid var(--neutral-stroke-rest); border-radius: 8px; margin-bottom: 16px;")
-                    .WithView(headerStack)
-                    .WithView(contentControl));
-        }
-
-        return stack;
-    }
-
-    private static object? GetPropertyValue(object? content, PropertyInfo prop)
-    {
-        if (content == null) return null;
-
-        // Handle JsonElement content
-        if (content is JsonElement jsonElement)
-        {
-            var propName = prop.Name.ToCamelCase();
-            if (propName != null && jsonElement.TryGetProperty(propName, out var propValue))
-            {
-                return propValue.ValueKind switch
-                {
-                    JsonValueKind.String => propValue.GetString(),
-                    JsonValueKind.Number => propValue.GetDouble(),
-                    JsonValueKind.True => true,
-                    JsonValueKind.False => false,
-                    JsonValueKind.Null => null,
-                    _ => propValue.ToString()
-                };
-            }
-            return null;
-        }
-
-        // Handle direct property access
-        try
-        {
-            return prop.GetValue(content);
-        }
-        catch
-        {
-            return null;
-        }
-    }
-
-    private static string FormatDisplayValue(object? value, PropertyInfo prop)
-    {
-        if (value == null) return "<em>Not set</em>";
-
-        // Format DateTime
-        if (value is DateTime dt)
-            return dt.ToString("MMM dd, yyyy");
-
-        // Format enum
-        if (value.GetType().IsEnum)
-            return value.ToString()!.Wordify();
-
-        // Format boolean
-        if (value is bool b)
-            return b ? "Yes" : "No";
-
-        return System.Web.HttpUtility.HtmlEncode(value.ToString() ?? string.Empty);
-    }
-
-    /// <summary>
-    /// Gets the content display for a node.
-    /// For Markdown type: renders content directly as markdown.
-    /// For other types: generates markdown table from properties.
-    /// </summary>
-    private static string GetNodeContentDisplay(MeshNode? node, JsonSerializerOptions jsonOptions)
-    {
-        if (node?.Content == null)
-            return node?.Description ?? string.Empty;
-
-        // Check for Markdown type - render content directly
-        if (node.NodeType?.Equals("Markdown", StringComparison.OrdinalIgnoreCase) == true)
-        {
-            return GetNodeContent(node);
-        }
-
-        // Check if content is pure markdown text (MarkdownDocument type)
-        if (node.Content is JsonElement jsonElement)
-        {
-            if (jsonElement.TryGetProperty("$type", out var typeProperty))
-            {
-                var typeName = typeProperty.GetString();
-                if (typeName == "MarkdownDocument" && jsonElement.TryGetProperty("content", out var contentProperty))
-                {
-                    return contentProperty.GetString() ?? string.Empty;
-                }
-            }
-        }
-
-        // For other types, generate markdown table from properties
-        return GenerateContentMarkdown(node.Content, jsonOptions);
-    }
-
-    /// <summary>
-    /// Generates markdown representation of content (tables for properties).
-    /// </summary>
-    private static string GenerateContentMarkdown(object content, JsonSerializerOptions jsonOptions)
-    {
-        var sb = new System.Text.StringBuilder();
-
-        if (content is JsonElement json)
-        {
-            GenerateJsonMarkdown(json, sb, 0);
-        }
-        else
-        {
-            // Use reflection to get properties
-            var type = content.GetType();
-            var properties = type.GetProperties()
-                .Where(p => p.CanRead && p.Name != "$type")
-                .OrderBy(p => p.Name);
-
-            sb.AppendLine("| Property | Value |");
-            sb.AppendLine("|----------|-------|");
-
-            foreach (var prop in properties)
-            {
-                var value = prop.GetValue(content);
-                var displayValue = FormatPropertyValue(value, jsonOptions);
-                sb.AppendLine($"| **{prop.Name}** | {displayValue} |");
-            }
-        }
-
-        return sb.ToString();
-    }
-
-    /// <summary>
-    /// Generates markdown from a JsonElement, with sub-objects as separate tables.
-    /// </summary>
-    private static void GenerateJsonMarkdown(JsonElement json, System.Text.StringBuilder sb, int depth)
-    {
-        // Skip $type property and gather properties
-        var properties = json.EnumerateObject()
-            .Where(p => p.Name != "$type")
-            .OrderBy(p => p.Name)
-            .ToList();
-
-        // Separate simple values from complex objects
-        var simpleProps = properties.Where(p => p.Value.ValueKind != JsonValueKind.Object && p.Value.ValueKind != JsonValueKind.Array).ToList();
-        var complexProps = properties.Where(p => p.Value.ValueKind == JsonValueKind.Object || p.Value.ValueKind == JsonValueKind.Array).ToList();
-
-        // Render simple properties as table
-        if (simpleProps.Count > 0)
-        {
-            sb.AppendLine("| Property | Value |");
-            sb.AppendLine("|----------|-------|");
-
-            foreach (var prop in simpleProps)
-            {
-                var displayValue = FormatJsonValue(prop.Value);
-                sb.AppendLine($"| **{prop.Name}** | {displayValue} |");
-            }
-        }
-
-        // Render complex properties as sub-tables
-        foreach (var prop in complexProps)
-        {
-            sb.AppendLine();
-            sb.AppendLine($"### {prop.Name}");
-            sb.AppendLine();
-
-            if (prop.Value.ValueKind == JsonValueKind.Object)
-            {
-                GenerateJsonMarkdown(prop.Value, sb, depth + 1);
-            }
-            else if (prop.Value.ValueKind == JsonValueKind.Array)
-            {
-                // For arrays, list items
-                var items = prop.Value.EnumerateArray().ToList();
-                if (items.Count == 0)
-                {
-                    sb.AppendLine("*Empty array*");
-                }
-                else if (items.All(i => i.ValueKind == JsonValueKind.Object))
-                {
-                    // Array of objects - render each as a sub-table
-                    for (int i = 0; i < items.Count; i++)
-                    {
-                        sb.AppendLine($"**Item {i + 1}:**");
-                        sb.AppendLine();
-                        GenerateJsonMarkdown(items[i], sb, depth + 1);
-                        sb.AppendLine();
-                    }
-                }
-                else
-                {
-                    // Array of simple values - render as list
-                    foreach (var item in items)
-                    {
-                        sb.AppendLine($"- {FormatJsonValue(item)}");
-                    }
-                }
-            }
-        }
-    }
-
-    /// <summary>
-    /// Formats a JSON value for display in markdown.
-    /// </summary>
-    private static string FormatJsonValue(JsonElement value)
-    {
-        return value.ValueKind switch
-        {
-            JsonValueKind.String => value.GetString() ?? "*null*",
-            JsonValueKind.Number => value.GetRawText(),
-            JsonValueKind.True => "Yes",
-            JsonValueKind.False => "No",
-            JsonValueKind.Null => "*null*",
-            JsonValueKind.Object => "*object*",
-            JsonValueKind.Array => $"*{value.GetArrayLength()} items*",
-            _ => value.GetRawText()
-        };
-    }
-
-    /// <summary>
-    /// Formats a property value for display in markdown.
-    /// </summary>
-    private static string FormatPropertyValue(object? value, JsonSerializerOptions _)
-    {
-        if (value == null)
-            return "*null*";
-
-        return value switch
-        {
-            string s => s,
-            bool b => b ? "Yes" : "No",
-            DateTime dt => dt.ToString("yyyy-MM-dd HH:mm:ss"),
-            DateTimeOffset dto => dto.ToString("yyyy-MM-dd HH:mm:ss"),
-            IEnumerable<object> enumerable => $"*{enumerable.Count()} items*",
-            _ when value.GetType().IsValueType => value.ToString() ?? "*null*",
-            _ => "*complex object*"
-        };
-    }
 
     /// <summary>
     /// Renders the Search view showing nodes as thumbnails with search.
@@ -1251,149 +776,6 @@ public static class MeshNodeView
         return new FileBrowserControl("content")
             .WithTopLevel(host.Hub.Address.ToString());
 
-    }
-
-    /// <summary>
-    /// Renders the Edit area using EditorExtensions for the ContentType.
-    /// If a ContentType is registered, uses EditorExtensions to generate a form.
-    /// Falls back to MeshNodeEditorControl if no ContentType is found.
-    /// Includes a back button to return to Overview.
-    /// </summary>
-    [Browsable(false)]
-    public static IObservable<UiControl> Edit(LayoutAreaHost host, RenderingContext _)
-    {
-        var nodePath = host.Hub.Address.ToString();
-        var persistence = host.Hub.ServiceProvider.GetService<IPersistenceService>();
-        var dataContext = host.Workspace.DataContext;
-
-        return Observable.FromAsync(async ct =>
-        {
-            var node = await persistence?.GetNodeAsync(nodePath, ct)!;
-            var stack = Controls.Stack.WithWidth("100%");
-
-            // Back button
-            var overviewHref = $"/{nodePath}/{OverviewArea}";
-            stack = stack.WithView(Controls.Stack
-                .WithOrientation(Orientation.Horizontal)
-                .WithStyle("margin-bottom: 16px;")
-                .WithView(Controls.Button("← Back to Overview").WithNavigateToHref(overviewHref)));
-
-            // Get ContentType from DataContext's TypeSources (first non-MeshNode type)
-            var contentTypeSource = dataContext.TypeSources.Values
-                .FirstOrDefault(ts => ts.TypeDefinition.Type != typeof(MeshNode));
-
-            if (contentTypeSource != null && node?.Content != null)
-            {
-                var contentType = contentTypeSource.TypeDefinition.Type;
-                var dataId = Guid.NewGuid().AsString();
-
-                // Deserialize content to the actual type if it's a JsonElement
-                object content = node.Content;
-                if (content is JsonElement jsonElement)
-                {
-                    try
-                    {
-                        content = jsonElement.Deserialize(contentType, host.Hub.JsonSerializerOptions) ?? content;
-                    }
-                    catch
-                    {
-                        // If deserialization fails, keep as JsonElement
-                    }
-                }
-
-                // Use EditorExtensions to generate editor for ContentType
-                var editor = host.Hub.ServiceProvider.Edit(contentType, dataId);
-                host.UpdateData(dataId, content);
-                stack = stack.WithView(editor);
-
-                // Save button with DataChangeRequest
-                stack = stack.WithView(BuildSaveButton(host, dataId, contentType, nodePath));
-            }
-            else
-            {
-                // Fallback to MeshNodeEditorControl
-                stack = stack.WithView(new MeshNodeEditorControl { NodePath = nodePath, NodeType = node?.NodeType });
-            }
-
-            return (UiControl)stack;
-        });
-    }
-
-    /// <summary>
-    /// Builds a save button that updates the node's Content via DataChangeRequest.
-    /// </summary>
-    private static UiControl BuildSaveButton(LayoutAreaHost host, string dataId, Type contentType, string nodePath)
-    {
-        var hubAddress = host.Hub.Configuration.ParentHub?.Address ?? host.Hub.Address;
-
-        return Controls.Button("Save")
-            .WithAppearance(Appearance.Accent)
-            .WithStyle("margin-top: 16px;")
-            .WithClickAction(async actx =>
-            {
-                // Get the updated content from the workspace data stream
-                var stream = actx.Host.Stream.GetDataStream<object>(dataId);
-                var updatedContent = await stream.FirstAsync();
-
-                if (updatedContent == null)
-                {
-                    var errorDialog = Controls.Dialog(
-                        Controls.Markdown("**No changes to save.**"),
-                        "Info"
-                    ).WithSize("S");
-                    actx.Host.UpdateArea(DialogControl.DialogArea, errorDialog);
-                    return;
-                }
-
-                // Get the current node to update its Content
-                var persistence = actx.Host.Hub.ServiceProvider.GetService<IPersistenceService>();
-                var node = await persistence?.GetNodeAsync(nodePath, CancellationToken.None)!;
-
-                if (node == null)
-                {
-                    var errorDialog = Controls.Dialog(
-                        Controls.Markdown("**Node not found.**"),
-                        "Error"
-                    ).WithSize("S");
-                    actx.Host.UpdateArea(DialogControl.DialogArea, errorDialog);
-                    return;
-                }
-
-                // Update the node with new content
-                var updatedNode = node with { Content = updatedContent };
-
-                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-                try
-                {
-                    var response = await actx.Host.Hub.AwaitResponse<DataChangeResponse>(
-                        new DataChangeRequest().WithUpdates(updatedNode),
-                        o => o.WithTarget(hubAddress),
-                        cts.Token);
-
-                    if (response.Message.Log.Status != ActivityStatus.Succeeded)
-                    {
-                        var errorMsg = response.Message.Log.Messages.LastOrDefault()?.Message ?? "Save failed";
-                        var errorDialog = Controls.Dialog(
-                            Controls.Markdown($"**Error saving:**\n\n{errorMsg}"),
-                            "Save Failed"
-                        ).WithSize("M");
-                        actx.Host.UpdateArea(DialogControl.DialogArea, errorDialog);
-                    }
-                    else
-                    {
-                        // Navigate back to overview on success
-                        actx.Host.UpdateArea(actx.Area, new RedirectControl($"/{nodePath}/{OverviewArea}"));
-                    }
-                }
-                catch (Exception ex)
-                {
-                    var errorDialog = Controls.Dialog(
-                        Controls.Markdown($"**Error saving:**\n\n{ex.Message}"),
-                        "Save Failed"
-                    ).WithSize("M");
-                    actx.Host.UpdateArea(DialogControl.DialogArea, errorDialog);
-                }
-            });
     }
 
     #region UCR Special Areas
@@ -1650,7 +1032,7 @@ public static class MeshNodeView
         return Observable.Return<UiControl?>(new MarkdownControl($"## JSON Schema: {typeName}\n\n```json\n{schema}\n```"));
     }
 
-    private static UiControl RenderNodeSchema(MeshNode? node, string _, JsonSerializerOptions? jsonOptions = null)
+    private static UiControl RenderNodeSchema(MeshNode? node, string _, JsonSerializerOptions jsonOptions)
     {
         var sb = new System.Text.StringBuilder();
         sb.AppendLine("## Schema");
@@ -1709,10 +1091,10 @@ public static class MeshNodeView
         return new MarkdownControl(sb.ToString());
     }
 
-    private static string GenerateJsonSchema(Type type, JsonSerializerOptions? jsonOptions = null)
+    private static string GenerateJsonSchema(Type type, JsonSerializerOptions jsonOptions)
     {
         // Use the built-in JsonSchemaExporter from System.Text.Json.Schema
-        var options = jsonOptions ?? JsonSerializerOptions.Default;
+        var options = jsonOptions;
 
         var schema = options.GetJsonSchemaAsNode(type, new JsonSchemaExporterOptions
         {
@@ -2123,9 +1505,9 @@ public static class MeshNodeView
 
                 if (response.Message.Success)
                 {
-                    // Navigate to the new node's edit view
-                    var editHref = $"/{nodePath}/{EditArea}";
-                    actx.Host.UpdateArea(actx.Area, new RedirectControl(editHref));
+                    // Navigate to the new node's overview
+                    var overviewHref = $"/{nodePath}/{OverviewArea}";
+                    actx.Host.UpdateArea(actx.Area, new RedirectControl(overviewHref));
                 }
                 else
                 {

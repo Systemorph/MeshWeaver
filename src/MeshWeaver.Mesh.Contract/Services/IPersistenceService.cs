@@ -4,6 +4,7 @@ namespace MeshWeaver.Mesh.Services;
 /// Persistence service for MeshNode instances in a hierarchical graph structure.
 /// The graph root is at address "_graph" (path "/").
 /// Each path segment manages its children (segment1 manages segment1/*, etc.)
+/// This is the scoped wrapper that automatically injects JsonSerializerOptions from IMessageHub.
 /// </summary>
 public interface IPersistenceService
 {
@@ -121,7 +122,7 @@ public interface IPersistenceService
     /// <param name="nodePath">The node path (e.g., "_types/story")</param>
     /// <param name="subPath">Optional sub-path within partition (e.g., "layoutAreas")</param>
     /// <returns>Async enumerable of deserialized objects</returns>
-    IAsyncEnumerable<object> GetPartitionObjectsAsync(string nodePath, string? subPath = null);
+    IAsyncEnumerable<object> GetPartitionObjectsAsync(string nodePath, string? subPath);
 
     /// <summary>
     /// Saves objects to a node's partition folder.

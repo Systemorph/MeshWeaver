@@ -149,5 +149,10 @@ public abstract class FormComponentBase<TViewModel, TView, TValue> : BlazorView<
         return !Equals(data, v);
     }
 
-
+    protected virtual void OnBlur()
+    {
+        if (Stream is null || ViewModel is not { IsBlurable: true })
+            return;
+        Stream.Hub.Post(new BlurEvent(Area, Stream.StreamId), o => o.WithTarget(Stream.Owner));
+    }
 }

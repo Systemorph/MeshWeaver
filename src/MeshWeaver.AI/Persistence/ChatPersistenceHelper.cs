@@ -42,7 +42,7 @@ public static class ChatPersistenceHelper
         string chatId,
         CancellationToken ct = default)
     {
-        await foreach (var obj in persistence.GetPartitionObjectsAsync(partitionPath).WithCancellation(ct))
+        await foreach (var obj in persistence.GetPartitionObjectsAsync(partitionPath, null).WithCancellation(ct))
         {
             if (obj is Chat chat && chat.Id == chatId)
             {
@@ -58,13 +58,14 @@ public static class ChatPersistenceHelper
     /// </summary>
     /// <param name="persistence">The persistence service.</param>
     /// <param name="partitionPath">The partition path.</param>
+    /// <param name="ct">Cancellation token.</param>
     /// <returns>Async enumerable of chats.</returns>
     public static async IAsyncEnumerable<Chat> ListChatsAsync(
         IPersistenceService persistence,
         string partitionPath,
         [EnumeratorCancellation] CancellationToken ct = default)
     {
-        await foreach (var obj in persistence.GetPartitionObjectsAsync(partitionPath).WithCancellation(ct))
+        await foreach (var obj in persistence.GetPartitionObjectsAsync(partitionPath, null).WithCancellation(ct))
         {
             if (obj is Chat chat)
             {
@@ -88,7 +89,7 @@ public static class ChatPersistenceHelper
     {
         // Load all chats except the one to delete, then save back
         var remainingChats = new List<Chat>();
-        await foreach (var obj in persistence.GetPartitionObjectsAsync(partitionPath).WithCancellation(ct))
+        await foreach (var obj in persistence.GetPartitionObjectsAsync(partitionPath, null).WithCancellation(ct))
         {
             if (obj is Chat chat && chat.Id != chatId)
             {

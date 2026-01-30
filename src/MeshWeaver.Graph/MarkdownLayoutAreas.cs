@@ -47,9 +47,9 @@ public static class MarkdownLayoutAreas
                 .WithView(NotebookArea, NotebookView)
                 .WithView(CommentsArea, CommentsView)
                 .WithView(AttachmentsArea, AttachmentsView)
-                .WithView(MeshNodeView.SettingsArea, MeshNodeView.Settings)
-                .WithView(MeshNodeView.MetadataArea, MeshNodeView.Metadata)
-                .WithView(MeshNodeView.ThumbnailArea, Thumbnail));
+                .WithView(MeshNodeLayoutAreas.SettingsArea, MeshNodeLayoutAreas.Settings)
+                .WithView(MeshNodeLayoutAreas.MetadataArea, MeshNodeLayoutAreas.Metadata)
+                .WithView(MeshNodeLayoutAreas.ThumbnailArea, Thumbnail));
 
     /// <summary>
     /// View mode for annotation display.
@@ -254,7 +254,7 @@ public static class MarkdownLayoutAreas
 
         foreach (var group in childGroups)
         {
-            var displayName = MeshNodeView.GetGroupDisplayName(group.Key, group.Count());
+            var displayName = MeshNodeLayoutAreas.GetGroupDisplayName(group.Key, group.Count());
 
             // Section header spans full width
             mainGrid = mainGrid.WithView(
@@ -895,11 +895,11 @@ public static class MarkdownLayoutAreas
         menu = menu.WithView(new NavLinkControl("Attachments", FluentIcons.Attach(IconSize.Size16), attachmentsHref));
 
         // Settings option
-        var settingsHref = $"/{nodePath}/{MeshNodeView.SettingsArea}";
+        var settingsHref = $"/{nodePath}/{MeshNodeLayoutAreas.SettingsArea}";
         menu = menu.WithView(new NavLinkControl("Settings", FluentIcons.Settings(IconSize.Size16), settingsHref));
 
-        // Properties option (node metadata from MeshNodeView)
-        var propertiesHref = $"/{nodePath}/{MeshNodeView.MetadataArea}";
+        // Properties option (node metadata from MeshNodeLayoutAreas)
+        var propertiesHref = $"/{nodePath}/{MeshNodeLayoutAreas.MetadataArea}";
         menu = menu.WithView(new NavLinkControl("Properties", FluentIcons.Info(IconSize.Size16), propertiesHref));
 
         return menu;

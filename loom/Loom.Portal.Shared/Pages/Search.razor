@@ -1,9 +1,12 @@
 @page "/search"
+@using System.Text.Json
 @using MeshWeaver.Mesh
 @using MeshWeaver.Mesh.Services
+@using MeshWeaver.Messaging
 @using Microsoft.FluentUI.AspNetCore.Components
 @inject IMeshQuery? MeshQuery
 @inject INavigationService NavigationService
+@inject IMessageHub Hub
 
 <PageTitle>Search - Loom</PageTitle>
 

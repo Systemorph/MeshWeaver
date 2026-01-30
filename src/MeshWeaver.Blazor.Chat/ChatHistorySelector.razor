@@ -6,6 +6,7 @@
 @namespace MeshWeaver.Blazor.Chat
 @inject IPersistenceService PersistenceService
 @inject AccessService AccessService
+@inject IMessageHub Hub
 
 <div class="chat-history-container @(IsRightPanel ? "right-panel" : "")">
     <div class="chat-history-header">

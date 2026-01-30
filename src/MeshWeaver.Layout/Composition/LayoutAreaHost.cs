@@ -107,6 +107,12 @@ public record LayoutAreaHost : IDisposable
                 delivery => Stream.ClientId.Equals(delivery.Message.StreamId)
             )
         );
+        Stream.RegisterForDisposal(
+            Stream.Hub.Register<BlurEvent>(
+                OnBlur,
+                delivery => Stream.ClientId.Equals(delivery.Message.StreamId)
+            )
+        );
 
         logger = Stream.Hub.ServiceProvider.GetRequiredService<ILogger<LayoutAreaHost>>();
     }
@@ -136,6 +142,22 @@ public record LayoutAreaHost : IDisposable
             InvokeAsync(() => control.CloseAction.Invoke(
                 new(request.Message.Area, request.Message.State, request.Message.Payload ?? new object(), Hub, this)
             ), ex => FailRequest(ex, request));
+        return request.Processed();
+    }
+
+    private IMessageDelivery OnBlur(IMessageDelivery<BlurEvent> request)
+    {
+        if (GetControl(request.Message.Area) is IFormControl { OnBlur: Func<UiActionContext, Task> blurAction })
+            try
+            {
+                blurAction.Invoke(
+                    new(request.Message.Area, request.Message.Payload ?? new object(), Hub, this)
+                );
+            }
+            catch (Exception ex)
+            {
+                FailRequest(ex, request);
+            }
         return request.Processed();
     }
 
@@ -241,7 +263,7 @@ public record LayoutAreaHost : IDisposable
             });
     }
 
-    public void UpdateData(string id, object data)
+    public void UpdateData(string id, object? data)
         => Update(LayoutAreaReference.Data, store => store.SetItem(id, data));
 
 
@@ -251,6 +273,25 @@ public record LayoutAreaHost : IDisposable
     public void RegisterForDisposal(string area, IDisposable disposable)
     {
         disposablesByArea.GetOrAdd(area, _ => new()).Add(disposable);
+    }
+
+    /// <summary>
+    /// Registers a disposable for the given key, disposing any previously registered disposable with the same key.
+    /// Use this when re-creating subscriptions to prevent duplicate/endless emissions.
+    /// </summary>
+    public void ReplaceDisposable(string key, IDisposable disposable)
+    {
+        // Dispose existing disposables with this key
+        if (disposablesByArea.TryRemove(key, out var existing))
+        {
+            foreach (var d in existing)
+            {
+                try { d.Dispose(); }
+                catch { /* ignore disposal errors */ }
+            }
+        }
+        // Add the new disposable
+        disposablesByArea.GetOrAdd(key, _ => new()).Add(disposable);
     }
 
     public void RegisterForDisposal(IDisposable disposable)

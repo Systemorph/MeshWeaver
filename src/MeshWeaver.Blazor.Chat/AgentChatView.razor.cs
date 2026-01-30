@@ -526,7 +526,7 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
             var activityPath = $"_activity/{userId}";
             var recentItems = new List<(UserActivityRecord Record, DateTimeOffset LastAccess)>();
 
-            await foreach (var obj in persistence.GetPartitionObjectsAsync(activityPath))
+            await foreach (var obj in persistence.GetPartitionObjectsAsync(activityPath, null))
             {
                 if (obj is UserActivityRecord record)
                 {

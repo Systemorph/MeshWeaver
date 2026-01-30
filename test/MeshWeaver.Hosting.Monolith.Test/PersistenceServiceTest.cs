@@ -1,8 +1,10 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text.Json;
 using System.Threading.Tasks;
 using FluentAssertions;
+using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
@@ -13,19 +15,21 @@ using Xunit;
 
 namespace MeshWeaver.Hosting.Monolith.Test;
 
-public class PersistenceServiceTest
+public class PersistenceServiceTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
+    private JsonSerializerOptions JsonOptions => Mesh.ServiceProvider.GetRequiredService<IMessageHub>().JsonSerializerOptions;
+
     [Fact]
     public async Task GetChildrenAsync_ReturnsDirectChildren()
     {
         // Arrange
         var persistence = new InMemoryPersistenceService();
-        await persistence.SaveNodeAsync(MeshNode.FromPath("org/acme") with { Name = "Acme Corp" });
-        await persistence.SaveNodeAsync(MeshNode.FromPath("org/contoso") with { Name = "Contoso" });
-        await persistence.SaveNodeAsync(MeshNode.FromPath("org/acme/project/web") with { Name = "Web Project" });
+        await persistence.SaveNodeAsync(MeshNode.FromPath("org/acme") with { Name = "Acme Corp" }, JsonOptions);
+        await persistence.SaveNodeAsync(MeshNode.FromPath("org/contoso") with { Name = "Contoso" }, JsonOptions);
+        await persistence.SaveNodeAsync(MeshNode.FromPath("org/acme/project/web") with { Name = "Web Project" }, JsonOptions);
 
         // Act
-        var children = await persistence.GetChildrenAsync("org").ToListAsync(TestContext.Current.CancellationToken);
+        var children = await persistence.GetChildrenAsync("org", JsonOptions).ToListAsync(TestContext.Current.CancellationToken);
 
         // Assert
         children.Should().HaveCount(2);
@@ -37,12 +41,12 @@ public class PersistenceServiceTest
     {
         // Arrange
         var persistence = new InMemoryPersistenceService();
-        await persistence.SaveNodeAsync(new MeshNode("org") { Name = "Organizations" });
-        await persistence.SaveNodeAsync(new MeshNode("system") { Name = "System" });
-        await persistence.SaveNodeAsync(MeshNode.FromPath("org/acme") with { Name = "Acme" });
+        await persistence.SaveNodeAsync(new MeshNode("org") { Name = "Organizations" }, JsonOptions);
+        await persistence.SaveNodeAsync(new MeshNode("system") { Name = "System" }, JsonOptions);
+        await persistence.SaveNodeAsync(MeshNode.FromPath("org/acme") with { Name = "Acme" }, JsonOptions);
 
         // Act
-        var children = await persistence.GetChildrenAsync(null).ToListAsync(TestContext.Current.CancellationToken);
+        var children = await persistence.GetChildrenAsync(null, JsonOptions).ToListAsync(TestContext.Current.CancellationToken);
 
         // Assert
         children.Should().HaveCount(2);
@@ -54,10 +58,10 @@ public class PersistenceServiceTest
     {
         // Arrange
         var persistence = new InMemoryPersistenceService();
-        await persistence.SaveNodeAsync(MeshNode.FromPath("org/acme") with { Name = "Acme" });
+        await persistence.SaveNodeAsync(MeshNode.FromPath("org/acme") with { Name = "Acme" }, JsonOptions);
 
         // Act
-        var children = await persistence.GetChildrenAsync("nonexistent").ToListAsync(TestContext.Current.CancellationToken);
+        var children = await persistence.GetChildrenAsync("nonexistent", JsonOptions).ToListAsync(TestContext.Current.CancellationToken);
 
         // Assert
         children.Should().BeEmpty();
@@ -70,8 +74,8 @@ public class PersistenceServiceTest
         var persistence = new InMemoryPersistenceService();
 
         // Act
-        await persistence.SaveNodeAsync(MeshNode.FromPath("ORG/Acme") with { Name = "Acme" });
-        var node = await persistence.GetNodeAsync("org/acme");
+        await persistence.SaveNodeAsync(MeshNode.FromPath("ORG/Acme") with { Name = "Acme" }, JsonOptions);
+        var node = await persistence.GetNodeAsync("org/acme", JsonOptions);
 
         // Assert
         node.Should().NotBeNull();
@@ -83,11 +87,11 @@ public class PersistenceServiceTest
     {
         // Arrange
         var persistence = new InMemoryPersistenceService();
-        await persistence.SaveNodeAsync(MeshNode.FromPath("org/acme") with { Name = "Acme" });
+        await persistence.SaveNodeAsync(MeshNode.FromPath("org/acme") with { Name = "Acme" }, JsonOptions);
 
         // Act
         await persistence.DeleteNodeAsync("org/acme");
-        var node = await persistence.GetNodeAsync("org/acme");
+        var node = await persistence.GetNodeAsync("org/acme", JsonOptions);
 
         // Assert
         node.Should().BeNull();
@@ -98,19 +102,19 @@ public class PersistenceServiceTest
     {
         // Arrange
         var persistence = new InMemoryPersistenceService();
-        await persistence.SaveNodeAsync(MeshNode.FromPath("org/acme") with { Name = "Acme" });
-        await persistence.SaveNodeAsync(MeshNode.FromPath("org/acme/project/web") with { Name = "Web" });
-        await persistence.SaveNodeAsync(MeshNode.FromPath("org/acme/project/mobile") with { Name = "Mobile" });
-        await persistence.SaveNodeAsync(MeshNode.FromPath("org/contoso") with { Name = "Contoso" });
+        await persistence.SaveNodeAsync(MeshNode.FromPath("org/acme") with { Name = "Acme" }, JsonOptions);
+        await persistence.SaveNodeAsync(MeshNode.FromPath("org/acme/project/web") with { Name = "Web" }, JsonOptions);
+        await persistence.SaveNodeAsync(MeshNode.FromPath("org/acme/project/mobile") with { Name = "Mobile" }, JsonOptions);
+        await persistence.SaveNodeAsync(MeshNode.FromPath("org/contoso") with { Name = "Contoso" }, JsonOptions);
 
         // Act
         await persistence.DeleteNodeAsync("org/acme", recursive: true);
 
         // Assert
-        (await persistence.GetNodeAsync("org/acme")).Should().BeNull();
-        (await persistence.GetNodeAsync("org/acme/project/web")).Should().BeNull();
-        (await persistence.GetNodeAsync("org/acme/project/mobile")).Should().BeNull();
-        (await persistence.GetNodeAsync("org/contoso")).Should().NotBeNull();
+        (await persistence.GetNodeAsync("org/acme", JsonOptions)).Should().BeNull();
+        (await persistence.GetNodeAsync("org/acme/project/web", JsonOptions)).Should().BeNull();
+        (await persistence.GetNodeAsync("org/acme/project/mobile", JsonOptions)).Should().BeNull();
+        (await persistence.GetNodeAsync("org/contoso", JsonOptions)).Should().NotBeNull();
     }
 
     [Fact]
@@ -118,11 +122,11 @@ public class PersistenceServiceTest
     {
         // Arrange
         var persistence = new InMemoryPersistenceService();
-        await persistence.SaveNodeAsync(MeshNode.FromPath("org/acme") with { Name = "Acme Corporation" });
-        await persistence.SaveNodeAsync(MeshNode.FromPath("org/contoso") with { Name = "Contoso Ltd" });
+        await persistence.SaveNodeAsync(MeshNode.FromPath("org/acme") with { Name = "Acme Corporation" }, JsonOptions);
+        await persistence.SaveNodeAsync(MeshNode.FromPath("org/contoso") with { Name = "Contoso Ltd" }, JsonOptions);
 
         // Act
-        var results = await persistence.SearchAsync(null, "Acme").ToListAsync(TestContext.Current.CancellationToken);
+        var results = await persistence.SearchAsync(null, "Acme", JsonOptions).ToListAsync(TestContext.Current.CancellationToken);
 
         // Assert
         results.Should().HaveCount(1);
@@ -134,7 +138,7 @@ public class PersistenceServiceTest
     {
         // Arrange
         var persistence = new InMemoryPersistenceService();
-        await persistence.SaveNodeAsync(MeshNode.FromPath("org/acme") with { Name = "Acme" });
+        await persistence.SaveNodeAsync(MeshNode.FromPath("org/acme") with { Name = "Acme" }, JsonOptions);
 
         // Act & Assert
         (await persistence.ExistsAsync("org/acme")).Should().BeTrue();
@@ -146,13 +150,13 @@ public class PersistenceServiceTest
     {
         // Arrange
         var persistence = new InMemoryPersistenceService();
-        await persistence.SaveNodeAsync(MeshNode.FromPath("org/acme") with { Name = "Acme" });
-        await persistence.SaveNodeAsync(MeshNode.FromPath("org/acme/project/web") with { Name = "Web" });
-        await persistence.SaveNodeAsync(MeshNode.FromPath("org/acme/project/mobile") with { Name = "Mobile" });
-        await persistence.SaveNodeAsync(MeshNode.FromPath("org/contoso") with { Name = "Contoso" });
+        await persistence.SaveNodeAsync(MeshNode.FromPath("org/acme") with { Name = "Acme" }, JsonOptions);
+        await persistence.SaveNodeAsync(MeshNode.FromPath("org/acme/project/web") with { Name = "Web" }, JsonOptions);
+        await persistence.SaveNodeAsync(MeshNode.FromPath("org/acme/project/mobile") with { Name = "Mobile" }, JsonOptions);
+        await persistence.SaveNodeAsync(MeshNode.FromPath("org/contoso") with { Name = "Contoso" }, JsonOptions);
 
         // Act
-        var descendants = await persistence.GetDescendantsAsync("org/acme").ToListAsync(TestContext.Current.CancellationToken);
+        var descendants = await persistence.GetDescendantsAsync("org/acme", JsonOptions).ToListAsync(TestContext.Current.CancellationToken);
 
         // Assert
         descendants.Should().HaveCount(2);
@@ -165,10 +169,10 @@ public class PersistenceServiceTest
         // Arrange
         var persistence = new InMemoryPersistenceService();
         var content = new { Id = "acme", Website = "https://acme.com" };
-        await persistence.SaveNodeAsync(MeshNode.FromPath("org/acme") with { Name = "Acme", Content = content });
+        await persistence.SaveNodeAsync(MeshNode.FromPath("org/acme") with { Name = "Acme", Content = content }, JsonOptions);
 
         // Act
-        var node = await persistence.GetNodeAsync("org/acme");
+        var node = await persistence.GetNodeAsync("org/acme", JsonOptions);
 
         // Assert
         node.Should().NotBeNull();
@@ -176,19 +180,21 @@ public class PersistenceServiceTest
     }
 }
 
-public class MeshCatalogQueryTest
+public class MeshCatalogQueryTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
+    private JsonSerializerOptions JsonOptions => Mesh.ServiceProvider.GetRequiredService<IMessageHub>().JsonSerializerOptions;
+
     [Fact]
     public async Task QueryAsync_ReturnsFilteredResults()
     {
         // Arrange
         var persistence = new InMemoryPersistenceService();
-        await persistence.SaveNodeAsync(MeshNode.FromPath("org/acme") with { Name = "Acme Corp", Description = "Technology company" });
-        await persistence.SaveNodeAsync(MeshNode.FromPath("org/contoso") with { Name = "Contoso Ltd", Description = "Software company" });
-        await persistence.SaveNodeAsync(MeshNode.FromPath("org/fabrikam") with { Name = "Fabrikam Inc", Description = "Hardware manufacturer" });
+        await persistence.SaveNodeAsync(MeshNode.FromPath("org/acme") with { Name = "Acme Corp", Description = "Technology company" }, JsonOptions);
+        await persistence.SaveNodeAsync(MeshNode.FromPath("org/contoso") with { Name = "Contoso Ltd", Description = "Software company" }, JsonOptions);
+        await persistence.SaveNodeAsync(MeshNode.FromPath("org/fabrikam") with { Name = "Fabrikam Inc", Description = "Hardware manufacturer" }, JsonOptions);
 
         // Act - simulate QueryAsync filtering
-        var children = await persistence.GetChildrenAsync("org").ToListAsync(TestContext.Current.CancellationToken);
+        var children = await persistence.GetChildrenAsync("org", JsonOptions).ToListAsync(TestContext.Current.CancellationToken);
         var filtered = children.Where(n =>
             (n.Name?.Contains("soft", StringComparison.OrdinalIgnoreCase) ?? false) ||
             (n.Description?.Contains("soft", StringComparison.OrdinalIgnoreCase) ?? false) ||
@@ -206,11 +212,11 @@ public class MeshCatalogQueryTest
         var persistence = new InMemoryPersistenceService();
         for (int i = 0; i < 10; i++)
         {
-            await persistence.SaveNodeAsync(MeshNode.FromPath($"org/company{i}") with { Name = $"Company {i}" });
+            await persistence.SaveNodeAsync(MeshNode.FromPath($"org/company{i}") with { Name = $"Company {i}" }, JsonOptions);
         }
 
         // Act - simulate QueryAsync with maxResults
-        var children = await persistence.GetChildrenAsync("org").ToListAsync(TestContext.Current.CancellationToken);
+        var children = await persistence.GetChildrenAsync("org", JsonOptions).ToListAsync(TestContext.Current.CancellationToken);
         var limited = children.Take(3).ToList();
 
         // Assert
@@ -222,11 +228,11 @@ public class MeshCatalogQueryTest
     {
         // Arrange
         var persistence = new InMemoryPersistenceService();
-        await persistence.SaveNodeAsync(MeshNode.FromPath("org/acme") with { Name = "Acme" });
-        await persistence.SaveNodeAsync(MeshNode.FromPath("org/contoso") with { Name = "Contoso" });
+        await persistence.SaveNodeAsync(MeshNode.FromPath("org/acme") with { Name = "Acme" }, JsonOptions);
+        await persistence.SaveNodeAsync(MeshNode.FromPath("org/contoso") with { Name = "Contoso" }, JsonOptions);
 
         // Act - simulate QueryAsync without filter
-        var children = await persistence.GetChildrenAsync("org").ToListAsync(TestContext.Current.CancellationToken);
+        var children = await persistence.GetChildrenAsync("org", JsonOptions).ToListAsync(TestContext.Current.CancellationToken);
 
         // Assert
         children.Should().HaveCount(2);
@@ -237,11 +243,11 @@ public class MeshCatalogQueryTest
     {
         // Arrange
         var persistence = new InMemoryPersistenceService();
-        await persistence.SaveNodeAsync(MeshNode.FromPath("org/acme") with { Name = "Acme" });
-        await persistence.SaveNodeAsync(MeshNode.FromPath("org/acme-corp") with { Name = "Acme Corp" });
+        await persistence.SaveNodeAsync(MeshNode.FromPath("org/acme") with { Name = "Acme" }, JsonOptions);
+        await persistence.SaveNodeAsync(MeshNode.FromPath("org/acme-corp") with { Name = "Acme Corp" }, JsonOptions);
 
         // Act - simulate QueryAsync with prefix filter
-        var children = await persistence.GetChildrenAsync("org").ToListAsync(TestContext.Current.CancellationToken);
+        var children = await persistence.GetChildrenAsync("org", JsonOptions).ToListAsync(TestContext.Current.CancellationToken);
         var filtered = children.Where(n =>
             (n.Name?.Contains("acme-", StringComparison.OrdinalIgnoreCase) ?? false) ||
             (n.Description?.Contains("acme-", StringComparison.OrdinalIgnoreCase) ?? false) ||

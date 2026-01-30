@@ -20,10 +20,12 @@ internal class MeshNodeCompilationService(
     IPersistenceService persistence,
     ICompilationCacheService cacheService,
     IOptions<CompilationCacheOptions> cacheOptions,
+    IMessageHub hub,
     ILogger<MeshNodeCompilationService> logger)
     : IMeshNodeCompilationService
 {
     private readonly CompilationCacheOptions _cacheOptions = cacheOptions.Value ?? new CompilationCacheOptions();
+    private JsonSerializerOptions JsonOptions => hub.JsonSerializerOptions;
     private readonly DynamicMeshNodeAttributeGenerator _attributeGenerator = new();
     private readonly List<MetadataReference> _references = GetDefaultReferences();
 
@@ -106,7 +108,7 @@ internal class MeshNodeCompilationService(
         var codePartition = node.Content is NodeTypeDefinition
             ? $"{node.Path}/Code"    // NodeType node - use its own Code partition
             : $"{node.NodeType}/Code"; // Instance node - use NodeType's Code partition
-        await foreach (var obj in persistence.GetPartitionObjectsAsync(codePartition).WithCancellation(ct))
+        await foreach (var obj in persistence.GetPartitionObjectsAsync(codePartition, null).WithCancellation(ct))
         {
             if (obj is CodeConfiguration cf && !string.IsNullOrWhiteSpace(cf.Code))
             {

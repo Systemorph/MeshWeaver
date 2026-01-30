@@ -130,7 +130,7 @@ public static class OrganizationViews
         headerRow = headerRow.WithView(
             Controls.Stack
                 .WithStyle("margin-left: auto;")
-                .WithView(MeshWeaver.Graph.MeshNodeView.BuildActionMenu(host, node)));
+                .WithView(MeshWeaver.Graph.MeshNodeLayoutAreas.BuildActionMenu(host, node)));
 
         container = container.WithView(headerRow);
 

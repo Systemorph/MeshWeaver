@@ -1,11 +1,13 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
 using FluentAssertions.Extensions;
 using MeshWeaver.Hosting.Monolith.TestBase;
+using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Hosting.Security;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
@@ -385,6 +387,7 @@ public class RlsIntegrationTests(ITestOutputHelper output) : MonolithMeshTestBas
 public class SecurePersistenceDecoratorTests(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
     private CancellationToken TestTimeout => new CancellationTokenSource(10.Seconds()).Token;
+    private JsonSerializerOptions _jsonOptions => Mesh.ServiceProvider.GetRequiredService<IMessageHub>().JsonSerializerOptions;
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
     {
@@ -397,7 +400,7 @@ public class SecurePersistenceDecoratorTests(ITestOutputHelper output) : Monolit
     public async Task SecureDecorator_CanBeCreated()
     {
         // Arrange
-        var persistence = Mesh.ServiceProvider.GetRequiredService<IPersistenceService>();
+        var persistence = Mesh.ServiceProvider.GetRequiredService<IPersistenceServiceCore>();
         var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
         var logger = Mesh.ServiceProvider.GetRequiredService<ILogger<SecurePersistenceServiceDecorator>>();
 
@@ -413,7 +416,7 @@ public class SecurePersistenceDecoratorTests(ITestOutputHelper output) : Monolit
     public async Task GetNodeSecureAsync_WithPermission_ReturnsNode()
     {
         // Arrange
-        var persistence = Mesh.ServiceProvider.GetRequiredService<IPersistenceService>();
+        var persistence = Mesh.ServiceProvider.GetRequiredService<IPersistenceServiceCore>();
         var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
         var logger = Mesh.ServiceProvider.GetRequiredService<ILogger<SecurePersistenceServiceDecorator>>();
         var decorator = new SecurePersistenceServiceDecorator(persistence, new Lazy<ISecurityService>(() => securityService), logger);
@@ -427,13 +430,13 @@ public class SecurePersistenceDecoratorTests(ITestOutputHelper output) : Monolit
             Name = "Secure Node",
             State = MeshNodeState.Active
         };
-        await persistence.SaveNodeAsync(node, TestTimeout);
+        await persistence.SaveNodeAsync(node, _jsonOptions, TestTimeout);
 
         // Assign read permission
         await securityService.AddUserRoleAsync(userId, "Viewer", "secure/test", "system", TestTimeout);
 
         // Act
-        var result = await decorator.GetNodeSecureAsync(nodePath, userId, TestTimeout);
+        var result = await decorator.GetNodeSecureAsync(nodePath, userId, _jsonOptions, TestTimeout);
 
         // Assert
         result.Should().NotBeNull();
@@ -444,7 +447,7 @@ public class SecurePersistenceDecoratorTests(ITestOutputHelper output) : Monolit
     public async Task GetNodeSecureAsync_WithoutPermission_ReturnsNull()
     {
         // Arrange
-        var persistence = Mesh.ServiceProvider.GetRequiredService<IPersistenceService>();
+        var persistence = Mesh.ServiceProvider.GetRequiredService<IPersistenceServiceCore>();
         var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
         var logger = Mesh.ServiceProvider.GetRequiredService<ILogger<SecurePersistenceServiceDecorator>>();
         var decorator = new SecurePersistenceServiceDecorator(persistence, new Lazy<ISecurityService>(() => securityService), logger);
@@ -458,12 +461,12 @@ public class SecurePersistenceDecoratorTests(ITestOutputHelper output) : Monolit
             Name = "Hidden Node",
             State = MeshNodeState.Active
         };
-        await persistence.SaveNodeAsync(node, TestTimeout);
+        await persistence.SaveNodeAsync(node, _jsonOptions, TestTimeout);
 
         // No permission assigned
 
         // Act
-        var result = await decorator.GetNodeSecureAsync(nodePath, userId, TestTimeout);
+        var result = await decorator.GetNodeSecureAsync(nodePath, userId, _jsonOptions, TestTimeout);
 
         // Assert
         result.Should().BeNull();
@@ -473,7 +476,7 @@ public class SecurePersistenceDecoratorTests(ITestOutputHelper output) : Monolit
     public async Task GetChildrenSecureAsync_FiltersUnauthorizedNodes()
     {
         // Arrange
-        var persistence = Mesh.ServiceProvider.GetRequiredService<IPersistenceService>();
+        var persistence = Mesh.ServiceProvider.GetRequiredService<IPersistenceServiceCore>();
         var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
         var logger = Mesh.ServiceProvider.GetRequiredService<ILogger<SecurePersistenceServiceDecorator>>();
         var decorator = new SecurePersistenceServiceDecorator(persistence, new Lazy<ISecurityService>(() => securityService), logger);
@@ -492,14 +495,14 @@ public class SecurePersistenceDecoratorTests(ITestOutputHelper output) : Monolit
             Name = "Restricted Node",
             State = MeshNodeState.Active
         };
-        await persistence.SaveNodeAsync(node1, TestTimeout);
-        await persistence.SaveNodeAsync(node2, TestTimeout);
+        await persistence.SaveNodeAsync(node1, _jsonOptions, TestTimeout);
+        await persistence.SaveNodeAsync(node2, _jsonOptions, TestTimeout);
 
         // Only grant access to node1's subtree
         await securityService.AddUserRoleAsync(userId, "Viewer", "filter/test/accessible", "system", TestTimeout);
 
         // Act
-        var children = await decorator.GetChildrenSecureAsync(parentPath, userId).ToListAsync();
+        var children = await decorator.GetChildrenSecureAsync(parentPath, userId, _jsonOptions).ToListAsync();
 
         // Assert - Should only include the accessible node
         children.Should().ContainSingle(n => n.Name == "Accessible Node");

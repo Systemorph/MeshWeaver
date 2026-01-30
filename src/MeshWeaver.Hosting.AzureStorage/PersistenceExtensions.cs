@@ -61,7 +61,7 @@ public static class PersistenceExtensions
         persistenceService.InitializeAsync().GetAwaiter().GetResult();
 
         services.AddSingleton<IStorageAdapter>(storageAdapter);
-        services.AddSingleton<IPersistenceService>(persistenceService);
+        services.AddSingleton<IPersistenceServiceCore>(persistenceService);
 
         return services;
     }
@@ -109,7 +109,7 @@ public static class PersistenceExtensions
         await persistenceService.InitializeAsync();
 
         services.AddSingleton<IStorageAdapter>(storageAdapter);
-        services.AddSingleton<IPersistenceService>(persistenceService);
+        services.AddSingleton<IPersistenceServiceCore>(persistenceService);
 
         return services;
     }

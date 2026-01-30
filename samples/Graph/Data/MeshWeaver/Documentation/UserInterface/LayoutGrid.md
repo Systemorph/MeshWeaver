@@ -2,7 +2,7 @@
 Name: Adapting to Different Screens With Layout Grid
 Category: Documentation
 Description: Build responsive layouts that adapt beautifully to any screen size
-Icon: /static/storage/content/MeshWeaver/Documentation/GUI/LayoutGrid/icon.svg
+Icon: /static/storage/content/MeshWeaver/Documentation/UserInterface/LayoutGrid/icon.svg
 ---
 
 # Adapting to Different Screens With Layout Grid
@@ -189,6 +189,6 @@ Configure individual items via the skin function parameter:
 
 ## See Also
 
-- [Container Control](MeshWeaver/Documentation/GUI/ContainerControl) - Stack, Tabs, Toolbar
-- [DataGrid](MeshWeaver/Documentation/GUI/DataGrid) - Tabular data display
+- [Container Control](MeshWeaver/Documentation/UserInterface/ContainerControl) - Stack, Tabs, Toolbar
+- [DataGrid](MeshWeaver/Documentation/UserInterface/DataGrid) - Tabular data display
 

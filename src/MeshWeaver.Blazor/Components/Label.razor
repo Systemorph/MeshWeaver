@@ -3,14 +3,29 @@
 @using FontWeight = Microsoft.FluentUI.AspNetCore.Components.FontWeight
 @inherits BlazorView<LabelControl, Label>
 
-<FluentLabel
-    Alignment="@Alignment"
-    Disabled="@Disabled"
-    Typo="@Typo"
-    Weight="@Weight"
-    Style="@Style">
-    @InternalData
-</FluentLabel>
+@if (ViewModel.IsClickable)
+{
+    <FluentLabel
+        Alignment="@Alignment"
+        Disabled="@Disabled"
+        Typo="@Typo"
+        Weight="@Weight"
+        Style="@Style"
+        @onclick="OnClick">
+        @InternalData
+    </FluentLabel>
+}
+else
+{
+    <FluentLabel
+        Alignment="@Alignment"
+        Disabled="@Disabled"
+        Typo="@Typo"
+        Weight="@Weight"
+        Style="@Style">
+        @InternalData
+    </FluentLabel>
+}
 
 @code
 {

@@ -1,3 +1,4 @@
+using System.Text.Json;
 using MeshWeaver.Hosting.Persistence.Query;
 using MeshWeaver.Mesh;
 
@@ -10,7 +11,7 @@ namespace MeshWeaver.Hosting.Persistence;
 /// File system persistence service with in-memory caching.
 /// Reads from file system on cache miss, with 10-minute sliding expiration.
 /// </summary>
-public class FileSystemPersistenceService : IPersistenceService
+public class FileSystemPersistenceService : IPersistenceServiceCore
 {
     private readonly IStorageAdapter _storageAdapter;
     private readonly IDataChangeNotifier? _changeNotifier;
@@ -33,14 +34,14 @@ public class FileSystemPersistenceService : IPersistenceService
 
     public Task InitializeAsync(CancellationToken ct = default) => Task.CompletedTask;
 
-    public async Task<MeshNode?> GetNodeAsync(string path, CancellationToken ct = default)
+    public async Task<MeshNode?> GetNodeAsync(string path, JsonSerializerOptions options, CancellationToken ct = default)
     {
         var key = NormalizePath(path);
 
         if (_cache.TryGetValue(key, out MeshNode? cached))
             return cached;
 
-        var node = await _storageAdapter.ReadAsync(path, ct);
+        var node = await _storageAdapter.ReadAsync(path, options, ct);
         if (node != null)
         {
             _cache.Set(key, node, _cacheOptions);
@@ -48,33 +49,33 @@ public class FileSystemPersistenceService : IPersistenceService
         return node;
     }
 
-    public async IAsyncEnumerable<MeshNode> GetChildrenAsync(string? parentPath)
+    public async IAsyncEnumerable<MeshNode> GetChildrenAsync(string? parentPath, JsonSerializerOptions options)
     {
         var (nodePaths, _) = await _storageAdapter.ListChildPathsAsync(parentPath ?? "", default);
 
         foreach (var path in nodePaths)
         {
-            var node = await _storageAdapter.ReadAsync(path, default);
+            var node = await _storageAdapter.ReadAsync(path, options, default);
             if (node != null)
                 yield return node;
         }
     }
 
-    public async IAsyncEnumerable<MeshNode> GetDescendantsAsync(string? parentPath)
+    public async IAsyncEnumerable<MeshNode> GetDescendantsAsync(string? parentPath, JsonSerializerOptions options)
     {
-        await foreach (var child in GetChildrenAsync(parentPath))
+        await foreach (var child in GetChildrenAsync(parentPath, options))
         {
             yield return child;
 
             // Recursively get descendants
-            await foreach (var descendant in GetDescendantsAsync(child.Path))
+            await foreach (var descendant in GetDescendantsAsync(child.Path, options))
             {
                 yield return descendant;
             }
         }
     }
 
-    public async Task<MeshNode> SaveNodeAsync(MeshNode node, CancellationToken ct = default)
+    public async Task<MeshNode> SaveNodeAsync(MeshNode node, JsonSerializerOptions options, CancellationToken ct = default)
     {
         var key = NormalizePath(node.Path);
         var isNew = !_cache.TryGetValue(key, out MeshNode? _) && !await _storageAdapter.ExistsAsync(node.Path, ct);
@@ -84,7 +85,7 @@ public class FileSystemPersistenceService : IPersistenceService
             LastModified = node.LastModified == default ? DateTimeOffset.UtcNow : node.LastModified
         };
 
-        await _storageAdapter.WriteAsync(savedNode, ct);
+        await _storageAdapter.WriteAsync(savedNode, options, ct);
 
         // Update cache
         _cache.Set(key, savedNode, _cacheOptions);
@@ -102,11 +103,10 @@ public class FileSystemPersistenceService : IPersistenceService
         var key = NormalizePath(path);
 
         // Get the node before deletion for notification
+        // Note: We cannot read the node here without options, so we rely on cached value only
         MeshNode? deletedNode = null;
         if (_cache.TryGetValue(key, out MeshNode? cached))
             deletedNode = cached;
-        else
-            deletedNode = await _storageAdapter.ReadAsync(path, ct);
 
         await _storageAdapter.DeleteAsync(path, ct);
 
@@ -117,9 +117,9 @@ public class FileSystemPersistenceService : IPersistenceService
         _changeNotifier?.NotifyChange(DataChangeNotification.Deleted(key, deletedNode));
     }
 
-    public async Task<MeshNode> MoveNodeAsync(string sourcePath, string targetPath, CancellationToken ct = default)
+    public async Task<MeshNode> MoveNodeAsync(string sourcePath, string targetPath, JsonSerializerOptions options, CancellationToken ct = default)
     {
-        var sourceNode = await _storageAdapter.ReadAsync(sourcePath, ct)
+        var sourceNode = await _storageAdapter.ReadAsync(sourcePath, options, ct)
             ?? throw new InvalidOperationException($"Source node not found: {sourcePath}");
 
         if (await _storageAdapter.ExistsAsync(targetPath, ct))
@@ -132,7 +132,6 @@ public class FileSystemPersistenceService : IPersistenceService
             Description = sourceNode.Description,
             Icon = sourceNode.Icon,
             DisplayOrder = sourceNode.DisplayOrder,
-            AddressSegments = sourceNode.AddressSegments,
             IsPersistent = sourceNode.IsPersistent,
             Content = sourceNode.Content,
             ThumbNail = sourceNode.ThumbNail,
@@ -140,12 +139,10 @@ public class FileSystemPersistenceService : IPersistenceService
             AssemblyLocation = sourceNode.AssemblyLocation,
             HubConfiguration = sourceNode.HubConfiguration,
             StartupScript = sourceNode.StartupScript,
-            RoutingType = sourceNode.RoutingType,
-            InstantiationType = sourceNode.InstantiationType,
             GlobalServiceConfigurations = sourceNode.GlobalServiceConfigurations
         };
 
-        await _storageAdapter.WriteAsync(movedNode, ct);
+        await _storageAdapter.WriteAsync(movedNode, options, ct);
         await _storageAdapter.DeleteAsync(sourcePath, ct);
 
         // Update cache: remove old path, add new path
@@ -161,9 +158,9 @@ public class FileSystemPersistenceService : IPersistenceService
         return movedNode;
     }
 
-    public async IAsyncEnumerable<MeshNode> SearchAsync(string? parentPath, string query)
+    public async IAsyncEnumerable<MeshNode> SearchAsync(string? parentPath, string query, JsonSerializerOptions options)
     {
-        await foreach (var node in GetDescendantsAsync(parentPath))
+        await foreach (var node in GetDescendantsAsync(parentPath, options))
         {
             if (node.Name?.Contains(query, StringComparison.OrdinalIgnoreCase) == true ||
                 node.Description?.Contains(query, StringComparison.OrdinalIgnoreCase) == true ||
@@ -179,16 +176,16 @@ public class FileSystemPersistenceService : IPersistenceService
 
     #region Comments - stored in separate files
 
-    public async IAsyncEnumerable<Comment> GetCommentsAsync(string nodePath)
+    public async IAsyncEnumerable<Comment> GetCommentsAsync(string nodePath, JsonSerializerOptions options)
     {
-        await foreach (var obj in _storageAdapter.GetPartitionObjectsAsync(nodePath, "comments"))
+        await foreach (var obj in _storageAdapter.GetPartitionObjectsAsync(nodePath, "comments", options))
         {
             if (obj is Comment comment)
                 yield return comment;
         }
     }
 
-    public async Task<Comment> AddCommentAsync(Comment comment, CancellationToken ct = default)
+    public async Task<Comment> AddCommentAsync(Comment comment, JsonSerializerOptions options, CancellationToken ct = default)
     {
         var savedComment = comment with
         {
@@ -197,13 +194,13 @@ public class FileSystemPersistenceService : IPersistenceService
         };
 
         var comments = new List<Comment>();
-        await foreach (var existing in GetCommentsAsync(comment.NodePath))
+        await foreach (var existing in GetCommentsAsync(comment.NodePath, options))
         {
             comments.Add(existing);
         }
         comments.Add(savedComment);
 
-        await _storageAdapter.SavePartitionObjectsAsync(comment.NodePath, "comments", comments.Cast<object>().ToList(), ct);
+        await _storageAdapter.SavePartitionObjectsAsync(comment.NodePath, "comments", comments.Cast<object>().ToList(), options, ct);
         return savedComment;
     }
 
@@ -225,11 +222,11 @@ public class FileSystemPersistenceService : IPersistenceService
 
     #region Partition Storage
 
-    public IAsyncEnumerable<object> GetPartitionObjectsAsync(string nodePath, string? subPath = null)
-        => _storageAdapter.GetPartitionObjectsAsync(nodePath, subPath);
+    public IAsyncEnumerable<object> GetPartitionObjectsAsync(string nodePath, string? subPath, JsonSerializerOptions options)
+        => _storageAdapter.GetPartitionObjectsAsync(nodePath, subPath, options);
 
-    public Task SavePartitionObjectsAsync(string nodePath, string? subPath, IReadOnlyCollection<object> objects, CancellationToken ct = default)
-        => _storageAdapter.SavePartitionObjectsAsync(nodePath, subPath, objects, ct);
+    public Task SavePartitionObjectsAsync(string nodePath, string? subPath, IReadOnlyCollection<object> objects, JsonSerializerOptions options, CancellationToken ct = default)
+        => _storageAdapter.SavePartitionObjectsAsync(nodePath, subPath, objects, options, ct);
 
     public Task DeletePartitionObjectsAsync(string nodePath, string? subPath = null, CancellationToken ct = default)
         => _storageAdapter.DeletePartitionObjectsAsync(nodePath, subPath, ct);
@@ -241,7 +238,7 @@ public class FileSystemPersistenceService : IPersistenceService
 
     #region Query
 
-    public async IAsyncEnumerable<object> QueryAsync(string query, string path)
+    public async IAsyncEnumerable<object> QueryAsync(string query, string path, JsonSerializerOptions options)
     {
         var parser = new QueryParser();
         var parsedQuery = parser.Parse(query);
@@ -256,7 +253,7 @@ public class FileSystemPersistenceService : IPersistenceService
         foreach (var searchPath in pathsToSearch)
         {
             // Search MeshNodes at this path
-            var node = await GetNodeAsync(searchPath);
+            var node = await GetNodeAsync(searchPath, options);
             if (node != null && evaluator.Matches(node, parsedQuery))
             {
                 var score = evaluator.GetFuzzyScore(node, parsedQuery.TextSearch);
@@ -264,7 +261,7 @@ public class FileSystemPersistenceService : IPersistenceService
             }
 
             // Search partition objects at this path
-            await foreach (var obj in GetPartitionObjectsAsync(searchPath))
+            await foreach (var obj in GetPartitionObjectsAsync(searchPath, null, options))
             {
                 if (evaluator.Matches(obj, parsedQuery))
                 {
@@ -277,7 +274,7 @@ public class FileSystemPersistenceService : IPersistenceService
         // For Descendants and Hierarchy scopes, also search descendant paths
         if (parsedQuery.Scope == QueryScope.Descendants || parsedQuery.Scope == QueryScope.Hierarchy)
         {
-            await foreach (var descendant in GetDescendantsAsync(normalizedPath))
+            await foreach (var descendant in GetDescendantsAsync(normalizedPath, options))
             {
                 var descendantPath = NormalizePath(descendant.Path);
 
@@ -290,7 +287,7 @@ public class FileSystemPersistenceService : IPersistenceService
                 }
 
                 // Search partition objects under descendant
-                await foreach (var obj in GetPartitionObjectsAsync(descendantPath))
+                await foreach (var obj in GetPartitionObjectsAsync(descendantPath, null, options))
                 {
                     if (evaluator.Matches(obj, parsedQuery))
                     {

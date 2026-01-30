@@ -39,7 +39,7 @@ public class AzureClaudeChatClientAgentFactory(
         if (string.IsNullOrEmpty(modelName))
             throw new InvalidOperationException("At least one model must be configured in AzureClaudeConfiguration.Models");
 
-        logger.LogInformation(
+        logger.LogDebug(
             "Creating Azure Claude chat client for agent {AgentName} using model {ModelName} at endpoint {Endpoint}",
             agentConfig.Id, modelName, configuration.Endpoint);
 
@@ -50,7 +50,7 @@ public class AzureClaudeChatClientAgentFactory(
                 apiKey: configuration.ApiKey,
                 modelId: modelName);
 
-            logger.LogInformation(
+            logger.LogDebug(
                 "Successfully configured Azure Claude chat client for agent {AgentName}",
                 agentConfig.Id);
 

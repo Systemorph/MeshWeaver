@@ -260,7 +260,7 @@ public record Graph
             TestContext.Current.CancellationToken);
 
         // Verify IMeshQuery finds the pre-seeded data
-        var children = await MeshQuery.QueryAsync<MeshNode>("path:graph scope:children", ct: TestContext.Current.CancellationToken)
+        var children = await MeshQuery.QueryAsync<MeshNode>("path:graph scope:children", null, TestContext.Current.CancellationToken)
             .ToListAsync(TestContext.Current.CancellationToken);
         children.Should().HaveCount(2, "graph should have 2 org children pre-seeded");
         children.Should().Contain(n => n.Path == "graph/org1");
@@ -287,7 +287,7 @@ public record Graph
             TestContext.Current.CancellationToken);
 
         // Verify IMeshQuery finds the pre-seeded projects
-        var children = await MeshQuery.QueryAsync<MeshNode>("path:graph/org1 scope:children", ct: TestContext.Current.CancellationToken)
+        var children = await MeshQuery.QueryAsync<MeshNode>("path:graph/org1 scope:children", null, TestContext.Current.CancellationToken)
             .ToListAsync(TestContext.Current.CancellationToken);
         children.Should().HaveCount(2, "org1 should have 2 project children pre-seeded");
         children.Should().Contain(n => n.Path == "graph/org1/proj1");
@@ -314,7 +314,7 @@ public record Graph
             TestContext.Current.CancellationToken);
 
         // Verify IMeshQuery finds the pre-seeded stories
-        var children = await MeshQuery.QueryAsync<MeshNode>("path:graph/org1/proj1 scope:children", ct: TestContext.Current.CancellationToken)
+        var children = await MeshQuery.QueryAsync<MeshNode>("path:graph/org1/proj1 scope:children", null, TestContext.Current.CancellationToken)
             .ToListAsync(TestContext.Current.CancellationToken);
         children.Should().HaveCount(2, "proj1 should have 2 story children pre-seeded");
         children.Should().Contain(n => n.Path == "graph/org1/proj1/story1");
@@ -687,7 +687,7 @@ public record Graph
         // Act: Request the default layout area (Overview) using stream
         // This should not hang if default views are properly configured
         var workspace = client.GetWorkspace();
-        var reference = new LayoutAreaReference(MeshNodeView.OverviewArea);
+        var reference = new LayoutAreaReference(MeshNodeLayoutAreas.OverviewArea);
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(orgAddress, reference);
 
         // Wait for the stream to emit a value (with timeout from test attribute)
@@ -758,7 +758,7 @@ public record Graph
 
         // Act: Request Search area directly (the default view for NodeType)
         var workspace = client.GetWorkspace();
-        var reference = new LayoutAreaReference(MeshNodeView.SearchArea);
+        var reference = new LayoutAreaReference(MeshNodeLayoutAreas.SearchArea);
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(typeOrgAddress, reference);
 
         // Wait for multiple emissions - first one may be loading state, later ones have data
@@ -802,7 +802,7 @@ public record Graph
     {
         // Act - query for all nodes with nodeType type/org
         var query = "nodeType:type/org scope:descendants";
-        var nodes = await MeshQuery.QueryAsync<MeshNode>(query, ct: TestContext.Current.CancellationToken).ToListAsync(TestContext.Current.CancellationToken);
+        var nodes = await MeshQuery.QueryAsync<MeshNode>(query, null, TestContext.Current.CancellationToken).ToListAsync(TestContext.Current.CancellationToken);
         foreach (var node in nodes)
             Output.WriteLine($"Found: {node.Path}");
 
@@ -1641,13 +1641,13 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
             TestContext.Current.CancellationToken);
 
         // Request the Overview view area
-        var reference = new LayoutAreaReference(MeshNodeView.OverviewArea);
+        var reference = new LayoutAreaReference(MeshNodeLayoutAreas.OverviewArea);
 
         Output.WriteLine("Getting Overview area for Systemorph organization...");
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(organizationAddress, reference);
 
         var control = await stream
-            .GetControlStream(MeshNodeView.OverviewArea)
+            .GetControlStream(MeshNodeLayoutAreas.OverviewArea)
             .Timeout(30.Seconds())
             .FirstAsync(x => x != null);
 
@@ -1688,7 +1688,7 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
 
         // Act: Request the Search area
         var workspace = client.GetWorkspace();
-        var reference = new LayoutAreaReference(MeshNodeView.SearchArea);
+        var reference = new LayoutAreaReference(MeshNodeLayoutAreas.SearchArea);
 
         Output.WriteLine("Getting Search area for MeshWeaver...");
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(meshWeaverAddress, reference);
