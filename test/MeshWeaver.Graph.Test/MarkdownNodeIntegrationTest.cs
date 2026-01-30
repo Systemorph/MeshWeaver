@@ -35,6 +35,7 @@ namespace MeshWeaver.Graph.Test;
 [Collection("MarkdownNodeTests")]
 public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
+
     private static readonly string SharedCacheDirectory = Path.Combine(
         Path.GetTempPath(),
         "MeshWeaverMarkdownTests",
@@ -475,7 +476,7 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
     {
         var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
 
-        var children = await meshQuery.QueryAsync<MeshNode>("path:MeshWeaver scope:children", ct: TestContext.Current.CancellationToken)
+        var children = await meshQuery.QueryAsync<MeshNode>("path:MeshWeaver scope:children", null, TestContext.Current.CancellationToken)
             .ToListAsync(TestContext.Current.CancellationToken);
 
         children.Should().NotBeEmpty("MeshWeaver should have children");
@@ -680,9 +681,9 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
 
         // Request the $Data layout area with no Id (self-reference)
         var workspace = client.GetWorkspace();
-        var reference = new LayoutAreaReference(MeshNodeView.DataArea); // "$Data"
+        var reference = new LayoutAreaReference(MeshNodeLayoutAreas.DataArea); // "$Data"
 
-        Output.WriteLine($"Getting {MeshNodeView.DataArea} layout for MeshWeaver/Documentation/DataMesh/CollaborativeEditing...");
+        Output.WriteLine($"Getting {MeshNodeLayoutAreas.DataArea} layout for MeshWeaver/Documentation/DataMesh/CollaborativeEditing...");
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(nodeAddress, reference);
 
         var changeItem = await stream.Timeout(30.Seconds()).FirstAsync();
@@ -714,9 +715,9 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
 
         // Request the $Schema layout area with no Id (self-reference)
         var workspace = client.GetWorkspace();
-        var reference = new LayoutAreaReference(MeshNodeView.SchemaArea); // "$Schema"
+        var reference = new LayoutAreaReference(MeshNodeLayoutAreas.SchemaArea); // "$Schema"
 
-        Output.WriteLine($"Getting {MeshNodeView.SchemaArea} layout for MeshWeaver/Documentation/DataMesh/CollaborativeEditing...");
+        Output.WriteLine($"Getting {MeshNodeLayoutAreas.SchemaArea} layout for MeshWeaver/Documentation/DataMesh/CollaborativeEditing...");
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(nodeAddress, reference);
 
         var changeItem = await stream.Timeout(30.Seconds()).FirstAsync();
@@ -748,9 +749,9 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
 
         // Request the $Model layout area
         var workspace = client.GetWorkspace();
-        var reference = new LayoutAreaReference(MeshNodeView.ModelArea); // "$Model"
+        var reference = new LayoutAreaReference(MeshNodeLayoutAreas.ModelArea); // "$Model"
 
-        Output.WriteLine($"Getting {MeshNodeView.ModelArea} layout for MeshWeaver/Documentation/DataMesh/CollaborativeEditing...");
+        Output.WriteLine($"Getting {MeshNodeLayoutAreas.ModelArea} layout for MeshWeaver/Documentation/DataMesh/CollaborativeEditing...");
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(nodeAddress, reference);
 
         var changeItem = await stream.Timeout(30.Seconds()).FirstAsync();
@@ -782,9 +783,9 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
 
         // Request the $Content layout area with no Id (self-reference)
         var workspace = client.GetWorkspace();
-        var reference = new LayoutAreaReference(MeshNodeView.ContentArea); // "$Content"
+        var reference = new LayoutAreaReference(MeshNodeLayoutAreas.ContentArea); // "$Content"
 
-        Output.WriteLine($"Getting {MeshNodeView.ContentArea} layout for MeshWeaver/Documentation/DataMesh/CollaborativeEditing...");
+        Output.WriteLine($"Getting {MeshNodeLayoutAreas.ContentArea} layout for MeshWeaver/Documentation/DataMesh/CollaborativeEditing...");
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(nodeAddress, reference);
 
         var changeItem = await stream.Timeout(30.Seconds()).FirstAsync();
@@ -1063,6 +1064,7 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
 
         var kernelNode = new MeshNode(kernelId, AddressExtensions.KernelType)
         {
+            NodeType = AddressExtensions.KernelType,
             Name = $"Kernel-{kernelId}"
         };
 
@@ -1128,6 +1130,7 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
 
         var kernelNode = new MeshNode(kernelId, AddressExtensions.KernelType)
         {
+            NodeType = AddressExtensions.KernelType,
             Name = $"Kernel-{kernelId}"
         };
 
@@ -1213,6 +1216,7 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
 
         var kernelNode = new MeshNode(kernelId, AddressExtensions.KernelType)
         {
+            NodeType = AddressExtensions.KernelType,
             Name = $"Kernel-{kernelId}"
         };
 

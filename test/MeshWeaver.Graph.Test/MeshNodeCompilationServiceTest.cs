@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
@@ -11,9 +12,11 @@ using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Messaging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Namotion.Reflection;
+using NSubstitute;
 using Xunit;
 
 namespace MeshWeaver.Graph.Test;
@@ -24,9 +27,11 @@ namespace MeshWeaver.Graph.Test;
 /// </summary>
 public class MeshNodeCompilationServiceTest : IDisposable
 {
+    private static readonly JsonSerializerOptions SetupJsonOptions = new JsonSerializerOptions();
     private readonly string _testCacheDir;
     private readonly IOptions<CompilationCacheOptions> _cacheOptions;
     private readonly ICompilationCacheService _cacheService;
+    private readonly IMessageHub _mockHub;
 
     public MeshNodeCompilationServiceTest()
     {
@@ -41,6 +46,8 @@ public class MeshNodeCompilationServiceTest : IDisposable
         });
 
         _cacheService = new CompilationCacheService(_cacheOptions, NullLogger<CompilationCacheService>.Instance);
+        _mockHub = Substitute.For<IMessageHub>();
+        _mockHub.JsonSerializerOptions.Returns(SetupJsonOptions);
     }
 
     public void Dispose()
@@ -61,8 +68,8 @@ public class MeshNodeCompilationServiceTest : IDisposable
         }
     }
 
-    private MeshNodeCompilationService CreateService(IPersistenceService persistence) =>
-        new(persistence, _cacheService, _cacheOptions, NullLogger<MeshNodeCompilationService>.Instance);
+    private MeshNodeCompilationService CreateService(IPersistenceServiceCore persistenceCore) =>
+        new(new PersistenceService(persistenceCore, _mockHub), _cacheService, _cacheOptions, _mockHub, NullLogger<MeshNodeCompilationService>.Instance);
 
     private async Task SetupNodeType(InMemoryPersistenceService persistence, string nodeType, NodeTypeDefinition definition, CodeConfiguration? codeFile = null)
     {
@@ -72,12 +79,12 @@ public class MeshNodeCompilationServiceTest : IDisposable
             NodeType = MeshNode.NodeTypePath,
             Content = definition
         };
-        await persistence.SaveNodeAsync(node);
+        await persistence.SaveNodeAsync(node, SetupJsonOptions);
 
         if (codeFile != null)
         {
             // CodeConfiguration is stored in the "Code" sub-partition (e.g., "type/project/Code")
-            await persistence.SavePartitionObjectsAsync($"type/{nodeType}", "Code", [codeFile]);
+            await persistence.SavePartitionObjectsAsync($"type/{nodeType}", "Code", [codeFile], SetupJsonOptions);
         }
     }
 

@@ -2,7 +2,7 @@
 Name: Displaying Data in a UI
 Category: Documentation
 Description: Display collections of data with sortable, resizable columns
-Icon: /static/storage/content/MeshWeaver/Documentation/GUI/DataGrid/icon.svg
+Icon: /static/storage/content/MeshWeaver/Documentation/UserInterface/DataGrid/icon.svg
 ---
 
 # Displaying Data in a UI
@@ -222,5 +222,5 @@ new DataGridControl(reportData)                         // Create grid with data
 
 ## See Also
 
-- [Editor Control](MeshWeaver/Documentation/GUI/Editor) - Form generation
-- [Stack Control](MeshWeaver/Documentation/GUI/ContainerControl/Stack) - Layout container
+- [Editor Control](MeshWeaver/Documentation/UserInterface/Editor) - Form generation
+- [Stack Control](MeshWeaver/Documentation/UserInterface/ContainerControl/Stack) - Layout container

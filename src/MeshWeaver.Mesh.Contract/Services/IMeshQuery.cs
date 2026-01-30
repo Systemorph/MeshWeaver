@@ -6,6 +6,7 @@ namespace MeshWeaver.Mesh.Services;
 /// Query service for searching MeshNodes and partition objects.
 /// Separated from IPersistenceService to allow swappable implementations
 /// (InMemory, ElasticSearch, Cosmos with vector search, etc.)
+/// This is the scoped wrapper that automatically injects JsonSerializerOptions from IMessageHub.
 /// </summary>
 public interface IMeshQuery
 {

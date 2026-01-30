@@ -20,8 +20,7 @@ public static class KernelExtensions
                     Name = "Kernel",
                     AssemblyLocation = typeof(KernelExtensions).Assembly.Location,
                     HubConfiguration = ConfigureHub,
-                    Description = "Jupyter kernel for code execution",
-                    AddressSegments = 2 // "kernel/{id}" enables dynamic child nodes
+                    Description = "Jupyter kernel for code execution"
                 }
             );
 

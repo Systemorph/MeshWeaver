@@ -2,7 +2,7 @@
 Name: Adding Editable Forms to a UI
 Category: Documentation
 Description: Generate editable forms from C# records with automatic field rendering
-Icon: /static/storage/content/MeshWeaver/Documentation/GUI/Editor/icon.svg
+Icon: /static/storage/content/MeshWeaver/Documentation/UserInterface/Editor/icon.svg
 ---
 
 # Adding Editable Forms to a UI
@@ -160,7 +160,7 @@ Each property becomes a named area in the `EditorControl`. The reactive variant 
 
 ## See Also
 
-- [Property Attributes](MeshWeaver/Documentation/GUI/Attributes) - All supported attributes in detail
-- [Data Binding](MeshWeaver/Documentation/GUI/DataBinding) - How form data flows
-- [Stack Control](MeshWeaver/Documentation/GUI/ContainerControl/Stack) - Container for layouts
-- [DataGrid Control](MeshWeaver/Documentation/GUI/DataGrid) - Tabular data display
+- [Property Attributes](MeshWeaver/Documentation/UserInterface/Attributes) - All supported attributes in detail
+- [Data Binding](MeshWeaver/Documentation/UserInterface/DataBinding) - How form data flows
+- [Stack Control](MeshWeaver/Documentation/UserInterface/ContainerControl/Stack) - Container for layouts
+- [DataGrid Control](MeshWeaver/Documentation/UserInterface/DataGrid) - Tabular data display

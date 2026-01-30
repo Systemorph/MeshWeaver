@@ -18,6 +18,37 @@ using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Layout;
 
+/// <summary>
+/// Equality comparer for JsonElement that compares by content (raw JSON text).
+/// This is needed because JsonElement's default equality is reference-based,
+/// causing DistinctUntilChanged to fail.
+/// </summary>
+public class JsonElementContentComparer : IEqualityComparer<JsonElement>
+{
+    public static readonly JsonElementContentComparer Instance = new();
+
+    public bool Equals(JsonElement x, JsonElement y)
+    {
+        // Both undefined
+        if (x.ValueKind == JsonValueKind.Undefined && y.ValueKind == JsonValueKind.Undefined)
+            return true;
+
+        // One undefined
+        if (x.ValueKind == JsonValueKind.Undefined || y.ValueKind == JsonValueKind.Undefined)
+            return false;
+
+        // Compare by raw JSON text
+        return x.GetRawText() == y.GetRawText();
+    }
+
+    public int GetHashCode(JsonElement obj)
+    {
+        if (obj.ValueKind == JsonValueKind.Undefined)
+            return 0;
+        return obj.GetRawText().GetHashCode();
+    }
+}
+
 public static class LayoutExtensions
 {
     public static MessageHubConfiguration AddLayout(
@@ -288,9 +319,44 @@ public static class LayoutExtensions
         string id
     ) => stream.Reduce(new EntityReference(LayoutAreaReference.Data, id))!
         .Where(x => x.Value != null)
-        .Select(x => (T)x.Value!)
-        .DistinctUntilChanged()
+        .Select(x => ConvertDataValue<T>(x.Value!, stream.Hub.JsonSerializerOptions))
+        .DistinctUntilChangedWithJsonSupport()
     ;
+
+    /// <summary>
+    /// DistinctUntilChanged that properly handles JsonElement by comparing content.
+    /// </summary>
+    private static IObservable<T> DistinctUntilChangedWithJsonSupport<T>(this IObservable<T> source)
+    {
+        // For JsonElement, use content-based comparison
+        if (typeof(T) == typeof(JsonElement))
+        {
+            return source.DistinctUntilChanged((IEqualityComparer<T>)(object)JsonElementContentComparer.Instance);
+        }
+        return source.DistinctUntilChanged();
+    }
+
+    private static T ConvertDataValue<T>(object value, JsonSerializerOptions options)
+    {
+        // Direct cast if already the right type
+        if (value is T t)
+            return t;
+
+        // Handle JsonNode to JsonElement conversion
+        if (typeof(T) == typeof(JsonElement) && value is JsonNode node)
+            return (T)(object)JsonSerializer.SerializeToElement(node, options);
+
+        // Handle JsonElement to other types via deserialization
+        if (value is JsonElement je)
+            return je.Deserialize<T>(options)!;
+
+        // Handle arbitrary object to JsonElement conversion (e.g., Todo -> JsonElement)
+        if (typeof(T) == typeof(JsonElement))
+            return (T)(object)JsonSerializer.SerializeToElement(value, options);
+
+        // Fallback: try direct cast (may throw if incompatible)
+        return (T)value;
+    }
 
 
     public static void SetData(

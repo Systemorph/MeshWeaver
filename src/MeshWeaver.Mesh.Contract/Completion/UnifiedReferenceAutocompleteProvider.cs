@@ -1,6 +1,8 @@
 using System.Runtime.CompilerServices;
+using System.Text.Json;
 using MeshWeaver.Data.Completion;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Messaging;
 
 namespace MeshWeaver.Mesh.Completion;
 
@@ -14,8 +16,11 @@ namespace MeshWeaver.Mesh.Completion;
 public class UnifiedReferenceAutocompleteProvider(
     IMeshCatalog? meshCatalog,
     IMeshQuery? meshQuery,
-    INavigationService? navigationContext) : IAutocompleteProvider
+    INavigationService? navigationContext,
+    IMessageHub hub) : IAutocompleteProvider
 {
+    private JsonSerializerOptions JsonOptions => hub.JsonSerializerOptions;
+
     private const int ContextPriority = 2000;  // Higher priority for context-aware items
     private const int PrefixPriority = 1800;
     private const int KeywordPriority = 1500;

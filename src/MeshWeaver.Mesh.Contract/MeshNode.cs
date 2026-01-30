@@ -70,8 +70,6 @@ public record MessageLog(
 /// The Id is the local identifier within a namespace (e.g., "Root", "Alice", "Story1").
 /// The Namespace is the container path (e.g., "type", "Systemorph/type/Project").
 /// Path is derived as {Namespace}/{Id} and serves as the unique identifier.
-/// For template nodes, AddressSegments determines how many path segments are used for hub addressing.
-/// Score-based matching uses the Prefix (derived from Path) for pattern matching.
 /// </summary>
 public record MeshNode([property: Key] string Id, [property: Editable(false)] string? Namespace = null)
 {
@@ -183,14 +181,6 @@ public record MeshNode([property: Key] string Id, [property: Editable(false)] st
     public int? DisplayOrder { get; init; }
 
     /// <summary>
-    /// Number of segments to include in the address when creating hub instances.
-    /// For example, prefix "pricing" with AddressSegments=3 means URLs like "pricing/Microsoft/2026"
-    /// will create hubs with address "pricing/Microsoft/2026".
-    /// If not set (0), defaults to the number of segments in the Prefix.
-    /// </summary>
-    public int AddressSegments { get; init; }
-
-    /// <summary>
     /// Indicates this node's data is persisted and should be loaded on startup.
     /// When true, the hub will load children from IPersistenceService via MeshNodeTypeSource.
     /// </summary>
@@ -225,7 +215,7 @@ public record MeshNode([property: Key] string Id, [property: Editable(false)] st
     /// Virtual nodes are created on-demand when addressing template-based paths.
     /// CreateNodeRequest should not consider virtual nodes as "existing" nodes.
     /// </summary>
-    [Editable(false)]
+    [JsonIgnore, NotMapped, Editable(false)]
     public bool IsVirtual { get; init; }
 
     /// <summary>
@@ -278,17 +268,6 @@ public record MeshNode([property: Key] string Id, [property: Editable(false)] st
     [Editable(false)]
     public string? StartupScript { get; init; }
 
-    /// <summary>
-    /// Determines how requests are routed to this node.
-    /// </summary>
-    [Editable(false)]
-    public RoutingType RoutingType { get; init; }
-
-    /// <summary>
-    /// Determines how the node hub is instantiated.
-    /// </summary>
-    [Editable(false)]
-    public InstantiationType InstantiationType { get; set; }
 
 
     /// <summary>
@@ -307,18 +286,3 @@ public record MeshNode([property: Key] string Id, [property: Editable(false)] st
         => this with { GlobalServiceConfigurations = GlobalServiceConfigurations.Add(services) };
 }
 
-/// <summary>
-/// Determines how a node hub is instantiated and configured.
-/// </summary>
-public enum InstantiationType
-{
-    /// <summary>
-    /// Hub is configured using a C# configuration function.
-    /// </summary>
-    HubConfiguration,
-
-    /// <summary>
-    /// Hub is configured using a startup script.
-    /// </summary>
-    Script
-}

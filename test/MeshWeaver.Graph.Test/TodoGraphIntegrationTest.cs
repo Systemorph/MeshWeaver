@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reactive.Linq;
-using System.Text.Json;
 using System.Threading.Tasks;
 using FluentAssertions;
 using MeshWeaver.Data;
@@ -175,7 +174,7 @@ public class TodoGraphIntegrationTest(ITestOutputHelper output) : MonolithMeshTe
     {
         var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
 
-        var children = await meshQuery.QueryAsync<MeshNode>("path:ACME/ProductLaunch/Todo scope:children", ct: TestContext.Current.CancellationToken)
+        var children = await meshQuery.QueryAsync<MeshNode>("path:ACME/ProductLaunch/Todo scope:children", null, TestContext.Current.CancellationToken)
             .ToListAsync(TestContext.Current.CancellationToken);
 
         children.Should().NotBeEmpty("ProductLaunch should have task children");

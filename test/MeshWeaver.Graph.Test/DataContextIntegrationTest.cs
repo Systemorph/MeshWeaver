@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.ComponentModel.DataAnnotations;
 using System.IO;
 using System.Linq;
+using System.Text.Json;
 using System.Threading.Tasks;
 using FluentAssertions;
 using MeshWeaver.Graph.Configuration;
@@ -60,6 +61,8 @@ public class DataContextIntegrationTest : MonolithMeshTestBase
     {
     }
 
+    private static readonly JsonSerializerOptions SetupJsonOptions = new JsonSerializerOptions();
+
     private static void SetupTestConfiguration(InMemoryPersistenceService persistence)
     {
         // Create Story type at type/story (NodeType = "NodeType")
@@ -86,8 +89,8 @@ public class DataContextIntegrationTest : MonolithMeshTestBase
                 DisplayOrder = 30
             }
         };
-        persistence.SaveNodeAsync(storyTypeNode).GetAwaiter().GetResult();
-        persistence.SavePartitionObjectsAsync("type/story", null, [storyCodeConfig]).GetAwaiter().GetResult();
+        persistence.SaveNodeAsync(storyTypeNode, SetupJsonOptions).GetAwaiter().GetResult();
+        persistence.SavePartitionObjectsAsync("type/story", null, [storyCodeConfig], SetupJsonOptions).GetAwaiter().GetResult();
 
         // Create Graph type at type/graph (NodeType = "NodeType")
         var graphCodeConfig = new CodeConfiguration
@@ -113,8 +116,8 @@ public class DataContextIntegrationTest : MonolithMeshTestBase
                 DisplayOrder = 0
             }
         };
-        persistence.SaveNodeAsync(graphTypeNode).GetAwaiter().GetResult();
-        persistence.SavePartitionObjectsAsync("type/graph", null, [graphCodeConfig]).GetAwaiter().GetResult();
+        persistence.SaveNodeAsync(graphTypeNode, SetupJsonOptions).GetAwaiter().GetResult();
+        persistence.SavePartitionObjectsAsync("type/graph", null, [graphCodeConfig], SetupJsonOptions).GetAwaiter().GetResult();
     }
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
@@ -132,7 +135,7 @@ public class DataContextIntegrationTest : MonolithMeshTestBase
         {
             Name = "Graph",
             NodeType = "type/graph"
-        }).GetAwaiter().GetResult();
+        }, SetupJsonOptions).GetAwaiter().GetResult();
 
         // Pre-seed story nodes WITH Content containing TestStory data
         persistence.SaveNodeAsync(MeshNode.FromPath("graph/story1") with
@@ -146,7 +149,7 @@ public class DataContextIntegrationTest : MonolithMeshTestBase
                 Description = "This is the first story",
                 Points = 5
             }
-        }).GetAwaiter().GetResult();
+        }, SetupJsonOptions).GetAwaiter().GetResult();
 
         persistence.SaveNodeAsync(MeshNode.FromPath("graph/story2") with
         {
@@ -159,7 +162,7 @@ public class DataContextIntegrationTest : MonolithMeshTestBase
                 Description = "This is the second story",
                 Points = 8
             }
-        }).GetAwaiter().GetResult();
+        }, SetupJsonOptions).GetAwaiter().GetResult();
 
         var cacheDirectory = Path.Combine(testDataDirectory, ".mesh-cache");
 
@@ -242,7 +245,7 @@ public class DataContextIntegrationTest : MonolithMeshTestBase
             TestContext.Current.CancellationToken);
 
         // Act - get children via IMeshQuery
-        var children = await MeshQuery.QueryAsync<MeshNode>("path:graph scope:children", ct: TestContext.Current.CancellationToken)
+        var children = await MeshQuery.QueryAsync<MeshNode>("path:graph scope:children", null, TestContext.Current.CancellationToken)
             .ToListAsync(TestContext.Current.CancellationToken);
 
         // Assert - children should be available

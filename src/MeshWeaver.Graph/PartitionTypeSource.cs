@@ -104,7 +104,7 @@ public record PartitionTypeSource<T> : TypeSourceWithType<T, PartitionTypeSource
 
         var items = new List<T>();
 
-        await foreach (var obj in _persistence.GetPartitionObjectsAsync(_partitionPath).WithCancellation(ct))
+        await foreach (var obj in _persistence.GetPartitionObjectsAsync(_partitionPath, null).WithCancellation(ct))
         {
             if (obj is T typedObj)
             {

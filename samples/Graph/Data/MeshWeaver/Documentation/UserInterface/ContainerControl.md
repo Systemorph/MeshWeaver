@@ -2,7 +2,7 @@
 Name: Adding Controls to a UI
 Category: Documentation
 Description: How to add controls to containers and make them update automatically
-Icon: /static/storage/content/MeshWeaver/Documentation/GUI/ContainerControl/icon.svg
+Icon: /static/storage/content/MeshWeaver/Documentation/UserInterface/ContainerControl/icon.svg
 ---
 
 # Adding Controls to a UI
@@ -13,12 +13,12 @@ When building a UI, you combine small pieces (buttons, labels, inputs) into larg
 
 | Container | Purpose | Use when... |
 |-----------|---------|-------------|
-| [Stack](MeshWeaver/Documentation/GUI/ContainerControl/Stack) | Arrange items vertically or horizontally | Building forms, lists, button groups |
-| [Tabs](MeshWeaver/Documentation/GUI/ContainerControl/Tabs) | Organize content into switchable tabs | Grouping related content, settings pages |
-| [Toolbar](MeshWeaver/Documentation/GUI/ContainerControl/Toolbar) | Group action buttons | Page headers, action bars |
-| [Splitter](MeshWeaver/Documentation/GUI/ContainerControl/Splitter) | Create resizable, collapsible panes | Sidebars, IDE layouts, adjustable panels |
+| [Stack](MeshWeaver/Documentation/UserInterface/ContainerControl/Stack) | Arrange items vertically or horizontally | Building forms, lists, button groups |
+| [Tabs](MeshWeaver/Documentation/UserInterface/ContainerControl/Tabs) | Organize content into switchable tabs | Grouping related content, settings pages |
+| [Toolbar](MeshWeaver/Documentation/UserInterface/ContainerControl/Toolbar) | Group action buttons | Page headers, action bars |
+| [Splitter](MeshWeaver/Documentation/UserInterface/ContainerControl/Splitter) | Create resizable, collapsible panes | Sidebars, IDE layouts, adjustable panels |
 
-For responsive grid layouts, see [Layout Grid](MeshWeaver/Documentation/GUI/LayoutGrid).
+For responsive grid layouts, see [Layout Grid](MeshWeaver/Documentation/UserInterface/LayoutGrid).
 
 ---
 
@@ -44,7 +44,7 @@ Controls.Stack                                              // Create a containe
 | Load data before showing content | Pass an async function |
 | Access the current data store | Pass a function with store parameter |
 
-See [Static vs Dynamic Views](MeshWeaver/Documentation/GUI/Observables) for details on reactive patterns.
+See [Static vs Dynamic Views](MeshWeaver/Documentation/UserInterface/Observables) for details on reactive patterns.
 
 ---
 
@@ -65,5 +65,5 @@ Controls.Tabs                                                               // T
 
 ## See Also
 
-- [Static vs Dynamic Views](MeshWeaver/Documentation/GUI/Observables) - When and how content updates
-- [Data Binding](MeshWeaver/Documentation/GUI/DataBinding) - How data flows through the UI
+- [Static vs Dynamic Views](MeshWeaver/Documentation/UserInterface/Observables) - When and how content updates
+- [Data Binding](MeshWeaver/Documentation/UserInterface/DataBinding) - How data flows through the UI

@@ -35,6 +35,9 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
         "MeshWeaverTodoWorkflowTests",
         ".mesh-cache");
 
+    // Local copy of test data - each test instance gets its own copy
+    private string? _localTestDataPath;
+
     private static string GetSamplesGraphPath()
     {
         var currentDir = Directory.GetCurrentDirectory();
@@ -42,9 +45,44 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
         return Path.Combine(solutionRoot, "samples", "Graph");
     }
 
+    /// <summary>
+    /// Gets or creates a local copy of the sample data for this test instance.
+    /// </summary>
+    private string GetLocalTestDataPath()
+    {
+        if (_localTestDataPath != null)
+            return _localTestDataPath;
+
+        var currentDir = Directory.GetCurrentDirectory();
+        _localTestDataPath = Path.Combine(currentDir, "testdata", $"TodoWorkflowTests_{Guid.NewGuid():N}");
+
+        // Copy samples/Graph to local test directory
+        var sourcePath = GetSamplesGraphPath();
+        CopyDirectory(sourcePath, _localTestDataPath);
+
+        return _localTestDataPath;
+    }
+
+    private static void CopyDirectory(string sourceDir, string destDir)
+    {
+        Directory.CreateDirectory(destDir);
+
+        foreach (var file in Directory.GetFiles(sourceDir))
+        {
+            var destFile = Path.Combine(destDir, Path.GetFileName(file));
+            File.Copy(file, destFile, overwrite: true);
+        }
+
+        foreach (var dir in Directory.GetDirectories(sourceDir))
+        {
+            var destSubDir = Path.Combine(destDir, Path.GetFileName(dir));
+            CopyDirectory(dir, destSubDir);
+        }
+    }
+
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
     {
-        var graphPath = GetSamplesGraphPath();
+        var graphPath = GetLocalTestDataPath();
         var dataDirectory = Path.Combine(graphPath, "Data");
         Directory.CreateDirectory(SharedCacheDirectory);
 
@@ -70,6 +108,24 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
                 return services;
             })
             .AddJsonGraphConfiguration(dataDirectory);
+    }
+
+    public override async ValueTask DisposeAsync()
+    {
+        await base.DisposeAsync();
+
+        // Clean up local test data copy
+        if (_localTestDataPath != null && Directory.Exists(_localTestDataPath))
+        {
+            try
+            {
+                Directory.Delete(_localTestDataPath, recursive: true);
+            }
+            catch
+            {
+                // Ignore cleanup errors
+            }
+        }
     }
 
     protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
@@ -105,7 +161,7 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
     {
         var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
 
-        var todos = await meshQuery.QueryAsync<MeshNode>("path:ACME/ProductLaunch/Todo scope:children", ct: TestContext.Current.CancellationToken)
+        var todos = await meshQuery.QueryAsync<MeshNode>("path:ACME/ProductLaunch/Todo scope:children", null, TestContext.Current.CancellationToken)
             .ToListAsync(TestContext.Current.CancellationToken);
 
         todos.Should().NotBeEmpty("Should have child Todo nodes");
@@ -408,45 +464,31 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
         var projectAddress = new Address("ACME/ProductLaunch");
         var todoPath = "ACME/ProductLaunch/Todo/DefinePersona";
 
-        // Get original state
+        // Get original node
         var originalNode = await persistence.GetNodeAsync(todoPath, TestContext.Current.CancellationToken);
         originalNode.Should().NotBeNull();
-        var originalState = originalNode!.State;
 
-        try
-        {
-            // Soft delete a todo to ensure Deleted section has content
-            var deletedNode = originalNode with { State = MeshNodeState.Deleted };
-            await persistence.SaveNodeAsync(deletedNode, TestContext.Current.CancellationToken);
-            Output.WriteLine("Soft-deleted a todo item");
+        // Soft delete a todo to ensure Deleted section has content
+        var deletedNode = originalNode! with { State = MeshNodeState.Deleted };
+        await persistence.SaveNodeAsync(deletedNode, TestContext.Current.CancellationToken);
+        Output.WriteLine("Soft-deleted a todo item");
 
-            // Request the AllTasks view - this will trigger dynamic compilation
-            var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
-                projectAddress,
-                reference);
+        // Request the AllTasks view - this will trigger dynamic compilation
+        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
+            projectAddress,
+            reference);
 
-            Output.WriteLine("Getting AllTasks view (triggers ProjectViews compilation)...");
-            var control = await stream
-                .GetControlStream(reference.Area!)
-                .Where(c => c != null)
-                .Timeout(TimeSpan.FromSeconds(10))
-                .FirstAsync();
+        Output.WriteLine("Getting AllTasks view (triggers ProjectViews compilation)...");
+        var control = await stream
+            .GetControlStream(reference.Area!)
+            .Where(c => c != null)
+            .Timeout(TimeSpan.FromSeconds(10))
+            .FirstAsync();
 
-            control.Should().NotBeNull("AllTasks view should compile and render");
-            Output.WriteLine($"AllTasks view compiled and rendered: {control?.GetType().Name}");
-            Output.WriteLine("ProjectViews dynamic compilation successful");
-        }
-        finally
-        {
-            // Restore original state
-            var nodeToRestore = await persistence.GetNodeAsync(todoPath, TestContext.Current.CancellationToken);
-            if (nodeToRestore != null)
-            {
-                var restoredNode = nodeToRestore with { State = originalState };
-                await persistence.SaveNodeAsync(restoredNode, TestContext.Current.CancellationToken);
-                Output.WriteLine("Restored todo to original state");
-            }
-        }
+        control.Should().NotBeNull("AllTasks view should compile and render");
+        Output.WriteLine($"AllTasks view compiled and rendered: {control?.GetType().Name}");
+        Output.WriteLine("ProjectViews dynamic compilation successful");
+        // Note: No restore needed - test uses local copy of data
     }
 
     /// <summary>
@@ -461,32 +503,18 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
         // Get the original todo
         var originalNode = await persistence.GetNodeAsync(todoPath, TestContext.Current.CancellationToken);
         originalNode.Should().NotBeNull("Todo node should exist");
-        var originalState = originalNode!.State;
-        Output.WriteLine($"Original state: {originalState}");
+        Output.WriteLine($"Original state: {originalNode!.State}");
 
-        try
-        {
-            // Perform soft delete by setting state to Deleted
-            var deletedNode = originalNode with { State = MeshNodeState.Deleted };
-            await persistence.SaveNodeAsync(deletedNode, TestContext.Current.CancellationToken);
+        // Perform soft delete by setting state to Deleted
+        var deletedNode = originalNode with { State = MeshNodeState.Deleted };
+        await persistence.SaveNodeAsync(deletedNode, TestContext.Current.CancellationToken);
 
-            // Verify the state changed
-            var updatedNode = await persistence.GetNodeAsync(todoPath, TestContext.Current.CancellationToken);
-            updatedNode.Should().NotBeNull("Node should still exist after soft delete");
-            updatedNode!.State.Should().Be(MeshNodeState.Deleted, "State should be Deleted after soft delete");
-            Output.WriteLine($"Updated state: {updatedNode.State}");
-        }
-        finally
-        {
-            // Restore original state
-            var nodeToRestore = await persistence.GetNodeAsync(todoPath, TestContext.Current.CancellationToken);
-            if (nodeToRestore != null)
-            {
-                var restoredNode = nodeToRestore with { State = originalState };
-                await persistence.SaveNodeAsync(restoredNode, TestContext.Current.CancellationToken);
-                Output.WriteLine($"Restored state to: {originalState}");
-            }
-        }
+        // Verify the state changed
+        var updatedNode = await persistence.GetNodeAsync(todoPath, TestContext.Current.CancellationToken);
+        updatedNode.Should().NotBeNull("Node should still exist after soft delete");
+        updatedNode!.State.Should().Be(MeshNodeState.Deleted, "State should be Deleted after soft delete");
+        Output.WriteLine($"Updated state: {updatedNode.State}");
+        // Note: No restore needed - test uses local copy of data
     }
 
     /// <summary>
@@ -502,34 +530,21 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
         // Get the original todo
         var originalNode = await persistence.GetNodeAsync(todoPath, TestContext.Current.CancellationToken);
         originalNode.Should().NotBeNull();
-        var originalState = originalNode!.State;
 
-        try
-        {
-            // Soft delete the node
-            var deletedNode = originalNode with { State = MeshNodeState.Deleted };
-            await persistence.SaveNodeAsync(deletedNode, TestContext.Current.CancellationToken);
+        // Soft delete the node
+        var deletedNode = originalNode! with { State = MeshNodeState.Deleted };
+        await persistence.SaveNodeAsync(deletedNode, TestContext.Current.CancellationToken);
 
-            // Query for active items only
-            var activeQuery = "path:ACME/ProductLaunch/Todo nodeType:ACME/Project/Todo state:Active scope:subtree";
-            var activeResults = await meshQuery.QueryAsync<MeshNode>(activeQuery, ct: TestContext.Current.CancellationToken)
-                .ToListAsync(TestContext.Current.CancellationToken);
+        // Query for active items only
+        var activeQuery = "path:ACME/ProductLaunch/Todo nodeType:ACME/Project/Todo state:Active scope:subtree";
+        var activeResults = await meshQuery.QueryAsync<MeshNode>(activeQuery, null, TestContext.Current.CancellationToken)
+            .ToListAsync(TestContext.Current.CancellationToken);
 
-            // The deleted item should not be in active results
-            activeResults.Should().NotContain(n => n.Path == todoPath,
-                "Deleted item should not appear in state:Active query results");
-            Output.WriteLine($"Active query returned {activeResults.Count} items, excluding the deleted one");
-        }
-        finally
-        {
-            // Restore original state
-            var nodeToRestore = await persistence.GetNodeAsync(todoPath, TestContext.Current.CancellationToken);
-            if (nodeToRestore != null)
-            {
-                var restoredNode = nodeToRestore with { State = originalState };
-                await persistence.SaveNodeAsync(restoredNode, TestContext.Current.CancellationToken);
-            }
-        }
+        // The deleted item should not be in active results
+        activeResults.Should().NotContain(n => n.Path == todoPath,
+            "Deleted item should not appear in state:Active query results");
+        Output.WriteLine($"Active query returned {activeResults.Count} items, excluding the deleted one");
+        // Note: No restore needed - test uses local copy of data
     }
 
     /// <summary>
@@ -545,34 +560,21 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
         // Get the original todo
         var originalNode = await persistence.GetNodeAsync(todoPath, TestContext.Current.CancellationToken);
         originalNode.Should().NotBeNull();
-        var originalState = originalNode!.State;
 
-        try
-        {
-            // Soft delete the node
-            var deletedNode = originalNode with { State = MeshNodeState.Deleted };
-            await persistence.SaveNodeAsync(deletedNode, TestContext.Current.CancellationToken);
+        // Soft delete the node
+        var deletedNode = originalNode! with { State = MeshNodeState.Deleted };
+        await persistence.SaveNodeAsync(deletedNode, TestContext.Current.CancellationToken);
 
-            // Query for deleted items only
-            var deletedQuery = "path:ACME/ProductLaunch/Todo nodeType:ACME/Project/Todo state:Deleted scope:subtree";
-            var deletedResults = await meshQuery.QueryAsync<MeshNode>(deletedQuery, ct: TestContext.Current.CancellationToken)
-                .ToListAsync(TestContext.Current.CancellationToken);
+        // Query for deleted items only
+        var deletedQuery = "path:ACME/ProductLaunch/Todo nodeType:ACME/Project/Todo state:Deleted scope:subtree";
+        var deletedResults = await meshQuery.QueryAsync<MeshNode>(deletedQuery, null, TestContext.Current.CancellationToken)
+            .ToListAsync(TestContext.Current.CancellationToken);
 
-            // The deleted item should be in deleted results
-            deletedResults.Should().Contain(n => n.Path == todoPath,
-                "Deleted item should appear in state:Deleted query results");
-            Output.WriteLine($"Deleted query returned {deletedResults.Count} items, including the soft-deleted one");
-        }
-        finally
-        {
-            // Restore original state
-            var nodeToRestore = await persistence.GetNodeAsync(todoPath, TestContext.Current.CancellationToken);
-            if (nodeToRestore != null)
-            {
-                var restoredNode = nodeToRestore with { State = originalState };
-                await persistence.SaveNodeAsync(restoredNode, TestContext.Current.CancellationToken);
-            }
-        }
+        // The deleted item should be in deleted results
+        deletedResults.Should().Contain(n => n.Path == todoPath,
+            "Deleted item should appear in state:Deleted query results");
+        Output.WriteLine($"Deleted query returned {deletedResults.Count} items, including the soft-deleted one");
+        // Note: No restore needed - test uses local copy of data
     }
 
     /// <summary>
@@ -587,38 +589,25 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
         // Get the original todo
         var originalNode = await persistence.GetNodeAsync(todoPath, TestContext.Current.CancellationToken);
         originalNode.Should().NotBeNull();
-        var originalState = originalNode!.State;
 
-        try
-        {
-            // First soft delete
-            var deletedNode = originalNode with { State = MeshNodeState.Deleted };
-            await persistence.SaveNodeAsync(deletedNode, TestContext.Current.CancellationToken);
+        // First soft delete
+        var deletedNode = originalNode! with { State = MeshNodeState.Deleted };
+        await persistence.SaveNodeAsync(deletedNode, TestContext.Current.CancellationToken);
 
-            // Verify it's deleted
-            var deletedCheck = await persistence.GetNodeAsync(todoPath, TestContext.Current.CancellationToken);
-            deletedCheck!.State.Should().Be(MeshNodeState.Deleted);
-            Output.WriteLine("Node is now Deleted");
+        // Verify it's deleted
+        var deletedCheck = await persistence.GetNodeAsync(todoPath, TestContext.Current.CancellationToken);
+        deletedCheck!.State.Should().Be(MeshNodeState.Deleted);
+        Output.WriteLine("Node is now Deleted");
 
-            // Now restore
-            var restoredNode = deletedCheck with { State = MeshNodeState.Active };
-            await persistence.SaveNodeAsync(restoredNode, TestContext.Current.CancellationToken);
+        // Now restore
+        var restoredNode = deletedCheck with { State = MeshNodeState.Active };
+        await persistence.SaveNodeAsync(restoredNode, TestContext.Current.CancellationToken);
 
-            // Verify it's active again
-            var activeCheck = await persistence.GetNodeAsync(todoPath, TestContext.Current.CancellationToken);
-            activeCheck!.State.Should().Be(MeshNodeState.Active, "State should be Active after restore");
-            Output.WriteLine("Node successfully restored to Active state");
-        }
-        finally
-        {
-            // Ensure we restore to original state
-            var nodeToRestore = await persistence.GetNodeAsync(todoPath, TestContext.Current.CancellationToken);
-            if (nodeToRestore != null && nodeToRestore.State != originalState)
-            {
-                var finalNode = nodeToRestore with { State = originalState };
-                await persistence.SaveNodeAsync(finalNode, TestContext.Current.CancellationToken);
-            }
-        }
+        // Verify it's active again
+        var activeCheck = await persistence.GetNodeAsync(todoPath, TestContext.Current.CancellationToken);
+        activeCheck!.State.Should().Be(MeshNodeState.Active, "State should be Active after restore");
+        Output.WriteLine("Node successfully restored to Active state");
+        // Note: No restore needed - test uses local copy of data
     }
 
     /// <summary>
@@ -628,7 +617,6 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
     public async Task PermanentDelete_RemovesNodeCompletely()
     {
         var persistence = Mesh.ServiceProvider.GetRequiredService<IPersistenceService>();
-        var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
 
         // Create a temporary test node for this test
         var testId = $"TestTodo_{Guid.NewGuid():N}";
@@ -643,36 +631,22 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
             State = MeshNodeState.Active
         };
 
-        try
-        {
-            // Create the test node
-            await persistence.SaveNodeAsync(testNode, TestContext.Current.CancellationToken);
-            Output.WriteLine($"Created test node at {testPath}");
+        // Create the test node
+        await persistence.SaveNodeAsync(testNode, TestContext.Current.CancellationToken);
+        Output.WriteLine($"Created test node at {testPath}");
 
-            // Verify it exists
-            var createdNode = await persistence.GetNodeAsync(testPath, TestContext.Current.CancellationToken);
-            createdNode.Should().NotBeNull("Test node should exist after creation");
+        // Verify it exists
+        var createdNode = await persistence.GetNodeAsync(testPath, TestContext.Current.CancellationToken);
+        createdNode.Should().NotBeNull("Test node should exist after creation");
 
-            // Permanently delete it
-            await persistence.DeleteNodeAsync(testPath, recursive: false, TestContext.Current.CancellationToken);
-            Output.WriteLine("Permanently deleted test node");
+        // Permanently delete it
+        await persistence.DeleteNodeAsync(testPath, recursive: false, TestContext.Current.CancellationToken);
+        Output.WriteLine("Permanently deleted test node");
 
-            // Verify it no longer exists
-            var deletedNode = await persistence.GetNodeAsync(testPath, TestContext.Current.CancellationToken);
-            deletedNode.Should().BeNull("Node should not exist after permanent delete");
-            Output.WriteLine("Confirmed node no longer exists after permanent delete");
-        }
-        finally
-        {
-            // Clean up just in case
-            try
-            {
-                await persistence.DeleteNodeAsync(testPath, recursive: false, TestContext.Current.CancellationToken);
-            }
-            catch
-            {
-                // Ignore cleanup errors
-            }
-        }
+        // Verify it no longer exists
+        var deletedNode = await persistence.GetNodeAsync(testPath, TestContext.Current.CancellationToken);
+        deletedNode.Should().BeNull("Node should not exist after permanent delete");
+        Output.WriteLine("Confirmed node no longer exists after permanent delete");
+        // Note: No cleanup needed - test uses local copy of data
     }
 }

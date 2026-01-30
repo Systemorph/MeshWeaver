@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Linq;
 using System.Runtime.CompilerServices;
+using System.Text.Json;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
@@ -23,6 +24,7 @@ public class SecurityService : ISecurityService
     private readonly IPersistenceService _persistence;
     private readonly AccessService _accessService;
     private readonly ILogger<SecurityService> _logger;
+    private readonly IMessageHub _hub;
 
     // In-memory cache for performance
     private readonly ConcurrentDictionary<string, List<UserAccess>> _accessCache = new();
@@ -36,13 +38,17 @@ public class SecurityService : ISecurityService
         { "Viewer", Role.Viewer }
     };
 
+    private JsonSerializerOptions JsonOptions => _hub.JsonSerializerOptions;
+
     public SecurityService(
         IPersistenceService persistence,
         AccessService accessService,
+        IMessageHub hub,
         ILogger<SecurityService> logger)
     {
         _persistence = persistence;
         _accessService = accessService;
+        _hub = hub;
         _logger = logger;
     }
 

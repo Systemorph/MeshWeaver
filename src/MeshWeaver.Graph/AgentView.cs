@@ -42,9 +42,9 @@ public static class AgentView
             .WithView(DetailsArea, Details)
             .WithView(EditArea, Edit)
             // UCR special areas for unified content references
-            .WithView(MeshNodeView.DataArea, MeshNodeView.Data)
-            .WithView(MeshNodeView.SchemaArea, MeshNodeView.Schema)
-            .WithView(MeshNodeView.ModelArea, DataModelLayoutArea.DataModel));
+            .WithView(MeshNodeLayoutAreas.DataArea, MeshNodeLayoutAreas.Data)
+            .WithView(MeshNodeLayoutAreas.SchemaArea, MeshNodeLayoutAreas.Schema)
+            .WithView(MeshNodeLayoutAreas.ModelArea, DataModelLayoutArea.DataModel));
 
     /// <summary>
     /// Renders the Catalog view showing all agents.

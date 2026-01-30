@@ -7,12 +7,10 @@
   "description": "Create detailed buyer persona for TaskFlow targeting operations managers at mid-market companies",
   "category": "Tasks",
   "icon": "/static/content/ACME/Project/Todo/icon.svg",
-  "addressSegments": 0,
   "isPersistent": true,
   "lastModified": "2026-01-20T10:05:06.1472369+00:00",
   "version": 0,
   "state": "Active",
-  "isVirtual": false,
   "content": {
     "$type": "Todo",
     "id": "DefinePersona",
@@ -24,7 +22,5 @@
     "dueDateOffsetDays": -10,
     "status": "Completed",
     "completedAt": "2025-01-18T14:30:00Z"
-  },
-  "routingType": "Shared",
-  "instantiationType": "HubConfiguration"
+  }
 }

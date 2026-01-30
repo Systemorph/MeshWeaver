@@ -1,5 +1,4 @@
 ﻿using System.Text.Json;
-using MeshWeaver.Domain;
 using MeshWeaver.Hosting.Persistence.Parsers;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
@@ -14,25 +13,20 @@ namespace MeshWeaver.Hosting.Persistence;
 public class FileSystemStorageAdapter : IStorageAdapter
 {
     private readonly string _baseDirectory;
-    private readonly Func<ITypeRegistry?>? _typeRegistryFactory;
     private readonly FileFormatParserRegistry _parserRegistry = new();
-    private JsonSerializerOptions? _jsonOptions;
-
-    private JsonSerializerOptions JsonOptions => _jsonOptions ??= PersistenceJsonOptions.CreateForPersistence(_typeRegistryFactory?.Invoke());
 
     /// <summary>
     /// Supported file extensions in priority order for reading.
     /// </summary>
     private static readonly string[] SupportedExtensions = [".md", ".cs", ".json"];
 
-    public FileSystemStorageAdapter(string baseDirectory, Func<ITypeRegistry?>? typeRegistryFactory = null)
+    public FileSystemStorageAdapter(string baseDirectory)
     {
         _baseDirectory = baseDirectory;
-        _typeRegistryFactory = typeRegistryFactory;
         Directory.CreateDirectory(baseDirectory);
     }
 
-    public async Task<MeshNode?> ReadAsync(string path, CancellationToken ct = default)
+    public async Task<MeshNode?> ReadAsync(string path, JsonSerializerOptions options, CancellationToken ct = default)
     {
         var (filePath, extension) = FindFileWithExtension(path);
         if (filePath == null || !File.Exists(filePath))
@@ -54,7 +48,7 @@ public class FileSystemStorageAdapter : IStorageAdapter
         else
         {
             // Default to JSON deserialization
-            node = JsonSerializer.Deserialize<MeshNode>(content, JsonOptions);
+            node = JsonSerializer.Deserialize<MeshNode>(content, options);
         }
 
         if (node == null)
@@ -80,21 +74,22 @@ public class FileSystemStorageAdapter : IStorageAdapter
         return node;
     }
 
-    public async Task WriteAsync(MeshNode node, CancellationToken ct = default)
+    public async Task WriteAsync(MeshNode node, JsonSerializerOptions options, CancellationToken ct = default)
     {
-        // Determine the output format based on the node type
-        var serializer = _parserRegistry.GetSerializerFor(node);
         string content;
         string extension;
 
+        // Check if we have a serializer for this node type (e.g., Markdown)
+        var serializer = _parserRegistry.GetSerializerFor(node);
         if (serializer != null)
         {
             content = await serializer.SerializeAsync(node, ct);
-            extension = serializer.SupportedExtensions[0]; // Use primary extension
+            extension = serializer.SupportedExtensions[0]; // Use the primary extension
         }
         else
         {
-            content = JsonSerializer.Serialize(node, JsonOptions);
+            // Default to JSON serialization for type preservation
+            content = JsonSerializer.Serialize(node, options);
             extension = ".json";
         }
 
@@ -107,7 +102,7 @@ public class FileSystemStorageAdapter : IStorageAdapter
 
         await File.WriteAllTextAsync(filePath, content, ct);
 
-        // Clean up old files with different extensions
+        // Clean up old files with different extensions (e.g., if originally read from .json)
         CleanupOtherExtensions(node.Path, extension);
     }
 
@@ -209,7 +204,8 @@ public class FileSystemStorageAdapter : IStorageAdapter
 
     public async IAsyncEnumerable<object> GetPartitionObjectsAsync(
         string nodePath,
-        string? subPath = null,
+        string? subPath,
+        JsonSerializerOptions options,
         [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
     {
         var partitionDir = GetPartitionDirectory(nodePath, subPath);
@@ -228,7 +224,7 @@ public class FileSystemStorageAdapter : IStorageAdapter
             try
             {
                 var json = await ReadFileWithSharingAsync(file, ct);
-                obj = JsonSerializer.Deserialize<object>(json, JsonOptions);
+                obj = JsonSerializer.Deserialize<object>(json, options);
 
                 // Set Id from file name if the object has an Id property
                 if (obj != null)
@@ -320,6 +316,7 @@ public class FileSystemStorageAdapter : IStorageAdapter
         string nodePath,
         string? subPath,
         IReadOnlyCollection<object> objects,
+        JsonSerializerOptions options,
         CancellationToken ct = default)
     {
         var partitionDir = GetPartitionDirectory(nodePath, subPath);
@@ -340,7 +337,7 @@ public class FileSystemStorageAdapter : IStorageAdapter
             {
                 var fileName = GetObjectFileName(obj);
                 var filePath = Path.Combine(partitionDir, fileName);
-                var json = JsonSerializer.Serialize(obj, obj.GetType(), JsonOptions);
+                var json = JsonSerializer.Serialize(obj, obj.GetType(), options);
                 await File.WriteAllTextAsync(filePath, json, ct);
             }
         }

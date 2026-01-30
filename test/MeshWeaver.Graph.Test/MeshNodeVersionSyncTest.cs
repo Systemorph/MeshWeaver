@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Text.Json;
 using System.Threading.Tasks;
 using FluentAssertions;
 using MeshWeaver.Graph.Configuration;
@@ -26,6 +27,8 @@ namespace MeshWeaver.Graph.Test;
 [Collection("MeshNodeVersionSyncTests")]
 public class MeshNodeVersionSyncTest : MonolithMeshTestBase
 {
+    private static readonly JsonSerializerOptions SetupJsonOptions = new JsonSerializerOptions();
+    private JsonSerializerOptions _jsonOptions => Mesh.ServiceProvider.GetRequiredService<IMessageHub>().JsonSerializerOptions;
     private static readonly string TestDirectoryBase = Path.Combine(Path.GetTempPath(), "MeshWeaverVersionTests");
 
     [ThreadStatic]
@@ -81,8 +84,8 @@ public record Story
                 DisplayOrder = 30
             }
         };
-        persistence.SaveNodeAsync(storyNode).GetAwaiter().GetResult();
-        persistence.SavePartitionObjectsAsync("type/story", null, [storyCodeConfig]).GetAwaiter().GetResult();
+        persistence.SaveNodeAsync(storyNode, SetupJsonOptions).GetAwaiter().GetResult();
+        persistence.SavePartitionObjectsAsync("type/story", null, [storyCodeConfig], SetupJsonOptions).GetAwaiter().GetResult();
 
         // Create Graph type
         var graphCodeConfig = new CodeConfiguration
@@ -114,8 +117,8 @@ public record Graph
                 DisplayOrder = 0
             }
         };
-        persistence.SaveNodeAsync(graphTypeNode).GetAwaiter().GetResult();
-        persistence.SavePartitionObjectsAsync("type/graph", null, [graphCodeConfig]).GetAwaiter().GetResult();
+        persistence.SaveNodeAsync(graphTypeNode, SetupJsonOptions).GetAwaiter().GetResult();
+        persistence.SavePartitionObjectsAsync("type/graph", null, [graphCodeConfig], SetupJsonOptions).GetAwaiter().GetResult();
     }
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
@@ -135,7 +138,7 @@ public record Graph
             NodeType = "type/graph",
             Version = 0
         };
-        persistence.SaveNodeAsync(graphNode).GetAwaiter().GetResult();
+        persistence.SaveNodeAsync(graphNode, SetupJsonOptions).GetAwaiter().GetResult();
 
         return builder
             .UseMonolithMesh()

@@ -2,7 +2,7 @@
 Name: Controlling Form Fields Through Attributes
 Category: Documentation
 Description: Attributes that control how properties are rendered and validated in editors
-Icon: /static/storage/content/MeshWeaver/Documentation/GUI/Attributes/icon.svg
+Icon: /static/storage/content/MeshWeaver/Documentation/UserInterface/Attributes/icon.svg
 ---
 
 # Controlling Form Fields Through Attributes
@@ -183,5 +183,5 @@ public record Employee
 
 ## See Also
 
-- [Editor Control](MeshWeaver/Documentation/GUI/Editor) - How attributes are used in forms
-- [DataBinding](MeshWeaver/Documentation/GUI/DataBinding) - How data flows through forms
+- [Editor Control](MeshWeaver/Documentation/UserInterface/Editor) - How attributes are used in forms
+- [DataBinding](MeshWeaver/Documentation/UserInterface/DataBinding) - How data flows through forms
