@@ -1,9 +1,12 @@
 @page "/search"
+@using System.Text.Json
 @using MeshWeaver.Mesh
 @using MeshWeaver.Mesh.Services
+@using MeshWeaver.Messaging
 @using Microsoft.FluentUI.AspNetCore.Components
 @inject IMeshQuery? MeshQuery
 @inject INavigationService NavigationService
+@inject IMessageHub Hub
 
 <PageTitle>Search - Loom</PageTitle>
 
@@ -78,6 +81,8 @@
     private MeshNode[]? results;
     private bool isLoading;
     private bool isInitialized;
+
+    private JsonSerializerOptions JsonOptions => Hub.JsonSerializerOptions;
 
     protected override async Task OnParametersSetAsync()
     {
@@ -225,7 +230,7 @@
                 Limit = 100
             };
 
-            var searchResults = await MeshQuery.QueryAsync<MeshNode>(request).ToArrayAsync();
+            var searchResults = await MeshQuery.QueryAsync<MeshNode>(request, JsonOptions).ToArrayAsync();
 
             // Filter out the excluded namespace (the parent node itself)
             if (!string.IsNullOrWhiteSpace(ExcludeNamespace))

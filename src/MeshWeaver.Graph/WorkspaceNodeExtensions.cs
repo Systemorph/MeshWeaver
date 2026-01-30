@@ -28,7 +28,7 @@ public static class WorkspaceNodeExtensions
         // Create an observable that fetches the node
         // TODO: Subscribe to node changes for reactive updates
         return Observable.FromAsync(async ct =>
-            await persistence.GetNodeAsync(nodePath, ct));
+            await persistence.GetNodeAsync(nodePath, workspace.Hub.JsonSerializerOptions, ct));
     }
 
     /// <summary>
@@ -56,7 +56,7 @@ public static class WorkspaceNodeExtensions
             return Observable.Return<MeshNode?>(null);
 
         return Observable.FromAsync(async ct =>
-            await persistence.GetNodeAsync(path, ct));
+            await persistence.GetNodeAsync(path, workspace.Hub.JsonSerializerOptions, ct));
     }
 
     /// <summary>

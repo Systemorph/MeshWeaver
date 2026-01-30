@@ -19,8 +19,10 @@ public class MeshDataSourceThreadManager : IThreadManager
 {
     private readonly IPersistenceService _persistence;
     private readonly AccessService _accessService;
+    private readonly IMessageHub _hub;
     private readonly ILogger<MeshDataSourceThreadManager>? _logger;
-    private readonly JsonSerializerOptions _jsonOptions;
+
+    private JsonSerializerOptions JsonOptions => _hub.JsonSerializerOptions;
 
     private const string DefaultChatRoot = "_chats";
 
@@ -32,8 +34,8 @@ public class MeshDataSourceThreadManager : IThreadManager
     {
         _persistence = persistence;
         _accessService = accessService;
+        _hub = hub;
         _logger = logger;
-        _jsonOptions = hub.JsonSerializerOptions;
     }
 
     private string GetUserId() => _accessService.Context?.ObjectId ?? "anonymous";
@@ -85,7 +87,7 @@ public class MeshDataSourceThreadManager : IThreadManager
             Timestamp = DateTime.UtcNow
         };
 
-        await _persistence.SavePartitionObjectsAsync(messagesPath, null, [messageRecord]);
+        await _persistence.SavePartitionObjectsAsync(messagesPath, null, [messageRecord], JsonOptions);
         _logger?.LogDebug("Saved message {MessageId} to thread {ThreadId}", messageRecord.Id, threadId);
 
         // Update thread metadata
@@ -119,7 +121,7 @@ public class MeshDataSourceThreadManager : IThreadManager
 
         if (messageRecords.Count > 0)
         {
-            await _persistence.SavePartitionObjectsAsync(messagesPath, null, messageRecords.Cast<object>().ToArray());
+            await _persistence.SavePartitionObjectsAsync(messagesPath, null, messageRecords.Cast<object>().ToArray(), JsonOptions);
             _logger?.LogDebug("Saved {Count} messages to thread {ThreadId}", messageRecords.Count, threadId);
         }
 
@@ -152,7 +154,7 @@ public class MeshDataSourceThreadManager : IThreadManager
         var messagesPath = GetMessagesPath(thread.Scope, threadId);
         var messages = new List<ChatMessage>();
 
-        await foreach (var obj in _persistence.GetPartitionObjectsAsync(messagesPath).WithCancellation(ct))
+        await foreach (var obj in _persistence.GetPartitionObjectsAsync(messagesPath, null, JsonOptions).WithCancellation(ct))
         {
             if (obj is ChatMessageRecord record)
             {
@@ -187,7 +189,7 @@ public class MeshDataSourceThreadManager : IThreadManager
         var basePath = GetChatsBasePath(scope);
         var threads = new List<ChatThread>();
 
-        await foreach (var obj in _persistence.GetPartitionObjectsAsync(basePath).WithCancellation(ct))
+        await foreach (var obj in _persistence.GetPartitionObjectsAsync(basePath, null, JsonOptions).WithCancellation(ct))
         {
             if (obj is ChatThreadMetadata metadata)
             {
@@ -218,7 +220,7 @@ public class MeshDataSourceThreadManager : IThreadManager
         // Try to find the thread in default scope first, then with scope
         var basePath = GetChatsBasePath(null);
 
-        await foreach (var obj in _persistence.GetPartitionObjectsAsync(basePath).WithCancellation(ct))
+        await foreach (var obj in _persistence.GetPartitionObjectsAsync(basePath, null, JsonOptions).WithCancellation(ct))
         {
             if (obj is ChatThreadMetadata metadata && metadata.Id == threadId)
             {
@@ -249,7 +251,7 @@ public class MeshDataSourceThreadManager : IThreadManager
     {
         var basePath = GetChatsBasePath(thread.Scope);
         var metadata = ChatThreadMetadata.FromThread(thread);
-        await _persistence.SavePartitionObjectsAsync(basePath, null, [metadata]);
+        await _persistence.SavePartitionObjectsAsync(basePath, null, [metadata], JsonOptions);
         _logger?.LogDebug("Saved thread metadata {ThreadId}", thread.Id);
     }
 
@@ -260,7 +262,7 @@ public class MeshDataSourceThreadManager : IThreadManager
 
         try
         {
-            return JsonSerializer.Serialize(contents, _jsonOptions);
+            return JsonSerializer.Serialize(contents, JsonOptions);
         }
         catch
         {
@@ -276,7 +278,7 @@ public class MeshDataSourceThreadManager : IThreadManager
 
         try
         {
-            return JsonSerializer.Deserialize<List<AIContent>>(json, _jsonOptions) ?? [];
+            return JsonSerializer.Deserialize<List<AIContent>>(json, JsonOptions) ?? [];
         }
         catch
         {

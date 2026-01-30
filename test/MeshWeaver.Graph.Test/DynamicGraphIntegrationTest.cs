@@ -34,6 +34,7 @@ public class DynamicGraphIntegrationTest : MonolithMeshTestBase
     // Each test instance gets its own unique directory
     private static readonly string TestDirectoryBase = Path.Combine(Path.GetTempPath(), "MeshWeaverDynamicGraphTests");
     private string? _testDirectory;
+    private JsonSerializerOptions _jsonOptions => Mesh.ServiceProvider.GetRequiredService<IMessageHub>().JsonSerializerOptions;
 
     private IPersistenceService Persistence => Mesh.ServiceProvider.GetRequiredService<IPersistenceService>();
     private IMeshQuery MeshQuery => Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
@@ -65,6 +66,8 @@ public class DynamicGraphIntegrationTest : MonolithMeshTestBase
         await SetupTestConfigurationAsync(persistence);
         await SeedHierarchyAsync(persistence);
     }
+
+    private static readonly JsonSerializerOptions SetupJsonOptions = new JsonSerializerOptions();
 
     private static async Task SetupTestConfigurationAsync(IPersistenceService persistence)
     {
@@ -111,8 +114,8 @@ public enum StoryStatus
                 Configuration = "config => config"
             }
         };
-        await persistence.SaveNodeAsync(storyNode);
-        await persistence.SavePartitionObjectsAsync("type/story", "Code", [storyCodeConfig]);
+        await persistence.SaveNodeAsync(storyNode, SetupJsonOptions);
+        await persistence.SavePartitionObjectsAsync("type/story", "Code", [storyCodeConfig], SetupJsonOptions);
 
         // Create Organization type
         var orgCodeConfig = new CodeConfiguration
@@ -146,8 +149,8 @@ public record Organization
                 Configuration = "config => config.WithContentType<Organization>().AddDefaultLayoutAreas()"
             }
         };
-        await persistence.SaveNodeAsync(orgNode);
-        await persistence.SavePartitionObjectsAsync("type/org", "Code", [orgCodeConfig]);
+        await persistence.SaveNodeAsync(orgNode, SetupJsonOptions);
+        await persistence.SavePartitionObjectsAsync("type/org", "Code", [orgCodeConfig], SetupJsonOptions);
 
         // Create Project type
         var projectCodeConfig = new CodeConfiguration
@@ -181,8 +184,8 @@ public record Project
                 Configuration = "config => config"
             }
         };
-        await persistence.SaveNodeAsync(projectNode);
-        await persistence.SavePartitionObjectsAsync("type/project", "Code", [projectCodeConfig]);
+        await persistence.SaveNodeAsync(projectNode, SetupJsonOptions);
+        await persistence.SavePartitionObjectsAsync("type/project", "Code", [projectCodeConfig], SetupJsonOptions);
 
         // Create Graph type
         var graphCodeConfig = new CodeConfiguration
@@ -215,21 +218,21 @@ public record Graph
                 Configuration = "config => config"
             }
         };
-        await persistence.SaveNodeAsync(graphTypeNode);
-        await persistence.SavePartitionObjectsAsync("type/graph", "Code", [graphCodeConfig]);
+        await persistence.SaveNodeAsync(graphTypeNode, SetupJsonOptions);
+        await persistence.SavePartitionObjectsAsync("type/graph", "Code", [graphCodeConfig], SetupJsonOptions);
     }
 
     private static async Task SeedHierarchyAsync(IPersistenceService persistence)
     {
         // Pre-seed the hierarchy: graph -> org -> project -> story
         // NodeType uses full path to type definition (e.g., "type/graph", "type/org")
-        await persistence.SaveNodeAsync(MeshNode.FromPath("graph") with { Name = "Graph", NodeType = "type/graph" });
-        await persistence.SaveNodeAsync(MeshNode.FromPath("graph/org1") with { Name = "Organization 1", NodeType = "type/org", Description = "First org" });
-        await persistence.SaveNodeAsync(MeshNode.FromPath("graph/org2") with { Name = "Organization 2", NodeType = "type/org", Description = "Second org" });
-        await persistence.SaveNodeAsync(MeshNode.FromPath("graph/org1/proj1") with { Name = "Project 1", NodeType = "type/project" });
-        await persistence.SaveNodeAsync(MeshNode.FromPath("graph/org1/proj2") with { Name = "Project 2", NodeType = "type/project" });
-        await persistence.SaveNodeAsync(MeshNode.FromPath("graph/org1/proj1/story1") with { Name = "Story 1", NodeType = "type/story" });
-        await persistence.SaveNodeAsync(MeshNode.FromPath("graph/org1/proj1/story2") with { Name = "Story 2", NodeType = "type/story" });
+        await persistence.SaveNodeAsync(MeshNode.FromPath("graph") with { Name = "Graph", NodeType = "type/graph" }, SetupJsonOptions);
+        await persistence.SaveNodeAsync(MeshNode.FromPath("graph/org1") with { Name = "Organization 1", NodeType = "type/org", Description = "First org" }, SetupJsonOptions);
+        await persistence.SaveNodeAsync(MeshNode.FromPath("graph/org2") with { Name = "Organization 2", NodeType = "type/org", Description = "Second org" }, SetupJsonOptions);
+        await persistence.SaveNodeAsync(MeshNode.FromPath("graph/org1/proj1") with { Name = "Project 1", NodeType = "type/project" }, SetupJsonOptions);
+        await persistence.SaveNodeAsync(MeshNode.FromPath("graph/org1/proj2") with { Name = "Project 2", NodeType = "type/project" }, SetupJsonOptions);
+        await persistence.SaveNodeAsync(MeshNode.FromPath("graph/org1/proj1/story1") with { Name = "Story 1", NodeType = "type/story" }, SetupJsonOptions);
+        await persistence.SaveNodeAsync(MeshNode.FromPath("graph/org1/proj1/story2") with { Name = "Story 2", NodeType = "type/story" }, SetupJsonOptions);
     }
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
@@ -260,7 +263,7 @@ public record Graph
             TestContext.Current.CancellationToken);
 
         // Verify IMeshQuery finds the pre-seeded data
-        var children = await MeshQuery.QueryAsync<MeshNode>("path:graph scope:children", ct: TestContext.Current.CancellationToken)
+        var children = await MeshQuery.QueryAsync<MeshNode>("path:graph scope:children", _jsonOptions, null, TestContext.Current.CancellationToken)
             .ToListAsync(TestContext.Current.CancellationToken);
         children.Should().HaveCount(2, "graph should have 2 org children pre-seeded");
         children.Should().Contain(n => n.Path == "graph/org1");
@@ -287,7 +290,7 @@ public record Graph
             TestContext.Current.CancellationToken);
 
         // Verify IMeshQuery finds the pre-seeded projects
-        var children = await MeshQuery.QueryAsync<MeshNode>("path:graph/org1 scope:children", ct: TestContext.Current.CancellationToken)
+        var children = await MeshQuery.QueryAsync<MeshNode>("path:graph/org1 scope:children", _jsonOptions, null, TestContext.Current.CancellationToken)
             .ToListAsync(TestContext.Current.CancellationToken);
         children.Should().HaveCount(2, "org1 should have 2 project children pre-seeded");
         children.Should().Contain(n => n.Path == "graph/org1/proj1");
@@ -314,7 +317,7 @@ public record Graph
             TestContext.Current.CancellationToken);
 
         // Verify IMeshQuery finds the pre-seeded stories
-        var children = await MeshQuery.QueryAsync<MeshNode>("path:graph/org1/proj1 scope:children", ct: TestContext.Current.CancellationToken)
+        var children = await MeshQuery.QueryAsync<MeshNode>("path:graph/org1/proj1 scope:children", _jsonOptions, null, TestContext.Current.CancellationToken)
             .ToListAsync(TestContext.Current.CancellationToken);
         children.Should().HaveCount(2, "proj1 should have 2 story children pre-seeded");
         children.Should().Contain(n => n.Path == "graph/org1/proj1/story1");
@@ -520,11 +523,11 @@ public record Graph
     public async Task TypeNodes_ExistInPersistence()
     {
         // Assert that type nodes exist
-        var graphType = await Persistence.GetNodeAsync("type/graph", TestContext.Current.CancellationToken);
+        var graphType = await Persistence.GetNodeAsync("type/graph", _jsonOptions, TestContext.Current.CancellationToken);
         graphType.Should().NotBeNull("type/graph should exist in persistence");
         graphType.NodeType.Should().Be("NodeType");
 
-        var orgType = await Persistence.GetNodeAsync("type/org", TestContext.Current.CancellationToken);
+        var orgType = await Persistence.GetNodeAsync("type/org", _jsonOptions, TestContext.Current.CancellationToken);
         orgType.Should().NotBeNull("type/org should exist in persistence");
         orgType.NodeType.Should().Be("NodeType");
     }
@@ -540,20 +543,20 @@ public record Graph
     public async Task MoveNodeAsync_MovesNodeToNewPath()
     {
         // Arrange - create a node to move
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("graph/movetest") with { Name = "Move Test", NodeType = "type/org" }, TestContext.Current.CancellationToken);
+        await Persistence.SaveNodeAsync(MeshNode.FromPath("graph/movetest") with { Name = "Move Test", NodeType = "type/org" }, _jsonOptions, TestContext.Current.CancellationToken);
 
         // Act
-        var moved = await Persistence.MoveNodeAsync("graph/movetest", "graph/movetest-renamed", TestContext.Current.CancellationToken);
+        var moved = await Persistence.MoveNodeAsync("graph/movetest", "graph/movetest-renamed", _jsonOptions, TestContext.Current.CancellationToken);
 
         // Assert
         moved.Should().NotBeNull();
         moved.Path.Should().Be("graph/movetest-renamed");
         moved.Name.Should().Be("Move Test");
 
-        var oldNode = await Persistence.GetNodeAsync("graph/movetest", TestContext.Current.CancellationToken);
+        var oldNode = await Persistence.GetNodeAsync("graph/movetest", _jsonOptions, TestContext.Current.CancellationToken);
         oldNode.Should().BeNull("Original node should be deleted");
 
-        var newNode = await Persistence.GetNodeAsync("graph/movetest-renamed", TestContext.Current.CancellationToken);
+        var newNode = await Persistence.GetNodeAsync("graph/movetest-renamed", _jsonOptions, TestContext.Current.CancellationToken);
         newNode.Should().NotBeNull("Node should exist at new path");
         newNode.Name.Should().Be("Move Test");
     }
@@ -565,34 +568,34 @@ public record Graph
     public async Task MoveNodeAsync_MovesDescendantsWithUpdatedPaths()
     {
         // Arrange - create a hierarchy to move
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("graph/parent") with { Name = "Parent", NodeType = "type/org" }, TestContext.Current.CancellationToken);
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("graph/parent/child1") with { Name = "Child 1", NodeType = "type/project" }, TestContext.Current.CancellationToken);
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("graph/parent/child2") with { Name = "Child 2", NodeType = "type/project" }, TestContext.Current.CancellationToken);
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("graph/parent/child1/grandchild") with { Name = "Grandchild", NodeType = "type/story" }, TestContext.Current.CancellationToken);
+        await Persistence.SaveNodeAsync(MeshNode.FromPath("graph/parent") with { Name = "Parent", NodeType = "type/org" }, _jsonOptions, TestContext.Current.CancellationToken);
+        await Persistence.SaveNodeAsync(MeshNode.FromPath("graph/parent/child1") with { Name = "Child 1", NodeType = "type/project" }, _jsonOptions, TestContext.Current.CancellationToken);
+        await Persistence.SaveNodeAsync(MeshNode.FromPath("graph/parent/child2") with { Name = "Child 2", NodeType = "type/project" }, _jsonOptions, TestContext.Current.CancellationToken);
+        await Persistence.SaveNodeAsync(MeshNode.FromPath("graph/parent/child1/grandchild") with { Name = "Grandchild", NodeType = "type/story" }, _jsonOptions, TestContext.Current.CancellationToken);
 
         // Act
-        await Persistence.MoveNodeAsync("graph/parent", "graph/newparent", TestContext.Current.CancellationToken);
+        await Persistence.MoveNodeAsync("graph/parent", "graph/newparent", _jsonOptions, TestContext.Current.CancellationToken);
 
         // Assert - old paths should not exist
-        (await Persistence.GetNodeAsync("graph/parent", TestContext.Current.CancellationToken)).Should().BeNull();
-        (await Persistence.GetNodeAsync("graph/parent/child1", TestContext.Current.CancellationToken)).Should().BeNull();
-        (await Persistence.GetNodeAsync("graph/parent/child2", TestContext.Current.CancellationToken)).Should().BeNull();
-        (await Persistence.GetNodeAsync("graph/parent/child1/grandchild", TestContext.Current.CancellationToken)).Should().BeNull();
+        (await Persistence.GetNodeAsync("graph/parent", _jsonOptions, TestContext.Current.CancellationToken)).Should().BeNull();
+        (await Persistence.GetNodeAsync("graph/parent/child1", _jsonOptions, TestContext.Current.CancellationToken)).Should().BeNull();
+        (await Persistence.GetNodeAsync("graph/parent/child2", _jsonOptions, TestContext.Current.CancellationToken)).Should().BeNull();
+        (await Persistence.GetNodeAsync("graph/parent/child1/grandchild", _jsonOptions, TestContext.Current.CancellationToken)).Should().BeNull();
 
         // Assert - new paths should exist with correct data
-        var newParent = await Persistence.GetNodeAsync("graph/newparent", TestContext.Current.CancellationToken);
+        var newParent = await Persistence.GetNodeAsync("graph/newparent", _jsonOptions, TestContext.Current.CancellationToken);
         newParent.Should().NotBeNull();
         newParent.Name.Should().Be("Parent");
 
-        var newChild1 = await Persistence.GetNodeAsync("graph/newparent/child1", TestContext.Current.CancellationToken);
+        var newChild1 = await Persistence.GetNodeAsync("graph/newparent/child1", _jsonOptions, TestContext.Current.CancellationToken);
         newChild1.Should().NotBeNull();
         newChild1.Name.Should().Be("Child 1");
 
-        var newChild2 = await Persistence.GetNodeAsync("graph/newparent/child2", TestContext.Current.CancellationToken);
+        var newChild2 = await Persistence.GetNodeAsync("graph/newparent/child2", _jsonOptions, TestContext.Current.CancellationToken);
         newChild2.Should().NotBeNull();
         newChild2.Name.Should().Be("Child 2");
 
-        var newGrandchild = await Persistence.GetNodeAsync("graph/newparent/child1/grandchild", TestContext.Current.CancellationToken);
+        var newGrandchild = await Persistence.GetNodeAsync("graph/newparent/child1/grandchild", _jsonOptions, TestContext.Current.CancellationToken);
         newGrandchild.Should().NotBeNull();
         newGrandchild.Name.Should().Be("Grandchild");
     }
@@ -604,25 +607,25 @@ public record Graph
     public async Task MoveNodeAsync_MigratesCommentsToNewPath()
     {
         // Arrange - create node with comments
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("graph/commented") with { Name = "Commented Node", NodeType = "type/org" }, TestContext.Current.CancellationToken);
-        await Persistence.AddCommentAsync(new Comment { NodePath = "graph/commented", Text = "Comment 1", Author = "User1" }, TestContext.Current.CancellationToken);
-        await Persistence.AddCommentAsync(new Comment { NodePath = "graph/commented", Text = "Comment 2", Author = "User2" }, TestContext.Current.CancellationToken);
+        await Persistence.SaveNodeAsync(MeshNode.FromPath("graph/commented") with { Name = "Commented Node", NodeType = "type/org" }, _jsonOptions, TestContext.Current.CancellationToken);
+        await Persistence.AddCommentAsync(new Comment { NodePath = "graph/commented", Text = "Comment 1", Author = "User1" }, _jsonOptions, TestContext.Current.CancellationToken);
+        await Persistence.AddCommentAsync(new Comment { NodePath = "graph/commented", Text = "Comment 2", Author = "User2" }, _jsonOptions, TestContext.Current.CancellationToken);
 
         // Verify comments exist at old path
-        var oldComments = await Persistence.GetCommentsAsync("graph/commented").ToListAsync(TestContext.Current.CancellationToken);
+        var oldComments = await Persistence.GetCommentsAsync("graph/commented", _jsonOptions).ToListAsync(TestContext.Current.CancellationToken);
         oldComments.Should().HaveCount(2);
 
         // Act
-        await Persistence.MoveNodeAsync("graph/commented", "graph/commented-moved", TestContext.Current.CancellationToken);
+        await Persistence.MoveNodeAsync("graph/commented", "graph/commented-moved", _jsonOptions, TestContext.Current.CancellationToken);
 
         // Assert - comments should be at new path
-        var newComments = await Persistence.GetCommentsAsync("graph/commented-moved").ToListAsync(TestContext.Current.CancellationToken);
+        var newComments = await Persistence.GetCommentsAsync("graph/commented-moved", _jsonOptions).ToListAsync(TestContext.Current.CancellationToken);
         newComments.Should().HaveCount(2, "Comments should be migrated to new path");
         newComments.Should().Contain(c => c.Text == "Comment 1");
         newComments.Should().Contain(c => c.Text == "Comment 2");
 
         // Assert - no comments at old path
-        var remainingOldComments = await Persistence.GetCommentsAsync("graph/commented").ToListAsync(TestContext.Current.CancellationToken);
+        var remainingOldComments = await Persistence.GetCommentsAsync("graph/commented", _jsonOptions).ToListAsync(TestContext.Current.CancellationToken);
         remainingOldComments.Should().BeEmpty("Comments should not remain at old path");
     }
 
@@ -633,7 +636,7 @@ public record Graph
     public async Task MoveNodeAsync_ThrowsWhenSourceNotFound()
     {
         // Act & Assert
-        var act = () => Persistence.MoveNodeAsync("graph/nonexistent", "graph/newpath");
+        var act = () => Persistence.MoveNodeAsync("graph/nonexistent", "graph/newpath", _jsonOptions);
         await act.Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("*not found*");
     }
@@ -645,11 +648,11 @@ public record Graph
     public async Task MoveNodeAsync_ThrowsWhenTargetExists()
     {
         // Arrange
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("graph/source") with { Name = "Source", NodeType = "type/org" }, TestContext.Current.CancellationToken);
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("graph/target") with { Name = "Target", NodeType = "type/org" }, TestContext.Current.CancellationToken);
+        await Persistence.SaveNodeAsync(MeshNode.FromPath("graph/source") with { Name = "Source", NodeType = "type/org" }, _jsonOptions, TestContext.Current.CancellationToken);
+        await Persistence.SaveNodeAsync(MeshNode.FromPath("graph/target") with { Name = "Target", NodeType = "type/org" }, _jsonOptions, TestContext.Current.CancellationToken);
 
         // Act & Assert
-        var act = () => Persistence.MoveNodeAsync("graph/source", "graph/target");
+        var act = () => Persistence.MoveNodeAsync("graph/source", "graph/target", _jsonOptions);
         await act.Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("*already exists*");
     }
@@ -802,7 +805,7 @@ public record Graph
     {
         // Act - query for all nodes with nodeType type/org
         var query = "nodeType:type/org scope:descendants";
-        var nodes = await MeshQuery.QueryAsync<MeshNode>(query, ct: TestContext.Current.CancellationToken).ToListAsync(TestContext.Current.CancellationToken);
+        var nodes = await MeshQuery.QueryAsync<MeshNode>(query, _jsonOptions, null, TestContext.Current.CancellationToken).ToListAsync(TestContext.Current.CancellationToken);
         foreach (var node in nodes)
             Output.WriteLine($"Found: {node.Path}");
 
@@ -827,6 +830,7 @@ public class FileSystemPersistenceTest : MonolithMeshTestBase
 {
     private static readonly string TestDirectoryBase = Path.Combine(Path.GetTempPath(), "MeshWeaverFileSystemTests");
     private string? _testDirectory;
+    private JsonSerializerOptions _jsonOptions => Mesh.ServiceProvider.GetRequiredService<IMessageHub>().JsonSerializerOptions;
 
     private string GetOrCreateTestDirectory()
     {
@@ -993,7 +997,7 @@ public class FileSystemPersistenceTest : MonolithMeshTestBase
         var persistence = Mesh.ServiceProvider.GetRequiredService<IPersistenceService>();
 
         // Act - this should find Type/Organizations by reading from disk
-        var nodeTypeNode = await persistence.GetNodeAsync("Type/Organizations", TestContext.Current.CancellationToken);
+        var nodeTypeNode = await persistence.GetNodeAsync("Type/Organizations", _jsonOptions, TestContext.Current.CancellationToken);
 
         // Assert
         nodeTypeNode.Should().NotBeNull(
@@ -1104,6 +1108,7 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
         Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "samples", "Graph", "Data"));
 
     private readonly string _cacheDirectory;
+    private JsonSerializerOptions _jsonOptions => Mesh.ServiceProvider.GetRequiredService<IMessageHub>().JsonSerializerOptions;
 
     public SamplesGraphDataTest(ITestOutputHelper output) : base(output)
     {

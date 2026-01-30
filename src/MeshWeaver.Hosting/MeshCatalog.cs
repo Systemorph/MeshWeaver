@@ -74,7 +74,7 @@ public sealed class MeshCatalog(
         }
 
         // Try loading from persistence
-        var persistenceNode = await Persistence.GetNodeAsync(address.ToString());
+        var persistenceNode = await Persistence.GetNodeAsync(address.ToString(), hub.JsonSerializerOptions);
         if (persistenceNode != null)
         {
             // Enrich with HubConfiguration based on NodeType (NOT the address - that would cause circular dependency)
@@ -88,6 +88,29 @@ public sealed class MeshCatalog(
             if (!await ValidateReadAsync(persistenceNode))
                 return null;
             return persistenceNode;
+        }
+
+        // Try to create a virtual node from template (for auto-kernel addresses like kernel/app-Kernel)
+        var segments = addressKey.Split('/');
+        if (segments.Length > 1)
+        {
+            // Find a matching template (first segment typically matches the template type)
+            var templatePath = segments[0];
+            if (Configuration.Nodes.TryGetValue(templatePath, out var templateNode) && templateNode.HubConfiguration != null)
+            {
+                // Create a virtual node that inherits from the template
+                var virtualNode = MeshNode.FromPath(addressKey) with
+                {
+                    NodeType = templatePath,
+                    HubConfiguration = templateNode.HubConfiguration,
+                    IsVirtual = true
+                };
+                logger.LogDebug("GetNodeAsync: Created virtual node at {Path} from template {Template}", addressKey, templatePath);
+                cache.Set(virtualNode.Path, virtualNode, cacheOptions);
+                if (!await ValidateReadAsync(virtualNode))
+                    return null;
+                return virtualNode;
+            }
         }
 
         return null;
@@ -132,7 +155,7 @@ public sealed class MeshCatalog(
 
 
     public Task UpdateAsync(MeshNode node) =>
-        Persistence.SaveNodeAsync(node);
+        Persistence.SaveNodeAsync(node, hub.JsonSerializerOptions);
 
     /// <inheritdoc />
     public async Task<MeshNode> CreateNodeAsync(MeshNode node, string? createdBy = null, CancellationToken ct = default)
@@ -179,7 +202,7 @@ public sealed class MeshCatalog(
         var transientNode = node with { State = MeshNodeState.Transient };
 
         // 6. Save to persistence
-        var savedNode = await Persistence.SaveNodeAsync(transientNode, ct);
+        var savedNode = await Persistence.SaveNodeAsync(transientNode, hub.JsonSerializerOptions, ct);
 
         // 7. Update cache with transient node
         cache.Set(savedNode.Path, savedNode, cacheOptions);
@@ -193,7 +216,7 @@ public sealed class MeshCatalog(
     public async Task<MeshNode> ConfirmNodeAsync(string path, CancellationToken ct = default)
     {
         // Get the current node
-        var node = await Persistence.GetNodeAsync(path, ct);
+        var node = await Persistence.GetNodeAsync(path, hub.JsonSerializerOptions, ct);
         if (node == null)
         {
             throw new InvalidOperationException($"Node not found at path: {path}");
@@ -206,7 +229,7 @@ public sealed class MeshCatalog(
 
         // Update to Confirmed state
         var confirmedNode = node with { State = MeshNodeState.Active };
-        await Persistence.SaveNodeAsync(confirmedNode, ct);
+        await Persistence.SaveNodeAsync(confirmedNode, hub.JsonSerializerOptions, ct);
 
         // Enrich with HubConfiguration based on NodeType (same as cold start in GetNodeAsync)
         if (NodeTypeService != null)
@@ -228,7 +251,7 @@ public sealed class MeshCatalog(
         // Remove from cache - for recursive, also remove all descendants
         if (recursive)
         {
-            await foreach (var descendant in Persistence.GetDescendantsAsync(path).WithCancellation(ct))
+            await foreach (var descendant in Persistence.GetDescendantsAsync(path, hub.JsonSerializerOptions).WithCancellation(ct))
             {
                 cache.Remove(descendant.Path);
             }
@@ -323,9 +346,12 @@ public sealed class MeshCatalog(
         {
             var testPath = string.Join("/", segments.Take(depth));
 
-            var node = await Persistence.GetNodeAsync(testPath);
+            var node = await Persistence.GetNodeAsync(testPath, hub.JsonSerializerOptions);
             if (node != null)
+            {
+                logger.LogDebug("FindBestPersistenceMatchAsync: found node at path={Path}", testPath);
                 return (node, depth);
+            }
         }
 
         return (null, 0);
@@ -333,33 +359,26 @@ public sealed class MeshCatalog(
 
     private async Task<AddressResolution> ResolveFromConfigNodeAsync(MeshNode matchedNode, string[] segments, string _)
     {
-        // For graph-style nodes (where the path IS the address), use all segments as address
-        // This is determined by checking if NodeTypeService is available
-        // (which means the node supports dynamic children via persistence)
-        if (NodeTypeService != null &&
+        // When path goes deeper than the config node, check persistence for a deeper match
+        // This handles dynamically created child nodes (e.g., kernel/test-kernel via CreateNodeRequest)
+        if (segments.Length > matchedNode.Segments.Count &&
             matchedNode.Segments.Count > 0 &&
             segments[0].Equals(matchedNode.Segments[0], StringComparison.OrdinalIgnoreCase))
         {
-            // For graph-style nodes, find the deepest existing node in persistence
-            // This allows proper remainder handling when path goes beyond existing nodes
+            // Find the deepest existing node in persistence
             var (persistenceMatch, matchedSegmentCount) = await FindBestPersistenceMatchAsync(segments);
-            if (persistenceMatch != null)
+            if (persistenceMatch != null && matchedSegmentCount > matchedNode.Segments.Count)
             {
+                // Found a deeper match in persistence
                 var matchedPath = persistenceMatch.Path;
                 var persistenceRemainder = matchedSegmentCount < segments.Length
                     ? string.Join("/", segments.Skip(matchedSegmentCount))
                     : null;
                 return new AddressResolution(matchedPath, persistenceRemainder);
             }
-
-            // Fallback to using just the config node Namespace if nothing in persistence
-            var configRemainder = segments.Length > matchedNode.Segments.Count
-                ? string.Join("/", segments.Skip(matchedNode.Segments.Count))
-                : null;
-            return new AddressResolution(matchedNode.Path, configRemainder);
         }
 
-        // Use the node's path as the address
+        // Use the config node's path as the address, with remainder for any extra segments
         var remainder = segments.Length > matchedNode.Segments.Count
             ? string.Join("/", segments.Skip(matchedNode.Segments.Count))
             : null;
@@ -403,7 +422,7 @@ public sealed class MeshCatalog(
         if (_meshQuery != null)
         {
             var request = new MeshQueryRequest { Query = fullQuery, Limit = maxResults };
-            await foreach (var item in _meshQuery.QueryAsync(request, ct))
+            await foreach (var item in _meshQuery.QueryAsync(request, hub.JsonSerializerOptions, ct))
             {
                 if (item is MeshNode child)
                 {

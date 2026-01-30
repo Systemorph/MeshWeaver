@@ -3,10 +3,12 @@
 using System.Collections.Generic;
 using System.Linq;
 using System.Runtime.CompilerServices;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
 using MeshWeaver.AI;
+using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using NSubstitute;
@@ -22,6 +24,7 @@ namespace MeshWeaver.AI.Test;
 public class AgentSelectionTest
 {
     private readonly IMeshQuery _meshQuery;
+    private readonly JsonSerializerOptions _jsonOptions = new JsonSerializerOptions();
 
     public AgentSelectionTest()
     {
@@ -72,6 +75,7 @@ public class AgentSelectionTest
                     r.Query.Contains($"path:{contextPath}") &&
                     r.Query.Contains("scope:self") &&
                     r.Query.Contains("$type:MeshNode")),
+                Arg.Any<JsonSerializerOptions>(),
                 Arg.Any<CancellationToken>())
             .Returns(ToAsyncEnumerable<object>(productLaunchNode));
 
@@ -82,6 +86,7 @@ public class AgentSelectionTest
                     r.Query.Contains("nodeType:Agent") &&
                     r.Query.Contains("scope:hierarchy") &&
                     r.Query.Contains("$type:MeshNode")),
+                Arg.Any<JsonSerializerOptions>(),
                 Arg.Any<CancellationToken>())
             .Returns(ToAsyncEnumerable<object>(todoAgentNode));
 
@@ -92,15 +97,16 @@ public class AgentSelectionTest
                     r.Query.Contains("nodeType:Agent") &&
                     r.Query.Contains("scope:selfAndAncestors") &&
                     r.Query.Contains("$type:MeshNode")),
+                Arg.Any<JsonSerializerOptions>(),
                 Arg.Any<CancellationToken>())
             .Returns(ToAsyncEnumerable<object>());
 
         // Act - Call the REAL AgentOrderingHelper implementation
         // First get the NodeType
-        var detectedNodeType = await AgentOrderingHelper.GetNodeTypeAsync(_meshQuery, contextPath);
+        var detectedNodeType = await AgentOrderingHelper.GetNodeTypeAsync(_meshQuery, _jsonOptions, contextPath);
 
         // Then query agents with the detected NodeType
-        var foundAgents = await AgentOrderingHelper.QueryAgentsAsync(_meshQuery, contextPath, detectedNodeType);
+        var foundAgents = await AgentOrderingHelper.QueryAgentsAsync(_meshQuery, _jsonOptions, contextPath, detectedNodeType);
 
         // Assert
         detectedNodeType.Should().Be(nodeTypePath, "ProductLaunch node has NodeType=ACME/Project");
@@ -152,6 +158,7 @@ public class AgentSelectionTest
                     r.Query.Contains($"path:{contextPath}") &&
                     r.Query.Contains("scope:self") &&
                     r.Query.Contains("$type:MeshNode")),
+                Arg.Any<JsonSerializerOptions>(),
                 Arg.Any<CancellationToken>())
             .Returns(ToAsyncEnumerable<object>(productLaunchNode));
 
@@ -162,12 +169,13 @@ public class AgentSelectionTest
                     r.Query.Contains("nodeType:Agent") &&
                     r.Query.Contains("scope:selfAndAncestors") &&
                     r.Query.Contains("$type:MeshNode")),
+                Arg.Any<JsonSerializerOptions>(),
                 Arg.Any<CancellationToken>())
             .Returns(ToAsyncEnumerable<object>(navigatorNode));
 
         // Act - Call the REAL AgentOrderingHelper implementation
-        var detectedNodeType = await AgentOrderingHelper.GetNodeTypeAsync(_meshQuery, contextPath);
-        var foundAgents = await AgentOrderingHelper.QueryAgentsAsync(_meshQuery, contextPath, detectedNodeType);
+        var detectedNodeType = await AgentOrderingHelper.GetNodeTypeAsync(_meshQuery, _jsonOptions, contextPath);
+        var foundAgents = await AgentOrderingHelper.QueryAgentsAsync(_meshQuery, _jsonOptions, contextPath, detectedNodeType);
 
         // Assert
         detectedNodeType.Should().BeNull("Markdown NodeType should be ignored");

@@ -6,6 +6,7 @@
 @namespace MeshWeaver.Blazor.Chat
 @inject IPersistenceService PersistenceService
 @inject AccessService AccessService
+@inject IMessageHub Hub
 
 <div class="chat-history-container @(IsRightPanel ? "right-panel" : "")">
     <div class="chat-history-header">
@@ -173,7 +174,7 @@
         {
             var userPartition = GetUserChatPartition();
             var chats = new List<ChatRecord>();
-            await foreach (var c in ChatPersistenceHelper.ListChatsAsync(PersistenceService, userPartition))
+            await foreach (var c in ChatPersistenceHelper.ListChatsAsync(PersistenceService, userPartition, Hub.JsonSerializerOptions))
             {
                 // Filter by scope if specified
                 if (Scope == null || c.Scope == Scope)
@@ -212,7 +213,7 @@
         try
         {
             var userPartition = GetUserChatPartition();
-            await ChatPersistenceHelper.DeleteChatAsync(PersistenceService, userPartition, conversationId);
+            await ChatPersistenceHelper.DeleteChatAsync(PersistenceService, userPartition, conversationId, Hub.JsonSerializerOptions);
 
             // Remove from local list
             Chats = Chats.Where(c => c.Id != conversationId).ToList();

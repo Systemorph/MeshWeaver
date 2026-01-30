@@ -523,6 +523,9 @@ public static class EditorExtensions
 
     #region MapToToggleableControl
 
+    // Track which edit states have been initialized to avoid re-initializing on re-render
+    private static readonly HashSet<string> InitializedEditStates = new();
+
     /// <summary>
     /// Creates a control that toggles between read-only and edit modes.
     /// Read-only displays a LabelControl; click switches to edit mode.
@@ -544,7 +547,22 @@ public static class EditorExtensions
     {
         var propName = property.Name.ToCamelCase()!;
         var editStateId = $"editState_{dataId}_{propName}";
-        var editStateStream = host.Stream.GetDataStream<bool>(editStateId);
+
+        // Initialize edit state only once per session to prevent reset on re-render
+        // Use a unique key combining stream ID and edit state ID
+        var initKey = $"{host.Stream.StreamId}_{editStateId}";
+        lock (InitializedEditStates)
+        {
+            if (!InitializedEditStates.Contains(initKey))
+            {
+                host.UpdateData(editStateId, false);
+                InitializedEditStates.Add(initKey);
+            }
+        }
+
+        // Get the edit state stream - now it will emit the stored value
+        var editStateStream = host.Stream.GetDataStream<bool>(editStateId)
+            .DistinctUntilChanged();
 
         var isEditable = canEdit &&
                          property.GetCustomAttribute<EditableAttribute>()?.AllowEdit != false &&
@@ -565,8 +583,6 @@ public static class EditorExtensions
             .WithView(Controls.Label(displayName)
                 .WithStyle("font-weight: 600; color: var(--neutral-foreground-hint); font-size: 0.875rem;"))
             .WithView((h, _) => editStateStream
-                .StartWith(false)
-                .DistinctUntilChanged()
                 .Select(isEditing => isEditing && isEditable
                     ? BuildEditControl(h, property, dataId, editStateId)
                     : BuildReadonlyControl(h, property, dataId, editStateId, isEditable)));
@@ -665,7 +681,10 @@ public static class EditorExtensions
 
         if (collectionStream != null)
         {
-            host.RegisterForDisposal(displayLabelId,
+            // Use ReplaceDisposable to prevent duplicate subscriptions when control is rebuilt
+            // Use DistinctUntilChanged to prevent endless emissions from CombineLatest
+            string? lastDisplayName = null;
+            host.ReplaceDisposable(displayLabelId,
                 dataStream.CombineLatest(collectionStream, (data, collection) =>
                 {
                     if (data.ValueKind == JsonValueKind.Undefined || collection?.Value == null)
@@ -692,7 +711,15 @@ public static class EditorExtensions
                     }
 
                     return keyValue.ToString() ?? "";
-                }).Subscribe(displayName => host.UpdateData(displayLabelId, displayName)));
+                })
+                .Subscribe(displayName =>
+                {
+                    // Manual DistinctUntilChanged to avoid endless emissions
+                    if (displayName == lastDisplayName)
+                        return;
+                    lastDisplayName = displayName;
+                    host.UpdateData(displayLabelId, displayName);
+                }));
         }
         else
         {
@@ -713,7 +740,9 @@ public static class EditorExtensions
         var optionsList = ConvertOptionsForToggle(options);
 
         var dataStream = host.Stream.GetDataStream<JsonElement>(dataId);
-        host.RegisterForDisposal(displayLabelId,
+        // Use ReplaceDisposable to prevent duplicate subscriptions when control is rebuilt
+        string? lastDisplayName = null;
+        host.ReplaceDisposable(displayLabelId,
             dataStream.Select(data =>
             {
                 if (data.ValueKind == JsonValueKind.Undefined)
@@ -728,7 +757,15 @@ public static class EditorExtensions
 
                 var option = optionsList.FirstOrDefault(o => o.GetItem()?.ToString() == keyValue);
                 return option?.Text ?? keyValue ?? "";
-            }).Subscribe(displayName => host.UpdateData(displayLabelId, displayName)));
+            })
+            .Subscribe(displayName =>
+            {
+                // Manual DistinctUntilChanged to avoid unnecessary emissions
+                if (displayName == lastDisplayName)
+                    return;
+                lastDisplayName = displayName;
+                host.UpdateData(displayLabelId, displayName);
+            }));
 
         return new LabelControl(new JsonPointerReference(LayoutAreaReference.GetDataPointer(displayLabelId)))
             .WithStyle("padding: 8px; min-height: 32px;");
@@ -743,7 +780,9 @@ public static class EditorExtensions
         var displayLabelId = $"displayLabel_{dataId}_{propName}";
 
         var dataStream = host.Stream.GetDataStream<JsonElement>(dataId);
-        host.RegisterForDisposal(displayLabelId,
+        // Use ReplaceDisposable to prevent duplicate subscriptions when control is rebuilt
+        string? lastFormattedDate = null;
+        host.ReplaceDisposable(displayLabelId,
             dataStream.Select(data =>
             {
                 if (data.ValueKind == JsonValueKind.Undefined)
@@ -768,7 +807,15 @@ public static class EditorExtensions
                 }
 
                 return valueElement.ToString();
-            }).Subscribe(formattedDate => host.UpdateData(displayLabelId, formattedDate)));
+            })
+            .Subscribe(formattedDate =>
+            {
+                // Manual DistinctUntilChanged to avoid unnecessary emissions
+                if (formattedDate == lastFormattedDate)
+                    return;
+                lastFormattedDate = formattedDate;
+                host.UpdateData(displayLabelId, formattedDate);
+            }));
 
         return new LabelControl(new JsonPointerReference(LayoutAreaReference.GetDataPointer(displayLabelId)))
             .WithStyle("padding: 8px; min-height: 32px;");
@@ -896,9 +943,10 @@ public static class EditorExtensions
                 AutoFocus = true
             }.WithBlurAction(ctx => SwitchToReadOnlyMode(ctx, editStateId));
 
-        var optionsId = Guid.NewGuid().AsString();
         var registrationKey = $"dimensionOptions_{dataId}_{jsonPointer.Pointer}";
-        host.RegisterForDisposal(registrationKey,
+        var optionsId = $"dimOpts_{dataId}_{jsonPointer.Pointer}"; // Use stable ID instead of Guid
+        // Use ReplaceDisposable to prevent duplicate subscriptions when control is rebuilt
+        host.ReplaceDisposable(registrationKey,
             host.Workspace.GetStream(new CollectionReference(collectionName))!
                 .Select(x => ConvertDimensionToOptionsForToggle(x.Value!,
                     host.Workspace.DataContext.TypeRegistry.GetTypeDefinition(dimensionAttr.Type)!))
@@ -930,7 +978,6 @@ public static class EditorExtensions
             .WithStyle("margin-top: 24px;")
             .WithView((h, _) =>
                 editStateStream
-                    .StartWith(false)
                     .DistinctUntilChanged()
                     .Select(isEditing =>
                         isEditing && isEditable

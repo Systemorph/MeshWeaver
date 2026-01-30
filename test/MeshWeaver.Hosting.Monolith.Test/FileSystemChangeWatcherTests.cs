@@ -3,12 +3,16 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reactive.Linq;
+using System.Text.Json;
 using System.Threading.Tasks;
 using FluentAssertions;
+using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Hosting.Persistence.Query;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Messaging;
+using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
 namespace MeshWeaver.Hosting.Monolith.Test;
@@ -18,39 +22,36 @@ namespace MeshWeaver.Hosting.Monolith.Test;
 /// and publishes notifications to ObserveQuery.
 /// </summary>
 [Collection("FileSystemWatcherTests")]
-public class FileSystemChangeWatcherTests : IDisposable
+public class FileSystemChangeWatcherTests(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
-    private readonly string _testDirectory;
-    private readonly DataChangeNotifier _changeNotifier;
-    private readonly FileSystemStorageAdapter _storageAdapter;
-    private readonly FileSystemPersistenceService _persistence;
-    private readonly IMeshQuery _meshQuery;
-    private readonly FileSystemChangeWatcher _watcher;
+    private readonly string _testDirectory = Path.Combine(Path.GetTempPath(), "MeshWeaverTests", Guid.NewGuid().ToString());
+    private readonly DataChangeNotifier _changeNotifier = new();
+    private FileSystemStorageAdapter? _storageAdapterInstance;
+    private FileSystemStorageAdapter _storageAdapter => _storageAdapterInstance ??= CreateStorageAdapter();
+    private FileSystemPersistenceService? _persistenceInstance;
+    private FileSystemPersistenceService _persistence => _persistenceInstance ??= new(_storageAdapter, _changeNotifier);
+    private IMeshQuery? _meshQueryInstance;
+    private IMeshQuery _meshQuery => _meshQueryInstance ??= new InMemoryMeshQuery(_persistence, changeNotifier: _changeNotifier);
+    private FileSystemChangeWatcher? _watcherInstance;
+    private FileSystemChangeWatcher _watcher => _watcherInstance ??= new(_testDirectory, _storageAdapter, _changeNotifier, JsonOptions) { DebounceIntervalMs = 50 };
+    private JsonSerializerOptions JsonOptions => Mesh.ServiceProvider.GetRequiredService<IMessageHub>().JsonSerializerOptions;
 
-    public FileSystemChangeWatcherTests()
+    private FileSystemStorageAdapter CreateStorageAdapter()
     {
-        _testDirectory = Path.Combine(Path.GetTempPath(), "MeshWeaverTests", Guid.NewGuid().ToString());
         Directory.CreateDirectory(_testDirectory);
-
-        _changeNotifier = new DataChangeNotifier();
-        _storageAdapter = new FileSystemStorageAdapter(_testDirectory);
-        _persistence = new FileSystemPersistenceService(_storageAdapter, _changeNotifier);
-        _meshQuery = new InMemoryMeshQuery(_persistence, changeNotifier: _changeNotifier);
-        _watcher = new FileSystemChangeWatcher(_testDirectory, _storageAdapter, _changeNotifier)
-        {
-            DebounceIntervalMs = 50 // Use shorter debounce for tests
-        };
+        return new FileSystemStorageAdapter(_testDirectory);
     }
 
-    public void Dispose()
+    public override void Dispose()
     {
-        _watcher.Dispose();
+        _watcherInstance?.Dispose();
         _changeNotifier.Dispose();
 
         if (Directory.Exists(_testDirectory))
         {
             Directory.Delete(_testDirectory, recursive: true);
         }
+        base.Dispose();
     }
 
     #region External File Creation Tests
@@ -91,7 +92,7 @@ public class FileSystemChangeWatcherTests : IDisposable
         var receivedChanges = new List<QueryResultChange<MeshNode>>();
 
         var subscription = _meshQuery
-            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery("path:external scope:descendants"))
+            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery("path:external scope:descendants"), JsonOptions)
             .Subscribe(change => receivedChanges.Add(change));
 
         await Task.Delay(200);
@@ -205,12 +206,12 @@ public class FileSystemChangeWatcherTests : IDisposable
     public async Task ExternalFileDeletion_ObserveQueryReceivesRemoval()
     {
         // Arrange - Create a node first
-        await _persistence.SaveNodeAsync(MeshNode.FromPath("external/node1") with { Name = "Node 1", NodeType = "Test" });
+        await _persistence.SaveNodeAsync(MeshNode.FromPath("external/node1") with { Name = "Node 1", NodeType = "Test" }, JsonOptions);
 
         var receivedChanges = new List<QueryResultChange<MeshNode>>();
 
         var subscription = _meshQuery
-            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery("path:external scope:descendants"))
+            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery("path:external scope:descendants"), JsonOptions)
             .Subscribe(change => receivedChanges.Add(change));
 
         await Task.Delay(200);

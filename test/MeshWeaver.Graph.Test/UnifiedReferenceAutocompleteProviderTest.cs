@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Text.Json;
 using System.Threading.Tasks;
 using FluentAssertions;
 using MeshWeaver.Data.Completion;
@@ -12,6 +13,7 @@ using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Completion;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
@@ -28,6 +30,7 @@ public class UnifiedReferenceAutocompleteProviderTest : MonolithMeshTestBase
         Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "samples", "Graph", "Data"));
 
     private readonly string _cacheDirectory;
+    private IMessageHub Hub => Mesh.ServiceProvider.GetRequiredService<IMessageHub>();
 
     private IMeshCatalog MeshCatalog => Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
     private IMeshQuery MeshQuery => Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
@@ -96,7 +99,7 @@ public class UnifiedReferenceAutocompleteProviderTest : MonolithMeshTestBase
         Output.WriteLine("Querying for Systemorph via IMeshQuery...");
 
         // Query from root to find Systemorph
-        var suggestions = await MeshQuery.AutocompleteAsync("", "Sys", 10, TestContext.Current.CancellationToken).ToArrayAsync(TestContext.Current.CancellationToken);
+        var suggestions = await MeshQuery.AutocompleteAsync("", "Sys", Hub.JsonSerializerOptions, 10, TestContext.Current.CancellationToken).ToArrayAsync(TestContext.Current.CancellationToken);
 
         Output.WriteLine($"Found {suggestions.Length} suggestions for 'Sys':");
         foreach (var s in suggestions)
@@ -121,7 +124,8 @@ public class UnifiedReferenceAutocompleteProviderTest : MonolithMeshTestBase
         var provider = new UnifiedReferenceAutocompleteProvider(
             MeshCatalog,
             MeshQuery,
-            navigationContext: null);  // No navigation context for this test
+            navigationContext: null,
+            hub: Hub);
 
         // Act - query with just "@"
         var items = await provider.GetItemsAsync("@", null, TestContext.Current.CancellationToken).ToArrayAsync(TestContext.Current.CancellationToken);
@@ -143,7 +147,8 @@ public class UnifiedReferenceAutocompleteProviderTest : MonolithMeshTestBase
         var provider = new UnifiedReferenceAutocompleteProvider(
             MeshCatalog,
             MeshQuery,
-            navigationContext: null);
+            navigationContext: null,
+            hub: Hub);
 
         // Act - query with "@Sys" (partial match for Systemorph)
         var items = await provider.GetItemsAsync("@Sys", null, TestContext.Current.CancellationToken).ToArrayAsync(TestContext.Current.CancellationToken);
@@ -172,7 +177,8 @@ public class UnifiedReferenceAutocompleteProviderTest : MonolithMeshTestBase
         var provider = new UnifiedReferenceAutocompleteProvider(
             MeshCatalog,
             MeshQuery,
-            navigationContext: null);
+            navigationContext: null,
+            hub: Hub);
 
         // Act - query with "@Org" (partial match for Organization)
         var items = await provider.GetItemsAsync("@Org", null, TestContext.Current.CancellationToken).ToArrayAsync(TestContext.Current.CancellationToken);
@@ -197,7 +203,8 @@ public class UnifiedReferenceAutocompleteProviderTest : MonolithMeshTestBase
         var provider = new UnifiedReferenceAutocompleteProvider(
             MeshCatalog,
             MeshQuery,
-            navigationContext: null);
+            navigationContext: null,
+            hub: Hub);
 
         // Act - query with "@Use" (partial match for User)
         var items = await provider.GetItemsAsync("@Use", null, TestContext.Current.CancellationToken).ToArrayAsync(TestContext.Current.CancellationToken);
@@ -222,7 +229,8 @@ public class UnifiedReferenceAutocompleteProviderTest : MonolithMeshTestBase
         var provider = new UnifiedReferenceAutocompleteProvider(
             MeshCatalog,
             MeshQuery,
-            navigationContext: null);
+            navigationContext: null,
+            hub: Hub);
 
         // Act - query with lowercase "@sys"
         var items = await provider.GetItemsAsync("@sys", null, TestContext.Current.CancellationToken).ToArrayAsync(TestContext.Current.CancellationToken);
@@ -259,7 +267,7 @@ public class UnifiedReferenceAutocompleteProviderTest : MonolithMeshTestBase
         var meshCatalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
         var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
 
-        var provider = new UnifiedReferenceAutocompleteProvider(meshCatalog, meshQuery, null);
+        var provider = new UnifiedReferenceAutocompleteProvider(meshCatalog, meshQuery, null, Hub);
         provider.Should().NotBeNull("UnifiedReferenceAutocompleteProvider can be instantiated with available services");
     }
 
@@ -269,7 +277,7 @@ public class UnifiedReferenceAutocompleteProviderTest : MonolithMeshTestBase
         // Create provider manually with available services (no INavigationService in test env)
         var meshCatalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
         var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
-        var provider = new UnifiedReferenceAutocompleteProvider(meshCatalog, meshQuery, null);
+        var provider = new UnifiedReferenceAutocompleteProvider(meshCatalog, meshQuery, null, Hub);
 
         // Act
         var items = await provider.GetItemsAsync("@Sys", null, TestContext.Current.CancellationToken).ToArrayAsync(TestContext.Current.CancellationToken);

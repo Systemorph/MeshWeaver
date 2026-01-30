@@ -1,4 +1,4 @@
-using System.ComponentModel;
+﻿using System.ComponentModel;
 using System.ComponentModel.DataAnnotations;
 using System.Reactive.Linq;
 using System.Reflection;
@@ -10,7 +10,6 @@ using MeshWeaver.Layout.Composition;
 using MeshWeaver.Layout.DataBinding;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
-using MeshWeaver.Messaging.Serialization;
 using MeshWeaver.Reflection;
 using MeshWeaver.Utils;
 using Microsoft.Extensions.DependencyInjection;
@@ -37,19 +36,15 @@ public static class OverviewLayoutArea
     {
         var nodePath = node.Namespace ?? host.Hub.Address.ToString();
 
-        if (node.Content is not JsonElement jsonContent)
+        // Handle Content which could be null, JsonElement, or already deserialized typed object
+        var instance = node.Content;
+        if (instance == null)
             return Controls.Stack;
 
-        // 1. Get $type from JsonElement
-        if (!jsonContent.TryGetProperty("$type", out var typeProperty))
-            return Controls.Stack;
+        if (instance is JsonElement je)
+            instance = JsonSerializer.Deserialize<object>(je.GetRawText(), host.Hub.JsonSerializerOptions)!;
 
-        var typeName = typeProperty.GetString();
-        var typeRegistry = host.Hub.ServiceProvider.GetRequiredService<ITypeRegistry>();
-        var contentType = typeRegistry.GetType(typeName!);
-
-        if (contentType == null)
-            return Controls.Stack;
+        var contentType = instance.GetType();
 
         // 2. Check access permissions
         var canEdit = CheckEditAccess(host, node);
@@ -57,43 +52,29 @@ public static class OverviewLayoutArea
         // 3. Set up workspace stream for bidirectional data binding (DomainDetails pattern)
         var dataId = GetDataId(nodePath);
         var typeDefinition = host.Workspace.DataContext.TypeRegistry.GetTypeDefinition(contentType);
+        if (typeDefinition is null)
+            throw new InvalidOperationException($"Type definition not found for content type {contentType.FullName}");
 
-        if (typeDefinition != null && !string.IsNullOrEmpty(typeDefinition.CollectionName))
+        var entityId = node.Id;
+        var stream = host.Workspace.GetStream(new EntityReference(typeDefinition.CollectionName, entityId));
+        if (stream != null)
         {
-            var entityId = GetEntityId(jsonContent, contentType, typeRegistry);
-            if (entityId != null)
-            {
-                var stream = host.Workspace.GetStream(new EntityReference(typeDefinition.CollectionName, entityId));
-                if (stream != null)
-                {
-                    // Subscribe to workspace stream - this handles bidirectional sync automatically
-                    host.RegisterForDisposal(stream
-                        .Where(e => e?.Value != null)
-                        .Select(e => typeDefinition.SerializeEntityAndId(e!.Value!, host.Hub.JsonSerializerOptions))
-                        .Where(e => e != null)
-                        .Subscribe(e => host.UpdateData(dataId, e!))
-                    );
-                }
-                else
-                {
-                    // Fallback: store JsonElement directly
-                    host.UpdateData(dataId, jsonContent);
-                }
-            }
-            else
-            {
-                host.UpdateData(dataId, jsonContent);
-            }
+            // Subscribe to workspace stream - this handles bidirectional sync automatically
+            host.RegisterForDisposal(stream
+                .Where(e => e?.Value != null)
+                .Subscribe(e => host.UpdateData(dataId, e!.Value!))
+            );
         }
         else
         {
-            host.UpdateData(dataId, jsonContent);
+            // Fallback: store JsonElement directly
+            host.UpdateData(dataId, instance);
         }
 
         // 4. Setup auto-save to persist changes via DataChangeRequest
         if (canEdit)
         {
-            SetupAutoSave(host, dataId, jsonContent, node);
+            SetupAutoSave(host, dataId, instance, node);
         }
 
         // 5. Build property form with readonly/edit toggle
@@ -251,32 +232,28 @@ public static class OverviewLayoutArea
     private static void SetupAutoSave(
         LayoutAreaHost host,
         string dataId,
-        JsonElement originalContent,
+        object instance,
         MeshNode node)
     {
-        var initialJson = originalContent.GetRawText();
+        var current = instance;
 
         host.RegisterForDisposal($"autosave_{dataId}",
-            host.Stream.GetDataStream<JsonElement>(dataId)
+            host.Stream.GetDataStream<object>(dataId)
                 .Debounce(TimeSpan.FromMilliseconds(300))
-                .Subscribe(async updatedContent =>
+                .Subscribe(updatedContent =>
                 {
-                    if (updatedContent.ValueKind == JsonValueKind.Undefined)
+
+                    if (object.Equals(current, updatedContent))
                         return;
 
-                    var currentJson = updatedContent.GetRawText();
-
-                    if (currentJson == initialJson)
-                        return;
-
-                    // Update initial to prevent re-sending
-                    initialJson = currentJson;
+                    // Update current to prevent re-sending
+                    current = updatedContent;
 
                     // Create updated MeshNode with new content
                     var updatedNode = node with { Content = updatedContent };
 
                     // Issue DataChangeRequest to persist the change
-                    await host.Hub.AwaitResponse<DataChangeResponse>(
+                    host.Hub.Post(
                         new DataChangeRequest().WithUpdates(updatedNode),
                         o => o.WithTarget(host.Hub.Address));
                 }));

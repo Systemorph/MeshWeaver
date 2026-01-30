@@ -2,9 +2,11 @@
 @page "/catalog/{*Namespace}"
 @using MeshWeaver.Mesh
 @using MeshWeaver.Mesh.Services
+@using MeshWeaver.Messaging
 @using Fluent = Microsoft.FluentUI.AspNetCore.Components
 @inject IMeshQuery MeshQuery
 @inject NavigationManager NavigationManager
+@inject IMessageHub Hub
 
 <FluentDesignTheme @bind-Mode="@Mode" StorageName="theme" />
 
@@ -178,7 +180,7 @@
             var fullQuery = string.Join(" ", queryParts);
 
             // Execute query
-            Nodes = await MeshQuery.QueryAsync<MeshNode>(fullQuery).ToListAsync();
+            Nodes = await MeshQuery.QueryAsync<MeshNode>(fullQuery, Hub.JsonSerializerOptions).ToListAsync();
         }
         catch
         {

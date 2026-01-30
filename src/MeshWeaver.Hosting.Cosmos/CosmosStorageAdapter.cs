@@ -1,9 +1,7 @@
 using System.Runtime.CompilerServices;
 using System.Text.Json;
 using Microsoft.Azure.Cosmos;
-using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Mesh;
-
 using MeshWeaver.Mesh.Services;
 
 namespace MeshWeaver.Hosting.Cosmos;
@@ -17,7 +15,6 @@ public class CosmosStorageAdapter : IStorageAdapter, IAsyncDisposable
     private readonly Container _nodesContainer;
     private readonly Container _partitionsContainer;
     private readonly CosmosSqlGenerator _sqlGenerator = new();
-    private readonly JsonSerializerOptions _jsonOptions;
     private CosmosChangeFeedProcessor? _changeFeedProcessor;
 
     /// <summary>
@@ -36,7 +33,6 @@ public class CosmosStorageAdapter : IStorageAdapter, IAsyncDisposable
     {
         _nodesContainer = nodesContainer;
         _partitionsContainer = partitionsContainer;
-        _jsonOptions = PersistenceJsonOptions.CreateForPersistence();
     }
 
     /// <summary>
@@ -73,7 +69,7 @@ public class CosmosStorageAdapter : IStorageAdapter, IAsyncDisposable
     private static string NormalizePath(string? path) =>
         path?.Trim('/').ToLowerInvariant() ?? "";
 
-    public async Task<MeshNode?> ReadAsync(string path, CancellationToken ct = default)
+    public async Task<MeshNode?> ReadAsync(string path, JsonSerializerOptions options, CancellationToken ct = default)
     {
         var normalizedPath = NormalizePath(path);
         if (string.IsNullOrEmpty(normalizedPath))
@@ -98,10 +94,10 @@ public class CosmosStorageAdapter : IStorageAdapter, IAsyncDisposable
         }
     }
 
-    public async Task WriteAsync(MeshNode node, CancellationToken ct = default)
+    public async Task WriteAsync(MeshNode node, JsonSerializerOptions options, CancellationToken ct = default)
     {
         // Serialize manually to apply NotMapped property exclusion
-        var json = JsonSerializer.Serialize(node, _jsonOptions);
+        var json = JsonSerializer.Serialize(node, options);
         using var document = JsonDocument.Parse(json);
         await _nodesContainer.UpsertItemAsync(
             document.RootElement,
@@ -169,7 +165,7 @@ public class CosmosStorageAdapter : IStorageAdapter, IAsyncDisposable
 
     public async Task<bool> ExistsAsync(string path, CancellationToken ct = default)
     {
-        var node = await ReadAsync(path, ct);
+        var node = await ReadAsync(path, new JsonSerializerOptions(), ct);
         return node != null;
     }
 
@@ -177,7 +173,8 @@ public class CosmosStorageAdapter : IStorageAdapter, IAsyncDisposable
 
     public async IAsyncEnumerable<object> GetPartitionObjectsAsync(
         string nodePath,
-        string? subPath = null,
+        string? subPath,
+        JsonSerializerOptions options,
         [EnumeratorCancellation] CancellationToken ct = default)
     {
         var partitionKey = GetPartitionStorageKey(nodePath, subPath);
@@ -203,6 +200,7 @@ public class CosmosStorageAdapter : IStorageAdapter, IAsyncDisposable
         string nodePath,
         string? subPath,
         IReadOnlyCollection<object> objects,
+        JsonSerializerOptions options,
         CancellationToken ct = default)
     {
         var partitionKey = GetPartitionStorageKey(nodePath, subPath);

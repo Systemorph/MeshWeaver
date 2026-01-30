@@ -6,6 +6,11 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- Allow NSubstitute's DynamicProxy to access internal members for testing -->
+    <InternalsVisibleTo Include="DynamicProxyGenAssembly2" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="JsonPatch.Net" />
     <PackageReference Include="Microsoft.Extensions.Logging" />
     <PackageReference Include="System.Reactive" />

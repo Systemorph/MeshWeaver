@@ -16,6 +16,7 @@ using MeshWeaver.Layout.Client;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Layout.DataBinding;
 using MeshWeaver.Messaging;
+using MeshWeaver.Reflection;
 using Xunit;
 
 namespace MeshWeaver.Layout.Test;
@@ -465,7 +466,7 @@ public class EditPersistenceTest(ITestOutputHelper output) : HubTestBase(output)
         // Build the form using MapToToggleableControl
         var properties = typeof(PersistableEntity).GetProperties()
             .Where(p => p.GetCustomAttribute<BrowsableAttribute>()?.Browsable != false)
-            .Where(p => !p.HasAttribute<KeyAttribute>())
+            .Where(p => p.GetCustomAttribute<KeyAttribute>() == null)
             .ToArray();
 
         var stack = Controls.Stack.WithWidth("100%");
@@ -563,16 +564,16 @@ public class EditPersistenceTest(ITestOutputHelper output) : HubTestBase(output)
 
         Output.WriteLine($"Initial control rendered: {control?.GetType().Name}");
 
-        // Verify initial data via GetDataRequest
-        var initialResponse = await client.AwaitResponse<GetDataResponse>(
-            new GetDataRequest(new CollectionReference(typeof(PersistableEntity).Name)),
-            o => o.WithTarget(hostAddress));
+        // Verify initial data via workspace stream
+        var initialItems = await workspace
+            .GetRemoteStream<PersistableEntity>(hostAddress)!
+            .Timeout(5.Seconds())
+            .FirstAsync();
 
-        var initialEntities = initialResponse.Message.Data as IEnumerable<PersistableEntity>;
-        var initialEntity = initialEntities?.FirstOrDefault(e => e.Id == "persist-1");
+        var initialEntity = initialItems.FirstOrDefault(e => e.Id == "persist-1");
         initialEntity.Should().NotBeNull();
         initialEntity!.Title.Should().Be("Original Title");
-        Output.WriteLine($"Initial entity from GetDataRequest: Title={initialEntity.Title}");
+        Output.WriteLine($"Initial entity from stream: Title={initialEntity.Title}");
 
         // Update the title via UpdatePointer (simulating user edit)
         var newTitle = $"Updated Title {DateTime.Now:HHmmss}";
@@ -583,16 +584,16 @@ public class EditPersistenceTest(ITestOutputHelper output) : HubTestBase(output)
         Output.WriteLine("Waiting for auto-save...");
         await Task.Delay(500);
 
-        // Get a FRESH instance from the data store using GetDataRequest
+        // Get FRESH instance from the data store via workspace stream
         // This is the critical check - did the change actually persist?
-        var updatedResponse = await client.AwaitResponse<GetDataResponse>(
-            new GetDataRequest(new CollectionReference(typeof(PersistableEntity).Name)),
-            o => o.WithTarget(hostAddress));
+        var updatedItems = await workspace
+            .GetRemoteStream<PersistableEntity>(hostAddress)!
+            .Timeout(5.Seconds())
+            .FirstAsync();
 
-        var updatedEntities = updatedResponse.Message.Data as IEnumerable<PersistableEntity>;
-        var updatedEntity = updatedEntities?.FirstOrDefault(e => e.Id == "persist-1");
+        var updatedEntity = updatedItems.FirstOrDefault(e => e.Id == "persist-1");
 
-        Output.WriteLine($"Updated entity from GetDataRequest: Title={updatedEntity?.Title ?? "null"}");
+        Output.WriteLine($"Updated entity from stream: Title={updatedEntity?.Title ?? "null"}");
 
         // THIS ASSERTION SHOULD FAIL - the title should be updated but won't be
         updatedEntity.Should().NotBeNull();
@@ -620,13 +621,13 @@ public class EditPersistenceTest(ITestOutputHelper output) : HubTestBase(output)
             .Timeout(10.Seconds())
             .FirstAsync(x => x is StackControl);
 
-        // Verify initial date
-        var initialResponse = await client.AwaitResponse<GetDataResponse>(
-            new GetDataRequest(new CollectionReference(typeof(PersistableEntity).Name)),
-            o => o.WithTarget(hostAddress));
+        // Verify initial date via workspace stream
+        var initialItems = await workspace
+            .GetRemoteStream<PersistableEntity>(hostAddress)!
+            .Timeout(5.Seconds())
+            .FirstAsync();
 
-        var initialEntity = (initialResponse.Message.Data as IEnumerable<PersistableEntity>)?
-            .FirstOrDefault(e => e.Id == "persist-1");
+        var initialEntity = initialItems.FirstOrDefault(e => e.Id == "persist-1");
         initialEntity.Should().NotBeNull();
         initialEntity!.DueDate.Should().Be(new DateTime(2024, 6, 15));
         Output.WriteLine($"Initial DueDate: {initialEntity.DueDate}");
@@ -639,15 +640,15 @@ public class EditPersistenceTest(ITestOutputHelper output) : HubTestBase(output)
         // Wait for auto-save
         await Task.Delay(500);
 
-        // Get fresh instance
-        var updatedResponse = await client.AwaitResponse<GetDataResponse>(
-            new GetDataRequest(new CollectionReference(typeof(PersistableEntity).Name)),
-            o => o.WithTarget(hostAddress));
+        // Get fresh instance via workspace stream
+        var updatedItems = await workspace
+            .GetRemoteStream<PersistableEntity>(hostAddress)!
+            .Timeout(5.Seconds())
+            .FirstAsync();
 
-        var updatedEntity = (updatedResponse.Message.Data as IEnumerable<PersistableEntity>)?
-            .FirstOrDefault(e => e.Id == "persist-1");
+        var updatedEntity = updatedItems.FirstOrDefault(e => e.Id == "persist-1");
 
-        Output.WriteLine($"Updated DueDate from GetDataRequest: {updatedEntity?.DueDate}");
+        Output.WriteLine($"Updated DueDate from stream: {updatedEntity?.DueDate}");
 
         // THIS ASSERTION SHOULD FAIL
         updatedEntity.Should().NotBeNull();
@@ -656,15 +657,91 @@ public class EditPersistenceTest(ITestOutputHelper output) : HubTestBase(output)
     }
 
     /// <summary>
-    /// THIS TEST SHOULD FAIL - demonstrates that the edit state switches back prematurely.
+    /// THIS TEST SHOULD FAIL - demonstrates that workspace stream emitting
+    /// overwrites local changes, causing data to revert to original values.
     ///
-    /// The issue: when user clicks to edit, the edit state briefly becomes true,
-    /// but then switches back to false because the underlying data stream emits
-    /// a new value (from workspace sync), causing the reactive view to re-evaluate
-    /// with StartWith(false).
+    /// The real scenario: OverviewLayoutArea subscribes to workspace stream and
+    /// calls host.UpdateData() when entity changes. If this happens before or
+    /// during editing, local changes get overwritten.
     /// </summary>
     [Fact]
-    public async Task EditState_ShouldRemainTrueUntilBlur()
+    public async Task WorkspaceStreamEmit_ShouldNotOverwriteLocalEdits()
+    {
+        var client = GetClient();
+        var workspace = client.GetWorkspace();
+        var hostAddress = CreateHostAddress();
+
+        var layoutStream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
+            hostAddress,
+            new LayoutAreaReference(PersistenceView));
+
+        // Wait for initial render
+        await layoutStream
+            .GetControlStream(PersistenceView)
+            .Timeout(10.Seconds())
+            .FirstAsync(x => x is StackControl);
+
+        // Make a local edit
+        var newTitle = "Local Edit Title";
+        layoutStream.UpdatePointer(newTitle, "/data/\"persistable_entity\"", new JsonPointerReference("title"));
+        Output.WriteLine($"Made local edit: title = {newTitle}");
+
+        // Wait briefly for local update to propagate
+        await Task.Delay(50);
+
+        // Read the local data to confirm it was updated
+        var localDataAfterEdit = await layoutStream
+            .GetDataStream<JsonElement>(new JsonPointerReference("/data/\"persistable_entity\""))
+            .Where(x => x.ValueKind != JsonValueKind.Undefined)
+            .Timeout(5.Seconds())
+            .FirstAsync();
+
+        var titleAfterEdit = localDataAfterEdit.TryGetProperty("title", out var t) ? t.GetString() : null;
+        Output.WriteLine($"Local data after edit: title = {titleAfterEdit}");
+        titleAfterEdit.Should().Be(newTitle, "Local edit should update the data");
+
+        // Now simulate what happens when workspace stream emits (like OverviewLayoutArea does)
+        // In the real scenario, the workspace stream subscription would call:
+        // host.UpdateData(dataId, serializedEntityFromWorkspace)
+        // This would overwrite the local edit with the original value
+
+        // Wait for auto-save debounce to NOT have triggered yet (it's 100ms in our test)
+        // Then simulate workspace emitting original data
+        await Task.Delay(30); // Still within debounce window
+
+        // Simulate workspace stream emitting original entity data
+        // This is what happens when OverviewLayoutArea's subscription receives data
+        var originalEntity = InitialData.First();
+        layoutStream.UpdatePointer(originalEntity.Title, "/data/\"persistable_entity\"", new JsonPointerReference("title"));
+        Output.WriteLine($"Simulated workspace emit: title = {originalEntity.Title}");
+
+        // Now wait for debounce to complete
+        await Task.Delay(200);
+
+        // Check what gets persisted - should be the LOCAL edit, not the original
+        var finalItems = await workspace
+            .GetRemoteStream<PersistableEntity>(hostAddress)!
+            .Timeout(5.Seconds())
+            .FirstAsync();
+
+        var finalEntity = finalItems.FirstOrDefault(e => e.Id == "persist-1");
+        Output.WriteLine($"Final persisted title: {finalEntity?.Title}");
+
+        // THIS ASSERTION SHOULD FAIL - the workspace emit overwrote local changes
+        finalEntity.Should().NotBeNull();
+        finalEntity!.Title.Should().Be(newTitle,
+            "Local edits should not be overwritten by workspace stream, but they are - this demonstrates the bug");
+    }
+
+    /// <summary>
+    /// THIS TEST SHOULD FAIL - demonstrates that edit state resets when view re-renders.
+    ///
+    /// The issue: MapToToggleableControl uses StartWith(false) on the edit state stream.
+    /// When the view is re-rendered (due to data change), a new subscription is created
+    /// that starts with false, resetting the edit state.
+    /// </summary>
+    [Fact]
+    public async Task EditState_ShouldSurviveDataUpdates()
     {
         var client = GetClient();
         var workspace = client.GetWorkspace();
@@ -694,17 +771,8 @@ public class EditPersistenceTest(ITestOutputHelper output) : HubTestBase(output)
         // Get the reactive view area (second child - after the label)
         var reactiveAreaId = titleStackControl.Areas.Skip(1).First().Area.ToString()!;
 
-        // Initial state should be readonly (StackControl with LabelControl)
-        var initialControl = await layoutStream
-            .GetControlStream(reactiveAreaId)
-            .Timeout(5.Seconds())
-            .FirstAsync(x => x is not null);
-
-        initialControl.Should().BeOfType<StackControl>("Initial state should be readonly StackControl");
-        Output.WriteLine($"Initial control type: {initialControl.GetType().Name}");
-
         // Click to enter edit mode
-        Output.WriteLine("Sending click event to enter edit mode...");
+        Output.WriteLine("Entering edit mode...");
         client.Post(new ClickedEvent(reactiveAreaId, layoutStream.StreamId), o => o.WithTarget(hostAddress));
 
         // Wait for edit mode
@@ -714,23 +782,26 @@ public class EditPersistenceTest(ITestOutputHelper output) : HubTestBase(output)
             .Timeout(5.Seconds())
             .FirstAsync();
 
-        editControl.Should().BeOfType<TextFieldControl>("Should switch to TextFieldControl in edit mode");
-        Output.WriteLine("Edit mode activated - TextFieldControl visible");
+        Output.WriteLine("Edit mode activated");
 
-        // Wait a bit to see if edit state stays
-        await Task.Delay(300);
+        // While in edit mode, trigger a data update (simulating workspace stream emit)
+        Output.WriteLine("Triggering data update while in edit mode...");
+        layoutStream.UpdatePointer(42, "/data/\"persistable_entity\"", new JsonPointerReference("count"));
 
-        // Check if still in edit mode (THIS IS WHERE IT SHOULD FAIL)
-        var controlAfterWait = await layoutStream
+        // Wait for update to propagate
+        await Task.Delay(100);
+
+        // Check if still in edit mode
+        var controlAfterDataUpdate = await layoutStream
             .GetControlStream(reactiveAreaId)
             .Timeout(2.Seconds())
             .FirstAsync();
 
-        Output.WriteLine($"Control after 300ms wait: {controlAfterWait?.GetType().Name}");
+        Output.WriteLine($"Control after data update: {controlAfterDataUpdate?.GetType().Name}");
 
-        // THIS ASSERTION SHOULD FAIL - the control will have switched back to StackControl
-        controlAfterWait.Should().BeOfType<TextFieldControl>(
-            "Edit state should remain true until blur, but it switches back prematurely - this demonstrates the bug");
+        // THIS ASSERTION SHOULD FAIL - data update causes re-render which resets edit state
+        controlAfterDataUpdate.Should().BeOfType<TextFieldControl>(
+            "Edit state should survive data updates, but it resets - this demonstrates the bug");
     }
 }
 

@@ -56,7 +56,7 @@ public class MeshPlugin(IMessageHub hub, IAgentChat chat)
                 if (meshQuery != null)
                 {
                     var query = $"path:{parentPath} scope:children";
-                    await foreach (var node in meshQuery.QueryAsync<MeshNode>(MeshQueryRequest.FromQuery(query)))
+                    await foreach (var node in meshQuery.QueryAsync<MeshNode>(MeshQueryRequest.FromQuery(query), hub.JsonSerializerOptions))
                     {
                         result.Add(new
                         {
@@ -72,7 +72,7 @@ public class MeshPlugin(IMessageHub hub, IAgentChat chat)
             }
 
             // Get single node
-            var meshNode = await persistence.GetNodeAsync(resolvedPath);
+            var meshNode = await persistence.GetNodeAsync(resolvedPath, hub.JsonSerializerOptions);
             if (meshNode == null)
                 return $"Not found: {resolvedPath}";
 
@@ -105,7 +105,7 @@ public class MeshPlugin(IMessageHub hub, IAgentChat chat)
             var updates = JsonSerializer.Deserialize<JsonElement>(json, hub.JsonSerializerOptions);
 
             // Get existing node or create new one
-            var existingNode = await persistence.GetNodeAsync(resolvedPath);
+            var existingNode = await persistence.GetNodeAsync(resolvedPath, hub.JsonSerializerOptions);
             var isCreate = existingNode == null;
 
             // Build the node from updates
@@ -134,7 +134,7 @@ public class MeshPlugin(IMessageHub hub, IAgentChat chat)
                 Content = content ?? existingNode?.Content
             };
 
-            await persistence.SaveNodeAsync(node);
+            await persistence.SaveNodeAsync(node, hub.JsonSerializerOptions);
             return isCreate
                 ? $"Created: {resolvedPath}"
                 : $"Updated: {resolvedPath}";
@@ -183,7 +183,7 @@ public class MeshPlugin(IMessageHub hub, IAgentChat chat)
         try
         {
             var results = new List<object>();
-            await foreach (var item in meshQuery.QueryAsync(new MeshQueryRequest { Query = fullQuery, Limit = 50 }))
+            await foreach (var item in meshQuery.QueryAsync(new MeshQueryRequest { Query = fullQuery, Limit = 50 }, hub.JsonSerializerOptions))
             {
                 if (item is MeshNode node)
                 {

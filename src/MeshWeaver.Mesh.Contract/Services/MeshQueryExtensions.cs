@@ -1,4 +1,5 @@
 using System.Runtime.CompilerServices;
+using System.Text.Json;
 using MeshWeaver.Domain;
 
 namespace MeshWeaver.Mesh.Services;
@@ -15,19 +16,21 @@ public static class MeshQueryExtensions
     /// <typeparam name="T">The type to query for</typeparam>
     /// <param name="meshQuery">The mesh query service</param>
     /// <param name="request">The query request</param>
+    /// <param name="options">JSON serializer options for type polymorphism</param>
     /// <param name="typeRegistry">Optional type registry for type name resolution</param>
     /// <param name="ct">Cancellation token</param>
     /// <returns>Typed results matching the query</returns>
     public static async IAsyncEnumerable<T> QueryAsync<T>(
         this IMeshQuery meshQuery,
         MeshQueryRequest request,
+        JsonSerializerOptions options,
         ITypeRegistry? typeRegistry = null,
         [EnumeratorCancellation] CancellationToken ct = default)
     {
         var typeName = GetTypeName<T>(typeRegistry);
         var typedRequest = AddTypeFilter(request, typeName);
 
-        await foreach (var item in meshQuery.QueryAsync(typedRequest, ct))
+        await foreach (var item in meshQuery.QueryAsync(typedRequest, options, ct))
         {
             if (item is T typed)
             {
@@ -43,16 +46,18 @@ public static class MeshQueryExtensions
     /// <typeparam name="T">The type to query for</typeparam>
     /// <param name="meshQuery">The mesh query service</param>
     /// <param name="query">The query string</param>
+    /// <param name="options">JSON serializer options for type polymorphism</param>
     /// <param name="typeRegistry">Optional type registry for type name resolution</param>
     /// <param name="ct">Cancellation token</param>
     /// <returns>Typed results matching the query</returns>
     public static IAsyncEnumerable<T> QueryAsync<T>(
         this IMeshQuery meshQuery,
         string query,
+        JsonSerializerOptions options,
         ITypeRegistry? typeRegistry = null,
         CancellationToken ct = default)
     {
-        return meshQuery.QueryAsync<T>(MeshQueryRequest.FromQuery(query), typeRegistry, ct);
+        return meshQuery.QueryAsync<T>(MeshQueryRequest.FromQuery(query), options, typeRegistry, ct);
     }
 
     /// <summary>
@@ -62,6 +67,7 @@ public static class MeshQueryExtensions
     /// <typeparam name="T">The type to query for</typeparam>
     /// <param name="meshQuery">The mesh query service</param>
     /// <param name="query">The query string</param>
+    /// <param name="options">JSON serializer options for type polymorphism</param>
     /// <param name="skip">Number of results to skip</param>
     /// <param name="limit">Maximum number of results</param>
     /// <param name="typeRegistry">Optional type registry for type name resolution</param>
@@ -70,6 +76,7 @@ public static class MeshQueryExtensions
     public static IAsyncEnumerable<T> QueryAsync<T>(
         this IMeshQuery meshQuery,
         string query,
+        JsonSerializerOptions options,
         int skip,
         int limit,
         ITypeRegistry? typeRegistry = null,
@@ -81,7 +88,7 @@ public static class MeshQueryExtensions
             Skip = skip,
             Limit = limit
         };
-        return meshQuery.QueryAsync<T>(request, typeRegistry, ct);
+        return meshQuery.QueryAsync<T>(request, options, typeRegistry, ct);
     }
 
     private static string GetTypeName<T>(ITypeRegistry? typeRegistry)

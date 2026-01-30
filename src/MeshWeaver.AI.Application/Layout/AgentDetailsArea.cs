@@ -27,7 +27,7 @@ public static class AgentDetailsArea
         }
 
         // Load agents using AgentOrderingHelper
-        var agentDisplayInfos = await AgentOrderingHelper.QueryAgentsAsync(meshQuery, null, null);
+        var agentDisplayInfos = await AgentOrderingHelper.QueryAgentsAsync(meshQuery, host.Hub.JsonSerializerOptions, null, null);
         var agents = agentDisplayInfos.Select(a => a.AgentConfiguration).ToList();
         var agent = agents.FirstOrDefault(a => a.Id == agentName);
 

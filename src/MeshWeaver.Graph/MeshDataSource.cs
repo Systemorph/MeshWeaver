@@ -91,7 +91,7 @@ public static class MeshDataSourceExtensions
 
         try
         {
-            var node = await persistence.GetNodeAsync(hubPath, ct);
+            var node = await persistence.GetNodeAsync(hubPath, hub.JsonSerializerOptions, ct);
 
             // Only handle NodeType nodes
             if (node?.NodeType != MeshNode.NodeTypePath)

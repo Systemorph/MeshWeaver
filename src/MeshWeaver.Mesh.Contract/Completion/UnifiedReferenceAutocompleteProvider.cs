@@ -1,6 +1,8 @@
 using System.Runtime.CompilerServices;
+using System.Text.Json;
 using MeshWeaver.Data.Completion;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Messaging;
 
 namespace MeshWeaver.Mesh.Completion;
 
@@ -14,8 +16,11 @@ namespace MeshWeaver.Mesh.Completion;
 public class UnifiedReferenceAutocompleteProvider(
     IMeshCatalog? meshCatalog,
     IMeshQuery? meshQuery,
-    INavigationService? navigationContext) : IAutocompleteProvider
+    INavigationService? navigationContext,
+    IMessageHub hub) : IAutocompleteProvider
 {
+    private JsonSerializerOptions JsonOptions => hub.JsonSerializerOptions;
+
     private const int ContextPriority = 2000;  // Higher priority for context-aware items
     private const int PrefixPriority = 1800;
     private const int KeywordPriority = 1500;
@@ -135,7 +140,7 @@ public class UnifiedReferenceAutocompleteProvider(
             IAsyncEnumerable<QuerySuggestion>? suggestions = null;
             try
             {
-                suggestions = meshQuery.AutocompleteAsync(currentNamespace, prefix, 10, ct);
+                suggestions = meshQuery.AutocompleteAsync(currentNamespace, prefix, JsonOptions, 10, ct);
             }
             catch
             {
@@ -168,7 +173,7 @@ public class UnifiedReferenceAutocompleteProvider(
             try
             {
                 // Query from root (empty base path) to get all top-level nodes
-                suggestions = meshQuery.AutocompleteAsync("", prefix, 15, ct);
+                suggestions = meshQuery.AutocompleteAsync("", prefix, JsonOptions, 15, ct);
             }
             catch
             {
@@ -233,7 +238,7 @@ public class UnifiedReferenceAutocompleteProvider(
         IAsyncEnumerable<QuerySuggestion>? suggestions = null;
         try
         {
-            suggestions = meshQuery.AutocompleteAsync(addressType, prefix, 15, ct);
+            suggestions = meshQuery.AutocompleteAsync(addressType, prefix, JsonOptions, 15, ct);
         }
         catch
         {
@@ -282,7 +287,7 @@ public class UnifiedReferenceAutocompleteProvider(
         IAsyncEnumerable<QuerySuggestion>? suggestions = null;
         try
         {
-            suggestions = meshQuery.AutocompleteAsync(address, prefix, 15, ct);
+            suggestions = meshQuery.AutocompleteAsync(address, prefix, JsonOptions, 15, ct);
         }
         catch
         {
@@ -320,7 +325,7 @@ public class UnifiedReferenceAutocompleteProvider(
         IAsyncEnumerable<QuerySuggestion>? suggestions = null;
         try
         {
-            suggestions = meshQuery.AutocompleteAsync(searchPath, prefix, 15, ct);
+            suggestions = meshQuery.AutocompleteAsync(searchPath, prefix, JsonOptions, 15, ct);
         }
         catch
         {

@@ -1,4 +1,3 @@
-using MeshWeaver.Domain;
 using MeshWeaver.Hosting.Persistence.Query;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
@@ -167,7 +166,7 @@ public static class PersistenceExtensions
 
     /// <summary>
     /// Adds file system persistence that reads directly from disk.
-    /// Uses type registry for polymorphic JSON deserialization of Content and partition objects.
+    /// Uses the hub's JsonSerializerOptions for proper type polymorphism.
     /// </summary>
     /// <param name="services">The service collection</param>
     /// <param name="baseDirectory">The base directory for storing JSON files</param>
@@ -177,11 +176,9 @@ public static class PersistenceExtensions
         // Register the data change notifier as singleton
         services.AddSingleton<IDataChangeNotifier, DataChangeNotifier>();
 
-        // Use factory registration to get ITypeRegistry from the resolved service provider
+        // Storage adapter now receives options per-call, no need for service provider
         services.AddSingleton<IStorageAdapter>(sp =>
-            new FileSystemStorageAdapter(
-                baseDirectory,
-                typeRegistryFactory: () => sp.GetService<ITypeRegistry>()));
+            new FileSystemStorageAdapter(baseDirectory));
 
         services.AddSingleton<IPersistenceService>(sp =>
             new FileSystemPersistenceService(sp.GetRequiredService<IStorageAdapter>()));

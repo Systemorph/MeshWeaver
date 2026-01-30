@@ -39,7 +39,7 @@ public static class ChildrenQueryExtensions
             query = $"path:{hubPath} {query}";
         }
 
-        await foreach (var item in meshQuery.QueryAsync<MeshNode>(query, ct: ct))
+        await foreach (var item in meshQuery.QueryAsync<MeshNode>(query, host.Hub.JsonSerializerOptions, ct: ct))
         {
             yield return item;
         }

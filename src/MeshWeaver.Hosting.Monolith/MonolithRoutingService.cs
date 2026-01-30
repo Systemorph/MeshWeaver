@@ -39,7 +39,8 @@ public class MonolithRoutingService(IMessageHub hub, ILogger<MonolithRoutingServ
         var hub = CreateHub(node, address);
         if (hub is null)
         {
-            logger.LogWarning("No node found for address {Address}", address);
+            logger.LogWarning("No node found for address {Address}. Node: {NodePath}, NodeType: {NodeType}, HubConfig: {HasHubConfig}",
+                address, node?.Path, node?.NodeType, node?.HubConfiguration != null);
             return delivery.Failed($"No node found for address {address}");
         }
 

@@ -2,7 +2,6 @@ using System.Runtime.CompilerServices;
 using System.Text.Json;
 using Azure.Storage.Blobs;
 using Azure.Storage.Blobs.Models;
-using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Hosting.Persistence.Parsers;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
@@ -17,7 +16,6 @@ namespace MeshWeaver.Hosting.AzureStorage;
 public class AzureBlobStorageAdapter : IStorageAdapter
 {
     private readonly BlobContainerClient _containerClient;
-    private readonly JsonSerializerOptions _jsonOptions;
     private readonly FileFormatParserRegistry _parserRegistry = new();
 
     /// <summary>
@@ -25,11 +23,9 @@ public class AzureBlobStorageAdapter : IStorageAdapter
     /// </summary>
     private static readonly string[] SupportedExtensions = [".md", ".json"];
 
-    public AzureBlobStorageAdapter(
-        BlobContainerClient containerClient)
+    public AzureBlobStorageAdapter(BlobContainerClient containerClient)
     {
         _containerClient = containerClient;
-        _jsonOptions = PersistenceJsonOptions.CreateForPersistence();
     }
 
     private static string NormalizePath(string? path) =>
@@ -64,7 +60,7 @@ public class AzureBlobStorageAdapter : IStorageAdapter
         return (null, ".json");
     }
 
-    public async Task<MeshNode?> ReadAsync(string path, CancellationToken ct = default)
+    public async Task<MeshNode?> ReadAsync(string path, JsonSerializerOptions options, CancellationToken ct = default)
     {
         var (blobClient, extension) = await FindBlobWithExtensionAsync(path, ct);
         if (blobClient == null)
@@ -86,7 +82,7 @@ public class AzureBlobStorageAdapter : IStorageAdapter
             else
             {
                 // Default to JSON deserialization
-                node = JsonSerializer.Deserialize<MeshNode>(content, _jsonOptions);
+                node = JsonSerializer.Deserialize<MeshNode>(content, options);
             }
 
             if (node != null)
@@ -116,7 +112,7 @@ public class AzureBlobStorageAdapter : IStorageAdapter
         }
     }
 
-    public async Task WriteAsync(MeshNode node, CancellationToken ct = default)
+    public async Task WriteAsync(MeshNode node, JsonSerializerOptions options, CancellationToken ct = default)
     {
         var key = NormalizePath(node.Path);
         var nodeToSave = node with
@@ -124,19 +120,20 @@ public class AzureBlobStorageAdapter : IStorageAdapter
             LastModified = node.LastModified == default ? DateTimeOffset.UtcNow : node.LastModified
         };
 
-        // Determine the output format based on the node type
-        var serializer = _parserRegistry.GetSerializerFor(nodeToSave);
         string content;
         string extension;
 
+        // Check if we have a serializer for this node type (e.g., Markdown)
+        var serializer = _parserRegistry.GetSerializerFor(nodeToSave);
         if (serializer != null)
         {
             content = await serializer.SerializeAsync(nodeToSave, ct);
-            extension = serializer.SupportedExtensions[0]; // Use primary extension
+            extension = serializer.SupportedExtensions[0]; // Use the primary extension
         }
         else
         {
-            content = JsonSerializer.Serialize(nodeToSave, _jsonOptions);
+            // Default to JSON serialization for type preservation
+            content = JsonSerializer.Serialize(nodeToSave, options);
             extension = ".json";
         }
 
@@ -148,7 +145,7 @@ public class AzureBlobStorageAdapter : IStorageAdapter
             overwrite: true,
             cancellationToken: ct);
 
-        // Clean up old blobs with different extensions
+        // Clean up old blobs with different extensions (e.g., if originally read from .json)
         await CleanupOtherExtensionsAsync(key, extension, ct);
     }
 
@@ -262,7 +259,8 @@ public class AzureBlobStorageAdapter : IStorageAdapter
 
     public async IAsyncEnumerable<object> GetPartitionObjectsAsync(
         string nodePath,
-        string? subPath = null,
+        string? subPath,
+        JsonSerializerOptions options,
         [EnumeratorCancellation] CancellationToken ct = default)
     {
         var prefix = GetPartitionPrefix(nodePath, subPath);
@@ -286,7 +284,7 @@ public class AzureBlobStorageAdapter : IStorageAdapter
             }
 
             // Return as JsonElement - the caller can deserialize based on $type if needed
-            var element = JsonSerializer.Deserialize<JsonElement>(content.ToString(), _jsonOptions);
+            var element = JsonSerializer.Deserialize<JsonElement>(content.ToString(), options);
             yield return element;
         }
     }
@@ -295,6 +293,7 @@ public class AzureBlobStorageAdapter : IStorageAdapter
         string nodePath,
         string? subPath,
         IReadOnlyCollection<object> objects,
+        JsonSerializerOptions options,
         CancellationToken ct = default)
     {
         // Delete existing objects first
@@ -315,7 +314,7 @@ public class AzureBlobStorageAdapter : IStorageAdapter
                 lastModified = DateTimeOffset.UtcNow
             };
 
-            var json = JsonSerializer.Serialize(wrapper, _jsonOptions);
+            var json = JsonSerializer.Serialize(wrapper, options);
             await blobClient.UploadAsync(
                 BinaryData.FromString(json),
                 overwrite: true,

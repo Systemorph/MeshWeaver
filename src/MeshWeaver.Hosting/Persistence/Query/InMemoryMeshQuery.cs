@@ -2,6 +2,7 @@
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using System.Runtime.CompilerServices;
+using System.Text.Json;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
@@ -61,6 +62,7 @@ public class InMemoryMeshQuery : IMeshQuery
     /// <inheritdoc />
     public async IAsyncEnumerable<object> QueryAsync(
         MeshQueryRequest request,
+        JsonSerializerOptions options,
         [EnumeratorCancellation] CancellationToken ct = default)
     {
         var parsedQuery = _parser.Parse(request.Query);
@@ -103,7 +105,7 @@ public class InMemoryMeshQuery : IMeshQuery
         foreach (var searchPath in pathsToSearch)
         {
             // Search MeshNodes at this path (with security filtering)
-            var node = await _persistence.GetNodeSecureAsync(searchPath, userId, ct);
+            var node = await _persistence.GetNodeSecureAsync(searchPath, userId, options, ct);
             if (node != null)
             {
                 if (_evaluator.Matches(node, parsedQuery))
@@ -114,7 +116,7 @@ public class InMemoryMeshQuery : IMeshQuery
             }
 
             // Search partition objects at this path
-            await foreach (var obj in _persistence.GetPartitionObjectsAsync(searchPath).WithCancellation(ct))
+            await foreach (var obj in _persistence.GetPartitionObjectsAsync(searchPath, null, options).WithCancellation(ct))
             {
                 if (_evaluator.Matches(obj, parsedQuery))
                 {
@@ -127,7 +129,7 @@ public class InMemoryMeshQuery : IMeshQuery
         // If we're doing scope=children, search immediate children only
         if (effectiveScope == QueryScope.Children)
         {
-            await foreach (var child in _persistence.GetChildrenSecureAsync(basePath, userId).WithCancellation(ct))
+            await foreach (var child in _persistence.GetChildrenSecureAsync(basePath, userId, options).WithCancellation(ct))
             {
                 // Evaluate the node itself
                 if (_evaluator.Matches(child, parsedQuery))
@@ -140,7 +142,7 @@ public class InMemoryMeshQuery : IMeshQuery
 
                 // Search partition objects under child
                 var childPath = NormalizePath(child.Path);
-                await foreach (var obj in _persistence.GetPartitionObjectsAsync(childPath).WithCancellation(ct))
+                await foreach (var obj in _persistence.GetPartitionObjectsAsync(childPath, null, options).WithCancellation(ct))
                 {
                     if (_evaluator.Matches(obj, parsedQuery))
                     {
@@ -163,7 +165,7 @@ public class InMemoryMeshQuery : IMeshQuery
 
             foreach (var ancestorPath in pathsToSearchChildren)
             {
-                await foreach (var child in _persistence.GetChildrenSecureAsync(ancestorPath, userId).WithCancellation(ct))
+                await foreach (var child in _persistence.GetChildrenSecureAsync(ancestorPath, userId, options).WithCancellation(ct))
                 {
                     // Evaluate the node itself
                     if (_evaluator.Matches(child, parsedQuery))
@@ -176,7 +178,7 @@ public class InMemoryMeshQuery : IMeshQuery
 
                     // Search partition objects under child
                     var childPath = NormalizePath(child.Path);
-                    await foreach (var obj in _persistence.GetPartitionObjectsAsync(childPath).WithCancellation(ct))
+                    await foreach (var obj in _persistence.GetPartitionObjectsAsync(childPath, null, options).WithCancellation(ct))
                     {
                         if (_evaluator.Matches(obj, parsedQuery))
                         {
@@ -191,7 +193,7 @@ public class InMemoryMeshQuery : IMeshQuery
         // If we're doing scope=descendants, also search descendant paths recursively
         if (effectiveScope == QueryScope.Descendants || effectiveScope == QueryScope.Hierarchy || effectiveScope == QueryScope.Subtree)
         {
-            await foreach (var descendant in _persistence.GetDescendantsSecureAsync(basePath, userId).WithCancellation(ct))
+            await foreach (var descendant in _persistence.GetDescendantsSecureAsync(basePath, userId, options).WithCancellation(ct))
             {
                 // Evaluate the node itself
                 if (_evaluator.Matches(descendant, parsedQuery))
@@ -204,7 +206,7 @@ public class InMemoryMeshQuery : IMeshQuery
 
                 // Search partition objects under descendant
                 var descendantPath = NormalizePath(descendant.Path);
-                await foreach (var obj in _persistence.GetPartitionObjectsAsync(descendantPath).WithCancellation(ct))
+                await foreach (var obj in _persistence.GetPartitionObjectsAsync(descendantPath, null, options).WithCancellation(ct))
                 {
                     if (_evaluator.Matches(obj, parsedQuery))
                     {
@@ -281,18 +283,20 @@ public class InMemoryMeshQuery : IMeshQuery
     public IAsyncEnumerable<QuerySuggestion> AutocompleteAsync(
         string basePath,
         string prefix,
+        JsonSerializerOptions options,
         int limit = 10,
         CancellationToken ct = default)
-        => AutocompleteAsync(basePath, prefix, null, AutocompleteMode.PathFirst, limit, ct);
+        => AutocompleteAsync(basePath, prefix, options, null, AutocompleteMode.PathFirst, limit, ct);
 
     /// <inheritdoc />
     public IAsyncEnumerable<QuerySuggestion> AutocompleteAsync(
         string basePath,
         string prefix,
+        JsonSerializerOptions options,
         AutocompleteMode mode,
         int limit = 10,
         CancellationToken ct = default)
-        => AutocompleteAsync(basePath, prefix, null, mode, limit, ct);
+        => AutocompleteAsync(basePath, prefix, options, null, mode, limit, ct);
 
     /// <summary>
     /// Autocomplete with user ID for access control filtering.
@@ -300,6 +304,7 @@ public class InMemoryMeshQuery : IMeshQuery
     public async IAsyncEnumerable<QuerySuggestion> AutocompleteAsync(
         string basePath,
         string prefix,
+        JsonSerializerOptions options,
         string? userId,
         AutocompleteMode mode,
         int limit = 10,
@@ -311,10 +316,10 @@ public class InMemoryMeshQuery : IMeshQuery
         var suggestions = new List<QuerySuggestion>();
 
         // Search descendants for matching nodes (with security filtering)
-        await foreach (var node in _persistence.GetDescendantsSecureAsync(normalizedPath, userId).WithCancellation(ct))
+        await foreach (var node in _persistence.GetDescendantsSecureAsync(normalizedPath, userId, options).WithCancellation(ct))
         {
-            var name = node.Name ?? node.Id;
-            var nameLower = name.ToLowerInvariant();
+            var name = node.Name ?? node.Id ?? node.Path;
+            var nameLower = name?.ToLowerInvariant() ?? "";
             var pathLower = node.Path.ToLowerInvariant();
 
             // Calculate match score based on prefix match (check both name and path)
@@ -434,7 +439,7 @@ public class InMemoryMeshQuery : IMeshQuery
     }
 
     /// <inheritdoc />
-    public IObservable<QueryResultChange<T>> ObserveQuery<T>(MeshQueryRequest request)
+    public IObservable<QueryResultChange<T>> ObserveQuery<T>(MeshQueryRequest request, JsonSerializerOptions options)
     {
         return Observable.Create<QueryResultChange<T>>(async (observer, ct) =>
         {
@@ -460,7 +465,7 @@ public class InMemoryMeshQuery : IMeshQuery
             try
             {
                 var initialItems = new List<T>();
-                await foreach (var item in QueryAsync(request, ct))
+                await foreach (var item in QueryAsync(request, options, ct))
                 {
                     if (item is T typedItem)
                     {
@@ -512,7 +517,7 @@ public class InMemoryMeshQuery : IMeshQuery
                 {
                     try
                     {
-                        await ProcessChangeBatchAsync(batch, request, parsedQuery, currentItems, observer, ct);
+                        await ProcessChangeBatchAsync(batch, request, options, parsedQuery, currentItems, observer, ct);
                     }
                     catch (Exception ex)
                     {
@@ -529,6 +534,7 @@ public class InMemoryMeshQuery : IMeshQuery
     private async Task ProcessChangeBatchAsync<T>(
         IList<DataChangeNotification> batch,
         MeshQueryRequest request,
+        JsonSerializerOptions options,
         ParsedQuery parsedQuery,
         Dictionary<string, T> currentItems,
         IObserver<QueryResultChange<T>> observer,
@@ -545,7 +551,7 @@ public class InMemoryMeshQuery : IMeshQuery
 
         // Re-query to get current matching items
         var newItems = new Dictionary<string, T>();
-        await foreach (var item in QueryAsync(request, ct))
+        await foreach (var item in QueryAsync(request, options, ct))
         {
             if (item is T typedItem)
             {
