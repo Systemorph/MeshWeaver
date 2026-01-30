@@ -63,7 +63,7 @@ public static class AgentView
                     List<MeshNode> agents;
                     try
                     {
-                        agents = await meshQuery.QueryAsync<MeshNode>("nodeType:Agent").ToListAsync();
+                        agents = await meshQuery.QueryAsync<MeshNode>("nodeType:Agent", host.Hub.JsonSerializerOptions).ToListAsync();
                     }
                     catch
                     {

@@ -35,6 +35,8 @@ namespace MeshWeaver.Graph.Test;
 [Collection("SamplesGraphData")]
 public class OverviewLayoutAreaTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
+    private JsonSerializerOptions _jsonOptions => Mesh.ServiceProvider.GetRequiredService<IMessageHub>().JsonSerializerOptions;
+
     // Shared cache - tests run sequentially in this collection
     private static readonly string SharedCacheDirectory = Path.Combine(
         Path.GetTempPath(),
@@ -345,7 +347,7 @@ public class OverviewLayoutAreaTest(ITestOutputHelper output) : MonolithMeshTest
         var reference = new LayoutAreaReference("Overview");
 
         // Get original content for comparison
-        var originalNode = await persistence.GetNodeAsync(todoPath, TestContext.Current.CancellationToken);
+        var originalNode = await persistence.GetNodeAsync(todoPath, _jsonOptions, TestContext.Current.CancellationToken);
         originalNode.Should().NotBeNull("Todo node should exist");
 
         var originalContentJson = JsonSerializer.Serialize(originalNode!.Content, Mesh.ServiceProvider.GetRequiredService<IMessageHub>().JsonSerializerOptions);
@@ -381,7 +383,7 @@ public class OverviewLayoutAreaTest(ITestOutputHelper output) : MonolithMeshTest
         Output.WriteLine("Testing DataChangeRequest commit mechanism...");
 
         // Read the current content
-        var currentNode = await persistence.GetNodeAsync(todoPath, TestContext.Current.CancellationToken);
+        var currentNode = await persistence.GetNodeAsync(todoPath, _jsonOptions, TestContext.Current.CancellationToken);
         currentNode.Should().NotBeNull();
 
         if (currentNode!.Content is JsonElement jsonContent)
@@ -419,7 +421,7 @@ public class OverviewLayoutAreaTest(ITestOutputHelper output) : MonolithMeshTest
 
                 // Verify the change was persisted
                 await Task.Delay(500); // Allow time for persistence
-                var persistedNode = await persistence.GetNodeAsync(todoPath, TestContext.Current.CancellationToken);
+                var persistedNode = await persistence.GetNodeAsync(todoPath, _jsonOptions, TestContext.Current.CancellationToken);
                 persistedNode.Should().NotBeNull();
 
                 if (persistedNode!.Content is JsonElement persistedContent)

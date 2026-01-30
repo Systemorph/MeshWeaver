@@ -35,6 +35,8 @@ namespace MeshWeaver.Graph.Test;
 [Collection("MarkdownNodeTests")]
 public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
+    private JsonSerializerOptions _jsonOptions => Mesh.ServiceProvider.GetRequiredService<IMessageHub>().JsonSerializerOptions;
+
     private static readonly string SharedCacheDirectory = Path.Combine(
         Path.GetTempPath(),
         "MeshWeaverMarkdownTests",
@@ -98,7 +100,7 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
     {
         var persistence = Mesh.ServiceProvider.GetRequiredService<IPersistenceService>();
 
-        var node = await persistence.GetNodeAsync("MeshWeaver/Documentation/DataMesh/CollaborativeEditing", TestContext.Current.CancellationToken);
+        var node = await persistence.GetNodeAsync("MeshWeaver/Documentation/DataMesh/CollaborativeEditing", _jsonOptions, TestContext.Current.CancellationToken);
 
         node.Should().NotBeNull("CollaborativeEditing node should exist");
         node!.Path.Should().Be("MeshWeaver/Documentation/DataMesh/CollaborativeEditing");
@@ -114,7 +116,7 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
     {
         var persistence = Mesh.ServiceProvider.GetRequiredService<IPersistenceService>();
 
-        var node = await persistence.GetNodeAsync("MeshWeaver/Documentation/DataMesh/CollaborativeEditing", TestContext.Current.CancellationToken);
+        var node = await persistence.GetNodeAsync("MeshWeaver/Documentation/DataMesh/CollaborativeEditing", _jsonOptions, TestContext.Current.CancellationToken);
 
         node.Should().NotBeNull();
         node!.Content.Should().NotBeNull("Node should have content");
@@ -136,7 +138,7 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
     {
         var persistence = Mesh.ServiceProvider.GetRequiredService<IPersistenceService>();
 
-        var node = await persistence.GetNodeAsync("MeshWeaver/Documentation/DataMesh/CollaborativeEditing", TestContext.Current.CancellationToken);
+        var node = await persistence.GetNodeAsync("MeshWeaver/Documentation/DataMesh/CollaborativeEditing", _jsonOptions, TestContext.Current.CancellationToken);
 
         node.Should().NotBeNull();
 
@@ -475,7 +477,7 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
     {
         var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
 
-        var children = await meshQuery.QueryAsync<MeshNode>("path:MeshWeaver scope:children", ct: TestContext.Current.CancellationToken)
+        var children = await meshQuery.QueryAsync<MeshNode>("path:MeshWeaver scope:children", _jsonOptions, null, TestContext.Current.CancellationToken)
             .ToListAsync(TestContext.Current.CancellationToken);
 
         children.Should().NotBeEmpty("MeshWeaver should have children");
@@ -491,8 +493,8 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
     {
         var persistence = Mesh.ServiceProvider.GetRequiredService<IPersistenceService>();
 
-        var collaborativeEditing = await persistence.GetNodeAsync("MeshWeaver/Documentation/DataMesh/CollaborativeEditing", TestContext.Current.CancellationToken);
-        var nodeTypeConfig = await persistence.GetNodeAsync("MeshWeaver/Documentation/DataMesh/NodeTypeConfiguration", TestContext.Current.CancellationToken);
+        var collaborativeEditing = await persistence.GetNodeAsync("MeshWeaver/Documentation/DataMesh/CollaborativeEditing", _jsonOptions, TestContext.Current.CancellationToken);
+        var nodeTypeConfig = await persistence.GetNodeAsync("MeshWeaver/Documentation/DataMesh/NodeTypeConfiguration", _jsonOptions, TestContext.Current.CancellationToken);
 
         collaborativeEditing.Should().NotBeNull();
         collaborativeEditing!.NodeType.Should().Be("Markdown");
@@ -889,7 +891,7 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
     {
         var persistence = Mesh.ServiceProvider.GetRequiredService<IPersistenceService>();
 
-        var node = await persistence.GetNodeAsync("MeshWeaver/Documentation/DataMesh/InteractiveMarkdown", TestContext.Current.CancellationToken);
+        var node = await persistence.GetNodeAsync("MeshWeaver/Documentation/DataMesh/InteractiveMarkdown", _jsonOptions, TestContext.Current.CancellationToken);
 
         node.Should().NotBeNull("InteractiveMarkdown node should exist at MeshWeaver/Documentation/DataMesh/InteractiveMarkdown");
         node!.Path.Should().Be("MeshWeaver/Documentation/DataMesh/InteractiveMarkdown");
@@ -904,7 +906,7 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
     {
         var persistence = Mesh.ServiceProvider.GetRequiredService<IPersistenceService>();
 
-        var node = await persistence.GetNodeAsync("MeshWeaver/Documentation/DataMesh/InteractiveMarkdown", TestContext.Current.CancellationToken);
+        var node = await persistence.GetNodeAsync("MeshWeaver/Documentation/DataMesh/InteractiveMarkdown", _jsonOptions, TestContext.Current.CancellationToken);
 
         node.Should().NotBeNull();
 
@@ -926,7 +928,7 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
     {
         var persistence = Mesh.ServiceProvider.GetRequiredService<IPersistenceService>();
 
-        var node = await persistence.GetNodeAsync("MeshWeaver/Documentation/DataMesh/InteractiveMarkdown", TestContext.Current.CancellationToken);
+        var node = await persistence.GetNodeAsync("MeshWeaver/Documentation/DataMesh/InteractiveMarkdown", _jsonOptions, TestContext.Current.CancellationToken);
         node.Should().NotBeNull();
 
         // Extract markdown content from node
@@ -990,7 +992,7 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
     {
         var persistence = Mesh.ServiceProvider.GetRequiredService<IPersistenceService>();
 
-        var node = await persistence.GetNodeAsync("MeshWeaver/Documentation/DataMesh/InteractiveMarkdown", TestContext.Current.CancellationToken);
+        var node = await persistence.GetNodeAsync("MeshWeaver/Documentation/DataMesh/InteractiveMarkdown", _jsonOptions, TestContext.Current.CancellationToken);
         node.Should().NotBeNull();
 
         // Extract markdown content from node
@@ -1063,6 +1065,7 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
 
         var kernelNode = new MeshNode(kernelId, AddressExtensions.KernelType)
         {
+            NodeType = AddressExtensions.KernelType,
             Name = $"Kernel-{kernelId}"
         };
 
@@ -1128,6 +1131,7 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
 
         var kernelNode = new MeshNode(kernelId, AddressExtensions.KernelType)
         {
+            NodeType = AddressExtensions.KernelType,
             Name = $"Kernel-{kernelId}"
         };
 
@@ -1213,6 +1217,7 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
 
         var kernelNode = new MeshNode(kernelId, AddressExtensions.KernelType)
         {
+            NodeType = AddressExtensions.KernelType,
             Name = $"Kernel-{kernelId}"
         };
 
@@ -1402,7 +1407,7 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
 
         // Read from persistence to verify the merged result
         var persistence = Mesh.ServiceProvider.GetRequiredService<IPersistenceService>();
-        var persistedNode = await persistence.GetNodeAsync(nodePath, TestContext.Current.CancellationToken);
+        var persistedNode = await persistence.GetNodeAsync(nodePath, _jsonOptions, TestContext.Current.CancellationToken);
 
         persistedNode.Should().NotBeNull("Node should exist in persistence");
         persistedNode!.Name.Should().Be(originalName, "Name should be preserved after merge");
@@ -1453,7 +1458,7 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
         // Step 1: Get original node state
         Output.WriteLine($"Step 1: Getting original node state for {nodePath}");
 
-        var originalNode = await persistence.GetNodeAsync(nodePath, TestContext.Current.CancellationToken);
+        var originalNode = await persistence.GetNodeAsync(nodePath, _jsonOptions, TestContext.Current.CancellationToken);
         originalNode.Should().NotBeNull("CollaborativeEditing node should exist");
 
         var originalName = originalNode!.Name;
@@ -1512,7 +1517,7 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
         // Step 5: Verify node still exists with correct metadata
         Output.WriteLine($"Step 5: Verifying node data from persistence");
 
-        var readNode = await persistence.GetNodeAsync(nodePath, TestContext.Current.CancellationToken);
+        var readNode = await persistence.GetNodeAsync(nodePath, _jsonOptions, TestContext.Current.CancellationToken);
 
         readNode.Should().NotBeNull("Node should exist after edit");
         readNode!.Name.Should().Be(originalName, "Name should be preserved after edit");
@@ -1570,7 +1575,7 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
         Output.WriteLine($"Initial resolution: Prefix={initialResolution!.Prefix}, Remainder={initialResolution.Remainder}");
 
         // Get original content for cleanup
-        var originalNode = await persistence.GetNodeAsync(nodePath, TestContext.Current.CancellationToken);
+        var originalNode = await persistence.GetNodeAsync(nodePath, _jsonOptions, TestContext.Current.CancellationToken);
         var originalContent = ExtractMarkdownContent(originalNode!);
 
         // Step 2: Request Edit layout (like navigating to /path/Edit)
@@ -1636,7 +1641,7 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
         // Step 6: Verify node data
         Output.WriteLine($"Step 6: Verifying node data");
 
-        var verifyNode = await persistence.GetNodeAsync(nodePath, TestContext.Current.CancellationToken);
+        var verifyNode = await persistence.GetNodeAsync(nodePath, _jsonOptions, TestContext.Current.CancellationToken);
         verifyNode.Should().NotBeNull("Node should exist in persistence");
         verifyNode!.Name.Should().Be("Collaborative Editing", "Name should be preserved");
 
@@ -1679,7 +1684,7 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
         var nodeAddress = new Address(nodePath);
 
         // Get original state for cleanup
-        var originalNode = await persistence.GetNodeAsync(nodePath, TestContext.Current.CancellationToken);
+        var originalNode = await persistence.GetNodeAsync(nodePath, _jsonOptions, TestContext.Current.CancellationToken);
         originalNode.Should().NotBeNull("CollaborativeEditing node should exist");
 
         var originalName = originalNode!.Name;
@@ -1725,7 +1730,7 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
         // Verify node still has all metadata
         Output.WriteLine($"Verifying node metadata is preserved");
 
-        var finalNode = await persistence.GetNodeAsync(nodePath, TestContext.Current.CancellationToken);
+        var finalNode = await persistence.GetNodeAsync(nodePath, _jsonOptions, TestContext.Current.CancellationToken);
 
         finalNode.Should().NotBeNull("Node should exist");
         finalNode!.Name.Should().Be(originalName, "Name must be preserved");

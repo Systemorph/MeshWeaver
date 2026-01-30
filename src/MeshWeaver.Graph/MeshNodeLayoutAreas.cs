@@ -415,7 +415,7 @@ public static class MeshNodeLayoutAreas
 
             try
             {
-                return await meshQuery.QueryAsync<MeshNode>($"path:{hubPath} nodeType:NodeType scope:descendants").ToListAsync() as IReadOnlyList<MeshNode>;
+                return await meshQuery.QueryAsync<MeshNode>($"path:{hubPath} nodeType:NodeType scope:descendants", host.Hub.JsonSerializerOptions).ToListAsync() as IReadOnlyList<MeshNode>;
             }
             catch
             {
@@ -661,7 +661,7 @@ public static class MeshNodeLayoutAreas
             IReadOnlyList<MeshNode> nodeTypeChildren;
             try
             {
-                nodeTypeChildren = await meshQuery.QueryAsync<MeshNode>($"path:{hubPath} nodeType:NodeType scope:children").ToListAsync();
+                nodeTypeChildren = await meshQuery.QueryAsync<MeshNode>($"path:{hubPath} nodeType:NodeType scope:children", host.Hub.JsonSerializerOptions).ToListAsync();
             }
             catch
             {
@@ -674,7 +674,7 @@ public static class MeshNodeLayoutAreas
             {
                 try
                 {
-                    ownType = await meshQuery.QueryAsync<MeshNode>($"path:{node.NodeType} scope:exact").FirstOrDefaultAsync();
+                    ownType = await meshQuery.QueryAsync<MeshNode>($"path:{node.NodeType} scope:exact", host.Hub.JsonSerializerOptions).FirstOrDefaultAsync();
                 }
                 catch { }
             }
@@ -1032,7 +1032,7 @@ public static class MeshNodeLayoutAreas
         return Observable.Return<UiControl?>(new MarkdownControl($"## JSON Schema: {typeName}\n\n```json\n{schema}\n```"));
     }
 
-    private static UiControl RenderNodeSchema(MeshNode? node, string _, JsonSerializerOptions? jsonOptions = null)
+    private static UiControl RenderNodeSchema(MeshNode? node, string _, JsonSerializerOptions jsonOptions)
     {
         var sb = new System.Text.StringBuilder();
         sb.AppendLine("## Schema");
@@ -1091,10 +1091,10 @@ public static class MeshNodeLayoutAreas
         return new MarkdownControl(sb.ToString());
     }
 
-    private static string GenerateJsonSchema(Type type, JsonSerializerOptions? jsonOptions = null)
+    private static string GenerateJsonSchema(Type type, JsonSerializerOptions jsonOptions)
     {
         // Use the built-in JsonSchemaExporter from System.Text.Json.Schema
-        var options = jsonOptions ?? JsonSerializerOptions.Default;
+        var options = jsonOptions;
 
         var schema = options.GetJsonSchemaAsNode(type, new JsonSchemaExporterOptions
         {
@@ -1395,7 +1395,7 @@ public static class MeshNodeLayoutAreas
         string? typeDescription = null;
         if (persistence != null)
         {
-            var typeNode = await persistence.GetNodeAsync(nodeTypePath, ct);
+            var typeNode = await persistence.GetNodeAsync(nodeTypePath, host.Hub.JsonSerializerOptions, ct);
             if (typeNode?.Content is NodeTypeDefinition typeDef)
             {
                 typeDescription = typeDef.Description;

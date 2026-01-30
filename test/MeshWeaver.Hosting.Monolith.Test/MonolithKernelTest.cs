@@ -48,6 +48,7 @@ public class MonolithKernelTest(ITestOutputHelper output) : MonolithMeshTestBase
         // So this creates path "kernel/test-kernel"
         var kernelNode = new MeshNode(kernelId, AddressExtensions.KernelType)
         {
+            NodeType = AddressExtensions.KernelType,
             Name = $"Kernel-{kernelId}"
         };
 

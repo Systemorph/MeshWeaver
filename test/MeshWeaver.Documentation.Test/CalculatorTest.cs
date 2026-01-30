@@ -6,6 +6,7 @@ using FluentAssertions;
 using FluentAssertions.Extensions;
 using MeshWeaver.Data;
 using MeshWeaver.Hosting.Monolith.TestBase;
+using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Layout;
 using MeshWeaver.Markdown;
 using MeshWeaver.Mesh;
@@ -22,6 +23,7 @@ namespace MeshWeaver.Documentation.Test;
 /// <param name="output"></param>
 public class CalculatorTest(ITestOutputHelper output) : DocumentationTestBase(output)
 {
+    private JsonSerializerOptions _jsonOptions => Mesh.ServiceProvider.GetRequiredService<IMessageHub>().JsonSerializerOptions;
     /// <summary>
     /// Tests that the Calculator markdown file exists and has expected content.
     /// </summary>
@@ -30,7 +32,7 @@ public class CalculatorTest(ITestOutputHelper output) : DocumentationTestBase(ou
     {
         var persistence = Mesh.ServiceProvider.GetRequiredService<IPersistenceService>();
 
-        var node = await persistence.GetNodeAsync("Calculator", TestContext.Current.CancellationToken);
+        var node = await persistence.GetNodeAsync("Calculator", _jsonOptions, TestContext.Current.CancellationToken);
 
         node.Should().NotBeNull("Calculator node should exist");
         node!.NodeType.Should().Be("Markdown");
@@ -51,7 +53,7 @@ public class CalculatorTest(ITestOutputHelper output) : DocumentationTestBase(ou
         var persistence = Mesh.ServiceProvider.GetRequiredService<IPersistenceService>();
 
         // Get the calculator node
-        var node = await persistence.GetNodeAsync("Calculator", TestContext.Current.CancellationToken);
+        var node = await persistence.GetNodeAsync("Calculator", _jsonOptions, TestContext.Current.CancellationToken);
         node.Should().NotBeNull("Calculator node should exist");
 
         // Extract MarkdownContent
@@ -119,7 +121,7 @@ public class CalculatorTest(ITestOutputHelper output) : DocumentationTestBase(ou
     {
         var persistence = Mesh.ServiceProvider.GetRequiredService<IPersistenceService>();
 
-        var node = await persistence.GetNodeAsync("Calculator", TestContext.Current.CancellationToken);
+        var node = await persistence.GetNodeAsync("Calculator", _jsonOptions, TestContext.Current.CancellationToken);
         node.Should().NotBeNull();
 
         var content = ExtractMarkdownContent(node!);

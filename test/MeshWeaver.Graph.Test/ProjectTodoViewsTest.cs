@@ -30,6 +30,8 @@ namespace MeshWeaver.Graph.Test;
 [Collection("SamplesGraphData")]
 public class ProjectTodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
+    private JsonSerializerOptions _jsonOptions => Mesh.ServiceProvider.GetRequiredService<IMessageHub>().JsonSerializerOptions;
+
     // Shared cache - tests run sequentially in this collection
     private static readonly string SharedCacheDirectory = Path.Combine(
         Path.GetTempPath(),
@@ -95,7 +97,7 @@ public class ProjectTodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBa
         var query = "path:ACME/ProductLaunch/Todo nodeType:ACME/Project/Todo scope:subtree";
         Output.WriteLine($"Querying: {query}");
 
-        var results = await meshQuery.QueryAsync<MeshNode>(MeshQueryRequest.FromQuery(query), ct: TestContext.Current.CancellationToken)
+        var results = await meshQuery.QueryAsync<MeshNode>(MeshQueryRequest.FromQuery(query), _jsonOptions, null, TestContext.Current.CancellationToken)
             .ToListAsync(TestContext.Current.CancellationToken);
 
         Output.WriteLine($"Found {results.Count} Todo items:");
@@ -120,7 +122,7 @@ public class ProjectTodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBa
         var query = "path:ACME/ProductLaunch/Todo nodeType:ACME/Project/Todo scope:subtree";
         Output.WriteLine($"Querying: {query}");
 
-        var results = await meshQuery.QueryAsync<MeshNode>(MeshQueryRequest.FromQuery(query), ct: TestContext.Current.CancellationToken)
+        var results = await meshQuery.QueryAsync<MeshNode>(MeshQueryRequest.FromQuery(query), _jsonOptions, null, TestContext.Current.CancellationToken)
             .ToListAsync(TestContext.Current.CancellationToken);
 
         Output.WriteLine($"Found {results.Count} Todo items:");
@@ -143,12 +145,12 @@ public class ProjectTodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBa
 
         // Query without nodeType filter
         var queryWithoutFilter = "path:ACME/ProductLaunch/Todo scope:subtree";
-        var allResults = await meshQuery.QueryAsync<MeshNode>(MeshQueryRequest.FromQuery(queryWithoutFilter), ct: TestContext.Current.CancellationToken)
+        var allResults = await meshQuery.QueryAsync<MeshNode>(MeshQueryRequest.FromQuery(queryWithoutFilter), _jsonOptions, null, TestContext.Current.CancellationToken)
             .ToListAsync(TestContext.Current.CancellationToken);
 
         // Query with nodeType filter
         var queryWithFilter = "path:ACME/ProductLaunch/Todo nodeType:ACME/Project/Todo scope:subtree";
-        var filteredResults = await meshQuery.QueryAsync<MeshNode>(MeshQueryRequest.FromQuery(queryWithFilter), ct: TestContext.Current.CancellationToken)
+        var filteredResults = await meshQuery.QueryAsync<MeshNode>(MeshQueryRequest.FromQuery(queryWithFilter), _jsonOptions, null, TestContext.Current.CancellationToken)
             .ToListAsync(TestContext.Current.CancellationToken);
 
         Output.WriteLine($"Without filter: {allResults.Count}, With filter: {filteredResults.Count}");
@@ -362,7 +364,7 @@ public class ProjectTodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBa
         var query = "path:ACME/ProductLaunch/Todo nodeType:ACME/Project/Todo scope:subtree";
         Output.WriteLine($"Querying: {query}");
 
-        var results = await meshQuery.QueryAsync<MeshNode>(MeshQueryRequest.FromQuery(query), ct: TestContext.Current.CancellationToken)
+        var results = await meshQuery.QueryAsync<MeshNode>(MeshQueryRequest.FromQuery(query), _jsonOptions, null, TestContext.Current.CancellationToken)
             .ToListAsync(TestContext.Current.CancellationToken);
 
         Output.WriteLine($"Found {results.Count} Todo items");
@@ -453,7 +455,7 @@ public class ProjectTodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBa
         var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
         var query = "path:ACME/ProductLaunch/Todo nodeType:ACME/Project/Todo scope:subtree";
 
-        var results = await meshQuery.QueryAsync<MeshNode>(MeshQueryRequest.FromQuery(query), ct: TestContext.Current.CancellationToken)
+        var results = await meshQuery.QueryAsync<MeshNode>(MeshQueryRequest.FromQuery(query), _jsonOptions, null, TestContext.Current.CancellationToken)
             .ToListAsync(TestContext.Current.CancellationToken);
 
         // Get Roland's tasks

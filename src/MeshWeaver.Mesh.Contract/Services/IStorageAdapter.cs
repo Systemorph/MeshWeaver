@@ -1,3 +1,5 @@
+using System.Text.Json;
+
 namespace MeshWeaver.Mesh.Services;
 
 /// <summary>
@@ -10,16 +12,18 @@ public interface IStorageAdapter
     /// Reads a node from storage.
     /// </summary>
     /// <param name="path">The node path</param>
+    /// <param name="options">JSON serializer options for type polymorphism</param>
     /// <param name="ct">Cancellation token</param>
     /// <returns>The node or null if not found</returns>
-    Task<MeshNode?> ReadAsync(string path, CancellationToken ct = default);
+    Task<MeshNode?> ReadAsync(string path, JsonSerializerOptions options, CancellationToken ct = default);
 
     /// <summary>
     /// Writes a node to storage.
     /// </summary>
     /// <param name="node">The node to write</param>
+    /// <param name="options">JSON serializer options for type polymorphism</param>
     /// <param name="ct">Cancellation token</param>
-    Task WriteAsync(MeshNode node, CancellationToken ct = default);
+    Task WriteAsync(MeshNode node, JsonSerializerOptions options, CancellationToken ct = default);
 
     /// <summary>
     /// Deletes a node from storage.
@@ -53,9 +57,10 @@ public interface IStorageAdapter
     /// </summary>
     /// <param name="nodePath">The node path (e.g., "_types/story")</param>
     /// <param name="subPath">Optional sub-path within partition (e.g., "layoutAreas")</param>
+    /// <param name="options">JSON serializer options for type polymorphism</param>
     /// <param name="ct">Cancellation token</param>
     /// <returns>Async enumerable of deserialized objects</returns>
-    IAsyncEnumerable<object> GetPartitionObjectsAsync(string nodePath, string? subPath = null, CancellationToken ct = default);
+    IAsyncEnumerable<object> GetPartitionObjectsAsync(string nodePath, string? subPath, JsonSerializerOptions options, CancellationToken ct = default);
 
     /// <summary>
     /// Saves objects to a node's partition folder.
@@ -65,8 +70,9 @@ public interface IStorageAdapter
     /// <param name="nodePath">The node path</param>
     /// <param name="subPath">Optional sub-path within partition</param>
     /// <param name="objects">Objects to save</param>
+    /// <param name="options">JSON serializer options for type polymorphism</param>
     /// <param name="ct">Cancellation token</param>
-    Task SavePartitionObjectsAsync(string nodePath, string? subPath, IReadOnlyCollection<object> objects, CancellationToken ct = default);
+    Task SavePartitionObjectsAsync(string nodePath, string? subPath, IReadOnlyCollection<object> objects, JsonSerializerOptions options, CancellationToken ct = default);
 
     /// <summary>
     /// Deletes all objects from a node's partition folder (or sub-path).

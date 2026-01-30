@@ -1,6 +1,7 @@
 using System.Security.Claims;
 using System.Text.Json;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Messaging;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Mvc;
@@ -13,10 +14,12 @@ public class DevAuthController : ControllerBase
 {
     private readonly IPersistenceService _persistence;
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
+    private readonly JsonSerializerOptions _jsonOptions;
 
-    public DevAuthController(IPersistenceService persistence)
+    public DevAuthController(IPersistenceService persistence, IMessageHub hub)
     {
         _persistence = persistence;
+        _jsonOptions = hub.JsonSerializerOptions;
     }
 
     /// <summary>
@@ -33,7 +36,7 @@ public class DevAuthController : ControllerBase
     {
         var persons = new List<PersonInfo>();
 
-        await foreach (var node in _persistence.GetDescendantsAsync(null))
+        await foreach (var node in _persistence.GetDescendantsAsync(null, _jsonOptions))
         {
             if (node.NodeType == "User" && node.Content != null)
             {
@@ -55,7 +58,7 @@ public class DevAuthController : ControllerBase
     public async Task<IActionResult> Login([FromForm] string personId, [FromForm] string? returnUrl)
     {
         // Find the person node
-        var node = await _persistence.GetNodeAsync(personId);
+        var node = await _persistence.GetNodeAsync(personId, _jsonOptions);
         if (node?.NodeType != "User" || node.Content == null)
         {
             return BadRequest("Person not found");

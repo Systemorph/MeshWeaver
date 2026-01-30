@@ -22,12 +22,13 @@ public partial class MigrationUtility
     /// </summary>
     /// <param name="dataDirectory">Directory containing JSON files (e.g., samples/Graph/Data).</param>
     /// <param name="contentDirectory">Directory for extracted icons (e.g., samples/Graph/content).</param>
-    public MigrationUtility(string dataDirectory, string contentDirectory)
+    /// <param name="jsonOptions">JSON serializer options from the hub.</param>
+    public MigrationUtility(string dataDirectory, string contentDirectory, JsonSerializerOptions jsonOptions)
     {
         _dataDirectory = dataDirectory;
         _contentDirectory = contentDirectory;
         _iconExtractor = new IconExtractor(contentDirectory);
-        _jsonOptions = PersistenceJsonOptions.CreateForPersistence(null);
+        _jsonOptions = jsonOptions;
     }
 
     // Regex to extract class/record name from C# code

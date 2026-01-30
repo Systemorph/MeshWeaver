@@ -1,3 +1,5 @@
+using System.Text.Json;
+
 namespace MeshWeaver.Mesh.Services;
 
 /// <summary>
@@ -11,31 +13,35 @@ public interface IPersistenceService
     /// Gets a node by its path.
     /// </summary>
     /// <param name="path">The node path (e.g., "org/acme/project/web")</param>
+    /// <param name="options">JSON serializer options for type polymorphism</param>
     /// <param name="ct">Cancellation token</param>
     /// <returns>The node or null if not found</returns>
-    Task<MeshNode?> GetNodeAsync(string path, CancellationToken ct = default);
+    Task<MeshNode?> GetNodeAsync(string path, JsonSerializerOptions options, CancellationToken ct = default);
 
     /// <summary>
     /// Gets all child nodes at the specified parent path.
     /// </summary>
     /// <param name="parentPath">Parent path (empty or null for root level)</param>
+    /// <param name="options">JSON serializer options for type polymorphism</param>
     /// <returns>Async enumerable of child nodes</returns>
-    IAsyncEnumerable<MeshNode> GetChildrenAsync(string? parentPath);
+    IAsyncEnumerable<MeshNode> GetChildrenAsync(string? parentPath, JsonSerializerOptions options);
 
     /// <summary>
     /// Gets all descendant nodes under the specified path.
     /// </summary>
     /// <param name="parentPath">Parent path</param>
+    /// <param name="options">JSON serializer options for type polymorphism</param>
     /// <returns>Async enumerable of all descendant nodes</returns>
-    IAsyncEnumerable<MeshNode> GetDescendantsAsync(string? parentPath);
+    IAsyncEnumerable<MeshNode> GetDescendantsAsync(string? parentPath, JsonSerializerOptions options);
 
     /// <summary>
     /// Creates or updates a node.
     /// </summary>
     /// <param name="node">The node to save</param>
+    /// <param name="options">JSON serializer options for type polymorphism</param>
     /// <param name="ct">Cancellation token</param>
     /// <returns>The saved node</returns>
-    Task<MeshNode> SaveNodeAsync(MeshNode node, CancellationToken ct = default);
+    Task<MeshNode> SaveNodeAsync(MeshNode node, JsonSerializerOptions options, CancellationToken ct = default);
 
     /// <summary>
     /// Deletes a node and optionally its descendants.
@@ -51,18 +57,20 @@ public interface IPersistenceService
     /// </summary>
     /// <param name="sourcePath">The current node path</param>
     /// <param name="targetPath">The new node path</param>
+    /// <param name="options">JSON serializer options for type polymorphism</param>
     /// <param name="ct">Cancellation token</param>
     /// <returns>The moved node at the new path</returns>
     /// <exception cref="InvalidOperationException">If source doesn't exist or target already exists</exception>
-    Task<MeshNode> MoveNodeAsync(string sourcePath, string targetPath, CancellationToken ct = default);
+    Task<MeshNode> MoveNodeAsync(string sourcePath, string targetPath, JsonSerializerOptions options, CancellationToken ct = default);
 
     /// <summary>
     /// Searches nodes by query text within their Name, Description, or Content.
     /// </summary>
     /// <param name="parentPath">Parent path to search under (null for all)</param>
     /// <param name="query">Search query</param>
+    /// <param name="options">JSON serializer options for type polymorphism</param>
     /// <returns>Async enumerable of matching nodes</returns>
-    IAsyncEnumerable<MeshNode> SearchAsync(string? parentPath, string query);
+    IAsyncEnumerable<MeshNode> SearchAsync(string? parentPath, string query, JsonSerializerOptions options);
 
     /// <summary>
     /// Checks if a node exists at the given path.
@@ -84,16 +92,18 @@ public interface IPersistenceService
     /// Gets all comments for a node.
     /// </summary>
     /// <param name="nodePath">Path of the node</param>
+    /// <param name="options">JSON serializer options for type polymorphism</param>
     /// <returns>Async enumerable of comments for the node</returns>
-    IAsyncEnumerable<Comment> GetCommentsAsync(string nodePath);
+    IAsyncEnumerable<Comment> GetCommentsAsync(string nodePath, JsonSerializerOptions options);
 
     /// <summary>
     /// Adds a comment to a node.
     /// </summary>
     /// <param name="comment">The comment to add</param>
+    /// <param name="options">JSON serializer options for type polymorphism</param>
     /// <param name="ct">Cancellation token</param>
     /// <returns>The saved comment</returns>
-    Task<Comment> AddCommentAsync(Comment comment, CancellationToken ct = default);
+    Task<Comment> AddCommentAsync(Comment comment, JsonSerializerOptions options, CancellationToken ct = default);
 
     /// <summary>
     /// Deletes a comment by ID.
@@ -120,8 +130,9 @@ public interface IPersistenceService
     /// </summary>
     /// <param name="nodePath">The node path (e.g., "_types/story")</param>
     /// <param name="subPath">Optional sub-path within partition (e.g., "layoutAreas")</param>
+    /// <param name="options">JSON serializer options for type polymorphism</param>
     /// <returns>Async enumerable of deserialized objects</returns>
-    IAsyncEnumerable<object> GetPartitionObjectsAsync(string nodePath, string? subPath = null);
+    IAsyncEnumerable<object> GetPartitionObjectsAsync(string nodePath, string? subPath, JsonSerializerOptions options);
 
     /// <summary>
     /// Saves objects to a node's partition folder.
@@ -130,8 +141,9 @@ public interface IPersistenceService
     /// <param name="nodePath">The node path</param>
     /// <param name="subPath">Optional sub-path within partition</param>
     /// <param name="objects">Objects to save</param>
+    /// <param name="options">JSON serializer options for type polymorphism</param>
     /// <param name="ct">Cancellation token</param>
-    Task SavePartitionObjectsAsync(string nodePath, string? subPath, IReadOnlyCollection<object> objects, CancellationToken ct = default);
+    Task SavePartitionObjectsAsync(string nodePath, string? subPath, IReadOnlyCollection<object> objects, JsonSerializerOptions options, CancellationToken ct = default);
 
     /// <summary>
     /// Deletes all objects from a node's partition folder (or sub-path).
@@ -163,10 +175,11 @@ public interface IPersistenceService
     /// </summary>
     /// <param name="path">The node path</param>
     /// <param name="userId">The user's ObjectId (null for anonymous)</param>
+    /// <param name="options">JSON serializer options for type polymorphism</param>
     /// <param name="ct">Cancellation token</param>
     /// <returns>The node or null if not found or not authorized</returns>
-    Task<MeshNode?> GetNodeSecureAsync(string path, string? userId, CancellationToken ct = default)
-        => GetNodeAsync(path, ct);
+    Task<MeshNode?> GetNodeSecureAsync(string path, string? userId, JsonSerializerOptions options, CancellationToken ct = default)
+        => GetNodeAsync(path, options, ct);
 
     /// <summary>
     /// Gets child nodes, filtering out those the user cannot read.
@@ -175,9 +188,10 @@ public interface IPersistenceService
     /// </summary>
     /// <param name="parentPath">Parent path (empty or null for root level)</param>
     /// <param name="userId">The user's ObjectId (null for anonymous)</param>
+    /// <param name="options">JSON serializer options for type polymorphism</param>
     /// <returns>Async enumerable of accessible child nodes</returns>
-    IAsyncEnumerable<MeshNode> GetChildrenSecureAsync(string? parentPath, string? userId)
-        => GetChildrenAsync(parentPath);
+    IAsyncEnumerable<MeshNode> GetChildrenSecureAsync(string? parentPath, string? userId, JsonSerializerOptions options)
+        => GetChildrenAsync(parentPath, options);
 
     /// <summary>
     /// Gets descendant nodes, filtering out those the user cannot read.
@@ -186,9 +200,10 @@ public interface IPersistenceService
     /// </summary>
     /// <param name="parentPath">Parent path</param>
     /// <param name="userId">The user's ObjectId (null for anonymous)</param>
+    /// <param name="options">JSON serializer options for type polymorphism</param>
     /// <returns>Async enumerable of accessible descendant nodes</returns>
-    IAsyncEnumerable<MeshNode> GetDescendantsSecureAsync(string? parentPath, string? userId)
-        => GetDescendantsAsync(parentPath);
+    IAsyncEnumerable<MeshNode> GetDescendantsSecureAsync(string? parentPath, string? userId, JsonSerializerOptions options)
+        => GetDescendantsAsync(parentPath, options);
 
     #endregion
 }

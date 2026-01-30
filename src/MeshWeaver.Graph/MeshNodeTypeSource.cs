@@ -77,7 +77,7 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
             // TODO: Consider making this async with proper task tracking
             try
             {
-                _persistence.SaveNodeAsync(nodeWithVersion).GetAwaiter().GetResult();
+                _persistence.SaveNodeAsync(nodeWithVersion, _workspace.Hub.JsonSerializerOptions).GetAwaiter().GetResult();
             }
             catch (Exception ex)
             {
@@ -188,7 +188,7 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
         // Load own MeshNode doc only (stored in parent's partition)
         // File location: parentPath/ownNodeName.json (e.g., "graph/org1.json")
         // Note: Children are NOT loaded here - they are accessed via their own hubs
-        var ownNode = await _persistence.GetNodeAsync(_hubPath, ct);
+        var ownNode = await _persistence.GetNodeAsync(_hubPath, _workspace.Hub.JsonSerializerOptions, ct);
 
         // Restore hub version from persisted MeshNode
         if (ownNode is { Version: > 0 })

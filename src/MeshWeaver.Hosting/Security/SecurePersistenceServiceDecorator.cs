@@ -1,3 +1,4 @@
+using System.Text.Json;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
@@ -31,9 +32,9 @@ public class SecurePersistenceServiceDecorator : IPersistenceService
 
     #region Secure Operations
 
-    public async Task<MeshNode?> GetNodeSecureAsync(string path, string? userId, CancellationToken ct = default)
+    public async Task<MeshNode?> GetNodeSecureAsync(string path, string? userId, JsonSerializerOptions options, CancellationToken ct = default)
     {
-        var node = await _inner.GetNodeAsync(path, ct);
+        var node = await _inner.GetNodeAsync(path, options, ct);
         if (node == null)
             return null;
 
@@ -50,9 +51,9 @@ public class SecurePersistenceServiceDecorator : IPersistenceService
         return node;
     }
 
-    public async IAsyncEnumerable<MeshNode> GetChildrenSecureAsync(string? parentPath, string? userId)
+    public async IAsyncEnumerable<MeshNode> GetChildrenSecureAsync(string? parentPath, string? userId, JsonSerializerOptions options)
     {
-        await foreach (var node in _inner.GetChildrenAsync(parentPath))
+        await foreach (var node in _inner.GetChildrenAsync(parentPath, options))
         {
             var hasPermission = string.IsNullOrEmpty(userId)
                 ? await SecurityService.HasPermissionAsync(node.Path, Permission.Read)
@@ -69,9 +70,9 @@ public class SecurePersistenceServiceDecorator : IPersistenceService
         }
     }
 
-    public async IAsyncEnumerable<MeshNode> GetDescendantsSecureAsync(string? parentPath, string? userId)
+    public async IAsyncEnumerable<MeshNode> GetDescendantsSecureAsync(string? parentPath, string? userId, JsonSerializerOptions options)
     {
-        await foreach (var node in _inner.GetDescendantsAsync(parentPath))
+        await foreach (var node in _inner.GetDescendantsAsync(parentPath, options))
         {
             var hasPermission = string.IsNullOrEmpty(userId)
                 ? await SecurityService.HasPermissionAsync(node.Path, Permission.Read)
@@ -92,26 +93,26 @@ public class SecurePersistenceServiceDecorator : IPersistenceService
 
     #region Delegated Methods (pass-through to inner service)
 
-    public Task<MeshNode?> GetNodeAsync(string path, CancellationToken ct = default)
-        => _inner.GetNodeAsync(path, ct);
+    public Task<MeshNode?> GetNodeAsync(string path, JsonSerializerOptions options, CancellationToken ct = default)
+        => _inner.GetNodeAsync(path, options, ct);
 
-    public IAsyncEnumerable<MeshNode> GetChildrenAsync(string? parentPath)
-        => _inner.GetChildrenAsync(parentPath);
+    public IAsyncEnumerable<MeshNode> GetChildrenAsync(string? parentPath, JsonSerializerOptions options)
+        => _inner.GetChildrenAsync(parentPath, options);
 
-    public IAsyncEnumerable<MeshNode> GetDescendantsAsync(string? parentPath)
-        => _inner.GetDescendantsAsync(parentPath);
+    public IAsyncEnumerable<MeshNode> GetDescendantsAsync(string? parentPath, JsonSerializerOptions options)
+        => _inner.GetDescendantsAsync(parentPath, options);
 
-    public Task<MeshNode> SaveNodeAsync(MeshNode node, CancellationToken ct = default)
-        => _inner.SaveNodeAsync(node, ct);
+    public Task<MeshNode> SaveNodeAsync(MeshNode node, JsonSerializerOptions options, CancellationToken ct = default)
+        => _inner.SaveNodeAsync(node, options, ct);
 
     public Task DeleteNodeAsync(string path, bool recursive = false, CancellationToken ct = default)
         => _inner.DeleteNodeAsync(path, recursive, ct);
 
-    public Task<MeshNode> MoveNodeAsync(string sourcePath, string targetPath, CancellationToken ct = default)
-        => _inner.MoveNodeAsync(sourcePath, targetPath, ct);
+    public Task<MeshNode> MoveNodeAsync(string sourcePath, string targetPath, JsonSerializerOptions options, CancellationToken ct = default)
+        => _inner.MoveNodeAsync(sourcePath, targetPath, options, ct);
 
-    public IAsyncEnumerable<MeshNode> SearchAsync(string? parentPath, string query)
-        => _inner.SearchAsync(parentPath, query);
+    public IAsyncEnumerable<MeshNode> SearchAsync(string? parentPath, string query, JsonSerializerOptions options)
+        => _inner.SearchAsync(parentPath, query, options);
 
     public Task<bool> ExistsAsync(string path, CancellationToken ct = default)
         => _inner.ExistsAsync(path, ct);
@@ -119,11 +120,11 @@ public class SecurePersistenceServiceDecorator : IPersistenceService
     public Task InitializeAsync(CancellationToken ct = default)
         => _inner.InitializeAsync(ct);
 
-    public IAsyncEnumerable<Comment> GetCommentsAsync(string nodePath)
-        => _inner.GetCommentsAsync(nodePath);
+    public IAsyncEnumerable<Comment> GetCommentsAsync(string nodePath, JsonSerializerOptions options)
+        => _inner.GetCommentsAsync(nodePath, options);
 
-    public Task<Comment> AddCommentAsync(Comment comment, CancellationToken ct = default)
-        => _inner.AddCommentAsync(comment, ct);
+    public Task<Comment> AddCommentAsync(Comment comment, JsonSerializerOptions options, CancellationToken ct = default)
+        => _inner.AddCommentAsync(comment, options, ct);
 
     public Task DeleteCommentAsync(string commentId, CancellationToken ct = default)
         => _inner.DeleteCommentAsync(commentId, ct);
@@ -131,11 +132,11 @@ public class SecurePersistenceServiceDecorator : IPersistenceService
     public Task<Comment?> GetCommentAsync(string commentId, CancellationToken ct = default)
         => _inner.GetCommentAsync(commentId, ct);
 
-    public IAsyncEnumerable<object> GetPartitionObjectsAsync(string nodePath, string? subPath = null)
-        => _inner.GetPartitionObjectsAsync(nodePath, subPath);
+    public IAsyncEnumerable<object> GetPartitionObjectsAsync(string nodePath, string? subPath, JsonSerializerOptions options)
+        => _inner.GetPartitionObjectsAsync(nodePath, subPath, options);
 
-    public Task SavePartitionObjectsAsync(string nodePath, string? subPath, IReadOnlyCollection<object> objects, CancellationToken ct = default)
-        => _inner.SavePartitionObjectsAsync(nodePath, subPath, objects, ct);
+    public Task SavePartitionObjectsAsync(string nodePath, string? subPath, IReadOnlyCollection<object> objects, JsonSerializerOptions options, CancellationToken ct = default)
+        => _inner.SavePartitionObjectsAsync(nodePath, subPath, objects, options, ct);
 
     public Task DeletePartitionObjectsAsync(string nodePath, string? subPath = null, CancellationToken ct = default)
         => _inner.DeletePartitionObjectsAsync(nodePath, subPath, ct);

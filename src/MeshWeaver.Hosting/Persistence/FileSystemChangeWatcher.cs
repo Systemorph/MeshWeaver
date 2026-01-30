@@ -1,5 +1,7 @@
+using System.Text.Json;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Messaging;
 
 namespace MeshWeaver.Hosting.Persistence;
 
@@ -12,11 +14,15 @@ public class FileSystemChangeWatcher : IDisposable
     private readonly string _baseDirectory;
     private readonly IStorageAdapter _storageAdapter;
     private readonly IDataChangeNotifier _changeNotifier;
+    private readonly IMessageHub? _hub;
+    private readonly JsonSerializerOptions? _jsonOptions;
     private readonly FileSystemWatcher _watcher;
     private readonly Timer _debounceTimer;
     private readonly object _changeLock = new();
     private readonly Dictionary<string, (WatcherChangeTypes ChangeType, DateTime Timestamp)> _pendingChanges = new(StringComparer.OrdinalIgnoreCase);
     private bool _disposed;
+
+    private JsonSerializerOptions JsonOptions => _jsonOptions ?? _hub!.JsonSerializerOptions;
 
     /// <summary>
     /// Debounce interval in milliseconds. Changes within this window are batched.
@@ -28,7 +34,33 @@ public class FileSystemChangeWatcher : IDisposable
     /// </summary>
     private static readonly string[] SupportedExtensions = [".json", ".md", ".cs"];
 
+    /// <summary>
+    /// Creates a FileSystemChangeWatcher with options from the hub.
+    /// </summary>
     public FileSystemChangeWatcher(
+        string baseDirectory,
+        IStorageAdapter storageAdapter,
+        IDataChangeNotifier changeNotifier,
+        IMessageHub hub)
+        : this(baseDirectory, storageAdapter, changeNotifier)
+    {
+        _hub = hub;
+    }
+
+    /// <summary>
+    /// Creates a FileSystemChangeWatcher with explicit options (for testing).
+    /// </summary>
+    public FileSystemChangeWatcher(
+        string baseDirectory,
+        IStorageAdapter storageAdapter,
+        IDataChangeNotifier changeNotifier,
+        JsonSerializerOptions jsonOptions)
+        : this(baseDirectory, storageAdapter, changeNotifier)
+    {
+        _jsonOptions = jsonOptions;
+    }
+
+    private FileSystemChangeWatcher(
         string baseDirectory,
         IStorageAdapter storageAdapter,
         IDataChangeNotifier changeNotifier)
@@ -159,7 +191,7 @@ public class FileSystemChangeWatcher : IDisposable
         switch (changeType)
         {
             case WatcherChangeTypes.Created:
-                var createdNode = await _storageAdapter.ReadAsync(path);
+                var createdNode = await _storageAdapter.ReadAsync(path, JsonOptions);
                 if (createdNode != null)
                 {
                     _changeNotifier.NotifyChange(DataChangeNotification.Created(normalizedPath, createdNode));
@@ -167,7 +199,7 @@ public class FileSystemChangeWatcher : IDisposable
                 break;
 
             case WatcherChangeTypes.Changed:
-                var updatedNode = await _storageAdapter.ReadAsync(path);
+                var updatedNode = await _storageAdapter.ReadAsync(path, JsonOptions);
                 if (updatedNode != null)
                 {
                     _changeNotifier.NotifyChange(DataChangeNotification.Updated(normalizedPath, updatedNode));

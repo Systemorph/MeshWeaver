@@ -1,14 +1,17 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text.Json;
 using System.Threading.Tasks;
 using System.Reactive.Linq;
 using FluentAssertions;
+using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Hosting.Persistence.Query;
 using MeshWeaver.Mesh;
-
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Messaging;
+using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
 namespace MeshWeaver.Hosting.Monolith.Test;
@@ -17,35 +20,33 @@ namespace MeshWeaver.Hosting.Monolith.Test;
 /// Integration tests for observable queries with InMemory persistence.
 /// Tests end-to-end scenarios including multiple concurrent subscriptions.
 /// </summary>
-public class ObservableQueryIntegrationTests
+public class ObservableQueryIntegrationTests(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
     private readonly DataChangeNotifier _changeNotifier = new();
-    private readonly InMemoryPersistenceService _persistence;
-    private readonly IMeshQuery _meshQuery;
+    private InMemoryPersistenceService? _persistence;
+    private IMeshQuery? _meshQuery;
+    private JsonSerializerOptions JsonOptions => Mesh.ServiceProvider.GetRequiredService<IMessageHub>().JsonSerializerOptions;
 
-    public ObservableQueryIntegrationTests()
-    {
-        _persistence = new InMemoryPersistenceService(changeNotifier: _changeNotifier);
-        _meshQuery = new InMemoryMeshQuery(_persistence, changeNotifier: _changeNotifier);
-    }
+    private InMemoryPersistenceService Persistence => _persistence ??= new InMemoryPersistenceService(changeNotifier: _changeNotifier);
+    private IMeshQuery MeshQuery => _meshQuery ??= new InMemoryMeshQuery(Persistence, changeNotifier: _changeNotifier);
 
     [Fact]
     public async Task MultipleConcurrentSubscriptions_EachReceivesCorrectChanges()
     {
         // Arrange
-        await _persistence.SaveNodeAsync(MeshNode.FromPath("ACME/Project1") with { Name = "Project 1", NodeType = "Project" });
-        await _persistence.SaveNodeAsync(MeshNode.FromPath("ACME/Task1") with { Name = "Task 1", NodeType = "Task" });
+        await Persistence.SaveNodeAsync(MeshNode.FromPath("ACME/Project1") with { Name = "Project 1", NodeType = "Project" }, JsonOptions);
+        await Persistence.SaveNodeAsync(MeshNode.FromPath("ACME/Task1") with { Name = "Task 1", NodeType = "Task" }, JsonOptions);
 
         var projectChanges = new List<QueryResultChange<MeshNode>>();
         var taskChanges = new List<QueryResultChange<MeshNode>>();
 
         // Subscribe to two different queries concurrently
-        var projectSubscription = _meshQuery
-            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery("path:ACME nodeType:Project scope:descendants"))
+        var projectSubscription = MeshQuery
+            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery("path:ACME nodeType:Project scope:descendants"), JsonOptions)
             .Subscribe(change => projectChanges.Add(change));
 
-        var taskSubscription = _meshQuery
-            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery("path:ACME nodeType:Task scope:descendants"))
+        var taskSubscription = MeshQuery
+            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery("path:ACME nodeType:Task scope:descendants"), JsonOptions)
             .Subscribe(change => taskChanges.Add(change));
 
         await Task.Delay(200);
@@ -58,7 +59,7 @@ public class ObservableQueryIntegrationTests
         taskChanges[0].Items.Should().HaveCount(1);
 
         // Act - Add a new project (should only affect project subscription)
-        await _persistence.SaveNodeAsync(MeshNode.FromPath("ACME/Project2") with { Name = "Project 2", NodeType = "Project" });
+        await Persistence.SaveNodeAsync(MeshNode.FromPath("ACME/Project2") with { Name = "Project 2", NodeType = "Project" }, JsonOptions);
         await Task.Delay(300);
 
         projectChanges.Should().HaveCount(2);
@@ -67,7 +68,7 @@ public class ObservableQueryIntegrationTests
         taskChanges.Should().HaveCount(1); // No change for task query
 
         // Act - Add a new task (should only affect task subscription)
-        await _persistence.SaveNodeAsync(MeshNode.FromPath("ACME/Task2") with { Name = "Task 2", NodeType = "Task" });
+        await Persistence.SaveNodeAsync(MeshNode.FromPath("ACME/Task2") with { Name = "Task 2", NodeType = "Task" }, JsonOptions);
         await Task.Delay(300);
 
         projectChanges.Should().HaveCount(2); // No change for project query
@@ -82,26 +83,26 @@ public class ObservableQueryIntegrationTests
     public async Task ScopeExact_OnlyNotifiesOnExactPathChanges()
     {
         // Arrange
-        await _persistence.SaveNodeAsync(MeshNode.FromPath("ACME") with { Name = "ACME", NodeType = "Organization" });
+        await Persistence.SaveNodeAsync(MeshNode.FromPath("ACME") with { Name = "ACME", NodeType = "Organization" }, JsonOptions);
 
         var changes = new List<QueryResultChange<MeshNode>>();
 
-        var subscription = _meshQuery
-            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery("path:ACME scope:exact"))
+        var subscription = MeshQuery
+            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery("path:ACME scope:exact"), JsonOptions)
             .Subscribe(change => changes.Add(change));
 
         await Task.Delay(200);
         changes.Should().HaveCount(1); // Initial
 
         // Act - Update exact path
-        await _persistence.SaveNodeAsync(MeshNode.FromPath("ACME") with { Name = "ACME Updated", NodeType = "Organization" });
+        await Persistence.SaveNodeAsync(MeshNode.FromPath("ACME") with { Name = "ACME Updated", NodeType = "Organization" }, JsonOptions);
         await Task.Delay(300);
 
         changes.Should().HaveCount(2);
         changes[1].ChangeType.Should().Be(QueryChangeType.Updated);
 
         // Act - Add child (should NOT trigger)
-        await _persistence.SaveNodeAsync(MeshNode.FromPath("ACME/Project") with { Name = "Project", NodeType = "Project" });
+        await Persistence.SaveNodeAsync(MeshNode.FromPath("ACME/Project") with { Name = "Project", NodeType = "Project" }, JsonOptions);
         await Task.Delay(300);
 
         changes.Should().HaveCount(2); // No change
@@ -113,26 +114,26 @@ public class ObservableQueryIntegrationTests
     public async Task ScopeChildren_OnlyNotifiesOnDirectChildChanges()
     {
         // Arrange
-        await _persistence.SaveNodeAsync(MeshNode.FromPath("ACME/Project1") with { Name = "Project 1", NodeType = "Project" });
+        await Persistence.SaveNodeAsync(MeshNode.FromPath("ACME/Project1") with { Name = "Project 1", NodeType = "Project" }, JsonOptions);
 
         var changes = new List<QueryResultChange<MeshNode>>();
 
-        var subscription = _meshQuery
-            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery("path:ACME scope:children"))
+        var subscription = MeshQuery
+            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery("path:ACME scope:children"), JsonOptions)
             .Subscribe(change => changes.Add(change));
 
         await Task.Delay(200);
         changes.Should().HaveCount(1); // Initial
 
         // Act - Add direct child
-        await _persistence.SaveNodeAsync(MeshNode.FromPath("ACME/Project2") with { Name = "Project 2", NodeType = "Project" });
+        await Persistence.SaveNodeAsync(MeshNode.FromPath("ACME/Project2") with { Name = "Project 2", NodeType = "Project" }, JsonOptions);
         await Task.Delay(300);
 
         changes.Should().HaveCount(2);
         changes[1].ChangeType.Should().Be(QueryChangeType.Added);
 
         // Act - Add grandchild (should NOT trigger for children scope)
-        await _persistence.SaveNodeAsync(MeshNode.FromPath("ACME/Project1/Task") with { Name = "Task", NodeType = "Task" });
+        await Persistence.SaveNodeAsync(MeshNode.FromPath("ACME/Project1/Task") with { Name = "Task", NodeType = "Task" }, JsonOptions);
         await Task.Delay(300);
 
         changes.Should().HaveCount(2); // No change
@@ -146,27 +147,27 @@ public class ObservableQueryIntegrationTests
         // Arrange
         var changes = new List<QueryResultChange<MeshNode>>();
 
-        var subscription = _meshQuery
-            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery("path:ACME scope:descendants"))
+        var subscription = MeshQuery
+            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery("path:ACME scope:descendants"), JsonOptions)
             .Subscribe(change => changes.Add(change));
 
         await Task.Delay(200);
         changes.Should().HaveCount(1); // Initial (empty)
 
         // Act - Add child
-        await _persistence.SaveNodeAsync(MeshNode.FromPath("ACME/Project") with { Name = "Project", NodeType = "Project" });
+        await Persistence.SaveNodeAsync(MeshNode.FromPath("ACME/Project") with { Name = "Project", NodeType = "Project" }, JsonOptions);
         await Task.Delay(300);
 
         changes.Should().HaveCount(2);
 
         // Act - Add grandchild
-        await _persistence.SaveNodeAsync(MeshNode.FromPath("ACME/Project/Task") with { Name = "Task", NodeType = "Task" });
+        await Persistence.SaveNodeAsync(MeshNode.FromPath("ACME/Project/Task") with { Name = "Task", NodeType = "Task" }, JsonOptions);
         await Task.Delay(300);
 
         changes.Should().HaveCount(3);
 
         // Act - Add great-grandchild
-        await _persistence.SaveNodeAsync(MeshNode.FromPath("ACME/Project/Task/Subtask") with { Name = "Subtask", NodeType = "Task" });
+        await Persistence.SaveNodeAsync(MeshNode.FromPath("ACME/Project/Task/Subtask") with { Name = "Subtask", NodeType = "Task" }, JsonOptions);
         await Task.Delay(300);
 
         changes.Should().HaveCount(4);
@@ -178,29 +179,29 @@ public class ObservableQueryIntegrationTests
     public async Task ScopeAncestors_NotifiesOnAncestorChanges()
     {
         // Arrange
-        await _persistence.SaveNodeAsync(MeshNode.FromPath("ACME") with { Name = "ACME", NodeType = "Organization" });
-        await _persistence.SaveNodeAsync(MeshNode.FromPath("ACME/Project") with { Name = "Project", NodeType = "Project" });
-        await _persistence.SaveNodeAsync(MeshNode.FromPath("ACME/Project/Task") with { Name = "Task", NodeType = "Task" });
+        await Persistence.SaveNodeAsync(MeshNode.FromPath("ACME") with { Name = "ACME", NodeType = "Organization" }, JsonOptions);
+        await Persistence.SaveNodeAsync(MeshNode.FromPath("ACME/Project") with { Name = "Project", NodeType = "Project" }, JsonOptions);
+        await Persistence.SaveNodeAsync(MeshNode.FromPath("ACME/Project/Task") with { Name = "Task", NodeType = "Task" }, JsonOptions);
 
         var changes = new List<QueryResultChange<MeshNode>>();
 
         // Subscribe from the deepest path looking at ancestors
-        var subscription = _meshQuery
-            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery("path:ACME/Project/Task scope:ancestors"))
+        var subscription = MeshQuery
+            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery("path:ACME/Project/Task scope:ancestors"), JsonOptions)
             .Subscribe(change => changes.Add(change));
 
         await Task.Delay(200);
         changes.Should().HaveCount(1); // Initial with ACME and ACME/Project
 
         // Act - Update an ancestor
-        await _persistence.SaveNodeAsync(MeshNode.FromPath("ACME") with { Name = "ACME Updated", NodeType = "Organization" });
+        await Persistence.SaveNodeAsync(MeshNode.FromPath("ACME") with { Name = "ACME Updated", NodeType = "Organization" }, JsonOptions);
         await Task.Delay(300);
 
         changes.Should().HaveCount(2);
         changes[1].ChangeType.Should().Be(QueryChangeType.Updated);
 
         // Act - Add a sibling of Task (should NOT trigger for ancestors scope)
-        await _persistence.SaveNodeAsync(MeshNode.FromPath("ACME/Project/Task2") with { Name = "Task 2", NodeType = "Task" });
+        await Persistence.SaveNodeAsync(MeshNode.FromPath("ACME/Project/Task2") with { Name = "Task 2", NodeType = "Task" }, JsonOptions);
         await Task.Delay(300);
 
         changes.Should().HaveCount(2); // No change
@@ -212,25 +213,25 @@ public class ObservableQueryIntegrationTests
     public async Task ScopeSubtree_NotifiesOnSelfAndDescendantChanges()
     {
         // Arrange
-        await _persistence.SaveNodeAsync(MeshNode.FromPath("ACME") with { Name = "ACME", NodeType = "Organization" });
+        await Persistence.SaveNodeAsync(MeshNode.FromPath("ACME") with { Name = "ACME", NodeType = "Organization" }, JsonOptions);
 
         var changes = new List<QueryResultChange<MeshNode>>();
 
-        var subscription = _meshQuery
-            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery("path:ACME scope:subtree"))
+        var subscription = MeshQuery
+            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery("path:ACME scope:subtree"), JsonOptions)
             .Subscribe(change => changes.Add(change));
 
         await Task.Delay(200);
         changes.Should().HaveCount(1); // Initial with ACME
 
         // Act - Update self
-        await _persistence.SaveNodeAsync(MeshNode.FromPath("ACME") with { Name = "ACME Updated", NodeType = "Organization" });
+        await Persistence.SaveNodeAsync(MeshNode.FromPath("ACME") with { Name = "ACME Updated", NodeType = "Organization" }, JsonOptions);
         await Task.Delay(300);
 
         changes.Should().HaveCount(2);
 
         // Act - Add descendant
-        await _persistence.SaveNodeAsync(MeshNode.FromPath("ACME/Project") with { Name = "Project", NodeType = "Project" });
+        await Persistence.SaveNodeAsync(MeshNode.FromPath("ACME/Project") with { Name = "Project", NodeType = "Project" }, JsonOptions);
         await Task.Delay(300);
 
         changes.Should().HaveCount(3);
@@ -242,40 +243,40 @@ public class ObservableQueryIntegrationTests
     public async Task ScopeHierarchy_NotifiesOnAncestorsSelfAndDescendantChanges()
     {
         // Arrange
-        await _persistence.SaveNodeAsync(MeshNode.FromPath("Root") with { Name = "Root", NodeType = "Organization" });
-        await _persistence.SaveNodeAsync(MeshNode.FromPath("Root/ACME") with { Name = "ACME", NodeType = "Company" });
-        await _persistence.SaveNodeAsync(MeshNode.FromPath("Root/ACME/Project") with { Name = "Project", NodeType = "Project" });
+        await Persistence.SaveNodeAsync(MeshNode.FromPath("Root") with { Name = "Root", NodeType = "Organization" }, JsonOptions);
+        await Persistence.SaveNodeAsync(MeshNode.FromPath("Root/ACME") with { Name = "ACME", NodeType = "Company" }, JsonOptions);
+        await Persistence.SaveNodeAsync(MeshNode.FromPath("Root/ACME/Project") with { Name = "Project", NodeType = "Project" }, JsonOptions);
 
         var changes = new List<QueryResultChange<MeshNode>>();
 
         // Subscribe from the middle of the hierarchy
-        var subscription = _meshQuery
-            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery("path:Root/ACME scope:hierarchy"))
+        var subscription = MeshQuery
+            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery("path:Root/ACME scope:hierarchy"), JsonOptions)
             .Subscribe(change => changes.Add(change));
 
         await Task.Delay(200);
         changes.Should().HaveCount(1); // Initial with Root, ACME, and Project
 
         // Act - Update ancestor
-        await _persistence.SaveNodeAsync(MeshNode.FromPath("Root") with { Name = "Root Updated", NodeType = "Organization" });
+        await Persistence.SaveNodeAsync(MeshNode.FromPath("Root") with { Name = "Root Updated", NodeType = "Organization" }, JsonOptions);
         await Task.Delay(300);
 
         changes.Should().HaveCount(2);
 
         // Act - Update self
-        await _persistence.SaveNodeAsync(MeshNode.FromPath("Root/ACME") with { Name = "ACME Updated", NodeType = "Company" });
+        await Persistence.SaveNodeAsync(MeshNode.FromPath("Root/ACME") with { Name = "ACME Updated", NodeType = "Company" }, JsonOptions);
         await Task.Delay(300);
 
         changes.Should().HaveCount(3);
 
         // Act - Update descendant
-        await _persistence.SaveNodeAsync(MeshNode.FromPath("Root/ACME/Project") with { Name = "Project Updated", NodeType = "Project" });
+        await Persistence.SaveNodeAsync(MeshNode.FromPath("Root/ACME/Project") with { Name = "Project Updated", NodeType = "Project" }, JsonOptions);
         await Task.Delay(300);
 
         changes.Should().HaveCount(4);
 
         // Act - Add new descendant
-        await _persistence.SaveNodeAsync(MeshNode.FromPath("Root/ACME/Project/Task") with { Name = "Task", NodeType = "Task" });
+        await Persistence.SaveNodeAsync(MeshNode.FromPath("Root/ACME/Project/Task") with { Name = "Task", NodeType = "Task" }, JsonOptions);
         await Task.Delay(300);
 
         changes.Should().HaveCount(5);
@@ -287,14 +288,14 @@ public class ObservableQueryIntegrationTests
     public async Task RecursiveDelete_EmitsRemovedForAllDeletedNodes()
     {
         // Arrange
-        await _persistence.SaveNodeAsync(MeshNode.FromPath("ACME") with { Name = "ACME", NodeType = "Organization" });
-        await _persistence.SaveNodeAsync(MeshNode.FromPath("ACME/Project") with { Name = "Project", NodeType = "Project" });
-        await _persistence.SaveNodeAsync(MeshNode.FromPath("ACME/Project/Task") with { Name = "Task", NodeType = "Task" });
+        await Persistence.SaveNodeAsync(MeshNode.FromPath("ACME") with { Name = "ACME", NodeType = "Organization" }, JsonOptions);
+        await Persistence.SaveNodeAsync(MeshNode.FromPath("ACME/Project") with { Name = "Project", NodeType = "Project" }, JsonOptions);
+        await Persistence.SaveNodeAsync(MeshNode.FromPath("ACME/Project/Task") with { Name = "Task", NodeType = "Task" }, JsonOptions);
 
         var changes = new List<QueryResultChange<MeshNode>>();
 
-        var subscription = _meshQuery
-            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery("path:ACME scope:subtree"))
+        var subscription = MeshQuery
+            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery("path:ACME scope:subtree"), JsonOptions)
             .Subscribe(change => changes.Add(change));
 
         await Task.Delay(200);
@@ -302,7 +303,7 @@ public class ObservableQueryIntegrationTests
         changes[0].Items.Should().HaveCount(3);
 
         // Act - Recursive delete
-        await _persistence.DeleteNodeAsync("ACME", recursive: true);
+        await Persistence.DeleteNodeAsync("ACME", recursive: true);
         await Task.Delay(300);
 
         // Assert - Should have removal for all 3 items
@@ -320,25 +321,25 @@ public class ObservableQueryIntegrationTests
     public async Task QueryWithFilter_OnlyEmitsMatchingChanges()
     {
         // Arrange
-        await _persistence.SaveNodeAsync(MeshNode.FromPath("ACME/Project1") with { Name = "Project 1", NodeType = "Project" });
+        await Persistence.SaveNodeAsync(MeshNode.FromPath("ACME/Project1") with { Name = "Project 1", NodeType = "Project" }, JsonOptions);
 
         var changes = new List<QueryResultChange<MeshNode>>();
 
-        var subscription = _meshQuery
-            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery("path:ACME nodeType:Project scope:descendants"))
+        var subscription = MeshQuery
+            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery("path:ACME nodeType:Project scope:descendants"), JsonOptions)
             .Subscribe(change => changes.Add(change));
 
         await Task.Delay(200);
         changes.Should().HaveCount(1);
 
         // Act - Add matching node
-        await _persistence.SaveNodeAsync(MeshNode.FromPath("ACME/Project2") with { Name = "Project 2", NodeType = "Project" });
+        await Persistence.SaveNodeAsync(MeshNode.FromPath("ACME/Project2") with { Name = "Project 2", NodeType = "Project" }, JsonOptions);
         await Task.Delay(300);
 
         changes.Should().HaveCount(2);
 
         // Act - Add non-matching node (different nodeType)
-        await _persistence.SaveNodeAsync(MeshNode.FromPath("ACME/Task1") with { Name = "Task 1", NodeType = "Task" });
+        await Persistence.SaveNodeAsync(MeshNode.FromPath("ACME/Task1") with { Name = "Task 1", NodeType = "Task" }, JsonOptions);
         await Task.Delay(300);
 
         // Should still be 2 (Task doesn't match nodeType:Project filter)

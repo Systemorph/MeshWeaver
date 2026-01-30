@@ -1,6 +1,4 @@
-using MeshWeaver.Domain;
 using MeshWeaver.Mesh.Services;
-using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.Hosting.Persistence;
 
@@ -24,8 +22,6 @@ public class FileSystemStorageAdapterFactory : IStorageAdapterFactory
             basePath = Path.GetFullPath(Path.Combine(Directory.GetCurrentDirectory(), basePath));
         }
 
-        return new FileSystemStorageAdapter(
-            basePath,
-            typeRegistryFactory: () => serviceProvider.GetService<ITypeRegistry>());
+        return new FileSystemStorageAdapter(basePath);
     }
 }

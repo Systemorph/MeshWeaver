@@ -63,7 +63,7 @@ public static class MeshCatalogView
             IReadOnlyList<MeshNode> children;
             try
             {
-                children = await meshQuery.QueryAsync<MeshNode>(query, ct: ct).ToListAsync(ct);
+                children = await meshQuery.QueryAsync<MeshNode>(query, host.Hub.JsonSerializerOptions, ct: ct).ToListAsync(ct);
             }
             catch
             {
@@ -124,7 +124,7 @@ public static class MeshCatalogView
 
         return Observable.FromAsync(async ct =>
         {
-            var node = await persistence?.GetNodeAsync(nodePath, ct)!;
+            var node = await persistence?.GetNodeAsync(nodePath, host.Hub.JsonSerializerOptions, ct)!;
 
             // Wrap editor control with a back button
             var stack = Controls.Stack.WithWidth("100%");
