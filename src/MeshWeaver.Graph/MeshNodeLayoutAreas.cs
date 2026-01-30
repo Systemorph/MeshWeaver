@@ -221,7 +221,7 @@ public static class MeshNodeLayoutAreas
         // Title - click-to-edit if we have Title property, otherwise static
         if (hasTitleProperty && node != null)
         {
-            var dataId = OverviewLayoutArea.GetDataId(nodePath);
+            var dataId = EditLayoutArea.GetDataId(nodePath);
             // Data will be set up by OverviewLayoutArea.BuildPropertyOverview, just use the same ID
             titleContent = titleContent.WithView(OverviewLayoutArea.BuildTitle(host, node, dataId, canEdit));
         }

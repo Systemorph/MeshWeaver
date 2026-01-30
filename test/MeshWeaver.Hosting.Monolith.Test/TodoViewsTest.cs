@@ -6,6 +6,7 @@ using System.Text.Json;
 using System.Threading.Tasks;
 using FluentAssertions;
 using MeshWeaver.Data;
+using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Monolith;
 using MeshWeaver.Hosting.Monolith.TestBase;
@@ -18,7 +19,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
-namespace MeshWeaver.Graph.Test;
+namespace MeshWeaver.Hosting.Monolith.Test;
 
 /// <summary>
 /// Tests for Todo-level views (Details, Thumbnail).
@@ -33,17 +34,10 @@ public class TodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBase(outp
         "MeshWeaverTodoViewTests",
         ".mesh-cache");
 
-    private static string GetSamplesGraphPath()
-    {
-        var currentDir = Directory.GetCurrentDirectory();
-        var solutionRoot = Path.GetFullPath(Path.Combine(currentDir, "..", "..", "..", "..", ".."));
-        return Path.Combine(solutionRoot, "samples", "Graph");
-    }
-
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
     {
-        var graphPath = GetSamplesGraphPath();
-        var dataDirectory = Path.Combine(graphPath, "Data");
+        var graphPath = TestPaths.SamplesGraph;
+        var dataDirectory = TestPaths.SamplesGraphData;
         Directory.CreateDirectory(SharedCacheDirectory);
 
         var configuration = new ConfigurationBuilder()

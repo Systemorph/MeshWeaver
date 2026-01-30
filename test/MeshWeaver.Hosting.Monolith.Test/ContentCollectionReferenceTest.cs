@@ -9,6 +9,7 @@ using System.Threading.Tasks;
 using FluentAssertions;
 using MeshWeaver.ContentCollections;
 using MeshWeaver.Data;
+using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Monolith;
 using MeshWeaver.Hosting.Monolith.TestBase;
@@ -20,7 +21,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
-namespace MeshWeaver.Graph.Test;
+namespace MeshWeaver.Hosting.Monolith.Test;
 
 /// <summary>
 /// Tests for ContentCollectionReference resolution via GetDataRequest.
@@ -37,8 +38,8 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
     {
-        var graphPath = GetSamplesGraphPath();
-        var dataDirectory = Path.Combine(graphPath, "Data");
+        var graphPath = TestPaths.SamplesGraph;
+        var dataDirectory = TestPaths.SamplesGraphData;
         var cacheDirectory = Path.Combine(Path.GetTempPath(), "MeshWeaverContentCollectionTests", System.Guid.NewGuid().ToString(), ".mesh-cache");
         Directory.CreateDirectory(cacheDirectory);
 

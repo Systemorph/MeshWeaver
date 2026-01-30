@@ -24,7 +24,7 @@ public sealed class MeshCatalog(
     public IPersistenceService Persistence { get; } = persistenceService;
     private readonly IMeshQuery? _meshQuery = meshQuery;
     private readonly IMemoryCache cache = new MemoryCache(new MemoryCacheOptions());
-    private readonly MemoryCacheEntryOptions cacheOptions = new() { SlidingExpiration = TimeSpan.FromMinutes(5) };
+    private readonly MemoryCacheEntryOptions cacheOptions = new() { SlidingExpiration = TimeSpan.FromMinutes(15) };
     private readonly IMessageHub persistenceHub = hub.GetHostedHub(AddressExtensions.CreatePersistenceAddress())!;
     private readonly ILogger<MeshCatalog> logger = hub.ServiceProvider.GetRequiredService<ILogger<MeshCatalog>>();
 

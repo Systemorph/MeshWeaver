@@ -6,6 +6,7 @@ using System.Reactive.Linq;
 using System.Threading.Tasks;
 using FluentAssertions;
 using MeshWeaver.Data;
+using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Monolith;
 using MeshWeaver.Hosting.Monolith.TestBase;
@@ -17,7 +18,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
-namespace MeshWeaver.Graph.Test;
+namespace MeshWeaver.Hosting.Monolith.Test;
 
 /// <summary>
 /// Integration tests for the ProductLaunch project under ACME organization.
@@ -43,8 +44,8 @@ public class TodoGraphIntegrationTest(ITestOutputHelper output) : MonolithMeshTe
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
     {
-        var graphPath = GetSamplesGraphPath();
-        var dataDirectory = Path.Combine(graphPath, "Data");
+        var graphPath = TestPaths.SamplesGraph;
+        var dataDirectory = TestPaths.SamplesGraphData;
         Directory.CreateDirectory(SharedCacheDirectory);
 
         Output.WriteLine($"Graph path: {graphPath}");

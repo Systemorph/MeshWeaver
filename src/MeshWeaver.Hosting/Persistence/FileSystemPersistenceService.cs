@@ -18,7 +18,7 @@ public class FileSystemPersistenceService : IPersistenceServiceCore
     private readonly IMemoryCache _cache = new MemoryCache(new MemoryCacheOptions());
     private readonly MemoryCacheEntryOptions _cacheOptions = new()
     {
-        SlidingExpiration = TimeSpan.FromMinutes(10)
+        SlidingExpiration = TimeSpan.FromMinutes(15)
     };
 
     public FileSystemPersistenceService(
@@ -55,7 +55,8 @@ public class FileSystemPersistenceService : IPersistenceServiceCore
 
         foreach (var path in nodePaths)
         {
-            var node = await _storageAdapter.ReadAsync(path, options, default);
+            // Use GetNodeAsync to leverage cache
+            var node = await GetNodeAsync(path, options);
             if (node != null)
                 yield return node;
         }
