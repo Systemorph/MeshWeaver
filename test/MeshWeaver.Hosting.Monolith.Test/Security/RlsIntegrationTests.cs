@@ -400,7 +400,7 @@ public class SecurePersistenceDecoratorTests(ITestOutputHelper output) : Monolit
     public async Task SecureDecorator_CanBeCreated()
     {
         // Arrange
-        var persistence = Mesh.ServiceProvider.GetRequiredService<IPersistenceService>();
+        var persistence = Mesh.ServiceProvider.GetRequiredService<IPersistenceServiceCore>();
         var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
         var logger = Mesh.ServiceProvider.GetRequiredService<ILogger<SecurePersistenceServiceDecorator>>();
 
@@ -416,7 +416,7 @@ public class SecurePersistenceDecoratorTests(ITestOutputHelper output) : Monolit
     public async Task GetNodeSecureAsync_WithPermission_ReturnsNode()
     {
         // Arrange
-        var persistence = Mesh.ServiceProvider.GetRequiredService<IPersistenceService>();
+        var persistence = Mesh.ServiceProvider.GetRequiredService<IPersistenceServiceCore>();
         var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
         var logger = Mesh.ServiceProvider.GetRequiredService<ILogger<SecurePersistenceServiceDecorator>>();
         var decorator = new SecurePersistenceServiceDecorator(persistence, new Lazy<ISecurityService>(() => securityService), logger);
@@ -447,7 +447,7 @@ public class SecurePersistenceDecoratorTests(ITestOutputHelper output) : Monolit
     public async Task GetNodeSecureAsync_WithoutPermission_ReturnsNull()
     {
         // Arrange
-        var persistence = Mesh.ServiceProvider.GetRequiredService<IPersistenceService>();
+        var persistence = Mesh.ServiceProvider.GetRequiredService<IPersistenceServiceCore>();
         var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
         var logger = Mesh.ServiceProvider.GetRequiredService<ILogger<SecurePersistenceServiceDecorator>>();
         var decorator = new SecurePersistenceServiceDecorator(persistence, new Lazy<ISecurityService>(() => securityService), logger);
@@ -476,7 +476,7 @@ public class SecurePersistenceDecoratorTests(ITestOutputHelper output) : Monolit
     public async Task GetChildrenSecureAsync_FiltersUnauthorizedNodes()
     {
         // Arrange
-        var persistence = Mesh.ServiceProvider.GetRequiredService<IPersistenceService>();
+        var persistence = Mesh.ServiceProvider.GetRequiredService<IPersistenceServiceCore>();
         var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
         var logger = Mesh.ServiceProvider.GetRequiredService<ILogger<SecurePersistenceServiceDecorator>>();
         var decorator = new SecurePersistenceServiceDecorator(persistence, new Lazy<ISecurityService>(() => securityService), logger);

@@ -12,14 +12,14 @@ namespace MeshWeaver.Hosting.Security;
 /// Implements the secure query methods by delegating to the inner service
 /// and filtering results based on user permissions.
 /// </summary>
-public class SecurePersistenceServiceDecorator : IPersistenceService
+public class SecurePersistenceServiceDecorator : IPersistenceServiceCore
 {
-    private readonly IPersistenceService _inner;
+    private readonly IPersistenceServiceCore _inner;
     private readonly Lazy<ISecurityService> _securityService;
     private readonly ILogger<SecurePersistenceServiceDecorator> _logger;
 
     public SecurePersistenceServiceDecorator(
-        IPersistenceService inner,
+        IPersistenceServiceCore inner,
         Lazy<ISecurityService> securityService,
         ILogger<SecurePersistenceServiceDecorator> logger)
     {

@@ -1,5 +1,4 @@
 using System.Linq;
-using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
@@ -9,8 +8,8 @@ using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Hosting.Security;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
-using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
+using MeshWeaver.Mesh.Services;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
@@ -24,7 +23,6 @@ namespace MeshWeaver.Hosting.Monolith.Test.Security;
 public class UserAccessTests(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
     private CancellationToken TestTimeout => new CancellationTokenSource(10.Seconds()).Token;
-    private JsonSerializerOptions _jsonOptions => Mesh.ServiceProvider.GetRequiredService<IMessageHub>().JsonSerializerOptions;
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
     {
@@ -290,15 +288,15 @@ public class UserAccessTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
         var persistenceService = Mesh.ServiceProvider.GetRequiredService<IPersistenceService>();
 
         // Create test namespace and nodes
-        await persistenceService.SaveNodeAsync(new MeshNode("PublicArea") { Name = "Public Area" }, _jsonOptions, TestTimeout);
-        await persistenceService.SaveNodeAsync(new MeshNode("Doc1", "PublicArea") { Name = "Document 1" }, _jsonOptions, TestTimeout);
-        await persistenceService.SaveNodeAsync(new MeshNode("Doc2", "PublicArea") { Name = "Document 2" }, _jsonOptions, TestTimeout);
+        await persistenceService.SaveNodeAsync(new MeshNode("PublicArea") { Name = "Public Area" }, TestTimeout);
+        await persistenceService.SaveNodeAsync(new MeshNode("Doc1", "PublicArea") { Name = "Document 1" }, TestTimeout);
+        await persistenceService.SaveNodeAsync(new MeshNode("Doc2", "PublicArea") { Name = "Document 2" }, TestTimeout);
 
         // Configure Public user to have Viewer role on PublicArea
         await securityService.AddUserRoleAsync(WellKnownUsers.Public, "Viewer", "PublicArea", "system", TestTimeout);
 
         // Act - Get children as anonymous user (null/empty userId)
-        var children = await persistenceService.GetChildrenSecureAsync("PublicArea", null, _jsonOptions).ToListAsync();
+        var children = await persistenceService.GetChildrenSecureAsync("PublicArea", null).ToListAsync();
 
         // Assert - Anonymous user should see the public documents
         children.Should().HaveCount(2);
@@ -314,13 +312,13 @@ public class UserAccessTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
         var persistenceService = Mesh.ServiceProvider.GetRequiredService<IPersistenceService>();
 
         // Create private namespace and nodes (no Public access)
-        await persistenceService.SaveNodeAsync(new MeshNode("PrivateArea") { Name = "Private Area" }, _jsonOptions, TestTimeout);
-        await persistenceService.SaveNodeAsync(new MeshNode("Secret1", "PrivateArea") { Name = "Secret 1" }, _jsonOptions, TestTimeout);
+        await persistenceService.SaveNodeAsync(new MeshNode("PrivateArea") { Name = "Private Area" }, TestTimeout);
+        await persistenceService.SaveNodeAsync(new MeshNode("Secret1", "PrivateArea") { Name = "Secret 1" }, TestTimeout);
 
         // Don't configure any Public access
 
         // Act - Get children as anonymous user (null/empty userId)
-        var children = await persistenceService.GetChildrenSecureAsync("PrivateArea", null, _jsonOptions).ToListAsync();
+        var children = await persistenceService.GetChildrenSecureAsync("PrivateArea", null).ToListAsync();
 
         // Assert - Anonymous user should not see any documents
         children.Should().BeEmpty();
@@ -334,14 +332,14 @@ public class UserAccessTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
         var persistenceService = Mesh.ServiceProvider.GetRequiredService<IPersistenceService>();
 
         // Create two root namespaces
-        await persistenceService.SaveNodeAsync(new MeshNode("OpenProject") { Name = "Open Project" }, _jsonOptions, TestTimeout);
-        await persistenceService.SaveNodeAsync(new MeshNode("ClosedProject") { Name = "Closed Project" }, _jsonOptions, TestTimeout);
+        await persistenceService.SaveNodeAsync(new MeshNode("OpenProject") { Name = "Open Project" }, TestTimeout);
+        await persistenceService.SaveNodeAsync(new MeshNode("ClosedProject") { Name = "Closed Project" }, TestTimeout);
 
         // Only configure Public access for OpenProject
         await securityService.AddUserRoleAsync(WellKnownUsers.Public, "Viewer", "OpenProject", "system", TestTimeout);
 
         // Act - Get root children as anonymous user
-        var rootChildren = await persistenceService.GetChildrenSecureAsync(null, null, _jsonOptions).ToListAsync();
+        var rootChildren = await persistenceService.GetChildrenSecureAsync(null, null).ToListAsync();
 
         // Assert - Only OpenProject should be visible
         rootChildren.Should().Contain(n => n.Id == "OpenProject");
@@ -422,7 +420,7 @@ public class UserAccessTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
             Name = "Organization",
             NodeType = "NodeType",
             Description = "An organization containing projects"
-        }, _jsonOptions, TestTimeout);
+        }, TestTimeout);
 
         // Create two organizations - one public (Systemorph), one private (ACME)
         await persistenceService.SaveNodeAsync(new MeshNode("Systemorph")
@@ -430,14 +428,14 @@ public class UserAccessTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
             Name = "Systemorph",
             NodeType = "Organization",
             Description = "The company behind MeshWeaver"
-        }, _jsonOptions, TestTimeout);
+        }, TestTimeout);
 
         await persistenceService.SaveNodeAsync(new MeshNode("ACME")
         {
             Name = "ACME",
             NodeType = "Organization",
             Description = "Private organization"
-        }, _jsonOptions, TestTimeout);
+        }, TestTimeout);
 
         // Configure Systemorph as public (Public user has Viewer role)
         await securityService.AddUserRoleAsync(WellKnownUsers.Public, "Viewer", "Systemorph", "system", TestTimeout);
@@ -450,7 +448,7 @@ public class UserAccessTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
             Query = "nodeType:Organization scope:children",
             UserId = "" // Anonymous
         };
-        var results = await meshQuery.QueryAsync(request, _jsonOptions, TestTimeout).ToListAsync();
+        var results = await meshQuery.QueryAsync(request, TestTimeout).ToListAsync();
 
         // Assert - Anonymous should only see Systemorph, not ACME
         var nodeNames = results.OfType<MeshNode>().Select(n => n.Name).ToList();
@@ -473,7 +471,7 @@ public class UserAccessTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
             Name = "Organization2",
             NodeType = "NodeType",
             Description = "An organization containing projects"
-        }, _jsonOptions, TestTimeout);
+        }, TestTimeout);
 
         // Create two organizations - one public (MeshWeaver), one private (SecretOrg)
         await persistenceService.SaveNodeAsync(new MeshNode("MeshWeaver2")
@@ -481,14 +479,14 @@ public class UserAccessTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
             Name = "MeshWeaver2",
             NodeType = "Organization2",
             Description = "The MeshWeaver project"
-        }, _jsonOptions, TestTimeout);
+        }, TestTimeout);
 
         await persistenceService.SaveNodeAsync(new MeshNode("SecretOrg")
         {
             Name = "SecretOrg",
             NodeType = "Organization2",
             Description = "Secret organization"
-        }, _jsonOptions, TestTimeout);
+        }, TestTimeout);
 
         // Configure MeshWeaver2 as public (Public user has Viewer role)
         await securityService.AddUserRoleAsync(WellKnownUsers.Public, "Viewer", "MeshWeaver2", "system", TestTimeout);
@@ -505,7 +503,7 @@ public class UserAccessTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
             Query = "nodeType:Organization2 scope:children"
             // Note: UserId is NOT set - should come from AccessService
         };
-        var results = await meshQuery.QueryAsync(request, _jsonOptions, TestTimeout).ToListAsync();
+        var results = await meshQuery.QueryAsync(request, TestTimeout).ToListAsync();
 
         // Assert - Anonymous should only see MeshWeaver2, not SecretOrg
         var nodeNames = results.OfType<MeshNode>().Select(n => n.Name).ToList();
@@ -525,10 +523,10 @@ public class UserAccessTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
         var publicNode = new MeshNode("PublicDoc", "Public") { Name = "Public Document" };
         var restrictedNode = new MeshNode("PrivateDoc", "Private") { Name = "Private Document" };
 
-        await persistenceService.SaveNodeAsync(new MeshNode("Public") { Name = "Public" }, _jsonOptions, TestTimeout);
-        await persistenceService.SaveNodeAsync(publicNode, _jsonOptions, TestTimeout);
-        await persistenceService.SaveNodeAsync(new MeshNode("Private") { Name = "Private" }, _jsonOptions, TestTimeout);
-        await persistenceService.SaveNodeAsync(restrictedNode, _jsonOptions, TestTimeout);
+        await persistenceService.SaveNodeAsync(new MeshNode("Public") { Name = "Public" }, TestTimeout);
+        await persistenceService.SaveNodeAsync(publicNode, TestTimeout);
+        await persistenceService.SaveNodeAsync(new MeshNode("Private") { Name = "Private" }, TestTimeout);
+        await persistenceService.SaveNodeAsync(restrictedNode, TestTimeout);
 
         // Configure Public namespace as public (Public user has Viewer role)
         await securityService.AddUserRoleAsync(WellKnownUsers.Public, "Viewer", "Public", "system", TestTimeout);
@@ -537,10 +535,10 @@ public class UserAccessTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
 
         // Act - Query as anonymous user (empty userId)
         var request = new MeshQueryRequest { Query = "path:Public scope:descendants", UserId = "" };
-        var publicResults = await meshQuery.QueryAsync(request, _jsonOptions, TestTimeout).ToListAsync();
+        var publicResults = await meshQuery.QueryAsync(request, TestTimeout).ToListAsync();
 
         var restrictedRequest = new MeshQueryRequest { Query = "path:Private scope:descendants", UserId = "" };
-        var restrictedResults = await meshQuery.QueryAsync(restrictedRequest, _jsonOptions, TestTimeout).ToListAsync();
+        var restrictedResults = await meshQuery.QueryAsync(restrictedRequest, TestTimeout).ToListAsync();
 
         // Assert - Use OfType for cleaner filtering
         var publicNodePaths = publicResults.OfType<MeshNode>().Select(n => n.Path).ToList();
@@ -560,8 +558,8 @@ public class UserAccessTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
 
         // Create test node in restricted area (Id, Namespace)
         var restrictedNode = new MeshNode("SecretDoc", "Secret") { Name = "Secret Document" };
-        await persistenceService.SaveNodeAsync(new MeshNode("Secret") { Name = "Secret" }, _jsonOptions, TestTimeout);
-        await persistenceService.SaveNodeAsync(restrictedNode, _jsonOptions, TestTimeout);
+        await persistenceService.SaveNodeAsync(new MeshNode("Secret") { Name = "Secret" }, TestTimeout);
+        await persistenceService.SaveNodeAsync(restrictedNode, TestTimeout);
 
         // Secret namespace has no public access
         // Give user access
@@ -569,7 +567,7 @@ public class UserAccessTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
 
         // Act - Query as authenticated user
         var request = new MeshQueryRequest { Query = "path:Secret scope:descendants", UserId = "QueryUser" };
-        var results = await meshQuery.QueryAsync(request, _jsonOptions, TestTimeout).ToListAsync();
+        var results = await meshQuery.QueryAsync(request, TestTimeout).ToListAsync();
 
         // Assert - User should see the restricted node
         var nodePaths = results.OfType<MeshNode>().Select(n => n.Path).ToList();

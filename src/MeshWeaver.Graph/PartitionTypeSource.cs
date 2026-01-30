@@ -85,7 +85,7 @@ public record PartitionTypeSource<T> : TypeSourceWithType<T, PartitionTypeSource
         {
             _logger?.LogDebug("PartitionTypeSource<{Type}>.UpdateImpl: Saving object to partition {PartitionPath}",
                 typeof(T).Name, _partitionPath);
-            _ = _persistence.SavePartitionObjectsAsync(_partitionPath, null, [obj], _workspace.Hub.JsonSerializerOptions);
+            _ = _persistence.SavePartitionObjectsAsync(_partitionPath, null, [obj]);
         }
 
         // Note: Delete of partition objects is not yet supported
@@ -104,7 +104,7 @@ public record PartitionTypeSource<T> : TypeSourceWithType<T, PartitionTypeSource
 
         var items = new List<T>();
 
-        await foreach (var obj in _persistence.GetPartitionObjectsAsync(_partitionPath, null, _workspace.Hub.JsonSerializerOptions).WithCancellation(ct))
+        await foreach (var obj in _persistence.GetPartitionObjectsAsync(_partitionPath, null).WithCancellation(ct))
         {
             if (obj is T typedObj)
             {

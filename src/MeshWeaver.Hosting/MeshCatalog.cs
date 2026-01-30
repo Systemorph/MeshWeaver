@@ -74,7 +74,7 @@ public sealed class MeshCatalog(
         }
 
         // Try loading from persistence
-        var persistenceNode = await Persistence.GetNodeAsync(address.ToString(), hub.JsonSerializerOptions);
+        var persistenceNode = await Persistence.GetNodeAsync(address.ToString());
         if (persistenceNode != null)
         {
             // Enrich with HubConfiguration based on NodeType (NOT the address - that would cause circular dependency)
@@ -155,7 +155,7 @@ public sealed class MeshCatalog(
 
 
     public Task UpdateAsync(MeshNode node) =>
-        Persistence.SaveNodeAsync(node, hub.JsonSerializerOptions);
+        Persistence.SaveNodeAsync(node);
 
     /// <inheritdoc />
     public async Task<MeshNode> CreateNodeAsync(MeshNode node, string? createdBy = null, CancellationToken ct = default)
@@ -202,7 +202,7 @@ public sealed class MeshCatalog(
         var transientNode = node with { State = MeshNodeState.Transient };
 
         // 6. Save to persistence
-        var savedNode = await Persistence.SaveNodeAsync(transientNode, hub.JsonSerializerOptions, ct);
+        var savedNode = await Persistence.SaveNodeAsync(transientNode, ct);
 
         // 7. Update cache with transient node
         cache.Set(savedNode.Path, savedNode, cacheOptions);
@@ -216,7 +216,7 @@ public sealed class MeshCatalog(
     public async Task<MeshNode> ConfirmNodeAsync(string path, CancellationToken ct = default)
     {
         // Get the current node
-        var node = await Persistence.GetNodeAsync(path, hub.JsonSerializerOptions, ct);
+        var node = await Persistence.GetNodeAsync(path, ct);
         if (node == null)
         {
             throw new InvalidOperationException($"Node not found at path: {path}");
@@ -229,7 +229,7 @@ public sealed class MeshCatalog(
 
         // Update to Confirmed state
         var confirmedNode = node with { State = MeshNodeState.Active };
-        await Persistence.SaveNodeAsync(confirmedNode, hub.JsonSerializerOptions, ct);
+        await Persistence.SaveNodeAsync(confirmedNode, ct);
 
         // Enrich with HubConfiguration based on NodeType (same as cold start in GetNodeAsync)
         if (NodeTypeService != null)
@@ -251,7 +251,7 @@ public sealed class MeshCatalog(
         // Remove from cache - for recursive, also remove all descendants
         if (recursive)
         {
-            await foreach (var descendant in Persistence.GetDescendantsAsync(path, hub.JsonSerializerOptions).WithCancellation(ct))
+            await foreach (var descendant in Persistence.GetDescendantsAsync(path).WithCancellation(ct))
             {
                 cache.Remove(descendant.Path);
             }
@@ -346,7 +346,7 @@ public sealed class MeshCatalog(
         {
             var testPath = string.Join("/", segments.Take(depth));
 
-            var node = await Persistence.GetNodeAsync(testPath, hub.JsonSerializerOptions);
+            var node = await Persistence.GetNodeAsync(testPath);
             if (node != null)
             {
                 logger.LogDebug("FindBestPersistenceMatchAsync: found node at path={Path}", testPath);
@@ -422,7 +422,7 @@ public sealed class MeshCatalog(
         if (_meshQuery != null)
         {
             var request = new MeshQueryRequest { Query = fullQuery, Limit = maxResults };
-            await foreach (var item in _meshQuery.QueryAsync(request, hub.JsonSerializerOptions, ct))
+            await foreach (var item in _meshQuery.QueryAsync(request, ct))
             {
                 if (item is MeshNode child)
                 {

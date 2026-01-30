@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reactive.Linq;
-using System.Text.Json;
 using System.Threading.Tasks;
 using FluentAssertions;
 using MeshWeaver.Data;
@@ -29,8 +28,6 @@ namespace MeshWeaver.Graph.Test;
 [Collection("SamplesGraphData")]
 public class TodoGraphIntegrationTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
-    private JsonSerializerOptions _jsonOptions => Mesh.ServiceProvider.GetRequiredService<IMessageHub>().JsonSerializerOptions;
-
     // Shared cache directory for all tests - compiled assemblies are reused
     private static readonly string SharedCacheDirectory = Path.Combine(
         Path.GetTempPath(),
@@ -177,7 +174,7 @@ public class TodoGraphIntegrationTest(ITestOutputHelper output) : MonolithMeshTe
     {
         var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
 
-        var children = await meshQuery.QueryAsync<MeshNode>("path:ACME/ProductLaunch/Todo scope:children", _jsonOptions, null, TestContext.Current.CancellationToken)
+        var children = await meshQuery.QueryAsync<MeshNode>("path:ACME/ProductLaunch/Todo scope:children", null, TestContext.Current.CancellationToken)
             .ToListAsync(TestContext.Current.CancellationToken);
 
         children.Should().NotBeEmpty("ProductLaunch should have task children");
@@ -193,7 +190,7 @@ public class TodoGraphIntegrationTest(ITestOutputHelper output) : MonolithMeshTe
     {
         var persistence = Mesh.ServiceProvider.GetRequiredService<IPersistenceService>();
 
-        var task = await persistence.GetNodeAsync("ACME/ProductLaunch/Todo/DefinePersona", _jsonOptions, TestContext.Current.CancellationToken);
+        var task = await persistence.GetNodeAsync("ACME/ProductLaunch/Todo/DefinePersona", TestContext.Current.CancellationToken);
 
         task.Should().NotBeNull();
         task!.NodeType.Should().Be("ACME/Project/Todo");

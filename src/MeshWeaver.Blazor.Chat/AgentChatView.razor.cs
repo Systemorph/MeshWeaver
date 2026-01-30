@@ -131,7 +131,7 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
         {
             var userPartition = GetUserChatPartition();
             var chats = new List<ChatRecord>();
-            await foreach (var c in ChatPersistenceHelper.ListChatsAsync(PersistenceService, userPartition, Hub.JsonSerializerOptions))
+            await foreach (var c in ChatPersistenceHelper.ListChatsAsync(PersistenceService, userPartition))
             {
                 chats.Add(c);
             }
@@ -483,7 +483,6 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
             var suggestions = await meshQuery.AutocompleteAsync(
                 basePath: "",
                 prefix: searchPrefix,
-                options: Hub.JsonSerializerOptions,
                 mode: AutocompleteMode.RelevanceFirst,
                 limit: 15
             ).ToArrayAsync();
@@ -527,7 +526,7 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
             var activityPath = $"_activity/{userId}";
             var recentItems = new List<(UserActivityRecord Record, DateTimeOffset LastAccess)>();
 
-            await foreach (var obj in persistence.GetPartitionObjectsAsync(activityPath, null, Hub.JsonSerializerOptions))
+            await foreach (var obj in persistence.GetPartitionObjectsAsync(activityPath, null))
             {
                 if (obj is UserActivityRecord record)
                 {
@@ -690,7 +689,7 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
             CancelAnyCurrentResponse();
 
             var userPartition = GetUserChatPartition();
-            var chatRecord = await ChatPersistenceHelper.LoadChatAsync(PersistenceService, userPartition, conversationId, Hub.JsonSerializerOptions);
+            var chatRecord = await ChatPersistenceHelper.LoadChatAsync(PersistenceService, userPartition, conversationId);
 
             if (chatRecord != null)
             {
@@ -799,7 +798,7 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
 
                 // Save to user's chat partition
                 var userPartition = GetUserChatPartition();
-                await ChatPersistenceHelper.SaveChatAsync(PersistenceService, userPartition, chatRecord, Hub.JsonSerializerOptions);
+                await ChatPersistenceHelper.SaveChatAsync(PersistenceService, userPartition, chatRecord);
 
                 // Update local state
                 if (isNew)
@@ -1204,7 +1203,7 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
             {
                 var meshQuery = Hub.ServiceProvider.GetService<IMeshQuery>();
                 var nodeTypePath = node?.NodeType;
-                var agentDisplayInfoList = await AgentOrderingHelper.QueryAgentsAsync(meshQuery, Hub.JsonSerializerOptions, path, nodeTypePath);
+                var agentDisplayInfoList = await AgentOrderingHelper.QueryAgentsAsync(meshQuery, path, nodeTypePath);
                 availableAgents = agentDisplayInfoList.Select(a => a.AgentConfiguration).ToList();
                 Logger.LogDebug("Loaded {Count} available agents for context path: {Path}", availableAgents?.Count ?? 0, path);
             }

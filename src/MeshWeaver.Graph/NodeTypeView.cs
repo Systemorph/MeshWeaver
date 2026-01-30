@@ -163,7 +163,7 @@ public static class NodeTypeView
                 return Array.Empty<MeshNode>() as IReadOnlyList<MeshNode>;
             try
             {
-                return await meshQuery.QueryAsync<MeshNode>($"path:{hubPath} nodeType:NodeType scope:descendants", host.Hub.JsonSerializerOptions).ToListAsync() as IReadOnlyList<MeshNode>;
+                return await meshQuery.QueryAsync<MeshNode>($"path:{hubPath} nodeType:NodeType scope:descendants").ToListAsync() as IReadOnlyList<MeshNode>;
             }
             catch
             {
@@ -178,7 +178,7 @@ public static class NodeTypeView
                 return Array.Empty<MeshNode>() as IReadOnlyList<MeshNode>;
             try
             {
-                return await meshQuery.QueryAsync<MeshNode>($"path:{hubPath} nodeType:Agent scope:descendants", host.Hub.JsonSerializerOptions).ToListAsync() as IReadOnlyList<MeshNode>;
+                return await meshQuery.QueryAsync<MeshNode>($"path:{hubPath} nodeType:Agent scope:descendants").ToListAsync() as IReadOnlyList<MeshNode>;
             }
             catch
             {

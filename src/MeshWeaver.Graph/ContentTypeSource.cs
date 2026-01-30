@@ -81,7 +81,7 @@ public record ContentTypeSource<T> : TypeSourceWithType<T, ContentTypeSource<T>>
         // Using GetAwaiter().GetResult() to avoid async issues crossing test boundaries
         try
         {
-            var meshNode = _persistence.GetNodeAsync(_hubPath, _workspace.Hub.JsonSerializerOptions).GetAwaiter().GetResult();
+            var meshNode = _persistence.GetNodeAsync(_hubPath).GetAwaiter().GetResult();
 
             if (meshNode == null)
             {
@@ -105,7 +105,7 @@ public record ContentTypeSource<T> : TypeSourceWithType<T, ContentTypeSource<T>>
 
             // Save to persistence synchronously
             _logger?.LogDebug("ContentTypeSource<{Type}>.SyncToMeshNode: Saving MeshNode to persistence with new content, Version={Version}", typeof(T).Name, hubVersion);
-            _persistence.SaveNodeAsync(updatedNode, _workspace.Hub.JsonSerializerOptions).GetAwaiter().GetResult();
+            _persistence.SaveNodeAsync(updatedNode).GetAwaiter().GetResult();
             _logger?.LogDebug("ContentTypeSource<{Type}>.SyncToMeshNode: Persistence save complete", typeof(T).Name);
 
             // Also update the in-memory MeshNode data stream via RequestChange
@@ -131,7 +131,7 @@ public record ContentTypeSource<T> : TypeSourceWithType<T, ContentTypeSource<T>>
         _logger?.LogDebug("ContentTypeSource<{Type}>.InitializeAsync: Loading MeshNode from hubPath={HubPath}", typeof(T).Name, _hubPath);
 
         // Load the MeshNode from persistence to get the content
-        var meshNode = await _persistence.GetNodeAsync(_hubPath, _workspace.Hub.JsonSerializerOptions, ct);
+        var meshNode = await _persistence.GetNodeAsync(_hubPath, ct);
         _logger?.LogDebug("ContentTypeSource<{Type}>.InitializeAsync: meshNode={MeshNode}, Content type={ContentType}",
             typeof(T).Name, meshNode?.Path ?? "null", meshNode?.Content?.GetType().Name ?? "null");
 

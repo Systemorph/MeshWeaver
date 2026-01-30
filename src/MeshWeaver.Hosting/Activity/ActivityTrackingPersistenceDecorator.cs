@@ -13,9 +13,9 @@ namespace MeshWeaver.Hosting.Activity;
 /// Records reads and writes to _activity/{userId} partition storage.
 /// Flushes activity records synchronously on each save operation.
 /// </summary>
-public class ActivityTrackingPersistenceDecorator : IPersistenceService
+public class ActivityTrackingPersistenceDecorator : IPersistenceServiceCore
 {
-    private readonly IPersistenceService _inner;
+    private readonly IPersistenceServiceCore _inner;
     private readonly AccessService _accessService;
     private readonly ILogger<ActivityTrackingPersistenceDecorator> _logger;
 
@@ -24,7 +24,7 @@ public class ActivityTrackingPersistenceDecorator : IPersistenceService
     private readonly SemaphoreSlim _flushLock = new(1, 1);
 
     public ActivityTrackingPersistenceDecorator(
-        IPersistenceService inner,
+        IPersistenceServiceCore inner,
         AccessService accessService,
         ILogger<ActivityTrackingPersistenceDecorator> logger)
     {

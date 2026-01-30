@@ -415,7 +415,7 @@ public static class MeshNodeLayoutAreas
 
             try
             {
-                return await meshQuery.QueryAsync<MeshNode>($"path:{hubPath} nodeType:NodeType scope:descendants", host.Hub.JsonSerializerOptions).ToListAsync() as IReadOnlyList<MeshNode>;
+                return await meshQuery.QueryAsync<MeshNode>($"path:{hubPath} nodeType:NodeType scope:descendants").ToListAsync() as IReadOnlyList<MeshNode>;
             }
             catch
             {
@@ -661,7 +661,7 @@ public static class MeshNodeLayoutAreas
             IReadOnlyList<MeshNode> nodeTypeChildren;
             try
             {
-                nodeTypeChildren = await meshQuery.QueryAsync<MeshNode>($"path:{hubPath} nodeType:NodeType scope:children", host.Hub.JsonSerializerOptions).ToListAsync();
+                nodeTypeChildren = await meshQuery.QueryAsync<MeshNode>($"path:{hubPath} nodeType:NodeType scope:children").ToListAsync();
             }
             catch
             {
@@ -674,7 +674,7 @@ public static class MeshNodeLayoutAreas
             {
                 try
                 {
-                    ownType = await meshQuery.QueryAsync<MeshNode>($"path:{node.NodeType} scope:exact", host.Hub.JsonSerializerOptions).FirstOrDefaultAsync();
+                    ownType = await meshQuery.QueryAsync<MeshNode>($"path:{node.NodeType} scope:exact").FirstOrDefaultAsync();
                 }
                 catch { }
             }
@@ -1395,7 +1395,7 @@ public static class MeshNodeLayoutAreas
         string? typeDescription = null;
         if (persistence != null)
         {
-            var typeNode = await persistence.GetNodeAsync(nodeTypePath, host.Hub.JsonSerializerOptions, ct);
+            var typeNode = await persistence.GetNodeAsync(nodeTypePath, ct);
             if (typeNode?.Content is NodeTypeDefinition typeDef)
             {
                 typeDescription = typeDef.Description;

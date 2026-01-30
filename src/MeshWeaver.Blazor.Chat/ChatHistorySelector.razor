@@ -174,7 +174,7 @@
         {
             var userPartition = GetUserChatPartition();
             var chats = new List<ChatRecord>();
-            await foreach (var c in ChatPersistenceHelper.ListChatsAsync(PersistenceService, userPartition, Hub.JsonSerializerOptions))
+            await foreach (var c in ChatPersistenceHelper.ListChatsAsync(PersistenceService, userPartition))
             {
                 // Filter by scope if specified
                 if (Scope == null || c.Scope == Scope)
@@ -213,7 +213,7 @@
         try
         {
             var userPartition = GetUserChatPartition();
-            await ChatPersistenceHelper.DeleteChatAsync(PersistenceService, userPartition, conversationId, Hub.JsonSerializerOptions);
+            await ChatPersistenceHelper.DeleteChatAsync(PersistenceService, userPartition, conversationId);
 
             // Remove from local list
             Chats = Chats.Where(c => c.Id != conversationId).ToList();

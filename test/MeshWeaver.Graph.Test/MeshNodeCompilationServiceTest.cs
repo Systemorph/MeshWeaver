@@ -68,8 +68,8 @@ public class MeshNodeCompilationServiceTest : IDisposable
         }
     }
 
-    private MeshNodeCompilationService CreateService(IPersistenceService persistence) =>
-        new(persistence, _cacheService, _cacheOptions, _mockHub, NullLogger<MeshNodeCompilationService>.Instance);
+    private MeshNodeCompilationService CreateService(IPersistenceServiceCore persistenceCore) =>
+        new(new PersistenceService(persistenceCore, _mockHub), _cacheService, _cacheOptions, _mockHub, NullLogger<MeshNodeCompilationService>.Instance);
 
     private async Task SetupNodeType(InMemoryPersistenceService persistence, string nodeType, NodeTypeDefinition definition, CodeConfiguration? codeFile = null)
     {

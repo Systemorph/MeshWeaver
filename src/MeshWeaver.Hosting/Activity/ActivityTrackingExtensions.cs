@@ -1,4 +1,4 @@
-﻿using MeshWeaver.Mesh;
+using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
@@ -19,9 +19,9 @@ public static class ActivityTrackingExtensions
     {
         return builder.ConfigureServices(services =>
         {
-            // Use the decorator pattern manually: wrap the existing IPersistenceService
+            // Use the decorator pattern manually: wrap the existing IPersistenceServiceCore
             // with ActivityTrackingPersistenceDecorator
-            var descriptor = services.FirstOrDefault(d => d.ServiceType == typeof(IPersistenceService));
+            var descriptor = services.FirstOrDefault(d => d.ServiceType == typeof(IPersistenceServiceCore));
             if (descriptor != null)
             {
                 services.Remove(descriptor);
@@ -37,10 +37,10 @@ public static class ActivityTrackingExtensions
                 else if (descriptor.ImplementationFactory != null)
                 {
                     services.Add(new ServiceDescriptor(
-                        typeof(IPersistenceService),
+                        typeof(IPersistenceServiceCore),
                         sp =>
                         {
-                            var inner = (IPersistenceService)descriptor.ImplementationFactory(sp);
+                            var inner = (IPersistenceServiceCore)descriptor.ImplementationFactory(sp);
                             var accessService = sp.GetRequiredService<AccessService>();
                             var logger = sp.GetRequiredService<ILogger<ActivityTrackingPersistenceDecorator>>();
                             return new ActivityTrackingPersistenceDecorator(inner, accessService, logger);
@@ -51,12 +51,12 @@ public static class ActivityTrackingExtensions
 
                 // Register the decorator
                 services.Add(new ServiceDescriptor(
-                    typeof(IPersistenceService),
+                    typeof(IPersistenceServiceCore),
                     sp =>
                     {
                         var inner = descriptor.ImplementationType != null
-                            ? (IPersistenceService)sp.GetRequiredService(descriptor.ImplementationType)
-                            : (IPersistenceService)descriptor.ImplementationInstance!;
+                            ? (IPersistenceServiceCore)sp.GetRequiredService(descriptor.ImplementationType)
+                            : (IPersistenceServiceCore)descriptor.ImplementationInstance!;
                         var accessService = sp.GetRequiredService<AccessService>();
                         var logger = sp.GetRequiredService<ILogger<ActivityTrackingPersistenceDecorator>>();
                         return new ActivityTrackingPersistenceDecorator(inner, accessService, logger);

@@ -195,7 +195,7 @@ public class SecurityService : ISecurityService
 
         // Load existing objects from global Access partition
         var objects = new List<object>();
-        await foreach (var obj in _persistence.GetPartitionObjectsAsync(AccessPartitionName, null, JsonOptions).WithCancellation(ct))
+        await foreach (var obj in _persistence.GetPartitionObjectsAsync(AccessPartitionName, null).WithCancellation(ct))
         {
             // Keep all objects except existing Role with same Id
             if (obj is Role existing && existing.Id == role.Id)
@@ -206,7 +206,7 @@ public class SecurityService : ISecurityService
         // Add the new/updated role
         objects.Add(role);
 
-        await _persistence.SavePartitionObjectsAsync(AccessPartitionName, null, objects, JsonOptions, ct);
+        await _persistence.SavePartitionObjectsAsync(AccessPartitionName, null, objects, ct);
         _customRoleCache[role.Id] = role;
     }
 
@@ -215,7 +215,7 @@ public class SecurityService : ISecurityService
         if (_customRolesLoaded)
             return;
 
-        await foreach (var obj in _persistence.GetPartitionObjectsAsync(AccessPartitionName, null, JsonOptions).WithCancellation(ct))
+        await foreach (var obj in _persistence.GetPartitionObjectsAsync(AccessPartitionName, null).WithCancellation(ct))
         {
             if (obj is Role role && !BuiltInRoles.ContainsKey(role.Id))
             {
@@ -254,7 +254,7 @@ public class SecurityService : ISecurityService
                 return cached;
 
             var records = new List<UserAccess>();
-            await foreach (var obj in _persistence.GetPartitionObjectsAsync(partitionPath, null, JsonOptions).WithCancellation(ct))
+            await foreach (var obj in _persistence.GetPartitionObjectsAsync(partitionPath, null).WithCancellation(ct))
             {
                 if (obj is UserAccess userAccess)
                     records.Add(userAccess);
@@ -274,7 +274,7 @@ public class SecurityService : ISecurityService
     /// </summary>
     private async Task SaveAccessRecordsAsync(string partitionPath, List<UserAccess> records, CancellationToken ct)
     {
-        await _persistence.SavePartitionObjectsAsync(partitionPath, null, records.Cast<object>().ToList(), JsonOptions, ct);
+        await _persistence.SavePartitionObjectsAsync(partitionPath, null, records.Cast<object>().ToList(), ct);
         _accessCache[partitionPath] = records;
     }
 
