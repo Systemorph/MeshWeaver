@@ -59,6 +59,7 @@ public static class MeshNodeLayoutAreas
     public const string NodeTypesArea = "NodeTypes";
     public const string AccessControlArea = "AccessControl";
     public const string CreateNodeArea = "Create";
+    public const string EditArea = "Edit";
 
     // UCR (Unified Content Reference) special areas
     public const string ContentArea = "$Content";
@@ -89,6 +90,7 @@ public static class MeshNodeLayoutAreas
             .WithView(NodeTypesArea, NodeTypes)
             .WithView(AccessControlArea, AccessControl)
             .WithView(CreateNodeArea, CreateNode)
+            .WithView(EditArea, Edit)
             // UCR special areas
             .WithView(DataArea, Data)
             .WithView(SchemaArea, Schema)
@@ -256,6 +258,10 @@ public static class MeshNodeLayoutAreas
         var createHref = $"/{nodePath}/{CreateNodeArea}";
         menu = menu.WithView(new NavLinkControl("Create", FluentIcons.Add(IconSize.Size16), createHref));
 
+        // Edit option
+        var editHref = $"/{nodePath}/{EditArea}";
+        menu = menu.WithView(new NavLinkControl("Edit", FluentIcons.Edit(IconSize.Size16), editHref));
+
         // Comments option (only if comments are enabled)
         if (host.Hub.Configuration.HasComments())
         {
@@ -289,6 +295,21 @@ public static class MeshNodeLayoutAreas
         menu = menu.WithView(new NavLinkControl("Access Control", FluentIcons.Shield(IconSize.Size16), accessControlHref));
 
         return menu;
+    }
+
+    /// <summary>
+    /// Builds a content URL for navigating to a specific layout area of a node.
+    /// </summary>
+    /// <param name="nodePath">The path of the node</param>
+    /// <param name="area">The layout area to navigate to</param>
+    /// <param name="queryString">Optional query string (without leading ?)</param>
+    /// <returns>The full URL path</returns>
+    public static string BuildContentUrl(string nodePath, string area, string? queryString = null)
+    {
+        var url = $"/{nodePath}/{area}";
+        if (!string.IsNullOrEmpty(queryString))
+            url += $"?{queryString}";
+        return url;
     }
 
     /// <summary>
@@ -1241,198 +1262,95 @@ public static class MeshNodeLayoutAreas
 
     /// <summary>
     /// Renders the Create Node area showing available types to create.
-    /// If a type is selected via ?type= query param, shows a form for creating the node.
+    /// Delegates to CreateLayoutArea.Create for the actual implementation.
     /// </summary>
     [Browsable(false)]
-    public static IObservable<UiControl?> CreateNode(LayoutAreaHost host, RenderingContext _)
+    public static IObservable<UiControl?> CreateNode(LayoutAreaHost host, RenderingContext ctx)
+        => CreateLayoutArea.Create(host, ctx);
+
+    #endregion
+
+    #region Edit Node
+
+    /// <summary>
+    /// Renders the Edit area for editing node properties.
+    /// Uses EditLayoutArea.Overview for ContentType properties.
+    /// Shows Confirm button for transient nodes, Save/Done for active nodes.
+    /// </summary>
+    [Browsable(false)]
+    public static IObservable<UiControl?> Edit(LayoutAreaHost host, RenderingContext _)
     {
         var hubPath = host.Hub.Address.ToString();
-        var nodeTypeService = host.Hub.ServiceProvider.GetService<INodeTypeService>();
+        var meshCatalog = host.Hub.ServiceProvider.GetService<IMeshCatalog>();
 
-        if (nodeTypeService == null)
+        // Get the node from the workspace stream
+        var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? Array.Empty<MeshNode>())
+            ?? Observable.Return<MeshNode[]>(Array.Empty<MeshNode>());
+
+        return nodeStream.Select(nodes =>
         {
-            return Observable.Return<UiControl?>(
-                Controls.Stack.WithView(
-                    Controls.Html("<p style=\"color: var(--warning-color);\">NodeTypeService is not available.</p>")
-                )
-            );
-        }
-
-        // Check if a type is selected via query parameter
-        var selectedType = host.GetQueryStringParamValue("type")?.Trim();
-
-        return Observable.FromAsync(async ct =>
-        {
-            if (!string.IsNullOrEmpty(selectedType))
-            {
-                // Type is selected - show create form
-                return (UiControl?)await BuildCreateFormAsync(host, hubPath, selectedType, ct);
-            }
-            else
-            {
-                // No type selected - show type selection grid
-                return (UiControl?)await BuildTypeSelectionAsync(host, nodeTypeService, hubPath, ct);
-            }
+            var node = nodes.FirstOrDefault(n => n.Path == hubPath);
+            return (UiControl?)BuildEditContent(host, node, meshCatalog);
         });
     }
 
-    /// <summary>
-    /// Builds the type selection grid showing all creatable types as cards.
-    /// </summary>
-    private static async Task<UiControl> BuildTypeSelectionAsync(
-        LayoutAreaHost _,
-        INodeTypeService nodeTypeService,
-        string nodePath,
-        CancellationToken ct)
+    private static UiControl BuildEditContent(LayoutAreaHost host, MeshNode? node, IMeshCatalog? meshCatalog)
     {
+        var nodePath = node?.Namespace ?? host.Hub.Address.ToString();
         var stack = Controls.Stack.WithWidth("100%").WithStyle("padding: 24px;");
 
-        // Header with back link
-        var backHref = $"/{nodePath}/{OverviewArea}";
-        stack = stack.WithView(Controls.Stack
-            .WithOrientation(Orientation.Horizontal)
-            .WithHorizontalGap(16)
-            .WithStyle("align-items: center; margin-bottom: 24px;")
-            .WithView(Controls.Button("Back")
-                .WithAppearance(Appearance.Lightweight)
-                .WithIconStart(FluentIcons.ArrowLeft())
-                .WithNavigateToHref(backHref))
-            .WithView(Controls.H2("Create New").WithStyle("margin: 0;")));
-
-        // Get creatable types
-        var creatableTypes = await nodeTypeService.GetCreatableTypesAsync(nodePath, ct).ToListAsync(ct);
-
-        if (creatableTypes.Count == 0)
+        if (node == null)
         {
-            stack = stack.WithView(Controls.Body("No types available for creation.")
-                .WithStyle("color: var(--neutral-foreground-hint);"));
+            stack = stack.WithView(Controls.Html("<p style=\"color: var(--warning-color);\">Node not found.</p>"));
             return stack;
         }
 
-        // Grid of type cards
-        var grid = Controls.LayoutGrid.WithSkin(s => s.WithSpacing(3));
+        var isTransient = node.State == MeshNodeState.Transient;
+        var parentPath = node.GetParentPath();
 
-        foreach (var typeInfo in creatableTypes)
-        {
-            var typeCard = BuildTypeCard(nodePath, typeInfo);
-            grid = grid.WithView(typeCard, itemSkin => itemSkin.WithXs(12).WithSm(6).WithMd(4).WithLg(3));
-        }
+        // Header with title and cancel button
+        var cancelHref = isTransient && !string.IsNullOrEmpty(parentPath)
+            ? BuildContentUrl(parentPath, OverviewArea)
+            : BuildContentUrl(nodePath, OverviewArea);
 
-        stack = stack.WithView(grid);
-        return stack;
-    }
-
-    /// <summary>
-    /// Builds a card for a creatable type that navigates to the create form.
-    /// </summary>
-    private static UiControl BuildTypeCard(string nodePath, CreatableTypeInfo typeInfo)
-    {
-        var createHref = $"/{nodePath}/{CreateNodeArea}?type={Uri.EscapeDataString(typeInfo.NodeTypePath)}";
-        var displayName = typeInfo.DisplayName ?? GetLastPathSegment(typeInfo.NodeTypePath);
-        var iconName = typeInfo.Icon ?? "Document";
-        var description = string.IsNullOrEmpty(typeInfo.Description) ? "No description" : typeInfo.Description;
-
-        // Use NavLinkControl for navigation, wrapped in a styled stack for card appearance
-        return Controls.Stack
-            .WithStyle("padding: 16px; border: 1px solid var(--neutral-stroke-rest); border-radius: 8px; background: var(--neutral-layer-card-container);")
-            .WithView(new NavLinkControl(
-                Controls.Stack
-                    .WithView(Controls.Stack
-                        .WithOrientation(Orientation.Horizontal)
-                        .WithHorizontalGap(12)
-                        .WithStyle("align-items: center; margin-bottom: 8px;")
-                        .WithView(Controls.Icon(iconName).WithStyle("font-size: 24px; color: var(--accent-fill-rest);"))
-                        .WithView(Controls.H4(displayName).WithStyle("margin: 0; font-weight: 600;")))
-                    .WithView(Controls.Body(description).WithStyle("color: var(--neutral-foreground-hint); font-size: 14px;")),
-                null,
-                createHref));
-    }
-
-    /// <summary>
-    /// Builds the create form for a selected type with Name and Description fields.
-    /// Uses a view model and EditorExtensions for proper data binding.
-    /// For Markdown types, creates a MarkdownContent with a title heading.
-    /// </summary>
-    private static async Task<UiControl> BuildCreateFormAsync(
-        LayoutAreaHost host,
-        string parentPath,
-        string nodeTypePath,
-        CancellationToken ct)
-    {
-        var persistence = host.Hub.ServiceProvider.GetService<IPersistenceService>();
-        var stack = Controls.Stack.WithWidth("100%").WithStyle("padding: 24px;");
-
-        // Header with back link
-        var backHref = $"/{parentPath}/{CreateNodeArea}";
-        var typeName = GetLastPathSegment(nodeTypePath);
         stack = stack.WithView(Controls.Stack
             .WithOrientation(Orientation.Horizontal)
             .WithHorizontalGap(16)
-            .WithStyle("align-items: center; margin-bottom: 24px;")
-            .WithView(Controls.Button("Back")
-                .WithAppearance(Appearance.Lightweight)
-                .WithIconStart(FluentIcons.ArrowLeft())
-                .WithNavigateToHref(backHref))
-            .WithView(Controls.H2($"Create {typeName}").WithStyle("margin: 0;")));
+            .WithStyle("align-items: center; margin-bottom: 24px; justify-content: space-between;")
+            .WithView(Controls.Stack
+                .WithOrientation(Orientation.Horizontal)
+                .WithHorizontalGap(16)
+                .WithStyle("align-items: center;")
+                .WithView(Controls.Button("Cancel")
+                    .WithAppearance(Appearance.Lightweight)
+                    .WithIconStart(FluentIcons.ArrowLeft())
+                    .WithNavigateToHref(cancelHref))
+                .WithView(Controls.H2($"Edit {node.Name ?? node.Id}").WithStyle("margin: 0;")))
+            .WithView(isTransient
+                ? Controls.Html("<span style=\"padding: 4px 12px; background: var(--warning-color); color: white; border-radius: 4px; font-size: 12px;\">Draft</span>")
+                : Controls.Stack));
 
-        // Show NodeType being created
-        stack = stack.WithView(Controls.Stack
-            .WithOrientation(Orientation.Horizontal)
-            .WithHorizontalGap(8)
-            .WithStyle("margin-bottom: 16px; align-items: center;")
-            .WithView(Controls.Body("Node Type:").WithStyle("font-weight: 600; color: var(--neutral-foreground-hint);"))
-            .WithView(Controls.Body(nodeTypePath).WithStyle("color: var(--accent-fill-rest);")));
-
-        // Get type info for display
-        string? typeDescription = null;
-        if (persistence != null)
+        // Show node type info
+        if (!string.IsNullOrEmpty(node.NodeType))
         {
-            var typeNode = await persistence.GetNodeAsync(nodeTypePath, ct);
-            if (typeNode?.Content is NodeTypeDefinition typeDef)
-            {
-                typeDescription = typeDef.Description;
-            }
-            else
-            {
-                typeDescription = typeNode?.Description;
-            }
+            stack = stack.WithView(Controls.Stack
+                .WithOrientation(Orientation.Horizontal)
+                .WithHorizontalGap(8)
+                .WithStyle("margin-bottom: 16px; align-items: center;")
+                .WithView(Controls.Body("Node Type:").WithStyle("font-weight: 600; color: var(--neutral-foreground-hint);"))
+                .WithView(Controls.Body(node.NodeType).WithStyle("color: var(--accent-fill-rest);")));
         }
 
-        if (!string.IsNullOrEmpty(typeDescription))
+        // Property editing form
+        if (node.Content != null)
         {
-            stack = stack.WithView(Controls.Body(typeDescription)
-                .WithStyle("color: var(--neutral-foreground-hint); margin-bottom: 16px;"));
+            stack = stack.WithView(OverviewLayoutArea.BuildPropertyOverview(host, node));
         }
-
-        // Create data bindings for form fields
-        var nameDataId = Guid.NewGuid().AsString();
-        var descriptionDataId = $"{nameDataId}-description";
-        host.UpdateData(nameDataId, "");
-        host.UpdateData(descriptionDataId, "");
-
-        // Name field - using TextFieldControl
-        stack = stack.WithView(Controls.Stack
-            .WithStyle("margin-bottom: 16px;")
-            .WithView(Controls.Body("Name *").WithStyle("font-weight: 600; margin-bottom: 4px;"))
-            .WithView(new TextFieldControl(new JsonPointerReference(""))
-                .WithPlaceholder("Enter a name for the new node")
-                .WithImmediate(true)
-                .WithStyle("width: 100%;")
-                with
-            { DataContext = LayoutAreaReference.GetDataPointer(nameDataId) }));
-
-        // Description field - using MarkdownEditorControl with proper data binding
-        stack = stack.WithView(Controls.Stack
-            .WithStyle("margin-bottom: 16px; width: 100%;")
-            .WithView(Controls.Body("Description").WithStyle("font-weight: 600; margin-bottom: 4px;"))
-            .WithView(new MarkdownEditorControl()
-            {
-                Value = new JsonPointerReference(""),
-                DocumentId = descriptionDataId,
-                Height = "200px",
-                Placeholder = "Enter a description (supports Markdown formatting)",
-                DataContext = LayoutAreaReference.GetDataPointer(descriptionDataId)
-            }));
+        else
+        {
+            // No content type - show basic MeshNode properties
+            stack = stack.WithView(BuildBasicPropertiesForm(host, node));
+        }
 
         // Button row
         var buttonRow = Controls.Stack
@@ -1440,94 +1358,147 @@ public static class MeshNodeLayoutAreas
             .WithHorizontalGap(12)
             .WithStyle("margin-top: 24px;");
 
-        // Create button
-        buttonRow = buttonRow.WithView(Controls.Button("Create")
-            .WithAppearance(Appearance.Accent)
-            .WithIconStart(FluentIcons.Add())
-            .WithClickAction(async actx =>
-            {
-                // Get form values from workspace
-                var name = await host.Stream.GetDataStream<string>(nameDataId).FirstAsync();
-                var description = await host.Stream.GetDataStream<string>(descriptionDataId).FirstAsync();
-
-                if (string.IsNullOrWhiteSpace(name))
+        if (isTransient && meshCatalog != null)
+        {
+            // Confirm button for transient nodes
+            buttonRow = buttonRow.WithView(Controls.Button("Confirm")
+                .WithAppearance(Appearance.Accent)
+                .WithIconStart(FluentIcons.Checkmark())
+                .WithClickAction(async ctx =>
                 {
-                    var errorDialog = Controls.Dialog(
-                        Controls.Markdown("**Name is required.**"),
-                        "Validation Error"
-                    ).WithSize("S");
-                    actx.Host.UpdateArea(DialogControl.DialogArea, errorDialog);
-                    return;
-                }
+                    try
+                    {
+                        await meshCatalog.ConfirmNodeAsync(nodePath);
+                        // Navigate to Overview after confirmation
+                        var navigationService = ctx.Host.Hub.ServiceProvider.GetService<INavigationService>();
+                        var overviewUrl = BuildContentUrl(nodePath, OverviewArea);
+                        if (navigationService != null)
+                        {
+                            navigationService.NavigateTo(overviewUrl);
+                        }
+                        else
+                        {
+                            ctx.Host.UpdateArea(ctx.Area, new RedirectControl(overviewUrl));
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        var errorDialog = Controls.Dialog(
+                            Controls.Markdown($"**Error confirming node:**\n\n{ex.Message}"),
+                            "Confirmation Failed"
+                        ).WithSize("M");
+                        ctx.Host.UpdateArea(DialogControl.DialogArea, errorDialog);
+                    }
+                }));
 
-                // Sanitize name for use as ID
-                var trimmedName = name.Trim();
-                var nodeId = trimmedName
-                    .Replace(" ", "-")
-                    .Replace("/", "-")
-                    .ToLowerInvariant();
-
-                var nodePath = string.IsNullOrEmpty(parentPath) ? nodeId : $"{parentPath}/{nodeId}";
-
-                // Determine content based on node type
-                object? content = null;
-                if (nodeTypePath == GraphConfigurationExtensions.MarkdownNodeType)
+            // Delete draft button
+            buttonRow = buttonRow.WithView(Controls.Button("Delete Draft")
+                .WithAppearance(Appearance.Neutral)
+                .WithIconStart(FluentIcons.Delete())
+                .WithClickAction(async ctx =>
                 {
-                    // For Markdown types, create MarkdownContent with title heading
-                    var markdownText = $"# {trimmedName}\n\n{description ?? ""}";
-                    content = MarkdownContent.Parse(markdownText, nodePath);
-                }
-
-                // Create the node
-                var node = MeshNode.FromPath(nodePath) with
-                {
-                    Name = trimmedName,
-                    Description = string.IsNullOrWhiteSpace(description) ? null : description.Trim(),
-                    NodeType = nodeTypePath,
-                    Content = content
-                };
-
-                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-                var meshAddress = host.Hub.Configuration.ParentHub?.Address ?? host.Hub.Address;
-                var response = await actx.Host.Hub.AwaitResponse(
-                    new CreateNodeRequest(node),
-                    o => o.WithTarget(meshAddress),
-                    cts.Token);
-
-                if (response.Message.Success)
-                {
-                    // Navigate to the new node's overview
-                    var overviewHref = $"/{nodePath}/{OverviewArea}";
-                    actx.Host.UpdateArea(actx.Area, new RedirectControl(overviewHref));
-                }
-                else
-                {
-                    var errorMsg = response.Message.Error ?? "Failed to create node";
-                    var errorDialog = Controls.Dialog(
-                        Controls.Markdown($"**Error creating node:**\n\n{errorMsg}"),
-                        "Creation Failed"
-                    ).WithSize("M");
-                    actx.Host.UpdateArea(DialogControl.DialogArea, errorDialog);
-                }
-            }));
-
-        // Cancel button
-        buttonRow = buttonRow.WithView(Controls.Button("Cancel")
-            .WithAppearance(Appearance.Neutral)
-            .WithNavigateToHref($"/{parentPath}/{OverviewArea}"));
+                    try
+                    {
+                        await meshCatalog.DeleteNodeAsync(nodePath);
+                        // Navigate to parent's Overview after deletion
+                        var redirectPath = !string.IsNullOrEmpty(parentPath) ? parentPath : nodePath;
+                        var navigationService = ctx.Host.Hub.ServiceProvider.GetService<INavigationService>();
+                        var overviewUrl = BuildContentUrl(redirectPath, OverviewArea);
+                        if (navigationService != null)
+                        {
+                            navigationService.NavigateTo(overviewUrl);
+                        }
+                        else
+                        {
+                            ctx.Host.UpdateArea(ctx.Area, new RedirectControl(overviewUrl));
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        var errorDialog = Controls.Dialog(
+                            Controls.Markdown($"**Error deleting draft:**\n\n{ex.Message}"),
+                            "Delete Failed"
+                        ).WithSize("M");
+                        ctx.Host.UpdateArea(DialogControl.DialogArea, errorDialog);
+                    }
+                }));
+        }
+        else
+        {
+            // Done button for active nodes (changes are auto-saved)
+            buttonRow = buttonRow.WithView(Controls.Button("Done")
+                .WithAppearance(Appearance.Accent)
+                .WithNavigateToHref(BuildContentUrl(nodePath, OverviewArea)));
+        }
 
         stack = stack.WithView(buttonRow);
-
         return stack;
     }
 
     /// <summary>
-    /// Gets the last segment of a path.
+    /// Builds a basic properties form for nodes without ContentType.
     /// </summary>
-    private static string GetLastPathSegment(string path)
+    private static UiControl BuildBasicPropertiesForm(LayoutAreaHost host, MeshNode node)
     {
-        var lastSlash = path.LastIndexOf('/');
-        return lastSlash >= 0 ? path[(lastSlash + 1)..] : path;
+        var dataId = $"edit_{node.Path.Replace("/", "_")}";
+        var formData = new Dictionary<string, object?>
+        {
+            ["name"] = node.Name ?? "",
+            ["description"] = node.Description ?? "",
+            ["category"] = node.Category ?? "",
+            ["icon"] = node.Icon ?? ""
+        };
+        host.UpdateData(dataId, formData);
+
+        var stack = Controls.Stack.WithWidth("100%").WithStyle("gap: 16px;");
+
+        // Name field
+        stack = stack.WithView(Controls.Stack
+            .WithStyle("margin-bottom: 8px;")
+            .WithView(Controls.Body("Name").WithStyle("font-weight: 600; margin-bottom: 4px;"))
+            .WithView(new TextFieldControl(new JsonPointerReference("name"))
+            {
+                Placeholder = "Display name",
+                Immediate = true,
+                DataContext = LayoutAreaReference.GetDataPointer(dataId)
+            }.WithStyle("width: 100%;")));
+
+        // Description field
+        stack = stack.WithView(Controls.Stack
+            .WithStyle("margin-bottom: 8px; width: 100%;")
+            .WithView(Controls.Body("Description").WithStyle("font-weight: 600; margin-bottom: 4px;"))
+            .WithView(new MarkdownEditorControl()
+            {
+                Value = new JsonPointerReference("description"),
+                DocumentId = $"{dataId}_description",
+                Height = "200px",
+                Placeholder = "Enter a description (supports Markdown)",
+                DataContext = LayoutAreaReference.GetDataPointer(dataId)
+            }));
+
+        // Category field
+        stack = stack.WithView(Controls.Stack
+            .WithStyle("margin-bottom: 8px;")
+            .WithView(Controls.Body("Category").WithStyle("font-weight: 600; margin-bottom: 4px;"))
+            .WithView(new TextFieldControl(new JsonPointerReference("category"))
+            {
+                Placeholder = "Category for grouping",
+                Immediate = true,
+                DataContext = LayoutAreaReference.GetDataPointer(dataId)
+            }.WithStyle("width: 100%;")));
+
+        // Icon field
+        stack = stack.WithView(Controls.Stack
+            .WithStyle("margin-bottom: 8px;")
+            .WithView(Controls.Body("Icon").WithStyle("font-weight: 600; margin-bottom: 4px;"))
+            .WithView(new TextFieldControl(new JsonPointerReference("icon"))
+            {
+                Placeholder = "Icon name or URL",
+                Immediate = true,
+                DataContext = LayoutAreaReference.GetDataPointer(dataId)
+            }.WithStyle("width: 100%;")));
+
+        return stack;
     }
 
     #endregion
