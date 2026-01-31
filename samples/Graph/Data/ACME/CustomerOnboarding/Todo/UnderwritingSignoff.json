@@ -1,0 +1,21 @@
+{
+  "id": "UnderwritingSignoff",
+  "namespace": "ACME/CustomerOnboarding/Todo",
+  "name": "Underwriting sign-off",
+  "nodeType": "ACME/Project/Todo",
+  "category": "Tasks",
+  "description": "Final underwriting approval to bind",
+  "icon": "/static/content/ACME/Project/Todo/icon.svg",
+  "isPersistent": true,
+  "content": {
+    "$type": "Todo",
+    "id": "UnderwritingSignoff",
+    "title": "Underwriting sign-off",
+    "description": "Final underwriting sign-off to authorize binding coverage for Apex Manufacturing. Confirm risk acceptable within guidelines and pricing adequate for exposure.",
+    "category": "Research",
+    "priority": "Critical",
+    "assignee": "Bob",
+    "dueDateOffsetDays": 1,
+    "status": "Pending"
+  }
+}
