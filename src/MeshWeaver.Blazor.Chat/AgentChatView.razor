@@ -8,103 +8,110 @@
 @inject IThreadManager ThreadManager
 
 <div class="chat-app-container">
-    <!-- Sticky Chat Header -->
-    <div class="chat-header">
-        <h3 class="chat-title">@chatTitle</h3>
-        <div class="chat-actions">
-            @if (isGeneratingResponse)
-            {
-                <FluentButton BackgroundColor="transparent" OnClick="CancelCurrentResponse" Title="Cancel Response">
-                    <FluentIcon Value="@(new Icons.Regular.Size20.Stop())" Color="Color.Error" />
+    @if (showChatHistory)
+    {
+        <!-- Chat History Panel (full overlay) -->
+        <div class="chat-history-fullscreen">
+            <ChatHistorySelector SelectedConversationId="currentConversationId"
+                SelectedConversationIdChanged="OnConversationSelectionChanged"
+                OnNewConversation="StartNewConversationAsync"
+                OnClose="CloseChatHistory"
+                @ref="chatHistorySelector"
+                IsRightPanel="true" />
+        </div>
+    }
+    else
+    {
+        <!-- Sticky Chat Header -->
+        <div class="chat-header">
+            <h3 class="chat-title">@chatTitle</h3>
+            <div class="chat-actions">
+                @if (isGeneratingResponse)
+                {
+                    <FluentButton BackgroundColor="transparent" OnClick="CancelCurrentResponse" Title="Cancel Response">
+                        <FluentIcon Value="@(new Icons.Regular.Size20.Stop())" Color="Color.Error" />
+                    </FluentButton>
+                }
+                <FluentButton BackgroundColor="transparent" OnClick="StartNewConversationAsync" Title="New Chat">
+                    <FluentIcon Value="@(new Icons.Regular.Size20.Add())" Color="Color.Neutral" />
                 </FluentButton>
-            }
-            <FluentButton BackgroundColor="transparent" OnClick="StartNewConversationAsync" Title="New Chat">
-                <FluentIcon Value="@(new Icons.Regular.Size20.Add())" Color="Color.Neutral" />
-            </FluentButton>
-            <FluentButton BackgroundColor="transparent" OnClick="ToggleChatHistory" Title="Chat History">
-                <FluentIcon Value="@(new Icons.Regular.Size20.History())" Color="Color.Neutral" />
-            </FluentButton>
-            <FluentButton BackgroundColor="transparent" Title="Chat Position" @onclick="@(() => positionMenuVisible = !positionMenuVisible)" Id="position-menu-anchor">
-                <FluentIcon Value="@(new Icons.Regular.Size20.WindowLocationTarget())" Color="Color.Neutral" />
-            </FluentButton>
-            <FluentMenu @bind-Open="positionMenuVisible" Anchor="position-menu-anchor">
-                <FluentMenuItem OnClick="@(() => ChangeChatPosition(ChatPosition.Right))">
-                    <FluentIcon Value="@(new Icons.Regular.Size16.PanelRight())" />
-                    Right
-                    @if (currentPosition == ChatPosition.Right)
-                    {
-                        <FluentIcon Value="@(new Icons.Regular.Size16.Checkmark())" Color="Color.Success" Style="margin-left: auto;" />
-                    }
-                </FluentMenuItem>
-                <FluentMenuItem OnClick="@(() => ChangeChatPosition(ChatPosition.Bottom))">
-                    <FluentIcon Value="@(new Icons.Regular.Size16.ArrowDown())" />
-                    Bottom
-                    @if (currentPosition == ChatPosition.Bottom)
-                    {
-                        <FluentIcon Value="@(new Icons.Regular.Size16.Checkmark())" Color="Color.Success" Style="margin-left: auto;" />
-                    }
-                </FluentMenuItem>
-            </FluentMenu>
-            <FluentButton BackgroundColor="transparent" OnClick="CloseChatAsync" Title="Close Chat">
-                <FluentIcon Value="@(new Icons.Regular.Size20.Dismiss())" Color="Color.Neutral" />
-            </FluentButton>
-        </div>
-    </div>
-
-    <!-- Main Chat Area (Scrollable) -->
-    <div class="chat-main-area">
-        <!-- Chat History Panel (Right Side) -->
-        @if (showChatHistory)
-        {
-            <div class="chat-history-overlay" @onclick="CloseChatHistory">
-                <div class="chat-history-panel" @onclick:stopPropagation="true">
-                    <ChatHistorySelector SelectedConversationId="currentConversationId"
-                        SelectedConversationIdChanged="OnConversationSelectionChanged"
-                        OnNewConversation="StartNewConversationAsync" @ref="chatHistorySelector" IsRightPanel="true" />
-                    <div class="chat-history-close">
-                        <FluentButton BackgroundColor="transparent" OnClick="CloseChatHistory">
-                            <FluentIcon Value="@(new Icons.Regular.Size20.Dismiss())" Color="Color.Neutral" />
-                            Close
-                        </FluentButton>
-                    </div>
-                </div>
+                <FluentButton BackgroundColor="transparent" OnClick="ToggleChatHistory" Title="Chat History">
+                    <FluentIcon Value="@(new Icons.Regular.Size20.History())" Color="Color.Neutral" />
+                </FluentButton>
+                <FluentButton BackgroundColor="transparent" Title="Chat Position" @onclick="@(() => positionMenuVisible = !positionMenuVisible)" Id="position-menu-anchor">
+                    <FluentIcon Value="@(new Icons.Regular.Size20.WindowLocationTarget())" Color="Color.Neutral" />
+                </FluentButton>
+                <FluentMenu @bind-Open="positionMenuVisible" Anchor="position-menu-anchor">
+                    <FluentMenuItem OnClick="@(() => ChangeChatPosition(ChatPosition.Right))">
+                        <FluentIcon Value="@(new Icons.Regular.Size16.PanelRight())" />
+                        Right
+                        @if (currentPosition == ChatPosition.Right)
+                        {
+                            <FluentIcon Value="@(new Icons.Regular.Size16.Checkmark())" Color="Color.Success" Style="margin-left: auto;" />
+                        }
+                    </FluentMenuItem>
+                    <FluentMenuItem OnClick="@(() => ChangeChatPosition(ChatPosition.Bottom))">
+                        <FluentIcon Value="@(new Icons.Regular.Size16.ArrowDown())" />
+                        Bottom
+                        @if (currentPosition == ChatPosition.Bottom)
+                        {
+                            <FluentIcon Value="@(new Icons.Regular.Size16.Checkmark())" Color="Color.Success" Style="margin-left: auto;" />
+                        }
+                    </FluentMenuItem>
+                </FluentMenu>
+                <FluentButton BackgroundColor="transparent" OnClick="CloseChatAsync" Title="Close Chat">
+                    <FluentIcon Value="@(new Icons.Regular.Size20.Dismiss())" Color="Color.Neutral" />
+                </FluentButton>
             </div>
-        }
-        <div class="chat-messages-area">
-            @if (isLoadingConversation)
-            {
-                <div class="loading-overlay">
-                    <FluentProgressRing />
-                    <div class="loading-text">Loading conversation...</div>
-                </div>
-            }
-            else
-            {
-                <ChatMessageList Messages="@messages" InProgressMessage="@currentResponseMessage"
-                                OnNewMessage="@OnNewMessageReceived">
-                    <NoMessagesContent>
-                        <div>You can ask me questions about your data or instruct me to perform operations.
-                        </div>
-                    </NoMessagesContent>
-                </ChatMessageList>
-            }
         </div>
-        <div class="chat-container">
-            <MeshWeaver.Blazor.Chat.ChatInput OnSend="@AddUserMessageAsync" @ref="@chatInput"
-                IsDisabled="false"
-                IsStreaming="@isGeneratingResponse"
-                CompletionProvider="@GetAgentCompletionConfig()"
-                AsyncCompletionCallback="@GetCompletionsForEditorAsync"
-                SelectedContext="@selectedContextPath"
-                SelectedContextDisplayName="@selectedContextDisplayName"
-                SelectedContextChanged="@OnContextPathChanged"
-                OnContextAutocomplete="@GetContextAutocompleteAsync"
-                AgentDisplayInfos="@agentDisplayInfos"
-                SelectedAgentInfo="@selectedAgentInfo"
-                SelectedAgentInfoChanged="@OnAgentInfoChanged"
-                AvailableModels="@availableModels"
-                SelectedModelInfo="@selectedModelInfo"
-                SelectedModelInfoChanged="@OnModelInfoChanged" />
+
+        <!-- Main Chat Area (Scrollable) -->
+        <div class="chat-main-area">
+            <div class="chat-messages-area">
+                @if (isLoadingConversation)
+                {
+                    <div class="loading-overlay">
+                        <FluentProgressRing />
+                        <div class="loading-text">Loading conversation...</div>
+                    </div>
+                }
+                else
+                {
+                    <ChatMessageList Messages="@messages" InProgressMessage="@currentResponseMessage"
+                                    OnNewMessage="@OnNewMessageReceived">
+                        <NoMessagesContent>
+                            <div>You can ask me questions about your data or instruct me to perform operations.
+                            </div>
+                        </NoMessagesContent>
+                    </ChatMessageList>
+                }
+            </div>
+            <div class="chat-container">
+                <MeshWeaver.Blazor.Chat.ChatInput OnSend="@AddUserMessageAsync" @ref="@chatInput"
+                    IsDisabled="false"
+                    IsStreaming="@isGeneratingResponse"
+                    CompletionProvider="@GetAgentCompletionConfig()"
+                    AsyncCompletionCallback="@GetCompletionsForEditorAsync"
+                    SelectedContext="@selectedContextPath"
+                    SelectedContextDisplayName="@selectedContextDisplayName"
+                    SelectedContextChanged="@OnContextPathChanged"
+                    OnContextAutocomplete="@GetContextAutocompleteAsync"
+                    AgentDisplayInfos="@agentDisplayInfos"
+                    SelectedAgentInfo="@selectedAgentInfo"
+                    SelectedAgentInfoChanged="@OnAgentInfoChanged"
+                    AvailableModels="@availableModels"
+                    SelectedModelInfo="@selectedModelInfo"
+                    SelectedModelInfoChanged="@OnModelInfoChanged" />
+            </div>
         </div>
-    </div>
+    }
 </div>
+
+<style>
+    .chat-history-fullscreen {
+        display: flex;
+        flex-direction: column;
+        height: 100%;
+        width: 100%;
+    }
+</style>
