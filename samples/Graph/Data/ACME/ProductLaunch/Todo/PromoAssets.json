@@ -4,7 +4,7 @@
   "path": "ACME/ProductLaunch/Todo/PromoAssets",
   "name": "Design promotional assets",
   "nodeType": "ACME/Project/Todo",
-  "icon": "/static/content/ACME/Project/Todo/icon.svg",
+  "icon": "/static/storage/content/ACME/Project/Todo/icon.svg",
   "description": "Create graphics and visuals for marketing campaigns",
   "category": "Tasks",
   "addressSegments": 0,

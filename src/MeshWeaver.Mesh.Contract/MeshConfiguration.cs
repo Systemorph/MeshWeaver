@@ -12,7 +12,8 @@ namespace MeshWeaver.Mesh;
 /// </summary>
 public class MeshConfiguration(
     IReadOnlyDictionary<string, MeshNode> meshNodes,
-    Func<MessageHubConfiguration, MessageHubConfiguration>? defaultNodeHubConfiguration = null)
+    Func<MessageHubConfiguration, MessageHubConfiguration>? defaultNodeHubConfiguration = null,
+    IReadOnlyList<string>? globalCreatableTypes = null)
 {
     /// <summary>
     /// Registered mesh nodes by their key/path.
@@ -25,4 +26,16 @@ public class MeshConfiguration(
     /// that should be available on every node hub.
     /// </summary>
     public Func<MessageHubConfiguration, MessageHubConfiguration>? DefaultNodeHubConfiguration { get; } = defaultNodeHubConfiguration;
+
+    /// <summary>
+    /// Global types that are creatable everywhere by default.
+    /// These include utility types like Markdown, Thread, and Agent.
+    /// Can be overridden per-node using NodeTypeDefinition.ExcludeDefaults.
+    /// </summary>
+    public IReadOnlyList<string> GlobalCreatableTypes { get; } = globalCreatableTypes ?? DefaultGlobalCreatableTypes;
+
+    /// <summary>
+    /// Default global creatable types: Markdown, Thread, Agent, NodeType.
+    /// </summary>
+    public static readonly IReadOnlyList<string> DefaultGlobalCreatableTypes = ["Markdown", "Thread", "Agent", "NodeType"];
 }

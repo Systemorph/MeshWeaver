@@ -78,9 +78,10 @@ public abstract class FormComponentBase<TViewModel, TView, TValue> : BlazorView<
     {
         if (v is JsonElement je)
         {
-            return je.ValueKind == JsonValueKind.Undefined
-                ? default
-                : je.Deserialize<TValue>(Stream!.Hub.JsonSerializerOptions);
+            // Handle undefined and null JSON values - return default (null for nullable types)
+            if (je.ValueKind == JsonValueKind.Undefined || je.ValueKind == JsonValueKind.Null)
+                return default;
+            return je.Deserialize<TValue>(Stream!.Hub.JsonSerializerOptions);
         }
 
         // Handle specific conversions
@@ -130,9 +131,18 @@ public abstract class FormComponentBase<TViewModel, TView, TValue> : BlazorView<
             return typedValue;
         }
 
+        // Handle null values - return default for nullable types
+        if (v is null)
+        {
+            return default;
+        }
+
         try
         {
-            return (TValue)Convert.ChangeType(v, typeof(TValue));
+            // Handle nullable types - Convert.ChangeType doesn't support them directly
+            var targetType = Nullable.GetUnderlyingType(typeof(TValue)) ?? typeof(TValue);
+            var converted = Convert.ChangeType(v, targetType);
+            return (TValue)converted;
         }
         catch
         {

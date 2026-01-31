@@ -101,10 +101,21 @@ public static class LayoutClientExtensions
         if (value is null)
             return default;
 
+        // Handle nullable value types
+        var targetType = Nullable.GetUnderlyingType(typeof(T)) ?? typeof(T);
+
         // Use Convert.ChangeType for flexible conversion
         if (typeof(T).IsValueType)
+        {
+            // For nullable value types, convert to underlying type first
+            if (targetType != typeof(T))
+            {
+                var converted = Convert.ChangeType(value, targetType);
+                return (T?)converted;
+            }
             return (T?)value;
-        return (T?)Convert.ChangeType(value, typeof(T));
+        }
+        return (T?)Convert.ChangeType(value, targetType);
     }
     private static T? GetDataBoundValue<T>(this ISynchronizationStream<JsonElement> stream, string pointer, string? dataContext = null)
     {
@@ -203,7 +214,9 @@ public static class LayoutClientExtensions
         }
 
         // Fall back to Convert.ChangeType for non-numeric types
-        return (T?)Convert.ChangeType(value, typeof(T));
+        // Use targetType (underlying type for nullables) since Convert.ChangeType doesn't support nullable types
+        var converted = Convert.ChangeType(value, targetType);
+        return (T?)converted;
     }
 
     private static bool IsNumericType(Type type)

@@ -135,23 +135,24 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
     }
 
     /// <summary>
-    /// Navigates to the create page for the specified node type.
+    /// Creates a transient node and navigates to the Create layout area for editing.
     /// </summary>
-    protected virtual void NavigateToCreate(string nodeTypePath)
+    /// <summary>
+    /// Navigates to the Create page for a specific node type.
+    /// </summary>
+    protected virtual Task NavigateToCreateAsync(string nodeTypePath)
     {
         isCreateMenuOpen = false;
 
-        var currentPath = NavigationService.CurrentNamespace;
-        if (string.IsNullOrEmpty(currentPath))
-        {
-            // At root level - navigate to create with type parameter
-            NavigationManager.NavigateTo($"/create?type={Uri.EscapeDataString(nodeTypePath)}");
-        }
-        else
-        {
-            // Inside a node - navigate to create page with parent and type parameters
-            NavigationManager.NavigateTo($"/create?parent={Uri.EscapeDataString(currentPath)}&type={Uri.EscapeDataString(nodeTypePath)}");
-        }
+        var currentPath = NavigationService.CurrentNamespace ?? "";
+
+        // Navigate to Create area with type as query parameter
+        var createUrl = string.IsNullOrEmpty(currentPath)
+            ? $"/Create?type={Uri.EscapeDataString(nodeTypePath)}"
+            : $"/{currentPath}/Create?type={Uri.EscapeDataString(nodeTypePath)}";
+
+        NavigationManager.NavigateTo(createUrl);
+        return Task.CompletedTask;
     }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)

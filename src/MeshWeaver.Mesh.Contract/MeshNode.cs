@@ -145,6 +145,7 @@ public record MeshNode([property: Key] string Id, [property: Editable(false)] st
 
     /// <summary>
     /// Human-readable description of this mesh node for display in autocomplete and UI.
+    /// Rendered as markdown in the UI.
     /// </summary>
     public string? Description { get; init; }
 

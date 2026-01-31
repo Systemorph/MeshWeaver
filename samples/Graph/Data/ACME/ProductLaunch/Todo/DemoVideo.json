@@ -4,7 +4,7 @@
   "path": "ACME/ProductLaunch/Todo/DemoVideo",
   "name": "Record product demo video",
   "nodeType": "ACME/Project/Todo",
-  "icon": "/static/content/ACME/Project/Todo/icon.svg",
+  "icon": "/static/storage/content/ACME/Project/Todo/icon.svg",
   "description": "Produce a professional product walkthrough video",
   "category": "Tasks",
   "addressSegments": 0,

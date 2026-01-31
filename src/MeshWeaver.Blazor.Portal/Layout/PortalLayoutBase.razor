@@ -35,7 +35,7 @@
                     {
                         @foreach (var typeInfo in creatableTypes)
                         {
-                            <FluentMenuItem OnClick="@(() => NavigateToCreate(typeInfo.NodeTypePath))">
+                            <FluentMenuItem OnClick="@(async () => await NavigateToCreateAsync(typeInfo.NodeTypePath))">
                                 New @(typeInfo.DisplayName ?? typeInfo.NodeTypePath)
                             </FluentMenuItem>
                         }
