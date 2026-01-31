@@ -29,7 +29,7 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
 
         if(node is null)
             throw new MeshException(
-                $"Cannot instantiate Node {streamId}. Neither a {nameof(MeshNode.StartupScript)} nor a {nameof(MeshNode.HubConfiguration)}  are specified.");
+                $"Cannot instantiate Node {streamId}. No {nameof(MeshNode.HubConfiguration)} is specified.");
 
         // Ensure on-demand compilation of dynamic node assemblies if service is available
         // This compiles/caches the node's DataModel type and generates MeshNodeAttribute

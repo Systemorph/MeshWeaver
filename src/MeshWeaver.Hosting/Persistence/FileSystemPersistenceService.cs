@@ -133,13 +133,9 @@ public class FileSystemPersistenceService : IPersistenceServiceCore
             Description = sourceNode.Description,
             Icon = sourceNode.Icon,
             DisplayOrder = sourceNode.DisplayOrder,
-            IsPersistent = sourceNode.IsPersistent,
             Content = sourceNode.Content,
-            ThumbNail = sourceNode.ThumbNail,
-            StreamProvider = sourceNode.StreamProvider,
             AssemblyLocation = sourceNode.AssemblyLocation,
             HubConfiguration = sourceNode.HubConfiguration,
-            StartupScript = sourceNode.StartupScript,
             GlobalServiceConfigurations = sourceNode.GlobalServiceConfigurations
         };
 

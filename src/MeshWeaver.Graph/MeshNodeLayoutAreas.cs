@@ -379,13 +379,14 @@ public static class MeshNodeLayoutAreas
             stack = stack.WithView(Controls.Html($"<p><strong>Description:</strong> {node.Description}</p>"));
         }
 
-        if (!string.IsNullOrEmpty(node.ParentPath))
+        var parentPath = node.GetParentPath();
+        if (!string.IsNullOrEmpty(parentPath))
         {
-            var parentHref = $"/{node.ParentPath}/{OverviewArea}";
+            var parentHref = $"/{parentPath}/{OverviewArea}";
             stack = stack.WithView(Controls.Stack
                 .WithOrientation(Orientation.Horizontal)
                 .WithView(Controls.Html("<p><strong>Parent:</strong> </p>"))
-                .WithView(Controls.Button(node.ParentPath)
+                .WithView(Controls.Button(parentPath)
                     .WithNavigateToHref(parentHref)));
         }
 
@@ -481,13 +482,9 @@ public static class MeshNodeLayoutAreas
         sb.AppendLine($"| **Description** | {node.Description ?? "*not set*"} |");
         sb.AppendLine($"| **Icon** | {node.Icon ?? "*not set*"} |");
         sb.AppendLine($"| **DisplayOrder** | {node.DisplayOrder} |");
-        sb.AppendLine($"| **IsPersistent** | {node.IsPersistent} |");
         sb.AppendLine($"| **State** | {node.State} |");
         sb.AppendLine($"| **LastModified** | {node.LastModified:yyyy-MM-dd HH:mm:ss} |");
         sb.AppendLine($"| **Version** | {node.Version} |");
-
-        if (!string.IsNullOrEmpty(node.StreamProvider))
-            sb.AppendLine($"| **StreamProvider** | {node.StreamProvider} |");
 
         if (!string.IsNullOrEmpty(node.AssemblyLocation))
             sb.AppendLine($"| **AssemblyLocation** | `{node.AssemblyLocation}` |");
@@ -597,19 +594,14 @@ public static class MeshNodeLayoutAreas
             }
 
             // Instance node catalog - excludes NodeType nodes
-            var instanceHiddenQuery = node?.CatalogQuery ?? $"path:{node?.Namespace ?? hubPath} scope:children -nodeType:NodeType";
-
-            var catalogMode = node?.CatalogMode?.ToLowerInvariant();
-            var renderMode = catalogMode == "grouped"
-                ? MeshSearchRenderMode.Grouped
-                : MeshSearchRenderMode.Hierarchical;
+            var instanceHiddenQuery = $"path:{node?.Namespace ?? hubPath} scope:children -nodeType:NodeType";
 
             return Controls.MeshSearch
                 .WithHiddenQuery(instanceHiddenQuery)
                 .WithVisibleQuery(searchTerm ?? "")
                 .WithNamespace(hubPath)
                 .WithPlaceholder("Search... (use @ for references)")
-                .WithRenderMode(renderMode)
+                .WithRenderMode(MeshSearchRenderMode.Hierarchical)
                 .WithMaxColumns(3);
         });
     }
@@ -1288,7 +1280,7 @@ public static class MeshNodeLayoutAreas
     /// Builds the type selection grid showing all creatable types as cards.
     /// </summary>
     private static async Task<UiControl> BuildTypeSelectionAsync(
-        LayoutAreaHost host,
+        LayoutAreaHost _,
         INodeTypeService nodeTypeService,
         string nodePath,
         CancellationToken ct)
@@ -1492,7 +1484,6 @@ public static class MeshNodeLayoutAreas
                     Name = trimmedName,
                     Description = string.IsNullOrWhiteSpace(description) ? null : description.Trim(),
                     NodeType = nodeTypePath,
-                    IsPersistent = true,
                     Content = content
                 };
 

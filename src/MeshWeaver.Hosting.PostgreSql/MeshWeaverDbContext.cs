@@ -99,7 +99,6 @@ public class MeshWeaverDbContext(DbContextOptions<MeshWeaverDbContext> options)
             entity.Property(e => e.NodeType);
 
             entity.Property(e => e.AssemblyLocation);
-            entity.Property(e => e.StartupScript);
 
             // Ignore non-serializable properties
             entity.Ignore(e => e.HubConfiguration);
