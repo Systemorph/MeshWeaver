@@ -78,7 +78,6 @@ public class DataContextIntegrationTest : MonolithMeshTestBase
             Description = "A user story or task",
             Icon = "Document",
             DisplayOrder = 30,
-            IsPersistent = true,
             Content = new NodeTypeDefinition
             {
                 Id = "story",
@@ -105,7 +104,6 @@ public class DataContextIntegrationTest : MonolithMeshTestBase
             Description = "The graph root",
             Icon = "Diagram",
             DisplayOrder = 0,
-            IsPersistent = true,
             Content = new NodeTypeDefinition
             {
                 Id = "graph",

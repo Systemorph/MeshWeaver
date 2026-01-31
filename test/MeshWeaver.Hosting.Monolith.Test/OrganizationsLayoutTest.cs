@@ -70,7 +70,6 @@ namespace MeshWeaver.Hosting.Monolith.Test
                 Description = "An organization containing projects",
                 Icon = "Building",
                 DisplayOrder = 10,
-                IsPersistent = true,
                 Content = new NodeTypeDefinition
                 {
                     Id = "Organization",
@@ -93,7 +92,6 @@ namespace MeshWeaver.Hosting.Monolith.Test
                 NodeType = "Organization",
                 Description = "A famous company",
                 Icon = "Building",
-                IsPersistent = true,
                 Content = new { Id = "Acme", Name = "Acme Corporation", Description = "A famous company", Logo = "/static/Organization/logos/acme.png" }
             };
             await persistence.SaveNodeAsync(acme);
@@ -104,7 +102,6 @@ namespace MeshWeaver.Hosting.Monolith.Test
                 NodeType = "Organization",
                 Description = "Another company",
                 Icon = "Building",
-                IsPersistent = true,
                 Content = new { Id = "Contoso", Name = "Contoso Ltd", Description = "Another company", Logo = "/static/Organization/logos/contoso.png" }
             };
             await persistence.SaveNodeAsync(contoso);
@@ -115,7 +112,6 @@ namespace MeshWeaver.Hosting.Monolith.Test
                 NodeType = "Organization",
                 Description = "Yet another company",
                 Icon = "Building",
-                IsPersistent = true,
                 Content = new { Id = "Fabrikam", Name = "Fabrikam Inc", Description = "Yet another company", Logo = "/static/Organization/logos/fabrikam.png" }
             };
             await persistence.SaveNodeAsync(fabrikam);
@@ -124,8 +120,7 @@ namespace MeshWeaver.Hosting.Monolith.Test
             var graphNode = MeshNode.FromPath("graph") with
             {
                 Name = "Graph",
-                NodeType = "type/graph",
-                IsPersistent = true
+                NodeType = "type/graph"
             };
             await persistence.SaveNodeAsync(graphNode);
 
@@ -134,7 +129,6 @@ namespace MeshWeaver.Hosting.Monolith.Test
             {
                 Name = "Graph",
                 NodeType = "NodeType",
-                IsPersistent = true,
                 Content = new NodeTypeDefinition
                 {
                     Id = "graph",

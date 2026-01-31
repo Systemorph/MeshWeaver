@@ -625,7 +625,8 @@ internal class NodeTypeService : INodeTypeService, IDisposable
                                 var foundType = false;
                                 await foreach (var typeNode in meshQuery.QueryAsync<MeshNode>(typeQuery, ct: ct).WithCancellation(ct))
                                 {
-                                    yield return CreateCreatableTypeInfoFromNode(typeNode);
+                                    var contentType = GetContentTypeForNodeType(typeNode.Path);
+                                    yield return CreateCreatableTypeInfoFromNode(typeNode, contentType);
                                     foundType = true;
                                     break;
                                 }
@@ -633,12 +634,14 @@ internal class NodeTypeService : INodeTypeService, IDisposable
                                 if (!foundType)
                                 {
                                     // Type node not found, create a basic info
+                                    var contentType = GetContentTypeForNodeType(typePath);
                                     yield return new CreatableTypeInfo(
                                         NodeTypePath: typePath,
                                         DisplayName: typePath.Split('/').Last(),
                                         Icon: "Code",
                                         Description: $"Create a {typePath.Split('/').Last()}",
-                                        DisplayOrder: 0
+                                        DisplayOrder: 0,
+                                        ContentType: contentType
                                     );
                                 }
                             }
@@ -688,7 +691,8 @@ internal class NodeTypeService : INodeTypeService, IDisposable
             if (string.IsNullOrEmpty(nodePath) && typeNode.Path.Contains('/'))
                 continue;
 
-            var typeInfo = CreateCreatableTypeInfoFromNode(typeNode);
+            var contentType = GetContentTypeForNodeType(typeNode.Path);
+            var typeInfo = CreateCreatableTypeInfoFromNode(typeNode, contentType);
             yield return typeInfo;
         }
 
@@ -702,7 +706,8 @@ internal class NodeTypeService : INodeTypeService, IDisposable
             {
                 if (addedPaths.Add(childType.Path))
                 {
-                    var typeInfo = CreateCreatableTypeInfoFromNode(childType);
+                    var contentType = GetContentTypeForNodeType(childType.Path);
+                    var typeInfo = CreateCreatableTypeInfoFromNode(childType, contentType);
                     yield return typeInfo;
                 }
             }
@@ -719,7 +724,8 @@ internal class NodeTypeService : INodeTypeService, IDisposable
                 {
                     if (addedPaths.Add(childType.Path))
                     {
-                        var typeInfo = CreateCreatableTypeInfoFromNode(childType);
+                        var contentType = GetContentTypeForNodeType(childType.Path);
+                        var typeInfo = CreateCreatableTypeInfoFromNode(childType, contentType);
                         yield return typeInfo;
                     }
                 }
@@ -769,7 +775,7 @@ internal class NodeTypeService : INodeTypeService, IDisposable
     /// <summary>
     /// Creates CreatableTypeInfo from a MeshNode.
     /// </summary>
-    private static CreatableTypeInfo CreateCreatableTypeInfoFromNode(MeshNode node)
+    private static CreatableTypeInfo CreateCreatableTypeInfoFromNode(MeshNode node, Type? contentType = null)
     {
         var typeDef = node.Content as NodeTypeDefinition;
 
@@ -778,8 +784,18 @@ internal class NodeTypeService : INodeTypeService, IDisposable
             DisplayName: typeDef?.DisplayName ?? node.Name ?? GetLastPathSegment(node.Path),
             Icon: typeDef?.Icon ?? node.Icon,
             Description: typeDef?.Description ?? node.Description,
-            DisplayOrder: typeDef?.DisplayOrder ?? node.DisplayOrder ?? 0
+            DisplayOrder: typeDef?.DisplayOrder ?? node.DisplayOrder ?? 0,
+            ContentType: contentType
         );
+    }
+
+    /// <summary>
+    /// Gets the content type for a node type path from the cached configurations.
+    /// </summary>
+    private Type? GetContentTypeForNodeType(string nodeTypePath)
+    {
+        var config = GetCachedConfiguration(nodeTypePath);
+        return config?.DataType != typeof(object) ? config?.DataType : null;
     }
 
     /// <summary>

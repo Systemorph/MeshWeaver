@@ -100,7 +100,6 @@ public enum StoryStatus
             Description = "A user story or task",
             Icon = "Document",
             DisplayOrder = 30,
-            IsPersistent = true,
             Content = new NodeTypeDefinition
             {
                 Id = "story",
@@ -135,7 +134,6 @@ public record Organization
             Description = "An organization",
             Icon = "Building",
             DisplayOrder = 10,
-            IsPersistent = true,
             Content = new NodeTypeDefinition
             {
                 Id = "org",
@@ -170,7 +168,6 @@ public record Project
             Description = "A project",
             Icon = "Folder",
             DisplayOrder = 20,
-            IsPersistent = true,
             Content = new NodeTypeDefinition
             {
                 Id = "project",
@@ -204,7 +201,6 @@ public record Graph
             Description = "The graph root",
             Icon = "Diagram",
             DisplayOrder = 0,
-            IsPersistent = true,
             Content = new NodeTypeDefinition
             {
                 Id = "graph",

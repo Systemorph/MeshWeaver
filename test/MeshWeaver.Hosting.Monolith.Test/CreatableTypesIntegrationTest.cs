@@ -71,8 +71,7 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
         {
             Name = "Organization",
             NodeType = "NodeType",
-            Content = orgTypeDef,
-            IsPersistent = true
+            Content = orgTypeDef
         };
         ((IPersistenceServiceCore)persistence).SaveNodeAsync(orgTypeNode, SetupJsonOptions).GetAwaiter().GetResult();
 
@@ -81,8 +80,7 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
         {
             Name = "ACME Corp",
             NodeType = "Organization",
-            Description = "A sample organization",
-            IsPersistent = true
+            Description = "A sample organization"
         };
         ((IPersistenceServiceCore)persistence).SaveNodeAsync(acmeNode, SetupJsonOptions).GetAwaiter().GetResult();
 
@@ -99,8 +97,7 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
         {
             Name = "Project",
             NodeType = "NodeType",
-            Content = projectTypeDef,
-            IsPersistent = true
+            Content = projectTypeDef
         };
         ((IPersistenceServiceCore)persistence).SaveNodeAsync(projectTypeNode, SetupJsonOptions).GetAwaiter().GetResult();
 
@@ -117,8 +114,7 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
         {
             Name = "Todo",
             NodeType = "NodeType",
-            Content = todoTypeDef,
-            IsPersistent = true
+            Content = todoTypeDef
         };
         ((IPersistenceServiceCore)persistence).SaveNodeAsync(todoTypeNode, SetupJsonOptions).GetAwaiter().GetResult();
 
@@ -127,8 +123,7 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
         {
             Name = "Product Launch",
             NodeType = "ACME/Project",
-            Description = "2024 Product Launch Project",
-            IsPersistent = true
+            Description = "2024 Product Launch Project"
         };
         ((IPersistenceServiceCore)persistence).SaveNodeAsync(productLaunchNode, SetupJsonOptions).GetAwaiter().GetResult();
 
@@ -146,8 +141,7 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
         {
             Name = "Markdown",
             NodeType = "NodeType",
-            Content = markdownTypeDef,
-            IsPersistent = true
+            Content = markdownTypeDef
         };
         ((IPersistenceServiceCore)persistence).SaveNodeAsync(markdownTypeNode, SetupJsonOptions).GetAwaiter().GetResult();
 
@@ -165,8 +159,7 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
         {
             Name = "NodeType",
             NodeType = "NodeType",
-            Content = nodeTypeTypeDef,
-            IsPersistent = true
+            Content = nodeTypeTypeDef
         };
         ((IPersistenceServiceCore)persistence).SaveNodeAsync(nodeTypeTypeNode, SetupJsonOptions).GetAwaiter().GetResult();
     }
@@ -263,8 +256,7 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
         {
             Name = "My Todo",
             NodeType = "ACME/Project/Todo",
-            Description = "A test todo item",
-            IsPersistent = true
+            Description = "A test todo item"
         };
 
         // Act
@@ -294,8 +286,7 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
         {
             Name = "Restricted Project",
             NodeType = "NodeType",
-            Content = restrictedTypeDef,
-            IsPersistent = true
+            Content = restrictedTypeDef
         };
         await Persistence.SaveNodeAsync(restrictedTypeNode, TestContext.Current.CancellationToken);
 
@@ -303,8 +294,7 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
         var restrictedInstance = MeshNode.FromPath("ACME/MyRestrictedProject") with
         {
             Name = "My Restricted Project",
-            NodeType = "ACME/RestrictedProject",
-            IsPersistent = true
+            NodeType = "ACME/RestrictedProject"
         };
         await Persistence.SaveNodeAsync(restrictedInstance, TestContext.Current.CancellationToken);
 
@@ -354,7 +344,6 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
             Description = "A test node for create flow",
             NodeType = "Markdown",
             Icon = "Document",
-            IsPersistent = true,
             Content = MarkdownContent.Parse($"# Test Markdown Node\n\nThis is a test.", nodePath)
         };
 
@@ -443,7 +432,6 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
         {
             Name = "Test Markdown Default View",
             NodeType = "Markdown",
-            IsPersistent = true,
             Content = MarkdownContent.Parse($"# Test\n\nContent here.", nodePath)
         };
 
@@ -520,7 +508,6 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
             Name = nodeName,
             NodeType = markdownType!.NodeTypePath,
             Icon = markdownType.Icon,
-            IsPersistent = true,
             Content = MarkdownContent.Parse($"# {nodeName}\n\nCreated via test.", nodePath)
         };
 

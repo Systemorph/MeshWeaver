@@ -628,7 +628,6 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
             Name = "Test Todo for Permanent Delete",
             NodeType = "ACME/Project/Todo",
             Content = new { id = testId, title = "Test Todo", status = "Pending" },
-            IsPersistent = true,
             State = MeshNodeState.Active
         };
 

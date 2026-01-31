@@ -114,28 +114,8 @@ public class KernelContainer(IServiceProvider serviceProvider)
             if (meshNode == null)
                 return DeliveryFailure(kernelHub, request, $"No mesh node was found for {innerAddress}");
 
-            if (meshNode.StartupScript is null)
-                return DeliveryFailure(kernelHub, request, $"No startup script is defined for {innerAddress}");
-
-            var kernel = await kernelHub.ServiceProvider.GetRequiredService<Task<CompositeKernel>>();
-            var result = await kernel.SendAsync(new SubmitCode(meshNode.StartupScript), cancellationToken);
-            if (!result.Events.Any(e => e is CommandSucceeded))
-            {
-                var message = $"Startup script failed:\n{string.Join('\n',
-                    result.Events.OfType<DiagnosticsProduced>().SelectMany(d => d.FormattedDiagnostics.Select(z => z.Value)))}";
-
-                return DeliveryFailure(
-                    kernelHub, request,
-                    new DeliveryFailure(request) { ErrorType = ErrorType.StartupScriptFailed, Message = message });
-            }
-
-
-            hub = kernelHub.GetHostedHub(innerAddress, HostedHubCreation.Never);
-            if (hub is not null)
-            {
-                hub.DeliverMessage(request.ForwardTo(innerAddress));
-                return request.Processed();
-            }
+            if (meshNode.HubConfiguration is null)
+                return DeliveryFailure(kernelHub, request, $"No hub configuration is defined for {innerAddress}");
 
             return DeliveryFailure(kernelHub, request, $"Could not start hub for {innerAddress}");
         }
