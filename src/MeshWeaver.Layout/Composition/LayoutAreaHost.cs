@@ -264,7 +264,10 @@ public record LayoutAreaHost : IDisposable
     }
 
     public void UpdateData(string id, object? data)
-        => Update(LayoutAreaReference.Data, store => store.SetItem(id, data));
+    {
+        if (data != null)
+            Update(LayoutAreaReference.Data, store => store.SetItem(id, data));
+    }
 
 
     private readonly ConcurrentDictionary<string, List<IDisposable>> disposablesByArea = new();

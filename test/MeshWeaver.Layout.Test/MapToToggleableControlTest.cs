@@ -316,7 +316,7 @@ public class MapToToggleableControlTest(ITestOutputHelper output) : HubTestBase(
             client.Post(new ClickedEvent(idReactiveAreaId, stream.StreamId), o => o.WithTarget(CreateHostAddress()));
 
             // Wait a bit and verify control is still LabelControl (not TextField)
-            await Task.Delay(200);
+            await Task.Delay(200, TestContext.Current.CancellationToken);
 
             var stillReadonly = await stream
                 .GetControlStream(idReactiveAreaId)
@@ -360,7 +360,7 @@ public class MapToToggleableControlTest(ITestOutputHelper output) : HubTestBase(
         stream.UpdatePointer("Updated Title", "/data/\"binding_test\"", new JsonPointerReference("title"));
 
         // Wait for the update to propagate
-        await Task.Delay(100);
+        await Task.Delay(100, TestContext.Current.CancellationToken);
 
         // Read updated data
         var updatedData = await stream
@@ -397,7 +397,7 @@ public class MapToToggleableControlTest(ITestOutputHelper output) : HubTestBase(
         stream.UpdatePointer("Auto-saved Title", "/data/\"autosave_test\"", new JsonPointerReference("title"));
 
         // Wait for debounce and server-side processing
-        await Task.Delay(200);
+        await Task.Delay(200, TestContext.Current.CancellationToken);
 
         // Verify server-side subscription received the update
         ServerSideUpdates.Should().NotBeEmpty("Server-side subscription should receive client updates");
@@ -582,7 +582,7 @@ public class EditPersistenceTest(ITestOutputHelper output) : HubTestBase(output)
 
         // Wait for auto-save debounce (100ms) + processing time
         Output.WriteLine("Waiting for auto-save...");
-        await Task.Delay(500);
+        await Task.Delay(500, TestContext.Current.CancellationToken);
 
         // Get FRESH instance from the data store via workspace stream
         // This is the critical check - did the change actually persist?
@@ -638,7 +638,7 @@ public class EditPersistenceTest(ITestOutputHelper output) : HubTestBase(output)
         layoutStream.UpdatePointer(newDate, "/data/\"persistable_entity\"", new JsonPointerReference("dueDate"));
 
         // Wait for auto-save
-        await Task.Delay(500);
+        await Task.Delay(500, TestContext.Current.CancellationToken);
 
         // Get fresh instance via workspace stream
         var updatedItems = await workspace
@@ -687,7 +687,7 @@ public class EditPersistenceTest(ITestOutputHelper output) : HubTestBase(output)
         Output.WriteLine($"Made local edit: title = {newTitle}");
 
         // Wait briefly for local update to propagate
-        await Task.Delay(50);
+        await Task.Delay(50, TestContext.Current.CancellationToken);
 
         // Read the local data to confirm it was updated
         var localDataAfterEdit = await layoutStream
@@ -707,7 +707,7 @@ public class EditPersistenceTest(ITestOutputHelper output) : HubTestBase(output)
 
         // Wait for auto-save debounce to NOT have triggered yet (it's 100ms in our test)
         // Then simulate workspace emitting original data
-        await Task.Delay(30); // Still within debounce window
+        await Task.Delay(30, TestContext.Current.CancellationToken); // Still within debounce window
 
         // Simulate workspace stream emitting original entity data
         // This is what happens when OverviewLayoutArea's subscription receives data
@@ -716,7 +716,7 @@ public class EditPersistenceTest(ITestOutputHelper output) : HubTestBase(output)
         Output.WriteLine($"Simulated workspace emit: title = {originalEntity.Title}");
 
         // Now wait for debounce to complete
-        await Task.Delay(200);
+        await Task.Delay(200, TestContext.Current.CancellationToken);
 
         // Check what gets persisted - should be the LOCAL edit, not the original
         var finalItems = await workspace
@@ -789,7 +789,7 @@ public class EditPersistenceTest(ITestOutputHelper output) : HubTestBase(output)
         layoutStream.UpdatePointer(42, "/data/\"persistable_entity\"", new JsonPointerReference("count"));
 
         // Wait for update to propagate
-        await Task.Delay(100);
+        await Task.Delay(100, TestContext.Current.CancellationToken);
 
         // Check if still in edit mode
         var controlAfterDataUpdate = await layoutStream

@@ -319,8 +319,8 @@ public class InMemoryMeshQuery : IMeshQueryCore
         await foreach (var node in _persistence.GetDescendantsSecureAsync(normalizedPath, userId, options).WithCancellation(ct))
         {
             var name = node.Name ?? node.Id ?? node.Path ?? "";
-            var nameLower = name?.ToLowerInvariant() ?? "";
-            var pathLower = node.Path.ToLowerInvariant();
+            var nameLower = name.ToLowerInvariant();
+            var pathLower = (node.Path ?? "").ToLowerInvariant();
 
             // Calculate match score based on prefix match (check both name and path)
             double score = 0;
@@ -346,7 +346,7 @@ public class InMemoryMeshQuery : IMeshQueryCore
 
             if (score > 0)
             {
-                suggestions.Add(new QuerySuggestion(node.Path, name, node.NodeType, score));
+                suggestions.Add(new QuerySuggestion(node.Path ?? "", name, node.NodeType, score));
             }
         }
 

@@ -180,7 +180,9 @@ public class HierarchicalBrowsingTests(ITestOutputHelper output) : MonolithMeshT
         emailTriageNode!.GetParentPath().Should().Be("Systemorph/Marketing/ClaimsProcessing");
 
         // Get parent
-        var parentNode = await Persistence.GetNodeAsync(emailTriageNode.GetParentPath());
+        var parentPath = emailTriageNode.GetParentPath();
+        parentPath.Should().NotBeNull();
+        var parentNode = await Persistence.GetNodeAsync(parentPath!);
         parentNode.Should().NotBeNull();
         parentNode!.Name.Should().Be("Claims Processing");
     }
