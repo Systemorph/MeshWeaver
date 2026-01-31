@@ -262,7 +262,7 @@ public class InlineEditingTest(ITestOutputHelper output) : HubTestBase(output)
         stream.UpdatePointer("Updated Title", "/data/\"test_content\"", new JsonPointerReference("title"));
 
         // Wait for the update to propagate
-        await Task.Delay(100);
+        await Task.Delay(100, TestContext.Current.CancellationToken);
 
         // Read updated data
         var updatedData = await stream
@@ -300,7 +300,7 @@ public class InlineEditingTest(ITestOutputHelper output) : HubTestBase(output)
         stream.UpdatePointer("Server Should See This", "/data/\"autosave_test\"", new JsonPointerReference("title"));
 
         // Wait for debounce and server-side processing
-        await Task.Delay(200);
+        await Task.Delay(200, TestContext.Current.CancellationToken);
 
         // Verify server-side subscription received the update
         ServerSideUpdates.Should().NotBeEmpty("Server-side subscription should receive client updates");
@@ -368,7 +368,7 @@ public class InlineEditingTest(ITestOutputHelper output) : HubTestBase(output)
         client.Post(new ClickedEvent(idValueArea, stream.StreamId), o => o.WithTarget(CreateHostAddress()));
 
         // Wait a bit and verify control is still LabelControl
-        await Task.Delay(200);
+        await Task.Delay(200, TestContext.Current.CancellationToken);
 
         var stillLabel = await stream
             .GetControlStream(idValueArea)
@@ -534,7 +534,7 @@ public class InlineEditingPersistenceTest(ITestOutputHelper output) : HubTestBas
 
         // Wait for auto-save debounce (100ms) + DataChangeRequest processing
         Output.WriteLine("Waiting for auto-save...");
-        await Task.Delay(500);
+        await Task.Delay(500, TestContext.Current.CancellationToken);
 
         // Verify the data was persisted via workspace stream (backed by AddData)
         var updatedItems = await workspace
@@ -575,13 +575,13 @@ public class InlineEditingPersistenceTest(ITestOutputHelper output) : HubTestBas
         {
             var intermediateTitle = i < 5 ? $"Intermediate {i}" : finalTitle;
             layoutStream.UpdatePointer(intermediateTitle, "/data/\"persisted_item\"", new JsonPointerReference("title"));
-            await Task.Delay(20); // Less than debounce window
+            await Task.Delay(20, TestContext.Current.CancellationToken); // Less than debounce window
         }
 
         Output.WriteLine($"Sent 5 rapid updates, final title: {finalTitle}");
 
         // Wait for debounce and persistence
-        await Task.Delay(500);
+        await Task.Delay(500, TestContext.Current.CancellationToken);
 
         // Verify only the final value was persisted
         var items = await workspace
@@ -630,7 +630,7 @@ public class InlineEditingPersistenceTest(ITestOutputHelper output) : HubTestBas
         layoutStream.UpdatePointer(newCount, "/data/\"persisted_item\"", new JsonPointerReference("count"));
 
         // Wait for auto-save
-        await Task.Delay(500);
+        await Task.Delay(500, TestContext.Current.CancellationToken);
 
         // Verify persistence
         var updatedItems = await workspace
@@ -802,7 +802,7 @@ public class ObjectTypeAutoSaveTest(ITestOutputHelper output) : HubTestBase(outp
 
         // Wait for auto-save
         Output.WriteLine("Waiting for auto-save debounce...");
-        await Task.Delay(500);
+        await Task.Delay(500, TestContext.Current.CancellationToken);
 
         // Verify auto-save was triggered
         Output.WriteLine($"AutoSaveTriggered: {AutoSaveTriggered}, AutoSavedName: {AutoSavedName}");

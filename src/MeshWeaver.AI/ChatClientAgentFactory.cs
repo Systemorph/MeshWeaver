@@ -137,10 +137,12 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
             yield break;
         }
 
+        #pragma warning disable CS0618 // Type or member is obsolete - migration to DelegationTool.CreateUnifiedDelegationTool requires executeAsync implementation
         var delegationTool = ChatPlugin.CreateUnifiedDelegationTool(
             agentConfig,
             hierarchyAgents,
             Logger);
+        #pragma warning restore CS0618
 
         Logger.LogInformation("Created unified delegation tool for agent {AgentName} with {HierarchyCount} hierarchy agents",
             agentConfig.Id, hierarchyAgents.Count);

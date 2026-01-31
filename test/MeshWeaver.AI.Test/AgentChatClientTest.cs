@@ -68,7 +68,7 @@ public class AgentChatClientTest : MonolithMeshTestBase
         // Load the actual node from the file system
         var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
         MeshNode? productLaunchNode = null;
-        await foreach (var node in meshQuery.QueryAsync<MeshNode>($"path:{contextPath} scope:self"))
+        await foreach (var node in meshQuery.QueryAsync<MeshNode>($"path:{contextPath} scope:self", null, TestContext.Current.CancellationToken))
         {
             productLaunchNode = node;
             break;
@@ -121,7 +121,7 @@ public class AgentChatClientTest : MonolithMeshTestBase
         // Load the actual node from the file system
         var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
         MeshNode? acmeNode = null;
-        await foreach (var node in meshQuery.QueryAsync<MeshNode>($"path:{contextPath} scope:self"))
+        await foreach (var node in meshQuery.QueryAsync<MeshNode>($"path:{contextPath} scope:self", null, TestContext.Current.CancellationToken))
         {
             acmeNode = node;
             break;

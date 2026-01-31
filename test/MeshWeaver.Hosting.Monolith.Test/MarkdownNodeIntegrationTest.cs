@@ -1394,7 +1394,7 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
         var readNode = await meshNodeStream
             .Where(x => x.Value?.Instances.Count > 0)
             .Select(x => x.Value!.Get<MeshNode>().FirstOrDefault())
-            .Where(n => n != null && ExtractMarkdownContent(n).Contains(testMarker))
+            .Where(n => n != null && (ExtractMarkdownContent(n)?.Contains(testMarker) ?? false))
             .Timeout(10.Seconds())
             .FirstAsync();
 
@@ -1425,7 +1425,7 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
         var restoreUpdate = new MeshNode(nodePath)
         {
             NodeType = MarkdownNodeType.NodeType,
-            Content = new MarkdownContent { Content = originalContent }
+            Content = new MarkdownContent { Content = originalContent ?? "" }
         };
         client.Post(
             new DataChangeRequest().WithUpdates(restoreUpdate),
@@ -1533,7 +1533,7 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
         var restoreUpdate = new MeshNode(nodePath)
         {
             NodeType = MarkdownNodeType.NodeType,
-            Content = new MarkdownContent { Content = originalContent }
+            Content = new MarkdownContent { Content = originalContent ?? "" }
         };
         client.Post(
             new DataChangeRequest().WithUpdates(restoreUpdate),
@@ -1655,7 +1655,7 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
         var restoreUpdate = new MeshNode(nodePath)
         {
             NodeType = MarkdownNodeType.NodeType,
-            Content = new MarkdownContent { Content = originalContent }
+            Content = new MarkdownContent { Content = originalContent ?? "" }
         };
         client.Post(
             new DataChangeRequest().WithUpdates(restoreUpdate),
@@ -1746,7 +1746,7 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
         var restoreUpdate = new MeshNode(nodePath)
         {
             NodeType = MarkdownNodeType.NodeType,
-            Content = new MarkdownContent { Content = originalContent }
+            Content = new MarkdownContent { Content = originalContent ?? "" }
         };
         client.Post(
             new DataChangeRequest().WithUpdates(restoreUpdate),
