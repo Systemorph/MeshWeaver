@@ -1,0 +1,21 @@
+{
+  "id": "ScheduleIntroCall",
+  "namespace": "ACME/CustomerOnboarding/Todo",
+  "name": "Schedule introductory call",
+  "nodeType": "ACME/Project/Todo",
+  "category": "Tasks",
+  "description": "Set up initial call with Apex Manufacturing",
+  "icon": "/static/content/ACME/Project/Todo/icon.svg",
+  "isPersistent": true,
+  "content": {
+    "$type": "Todo",
+    "id": "ScheduleIntroCall",
+    "title": "Schedule introductory call",
+    "description": "Schedule introductory call with Apex Manufacturing CFO and Risk Manager. Discuss coverage needs, answer initial questions, and establish relationship.",
+    "category": "Sales",
+    "priority": "High",
+    "assignee": "Anna",
+    "dueDateOffsetDays": -4,
+    "status": "Pending"
+  }
+}
