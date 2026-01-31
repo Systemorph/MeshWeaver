@@ -75,9 +75,9 @@ public static class GraphConfigurationExtensions
             // This provides HubConfiguration for nodes with nodeType="Markdown" (markdown documentation nodes).
             builder.AddMeshNodes(Configuration.MarkdownNodeType.CreateMeshNode());
 
-            // Register the built-in "Chat" MeshNode
-            // This provides HubConfiguration for nodes with nodeType="Chat" (AI chat conversations).
-            builder.AddMeshNodes(Configuration.ChatNodeType.CreateMeshNode());
+            // Register the built-in "Thread" MeshNode
+            // This provides HubConfiguration for nodes with nodeType="Thread" (AI conversation threads).
+            builder.AddMeshNodes(Configuration.ThreadNodeType.CreateMeshNode());
 
             // Register services that don't need hub-level dependencies at the mesh level
             builder.ConfigureServices(services =>
@@ -94,8 +94,8 @@ public static class GraphConfigurationExtensions
                     typeRegistry.WithType(typeof(AgentDelegation), nameof(AgentDelegation));
                     typeRegistry.WithType(typeof(Comment), nameof(Comment));
                     typeRegistry.WithType(typeof(MarkdownContent), nameof(MarkdownContent));
-                    typeRegistry.WithType(typeof(ChatNodeContent), nameof(ChatNodeContent));
-                    typeRegistry.WithType(typeof(ChatMessageContent), nameof(ChatMessageContent));
+                    typeRegistry.WithType(typeof(ThreadNodeContent), nameof(ThreadNodeContent));
+                    typeRegistry.WithType(typeof(ThreadMessageContent), nameof(ThreadMessageContent));
                 }
 
                 // Register compilation cache options

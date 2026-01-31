@@ -192,8 +192,8 @@
     [Parameter] public string? Scope { get; set; }
 
     // Chat items with path and content for display
-    private record ChatItem(string Path, ChatNodeContent Content);
-    private IReadOnlyList<ChatItem> Chats = [];
+    private record ThreadItem(string Path, ThreadNodeContent Content);
+    private IReadOnlyList<ThreadItem> Chats = [];
 
     protected override async Task OnInitializedAsync()
     {
@@ -210,11 +210,11 @@
         try
         {
             var userId = GetCurrentUserId();
-            var chatNodes = await ChatNodePersistenceHelper.ListUserChatNodesAsync(MeshQuery, userId);
+            var threadNodes = await ThreadNodePersistenceHelper.ListUserThreadNodesAsync(MeshQuery, userId);
 
-            // Convert to ChatItem list, filtering by scope if specified
-            var items = chatNodes
-                .Select(n => new ChatItem(n.Path ?? n.Id, n.Content as ChatNodeContent ?? new ChatNodeContent()))
+            // Convert to ThreadItem list, filtering by scope if specified
+            var items = threadNodes
+                .Select(n => new ThreadItem(n.Path ?? n.Id, n.Content as ThreadNodeContent ?? new ThreadNodeContent()))
                 .Where(c => Scope == null || GetPathScope(c.Path) == Scope)
                 .OrderByDescending(c => c.Content.LastActivityAt)
                 .ToList();
@@ -236,7 +236,7 @@
         return lastSlash > 0 ? path[..lastSlash] : null;
     }
 
-    private string GetChatTitle(ChatItem chat)
+    private string GetChatTitle(ThreadItem chat)
     {
         // Use title if available
         if (!string.IsNullOrEmpty(chat.Content.Title))
@@ -253,7 +253,7 @@
         return $"Chat from {chat.Content.CreatedAt:MM/dd HH:mm}";
     }
 
-    private string GetChatPreview(ChatItem chat)
+    private string GetChatPreview(ThreadItem chat)
     {
         // Get first user message as preview
         var firstMessage = GetFirstUserMessage(chat.Content);
@@ -265,7 +265,7 @@
         return "No messages";
     }
 
-    private static string? GetFirstUserMessage(ChatNodeContent content)
+    private static string? GetFirstUserMessage(ThreadNodeContent content)
     {
         if (content.Messages == null || content.Messages.Count == 0)
             return null;
@@ -313,7 +313,7 @@
         try
         {
             // Delete via hub
-            await ChatNodePersistenceHelper.DeleteChatNodeAsync(Hub, chatPath);
+            await ThreadNodePersistenceHelper.DeleteThreadNodeAsync(Hub, chatPath);
 
             // Remove from local list
             Chats = Chats.Where(c => c.Path != chatPath).ToList();

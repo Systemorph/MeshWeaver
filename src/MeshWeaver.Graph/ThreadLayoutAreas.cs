@@ -13,36 +13,36 @@ using Microsoft.Extensions.DependencyInjection;
 namespace MeshWeaver.Graph;
 
 /// <summary>
-/// Provides dedicated views for Chat nodes with a conversation-focused layout.
+/// Provides dedicated views for Thread nodes with a conversation-focused layout.
 /// Features:
-/// - Chat area: Main view showing chat content and message history
-/// - History area: Shows delegation sub-chats as a list
+/// - Thread area: Main view showing thread content and message history
+/// - History area: Shows delegation sub-threads as a list
 /// - Thumbnail: Compact card for catalog display
 /// </summary>
-public static class ChatLayoutAreas
+public static class ThreadLayoutAreas
 {
-    public const string ChatArea = "Chat";
+    public const string ThreadArea = "Thread";
     public const string HistoryArea = "History";
 
     /// <summary>
-    /// Adds the chat-specific views to the hub's layout.
-    /// Sets Chat as the default area for viewing conversations.
+    /// Adds the thread-specific views to the hub's layout.
+    /// Sets Thread as the default area for viewing conversations.
     /// </summary>
-    public static MessageHubConfiguration AddChatViews(this MessageHubConfiguration configuration)
+    public static MessageHubConfiguration AddThreadViews(this MessageHubConfiguration configuration)
         => configuration
             .AddLayout(layout => layout
-                .WithDefaultArea(ChatArea)
-                .WithView(ChatArea, ChatView)
+                .WithDefaultArea(ThreadArea)
+                .WithView(ThreadArea, ThreadView)
                 .WithView(HistoryArea, HistoryView)
                 .WithView(MeshNodeLayoutAreas.SettingsArea, MeshNodeLayoutAreas.Settings)
                 .WithView(MeshNodeLayoutAreas.MetadataArea, MeshNodeLayoutAreas.Metadata)
                 .WithView(MeshNodeLayoutAreas.ThumbnailArea, Thumbnail));
 
     /// <summary>
-    /// Renders the Chat area showing the conversation content.
-    /// Displays the message history stored in the ChatNodeContent.
+    /// Renders the Thread area showing the conversation content.
+    /// Displays the message history stored in the ThreadNodeContent.
     /// </summary>
-    public static IObservable<UiControl?> ChatView(LayoutAreaHost host, RenderingContext _)
+    public static IObservable<UiControl?> ThreadView(LayoutAreaHost host, RenderingContext _)
     {
         var hubPath = host.Hub.Address.ToString();
 
@@ -53,27 +53,27 @@ public static class ChatLayoutAreas
         return nodeStream.Select(nodes =>
         {
             var node = nodes.FirstOrDefault(n => n.Path == hubPath);
-            return BuildChatView(host, node, hubPath);
+            return BuildThreadView(host, node, hubPath);
         });
     }
 
-    private static UiControl BuildChatView(LayoutAreaHost host, MeshNode? node, string chatPath)
+    private static UiControl BuildThreadView(LayoutAreaHost host, MeshNode? node, string threadPath)
     {
         var container = Controls.Stack
             .WithWidth("100%")
             .WithHeight("100%")
             .WithStyle("display: flex; flex-direction: column;");
 
-        // Header with chat title and action menu
-        var title = GetChatTitle(node);
+        // Header with thread title and action menu
+        var title = GetThreadTitle(node);
         var header = Controls.Stack
             .WithOrientation(Orientation.Horizontal)
             .WithWidth("100%")
             .WithStyle("align-items: center; padding: 16px; border-bottom: 1px solid var(--neutral-stroke-rest); flex-shrink: 0;");
 
-        // Back button (navigate to user's chat catalog)
-        var userId = GetUserIdFromPath(chatPath);
-        var catalogPath = ChatNodeType.GetUserChatsPath(userId);
+        // Back button (navigate to user's thread catalog)
+        var userId = GetUserIdFromPath(threadPath);
+        var catalogPath = ThreadNodeType.GetUserThreadsPath(userId);
         header = header.WithView(Controls.Button("")
             .WithIconStart(FluentIcons.ArrowLeft(IconSize.Size16))
             .WithAppearance(Appearance.Stealth)
@@ -83,13 +83,13 @@ public static class ChatLayoutAreas
         header = header.WithView(Controls.Html($"<h2 style=\"margin: 0 16px; flex: 1;\">{System.Web.HttpUtility.HtmlEncode(title)}</h2>"));
 
         // Action menu
-        header = header.WithView(BuildChatActionMenu(host, node, chatPath));
+        header = header.WithView(BuildThreadActionMenu(host, node, threadPath));
 
         container = container.WithView(header);
 
-        // Chat messages content
-        var content = node?.Content as ChatNodeContent;
-        var messages = content?.Messages ?? new List<ChatMessageContent>();
+        // Thread messages content
+        var content = node?.Content as ThreadNodeContent;
+        var messages = content?.Messages ?? new List<ThreadMessageContent>();
 
         if (messages.Count == 0)
         {
@@ -100,7 +100,7 @@ public static class ChatLayoutAreas
                     "<div style=\"text-align: center; color: var(--neutral-foreground-hint);\">" +
                     "<div style=\"font-size: 48px; margin-bottom: 16px;\">💬</div>" +
                     "<p style=\"font-size: 1.1rem;\">No messages yet</p>" +
-                    "<p style=\"font-size: 0.9rem;\">This chat is empty.</p>" +
+                    "<p style=\"font-size: 0.9rem;\">This thread is empty.</p>" +
                     "</div>")));
         }
         else
@@ -142,7 +142,7 @@ public static class ChatLayoutAreas
         return container;
     }
 
-    private static UiControl BuildMessageBubble(ChatMessageContent message)
+    private static UiControl BuildMessageBubble(ThreadMessageContent message)
     {
         var isUser = message.Role.Equals("user", StringComparison.OrdinalIgnoreCase);
         var isSystem = message.Role.Equals("system", StringComparison.OrdinalIgnoreCase);
@@ -184,7 +184,7 @@ public static class ChatLayoutAreas
                 .WithOrientation(Orientation.Horizontal)
                 .WithStyle("margin-top: 8px; padding-top: 8px; border-top: 1px solid rgba(255,255,255,0.2);")
                 .WithView(Controls.Icon("ArrowRight").WithStyle("font-size: 14px;"))
-                .WithView(new NavLinkControl("View delegation", null, $"/{message.DelegationPath}/{ChatArea}")));
+                .WithView(new NavLinkControl("View delegation", null, $"/{message.DelegationPath}/{ThreadArea}")));
         }
 
         messageContainer = messageContainer.WithView(bubble);
@@ -192,7 +192,7 @@ public static class ChatLayoutAreas
     }
 
     /// <summary>
-    /// Renders the History area showing delegation sub-chats as a list.
+    /// Renders the History area showing delegation sub-threads as a list.
     /// </summary>
     public static IObservable<UiControl?> HistoryView(LayoutAreaHost host, RenderingContext _)
     {
@@ -208,12 +208,12 @@ public static class ChatLayoutAreas
         var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? Array.Empty<MeshNode>())
             ?? Observable.Return<MeshNode[]>(Array.Empty<MeshNode>());
 
-        // Query for child Chat nodes (delegations)
+        // Query for child Thread nodes (delegations)
         var childrenStream = Observable.FromAsync(async () =>
         {
             try
             {
-                return await meshQuery.QueryAsync<MeshNode>($"path:{hubPath} nodeType:{ChatNodeType.NodeType} scope:children").ToListAsync() as IReadOnlyList<MeshNode>;
+                return await meshQuery.QueryAsync<MeshNode>($"path:{hubPath} nodeType:{ThreadNodeType.NodeType} scope:children").ToListAsync() as IReadOnlyList<MeshNode>;
             }
             catch
             {
@@ -228,7 +228,7 @@ public static class ChatLayoutAreas
         });
     }
 
-    private static UiControl BuildHistoryView(LayoutAreaHost host, MeshNode? node, string chatPath, IReadOnlyList<MeshNode> delegations)
+    private static UiControl BuildHistoryView(LayoutAreaHost host, MeshNode? node, string threadPath, IReadOnlyList<MeshNode> delegations)
     {
         var container = Controls.Stack
             .WithWidth("100%")
@@ -243,9 +243,9 @@ public static class ChatLayoutAreas
         header = header.WithView(Controls.Button("")
             .WithIconStart(FluentIcons.ArrowLeft(IconSize.Size16))
             .WithAppearance(Appearance.Stealth)
-            .WithNavigateToHref($"/{chatPath}/{ChatArea}"));
+            .WithNavigateToHref($"/{threadPath}/{ThreadArea}"));
 
-        var title = GetChatTitle(node);
+        var title = GetThreadTitle(node);
         header = header.WithView(Controls.Html($"<h2 style=\"margin: 0 16px;\">Delegations - {System.Web.HttpUtility.HtmlEncode(title)}</h2>"));
 
         container = container.WithView(header);
@@ -264,7 +264,7 @@ public static class ChatLayoutAreas
             var grid = Controls.LayoutGrid.WithSkin(s => s.WithSpacing(2));
 
             foreach (var delegation in delegations.OrderByDescending(d =>
-                (d.Content as ChatNodeContent)?.CreatedAt ?? DateTime.MinValue))
+                (d.Content as ThreadNodeContent)?.CreatedAt ?? DateTime.MinValue))
             {
                 grid = grid.WithView(
                     BuildDelegationCard(delegation),
@@ -279,7 +279,7 @@ public static class ChatLayoutAreas
 
     private static UiControl BuildDelegationCard(MeshNode delegationNode)
     {
-        var content = delegationNode.Content as ChatNodeContent;
+        var content = delegationNode.Content as ThreadNodeContent;
         var title = content?.Title ?? delegationNode.Name ?? "Delegation";
         var timestamp = content?.CreatedAt.ToString("g") ?? "";
         var path = delegationNode.Path ?? "";
@@ -292,11 +292,11 @@ public static class ChatLayoutAreas
                 .WithView(Controls.Icon("Chat").WithStyle("color: var(--accent-fill-rest);"))
                 .WithView(Controls.Html($"<strong>{System.Web.HttpUtility.HtmlEncode(title)}</strong>")))
             .WithView(Controls.Html($"<span style=\"font-size: 0.85rem; color: var(--neutral-foreground-hint);\">{timestamp}</span>"))
-            .WithView(new NavLinkControl("", null, $"/{path}/{ChatArea}"));
+            .WithView(new NavLinkControl("", null, $"/{path}/{ThreadArea}"));
     }
 
     /// <summary>
-    /// Renders a compact thumbnail for chat nodes in catalogs.
+    /// Renders a compact thumbnail for thread nodes in catalogs.
     /// Shows title, last activity time, and message preview.
     /// </summary>
     public static IObservable<UiControl?> Thumbnail(LayoutAreaHost host, RenderingContext _)
@@ -315,8 +315,8 @@ public static class ChatLayoutAreas
 
     private static UiControl BuildThumbnail(MeshNode? node, string hubPath)
     {
-        var content = node?.Content as ChatNodeContent;
-        var title = content?.Title ?? node?.Name ?? "Chat";
+        var content = node?.Content as ThreadNodeContent;
+        var title = content?.Title ?? node?.Name ?? "Thread";
         var lastActivity = content?.LastActivityAt.ToString("g") ?? "";
         var messageCount = content?.Messages?.Count ?? 0;
 
@@ -345,46 +345,46 @@ public static class ChatLayoutAreas
             .WithView(!string.IsNullOrEmpty(preview)
                 ? Controls.Html($"<p style=\"margin: 8px 0 0 0; font-size: 0.9rem; color: var(--neutral-foreground-hint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;\">{System.Web.HttpUtility.HtmlEncode(preview)}</p>")
                 : Controls.Html($"<p style=\"margin: 8px 0 0 0; font-size: 0.9rem; color: var(--neutral-foreground-hint);\">{messageCount} messages</p>"))
-            .WithView(new NavLinkControl("", null, $"/{hubPath}/{ChatArea}"));
+            .WithView(new NavLinkControl("", null, $"/{hubPath}/{ThreadArea}"));
     }
 
     /// <summary>
-    /// Builds the action menu for chat nodes.
+    /// Builds the action menu for thread nodes.
     /// </summary>
-    private static UiControl BuildChatActionMenu(LayoutAreaHost host, MeshNode? node, string chatPath)
+    private static UiControl BuildThreadActionMenu(LayoutAreaHost host, MeshNode? node, string threadPath)
     {
         var menu = Controls.MenuItem("", FluentIcons.MoreHorizontal(IconSize.Size20))
             .WithAppearance(Appearance.Stealth)
             .WithIconOnly();
 
         // History option (show delegations)
-        menu = menu.WithView(new NavLinkControl("Delegations", FluentIcons.History(IconSize.Size16), $"/{chatPath}/{HistoryArea}"));
+        menu = menu.WithView(new NavLinkControl("Delegations", FluentIcons.History(IconSize.Size16), $"/{threadPath}/{HistoryArea}"));
 
         // Metadata option
-        menu = menu.WithView(new NavLinkControl("Metadata", FluentIcons.Info(IconSize.Size16), $"/{chatPath}/{MeshNodeLayoutAreas.MetadataArea}"));
+        menu = menu.WithView(new NavLinkControl("Metadata", FluentIcons.Info(IconSize.Size16), $"/{threadPath}/{MeshNodeLayoutAreas.MetadataArea}"));
 
         // Settings option
-        menu = menu.WithView(new NavLinkControl("Settings", FluentIcons.Settings(IconSize.Size16), $"/{chatPath}/{MeshNodeLayoutAreas.SettingsArea}"));
+        menu = menu.WithView(new NavLinkControl("Settings", FluentIcons.Settings(IconSize.Size16), $"/{threadPath}/{MeshNodeLayoutAreas.SettingsArea}"));
 
         return menu;
     }
 
     /// <summary>
-    /// Gets the chat title from node content or falls back to default.
+    /// Gets the thread title from node content or falls back to default.
     /// </summary>
-    private static string GetChatTitle(MeshNode? node)
+    private static string GetThreadTitle(MeshNode? node)
     {
-        if (node?.Content is ChatNodeContent content && !string.IsNullOrEmpty(content.Title))
+        if (node?.Content is ThreadNodeContent content && !string.IsNullOrEmpty(content.Title))
             return content.Title;
 
         if (!string.IsNullOrEmpty(node?.Name))
             return node.Name;
 
-        return "Chat";
+        return "Thread";
     }
 
     /// <summary>
-    /// Extracts user ID from a chat path like "User/userId/Chats/chatId".
+    /// Extracts user ID from a thread path like "User/userId/Threads/threadId".
     /// </summary>
     private static string GetUserIdFromPath(string path)
     {

@@ -3,10 +3,10 @@ using System.Text.Json;
 namespace MeshWeaver.Mesh;
 
 /// <summary>
-/// Content stored in Chat MeshNodes.
-/// Chats are stored as MeshNodes with nodeType="Chat" in User/{userId}/Chats/.
+/// Content stored in Thread MeshNodes.
+/// Threads are stored as MeshNodes with nodeType="Thread" in User/{userId}/Threads/.
 /// </summary>
-public record ChatNodeContent
+public record ThreadNodeContent
 {
     /// <summary>
     /// Optional title (auto-generated from first message if not set).
@@ -14,17 +14,17 @@ public record ChatNodeContent
     public string? Title { get; init; }
 
     /// <summary>
-    /// When the chat was created.
+    /// When the thread was created.
     /// </summary>
     public DateTime CreatedAt { get; init; } = DateTime.UtcNow;
 
     /// <summary>
-    /// When the chat was last active.
+    /// When the thread was last active.
     /// </summary>
     public DateTime LastActivityAt { get; init; } = DateTime.UtcNow;
 
     /// <summary>
-    /// The AI provider/model used for this chat.
+    /// The AI provider/model used for this thread.
     /// </summary>
     public string? ProviderId { get; init; }
 
@@ -34,20 +34,20 @@ public record ChatNodeContent
     public JsonElement? SessionState { get; init; }
 
     /// <summary>
-    /// Chat messages stored inline.
+    /// Thread messages stored inline.
     /// </summary>
-    public List<ChatMessageContent>? Messages { get; init; }
+    public List<ThreadMessageContent>? Messages { get; init; }
 
     /// <summary>
-    /// Gets a display title for the chat.
+    /// Gets a display title for the thread.
     /// </summary>
-    public string DisplayTitle => Title ?? $"Chat from {CreatedAt:MM/dd/yyyy HH:mm}";
+    public string DisplayTitle => Title ?? $"Thread from {CreatedAt:MM/dd/yyyy HH:mm}";
 }
 
 /// <summary>
-/// Represents a single message in a chat conversation.
+/// Represents a single message in a thread conversation.
 /// </summary>
-public record ChatMessageContent
+public record ThreadMessageContent
 {
     /// <summary>
     /// Unique identifier for this message.
@@ -75,7 +75,7 @@ public record ChatMessageContent
     public DateTime Timestamp { get; init; } = DateTime.UtcNow;
 
     /// <summary>
-    /// If this message triggered a delegation, path to the sub-chat node.
+    /// If this message triggered a delegation, path to the sub-thread node.
     /// </summary>
     public string? DelegationPath { get; init; }
 }

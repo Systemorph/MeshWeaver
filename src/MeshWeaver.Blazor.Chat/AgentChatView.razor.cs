@@ -39,7 +39,7 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
     private readonly List<ChatMessage> messages = new();
     // Chat persistence properties
     private string? currentConversationId;
-    private string? currentChatNodePath; // Path to current chat MeshNode for hub-based persistence
+    private string? currentThreadNodePath; // Path to current chat MeshNode for hub-based persistence
     private ChatConversation? currentConversation;
     private bool isLoadingConversation;
     private bool isGeneratingResponse;
@@ -135,9 +135,9 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
 
             if (meshQuery != null)
             {
-                var chatNodes = await ChatNodePersistenceHelper.ListUserChatNodesAsync(meshQuery, userId);
-                var mostRecent = chatNodes
-                    .Select(n => (Node: n, Content: n.Content as ChatNodeContent))
+                var threadNodes = await ThreadNodePersistenceHelper.ListUserThreadNodesAsync(meshQuery, userId);
+                var mostRecent = threadNodes
+                    .Select(n => (Node: n, Content: n.Content as ThreadNodeContent))
                     .Where(x => x.Content != null)
                     .OrderByDescending(x => x.Content!.LastActivityAt)
                     .FirstOrDefault();
@@ -615,7 +615,7 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
         CancelAnyCurrentResponse();
         // Clear current state
         currentConversationId = null;
-        currentChatNodePath = null;
+        currentThreadNodePath = null;
         currentConversation = null;
         messages.Clear();
 
@@ -626,9 +626,9 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
         {
             chat = await CreateChatAsync(context?.ToUnifiedPath());
 
-            // Create a new chat node via hub for persistence
+            // Create a new thread node via hub for persistence
             var userId = GetCurrentUserId();
-            var chatContent = new ChatNodeContent
+            var threadContent = new ThreadNodeContent
             {
                 CreatedAt = DateTime.UtcNow,
                 LastActivityAt = DateTime.UtcNow,
@@ -636,13 +636,13 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
                 Messages = []
             };
 
-            currentChatNodePath = await ChatNodePersistenceHelper.CreateChatNodeAsync(Hub, userId, chatContent);
-            currentConversationId = currentChatNodePath;
+            currentThreadNodePath = await ThreadNodePersistenceHelper.CreateThreadNodeAsync(Hub, userId, threadContent);
+            currentConversationId = currentThreadNodePath;
 
-            // Set the thread ID to match the chat node path
-            chat.SetThreadId(currentChatNodePath);
+            // Set the thread ID to match the thread node path
+            chat.SetThreadId(currentThreadNodePath);
 
-            Logger.LogInformation("[Chat:{InstanceId}] Created new chat node: {Path}", _instanceId, currentChatNodePath);
+            Logger.LogInformation("[Chat:{InstanceId}] Created new thread node: {Path}", _instanceId, currentThreadNodePath);
         }
         catch (ArgumentException ex) when (ex.Message.Contains("No factory can serve model"))
         {
@@ -711,17 +711,17 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
             StateHasChanged(); // Show loading spinner immediately
             CancelAnyCurrentResponse();
 
-            // Load chat node content via hub
-            var chatContent = await ChatNodePersistenceHelper.LoadChatNodeAsync(Hub, chatPath);
+            // Load thread node content via hub
+            var threadContent = await ThreadNodePersistenceHelper.LoadThreadNodeAsync(Hub, chatPath);
 
-            if (chatContent != null)
+            if (threadContent != null)
             {
                 currentConversationId = chatPath;
-                currentChatNodePath = chatPath;
+                currentThreadNodePath = chatPath;
 
-                // Convert ChatNodeContent messages to ChatMessage format
+                // Convert ThreadNodeContent messages to ChatMessage format
                 messages.Clear();
-                var loadedMessages = ChatNodePersistenceHelper.ConvertToAgentChatMessages(chatContent);
+                var loadedMessages = ThreadNodePersistenceHelper.ConvertToAgentChatMessages(threadContent);
                 foreach (var msg in loadedMessages)
                 {
                     messages.Add(msg);
@@ -731,9 +731,9 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
                 currentConversation = new ChatConversation
                 {
                     Id = chatPath,
-                    Title = chatContent.Title ?? "Chat",
-                    CreatedAt = chatContent.CreatedAt,
-                    LastModifiedAt = chatContent.LastActivityAt,
+                    Title = threadContent.Title ?? "Chat",
+                    CreatedAt = threadContent.CreatedAt,
+                    LastModifiedAt = threadContent.LastActivityAt,
                     Messages = messages.ToList()
                 };
 
@@ -776,10 +776,10 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
             var title = GetConversationTitle();
 
             // Convert messages to ChatMessageContent format
-            var chatMessages = ChatNodePersistenceHelper.ConvertFromAgentChatMessages(messages);
+            var chatMessages = ThreadNodePersistenceHelper.ConvertFromAgentChatMessages(messages);
 
-            // Create or update the chat node content
-            var chatContent = new ChatNodeContent
+            // Create or update the thread node content
+            var threadContent = new ThreadNodeContent
             {
                 Title = title,
                 CreatedAt = currentConversation?.CreatedAt ?? DateTime.UtcNow,
@@ -788,29 +788,29 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
                 Messages = chatMessages
             };
 
-            // If we have a chat node path, update it via hub
-            if (!string.IsNullOrEmpty(currentChatNodePath))
+            // If we have a thread node path, update it via hub
+            if (!string.IsNullOrEmpty(currentThreadNodePath))
             {
-                await ChatNodePersistenceHelper.UpdateChatNodeAsync(Hub, currentChatNodePath, chatContent);
-                Logger.LogDebug("[Chat:{InstanceId}] Updated chat node: {Path}", _instanceId, currentChatNodePath);
+                await ThreadNodePersistenceHelper.UpdateThreadNodeAsync(Hub, currentThreadNodePath, threadContent);
+                Logger.LogDebug("[Chat:{InstanceId}] Updated thread node: {Path}", _instanceId, currentThreadNodePath);
             }
             else
             {
-                // Create new chat node if we don't have one yet
+                // Create new thread node if we don't have one yet
                 var userId = GetCurrentUserId();
-                currentChatNodePath = await ChatNodePersistenceHelper.CreateChatNodeAsync(Hub, userId, chatContent);
-                currentConversationId = currentChatNodePath;
-                Logger.LogInformation("[Chat:{InstanceId}] Created chat node: {Path}", _instanceId, currentChatNodePath);
+                currentThreadNodePath = await ThreadNodePersistenceHelper.CreateThreadNodeAsync(Hub, userId, threadContent);
+                currentConversationId = currentThreadNodePath;
+                Logger.LogInformation("[Chat:{InstanceId}] Created thread node: {Path}", _instanceId, currentThreadNodePath);
             }
 
             // Update local state
             var agentContext = await GetCurrentAgentContextAsync();
             currentConversation = new ChatConversation
             {
-                Id = currentChatNodePath ?? Guid.NewGuid().AsString(),
+                Id = currentThreadNodePath ?? Guid.NewGuid().AsString(),
                 Title = title ?? "New Chat",
-                CreatedAt = chatContent.CreatedAt,
-                LastModifiedAt = chatContent.LastActivityAt,
+                CreatedAt = threadContent.CreatedAt,
+                LastModifiedAt = threadContent.LastActivityAt,
                 Messages = messages.ToList(),
                 AgentContext = agentContext
             };
