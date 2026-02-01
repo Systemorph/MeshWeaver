@@ -581,7 +581,7 @@ public static class EditorExtensions
         return Controls.Stack
             .WithStyle("padding: 4px 8px;")
             .WithView(Controls.Label(displayName)
-                .WithStyle("font-weight: 600; color: var(--neutral-foreground-hint); font-size: 0.875rem;"))
+                .WithStyle("font-weight: 600; color: var(--neutral-foreground-hint); font-size: 0.875rem; padding-left: 12px;"))
             .WithView((h, _) => editStateStream
                 .Select(isEditing => isEditing && isEditable
                     ? BuildEditControl(h, property, dataId, editStateId)

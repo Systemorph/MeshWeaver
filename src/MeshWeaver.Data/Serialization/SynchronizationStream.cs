@@ -4,6 +4,7 @@ using System.Reactive.Subjects;
 using System.Reflection;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using MeshWeaver.Data;
 using MeshWeaver.Messaging;
 using MeshWeaver.Reflection;
 using MeshWeaver.ShortGuid;
@@ -196,6 +197,9 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
         this.Host = Host;
         this.Configuration = configuration?.Invoke(new StreamConfiguration<TStream>(this)) ?? new StreamConfiguration<TStream>(this);
 
+        // Store subscriber in Properties for easy access via Get<Address>
+        if (Configuration.Subscriber != null)
+            Set(nameof(SubscribeRequest.Subscriber), Configuration.Subscriber);
 
         this.ReduceManager = ReduceManager;
         this.StreamIdentity = StreamIdentity;
@@ -404,6 +408,14 @@ public record StreamConfiguration<TStream>(ISynchronizationStream<TStream> Strea
     internal string ClientId { get; init; } = Guid.NewGuid().AsString();
     public StreamConfiguration<TStream> WithClientId(string streamId) =>
         this with { ClientId = streamId };
+
+    /// <summary>
+    /// The address of the subscriber (client/portal) that subscribed to this stream.
+    /// Used for sending messages back to the subscriber, such as NavigationRequest.
+    /// </summary>
+    public Address? Subscriber { get; init; }
+    public StreamConfiguration<TStream> WithSubscriber(Address subscriber) =>
+        this with { Subscriber = subscriber };
 
     internal bool NullReturn { get; init; }
 

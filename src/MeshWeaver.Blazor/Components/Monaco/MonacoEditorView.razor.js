@@ -172,7 +172,7 @@ function debounce(fn, delay) {
     document.head.appendChild(style);
 })();
 
-export function initEditor(editorId, placeholder, dotNetRef, codeEditMode = false) {
+export function initEditor(editorId, placeholder, dotNetRef, codeEditMode = false, showLineNumbers = false) {
     const container = document.getElementById(editorId);
     if (!container) {
         console.error('Container not found:', editorId);
@@ -187,11 +187,12 @@ export function initEditor(editorId, placeholder, dotNetRef, codeEditMode = fals
         dotNetRef: dotNetRef,
         completionConfig: null,
         completionDisposable: null,
-        codeEditMode: codeEditMode
+        codeEditMode: codeEditMode,
+        showLineNumbers: showLineNumbers
     });
 
     // Add placeholder styling
-    updatePlaceholder(editorId, placeholder);
+    updatePlaceholder(editorId, placeholder, showLineNumbers);
 
     // Get the monaco editor instance
     const editorInstance = monaco.editor.getEditors().find(e => e.getContainerDomNode()?.id === editorId);
@@ -276,9 +277,14 @@ export function initEditor(editorId, placeholder, dotNetRef, codeEditMode = fals
     }
 }
 
-function updatePlaceholder(editorId, placeholder) {
+function updatePlaceholder(editorId, placeholder, showLineNumbers = false) {
     const container = document.getElementById(editorId);
     if (!container) return;
+
+    // Calculate left offset based on line numbers
+    // When line numbers are shown, we need to account for the gutter width
+    // Monaco uses ~40px for 3-char line numbers + some padding
+    const leftOffset = showLineNumbers ? 30 : 10;
 
     // Create or update placeholder element
     let placeholderEl = container.querySelector('.monaco-placeholder');
@@ -288,7 +294,7 @@ function updatePlaceholder(editorId, placeholder) {
         placeholderEl.style.cssText = `
             position: absolute;
             top: 8px;
-            left: 10px;
+            left: ${leftOffset}px;
             color: var(--neutral-foreground-hint, #605e5c);
             pointer-events: none;
             font-size: 14px;
@@ -297,6 +303,9 @@ function updatePlaceholder(editorId, placeholder) {
         `;
         container.style.position = 'relative';
         container.appendChild(placeholderEl);
+    } else {
+        // Update left position if element already exists
+        placeholderEl.style.left = `${leftOffset}px`;
     }
     placeholderEl.textContent = placeholder;
 

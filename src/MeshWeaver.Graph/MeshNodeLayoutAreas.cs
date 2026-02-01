@@ -1370,16 +1370,8 @@ public static class MeshNodeLayoutAreas
                     {
                         await meshCatalog.ConfirmNodeAsync(nodePath);
                         // Navigate to Overview after confirmation
-                        var navigationService = ctx.Host.Hub.ServiceProvider.GetService<INavigationService>();
                         var overviewUrl = BuildContentUrl(nodePath, OverviewArea);
-                        if (navigationService != null)
-                        {
-                            navigationService.NavigateTo(overviewUrl);
-                        }
-                        else
-                        {
-                            ctx.Host.UpdateArea(ctx.Area, new RedirectControl(overviewUrl));
-                        }
+                        ctx.NavigateTo(overviewUrl);
                     }
                     catch (Exception ex)
                     {
@@ -1402,16 +1394,8 @@ public static class MeshNodeLayoutAreas
                         await meshCatalog.DeleteNodeAsync(nodePath);
                         // Navigate to parent's Overview after deletion
                         var redirectPath = !string.IsNullOrEmpty(parentPath) ? parentPath : nodePath;
-                        var navigationService = ctx.Host.Hub.ServiceProvider.GetService<INavigationService>();
                         var overviewUrl = BuildContentUrl(redirectPath, OverviewArea);
-                        if (navigationService != null)
-                        {
-                            navigationService.NavigateTo(overviewUrl);
-                        }
-                        else
-                        {
-                            ctx.Host.UpdateArea(ctx.Area, new RedirectControl(overviewUrl));
-                        }
+                        ctx.NavigateTo(overviewUrl);
                     }
                     catch (Exception ex)
                     {

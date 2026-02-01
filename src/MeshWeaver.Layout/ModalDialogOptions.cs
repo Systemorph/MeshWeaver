@@ -4,7 +4,7 @@
 /// Represents the options for a modal dialog.
 /// </summary>
 /// <param name="Size">The size of the modal dialog.</param>
-/// <param name="IsClosable">Indicates whether the modal dialog is closable.</param>
+/// <param name="IsClosable">Indicates whether the modal dialog shows a Close button.</param>
 public record ModalDialogOptions(string Size, bool IsClosable)
 {
     /// <summary>

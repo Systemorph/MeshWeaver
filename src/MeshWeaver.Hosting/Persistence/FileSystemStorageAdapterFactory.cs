@@ -1,3 +1,4 @@
+using System.Text.Json;
 using MeshWeaver.Mesh.Services;
 
 namespace MeshWeaver.Hosting.Persistence;
@@ -8,6 +9,12 @@ namespace MeshWeaver.Hosting.Persistence;
 public class FileSystemStorageAdapterFactory : IStorageAdapterFactory
 {
     public const string StorageType = "FileSystem";
+
+    /// <summary>
+    /// Creates a modifier function that enables WriteIndented for formatted JSON output.
+    /// </summary>
+    public static Func<JsonSerializerOptions, JsonSerializerOptions> FormattedJsonModifier =>
+        options => new JsonSerializerOptions(options) { WriteIndented = true };
 
     public IStorageAdapter Create(GraphStorageConfig config, IServiceProvider serviceProvider)
     {
@@ -22,6 +29,14 @@ public class FileSystemStorageAdapterFactory : IStorageAdapterFactory
             basePath = Path.GetFullPath(Path.Combine(Directory.GetCurrentDirectory(), basePath));
         }
 
-        return new FileSystemStorageAdapter(basePath);
+        // Check for FormatJson setting to enable formatted output
+        Func<JsonSerializerOptions, JsonSerializerOptions>? writeOptionsModifier = null;
+        if (config.Settings?.TryGetValue("FormatJson", out var formatValue) == true
+            && bool.TryParse(formatValue, out var format) && format)
+        {
+            writeOptionsModifier = FormattedJsonModifier;
+        }
+
+        return new FileSystemStorageAdapter(basePath, writeOptionsModifier);
     }
 }

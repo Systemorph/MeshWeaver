@@ -1,5 +1,6 @@
 using System.Reactive.Linq;
 using System.Text.RegularExpressions;
+using System.Threading;
 using MeshWeaver.Application.Styles;
 using MeshWeaver.Data;
 using MeshWeaver.Graph.Configuration;
@@ -165,26 +166,30 @@ public static class CreateLayoutArea
                 .WithNavigateToHref(backHref))
             .WithView(Controls.H2($"Create {typeName}").WithStyle("margin: 0;")));
 
-        // Show NodeType being created
+        // Show NodeType and Namespace as readonly info
         stack = stack.WithView(Controls.Stack
-            .WithOrientation(Orientation.Horizontal)
-            .WithHorizontalGap(8)
-            .WithStyle("margin-bottom: 16px; align-items: center;")
-            .WithView(Controls.Body("Node Type:").WithStyle("font-weight: 600; color: var(--neutral-foreground-hint);"))
-            .WithView(Controls.Body(nodeTypePath).WithStyle("color: var(--accent-fill-rest);")));
+            .WithStyle("margin-bottom: 16px; padding: 12px; background: var(--neutral-layer-card-container); border-radius: 4px;")
+            .WithView(Controls.Stack
+                .WithOrientation(Orientation.Horizontal)
+                .WithHorizontalGap(8)
+                .WithStyle("align-items: center; margin-bottom: 8px;")
+                .WithView(Controls.Body("Type:").WithStyle("font-weight: 600; color: var(--neutral-foreground-hint); min-width: 80px;"))
+                .WithView(Controls.Body(nodeTypePath).WithStyle("color: var(--accent-fill-rest);")))
+            .WithView(Controls.Stack
+                .WithOrientation(Orientation.Horizontal)
+                .WithHorizontalGap(8)
+                .WithStyle("align-items: center;")
+                .WithView(Controls.Body("Location:").WithStyle("font-weight: 600; color: var(--neutral-foreground-hint); min-width: 80px;"))
+                .WithView(Controls.Body(defaultNamespace).WithStyle("color: var(--neutral-foreground-rest);"))));
 
-        // Set up data binding for the form - Namespace, Name, and Description
+        // Set up data binding for the form - Name and Description only
         var dataId = $"create_{parentPath.Replace("/", "_")}_{Guid.NewGuid().AsString()}";
         var formData = new Dictionary<string, object?>
         {
-            ["namespace"] = defaultNamespace, // Pre-populate with sub-partition namespace
             ["name"] = "",
             ["description"] = ""
         };
         host.UpdateData(dataId, formData);
-
-        // Namespace field (pre-populated with sub-partition, editable)
-        stack = stack.WithView(BuildNamespaceField(host, dataId));
 
         // Name field (required)
         stack = stack.WithView(BuildNameField(host, dataId));
@@ -213,7 +218,7 @@ public static class CreateLayoutArea
                     var errorDialog = Controls.Dialog(
                         Controls.Markdown("**Name is required.**"),
                         "Validation Error"
-                    ).WithSize("S");
+                    ).WithSize("S").WithClosable(true);
                     actx.Host.UpdateArea(DialogControl.DialogArea, errorDialog);
                     return;
                 }
@@ -223,9 +228,8 @@ public static class CreateLayoutArea
                     // Generate Id from Name
                     var nodeId = GenerateIdFromName(name);
 
-                    // Build the full path using namespace from form
-                    var nodeNamespace = formValues.GetValueOrDefault("namespace")?.ToString()?.Trim();
-                    var nodePath = string.IsNullOrEmpty(nodeNamespace) ? nodeId : $"{nodeNamespace}/{nodeId}";
+                    // Build the full path using the computed namespace
+                    var nodePath = $"{defaultNamespace}/{nodeId}";
 
                     // Create the transient node with minimal properties
                     var newNode = MeshNode.FromPath(nodePath) with
@@ -237,27 +241,18 @@ public static class CreateLayoutArea
                     };
 
                     // Create the transient node via the catalog
-                    await meshCatalog.CreateTransientNodeAsync(newNode, ct: ct);
+                    await meshCatalog.CreateTransientNodeAsync(newNode, ct: CancellationToken.None);
 
                     // Navigate to the Edit layout area for full property editing
-                    var navigationService = actx.Host.Hub.ServiceProvider.GetService<INavigationService>();
                     var editUrl = MeshNodeLayoutAreas.BuildContentUrl(nodePath, MeshNodeLayoutAreas.EditArea);
-                    if (navigationService != null)
-                    {
-                        navigationService.NavigateTo(editUrl);
-                    }
-                    else
-                    {
-                        // Fallback to RedirectControl if navigation service not available
-                        actx.Host.UpdateArea(actx.Area, new RedirectControl(editUrl));
-                    }
+                    actx.NavigateTo(editUrl);
                 }
                 catch (Exception ex)
                 {
                     var errorDialog = Controls.Dialog(
                         Controls.Markdown($"**Error creating node:**\n\n{ex.Message}"),
                         "Creation Failed"
-                    ).WithSize("M");
+                    ).WithSize("M").WithClosable(true);
                     actx.Host.UpdateArea(DialogControl.DialogArea, errorDialog);
                 }
             }));
@@ -269,22 +264,6 @@ public static class CreateLayoutArea
 
         stack = stack.WithView(buttonRow);
         return stack;
-    }
-
-    /// <summary>
-    /// Builds the Namespace field pre-populated with the sub-partition path.
-    /// </summary>
-    private static UiControl BuildNamespaceField(LayoutAreaHost host, string dataId)
-    {
-        return Controls.Stack
-            .WithStyle("margin-bottom: 16px;")
-            .WithView(Controls.Body("Namespace").WithStyle("font-weight: 600; margin-bottom: 4px;"))
-            .WithView(new TextFieldControl(new JsonPointerReference("namespace"))
-            {
-                Placeholder = "Parent path (e.g., ACME/ProductLaunch/Todo)",
-                Immediate = true,
-                DataContext = LayoutAreaReference.GetDataPointer(dataId)
-            }.WithStyle("width: 100%;"));
     }
 
     /// <summary>

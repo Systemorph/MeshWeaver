@@ -39,11 +39,11 @@ public class CreateLayoutAreaTest(ITestOutputHelper output) : HubTestBase(output
     /// </summary>
     private static UiControl BuildSimplifiedCreateView(LayoutAreaHost host, RenderingContext ctx)
     {
-        // Simulate the simplified create form with Namespace, Name, and Description
+        // Simulate the simplified create form with Name and Description
+        // Namespace is shown as readonly info, not as an editable field
         var dataId = "createFormData";
         var formData = new Dictionary<string, object?>
         {
-            ["namespace"] = "ACME/ProductLaunch/Todo",
             ["name"] = "",
             ["description"] = ""
         };
@@ -51,11 +51,10 @@ public class CreateLayoutAreaTest(ITestOutputHelper output) : HubTestBase(output
 
         return Controls.Stack
             .WithView(Controls.H2("Create New Node"))
-            .WithView(new TextFieldControl(new JsonPointerReference("namespace"))
-            {
-                Placeholder = "Parent path",
-                DataContext = LayoutAreaReference.GetDataPointer(dataId)
-            })
+            // Info section showing Type and Location (readonly)
+            .WithView(Controls.Stack
+                .WithView(Controls.Body("Type: ACME/Project/Todo"))
+                .WithView(Controls.Body("Location: ACME/ProductLaunch/Todo")))
             .WithView(new TextFieldControl(new JsonPointerReference("name"))
             {
                 Required = true,
