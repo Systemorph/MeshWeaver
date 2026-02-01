@@ -43,6 +43,9 @@ internal class NodeTypeService : INodeTypeService, IDisposable
     // Cached NotCreatable markers (types that cannot be created via UI)
     private readonly ConcurrentDictionary<string, bool> _notCreatableTypes = new();
 
+    // Cached ContentTypes extracted from hub configurations
+    private readonly ConcurrentDictionary<string, Type> _contentTypes = new();
+
     public NodeTypeService(
         IMessageHub meshHub,
         MeshConfiguration meshConfiguration,
@@ -77,7 +80,7 @@ internal class NodeTypeService : INodeTypeService, IDisposable
     }
 
     /// <summary>
-    /// Caches a hub configuration and extracts CreatableTypesRules.
+    /// Caches a hub configuration and extracts CreatableTypesRules and ContentType.
     /// </summary>
     private void CacheHubConfiguration(string nodeTypePath, Func<MessageHubConfiguration, MessageHubConfiguration> hubConfig)
     {
@@ -108,6 +111,47 @@ internal class NodeTypeService : INodeTypeService, IDisposable
             // Log but don't fail - rules are optional
             logger.LogDebug(ex, "Could not extract rules from hub config for {Path}", nodeTypePath);
         }
+
+        // Extract ContentType by creating a temporary hub with the configuration
+        // This allows us to inspect the MeshDataSource.ContentType property
+        ExtractContentTypeAsync(nodeTypePath, hubConfig);
+    }
+
+    /// <summary>
+    /// Extracts ContentType from hub configuration by creating a temporary hub.
+    /// </summary>
+    private void ExtractContentTypeAsync(string nodeTypePath, Func<MessageHubConfiguration, MessageHubConfiguration> hubConfig)
+    {
+        try
+        {
+            // Create a temporary subhub with the configuration to extract ContentType
+            var probeAddress = new Address($"$content-probe/{Guid.NewGuid():N}");
+            var probeHub = meshHub.GetHostedHub(probeAddress, c => hubConfig(c.AddData()));
+
+            try
+            {
+                // Get the workspace and look for MeshDataSource with ContentType
+                var workspace = probeHub.GetWorkspace();
+                foreach (var dataSource in workspace.DataContext.DataSources)
+                {
+                    if (dataSource is MeshDataSource { ContentType: not null } mds)
+                    {
+                        _contentTypes[nodeTypePath] = mds.ContentType;
+                        logger.LogDebug("Cached ContentType {Type} for {Path}", mds.ContentType.Name, nodeTypePath);
+                        break;
+                    }
+                }
+            }
+            finally
+            {
+                probeHub.Dispose();
+            }
+        }
+        catch (Exception ex)
+        {
+            // Log but don't fail - ContentType extraction is optional
+            logger.LogDebug(ex, "Could not extract ContentType from hub config for {Path}", nodeTypePath);
+        }
     }
 
     /// <summary>
@@ -124,6 +168,15 @@ internal class NodeTypeService : INodeTypeService, IDisposable
     public bool IsNotCreatable(string nodeTypePath)
     {
         return _notCreatableTypes.GetValueOrDefault(nodeTypePath);
+    }
+
+    /// <summary>
+    /// Gets the cached ContentType for a node type.
+    /// This is the type registered via .WithContentType&lt;T&gt;() in the hub configuration.
+    /// </summary>
+    public Type? GetContentType(string nodeTypePath)
+    {
+        return _contentTypes.GetValueOrDefault(nodeTypePath);
     }
 
     /// <inheritdoc />
@@ -152,11 +205,14 @@ internal class NodeTypeService : INodeTypeService, IDisposable
         // Check if we have a cached HubConfiguration
         if (_hubConfigurations.TryGetValue(nodeTypePath, out var hubConfig))
         {
-            // Return a minimal NodeTypeConfiguration with the cached HubConfiguration
+            // Get the ContentType if available
+            var contentType = GetContentType(nodeTypePath) ?? typeof(object);
+
+            // Return a NodeTypeConfiguration with the cached HubConfiguration and ContentType
             return new NodeTypeConfiguration
             {
                 NodeType = nodeTypePath,
-                DataType = typeof(object),
+                DataType = contentType,
                 HubConfiguration = hubConfig
             };
         }
@@ -193,6 +249,7 @@ internal class NodeTypeService : INodeTypeService, IDisposable
         _hubConfigurations.TryRemove(nodeTypePath, out _);
         _creatableTypesRules.TryRemove(nodeTypePath, out _);
         _notCreatableTypes.TryRemove(nodeTypePath, out _);
+        _contentTypes.TryRemove(nodeTypePath, out _);
 
         // Dispose subscription (will re-subscribe on next access)
         if (_subscriptions.TryRemove(nodeTypePath, out var subscription))
@@ -555,11 +612,16 @@ internal class NodeTypeService : INodeTypeService, IDisposable
                             var hubConfig = meshNode.HubConfiguration;
                             if (hubConfig != null)
                             {
-                                _hubConfigurations[meshNode.NodeType ?? meshNode.Path] = hubConfig;
+                                var meshNodeTypePath = meshNode.NodeType ?? meshNode.Path;
+                                _hubConfigurations[meshNodeTypePath] = hubConfig;
+
+                                // Extract ContentType by creating a temporary hub
+                                ExtractContentTypeAsync(meshNodeTypePath, hubConfig);
+
                                 configurations.Add(new NodeTypeConfiguration
                                 {
-                                    NodeType = meshNode.NodeType ?? meshNode.Path,
-                                    DataType = typeof(object),
+                                    NodeType = meshNodeTypePath,
+                                    DataType = GetContentType(meshNodeTypePath) ?? typeof(object),
                                     HubConfiguration = hubConfig
                                 });
                             }
@@ -861,12 +923,11 @@ internal class NodeTypeService : INodeTypeService, IDisposable
     }
 
     /// <summary>
-    /// Gets the content type for a node type path from the cached configurations.
+    /// Gets the content type for a node type path from the cached ContentTypes.
     /// </summary>
     private Type? GetContentTypeForNodeType(string nodeTypePath)
     {
-        var config = GetCachedConfiguration(nodeTypePath);
-        return config?.DataType != typeof(object) ? config?.DataType : null;
+        return GetContentType(nodeTypePath);
     }
 
     /// <summary>
@@ -890,6 +951,7 @@ internal class NodeTypeService : INodeTypeService, IDisposable
         _compilationTasks.Clear();
         _releaseKeys.Clear();
         _hubConfigurations.Clear();
+        _contentTypes.Clear();
     }
 
     /// <summary>

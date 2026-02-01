@@ -18,18 +18,21 @@ namespace MeshWeaver.Graph;
 
 /// <summary>
 /// Layout area for creating new mesh nodes.
-/// Simplified flow: collect Name + Description, create transient node, redirect to Edit.
+/// Two-phase flow:
+/// 1. On parent: collect Name + Description, create transient node, redirect to node's Create area.
+/// 2. On transient node: show ContentType editor with Confirm/Cancel buttons.
 /// </summary>
 public static class CreateLayoutArea
 {
     /// <summary>
     /// Main entry point for the Create layout area.
-    /// If ?type= query param is present, shows the create form.
-    /// Otherwise shows a type selection grid.
+    /// - If current node is Transient: shows ContentType editor with Confirm button.
+    /// - If ?type= query param is present: shows the name/description form.
+    /// - Otherwise: shows a type selection grid.
     /// </summary>
     public static IObservable<UiControl?> Create(LayoutAreaHost host, RenderingContext ctx)
     {
-        var parentPath = host.Hub.Address.ToString();
+        var currentPath = host.Hub.Address.ToString();
         var meshCatalog = host.Hub.ServiceProvider.GetService<IMeshCatalog>();
         var nodeTypeService = host.Hub.ServiceProvider.GetService<INodeTypeService>();
 
@@ -45,21 +48,216 @@ public static class CreateLayoutArea
         // Check for type query parameter
         var nodeTypePath = host.GetQueryStringParamValue("type");
 
-        return Observable.FromAsync(async ct =>
+        // Get current node to check if it's transient
+        var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? Array.Empty<MeshNode>())
+            ?? Observable.Return<MeshNode[]>(Array.Empty<MeshNode>());
+
+        return nodeStream.SelectMany(async nodes =>
         {
+            var currentNode = nodes.FirstOrDefault(n => n.Path == currentPath);
+
+            // If current node is Transient, show ContentType editor with Confirm
+            if (currentNode?.State == MeshNodeState.Transient)
+            {
+                return (UiControl?)BuildTransientNodeEditor(host, currentNode, meshCatalog);
+            }
+
+            // Not on a transient node - show type selection or create form
             if (string.IsNullOrEmpty(nodeTypePath))
             {
                 // No type specified - show type selection grid
                 if (nodeTypeService != null)
                 {
-                    return (UiControl?)await BuildTypeSelectionAsync(host, nodeTypeService, parentPath, ct);
+                    return (UiControl?)await BuildTypeSelectionAsync(host, nodeTypeService, currentPath, CancellationToken.None);
                 }
                 return (UiControl?)Controls.Html("<p style=\"color: var(--warning-color);\">No type specified and type service not available.</p>");
             }
 
-            // Type specified - show create form
-            return (UiControl?)await BuildCreateFormAsync(host, parentPath, nodeTypePath, meshCatalog, ct);
+            // Type specified - show create form (Name + Description)
+            return (UiControl?)await BuildCreateFormAsync(host, currentPath, nodeTypePath, meshCatalog, CancellationToken.None);
         });
+    }
+
+    /// <summary>
+    /// Builds the ContentType editor for a transient node.
+    /// Resolves the ContentType from NodeType via INodeTypeService, creates an instance, and uses .Edit() for editing.
+    /// </summary>
+    private static UiControl BuildTransientNodeEditor(
+        LayoutAreaHost host,
+        MeshNode node,
+        IMeshCatalog meshCatalog)
+    {
+        var nodePath = node.Path;
+        var parentPath = node.GetParentPath();
+        var nodeTypeService = host.Hub.ServiceProvider.GetService<INodeTypeService>();
+
+        var stack = Controls.Stack.WithWidth("100%").WithStyle("padding: 24px;");
+
+        // Header with cancel button
+        var cancelHref = !string.IsNullOrEmpty(parentPath)
+            ? MeshNodeLayoutAreas.BuildContentUrl(parentPath, MeshNodeLayoutAreas.OverviewArea)
+            : MeshNodeLayoutAreas.BuildContentUrl(nodePath, MeshNodeLayoutAreas.OverviewArea);
+
+        stack = stack.WithView(Controls.Stack
+            .WithOrientation(Orientation.Horizontal)
+            .WithHorizontalGap(16)
+            .WithStyle("align-items: center; margin-bottom: 24px; justify-content: space-between;")
+            .WithView(Controls.Stack
+                .WithOrientation(Orientation.Horizontal)
+                .WithHorizontalGap(16)
+                .WithStyle("align-items: center;")
+                .WithView(Controls.Button("Cancel")
+                    .WithAppearance(Appearance.Lightweight)
+                    .WithIconStart(FluentIcons.ArrowLeft())
+                    .WithNavigateToHref(cancelHref))
+                .WithView(Controls.H2($"Create {node.Name ?? node.Id}").WithStyle("margin: 0;")))
+            .WithView(Controls.Html("<span style=\"padding: 4px 12px; background: var(--warning-color); color: white; border-radius: 4px; font-size: 12px;\">Draft</span>")));
+
+        // Show node type info
+        if (!string.IsNullOrEmpty(node.NodeType))
+        {
+            stack = stack.WithView(Controls.Stack
+                .WithWidth("100%")
+                .WithStyle("margin-bottom: 16px; padding: 12px; background: var(--neutral-layer-card-container); border-radius: 4px;")
+                .WithView(Controls.Stack
+                    .WithOrientation(Orientation.Horizontal)
+                    .WithHorizontalGap(8)
+                    .WithStyle("align-items: center;")
+                    .WithView(Controls.Body("Type:").WithStyle("font-weight: 600; color: var(--neutral-foreground-hint); min-width: 80px;"))
+                    .WithView(Controls.Body(node.NodeType).WithStyle("color: var(--accent-fill-rest);"))));
+        }
+
+        // ContentType editor - resolve type from NodeTypeService via INodeTypeService.GetContentType()
+        var contentType = !string.IsNullOrEmpty(node.NodeType)
+            ? nodeTypeService?.GetContentType(node.NodeType)
+            : null;
+        if (contentType != null)
+        {
+            // Create a data ID for the content editor
+            var dataId = $"create_content_{nodePath.Replace("/", "_")}";
+
+            // Create an instance of the ContentType
+            var contentInstance = CreateContentInstance(contentType, node);
+
+            // Store the content data for binding
+            host.UpdateData(dataId, contentInstance);
+
+            // Use .Edit() extension to create the editor
+            var editor = host.Hub.ServiceProvider.Edit(contentType, dataId);
+            stack = stack.WithView(editor);
+        }
+        else if (node.Content != null)
+        {
+            // Fallback to property overview if we have content but couldn't resolve type
+            stack = stack.WithView(OverviewLayoutArea.BuildPropertyOverview(host, node));
+        }
+        else
+        {
+            // No content type - show basic properties form
+            stack = stack.WithView(BuildBasicPropertiesForm(host, node));
+        }
+
+        // Button row with Confirm and Delete Draft
+        var buttonRow = Controls.Stack
+            .WithOrientation(Orientation.Horizontal)
+            .WithHorizontalGap(12)
+            .WithStyle("margin-top: 24px;");
+
+        // Confirm button - switches node from Transient to Active
+        buttonRow = buttonRow.WithView(Controls.Button("Confirm")
+            .WithAppearance(Appearance.Accent)
+            .WithIconStart(FluentIcons.Checkmark())
+            .WithClickAction(async ctx =>
+            {
+                try
+                {
+                    await meshCatalog.ConfirmNodeAsync(nodePath);
+                    // Navigate to Overview after confirmation
+                    var overviewUrl = MeshNodeLayoutAreas.BuildContentUrl(nodePath, MeshNodeLayoutAreas.OverviewArea);
+                    ctx.NavigateTo(overviewUrl);
+                }
+                catch (Exception ex)
+                {
+                    var errorDialog = Controls.Dialog(
+                        Controls.Markdown($"**Error confirming node:**\n\n{ex.Message}"),
+                        "Confirmation Failed"
+                    ).WithSize("M").WithClosable(true);
+                    ctx.Host.UpdateArea(DialogControl.DialogArea, errorDialog);
+                }
+            }));
+
+        // Delete Draft button
+        buttonRow = buttonRow.WithView(Controls.Button("Delete Draft")
+            .WithAppearance(Appearance.Neutral)
+            .WithIconStart(FluentIcons.Delete())
+            .WithClickAction(async ctx =>
+            {
+                try
+                {
+                    await meshCatalog.DeleteNodeAsync(nodePath);
+                    // Navigate to parent's Overview after deletion
+                    var redirectPath = !string.IsNullOrEmpty(parentPath) ? parentPath : nodePath;
+                    var overviewUrl = MeshNodeLayoutAreas.BuildContentUrl(redirectPath, MeshNodeLayoutAreas.OverviewArea);
+                    ctx.NavigateTo(overviewUrl);
+                }
+                catch (Exception ex)
+                {
+                    var errorDialog = Controls.Dialog(
+                        Controls.Markdown($"**Error deleting draft:**\n\n{ex.Message}"),
+                        "Delete Failed"
+                    ).WithSize("M").WithClosable(true);
+                    ctx.Host.UpdateArea(DialogControl.DialogArea, errorDialog);
+                }
+            }));
+
+        stack = stack.WithView(buttonRow);
+        return stack;
+    }
+
+    /// <summary>
+    /// Builds basic properties form for nodes without ContentType.
+    /// </summary>
+    private static UiControl BuildBasicPropertiesForm(LayoutAreaHost host, MeshNode node)
+    {
+        var dataId = $"create_{node.Path.Replace("/", "_")}";
+        var formData = new Dictionary<string, object?>
+        {
+            ["name"] = node.Name ?? "",
+            ["description"] = node.Description ?? "",
+            ["category"] = node.Category ?? "",
+            ["icon"] = node.Icon ?? ""
+        };
+        host.UpdateData(dataId, formData);
+
+        var stack = Controls.Stack.WithWidth("100%").WithStyle("gap: 16px;");
+
+        // Name field
+        stack = stack.WithView(Controls.Stack
+            .WithWidth("100%")
+            .WithStyle("margin-bottom: 8px;")
+            .WithView(Controls.Body("Name").WithStyle("font-weight: 600; margin-bottom: 4px;"))
+            .WithView(new TextFieldControl(new JsonPointerReference("name"))
+            {
+                Placeholder = "Display name",
+                Immediate = true,
+                DataContext = LayoutAreaReference.GetDataPointer(dataId)
+            }.WithStyle("width: 100%;")));
+
+        // Description field
+        stack = stack.WithView(Controls.Stack
+            .WithWidth("100%")
+            .WithStyle("margin-bottom: 8px;")
+            .WithView(Controls.Body("Description").WithStyle("font-weight: 600; margin-bottom: 4px;"))
+            .WithView(new MarkdownEditorControl()
+            {
+                Value = new JsonPointerReference("description"),
+                DocumentId = $"{dataId}_description",
+                Height = "200px",
+                Placeholder = "Enter a description (supports Markdown)",
+                DataContext = LayoutAreaReference.GetDataPointer(dataId)
+            }));
+
+        return stack;
     }
 
     /// <summary>
@@ -133,10 +331,8 @@ public static class CreateLayoutArea
     }
 
     /// <summary>
-    /// Builds a simplified create form with Name and Description fields.
-    /// Creates a transient node and redirects to Edit for full property editing.
-    /// The namespace is computed as parentPath + sub-partition (last segment of nodeType).
-    /// The Id is generated from the Name.
+    /// Builds the initial create form with Name and Description fields.
+    /// Creates a transient node and redirects to the node's Create area for ContentType editing.
     /// </summary>
     private static async Task<UiControl> BuildCreateFormAsync(
         LayoutAreaHost host,
@@ -148,12 +344,10 @@ public static class CreateLayoutArea
         var typeName = GetLastPathSegment(nodeTypePath);
 
         // Compute the sub-partition namespace: parentPath + last segment of nodeType
-        // E.g., if parentPath is "ACME/ProductLaunch" and nodeType is "ACME/Project/Todo"
-        // then namespace is "ACME/ProductLaunch/Todo"
         var subPartition = GetLastPathSegment(nodeTypePath);
         var defaultNamespace = $"{parentPath}/{subPartition}";
 
-        var stack = Controls.Stack.WithWidth("100%").WithStyle("padding: 24px; max-width: 800px;");
+        var stack = Controls.Stack.WithWidth("100%").WithStyle("padding: 24px;");
 
         // Header with back/cancel link
         var backHref = MeshNodeLayoutAreas.BuildContentUrl(parentPath, MeshNodeLayoutAreas.CreateNodeArea);
@@ -169,6 +363,7 @@ public static class CreateLayoutArea
 
         // Show NodeType and Namespace as readonly info
         stack = stack.WithView(Controls.Stack
+            .WithWidth("100%")
             .WithStyle("margin-bottom: 16px; padding: 12px; background: var(--neutral-layer-card-container); border-radius: 4px;")
             .WithView(Controls.Stack
                 .WithOrientation(Orientation.Horizontal)
@@ -204,7 +399,7 @@ public static class CreateLayoutArea
             .WithHorizontalGap(12)
             .WithStyle("margin-top: 24px;");
 
-        // Next button - creates transient node and redirects to Edit for full property editing
+        // Next button - creates transient node and redirects to node's Create area
         buttonRow = buttonRow.WithView(Controls.Button("Next")
             .WithAppearance(Appearance.Accent)
             .WithIconStart(FluentIcons.ArrowRight())
@@ -245,11 +440,11 @@ public static class CreateLayoutArea
                     var existingNode = await meshCatalog.GetNodeAsync(new Address(nodePath));
                     if (existingNode != null)
                     {
-                        // Node already exists - if it's transient, just redirect to Edit
+                        // Node already exists - if it's transient, redirect to its Create area
                         if (existingNode.State == MeshNodeState.Transient)
                         {
-                            var editUrl = MeshNodeLayoutAreas.BuildContentUrl(nodePath, MeshNodeLayoutAreas.EditArea);
-                            actx.NavigateTo(editUrl);
+                            var createUrl = MeshNodeLayoutAreas.BuildContentUrl(nodePath, MeshNodeLayoutAreas.CreateNodeArea);
+                            actx.NavigateTo(createUrl);
                             return;
                         }
                         else
@@ -267,9 +462,9 @@ public static class CreateLayoutArea
                     // Create the transient node via the catalog
                     await meshCatalog.CreateTransientNodeAsync(newNode, ct: CancellationToken.None);
 
-                    // Navigate to the Edit layout area for full property editing
-                    var editUrl2 = MeshNodeLayoutAreas.BuildContentUrl(nodePath, MeshNodeLayoutAreas.EditArea);
-                    actx.NavigateTo(editUrl2);
+                    // Navigate to the node's Create area for ContentType editing
+                    var createUrl2 = MeshNodeLayoutAreas.BuildContentUrl(nodePath, MeshNodeLayoutAreas.CreateNodeArea);
+                    actx.NavigateTo(createUrl2);
                 }
                 catch (Exception ex)
                 {
@@ -296,6 +491,7 @@ public static class CreateLayoutArea
     private static UiControl BuildNameField(LayoutAreaHost host, string dataId)
     {
         return Controls.Stack
+            .WithWidth("100%")
             .WithStyle("margin-bottom: 16px;")
             .WithView(Controls.Body("Name *").WithStyle("font-weight: 600; margin-bottom: 4px;"))
             .WithView(new TextFieldControl(new JsonPointerReference("name"))
@@ -314,7 +510,8 @@ public static class CreateLayoutArea
     {
         var documentId = $"{dataId}_description";
         return Controls.Stack
-            .WithStyle("margin-bottom: 8px; width: 100%;")
+            .WithWidth("100%")
+            .WithStyle("margin-bottom: 8px;")
             .WithView(Controls.Body("Description").WithStyle("font-weight: 600; margin-bottom: 4px;"))
             .WithView(new MarkdownEditorControl()
             {
@@ -359,5 +556,50 @@ public static class CreateLayoutArea
     {
         var lastSlash = path.LastIndexOf('/');
         return lastSlash >= 0 ? path[(lastSlash + 1)..] : path;
+    }
+
+    /// <summary>
+    /// Creates an instance of the ContentType, initializing from existing node content if available.
+    /// </summary>
+    private static object CreateContentInstance(Type contentType, MeshNode node)
+    {
+        // If node already has content, try to use it
+        if (node.Content != null)
+        {
+            // If content is already the correct type, use it
+            if (contentType.IsInstanceOfType(node.Content))
+                return node.Content;
+
+            // If content is JsonElement, deserialize it
+            if (node.Content is System.Text.Json.JsonElement jsonElement)
+            {
+                try
+                {
+                    var options = new System.Text.Json.JsonSerializerOptions
+                    {
+                        PropertyNameCaseInsensitive = true,
+                        Converters = { new System.Text.Json.Serialization.JsonStringEnumConverter() }
+                    };
+                    var deserialized = System.Text.Json.JsonSerializer.Deserialize(jsonElement.GetRawText(), contentType, options);
+                    if (deserialized != null)
+                        return deserialized;
+                }
+                catch
+                {
+                    // Fall through to create new instance
+                }
+            }
+        }
+
+        // Create a new instance
+        try
+        {
+            return Activator.CreateInstance(contentType) ?? throw new InvalidOperationException($"Could not create instance of {contentType.Name}");
+        }
+        catch
+        {
+            // Try to create with required properties set to defaults
+            throw new InvalidOperationException($"Could not create instance of {contentType.Name}. Ensure it has a parameterless constructor.");
+        }
     }
 }

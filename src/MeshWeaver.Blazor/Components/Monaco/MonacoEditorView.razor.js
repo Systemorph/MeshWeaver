@@ -284,7 +284,7 @@ function updatePlaceholder(editorId, placeholder, showLineNumbers = false) {
     // Calculate left offset based on line numbers
     // When line numbers are shown, we need to account for the gutter width
     // Monaco uses ~40px for 3-char line numbers + some padding
-    const leftOffset = showLineNumbers ? 30 : 10;
+    const leftOffset = showLineNumbers ? 35 : 10;
 
     // Create or update placeholder element
     let placeholderEl = container.querySelector('.monaco-placeholder');

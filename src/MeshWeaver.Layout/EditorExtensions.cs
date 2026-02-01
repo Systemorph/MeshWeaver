@@ -578,8 +578,15 @@ public static class EditorExtensions
         // Regular property: Label + reactive read/edit view
         var displayName = GetToggleableDisplayName(property);
 
+        // Apply style from UiControlAttribute if present
+        var containerStyle = "padding: 4px 8px;";
+        if (!string.IsNullOrEmpty(uiControlAttr?.Style))
+        {
+            containerStyle += " " + uiControlAttr.Style;
+        }
+
         return Controls.Stack
-            .WithStyle("padding: 4px 8px;")
+            .WithStyle(containerStyle)
             .WithView(Controls.Label(displayName)
                 .WithStyle("font-weight: 600; color: var(--neutral-foreground-hint); font-size: 0.875rem; padding-left: 12px;"))
             .WithView((h, _) => editStateStream
