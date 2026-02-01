@@ -197,6 +197,12 @@ public record MeshDataSource : GenericUnpartitionedDataSource<MeshDataSource>
     private readonly string _hubPath;
     private readonly ILogger? _logger;
 
+    /// <summary>
+    /// The ContentType registered via WithContentType&lt;T&gt;().
+    /// Used by NodeTypeService to identify the content type for this node type.
+    /// </summary>
+    public Type? ContentType { get; private init; }
+
     public MeshDataSource(object id, IWorkspace workspace) : base(id, workspace)
     {
         _persistence = workspace.Hub.ServiceProvider.GetService<IPersistenceService>();
@@ -230,6 +236,7 @@ public record MeshDataSource : GenericUnpartitionedDataSource<MeshDataSource>
 
     /// <summary>
     /// Adds a content type source that syncs with MeshNode.Content.
+    /// Also stores the ContentType for later retrieval by NodeTypeService.
     /// </summary>
     public MeshDataSource WithContentType<T>() where T : class
     {
@@ -239,6 +246,7 @@ public record MeshDataSource : GenericUnpartitionedDataSource<MeshDataSource>
     /// <summary>
     /// Adds a content type source that syncs with MeshNode.Content using a runtime Type.
     /// Use this for dynamically compiled types.
+    /// Also stores the ContentType for later retrieval by NodeTypeService.
     /// </summary>
     public MeshDataSource WithContentType(Type dataType)
     {
@@ -248,7 +256,7 @@ public record MeshDataSource : GenericUnpartitionedDataSource<MeshDataSource>
         if (_persistence == null)
         {
             _logger?.LogWarning("MeshDataSource: No persistence service, using basic type source for {Type}", dataType.Name);
-            return (MeshDataSource)WithType(dataType, null);
+            return ((MeshDataSource)WithType(dataType, null)) with { ContentType = dataType };
         }
 
         // Create ContentTypeSource<T> using reflection
@@ -264,7 +272,7 @@ public record MeshDataSource : GenericUnpartitionedDataSource<MeshDataSource>
             throw new InvalidOperationException($"Could not find constructor for ContentTypeSource<{dataType.Name}>");
 
         var contentTypeSource = (ITypeSource)constructor.Invoke([Workspace, Id, _persistence, _hubPath]);
-        return WithTypeSource(dataType, contentTypeSource);
+        return WithTypeSource(dataType, contentTypeSource) with { ContentType = dataType };
     }
 
     /// <summary>

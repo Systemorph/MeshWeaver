@@ -23,6 +23,12 @@ public class UiControlAttribute : Attribute
     /// </summary>
     public bool SeparateEditView { get; set; }
 
+    /// <summary>
+    /// CSS style to apply to the control container.
+    /// Example: "width: 100%;" for full-width fields.
+    /// </summary>
+    public string? Style { get; set; }
+
     public UiControlAttribute(Type? editControl = null, Type? displayControl = null)
     {
         EditControlType = editControl;

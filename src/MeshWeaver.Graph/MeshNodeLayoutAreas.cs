@@ -1273,15 +1273,13 @@ public static class MeshNodeLayoutAreas
     #region Edit Node
 
     /// <summary>
-    /// Renders the Edit area for editing node properties.
-    /// Uses EditLayoutArea.Overview for ContentType properties.
-    /// Shows Confirm button for transient nodes, Save/Done for active nodes.
+    /// Renders the Edit area for editing the ContentType using .Edit() extension.
+    /// For active nodes only. Transient nodes should use Create area.
     /// </summary>
     [Browsable(false)]
     public static IObservable<UiControl?> Edit(LayoutAreaHost host, RenderingContext _)
     {
         var hubPath = host.Hub.Address.ToString();
-        var meshCatalog = host.Hub.ServiceProvider.GetService<IMeshCatalog>();
 
         // Get the node from the workspace stream
         var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? Array.Empty<MeshNode>())
@@ -1290,11 +1288,11 @@ public static class MeshNodeLayoutAreas
         return nodeStream.Select(nodes =>
         {
             var node = nodes.FirstOrDefault(n => n.Path == hubPath);
-            return (UiControl?)BuildEditContent(host, node, meshCatalog);
+            return (UiControl?)BuildEditContent(host, node);
         });
     }
 
-    private static UiControl BuildEditContent(LayoutAreaHost host, MeshNode? node, IMeshCatalog? meshCatalog)
+    private static UiControl BuildEditContent(LayoutAreaHost host, MeshNode? node)
     {
         var nodePath = node?.Namespace ?? host.Hub.Address.ToString();
         var stack = Controls.Stack.WithWidth("100%").WithStyle("padding: 24px;");
@@ -1305,13 +1303,18 @@ public static class MeshNodeLayoutAreas
             return stack;
         }
 
-        var isTransient = node.State == MeshNodeState.Transient;
-        var parentPath = node.GetParentPath();
+        // If node is transient, redirect to Create area
+        if (node.State == MeshNodeState.Transient)
+        {
+            stack = stack.WithView(Controls.Html("<p>Redirecting to Create...</p>"));
+            stack = stack.WithView(Controls.Button("Go to Create")
+                .WithAppearance(Appearance.Accent)
+                .WithNavigateToHref(BuildContentUrl(nodePath, CreateNodeArea)));
+            return stack;
+        }
 
-        // Header with title and cancel button
-        var cancelHref = isTransient && !string.IsNullOrEmpty(parentPath)
-            ? BuildContentUrl(parentPath, OverviewArea)
-            : BuildContentUrl(nodePath, OverviewArea);
+        // Header with Done button
+        var doneHref = BuildContentUrl(nodePath, OverviewArea);
 
         stack = stack.WithView(Controls.Stack
             .WithOrientation(Orientation.Horizontal)
@@ -1321,166 +1324,36 @@ public static class MeshNodeLayoutAreas
                 .WithOrientation(Orientation.Horizontal)
                 .WithHorizontalGap(16)
                 .WithStyle("align-items: center;")
-                .WithView(Controls.Button("Cancel")
+                .WithView(Controls.Button("Done")
                     .WithAppearance(Appearance.Lightweight)
                     .WithIconStart(FluentIcons.ArrowLeft())
-                    .WithNavigateToHref(cancelHref))
-                .WithView(Controls.H2($"Edit {node.Name ?? node.Id}").WithStyle("margin: 0;")))
-            .WithView(isTransient
-                ? Controls.Html("<span style=\"padding: 4px 12px; background: var(--warning-color); color: white; border-radius: 4px; font-size: 12px;\">Draft</span>")
-                : Controls.Stack));
+                    .WithNavigateToHref(doneHref))
+                .WithView(Controls.H2($"Edit {node.Name ?? node.Id}").WithStyle("margin: 0;"))));
 
         // Show node type info
         if (!string.IsNullOrEmpty(node.NodeType))
         {
             stack = stack.WithView(Controls.Stack
-                .WithOrientation(Orientation.Horizontal)
-                .WithHorizontalGap(8)
-                .WithStyle("margin-bottom: 16px; align-items: center;")
-                .WithView(Controls.Body("Node Type:").WithStyle("font-weight: 600; color: var(--neutral-foreground-hint);"))
-                .WithView(Controls.Body(node.NodeType).WithStyle("color: var(--accent-fill-rest);")));
+                .WithWidth("100%")
+                .WithStyle("margin-bottom: 16px; padding: 12px; background: var(--neutral-layer-card-container); border-radius: 4px;")
+                .WithView(Controls.Stack
+                    .WithOrientation(Orientation.Horizontal)
+                    .WithHorizontalGap(8)
+                    .WithStyle("align-items: center;")
+                    .WithView(Controls.Body("Type:").WithStyle("font-weight: 600; color: var(--neutral-foreground-hint); min-width: 80px;"))
+                    .WithView(Controls.Body(node.NodeType).WithStyle("color: var(--accent-fill-rest);"))));
         }
 
-        // Property editing form
+        // ContentType editor using .Edit() extension or property overview
         if (node.Content != null)
         {
+            // Use the property overview which provides click-to-edit functionality
             stack = stack.WithView(OverviewLayoutArea.BuildPropertyOverview(host, node));
         }
         else
         {
-            // No content type - show basic MeshNode properties
-            stack = stack.WithView(BuildBasicPropertiesForm(host, node));
+            stack = stack.WithView(Controls.Html("<p style=\"color: var(--neutral-foreground-hint);\">No content type defined for this node.</p>"));
         }
-
-        // Button row
-        var buttonRow = Controls.Stack
-            .WithOrientation(Orientation.Horizontal)
-            .WithHorizontalGap(12)
-            .WithStyle("margin-top: 24px;");
-
-        if (isTransient && meshCatalog != null)
-        {
-            // Confirm button for transient nodes
-            buttonRow = buttonRow.WithView(Controls.Button("Confirm")
-                .WithAppearance(Appearance.Accent)
-                .WithIconStart(FluentIcons.Checkmark())
-                .WithClickAction(async ctx =>
-                {
-                    try
-                    {
-                        await meshCatalog.ConfirmNodeAsync(nodePath);
-                        // Navigate to Overview after confirmation
-                        var overviewUrl = BuildContentUrl(nodePath, OverviewArea);
-                        ctx.NavigateTo(overviewUrl);
-                    }
-                    catch (Exception ex)
-                    {
-                        var errorDialog = Controls.Dialog(
-                            Controls.Markdown($"**Error confirming node:**\n\n{ex.Message}"),
-                            "Confirmation Failed"
-                        ).WithSize("M");
-                        ctx.Host.UpdateArea(DialogControl.DialogArea, errorDialog);
-                    }
-                }));
-
-            // Delete draft button
-            buttonRow = buttonRow.WithView(Controls.Button("Delete Draft")
-                .WithAppearance(Appearance.Neutral)
-                .WithIconStart(FluentIcons.Delete())
-                .WithClickAction(async ctx =>
-                {
-                    try
-                    {
-                        await meshCatalog.DeleteNodeAsync(nodePath);
-                        // Navigate to parent's Overview after deletion
-                        var redirectPath = !string.IsNullOrEmpty(parentPath) ? parentPath : nodePath;
-                        var overviewUrl = BuildContentUrl(redirectPath, OverviewArea);
-                        ctx.NavigateTo(overviewUrl);
-                    }
-                    catch (Exception ex)
-                    {
-                        var errorDialog = Controls.Dialog(
-                            Controls.Markdown($"**Error deleting draft:**\n\n{ex.Message}"),
-                            "Delete Failed"
-                        ).WithSize("M");
-                        ctx.Host.UpdateArea(DialogControl.DialogArea, errorDialog);
-                    }
-                }));
-        }
-        else
-        {
-            // Done button for active nodes (changes are auto-saved)
-            buttonRow = buttonRow.WithView(Controls.Button("Done")
-                .WithAppearance(Appearance.Accent)
-                .WithNavigateToHref(BuildContentUrl(nodePath, OverviewArea)));
-        }
-
-        stack = stack.WithView(buttonRow);
-        return stack;
-    }
-
-    /// <summary>
-    /// Builds a basic properties form for nodes without ContentType.
-    /// </summary>
-    private static UiControl BuildBasicPropertiesForm(LayoutAreaHost host, MeshNode node)
-    {
-        var dataId = $"edit_{node.Path.Replace("/", "_")}";
-        var formData = new Dictionary<string, object?>
-        {
-            ["name"] = node.Name ?? "",
-            ["description"] = node.Description ?? "",
-            ["category"] = node.Category ?? "",
-            ["icon"] = node.Icon ?? ""
-        };
-        host.UpdateData(dataId, formData);
-
-        var stack = Controls.Stack.WithWidth("100%").WithStyle("gap: 16px;");
-
-        // Name field
-        stack = stack.WithView(Controls.Stack
-            .WithStyle("margin-bottom: 8px;")
-            .WithView(Controls.Body("Name").WithStyle("font-weight: 600; margin-bottom: 4px;"))
-            .WithView(new TextFieldControl(new JsonPointerReference("name"))
-            {
-                Placeholder = "Display name",
-                Immediate = true,
-                DataContext = LayoutAreaReference.GetDataPointer(dataId)
-            }.WithStyle("width: 100%;")));
-
-        // Description field
-        stack = stack.WithView(Controls.Stack
-            .WithStyle("margin-bottom: 8px; width: 100%;")
-            .WithView(Controls.Body("Description").WithStyle("font-weight: 600; margin-bottom: 4px;"))
-            .WithView(new MarkdownEditorControl()
-            {
-                Value = new JsonPointerReference("description"),
-                DocumentId = $"{dataId}_description",
-                Height = "200px",
-                Placeholder = "Enter a description (supports Markdown)",
-                DataContext = LayoutAreaReference.GetDataPointer(dataId)
-            }));
-
-        // Category field
-        stack = stack.WithView(Controls.Stack
-            .WithStyle("margin-bottom: 8px;")
-            .WithView(Controls.Body("Category").WithStyle("font-weight: 600; margin-bottom: 4px;"))
-            .WithView(new TextFieldControl(new JsonPointerReference("category"))
-            {
-                Placeholder = "Category for grouping",
-                Immediate = true,
-                DataContext = LayoutAreaReference.GetDataPointer(dataId)
-            }.WithStyle("width: 100%;")));
-
-        // Icon field
-        stack = stack.WithView(Controls.Stack
-            .WithStyle("margin-bottom: 8px;")
-            .WithView(Controls.Body("Icon").WithStyle("font-weight: 600; margin-bottom: 4px;"))
-            .WithView(new TextFieldControl(new JsonPointerReference("icon"))
-            {
-                Placeholder = "Icon name or URL",
-                Immediate = true,
-                DataContext = LayoutAreaReference.GetDataPointer(dataId)
-            }.WithStyle("width: 100%;")));
 
         return stack;
     }
