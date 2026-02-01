@@ -18,6 +18,32 @@ function syncMonacoTheme(effectiveTheme) {
     }
 }
 
+// Detect theme from DOM when themeHandler is not available
+function detectThemeFromDOM() {
+    // FluentDesignTheme sets data-theme on document.body
+    const bodyTheme = document.body?.getAttribute('data-theme');
+    if (bodyTheme) {
+        return bodyTheme;
+    }
+    // Also check documentElement as fallback
+    const htmlTheme = document.documentElement.getAttribute('data-theme');
+    if (htmlTheme) {
+        return htmlTheme;
+    }
+    // Check for dark/fluent-dark class on body or html
+    if (document.body?.classList.contains('dark') ||
+        document.body?.classList.contains('fluent-dark') ||
+        document.documentElement.classList.contains('dark') ||
+        document.documentElement.classList.contains('fluent-dark')) {
+        return 'dark';
+    }
+    // Fallback to system preference
+    if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
+        return 'dark';
+    }
+    return 'light';
+}
+
 // Register theme change callback (called from initEditor when Monaco is ready)
 function ensureThemeCallbackRegistered() {
     if (themeCallbackRegistered) return;
@@ -31,6 +57,39 @@ function ensureThemeCallbackRegistered() {
         // Apply current theme immediately
         const currentTheme = window.themeHandler.getEffectiveTheme();
         syncMonacoTheme(currentTheme);
+    } else {
+        // Fallback: detect theme from DOM and apply
+        const currentTheme = detectThemeFromDOM();
+        syncMonacoTheme(currentTheme);
+
+        // Also listen for system theme changes
+        if (window.matchMedia) {
+            window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', (e) => {
+                // Only use system preference if no explicit theme is set
+                if (!document.documentElement.getAttribute('data-theme')) {
+                    syncMonacoTheme(e.matches ? 'dark' : 'light');
+                }
+            });
+        }
+
+        // Set up MutationObservers to watch for theme attribute changes on both body and html
+        const observer = new MutationObserver((mutations) => {
+            for (const mutation of mutations) {
+                if (mutation.type === 'attributes' &&
+                    (mutation.attributeName === 'data-theme' || mutation.attributeName === 'class')) {
+                    const theme = detectThemeFromDOM();
+                    syncMonacoTheme(theme);
+                }
+            }
+        });
+
+        // Observe both body and documentElement for theme changes
+        if (document.body) {
+            observer.observe(document.body, { attributes: true, attributeFilter: ['data-theme', 'class'] });
+        }
+        observer.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme', 'class'] });
+
+        themeCallbackRegistered = true;
     }
 }
 

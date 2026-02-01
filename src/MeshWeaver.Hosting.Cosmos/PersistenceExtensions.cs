@@ -156,7 +156,6 @@ public static class PersistenceExtensions
         services.AddSingleton<IMeshQueryCore>(sp =>
             new InMemoryMeshQuery(
                 sp.GetRequiredService<IPersistenceServiceCore>(),
-                sp.GetService<INavigationService>(),
                 sp.GetService<ISecurityService>(),
                 sp.GetService<AccessService>(),
                 sp.GetService<IDataChangeNotifier>()));

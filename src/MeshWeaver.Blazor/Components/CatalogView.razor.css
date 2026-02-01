@@ -61,6 +61,12 @@
     align-items: stretch;
 }
 
+/* Ensure cards within grid items fill the height */
+::deep fluent-grid-item > * {
+    width: 100%;
+    height: 100%;
+}
+
 /* Ensure layout areas fill the card */
 ::deep .layout-area-container {
     height: 100%;

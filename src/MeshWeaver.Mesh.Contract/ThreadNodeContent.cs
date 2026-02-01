@@ -1,4 +1,5 @@
 using System.Text.Json;
+using MeshWeaver.Domain;
 
 namespace MeshWeaver.Mesh;
 
@@ -11,6 +12,7 @@ public record ThreadNodeContent
     /// <summary>
     /// Optional title (auto-generated from first message if not set).
     /// </summary>
+    [MeshNodeProperty(nameof(MeshNode.Name))]
     public string? Title { get; init; }
 
     /// <summary>

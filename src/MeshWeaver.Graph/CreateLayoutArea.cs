@@ -52,6 +52,25 @@ public static class CreateLayoutArea
         var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? Array.Empty<MeshNode>())
             ?? Observable.Return<MeshNode[]>(Array.Empty<MeshNode>());
 
+        // Handle the type-specified case synchronously (most common)
+        if (!string.IsNullOrEmpty(nodeTypePath))
+        {
+            return nodeStream.Select(nodes =>
+            {
+                var currentNode = nodes.FirstOrDefault(n => n.Path == currentPath);
+
+                // If current node is Transient, show ContentType editor with Confirm
+                if (currentNode?.State == MeshNodeState.Transient)
+                {
+                    return (UiControl?)BuildTransientNodeEditor(host, currentNode, meshCatalog);
+                }
+
+                // Type specified - show create form (Name + Description)
+                return (UiControl?)BuildCreateForm(host, currentPath, nodeTypePath, meshCatalog);
+            });
+        }
+
+        // Handle type selection (async due to querying for creatable types)
         return nodeStream.SelectMany(async nodes =>
         {
             var currentNode = nodes.FirstOrDefault(n => n.Path == currentPath);
@@ -62,19 +81,12 @@ public static class CreateLayoutArea
                 return (UiControl?)BuildTransientNodeEditor(host, currentNode, meshCatalog);
             }
 
-            // Not on a transient node - show type selection or create form
-            if (string.IsNullOrEmpty(nodeTypePath))
+            // No type specified - show type selection grid
+            if (nodeTypeService != null)
             {
-                // No type specified - show type selection grid
-                if (nodeTypeService != null)
-                {
-                    return (UiControl?)await BuildTypeSelectionAsync(host, nodeTypeService, currentPath, CancellationToken.None);
-                }
-                return (UiControl?)Controls.Html("<p style=\"color: var(--warning-color);\">No type specified and type service not available.</p>");
+                return (UiControl?)await BuildTypeSelectionAsync(host, nodeTypeService, currentPath, CancellationToken.None);
             }
-
-            // Type specified - show create form (Name + Description)
-            return (UiControl?)await BuildCreateFormAsync(host, currentPath, nodeTypePath, meshCatalog, CancellationToken.None);
+            return (UiControl?)Controls.Html("<p style=\"color: var(--warning-color);\">No type specified and type service not available.</p>");
         });
     }
 
@@ -334,12 +346,11 @@ public static class CreateLayoutArea
     /// Builds the initial create form with Name and Description fields.
     /// Creates a transient node and redirects to the node's Create area for ContentType editing.
     /// </summary>
-    private static async Task<UiControl> BuildCreateFormAsync(
+    private static UiControl BuildCreateForm(
         LayoutAreaHost host,
         string parentPath,
         string nodeTypePath,
-        IMeshCatalog meshCatalog,
-        CancellationToken ct)
+        IMeshCatalog meshCatalog)
     {
         var typeName = GetLastPathSegment(nodeTypePath);
 

@@ -21,7 +21,9 @@
     box-shadow: 0 0 0 1px var(--accent-fill-rest, #0078d4);
 }
 
-/* Dark mode support using CSS custom properties 
+/* Dark mode support using CSS custom properties */
+/* FluentDesignTheme sets data-theme on body, so we need to target body[data-theme] */
+:global(body[data-theme="dark"]) .monaco-editor-container.with-border,
 :global([data-theme="dark"]) .monaco-editor-container.with-border,
 :global(.dark) .monaco-editor-container.with-border,
 :global(.fluent-dark) .monaco-editor-container.with-border {
@@ -29,12 +31,13 @@
     background: var(--neutral-layer-1, #2d2d2d);
 }
 
+:global(body[data-theme="dark"]) .monaco-editor-container.with-border:focus-within,
 :global([data-theme="dark"]) .monaco-editor-container.with-border:focus-within,
 :global(.dark) .monaco-editor-container.with-border:focus-within,
 :global(.fluent-dark) .monaco-editor-container.with-border:focus-within {
     border-color: var(--accent-fill-rest, #479ef5);
     box-shadow: 0 0 0 1px var(--accent-fill-rest, #479ef5);
-}*/
+}
 
 /* Note: Removed @media (prefers-color-scheme: dark) fallback because it responds to OS settings,
    not app theme. Use [data-theme] selectors above which are controlled by the app. */
@@ -100,7 +103,7 @@
 /* Note: Suggest widget styles are applied globally via JavaScript
    because FixedOverflowWidgets renders the widget outside the component's DOM tree */
 
-/* Placeholder styling 
+/* Placeholder styling */
 ::deep .monaco-placeholder {
     color: var(--neutral-foreground-hint, #767676) !important;
     font-family: var(--body-font, "Segoe UI", sans-serif);
@@ -108,6 +111,7 @@
     padding-left: 2px;
 }
 
+:global(body[data-theme="dark"]) ::deep .monaco-placeholder,
 :global([data-theme="dark"]) ::deep .monaco-placeholder {
     color: var(--neutral-foreground-hint, #9a9a9a) !important;
-}*/
+}

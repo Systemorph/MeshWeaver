@@ -3,6 +3,8 @@
 // DisplayName: Organization Data Model
 // </meshweaver>
 
+using MeshWeaver.Domain;
+
 /// <summary>
 /// Represents a company, team, or organizational unit.
 /// </summary>
@@ -18,11 +20,13 @@ public record Organization
     /// Name of the organization.
     /// </summary>
     [Required]
+    [MeshNodeProperty(nameof(MeshNode.Name))]
     public string Name { get; init; } = string.Empty;
 
     /// <summary>
     /// Brief description of the organization.
     /// </summary>
+    [MeshNodeProperty(nameof(MeshNode.Description))]
     public string? Description { get; init; }
 
     /// <summary>
@@ -38,6 +42,7 @@ public record Organization
     /// <summary>
     /// Icon name for visual representation.
     /// </summary>
+    [MeshNodeProperty(nameof(MeshNode.Icon))]
     public string Icon { get; init; } = "Building";
 
     /// <summary>

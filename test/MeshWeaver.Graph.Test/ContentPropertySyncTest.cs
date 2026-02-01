@@ -133,8 +133,8 @@ public class ContentPropertySyncTest(ITestOutputHelper output) : HubTestBase(out
         // Assert - MeshNode should have synced via attribute mapping
         var meshNode = await _persistence.GetNodeAsync(hubPath, JsonOptions);
         meshNode.Should().NotBeNull();
-        meshNode!.Name.Should().Be("Attribute Title", "MeshNode.Name should sync from [MapsToMeshNode(\"Name\")] property");
-        meshNode.Description.Should().Be("Attribute Notes", "MeshNode.Description should sync from [MapsToMeshNode(\"Description\")] property");
+        meshNode!.Name.Should().Be("Attribute Title", "MeshNode.Name should sync from [MeshNodeProperty(\"Name\")] property");
+        meshNode.Description.Should().Be("Attribute Notes", "MeshNode.Description should sync from [MeshNodeProperty(\"Description\")] property");
     }
 
     [HubFact]
@@ -293,6 +293,104 @@ public class ContentPropertySyncTest(ITestOutputHelper output) : HubTestBase(out
         meshNode.Should().NotBeNull();
         meshNode!.Name.Should().Be("Updated Attribute", "Attribute mapping should take priority over convention");
     }
+
+    [HubFact]
+    public async Task ContentUpdate_SyncsAllFourProperties_ViaAttribute()
+    {
+        // Arrange - Content type with all four MeshNode property mappings
+        var hubPath = GetHubPath("full-attr");
+        var initialContent = new FullMappingItem
+        {
+            Id = "1",
+            DisplayName = "Original Name",
+            Summary = "Original Description",
+            IconName = "Document",
+            Group = "General"
+        };
+        await SetupInitialNode(hubPath, initialContent, "full");
+
+        var host = Mesh.GetHostedHub(new Address(HostType, "full-attr"), c => c
+            .AddMeshDataSource(ds => ds.WithContentType<FullMappingItem>()));
+
+        var workspace = host.GetWorkspace();
+
+        // Wait for initial data load
+        var contentStream = workspace.GetStream<FullMappingItem>();
+        await contentStream!
+            .Where(items => items?.Any() == true)
+            .Timeout(5.Seconds())
+            .FirstAsync();
+
+        // Act - Update all properties
+        var updatedContent = initialContent with
+        {
+            DisplayName = "Updated Name",
+            Summary = "Updated Description",
+            IconName = "Star",
+            Group = "Premium"
+        };
+        workspace.RequestChange(DataChangeRequest.Update([updatedContent]), null, null);
+
+        // Wait for sync
+        await Task.Delay(500);
+
+        // Assert - All four MeshNode properties should be synced
+        var meshNode = await _persistence.GetNodeAsync(hubPath, JsonOptions);
+        meshNode.Should().NotBeNull();
+        meshNode!.Name.Should().Be("Updated Name", "MeshNode.Name should sync from [MeshNodeProperty(\"Name\")]");
+        meshNode.Description.Should().Be("Updated Description", "MeshNode.Description should sync from [MeshNodeProperty(\"Description\")]");
+        meshNode.Icon.Should().Be("Star", "MeshNode.Icon should sync from [MeshNodeProperty(\"Icon\")]");
+        meshNode.Category.Should().Be("Premium", "MeshNode.Category should sync from [MeshNodeProperty(\"Category\")]");
+    }
+
+    [HubFact]
+    public async Task ContentUpdate_SyncsAllFourProperties_ViaConvention()
+    {
+        // Arrange - Content type with conventional property names
+        var hubPath = GetHubPath("full-conv");
+        var initialContent = new ConventionalFullItem
+        {
+            Id = "1",
+            Name = "Original Name",
+            Description = "Original Description",
+            Icon = "Document",
+            Category = "General"
+        };
+        await SetupInitialNode(hubPath, initialContent, "fullconv");
+
+        var host = Mesh.GetHostedHub(new Address(HostType, "full-conv"), c => c
+            .AddMeshDataSource(ds => ds.WithContentType<ConventionalFullItem>()));
+
+        var workspace = host.GetWorkspace();
+
+        // Wait for initial data load
+        var contentStream = workspace.GetStream<ConventionalFullItem>();
+        await contentStream!
+            .Where(items => items?.Any() == true)
+            .Timeout(5.Seconds())
+            .FirstAsync();
+
+        // Act - Update all properties
+        var updatedContent = initialContent with
+        {
+            Name = "Convention Name",
+            Description = "Convention Description",
+            Icon = "Folder",
+            Category = "Archive"
+        };
+        workspace.RequestChange(DataChangeRequest.Update([updatedContent]), null, null);
+
+        // Wait for sync
+        await Task.Delay(500);
+
+        // Assert - All four MeshNode properties should be synced via convention
+        var meshNode = await _persistence.GetNodeAsync(hubPath, JsonOptions);
+        meshNode.Should().NotBeNull();
+        meshNode!.Name.Should().Be("Convention Name", "MeshNode.Name should sync from Name property by convention");
+        meshNode.Description.Should().Be("Convention Description", "MeshNode.Description should sync from Description property by convention");
+        meshNode.Icon.Should().Be("Folder", "MeshNode.Icon should sync from Icon property by convention");
+        meshNode.Category.Should().Be("Archive", "MeshNode.Category should sync from Category property by convention");
+    }
 }
 
 /// <summary>
@@ -314,10 +412,10 @@ public record AttributeMappedItem
     [Key]
     public string Id { get; init; } = "";
 
-    [MapsToMeshNode("Name")]
+    [MeshNodeProperty("Name")]
     public string DisplayTitle { get; init; } = "";
 
-    [MapsToMeshNode("Description")]
+    [MeshNodeProperty("Description")]
     public string Notes { get; init; } = "";
 }
 
@@ -354,6 +452,41 @@ public record MixedMappingItem
 
     public string Title { get; init; } = "";  // Convention would map this to Name
 
-    [MapsToMeshNode("Name")]
+    [MeshNodeProperty("Name")]
     public string CustomName { get; init; } = "";  // Attribute should take priority
+}
+
+/// <summary>
+/// Test content type with all four MeshNode property mappings via attributes.
+/// </summary>
+public record FullMappingItem
+{
+    [Key]
+    public string Id { get; init; } = "";
+
+    [MeshNodeProperty("Name")]
+    public string DisplayName { get; init; } = "";
+
+    [MeshNodeProperty("Description")]
+    public string Summary { get; init; } = "";
+
+    [MeshNodeProperty("Icon")]
+    public string IconName { get; init; } = "";
+
+    [MeshNodeProperty("Category")]
+    public string Group { get; init; } = "";
+}
+
+/// <summary>
+/// Test content type with all four MeshNode properties via convention.
+/// </summary>
+public record ConventionalFullItem
+{
+    [Key]
+    public string Id { get; init; } = "";
+
+    public string Name { get; init; } = "";
+    public string Description { get; init; } = "";
+    public string Icon { get; init; } = "";
+    public string Category { get; init; } = "";
 }

@@ -1,3 +1,5 @@
+@using MeshWeaver.Mesh.Services
+@inject INavigationService NavigationService
 
 <LayoutAreaView ViewModel="@ViewModel" Top="@Top"/>
 
@@ -19,4 +21,12 @@
             ProgressMessage = ProgressMessage
         };
 
+    protected override void OnParametersSet()
+    {
+        // Set the current namespace so creatable types are loaded for this address
+        if (!string.IsNullOrEmpty(Address))
+        {
+            NavigationService.SetCurrentNamespace(Address);
+        }
+    }
 }

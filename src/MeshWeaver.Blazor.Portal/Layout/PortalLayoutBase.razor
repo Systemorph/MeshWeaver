@@ -27,13 +27,17 @@
                     <FluentIcon Value="@(new Icons.Regular.Size20.Add())" Color="Color.FillInverse" />
                 </FluentButton>
                 <FluentMenu Anchor="create-menu-button" @bind-Open="isCreateMenuOpen">
-                    @if (creatableTypes.Count == 0)
+                    @if (IsLoadingCreatableTypes && CreatableTypes.Count == 0)
                     {
                         <FluentMenuItem Disabled="true">Loading...</FluentMenuItem>
                     }
+                    else if (CreatableTypes.Count == 0)
+                    {
+                        <FluentMenuItem Disabled="true">No types available</FluentMenuItem>
+                    }
                     else
                     {
-                        @foreach (var typeInfo in creatableTypes)
+                        @foreach (var typeInfo in CreatableTypes)
                         {
                             <FluentMenuItem OnClick="@(async () => await NavigateToCreateAsync(typeInfo.NodeTypePath))">
                                 New @(typeInfo.DisplayName ?? typeInfo.NodeTypePath)
