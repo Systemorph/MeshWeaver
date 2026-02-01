@@ -511,6 +511,27 @@ public record LayoutAreaHost : IDisposable
         return Stream;
     }
 
+    /// <summary>
+    /// Navigates to the specified URI by posting a NavigationRequest to the subscriber (portal).
+    /// Safe to call from LayoutAreaHost context (click handlers, etc.)
+    /// </summary>
+    /// <param name="uri">The URI to navigate to.</param>
+    /// <param name="forceLoad">Whether to force a full page reload.</param>
+    public void NavigateTo(string uri, bool forceLoad = false)
+    {
+        var subscriber = Stream.Get<Address>(nameof(SubscribeRequest.Subscriber));
+        if (subscriber != null)
+        {
+            if (subscriber?.Host is { })
+                subscriber = subscriber.Host;
+            Stream.Hub.Post(new NavigationRequest(uri) { ForceLoad = forceLoad }, o => o.WithTarget(subscriber));
+        }
+        else
+        {
+            logger.LogWarning("Cannot navigate: no subscriber address found for stream {StreamId}", Stream.StreamId);
+        }
+    }
+
     internal IEnumerable<LayoutAreaDefinition> GetLayoutAreaDefinitions()
         => LayoutDefinition.AreaDefinitions.Values.Where(l => l.IsVisible());
 

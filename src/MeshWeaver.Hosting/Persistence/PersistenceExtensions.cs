@@ -1,3 +1,4 @@
+using System.Text.Json;
 using MeshWeaver.Hosting.Persistence.Query;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
@@ -86,11 +87,15 @@ public static class PersistenceExtensions
     /// </summary>
     /// <param name="builder">The mesh builder</param>
     /// <param name="baseDirectory">The base directory for storing JSON files</param>
+    /// <param name="writeOptionsModifier">Optional modifier for JsonSerializerOptions when writing (e.g., to enable WriteIndented)</param>
     /// <returns>The mesh builder for chaining</returns>
-    public static TBuilder AddFileSystemPersistence<TBuilder>(this TBuilder builder, string baseDirectory)
+    public static TBuilder AddFileSystemPersistence<TBuilder>(
+        this TBuilder builder,
+        string baseDirectory,
+        Func<JsonSerializerOptions, JsonSerializerOptions>? writeOptionsModifier = null)
         where TBuilder : MeshBuilder
     {
-        builder.ConfigureServices(services => services.AddFileSystemPersistence(baseDirectory));
+        builder.ConfigureServices(services => services.AddFileSystemPersistence(baseDirectory, writeOptionsModifier));
         return builder;
     }
 
@@ -100,10 +105,14 @@ public static class PersistenceExtensions
     /// </summary>
     /// <param name="builder">The mesh builder</param>
     /// <param name="basePath">The base path for storing JSON files</param>
+    /// <param name="writeOptionsModifier">Optional modifier for JsonSerializerOptions when writing (e.g., to enable WriteIndented)</param>
     /// <returns>The mesh builder for chaining</returns>
-    public static TBuilder WithFileSystemPersistence<TBuilder>(this TBuilder builder, string basePath)
+    public static TBuilder WithFileSystemPersistence<TBuilder>(
+        this TBuilder builder,
+        string basePath,
+        Func<JsonSerializerOptions, JsonSerializerOptions>? writeOptionsModifier = null)
         where TBuilder : MeshBuilder
-        => builder.AddFileSystemPersistence(basePath);
+        => builder.AddFileSystemPersistence(basePath, writeOptionsModifier);
 
     /// <summary>
     /// Adds in-memory persistence to the mesh builder (no file system backing).
@@ -144,11 +153,14 @@ public static class PersistenceExtensions
     /// </summary>
     /// <param name="services">The service collection</param>
     /// <param name="baseDirectory">The base directory for storing JSON files</param>
+    /// <param name="writeOptionsModifier">Optional modifier for JsonSerializerOptions when writing (e.g., to enable WriteIndented)</param>
     /// <returns>The service collection for chaining</returns>
-    public static IServiceCollection AddFileSystemPersistence(this IServiceCollection services, string baseDirectory)
+    public static IServiceCollection AddFileSystemPersistence(
+        this IServiceCollection services,
+        string baseDirectory,
+        Func<JsonSerializerOptions, JsonSerializerOptions>? writeOptionsModifier = null)
     {
-        // Storage adapter now receives options per-call, no need for service provider
-        services.AddSingleton<IStorageAdapter>(new FileSystemStorageAdapter(baseDirectory));
+        services.AddSingleton<IStorageAdapter>(new FileSystemStorageAdapter(baseDirectory, writeOptionsModifier));
 
         // Register common services and wrapper services
         return services.AddCoreAndWrapperServices<FileSystemPersistenceService>();

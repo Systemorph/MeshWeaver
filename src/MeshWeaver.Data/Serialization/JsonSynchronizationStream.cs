@@ -114,7 +114,7 @@ public static class JsonSynchronizationStream
             .ReduceManager
             .ReduceStream<TReduced>(
                 workspace,
-                request.Reference, config => config.WithClientId(request.StreamId)
+                request.Reference, config => config.WithClientId(request.StreamId).WithSubscriber(request.Subscriber)
             );
 
         var reduced =
