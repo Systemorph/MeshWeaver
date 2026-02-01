@@ -203,7 +203,13 @@ public sealed class MeshCatalog(
         // 6. Save to persistence
         var savedNode = await Persistence.SaveNodeAsync(transientNode, ct);
 
-        // 7. Update cache with transient node
+        // 7. Enrich with HubConfiguration based on NodeType (same as cold start in GetNodeAsync)
+        if (NodeTypeService != null)
+        {
+            savedNode = await NodeTypeService.EnrichWithNodeTypeAsync(savedNode, ct);
+        }
+
+        // 8. Update cache with enriched transient node
         cache.Set(savedNode.Path, savedNode, cacheOptions);
 
         logger.LogInformation("Created transient node at path {Path} by {CreatedBy}", savedNode.Path, createdBy ?? "system");

@@ -471,6 +471,124 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
     }
 
     /// <summary>
+    /// Test that creating a TRANSIENT node and then requesting Edit view works.
+    /// This is the exact flow from the simplified Create form:
+    /// 1. User fills in Name + Description
+    /// 2. CreateTransientNodeAsync is called (NOT CreateNodeAsync which confirms immediately)
+    /// 3. Redirect to /{nodePath}/Edit
+    /// 4. Edit view should load and show "Draft" badge
+    /// </summary>
+    [Fact(Timeout = 30000)]
+    public async Task CreateTransientNode_ThenRequestEditView_Succeeds()
+    {
+        // Use a short timeout CancellationToken to prevent hanging
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        var ct = cts.Token;
+
+        // Arrange - Create a unique node path
+        var uniqueId = Guid.NewGuid().ToString("N")[..8];
+        var nodePath = $"test-transient-{uniqueId}";
+        var nodeAddress = new Address(nodePath);
+
+        Output.WriteLine($"Test: Creating TRANSIENT node at {nodePath}");
+
+        // Step 1: Create TRANSIENT node via IMeshCatalog (like the new Create form does)
+        var node = MeshNode.FromPath(nodePath) with
+        {
+            Name = "Test Transient Node",
+            Description = "A transient node for testing",
+            NodeType = "Markdown",
+            State = MeshNodeState.Transient, // Explicitly transient
+            Content = MarkdownContent.Parse($"# Test Transient\n\nThis is transient.", nodePath)
+        };
+
+        Output.WriteLine($"Step 1: Calling Catalog.CreateTransientNodeAsync for {nodePath}");
+
+        var createdNode = await Catalog.CreateTransientNodeAsync(node, "test-user", ct);
+        Output.WriteLine($"CreateTransientNodeAsync completed: Path={createdNode.Path}, State={createdNode.State}");
+        createdNode.State.Should().Be(MeshNodeState.Transient, "Node should be in Transient state");
+
+        // Step 2: Verify node exists in persistence with Transient state
+        Output.WriteLine($"Step 2: Verifying transient node in persistence");
+        var persistedNode = await Persistence.GetNodeAsync(nodePath, ct);
+        persistedNode.Should().NotBeNull($"Transient node {nodePath} should exist in persistence");
+        persistedNode!.State.Should().Be(MeshNodeState.Transient, "Persisted node should be Transient");
+        Output.WriteLine($"Node in persistence: State={persistedNode.State}, Name={persistedNode.Name}");
+
+        // Diagnostic: Check what's in MeshConfiguration.Nodes BEFORE GetNodeAsync
+        Output.WriteLine($"MeshConfiguration.Nodes contains {Catalog.Configuration.Nodes.Count} entries:");
+        foreach (var kv in Catalog.Configuration.Nodes)
+        {
+            Output.WriteLine($"  - {kv.Key}: HubConfig={(kv.Value.HubConfiguration != null ? "SET" : "NULL")}");
+        }
+
+        // Diagnostic: Check if "Markdown" is in the configuration
+        if (Catalog.Configuration.Nodes.TryGetValue("Markdown", out var markdownNode))
+        {
+            Output.WriteLine($"Found 'Markdown' in Configuration.Nodes: HubConfig={(markdownNode.HubConfiguration != null ? "SET" : "NULL")}");
+        }
+        else
+        {
+            Output.WriteLine($"WARNING: 'Markdown' NOT found in Configuration.Nodes!");
+        }
+
+        // Diagnostic: Check if NodeTypeService is available from different service providers
+        var nodeTypeServiceFromMesh = Mesh.ServiceProvider.GetService<INodeTypeService>();
+        Output.WriteLine($"INodeTypeService from Mesh.ServiceProvider: {(nodeTypeServiceFromMesh != null ? "AVAILABLE" : "NULL")}");
+
+        // Get the hub that MeshCatalog uses (should be injected during construction)
+        var meshHub = Mesh.ServiceProvider.GetRequiredService<IMessageHub>();
+        var nodeTypeServiceFromMeshHub = meshHub.ServiceProvider.GetService<INodeTypeService>();
+        Output.WriteLine($"INodeTypeService from MeshHub.ServiceProvider: {(nodeTypeServiceFromMeshHub != null ? "AVAILABLE" : "NULL")}");
+        Output.WriteLine($"Same service provider? {ReferenceEquals(Mesh.ServiceProvider, meshHub.ServiceProvider)}");
+
+        if (nodeTypeServiceFromMesh != null)
+        {
+            var cachedConfig = nodeTypeServiceFromMesh.GetCachedConfiguration("Markdown");
+            Output.WriteLine($"NodeTypeService.GetCachedConfiguration('Markdown'): {(cachedConfig?.HubConfiguration != null ? "HubConfig=SET" : "NULL or no HubConfig")}");
+        }
+
+        // Step 3: Get node via catalog (this should trigger EnrichWithNodeTypeAsync)
+        Output.WriteLine($"Step 3: Getting node via Catalog.GetNodeAsync");
+        var catalogNode = await Catalog.GetNodeAsync(nodeAddress);
+        catalogNode.Should().NotBeNull($"Catalog should return the transient node");
+        Output.WriteLine($"Catalog node: State={catalogNode!.State}, HubConfiguration={(catalogNode.HubConfiguration != null ? "SET" : "NULL")}");
+
+        // Verify HubConfiguration is set (this is critical for routing to work)
+        catalogNode.HubConfiguration.Should().NotBeNull("HubConfiguration must be set for routing to create the hub. Check MeshBuilder.AddMeshNodes registration.");
+
+        // Step 4: Request Edit view (simulates redirect)
+        Output.WriteLine($"Step 4: Requesting Edit layout (simulates redirect to /{nodePath}/Edit)");
+        var client = GetClient(c => c
+            .WithInitialization((h, _) => RoutingService.RegisterStreamAsync(h))
+            .AddLayoutClient(cc => cc)
+            .AddData(data => data));
+
+        var workspace = client.GetWorkspace();
+        var editReference = new LayoutAreaReference(MarkdownLayoutAreas.EditArea);
+
+        Output.WriteLine($"Requesting Edit layout for {nodeAddress}...");
+        var editStream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(nodeAddress, editReference);
+
+        var editLayout = await editStream.Timeout(10.Seconds()).FirstAsync();
+        Output.WriteLine($"Edit layout received: ValueKind={editLayout.Value.ValueKind}");
+
+        if (editLayout.Value.ValueKind != JsonValueKind.Undefined && editLayout.Value.ValueKind != JsonValueKind.Null)
+        {
+            var rawText = editLayout.Value.GetRawText();
+            Output.WriteLine($"Edit layout content: {rawText[..Math.Min(500, rawText.Length)]}...");
+        }
+
+        editLayout.Value.ValueKind.Should().NotBe(JsonValueKind.Undefined, "Edit layout should not be undefined for transient node");
+
+        Output.WriteLine("SUCCESS: CreateTransientNode -> Edit flow completed");
+
+        // Cleanup
+        Output.WriteLine($"Cleanup: Deleting test node {nodePath}");
+        await Catalog.DeleteNodeAsync(nodePath, ct: CancellationToken.None);
+    }
+
+    /// <summary>
     /// Test that verifies the complete GUI create flow:
     /// 1. GetCreatableTypesAsync to get available types
     /// 2. CreateNodeAsync to create the node
