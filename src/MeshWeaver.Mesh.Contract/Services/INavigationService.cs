@@ -1,11 +1,12 @@
-﻿using System.Web;
+using System.Web;
 
 namespace MeshWeaver.Mesh.Services;
 
 /// <summary>
 /// Service for navigation and getting the current navigation path and namespace context.
+/// Automatically subscribes to location changes and manages path resolution and creatable types.
 /// </summary>
-public interface INavigationService
+public interface INavigationService : IDisposable
 {
     /// <summary>
     /// Gets the current relative path from navigation.
@@ -17,6 +18,41 @@ public interface INavigationService
     /// Used as the default namespace for queries when none is specified.
     /// </summary>
     string? CurrentNamespace { get; }
+
+    /// <summary>
+    /// Gets the current navigation context containing resolved path information.
+    /// Null if the path could not be resolved.
+    /// </summary>
+    NavigationContext? Context { get; }
+
+    /// <summary>
+    /// Event raised when the navigation context changes due to location change.
+    /// </summary>
+    event Action<NavigationContext?>? OnNavigationContextChanged;
+
+    /// <summary>
+    /// Gets the list of creatable types for the current node path.
+    /// Automatically reloaded when the node path changes.
+    /// </summary>
+    IReadOnlyList<CreatableTypeInfo> CreatableTypes { get; }
+
+    /// <summary>
+    /// Event raised when the creatable types list changes.
+    /// Fired incrementally as types are loaded.
+    /// </summary>
+    event Action<IReadOnlyList<CreatableTypeInfo>>? OnCreatableTypesChanged;
+
+    /// <summary>
+    /// Gets whether creatable types are currently being loaded.
+    /// </summary>
+    bool IsLoadingCreatableTypes { get; }
+
+    /// <summary>
+    /// Initializes the service and subscribes to NavigationManager.LocationChanged.
+    /// Should be called once during application startup or component initialization.
+    /// Multiple calls are idempotent.
+    /// </summary>
+    Task InitializeAsync();
 
     /// <summary>
     /// Sets the current namespace from the resolved Address.

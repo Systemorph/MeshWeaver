@@ -884,10 +884,12 @@ public static class EditorExtensions
             }.WithBlurAction(ctx => SwitchToReadOnlyMode(ctx, editStateId));
         }
 
+        // Apply style from UiControlAttribute if present, otherwise no default constraints
+        var attrStyle = property.GetCustomAttribute<UiControlAttribute>()?.Style;
         editCtrl = editCtrl with
         {
             DataContext = LayoutAreaReference.GetDataPointer(dataId),
-            Style = "width: 100%; max-width: 300px;"
+            Style = attrStyle
         };
 
         return editCtrl;
@@ -920,8 +922,7 @@ public static class EditorExtensions
             host.UpdateData(optionsId, ConvertOptionsForToggle(attr.Options));
             return new SelectControl(jsonPointer, new JsonPointerReference(LayoutAreaReference.GetDataPointer(optionsId)))
             {
-                Required = isRequired,
-                Style = "width: 100%; max-width: 300px;"
+                Required = isRequired
             }.WithBlurAction(ctx => SwitchToReadOnlyMode(ctx, editStateId));
         }
 
@@ -961,8 +962,7 @@ public static class EditorExtensions
 
         return new SelectControl(jsonPointer, new JsonPointerReference(LayoutAreaReference.GetDataPointer(optionsId)))
         {
-            Required = isRequired,
-            Style = "width: 100%; max-width: 300px;"
+            Required = isRequired
         }.WithBlurAction(ctx => SwitchToReadOnlyMode(ctx, editStateId));
     }
 

@@ -101,13 +101,15 @@ public record ContentTypeSource<T> : TypeSourceWithType<T, ContentTypeSource<T>>
 
             // Update MeshNode with new content and current hub version
             var hubVersion = _workspace.Hub.Version;
-            var (extractedName, extractedDescription) = ExtractMeshNodeProperties(contentEntity);
+            var (extractedName, extractedDescription, extractedIcon, extractedCategory) = ExtractMeshNodeProperties(contentEntity);
             var updatedNode = meshNode with
             {
                 Content = contentEntity,
                 Version = hubVersion,
                 Name = extractedName ?? meshNode.Name,
-                Description = extractedDescription ?? meshNode.Description
+                Description = extractedDescription ?? meshNode.Description,
+                Icon = extractedIcon ?? meshNode.Icon,
+                Category = extractedCategory ?? meshNode.Category
             };
 
             // Save to persistence synchronously
@@ -132,20 +134,24 @@ public record ContentTypeSource<T> : TypeSourceWithType<T, ContentTypeSource<T>>
     }
 
     /// <summary>
-    /// Extracts Name and Description from content entity using attribute-based and convention-based mapping.
-    /// Priority for Name: [MapsToMeshNode("Name")] > INamed.DisplayName > Title property > Name property
-    /// Priority for Description: [MapsToMeshNode("Description")] > Description property
+    /// Extracts MeshNode properties from content entity using attribute-based and convention-based mapping.
+    /// Priority for Name: [MeshNodeProperty("Name")] > INamed.DisplayName > Title property > Name property
+    /// Priority for Description: [MeshNodeProperty("Description")] > Description property
+    /// Priority for Icon: [MeshNodeProperty("Icon")] > Icon property
+    /// Priority for Category: [MeshNodeProperty("Category")] > Category property
     /// </summary>
-    private static (string? Name, string? Description) ExtractMeshNodeProperties(object content)
+    private static (string? Name, string? Description, string? Icon, string? Category) ExtractMeshNodeProperties(object content)
     {
         string? name = null;
         string? description = null;
+        string? icon = null;
+        string? category = null;
         var type = content.GetType();
 
-        // Priority 1: Look for [MapsToMeshNode] attributes
+        // Priority 1: Look for [MeshNodeProperty] attributes
         foreach (var prop in type.GetProperties())
         {
-            var attr = prop.GetCustomAttribute<MapsToMeshNodeAttribute>();
+            var attr = prop.GetCustomAttribute<MeshNodePropertyAttribute>();
             if (attr == null || prop.PropertyType != typeof(string))
                 continue;
 
@@ -157,6 +163,12 @@ public record ContentTypeSource<T> : TypeSourceWithType<T, ContentTypeSource<T>>
                     break;
                 case "Description" when description == null:
                     description = value;
+                    break;
+                case "Icon" when icon == null:
+                    icon = value;
+                    break;
+                case "Category" when category == null:
+                    category = value;
                     break;
             }
         }
@@ -191,7 +203,23 @@ public record ContentTypeSource<T> : TypeSourceWithType<T, ContentTypeSource<T>>
                 description = descProp.GetValue(content) as string;
         }
 
-        return (name, description);
+        // Convention - look for Icon property (if not already set via attribute)
+        if (icon == null)
+        {
+            var iconProp = type.GetProperty("Icon");
+            if (iconProp?.PropertyType == typeof(string))
+                icon = iconProp.GetValue(content) as string;
+        }
+
+        // Convention - look for Category property (if not already set via attribute)
+        if (category == null)
+        {
+            var catProp = type.GetProperty("Category");
+            if (catProp?.PropertyType == typeof(string))
+                category = catProp.GetValue(content) as string;
+        }
+
+        return (name, description, icon, category);
     }
 
     protected override async Task<InstanceCollection> InitializeAsync(
