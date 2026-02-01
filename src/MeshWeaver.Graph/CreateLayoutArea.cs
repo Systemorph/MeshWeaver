@@ -10,6 +10,7 @@ using MeshWeaver.Layout.DataBinding;
 using MeshWeaver.Layout.Domain;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Messaging;
 using MeshWeaver.ShortGuid;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -203,10 +204,10 @@ public static class CreateLayoutArea
             .WithHorizontalGap(12)
             .WithStyle("margin-top: 24px;");
 
-        // Create button
-        buttonRow = buttonRow.WithView(Controls.Button("Create")
+        // Next button - creates transient node and redirects to Edit for full property editing
+        buttonRow = buttonRow.WithView(Controls.Button("Next")
             .WithAppearance(Appearance.Accent)
-            .WithIconStart(FluentIcons.Add())
+            .WithIconStart(FluentIcons.ArrowRight())
             .WithClickAction(async actx =>
             {
                 // Get form values from data stream
@@ -240,12 +241,35 @@ public static class CreateLayoutArea
                         State = MeshNodeState.Transient
                     };
 
+                    // Check if node already exists
+                    var existingNode = await meshCatalog.GetNodeAsync(new Address(nodePath));
+                    if (existingNode != null)
+                    {
+                        // Node already exists - if it's transient, just redirect to Edit
+                        if (existingNode.State == MeshNodeState.Transient)
+                        {
+                            var editUrl = MeshNodeLayoutAreas.BuildContentUrl(nodePath, MeshNodeLayoutAreas.EditArea);
+                            actx.NavigateTo(editUrl);
+                            return;
+                        }
+                        else
+                        {
+                            // Node exists and is not transient - show error
+                            var errorDialog = Controls.Dialog(
+                                Controls.Markdown($"**A node already exists at this path:**\n\n`{nodePath}`\n\nPlease choose a different name."),
+                                "Node Already Exists"
+                            ).WithSize("M").WithClosable(true);
+                            actx.Host.UpdateArea(DialogControl.DialogArea, errorDialog);
+                            return;
+                        }
+                    }
+
                     // Create the transient node via the catalog
                     await meshCatalog.CreateTransientNodeAsync(newNode, ct: CancellationToken.None);
 
                     // Navigate to the Edit layout area for full property editing
-                    var editUrl = MeshNodeLayoutAreas.BuildContentUrl(nodePath, MeshNodeLayoutAreas.EditArea);
-                    actx.NavigateTo(editUrl);
+                    var editUrl2 = MeshNodeLayoutAreas.BuildContentUrl(nodePath, MeshNodeLayoutAreas.EditArea);
+                    actx.NavigateTo(editUrl2);
                 }
                 catch (Exception ex)
                 {
