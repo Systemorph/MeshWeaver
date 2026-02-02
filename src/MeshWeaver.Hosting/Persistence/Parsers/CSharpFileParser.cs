@@ -72,7 +72,6 @@ public partial class CSharpFileParser : IFileFormatParser
         {
             NodeType = "Code",
             Name = codeConfig.DisplayName ?? codeConfig.Id,
-            IsPersistent = true,
             LastModified = lastModified,
             Content = codeConfig
         };

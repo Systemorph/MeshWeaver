@@ -41,7 +41,7 @@ public static class DomainLayoutAreas
             var idString = parts[1];
             var keyType = typeDefinition.GetKeyType();
             var id = keyType == typeof(string)  ? idString : JsonSerializer.Deserialize(idString, keyType)!;
-            return DomainDetails.GetDetails(area, typeDefinition, id, ctx);
+            return EditLayoutArea.Edit(area, typeDefinition, id, ctx);
         }
         catch (Exception e)
         {

@@ -9,9 +9,11 @@ namespace MeshWeaver.Mesh;
 /// <param name="Icon">Optional icon URL or identifier for UI</param>
 /// <param name="Description">Optional description of this node type</param>
 /// <param name="DisplayOrder">Display order for sorting in UI lists</param>
+/// <param name="ContentType">The content type for this node type, used for collecting properties in create dialog</param>
 public record CreatableTypeInfo(
     string NodeTypePath,
     string? DisplayName = null,
     string? Icon = null,
     string? Description = null,
-    int DisplayOrder = 0);
+    int DisplayOrder = 0,
+    Type? ContentType = null);

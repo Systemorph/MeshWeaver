@@ -78,4 +78,13 @@ public interface INodeTypeService
     /// <param name="ct">Cancellation token</param>
     /// <returns>Async enumerable of creatable type information, sorted by display order</returns>
     IAsyncEnumerable<CreatableTypeInfo> GetCreatableTypesAsync(string nodePath, CancellationToken ct = default);
+
+    /// <summary>
+    /// Gets the ContentType for a node type.
+    /// This is the type registered via .WithContentType&lt;T&gt;() in the hub configuration.
+    /// Returns null if no ContentType was registered for this node type.
+    /// </summary>
+    /// <param name="nodeTypePath">The node type path</param>
+    /// <returns>The ContentType if registered, null otherwise</returns>
+    Type? GetContentType(string nodeTypePath);
 }

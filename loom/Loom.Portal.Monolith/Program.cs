@@ -17,7 +17,7 @@ builder.UseMeshWeaver(
     AddressExtensions.CreateMeshAddress(),
     config => config
         .ConfigureLoomPortal()
-        .ConfigureLoomMesh(builder.Configuration)
+        .ConfigureLoomMesh(builder.Configuration, builder.Environment.IsDevelopment())
         .UseMonolithMesh()
 );
 

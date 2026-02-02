@@ -29,6 +29,7 @@ internal class TypeRegistry(ITypeRegistry? parent) : ITypeRegistry
         typeof(Uri),
         typeof(byte[]),
         typeof(RawJson),
+        typeof(Nullable<>),
         typeof(MessageDelivery<>),
         typeof(Address),
         typeof(HeartbeatEvent),
@@ -87,6 +88,13 @@ internal class TypeRegistry(ITypeRegistry? parent) : ITypeRegistry
         {
             var typeName = name.Substring(0, name.IndexOf('['));
             var baseType = GetTypeDefinition(typeName)?.Type;
+
+            // If not found with full name, try without namespace (e.g., "System.Nullable`1" -> "Nullable`1")
+            if (baseType == null && typeName.Contains('.'))
+            {
+                var shortName = typeName.Substring(typeName.LastIndexOf('.') + 1);
+                baseType = GetTypeDefinition(shortName)?.Type;
+            }
 
             if (baseType == null)
                 return false;

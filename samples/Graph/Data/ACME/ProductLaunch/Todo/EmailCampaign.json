@@ -5,7 +5,7 @@
   "nodeType": "ACME/Project/Todo",
   "category": "Tasks",
   "description": "Build automated email campaigns for lead nurturing",
-  "icon": "/static/content/ACME/Project/Todo/icon.svg",
+  "icon": "/static/storage/content/ACME/Project/Todo/icon.svg",
   "isPersistent": true,
   "content": {
     "$type": "Todo",

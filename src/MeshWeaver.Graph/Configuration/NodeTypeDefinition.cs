@@ -1,5 +1,7 @@
 ﻿using System.ComponentModel.DataAnnotations;
 using MeshWeaver.ContentCollections;
+using MeshWeaver.Domain;
+using MeshWeaver.Mesh;
 
 namespace MeshWeaver.Graph.Configuration;
 
@@ -24,16 +26,19 @@ public record NodeTypeDefinition
     /// <summary>
     /// Display name for the type in UI.
     /// </summary>
+    [MeshNodeProperty(nameof(MeshNode.Name))]
     public string? DisplayName { get; init; }
 
     /// <summary>
     /// Icon URL or identifier for UI.
     /// </summary>
+    [MeshNodeProperty(nameof(MeshNode.Icon))]
     public string? Icon { get; init; }
 
     /// <summary>
     /// Description of this node type.
     /// </summary>
+    [MeshNodeProperty(nameof(MeshNode.Description))]
     public string? Description { get; init; }
 
     /// <summary>

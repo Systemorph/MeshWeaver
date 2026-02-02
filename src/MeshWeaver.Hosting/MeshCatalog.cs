@@ -24,7 +24,7 @@ public sealed class MeshCatalog(
     public IPersistenceService Persistence { get; } = persistenceService;
     private readonly IMeshQuery? _meshQuery = meshQuery;
     private readonly IMemoryCache cache = new MemoryCache(new MemoryCacheOptions());
-    private readonly MemoryCacheEntryOptions cacheOptions = new() { SlidingExpiration = TimeSpan.FromMinutes(5) };
+    private readonly MemoryCacheEntryOptions cacheOptions = new() { SlidingExpiration = TimeSpan.FromMinutes(15) };
     private readonly IMessageHub persistenceHub = hub.GetHostedHub(AddressExtensions.CreatePersistenceAddress())!;
     private readonly ILogger<MeshCatalog> logger = hub.ServiceProvider.GetRequiredService<ILogger<MeshCatalog>>();
 
@@ -90,7 +90,7 @@ public sealed class MeshCatalog(
             return persistenceNode;
         }
 
-        // Try to create a virtual node from template (for auto-kernel addresses like kernel/app-Kernel)
+        // Try to create a node from template (for auto-kernel addresses like kernel/app-Kernel)
         var segments = addressKey.Split('/');
         if (segments.Length > 1)
         {
@@ -98,18 +98,17 @@ public sealed class MeshCatalog(
             var templatePath = segments[0];
             if (Configuration.Nodes.TryGetValue(templatePath, out var templateNode) && templateNode.HubConfiguration != null)
             {
-                // Create a virtual node that inherits from the template
-                var virtualNode = MeshNode.FromPath(addressKey) with
+                // Create a node that inherits from the template
+                var templateBasedNode = MeshNode.FromPath(addressKey) with
                 {
                     NodeType = templatePath,
-                    HubConfiguration = templateNode.HubConfiguration,
-                    IsVirtual = true
+                    HubConfiguration = templateNode.HubConfiguration
                 };
-                logger.LogDebug("GetNodeAsync: Created virtual node at {Path} from template {Template}", addressKey, templatePath);
-                cache.Set(virtualNode.Path, virtualNode, cacheOptions);
-                if (!await ValidateReadAsync(virtualNode))
+                logger.LogDebug("GetNodeAsync: Created node at {Path} from template {Template}", addressKey, templatePath);
+                cache.Set(templateBasedNode.Path, templateBasedNode, cacheOptions);
+                if (!await ValidateReadAsync(templateBasedNode))
                     return null;
-                return virtualNode;
+                return templateBasedNode;
             }
         }
 
@@ -168,8 +167,8 @@ public sealed class MeshCatalog(
     /// <inheritdoc />
     public async Task<MeshNode> CreateTransientNodeAsync(MeshNode node, string? createdBy = null, CancellationToken ct = default)
     {
-        // 1. Check if node already exists in cache (skip virtual nodes - they're just templates)
-        if (cache.TryGetValue(node.Path, out var cachedValue) && cachedValue is MeshNode cachedNode && !cachedNode.IsVirtual)
+        // 1. Check if node already exists in cache
+        if (cache.TryGetValue(node.Path, out var cachedValue) && cachedValue is MeshNode cachedNode)
         {
             throw new InvalidOperationException($"Node already exists at path: {node.Path}");
         }
@@ -204,7 +203,13 @@ public sealed class MeshCatalog(
         // 6. Save to persistence
         var savedNode = await Persistence.SaveNodeAsync(transientNode, ct);
 
-        // 7. Update cache with transient node
+        // 7. Enrich with HubConfiguration based on NodeType (same as cold start in GetNodeAsync)
+        if (NodeTypeService != null)
+        {
+            savedNode = await NodeTypeService.EnrichWithNodeTypeAsync(savedNode, ct);
+        }
+
+        // 8. Update cache with enriched transient node
         cache.Set(savedNode.Path, savedNode, cacheOptions);
 
         logger.LogInformation("Created transient node at path {Path} by {CreatedBy}", savedNode.Path, createdBy ?? "system");

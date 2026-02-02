@@ -13,6 +13,7 @@ namespace MeshWeaver.Hosting.Persistence;
 public class FileSystemStorageAdapter : IStorageAdapter
 {
     private readonly string _baseDirectory;
+    private readonly Func<JsonSerializerOptions, JsonSerializerOptions>? _writeOptionsModifier;
     private readonly FileFormatParserRegistry _parserRegistry = new();
 
     /// <summary>
@@ -20,9 +21,15 @@ public class FileSystemStorageAdapter : IStorageAdapter
     /// </summary>
     private static readonly string[] SupportedExtensions = [".md", ".cs", ".json"];
 
-    public FileSystemStorageAdapter(string baseDirectory)
+    /// <summary>
+    /// Creates a new FileSystemStorageAdapter.
+    /// </summary>
+    /// <param name="baseDirectory">Base directory for file storage</param>
+    /// <param name="writeOptionsModifier">Optional modifier for JsonSerializerOptions when writing (e.g., to enable WriteIndented)</param>
+    public FileSystemStorageAdapter(string baseDirectory, Func<JsonSerializerOptions, JsonSerializerOptions>? writeOptionsModifier = null)
     {
         _baseDirectory = baseDirectory;
+        _writeOptionsModifier = writeOptionsModifier;
         Directory.CreateDirectory(baseDirectory);
     }
 
@@ -89,7 +96,7 @@ public class FileSystemStorageAdapter : IStorageAdapter
         else
         {
             // Default to JSON serialization for type preservation
-            content = JsonSerializer.Serialize(node, options);
+            content = JsonSerializer.Serialize(node, GetWriteOptions(options));
             extension = ".json";
         }
 
@@ -337,7 +344,7 @@ public class FileSystemStorageAdapter : IStorageAdapter
             {
                 var fileName = GetObjectFileName(obj);
                 var filePath = Path.Combine(partitionDir, fileName);
-                var json = JsonSerializer.Serialize(obj, obj.GetType(), options);
+                var json = JsonSerializer.Serialize(obj, obj.GetType(), GetWriteOptions(options));
                 await File.WriteAllTextAsync(filePath, json, ct);
             }
         }
@@ -449,6 +456,21 @@ public class FileSystemStorageAdapter : IStorageAdapter
         }
 
         return id + ".cs";
+    }
+
+    #endregion
+
+    #region JSON Serialization Helpers
+
+    /// <summary>
+    /// Gets JsonSerializerOptions for writing, applying any configured modifier.
+    /// </summary>
+    private JsonSerializerOptions GetWriteOptions(JsonSerializerOptions options)
+    {
+        if (_writeOptionsModifier == null)
+            return options;
+
+        return _writeOptionsModifier(options);
     }
 
     #endregion

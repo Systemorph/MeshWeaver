@@ -97,6 +97,13 @@ public record MeshQueryRequest
     public string? UserId { get; init; }
 
     /// <summary>
+    /// Default path to use when no path is specified in the query.
+    /// Set this from the current navigation context (e.g., INavigationService.CurrentNamespace)
+    /// before calling query methods.
+    /// </summary>
+    public string? DefaultPath { get; init; }
+
+    /// <summary>
     /// Number of results to skip (for paging).
     /// </summary>
     public int? Skip { get; init; }
@@ -116,6 +123,12 @@ public record MeshQueryRequest
     /// </summary>
     public static MeshQueryRequest FromQuery(string query, string? userId)
         => new() { Query = query, UserId = userId };
+
+    /// <summary>
+    /// Creates a new request with query and default path.
+    /// </summary>
+    public static MeshQueryRequest FromQuery(string query, string? userId, string? defaultPath)
+        => new() { Query = query, UserId = userId, DefaultPath = defaultPath };
 }
 
 /// <summary>

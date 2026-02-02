@@ -68,3 +68,15 @@ public enum DialogCloseState
 /// <param name="Hub">The message hub for posting messages.</param>
 /// <param name="Host">The layout area host.</param>
 public record DialogCloseActionContext(string Area, DialogCloseState State, object Payload, IMessageHub Hub, LayoutAreaHost Host);
+
+/// <summary>
+/// Represents a navigation request that should be handled by the Blazor portal.
+/// </summary>
+/// <param name="Uri">The URI to navigate to.</param>
+public record NavigationRequest(string Uri)
+{
+    /// <summary>
+    /// Whether to force a full page load.
+    /// </summary>
+    public bool ForceLoad { get; init; }
+}

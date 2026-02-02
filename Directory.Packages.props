@@ -20,7 +20,7 @@
     <PackageVersion Include="Autofac.Extensions.DependencyInjection" Version="10.0.0" />
     <PackageVersion Include="Azure.AI.Inference" Version="1.0.0-beta.5" />
     <PackageVersion Include="Azure.AI.OpenAI" Version="2.8.0-beta.1" />
-    <PackageVersion Include="Azure.Core" Version="1.50.0" />
+    <PackageVersion Include="Azure.Core" Version="1.51.0" />
     <PackageVersion Include="Azure.Data.Tables" Version="12.11.0" />
     <PackageVersion Include="Azure.Identity" Version="1.17.1" />
     <PackageVersion Include="Azure.Monitor.OpenTelemetry.AspNetCore" Version="1.4.0" />
@@ -29,15 +29,15 @@
     <PackageVersion Include="Azure.Storage.Blobs" Version="12.27.0" />
     <PackageVersion Include="Azure.Storage.Files.Shares" Version="12.21.0" />
     <PackageVersion Include="Azure.Storage.Queues" Version="12.21.0" />
-    <PackageVersion Include="Microsoft.Azure.Cosmos" Version="3.56.0" />
+    <PackageVersion Include="Microsoft.Azure.Cosmos" Version="3.57.0" />
     <PackageVersion Include="BlazorMonaco" Version="3.4.0" />
-    <PackageVersion Include="Radzen.Blazor" Version="8.6.0" />
+    <PackageVersion Include="Radzen.Blazor" Version="8.7.4" />
     <PackageVersion Include="Castle.Core" Version="5.1.1" />
     <PackageVersion Include="ClosedXML" Version="0.105.0" />
     <PackageVersion Include="CSharpVitamins.ShortGuid" Version="2.0.0" />
     <PackageVersion Include="CsvHelper" Version="33.1.0" />
     <PackageVersion Include="DocumentFormat.OpenXml" Version="3.4.1" />
-    <PackageVersion Include="EPS.Extensions.YamlMarkdown" Version="10.0.0" />
+    <PackageVersion Include="EPS.Extensions.YamlMarkdown" Version="10.1.0" />
     <PackageVersion Include="HtmlAgilityPack" Version="1.12.4" />
     <PackageVersion Include="itext7" Version="9.5.0" />
     <PackageVersion Include="JetBrains.Annotations" Version="2023.3.0" />
@@ -80,13 +80,13 @@
     <PackageVersion Include="Microsoft.Identity.Web" Version="4.3.0" />
     <PackageVersion Include="Microsoft.Identity.Web.Ui" Version="4.3.0" />
     <PackageVersion Include="Microsoft.Orleans.BroadcastChannel" Version="9.2.1" />
-    <PackageVersion Include="Microsoft.Orleans.Core.Abstractions" Version="9.2.1" />
-    <PackageVersion Include="Microsoft.Orleans.Runtime" Version="9.2.1" />
+    <PackageVersion Include="Microsoft.Orleans.Core.Abstractions" Version="10.0.0" />
+    <PackageVersion Include="Microsoft.Orleans.Runtime" Version="10.0.0" />
     <PackageVersion Include="Microsoft.Orleans.Serialization.Abstractions" Version="9.0.1" />
-    <PackageVersion Include="Microsoft.Agents.AI" Version="1.0.0-preview.260108.1" />
-    <PackageVersion Include="Microsoft.Agents.AI.OpenAI" Version="1.0.0-preview.260108.1" />
-    <PackageVersion Include="Microsoft.Agents.AI.Workflows" Version="1.0.0-preview.260108.1" />
-    <PackageVersion Include="Microsoft.Agents.AI.AzureAI" Version="1.0.0-preview.260108.1" />
+    <PackageVersion Include="Microsoft.Agents.AI" Version="1.0.0-preview.260128.1" />
+    <PackageVersion Include="Microsoft.Agents.AI.OpenAI" Version="1.0.0-preview.260128.1" />
+    <PackageVersion Include="Microsoft.Agents.AI.Workflows" Version="1.0.0-preview.260128.1" />
+    <PackageVersion Include="Microsoft.Agents.AI.AzureAI" Version="1.0.0-preview.260128.1" />
     <PackageVersion Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="10.0.0" />
     <PackageVersion Include="OpenTelemetry" Version="1.9.0" />
     <PackageVersion Include="Serilog.AspNetCore" Version="10.0.0" />
@@ -105,10 +105,10 @@
     <PackageVersion Include="Microsoft.CodeAnalysis.CSharp.Features" Version="5.0.0" />
     <PackageVersion Include="Microsoft.CodeAnalysis.CSharp.Scripting" Version="5.0.0" />
     <PackageVersion Include="Microsoft.DotNet.Interactive.AspNetCore" Version="1.0.0-beta.25323.1" />
-    <PackageVersion Include="Microsoft.DotNet.Interactive" Version="1.0.0-beta.25323.1" />
-    <PackageVersion Include="Microsoft.DotNet.Interactive.CSharp" Version="1.0.0-beta.25323.1" />
-    <PackageVersion Include="Microsoft.DotNet.Interactive.Formatting" Version="1.0.0-beta.25323.1" />
-    <PackageVersion Include="Microsoft.DotNet.Interactive.PackageManagement" Version="1.0.0-beta.25323.1" />
+    <PackageVersion Include="Microsoft.DotNet.Interactive" Version="1.0.0-beta.26071.1" />
+    <PackageVersion Include="Microsoft.DotNet.Interactive.CSharp" Version="1.0.0-beta.26071.1" />
+    <PackageVersion Include="Microsoft.DotNet.Interactive.Formatting" Version="1.0.0-beta.26071.1" />
+    <PackageVersion Include="Microsoft.DotNet.Interactive.PackageManagement" Version="1.0.0-beta.26071.1" />
     <PackageVersion Include="Microsoft.EntityFrameworkCore" Version="10.0.2" />
     <PackageVersion Include="Microsoft.Extensions.Caching.Abstractions" Version="10.0.2" />
     <PackageVersion Include="Microsoft.Extensions.Caching.Memory" Version="10.0.2" />
@@ -120,20 +120,20 @@
     <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.2" />
     <PackageVersion Include="Microsoft.Extensions.Options" Version="10.0.2" />
     <PackageVersion Include="Microsoft.Extensions.ServiceDiscovery" Version="10.2.0" />
-    <PackageVersion Include="Microsoft.Orleans.Core" Version="9.2.1" />
-    <PackageVersion Include="Microsoft.Orleans.Sdk" Version="9.2.1" />
-    <PackageVersion Include="Microsoft.Orleans.Serialization.SystemTextJson" Version="9.2.1" />
-    <PackageVersion Include="Microsoft.Orleans.Client" Version="9.2.1" />
-    <PackageVersion Include="Microsoft.Orleans.Server" Version="9.2.1" />
-    <PackageVersion Include="Microsoft.Orleans.Streaming" Version="9.2.1" />
+    <PackageVersion Include="Microsoft.Orleans.Core" Version="10.0.0" />
+    <PackageVersion Include="Microsoft.Orleans.Sdk" Version="10.0.0" />
+    <PackageVersion Include="Microsoft.Orleans.Serialization.SystemTextJson" Version="10.0.0" />
+    <PackageVersion Include="Microsoft.Orleans.Client" Version="10.0.0" />
+    <PackageVersion Include="Microsoft.Orleans.Server" Version="10.0.0" />
+    <PackageVersion Include="Microsoft.Orleans.Streaming" Version="10.0.0" />
     <PackageVersion Include="Microsoft.Playwright" Version="1.57.0" />
     <PackageVersion Include="Newtonsoft.Json" Version="13.0.4" />
     <PackageVersion Include="OpenAI" Version="2.8.0" />
-    <PackageVersion Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" Version="1.14.0" />
-    <PackageVersion Include="OpenTelemetry.Extensions.Hosting" Version="1.14.0" />
-    <PackageVersion Include="OpenTelemetry.Instrumentation.AspNetCore" Version="1.14.0" />
-    <PackageVersion Include="OpenTelemetry.Instrumentation.Http" Version="1.14.0" />
-    <PackageVersion Include="OpenTelemetry.Instrumentation.Runtime" Version="1.14.0" />
+    <PackageVersion Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" Version="1.15.0" />
+    <PackageVersion Include="OpenTelemetry.Extensions.Hosting" Version="1.15.0" />
+    <PackageVersion Include="OpenTelemetry.Instrumentation.AspNetCore" Version="1.15.0" />
+    <PackageVersion Include="OpenTelemetry.Instrumentation.Http" Version="1.15.0" />
+    <PackageVersion Include="OpenTelemetry.Instrumentation.Runtime" Version="1.15.0" />
     <PackageVersion Include="System.Interactive" Version="7.0.0" />
     <PackageVersion Include="System.Reactive" Version="6.1.0" />
     <PackageVersion Include="Microsoft.Reactive.Testing" Version="6.1.0" />
@@ -147,14 +147,14 @@
     <PackageVersion Include="Namotion.Reflection" Version="3.4.3" />
     <PackageVersion Include="System.Text.RegularExpressions" Version="4.3.1" />
     <PackageVersion Include="System.Xml.XmlSerializer" Version="4.3.0" />
-    <PackageVersion Include="Microsoft.Orleans.Clustering.AzureStorage" Version="9.2.1" />
-    <PackageVersion Include="Microsoft.Orleans.Persistence.AzureStorage" Version="9.2.1" />
+    <PackageVersion Include="Microsoft.Orleans.Clustering.AzureStorage" Version="10.0.0" />
+    <PackageVersion Include="Microsoft.Orleans.Persistence.AzureStorage" Version="10.0.0" />
     <PackageVersion Include="Aspire.Hosting.Azure.Storage" Version="13.1.0" />
     <PackageVersion Include="Aspire.Azure.Data.Tables" Version="13.1.0" />
     <PackageVersion Include="Microsoft.AspNetCore.Components.Web" Version="10.0.2" />
     <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.0.1" />
     <PackageVersion Include="UglyToad.PdfPig" Version="1.7.0-custom-5" />
-    <PackageVersion Include="Verify.XunitV3" Version="31.9.4" />
+    <PackageVersion Include="Verify.XunitV3" Version="31.10.0" />
     <PackageVersion Include="xunit.v3" Version="3.2.2" />
     <PackageVersion Include="xunit.v3.assert" Version="3.2.2" />
     <PackageVersion Include="xunit.v3.extensibility.core" Version="3.2.2" />
@@ -162,6 +162,6 @@
     <PackageVersion Include="xunit.v3.runner.console" Version="3.2.2" />
     <PackageVersion Include="FluentAssertions" Version="8.8.0" />
     <PackageVersion Include="NSubstitute" Version="5.3.0" />
-    <PackageVersion Include="GitHub.Copilot.SDK" Version="0.1.17" />
+    <PackageVersion Include="GitHub.Copilot.SDK" Version="0.1.20" />
   </ItemGroup>
 </Project>

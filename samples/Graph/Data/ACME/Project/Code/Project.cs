@@ -3,6 +3,8 @@
 // DisplayName: Project Data Model
 // </meshweaver>
 
+using MeshWeaver.Domain;
+
 /// <summary>
 /// Represents a project with status tracking and deadlines.
 /// </summary>
@@ -18,11 +20,13 @@ public record Project
     /// Project name.
     /// </summary>
     [Required]
+    [MeshNodeProperty(nameof(MeshNode.Name))]
     public string Name { get; init; } = string.Empty;
 
     /// <summary>
     /// Detailed description of the project.
     /// </summary>
+    [MeshNodeProperty(nameof(MeshNode.Description))]
     public string? Description { get; init; }
 
     /// <summary>
@@ -33,6 +37,7 @@ public record Project
     /// <summary>
     /// Icon name for visual representation.
     /// </summary>
+    [MeshNodeProperty(nameof(MeshNode.Icon))]
     public string Icon { get; init; } = "Folder";
 
     /// <summary>

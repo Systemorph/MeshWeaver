@@ -17,7 +17,6 @@ namespace MeshWeaver.Hosting.Persistence.Query;
 public class InMemoryMeshQuery : IMeshQueryCore
 {
     private readonly IPersistenceServiceCore _persistence;
-    private readonly INavigationService? _navigationContext;
     private readonly ISecurityService? _securityService;
     private readonly AccessService? _accessService;
     private readonly IDataChangeNotifier? _changeNotifier;
@@ -32,13 +31,11 @@ public class InMemoryMeshQuery : IMeshQueryCore
 
     public InMemoryMeshQuery(
         IPersistenceServiceCore persistence,
-        INavigationService? navigationContext = null,
         ISecurityService? securityService = null,
         AccessService? accessService = null,
         IDataChangeNotifier? changeNotifier = null)
     {
         _persistence = persistence;
-        _navigationContext = navigationContext;
         _securityService = securityService;
         _accessService = accessService;
         _changeNotifier = changeNotifier;
@@ -73,14 +70,14 @@ public class InMemoryMeshQuery : IMeshQueryCore
             parsedQuery = parsedQuery with { Limit = request.Limit };
         }
 
-        // If no path is specified, use navigation context's namespace or default to root
+        // If no path is specified, use the default path from request or default to root
         var effectivePath = parsedQuery.Path;
         var effectiveScope = parsedQuery.Scope;
         if (string.IsNullOrEmpty(effectivePath))
         {
-            if (_navigationContext?.CurrentNamespace != null)
+            if (!string.IsNullOrEmpty(request.DefaultPath))
             {
-                effectivePath = _navigationContext.CurrentNamespace;
+                effectivePath = request.DefaultPath;
             }
             // When no path specified and scope is Exact, default to Children (items in current namespace only)
             // This ensures queries like "nodeType:Organization" find root-level organizations
@@ -319,8 +316,8 @@ public class InMemoryMeshQuery : IMeshQueryCore
         await foreach (var node in _persistence.GetDescendantsSecureAsync(normalizedPath, userId, options).WithCancellation(ct))
         {
             var name = node.Name ?? node.Id ?? node.Path ?? "";
-            var nameLower = name?.ToLowerInvariant() ?? "";
-            var pathLower = node.Path.ToLowerInvariant();
+            var nameLower = name.ToLowerInvariant();
+            var pathLower = (node.Path ?? "").ToLowerInvariant();
 
             // Calculate match score based on prefix match (check both name and path)
             double score = 0;
@@ -346,7 +343,7 @@ public class InMemoryMeshQuery : IMeshQueryCore
 
             if (score > 0)
             {
-                suggestions.Add(new QuerySuggestion(node.Path, name, node.NodeType, score));
+                suggestions.Add(new QuerySuggestion(node.Path ?? "", name, node.NodeType, score));
             }
         }
 
@@ -450,7 +447,7 @@ public class InMemoryMeshQuery : IMeshQueryCore
             var effectiveScope = parsedQuery.Scope;
             if (string.IsNullOrEmpty(effectivePath))
             {
-                effectivePath = _navigationContext?.CurrentNamespace ?? "";
+                effectivePath = request.DefaultPath ?? "";
                 if (parsedQuery.Scope == QueryScope.Exact)
                 {
                     effectiveScope = QueryScope.Children;

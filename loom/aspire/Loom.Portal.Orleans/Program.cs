@@ -24,7 +24,7 @@ builder.UseOrleansMeshServer(address, silo =>
             options.OpenConnectionTimeout = TimeSpan.FromMinutes(1);
         })
     )
-    .ConfigureLoomMesh(builder.Configuration)
+    .ConfigureLoomMesh(builder.Configuration, builder.Environment.IsDevelopment())
     .ConfigureLoomPortal();
 
 var app = builder.Build();

@@ -1,3 +1,4 @@
+using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using Microsoft.Extensions.Logging;
@@ -49,7 +50,7 @@ public class RlsNodeValidator : INodeValidator
         // For Create operations, check permission on parent path
         // (user needs Create permission on the parent to create a child)
         var pathToCheck = context.Operation == NodeOperation.Create
-            ? context.Node.ParentPath ?? context.Node.Path
+            ? context.Node.GetParentPath() ?? context.Node.Path
             : context.Node.Path;
 
         // Check permission - use the explicit userId if available

@@ -145,6 +145,7 @@ public record MeshNode([property: Key] string Id, [property: Editable(false)] st
 
     /// <summary>
     /// Human-readable description of this mesh node for display in autocomplete and UI.
+    /// Rendered as markdown in the UI.
     /// </summary>
     public string? Description { get; init; }
 
@@ -155,22 +156,6 @@ public record MeshNode([property: Key] string Id, [property: Editable(false)] st
     public string? Category { get; init; }
 
     /// <summary>
-    /// Controls how children are displayed in the catalog view.
-    /// - "grouped": Group by category with headings (default for instances)
-    /// - "hierarchical": Show parent-child relationships with indentation
-    /// - null: Use default behavior based on node type
-    /// </summary>
-    public string? CatalogMode { get; init; }
-
-    /// <summary>
-    /// Override the default catalog query.
-    /// Default is "namespace:{path}" (direct children only).
-    /// Set to "namespace:{path} scope:descendants" to show all descendants.
-    /// Supports any valid query syntax.
-    /// </summary>
-    public string? CatalogQuery { get; init; }
-
-    /// <summary>
     /// Icon URL or identifier for display in UI.
     /// </summary>
     public string? Icon { get; init; }
@@ -179,13 +164,6 @@ public record MeshNode([property: Key] string Id, [property: Editable(false)] st
     /// Display order for sorting (lower values appear first, null values appear last).
     /// </summary>
     public int? DisplayOrder { get; init; }
-
-    /// <summary>
-    /// Indicates this node's data is persisted and should be loaded on startup.
-    /// When true, the hub will load children from IPersistenceService via MeshNodeTypeSource.
-    /// </summary>
-    [Editable(false)]
-    public bool IsPersistent { get; init; }
 
     /// <summary>
     /// Timestamp when this node was last modified.
@@ -211,45 +189,11 @@ public record MeshNode([property: Key] string Id, [property: Editable(false)] st
     public MeshNodeState State { get; init; } = MeshNodeState.Active;
 
     /// <summary>
-    /// Indicates this is a virtual node created from a template, not persisted.
-    /// Virtual nodes are created on-demand when addressing template-based paths.
-    /// CreateNodeRequest should not consider virtual nodes as "existing" nodes.
-    /// </summary>
-    [JsonIgnore, NotMapped, Editable(false)]
-    public bool IsVirtual { get; init; }
-
-    /// <summary>
     /// The data model content for this node.
     /// The type depends on NodeType (e.g., Organization, Project, Story).
     /// </summary>
     [Editable(false)]
     public object? Content { get; init; }
-
-    /// <summary>
-    /// Gets the parent path for this node.
-    /// Returns null for root-level nodes.
-    /// </summary>
-    [JsonIgnore, NotMapped]
-    public string? ParentPath
-    {
-        get
-        {
-            var pathSegments = Path.Split('/', StringSplitOptions.RemoveEmptyEntries);
-            return pathSegments.Length <= 1
-                ? null
-                : string.Join("/", pathSegments.Take(pathSegments.Length - 1));
-        }
-    }
-
-    /// <summary>
-    /// URL or path to a thumbnail image for this node.
-    /// </summary>
-    public string? ThumbNail { get; init; }
-
-    /// <summary>
-    /// Name of the stream provider used for data synchronization.
-    /// </summary>
-    public string? StreamProvider { get; init; }
 
     /// <summary>
     /// File path to the dynamically compiled assembly for this node type.
@@ -261,13 +205,6 @@ public record MeshNode([property: Key] string Id, [property: Editable(false)] st
     /// </summary>
     [JsonIgnore, NotMapped]
     public Func<MessageHubConfiguration, MessageHubConfiguration>? HubConfiguration { get; init; }
-
-    /// <summary>
-    /// Script to execute when the node hub starts up.
-    /// </summary>
-    [Editable(false)]
-    public string? StartupScript { get; init; }
-
 
 
     /// <summary>

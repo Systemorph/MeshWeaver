@@ -16,7 +16,6 @@ public class InMemoryPersistenceService : IPersistenceServiceCore
     private readonly IDataChangeNotifier? _changeNotifier;
     private readonly ConcurrentDictionary<string, MeshNode> _nodes = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, Comment> _comments = new(StringComparer.OrdinalIgnoreCase);
-    private bool _initialized;
 
     public InMemoryPersistenceService(
         IStorageAdapter? storageAdapter = null,
@@ -28,7 +27,6 @@ public class InMemoryPersistenceService : IPersistenceServiceCore
 
     public Task InitializeAsync(CancellationToken ct = default)
     {
-        _initialized = true;
         return Task.CompletedTask;
     }
 
@@ -39,8 +37,6 @@ public class InMemoryPersistenceService : IPersistenceServiceCore
     /// <param name="ct">Cancellation token</param>
     public async Task InitializeAsync(JsonSerializerOptions options, CancellationToken ct = default)
     {
-        _initialized = true;
-
         if (_storageAdapter == null)
             return;
 
@@ -231,13 +227,9 @@ public class InMemoryPersistenceService : IPersistenceServiceCore
             Description = sourceNode.Description,
             Icon = sourceNode.Icon,
             DisplayOrder = sourceNode.DisplayOrder,
-            IsPersistent = sourceNode.IsPersistent,
             Content = sourceNode.Content,
-            ThumbNail = sourceNode.ThumbNail,
-            StreamProvider = sourceNode.StreamProvider,
             AssemblyLocation = sourceNode.AssemblyLocation,
             HubConfiguration = sourceNode.HubConfiguration,
-            StartupScript = sourceNode.StartupScript,
             GlobalServiceConfigurations = sourceNode.GlobalServiceConfigurations
         };
         await SaveNodeAsync(movedNode, options, ct);
@@ -259,13 +251,9 @@ public class InMemoryPersistenceService : IPersistenceServiceCore
                     Description = descendantNode.Description,
                     Icon = descendantNode.Icon,
                     DisplayOrder = descendantNode.DisplayOrder,
-                    IsPersistent = descendantNode.IsPersistent,
                     Content = descendantNode.Content,
-                    ThumbNail = descendantNode.ThumbNail,
-                    StreamProvider = descendantNode.StreamProvider,
                     AssemblyLocation = descendantNode.AssemblyLocation,
                     HubConfiguration = descendantNode.HubConfiguration,
-                    StartupScript = descendantNode.StartupScript,
                     GlobalServiceConfigurations = descendantNode.GlobalServiceConfigurations
                 };
                 await SaveNodeAsync(movedDescendant, options, ct);
