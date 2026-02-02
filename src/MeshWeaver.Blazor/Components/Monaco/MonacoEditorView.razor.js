@@ -18,6 +18,32 @@ function syncMonacoTheme(effectiveTheme) {
     }
 }
 
+// Detect theme from DOM when themeHandler is not available
+function detectThemeFromDOM() {
+    // FluentDesignTheme sets data-theme on document.body
+    const bodyTheme = document.body?.getAttribute('data-theme');
+    if (bodyTheme) {
+        return bodyTheme;
+    }
+    // Also check documentElement as fallback
+    const htmlTheme = document.documentElement.getAttribute('data-theme');
+    if (htmlTheme) {
+        return htmlTheme;
+    }
+    // Check for dark/fluent-dark class on body or html
+    if (document.body?.classList.contains('dark') ||
+        document.body?.classList.contains('fluent-dark') ||
+        document.documentElement.classList.contains('dark') ||
+        document.documentElement.classList.contains('fluent-dark')) {
+        return 'dark';
+    }
+    // Fallback to system preference
+    if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
+        return 'dark';
+    }
+    return 'light';
+}
+
 // Register theme change callback (called from initEditor when Monaco is ready)
 function ensureThemeCallbackRegistered() {
     if (themeCallbackRegistered) return;
@@ -31,6 +57,39 @@ function ensureThemeCallbackRegistered() {
         // Apply current theme immediately
         const currentTheme = window.themeHandler.getEffectiveTheme();
         syncMonacoTheme(currentTheme);
+    } else {
+        // Fallback: detect theme from DOM and apply
+        const currentTheme = detectThemeFromDOM();
+        syncMonacoTheme(currentTheme);
+
+        // Also listen for system theme changes
+        if (window.matchMedia) {
+            window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', (e) => {
+                // Only use system preference if no explicit theme is set
+                if (!document.documentElement.getAttribute('data-theme')) {
+                    syncMonacoTheme(e.matches ? 'dark' : 'light');
+                }
+            });
+        }
+
+        // Set up MutationObservers to watch for theme attribute changes on both body and html
+        const observer = new MutationObserver((mutations) => {
+            for (const mutation of mutations) {
+                if (mutation.type === 'attributes' &&
+                    (mutation.attributeName === 'data-theme' || mutation.attributeName === 'class')) {
+                    const theme = detectThemeFromDOM();
+                    syncMonacoTheme(theme);
+                }
+            }
+        });
+
+        // Observe both body and documentElement for theme changes
+        if (document.body) {
+            observer.observe(document.body, { attributes: true, attributeFilter: ['data-theme', 'class'] });
+        }
+        observer.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme', 'class'] });
+
+        themeCallbackRegistered = true;
     }
 }
 
@@ -172,7 +231,7 @@ function debounce(fn, delay) {
     document.head.appendChild(style);
 })();
 
-export function initEditor(editorId, placeholder, dotNetRef, codeEditMode = false) {
+export function initEditor(editorId, placeholder, dotNetRef, codeEditMode = false, showLineNumbers = false) {
     const container = document.getElementById(editorId);
     if (!container) {
         console.error('Container not found:', editorId);
@@ -187,11 +246,12 @@ export function initEditor(editorId, placeholder, dotNetRef, codeEditMode = fals
         dotNetRef: dotNetRef,
         completionConfig: null,
         completionDisposable: null,
-        codeEditMode: codeEditMode
+        codeEditMode: codeEditMode,
+        showLineNumbers: showLineNumbers
     });
 
     // Add placeholder styling
-    updatePlaceholder(editorId, placeholder);
+    updatePlaceholder(editorId, placeholder, showLineNumbers);
 
     // Get the monaco editor instance
     const editorInstance = monaco.editor.getEditors().find(e => e.getContainerDomNode()?.id === editorId);
@@ -276,9 +336,14 @@ export function initEditor(editorId, placeholder, dotNetRef, codeEditMode = fals
     }
 }
 
-function updatePlaceholder(editorId, placeholder) {
+function updatePlaceholder(editorId, placeholder, showLineNumbers = false) {
     const container = document.getElementById(editorId);
     if (!container) return;
+
+    // Calculate left offset based on line numbers
+    // When line numbers are shown, we need to account for the gutter width
+    // Monaco uses ~40px for 3-char line numbers + some padding
+    const leftOffset = showLineNumbers ? 35 : 10;
 
     // Create or update placeholder element
     let placeholderEl = container.querySelector('.monaco-placeholder');
@@ -288,7 +353,7 @@ function updatePlaceholder(editorId, placeholder) {
         placeholderEl.style.cssText = `
             position: absolute;
             top: 8px;
-            left: 10px;
+            left: ${leftOffset}px;
             color: var(--neutral-foreground-hint, #605e5c);
             pointer-events: none;
             font-size: 14px;
@@ -297,6 +362,9 @@ function updatePlaceholder(editorId, placeholder) {
         `;
         container.style.position = 'relative';
         container.appendChild(placeholderEl);
+    } else {
+        // Update left position if element already exists
+        placeholderEl.style.left = `${leftOffset}px`;
     }
     placeholderEl.textContent = placeholder;
 

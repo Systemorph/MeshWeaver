@@ -311,19 +311,17 @@ public static class TodoViews
                     .WithClickAction(_ => { host.UpdateArea(DialogControl.DialogArea, null!); return System.Threading.Tasks.Task.CompletedTask; }))
                 .WithView(Controls.Button("Delete").WithAppearance(Appearance.Accent)
                     .WithStyle(s => s.WithBackgroundColor("#dc3545"))
-                    .WithClickAction(_ =>
+                    .WithClickAction(async ctx =>
                     {
                         host.UpdateArea(DialogControl.DialogArea, null!);
-                        return SoftDeleteTodo(host).ContinueWith(_ =>
+                        await SoftDeleteTodo(host);
+                        // Navigate back to parent after soft delete
+                        var segments = host.Hub.Address.Segments;
+                        if (segments.Length > 1)
                         {
-                            // Navigate back to parent after soft delete
-                            var segments = host.Hub.Address.Segments;
-                            if (segments.Length > 1)
-                            {
-                                var parentPath = string.Join("/", segments.Take(segments.Length - 1));
-                                host.Hub.ServiceProvider.GetService<MeshWeaver.Mesh.Services.INavigationService>()?.NavigateTo($"/{parentPath}");
-                            }
-                        });
+                            var parentPath = string.Join("/", segments.Take(segments.Length - 1));
+                            ctx.NavigateTo($"/{parentPath}");
+                        }
                     })));
 
         host.UpdateArea(DialogControl.DialogArea, Controls.Dialog(content, "Delete Task").WithSize("S").WithClosable(false));

@@ -59,8 +59,7 @@ public class MonolithMeshTest(ITestOutputHelper output) : MonolithMeshTestBase(o
             })
                 .AddMeshNodes(MeshNode.FromPath($"{AddressExtensions.AppType}/Kernel") with
                 {
-                    Name = "Kernel",
-                    StartupScript = @$"using MeshWeaver.Messaging; Mesh.ServiceProvider.CreateMessageHub(AddressExtensions.CreateAppAddress(""Kernel""))"
+                    Name = "Kernel"
                 })
             .AddKernel();
 }

@@ -127,7 +127,6 @@ public class AgentFileParser : IFileFormatParser
             Description = frontMatter.Description,
             Icon = frontMatter.Icon ?? DefaultAgentIcon,
             State = ParseState(frontMatter.State),
-            IsPersistent = true,
             LastModified = lastModified,
             Content = agentConfig
         };

@@ -1,3 +1,6 @@
+// Suppress ASP0006 - sequence numbers in dynamic RenderFragment loops are unavoidable for list rendering
+#pragma warning disable ASP0006
+
 using System.Text.Json;
 using System.Reactive.Linq;
 using Microsoft.AspNetCore.Components;

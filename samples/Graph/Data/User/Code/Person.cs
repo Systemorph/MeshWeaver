@@ -1,3 +1,5 @@
+using MeshWeaver.Domain;
+
 /// <summary>
 /// Represents an individual person or user in the system.
 /// </summary>
@@ -13,6 +15,7 @@ public record Person
     /// Full name of the person.
     /// </summary>
     [Required]
+    [MeshNodeProperty(nameof(MeshNode.Name))]
     public string Name { get; init; } = string.Empty;
 
     /// <summary>
@@ -28,6 +31,7 @@ public record Person
     /// <summary>
     /// Short biography or description.
     /// </summary>
+    [MeshNodeProperty(nameof(MeshNode.Description))]
     public string? Bio { get; init; }
 
     /// <summary>
@@ -38,6 +42,7 @@ public record Person
     /// <summary>
     /// Icon name for visual representation.
     /// </summary>
+    [MeshNodeProperty(nameof(MeshNode.Icon))]
     public string Icon { get; init; } = "Person";
 
     /// <summary>

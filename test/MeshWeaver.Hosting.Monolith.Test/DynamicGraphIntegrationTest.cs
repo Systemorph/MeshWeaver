@@ -7,6 +7,7 @@ using System.Threading.Tasks;
 using FluentAssertions;
 using FluentAssertions.Extensions;
 using MeshWeaver.Data;
+using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Monolith;
 using MeshWeaver.Hosting.Monolith.TestBase;
@@ -18,7 +19,7 @@ using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
-namespace MeshWeaver.Graph.Test;
+namespace MeshWeaver.Hosting.Monolith.Test;
 
 /// <summary>
 /// Integration tests for dynamically configured Graph using JSON configuration.
@@ -99,7 +100,6 @@ public enum StoryStatus
             Description = "A user story or task",
             Icon = "Document",
             DisplayOrder = 30,
-            IsPersistent = true,
             Content = new NodeTypeDefinition
             {
                 Id = "story",
@@ -134,7 +134,6 @@ public record Organization
             Description = "An organization",
             Icon = "Building",
             DisplayOrder = 10,
-            IsPersistent = true,
             Content = new NodeTypeDefinition
             {
                 Id = "org",
@@ -169,7 +168,6 @@ public record Project
             Description = "A project",
             Icon = "Folder",
             DisplayOrder = 20,
-            IsPersistent = true,
             Content = new NodeTypeDefinition
             {
                 Id = "project",
@@ -203,7 +201,6 @@ public record Graph
             Description = "The graph root",
             Icon = "Diagram",
             DisplayOrder = 0,
-            IsPersistent = true,
             Content = new NodeTypeDefinition
             {
                 Id = "graph",
@@ -822,8 +819,8 @@ public class OrganizationsLayoutTestsCollection { }
 /// Tests that use FileSystemPersistenceService to validate JSON deserialization with $type discriminator.
 /// This replicates the exact production scenario where nodes and partition objects are read from disk.
 /// </summary>
-[Collection("FileSystemPersistenceTests")]
-public class FileSystemPersistenceTest : MonolithMeshTestBase
+[Collection("DynamicGraphFileSystemPersistenceTests")]
+public class DynamicGraphFileSystemPersistenceTest : MonolithMeshTestBase
 {
     private static readonly string TestDirectoryBase = Path.Combine(Path.GetTempPath(), "MeshWeaverFileSystemTests");
     private string? _testDirectory;
@@ -838,7 +835,7 @@ public class FileSystemPersistenceTest : MonolithMeshTestBase
         return _testDirectory;
     }
 
-    public FileSystemPersistenceTest(ITestOutputHelper output) : base(output)
+    public DynamicGraphFileSystemPersistenceTest(ITestOutputHelper output) : base(output)
     {
     }
 
@@ -1080,8 +1077,8 @@ public class FileSystemPersistenceTest : MonolithMeshTestBase
     }
 }
 
-[CollectionDefinition("FileSystemPersistenceTests", DisableParallelization = true)]
-public class FileSystemPersistenceTestsCollection { }
+[CollectionDefinition("DynamicGraphFileSystemPersistenceTests", DisableParallelization = true)]
+public class DynamicGraphFileSystemPersistenceTestsCollection { }
 
 /// <summary>
 /// Collection definition for DynamicGraphIntegrationTests.

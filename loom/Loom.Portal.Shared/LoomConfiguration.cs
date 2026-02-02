@@ -191,7 +191,7 @@ public static class LoomConfiguration
         /// - Graph:Storage:ConnectionString - Connection string for AzureBlob/Cosmos
         /// - storage - Content collection configuration (Name, SourceType, BasePath)
         /// </summary>
-        public TBuilder ConfigureLoomMesh(IConfiguration configuration)
+        public TBuilder ConfigureLoomMesh(IConfiguration configuration, bool isDevelopment = false)
         {
             // Read graph storage config
             var graphStorageConfig = configuration.GetSection("Graph:Storage").Get<GraphStorageConfig>();
@@ -208,6 +208,16 @@ public static class LoomConfiguration
             {
                 basePath = Path.GetFullPath(Path.Combine(Directory.GetCurrentDirectory(), basePath));
                 graphStorageConfig = graphStorageConfig with { BasePath = basePath };
+            }
+
+            // In development, format JSON for readability
+            if (isDevelopment)
+            {
+                var settings = graphStorageConfig.Settings != null
+                    ? new Dictionary<string, string>(graphStorageConfig.Settings)
+                    : new Dictionary<string, string>();
+                settings["FormatJson"] = "true";
+                graphStorageConfig = graphStorageConfig with { Settings = settings };
             }
 
             // Read content collection storage config from appsettings

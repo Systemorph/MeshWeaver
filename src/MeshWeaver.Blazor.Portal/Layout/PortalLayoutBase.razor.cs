@@ -1,4 +1,4 @@
-﻿using MeshWeaver.AI;
+using MeshWeaver.AI;
 using MeshWeaver.Blazor.Chat;
 using MeshWeaver.Blazor.Portal.Components;
 using MeshWeaver.Blazor.Portal.Resize;
@@ -6,8 +6,6 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.AspNetCore.Components;
-using Microsoft.AspNetCore.Components.Routing;
-using Microsoft.Extensions.DependencyInjection;
 using Microsoft.FluentUI.AspNetCore.Components;
 using Microsoft.JSInterop;
 
@@ -52,9 +50,10 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
 
     // Create menu state
     protected bool isCreateMenuOpen;
-    protected List<CreatableTypeInfo> creatableTypes = new();
-    private string? lastLoadedPath;
-    private CancellationTokenSource? loadingCts;
+
+    // Creatable types - delegated to NavigationService
+    protected IReadOnlyList<CreatableTypeInfo> CreatableTypes => NavigationService.CreatableTypes;
+    protected bool IsLoadingCreatableTypes => NavigationService.IsLoadingCreatableTypes;
 
     private readonly AgentChatControl chatControl = new();
     private IJSObjectReference? jsModule;
@@ -63,95 +62,37 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
     protected override void OnInitialized()
     {
         base.OnInitialized();
-        NavigationManager.LocationChanged += OnLocationChanged;
         ChatState.OnStateChanged += OnChatStateChanged;
+        NavigationService.OnCreatableTypesChanged += OnCreatableTypesChanged;
     }
 
     protected override async Task OnInitializedAsync()
     {
         await base.OnInitializedAsync();
-        // Start loading creatable types without blocking - will await when menu opens
-        StartLoadingCreatableTypes();
+        await NavigationService.InitializeAsync();
     }
 
-    protected override async Task OnParametersSetAsync()
+    private void OnCreatableTypesChanged(IReadOnlyList<CreatableTypeInfo> types)
     {
-        await base.OnParametersSetAsync();
-
-        // Reload types when URL changes
-        var currentPath = NavigationService.CurrentNamespace;
-        if (currentPath != lastLoadedPath)
-        {
-            StartLoadingCreatableTypes();
-        }
+        InvokeAsync(StateHasChanged);
     }
 
     /// <summary>
-    /// Starts loading creatable types without blocking. Items are added as they arrive.
+    /// Navigates to the Create page for a specific node type.
     /// </summary>
-    protected virtual void StartLoadingCreatableTypes()
-    {
-        var nodeTypeService = Hub?.ServiceProvider.GetService<INodeTypeService>();
-        if (nodeTypeService == null)
-            return;
-
-        var currentPath = NavigationService.CurrentNamespace;
-
-        // Cancel any previous loading
-        loadingCts?.Cancel();
-        loadingCts = new CancellationTokenSource();
-
-        lastLoadedPath = currentPath;
-        creatableTypes = new(); // Clear existing items
-
-        // Fire and forget - load items incrementally
-        _ = LoadCreatableTypesIncrementallyAsync(nodeTypeService, currentPath ?? string.Empty, loadingCts.Token);
-    }
-
-    /// <summary>
-    /// Loads creatable types incrementally, updating the UI as each item arrives.
-    /// </summary>
-    private async Task LoadCreatableTypesIncrementallyAsync(
-        INodeTypeService nodeTypeService,
-        string currentPath,
-        CancellationToken ct)
-    {
-        try
-        {
-            await foreach (var typeInfo in nodeTypeService.GetCreatableTypesAsync(currentPath, ct).WithCancellation(ct))
-            {
-                creatableTypes.Add(typeInfo);
-                await InvokeAsync(StateHasChanged);
-            }
-        }
-        catch (OperationCanceledException)
-        {
-            // Path changed, loading was cancelled - this is expected
-        }
-        catch
-        {
-            // Fallback on error - keep whatever items we loaded
-        }
-    }
-
-    /// <summary>
-    /// Navigates to the create page for the specified node type.
-    /// </summary>
-    protected virtual void NavigateToCreate(string nodeTypePath)
+    protected virtual Task NavigateToCreateAsync(string nodeTypePath)
     {
         isCreateMenuOpen = false;
 
-        var currentPath = NavigationService.CurrentNamespace;
-        if (string.IsNullOrEmpty(currentPath))
-        {
-            // At root level - navigate to create with type parameter
-            NavigationManager.NavigateTo($"/create?type={Uri.EscapeDataString(nodeTypePath)}");
-        }
-        else
-        {
-            // Inside a node - navigate to create page with parent and type parameters
-            NavigationManager.NavigateTo($"/create?parent={Uri.EscapeDataString(currentPath)}&type={Uri.EscapeDataString(nodeTypePath)}");
-        }
+        var currentPath = NavigationService.CurrentNamespace ?? "";
+
+        // Navigate to Create area with type as query parameter
+        var createUrl = string.IsNullOrEmpty(currentPath)
+            ? $"/Create?type={Uri.EscapeDataString(nodeTypePath)}"
+            : $"/{currentPath}/Create?type={Uri.EscapeDataString(nodeTypePath)}";
+
+        NavigationManager.NavigateTo(createUrl);
+        return Task.CompletedTask;
     }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
@@ -173,23 +114,6 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
     private void OnChatStateChanged()
     {
         InvokeAsync(StateHasChanged);
-    }
-
-    private void OnLocationChanged(object? sender, LocationChangedEventArgs e)
-    {
-        // Reload creatable types when URL changes to a different node path
-        var currentPath = NavigationService.CurrentNamespace;
-        if (currentPath != lastLoadedPath)
-        {
-            _ = InvokeAsync(() =>
-            {
-                StartLoadingCreatableTypes();
-            });
-        }
-        else
-        {
-            StateHasChanged();
-        }
     }
 
     protected override void OnParametersSet()
@@ -275,10 +199,8 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
 
     public void Dispose()
     {
-        loadingCts?.Cancel();
-        loadingCts?.Dispose();
-        NavigationManager.LocationChanged -= OnLocationChanged;
         ChatState.OnStateChanged -= OnChatStateChanged;
+        NavigationService.OnCreatableTypesChanged -= OnCreatableTypesChanged;
         dotNetRef?.Dispose();
         jsModule?.DisposeAsync();
     }

@@ -86,7 +86,6 @@ public partial class MarkdownFileParser : IFileFormatParser
             // Icon: prefer Icon, then Thumbnail (legacy)
             Icon = frontMatter?.Icon ?? frontMatter?.Thumbnail ?? DefaultMarkdownIcon,
             State = ParseState(frontMatter?.State),
-            IsPersistent = true,
             LastModified = lastModified,
             Content = markdownDocument
         };

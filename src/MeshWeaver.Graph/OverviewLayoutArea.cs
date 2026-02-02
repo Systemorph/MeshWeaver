@@ -1,5 +1,4 @@
-﻿using System.ComponentModel;
-using System.ComponentModel.DataAnnotations;
+﻿using System.ComponentModel.DataAnnotations;
 using System.Reactive.Linq;
 using System.Reflection;
 using System.Text.Json;
@@ -7,6 +6,7 @@ using MeshWeaver.Data;
 using MeshWeaver.Domain;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
+using MeshWeaver.Layout.Domain;
 using MeshWeaver.Layout.DataBinding;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
@@ -24,11 +24,6 @@ namespace MeshWeaver.Graph;
 /// </summary>
 public static class OverviewLayoutArea
 {
-    /// <summary>
-    /// Gets the consistent data ID for a node path. Used by both header and property overview.
-    /// </summary>
-    public static string GetDataId(string nodePath) => $"content_{nodePath.Replace("/", "_")}";
-
     /// <summary>
     /// Builds the property overview for a MeshNode, showing read-only views with click-to-edit.
     /// </summary>
@@ -50,7 +45,7 @@ public static class OverviewLayoutArea
         var canEdit = CheckEditAccess(host, node);
 
         // 3. Set up workspace stream for bidirectional data binding (DomainDetails pattern)
-        var dataId = GetDataId(nodePath);
+        var dataId = EditLayoutArea.GetDataId(nodePath);
         var typeDefinition = host.Workspace.DataContext.TypeRegistry.GetTypeDefinition(contentType);
         if (typeDefinition is null)
             throw new InvalidOperationException($"Type definition not found for content type {contentType.FullName}");
@@ -78,59 +73,7 @@ public static class OverviewLayoutArea
         }
 
         // 5. Build property form with readonly/edit toggle
-        return BuildPropertyForm(host, contentType, dataId, nodePath, canEdit);
-    }
-
-    /// <summary>
-    /// Builds the property form with grid for regular properties and separate sections for markdown.
-    /// Uses MapToToggleableControl for readonly/edit toggle functionality.
-    /// </summary>
-    private static UiControl BuildPropertyForm(
-        LayoutAreaHost host,
-        Type contentType,
-        string dataId,
-        string nodePath,
-        bool canEdit)
-    {
-        // Get browsable properties (skip Title - shown in header)
-        var properties = contentType.GetProperties()
-            .Where(p => p.GetCustomAttribute<BrowsableAttribute>()?.Browsable != false)
-            .Where(p => !IsTitleProperty(p.Name))
-            .ToList();
-
-        // Separate properties into regular vs markdown (SeparateEditView)
-        var regularProps = properties
-            .Where(p => p.GetCustomAttribute<UiControlAttribute>()?.SeparateEditView != true)
-            .ToList();
-
-        var markdownProps = properties
-            .Where(p => p.GetCustomAttribute<UiControlAttribute>()?.SeparateEditView == true)
-            .ToList();
-
-        var stack = Controls.Stack.WithWidth("100%");
-
-        // Build grid for regular properties using MapToToggleableControl
-        if (regularProps.Count > 0)
-        {
-            var propsGrid = Controls.LayoutGrid.WithSkin(s => s.WithSpacing(2));
-
-            foreach (var prop in regularProps)
-            {
-                var control = host.Hub.ServiceProvider.MapToToggleableControl(prop, dataId, canEdit, host);
-                propsGrid = propsGrid.WithView(control, s => s.WithXs(12).WithMd(6).WithLg(4));
-            }
-
-            stack = stack.WithView(propsGrid);
-        }
-
-        // Build markdown sections using MapToToggleableControl
-        foreach (var prop in markdownProps)
-        {
-            var control = host.Hub.ServiceProvider.MapToToggleableControl(prop, dataId, canEdit, host);
-            stack = stack.WithView(control);
-        }
-
-        return stack;
+        return EditLayoutArea.Overview(host, contentType, dataId, canEdit);
     }
 
     /// <summary>
@@ -280,9 +223,4 @@ public static class OverviewLayoutArea
 
         return baseEditable;
     }
-
-    private static bool IsTitleProperty(string name) =>
-        name.Equals("Title", StringComparison.OrdinalIgnoreCase) ||
-        name.Equals("Name", StringComparison.OrdinalIgnoreCase) ||
-        name.Equals("DisplayName", StringComparison.OrdinalIgnoreCase);
 }

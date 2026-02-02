@@ -155,3 +155,19 @@
     -webkit-box-orient: vertical;
     line-height: 1.4;
 }
+
+/* Neutralize FluentGrid background to prevent color mismatch */
+::deep fluent-grid {
+    background: transparent;
+}
+
+/* Ensure grid items stretch to equal height within rows */
+::deep fluent-grid-item {
+    display: flex;
+    align-items: stretch;
+}
+
+/* Ensure cards within grid items fill the height */
+::deep fluent-grid-item > * {
+    width: 100%;
+}

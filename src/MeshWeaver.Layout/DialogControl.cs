@@ -47,7 +47,8 @@ public record DialogControl
         => this with { Content = content };
 
     /// <summary>
-    /// Whether the dialog can be closed with the X button
+    /// Whether the dialog shows a Close button in the footer.
+    /// When true, adds a Close button that dismisses the dialog.
     /// </summary>
     public object? IsClosable { get; init; }
 
@@ -57,7 +58,7 @@ public record DialogControl
     public object? Size { get; init; } = "M";
 
     /// <summary>
-    /// Callback when dialog is closed
+    /// Callback when dialog is closed (via Close button)
     /// </summary>
     internal Func<DialogCloseActionContext, Task>? CloseAction { get; init; }
 
@@ -67,7 +68,7 @@ public record DialogControl
     public DialogControl WithTitle(object? title) => this with { Title = title };
 
     /// <summary>
-    /// Sets whether the dialog is closable
+    /// Sets whether the dialog shows a Close button
     /// </summary>
     public DialogControl WithClosable(object? closable) => this with { IsClosable = closable };
 
@@ -77,12 +78,12 @@ public record DialogControl
     public DialogControl WithSize(object? size) => this with { Size = size };
 
     /// <summary>
-    /// Sets the close action for the dialog
+    /// Sets the close action for the dialog (called when Close button is clicked)
     /// </summary>
     public DialogControl WithCloseAction(Func<DialogCloseActionContext, Task> onClose) => this with { CloseAction = onClose };
 
     /// <summary>
-    /// Sets the close action for the dialog
+    /// Sets the close action for the dialog (called when Close button is clicked)
     /// </summary>
     public DialogControl WithCloseAction(Action<DialogCloseActionContext> onClose) =>
         WithCloseAction(c =>

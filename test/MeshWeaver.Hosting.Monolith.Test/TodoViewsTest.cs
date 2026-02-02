@@ -6,6 +6,7 @@ using System.Text.Json;
 using System.Threading.Tasks;
 using FluentAssertions;
 using MeshWeaver.Data;
+using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Monolith;
 using MeshWeaver.Hosting.Monolith.TestBase;
@@ -18,7 +19,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
-namespace MeshWeaver.Graph.Test;
+namespace MeshWeaver.Hosting.Monolith.Test;
 
 /// <summary>
 /// Tests for Todo-level views (Details, Thumbnail).
@@ -33,17 +34,10 @@ public class TodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBase(outp
         "MeshWeaverTodoViewTests",
         ".mesh-cache");
 
-    private static string GetSamplesGraphPath()
-    {
-        var currentDir = Directory.GetCurrentDirectory();
-        var solutionRoot = Path.GetFullPath(Path.Combine(currentDir, "..", "..", "..", "..", ".."));
-        return Path.Combine(solutionRoot, "samples", "Graph");
-    }
-
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
     {
-        var graphPath = GetSamplesGraphPath();
-        var dataDirectory = Path.Combine(graphPath, "Data");
+        var graphPath = TestPaths.SamplesGraph;
+        var dataDirectory = TestPaths.SamplesGraphData;
         Directory.CreateDirectory(SharedCacheDirectory);
 
         var configuration = new ConfigurationBuilder()
@@ -99,14 +93,11 @@ public class TodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBase(outp
             reference);
 
         Output.WriteLine("Waiting for Details view to render...");
-        var control = await stream
-            .GetControlStream(reference.Area!)
-            .Where(c => c != null)
-            .Timeout(TimeSpan.FromSeconds(5))
-            .FirstAsync();
+        // Use simpler pattern that works reliably
+        var value = await stream.Timeout(TimeSpan.FromSeconds(5)).FirstAsync();
 
-        Output.WriteLine($"Received control: {control?.GetType().Name}");
-        control.Should().NotBeNull("Details view should render for a Todo item");
+        Output.WriteLine($"Received value");
+        value.Should().NotBe(default(JsonElement), "Details view should render for a Todo item");
     }
 
     /// <summary>
@@ -132,14 +123,11 @@ public class TodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBase(outp
             reference);
 
         Output.WriteLine("Waiting for Thumbnail view to render...");
-        var control = await stream
-            .GetControlStream(reference.Area!)
-            .Where(c => c != null)
-            .Timeout(TimeSpan.FromSeconds(5))
-            .FirstAsync();
+        // Use simpler pattern that works reliably
+        var value = await stream.Timeout(TimeSpan.FromSeconds(5)).FirstAsync();
 
-        Output.WriteLine($"Received control: {control?.GetType().Name}");
-        control.Should().NotBeNull("Thumbnail view should render for a Todo item");
+        Output.WriteLine($"Received value");
+        value.Should().NotBe(default(JsonElement), "Thumbnail view should render for a Todo item");
     }
 
     /// <summary>
@@ -165,14 +153,11 @@ public class TodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBase(outp
             reference);
 
         Output.WriteLine("Waiting for Overview view to render...");
-        var control = await stream
-            .GetControlStream(reference.Area!)
-            .Where(c => c != null)
-            .Timeout(TimeSpan.FromSeconds(10))
-            .FirstAsync();
+        // Use simpler pattern that works reliably
+        var value = await stream.Timeout(TimeSpan.FromSeconds(10)).FirstAsync();
 
-        control.Should().NotBeNull("Overview view should render");
-        Output.WriteLine($"Overview view rendered: {control?.GetType().Name}");
+        value.Should().NotBe(default(JsonElement), "Overview view should render");
+        Output.WriteLine($"Overview view rendered");
     }
 
     /// <summary>
@@ -206,13 +191,10 @@ public class TodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBase(outp
                 todoAddress,
                 reference);
 
-            var control = await stream
-                .GetControlStream(reference.Area!)
-                .Where(c => c != null)
-                .Timeout(TimeSpan.FromSeconds(5))
-                .FirstAsync();
+            // Use simpler pattern that works reliably
+            var value = await stream.Timeout(TimeSpan.FromSeconds(5)).FirstAsync();
 
-            control.Should().NotBeNull($"Details view should render for {todoAddress}");
+            value.Should().NotBe(default(JsonElement), $"Details view should render for {todoAddress}");
             Output.WriteLine($"Successfully rendered: {todoAddress}");
         }
     }

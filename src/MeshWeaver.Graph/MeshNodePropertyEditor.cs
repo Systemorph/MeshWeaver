@@ -9,6 +9,7 @@ using MeshWeaver.Data;
 using MeshWeaver.Domain;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
+using MeshWeaver.Layout.Domain;
 using MeshWeaver.Layout.DataBinding;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
@@ -58,7 +59,7 @@ public static class MeshNodePropertyEditor
         // 4. Get browsable properties (skip Title - shown in header)
         var properties = contentType.GetProperties()
             .Where(p => p.GetCustomAttribute<BrowsableAttribute>()?.Browsable != false)
-            .Where(p => !IsTitleProperty(p.Name))
+            .Where(p => !EditLayoutArea.IsTitleProperty(p.Name))
             .ToList();
 
         // 5. For each property, create an editable control
@@ -70,11 +71,6 @@ public static class MeshNodePropertyEditor
 
         return propsGrid;
     }
-
-    private static bool IsTitleProperty(string name) =>
-        name.Equals("Title", StringComparison.OrdinalIgnoreCase) ||
-        name.Equals("Name", StringComparison.OrdinalIgnoreCase) ||
-        name.Equals("DisplayName", StringComparison.OrdinalIgnoreCase);
 
     private static UiControl BuildPropertyCell(LayoutAreaHost host, PropertyInfo prop, string dataId, string nodePath, MeshNode node)
     {

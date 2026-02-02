@@ -14,13 +14,19 @@ namespace MeshWeaver.Hosting.Monolith.Test;
 /// <summary>
 /// Tests and utility for running the migration.
 /// </summary>
-public class MigrationTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
+public class MigrationTest : MonolithMeshTestBase
 {
+    private readonly ITestOutputHelper _output;
     private readonly string _samplesDataDir = Path.GetFullPath(
         Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "samples", "Graph", "Data"));
     private readonly string _samplesContentDir = Path.GetFullPath(
         Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "samples", "Graph", "content"));
     private JsonSerializerOptions JsonOptions => Mesh.ServiceProvider.GetRequiredService<IMessageHub>().JsonSerializerOptions;
+
+    public MigrationTest(ITestOutputHelper output) : base(output)
+    {
+        _output = output;
+    }
 
     [Fact(Skip = "Run manually to see what would be migrated")]
     public async Task DryRun_ShowsWhatWouldBeMigrated()
@@ -28,12 +34,12 @@ public class MigrationTest(ITestOutputHelper output) : MonolithMeshTestBase(outp
         var utility = new MigrationUtility(_samplesDataDir, _samplesContentDir, JsonOptions);
         var report = await utility.MigrateAllAsync(dryRun: true);
 
-        output.WriteLine(report.ToString());
-        output.WriteLine("");
-        output.WriteLine("Files that would be migrated:");
+        _output.WriteLine(report.ToString());
+        _output.WriteLine("");
+        _output.WriteLine("Files that would be migrated:");
         foreach (var result in report.Results.Where(r => r.Status == MigrationStatus.WouldMigrate))
         {
-            output.WriteLine($"  {result.SourceFile} -> {result.TargetFile} ({result.MigrationType})");
+            _output.WriteLine($"  {result.SourceFile} -> {result.TargetFile} ({result.MigrationType})");
         }
     }
 
@@ -43,14 +49,14 @@ public class MigrationTest(ITestOutputHelper output) : MonolithMeshTestBase(outp
         var utility = new MigrationUtility(_samplesDataDir, _samplesContentDir, JsonOptions);
         var report = await utility.MigrateAllAsync(dryRun: false);
 
-        output.WriteLine(report.ToString());
-        output.WriteLine("");
-        output.WriteLine("Migrated files:");
+        _output.WriteLine(report.ToString());
+        _output.WriteLine("");
+        _output.WriteLine("Migrated files:");
         foreach (var result in report.Results.Where(r => r.Status == MigrationStatus.Migrated))
         {
-            output.WriteLine($"  {result.SourceFile} -> {result.TargetFile}");
+            _output.WriteLine($"  {result.SourceFile} -> {result.TargetFile}");
             if (result.ExtractedIcon != null)
-                output.WriteLine($"    Extracted icon: {result.ExtractedIcon}");
+                _output.WriteLine($"    Extracted icon: {result.ExtractedIcon}");
         }
     }
 }

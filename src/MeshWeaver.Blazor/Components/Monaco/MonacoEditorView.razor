@@ -172,7 +172,7 @@
 
         if (jsModule != null)
         {
-            await jsModule.InvokeVoidAsync("initEditor", EditorId, Placeholder, dotNetRef, CodeEditMode);
+            await jsModule.InvokeVoidAsync("initEditor", EditorId, Placeholder, dotNetRef, CodeEditMode, ShowLineNumbers);
 
             // Register completion provider if configured
             await TryRegisterCompletionProvider();

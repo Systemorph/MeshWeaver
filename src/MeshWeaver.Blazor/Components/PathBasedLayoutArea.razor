@@ -82,10 +82,27 @@ else
         if (string.IsNullOrEmpty(remainder))
             return (null, null);
 
+        // First, check for query string - it becomes the Id
+        string? queryString = null;
+        var questionIndex = remainder.IndexOf('?');
+        if (questionIndex >= 0)
+        {
+            queryString = remainder.Substring(questionIndex); // Keep the ? prefix
+            remainder = remainder.Substring(0, questionIndex);
+        }
+
+        // Now handle area/id from the path portion
         var slashIndex = remainder.IndexOf('/');
         if (slashIndex >= 0)
-            return (remainder.Substring(0, slashIndex), remainder.Substring(slashIndex + 1));
+        {
+            var area = remainder.Substring(0, slashIndex);
+            var pathId = remainder.Substring(slashIndex + 1);
+            // Combine path id with query string if both exist
+            var id = string.IsNullOrEmpty(pathId) ? queryString : (pathId + (queryString ?? ""));
+            return (area, id);
+        }
 
-        return (remainder, null);
+        // No slash - remainder is the area, query string is the id
+        return (remainder, queryString);
     }
 }

@@ -1,8 +1,6 @@
-﻿using System.Collections.Immutable;
-using System.Linq;
+using System.Collections.Immutable;
 using MeshWeaver.Data;
 using MeshWeaver.Layout;
-using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.AspNetCore.Components;
@@ -10,7 +8,7 @@ using Microsoft.FluentUI.AspNetCore.Components;
 
 namespace MeshWeaver.Blazor.Pages;
 
-public partial class ApplicationPage : ComponentBase
+public partial class ApplicationPage : ComponentBase, IDisposable
 {
     private DesignThemeModes Mode { get; set; }
     private LayoutAreaControl ViewModel { get; set; } = null!;
@@ -22,10 +20,7 @@ public partial class ApplicationPage : ComponentBase
     private IMessageHub Hub { get; set; } = null!;
 
     [Inject]
-    private IMeshCatalog MeshCatalog { get; set; } = null!;
-
-    [Inject]
-    private INavigationService NavigationContext { get; set; } = null!;
+    private INavigationService NavigationService { get; set; } = null!;
 
     /// <summary>
     /// Catch-all path parameter - the entire URL path is matched against registered namespace patterns.
@@ -38,31 +33,42 @@ public partial class ApplicationPage : ComponentBase
     [Parameter(CaptureUnmatchedValues = true)]
     public IReadOnlyDictionary<string, object>? Options { get; set; } = ImmutableDictionary<string, object>.Empty;
 
-    private AddressResolution? Resolution { get; set; }
-    private Address? Address => Resolution != null ? (Address)Resolution.Prefix : null;
-
     private LayoutAreaReference Reference { get; set; } = null!;
+
+    protected override void OnInitialized()
+    {
+        base.OnInitialized();
+        NavigationService.OnNavigationContextChanged += OnNavigationContextChanged;
+    }
+
     protected override async Task OnParametersSetAsync()
     {
-        // Resolve the entire path using pattern matching
-        Resolution = await MeshCatalog.ResolvePathAsync(Path ?? "");
+        await NavigationService.InitializeAsync();
+        UpdateFromContext();
+    }
 
-        if (Resolution is null)
+    private void OnNavigationContextChanged(NavigationContext? context)
+    {
+        InvokeAsync(() =>
         {
-            NavigationContext.SetCurrentNamespace(null);
-            PageTitle = $"Page Not Found";
+            UpdateFromContext();
+            StateHasChanged();
+        });
+    }
+
+    private void UpdateFromContext()
+    {
+        var context = NavigationService.Context;
+
+        if (context is null)
+        {
+            PageTitle = "Page Not Found";
             return;
         }
 
-        // Set the current namespace from the resolved Address
-        NavigationContext.SetCurrentNamespace(Address?.ToString());
-
-        // Parse remainder into area and id
-        var (area, id) = ParseRemainder(Resolution.Remainder);
-
         // Decode area and id, append query string
-        area = area != null ? (string)WorkspaceReference.Decode(area) : null;
-        id = id != null ? (string)WorkspaceReference.Decode(id) : "";
+        var area = context.Area != null ? (string)WorkspaceReference.Decode(context.Area) : null;
+        var id = context.Id != null ? (string)WorkspaceReference.Decode(context.Id) : "";
 
         var query = Navigation.ToAbsoluteUri(Navigation.Uri).Query;
         if (!string.IsNullOrEmpty(query))
@@ -73,29 +79,16 @@ public partial class ApplicationPage : ComponentBase
             Id = id,
         };
 
-        ViewModel = Controls.LayoutArea(Address!, Reference)
+        ViewModel = Controls.LayoutArea(context.Address, Reference)
             with
         {
             ShowProgress = true
         };
 
         // Use the last segment of the address for the page title
-        var titleSegment = Address!.Segments.LastOrDefault() ?? Address.Type;
+        var titleSegment = context.Address.Segments.LastOrDefault() ?? context.Address.Type;
         PageTitle = titleSegment;
     }
-
-    private static (string? Area, string? Id) ParseRemainder(string? remainder)
-    {
-        if (string.IsNullOrEmpty(remainder))
-            return (null, null);
-
-        var slashIndex = remainder.IndexOf('/');
-        if (slashIndex >= 0)
-            return (remainder.Substring(0, slashIndex), remainder.Substring(slashIndex + 1));
-
-        return (remainder, null);
-    }
-
 
     private string? GetDisplayNameFromId()
     {
@@ -108,5 +101,8 @@ public partial class ApplicationPage : ComponentBase
         return Reference.Id.ToString()!.Split("?").First().Split("/").Last();
     }
 
-
+    public void Dispose()
+    {
+        NavigationService.OnNavigationContextChanged -= OnNavigationContextChanged;
+    }
 }

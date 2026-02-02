@@ -9,6 +9,7 @@ using System.Threading.Tasks;
 using FluentAssertions;
 using FluentAssertions.Extensions;
 using MeshWeaver.Data;
+using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Monolith;
 using MeshWeaver.Hosting.Monolith.TestBase;
@@ -26,7 +27,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
-namespace MeshWeaver.Graph.Test;
+namespace MeshWeaver.Hosting.Monolith.Test;
 
 /// <summary>
 /// Integration tests for Markdown nodes including the collaborative editing documentation.
@@ -50,8 +51,8 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
     {
-        var graphPath = GetSamplesGraphPath();
-        var dataDirectory = Path.Combine(graphPath, "Data");
+        var graphPath = TestPaths.SamplesGraph;
+        var dataDirectory = TestPaths.SamplesGraphData;
         Directory.CreateDirectory(SharedCacheDirectory);
 
         Output.WriteLine($"Graph path: {graphPath}");
@@ -1393,7 +1394,7 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
         var readNode = await meshNodeStream
             .Where(x => x.Value?.Instances.Count > 0)
             .Select(x => x.Value!.Get<MeshNode>().FirstOrDefault())
-            .Where(n => n != null && ExtractMarkdownContent(n).Contains(testMarker))
+            .Where(n => n != null && (ExtractMarkdownContent(n)?.Contains(testMarker) ?? false))
             .Timeout(10.Seconds())
             .FirstAsync();
 
@@ -1424,7 +1425,7 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
         var restoreUpdate = new MeshNode(nodePath)
         {
             NodeType = MarkdownNodeType.NodeType,
-            Content = new MarkdownContent { Content = originalContent }
+            Content = new MarkdownContent { Content = originalContent ?? "" }
         };
         client.Post(
             new DataChangeRequest().WithUpdates(restoreUpdate),
@@ -1532,7 +1533,7 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
         var restoreUpdate = new MeshNode(nodePath)
         {
             NodeType = MarkdownNodeType.NodeType,
-            Content = new MarkdownContent { Content = originalContent }
+            Content = new MarkdownContent { Content = originalContent ?? "" }
         };
         client.Post(
             new DataChangeRequest().WithUpdates(restoreUpdate),
@@ -1654,7 +1655,7 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
         var restoreUpdate = new MeshNode(nodePath)
         {
             NodeType = MarkdownNodeType.NodeType,
-            Content = new MarkdownContent { Content = originalContent }
+            Content = new MarkdownContent { Content = originalContent ?? "" }
         };
         client.Post(
             new DataChangeRequest().WithUpdates(restoreUpdate),
@@ -1745,7 +1746,7 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
         var restoreUpdate = new MeshNode(nodePath)
         {
             NodeType = MarkdownNodeType.NodeType,
-            Content = new MarkdownContent { Content = originalContent }
+            Content = new MarkdownContent { Content = originalContent ?? "" }
         };
         client.Post(
             new DataChangeRequest().WithUpdates(restoreUpdate),

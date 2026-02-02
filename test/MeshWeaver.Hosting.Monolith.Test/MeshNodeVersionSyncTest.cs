@@ -15,7 +15,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
-namespace MeshWeaver.Graph.Test;
+namespace MeshWeaver.Hosting.Monolith.Test;
 
 /// <summary>
 /// Tests for syncing MeshNode.Version with MessageHub.Version.
@@ -74,7 +74,6 @@ public record Story
             Description = "A user story",
             Icon = "Document",
             DisplayOrder = 30,
-            IsPersistent = true,
             Content = new NodeTypeDefinition
             {
                 Id = "story", Namespace = "Type",
@@ -107,7 +106,6 @@ public record Graph
             Description = "The graph root",
             Icon = "Diagram",
             DisplayOrder = 0,
-            IsPersistent = true,
             Content = new NodeTypeDefinition
             {
                 Id = "graph", Namespace = "Type",

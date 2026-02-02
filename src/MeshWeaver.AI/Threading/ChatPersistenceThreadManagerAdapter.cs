@@ -25,7 +25,6 @@ public class ChatPersistenceThreadManagerAdapter : IThreadManager
             conversation = new ChatConversation
             {
                 Id = threadId,
-                Title = null,
                 CreatedAt = DateTime.UtcNow,
                 LastModifiedAt = DateTime.UtcNow,
                 AgentContext = scope != null ? new AgentContext { Address = scope } : null

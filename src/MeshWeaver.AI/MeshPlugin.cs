@@ -33,9 +33,8 @@ public class MeshPlugin(IMessageHub hub, IAgentChat chat)
         return path;
     }
 
-    [Description("Gets data from the mesh by path. Returns JSON. " +
-                 "Use @ prefix for shorthand (e.g., @graph/org1). " +
-                 "Add /* suffix to get children (e.g., @graph/*).")]
+    [Description("Gets data from the mesh by path. " +
+                 "@@MeshWeaver/Documentation/AI/Tools/MeshPlugin#Get")]
     public async Task<string> Get(
         [Description("Path to data (e.g., @graph/org1, @pricing/MS-2024, @NodeType/*)")] string path)
     {
@@ -85,9 +84,8 @@ public class MeshPlugin(IMessageHub hub, IAgentChat chat)
         }
     }
 
-    [Description("Updates or creates data at the specified path. " +
-                 "Provide a JSON object with the fields to update. " +
-                 "For nodes: {\"name\": \"...\", \"description\": \"...\", \"nodeType\": \"...\", \"content\": {...}}")]
+    [Description("Creates or updates a node at a path. " +
+                 "@@MeshWeaver/Documentation/AI/Tools/MeshPlugin#Update")]
     public async Task<string> Update(
         [Description("Path to update (e.g., @graph/neworg)")] string path,
         [Description("JSON object with fields to update")] string json)
@@ -150,7 +148,8 @@ public class MeshPlugin(IMessageHub hub, IAgentChat chat)
         }
     }
 
-    [Description("Navigates to a path in the UI. Displays the node's view.")]
+    [Description("Displays a node's view in the chat UI. " +
+                 "@@MeshWeaver/Documentation/AI/Tools/MeshPlugin#NavigateTo")]
     public string NavigateTo(
         [Description("Path to navigate to (e.g., @graph/org1)")] string path)
     {
@@ -164,9 +163,8 @@ public class MeshPlugin(IMessageHub hub, IAgentChat chat)
         return $"Navigating to: {resolvedPath}";
     }
 
-    [Description("Searches the mesh using GitHub-style query syntax. " +
-                 "Examples: 'nodeType:Organization', 'name:*acme*', 'status:active'. " +
-                 "Use 'text' for text search, 'scope:descendants' to include children.")]
+    [Description("Searches the mesh using query syntax. " +
+                 "@@MeshWeaver/Documentation/AI/Tools/MeshPlugin#Search")]
     public async Task<string> Search(
         [Description("Query string (e.g., 'nodeType:Agent', 'laptop', 'path:graph scope:descendants')")] string query,
         [Description("Base path to search from (e.g., @graph). Empty for all.")] string? basePath = null)

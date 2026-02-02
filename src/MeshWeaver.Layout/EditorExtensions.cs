@@ -578,10 +578,17 @@ public static class EditorExtensions
         // Regular property: Label + reactive read/edit view
         var displayName = GetToggleableDisplayName(property);
 
+        // Apply style from UiControlAttribute if present
+        var containerStyle = "padding: 4px 8px;";
+        if (!string.IsNullOrEmpty(uiControlAttr?.Style))
+        {
+            containerStyle += " " + uiControlAttr.Style;
+        }
+
         return Controls.Stack
-            .WithStyle("padding: 4px 8px;")
+            .WithStyle(containerStyle)
             .WithView(Controls.Label(displayName)
-                .WithStyle("font-weight: 600; color: var(--neutral-foreground-hint); font-size: 0.875rem;"))
+                .WithStyle("font-weight: 600; color: var(--neutral-foreground-hint); font-size: 0.875rem; padding-left: 12px;"))
             .WithView((h, _) => editStateStream
                 .Select(isEditing => isEditing && isEditable
                     ? BuildEditControl(h, property, dataId, editStateId)
@@ -877,10 +884,12 @@ public static class EditorExtensions
             }.WithBlurAction(ctx => SwitchToReadOnlyMode(ctx, editStateId));
         }
 
+        // Apply style from UiControlAttribute if present, otherwise no default constraints
+        var attrStyle = property.GetCustomAttribute<UiControlAttribute>()?.Style;
         editCtrl = editCtrl with
         {
             DataContext = LayoutAreaReference.GetDataPointer(dataId),
-            Style = "width: 100%; max-width: 300px;"
+            Style = attrStyle
         };
 
         return editCtrl;
@@ -913,8 +922,7 @@ public static class EditorExtensions
             host.UpdateData(optionsId, ConvertOptionsForToggle(attr.Options));
             return new SelectControl(jsonPointer, new JsonPointerReference(LayoutAreaReference.GetDataPointer(optionsId)))
             {
-                Required = isRequired,
-                Style = "width: 100%; max-width: 300px;"
+                Required = isRequired
             }.WithBlurAction(ctx => SwitchToReadOnlyMode(ctx, editStateId));
         }
 
@@ -954,8 +962,7 @@ public static class EditorExtensions
 
         return new SelectControl(jsonPointer, new JsonPointerReference(LayoutAreaReference.GetDataPointer(optionsId)))
         {
-            Required = isRequired,
-            Style = "width: 100%; max-width: 300px;"
+            Required = isRequired
         }.WithBlurAction(ctx => SwitchToReadOnlyMode(ctx, editStateId));
     }
 

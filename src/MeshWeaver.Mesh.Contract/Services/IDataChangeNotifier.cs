@@ -32,13 +32,13 @@ public record DataChangeNotification(
     /// <summary>
     /// Creates a notification for a created entity.
     /// </summary>
-    public static DataChangeNotification Created(string path, object entity) =>
+    public static DataChangeNotification Created(string path, object? entity) =>
         new(NormalizePath(path), DataChangeKind.Created, entity, DateTimeOffset.UtcNow);
 
     /// <summary>
     /// Creates a notification for an updated entity.
     /// </summary>
-    public static DataChangeNotification Updated(string path, object entity) =>
+    public static DataChangeNotification Updated(string path, object? entity) =>
         new(NormalizePath(path), DataChangeKind.Updated, entity, DateTimeOffset.UtcNow);
 
     /// <summary>

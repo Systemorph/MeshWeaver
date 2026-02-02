@@ -101,7 +101,16 @@ public record ContentTypeSource<T> : TypeSourceWithType<T, ContentTypeSource<T>>
 
             // Update MeshNode with new content and current hub version
             var hubVersion = _workspace.Hub.Version;
-            var updatedNode = meshNode with { Content = contentEntity, Version = hubVersion };
+            var (extractedName, extractedDescription, extractedIcon, extractedCategory) = ExtractMeshNodeProperties(contentEntity);
+            var updatedNode = meshNode with
+            {
+                Content = contentEntity,
+                Version = hubVersion,
+                Name = extractedName ?? meshNode.Name,
+                Description = extractedDescription ?? meshNode.Description,
+                Icon = extractedIcon ?? meshNode.Icon,
+                Category = extractedCategory ?? meshNode.Category
+            };
 
             // Save to persistence synchronously
             _logger?.LogDebug("ContentTypeSource<{Type}>.SyncToMeshNode: Saving MeshNode to persistence with new content, Version={Version}", typeof(T).Name, hubVersion);
@@ -122,6 +131,95 @@ public record ContentTypeSource<T> : TypeSourceWithType<T, ContentTypeSource<T>>
         {
             _logger?.LogError(ex, "ContentTypeSource<{Type}>.SyncToMeshNode: Error syncing to MeshNode", typeof(T).Name);
         }
+    }
+
+    /// <summary>
+    /// Extracts MeshNode properties from content entity using attribute-based and convention-based mapping.
+    /// Priority for Name: [MeshNodeProperty("Name")] > INamed.DisplayName > Title property > Name property
+    /// Priority for Description: [MeshNodeProperty("Description")] > Description property
+    /// Priority for Icon: [MeshNodeProperty("Icon")] > Icon property
+    /// Priority for Category: [MeshNodeProperty("Category")] > Category property
+    /// </summary>
+    private static (string? Name, string? Description, string? Icon, string? Category) ExtractMeshNodeProperties(object content)
+    {
+        string? name = null;
+        string? description = null;
+        string? icon = null;
+        string? category = null;
+        var type = content.GetType();
+
+        // Priority 1: Look for [MeshNodeProperty] attributes
+        foreach (var prop in type.GetProperties())
+        {
+            var attr = prop.GetCustomAttribute<MeshNodePropertyAttribute>();
+            if (attr == null || prop.PropertyType != typeof(string))
+                continue;
+
+            var value = prop.GetValue(content) as string;
+            switch (attr.MeshNodeProperty)
+            {
+                case "Name" when name == null:
+                    name = value;
+                    break;
+                case "Description" when description == null:
+                    description = value;
+                    break;
+                case "Icon" when icon == null:
+                    icon = value;
+                    break;
+                case "Category" when category == null:
+                    category = value;
+                    break;
+            }
+        }
+
+        // Priority 2: INamed interface for DisplayName
+        if (name == null && content is INamed named)
+        {
+            name = named.DisplayName;
+        }
+
+        // Priority 3: Convention - look for Title property
+        if (name == null)
+        {
+            var titleProp = type.GetProperty("Title");
+            if (titleProp?.PropertyType == typeof(string))
+                name = titleProp.GetValue(content) as string;
+        }
+
+        // Priority 4: Convention - look for Name property
+        if (name == null)
+        {
+            var nameProp = type.GetProperty("Name");
+            if (nameProp?.PropertyType == typeof(string))
+                name = nameProp.GetValue(content) as string;
+        }
+
+        // Convention - look for Description property (if not already set via attribute)
+        if (description == null)
+        {
+            var descProp = type.GetProperty("Description");
+            if (descProp?.PropertyType == typeof(string))
+                description = descProp.GetValue(content) as string;
+        }
+
+        // Convention - look for Icon property (if not already set via attribute)
+        if (icon == null)
+        {
+            var iconProp = type.GetProperty("Icon");
+            if (iconProp?.PropertyType == typeof(string))
+                icon = iconProp.GetValue(content) as string;
+        }
+
+        // Convention - look for Category property (if not already set via attribute)
+        if (category == null)
+        {
+            var catProp = type.GetProperty("Category");
+            if (catProp?.PropertyType == typeof(string))
+                category = catProp.GetValue(content) as string;
+        }
+
+        return (name, description, icon, category);
     }
 
     protected override async Task<InstanceCollection> InitializeAsync(

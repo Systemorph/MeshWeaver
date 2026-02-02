@@ -37,6 +37,15 @@ internal class NodeTypeService : INodeTypeService, IDisposable
     // Cached HubConfiguration functions for fast synchronous access
     private readonly ConcurrentDictionary<string, Func<MessageHubConfiguration, MessageHubConfiguration>> _hubConfigurations = new();
 
+    // Cached CreatableTypesRules extracted from hub configurations (defines what can be created FROM this type)
+    private readonly ConcurrentDictionary<string, CreatableTypesRules> _creatableTypesRules = new();
+
+    // Cached NotCreatable markers (types that cannot be created via UI)
+    private readonly ConcurrentDictionary<string, bool> _notCreatableTypes = new();
+
+    // Cached ContentTypes extracted from hub configurations
+    private readonly ConcurrentDictionary<string, Type> _contentTypes = new();
+
     public NodeTypeService(
         IMessageHub meshHub,
         MeshConfiguration meshConfiguration,
@@ -66,9 +75,108 @@ internal class NodeTypeService : INodeTypeService, IDisposable
             if (node.HubConfiguration == null)
                 continue;
 
-            _hubConfigurations[node.Path] = node.HubConfiguration;
-            logger.LogDebug("Cached HubConfiguration from MeshConfiguration for {Path}", node.Path);
+            CacheHubConfiguration(node.Path, node.HubConfiguration);
         }
+    }
+
+    /// <summary>
+    /// Caches a hub configuration and extracts CreatableTypesRules and ContentType.
+    /// </summary>
+    private void CacheHubConfiguration(string nodeTypePath, Func<MessageHubConfiguration, MessageHubConfiguration> hubConfig)
+    {
+        _hubConfigurations[nodeTypePath] = hubConfig;
+        logger.LogDebug("Cached HubConfiguration for {Path}", nodeTypePath);
+
+        // Extract rules by applying the configuration to a base config
+        try
+        {
+            var baseConfig = new MessageHubConfiguration(meshHub.ServiceProvider, new Address(nodeTypePath));
+            var configured = hubConfig(baseConfig);
+
+            var rules = configured.GetCreatableTypesRules();
+            if (rules != null)
+            {
+                _creatableTypesRules[nodeTypePath] = rules;
+                logger.LogDebug("Cached CreatableTypesRules for {Path}", nodeTypePath);
+            }
+
+            if (configured.IsNotCreatable())
+            {
+                _notCreatableTypes[nodeTypePath] = true;
+                logger.LogDebug("Marked {Path} as NotCreatable", nodeTypePath);
+            }
+        }
+        catch (Exception ex)
+        {
+            // Log but don't fail - rules are optional
+            logger.LogDebug(ex, "Could not extract rules from hub config for {Path}", nodeTypePath);
+        }
+
+        // Extract ContentType by creating a temporary hub with the configuration
+        // This allows us to inspect the MeshDataSource.ContentType property
+        ExtractContentTypeAsync(nodeTypePath, hubConfig);
+    }
+
+    /// <summary>
+    /// Extracts ContentType from hub configuration by creating a temporary hub.
+    /// </summary>
+    private void ExtractContentTypeAsync(string nodeTypePath, Func<MessageHubConfiguration, MessageHubConfiguration> hubConfig)
+    {
+        try
+        {
+            // Create a temporary subhub with the configuration to extract ContentType
+            var probeAddress = new Address($"$content-probe/{Guid.NewGuid():N}");
+            var probeHub = meshHub.GetHostedHub(probeAddress, c => hubConfig(c.AddData()));
+
+            try
+            {
+                // Get the workspace and look for MeshDataSource with ContentType
+                var workspace = probeHub.GetWorkspace();
+                foreach (var dataSource in workspace.DataContext.DataSources)
+                {
+                    if (dataSource is MeshDataSource { ContentType: not null } mds)
+                    {
+                        _contentTypes[nodeTypePath] = mds.ContentType;
+                        logger.LogDebug("Cached ContentType {Type} for {Path}", mds.ContentType.Name, nodeTypePath);
+                        break;
+                    }
+                }
+            }
+            finally
+            {
+                probeHub.Dispose();
+            }
+        }
+        catch (Exception ex)
+        {
+            // Log but don't fail - ContentType extraction is optional
+            logger.LogDebug(ex, "Could not extract ContentType from hub config for {Path}", nodeTypePath);
+        }
+    }
+
+    /// <summary>
+    /// Gets the cached CreatableTypesRules for a node type.
+    /// </summary>
+    public CreatableTypesRules? GetCreatableTypesRules(string nodeTypePath)
+    {
+        return _creatableTypesRules.GetValueOrDefault(nodeTypePath);
+    }
+
+    /// <summary>
+    /// Checks if a type is marked as not creatable.
+    /// </summary>
+    public bool IsNotCreatable(string nodeTypePath)
+    {
+        return _notCreatableTypes.GetValueOrDefault(nodeTypePath);
+    }
+
+    /// <summary>
+    /// Gets the cached ContentType for a node type.
+    /// This is the type registered via .WithContentType&lt;T&gt;() in the hub configuration.
+    /// </summary>
+    public Type? GetContentType(string nodeTypePath)
+    {
+        return _contentTypes.GetValueOrDefault(nodeTypePath);
     }
 
     /// <inheritdoc />
@@ -97,11 +205,14 @@ internal class NodeTypeService : INodeTypeService, IDisposable
         // Check if we have a cached HubConfiguration
         if (_hubConfigurations.TryGetValue(nodeTypePath, out var hubConfig))
         {
-            // Return a minimal NodeTypeConfiguration with the cached HubConfiguration
+            // Get the ContentType if available
+            var contentType = GetContentType(nodeTypePath) ?? typeof(object);
+
+            // Return a NodeTypeConfiguration with the cached HubConfiguration and ContentType
             return new NodeTypeConfiguration
             {
                 NodeType = nodeTypePath,
-                DataType = typeof(object),
+                DataType = contentType,
                 HubConfiguration = hubConfig
             };
         }
@@ -136,6 +247,9 @@ internal class NodeTypeService : INodeTypeService, IDisposable
         _compilationTasks.TryRemove(nodeTypePath, out _);
         _releaseKeys.TryRemove(nodeTypePath, out _);
         _hubConfigurations.TryRemove(nodeTypePath, out _);
+        _creatableTypesRules.TryRemove(nodeTypePath, out _);
+        _notCreatableTypes.TryRemove(nodeTypePath, out _);
+        _contentTypes.TryRemove(nodeTypePath, out _);
 
         // Dispose subscription (will re-subscribe on next access)
         if (_subscriptions.TryRemove(nodeTypePath, out var subscription))
@@ -498,11 +612,16 @@ internal class NodeTypeService : INodeTypeService, IDisposable
                             var hubConfig = meshNode.HubConfiguration;
                             if (hubConfig != null)
                             {
-                                _hubConfigurations[meshNode.NodeType ?? meshNode.Path] = hubConfig;
+                                var meshNodeTypePath = meshNode.NodeType ?? meshNode.Path;
+                                _hubConfigurations[meshNodeTypePath] = hubConfig;
+
+                                // Extract ContentType by creating a temporary hub
+                                ExtractContentTypeAsync(meshNodeTypePath, hubConfig);
+
                                 configurations.Add(new NodeTypeConfiguration
                                 {
-                                    NodeType = meshNode.NodeType ?? meshNode.Path,
-                                    DataType = typeof(object),
+                                    NodeType = meshNodeTypePath,
+                                    DataType = GetContentType(meshNodeTypePath) ?? typeof(object),
                                     HubConfiguration = hubConfig
                                 });
                             }
@@ -571,10 +690,9 @@ internal class NodeTypeService : INodeTypeService, IDisposable
     #region Creatable Types
 
     /// <summary>
-    /// Global types that are always creatable everywhere.
-    /// These are types with empty namespace (root-level types).
+    /// Gets the global creatable types from configuration or uses defaults.
     /// </summary>
-    private static readonly string[] GlobalTypes = ["Markdown", "NodeType", "Agent"];
+    private IReadOnlyList<string> GlobalTypes => meshConfiguration.GlobalCreatableTypes;
 
     /// <inheritdoc />
     public async IAsyncEnumerable<CreatableTypeInfo> GetCreatableTypesAsync(
@@ -590,156 +708,174 @@ internal class NodeTypeService : INodeTypeService, IDisposable
         }
 
         var addedPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var includeGlobalTypes = true;
+        MeshNode? parentNode = null;
         string? currentNodeType = null;
 
-        // First, get the current node to find its NodeType
+        // Get the parent node context
         if (!string.IsNullOrEmpty(nodePath))
         {
             var nodeQuery = $"path:{nodePath}";
             await foreach (var node in meshQuery.QueryAsync<MeshNode>(nodeQuery, ct: ct).WithCancellation(ct))
             {
+                parentNode = node;
                 currentNodeType = node.NodeType;
-
-                // Check if the node's NodeType has explicit CreatableTypes configuration
-                if (currentNodeType != null && currentNodeType != "NodeType")
-                {
-                    var nodeTypeQuery = $"path:{currentNodeType}";
-                    await foreach (var nodeTypeNode in meshQuery.QueryAsync<MeshNode>(nodeTypeQuery, ct: ct).WithCancellation(ct))
-                    {
-                        if (nodeTypeNode.Content is NodeTypeDefinition nodeTypeDef && nodeTypeDef.CreatableTypes != null)
-                        {
-                            // Use explicit CreatableTypes from NodeType definition
-                            logger.LogDebug("Using explicit CreatableTypes from {NodeType}: {Types}",
-                                currentNodeType, string.Join(", ", nodeTypeDef.CreatableTypes));
-
-                            includeGlobalTypes = nodeTypeDef.IncludeGlobalTypes;
-
-                            foreach (var typePath in nodeTypeDef.CreatableTypes)
-                            {
-                                if (!addedPaths.Add(typePath))
-                                    continue;
-
-                                // Query for the type node to get its info
-                                var typeQuery = $"path:{typePath}";
-                                var foundType = false;
-                                await foreach (var typeNode in meshQuery.QueryAsync<MeshNode>(typeQuery, ct: ct).WithCancellation(ct))
-                                {
-                                    yield return CreateCreatableTypeInfoFromNode(typeNode);
-                                    foundType = true;
-                                    break;
-                                }
-
-                                if (!foundType)
-                                {
-                                    // Type node not found, create a basic info
-                                    yield return new CreatableTypeInfo(
-                                        NodeTypePath: typePath,
-                                        DisplayName: typePath.Split('/').Last(),
-                                        Icon: "Code",
-                                        Description: $"Create a {typePath.Split('/').Last()}",
-                                        DisplayOrder: 0
-                                    );
-                                }
-                            }
-
-                            // Add global types if configured
-                            if (includeGlobalTypes)
-                            {
-                                foreach (var globalType in GlobalTypes)
-                                {
-                                    if (!addedPaths.Add(globalType))
-                                        continue;
-
-                                    yield return new CreatableTypeInfo(
-                                        NodeTypePath: globalType,
-                                        DisplayName: globalType,
-                                        Icon: GetGlobalTypeIcon(globalType),
-                                        Description: GetGlobalTypeDescription(globalType),
-                                        DisplayOrder: GetGlobalTypeDisplayOrder(globalType)
-                                    );
-                                }
-                            }
-
-                            yield break; // Don't use automatic discovery
-                        }
-                        break;
-                    }
-                }
                 break;
             }
         }
 
-        // Automatic discovery: Query NodeTypes using scope:ancestorsAndSelf
-        var query = string.IsNullOrEmpty(nodePath)
-            ? "nodeType:NodeType"  // At root, get all NodeTypes
-            : $"path:{nodePath} nodeType:NodeType scope:ancestorsAndSelf";
+        // Collect all creatable types from multiple sources
+        var creatableTypes = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var excludedTypes = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var includeGlobalTypes = true;
 
-        logger.LogDebug("Querying creatable types with: {Query}", query);
-
-        // Stream results as they come in - non-blocking
-        await foreach (var typeNode in meshQuery.QueryAsync<MeshNode>(query, ct: ct).WithCancellation(ct))
-        {
-            // Skip global types (handled separately) and already-added types
-            if (GlobalTypes.Contains(typeNode.Path) || !addedPaths.Add(typeNode.Path))
-                continue;
-
-            // For root level, only include root-level NodeTypes (no "/" in path)
-            if (string.IsNullOrEmpty(nodePath) && typeNode.Path.Contains('/'))
-                continue;
-
-            var typeInfo = CreateCreatableTypeInfoFromNode(typeNode);
-            yield return typeInfo;
-        }
-
-        // Also query for child NodeTypes if we have a path
+        // 1. ALWAYS auto-discover child NodeTypes (this is the default behavior)
         if (!string.IsNullOrEmpty(nodePath))
         {
+            // Child NodeTypes under this node's path
             var childQuery = $"path:{nodePath} nodeType:NodeType scope:children";
-            logger.LogDebug("Querying child types with: {Query}", childQuery);
-
             await foreach (var childType in meshQuery.QueryAsync<MeshNode>(childQuery, ct: ct).WithCancellation(ct))
             {
-                if (addedPaths.Add(childType.Path))
-                {
-                    var typeInfo = CreateCreatableTypeInfoFromNode(childType);
-                    yield return typeInfo;
-                }
+                creatableTypes.Add(childType.Path);
             }
 
-            // Also query for child NodeTypes under the node's NodeType path
-            // This is needed for instances: e.g., ProductLaunch (nodeType: ACME/Project)
-            // should be able to create ACME/Project/Todo
-            if (currentNodeType != null && currentNodeType != "NodeType" && !string.IsNullOrEmpty(currentNodeType))
+            // Child NodeTypes under the node's NodeType path
+            // e.g., ProductLaunch (nodeType: ACME/Project) can create ACME/Project/Todo
+            if (!string.IsNullOrEmpty(currentNodeType) && currentNodeType != "NodeType")
             {
                 var nodeTypeChildQuery = $"path:{currentNodeType} nodeType:NodeType scope:children";
-                logger.LogDebug("Querying NodeType child types with: {Query}", nodeTypeChildQuery);
-
                 await foreach (var childType in meshQuery.QueryAsync<MeshNode>(nodeTypeChildQuery, ct: ct).WithCancellation(ct))
                 {
-                    if (addedPaths.Add(childType.Path))
+                    creatableTypes.Add(childType.Path);
+                }
+            }
+        }
+        else
+        {
+            // At root: include root-level NodeTypes
+            var rootQuery = "nodeType:NodeType";
+            await foreach (var typeNode in meshQuery.QueryAsync<MeshNode>(rootQuery, ct: ct).WithCancellation(ct))
+            {
+                if (!typeNode.Path.Contains('/'))
+                    creatableTypes.Add(typeNode.Path);
+            }
+        }
+
+        // 2. Check for fluent API rules (AddCreatableTypes) - these ADD to the auto-discovered types
+        CreatableTypesRules? rules = null;
+        if (!string.IsNullOrEmpty(currentNodeType))
+        {
+            rules = GetCreatableTypesRules(currentNodeType);
+        }
+
+        if (rules != null)
+        {
+            logger.LogDebug("Applying CreatableTypesRules from {NodeType}", currentNodeType);
+            includeGlobalTypes = rules.IncludeDefaults;
+
+            // Add types from rules
+            foreach (var typePath in rules.Rules.SelectMany(r => r(parentNode)))
+            {
+                creatableTypes.Add(typePath);
+            }
+
+            // Track excluded types
+            foreach (var t in rules.ExcludedTypes)
+            {
+                excludedTypes.Add(t);
+            }
+        }
+        else
+        {
+            // Fallback: check JSON-based configuration in NodeTypeDefinition
+            if (!string.IsNullOrEmpty(currentNodeType) && currentNodeType != "NodeType")
+            {
+                var nodeTypeQuery = $"path:{currentNodeType}";
+                await foreach (var nodeTypeNode in meshQuery.QueryAsync<MeshNode>(nodeTypeQuery, ct: ct).WithCancellation(ct))
+                {
+                    if (nodeTypeNode.Content is NodeTypeDefinition parentTypeDef)
                     {
-                        var typeInfo = CreateCreatableTypeInfoFromNode(childType);
-                        yield return typeInfo;
+                        // Add explicit CreatableTypes from JSON
+                        if (parentTypeDef.CreatableTypes != null)
+                        {
+                            foreach (var t in parentTypeDef.CreatableTypes)
+                                creatableTypes.Add(t);
+                        }
+
+                        includeGlobalTypes = parentTypeDef.IncludeGlobalTypes;
                     }
+                    break;
                 }
             }
         }
 
-        // Yield global types last
-        foreach (var globalType in GlobalTypes)
+        // 3. Add global types if enabled
+        if (includeGlobalTypes)
         {
-            if (!addedPaths.Add(globalType))
+            foreach (var t in GlobalTypes)
+                creatableTypes.Add(t);
+        }
+
+        // 4. Remove excluded types
+        foreach (var t in excludedTypes)
+        {
+            creatableTypes.Remove(t);
+        }
+
+        // Yield CreatableTypeInfo for each type
+        foreach (var typePath in creatableTypes)
+        {
+            // Skip types marked as NotCreatable
+            if (IsNotCreatable(typePath))
                 continue;
 
-            yield return new CreatableTypeInfo(
-                NodeTypePath: globalType,
-                DisplayName: globalType,
-                Icon: GetGlobalTypeIcon(globalType),
-                Description: GetGlobalTypeDescription(globalType),
-                DisplayOrder: GetGlobalTypeDisplayOrder(globalType)
+            if (!addedPaths.Add(typePath))
+                continue;
+
+            // Try to get type info from cache or query
+            var typeInfo = await GetTypeInfoAsync(typePath, meshQuery, ct);
+            if (typeInfo != null)
+                yield return typeInfo;
+        }
+    }
+
+    /// <summary>
+    /// Gets CreatableTypeInfo for a type path.
+    /// </summary>
+    private async Task<CreatableTypeInfo?> GetTypeInfoAsync(
+        string typePath,
+        IMeshQuery meshQuery,
+        CancellationToken ct)
+    {
+        // Check for global types first
+        if (GlobalTypes.Contains(typePath))
+        {
+            return new CreatableTypeInfo(
+                NodeTypePath: typePath,
+                DisplayName: typePath,
+                Icon: GetGlobalTypeIcon(typePath),
+                Description: GetGlobalTypeDescription(typePath),
+                DisplayOrder: GetGlobalTypeDisplayOrder(typePath)
             );
         }
+
+        // Query for the type node
+        var typeQuery = $"path:{typePath}";
+        await foreach (var typeNode in meshQuery.QueryAsync<MeshNode>(typeQuery, ct: ct).WithCancellation(ct))
+        {
+            var contentType = GetContentTypeForNodeType(typeNode.Path);
+            return CreateCreatableTypeInfoFromNode(typeNode, contentType);
+        }
+
+        // Fallback: create basic info
+        var contentTypeFallback = GetContentTypeForNodeType(typePath);
+        return new CreatableTypeInfo(
+            NodeTypePath: typePath,
+            DisplayName: typePath.Split('/').Last(),
+            Icon: "Code",
+            Description: $"Create a {typePath.Split('/').Last()}",
+            DisplayOrder: 0,
+            ContentType: contentTypeFallback
+        );
     }
 
     private static string GetGlobalTypeIcon(string globalType) => globalType switch
@@ -747,6 +883,7 @@ internal class NodeTypeService : INodeTypeService, IDisposable
         "Markdown" => "Document",
         "NodeType" => "Code",
         "Agent" => "Bot",
+        "Thread" => "Chat",
         _ => "Code"
     };
 
@@ -755,6 +892,7 @@ internal class NodeTypeService : INodeTypeService, IDisposable
         "Markdown" => "Create a markdown document",
         "NodeType" => "Create a new node type definition",
         "Agent" => "Create a new AI agent",
+        "Thread" => "Create a new conversation thread",
         _ => $"Create a {globalType}"
     };
 
@@ -763,13 +901,14 @@ internal class NodeTypeService : INodeTypeService, IDisposable
         "Markdown" => 1000,
         "NodeType" => 1001,
         "Agent" => 1002,
+        "Thread" => 1003,
         _ => 1000
     };
 
     /// <summary>
     /// Creates CreatableTypeInfo from a MeshNode.
     /// </summary>
-    private static CreatableTypeInfo CreateCreatableTypeInfoFromNode(MeshNode node)
+    private static CreatableTypeInfo CreateCreatableTypeInfoFromNode(MeshNode node, Type? contentType = null)
     {
         var typeDef = node.Content as NodeTypeDefinition;
 
@@ -778,8 +917,17 @@ internal class NodeTypeService : INodeTypeService, IDisposable
             DisplayName: typeDef?.DisplayName ?? node.Name ?? GetLastPathSegment(node.Path),
             Icon: typeDef?.Icon ?? node.Icon,
             Description: typeDef?.Description ?? node.Description,
-            DisplayOrder: typeDef?.DisplayOrder ?? node.DisplayOrder ?? 0
+            DisplayOrder: typeDef?.DisplayOrder ?? node.DisplayOrder ?? 0,
+            ContentType: contentType
         );
+    }
+
+    /// <summary>
+    /// Gets the content type for a node type path from the cached ContentTypes.
+    /// </summary>
+    private Type? GetContentTypeForNodeType(string nodeTypePath)
+    {
+        return GetContentType(nodeTypePath);
     }
 
     /// <summary>
@@ -803,6 +951,7 @@ internal class NodeTypeService : INodeTypeService, IDisposable
         _compilationTasks.Clear();
         _releaseKeys.Clear();
         _hubConfigurations.Clear();
+        _contentTypes.Clear();
     }
 
     /// <summary>

@@ -6,7 +6,7 @@
   "nodeType": "ACME/Project/Todo",
   "description": "Create detailed buyer persona for TaskFlow targeting operations managers at mid-market companies",
   "category": "Tasks",
-  "icon": "/static/content/ACME/Project/Todo/icon.svg",
+  "icon": "/static/storage/content/ACME/Project/Todo/icon.svg",
   "isPersistent": true,
   "lastModified": "2026-01-20T10:05:06.1472369+00:00",
   "version": 0,

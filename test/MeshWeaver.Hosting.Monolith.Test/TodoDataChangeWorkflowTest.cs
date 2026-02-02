@@ -7,6 +7,7 @@ using System.Text.Json;
 using System.Threading.Tasks;
 using FluentAssertions;
 using MeshWeaver.Data;
+using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Monolith;
 using MeshWeaver.Hosting.Monolith.TestBase;
@@ -19,7 +20,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
-namespace MeshWeaver.Graph.Test;
+namespace MeshWeaver.Hosting.Monolith.Test;
 
 /// <summary>
 /// Tests for DataChangeRequest workflows in the Graph-based Todo application.
@@ -83,7 +84,7 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
     {
         var graphPath = GetLocalTestDataPath();
-        var dataDirectory = Path.Combine(graphPath, "Data");
+        var dataDirectory = TestPaths.SamplesGraphData;
         Directory.CreateDirectory(SharedCacheDirectory);
 
         var configuration = new ConfigurationBuilder()
@@ -627,7 +628,6 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
             Name = "Test Todo for Permanent Delete",
             NodeType = "ACME/Project/Todo",
             Content = new { id = testId, title = "Test Todo", status = "Pending" },
-            IsPersistent = true,
             State = MeshNodeState.Active
         };
 

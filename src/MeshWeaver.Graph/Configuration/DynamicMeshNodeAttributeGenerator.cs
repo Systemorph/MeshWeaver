@@ -101,7 +101,6 @@ internal class DynamicMeshNodeAttributeGenerator
         sb.AppendLine($"                Description = \"{EscapeString(node.Description)}\",");
         sb.AppendLine($"                Icon = \"{EscapeString(node.Icon)}\",");
         sb.AppendLine($"                DisplayOrder = {(node.DisplayOrder.HasValue ? node.DisplayOrder.Value.ToString() : "null")},");
-        sb.AppendLine($"                IsPersistent = {node.IsPersistent.ToString().ToLowerInvariant()},");
         sb.AppendLine($"                LastModified = DateTimeOffset.Parse(\"{node.LastModified:O}\"),");
         sb.AppendLine($"                AssemblyLocation = typeof({safeClassName}MeshNodeAttribute).Assembly.Location,");
         sb.AppendLine("                HubConfiguration = ConfigureHub");
