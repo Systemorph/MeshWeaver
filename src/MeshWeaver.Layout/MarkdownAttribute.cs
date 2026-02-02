@@ -8,7 +8,7 @@ namespace MeshWeaver.Layout;
 public class MarkdownAttribute : UiControlAttribute
 {
     public MarkdownAttribute()
-        : base(typeof(MarkdownEditorControl), typeof(MarkdownControl))
+        : base(typeof(MarkdownControl), typeof(MarkdownEditorControl))
     {
         SeparateEditView = true; // Default: own edit button
     }

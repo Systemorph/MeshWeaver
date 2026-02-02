@@ -1,5 +1,6 @@
 using MeshWeaver.Data;
 using MeshWeaver.Mesh;
+using MeshThread = MeshWeaver.Mesh.Thread;
 
 namespace MeshWeaver.Graph.Configuration;
 
@@ -23,6 +24,14 @@ public static class ThreadNodeType
     public static string GetUserThreadsPath(string userId) => $"User/{userId}/Threads";
 
     /// <summary>
+    /// Gets the threads path for a context (e.g., ACME/ProductLaunch/Threads).
+    /// Used for storing threads under a specific MeshNode context.
+    /// </summary>
+    /// <param name="contextPath">The context path (e.g., "ACME/ProductLaunch").</param>
+    /// <returns>Path to the context's threads namespace.</returns>
+    public static string GetContextThreadsPath(string contextPath) => $"{contextPath}/Threads";
+
+    /// <summary>
     /// Creates a MeshNode definition for the Thread node type.
     /// This provides HubConfiguration for nodes with nodeType="Thread".
     /// </summary>
@@ -33,6 +42,6 @@ public static class ThreadNodeType
         Icon = "Chat",
         HubConfiguration = config => config
             .AddThreadViews()
-            .AddMeshDataSource(source => source.WithContentType<ThreadNodeContent>())
+            .AddMeshDataSource(source => source.WithContentType<MeshThread>())
     };
 }
