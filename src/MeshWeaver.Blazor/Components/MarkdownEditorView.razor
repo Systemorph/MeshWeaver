@@ -128,6 +128,7 @@
         AddBinding(autoSaveHandler);
 
         // Bind Value with reactive subscription
+        // Use AutoSaveHandler to filter stale stream feedback
         if (Stream != null && ValuePointer != null)
         {
             AddBinding(Stream
@@ -136,10 +137,19 @@
                 {
                     if (value != null && value != BoundValue)
                     {
+                        // Check if we should apply this external update
+                        // Rejects echoes of our own sync and updates during active local editing
+                        if (autoSaveHandler != null && !autoSaveHandler.ShouldApplyExternalUpdate(value))
+                            return;
+
                         isUpdatingFromStream = true;
                         BoundValue = value;
                         UpdatePreview(value);
                         ExtractAnnotations(value);
+
+                        // Track that we applied this external update
+                        autoSaveHandler?.OnExternalUpdateApplied(value);
+
                         InvokeAsync(StateHasChanged);
                         isUpdatingFromStream = false;
                     }
@@ -302,21 +312,30 @@
         ExtractAnnotations(value);
         UpdatePreview(value);
 
-        // Write back to stream via UpdatePointer
-        if (ValuePointer != null)
-        {
-            UpdatePointer(value, ValuePointer);
-        }
+        // NOTE: We no longer call UpdatePointer immediately here.
+        // The pointer update is now handled in AutoSaveContent after throttling.
+        // This prevents the race condition where:
+        // 1. User types "H", UpdatePointer("H") sends to stream
+        // 2. User types "e", UpdatePointer("He") sends to stream
+        // 3. Stream echoes "H" back, overwriting "He" and losing characters
 
-        // Trigger throttled auto-save
+        // Trigger throttled auto-save (which will also update the pointer)
         autoSaveHandler?.OnValueChanged(value);
     }
 
     /// <summary>
     /// Auto-saves content by posting a DataChangeRequest to the target hub.
+    /// Also updates the data pointer to sync with the stream.
     /// </summary>
     private void AutoSaveContent(string content)
     {
+        // Update the pointer now that throttling is complete
+        // This is the only place we sync to the stream, preventing race conditions
+        if (ValuePointer != null)
+        {
+            UpdatePointer(content, ValuePointer);
+        }
+
         if (string.IsNullOrEmpty(BoundAutoSaveAddress) || string.IsNullOrEmpty(BoundNodePath))
             return;
 
