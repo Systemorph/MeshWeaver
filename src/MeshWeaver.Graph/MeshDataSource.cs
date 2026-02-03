@@ -1,5 +1,7 @@
 using System.Reactive.Linq;
+using System.Reflection;
 using MeshWeaver.Data;
+using MeshWeaver.Domain;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
@@ -307,5 +309,148 @@ public record MeshDataSource : GenericUnpartitionedDataSource<MeshDataSource>
     public MeshDataSource WithCodeConfiguration()
     {
         return WithType<CodeConfiguration>("Code", "Code");
+    }
+
+    /// <summary>
+    /// Creates an instance of the ContentType, initializing properties from a MeshNode.
+    /// Pre-populates ContentType properties from MeshNode properties using [MeshNodeProperty] attribute mappings.
+    /// </summary>
+    /// <param name="node">The MeshNode to copy properties from</param>
+    /// <returns>A new instance of ContentType with MeshNode properties mapped, or null if no ContentType is registered</returns>
+    public object? CreateContentInstance(MeshNode node)
+    {
+        if (ContentType == null)
+        {
+            _logger?.LogDebug("No ContentType registered for MeshDataSource");
+            return null;
+        }
+
+        // If node already has content of the correct type, return it
+        if (node.Content != null)
+        {
+            if (ContentType.IsInstanceOfType(node.Content))
+                return node.Content;
+
+            // If content is JsonElement, deserialize it
+            if (node.Content is System.Text.Json.JsonElement jsonElement)
+            {
+                try
+                {
+                    var options = new System.Text.Json.JsonSerializerOptions
+                    {
+                        PropertyNameCaseInsensitive = true,
+                        Converters = { new System.Text.Json.Serialization.JsonStringEnumConverter() }
+                    };
+                    var deserialized = System.Text.Json.JsonSerializer.Deserialize(jsonElement.GetRawText(), ContentType, options);
+                    if (deserialized != null)
+                        return deserialized;
+                }
+                catch (Exception ex)
+                {
+                    _logger?.LogDebug(ex, "Failed to deserialize JsonElement content for {Path}", node.Path);
+                    // Fall through to create new instance
+                }
+            }
+        }
+
+        // Create a new instance
+        object instance;
+        try
+        {
+            instance = Activator.CreateInstance(ContentType) ?? throw new InvalidOperationException($"Could not create instance of {ContentType.Name}");
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogWarning(ex, "Could not create instance of {ContentType} for node {Path}. Ensure it has a parameterless constructor.",
+                ContentType.Name, node.Path);
+            return null;
+        }
+
+        // Pre-populate ContentType properties from MeshNode properties via [MeshNodeProperty] mappings
+        var mappings = GetMeshNodePropertyMappings(ContentType);
+
+        // Map MeshNode.Name
+        if (mappings.TryGetValue("Name", out var nameProp) && !string.IsNullOrEmpty(node.Name))
+        {
+            instance = SetPropertyValue(instance, nameProp, node.Name);
+        }
+
+        // Map MeshNode.Description
+        if (mappings.TryGetValue("Description", out var descProp) && !string.IsNullOrEmpty(node.Description))
+        {
+            instance = SetPropertyValue(instance, descProp, node.Description);
+        }
+
+        // Map MeshNode.Icon
+        if (mappings.TryGetValue("Icon", out var iconProp) && !string.IsNullOrEmpty(node.Icon))
+        {
+            instance = SetPropertyValue(instance, iconProp, node.Icon);
+        }
+
+        // Map MeshNode.Category
+        if (mappings.TryGetValue("Category", out var catProp) && !string.IsNullOrEmpty(node.Category))
+        {
+            instance = SetPropertyValue(instance, catProp, node.Category);
+        }
+
+        return instance;
+    }
+
+    /// <summary>
+    /// Gets all MeshNode property mappings from a ContentType.
+    /// Returns a dictionary from MeshNode property name to ContentType PropertyInfo.
+    /// </summary>
+    private static Dictionary<string, PropertyInfo> GetMeshNodePropertyMappings(Type contentType)
+    {
+        var mappings = new Dictionary<string, PropertyInfo>();
+
+        foreach (var prop in contentType.GetProperties())
+        {
+            var attr = prop.GetCustomAttribute<MeshNodePropertyAttribute>();
+            if (attr?.MeshNodeProperty != null)
+            {
+                mappings[attr.MeshNodeProperty] = prop;
+            }
+        }
+
+        return mappings;
+    }
+
+    /// <summary>
+    /// Sets a property value on an object, handling both mutable classes and immutable records.
+    /// For records, uses the "with" pattern by creating a new instance.
+    /// </summary>
+    private static object SetPropertyValue(object instance, PropertyInfo property, object? value)
+    {
+        if (value == null)
+            return instance;
+
+        // Check if property has a setter
+        if (property.SetMethod != null && property.SetMethod.IsPublic)
+        {
+            property.SetValue(instance, value);
+            return instance;
+        }
+
+        // For records with init-only setters, we need to create a new instance
+        // Check if this is a record type by looking for <Clone>$ method
+        var cloneMethod = instance.GetType().GetMethod("<Clone>$");
+        if (cloneMethod != null)
+        {
+            // Clone the instance
+            var cloned = cloneMethod.Invoke(instance, null);
+            if (cloned != null)
+            {
+                // Set the property via the backing field
+                var backingField = instance.GetType().GetField($"<{property.Name}>k__BackingField", BindingFlags.Instance | BindingFlags.NonPublic);
+                if (backingField != null)
+                {
+                    backingField.SetValue(cloned, value);
+                    return cloned;
+                }
+            }
+        }
+
+        return instance;
     }
 }

@@ -94,8 +94,8 @@ public static class GraphConfigurationExtensions
                     typeRegistry.WithType(typeof(AgentDelegation), nameof(AgentDelegation));
                     typeRegistry.WithType(typeof(Comment), nameof(Comment));
                     typeRegistry.WithType(typeof(MarkdownContent), nameof(MarkdownContent));
-                    typeRegistry.WithType(typeof(ThreadNodeContent), nameof(ThreadNodeContent));
-                    typeRegistry.WithType(typeof(ThreadMessageContent), nameof(ThreadMessageContent));
+                    typeRegistry.WithType(typeof(MeshWeaver.Mesh.Thread), nameof(MeshWeaver.Mesh.Thread));
+                    typeRegistry.WithType(typeof(ThreadMessage), nameof(ThreadMessage));
                 }
 
                 // Register compilation cache options

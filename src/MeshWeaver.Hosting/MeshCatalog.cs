@@ -200,14 +200,14 @@ public sealed class MeshCatalog(
         // 5. Create node with Transient state
         var transientNode = node with { State = MeshNodeState.Transient };
 
-        // 6. Save to persistence
-        var savedNode = await Persistence.SaveNodeAsync(transientNode, ct);
-
-        // 7. Enrich with HubConfiguration based on NodeType (same as cold start in GetNodeAsync)
+        // 6. Enrich with HubConfiguration based on NodeType
         if (NodeTypeService != null)
         {
-            savedNode = await NodeTypeService.EnrichWithNodeTypeAsync(savedNode, ct);
+            transientNode = await NodeTypeService.EnrichWithNodeTypeAsync(transientNode, ct);
         }
+
+        // 7. Save to persistence
+        var savedNode = await Persistence.SaveNodeAsync(transientNode, ct);
 
         // 8. Update cache with enriched transient node
         cache.Set(savedNode.Path, savedNode, cacheOptions);
