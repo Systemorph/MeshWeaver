@@ -1,13 +1,16 @@
 ﻿using System.Collections.Concurrent;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using MeshWeaver.Utils;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Hosting.Monolith;
 
 public class MonolithRoutingService(IMessageHub hub, ILogger<MonolithRoutingService> logger) : RoutingServiceBase(hub)
 {
+    private readonly INodeTypeService? nodeTypeService = hub.ServiceProvider.GetService<INodeTypeService>();
     private readonly ConcurrentDictionary<Address, AsyncDelivery> streams = new();
 
 
@@ -50,8 +53,9 @@ public class MonolithRoutingService(IMessageHub hub, ILogger<MonolithRoutingServ
 
     private IMessageHub? CreateHub(MeshNode? node, Address address)
     {
-        var hubConfig = node?.HubConfiguration
-            ?? GetNodeTypeHubConfiguration(node);
+        // Use INodeTypeService if available - it properly combines DefaultNodeHubConfiguration
+        // with node type's specific configuration
+        var hubConfig = GetHubConfiguration(node);
 
         if (hubConfig is not null)
         {
@@ -66,23 +70,63 @@ public class MonolithRoutingService(IMessageHub hub, ILogger<MonolithRoutingServ
     }
 
     /// <summary>
-    /// Gets the HubConfiguration for a node by looking up its NodeType template.
-    /// This is used when the node itself doesn't have HubConfiguration.
+    /// Gets the HubConfiguration for a node, properly combining:
+    /// 1. Node's own HubConfiguration (if set)
+    /// 2. NodeType's HubConfiguration (from template)
+    /// 3. DefaultNodeHubConfiguration (from MeshBuilder.ConfigureDefaultNodeHub)
     /// </summary>
-    private Func<MessageHubConfiguration, MessageHubConfiguration>? GetNodeTypeHubConfiguration(MeshNode? node)
+    private Func<MessageHubConfiguration, MessageHubConfiguration>? GetHubConfiguration(MeshNode? node)
     {
-        if (node?.NodeType == null)
-            return null;
+        // Get the default config first
+        var defaultConfig = MeshCatalog.Configuration.DefaultNodeHubConfiguration;
 
-        // Look up the NodeType template in Configuration.Nodes
-        if (MeshCatalog.Configuration.Nodes.TryGetValue(node.NodeType, out var templateNode) &&
+        logger.LogDebug("GetHubConfiguration for node {NodePath}, NodeType: {NodeType}, HasNodeHubConfig: {HasNodeHubConfig}, HasDefaultConfig: {HasDefaultConfig}, NodeTypeService: {HasNodeTypeService}",
+            node?.Path, node?.NodeType, node?.HubConfiguration != null, defaultConfig != null, nodeTypeService != null);
+
+        // If node has its own HubConfiguration, combine with default
+        if (node?.HubConfiguration != null)
+        {
+            logger.LogDebug("Using node's own HubConfiguration for {NodePath}", node.Path);
+            if (defaultConfig != null)
+            {
+                var nodeConfig = node.HubConfiguration;
+                return config => nodeConfig(defaultConfig(config));
+            }
+            return node.HubConfiguration;
+        }
+
+        // Use INodeTypeService which properly combines default + node type configs
+        if (nodeTypeService != null && node?.NodeType != null)
+        {
+            var cachedConfig = nodeTypeService.GetCachedHubConfiguration(node.NodeType);
+            logger.LogDebug("GetCachedHubConfiguration({NodeType}) returned: {HasConfig}", node.NodeType, cachedConfig != null);
+            if (cachedConfig != null)
+            {
+                logger.LogDebug("Using cached HubConfiguration from INodeTypeService for {NodeType} at {Address}",
+                    node.NodeType, node.Path);
+                return cachedConfig;
+            }
+        }
+
+        // Fallback: look up the NodeType template in Configuration.Nodes
+        if (node?.NodeType != null &&
+            MeshCatalog.Configuration.Nodes.TryGetValue(node.NodeType, out var templateNode) &&
             templateNode.HubConfiguration is not null)
         {
-            logger.LogDebug("Using NodeType HubConfiguration from {NodeType} for node at {Address}",
+            logger.LogDebug("Using NodeType HubConfiguration from template for {NodeType} at {Address}",
                 node.NodeType, node.Path);
+
+            // Combine with default config
+            if (defaultConfig != null)
+            {
+                var templateConfig = templateNode.HubConfiguration;
+                return config => templateConfig(defaultConfig(config));
+            }
             return templateNode.HubConfiguration;
         }
 
-        return null;
+        logger.LogDebug("Returning defaultConfig only for {NodePath}: {HasDefaultConfig}", node?.Path, defaultConfig != null);
+        // No node-specific config - return just the default config
+        return defaultConfig;
     }
 }

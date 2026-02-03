@@ -102,10 +102,16 @@ public static class LayoutExtensions
     }
 
 
-    internal static LayoutDefinition GetLayoutDefinition(this IMessageHub hub) =>
-        hub
-            .Configuration.GetListOfLambdas()
-            .Aggregate(CreateDefaultLayoutConfiguration(hub), (x, y) => y.Invoke(x));
+    internal static LayoutDefinition GetLayoutDefinition(this IMessageHub hub)
+    {
+        var lambdas = hub.Configuration.GetListOfLambdas();
+        System.Diagnostics.Debug.WriteLine($"GetLayoutDefinition for hub {hub.Address}: {lambdas.Count} layout lambdas");
+        Console.WriteLine($"[GetLayoutDefinition] Hub {hub.Address}: {lambdas.Count} layout lambdas");
+        var result = lambdas.Aggregate(CreateDefaultLayoutConfiguration(hub), (x, y) => y.Invoke(x));
+        System.Diagnostics.Debug.WriteLine($"GetLayoutDefinition for hub {hub.Address}: LayoutDefinition has {result.Count} renderers");
+        Console.WriteLine($"[GetLayoutDefinition] Hub {hub.Address}: LayoutDefinition has {result.Count} renderers");
+        return result;
+    }
 
     private static LayoutDefinition CreateDefaultLayoutConfiguration(IMessageHub hub)
     {

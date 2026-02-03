@@ -4,10 +4,12 @@
 @using MeshWeaver.Mesh.Services
 @using MeshWeaver.Messaging
 @using System.Text.Json
+@using MeshThread = MeshWeaver.Mesh.Thread
 @namespace MeshWeaver.Blazor.Chat
 @inject IMeshQuery MeshQuery
 @inject AccessService AccessService
 @inject IMessageHub Hub
+@inject NavigationManager NavigationManager
 
 <div class="chat-history-container @(IsRightPanel ? "right-panel" : "")">
     <!-- Header at top, same height as main bar -->
@@ -192,7 +194,7 @@
     [Parameter] public string? Scope { get; set; }
 
     // Chat items with path and content for display
-    private record ThreadItem(string Path, ThreadNodeContent Content);
+    private record ThreadItem(string Path, MeshThread Content);
     private IReadOnlyList<ThreadItem> Chats = [];
 
     protected override async Task OnInitializedAsync()
@@ -205,19 +207,46 @@
         return AccessService?.Context?.ObjectId ?? "anonymous";
     }
 
+    /// <summary>
+    /// Gets the current navigation context path from the URL.
+    /// Returns null if at root or /chat.
+    /// </summary>
+    private string? GetCurrentContextPath()
+    {
+        var path = NavigationManager.ToBaseRelativePath(NavigationManager.Uri);
+
+        // If at root or /chat, return null (no context)
+        if (string.IsNullOrEmpty(path) || path == "chat")
+            return null;
+
+        return path;
+    }
+
     private async Task LoadConversations()
     {
         try
         {
             var userId = GetCurrentUserId();
-            var threadNodes = await ThreadNodePersistenceHelper.ListUserThreadNodesAsync(MeshQuery, userId);
+            var pathsToQuery = new List<string>();
+
+            // Always include user's personal threads
+            pathsToQuery.Add(ThreadNodeType.GetUserThreadsPath(userId));
+
+            // If in a MeshNode context, also include context threads
+            var contextPath = GetCurrentContextPath();
+            if (!string.IsNullOrEmpty(contextPath))
+            {
+                pathsToQuery.Add(ThreadNodeType.GetContextThreadsPath(contextPath));
+            }
+
+            // Query threads from all paths (deduplicates and orders by LastActivityAt)
+            var threadNodes = await ThreadNodePersistenceHelper.ListThreadsFromPathsAsync(MeshQuery, pathsToQuery);
 
             // Convert to ThreadItem list, filtering by scope if specified
             var items = threadNodes
-                .Select(n => new ThreadItem(n.Path ?? n.Id, n.Content as ThreadNodeContent ?? new ThreadNodeContent()))
+                .Select(n => new ThreadItem(n.Path ?? n.Id, n.Content as MeshThread ?? new MeshThread()))
                 .Where(c => Scope == null || GetPathScope(c.Path) == Scope)
-                .OrderByDescending(c => c.Content.LastActivityAt)
-                .ToList();
+                .ToList(); // Already ordered by LastActivityAt in ListThreadsFromPathsAsync
 
             Chats = items;
             StateHasChanged();
@@ -265,7 +294,7 @@
         return "No messages";
     }
 
-    private static string? GetFirstUserMessage(ThreadNodeContent content)
+    private static string? GetFirstUserMessage(MeshThread content)
     {
         if (content.Messages == null || content.Messages.Count == 0)
             return null;

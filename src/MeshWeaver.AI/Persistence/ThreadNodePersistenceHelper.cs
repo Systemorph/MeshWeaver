@@ -5,6 +5,8 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using MeshWeaver.ShortGuid;
+using Microsoft.Extensions.DependencyInjection;
+using MeshThread = MeshWeaver.Mesh.Thread;
 
 namespace MeshWeaver.AI.Persistence;
 
@@ -15,21 +17,21 @@ namespace MeshWeaver.AI.Persistence;
 public static class ThreadNodePersistenceHelper
 {
     /// <summary>
-    /// Creates a new Thread MeshNode with the given content.
+    /// Creates a new Thread MeshNode with the given content at a context-aware path.
     /// </summary>
     /// <param name="hub">The message hub.</param>
-    /// <param name="userId">The user ID.</param>
+    /// <param name="basePath">The base path for storage (e.g., "User/{userId}/Threads" or "ACME/ProductLaunch/Threads").</param>
     /// <param name="content">The thread content to store.</param>
     /// <param name="ct">Cancellation token.</param>
     /// <returns>The path of the created thread node.</returns>
     public static async Task<string> CreateThreadNodeAsync(
         IMessageHub hub,
-        string userId,
-        ThreadNodeContent content,
+        string basePath,
+        MeshThread content,
         CancellationToken ct = default)
     {
         var threadId = Guid.NewGuid().AsString();
-        var threadPath = $"{ThreadNodeType.GetUserThreadsPath(userId)}/{threadId}";
+        var threadPath = $"{basePath}/{threadId}";
 
         var node = new MeshNode(threadPath)
         {
@@ -38,15 +40,8 @@ public static class ThreadNodePersistenceHelper
             Content = content
         };
 
-        var address = new Address(threadPath);
-        var nodeJson = JsonSerializer.SerializeToElement(node, hub.JsonSerializerOptions);
-
-        var delivery = hub.Post(
-            new DataChangeRequest { Updates = [nodeJson] },
-            o => o.WithTarget(address));
-
-        if (delivery != null)
-            await hub.RegisterCallback(delivery, d => d, ct);
+        var catalog = hub.ServiceProvider.GetRequiredService<IMeshCatalog>();
+        await catalog.CreateNodeAsync(node, null, ct);
 
         return threadPath;
     }
@@ -61,7 +56,7 @@ public static class ThreadNodePersistenceHelper
     public static async Task UpdateThreadNodeAsync(
         IMessageHub hub,
         string threadPath,
-        ThreadNodeContent content,
+        MeshThread content,
         CancellationToken ct = default)
     {
         var address = new Address(threadPath);
@@ -113,7 +108,7 @@ public static class ThreadNodePersistenceHelper
     /// <param name="threadPath">The full path to the thread node.</param>
     /// <param name="ct">Cancellation token.</param>
     /// <returns>The thread node content if found, null otherwise.</returns>
-    public static async Task<ThreadNodeContent?> LoadThreadNodeAsync(
+    public static async Task<MeshThread?> LoadThreadNodeAsync(
         IMessageHub hub,
         string threadPath,
         CancellationToken ct = default)
@@ -124,14 +119,14 @@ public static class ThreadNodePersistenceHelper
             new GetDataRequest(new EntityReference(nameof(MeshNode), threadPath)),
             o => o.WithTarget(address));
 
-        ThreadNodeContent? result = null;
+        MeshThread? result = null;
         if (delivery != null)
         {
             await hub.RegisterCallback(delivery, d =>
             {
                 if (d.Message is GetDataResponse response && response.Data is MeshNode node)
                 {
-                    result = node.Content as ThreadNodeContent;
+                    result = node.Content as MeshThread;
                 }
                 return d;
             }, ct);
@@ -153,7 +148,22 @@ public static class ThreadNodePersistenceHelper
         CancellationToken ct = default)
     {
         var userThreadsPath = ThreadNodeType.GetUserThreadsPath(userId);
-        var query = $"path:{userThreadsPath} nodeType:{ThreadNodeType.NodeType} scope:children";
+        return await ListThreadsFromPathAsync(meshQuery, userThreadsPath, ct);
+    }
+
+    /// <summary>
+    /// Lists Thread MeshNodes from a specific base path.
+    /// </summary>
+    /// <param name="meshQuery">The mesh query service.</param>
+    /// <param name="basePath">The base path to query threads from (e.g., "User/{userId}/Threads" or "ACME/ProductLaunch/Threads").</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <returns>List of thread nodes.</returns>
+    public static async Task<IReadOnlyList<MeshNode>> ListThreadsFromPathAsync(
+        IMeshQuery meshQuery,
+        string basePath,
+        CancellationToken ct = default)
+    {
+        var query = $"path:{basePath} nodeType:{ThreadNodeType.NodeType} scope:children";
 
         var nodes = new List<MeshNode>();
         await foreach (var node in meshQuery.QueryAsync<MeshNode>(query).WithCancellation(ct))
@@ -162,6 +172,41 @@ public static class ThreadNodePersistenceHelper
         }
 
         return nodes;
+    }
+
+    /// <summary>
+    /// Lists Thread MeshNodes from multiple paths (e.g., user threads + context threads).
+    /// Results are deduplicated by path and ordered by LastActivityAt descending.
+    /// </summary>
+    /// <param name="meshQuery">The mesh query service.</param>
+    /// <param name="paths">The base paths to query threads from.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <returns>List of thread nodes ordered by LastActivityAt descending.</returns>
+    public static async Task<IReadOnlyList<MeshNode>> ListThreadsFromPathsAsync(
+        IMeshQuery meshQuery,
+        IEnumerable<string> paths,
+        CancellationToken ct = default)
+    {
+        var allNodes = new Dictionary<string, MeshNode>();
+
+        foreach (var path in paths.Where(p => !string.IsNullOrEmpty(p)))
+        {
+            var nodes = await ListThreadsFromPathAsync(meshQuery, path, ct);
+            foreach (var node in nodes)
+            {
+                var nodePath = node.Path ?? node.Id;
+                // Deduplicate by path (in case same thread appears in multiple queries)
+                if (!allNodes.ContainsKey(nodePath))
+                {
+                    allNodes[nodePath] = node;
+                }
+            }
+        }
+
+        // Order by LastActivityAt descending
+        return allNodes.Values
+            .OrderByDescending(n => (n.Content as MeshThread)?.LastActivityAt ?? DateTime.MinValue)
+            .ToList();
     }
 
     /// <summary>
@@ -194,6 +239,7 @@ public static class ThreadNodePersistenceHelper
     /// <param name="parentThreadPath">The parent thread path.</param>
     /// <param name="targetAgentName">The name of the delegated agent.</param>
     /// <param name="delegationMessage">The delegation message.</param>
+    /// <param name="userId">The user ID creating the delegation.</param>
     /// <param name="ct">Cancellation token.</param>
     /// <returns>The path of the created delegation node.</returns>
     public static async Task<string> CreateDelegationNodeAsync(
@@ -201,6 +247,7 @@ public static class ThreadNodePersistenceHelper
         string parentThreadPath,
         string targetAgentName,
         string delegationMessage,
+        string? userId = null,
         CancellationToken ct = default)
     {
         var delegationId = Guid.NewGuid().AsString();
@@ -211,7 +258,7 @@ public static class ThreadNodePersistenceHelper
             ? delegationMessage[..50] + "..."
             : delegationMessage;
 
-        var content = new ThreadNodeContent
+        var content = new MeshThread
         {
             Title = $"Delegation to {targetAgentName}: {titlePreview}",
             CreatedAt = DateTime.UtcNow,
@@ -226,15 +273,8 @@ public static class ThreadNodePersistenceHelper
             Content = content
         };
 
-        var address = new Address(delegationPath);
-        var nodeJson = JsonSerializer.SerializeToElement(node, hub.JsonSerializerOptions);
-
-        var delivery = hub.Post(
-            new DataChangeRequest { Updates = [nodeJson] },
-            o => o.WithTarget(address));
-
-        if (delivery != null)
-            await hub.RegisterCallback(delivery, d => d, ct);
+        var catalog = hub.ServiceProvider.GetRequiredService<IMeshCatalog>();
+        await catalog.CreateNodeAsync(node, userId, ct);
 
         return delegationPath;
     }
@@ -270,7 +310,7 @@ public static class ThreadNodePersistenceHelper
     public static async Task AddMessageAsync(
         IMessageHub hub,
         string threadPath,
-        ThreadMessageContent message,
+        ThreadMessage message,
         CancellationToken ct = default)
     {
         var existingContent = await LoadThreadNodeAsync(hub, threadPath, ct);
@@ -278,7 +318,7 @@ public static class ThreadNodePersistenceHelper
         var messages = existingContent?.Messages?.ToList() ?? [];
         messages.Add(message);
 
-        var updatedContent = (existingContent ?? new ThreadNodeContent()) with
+        var updatedContent = (existingContent ?? new MeshThread()) with
         {
             LastActivityAt = DateTime.UtcNow,
             Messages = messages
@@ -288,12 +328,12 @@ public static class ThreadNodePersistenceHelper
     }
 
     /// <summary>
-    /// Converts ThreadNodeContent messages to Microsoft.Extensions.AI.ChatMessage format.
+    /// Converts Thread messages to Microsoft.Extensions.AI.ChatMessage format.
     /// </summary>
     /// <param name="content">The thread node content.</param>
     /// <returns>List of ChatMessage objects.</returns>
     public static List<Microsoft.Extensions.AI.ChatMessage> ConvertToAgentChatMessages(
-        ThreadNodeContent? content)
+        MeshThread? content)
     {
         if (content?.Messages == null || content.Messages.Count == 0)
             return [];
@@ -313,17 +353,17 @@ public static class ThreadNodePersistenceHelper
     }
 
     /// <summary>
-    /// Converts Microsoft.Extensions.AI.ChatMessage to ThreadMessageContent format.
+    /// Converts Microsoft.Extensions.AI.ChatMessage to ThreadMessage format.
     /// </summary>
     /// <param name="messages">The chat messages.</param>
-    /// <returns>List of ThreadMessageContent objects.</returns>
-    public static List<ThreadMessageContent> ConvertFromAgentChatMessages(
+    /// <returns>List of ThreadMessage objects.</returns>
+    public static List<ThreadMessage> ConvertFromAgentChatMessages(
         IEnumerable<Microsoft.Extensions.AI.ChatMessage> messages)
     {
-        var result = new List<ThreadMessageContent>();
+        var result = new List<ThreadMessage>();
         foreach (var msg in messages)
         {
-            var threadContent = new ThreadMessageContent
+            var threadContent = new ThreadMessage
             {
                 Id = Guid.NewGuid().AsString(),
                 Role = msg.Role.Value,

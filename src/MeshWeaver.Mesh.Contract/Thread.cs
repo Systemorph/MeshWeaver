@@ -7,7 +7,7 @@ namespace MeshWeaver.Mesh;
 /// Content stored in Thread MeshNodes.
 /// Threads are stored as MeshNodes with nodeType="Thread" in User/{userId}/Threads/.
 /// </summary>
-public record ThreadNodeContent
+public record Thread
 {
     /// <summary>
     /// Optional title (auto-generated from first message if not set).
@@ -38,7 +38,7 @@ public record ThreadNodeContent
     /// <summary>
     /// Thread messages stored inline.
     /// </summary>
-    public List<ThreadMessageContent>? Messages { get; init; }
+    public List<ThreadMessage>? Messages { get; init; }
 
     /// <summary>
     /// Gets a display title for the thread.
@@ -49,7 +49,7 @@ public record ThreadNodeContent
 /// <summary>
 /// Represents a single message in a thread conversation.
 /// </summary>
-public record ThreadMessageContent
+public record ThreadMessage
 {
     /// <summary>
     /// Unique identifier for this message.

@@ -9,6 +9,7 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
+using MeshThread = MeshWeaver.Mesh.Thread;
 
 namespace MeshWeaver.Graph;
 
@@ -40,7 +41,7 @@ public static class ThreadLayoutAreas
 
     /// <summary>
     /// Renders the Thread area showing the conversation content.
-    /// Displays the message history stored in the ThreadNodeContent.
+    /// Displays the message history stored in the Thread.
     /// </summary>
     public static IObservable<UiControl?> ThreadView(LayoutAreaHost host, RenderingContext _)
     {
@@ -88,8 +89,8 @@ public static class ThreadLayoutAreas
         container = container.WithView(header);
 
         // Thread messages content
-        var content = node?.Content as ThreadNodeContent;
-        var messages = content?.Messages ?? new List<ThreadMessageContent>();
+        var content = node?.Content as MeshThread;
+        var messages = content?.Messages ?? new List<ThreadMessage>();
 
         if (messages.Count == 0)
         {
@@ -142,7 +143,7 @@ public static class ThreadLayoutAreas
         return container;
     }
 
-    private static UiControl BuildMessageBubble(ThreadMessageContent message)
+    private static UiControl BuildMessageBubble(ThreadMessage message)
     {
         var isUser = message.Role.Equals("user", StringComparison.OrdinalIgnoreCase);
         var isSystem = message.Role.Equals("system", StringComparison.OrdinalIgnoreCase);
@@ -264,7 +265,7 @@ public static class ThreadLayoutAreas
             var grid = Controls.LayoutGrid.WithSkin(s => s.WithSpacing(2));
 
             foreach (var delegation in delegations.OrderByDescending(d =>
-                (d.Content as ThreadNodeContent)?.CreatedAt ?? DateTime.MinValue))
+                (d.Content as MeshThread)?.CreatedAt ?? DateTime.MinValue))
             {
                 grid = grid.WithView(
                     BuildDelegationCard(delegation),
@@ -279,7 +280,7 @@ public static class ThreadLayoutAreas
 
     private static UiControl BuildDelegationCard(MeshNode delegationNode)
     {
-        var content = delegationNode.Content as ThreadNodeContent;
+        var content = delegationNode.Content as MeshThread;
         var title = content?.Title ?? delegationNode.Name ?? "Delegation";
         var timestamp = content?.CreatedAt.ToString("g") ?? "";
         var path = delegationNode.Path ?? "";
@@ -315,7 +316,7 @@ public static class ThreadLayoutAreas
 
     private static UiControl BuildThumbnail(MeshNode? node, string hubPath)
     {
-        var content = node?.Content as ThreadNodeContent;
+        var content = node?.Content as MeshThread;
         var title = content?.Title ?? node?.Name ?? "Thread";
         var lastActivity = content?.LastActivityAt.ToString("g") ?? "";
         var messageCount = content?.Messages?.Count ?? 0;
@@ -374,7 +375,7 @@ public static class ThreadLayoutAreas
     /// </summary>
     private static string GetThreadTitle(MeshNode? node)
     {
-        if (node?.Content is ThreadNodeContent content && !string.IsNullOrEmpty(content.Title))
+        if (node?.Content is MeshThread content && !string.IsNullOrEmpty(content.Title))
             return content.Title;
 
         if (!string.IsNullOrEmpty(node?.Name))

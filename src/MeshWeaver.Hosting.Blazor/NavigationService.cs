@@ -158,11 +158,35 @@ public class NavigationService : INavigationService
         if (string.IsNullOrEmpty(remainder))
             return (null, null);
 
-        var slashIndex = remainder.IndexOf('/');
-        if (slashIndex >= 0)
-            return (remainder.Substring(0, slashIndex), remainder.Substring(slashIndex + 1));
+        // First, check for query string (?) - query string becomes part of the Id
+        var queryIndex = remainder.IndexOf('?');
+        string mainPart;
+        string? querySuffix = null;
 
-        return (remainder, null);
+        if (queryIndex >= 0)
+        {
+            mainPart = remainder.Substring(0, queryIndex);
+            querySuffix = remainder.Substring(queryIndex); // includes the '?'
+        }
+        else
+        {
+            mainPart = remainder;
+        }
+
+        // Now parse the main part for area/id using '/'
+        var slashIndex = mainPart.IndexOf('/');
+        if (slashIndex >= 0)
+        {
+            var area = mainPart.Substring(0, slashIndex);
+            var id = mainPart.Substring(slashIndex + 1);
+            // Append query string to id if present
+            if (querySuffix != null)
+                id = string.IsNullOrEmpty(id) ? querySuffix : id + querySuffix;
+            return (area, id);
+        }
+
+        // No slash - the main part is the area, query string (if any) is the id
+        return (mainPart, querySuffix);
     }
 
     private async Task LoadCreatableTypesAsync(string nodePath)

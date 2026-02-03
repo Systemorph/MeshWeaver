@@ -1,17 +1,17 @@
 ﻿namespace MeshWeaver.Layout;
 
 [AttributeUsage(AttributeTargets.Property)]
-public class UiControlAttribute : Attribute
+public class UiControlAttribute(Type? displayControl = null, Type? editControl = null) : Attribute
 {
     /// <summary>
     /// Control type for edit mode.
     /// </summary>
-    public Type? EditControlType { get; }
+    public Type? EditControlType { get; } = editControl;
 
     /// <summary>
     /// Control type for display/read mode.
     /// </summary>
-    public Type? DisplayControlType { get; }
+    public Type? DisplayControlType { get; } = displayControl;
 
     /// <summary>
     /// Optional configuration options for the control.
@@ -29,12 +29,6 @@ public class UiControlAttribute : Attribute
     /// </summary>
     public string? Style { get; set; }
 
-    public UiControlAttribute(Type? editControl = null, Type? displayControl = null)
-    {
-        EditControlType = editControl;
-        DisplayControlType = displayControl;
-    }
-
     /// <summary>
     /// Backward compatibility property. Returns EditControlType or DisplayControlType.
     /// </summary>
@@ -45,7 +39,7 @@ public class UiControlAttribute : Attribute
 /// <summary>
 /// Generic attribute for specifying a single control type (backward compatible).
 /// </summary>
-public class UiControlAttribute<TControl>() : UiControlAttribute(typeof(TControl), null)
+public class UiControlAttribute<TControl>() : UiControlAttribute(null, typeof(TControl))
     where TControl : UiControl
 {
 }
@@ -54,7 +48,7 @@ public class UiControlAttribute<TControl>() : UiControlAttribute(typeof(TControl
 /// Generic attribute for specifying separate edit and display control types.
 /// </summary>
 public class UiControlAttribute<TEditControl, TDisplayControl>()
-    : UiControlAttribute(typeof(TEditControl), typeof(TDisplayControl))
+    : UiControlAttribute(typeof(TDisplayControl), typeof(TEditControl))
     where TEditControl : UiControl
     where TDisplayControl : UiControl
 {

@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.ComponentModel.DataAnnotations;
@@ -10,13 +10,11 @@ using System.Threading.Tasks;
 using FluentAssertions;
 using FluentAssertions.Extensions;
 using MeshWeaver.Data;
-using MeshWeaver.Domain;
 using MeshWeaver.Fixture;
 using MeshWeaver.Layout.Client;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Layout.DataBinding;
 using MeshWeaver.Messaging;
-using MeshWeaver.Reflection;
 using Xunit;
 
 namespace MeshWeaver.Layout.Test;
@@ -52,7 +50,7 @@ public class MapToToggleableControlTest(ITestOutputHelper output) : HubTestBase(
         [Display(Name = "Is Active")]
         public bool IsActive { get; init; }
 
-        [UiControl(typeof(MarkdownEditorControl), SeparateEditView = true)]
+        [UiControl(editControl: typeof(MarkdownEditorControl), SeparateEditView = true)]
         [Display(Name = "Description")]
         public string Description { get; init; } = string.Empty;
     }
@@ -816,7 +814,7 @@ public class MarkdownToggleTest(ITestOutputHelper output) : HubTestBase(output)
         [Key]
         public string Id { get; init; } = string.Empty;
 
-        [UiControl(typeof(MarkdownEditorControl), SeparateEditView = true)]
+        [UiControl(editControl: typeof(MarkdownEditorControl), SeparateEditView = true)]
         [Display(Name = "Content")]
         public string Content { get; init; } = string.Empty;
     }

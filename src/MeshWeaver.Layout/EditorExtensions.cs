@@ -221,7 +221,8 @@ public static class EditorExtensions
 
 
         var uiControlAttribute = propertyInfo.GetCustomAttribute<UiControlAttribute>();
-        if (uiControlAttribute != null)
+        // Only use UiControlAttribute if it specifies a control type (not just styling)
+        if (uiControlAttribute != null && (uiControlAttribute.EditControlType != null || uiControlAttribute.DisplayControlType != null))
             return editor.WithView((host, _) => RenderControl(host, uiControlAttribute.ControlType, propertyInfo, label, jsonPointerReference, uiControlAttribute.Options));
 
 
@@ -282,7 +283,8 @@ public static class EditorExtensions
 
 
         var uiControlAttribute = propertyInfo.GetCustomAttribute<UiControlAttribute>();
-        if (uiControlAttribute != null)
+        // Only use UiControlAttribute if it specifies a control type (not just styling)
+        if (uiControlAttribute != null && (uiControlAttribute.EditControlType != null || uiControlAttribute.DisplayControlType != null))
             return editor.WithView((host, _) => RenderControl(host, uiControlAttribute.ControlType, propertyInfo, label, jsonPointerReference, uiControlAttribute.Options), skinConfiguration);
 
 

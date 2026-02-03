@@ -80,11 +80,11 @@ public interface INodeTypeService
     IAsyncEnumerable<CreatableTypeInfo> GetCreatableTypesAsync(string nodePath, CancellationToken ct = default);
 
     /// <summary>
-    /// Gets the ContentType for a node type.
-    /// This is the type registered via .WithContentType&lt;T&gt;() in the hub configuration.
-    /// Returns null if no ContentType was registered for this node type.
+    /// Gets the cached HubConfiguration function for a node type.
+    /// Applies the DefaultNodeHubConfiguration from MeshConfiguration if available.
+    /// Returns null if the node type is not cached.
     /// </summary>
     /// <param name="nodeTypePath">The node type path</param>
-    /// <returns>The ContentType if registered, null otherwise</returns>
-    Type? GetContentType(string nodeTypePath);
+    /// <returns>The combined HubConfiguration function, or null if not cached</returns>
+    Func<MessageHubConfiguration, MessageHubConfiguration>? GetCachedHubConfiguration(string nodeTypePath);
 }

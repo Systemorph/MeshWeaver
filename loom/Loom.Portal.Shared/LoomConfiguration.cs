@@ -271,7 +271,7 @@ public static class LoomConfiguration
                             .MapContentCollection("content", contentStorageConfig.Name, $"content/{nodePath}");
                     }
 
-                    return config.AddDefaultLayoutAreas().AddChatsLayoutArea();
+                    return config.AddDefaultLayoutAreas().AddThreadsLayoutArea();
                 })
                 // Add activity tracking to record user access patterns
                 .AddActivityTracking();
