@@ -14,9 +14,8 @@
     "description": "Execute automated screening against OFAC, EU sanctions, and UN consolidated lists. Check company name, directors, and key personnel. No matches found.",
     "category": "Legal",
     "priority": "Critical",
-    "assignee": null,
+    "assignee": "Oliver",
     "dueDateOffsetDays": -7,
-    "status": "Completed",
-    "completedAt": "2026-01-20T08:00:00Z"
+    "status": "InReview"
   }
 }

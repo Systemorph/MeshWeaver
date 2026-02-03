@@ -1,12 +1,16 @@
 {
+  "$type": "MeshNode",
   "id": "PresentCoverageOptions",
   "namespace": "ACME/CustomerOnboarding/Todo",
+  "path": "ACME/CustomerOnboarding/Todo/PresentCoverageOptions",
   "name": "Present coverage options",
   "nodeType": "ACME/Project/Todo",
-  "category": "Tasks",
   "description": "Present insurance package options to client",
+  "category": "Tasks",
   "icon": "/static/content/ACME/Project/Todo/icon.svg",
-  "isPersistent": true,
+  "lastModified": "2026-02-03T08:15:10.4640455+00:00",
+  "version": 9,
+  "state": "Active",
   "content": {
     "$type": "Todo",
     "id": "PresentCoverageOptions",
@@ -14,7 +18,8 @@
     "description": "Present tailored coverage options to Apex Manufacturing: General Liability, Property, Workers Comp, and optional Umbrella coverage. Include limit options and deductible choices.",
     "category": "Sales",
     "priority": "High",
-    "assignee": "Anna",
+    "createdAt": "2026-02-03T16:35:03.049121Z",
+    "dueDate": "2026-02-01T00:00:00Z",
     "dueDateOffsetDays": -2,
     "status": "Pending"
   }
