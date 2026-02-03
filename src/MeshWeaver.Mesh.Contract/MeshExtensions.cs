@@ -1,4 +1,5 @@
-﻿using MeshWeaver.Mesh.Security;
+﻿using MeshWeaver.Data;
+using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
@@ -57,6 +58,7 @@ public static class MeshExtensions
     {
         var logger = hub.ServiceProvider.GetRequiredService<ILogger<IMeshCatalog>>();
         var catalog = hub.ServiceProvider.GetService<IMeshCatalog>();
+        var persistence = hub.ServiceProvider.GetService<IPersistenceService>();
 
         if (catalog == null)
         {
@@ -66,44 +68,55 @@ public static class MeshExtensions
             return request.Processed();
         }
 
-        MeshNode? transientNode = null;
         try
         {
             var createRequest = request.Message;
             var node = createRequest.Node;
 
-            // Note: We don't check for existing nodes here via GetNodeAsync because:
-            // 1. GetNodeAsync now returns virtual nodes from templates
-            // 2. CreateTransientNodeAsync already checks cache + persistence directly
-            // The existence check happens in CreateTransientNodeAsync and throws InvalidOperationException
-
-            // 1. Validate NodeType if specified - check if it exists as a MeshNode
-            if (!string.IsNullOrEmpty(node.NodeType))
+            // 1. Check if node already exists
+            var existingNode = await catalog.GetNodeAsync(new Address(node.Path));
+            if (existingNode != null)
             {
-                var nodeTypeExists = catalog.Configuration.Nodes.ContainsKey(node.NodeType)
-                    || await catalog.GetNodeAsync(new Address(node.NodeType)) != null;
-                if (!nodeTypeExists)
+                // If existing node is Transient and request wants Active, this is a "confirm" operation
+                if (existingNode.State == MeshNodeState.Transient && node.State == MeshNodeState.Active)
                 {
-                    hub.Post(
-                        CreateNodeResponse.Fail(
-                            $"NodeType '{node.NodeType}' is not registered",
-                            NodeCreationRejectionReason.InvalidNodeType),
-                        o => o.ResponseFor(request));
+                    // Merge request node with existing node (preserve NodeType, update content/properties)
+                    var confirmedNode = existingNode with
+                    {
+                        State = MeshNodeState.Active,
+                        Name = node.Name ?? existingNode.Name,
+                        Description = node.Description ?? existingNode.Description,
+                        Icon = node.Icon ?? existingNode.Icon,
+                        Category = node.Category ?? existingNode.Category,
+                        Content = node.Content ?? existingNode.Content
+                    };
+
+                    // Save via persistence (triggers MeshNodeTypeSource sync)
+                    if (persistence != null)
+                    {
+                        await persistence.SaveNodeAsync(confirmedNode, ct);
+                    }
+
+                    hub.Post(CreateNodeResponse.Ok(confirmedNode), o => o.ResponseFor(request));
+                    logger.LogInformation("Confirmed transient node at {Path}", confirmedNode.Path);
                     return request.Processed();
                 }
+
+                // Node exists and is not a Transient->Active confirmation
+                hub.Post(
+                    CreateNodeResponse.Fail(
+                        $"Node already exists at path: {node.Path}",
+                        NodeCreationRejectionReason.NodeAlreadyExists),
+                    o => o.ResponseFor(request));
+                return request.Processed();
             }
 
-            // 3. Create transient node
-            transientNode = await catalog.CreateTransientNodeAsync(node, createRequest.CreatedBy, ct);
-
-            // 4. Run validators (global + NodeType-specific)
-            var validationError = await RunCreationValidatorsAsync(hub, catalog, transientNode, createRequest, ct);
+            // 2. Run validators (global + NodeType-specific)
+            var validationError = await RunCreationValidatorsAsync(hub, catalog, node, createRequest, ct);
             if (validationError != null)
             {
-                // Validation failed - delete transient node
                 logger.LogWarning("Validator rejected node creation at {Path}: {Error}",
-                    transientNode.Path, validationError.Value.ErrorMessage);
-                await catalog.DeleteNodeAsync(transientNode.Path, false, ct);
+                    node.Path, validationError.Value.ErrorMessage);
 
                 hub.Post(
                     CreateNodeResponse.Fail(
@@ -113,51 +126,25 @@ public static class MeshExtensions
                 return request.Processed();
             }
 
-            // 5. Confirm the node
-            var confirmedNode = await catalog.ConfirmNodeAsync(transientNode.Path, ct);
+            // 3. Create the node using the catalog
+            var createdNode = await catalog.CreateNodeAsync(node, createRequest.CreatedBy, ct);
 
-            // 6. Return success response
-            hub.Post(CreateNodeResponse.Ok(confirmedNode), o => o.ResponseFor(request));
+            // 4. Return success response
+            hub.Post(CreateNodeResponse.Ok(createdNode), o => o.ResponseFor(request));
 
-            logger.LogInformation("Node created successfully at {Path}", confirmedNode.Path);
+            logger.LogInformation("Node created at {Path}", createdNode.Path);
             return request.Processed();
         }
         catch (InvalidOperationException ex)
         {
-            // Clean up transient node if it was created
-            if (transientNode != null)
-            {
-                try
-                {
-                    await catalog.DeleteNodeAsync(transientNode.Path, false, ct);
-                }
-                catch { /* Ignore cleanup errors */ }
-            }
-
             logger.LogWarning(ex, "Node creation failed for path {Path}", request.Message.Node.Path);
-
-            // Determine the appropriate rejection reason
-            var reason = ex.Message.Contains("already exists", StringComparison.OrdinalIgnoreCase)
-                ? NodeCreationRejectionReason.NodeAlreadyExists
-                : NodeCreationRejectionReason.ValidationFailed;
-
             hub.Post(
-                CreateNodeResponse.Fail(ex.Message, reason),
+                CreateNodeResponse.Fail(ex.Message, NodeCreationRejectionReason.ValidationFailed),
                 o => o.ResponseFor(request));
             return request.Processed();
         }
         catch (Exception ex)
         {
-            // Clean up transient node if it was created
-            if (transientNode != null)
-            {
-                try
-                {
-                    await catalog.DeleteNodeAsync(transientNode.Path, false, ct);
-                }
-                catch { /* Ignore cleanup errors */ }
-            }
-
             logger.LogError(ex, "Unexpected error during node creation at {Path}", request.Message.Node.Path);
             hub.Post(
                 CreateNodeResponse.Fail($"Unexpected error: {ex.Message}"),

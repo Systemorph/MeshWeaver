@@ -75,14 +75,14 @@ public static class EditorExtensions
         , string id)
         => observable.Bind(_ =>
                 typeof(T).GetProperties()
-                    .Aggregate(new EditorControl(),
+                    .Aggregate(new EditorControl() { Style = "width: 100%;" },
                         serviceProvider.MapToControl<EditorControl, EditorSkin>),
             id);
     public static EditorControl Edit(this IServiceProvider serviceProvider, Type type, string id)
         => type.GetProperties()
                     .Aggregate(new EditorControl(),
                         serviceProvider.MapToControl<EditorControl, EditorSkin>) with
-        { DataContext = LayoutAreaReference.GetDataPointer(id) };
+        { DataContext = LayoutAreaReference.GetDataPointer(id), Style = "width: 100%;" };
 
 
     private static readonly int DebounceWindow = 20; // milliseconds

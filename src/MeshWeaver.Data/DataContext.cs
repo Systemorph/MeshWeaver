@@ -118,7 +118,20 @@ public sealed record DataContext : IDisposable
     public void Initialize()
     {
         logger.LogDebug("Starting initialization of DataContext for {Address}", Hub.Address);
-        DataSourcesById = DataSourceBuilders.Select(x => x.Invoke(Hub)).ToImmutableDictionary(x => x.Id);
+
+        // Build data sources, handling duplicates by keeping the last one with each ID
+        // This can happen when multiple configurations add the same data source type
+        var dataSources = DataSourceBuilders.Select(x => x.Invoke(Hub)).ToList();
+        var deduped = new Dictionary<object, IDataSource>();
+        foreach (var ds in dataSources)
+        {
+            if (deduped.ContainsKey(ds.Id))
+            {
+                logger.LogDebug("DataContext: Duplicate data source ID '{Id}', keeping last one", ds.Id);
+            }
+            deduped[ds.Id] = ds;
+        }
+        DataSourcesById = deduped.ToImmutableDictionary();
 
         // Build TypeSources first to get collection names
         TypeSources = DataSourcesById
