@@ -331,6 +331,96 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
     #region End-to-End Flow Tests
 
     /// <summary>
+    /// Test the ACTUAL create flow: create transient node, then send CreateNodeRequest to confirm it.
+    /// This is what happens when user clicks "Create" button on a transient node.
+    /// BUG: HandleCreateNodeRequest was calling CreateTransientNodeAsync again, causing "Node already exists" error.
+    /// </summary>
+    [Fact(Timeout = 30000)]
+    public async Task CreateNodeRequest_ForExistingTransientNode_ConfirmsNode()
+    {
+        var client = GetClient();
+        var catalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
+        var persistence = Mesh.ServiceProvider.GetRequiredService<IPersistenceService>();
+
+        var uniqueId = Guid.NewGuid().ToString("N")[..8];
+        var nodePath = $"ACME/ProductLaunch/Todo/CreateTest{uniqueId}";
+
+        Output.WriteLine($"Creating transient node at: {nodePath}");
+
+        var transientNode = MeshNode.FromPath(nodePath) with
+        {
+            Name = "Create Test Task",
+            Description = "Testing CreateNodeRequest flow",
+            NodeType = "ACME/Project/Todo",
+            State = MeshNodeState.Transient
+        };
+
+        try
+        {
+            // Step 1: Create transient node (simulates BuildCreateChildForm)
+            var createdNode = await catalog.CreateTransientNodeAsync(transientNode, ct: TestContext.Current.CancellationToken);
+            createdNode.Should().NotBeNull("Transient node should be created");
+            createdNode.State.Should().Be(MeshNodeState.Transient);
+            Output.WriteLine($"Transient node created: {createdNode.Path}");
+
+            // Step 2: Initialize the node's hub (required for sending CreateNodeRequest)
+            var nodeAddress = new Address(nodePath);
+            await client.AwaitResponse(
+                new PingRequest(),
+                o => o.WithTarget(nodeAddress),
+                TestContext.Current.CancellationToken);
+            Output.WriteLine("Node hub initialized.");
+
+            // Step 3: Send CreateNodeRequest with State=Active (simulates Create button click)
+            // This is what BuildCreateEditor does when user clicks "Create"
+            var nodeWithContent = createdNode with
+            {
+                State = MeshNodeState.Active,
+                Content = new { Title = "Create Test Task", Description = "Testing" }
+            };
+
+            Output.WriteLine("Sending CreateNodeRequest...");
+
+            // Send CreateNodeRequest - note: response type registration may vary
+            // We'll verify success by checking the persisted node state
+            client.Post(
+                new CreateNodeRequest(nodeWithContent),
+                o => o.WithTarget(nodeAddress));
+
+            // Use IMeshQuery.ObserveQuery to wait for the state change to be persisted
+            var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
+            var query = MeshQueryRequest.FromQuery($"path:{nodePath}");
+
+            var confirmedNode = await meshQuery
+                .ObserveQuery<MeshNode>(query)
+                .SelectMany(change => change.Items)
+                .Where(node => node.State == MeshNodeState.Active)
+                .Timeout(TimeSpan.FromSeconds(10))
+                .FirstAsync();
+
+            Output.WriteLine($"Observed node state: {confirmedNode.State}");
+
+            // Verify success by checking persisted node state directly
+            var persistedNode = await persistence.GetNodeAsync(nodePath);
+            Output.WriteLine($"Persisted node state: {persistedNode?.State}");
+            persistedNode.Should().NotBeNull("Node should be persisted after CreateNodeRequest");
+            persistedNode!.State.Should().Be(MeshNodeState.Active, "Node should be Active after confirmation");
+
+            Output.WriteLine($"Node confirmed successfully: {persistedNode.Path}, State: {persistedNode.State}");
+            Output.WriteLine("End-to-end create flow completed successfully.");
+        }
+        finally
+        {
+            try
+            {
+                await catalog.DeleteNodeAsync(nodePath);
+                Output.WriteLine("Cleanup: node deleted.");
+            }
+            catch { }
+        }
+    }
+
+    /// <summary>
     /// Test the complete create flow: create transient node, verify it can be retrieved.
     /// </summary>
     [Fact(Timeout = 30000)]
