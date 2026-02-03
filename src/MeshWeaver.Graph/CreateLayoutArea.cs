@@ -3,6 +3,7 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using MeshWeaver.Application.Styles;
 using MeshWeaver.Data;
+using MeshWeaver.Domain;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Mesh;
@@ -385,7 +386,7 @@ public static class CreateLayoutArea
     private static UiControl BuildTypeCard(string parentPath, CreatableTypeInfo typeInfo)
     {
         var displayName = typeInfo.DisplayName ?? GetLastPathSegment(typeInfo.NodeTypePath);
-        var iconName = typeInfo.Icon ?? "Document";
+        var icon = new Icon(FluentIcons.Provider, typeInfo.Icon ?? "Document");
         var description = string.IsNullOrEmpty(typeInfo.Description) ? "No description" : typeInfo.Description;
 
         // Navigate to create form with type query parameter
@@ -397,7 +398,7 @@ public static class CreateLayoutArea
                 .WithOrientation(Orientation.Horizontal)
                 .WithHorizontalGap(12)
                 .WithStyle("align-items: center; margin-bottom: 8px;")
-                .WithView(Controls.Icon(iconName).WithStyle("font-size: 24px; color: var(--accent-fill-rest);"))
+                .WithView(Controls.Icon(icon).WithStyle("font-size: 24px; color: var(--accent-fill-rest);"))
                 .WithView(Controls.H4(displayName).WithStyle("margin: 0; font-weight: 600;")))
             .WithView(Controls.Body(description).WithStyle("color: var(--neutral-foreground-hint); font-size: 14px;"))
             .WithClickAction(ctx => ctx.Host.UpdateArea(ctx.Area, new RedirectControl(createUrl)));

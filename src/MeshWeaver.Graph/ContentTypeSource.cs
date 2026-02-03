@@ -241,17 +241,12 @@ public record ContentTypeSource<T> : TypeSourceWithType<T, ContentTypeSource<T>>
         if (node.Content is T typed)
             return typed;
 
-        // If JsonElement, deserialize
+        // If JsonElement, deserialize using Hub's JsonSerializerOptions for proper type handling
         if (node.Content is System.Text.Json.JsonElement jsonElement)
         {
             try
             {
-                var options = new System.Text.Json.JsonSerializerOptions
-                {
-                    PropertyNameCaseInsensitive = true,
-                    Converters = { new System.Text.Json.Serialization.JsonStringEnumConverter() }
-                };
-                return System.Text.Json.JsonSerializer.Deserialize<T>(jsonElement.GetRawText(), options);
+                return System.Text.Json.JsonSerializer.Deserialize<T>(jsonElement.GetRawText(), _workspace.Hub.JsonSerializerOptions);
             }
             catch (Exception ex)
             {
