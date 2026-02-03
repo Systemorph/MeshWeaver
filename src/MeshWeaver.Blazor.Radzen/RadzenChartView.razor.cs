@@ -23,7 +23,7 @@ public partial class RadzenChartView : RadzenViewBase<ChartControl, RadzenChartV
     {
         base.BindData();
 
-        // Bind all chart properties
+        // Bind all chart properties - use Stream's Hub.JsonSerializerOptions for proper type handling
         DataBind(ViewModel.Series, x => x.Series, (data, _) =>
         {
             if (data == null)
@@ -33,18 +33,11 @@ public partial class RadzenChartView : RadzenViewBase<ChartControl, RadzenChartV
             if (data is ImmutableList<ChartSeries>)
                 return data;
 
-            // If it's a JsonElement, deserialize it
+            // If it's a JsonElement, deserialize it using Hub's JsonSerializerOptions
             if (data is JsonElement jsonElement)
             {
-                var options = new JsonSerializerOptions
-                {
-                    PropertyNameCaseInsensitive = true,
-                    PropertyNamingPolicy = JsonNamingPolicy.CamelCase
-                };
-
-                // Deserialize from the JsonElement's raw text to ensure type discriminators work
                 var json = jsonElement.GetRawText();
-                return JsonSerializer.Deserialize<ImmutableList<ChartSeries>>(json, options);
+                return JsonSerializer.Deserialize<ImmutableList<ChartSeries>>(json, Stream!.Hub.JsonSerializerOptions);
             }
 
             return data;
@@ -59,17 +52,11 @@ public partial class RadzenChartView : RadzenViewBase<ChartControl, RadzenChartV
             if (data is ImmutableList<string>)
                 return data;
 
-            // If it's a JsonElement, deserialize it
+            // If it's a JsonElement, deserialize it using Hub's JsonSerializerOptions
             if (data is JsonElement jsonElement)
             {
-                var options = new JsonSerializerOptions
-                {
-                    PropertyNameCaseInsensitive = true,
-                    PropertyNamingPolicy = JsonNamingPolicy.CamelCase
-                };
-
                 var json = jsonElement.GetRawText();
-                return JsonSerializer.Deserialize<ImmutableList<string>>(json, options);
+                return JsonSerializer.Deserialize<ImmutableList<string>>(json, Stream!.Hub.JsonSerializerOptions);
             }
 
             return data;
