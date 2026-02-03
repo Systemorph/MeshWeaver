@@ -518,6 +518,264 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
     #region Verification Tests
 
     /// <summary>
+    /// Test that simulates the actual UI create flow:
+    /// 1. Create transient node WITHOUT content (like CreateChild does)
+    /// 2. Initialize hub (which creates content instance via MeshDataSource.CreateContentInstance)
+    /// 3. Confirm node with content from workspace
+    /// 4. Verify content fields are preserved
+    ///
+    /// This reproduces the bug where content fields (category, priority, etc.) are empty after create.
+    /// </summary>
+    [Fact(Timeout = 30000)]
+    public async Task CreateFlow_TransientNodeWithoutContent_PreservesContentFieldsAfterConfirm()
+    {
+        var client = GetClient();
+        var catalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
+        var persistence = Mesh.ServiceProvider.GetRequiredService<IPersistenceService>();
+
+        var uniqueId = Guid.NewGuid().ToString("N")[..8];
+        var nodePath = $"ACME/ProductLaunch/Todo/UIFlowTest{uniqueId}";
+
+        Output.WriteLine($"Creating transient node at: {nodePath}");
+
+        // Step 1: Create transient node WITHOUT content (simulates CreateChild flow)
+        // In real UI, this is done by BuildCreateChildForm which only sets Name/Description/NodeType
+        var transientNode = MeshNode.FromPath(nodePath) with
+        {
+            Name = "UI Flow Test Task",
+            Description = "Testing UI flow content preservation",
+            NodeType = "ACME/Project/Todo",
+            State = MeshNodeState.Transient
+            // NOTE: No Content set - this is how CreateChild creates the node
+        };
+
+        try
+        {
+            await catalog.CreateTransientNodeAsync(transientNode, ct: TestContext.Current.CancellationToken);
+            Output.WriteLine("Transient node created (without content).");
+
+            // Step 2: Initialize the node's hub (this triggers MeshDataSource initialization)
+            var nodeAddress = new Address(nodePath);
+            await client.AwaitResponse(
+                new PingRequest(),
+                o => o.WithTarget(nodeAddress),
+                TestContext.Current.CancellationToken);
+            Output.WriteLine("Node hub initialized.");
+
+            // Step 3: Get the node from workspace to see what content was created
+            var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
+            var query = MeshQueryRequest.FromQuery($"path:{nodePath}");
+
+            var workspaceNode = await meshQuery
+                .ObserveQuery<MeshNode>(query)
+                .SelectMany(change => change.Items)
+                .Timeout(TimeSpan.FromSeconds(10))
+                .FirstAsync();
+
+            Output.WriteLine($"Workspace node content type: {workspaceNode.Content?.GetType().Name ?? "null"}");
+            if (workspaceNode.Content != null)
+            {
+                var contentJson = JsonSerializer.Serialize(workspaceNode.Content);
+                Output.WriteLine($"Workspace node content: {contentJson}");
+            }
+
+            // Step 4: Simulate user filling out the form by creating content with values
+            // In real UI, this would come from the data stream after user edits
+            var editedContent = new
+            {
+                id = uniqueId,
+                title = "UI Flow Test Task",
+                description = "Testing UI flow content preservation",
+                category = "Testing",
+                priority = "High",
+                status = "Planning"
+            };
+
+            // Step 5: Confirm the node (simulates Create button click)
+            var activeNode = transientNode with
+            {
+                State = MeshNodeState.Active,
+                Content = editedContent
+            };
+
+            client.Post(
+                new CreateNodeRequest(activeNode),
+                o => o.WithTarget(nodeAddress));
+
+            // Step 6: Wait for node to become Active
+            var confirmedNode = await meshQuery
+                .ObserveQuery<MeshNode>(query)
+                .SelectMany(change => change.Items)
+                .Where(node => node.State == MeshNodeState.Active)
+                .Timeout(TimeSpan.FromSeconds(10))
+                .FirstAsync();
+
+            Output.WriteLine($"Node confirmed. Content type: {confirmedNode.Content?.GetType().Name ?? "null"}");
+            if (confirmedNode.Content != null)
+            {
+                var contentJson = JsonSerializer.Serialize(confirmedNode.Content);
+                Output.WriteLine($"Confirmed node content: {contentJson}");
+            }
+
+            // Step 7: Verify content fields are preserved
+            confirmedNode.Content.Should().NotBeNull("Confirmed node should have content");
+
+            var json = JsonSerializer.Serialize(confirmedNode.Content);
+            using var doc = JsonDocument.Parse(json);
+            var root = doc.RootElement;
+
+            // These assertions reproduce the bug - content should NOT be empty
+            root.TryGetProperty("category", out var categoryProp).Should().BeTrue("Content should have category");
+            categoryProp.GetString().Should().Be("Testing", "Content category should be preserved");
+
+            root.TryGetProperty("priority", out var priorityProp).Should().BeTrue("Content should have priority");
+            priorityProp.GetString().Should().Be("High", "Content priority should be preserved");
+
+            root.TryGetProperty("status", out var statusProp).Should().BeTrue("Content should have status");
+            statusProp.GetString().Should().Be("Planning", "Content status should be preserved");
+
+            Output.WriteLine("UI flow test completed - all content fields preserved.");
+        }
+        finally
+        {
+            try
+            {
+                await catalog.DeleteNodeAsync(nodePath);
+                Output.WriteLine("Cleanup: node deleted.");
+            }
+            catch { }
+        }
+    }
+
+    /// <summary>
+    /// Test that GetDataRequest with EntityReference returns the correct Todo content.
+    /// This is the primary mechanism to verify content retrieval after node creation.
+    /// </summary>
+    [Fact(Timeout = 30000)]
+    public async Task GetDataRequest_ForCreatedTodo_ReturnsCorrectContent()
+    {
+        var client = GetClient();
+        var catalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
+        var persistence = Mesh.ServiceProvider.GetRequiredService<IPersistenceService>();
+
+        var uniqueId = Guid.NewGuid().ToString("N")[..8];
+        var nodePath = $"ACME/ProductLaunch/Todo/DataReqTest{uniqueId}";
+
+        Output.WriteLine($"Creating node at: {nodePath}");
+
+        // Create transient node with content
+        var todoContent = new
+        {
+            id = uniqueId,
+            title = "Data Request Test Task",
+            description = "Testing GetDataRequest retrieval",
+            status = "pending",
+            priority = "high",
+            category = "Testing"
+        };
+
+        var transientNode = MeshNode.FromPath(nodePath) with
+        {
+            Name = "Data Request Test Task",
+            Description = "Testing GetDataRequest retrieval",
+            NodeType = "ACME/Project/Todo",
+            State = MeshNodeState.Transient,
+            Content = todoContent
+        };
+
+        try
+        {
+            // Step 1: Create transient node
+            await catalog.CreateTransientNodeAsync(transientNode, ct: TestContext.Current.CancellationToken);
+            Output.WriteLine("Transient node created.");
+
+            // Step 2: Initialize the node's hub
+            var nodeAddress = new Address(nodePath);
+            await client.AwaitResponse(
+                new PingRequest(),
+                o => o.WithTarget(nodeAddress),
+                TestContext.Current.CancellationToken);
+            Output.WriteLine("Node hub initialized.");
+
+            // Step 3: Confirm the node (make it Active)
+            var activeNode = transientNode with { State = MeshNodeState.Active };
+            client.Post(
+                new CreateNodeRequest(activeNode),
+                o => o.WithTarget(nodeAddress));
+
+            // Step 4: Wait for node to become Active using reactive query
+            var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
+            var query = MeshQueryRequest.FromQuery($"path:{nodePath}");
+
+            await meshQuery
+                .ObserveQuery<MeshNode>(query)
+                .SelectMany(change => change.Items)
+                .Where(node => node.State == MeshNodeState.Active)
+                .Timeout(TimeSpan.FromSeconds(10))
+                .FirstAsync();
+            Output.WriteLine("Node confirmed as Active.");
+
+            // Step 5: Use GetDataRequest to retrieve the MeshNode via EntityReference
+            var entityRef = new EntityReference(nameof(MeshNode), nodePath);
+            var getDataResponse = await client.AwaitResponse(
+                new GetDataRequest(entityRef),
+                o => o.WithTarget(nodeAddress),
+                TestContext.Current.CancellationToken);
+
+            Output.WriteLine($"GetDataRequest response received.");
+
+            // Step 6: Verify the response contains the correct data
+            getDataResponse.Message.Should().NotBeNull("Response should not be null");
+            getDataResponse.Message.Data.Should().NotBeNull("Response data should not be null");
+
+            var retrievedNode = getDataResponse.Message.Data as MeshNode;
+            retrievedNode.Should().NotBeNull("Data should be a MeshNode");
+            retrievedNode!.Path.Should().Be(nodePath, "Retrieved node should have correct path");
+            retrievedNode.Name.Should().Be("Data Request Test Task", "Retrieved node should have correct name");
+            retrievedNode.State.Should().Be(MeshNodeState.Active, "Retrieved node should be Active");
+
+            // Verify content is present and has expected structure
+            retrievedNode.Content.Should().NotBeNull("Node should have content");
+            var contentJson = JsonSerializer.Serialize(retrievedNode.Content);
+            Output.WriteLine($"Retrieved content: {contentJson}");
+
+            using var doc = JsonDocument.Parse(contentJson);
+            var root = doc.RootElement;
+
+            // Verify title
+            root.TryGetProperty("title", out var titleProp).Should().BeTrue("Content should have title");
+            titleProp.GetString().Should().Be("Data Request Test Task", "Content title should match");
+
+            // Verify category is preserved
+            root.TryGetProperty("category", out var categoryProp).Should().BeTrue("Content should have category");
+            categoryProp.GetString().Should().Be("Testing", "Content category should match");
+
+            // Verify priority is preserved
+            root.TryGetProperty("priority", out var priorityProp).Should().BeTrue("Content should have priority");
+            priorityProp.GetString().Should().Be("high", "Content priority should match");
+
+            // Verify status is preserved
+            root.TryGetProperty("status", out var statusProp).Should().BeTrue("Content should have status");
+            statusProp.GetString().Should().Be("pending", "Content status should match");
+
+            // Verify description is preserved
+            root.TryGetProperty("description", out var descProp).Should().BeTrue("Content should have description");
+            descProp.GetString().Should().Be("Testing GetDataRequest retrieval", "Content description should match");
+
+            Output.WriteLine("GetDataRequest verification completed successfully - all fields preserved.");
+        }
+        finally
+        {
+            try
+            {
+                await catalog.DeleteNodeAsync(nodePath);
+                Output.WriteLine("Cleanup: node deleted.");
+            }
+            catch { }
+        }
+    }
+
+    /// <summary>
     /// Test that existing Todo items can be queried and have the expected content structure.
     /// This verifies that the Todo ContentType is properly configured.
     /// </summary>

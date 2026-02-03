@@ -324,17 +324,13 @@ public record MeshDataSource : GenericUnpartitionedDataSource<MeshDataSource>
             if (ContentType.IsInstanceOfType(node.Content))
                 return node.Content;
 
-            // If content is JsonElement, deserialize it
+            // If content is JsonElement, deserialize it using Hub's JsonSerializerOptions
+            // This ensures proper handling of polymorphic types, custom converters, and type discriminators
             if (node.Content is System.Text.Json.JsonElement jsonElement)
             {
                 try
                 {
-                    var options = new System.Text.Json.JsonSerializerOptions
-                    {
-                        PropertyNameCaseInsensitive = true,
-                        Converters = { new System.Text.Json.Serialization.JsonStringEnumConverter() }
-                    };
-                    var deserialized = System.Text.Json.JsonSerializer.Deserialize(jsonElement.GetRawText(), ContentType, options);
+                    var deserialized = System.Text.Json.JsonSerializer.Deserialize(jsonElement.GetRawText(), ContentType, Workspace.Hub.JsonSerializerOptions);
                     if (deserialized != null)
                         return deserialized;
                 }

@@ -188,7 +188,7 @@ public class AutoSaveHandlerTest
     }
 
     [Fact]
-    public void SameValueTwice_ShouldSaveBothTimes()
+    public void SameValueTwice_ShouldSaveOnlyOnce()
     {
         // Arrange
         var scheduler = new TestScheduler();
@@ -206,9 +206,203 @@ public class AutoSaveHandlerTest
         handler.OnValueChanged("Hello");
         scheduler.AdvanceBy(ThrottleInterval.Ticks + 1);
 
-        // Assert - both should be saved (Throttle doesn't use DistinctUntilChanged)
-        Assert.Equal(2, savedValues.Count);
+        // Assert - should save only once (skip duplicate sync of same value)
+        Assert.Single(savedValues);
         Assert.Equal("Hello", savedValues[0]);
-        Assert.Equal("Hello", savedValues[1]);
+    }
+
+    /// <summary>
+    /// Bug reproduction: Fast typing with stale echo arriving mid-typing should not lose characters.
+    /// Scenario:
+    /// 1. User types "H", sync sends "H"
+    /// 2. User types "e" before stream responds, current value is "He"
+    /// 3. Stream echoes back "H" - this should NOT overwrite "He"
+    /// </summary>
+    [Fact]
+    public void FastTyping_WithStaleEcho_ShouldNotLoseCharacters()
+    {
+        // Arrange
+        var scheduler = new TestScheduler();
+        var savedValues = new List<string>();
+
+        using var handler = new AutoSaveHandler(
+            ThrottleInterval,
+            value => savedValues.Add(value),
+            scheduler);
+
+        // Act - simulate fast typing
+        handler.OnValueChanged("H");
+        scheduler.AdvanceBy(TimeSpan.FromMilliseconds(50).Ticks);
+        handler.OnValueChanged("He");
+        scheduler.AdvanceBy(TimeSpan.FromMilliseconds(50).Ticks);
+
+        // At this point, no sync has happened yet (still within throttle)
+        // Simulate receiving stale echo from stream (the "H" we sent earlier)
+        // This should be rejected because we have pending local changes
+        Assert.False(handler.ShouldApplyExternalUpdate("H"),
+            "Stale echo 'H' should be rejected when local value is 'He'");
+
+        // Continue typing
+        handler.OnValueChanged("Hel");
+        scheduler.AdvanceBy(TimeSpan.FromMilliseconds(50).Ticks);
+        handler.OnValueChanged("Hell");
+        scheduler.AdvanceBy(TimeSpan.FromMilliseconds(50).Ticks);
+        handler.OnValueChanged("Hello");
+
+        // Wait for throttle to trigger sync
+        scheduler.AdvanceBy(ThrottleInterval.Ticks + 1);
+
+        // Assert - sync should have saved "Hello"
+        Assert.Single(savedValues);
+        Assert.Equal("Hello", savedValues[0]);
+        Assert.Equal("Hello", handler.LastSyncedValue);
+
+        // Now if stream echoes back "Hello", it should be accepted
+        // (but marked as no-op since it matches our synced value)
+        Assert.False(handler.ShouldApplyExternalUpdate("Hello"),
+            "Echo of our own synced value should be rejected as no-op");
+    }
+
+    /// <summary>
+    /// Bug reproduction: External update during local editing should not overwrite local changes.
+    /// Scenario: Another user makes a change while we're typing - we should not lose our work.
+    /// </summary>
+    [Fact]
+    public void ExternalUpdate_DuringLocalEditing_ShouldNotOverwriteLocalChanges()
+    {
+        // Arrange
+        var scheduler = new TestScheduler();
+        var savedValues = new List<string>();
+
+        using var handler = new AutoSaveHandler(
+            ThrottleInterval,
+            value => savedValues.Add(value),
+            scheduler);
+
+        // Start typing
+        handler.OnValueChanged("My ");
+        scheduler.AdvanceBy(TimeSpan.FromMilliseconds(50).Ticks);
+        handler.OnValueChanged("My text");
+
+        // External update arrives while we're still typing (before throttle fires)
+        // This should be rejected to protect our local work
+        Assert.False(handler.ShouldApplyExternalUpdate("Someone else's text"),
+            "External update should be rejected while we have pending local changes");
+
+        // Continue typing
+        handler.OnValueChanged("My text here");
+
+        // Wait for sync
+        scheduler.AdvanceBy(ThrottleInterval.Ticks + 1);
+
+        // Our value should have been saved
+        Assert.Single(savedValues);
+        Assert.Equal("My text here", savedValues[0]);
+    }
+
+    /// <summary>
+    /// After sync is complete and no local changes, external updates should be applied.
+    /// </summary>
+    [Fact]
+    public void ExternalUpdate_AfterSyncComplete_ShouldBeApplied()
+    {
+        // Arrange
+        var scheduler = new TestScheduler();
+        var savedValues = new List<string>();
+
+        using var handler = new AutoSaveHandler(
+            ThrottleInterval,
+            value => savedValues.Add(value),
+            scheduler);
+
+        // Type and wait for sync
+        handler.OnValueChanged("Hello");
+        scheduler.AdvanceBy(ThrottleInterval.Ticks + 1);
+
+        // Sync completed
+        Assert.Single(savedValues);
+        Assert.Equal("Hello", handler.LastSyncedValue);
+        Assert.Equal("Hello", handler.CurrentValue);
+
+        // Now an external update arrives (from another user)
+        // Since we have no pending changes, this should be accepted
+        Assert.True(handler.ShouldApplyExternalUpdate("Hello World"),
+            "External update should be accepted when no pending local changes");
+
+        // Apply the update
+        handler.OnExternalUpdateApplied("Hello World");
+
+        // Verify state is updated
+        Assert.Equal("Hello World", handler.LastSyncedValue);
+        Assert.Equal("Hello World", handler.CurrentValue);
+    }
+
+    /// <summary>
+    /// Verify that echo of last synced value is always rejected (prevents flicker).
+    /// </summary>
+    [Fact]
+    public void EchoOfLastSyncedValue_ShouldAlwaysBeRejected()
+    {
+        // Arrange
+        var scheduler = new TestScheduler();
+        var savedValues = new List<string>();
+
+        using var handler = new AutoSaveHandler(
+            ThrottleInterval,
+            value => savedValues.Add(value),
+            scheduler);
+
+        // Sync "Hello"
+        handler.OnValueChanged("Hello");
+        scheduler.AdvanceBy(ThrottleInterval.Ticks + 1);
+
+        Assert.Equal("Hello", handler.LastSyncedValue);
+
+        // Echo of our own sync should be rejected
+        Assert.False(handler.ShouldApplyExternalUpdate("Hello"),
+            "Echo of our own synced value should always be rejected");
+    }
+
+    /// <summary>
+    /// Verify LastSyncedValue and CurrentValue are tracked correctly.
+    /// </summary>
+    [Fact]
+    public void StateTracking_ShouldBeAccurate()
+    {
+        // Arrange
+        var scheduler = new TestScheduler();
+        var savedValues = new List<string>();
+
+        using var handler = new AutoSaveHandler(
+            ThrottleInterval,
+            value => savedValues.Add(value),
+            scheduler);
+
+        // Initially null
+        Assert.Null(handler.LastSyncedValue);
+        Assert.Null(handler.CurrentValue);
+
+        // Type first character
+        handler.OnValueChanged("H");
+        Assert.Null(handler.LastSyncedValue); // Not synced yet
+        Assert.Equal("H", handler.CurrentValue); // Tracked immediately
+
+        // Type more
+        handler.OnValueChanged("He");
+        handler.OnValueChanged("Hel");
+        Assert.Null(handler.LastSyncedValue); // Still not synced
+        Assert.Equal("Hel", handler.CurrentValue); // Always current
+
+        // Wait for sync
+        scheduler.AdvanceBy(ThrottleInterval.Ticks + 1);
+
+        // Now synced
+        Assert.Equal("Hel", handler.LastSyncedValue);
+        Assert.Equal("Hel", handler.CurrentValue);
+
+        // Type more
+        handler.OnValueChanged("Hello");
+        Assert.Equal("Hel", handler.LastSyncedValue); // Still old value
+        Assert.Equal("Hello", handler.CurrentValue); // Updated
     }
 }

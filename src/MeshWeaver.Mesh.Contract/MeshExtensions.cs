@@ -91,11 +91,15 @@ public static class MeshExtensions
                         Content = node.Content ?? existingNode.Content
                     };
 
-                    // Save via persistence (triggers MeshNodeTypeSource sync)
+                    // Save via persistence
                     if (persistence != null)
                     {
                         await persistence.SaveNodeAsync(confirmedNode, ct);
                     }
+
+                    // Update workspace stream via DataChangeRequest so GetDataRequest returns updated state
+                    // Post the change to ourselves to update the workspace
+                    hub.Post(DataChangeRequest.Update([confirmedNode]), o => o.WithTarget(hub.Address));
 
                     hub.Post(CreateNodeResponse.Ok(confirmedNode), o => o.ResponseFor(request));
                     logger.LogInformation("Confirmed transient node at {Path}", confirmedNode.Path);
