@@ -14,7 +14,7 @@
     "description": "Review all submitted KYC documents for Apex Manufacturing: certificate of incorporation, tax ID verification, business license, and authorized signatory documentation.",
     "category": "Legal",
     "priority": "Critical",
-    "assignee": null,
+    "assignee": "Oliver",
     "dueDateOffsetDays": -7,
     "status": "InProgress"
   }

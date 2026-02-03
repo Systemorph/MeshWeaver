@@ -14,7 +14,6 @@
     "description": "Calculate comprehensive risk score using underwriting model. Factor in: industry hazard class, loss history, safety programs, financial strength, and geographic exposure.",
     "category": "Research",
     "priority": "High",
-    "assignee": "Bob",
     "dueDateOffsetDays": -4,
     "status": "Pending"
   }
