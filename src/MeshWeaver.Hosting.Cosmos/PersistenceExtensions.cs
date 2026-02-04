@@ -7,6 +7,8 @@ using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 
+#pragma warning disable CS8618 // Required properties may be uninitialized in partial classes
+
 namespace MeshWeaver.Hosting.Cosmos;
 
 /// <summary>
@@ -220,5 +222,95 @@ public static class PersistenceExtensions
             });
 
         return services.AddCosmosPersistenceWithChangeFeed(cosmosClient, databaseName);
+    }
+
+    /// <summary>
+    /// Creates container properties with vector index support for semantic search.
+    /// </summary>
+    /// <param name="containerName">The container name</param>
+    /// <param name="partitionKeyPath">The partition key path</param>
+    /// <param name="embeddingPath">Path to the embedding property (default: "/embedding")</param>
+    /// <param name="dimensions">Vector dimensions (default: 1536 for OpenAI text-embedding-3-small)</param>
+    /// <param name="dataType">Vector data type (default: Float32)</param>
+    /// <param name="distanceFunction">Distance function for similarity (default: Cosine)</param>
+    /// <param name="indexType">Vector index type (default: DiskANN)</param>
+    /// <returns>Container properties configured for vector search</returns>
+    public static ContainerProperties CreateVectorEnabledContainerProperties(
+        string containerName,
+        string partitionKeyPath,
+        string embeddingPath = "/embedding",
+        int dimensions = 1536,
+        VectorDataType dataType = VectorDataType.Float32,
+        DistanceFunction distanceFunction = DistanceFunction.Cosine,
+        VectorIndexType indexType = VectorIndexType.DiskANN)
+    {
+        var containerProperties = new ContainerProperties(containerName, partitionKeyPath)
+        {
+            DefaultTimeToLive = -1,
+            VectorEmbeddingPolicy = new VectorEmbeddingPolicy(
+            [
+                new Embedding
+                {
+                    Path = embeddingPath,
+                    DataType = dataType,
+                    DistanceFunction = distanceFunction,
+                    Dimensions = dimensions
+                }
+            ]),
+            IndexingPolicy = new IndexingPolicy
+            {
+                VectorIndexes =
+                [
+                    new VectorIndexPath
+                    {
+                        Path = embeddingPath,
+                        Type = indexType
+                    }
+                ]
+            }
+        };
+
+        return containerProperties;
+    }
+
+    /// <summary>
+    /// Adds Cosmos DB persistence services with vector search support and automatic container creation.
+    /// </summary>
+    /// <param name="services">The service collection</param>
+    /// <param name="cosmosClient">The Cosmos DB client</param>
+    /// <param name="databaseName">The database name</param>
+    /// <param name="throughput">The throughput for containers</param>
+    /// <param name="vectorDimensions">Vector dimensions for embeddings (default: 1536)</param>
+    /// <returns>The service collection for chaining</returns>
+    public static async Task<IServiceCollection> AddCosmosPersistenceWithVectorSearchAsync(
+        this IServiceCollection services,
+        CosmosClient cosmosClient,
+        string databaseName,
+        int throughput = 400,
+        int vectorDimensions = 1536)
+    {
+        // Create database if not exists
+        var databaseResponse = await cosmosClient.CreateDatabaseIfNotExistsAsync(
+            databaseName,
+            ThroughputProperties.CreateManualThroughput(throughput));
+        var database = databaseResponse.Database;
+
+        // Create nodes container with vector index support
+        var nodesContainerProperties = CreateVectorEnabledContainerProperties(
+            "nodes",
+            "/key",
+            "/embedding",
+            vectorDimensions);
+
+        await database.CreateContainerIfNotExistsAsync(nodesContainerProperties);
+
+        // Create partitions container (standard, no vector support needed)
+        await database.CreateContainerIfNotExistsAsync(
+            new ContainerProperties("partitions", "/partitionKey")
+            {
+                DefaultTimeToLive = -1
+            });
+
+        return services.AddCosmosPersistence(cosmosClient, databaseName);
     }
 }
