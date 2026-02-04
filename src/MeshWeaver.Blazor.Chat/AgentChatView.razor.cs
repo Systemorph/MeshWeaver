@@ -17,7 +17,7 @@ using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using TextContent = Microsoft.Extensions.AI.TextContent;
-using MeshThread = MeshWeaver.Mesh.Thread;
+using MeshThread = MeshWeaver.AI.Thread;
 
 namespace MeshWeaver.Blazor.Chat;
 
@@ -138,14 +138,12 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
             {
                 var threadNodes = await ThreadNodePersistenceHelper.ListUserThreadNodesAsync(meshQuery, userId);
                 var mostRecent = threadNodes
-                    .Select(n => (Node: n, Content: n.Content as MeshThread))
-                    .Where(x => x.Content != null)
-                    .OrderByDescending(x => x.Content!.LastActivityAt)
+                    .OrderByDescending(n => n.LastModified)
                     .FirstOrDefault();
 
-                if (mostRecent.Node != null && mostRecent.Node.Path != null)
+                if (mostRecent?.Path != null)
                 {
-                    await LoadConversation(mostRecent.Node.Path);
+                    await LoadConversation(mostRecent.Path);
                 }
                 else
                 {
@@ -736,9 +734,9 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
                 currentConversation = new ChatConversation
                 {
                     Id = chatPath,
-                    Title = threadContent.Title ?? "Chat",
-                    CreatedAt = threadContent.CreatedAt,
-                    LastModifiedAt = threadContent.LastActivityAt,
+                    Title = "Chat",
+                    CreatedAt = DateTime.UtcNow,
+                    LastModifiedAt = DateTime.UtcNow,
                     Messages = messages.ToList()
                 };
 
@@ -786,10 +784,6 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
             // Create or update the thread node content
             var threadContent = new MeshThread
             {
-                Title = title,
-                CreatedAt = currentConversation?.CreatedAt ?? DateTime.UtcNow,
-                LastActivityAt = DateTime.UtcNow,
-                ProviderId = selectedModelInfo?.Name,
                 Messages = chatMessages
             };
 
@@ -803,7 +797,8 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
             {
                 // Create new thread node with context-aware path (lazy creation on first message)
                 var basePath = await GetThreadStorageBasePath();
-                currentThreadNodePath = await ThreadNodePersistenceHelper.CreateThreadNodeAsync(Hub, basePath, threadContent);
+                var name = title ?? $"Chat {DateTime.UtcNow:yyyy-MM-dd HH:mm}";
+                currentThreadNodePath = await ThreadNodePersistenceHelper.CreateThreadNodeAsync(Hub, basePath, name, threadContent);
                 currentConversationId = currentThreadNodePath;
 
                 // Set the thread ID on the chat client
@@ -818,8 +813,8 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
             {
                 Id = currentThreadNodePath ?? Guid.NewGuid().AsString(),
                 Title = title ?? "New Chat",
-                CreatedAt = threadContent.CreatedAt,
-                LastModifiedAt = threadContent.LastActivityAt,
+                CreatedAt = DateTime.UtcNow,
+                LastModifiedAt = DateTime.UtcNow,
                 Messages = messages.ToList(),
                 AgentContext = agentContext
             };

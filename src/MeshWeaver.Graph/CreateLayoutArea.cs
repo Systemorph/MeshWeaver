@@ -29,7 +29,7 @@ public static class CreateLayoutArea
     /// - If ?type= query param is present: shows CreateChild form.
     /// - Otherwise: shows type selection grid for CreateChild.
     /// </summary>
-    public static IObservable<UiControl?> Create(LayoutAreaHost host, RenderingContext ctx)
+    public static IObservable<UiControl?> Create(LayoutAreaHost host, RenderingContext _)
     {
         var currentPath = host.Hub.Address.ToString();
         var nodeTypeService = host.Hub.ServiceProvider.GetService<INodeTypeService>();
@@ -342,7 +342,7 @@ public static class CreateLayoutArea
     /// Builds the type selection grid showing all creatable types as cards.
     /// </summary>
     private static async Task<UiControl> BuildTypeSelectionAsync(
-        LayoutAreaHost host,
+        LayoutAreaHost _,
         INodeTypeService nodeTypeService,
         string parentPath,
         CancellationToken ct)
@@ -567,7 +567,7 @@ public static class CreateLayoutArea
     /// <summary>
     /// Builds the Name field (required).
     /// </summary>
-    private static UiControl BuildNameField(LayoutAreaHost host, string dataId)
+    private static UiControl BuildNameField(LayoutAreaHost _, string dataId)
     {
         return Controls.Stack
             .WithWidth("100%")
@@ -585,7 +585,7 @@ public static class CreateLayoutArea
     /// <summary>
     /// Builds the Description field as a markdown editor.
     /// </summary>
-    private static UiControl BuildDescriptionField(LayoutAreaHost host, string dataId)
+    private static UiControl BuildDescriptionField(LayoutAreaHost _, string dataId)
     {
         return Controls.Stack
             .WithWidth("100%")

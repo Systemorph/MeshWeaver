@@ -1,6 +1,6 @@
 using System.ComponentModel.DataAnnotations;
 
-namespace MeshWeaver.Mesh;
+namespace MeshWeaver.AI;
 
 /// <summary>
 /// Represents an agent configuration stored in the graph.

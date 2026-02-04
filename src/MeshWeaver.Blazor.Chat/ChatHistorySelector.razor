@@ -4,7 +4,7 @@
 @using MeshWeaver.Mesh.Services
 @using MeshWeaver.Messaging
 @using System.Text.Json
-@using MeshThread = MeshWeaver.Mesh.Thread
+@using MeshThread = MeshWeaver.AI.Thread
 @namespace MeshWeaver.Blazor.Chat
 @inject IMeshQuery MeshQuery
 @inject AccessService AccessService
@@ -29,7 +29,7 @@
         else
         {
             <div class="conversation-list">
-                @foreach (var chat in Chats.OrderByDescending(c => c.Content.LastActivityAt))
+                @foreach (var chat in Chats.OrderByDescending(c => c.Node.LastModified))
                 {
                     <div class="conversation-item @(chat.Path == SelectedConversationId ? "selected" : "")"
                         @onclick="() => SelectConversation(chat.Path)">
@@ -37,7 +37,7 @@
                         <div class="conversation-preview">@GetChatPreview(chat)</div>
                         <div class="conversation-meta">
                             <small class="text-muted">
-                                @FormatDate(chat.Content.LastActivityAt)
+                                @FormatDate(chat.Node.LastModified.DateTime)
                                 @if (!string.IsNullOrEmpty(GetPathScope(chat.Path)))
                                 {
                                     <span> • @GetContextName(GetPathScope(chat.Path))</span>
@@ -193,8 +193,8 @@
     [Parameter] public bool IsRightPanel { get; set; }
     [Parameter] public string? Scope { get; set; }
 
-    // Chat items with path and content for display
-    private record ThreadItem(string Path, MeshThread Content);
+    // Chat items with node and content for display
+    private record ThreadItem(string Path, MeshNode Node, MeshThread Content);
     private IReadOnlyList<ThreadItem> Chats = [];
 
     protected override async Task OnInitializedAsync()
@@ -244,9 +244,9 @@
 
             // Convert to ThreadItem list, filtering by scope if specified
             var items = threadNodes
-                .Select(n => new ThreadItem(n.Path ?? n.Id, n.Content as MeshThread ?? new MeshThread()))
+                .Select(n => new ThreadItem(n.Path ?? n.Id, n, n.Content as MeshThread ?? new MeshThread()))
                 .Where(c => Scope == null || GetPathScope(c.Path) == Scope)
-                .ToList(); // Already ordered by LastActivityAt in ListThreadsFromPathsAsync
+                .ToList();
 
             Chats = items;
             StateHasChanged();
@@ -267,9 +267,9 @@
 
     private string GetChatTitle(ThreadItem chat)
     {
-        // Use title if available
-        if (!string.IsNullOrEmpty(chat.Content.Title))
-            return chat.Content.Title;
+        // Use node name if available
+        if (!string.IsNullOrEmpty(chat.Node.Name))
+            return chat.Node.Name;
 
         // Try to extract first user message as title
         var preview = GetFirstUserMessage(chat.Content);
@@ -279,7 +279,7 @@
         }
 
         // Fallback to date
-        return $"Chat from {chat.Content.CreatedAt:MM/dd HH:mm}";
+        return $"Chat from {chat.Node.LastModified:MM/dd HH:mm}";
     }
 
     private string GetChatPreview(ThreadItem chat)

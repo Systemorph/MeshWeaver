@@ -1,35 +1,14 @@
 using System.Text.Json;
-using MeshWeaver.Domain;
 
-namespace MeshWeaver.Mesh;
+namespace MeshWeaver.AI;
 
 /// <summary>
 /// Content stored in Thread MeshNodes.
 /// Threads are stored as MeshNodes with nodeType="Thread" in User/{userId}/Threads/.
+/// Title is stored in MeshNode.Name, LastModified tracks activity.
 /// </summary>
 public record Thread
 {
-    /// <summary>
-    /// Optional title (auto-generated from first message if not set).
-    /// </summary>
-    [MeshNodeProperty(nameof(MeshNode.Name))]
-    public string? Title { get; init; }
-
-    /// <summary>
-    /// When the thread was created.
-    /// </summary>
-    public DateTime CreatedAt { get; init; } = DateTime.UtcNow;
-
-    /// <summary>
-    /// When the thread was last active.
-    /// </summary>
-    public DateTime LastActivityAt { get; init; } = DateTime.UtcNow;
-
-    /// <summary>
-    /// The AI provider/model used for this thread.
-    /// </summary>
-    public string? ProviderId { get; init; }
-
     /// <summary>
     /// Serialized AgentSession state for resuming conversations.
     /// </summary>
@@ -39,11 +18,6 @@ public record Thread
     /// Thread messages stored inline.
     /// </summary>
     public List<ThreadMessage>? Messages { get; init; }
-
-    /// <summary>
-    /// Gets a display title for the thread.
-    /// </summary>
-    public string DisplayTitle => Title ?? $"Thread from {CreatedAt:MM/dd/yyyy HH:mm}";
 }
 
 /// <summary>

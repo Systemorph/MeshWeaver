@@ -1,12 +1,10 @@
-using System.Text.Json;
+﻿using System.Text.Json;
 using MeshWeaver.Data;
-using MeshWeaver.Graph.Configuration;
-using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using MeshWeaver.ShortGuid;
 using Microsoft.Extensions.DependencyInjection;
-using MeshThread = MeshWeaver.Mesh.Thread;
+using MeshThread = MeshWeaver.AI.Thread;
 
 namespace MeshWeaver.AI.Persistence;
 
@@ -21,12 +19,14 @@ public static class ThreadNodePersistenceHelper
     /// </summary>
     /// <param name="hub">The message hub.</param>
     /// <param name="basePath">The base path for storage (e.g., "User/{userId}/Threads" or "ACME/ProductLaunch/Threads").</param>
+    /// <param name="name">The display name for the thread.</param>
     /// <param name="content">The thread content to store.</param>
     /// <param name="ct">Cancellation token.</param>
     /// <returns>The path of the created thread node.</returns>
     public static async Task<string> CreateThreadNodeAsync(
         IMessageHub hub,
         string basePath,
+        string name,
         MeshThread content,
         CancellationToken ct = default)
     {
@@ -35,7 +35,7 @@ public static class ThreadNodePersistenceHelper
 
         var node = new MeshNode(threadPath)
         {
-            Name = content.Title ?? content.DisplayTitle,
+            Name = name,
             NodeType = ThreadNodeType.NodeType,
             Content = content
         };
@@ -80,14 +80,9 @@ public static class ThreadNodePersistenceHelper
         }
 
         var updatedNode = existingNode != null
-            ? existingNode with
-            {
-                Name = content.Title ?? content.DisplayTitle,
-                Content = content
-            }
+            ? existingNode with { Content = content }
             : new MeshNode(threadPath)
             {
-                Name = content.Title ?? content.DisplayTitle,
                 NodeType = ThreadNodeType.NodeType,
                 Content = content
             };
@@ -124,7 +119,7 @@ public static class ThreadNodePersistenceHelper
         {
             await hub.RegisterCallback(delivery, d =>
             {
-                if (d.Message is GetDataResponse response && response.Data is MeshNode node)
+                if (d.Message is { Data: MeshNode node })
                 {
                     result = node.Content as MeshThread;
                 }
@@ -176,12 +171,12 @@ public static class ThreadNodePersistenceHelper
 
     /// <summary>
     /// Lists Thread MeshNodes from multiple paths (e.g., user threads + context threads).
-    /// Results are deduplicated by path and ordered by LastActivityAt descending.
+    /// Results are deduplicated by path and ordered by LastModified descending.
     /// </summary>
     /// <param name="meshQuery">The mesh query service.</param>
     /// <param name="paths">The base paths to query threads from.</param>
     /// <param name="ct">Cancellation token.</param>
-    /// <returns>List of thread nodes ordered by LastActivityAt descending.</returns>
+    /// <returns>List of thread nodes ordered by LastModified descending.</returns>
     public static async Task<IReadOnlyList<MeshNode>> ListThreadsFromPathsAsync(
         IMeshQuery meshQuery,
         IEnumerable<string> paths,
@@ -203,9 +198,9 @@ public static class ThreadNodePersistenceHelper
             }
         }
 
-        // Order by LastActivityAt descending
+        // Order by LastModified descending
         return allNodes.Values
-            .OrderByDescending(n => (n.Content as MeshThread)?.LastActivityAt ?? DateTime.MinValue)
+            .OrderByDescending(n => n.LastModified)
             .ToList();
     }
 
@@ -253,16 +248,8 @@ public static class ThreadNodePersistenceHelper
         var delegationId = Guid.NewGuid().AsString();
         var delegationPath = $"{parentThreadPath}/{targetAgentName}-{delegationId}";
 
-        // Truncate title if message is too long
-        var titlePreview = delegationMessage.Length > 50
-            ? delegationMessage[..50] + "..."
-            : delegationMessage;
-
         var content = new MeshThread
         {
-            Title = $"Delegation to {targetAgentName}: {titlePreview}",
-            CreatedAt = DateTime.UtcNow,
-            LastActivityAt = DateTime.UtcNow,
             Messages = []
         };
 
@@ -320,7 +307,6 @@ public static class ThreadNodePersistenceHelper
 
         var updatedContent = (existingContent ?? new MeshThread()) with
         {
-            LastActivityAt = DateTime.UtcNow,
             Messages = messages
         };
 

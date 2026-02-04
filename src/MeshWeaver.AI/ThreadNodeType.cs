@@ -1,13 +1,7 @@
-using MeshWeaver.Data;
-using MeshWeaver.Mesh;
-using MeshThread = MeshWeaver.Mesh.Thread;
-
-namespace MeshWeaver.Graph.Configuration;
+namespace MeshWeaver.AI;
 
 /// <summary>
-/// Provides configuration for Thread node types in the graph.
-/// Thread nodes store AI conversation history with hierarchical support
-/// for agent delegations stored as child nodes.
+/// Constants and path helpers for Thread node types.
 /// </summary>
 public static class ThreadNodeType
 {
@@ -30,18 +24,4 @@ public static class ThreadNodeType
     /// <param name="contextPath">The context path (e.g., "ACME/ProductLaunch").</param>
     /// <returns>Path to the context's threads namespace.</returns>
     public static string GetContextThreadsPath(string contextPath) => $"{contextPath}/Threads";
-
-    /// <summary>
-    /// Creates a MeshNode definition for the Thread node type.
-    /// This provides HubConfiguration for nodes with nodeType="Thread".
-    /// </summary>
-    public static MeshNode CreateMeshNode() => new(NodeType)
-    {
-        Name = "Thread",
-        Description = "A conversation thread with AI agents",
-        Icon = "Chat",
-        HubConfiguration = config => config
-            .AddThreadViews()
-            .AddMeshDataSource(source => source.WithContentType<MeshThread>())
-    };
 }

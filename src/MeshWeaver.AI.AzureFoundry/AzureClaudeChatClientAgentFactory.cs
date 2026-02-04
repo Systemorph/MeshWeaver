@@ -1,4 +1,3 @@
-using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;

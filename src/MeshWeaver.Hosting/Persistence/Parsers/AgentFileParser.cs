@@ -2,6 +2,7 @@ using System.Text;
 using Markdig;
 using Markdig.Extensions.Yaml;
 using Markdig.Syntax;
+using MeshWeaver.AI;
 using MeshWeaver.Mesh;
 using YamlDotNet.Serialization;
 using YamlDotNet.Serialization.NamingConventions;

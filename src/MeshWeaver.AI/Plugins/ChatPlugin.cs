@@ -1,7 +1,6 @@
 ﻿using System.ComponentModel;
 using System.Text.Json;
 using MeshWeaver.Data;
-using MeshWeaver.Graph.Configuration;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 

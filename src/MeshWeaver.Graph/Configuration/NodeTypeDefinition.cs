@@ -13,6 +13,11 @@ namespace MeshWeaver.Graph.Configuration;
 public record NodeTypeDefinition
 {
     /// <summary>
+    /// Unique identifier for this node type definition.
+    /// </summary>
+    public string? Id { get; init; }
+
+    /// <summary>
     /// The namespace in which the type is defined (is also partition)
     /// </summary>
     public required string Namespace { get; init; }

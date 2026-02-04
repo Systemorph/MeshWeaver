@@ -1,0 +1,77 @@
+@using Microsoft.FluentUI.AspNetCore.Components
+
+<div class="reference-chip-collection">
+    @if (!string.IsNullOrEmpty(ContextPath))
+    {
+        <!-- Current context chip (highlighted, non-removable) -->
+        <div class="reference-chip context-chip" title="Current context: @ContextPath" @onclick="@(() => OnChipClick.InvokeAsync(ContextPath))">
+            <FluentIcon Value="@(new Icons.Regular.Size16.Location())" Color="Color.Accent" />
+            <span class="chip-text">@GetDisplayName(ContextPath, ContextDisplayName)</span>
+        </div>
+    }
+
+    @foreach (var reference in References)
+    {
+        <div class="reference-chip" title="@reference" @onclick="@(() => OnChipClick.InvokeAsync(reference))">
+            <FluentIcon Value="@(new Icons.Regular.Size16.Link())" Color="Color.Neutral" />
+            <span class="chip-text">@GetShortDisplayName(reference)</span>
+            <button type="button" class="chip-remove" @onclick:stopPropagation="true" @onclick="@(() => RemoveReference(reference))" title="Remove reference">
+                <FluentIcon Value="@(new Icons.Regular.Size12.Dismiss())" Color="Color.Neutral" />
+            </button>
+        </div>
+    }
+</div>
+
+@code {
+    /// <summary>
+    /// The current context path (displayed as first chip, non-removable).
+    /// </summary>
+    [Parameter]
+    public string? ContextPath { get; set; }
+
+    /// <summary>
+    /// Display name for the context (optional, uses path if not provided).
+    /// </summary>
+    [Parameter]
+    public string? ContextDisplayName { get; set; }
+
+    /// <summary>
+    /// List of @ references extracted from markdown.
+    /// </summary>
+    [Parameter]
+    public IReadOnlyList<string> References { get; set; } = Array.Empty<string>();
+
+    /// <summary>
+    /// Callback when a reference is removed by clicking the X button.
+    /// </summary>
+    [Parameter]
+    public EventCallback<string> OnReferenceRemoved { get; set; }
+
+    /// <summary>
+    /// Callback when a chip is clicked (for navigation).
+    /// </summary>
+    [Parameter]
+    public EventCallback<string> OnChipClick { get; set; }
+
+    private async Task RemoveReference(string reference)
+    {
+        await OnReferenceRemoved.InvokeAsync(reference);
+    }
+
+    private static string GetDisplayName(string path, string? displayName)
+    {
+        if (!string.IsNullOrEmpty(displayName))
+            return displayName;
+
+        // Extract last segment of path for display
+        var segments = path.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        return segments.Length > 0 ? segments[^1] : path;
+    }
+
+    private static string GetShortDisplayName(string path)
+    {
+        // Extract last segment of path for display
+        var segments = path.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        return segments.Length > 0 ? segments[^1] : path;
+    }
+}

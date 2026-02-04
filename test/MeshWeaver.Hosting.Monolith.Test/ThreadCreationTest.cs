@@ -1,8 +1,10 @@
 using System;
+using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
 using FluentAssertions.Extensions;
+using MeshWeaver.AI;
 using MeshWeaver.Data;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Monolith.TestBase;
@@ -11,6 +13,7 @@ using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
+using MeshThread = MeshWeaver.AI.Thread;
 
 namespace MeshWeaver.Hosting.Monolith.Test;
 
@@ -34,15 +37,14 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
         // Arrange
         var userId = "TestUser";
         var catalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
-        var threadContent = new Mesh.Thread
+        var threadContent = new MeshThread
         {
-            Title = "Test Thread",
-            CreatedAt = DateTime.UtcNow
+            Messages = new List<ThreadMessage>()
         };
         var threadPath = $"User/{userId}/Threads/{Guid.NewGuid()}";
         var node = new MeshNode(threadPath)
         {
-            Name = threadContent.DisplayTitle,
+            Name = "Test Thread",
             NodeType = ThreadNodeType.NodeType,
             Content = threadContent
         };
@@ -54,7 +56,7 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
         createdNode.Should().NotBeNull();
         createdNode.Path.Should().Be(threadPath);
         createdNode.State.Should().Be(MeshNodeState.Active);
-        createdNode.Content.Should().BeOfType<Mesh.Thread>();
+        createdNode.Content.Should().BeOfType<MeshThread>();
     }
 
     [Fact]
@@ -63,13 +65,11 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
         // Arrange
         var userId = "TestUser";
         var catalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
-        var threadContent = new Mesh.Thread
+        var threadContent = new MeshThread
         {
-            Title = "Thread with Messages",
-            CreatedAt = DateTime.UtcNow,
             Messages =
             [
-                new Mesh.ThreadMessage
+                new ThreadMessage
                 {
                     Id = Guid.NewGuid().ToString(),
                     Role = "user",
@@ -81,7 +81,7 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
         var threadPath = $"User/{userId}/Threads/{Guid.NewGuid()}";
         var node = new MeshNode(threadPath)
         {
-            Name = threadContent.DisplayTitle,
+            Name = "Thread with Messages",
             NodeType = ThreadNodeType.NodeType,
             Content = threadContent
         };
@@ -93,7 +93,7 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
         createdNode.Should().NotBeNull();
         createdNode.Path.Should().Be(threadPath);
         createdNode.State.Should().Be(MeshNodeState.Active);
-        var content = createdNode.Content.Should().BeOfType<Mesh.Thread>().Subject;
+        var content = createdNode.Content.Should().BeOfType<MeshThread>().Subject;
         content.Messages.Should().HaveCount(1);
         content.Messages![0].Text.Should().Be("Hello, world!");
     }
@@ -104,15 +104,14 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
         // Arrange
         var userId = "TestUser";
         var catalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
-        var threadContent = new Mesh.Thread
+        var threadContent = new MeshThread
         {
-            Title = "Retrievable Thread",
-            CreatedAt = DateTime.UtcNow
+            Messages = new List<ThreadMessage>()
         };
         var threadPath = $"User/{userId}/Threads/{Guid.NewGuid()}";
         var node = new MeshNode(threadPath)
         {
-            Name = threadContent.DisplayTitle,
+            Name = "Retrievable Thread",
             NodeType = ThreadNodeType.NodeType,
             Content = threadContent
         };
@@ -127,8 +126,8 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
         retrievedNode.Should().NotBeNull();
         retrievedNode!.Path.Should().Be(threadPath);
         retrievedNode.NodeType.Should().Be(ThreadNodeType.NodeType);
-        var content = retrievedNode.Content.Should().BeOfType<Mesh.Thread>().Subject;
-        content.Title.Should().Be("Retrievable Thread");
+        retrievedNode.Name.Should().Be("Retrievable Thread");
+        retrievedNode.Content.Should().BeOfType<MeshThread>();
     }
 
     [Fact]

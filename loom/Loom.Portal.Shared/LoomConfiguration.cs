@@ -8,6 +8,7 @@ using MeshWeaver.AI.ClaudeCode;
 using MeshWeaver.AI.Copilot;
 using MeshWeaver.AI.Layout;
 using MeshWeaver.AI.Persistence;
+using MeshWeaver.Blazor.Chat;
 using MeshWeaver.Blazor.GoogleMaps;
 using MeshWeaver.Blazor.Graph;
 using MeshWeaver.Blazor.Infrastructure;
@@ -287,6 +288,7 @@ public static class LoomConfiguration
                 .AddRadzenCharts()
                 .AddGoogleMaps()
                 .AddGraphViews()  // Also enables @ autocomplete in markdown editors
+                .AddChatViews()   // Register ThreadChatView and AgentChatView
             )
             .AddBlazor(layoutClient => layoutClient
                 .WithPortalConfiguration(c => c)
