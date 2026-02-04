@@ -9,7 +9,6 @@
   "isPersistent": true,
   "content": {
     "$type": "Todo",
-    "id": "SendWelcomePacket",
     "title": "Send welcome packet with checklist",
     "description": "Send branded welcome packet to Apex Manufacturing including document checklist, process timeline, key contacts, and secure upload portal instructions.",
     "category": "Support",

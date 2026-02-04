@@ -9,7 +9,6 @@
   "isPersistent": true,
   "content": {
     "$type": "NodeTypeDefinition",
-    "id": "Article",
     "namespace": "Type",
     "displayName": "Article",
     "iconName": "DocumentText",

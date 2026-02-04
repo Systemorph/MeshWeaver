@@ -9,7 +9,6 @@
   "isPersistent": true,
   "content": {
     "$type": "Todo",
-    "id": "CollectSignatures",
     "title": "Client signature collection",
     "description": "Collect authorized signatures from Apex Manufacturing on policy application, coverage elections, and premium payment authorization. Use secure e-signature platform.",
     "category": "Sales",

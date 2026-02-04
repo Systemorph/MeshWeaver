@@ -9,7 +9,6 @@
   "isPersistent": true,
   "content": {
     "$type": "Project",
-    "id": "CustomerOnboarding",
     "name": "Apex Manufacturing Onboarding",
     "description": "Full onboarding process for Apex Manufacturing Inc. - commercial liability and property insurance package.",
     "status": "Active",

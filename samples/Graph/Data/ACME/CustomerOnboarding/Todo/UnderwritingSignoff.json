@@ -9,7 +9,6 @@
   "isPersistent": true,
   "content": {
     "$type": "Todo",
-    "id": "UnderwritingSignoff",
     "title": "Underwriting sign-off",
     "description": "Final underwriting sign-off to authorize binding coverage for Apex Manufacturing. Confirm risk acceptable within guidelines and pricing adequate for exposure.",
     "category": "Research",

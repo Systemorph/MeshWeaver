@@ -14,7 +14,6 @@
   "state": "Active",
   "isVirtual": false,
   "content": {
-    "id": "AddressClientQuestions",
     "title": "Address client questions",
     "description": "Address any outstanding questions from Apex Manufacturing regarding coverage terms, exclusions, claims process, and policy servicing. Ensure client comfort before binding.",
     "category": "Support",

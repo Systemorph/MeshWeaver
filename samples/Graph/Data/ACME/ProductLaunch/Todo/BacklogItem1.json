@@ -9,7 +9,6 @@
   "isPersistent": true,
   "content": {
     "$type": "Todo",
-    "id": "BacklogItem1",
     "title": "Research competitor pricing models",
     "description": "Conduct comprehensive analysis of competitor pricing tiers, feature packaging, and enterprise vs SMB offerings.",
     "category": "Research",

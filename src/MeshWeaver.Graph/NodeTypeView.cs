@@ -51,6 +51,7 @@ public static class NodeTypeView
             .Set(new NodeTypeCatalogMode())  // Enable NodeType catalog mode
             .AddLayout(layout => layout
                 .WithDefaultArea(CodeViewArea)
+                .WithView(MeshNodeLayoutAreas.OverviewArea, Overview)  // Override default Overview
                 .WithView(SearchArea, MeshNodeLayoutAreas.Search)  // Use standard search
                 .WithView(DetailsArea, Details)
                 .WithView(CodeViewArea, CodeView)
@@ -61,6 +62,71 @@ public static class NodeTypeView
                 .WithView(MeshNodeLayoutAreas.DataArea, MeshNodeLayoutAreas.Data)
                 .WithView(MeshNodeLayoutAreas.SchemaArea, MeshNodeLayoutAreas.Schema)
                 .WithView(MeshNodeLayoutAreas.ModelArea, DataModelLayoutArea.DataModel));
+
+    /// <summary>
+    /// Overview for NodeType nodes - extracts ShowChildrenInDetails from NodeTypeDefinition content.
+    /// </summary>
+    [Browsable(false)]
+    public static IObservable<UiControl?> Overview(LayoutAreaHost host, RenderingContext _)
+    {
+        var hubPath = host.Hub.Address.ToString();
+
+        // Get the node from the workspace stream
+        var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? Array.Empty<MeshNode>())
+            ?? Observable.Return(Array.Empty<MeshNode>());
+
+        // Map nodes and extract NodeTypeDefinition from Content
+        return nodeStream.Select(nodes =>
+        {
+            var node = nodes.FirstOrDefault(n => n.Path == hubPath);
+
+            // Extract NodeTypeDefinition from MeshNode.Content
+            NodeTypeDefinition? typeDef = null;
+            if (node?.Content != null)
+            {
+                typeDef = node.Content as NodeTypeDefinition;
+            }
+
+            return host.BuildNodeTypeDetailsContent(node, typeDef);
+        });
+    }
+
+    /// <summary>
+    /// Builds details content for NodeType nodes with ShowChildrenInDetails support.
+    /// </summary>
+    private static UiControl BuildNodeTypeDetailsContent(this LayoutAreaHost host, MeshNode? node, NodeTypeDefinition? typeDef)
+    {
+        var nodePath = node?.Namespace ?? host.Hub.Address.ToString();
+        var stack = Controls.Stack.WithWidth("100%").WithStyle("position: relative;");
+
+        // Action menu (top-right)
+        stack = stack.WithView(Controls.Stack
+            .WithStyle("position: absolute; top: 0; right: 0; z-index: 10;")
+            .WithView(MeshNodeLayoutAreas.BuildActionMenu(host, node)));
+
+        // Header with title/icon
+        stack = stack.WithView(MeshNodeLayoutAreas.BuildHeader(host, node));
+
+        // Property overview (read-only with click-to-edit)
+        if (node != null)
+        {
+            stack = stack.WithView(OverviewLayoutArea.BuildPropertyOverview(host, node));
+        }
+
+        // Children - controlled by NodeTypeDefinition.ShowChildrenInDetails
+        if (typeDef?.ShowChildrenInDetails ?? true)
+        {
+            stack = stack.WithView(LayoutAreaControl.Children(host.Hub));
+        }
+
+        // Comments
+        if (host.Hub.Configuration.HasComments())
+        {
+            stack = stack.WithView(CommentsView.BuildInlineCommentsSection(host));
+        }
+
+        return stack;
+    }
 
     /// <summary>
     /// Renders the main Details area for a NodeType.
@@ -101,8 +167,9 @@ public static class NodeTypeView
         var hubAddress = host.Hub.Address;
         var stack = Controls.Stack.WithWidth("100%").WithStyle("padding: 24px;");
 
-        // Header
-        var title = content.DisplayName ?? content.Id;
+        // Header - ID comes from hub address, not from content
+        var nodeId = hubAddress.Segments.LastOrDefault() ?? "Unknown";
+        var title = content.DisplayName ?? nodeId;
         stack = stack.WithView(Controls.H1(title));
         stack = stack.WithView(Controls.Body("NodeType Configuration").WithStyle("color: var(--neutral-foreground-hint); margin-bottom: 24px;"));
 
@@ -110,7 +177,7 @@ public static class NodeTypeView
         var infoCard = Controls.Stack
             .WithStyle("background: var(--neutral-layer-2); border-radius: 8px; padding: 20px; margin-bottom: 24px;");
 
-        infoCard = infoCard.WithView(BuildInfoRow("ID", content.Id));
+        infoCard = infoCard.WithView(BuildInfoRow("ID", nodeId));
         if (!string.IsNullOrEmpty(content.DisplayName))
             infoCard = infoCard.WithView(BuildInfoRow("Display Name", content.DisplayName));
         if (!string.IsNullOrEmpty(content.Description))
@@ -240,8 +307,10 @@ public static class NodeTypeView
         );
 
         // Node type definition entry - switches main view to configuration
+        // ID comes from hub address, not from content
+        var nodeId = hubAddress is Address addr ? addr.Segments.LastOrDefault() : hubAddress.ToString().Split('/').LastOrDefault() ?? "Unknown";
         navMenu = navMenu.WithView(
-            new NavLinkControl(content.DisplayName ?? content.Id, FluentIcons.Settings(), null)
+            new NavLinkControl(content.DisplayName ?? nodeId, FluentIcons.Settings(), null)
                 .WithClickAction(actx => host.UpdateData(SelectionDataId, "configuration"))
         );
 
@@ -366,12 +435,14 @@ public static class NodeTypeView
     private static UiControl BuildConfigurationPane(StackControl stack, object hubAddress, NodeTypeDefinition definition)
     {
         var editHref = new LayoutAreaReference(HubConfigEditArea).ToHref(hubAddress);
+        // ID comes from hub address, not from content
+        var nodeId = hubAddress is Address addr ? addr.Segments.LastOrDefault() : hubAddress.ToString().Split('/').LastOrDefault() ?? "Unknown";
 
         // Header with edit button
         var headerRow = Controls.Stack
             .WithOrientation(Orientation.Horizontal)
             .WithStyle("justify-content: space-between; align-items: center; margin-bottom: 16px;")
-            .WithView(Controls.H2(definition.DisplayName ?? definition.Id))
+            .WithView(Controls.H2(definition.DisplayName ?? nodeId))
             .WithView(
                 Controls.Button("")
                     .WithIconStart(FluentIcons.Edit())
@@ -384,7 +455,7 @@ public static class NodeTypeView
         var propsCard = Controls.Stack
             .WithStyle("background: var(--neutral-layer-2); border-radius: 8px; padding: 20px; margin-bottom: 24px;");
 
-        propsCard = propsCard.WithView(BuildInfoRow("ID", definition.Id));
+        propsCard = propsCard.WithView(BuildInfoRow("ID", nodeId));
         propsCard = propsCard.WithView(BuildInfoRow("Namespace", definition.Namespace));
 
         if (!string.IsNullOrEmpty(definition.DisplayName))
@@ -675,6 +746,8 @@ public static class NodeTypeView
     {
         var hubAddress = host.Hub.Address;
         var stack = Controls.Stack.WithWidth("100%").WithStyle("padding: 24px;");
+        // ID comes from hub address, not from content
+        var nodeId = hubAddress.Segments.LastOrDefault() ?? "Unknown";
 
         // Data IDs for each editable field
         var displayNameDataId = Guid.NewGuid().AsString();
@@ -695,7 +768,7 @@ public static class NodeTypeView
         host.UpdateData(configurationDataId, content.Configuration ?? "config => config");
 
         // Header
-        stack = stack.WithView(Controls.H2($"Edit: {content.DisplayName ?? content.Id}").WithStyle("margin-bottom: 16px;"));
+        stack = stack.WithView(Controls.H2($"Edit: {content.DisplayName ?? nodeId}").WithStyle("margin-bottom: 16px;"));
 
         // Form fields
         var formStyle = "display: grid; grid-template-columns: 150px 1fr; gap: 12px; align-items: center; margin-bottom: 12px;";
@@ -824,9 +897,26 @@ public static class NodeTypeView
                     Configuration = string.IsNullOrWhiteSpace(configuration) ? null : configuration
                 };
 
+                // Get current MeshNode and update its content
+                var hubPath = host.Hub.Address.ToString();
+                var currentNodes = await host.Workspace.GetStream<MeshNode>()!.FirstAsync();
+                var currentNode = currentNodes?.FirstOrDefault(n => n.Path == hubPath);
+                if (currentNode == null)
+                {
+                    var errorDialog = Controls.Dialog(
+                        Controls.Markdown("**Error:** Could not find MeshNode to update."),
+                        "Save Failed"
+                    ).WithSize("M");
+                    actx.Host.UpdateArea(DialogControl.DialogArea, errorDialog);
+                    return;
+                }
+
+                // Update MeshNode with new content
+                var updatedNode = currentNode with { Content = updatedDefinition };
+
                 using var cts = new CancellationTokenSource(10.Seconds());
                 var response = await actx.Host.Hub.AwaitResponse<DataChangeResponse>(
-                    new DataChangeRequest().WithUpdates(updatedDefinition),
+                    new DataChangeRequest().WithUpdates(updatedNode),
                     o => o.WithTarget(hubAddress),
                     cts.Token);
 

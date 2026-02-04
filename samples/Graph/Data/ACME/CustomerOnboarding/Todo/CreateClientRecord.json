@@ -9,7 +9,6 @@
   "isPersistent": true,
   "content": {
     "$type": "Todo",
-    "id": "CreateClientRecord",
     "title": "Create client record in CRM",
     "description": "Create comprehensive client profile for Apex Manufacturing Inc. in CRM system including company details, key contacts, and industry classification.",
     "category": "Support",

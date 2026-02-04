@@ -9,7 +9,6 @@
   "isPersistent": true,
   "content": {
     "$type": "Project",
-    "id": "ProductLaunch",
     "name": "TaskFlow Product Launch",
     "description": "Q1 launch campaign for TaskFlow, targeting mid-market enterprises seeking workflow automation solutions.",
     "status": "Active",

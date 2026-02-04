@@ -9,7 +9,6 @@
   "isPersistent": true,
   "content": {
     "$type": "Todo",
-    "id": "SendPolicyConfirmation",
     "title": "Send policy confirmation",
     "description": "Send policy confirmation package to Apex Manufacturing: certificate of insurance, policy documents, claims reporting instructions, and account team contact information.",
     "category": "Support",

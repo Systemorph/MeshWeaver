@@ -8,7 +8,6 @@
   "isPersistent": true,
   "content": {
     "$type": "Organization",
-    "id": "Systemorph",
     "name": "Systemorph",
     "description": "Systemorph Cloud",
     "website": "https://systemorph.cloud",

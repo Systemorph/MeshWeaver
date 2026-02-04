@@ -9,7 +9,6 @@
   "isPersistent": true,
   "content": {
     "$type": "NodeTypeDefinition",
-    "id": "Project",
     "namespace": "Systemorph",
     "displayName": "Project",
     "icon": "/static/storage/content/Systemorph/icons/briefcase.svg",

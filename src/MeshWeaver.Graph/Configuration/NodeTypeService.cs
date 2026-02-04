@@ -596,7 +596,6 @@ internal class NodeTypeService : INodeTypeService, IDisposable
         // Create a minimal definition from the release
         var definition = new NodeTypeDefinition
         {
-            Id = release.NodeTypePath.Split('/').Last(),
             Namespace = string.Join("/", release.NodeTypePath.Split('/').SkipLast(1)),
             Configuration = release.HubConfiguration,
             ContentCollections = release.ContentCollections?.ToList()

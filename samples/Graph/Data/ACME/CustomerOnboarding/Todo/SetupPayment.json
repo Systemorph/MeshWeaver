@@ -9,7 +9,6 @@
   "isPersistent": true,
   "content": {
     "$type": "Todo",
-    "id": "SetupPayment",
     "title": "Set up payment processing",
     "description": "Set up payment processing for Apex Manufacturing premium. Configure selected payment schedule, billing contact, and payment method (ACH/wire/check).",
     "category": "Support",

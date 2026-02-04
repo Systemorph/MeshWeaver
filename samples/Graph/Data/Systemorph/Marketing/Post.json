@@ -9,7 +9,6 @@
   "isPersistent": true,
   "content": {
     "$type": "NodeTypeDefinition",
-    "id": "Post",
     "namespace": "Systemorph/Marketing",
     "displayName": "Post",
     "icon": "/static/storage/content/Systemorph/Marketing/icons/share.svg",

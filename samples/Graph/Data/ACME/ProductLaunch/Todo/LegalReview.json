@@ -9,7 +9,6 @@
   "isPersistent": true,
   "content": {
     "$type": "Todo",
-    "id": "LegalReview",
     "title": "Review legal compliance",
     "description": "Legal review of terms of service, privacy policy, GDPR compliance, and marketing claims. Obtain sign-off before public launch.",
     "category": "Legal",

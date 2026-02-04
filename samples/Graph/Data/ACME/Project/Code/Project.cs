@@ -11,12 +11,6 @@ using MeshWeaver.Domain;
 public record Project
 {
     /// <summary>
-    /// Unique identifier for the project.
-    /// </summary>
-    [Key]
-    public string Id { get; init; } = string.Empty;
-
-    /// <summary>
     /// Project name.
     /// </summary>
     [Required]

@@ -9,7 +9,6 @@
   "isPersistent": true,
   "content": {
     "$type": "Todo",
-    "id": "AnalyticsDashboard",
     "title": "Configure analytics dashboard",
     "description": "Set up Mixpanel for product analytics and build launch dashboard tracking signups, activations, feature adoption, and conversion funnel.",
     "category": "Engineering",

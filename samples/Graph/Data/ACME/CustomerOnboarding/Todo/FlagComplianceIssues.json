@@ -9,7 +9,6 @@
   "isPersistent": true,
   "content": {
     "$type": "Todo",
-    "id": "FlagComplianceIssues",
     "title": "Flag compliance issues for review",
     "description": "Compile compliance findings requiring senior review: missing UBO documentation, pending verification of overseas subsidiary, and state environmental permit status check.",
     "category": "Legal",
