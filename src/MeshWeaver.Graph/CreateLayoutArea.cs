@@ -166,6 +166,7 @@ public static class CreateLayoutArea
                                         };
 
                                         // Post without blocking - use callback for response handling
+                                        logger?.LogInformation("Creating active node at {NodePath} with content type {ContentType}", nodePath, contentType?.Name);
                                         var delivery = host.Hub.Post(
                                             new CreateNodeRequest(updatedNode),
                                             o => o.WithTarget(host.Hub.Address));
@@ -181,6 +182,7 @@ public static class CreateLayoutArea
                                                     {
                                                         if (response.Success)
                                                         {
+                                                            logger?.LogInformation("Successfully created active node at {NodePath}", nodePath);
                                                             var overviewUrl = MeshNodeLayoutAreas.BuildContentUrl(nodePath, MeshNodeLayoutAreas.OverviewArea);
                                                             ctx.NavigateTo(overviewUrl);
                                                         }
@@ -234,6 +236,7 @@ public static class CreateLayoutArea
                             var updatedNode = node with { State = MeshNodeState.Active };
 
                             // Post without blocking - use callback for response handling
+                            logger?.LogInformation("Creating active node at {NodePath} (basic form)", nodePath);
                             var delivery = host.Hub.Post(
                                 new CreateNodeRequest(updatedNode),
                                 o => o.WithTarget(host.Hub.Address));
@@ -249,6 +252,7 @@ public static class CreateLayoutArea
                                         {
                                             if (response.Success)
                                             {
+                                                logger?.LogInformation("Successfully created active node at {NodePath} (basic form)", nodePath);
                                                 var overviewUrl = MeshNodeLayoutAreas.BuildContentUrl(nodePath, MeshNodeLayoutAreas.OverviewArea);
                                                 ctx.NavigateTo(overviewUrl);
                                             }
@@ -413,6 +417,7 @@ public static class CreateLayoutArea
         string parentPath,
         string nodeTypePath)
     {
+        var logger = host.Hub.ServiceProvider.GetService<ILogger<LayoutAreaHost>>();
         var typeName = GetLastPathSegment(nodeTypePath);
 
         // Compute the namespace: parentPath + last segment of nodeType
@@ -470,7 +475,6 @@ public static class CreateLayoutArea
             .WithOrientation(Orientation.Horizontal)
             .WithHorizontalGap(12)
             .WithStyle("margin-top: 24px;");
-
         // Next button - creates transient node and redirects to node's Create area
         buttonRow = buttonRow.WithView(Controls.Button("Next")
             .WithAppearance(Appearance.Accent)
@@ -533,7 +537,9 @@ public static class CreateLayoutArea
                     }
 
                     // Create the transient node via the catalog
+                    logger?.LogInformation("Creating transient node at {NodePath} with type {NodeType}", nodePath, nodeTypePath);
                     await meshCatalog.CreateTransientNodeAsync(newNode, ct: CancellationToken.None);
+                    logger?.LogInformation("Successfully created transient node at {NodePath}", nodePath);
 
                     // Navigate to the node's Create area for ContentType editing
                     var createUrl2 = MeshNodeLayoutAreas.BuildContentUrl(nodePath, MeshNodeLayoutAreas.CreateNodeArea);

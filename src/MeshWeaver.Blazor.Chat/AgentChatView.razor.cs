@@ -93,7 +93,7 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
 
         // Subscribe to navigation changes to update agent selection
         NavigationManager.LocationChanged += OnLocationChanged;
-        Logger.LogInformation("[Chat:{InstanceId}] Subscribed to NavigationManager.LocationChanged", _instanceId);
+        Logger.LogDebug("[Chat:{InstanceId}] Subscribed to NavigationManager.LocationChanged", _instanceId);
 
         // Store the initial navigation context and path
         lastNavigationContext = await GetCurrentAgentContextAsync();
@@ -105,7 +105,7 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
         try
         {
             await InitializeAgentAndModelSelectionsAsync();
-            Logger.LogInformation("[Chat:{InstanceId}] Agent and model selections initialized", _instanceId);
+            Logger.LogDebug("[Chat:{InstanceId}] Agent and model selections initialized", _instanceId);
         }
         catch (Exception ex)
         {
@@ -117,7 +117,7 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
         try
         {
             chat = await CreateChatAsync(lastNavigationContext?.ToUnifiedPath());
-            Logger.LogInformation("[Chat:{InstanceId}] Chat initialized", _instanceId);
+            Logger.LogDebug("[Chat:{InstanceId}] Chat initialized", _instanceId);
         }
         catch (Exception ex)
         {
@@ -179,7 +179,7 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
             }
         }
 
-        Logger.LogInformation("[Chat:{InstanceId}] OnInitializedAsync completed. IsDisposed={IsDisposed}", _instanceId, _isDisposed);
+        Logger.LogDebug("[Chat:{InstanceId}] OnInitializedAsync completed. IsDisposed={IsDisposed}", _instanceId, _isDisposed);
     }
 
     private async Task InitializeAgentAndModelSelectionsAsync()
@@ -260,7 +260,7 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
     /// </summary>
     private async void OnLocationChanged(object? sender, Microsoft.AspNetCore.Components.Routing.LocationChangedEventArgs e)
     {
-        Logger.LogInformation("[Chat:{InstanceId}] OnLocationChanged fired. IsDisposed={IsDisposed}, NewUrl={Url}",
+        Logger.LogDebug("[Chat:{InstanceId}] OnLocationChanged fired. IsDisposed={IsDisposed}, NewUrl={Url}",
             _instanceId, _isDisposed, e.Location);
 
         if (_isDisposed)
@@ -284,7 +284,7 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
 
                 if (contextChanged)
                 {
-                    Logger.LogInformation("[Chat:{InstanceId}] Navigation context changed from {OldContext} to {NewContext}",
+                    Logger.LogDebug("[Chat:{InstanceId}] Navigation context changed from {OldContext} to {NewContext}",
                         _instanceId,
                         lastNavigationContext?.Address?.ToString() ?? "null",
                         newContext?.Address?.ToString() ?? "null");
@@ -373,7 +373,7 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
             selectedAgentInfo = newAgent;
             selectedModelInfo = GetPreferredModelInfoForAgent(newAgent.Name);
 
-            Logger.LogInformation("[Chat:{InstanceId}] Agent changed to {Agent} with model {Model}",
+            Logger.LogDebug("[Chat:{InstanceId}] Agent changed to {Agent} with model {Model}",
                 _instanceId, newAgent.Name, selectedModelInfo?.Name);
 
             // Reinstantiate the agent with the new selection
@@ -626,7 +626,7 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
         try
         {
             chat = await CreateChatAsync(context?.ToUnifiedPath());
-            Logger.LogInformation("[Chat:{InstanceId}] Started new conversation (thread will be created on first message)", _instanceId);
+            Logger.LogDebug("[Chat:{InstanceId}] Started new conversation (thread will be created on first message)", _instanceId);
         }
         catch (ArgumentException ex) when (ex.Message.Contains("No factory can serve model"))
         {
@@ -809,7 +809,7 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
                 // Set the thread ID on the chat client
                 chat?.SetThreadId(currentThreadNodePath);
 
-                Logger.LogInformation("[Chat:{InstanceId}] Created thread node at context-aware path: {Path}", _instanceId, currentThreadNodePath);
+                Logger.LogDebug("[Chat:{InstanceId}] Created thread node at context-aware path: {Path}", _instanceId, currentThreadNodePath);
             }
 
             // Update local state
@@ -857,7 +857,7 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
     }
     private async Task AddUserMessageAsync(ChatMessage userMessage)
     {
-        Logger.LogInformation("[Chat:{InstanceId}] AddUserMessageAsync called. IsDisposed={IsDisposed}, chat={Chat}",
+        Logger.LogDebug("[Chat:{InstanceId}] AddUserMessageAsync called. IsDisposed={IsDisposed}, chat={Chat}",
             _instanceId, _isDisposed, chat != null ? "set" : "null");
 
         if (_isDisposed)
@@ -1468,16 +1468,16 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
 
     public override ValueTask DisposeAsync()
     {
-        Logger.LogInformation("[Chat:{InstanceId}] DisposeAsync called. Was already disposed: {WasDisposed}", _instanceId, _isDisposed);
+        Logger.LogDebug("[Chat:{InstanceId}] DisposeAsync called. Was already disposed: {WasDisposed}", _instanceId, _isDisposed);
 
         if (!_isDisposed)
         {
             _isDisposed = true;
             NavigationManager.LocationChanged -= OnLocationChanged;
-            Logger.LogInformation("[Chat:{InstanceId}] Unsubscribed from NavigationManager.LocationChanged", _instanceId);
+            Logger.LogDebug("[Chat:{InstanceId}] Unsubscribed from NavigationManager.LocationChanged", _instanceId);
 
             currentResponseCancellation.Cancel();
-            Logger.LogInformation("[Chat:{InstanceId}] Cancelled response cancellation token", _instanceId);
+            Logger.LogDebug("[Chat:{InstanceId}] Cancelled response cancellation token", _instanceId);
         }
 
         return base.DisposeAsync();
