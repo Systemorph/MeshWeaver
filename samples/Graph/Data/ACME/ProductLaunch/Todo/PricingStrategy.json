@@ -9,7 +9,6 @@
   "isPersistent": true,
   "content": {
     "$type": "Todo",
-    "id": "PricingStrategy",
     "title": "Develop pricing tiers",
     "description": "Create Starter, Professional, and Enterprise tiers. Model unit economics, analyze competitor pricing, and propose launch pricing with introductory discounts.",
     "category": "Strategy",

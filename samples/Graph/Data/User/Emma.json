@@ -6,7 +6,6 @@
   "iconName": "Person",
   "isPersistent": true,
   "content": {
-    "id": "Emma",
     "name": "Emma Johnson",
     "email": "emma.johnson@example.com",
     "avatar": "/static/storage/content/Emma/avatar.svg",

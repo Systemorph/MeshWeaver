@@ -10,7 +10,6 @@
   "isPersistent": true,
   "content": {
     "$type": "NodeTypeDefinition",
-    "id": "Project",
     "namespace": "ACME",
     "displayName": "Project",
     "iconName": "Folder",

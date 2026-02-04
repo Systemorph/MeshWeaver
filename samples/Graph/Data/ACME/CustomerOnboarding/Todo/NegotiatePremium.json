@@ -9,7 +9,6 @@
   "isPersistent": true,
   "content": {
     "$type": "Todo",
-    "id": "NegotiatePremium",
     "title": "Negotiate premium terms",
     "description": "Negotiate final premium terms with Apex Manufacturing. Discuss payment schedule options (annual, quarterly, monthly), any multi-year discount, and bundling incentives.",
     "category": "Sales",

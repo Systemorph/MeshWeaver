@@ -9,7 +9,6 @@
   "isPersistent": true,
   "content": {
     "$type": "Todo",
-    "id": "ScheduleFollowup",
     "title": "Schedule 30-day follow-up",
     "description": "Schedule 30-day follow-up call with Apex Manufacturing to ensure smooth policy implementation, answer any questions, and discuss additional coverage opportunities.",
     "category": "Sales",

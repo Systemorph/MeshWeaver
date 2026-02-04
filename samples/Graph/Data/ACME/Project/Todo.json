@@ -9,7 +9,6 @@
   "isPersistent": true,
   "content": {
     "$type": "NodeTypeDefinition",
-    "id": "Todo",
     "namespace": "ACME/Project",
     "displayName": "Task",
     "iconName": "TaskListSquare",

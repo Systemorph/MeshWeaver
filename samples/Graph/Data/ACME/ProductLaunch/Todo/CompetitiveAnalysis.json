@@ -9,7 +9,6 @@
   "isPersistent": true,
   "content": {
     "$type": "Todo",
-    "id": "CompetitiveAnalysis",
     "title": "Conduct competitive analysis",
     "description": "Deep-dive analysis of Zapier, Make, and Monday.com. Document feature gaps, pricing differences, and positioning opportunities for TaskFlow.",
     "category": "Research",

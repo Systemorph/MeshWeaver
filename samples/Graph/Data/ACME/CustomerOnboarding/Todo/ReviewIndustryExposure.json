@@ -9,7 +9,6 @@
   "isPersistent": true,
   "content": {
     "$type": "Todo",
-    "id": "ReviewIndustryExposure",
     "title": "Review industry exposure",
     "description": "Review manufacturing industry exposure: product liability trends, workers comp benchmarks, property concentration risk, and emerging risks like supply chain disruption and cyber exposure.",
     "category": "Research",

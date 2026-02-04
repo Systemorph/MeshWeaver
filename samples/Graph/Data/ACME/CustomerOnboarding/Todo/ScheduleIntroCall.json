@@ -9,7 +9,6 @@
   "isPersistent": true,
   "content": {
     "$type": "Todo",
-    "id": "ScheduleIntroCall",
     "title": "Schedule introductory call",
     "description": "Schedule introductory call with Apex Manufacturing CFO and Risk Manager. Discuss coverage needs, answer initial questions, and establish relationship.",
     "category": "Sales",

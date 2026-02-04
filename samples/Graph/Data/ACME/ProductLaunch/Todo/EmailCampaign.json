@@ -9,7 +9,6 @@
   "isPersistent": true,
   "content": {
     "$type": "Todo",
-    "id": "EmailCampaign",
     "title": "Create email nurture sequence",
     "description": "Design 6-email nurture sequence for demo requests. Include welcome email, product highlights, case study, pricing info, and trial offer.",
     "category": "Marketing",

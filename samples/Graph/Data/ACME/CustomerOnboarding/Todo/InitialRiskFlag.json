@@ -9,7 +9,6 @@
   "isPersistent": true,
   "content": {
     "$type": "Todo",
-    "id": "InitialRiskFlag",
     "title": "Initial risk flagging based on industry",
     "description": "Run automated risk screening based on manufacturing industry classification. Flag potential concerns: equipment liability, worker safety, environmental exposure, supply chain dependencies.",
     "category": "Research",

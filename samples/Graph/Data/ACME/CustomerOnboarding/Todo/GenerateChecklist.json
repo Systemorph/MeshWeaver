@@ -9,7 +9,6 @@
   "isPersistent": true,
   "content": {
     "$type": "Todo",
-    "id": "GenerateChecklist",
     "title": "Generate document checklist",
     "description": "Generate comprehensive document checklist based on commercial insurance requirements: financials, ownership docs, loss history, property details, and compliance certificates.",
     "category": "Support",

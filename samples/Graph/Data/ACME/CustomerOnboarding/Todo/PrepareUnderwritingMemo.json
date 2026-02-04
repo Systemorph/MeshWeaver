@@ -9,7 +9,6 @@
   "isPersistent": true,
   "content": {
     "$type": "Todo",
-    "id": "PrepareUnderwritingMemo",
     "title": "Prepare underwriting memo",
     "description": "Prepare formal underwriting memo with risk assessment summary, recommended coverage limits, pricing rationale, and any special conditions or exclusions for Apex Manufacturing.",
     "category": "Research",

@@ -9,7 +9,6 @@
   "isPersistent": true,
   "content": {
     "$type": "Todo",
-    "id": "CheckPEP",
     "title": "Check PEP database",
     "description": "Screen all directors and beneficial owners against PEP databases. Check for political connections, state-owned enterprise relationships, and high-risk jurisdictions. Clear results.",
     "category": "Legal",

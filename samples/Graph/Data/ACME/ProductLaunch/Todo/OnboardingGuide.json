@@ -9,7 +9,6 @@
   "isPersistent": true,
   "content": {
     "$type": "Todo",
-    "id": "OnboardingGuide",
     "title": "Create customer onboarding guide",
     "description": "Write comprehensive onboarding playbook covering first-day setup, first workflow creation, integration setup, and success milestones. Include video tutorials.",
     "category": "Support",
