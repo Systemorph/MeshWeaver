@@ -1,0 +1,13 @@
+{
+  "$type": "UserAccess",
+  "userId": "Quinn",
+  "displayName": "Quinn Johnson",
+  "roles": [
+    {
+      "roleId": "Editor",
+      "namespace": "ACME",
+      "assignedAt": "2025-01-01T00:00:00Z",
+      "assignedBy": "system"
+    }
+  ]
+}

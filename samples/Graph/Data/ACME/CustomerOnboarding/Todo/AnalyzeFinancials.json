@@ -13,7 +13,6 @@
     "description": "Analyze 3 years of audited financials for Apex Manufacturing: revenue trends, profitability ratios, debt levels, and cash flow stability. Assess premium payment capacity.",
     "category": "Research",
     "priority": "High",
-    "assignee": "Bob",
     "dueDateOffsetDays": -5,
     "status": "Pending"
   }

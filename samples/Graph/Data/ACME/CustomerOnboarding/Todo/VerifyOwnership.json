@@ -13,7 +13,7 @@
     "description": "Verify Ultimate Beneficial Ownership (UBO) for Apex Manufacturing. Awaiting additional documentation on parent company structure and 25%+ shareholders.",
     "category": "Legal",
     "priority": "Critical",
-    "assignee": null,
+    "assignee": "Oliver",
     "dueDateOffsetDays": -6,
     "status": "Blocked"
   }
