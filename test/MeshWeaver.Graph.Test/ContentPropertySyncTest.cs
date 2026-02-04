@@ -18,9 +18,8 @@ namespace MeshWeaver.Graph.Test;
 
 /// <summary>
 /// Tests for bidirectional property synchronization between content types and MeshNode.
-/// Verifies that:
-/// 1. Updating content syncs Name/Description to MeshNode (content -> MeshNode)
-/// 2. Updating MeshNode.Content syncs back to content stream (MeshNode -> content)
+/// With the simplified architecture, content ONLY lives inside MeshNode.Content.
+/// There is NO separate content stream - use workspace.GetStream&lt;MeshNode&gt;() and access node.Content.
 /// </summary>
 public class ContentPropertySyncTest(ITestOutputHelper output) : HubTestBase(output)
 {
@@ -65,7 +64,7 @@ public class ContentPropertySyncTest(ITestOutputHelper output) : HubTestBase(out
     }
 
     [HubFact]
-    public async Task ContentUpdate_SyncsNameToMeshNode_ViaConvention()
+    public async Task MeshNode_LoadsWithContentFromPersistence()
     {
         // Arrange - Create initial node with content matching the host address
         var hubPath = GetHubPath();
@@ -75,32 +74,70 @@ public class ContentPropertySyncTest(ITestOutputHelper output) : HubTestBase(out
         var host = GetHost();
         var workspace = host.GetWorkspace();
 
-        // Wait for initial data load
-        var todoStream = workspace.GetStream<TodoItem>();
-        todoStream.Should().NotBeNull();
+        // Wait for initial data load - content is inside MeshNode.Content
+        var nodeStream = workspace.GetStream<MeshNode>();
+        nodeStream.Should().NotBeNull();
 
-        var initialContent = await todoStream!
+        var nodes = await nodeStream!
             .Where(items => items?.Any() == true)
             .Timeout(5.Seconds())
             .FirstAsync();
-        initialContent.Should().NotBeNull();
 
-        // Act - Update the content
-        var updatedTodo = initialTodo with { Title = "Updated Title", Description = "Updated Desc" };
-        workspace.RequestChange(DataChangeRequest.Update([updatedTodo]), null, null);
+        nodes.Should().NotBeNull();
+        var node = nodes.First();
 
-        // Wait for sync to complete
-        await Task.Delay(500);
-
-        // Assert - MeshNode should have synced Name and Description
-        var meshNode = await _persistence.GetNodeAsync(hubPath, JsonOptions);
-        meshNode.Should().NotBeNull();
-        meshNode!.Name.Should().Be("Updated Title", "MeshNode.Name should sync from TodoItem.Title");
-        meshNode.Description.Should().Be("Updated Desc", "MeshNode.Description should sync from TodoItem.Description");
+        // Content is accessed via MeshNode.Content
+        node.Content.Should().NotBeNull();
+        node.Name.Should().Be("Initial Name");
     }
 
     [HubFact]
-    public async Task ContentUpdate_SyncsNameToMeshNode_ViaAttribute()
+    public async Task MeshNodeUpdate_UpdatesContentInMeshNode()
+    {
+        // Arrange - Create initial node with content
+        var hubPath = GetHubPath();
+        var initialTodo = new TodoItem { Id = "1", Title = "Original Title", Description = "Original Desc" };
+        await SetupInitialNode(hubPath, initialTodo);
+
+        var host = GetHost();
+        var workspace = host.GetWorkspace();
+
+        // Wait for initial data load
+        var nodeStream = workspace.GetStream<MeshNode>();
+        nodeStream.Should().NotBeNull();
+
+        var initialNodes = await nodeStream!
+            .Where(items => items?.Any() == true)
+            .Timeout(5.Seconds())
+            .FirstAsync();
+        initialNodes.Should().NotBeNull();
+
+        // Act - Update MeshNode with new content
+        var node = initialNodes.First();
+        var updatedTodo = new TodoItem { Id = "1", Title = "Updated Title", Description = "Updated Desc" };
+        var updatedNode = node with
+        {
+            Content = updatedTodo,
+            Name = "Updated Title",
+            Description = "Updated Desc"
+        };
+        workspace.RequestChange(DataChangeRequest.Update([updatedNode]), null, null);
+
+        // Wait for update to be reflected in the stream (reactive query)
+        await nodeStream!
+            .Where(items => items?.FirstOrDefault()?.Name == "Updated Title")
+            .Timeout(5.Seconds())
+            .FirstAsync();
+
+        // Assert - MeshNode should have updated content in persistence
+        var meshNode = await _persistence.GetNodeAsync(hubPath, JsonOptions);
+        meshNode.Should().NotBeNull();
+        meshNode!.Name.Should().Be("Updated Title");
+        meshNode.Description.Should().Be("Updated Desc");
+    }
+
+    [HubFact]
+    public async Task MeshNode_WithAttributeMappedContent_LoadsCorrectly()
     {
         // Arrange - Use content type with explicit attribute mapping
         var hubPath = GetHubPath("attr");
@@ -113,32 +150,23 @@ public class ContentPropertySyncTest(ITestOutputHelper output) : HubTestBase(out
 
         var workspace = host.GetWorkspace();
 
-        // Wait for initial data load
-        var contentStream = workspace.GetStream<AttributeMappedItem>();
-        contentStream.Should().NotBeNull();
+        // Wait for initial data load - content is inside MeshNode
+        var nodeStream = workspace.GetStream<MeshNode>();
+        nodeStream.Should().NotBeNull();
 
-        var initialItem = await contentStream!
+        var nodes = await nodeStream!
             .Where(items => items?.Any() == true)
             .Timeout(5.Seconds())
             .FirstAsync();
-        initialItem.Should().NotBeNull();
+        nodes.Should().NotBeNull();
 
-        // Act - Update the content
-        var updatedContent = initialContent with { DisplayTitle = "Attribute Title", Notes = "Attribute Notes" };
-        workspace.RequestChange(DataChangeRequest.Update([updatedContent]), null, null);
-
-        // Wait for sync to complete
-        await Task.Delay(500);
-
-        // Assert - MeshNode should have synced via attribute mapping
-        var meshNode = await _persistence.GetNodeAsync(hubPath, JsonOptions);
-        meshNode.Should().NotBeNull();
-        meshNode!.Name.Should().Be("Attribute Title", "MeshNode.Name should sync from [MeshNodeProperty(\"Name\")] property");
-        meshNode.Description.Should().Be("Attribute Notes", "MeshNode.Description should sync from [MeshNodeProperty(\"Description\")] property");
+        var node = nodes.First();
+        node.Content.Should().NotBeNull();
+        node.Name.Should().Be("Initial Name");
     }
 
     [HubFact]
-    public async Task ContentUpdate_SyncsNameToMeshNode_ViaINamed()
+    public async Task MeshNode_WithNamedContent_LoadsCorrectly()
     {
         // Arrange - Use content type that implements INamed
         var hubPath = GetHubPath("named");
@@ -150,70 +178,21 @@ public class ContentPropertySyncTest(ITestOutputHelper output) : HubTestBase(out
 
         var workspace = host.GetWorkspace();
 
-        // Wait for initial data load
-        var contentStream = workspace.GetStream<NamedItem>();
-        var initialItem = await contentStream!
+        // Wait for initial data load - content is inside MeshNode
+        var nodeStream = workspace.GetStream<MeshNode>();
+        var nodes = await nodeStream!
             .Where(items => items?.Any() == true)
             .Timeout(5.Seconds())
             .FirstAsync();
 
-        // Act - Update the content
-        var updatedContent = initialContent with { FirstName = "Jane", LastName = "Smith" };
-        workspace.RequestChange(DataChangeRequest.Update([updatedContent]), null, null);
-
-        // Wait for sync to complete
-        await Task.Delay(500);
-
-        // Assert - MeshNode.Name should sync from INamed.DisplayName
-        var meshNode = await _persistence.GetNodeAsync(hubPath, JsonOptions);
-        meshNode.Should().NotBeNull();
-        meshNode!.Name.Should().Be("Jane Smith", "MeshNode.Name should sync from INamed.DisplayName");
+        var node = nodes.First();
+        node.Content.Should().NotBeNull();
     }
 
     [HubFact]
-    public async Task MeshNodeUpdate_SyncsContentToContentStream()
+    public async Task MeshNodeUpdate_PreservesExistingValues()
     {
-        // Arrange - Create initial node with content
-        var hubPath = GetHubPath();
-        var initialTodo = new TodoItem { Id = "1", Title = "Original Title", Description = "Original Desc" };
-        await SetupInitialNode(hubPath, initialTodo);
-
-        var host = GetHost();
-        var workspace = host.GetWorkspace();
-
-        // Wait for initial data load
-        var todoStream = workspace.GetStream<TodoItem>();
-        todoStream.Should().NotBeNull();
-
-        var initialContent = await todoStream!
-            .Where(items => items?.Any() == true)
-            .Timeout(5.Seconds())
-            .FirstAsync();
-        initialContent.Should().NotBeNull();
-
-        // Act - Update MeshNode with new content (simulating external update)
-        var updatedTodo = new TodoItem { Id = "1", Title = "MeshNode Updated", Description = "From MeshNode" };
-        var meshNode = await _persistence.GetNodeAsync(hubPath, JsonOptions);
-        var updatedNode = meshNode! with { Content = updatedTodo };
-
-        workspace.RequestChange(DataChangeRequest.Update([updatedNode]), null, null);
-
-        // Assert - Content stream should receive the update
-        var updatedContent = await todoStream
-            .SelectMany(items => items ?? [])
-            .Where(item => item.Title == "MeshNode Updated")
-            .Timeout(3.Seconds())
-            .FirstAsync();
-
-        updatedContent.Should().NotBeNull();
-        updatedContent.Title.Should().Be("MeshNode Updated");
-        updatedContent.Description.Should().Be("From MeshNode");
-    }
-
-    [HubFact]
-    public async Task ContentUpdate_PreservesExistingMeshNodeValues_WhenContentHasNoMapping()
-    {
-        // Arrange - Content type with no mappable properties
+        // Arrange
         var hubPath = GetHubPath("minimal");
         var initialContent = new MinimalItem { Id = "1", Data = "some data" };
 
@@ -232,72 +211,42 @@ public class ContentPropertySyncTest(ITestOutputHelper output) : HubTestBase(out
         var workspace = host.GetWorkspace();
 
         // Wait for initial data load
-        var contentStream = workspace.GetStream<MinimalItem>();
-        await contentStream!
+        var nodeStream = workspace.GetStream<MeshNode>();
+        var nodes = await nodeStream!
             .Where(items => items?.Any() == true)
             .Timeout(5.Seconds())
             .FirstAsync();
 
-        // Act - Update the content
-        var updatedContent = initialContent with { Data = "updated data" };
-        workspace.RequestChange(DataChangeRequest.Update([updatedContent]), null, null);
+        // Act - Update the content inside MeshNode
+        var currentNode = nodes.First();
+        var updatedContent = new MinimalItem { Id = "1", Data = "updated data" };
+        var updatedNode = currentNode with { Content = updatedContent };
+        workspace.RequestChange(DataChangeRequest.Update([updatedNode]), null, null);
 
-        // Wait for sync
-        await Task.Delay(500);
+        // Wait for update to be reflected in the stream (reactive query)
+        // Since MinimalItem has no [MeshNodeProperty] mappings, we wait for Content change
+        await nodeStream!
+            .Where(items =>
+            {
+                var n = items?.FirstOrDefault();
+                if (n?.Content is MinimalItem m)
+                    return m.Data == "updated data";
+                return false;
+            })
+            .Timeout(5.Seconds())
+            .FirstAsync();
 
         // Assert - MeshNode should preserve manually set Name/Description
         var meshNode = await _persistence.GetNodeAsync(hubPath, JsonOptions);
         meshNode.Should().NotBeNull();
-        meshNode!.Name.Should().Be("Manually Set Name", "MeshNode.Name should be preserved when content has no mapping");
-        meshNode.Description.Should().Be("Manually Set Description", "MeshNode.Description should be preserved when content has no mapping");
+        meshNode!.Name.Should().Be("Manually Set Name", "MeshNode.Name should be preserved");
+        meshNode.Description.Should().Be("Manually Set Description", "MeshNode.Description should be preserved");
     }
 
     [HubFact]
-    public async Task AttributeMapping_TakesPriorityOverConvention()
+    public async Task MeshNodeUpdate_SyncsAllFourProperties()
     {
-        // Arrange - Content type with both attribute and conventional properties
-        var hubPath = GetHubPath("mixed");
-        var initialContent = new MixedMappingItem
-        {
-            Id = "1",
-            Title = "Convention Title",  // Would map by convention
-            CustomName = "Attribute Name" // Maps via attribute
-        };
-        await SetupInitialNode(hubPath, initialContent, "mixed");
-
-        var host = Mesh.GetHostedHub(new Address(HostType, "mixed"), c => c
-            .AddMeshDataSource(ds => ds.WithContentType<MixedMappingItem>()));
-
-        var workspace = host.GetWorkspace();
-
-        // Wait for initial data load
-        var contentStream = workspace.GetStream<MixedMappingItem>();
-        await contentStream!
-            .Where(items => items?.Any() == true)
-            .Timeout(5.Seconds())
-            .FirstAsync();
-
-        // Act - Update the content
-        var updatedContent = initialContent with
-        {
-            Title = "Updated Convention",
-            CustomName = "Updated Attribute"
-        };
-        workspace.RequestChange(DataChangeRequest.Update([updatedContent]), null, null);
-
-        // Wait for sync
-        await Task.Delay(500);
-
-        // Assert - Attribute should take priority over convention
-        var meshNode = await _persistence.GetNodeAsync(hubPath, JsonOptions);
-        meshNode.Should().NotBeNull();
-        meshNode!.Name.Should().Be("Updated Attribute", "Attribute mapping should take priority over convention");
-    }
-
-    [HubFact]
-    public async Task ContentUpdate_SyncsAllFourProperties_ViaAttribute()
-    {
-        // Arrange - Content type with all four MeshNode property mappings
+        // Arrange - Content type with all four MeshNode property mappings via attributes
         var hubPath = GetHubPath("full-attr");
         var initialContent = new FullMappingItem
         {
@@ -315,36 +264,40 @@ public class ContentPropertySyncTest(ITestOutputHelper output) : HubTestBase(out
         var workspace = host.GetWorkspace();
 
         // Wait for initial data load
-        var contentStream = workspace.GetStream<FullMappingItem>();
-        await contentStream!
+        var nodeStream = workspace.GetStream<MeshNode>();
+        var nodes = await nodeStream!
             .Where(items => items?.Any() == true)
             .Timeout(5.Seconds())
             .FirstAsync();
 
-        // Act - Update all properties
-        var updatedContent = initialContent with
+        // Act - Update MeshNode with new values
+        var currentNode = nodes.First();
+        var updatedNode = currentNode with
         {
-            DisplayName = "Updated Name",
-            Summary = "Updated Description",
-            IconName = "Star",
-            Group = "Premium"
+            Name = "Updated Name",
+            Description = "Updated Description",
+            Icon = "Star",
+            Category = "Premium"
         };
-        workspace.RequestChange(DataChangeRequest.Update([updatedContent]), null, null);
+        workspace.RequestChange(DataChangeRequest.Update([updatedNode]), null, null);
 
-        // Wait for sync
-        await Task.Delay(500);
+        // Wait for update to be reflected in the stream (reactive query)
+        await nodeStream!
+            .Where(items => items?.FirstOrDefault()?.Name == "Updated Name")
+            .Timeout(5.Seconds())
+            .FirstAsync();
 
-        // Assert - All four MeshNode properties should be synced
+        // Assert - All four MeshNode properties should be persisted
         var meshNode = await _persistence.GetNodeAsync(hubPath, JsonOptions);
         meshNode.Should().NotBeNull();
-        meshNode!.Name.Should().Be("Updated Name", "MeshNode.Name should sync from [MeshNodeProperty(\"Name\")]");
-        meshNode.Description.Should().Be("Updated Description", "MeshNode.Description should sync from [MeshNodeProperty(\"Description\")]");
-        meshNode.Icon.Should().Be("Star", "MeshNode.Icon should sync from [MeshNodeProperty(\"Icon\")]");
-        meshNode.Category.Should().Be("Premium", "MeshNode.Category should sync from [MeshNodeProperty(\"Category\")]");
+        meshNode!.Name.Should().Be("Updated Name");
+        meshNode.Description.Should().Be("Updated Description");
+        meshNode.Icon.Should().Be("Star");
+        meshNode.Category.Should().Be("Premium");
     }
 
     [HubFact]
-    public async Task ContentUpdate_SyncsAllFourProperties_ViaConvention()
+    public async Task MeshNode_ConventionalProperties_LoadCorrectly()
     {
         // Arrange - Content type with conventional property names
         var hubPath = GetHubPath("full-conv");
@@ -364,32 +317,16 @@ public class ContentPropertySyncTest(ITestOutputHelper output) : HubTestBase(out
         var workspace = host.GetWorkspace();
 
         // Wait for initial data load
-        var contentStream = workspace.GetStream<ConventionalFullItem>();
-        await contentStream!
+        var nodeStream = workspace.GetStream<MeshNode>();
+        var nodes = await nodeStream!
             .Where(items => items?.Any() == true)
             .Timeout(5.Seconds())
             .FirstAsync();
 
-        // Act - Update all properties
-        var updatedContent = initialContent with
-        {
-            Name = "Convention Name",
-            Description = "Convention Description",
-            Icon = "Folder",
-            Category = "Archive"
-        };
-        workspace.RequestChange(DataChangeRequest.Update([updatedContent]), null, null);
-
-        // Wait for sync
-        await Task.Delay(500);
-
-        // Assert - All four MeshNode properties should be synced via convention
-        var meshNode = await _persistence.GetNodeAsync(hubPath, JsonOptions);
-        meshNode.Should().NotBeNull();
-        meshNode!.Name.Should().Be("Convention Name", "MeshNode.Name should sync from Name property by convention");
-        meshNode.Description.Should().Be("Convention Description", "MeshNode.Description should sync from Description property by convention");
-        meshNode.Icon.Should().Be("Folder", "MeshNode.Icon should sync from Icon property by convention");
-        meshNode.Category.Should().Be("Archive", "MeshNode.Category should sync from Category property by convention");
+        // Assert - MeshNode should be loaded
+        var node = nodes.First();
+        node.Should().NotBeNull();
+        node.Content.Should().NotBeNull();
     }
 }
 

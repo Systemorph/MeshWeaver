@@ -1,8 +1,8 @@
 ﻿@using Appearance = Microsoft.FluentUI.AspNetCore.Components.Appearance
 @inherits MeshWeaver.Blazor.Components.SkinnedView<MeshWeaver.Layout.EditorControl, MeshWeaver.Layout.EditorSkin, EditorView>
 
-<div>
-    <dl class="form-group">
+<div style="@Style">
+    <dl class="form-group" style="width: 100%;">
             <DispatchView ViewModel="@ViewModel" Area="@Area" Stream="@Stream"></DispatchView>
     </dl>
 </div>

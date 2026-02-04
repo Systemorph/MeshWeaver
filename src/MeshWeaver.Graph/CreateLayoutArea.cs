@@ -1,15 +1,17 @@
 ﻿using System.Reactive.Linq;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using MeshWeaver.Application.Styles;
 using MeshWeaver.Data;
+using MeshWeaver.Domain;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
-using MeshWeaver.Layout.DataBinding;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using MeshWeaver.ShortGuid;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Graph;
 
@@ -30,24 +32,14 @@ public static class CreateLayoutArea
     public static IObservable<UiControl?> Create(LayoutAreaHost host, RenderingContext ctx)
     {
         var currentPath = host.Hub.Address.ToString();
-        var meshCatalog = host.Hub.ServiceProvider.GetService<IMeshCatalog>();
         var nodeTypeService = host.Hub.ServiceProvider.GetService<INodeTypeService>();
-
-        if (meshCatalog == null)
-        {
-            return Observable.Return<UiControl?>(
-                Controls.Stack.WithView(
-                    Controls.Html("<p style=\"color: var(--warning-color);\">Required services not available.</p>")
-                )
-            );
-        }
 
         // Check for type query parameter (CreateChild flow)
         var nodeTypePath = host.GetQueryStringParamValue("type");
         if (!string.IsNullOrEmpty(nodeTypePath))
         {
             return Observable.Return<UiControl?>(
-                BuildCreateChildForm(host, currentPath, nodeTypePath, meshCatalog)
+                BuildCreateChildForm(host, currentPath, nodeTypePath)
             );
         }
 
@@ -62,7 +54,7 @@ public static class CreateLayoutArea
             // If current node is Transient, show Create editor (own node)
             if (currentNode?.State == MeshNodeState.Transient)
             {
-                return (UiControl?)BuildCreateEditor(host, currentNode, meshCatalog);
+                return (UiControl?)BuildCreateEditor(host, currentNode);
             }
 
             // No type specified - show type selection grid for CreateChild
@@ -84,8 +76,7 @@ public static class CreateLayoutArea
     /// </summary>
     private static UiControl BuildCreateEditor(
         LayoutAreaHost host,
-        MeshNode node,
-        IMeshCatalog meshCatalog)
+        MeshNode node)
     {
         var nodePath = node.Path;
         var parentPath = node.GetParentPath();
@@ -110,6 +101,8 @@ public static class CreateLayoutArea
         var cancelUrl = !string.IsNullOrEmpty(parentPath)
             ? MeshNodeLayoutAreas.BuildContentUrl(parentPath, MeshNodeLayoutAreas.OverviewArea)
             : MeshNodeLayoutAreas.BuildContentUrl(nodePath, MeshNodeLayoutAreas.OverviewArea);
+        var meshCatalog = host.Hub.ServiceProvider.GetRequiredService<IMeshCatalog>();
+        var logger = host.Hub.ServiceProvider.GetService<ILogger<LayoutAreaHost>>();
 
         stack = stack.WithView(Controls.Stack
             .WithOrientation(Orientation.Horizontal)
@@ -141,48 +134,83 @@ public static class CreateLayoutArea
             stack = stack.WithView(editor);
 
             // Create button
+            // Note: Uses Post + RegisterCallback instead of AwaitResponse to avoid deadlock.
+            // Actors are single-threaded, and AwaitResponse blocks the actor's queue while waiting
+            // for a response that would be processed by the same blocked queue - causing deadlock.
             stack = stack.WithView(Controls.Stack
                 .WithStyle("margin-top: 24px;")
                 .WithView(Controls.Button("Create")
                     .WithAppearance(Appearance.Accent)
                     .WithIconStart(FluentIcons.Add())
-                    .WithClickAction(async ctx =>
+                    .WithClickAction(ctx =>
                     {
-                        try
-                        {
-                            // Get current content from data stream
-                            var currentContent = await ctx.Host.Stream
-                                .GetDataStream<object>(dataId)
-                                .FirstAsync();
+                        // Get current content from data stream and process asynchronously
+                        // Use JsonElement and deserialize with correct contentType to preserve typed properties
+                        ctx.Host.Stream.GetDataStream<JsonElement>(dataId)
+                            .Take(1)
+                            .Subscribe(
+                                jsonContent =>
+                                {
+                                    try
+                                    {
+                                        // Deserialize with the correct content type to preserve typed properties
+                                        // This fixes the issue where GetDataStream<object> returns JsonElement
+                                        // instead of the typed content, causing content fields to be empty
+                                        var currentContent = jsonContent.Deserialize(contentType!, ctx.Host.Hub.JsonSerializerOptions);
 
-                            // Update node with content and state=Active
-                            var updatedNode = node with
-                            {
-                                Content = currentContent,
-                                State = MeshNodeState.Active
-                            };
+                                        // Update node with content and state=Active
+                                        var updatedNode = node with
+                                        {
+                                            Content = currentContent,
+                                            State = MeshNodeState.Active
+                                        };
 
-                            // Submit via CreateNodeRequest to own hub
-                            var response = await host.Hub.AwaitResponse(
-                                new CreateNodeRequest(updatedNode),
-                                o => o.WithTarget(host.Hub.Address));
+                                        // Post without blocking - use callback for response handling
+                                        var delivery = host.Hub.Post(
+                                            new CreateNodeRequest(updatedNode),
+                                            o => o.WithTarget(host.Hub.Address));
 
-                            if (response.Message is CreateNodeResponse { Success: true })
-                            {
-                                // Navigate to Overview
-                                var overviewUrl = MeshNodeLayoutAreas.BuildContentUrl(nodePath, MeshNodeLayoutAreas.OverviewArea);
-                                ctx.NavigateTo(overviewUrl);
-                            }
-                            else
-                            {
-                                var error = (response.Message as CreateNodeResponse)?.Error ?? "Unknown error";
-                                ShowErrorDialog(ctx, "Creation Failed", error);
-                            }
-                        }
-                        catch (Exception ex)
-                        {
-                            ShowErrorDialog(ctx, "Creation Failed", ex.Message);
-                        }
+                                        if (delivery != null)
+                                        {
+                                            // Register callback to handle response asynchronously
+                                            host.Hub.RegisterCallback(delivery, d =>
+                                            {
+                                                try
+                                                {
+                                                    if (d.Message is CreateNodeResponse response)
+                                                    {
+                                                        if (response.Success)
+                                                        {
+                                                            var overviewUrl = MeshNodeLayoutAreas.BuildContentUrl(nodePath, MeshNodeLayoutAreas.OverviewArea);
+                                                            ctx.NavigateTo(overviewUrl);
+                                                        }
+                                                        else
+                                                        {
+                                                            logger?.LogWarning("CreateNodeRequest failed for {NodePath}: {Error}", nodePath, response.Error);
+                                                            ShowErrorDialog(ctx, "Creation Failed", response.Error ?? "Unknown error");
+                                                        }
+                                                    }
+                                                }
+                                                catch (Exception ex)
+                                                {
+                                                    logger?.LogError(ex, "Error processing CreateNodeResponse for {NodePath}", nodePath);
+                                                    ShowErrorDialog(ctx, "Creation Failed", ex.Message);
+                                                }
+                                                return d;
+                                            });
+                                        }
+                                    }
+                                    catch (Exception ex)
+                                    {
+                                        logger?.LogError(ex, "Error preparing CreateNodeRequest for {NodePath}", nodePath);
+                                        ShowErrorDialog(ctx, "Creation Failed", ex.Message);
+                                    }
+                                },
+                                ex =>
+                                {
+                                    logger?.LogError(ex, "Error getting content from data stream for {NodePath}", nodePath);
+                                    ShowErrorDialog(ctx, "Creation Failed", ex.Message);
+                                });
                     })));
         }
         else
@@ -191,35 +219,58 @@ public static class CreateLayoutArea
             stack = stack.WithView(BuildBasicPropertiesForm(host, node));
 
             // Create button for basic form
+            // Note: Uses Post + RegisterCallback instead of AwaitResponse to avoid deadlock.
+            // See architecture documentation for actor model patterns.
             stack = stack.WithView(Controls.Stack
                 .WithStyle("margin-top: 24px;")
                 .WithView(Controls.Button("Create")
                     .WithAppearance(Appearance.Accent)
                     .WithIconStart(FluentIcons.Add())
-                    .WithClickAction(async ctx =>
+                    .WithClickAction(ctx =>
                     {
                         try
                         {
                             // Update node state to Active
                             var updatedNode = node with { State = MeshNodeState.Active };
 
-                            var response = await host.Hub.AwaitResponse(
+                            // Post without blocking - use callback for response handling
+                            var delivery = host.Hub.Post(
                                 new CreateNodeRequest(updatedNode),
                                 o => o.WithTarget(host.Hub.Address));
 
-                            if (response.Message is CreateNodeResponse { Success: true })
+                            if (delivery != null)
                             {
-                                var overviewUrl = MeshNodeLayoutAreas.BuildContentUrl(nodePath, MeshNodeLayoutAreas.OverviewArea);
-                                ctx.NavigateTo(overviewUrl);
-                            }
-                            else
-                            {
-                                var error = (response.Message as CreateNodeResponse)?.Error ?? "Unknown error";
-                                ShowErrorDialog(ctx, "Creation Failed", error);
+                                // Register callback to handle response asynchronously
+                                host.Hub.RegisterCallback(delivery, d =>
+                                {
+                                    try
+                                    {
+                                        if (d.Message is CreateNodeResponse response)
+                                        {
+                                            if (response.Success)
+                                            {
+                                                var overviewUrl = MeshNodeLayoutAreas.BuildContentUrl(nodePath, MeshNodeLayoutAreas.OverviewArea);
+                                                ctx.NavigateTo(overviewUrl);
+                                            }
+                                            else
+                                            {
+                                                logger?.LogWarning("CreateNodeRequest failed for {NodePath}: {Error}", nodePath, response.Error);
+                                                ShowErrorDialog(ctx, "Creation Failed", response.Error ?? "Unknown error");
+                                            }
+                                        }
+                                    }
+                                    catch (Exception ex)
+                                    {
+                                        logger?.LogError(ex, "Error processing CreateNodeResponse for {NodePath}", nodePath);
+                                        ShowErrorDialog(ctx, "Creation Failed", ex.Message);
+                                    }
+                                    return d;
+                                });
                             }
                         }
                         catch (Exception ex)
                         {
+                            logger?.LogError(ex, "Error preparing CreateNodeRequest for {NodePath}", nodePath);
                             ShowErrorDialog(ctx, "Creation Failed", ex.Message);
                         }
                     })));
@@ -335,7 +386,7 @@ public static class CreateLayoutArea
     private static UiControl BuildTypeCard(string parentPath, CreatableTypeInfo typeInfo)
     {
         var displayName = typeInfo.DisplayName ?? GetLastPathSegment(typeInfo.NodeTypePath);
-        var iconName = typeInfo.Icon ?? "Document";
+        var icon = new Icon(FluentIcons.Provider, typeInfo.Icon ?? "Document");
         var description = string.IsNullOrEmpty(typeInfo.Description) ? "No description" : typeInfo.Description;
 
         // Navigate to create form with type query parameter
@@ -347,7 +398,7 @@ public static class CreateLayoutArea
                 .WithOrientation(Orientation.Horizontal)
                 .WithHorizontalGap(12)
                 .WithStyle("align-items: center; margin-bottom: 8px;")
-                .WithView(Controls.Icon(iconName).WithStyle("font-size: 24px; color: var(--accent-fill-rest);"))
+                .WithView(Controls.Icon(icon).WithStyle("font-size: 24px; color: var(--accent-fill-rest);"))
                 .WithView(Controls.H4(displayName).WithStyle("margin: 0; font-weight: 600;")))
             .WithView(Controls.Body(description).WithStyle("color: var(--neutral-foreground-hint); font-size: 14px;"))
             .WithClickAction(ctx => ctx.Host.UpdateArea(ctx.Area, new RedirectControl(createUrl)));
@@ -360,8 +411,7 @@ public static class CreateLayoutArea
     private static UiControl BuildCreateChildForm(
         LayoutAreaHost host,
         string parentPath,
-        string nodeTypePath,
-        IMeshCatalog meshCatalog)
+        string nodeTypePath)
     {
         var typeName = GetLastPathSegment(nodeTypePath);
 
@@ -457,6 +507,7 @@ public static class CreateLayoutArea
                         Description = formValues.GetValueOrDefault("description")?.ToString()?.Trim(),
                         State = MeshNodeState.Transient
                     };
+                    var meshCatalog = host.Hub.ServiceProvider.GetRequiredService<IMeshCatalog>();
 
                     // Check if node already exists
                     var existingNode = await meshCatalog.GetNodeAsync(new Address(nodePath));

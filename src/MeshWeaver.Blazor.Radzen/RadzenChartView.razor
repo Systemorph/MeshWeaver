@@ -158,19 +158,14 @@
 
         var dataList = new List<ChartDataPoint>();
 
-        // Deserialize data if it's a JsonElement
+        // Deserialize data if it's a JsonElement, using Hub's JsonSerializerOptions
         object? deserializedData = series.Data;
         if (series.Data is System.Text.Json.JsonElement jsonElement)
         {
             try
             {
                 var json = jsonElement.GetRawText();
-                var options = new System.Text.Json.JsonSerializerOptions
-                {
-                    PropertyNameCaseInsensitive = true,
-                    PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase
-                };
-                deserializedData = System.Text.Json.JsonSerializer.Deserialize<List<object>>(json, options);
+                deserializedData = System.Text.Json.JsonSerializer.Deserialize<List<object>>(json, Stream!.Hub.JsonSerializerOptions);
             }
             catch
             {

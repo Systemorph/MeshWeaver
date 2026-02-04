@@ -6,6 +6,11 @@ namespace MeshWeaver.Mesh;
 public enum MeshNodeState
 {
     /// <summary>
+    /// Node is brand new, just created in memory but not yet persisted.
+    /// </summary>
+    New,
+
+    /// <summary>
     /// Node is being created and awaiting hub confirmation.
     /// </summary>
     Transient,

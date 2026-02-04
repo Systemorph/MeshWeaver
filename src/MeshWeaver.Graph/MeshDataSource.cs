@@ -31,7 +31,7 @@ public static class MeshDataSourceExtensions
         return config
             .AddData(data =>
             {
-                var dataSource = configuration(new MeshDataSource(Guid.NewGuid().AsString(), data.Workspace).WithMeshNodes());
+                var dataSource = configuration(new MeshDataSource(data.Workspace.Hub.Address.ToString(), data.Workspace).WithMeshNodes());
                 return data
                     .WithDataSource(_ => dataSource)
                     .WithDefaultDataReference(workspace =>
@@ -54,18 +54,7 @@ public static class MeshDataSourceExtensions
     /// </summary>
     public static MessageHubConfiguration AddMeshDataSource(this MessageHubConfiguration config)
     {
-        return config
-            .AddData(data => data
-                .WithDataSource(_ => new MeshDataSource(Guid.NewGuid().AsString(), data.Workspace).WithMeshNodes())
-                .WithDefaultDataReference(workspace =>
-                {
-                    var hubPath = workspace.Hub.Address.ToString();
-                    return workspace.GetStream<MeshNode>()
-                        ?.Select(nodes => nodes?.FirstOrDefault(n => n.Path == hubPath)?.Content)
-                        ?? Observable.Return<object?>(null);
-                }))
-            .WithHandler<GetDataRequest>(HandleNodeTypeSchemaRequest)
-            .WithHandler<GetDataRequest>(HandleMetadataRequest);
+        return config.AddMeshDataSource(source => source);
     }
 
     /// <summary>
@@ -175,13 +164,11 @@ public static class MeshDataSourceExtensions
     }
 
     /// <summary>
-    /// Adds a content type to the MeshDataSource. This only adds the content type,
-    /// not MeshNodes - use when MeshNodes are already registered via AddMeshDataSource().
+    /// Adds a content type to the MeshDataSource. This calls AddMeshDataSource which includes MeshNodes.
     /// </summary>
     public static MessageHubConfiguration WithContentType<T>(this MessageHubConfiguration config) where T : class
     {
-        return config.AddData(data => data.WithDataSource(_ =>
-            new MeshDataSource(Guid.NewGuid().AsString(), data.Workspace).WithContentType<T>()));
+        return config.AddMeshDataSource(source => source.WithContentType<T>());
     }
 }
 
@@ -237,44 +224,50 @@ public record MeshDataSource : GenericUnpartitionedDataSource<MeshDataSource>
     }
 
     /// <summary>
-    /// Adds a content type source that syncs with MeshNode.Content.
-    /// Also stores the ContentType for later retrieval by NodeTypeService.
+    /// Registers a content type that provides:
+    /// 1. UI integration (e.g., building editor forms)
+    /// 2. A virtual collection allowing direct DataChangeRequest on content
+    ///
+    /// Two update paths are supported:
+    /// - Update MeshNode directly (includes Content) - via MeshNodeTypeSource
+    /// - Update just the content type (auto-wraps in MeshNode) - via ContentTypeSource
     /// </summary>
     public MeshDataSource WithContentType<T>() where T : class
     {
-        return WithContentType(typeof(T));
+        // Register the content type in TypeRegistry for JSON serialization
+        Workspace.Hub.TypeRegistry.WithType(typeof(T), typeof(T).Name);
+
+        // Add ContentTypeSource if persistence is available
+        var result = this with { ContentType = typeof(T) };
+
+        if (_persistence != null)
+        {
+            var contentTypeSource = new ContentTypeSource<T>(Workspace, Id, _persistence, _hubPath);
+            result = result.WithTypeSource(typeof(T), contentTypeSource);
+        }
+        else
+        {
+            _logger?.LogWarning("MeshDataSource: No persistence service, ContentTypeSource not added for {Type}", typeof(T).Name);
+        }
+
+        return result;
     }
 
     /// <summary>
-    /// Adds a content type source that syncs with MeshNode.Content using a runtime Type.
+    /// Registers a content type for UI purposes using a runtime Type.
     /// Use this for dynamically compiled types.
-    /// Also stores the ContentType for later retrieval by NodeTypeService.
+    /// Note: For runtime types, only UI integration is supported.
+    /// For full DataChangeRequest support, use the generic WithContentType&lt;T&gt;().
     /// </summary>
     public MeshDataSource WithContentType(Type dataType)
     {
         // Register the content type in TypeRegistry for JSON serialization
         Workspace.Hub.TypeRegistry.WithType(dataType, dataType.Name);
 
-        if (_persistence == null)
-        {
-            _logger?.LogWarning("MeshDataSource: No persistence service, using basic type source for {Type}", dataType.Name);
-            return ((MeshDataSource)WithType(dataType, null)) with { ContentType = dataType };
-        }
-
-        // Create ContentTypeSource<T> using reflection
-        var contentTypeSourceType = typeof(ContentTypeSource<>).MakeGenericType(dataType);
-        var constructor = contentTypeSourceType.GetConstructor([
-            typeof(IWorkspace),
-            typeof(object),
-            typeof(IPersistenceService),
-            typeof(string)
-        ]);
-
-        if (constructor == null)
-            throw new InvalidOperationException($"Could not find constructor for ContentTypeSource<{dataType.Name}>");
-
-        var contentTypeSource = (ITypeSource)constructor.Invoke([Workspace, Id, _persistence, _hubPath]);
-        return WithTypeSource(dataType, contentTypeSource) with { ContentType = dataType };
+        // For runtime types, we can only store the ContentType for UI purposes
+        // ContentTypeSource requires generic type parameter, so it's not supported here
+        // The dynamically compiled hub should use the generated type's WithContentType<T>()
+        return this with { ContentType = dataType };
     }
 
     /// <summary>
@@ -331,17 +324,13 @@ public record MeshDataSource : GenericUnpartitionedDataSource<MeshDataSource>
             if (ContentType.IsInstanceOfType(node.Content))
                 return node.Content;
 
-            // If content is JsonElement, deserialize it
+            // If content is JsonElement, deserialize it using Hub's JsonSerializerOptions
+            // This ensures proper handling of polymorphic types, custom converters, and type discriminators
             if (node.Content is System.Text.Json.JsonElement jsonElement)
             {
                 try
                 {
-                    var options = new System.Text.Json.JsonSerializerOptions
-                    {
-                        PropertyNameCaseInsensitive = true,
-                        Converters = { new System.Text.Json.Serialization.JsonStringEnumConverter() }
-                    };
-                    var deserialized = System.Text.Json.JsonSerializer.Deserialize(jsonElement.GetRawText(), ContentType, options);
+                    var deserialized = System.Text.Json.JsonSerializer.Deserialize(jsonElement.GetRawText(), ContentType, Workspace.Hub.JsonSerializerOptions);
                     if (deserialized != null)
                         return deserialized;
                 }

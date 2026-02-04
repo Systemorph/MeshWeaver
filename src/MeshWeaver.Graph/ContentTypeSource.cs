@@ -1,6 +1,4 @@
-using System.ComponentModel.DataAnnotations;
 using System.Reflection;
-using System.Text.Json;
 using MeshWeaver.Data;
 using MeshWeaver.Domain;
 using MeshWeaver.Mesh;
@@ -8,14 +6,18 @@ using MeshWeaver.Mesh.Services;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
-// IContentInitializable is in MeshWeaver.Mesh namespace
-
 namespace MeshWeaver.Graph;
 
 /// <summary>
-/// TypeSource for content entities (e.g., Story, Article) that syncs with MeshNode.Content.
-/// - On initialization: Loads content from MeshNode.Content
-/// - On update: Syncs changes back to MeshNode.Content (which triggers persistence via MeshNodeTypeSource)
+/// TypeSource for content types that provides a virtual collection allowing direct
+/// DataChangeRequest operations on content without manually wrapping in MeshNode.
+///
+/// On create/update: Wraps content in the hub's MeshNode and updates it.
+/// On read: Extracts content from MeshNode.Content.
+///
+/// This enables two update paths:
+/// 1. Update MeshNode directly (includes Content) - existing behavior
+/// 2. Update just the content type (auto-wraps in MeshNode) - via this source
 /// </summary>
 public record ContentTypeSource<T> : TypeSourceWithType<T, ContentTypeSource<T>> where T : class
 {
@@ -34,248 +36,224 @@ public record ContentTypeSource<T> : TypeSourceWithType<T, ContentTypeSource<T>>
         _logger = workspace.Hub.ServiceProvider.GetService<ILogger<ContentTypeSource<T>>>();
         _logger?.LogDebug("ContentTypeSource<{Type}>: Created for hubPath={HubPath}", typeof(T).Name, hubPath);
 
-        // Auto-configure key function from [Key] attribute
+        // Register key function for content type
+        // Use Path as the key to match MeshNode semantics
+        TypeDefinition = workspace.Hub.TypeRegistry.WithKeyFunction(
+            TypeDefinition.CollectionName,
+            new KeyFunction(GetContentKey, typeof(string)));
+    }
+
+    /// <summary>
+    /// Gets the key from a content instance.
+    /// Uses [Key] attribute if present, otherwise falls back to hubPath.
+    /// </summary>
+    private object GetContentKey(object content)
+    {
+        // Try to get key from [Key] attribute
         var keyProperty = typeof(T).GetProperties()
-            .FirstOrDefault(p => p.GetCustomAttribute<KeyAttribute>() != null);
+            .FirstOrDefault(p => p.GetCustomAttribute<System.ComponentModel.DataAnnotations.KeyAttribute>() != null);
 
         if (keyProperty != null)
         {
-            TypeDefinition = workspace.Hub.TypeRegistry.WithKeyFunction(
-                TypeDefinition.CollectionName,
-                new KeyFunction(o => keyProperty.GetValue(o)!, keyProperty.PropertyType));
-            _logger?.LogDebug("ContentTypeSource<{Type}>: Configured key from property {KeyProperty}", typeof(T).Name, keyProperty.Name);
+            var keyValue = keyProperty.GetValue(content);
+            if (keyValue != null)
+                return keyValue;
         }
+
+        // Fall back to hubPath as the key
+        return _hubPath;
     }
 
     protected override InstanceCollection UpdateImpl(InstanceCollection instances)
     {
-        _logger?.LogDebug("ContentTypeSource<{Type}>.UpdateImpl: Called with {Count} instances, _lastSaved has {LastSavedCount}",
-            typeof(T).Name, instances.Instances.Count, _lastSaved.Instances.Count);
+        _logger?.LogDebug("ContentTypeSource<{Type}>.UpdateImpl: Called with {Count} instances",
+            typeof(T).Name, instances.Instances.Count);
 
-        // Detect changes: adds, updates, deletes
-        var hasChanges = !_lastSaved.Instances.SequenceEqual(instances.Instances);
-        _logger?.LogDebug("ContentTypeSource<{Type}>.UpdateImpl: hasChanges={HasChanges}", typeof(T).Name, hasChanges);
-
-        if (hasChanges && instances.Instances.Count > 0)
+        // Only process if there are actual changes to content instances
+        // Compare with _lastSaved to detect real changes (not just passthrough from MeshNode updates)
+        var hasChanges = false;
+        foreach (var kvp in instances.Instances)
         {
-            // Get the content entity (there should be exactly one for a node's content)
-            var contentEntity = instances.Instances.Values.FirstOrDefault();
-            _logger?.LogDebug("ContentTypeSource<{Type}>.UpdateImpl: contentEntity={ContentEntity}", typeof(T).Name, contentEntity);
+            if (kvp.Value is not T content)
+                continue;
 
-            if (contentEntity != null)
+            // Check if this is a new or changed content instance
+            if (!_lastSaved.Instances.TryGetValue(kvp.Key, out var existing) ||
+                !existing.Equals(content))
             {
-                // Sync content back to MeshNode.Content
-                SyncToMeshNode(contentEntity);
+                hasChanges = true;
+                break;
             }
+        }
+
+        // Also check for deletions
+        if (!hasChanges)
+        {
+            foreach (var key in _lastSaved.Instances.Keys)
+            {
+                if (!instances.Instances.ContainsKey(key))
+                {
+                    hasChanges = true;
+                    break;
+                }
+            }
+        }
+
+        if (!hasChanges)
+        {
+            _logger?.LogDebug("ContentTypeSource<{Type}>.UpdateImpl: No changes detected, skipping",
+                typeof(T).Name);
+            return instances;
+        }
+
+        // For each changed content instance, wrap it in the hub's MeshNode and save
+        foreach (var kvp in instances.Instances)
+        {
+            if (kvp.Value is not T content)
+                continue;
+
+            // Skip if unchanged
+            if (_lastSaved.Instances.TryGetValue(kvp.Key, out var existing) &&
+                existing.Equals(content))
+                continue;
+
+            // Get the current MeshNode from persistence (or create new one)
+            var existingNode = _persistence.GetNodeAsync(_hubPath).GetAwaiter().GetResult();
+
+            if (existingNode == null)
+            {
+                _logger?.LogWarning("ContentTypeSource<{Type}>: No MeshNode found at {HubPath}, creating new one",
+                    typeof(T).Name, _hubPath);
+                existingNode = MeshNode.FromPath(_hubPath);
+            }
+
+            // Update the MeshNode's Content and sync MeshNode properties from content
+            var updatedNode = UpdateMeshNodeFromContent(existingNode, content);
+
+            // Save via MeshNode data change request (this will trigger MeshNodeTypeSource)
+            _workspace.RequestChange(
+                DataChangeRequest.Update([updatedNode]),
+                null,
+                null
+            );
+
+            _logger?.LogDebug("ContentTypeSource<{Type}>: Updated MeshNode at {HubPath} with content",
+                typeof(T).Name, _hubPath);
         }
 
         _lastSaved = instances;
         return instances;
     }
 
-    private void SyncToMeshNode(object contentEntity)
+    /// <summary>
+    /// Updates a MeshNode with content, syncing properties via [MeshNodeProperty] mappings.
+    /// </summary>
+    private MeshNode UpdateMeshNodeFromContent(MeshNode node, T content)
     {
-        _logger?.LogDebug("ContentTypeSource<{Type}>.SyncToMeshNode: Called for hubPath={HubPath}", typeof(T).Name, _hubPath);
+        var updatedNode = node with { Content = content };
 
-        // Read current MeshNode directly from persistence and update it synchronously
-        // Using GetAwaiter().GetResult() to avoid async issues crossing test boundaries
-        try
+        // Sync content properties to MeshNode properties via [MeshNodeProperty] attribute
+        var mappings = GetMeshNodePropertyMappings();
+
+        foreach (var (meshNodeProp, contentProp) in mappings)
         {
-            var meshNode = _persistence.GetNodeAsync(_hubPath).GetAwaiter().GetResult();
+            var value = contentProp.GetValue(content);
+            if (value == null)
+                continue;
 
-            if (meshNode == null)
+            var stringValue = value.ToString();
+            if (string.IsNullOrEmpty(stringValue))
+                continue;
+
+            updatedNode = meshNodeProp switch
             {
-                _logger?.LogDebug("ContentTypeSource<{Type}>.SyncToMeshNode: No MeshNode found at path {HubPath}", typeof(T).Name, _hubPath);
-                return;
-            }
-
-            _logger?.LogDebug("ContentTypeSource<{Type}>.SyncToMeshNode: Found MeshNode Prefix={Prefix}, Content type={ContentType}",
-                typeof(T).Name, meshNode.Path, meshNode.Content?.GetType().Name ?? "null");
-
-            // Check if content actually changed
-            if (meshNode.Content?.Equals(contentEntity) == true)
-            {
-                _logger?.LogDebug("ContentTypeSource<{Type}>.SyncToMeshNode: Content is already equal, skipping update", typeof(T).Name);
-                return;
-            }
-
-            // Update MeshNode with new content and current hub version
-            var hubVersion = _workspace.Hub.Version;
-            var (extractedName, extractedDescription, extractedIcon, extractedCategory) = ExtractMeshNodeProperties(contentEntity);
-            var updatedNode = meshNode with
-            {
-                Content = contentEntity,
-                Version = hubVersion,
-                Name = extractedName ?? meshNode.Name,
-                Description = extractedDescription ?? meshNode.Description,
-                Icon = extractedIcon ?? meshNode.Icon,
-                Category = extractedCategory ?? meshNode.Category
+                "Name" => updatedNode with { Name = stringValue },
+                "Description" => updatedNode with { Description = stringValue },
+                "Icon" => updatedNode with { Icon = stringValue },
+                "Category" => updatedNode with { Category = stringValue },
+                _ => updatedNode
             };
-
-            // Save to persistence synchronously
-            _logger?.LogDebug("ContentTypeSource<{Type}>.SyncToMeshNode: Saving MeshNode to persistence with new content, Version={Version}", typeof(T).Name, hubVersion);
-            _persistence.SaveNodeAsync(updatedNode).GetAwaiter().GetResult();
-            _logger?.LogDebug("ContentTypeSource<{Type}>.SyncToMeshNode: Persistence save complete", typeof(T).Name);
-
-            // Also update the in-memory MeshNode data stream via RequestChange
-            // This ensures GetDataRequest for MeshNode returns the updated content
-            _logger?.LogDebug("ContentTypeSource<{Type}>.SyncToMeshNode: Posting MeshNode update to data stream", typeof(T).Name);
-            _workspace.RequestChange(
-                DataChangeRequest.Update([updatedNode]),
-                null,
-                null
-            );
-            _logger?.LogDebug("ContentTypeSource<{Type}>.SyncToMeshNode: Data stream update posted", typeof(T).Name);
         }
-        catch (Exception ex)
-        {
-            _logger?.LogError(ex, "ContentTypeSource<{Type}>.SyncToMeshNode: Error syncing to MeshNode", typeof(T).Name);
-        }
+
+        return updatedNode;
     }
 
     /// <summary>
-    /// Extracts MeshNode properties from content entity using attribute-based and convention-based mapping.
-    /// Priority for Name: [MeshNodeProperty("Name")] > INamed.DisplayName > Title property > Name property
-    /// Priority for Description: [MeshNodeProperty("Description")] > Description property
-    /// Priority for Icon: [MeshNodeProperty("Icon")] > Icon property
-    /// Priority for Category: [MeshNodeProperty("Category")] > Category property
+    /// Gets property mappings from content type to MeshNode via [MeshNodeProperty] attributes.
     /// </summary>
-    private static (string? Name, string? Description, string? Icon, string? Category) ExtractMeshNodeProperties(object content)
+    private Dictionary<string, PropertyInfo> GetMeshNodePropertyMappings()
     {
-        string? name = null;
-        string? description = null;
-        string? icon = null;
-        string? category = null;
-        var type = content.GetType();
+        var mappings = new Dictionary<string, PropertyInfo>();
 
-        // Priority 1: Look for [MeshNodeProperty] attributes
-        foreach (var prop in type.GetProperties())
+        foreach (var prop in typeof(T).GetProperties())
         {
             var attr = prop.GetCustomAttribute<MeshNodePropertyAttribute>();
-            if (attr == null || prop.PropertyType != typeof(string))
-                continue;
-
-            var value = prop.GetValue(content) as string;
-            switch (attr.MeshNodeProperty)
+            if (attr?.MeshNodeProperty != null)
             {
-                case "Name" when name == null:
-                    name = value;
-                    break;
-                case "Description" when description == null:
-                    description = value;
-                    break;
-                case "Icon" when icon == null:
-                    icon = value;
-                    break;
-                case "Category" when category == null:
-                    category = value;
-                    break;
+                mappings[attr.MeshNodeProperty] = prop;
             }
         }
 
-        // Priority 2: INamed interface for DisplayName
-        if (name == null && content is INamed named)
-        {
-            name = named.DisplayName;
-        }
-
-        // Priority 3: Convention - look for Title property
-        if (name == null)
-        {
-            var titleProp = type.GetProperty("Title");
-            if (titleProp?.PropertyType == typeof(string))
-                name = titleProp.GetValue(content) as string;
-        }
-
-        // Priority 4: Convention - look for Name property
-        if (name == null)
-        {
-            var nameProp = type.GetProperty("Name");
-            if (nameProp?.PropertyType == typeof(string))
-                name = nameProp.GetValue(content) as string;
-        }
-
-        // Convention - look for Description property (if not already set via attribute)
-        if (description == null)
-        {
-            var descProp = type.GetProperty("Description");
-            if (descProp?.PropertyType == typeof(string))
-                description = descProp.GetValue(content) as string;
-        }
-
-        // Convention - look for Icon property (if not already set via attribute)
-        if (icon == null)
-        {
-            var iconProp = type.GetProperty("Icon");
-            if (iconProp?.PropertyType == typeof(string))
-                icon = iconProp.GetValue(content) as string;
-        }
-
-        // Convention - look for Category property (if not already set via attribute)
-        if (category == null)
-        {
-            var catProp = type.GetProperty("Category");
-            if (catProp?.PropertyType == typeof(string))
-                category = catProp.GetValue(content) as string;
-        }
-
-        return (name, description, icon, category);
+        return mappings;
     }
 
     protected override async Task<InstanceCollection> InitializeAsync(
         WorkspaceReference<InstanceCollection> reference,
         CancellationToken ct)
     {
-        _logger?.LogDebug("ContentTypeSource<{Type}>.InitializeAsync: Loading MeshNode from hubPath={HubPath}", typeof(T).Name, _hubPath);
+        _logger?.LogDebug("ContentTypeSource<{Type}>.InitializeAsync: Loading content from {HubPath}",
+            typeof(T).Name, _hubPath);
 
-        // Load the MeshNode from persistence to get the content
-        var meshNode = await _persistence.GetNodeAsync(_hubPath, ct);
-        _logger?.LogDebug("ContentTypeSource<{Type}>.InitializeAsync: meshNode={MeshNode}, Content type={ContentType}",
-            typeof(T).Name, meshNode?.Path ?? "null", meshNode?.Content?.GetType().Name ?? "null");
+        var items = new List<T>();
 
-        T? content = null;
+        // Load the MeshNode and extract its Content
+        var node = await _persistence.GetNodeAsync(_hubPath, ct);
 
-        if (meshNode?.Content is T typedContent)
+        if (node?.Content != null)
         {
-            content = typedContent;
+            var content = ExtractContent(node);
+            if (content != null)
+            {
+                items.Add(content);
+                _logger?.LogDebug("ContentTypeSource<{Type}>.InitializeAsync: Extracted content from {HubPath}",
+                    typeof(T).Name, _hubPath);
+            }
         }
-        else if (meshNode?.Content is JsonElement jsonElement)
+        else
         {
-            // Deserialize JsonElement to expected type T using Hub's options
+            _logger?.LogDebug("ContentTypeSource<{Type}>.InitializeAsync: No content found at {HubPath}",
+                typeof(T).Name, _hubPath);
+        }
+
+        _lastSaved = new InstanceCollection(items.Cast<object>(), GetContentKey);
+        return _lastSaved;
+    }
+
+    /// <summary>
+    /// Extracts typed content from a MeshNode, handling JsonElement deserialization.
+    /// </summary>
+    private T? ExtractContent(MeshNode node)
+    {
+        if (node.Content == null)
+            return null;
+
+        // If already the correct type, return directly
+        if (node.Content is T typed)
+            return typed;
+
+        // If JsonElement, deserialize using Hub's JsonSerializerOptions for proper type handling
+        if (node.Content is System.Text.Json.JsonElement jsonElement)
+        {
             try
             {
-                content = jsonElement.Deserialize<T>(_workspace.Hub.JsonSerializerOptions);
-                _logger?.LogDebug("ContentTypeSource<{Type}>.InitializeAsync: Deserialized JsonElement to {Type}", typeof(T).Name, typeof(T).Name);
+                return System.Text.Json.JsonSerializer.Deserialize<T>(jsonElement.GetRawText(), _workspace.Hub.JsonSerializerOptions);
             }
             catch (Exception ex)
             {
-                _logger?.LogDebug(ex, "ContentTypeSource<{Type}>.InitializeAsync: Failed to deserialize JsonElement", typeof(T).Name);
+                _logger?.LogDebug(ex, "Failed to deserialize JsonElement content for {Path}", node.Path);
             }
         }
 
-        if (content != null)
-        {
-            _logger?.LogDebug("ContentTypeSource<{Type}>.InitializeAsync: Found content, returning it", typeof(T).Name);
-
-            // Call Initialize() if content implements IContentInitializable
-            if (content is IContentInitializable initializable)
-            {
-                var initialized = initializable.Initialize();
-                if (initialized is T typedInitialized)
-                {
-                    content = typedInitialized;
-                    _logger?.LogDebug("ContentTypeSource<{Type}>.InitializeAsync: Content was initialized via IContentInitializable", typeof(T).Name);
-                }
-            }
-
-            // Return the content as the initial data
-            _lastSaved = new InstanceCollection([content], TypeDefinition.GetKey);
-            return _lastSaved;
-        }
-
-        _logger?.LogDebug("ContentTypeSource<{Type}>.InitializeAsync: No content found, returning empty", typeof(T).Name);
-        // No content found, return empty collection
-        _lastSaved = new InstanceCollection();
-        return _lastSaved;
+        return null;
     }
 }
