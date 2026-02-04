@@ -19,6 +19,7 @@ namespace MeshWeaver.Graph.Test;
 /// <summary>
 /// Dedicated tests for MeshNodeTypeSource functionality.
 /// Tests persistence, loading, and synchronization of MeshNode data.
+/// With the simplified architecture, content ONLY lives inside MeshNode.Content.
 /// </summary>
 public class MeshNodeTypeSourceTest(ITestOutputHelper output) : HubTestBase(output)
 {
@@ -87,6 +88,7 @@ public class MeshNodeTypeSourceTest(ITestOutputHelper output) : HubTestBase(outp
         loadedNode.Description.Should().Be("Test Description");
         loadedNode.Icon.Should().Be("Star");
         loadedNode.Category.Should().Be("Testing");
+        loadedNode.Content.Should().NotBeNull();
     }
 
     [HubFact]
@@ -124,8 +126,11 @@ public class MeshNodeTypeSourceTest(ITestOutputHelper output) : HubTestBase(outp
         };
         workspace.RequestChange(DataChangeRequest.Update([updatedNode]), null, null);
 
-        // Wait for persistence
-        await Task.Delay(500);
+        // Wait for the update to be reflected in the stream (reactive query)
+        await meshNodeStream!
+            .Where(nodes => nodes?.FirstOrDefault()?.Name == "Updated Name")
+            .Timeout(5.Seconds())
+            .FirstAsync();
 
         // Assert - Changes should be persisted
         var persistedNode = await _persistence.GetNodeAsync(hubPath, JsonOptions);
@@ -135,7 +140,7 @@ public class MeshNodeTypeSourceTest(ITestOutputHelper output) : HubTestBase(outp
     }
 
     [HubFact]
-    public async Task MeshNodeTypeSource_SyncsContentToMeshNodeProperties()
+    public async Task MeshNodeTypeSource_UpdatesContentInMeshNode()
     {
         // Arrange
         var hubPath = GetHubPath("sync-test");
@@ -154,24 +159,35 @@ public class MeshNodeTypeSourceTest(ITestOutputHelper output) : HubTestBase(outp
 
         var workspace = host.GetWorkspace();
 
-        // Wait for initial load
-        var contentStream = workspace.GetStream<TestContent>();
-        await contentStream!
+        // Wait for initial load - content is inside MeshNode.Content
+        var nodeStream = workspace.GetStream<MeshNode>();
+        var nodes = await nodeStream!
             .Where(items => items?.Any() == true)
             .Timeout(5.Seconds())
             .FirstAsync();
 
-        // Act - Update content
-        var updatedContent = content with { Title = "Synced Title", Notes = "Synced notes" };
-        workspace.RequestChange(DataChangeRequest.Update([updatedContent]), null, null);
+        // Act - Update MeshNode with new content
+        var currentNode = nodes.First();
+        var updatedContent = new TestContent { Id = "1", Title = "Synced Title", Notes = "Synced notes" };
+        var updatedNode = currentNode with
+        {
+            Content = updatedContent,
+            Name = "Synced Title",
+            Description = "Synced notes"
+        };
+        workspace.RequestChange(DataChangeRequest.Update([updatedNode]), null, null);
 
-        await Task.Delay(500);
+        // Wait for the update to be reflected in the stream (reactive query)
+        await nodeStream!
+            .Where(items => items?.FirstOrDefault()?.Name == "Synced Title")
+            .Timeout(5.Seconds())
+            .FirstAsync();
 
-        // Assert - MeshNode properties should be synced from content
+        // Assert - MeshNode properties should be persisted
         var persistedNode = await _persistence.GetNodeAsync(hubPath, JsonOptions);
         persistedNode.Should().NotBeNull();
-        persistedNode!.Name.Should().Be("Synced Title", "MeshNode.Name should sync from Content.Title");
-        persistedNode.Description.Should().Be("Synced notes", "MeshNode.Description should sync from Content.Notes");
+        persistedNode!.Name.Should().Be("Synced Title");
+        persistedNode.Description.Should().Be("Synced notes");
     }
 
     [HubFact]
@@ -207,7 +223,7 @@ public class MeshNodeTypeSourceTest(ITestOutputHelper output) : HubTestBase(outp
     }
 
     [HubFact]
-    public async Task MeshNodeTypeSource_PreservesNodeTypeOnContentUpdate()
+    public async Task MeshNodeTypeSource_PreservesNodeTypeOnUpdate()
     {
         // Arrange
         var hubPath = GetHubPath("nodetype-test");
@@ -225,18 +241,24 @@ public class MeshNodeTypeSourceTest(ITestOutputHelper output) : HubTestBase(outp
 
         var workspace = host.GetWorkspace();
 
-        // Wait for initial load
-        var contentStream = workspace.GetStream<TestContent>();
-        await contentStream!
+        // Wait for initial load - content is inside MeshNode
+        var nodeStream = workspace.GetStream<MeshNode>();
+        var nodes = await nodeStream!
             .Where(items => items?.Any() == true)
             .Timeout(5.Seconds())
             .FirstAsync();
 
-        // Act - Update content
-        var updatedContent = content with { Title = "Updated Title" };
-        workspace.RequestChange(DataChangeRequest.Update([updatedContent]), null, null);
+        // Act - Update MeshNode
+        var currentNode = nodes.First();
+        var updatedContent = new TestContent { Id = "1", Title = "Updated Title", Notes = "Notes" };
+        var updatedNode = currentNode with { Content = updatedContent, Name = "Updated Title" };
+        workspace.RequestChange(DataChangeRequest.Update([updatedNode]), null, null);
 
-        await Task.Delay(500);
+        // Wait for the update to be reflected in the stream (reactive query)
+        await nodeStream!
+            .Where(items => items?.FirstOrDefault()?.Name == "Updated Title")
+            .Timeout(5.Seconds())
+            .FirstAsync();
 
         // Assert - NodeType should be preserved
         var persistedNode = await _persistence.GetNodeAsync(hubPath, JsonOptions);

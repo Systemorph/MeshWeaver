@@ -113,5 +113,5 @@ public record InstanceCollection
     }
 
     public override int GetHashCode() =>
-        Instances.Values.Select(x => x.GetHashCode()).Aggregate((x, y) => x ^ y);
+        Instances.Values.Select(x => x.GetHashCode()).Aggregate(0, (x, y) => x ^ y);
 }
