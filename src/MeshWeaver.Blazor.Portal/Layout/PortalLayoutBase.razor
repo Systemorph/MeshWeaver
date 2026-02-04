@@ -21,30 +21,43 @@
                 <div class="search-container">
                     <SearchBar />
                 </div>
-                @* Create menu - available in all portal layouts *@
-                <FluentButton Appearance="Appearance.Stealth" Id="create-menu-button"
-                    Title="Create new" aria-label="Create new" @onclick="@(() => isCreateMenuOpen = !isCreateMenuOpen)">
-                    <FluentIcon Value="@(new Icons.Regular.Size20.Add())" Color="Color.FillInverse" />
-                </FluentButton>
-                <FluentMenu Anchor="create-menu-button" @bind-Open="isCreateMenuOpen">
-                    @if (IsLoadingCreatableTypes && CreatableTypes.Count == 0)
+                @* Create button with type menu *@
+                <FluentMenu Anchor="create-menu-anchor" @bind-Open="isCreateMenuOpen">
+                    @if (IsLoadingCreatableTypes)
                     {
-                        <FluentMenuItem Disabled="true">Loading...</FluentMenuItem>
+                        <FluentMenuItem>Loading...</FluentMenuItem>
                     }
                     else if (CreatableTypes.Count == 0)
                     {
-                        <FluentMenuItem Disabled="true">No types available</FluentMenuItem>
+                        <FluentMenuItem OnClick="@(() => OpenCreateNodeDialogAsync(null))">Create New...</FluentMenuItem>
                     }
                     else
                     {
-                        @foreach (var typeInfo in CreatableTypes)
+                        @foreach (var type in CreatableTypes)
                         {
-                            <FluentMenuItem OnClick="@(async () => await NavigateToCreateAsync(typeInfo.NodeTypePath))">
-                                New @(typeInfo.DisplayName ?? typeInfo.NodeTypePath)
+                            <FluentMenuItem OnClick="@(() => OpenCreateNodeDialogAsync(type))">
+                                @if (!string.IsNullOrEmpty(type.Icon))
+                                {
+                                    @if (IsEmoji(type.Icon))
+                                    {
+                                        <span style="margin-right: 8px;">@type.Icon</span>
+                                    }
+                                    else
+                                    {
+                                        <img src="@type.Icon" alt="" style="width: 16px; height: 16px; margin-right: 8px;" />
+                                    }
+                                }
+                                @(type.DisplayName ?? type.NodeTypePath)
                             </FluentMenuItem>
                         }
+                        <FluentDivider Style="margin: 4px 0;" />
+                        <FluentMenuItem OnClick="@(() => OpenCreateNodeDialogAsync(null))">Other...</FluentMenuItem>
                     }
                 </FluentMenu>
+                <FluentButton Id="create-menu-anchor" Appearance="Appearance.Stealth"
+                    Title="Create new" aria-label="Create new" @onclick="ToggleCreateMenu">
+                    <FluentIcon Value="@(new Icons.Regular.Size20.Add())" Color="Color.FillInverse" />
+                </FluentButton>
                 @HeaderLinks
             </div>
             <div class="notifications">

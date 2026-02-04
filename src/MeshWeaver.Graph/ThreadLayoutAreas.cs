@@ -68,37 +68,49 @@ public static class ThreadLayoutAreas
     /// <summary>
     /// Renders the Create area for Thread nodes.
     /// Auto-creates a thread with generated name and redirects to ChatArea.
+    /// Thread nodes are created under a "Threads" sub-namespace: {parentPath}/Threads/{threadId}
     /// </summary>
     public static IObservable<UiControl?> CreateView(LayoutAreaHost host, RenderingContext _)
     {
-        var parentPath = host.Hub.Address.ToString();
-        var meshCatalog = host.Hub.ServiceProvider.GetRequiredService<IMeshCatalog>();
+        var parentAddress = host.Hub.Address;
+        var parentPath = parentAddress.ToString();
 
         // Auto-create and redirect
         return Observable.FromAsync(async () =>
         {
-            var userId = GetUserIdFromPath(parentPath);
             var now = DateTime.UtcNow;
             var nodeId = Guid.NewGuid().AsString();
-            var nodePath = $"{parentPath}/{nodeId}";
-            var name = $"{userId} {now:yyyy-MM-dd HH:mm}";
+            var name = $"Thread {now:yyyy-MM-dd HH:mm}";
 
             var threadContent = new MeshThread
             {
-                Messages = new List<ThreadMessage>()
+                Messages = new List<ThreadMessage>(),
+                ParentPath = parentPath
             };
 
-            var newNode = MeshNode.FromPath(nodePath) with
+            // Construct full path with Threads sub-namespace
+            var threadNamespace = string.IsNullOrEmpty(parentPath) ? "Threads" : $"{parentPath}/Threads";
+            var threadPath = $"{threadNamespace}/{nodeId}";
+
+            var newNode = new MeshNode(threadPath)
             {
                 Name = name,
                 NodeType = ThreadNodeType.NodeType,
-                Content = threadContent,
-                State = MeshNodeState.Active
+                Content = threadContent
             };
 
-            await meshCatalog.CreateNodeAsync(newNode, userId);
+            var request = new CreateNodeRequest(newNode);
+            // Send to the mesh hub (not parent) since we're using full path
+            var response = await host.Hub.AwaitResponse(request, o => o.WithTarget(host.Hub.Address));
 
-            return (UiControl?)new RedirectControl(MeshNodeLayoutAreas.BuildContentUrl(nodePath, ChatArea));
+            if (response.Message.Success && response.Message.Node != null)
+            {
+                var nodePath = response.Message.Node.Path;
+                return (UiControl?)new RedirectControl(MeshNodeLayoutAreas.BuildContentUrl(nodePath!, ChatArea));
+            }
+
+            // If creation failed, show error
+            return (UiControl?)Controls.Html($"<p style=\"color: var(--error-foreground);\">Failed to create thread: {response.Message.Error}</p>");
         });
     }
 
@@ -135,13 +147,14 @@ public static class ThreadLayoutAreas
             .WithWidth("100%")
             .WithStyle("align-items: center; padding: 16px; border-bottom: 1px solid var(--neutral-stroke-rest); flex-shrink: 0;");
 
-        // Back button (navigate to user's thread catalog)
-        var userId = GetUserIdFromPath(threadPath);
-        var catalogPath = ThreadNodeType.GetUserThreadsPath(userId);
+        // Back button (navigate to parent context from Thread's ParentPath)
+        var content = node?.Content as MeshThread;
+        var parentPath = content?.ParentPath;
+        var backHref = string.IsNullOrEmpty(parentPath) ? "/" : $"/{parentPath}";
         header = header.WithView(Controls.Button("")
             .WithIconStart(FluentIcons.ArrowLeft(IconSize.Size16))
             .WithAppearance(Appearance.Stealth)
-            .WithNavigateToHref($"/{catalogPath}"));
+            .WithNavigateToHref(backHref));
 
         // Title
         header = header.WithView(Controls.Html($"<h2 style=\"margin: 0 16px; flex: 1;\">{System.Web.HttpUtility.HtmlEncode(title)}</h2>"));
@@ -151,8 +164,7 @@ public static class ThreadLayoutAreas
 
         container = container.WithView(header);
 
-        // Thread messages content
-        var content = node?.Content as MeshThread;
+        // Thread messages content (reuse content variable from above)
         var messages = content?.Messages ?? new List<ThreadMessage>();
 
         if (messages.Count == 0)
@@ -434,16 +446,4 @@ public static class ThreadLayoutAreas
     /// </summary>
     private static string GetThreadTitle(MeshNode? node)
         => !string.IsNullOrEmpty(node?.Name) ? node.Name : "Thread";
-
-    /// <summary>
-    /// Extracts user ID from a thread path like "User/userId/Threads/threadId".
-    /// </summary>
-    private static string GetUserIdFromPath(string path)
-    {
-        var segments = path.Split('/');
-        if (segments.Length >= 2 && segments[0] == "User")
-            return segments[1];
-
-        return "anonymous";
-    }
 }

@@ -1,10 +1,11 @@
 using System.Text.Json;
+using MeshWeaver.ShortGuid;
 
 namespace MeshWeaver.AI;
 
 /// <summary>
 /// Content stored in Thread MeshNodes.
-/// Threads are stored as MeshNodes with nodeType="Thread" in User/{userId}/Threads/.
+/// Threads are stored as MeshNodes with nodeType="Thread".
 /// Title is stored in MeshNode.Name, LastModified tracks activity.
 /// </summary>
 public record Thread
@@ -18,6 +19,64 @@ public record Thread
     /// Thread messages stored inline.
     /// </summary>
     public List<ThreadMessage>? Messages { get; init; }
+
+    /// <summary>
+    /// The path of the parent node where this thread was created.
+    /// Used for navigation back to context.
+    /// </summary>
+    public string? ParentPath { get; init; }
+
+    /// <summary>
+    /// Converts Thread messages to Microsoft.Extensions.AI.ChatMessage format.
+    /// </summary>
+    public List<Microsoft.Extensions.AI.ChatMessage> ToChatMessages()
+    {
+        if (Messages == null || Messages.Count == 0)
+            return [];
+
+        return Messages.Select(msg => new Microsoft.Extensions.AI.ChatMessage(
+            new Microsoft.Extensions.AI.ChatRole(msg.Role),
+            msg.Text)
+        {
+            AuthorName = msg.AuthorName
+        }).ToList();
+    }
+
+    /// <summary>
+    /// Creates a Thread from Microsoft.Extensions.AI.ChatMessage collection.
+    /// </summary>
+    public static Thread FromChatMessages(IEnumerable<Microsoft.Extensions.AI.ChatMessage> messages, string? parentPath = null)
+    {
+        return new Thread
+        {
+            Messages = messages.Select(msg => new ThreadMessage
+            {
+                Id = Guid.NewGuid().AsString(),
+                Role = msg.Role.Value,
+                AuthorName = msg.AuthorName,
+                Text = msg.Text ?? string.Empty,
+                Timestamp = DateTime.UtcNow
+            }).ToList(),
+            ParentPath = parentPath
+        };
+    }
+
+    /// <summary>
+    /// Adds messages from ChatMessage collection to this thread.
+    /// </summary>
+    public Thread WithMessages(IEnumerable<Microsoft.Extensions.AI.ChatMessage> messages)
+    {
+        var newMessages = messages.Select(msg => new ThreadMessage
+        {
+            Id = Guid.NewGuid().AsString(),
+            Role = msg.Role.Value,
+            AuthorName = msg.AuthorName,
+            Text = msg.Text ?? string.Empty,
+            Timestamp = DateTime.UtcNow
+        }).ToList();
+
+        return this with { Messages = newMessages };
+    }
 }
 
 /// <summary>

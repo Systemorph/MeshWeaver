@@ -1,4 +1,5 @@
-﻿using MeshWeaver.AI;
+﻿using System.Text.Json;
+using MeshWeaver.AI;
 using MeshWeaver.AI.Commands;
 using MeshWeaver.AI.Completion;
 using MeshWeaver.AI.Parsing;
@@ -30,6 +31,9 @@ public enum ChatPosition
 
 public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
 {
+    [Inject] private ChatWindowStateService ChatWindowState { get; set; } = null!;
+    [Inject] private INavigationService NavigationService { get; set; } = null!;
+
     private bool _isDisposed;
     private readonly string _instanceId = Guid.NewGuid().ToString("N")[..8];
     private IAgentChat? chat;
@@ -128,31 +132,45 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
         // Initialize command system
         InitializeCommands();
 
-        // Try to load the most recent conversation on startup
+        // Try to load conversation - first check if ChatWindowState has a thread to restore
         try
         {
-            var meshQuery = Hub.ServiceProvider.GetService<IMeshQuery>();
-            var userId = GetCurrentUserId();
+            var threadToLoad = ChatWindowState.CurrentThreadPath;
 
-            if (meshQuery != null)
+            if (!string.IsNullOrEmpty(threadToLoad))
             {
-                var threadNodes = await ThreadNodePersistenceHelper.ListUserThreadNodesAsync(meshQuery, userId);
-                var mostRecent = threadNodes
-                    .OrderByDescending(n => n.LastModified)
-                    .FirstOrDefault();
+                // Restore the thread from state (e.g., when moving from full-screen to panel)
+                Logger.LogDebug("[Chat:{InstanceId}] Restoring thread from state: {Path}", _instanceId, threadToLoad);
+                await LoadConversation(threadToLoad);
+            }
+            else
+            {
+                // Load the most recent conversation
+                var meshQuery = Hub.ServiceProvider.GetService<IMeshQuery>();
+                var userId = GetCurrentUserId();
 
-                if (mostRecent?.Path != null)
+                if (meshQuery != null)
                 {
-                    await LoadConversation(mostRecent.Path);
+                    // Query threads by node type and created by user
+                    var query = $"nodeType:{ThreadNodeType.NodeType} createdBy:{userId}";
+                    var threadNodes = await meshQuery.QueryAsync<MeshNode>(query).ToListAsync();
+                    var mostRecent = threadNodes
+                        .OrderByDescending(n => n.LastModified)
+                        .FirstOrDefault();
+
+                    if (mostRecent?.Path != null)
+                    {
+                        await LoadConversation(mostRecent.Path);
+                    }
+                    else
+                    {
+                        await StartNewConversationAsync();
+                    }
                 }
                 else
                 {
                     await StartNewConversationAsync();
                 }
-            }
-            else
-            {
-                await StartNewConversationAsync();
             }
         }
         catch (Exception ex)
@@ -618,6 +636,9 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
         currentConversation = null;
         messages.Clear();
 
+        // Clear the thread state
+        ChatWindowState.SetCurrentThread(null);
+
         // Get context path async and create new chat
         var context = await GetCurrentAgentContextAsync();
 
@@ -650,24 +671,23 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
     }
 
     /// <summary>
-    /// Gets the base path for thread storage based on the current navigation context.
-    /// If at root or /chat, uses User/{userId}/Threads.
-    /// Otherwise, uses {contextPath}/Threads.
+    /// Gets the parent address for thread creation based on the current navigation context.
+    /// Uses NavigationService.Context to get the current node's address.
+    /// If at root, uses the hub's address.
     /// </summary>
-    private async Task<string> GetThreadStorageBasePath()
+    private Address GetThreadParentAddress()
     {
-        var context = await GetCurrentAgentContextAsync();
-        var contextPath = context?.Address?.ToString();
+        var context = NavigationService.Context;
+        return context?.Address ?? Hub.Address;
+    }
 
-        // If at root or /chat, use user-based storage
-        if (string.IsNullOrEmpty(contextPath) || contextPath == "chat")
-        {
-            var userId = GetCurrentUserId();
-            return ThreadNodeType.GetUserThreadsPath(userId);
-        }
-
-        // Otherwise, store under the context node
-        return ThreadNodeType.GetContextThreadsPath(contextPath);
+    /// <summary>
+    /// Gets the parent path for storing in the thread content.
+    /// </summary>
+    private string? GetThreadParentPath()
+    {
+        var context = NavigationService.Context;
+        return context?.Namespace;
     }
 
     private string GetCurrentUserId()
@@ -714,17 +734,22 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
             StateHasChanged(); // Show loading spinner immediately
             CancelAnyCurrentResponse();
 
-            // Load thread node content via hub
-            var threadContent = await ThreadNodePersistenceHelper.LoadThreadNodeAsync(Hub, chatPath);
+            // Load thread node via IMeshCatalog
+            var meshCatalog = Hub.ServiceProvider.GetService<IMeshCatalog>();
+            var node = meshCatalog != null ? await meshCatalog.GetNodeAsync(new Address(chatPath)) : null;
+            var threadContent = node?.Content as MeshThread;
 
             if (threadContent != null)
             {
                 currentConversationId = chatPath;
                 currentThreadNodePath = chatPath;
 
+                // Sync with ChatWindowStateService
+                ChatWindowState.SetCurrentThread(chatPath);
+
                 // Convert Thread messages to ChatMessage format
                 messages.Clear();
-                var loadedMessages = ThreadNodePersistenceHelper.ConvertToAgentChatMessages(threadContent);
+                var loadedMessages = threadContent.ToChatMessages();
                 foreach (var msg in loadedMessages)
                 {
                     messages.Add(msg);
@@ -734,7 +759,7 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
                 currentConversation = new ChatConversation
                 {
                     Id = chatPath,
-                    Title = "Chat",
+                    Title = node?.Name ?? "Chat",
                     CreatedAt = DateTime.UtcNow,
                     LastModifiedAt = DateTime.UtcNow,
                     Messages = messages.ToList()
@@ -777,34 +802,64 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
         {
             // Generate title from first user message
             var title = GetConversationTitle();
+            var parentPath = GetThreadParentPath();
 
-            // Convert messages to ChatMessageContent format
-            var chatMessages = ThreadNodePersistenceHelper.ConvertFromAgentChatMessages(messages);
+            // Create thread content from messages
+            var threadContent = MeshThread.FromChatMessages(messages, parentPath);
 
-            // Create or update the thread node content
-            var threadContent = new MeshThread
-            {
-                Messages = chatMessages
-            };
-
-            // If we have a thread node path, update it via hub
+            // If we have a thread node path, update it via DataChangeRequest
             if (!string.IsNullOrEmpty(currentThreadNodePath))
             {
-                await ThreadNodePersistenceHelper.UpdateThreadNodeAsync(Hub, currentThreadNodePath, threadContent);
+                var meshCatalog = Hub.ServiceProvider.GetService<IMeshCatalog>();
+                var existingNode = meshCatalog != null ? await meshCatalog.GetNodeAsync(new Address(currentThreadNodePath)) : null;
+
+                var updatedNode = existingNode != null
+                    ? existingNode with { Content = threadContent }
+                    : new MeshNode(currentThreadNodePath) { NodeType = ThreadNodeType.NodeType, Content = threadContent };
+
+                var nodeJson = JsonSerializer.SerializeToElement(updatedNode, Hub.JsonSerializerOptions);
+                Hub.Post(new DataChangeRequest { Updates = [nodeJson] }, o => o.WithTarget(new Address(currentThreadNodePath)));
+
                 Logger.LogDebug("[Chat:{InstanceId}] Updated thread node: {Path}", _instanceId, currentThreadNodePath);
             }
             else
             {
-                // Create new thread node with context-aware path (lazy creation on first message)
-                var basePath = await GetThreadStorageBasePath();
+                // Create new thread node via CreateNodeRequest (lazy creation on first message)
+                // Thread nodes are created under a "Threads" sub-namespace: {parentPath}/Threads/{threadId}
                 var name = title ?? $"Chat {DateTime.UtcNow:yyyy-MM-dd HH:mm}";
-                currentThreadNodePath = await ThreadNodePersistenceHelper.CreateThreadNodeAsync(Hub, basePath, name, threadContent);
-                currentConversationId = currentThreadNodePath;
+                var threadId = Guid.NewGuid().AsString();
 
-                // Set the thread ID on the chat client
-                chat?.SetThreadId(currentThreadNodePath);
+                // Construct full path with Threads sub-namespace (parentPath already defined above)
+                var threadNamespace = string.IsNullOrEmpty(parentPath) ? "Threads" : $"{parentPath}/Threads";
+                var threadPath = $"{threadNamespace}/{threadId}";
 
-                Logger.LogDebug("[Chat:{InstanceId}] Created thread node at context-aware path: {Path}", _instanceId, currentThreadNodePath);
+                var newNode = new MeshNode(threadPath)
+                {
+                    Name = name,
+                    NodeType = ThreadNodeType.NodeType,
+                    Content = threadContent
+                };
+
+                var request = new CreateNodeRequest(newNode) { CreatedBy = GetCurrentUserId() };
+                var response = await Hub.AwaitResponse(request, o => o.WithTarget(Hub.Address));
+
+                if (response.Message.Success && response.Message.Node != null)
+                {
+                    currentThreadNodePath = response.Message.Node.Path;
+                    currentConversationId = currentThreadNodePath;
+
+                    // Set the thread ID on the chat client
+                    chat?.SetThreadId(currentThreadNodePath);
+
+                    // Sync with ChatWindowStateService
+                    ChatWindowState.SetCurrentThread(currentThreadNodePath);
+
+                    Logger.LogDebug("[Chat:{InstanceId}] Created thread node via CreateNodeRequest: {Path}", _instanceId, currentThreadNodePath);
+                }
+                else
+                {
+                    Logger.LogWarning("[Chat:{InstanceId}] Failed to create thread node: {Error}", _instanceId, response.Message.Error);
+                }
             }
 
             // Update local state
@@ -1290,6 +1345,13 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
             // Otherwise, navigate away from the chat page
             NavigationManager.NavigateTo("/");
         }
+    }
+
+    private void OpenThreadFullScreen()
+    {
+        if (string.IsNullOrEmpty(currentThreadNodePath))
+            return;
+        NavigationManager.NavigateTo($"/{currentThreadNodePath}");
     }
 
     private async Task ChangeChatPosition(ChatPosition newPosition)

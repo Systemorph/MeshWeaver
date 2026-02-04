@@ -1,7 +1,7 @@
 namespace MeshWeaver.AI;
 
 /// <summary>
-/// Constants and path helpers for Thread node types.
+/// Constants for Thread node types.
 /// </summary>
 public static class ThreadNodeType
 {
@@ -11,17 +11,12 @@ public static class ThreadNodeType
     public const string NodeType = "Thread";
 
     /// <summary>
-    /// Gets the user's thread catalog path.
+    /// Checks if a MeshNode is a Thread by checking its NodeType.
     /// </summary>
-    /// <param name="userId">The user's unique identifier.</param>
-    /// <returns>Path to the user's threads namespace.</returns>
-    public static string GetUserThreadsPath(string userId) => $"User/{userId}/Threads";
-
-    /// <summary>
-    /// Gets the threads path for a context (e.g., ACME/ProductLaunch/Threads).
-    /// Used for storing threads under a specific MeshNode context.
-    /// </summary>
-    /// <param name="contextPath">The context path (e.g., "ACME/ProductLaunch").</param>
-    /// <returns>Path to the context's threads namespace.</returns>
-    public static string GetContextThreadsPath(string contextPath) => $"{contextPath}/Threads";
+    /// <param name="nodeType">The node type to check.</param>
+    /// <returns>True if the node type is Thread.</returns>
+    public static bool IsThreadNodeType(string? nodeType)
+    {
+        return string.Equals(nodeType, NodeType, StringComparison.OrdinalIgnoreCase);
+    }
 }

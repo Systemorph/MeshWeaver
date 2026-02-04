@@ -30,13 +30,12 @@ public static class ThreadsLayoutArea
     /// <summary>
     /// Renders the Threads area showing node-scoped thread history.
     /// Uses MeshSearchControl with reactive mode for live updates.
-    /// Displays threads stored under the node's Threads path.
+    /// Displays threads that are direct children of the current node.
     /// </summary>
     [Browsable(false)]
     public static UiControl Threads(LayoutAreaHost host, RenderingContext _)
     {
         var nodePath = host.Hub.Address.ToString();
-        var threadsPath = ThreadNodeType.GetContextThreadsPath(nodePath);
 
         var stack = Controls.Stack.WithWidth("100%");
 
@@ -49,8 +48,9 @@ public static class ThreadsLayoutArea
         stack = stack.WithView(headerStack);
 
         // Thread list using MeshSearchControl with reactive mode
+        // Query for Thread nodes that are direct children of the current node
         var searchControl = Controls.MeshSearch
-            .WithHiddenQuery($"path:{threadsPath} nodeType:{ThreadNodeType.NodeType}")
+            .WithHiddenQuery($"path:{nodePath} nodeType:{ThreadNodeType.NodeType} scope:children")
             .WithShowSearchBox(false)
             .WithRenderMode(MeshSearchRenderMode.Flat)
             .WithSortBy("LastActivityAt", ascending: false)
