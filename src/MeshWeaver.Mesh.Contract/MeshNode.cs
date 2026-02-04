@@ -206,6 +206,12 @@ public record MeshNode([property: Key] string Id, [property: Editable(false)] st
     [JsonIgnore, NotMapped]
     public Func<MessageHubConfiguration, MessageHubConfiguration>? HubConfiguration { get; init; }
 
+    /// <summary>
+    /// User's intended Id for this node. Used during creation flow
+    /// when transient node path uses GUID but user wants specific Id.
+    /// </summary>
+    public string? DesiredId { get; init; }
+
 
     /// <summary>
     /// Gets or sets the global service configurations for this mesh node.

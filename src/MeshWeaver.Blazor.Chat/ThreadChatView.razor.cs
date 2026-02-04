@@ -1,7 +1,10 @@
+using System.Text.Json;
 using MeshWeaver.AI;
 using MeshWeaver.AI.Completion;
 using MeshWeaver.AI.Persistence;
 using MeshWeaver.Blazor.Components.Monaco;
+using MeshWeaver.Data;
+using MeshWeaver.Messaging;
 using MeshWeaver.Data.Completion;
 using MeshWeaver.Layout;
 using MeshWeaver.Mesh;
@@ -160,12 +163,15 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
             isLoadingThread = true;
             StateHasChanged();
 
-            var threadContent = await ThreadNodePersistenceHelper.LoadThreadNodeAsync(Hub, threadPath);
+            // Load thread node via IMeshCatalog
+            var meshCatalog = Hub.ServiceProvider.GetService<IMeshCatalog>();
+            var node = meshCatalog != null ? await meshCatalog.GetNodeAsync(new Address(threadPath)) : null;
+            var threadContent = node?.Content as MeshThread;
 
             if (threadContent != null)
             {
                 messages.Clear();
-                var loadedMessages = ThreadNodePersistenceHelper.ConvertToAgentChatMessages(threadContent);
+                var loadedMessages = threadContent.ToChatMessages();
                 foreach (var msg in loadedMessages)
                 {
                     messages.Add(msg);
@@ -177,7 +183,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
                     var conversation = new ChatConversation
                     {
                         Id = threadPath,
-                        Title = initialContextDisplayName ?? "Thread",
+                        Title = node?.Name ?? initialContextDisplayName ?? "Thread",
                         CreatedAt = DateTime.UtcNow,
                         LastModifiedAt = DateTime.UtcNow,
                         Messages = messages.ToList()
@@ -207,14 +213,21 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
 
         try
         {
-            var chatMessages = ThreadNodePersistenceHelper.ConvertFromAgentChatMessages(messages);
+            // Create thread content from messages
+            var threadContent = MeshThread.FromChatMessages(messages);
 
-            var threadContent = new MeshThread
-            {
-                Messages = chatMessages
-            };
+            // Load existing node to preserve metadata
+            var meshCatalog = Hub.ServiceProvider.GetService<IMeshCatalog>();
+            var existingNode = meshCatalog != null ? await meshCatalog.GetNodeAsync(new Address(threadPath)) : null;
 
-            await ThreadNodePersistenceHelper.UpdateThreadNodeAsync(Hub, threadPath, threadContent);
+            var updatedNode = existingNode != null
+                ? existingNode with { Content = threadContent }
+                : new MeshNode(threadPath) { NodeType = ThreadNodeType.NodeType, Content = threadContent };
+
+            // Update via DataChangeRequest
+            var nodeJson = JsonSerializer.SerializeToElement(updatedNode, Hub.JsonSerializerOptions);
+            Hub.Post(new DataChangeRequest { Updates = [nodeJson] }, o => o.WithTarget(new Address(threadPath)));
+
             Logger.LogDebug("[ThreadChat:{InstanceId}] Saved thread: {Path}", _instanceId, threadPath);
         }
         catch (Exception ex)

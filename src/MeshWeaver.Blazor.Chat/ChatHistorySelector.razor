@@ -1,4 +1,5 @@
-@using MeshWeaver.AI.Persistence
+@using MeshWeaver.AI
+@using MeshWeaver.Data
 @using MeshWeaver.Graph.Configuration
 @using MeshWeaver.Mesh
 @using MeshWeaver.Mesh.Services
@@ -227,23 +228,14 @@
         try
         {
             var userId = GetCurrentUserId();
-            var pathsToQuery = new List<string>();
 
-            // Always include user's personal threads
-            pathsToQuery.Add(ThreadNodeType.GetUserThreadsPath(userId));
-
-            // If in a MeshNode context, also include context threads
-            var contextPath = GetCurrentContextPath();
-            if (!string.IsNullOrEmpty(contextPath))
-            {
-                pathsToQuery.Add(ThreadNodeType.GetContextThreadsPath(contextPath));
-            }
-
-            // Query threads from all paths (deduplicates and orders by LastActivityAt)
-            var threadNodes = await ThreadNodePersistenceHelper.ListThreadsFromPathsAsync(MeshQuery, pathsToQuery);
+            // Query threads by node type and created by user
+            var query = $"nodeType:{ThreadNodeType.NodeType} createdBy:{userId}";
+            var threadNodes = await MeshQuery.QueryAsync<MeshNode>(query).ToListAsync();
 
             // Convert to ThreadItem list, filtering by scope if specified
             var items = threadNodes
+                .OrderByDescending(n => n.LastModified)
                 .Select(n => new ThreadItem(n.Path ?? n.Id, n, n.Content as MeshThread ?? new MeshThread()))
                 .Where(c => Scope == null || GetPathScope(c.Path) == Scope)
                 .ToList();
@@ -341,8 +333,9 @@
     {
         try
         {
-            // Delete via hub
-            await ThreadNodePersistenceHelper.DeleteThreadNodeAsync(Hub, chatPath);
+            // Delete via DeleteNodeRequest
+            var request = new DeleteNodeRequest(chatPath);
+            await Hub.AwaitResponse(request, o => o.WithTarget(new Address(chatPath)));
 
             // Remove from local list
             Chats = Chats.Where(c => c.Path != chatPath).ToList();

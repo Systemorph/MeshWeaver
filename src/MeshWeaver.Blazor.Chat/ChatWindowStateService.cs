@@ -23,6 +23,7 @@ public class ChatWindowStateService
     public ChatPosition Position => State.Position;
     public int? Width => State.Width;
     public int? Height => State.Height;
+    public string? CurrentThreadPath => State.CurrentThreadPath;
 
     public void SetVisible(bool visible)
     {
@@ -58,6 +59,27 @@ public class ChatWindowStateService
     public void Toggle()
     {
         State = State with { IsVisible = !State.IsVisible };
+        NotifyStateChanged();
+    }
+
+    /// <summary>
+    /// Sets the current thread path being viewed/edited.
+    /// </summary>
+    public void SetCurrentThread(string? threadPath)
+    {
+        if (State.CurrentThreadPath != threadPath)
+        {
+            State = State with { CurrentThreadPath = threadPath };
+            // Don't notify for thread changes - this is internal state
+        }
+    }
+
+    /// <summary>
+    /// Opens the side panel and sets the active thread.
+    /// </summary>
+    public void OpenSidePanelWithThread(string threadPath)
+    {
+        State = State with { IsVisible = true, CurrentThreadPath = threadPath };
         NotifyStateChanged();
     }
 
