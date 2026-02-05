@@ -1,4 +1,3 @@
-using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 

@@ -9,7 +9,6 @@
   "isPersistent": true,
   "content": {
     "$type": "Todo",
-    "id": "PositioningDoc",
     "title": "Create product positioning document",
     "description": "Draft the positioning statement, key messages, and differentiation points. Include the 'Enterprise-grade automation, startup-simple setup' tagline.",
     "category": "Marketing",

@@ -9,7 +9,6 @@
   "isPersistent": true,
   "content": {
     "$type": "Todo",
-    "id": "VerifyOwnership",
     "title": "Verify beneficial ownership",
     "description": "Verify Ultimate Beneficial Ownership (UBO) for Apex Manufacturing. Awaiting additional documentation on parent company structure and 25%+ shareholders.",
     "category": "Legal",

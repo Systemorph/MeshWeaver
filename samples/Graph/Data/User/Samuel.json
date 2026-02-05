@@ -6,7 +6,6 @@
   "iconName": "Person",
   "isPersistent": true,
   "content": {
-    "id": "Samuel",
     "name": "Samuel Glauser",
     "email": "sglauser@systemorph.com",
     "avatar": "/static/storage/content/Samuel/avatar.svg",

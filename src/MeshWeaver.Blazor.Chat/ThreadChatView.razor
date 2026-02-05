@@ -1,0 +1,122 @@
+@inherits BlazorView<ThreadChatControl, ThreadChatView>
+
+@using MeshWeaver.AI
+@using MeshWeaver.AI.Persistence
+@using MeshWeaver.Layout
+@using MeshWeaver.Mesh.Services
+@using MeshWeaver.Blazor.Components.Monaco
+@using FluentOrientation = Microsoft.FluentUI.AspNetCore.Components.Orientation
+@using FluentVerticalAlignment = Microsoft.FluentUI.AspNetCore.Components.VerticalAlignment
+@using FluentAppearance = Microsoft.FluentUI.AspNetCore.Components.Appearance
+@inject NavigationManager NavigationManager
+
+<div class="thread-chat-container">
+    <!-- Message history display -->
+    <div class="thread-chat-messages">
+        @if (isLoadingThread)
+        {
+            <div class="loading-overlay">
+                <FluentProgressRing />
+                <div class="loading-text">Loading thread...</div>
+            </div>
+        }
+        else
+        {
+            <ChatMessageList Messages="@messages" InProgressMessage="@currentResponseMessage"
+                             OnNewMessage="@OnNewMessageReceived">
+                <NoMessagesContent>
+                    <div class="empty-thread-message">
+                        <FluentIcon Value="@(new Icons.Regular.Size48.Chat())" Color="Color.Neutral" />
+                        <p>Start a conversation</p>
+                        <p class="hint">Use @("@") references to include context from other nodes</p>
+                    </div>
+                </NoMessagesContent>
+            </ChatMessageList>
+        }
+    </div>
+
+    <!-- Input area with reference chips -->
+    <div class="thread-chat-input-area">
+        <!-- Reference chip collection -->
+        <ReferenceChipCollection
+            ContextPath="@initialContext"
+            ContextDisplayName="@initialContextDisplayName"
+            References="@extractedReferences"
+            OnReferenceRemoved="@OnReferenceRemoved"
+            OnChipClick="@OnChipClicked" />
+
+        @* Monaco editor for markdown input with completion *@
+        <div class="input-container">
+            <MonacoEditorView @ref="monacoEditor"
+                              @bind-Value="MessageText"
+                              OnSubmit="SendMessageAsync"
+                              IsDisabled="@isGeneratingResponse"
+                              Placeholder="@placeholderText"
+                              Height="80px"
+                              MaxHeight="200px"
+                              CompletionProvider="@GetCompletionConfig()"
+                              AsyncCompletionCallback="@GetCompletionsAsync" />
+        </div>
+
+        <!-- Selector bar (agent + model) and send button -->
+        <FluentStack Orientation="FluentOrientation.Horizontal" VerticalAlignment="FluentVerticalAlignment.Center" HorizontalGap="8" Class="selector-bar">
+            <!-- Agent selector -->
+            <SimpleDropdown TOption="AgentDisplayInfo"
+                            SelectedItem="@selectedAgentInfo"
+                            SelectedItemChanged="@OnAgentChanged"
+                            Items="@agentDisplayInfos"
+                            GetDisplayText="@(a => a?.Name ?? "Select agent...")"
+                            Placeholder="Select agent..."
+                            Tooltip="@(selectedAgentInfo?.Path ?? "Select agent")"
+                            PanelWidth="320px"
+                            Class="selector-agent">
+                <ItemTemplate Context="agent">
+                    <div class="simple-dropdown-item-name">@agent.Name</div>
+                    @if (!string.IsNullOrEmpty(agent.Path) && agent.Path != agent.Name)
+                    {
+                        <div class="simple-dropdown-item-path">@agent.Path</div>
+                    }
+                    @if (!string.IsNullOrEmpty(agent.Description))
+                    {
+                        <div class="simple-dropdown-item-description">@TruncateText(agent.Description, 80)</div>
+                    }
+                </ItemTemplate>
+            </SimpleDropdown>
+
+            <!-- Model selector -->
+            @if (availableModels.Count > 0)
+            {
+                <SimpleDropdown TOption="ModelInfo"
+                                SelectedItem="@selectedModelInfo"
+                                SelectedItemChanged="@OnModelChanged"
+                                Items="@availableModels"
+                                GetDisplayText="@(m => m?.Name ?? "Select model...")"
+                                Placeholder="Select model..."
+                                ShowSearch="false"
+                                PanelWidth="280px"
+                                Class="selector-model">
+                    <ItemTemplate Context="model">
+                        <div class="simple-dropdown-item-provider">@model.Provider</div>
+                        <div class="simple-dropdown-item-name">@model.Name</div>
+                    </ItemTemplate>
+                </SimpleDropdown>
+            }
+
+            <FluentSpacer />
+
+            @if (isGeneratingResponse)
+            {
+                <FluentButton Appearance="FluentAppearance.Stealth" OnClick="CancelCurrentResponse" Title="Cancel">
+                    <FluentIcon Value="@(new Icons.Regular.Size20.Stop())" Color="Color.Error" />
+                </FluentButton>
+            }
+            else
+            {
+                <FluentButton Appearance="FluentAppearance.Accent" OnClick="SendMessageAsync"
+                              Disabled="@(string.IsNullOrWhiteSpace(MessageText))" Title="Send">
+                    <FluentIcon Value="@(new Icons.Regular.Size20.Send())" Color="Color.Neutral" />
+                </FluentButton>
+            }
+        </FluentStack>
+    </div>
+</div>

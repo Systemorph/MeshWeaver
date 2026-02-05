@@ -1,3 +1,4 @@
+using MeshWeaver.AI;
 using MeshWeaver.ContentCollections;
 using MeshWeaver.Data;
 using MeshWeaver.Domain;
@@ -77,7 +78,7 @@ public static class GraphConfigurationExtensions
 
             // Register the built-in "Thread" MeshNode
             // This provides HubConfiguration for nodes with nodeType="Thread" (AI conversation threads).
-            builder.AddMeshNodes(Configuration.ThreadNodeType.CreateMeshNode());
+            builder.AddMeshNodes(Configuration.ThreadNodeConfiguration.CreateMeshNode());
 
             // Register services that don't need hub-level dependencies at the mesh level
             builder.ConfigureServices(services =>
@@ -94,7 +95,7 @@ public static class GraphConfigurationExtensions
                     typeRegistry.WithType(typeof(AgentDelegation), nameof(AgentDelegation));
                     typeRegistry.WithType(typeof(Comment), nameof(Comment));
                     typeRegistry.WithType(typeof(MarkdownContent), nameof(MarkdownContent));
-                    typeRegistry.WithType(typeof(MeshWeaver.Mesh.Thread), nameof(MeshWeaver.Mesh.Thread));
+                    typeRegistry.WithType(typeof(MeshWeaver.AI.Thread), nameof(MeshWeaver.AI.Thread));
                     typeRegistry.WithType(typeof(ThreadMessage), nameof(ThreadMessage));
                 }
 

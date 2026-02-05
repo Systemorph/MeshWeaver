@@ -1,5 +1,4 @@
 using System.Text;
-using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Utils;

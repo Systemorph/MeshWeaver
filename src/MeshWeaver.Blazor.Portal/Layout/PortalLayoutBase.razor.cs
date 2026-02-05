@@ -48,8 +48,7 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
     private bool isNavMenuOpen;
     protected bool IsNavMenuOpen => isNavMenuOpen;
 
-    // Create menu state
-    protected bool isCreateMenuOpen;
+    private bool isCreateMenuOpen;
 
     // Creatable types - delegated to NavigationService
     protected IReadOnlyList<CreatableTypeInfo> CreatableTypes => NavigationService.CreatableTypes;
@@ -77,13 +76,45 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
         InvokeAsync(StateHasChanged);
     }
 
+    protected void ToggleCreateMenu()
+    {
+        isCreateMenuOpen = !isCreateMenuOpen;
+    }
+
     /// <summary>
-    /// Navigates to the Create page for a specific node type.
+    /// Opens the Create Node dialog with an optional pre-selected type.
     /// </summary>
-    protected virtual Task NavigateToCreateAsync(string nodeTypePath)
+    protected virtual async Task OpenCreateNodeDialogAsync(CreatableTypeInfo? selectedType)
     {
         isCreateMenuOpen = false;
 
+        var currentPath = NavigationService.CurrentNamespace ?? "";
+        var dialogData = new CreateNodeDialogData
+        {
+            InitialNamespace = currentPath,
+            InitialType = selectedType
+        };
+
+        var dialog = await DialogService.ShowDialogAsync<CreateNodeDialog>(dialogData, new DialogParameters
+        {
+            Title = "Create New Node",
+            PrimaryAction = "Create",
+            SecondaryAction = "Cancel",
+            Width = "500px",
+            PreventDismissOnOverlayClick = true,
+            PreventScroll = true
+        });
+
+        var result = await dialog.Result;
+
+        // Dialog handles navigation on success
+    }
+
+    /// <summary>
+    /// Navigates to the Create page for a specific node type (fallback/legacy method).
+    /// </summary>
+    protected virtual Task NavigateToCreateAsync(string nodeTypePath)
+    {
         var currentPath = NavigationService.CurrentNamespace ?? "";
 
         // Navigate to Create area with type as query parameter
@@ -162,12 +193,33 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
 
     public async Task ToggleAIChatVisibility()
     {
-        ChatState.Toggle();
+        var context = NavigationService.Context;
 
-        if (ChatState.IsVisible)
+        // Check if viewing a thread full-screen by checking the node's NodeType
+        if (context?.Node != null && ThreadNodeType.IsThreadNodeType(context.Node.NodeType))
         {
-            // Apply persisted size when opening
+            var threadPath = context.Namespace;
+            var threadContent = context.Node.Content as MeshWeaver.AI.Thread;
+            var parentPath = threadContent?.ParentPath;
+
+            // Navigate to parent (or home if no parent path)
+            var navigateTo = string.IsNullOrEmpty(parentPath) ? "/" : $"/{parentPath}";
+            NavigationManager.NavigateTo(navigateTo);
+
+            // Open panel with thread
+            ChatState.OpenSidePanelWithThread(threadPath);
             await ApplyPersistedSizeAsync();
+        }
+        else
+        {
+            // Normal toggle
+            ChatState.Toggle();
+
+            if (ChatState.IsVisible)
+            {
+                // Apply persisted size when opening
+                await ApplyPersistedSizeAsync();
+            }
         }
     }
 
@@ -203,5 +255,24 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
         NavigationService.OnCreatableTypesChanged -= OnCreatableTypesChanged;
         dotNetRef?.Dispose();
         jsModule?.DisposeAsync();
+    }
+
+    /// <summary>
+    /// Checks if a string is likely an emoji (short string, not a path/URL).
+    /// </summary>
+    protected static bool IsEmoji(string? value)
+    {
+        if (string.IsNullOrEmpty(value))
+            return false;
+
+        // Emojis are typically 1-4 characters (including surrogate pairs and modifiers)
+        // SVG paths start with / or http or contain .svg
+        if (value.Length > 8)
+            return false;
+
+        if (value.StartsWith("/") || value.StartsWith("http") || value.Contains(".svg"))
+            return false;
+
+        return true;
     }
 }

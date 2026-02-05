@@ -224,49 +224,31 @@ public record MeshDataSource : GenericUnpartitionedDataSource<MeshDataSource>
     }
 
     /// <summary>
-    /// Registers a content type that provides:
-    /// 1. UI integration (e.g., building editor forms)
-    /// 2. A virtual collection allowing direct DataChangeRequest on content
-    ///
-    /// Two update paths are supported:
-    /// - Update MeshNode directly (includes Content) - via MeshNodeTypeSource
-    /// - Update just the content type (auto-wraps in MeshNode) - via ContentTypeSource
+    /// Registers a content type for UI integration (editor generation, etc.).
+    /// Content is accessed via MeshNode.Content - there's no separate TypeSource.
     /// </summary>
     public MeshDataSource WithContentType<T>() where T : class
     {
         // Register the content type in TypeRegistry for JSON serialization
         Workspace.Hub.TypeRegistry.WithType(typeof(T), typeof(T).Name);
 
-        // Add ContentTypeSource if persistence is available
-        var result = this with { ContentType = typeof(T) };
-
-        if (_persistence != null)
-        {
-            var contentTypeSource = new ContentTypeSource<T>(Workspace, Id, _persistence, _hubPath);
-            result = result.WithTypeSource(typeof(T), contentTypeSource);
-        }
-        else
-        {
-            _logger?.LogWarning("MeshDataSource: No persistence service, ContentTypeSource not added for {Type}", typeof(T).Name);
-        }
-
-        return result;
+        // Store ContentType for UI integration (editor generation, etc.)
+        // Content is accessed via MeshNode.Content - there's no separate TypeSource
+        return this with { ContentType = typeof(T) };
     }
 
     /// <summary>
-    /// Registers a content type for UI purposes using a runtime Type.
+    /// Registers a content type for UI integration using a runtime Type.
     /// Use this for dynamically compiled types.
-    /// Note: For runtime types, only UI integration is supported.
-    /// For full DataChangeRequest support, use the generic WithContentType&lt;T&gt;().
+    /// Content is accessed via MeshNode.Content - there's no separate TypeSource.
     /// </summary>
     public MeshDataSource WithContentType(Type dataType)
     {
         // Register the content type in TypeRegistry for JSON serialization
         Workspace.Hub.TypeRegistry.WithType(dataType, dataType.Name);
 
-        // For runtime types, we can only store the ContentType for UI purposes
-        // ContentTypeSource requires generic type parameter, so it's not supported here
-        // The dynamically compiled hub should use the generated type's WithContentType<T>()
+        // Store ContentType for UI integration (editor generation, etc.)
+        // Content is accessed via MeshNode.Content - there's no separate TypeSource
         return this with { ContentType = dataType };
     }
 

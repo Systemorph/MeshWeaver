@@ -38,6 +38,12 @@
                 <FluentButton BackgroundColor="transparent" OnClick="ToggleChatHistory" Title="Chat History">
                     <FluentIcon Value="@(new Icons.Regular.Size20.History())" Color="Color.Neutral" />
                 </FluentButton>
+                @if (!string.IsNullOrEmpty(currentThreadNodePath))
+                {
+                    <FluentButton BackgroundColor="transparent" OnClick="OpenThreadFullScreen" Title="Open Full Screen">
+                        <FluentIcon Value="@(new Icons.Regular.Size20.ArrowMaximize())" Color="Color.Neutral" />
+                    </FluentButton>
+                }
                 <FluentButton BackgroundColor="transparent" Title="Chat Position" @onclick="@(() => positionMenuVisible = !positionMenuVisible)" Id="position-menu-anchor">
                     <FluentIcon Value="@(new Icons.Regular.Size20.WindowLocationTarget())" Color="Color.Neutral" />
                 </FluentButton>

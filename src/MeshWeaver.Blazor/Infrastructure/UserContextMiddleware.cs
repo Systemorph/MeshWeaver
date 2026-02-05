@@ -14,7 +14,7 @@ public class UserContextMiddleware(RequestDelegate next, ILogger<UserContextMidd
         var userContext = ExtractUserContext(context.User);
         if (userContext is not null)
         {
-            logger.LogInformation("UserContext: ObjectId={ObjectId}, Name={Name}, Email={Email}, Roles=[{Roles}]",
+            logger.LogDebug("UserContext: ObjectId={ObjectId}, Name={Name}, Email={Email}, Roles=[{Roles}]",
                 userContext.ObjectId, userContext.Name, userContext.Email, string.Join(", ", userContext.Roles ?? []));
 
             var userService = context.RequestServices.GetRequiredService<PortalApplication>().Hub.ServiceProvider.GetRequiredService<AccessService>();

@@ -596,7 +596,6 @@ internal class NodeTypeService : INodeTypeService, IDisposable
         // Create a minimal definition from the release
         var definition = new NodeTypeDefinition
         {
-            Id = release.NodeTypePath.Split('/').Last(),
             Namespace = string.Join("/", release.NodeTypePath.Split('/').SkipLast(1)),
             Configuration = release.HubConfiguration,
             ContentCollections = release.ContentCollections?.ToList()
@@ -794,7 +793,8 @@ internal class NodeTypeService : INodeTypeService, IDisposable
                 DisplayName: typePath,
                 Icon: GetGlobalTypeIcon(typePath),
                 Description: GetGlobalTypeDescription(typePath),
-                DisplayOrder: GetGlobalTypeDisplayOrder(typePath)
+                DisplayOrder: GetGlobalTypeDisplayOrder(typePath),
+                SubNamespace: GetGlobalTypeSubNamespace(typePath)
             );
         }
 
@@ -809,7 +809,7 @@ internal class NodeTypeService : INodeTypeService, IDisposable
         return new CreatableTypeInfo(
             NodeTypePath: typePath,
             DisplayName: typePath.Split('/').Last(),
-            Icon: "Code",
+            Icon: "📦",
             Description: $"Create a {typePath.Split('/').Last()}",
             DisplayOrder: 0
         );
@@ -817,11 +817,11 @@ internal class NodeTypeService : INodeTypeService, IDisposable
 
     private static string GetGlobalTypeIcon(string globalType) => globalType switch
     {
-        "Markdown" => "Document",
-        "NodeType" => "Code",
-        "Agent" => "Bot",
-        "Thread" => "Chat",
-        _ => "Code"
+        "Markdown" => "📄",
+        "NodeType" => "🔧",
+        "Agent" => "🤖",
+        "Thread" => "💬",
+        _ => "📦"
     };
 
     private static string GetGlobalTypeDescription(string globalType) => globalType switch
@@ -842,6 +842,12 @@ internal class NodeTypeService : INodeTypeService, IDisposable
         _ => 1000
     };
 
+    private static string? GetGlobalTypeSubNamespace(string globalType) => globalType switch
+    {
+        "Thread" => "Threads",
+        _ => null // Default: use last segment of NodeTypePath
+    };
+
     /// <summary>
     /// Creates CreatableTypeInfo from a MeshNode.
     /// </summary>
@@ -849,10 +855,13 @@ internal class NodeTypeService : INodeTypeService, IDisposable
     {
         var typeDef = node.Content as NodeTypeDefinition;
 
+        // Emoji takes precedence over Icon (SVG path)
+        var icon = typeDef?.Emoji ?? typeDef?.Icon ?? node.Icon;
+
         return new CreatableTypeInfo(
             NodeTypePath: node.Path,
             DisplayName: typeDef?.DisplayName ?? node.Name ?? GetLastPathSegment(node.Path),
-            Icon: typeDef?.Icon ?? node.Icon,
+            Icon: icon,
             Description: typeDef?.Description ?? node.Description,
             DisplayOrder: typeDef?.DisplayOrder ?? node.DisplayOrder ?? 0
         );

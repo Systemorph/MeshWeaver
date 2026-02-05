@@ -6,7 +6,6 @@
   "iconName": "Person",
   "isPersistent": true,
   "content": {
-    "id": "Roland",
     "name": "Roland Bürgi",
     "email": "rbuergi@systemorph.com",
     "avatar": "/static/storage/content/Roland/avatar.svg",

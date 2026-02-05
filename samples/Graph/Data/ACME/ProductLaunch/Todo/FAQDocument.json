@@ -9,7 +9,6 @@
   "isPersistent": true,
   "content": {
     "$type": "Todo",
-    "id": "FAQDocument",
     "title": "Prepare customer FAQ",
     "description": "Compile FAQ covering pricing, integrations, security, data handling, migration, and support. Use input from beta customers and sales team.",
     "category": "Support",

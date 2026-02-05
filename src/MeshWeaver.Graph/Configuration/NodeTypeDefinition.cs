@@ -13,10 +13,9 @@ namespace MeshWeaver.Graph.Configuration;
 public record NodeTypeDefinition
 {
     /// <summary>
-    /// The node type identifier (e.g., "story", "project").
+    /// Unique identifier for this node type definition.
     /// </summary>
-    [Key]
-    public required string Id { get; init; }
+    public string? Id { get; init; }
 
     /// <summary>
     /// The namespace in which the type is defined (is also partition)
@@ -30,10 +29,16 @@ public record NodeTypeDefinition
     public string? DisplayName { get; init; }
 
     /// <summary>
-    /// Icon URL or identifier for UI.
+    /// Icon URL or identifier for UI. Can be a path to an SVG file.
     /// </summary>
     [MeshNodeProperty(nameof(MeshNode.Icon))]
     public string? Icon { get; init; }
+
+    /// <summary>
+    /// Emoji character to use as icon. Takes precedence over Icon if both are set.
+    /// Example: "📝", "📁", "🎯"
+    /// </summary>
+    public string? Emoji { get; init; }
 
     /// <summary>
     /// Description of this node type.

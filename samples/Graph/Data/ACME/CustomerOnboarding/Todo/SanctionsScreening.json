@@ -9,7 +9,6 @@
   "isPersistent": true,
   "content": {
     "$type": "Todo",
-    "id": "SanctionsScreening",
     "title": "Run sanctions screening",
     "description": "Execute automated screening against OFAC, EU sanctions, and UN consolidated lists. Check company name, directors, and key personnel. No matches found.",
     "category": "Legal",

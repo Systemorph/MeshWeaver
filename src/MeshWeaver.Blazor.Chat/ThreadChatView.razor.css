@@ -1,0 +1,89 @@
+.thread-chat-container {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    width: 100%;
+    overflow: hidden;
+}
+
+.thread-chat-messages {
+    flex: 1;
+    overflow-y: auto;
+    padding: 16px;
+}
+
+.thread-chat-input-area {
+    flex-shrink: 0;
+    padding: 12px 16px;
+    border-top: 1px solid var(--neutral-stroke-rest);
+    background: var(--neutral-layer-1);
+}
+
+.input-container {
+    margin: 8px 0;
+}
+
+.selector-bar {
+    padding-top: 8px;
+}
+
+.loading-overlay {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    height: 100%;
+    gap: 16px;
+}
+
+.loading-text {
+    color: var(--neutral-foreground-hint);
+    font-size: 0.9rem;
+}
+
+.empty-thread-message {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    height: 100%;
+    text-align: center;
+    color: var(--neutral-foreground-hint);
+    gap: 8px;
+}
+
+.empty-thread-message p {
+    margin: 0;
+}
+
+.empty-thread-message .hint {
+    font-size: 0.85rem;
+    opacity: 0.8;
+}
+
+.selector-agent, .selector-model {
+    min-width: 140px;
+}
+
+.simple-dropdown-item-name {
+    font-weight: 500;
+}
+
+.simple-dropdown-item-path {
+    font-size: 0.8rem;
+    color: var(--neutral-foreground-hint);
+}
+
+.simple-dropdown-item-provider {
+    font-size: 0.75rem;
+    color: var(--neutral-foreground-hint);
+    text-transform: uppercase;
+}
+
+.simple-dropdown-item-description {
+    font-size: 0.8rem;
+    color: var(--neutral-foreground-hint);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}

@@ -293,6 +293,7 @@ public class CosmosStorageAdapter : IStorageAdapter, IAsyncDisposable
 
     /// <summary>
     /// Queries nodes using RSQL syntax, translated to Cosmos DB SQL.
+    /// Now supports ORDER BY, LIMIT, and scope-based path filtering.
     /// </summary>
     public async IAsyncEnumerable<MeshNode> QueryNodesAsync(
         ParsedQuery query,
@@ -301,14 +302,94 @@ public class CosmosStorageAdapter : IStorageAdapter, IAsyncDisposable
     {
         var (sql, parameters) = _sqlGenerator.GenerateSelectQuery(query);
 
-        // Add path filter if specified
-        if (!string.IsNullOrEmpty(basePath))
+        // Integrate scope-based path filtering if path is specified
+        var effectivePath = query.Path ?? basePath;
+        if (!string.IsNullOrEmpty(effectivePath))
         {
-            var normalizedPath = NormalizePath(basePath);
-            sql = sql.Replace("WHERE", $"WHERE STARTSWITH(c.namespace, @basePath) AND");
-            if (!sql.Contains("WHERE"))
-                sql += " WHERE STARTSWITH(c.namespace, @basePath)";
-            parameters["@basePath"] = normalizedPath;
+            var (scopeClause, scopeParams) = _sqlGenerator.GenerateScopeClause(
+                effectivePath,
+                query.Scope);
+
+            if (!string.IsNullOrEmpty(scopeClause))
+            {
+                // Merge scope parameters
+                foreach (var (k, v) in scopeParams)
+                    parameters[k] = v;
+
+                // Insert scope clause into SQL
+                if (sql.Contains("WHERE"))
+                {
+                    sql = sql.Replace("WHERE", $"WHERE {scopeClause} AND");
+                }
+                else if (sql.Contains("ORDER BY"))
+                {
+                    sql = sql.Replace("ORDER BY", $"WHERE {scopeClause} ORDER BY");
+                }
+                else
+                {
+                    sql += $" WHERE {scopeClause}";
+                }
+            }
+        }
+
+        var queryDefinition = new QueryDefinition(sql);
+        foreach (var (name, value) in parameters)
+        {
+            queryDefinition = queryDefinition.WithParameter(name, value);
+        }
+
+        using var iterator = _nodesContainer.GetItemQueryIterator<MeshNode>(queryDefinition);
+
+        while (iterator.HasMoreResults)
+        {
+            var response = await iterator.ReadNextAsync(ct);
+            foreach (var node in response)
+            {
+                yield return node;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Performs vector similarity search for semantic queries.
+    /// </summary>
+    /// <param name="queryVector">The query embedding vector</param>
+    /// <param name="filter">Optional filter to apply before vector search</param>
+    /// <param name="namespacePath">Optional namespace path to scope the search</param>
+    /// <param name="topK">Number of results to return (default: 10)</param>
+    /// <param name="embeddingField">The field containing embeddings (default: "embedding")</param>
+    /// <param name="ct">Cancellation token</param>
+    /// <returns>Stream of matching nodes ordered by similarity</returns>
+    public async IAsyncEnumerable<MeshNode> VectorSearchAsync(
+        float[] queryVector,
+        ParsedQuery? filter = null,
+        string? namespacePath = null,
+        int topK = 10,
+        string embeddingField = "embedding",
+        [EnumeratorCancellation] CancellationToken ct = default)
+    {
+        var (sql, parameters) = _sqlGenerator.GenerateVectorSearchQuery(
+            filter,
+            queryVector,
+            topK,
+            embeddingField);
+
+        // Add namespace scoping if specified
+        if (!string.IsNullOrEmpty(namespacePath))
+        {
+            var normalizedPath = NormalizePath(namespacePath);
+            parameters["@nsPrefix"] = $"{normalizedPath}/";
+
+            if (sql.Contains("WHERE"))
+            {
+                // Insert after existing WHERE
+                sql = sql.Replace("WHERE", "WHERE STARTSWITH(c.path, @nsPrefix) AND");
+            }
+            else
+            {
+                // Insert before ORDER BY
+                sql = sql.Replace("ORDER BY", "WHERE STARTSWITH(c.path, @nsPrefix) ORDER BY");
+            }
         }
 
         var queryDefinition = new QueryDefinition(sql);

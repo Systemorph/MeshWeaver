@@ -1,4 +1,3 @@
-using MeshWeaver.Graph.Configuration;
 using Microsoft.Agents.AI;
 
 namespace MeshWeaver.AI;

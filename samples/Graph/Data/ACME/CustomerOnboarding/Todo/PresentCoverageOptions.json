@@ -13,7 +13,6 @@
   "state": "Active",
   "content": {
     "$type": "Todo",
-    "id": "PresentCoverageOptions",
     "title": "Present coverage options",
     "description": "Present tailored coverage options to Apex Manufacturing: General Liability, Property, Workers Comp, and optional Umbrella coverage. Include limit options and deductible choices.",
     "category": "Sales",

@@ -1,5 +1,3 @@
-using MeshWeaver.Graph.Configuration;
-
 namespace MeshWeaver.AI;
 
 /// <summary>

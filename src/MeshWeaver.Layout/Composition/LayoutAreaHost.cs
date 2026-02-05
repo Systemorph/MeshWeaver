@@ -517,14 +517,15 @@ public record LayoutAreaHost : IDisposable
     /// </summary>
     /// <param name="uri">The URI to navigate to.</param>
     /// <param name="forceLoad">Whether to force a full page reload.</param>
-    public void NavigateTo(string uri, bool forceLoad = false)
+    /// <param name="replace">Whether to replace the current history entry instead of adding a new one.</param>
+    public void NavigateTo(string uri, bool forceLoad = false, bool replace = false)
     {
         var subscriber = Stream.Get<Address>(nameof(SubscribeRequest.Subscriber));
         if (subscriber != null)
         {
             if (subscriber?.Host is { })
                 subscriber = subscriber.Host;
-            Stream.Hub.Post(new NavigationRequest(uri) { ForceLoad = forceLoad }, o => o.WithTarget(subscriber));
+            Stream.Hub.Post(new NavigationRequest(uri) { ForceLoad = forceLoad, Replace = replace }, o => o.WithTarget(subscriber));
         }
         else
         {

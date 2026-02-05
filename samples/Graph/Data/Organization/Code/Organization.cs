@@ -11,12 +11,6 @@ using MeshWeaver.Domain;
 public record Organization
 {
     /// <summary>
-    /// Unique identifier for the organization.
-    /// </summary>
-    [Key]
-    public string Id { get; init; } = string.Empty;
-
-    /// <summary>
     /// Name of the organization.
     /// </summary>
     [Required]
