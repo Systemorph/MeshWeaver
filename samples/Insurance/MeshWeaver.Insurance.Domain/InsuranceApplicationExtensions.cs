@@ -26,6 +26,7 @@ public static class InsuranceApplicationExtensions
     private static IServiceCollection AddInsuranceDomainServices(this IServiceCollection services)
     {
         // Register pricing service
+        services.AddSingleton<IPricingService, InMemoryPricingService>();
         services.AddSingleton<IGeocodingService, GoogleGeocodingService>();
 
         return services;
@@ -40,6 +41,7 @@ public static class InsuranceApplicationExtensions
             => configuration
                 .AddEmbeddedResourceContentCollection("Insurance", typeof(InsuranceApplicationExtensions).Assembly, "Content")
                 .WithTypes(typeof(ImportConfiguration), typeof(ExcelImportConfiguration), typeof(ReinsuranceAcceptance), typeof(ReinsuranceSection), typeof(ImportRequest), typeof(CollectionSource), typeof(GeocodingRequest), typeof(GeocodingResponse))
+                .WithServices(AddInsuranceDomainServices)
                 .WithServices(services => services.AddScoped<IAutocompleteProvider, PricingAutocompleteProvider>())
                 .AddData(data =>
                 {

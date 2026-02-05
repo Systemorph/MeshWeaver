@@ -1,0 +1,18 @@
+{
+  "id": "Cornerstone",
+  "name": "Cornerstone Insurance",
+  "nodeType": "Organization",
+  "description": "Cornerstone Insurance - Property reinsurance underwriting portfolio",
+  "iconName": "Shield",
+  "isPersistent": true,
+  "content": {
+    "$type": "Organization",
+    "id": "Cornerstone",
+    "name": "Cornerstone Insurance",
+    "description": "Cornerstone Insurance is a global reinsurance company specializing in property reinsurance.",
+    "website": "https://cornerstone.example.com",
+    "location": "United States",
+    "email": "info@cornerstone.example.com",
+    "isVerified": false
+  }
+}

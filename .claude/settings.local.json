@@ -85,7 +85,14 @@
       "Bash(git fetch:*)",
       "Bash(do sed -i '' 's/\"\"nodeType\"\": \"\"ACME\\\\/Project\\\\/Todo\"\"/\"\"nodeType\"\": \"\"Type\\\\/Project\\\\/Todo\"\"/g' \"$f\")",
       "Bash(head:*)",
-      "Bash(pgrep:*)"
+      "Bash(pgrep:*)",
+      "Bash(gh extension list:*)",
+      "Bash(gh:*)",
+      "Bash(git -C /Users/samuelglauser/Documents/work/2026_Systemorph/projekte/MeshWeaver remote:*)",
+      "Bash(claude:*)",
+      "Bash(tail:*)",
+      "Bash(for f in /Users/samuelglauser/Documents/work/2026_Systemorph/projekte/MeshWeaver/samples/Graph/Data/Cornerstone/Pricing/Code/*.cs)",
+      "Bash(git -C /Users/samuelglauser/Documents/work/2026_Systemorph/projekte/MeshWeaver log --all --oneline --name-only -- **/Insurance/**)"
     ],
     "deny": []
   },
