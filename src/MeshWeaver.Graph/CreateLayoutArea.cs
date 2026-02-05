@@ -162,13 +162,13 @@ public static class CreateLayoutArea
                 }.WithStyle("width: 100%;"))
                 .WithView(Controls.Body("This will be the node's identifier in the path. Changing it creates a new node.").WithStyle("font-size: 12px; color: var(--neutral-foreground-hint); margin-top: 4px;"))));
 
-        // Content type editor
+        // Content type editor - use Overview with isToggleable=false for pure edit mode
         if (contentType != null && contentInstance != null)
         {
             var dataId = $"create_{nodePath.Replace("/", "_")}";
             host.UpdateData(dataId, contentInstance);
 
-            var editor = host.Hub.ServiceProvider.Edit(contentType, dataId);
+            var editor = Layout.Domain.EditLayoutArea.Overview(host, contentType, dataId, canEdit: true, isToggleable: false);
             stack = stack.WithView(editor);
 
             // Create button with Id change handling

@@ -539,25 +539,28 @@ public static class EditorExtensions
     /// <param name="dataId">The data ID used for data binding.</param>
     /// <param name="canEdit">Whether editing is allowed based on permissions.</param>
     /// <param name="host">The layout area host.</param>
+    /// <param name="isToggleable">If true (default), starts read-only and toggles on click/blur. If false, stays in edit mode.</param>
     /// <returns>A reactive control that switches between read and edit modes.</returns>
     public static UiControl MapToToggleableControl(
         this IServiceProvider serviceProvider,
         PropertyInfo property,
         string dataId,
         bool canEdit,
-        LayoutAreaHost host)
+        LayoutAreaHost host,
+        bool isToggleable = true)
     {
         var propName = property.Name.ToCamelCase()!;
         var editStateId = $"editState_{dataId}_{propName}";
 
         // Initialize edit state only once per session to prevent reset on re-render
         // Use a unique key combining stream ID and edit state ID
+        // When not toggleable, start in edit mode
         var initKey = $"{host.Stream.StreamId}_{editStateId}";
         lock (InitializedEditStates)
         {
             if (!InitializedEditStates.Contains(initKey))
             {
-                host.UpdateData(editStateId, false);
+                host.UpdateData(editStateId, !isToggleable); // Start in edit mode when not toggleable
                 InitializedEditStates.Add(initKey);
             }
         }
@@ -574,7 +577,7 @@ public static class EditorExtensions
         var uiControlAttr = property.GetCustomAttribute<UiControlAttribute>();
         if (uiControlAttr?.SeparateEditView == true)
         {
-            return BuildMarkdownToggle(host, property, dataId, editStateId, editStateStream, isEditable);
+            return BuildMarkdownToggle(host, property, dataId, editStateId, editStateStream, isEditable, isToggleable);
         }
 
         // Regular property: Label + reactive read/edit view
@@ -593,7 +596,7 @@ public static class EditorExtensions
                 .WithStyle("font-weight: 600; color: var(--neutral-foreground-hint); font-size: 0.875rem; padding-left: 12px;"))
             .WithView((h, _) => editStateStream
                 .Select(isEditing => isEditing && isEditable
-                    ? BuildEditControl(h, property, dataId, editStateId)
+                    ? BuildEditControl(h, property, dataId, editStateId, isToggleable)
                     : BuildReadonlyControl(h, property, dataId, editStateId, isEditable)));
     }
 
@@ -831,13 +834,19 @@ public static class EditorExtensions
     }
 
     /// <summary>
-    /// Builds the edit view for a property with blur action for auto-switching back to read mode.
+    /// Builds the edit view for a property with optional blur action for auto-switching back to read mode.
     /// </summary>
+    /// <param name="host">The layout area host.</param>
+    /// <param name="property">The property to create the control for.</param>
+    /// <param name="dataId">The data ID used for data binding.</param>
+    /// <param name="editStateId">The edit state ID for toggling.</param>
+    /// <param name="isToggleable">If true, blur switches back to read-only mode. If false, stays in edit mode.</param>
     private static UiControl BuildEditControl(
         LayoutAreaHost host,
         PropertyInfo property,
         string dataId,
-        string editStateId)
+        string editStateId,
+        bool isToggleable)
     {
         var propName = property.Name.ToCamelCase()!;
         var jsonPointer = new JsonPointerReference(propName);
@@ -848,29 +857,36 @@ public static class EditorExtensions
         UiControl editCtrl;
 
         var uiAttr = property.GetCustomAttribute<UiControlAttribute>();
-        if (uiAttr != null && uiAttr.SeparateEditView != true)
+        // Only use CreateEditControlFromUiAttribute if a control type is actually specified
+        if (uiAttr != null && uiAttr.SeparateEditView != true && (uiAttr.EditControlType != null || uiAttr.DisplayControlType != null || uiAttr.Options != null))
         {
-            editCtrl = CreateEditControlFromUiAttribute(host, uiAttr, property, jsonPointer, isRequired, editStateId);
+            editCtrl = CreateEditControlFromUiAttribute(host, uiAttr, property, jsonPointer, isRequired, editStateId, isToggleable);
         }
         else if (property.GetCustomAttribute<DimensionAttribute>() is { } dimAttr)
         {
-            editCtrl = CreateDimensionSelectControl(host, jsonPointer, dimAttr, isRequired, dataId, editStateId);
+            editCtrl = CreateDimensionSelectControl(host, jsonPointer, dimAttr, isRequired, dataId, editStateId, isToggleable);
         }
         else if (propType.IsIntegerType() || propType.IsRealType())
         {
-            editCtrl = new NumberFieldControl(jsonPointer, typeRegistry.GetOrAddType(propType))
+            var numCtrl = new NumberFieldControl(jsonPointer, typeRegistry.GetOrAddType(propType))
             {
                 Required = isRequired,
                 Immediate = true,
-                AutoFocus = true
-            }.WithBlurAction(ctx => SwitchToReadOnlyMode(ctx, editStateId));
+                AutoFocus = isToggleable // Only auto-focus when toggleable (user just clicked)
+            };
+            editCtrl = isToggleable
+                ? numCtrl.WithBlurAction(ctx => SwitchToReadOnlyMode(ctx, editStateId))
+                : numCtrl;
         }
         else if (propType == typeof(DateTime) || propType == typeof(DateTime?))
         {
-            editCtrl = new DateTimeControl(jsonPointer)
+            var dateCtrl = new DateTimeControl(jsonPointer)
             {
                 Required = isRequired
-            }.WithBlurAction(ctx => SwitchToReadOnlyMode(ctx, editStateId));
+            };
+            editCtrl = isToggleable
+                ? dateCtrl.WithBlurAction(ctx => SwitchToReadOnlyMode(ctx, editStateId))
+                : dateCtrl;
         }
         else if (propType == typeof(bool) || propType == typeof(bool?))
         {
@@ -878,12 +894,15 @@ public static class EditorExtensions
         }
         else
         {
-            editCtrl = new TextFieldControl(jsonPointer)
+            var textCtrl = new TextFieldControl(jsonPointer)
             {
                 Required = isRequired,
                 Immediate = true,
-                AutoFocus = true
-            }.WithBlurAction(ctx => SwitchToReadOnlyMode(ctx, editStateId));
+                AutoFocus = isToggleable // Only auto-focus when toggleable
+            };
+            editCtrl = isToggleable
+                ? textCtrl.WithBlurAction(ctx => SwitchToReadOnlyMode(ctx, editStateId))
+                : textCtrl;
         }
 
         // Apply style from UiControlAttribute if present, otherwise no default constraints
@@ -909,31 +928,47 @@ public static class EditorExtensions
         PropertyInfo property,
         JsonPointerReference jsonPointer,
         bool isRequired,
-        string editStateId)
+        string editStateId,
+        bool isToggleable)
     {
-        if (attr.ControlType == typeof(TextAreaControl))
-            return new TextAreaControl(jsonPointer)
+        var controlType = attr.EditControlType ?? attr.DisplayControlType;
+
+        if (controlType == typeof(TextAreaControl))
+        {
+            var textArea = new TextAreaControl(jsonPointer)
             {
                 Required = isRequired,
-                AutoFocus = true
-            }.WithBlurAction(ctx => SwitchToReadOnlyMode(ctx, editStateId));
+                AutoFocus = isToggleable
+            };
+            return isToggleable
+                ? textArea.WithBlurAction(ctx => SwitchToReadOnlyMode(ctx, editStateId))
+                : textArea;
+        }
 
-        if (attr.ControlType == typeof(SelectControl) && attr.Options != null)
+        // SelectControl with options (either explicit SelectControl type or just Options set)
+        if ((controlType == typeof(SelectControl) || controlType == null) && attr.Options != null)
         {
             var optionsId = Guid.NewGuid().AsString();
             host.UpdateData(optionsId, ConvertOptionsForToggle(attr.Options));
-            return new SelectControl(jsonPointer, new JsonPointerReference(LayoutAreaReference.GetDataPointer(optionsId)))
+            var selectCtrl = new SelectControl(jsonPointer, new JsonPointerReference(LayoutAreaReference.GetDataPointer(optionsId)))
             {
                 Required = isRequired
-            }.WithBlurAction(ctx => SwitchToReadOnlyMode(ctx, editStateId));
+            };
+            return isToggleable
+                ? selectCtrl.WithBlurAction(ctx => SwitchToReadOnlyMode(ctx, editStateId))
+                : selectCtrl;
         }
 
-        return new TextFieldControl(jsonPointer)
+        // Default to TextField
+        var textField = new TextFieldControl(jsonPointer)
         {
             Required = isRequired,
             Immediate = true,
-            AutoFocus = true
-        }.WithBlurAction(ctx => SwitchToReadOnlyMode(ctx, editStateId));
+            AutoFocus = isToggleable
+        };
+        return isToggleable
+            ? textField.WithBlurAction(ctx => SwitchToReadOnlyMode(ctx, editStateId))
+            : textField;
     }
 
     private static UiControl CreateDimensionSelectControl(
@@ -942,16 +977,22 @@ public static class EditorExtensions
         DimensionAttribute dimensionAttr,
         bool isRequired,
         string dataId,
-        string editStateId)
+        string editStateId,
+        bool isToggleable)
     {
         var collectionName = host.Workspace.DataContext.GetCollectionName(dimensionAttr.Type);
         if (string.IsNullOrEmpty(collectionName))
-            return new TextFieldControl(jsonPointer)
+        {
+            var fallback = new TextFieldControl(jsonPointer)
             {
                 Required = isRequired,
                 Immediate = true,
-                AutoFocus = true
-            }.WithBlurAction(ctx => SwitchToReadOnlyMode(ctx, editStateId));
+                AutoFocus = isToggleable
+            };
+            return isToggleable
+                ? fallback.WithBlurAction(ctx => SwitchToReadOnlyMode(ctx, editStateId))
+                : fallback;
+        }
 
         var registrationKey = $"dimensionOptions_{dataId}_{jsonPointer.Pointer}";
         var optionsId = $"dimOpts_{dataId}_{jsonPointer.Pointer}"; // Use stable ID instead of Guid
@@ -962,25 +1003,45 @@ public static class EditorExtensions
                     host.Workspace.DataContext.TypeRegistry.GetTypeDefinition(dimensionAttr.Type)!))
                 .Subscribe(opts => host.UpdateData(optionsId, opts)));
 
-        return new SelectControl(jsonPointer, new JsonPointerReference(LayoutAreaReference.GetDataPointer(optionsId)))
+        var ctrl = new SelectControl(jsonPointer, new JsonPointerReference(LayoutAreaReference.GetDataPointer(optionsId)))
         {
             Required = isRequired
-        }.WithBlurAction(ctx => SwitchToReadOnlyMode(ctx, editStateId));
+        };
+        return isToggleable
+            ? ctrl.WithBlurAction(ctx => SwitchToReadOnlyMode(ctx, editStateId))
+            : ctrl;
     }
 
     /// <summary>
     /// Builds a markdown section with full width, title, and Done button for edit mode.
     /// </summary>
+    /// <param name="host">The layout area host.</param>
+    /// <param name="property">The property to create the control for.</param>
+    /// <param name="dataId">The data ID used for data binding.</param>
+    /// <param name="editStateId">The edit state ID for toggling.</param>
+    /// <param name="editStateStream">Observable stream of edit state.</param>
+    /// <param name="isEditable">Whether the property is editable.</param>
+    /// <param name="isToggleable">If true, allows toggling between read/edit. If false, stays in edit mode.</param>
     private static UiControl BuildMarkdownToggle(
         LayoutAreaHost host,
         PropertyInfo property,
         string dataId,
         string editStateId,
         IObservable<bool> editStateStream,
-        bool isEditable)
+        bool isEditable,
+        bool isToggleable)
     {
         var propName = property.Name.ToCamelCase()!;
         var displayName = GetToggleableDisplayName(property);
+
+        // When not toggleable and editable, always show edit view
+        if (!isToggleable && isEditable)
+        {
+            return Controls.Stack
+                .WithWidth("100%")
+                .WithStyle("margin-top: 24px;")
+                .WithView(BuildMarkdownEditView(host, property, dataId, editStateId, isToggleable));
+        }
 
         return Controls.Stack
             .WithWidth("100%")
@@ -990,7 +1051,7 @@ public static class EditorExtensions
                     .DistinctUntilChanged()
                     .Select(isEditing =>
                         isEditing && isEditable
-                            ? BuildMarkdownEditView(h, property, dataId, editStateId)
+                            ? BuildMarkdownEditView(h, property, dataId, editStateId, isToggleable)
                             : BuildMarkdownReadView(h, property, dataId, displayName, editStateId, isEditable)));
     }
 
@@ -1031,7 +1092,8 @@ public static class EditorExtensions
         LayoutAreaHost host,
         PropertyInfo property,
         string dataId,
-        string editStateId)
+        string editStateId,
+        bool isToggleable)
     {
         var propName = property.Name.ToCamelCase()!;
         var markdownAttr = property.GetCustomAttribute<MarkdownAttribute>();
@@ -1046,11 +1108,15 @@ public static class EditorExtensions
             DataContext = LayoutAreaReference.GetDataPointer(dataId)
         };
 
-        return Controls.Stack
+        var stack = Controls.Stack
             .WithWidth("100%")
             .WithStyle("background: var(--neutral-fill-rest); border-radius: 8px; padding: 16px 20px;")
-            .WithView(editor)
-            .WithView(Controls.Stack
+            .WithView(editor);
+
+        // Only show Done button when toggleable
+        if (isToggleable)
+        {
+            stack = stack.WithView(Controls.Stack
                 .WithOrientation(Orientation.Horizontal)
                 .WithStyle("margin-top: 12px;")
                 .WithView(Controls.Button("Done")
@@ -1060,6 +1126,9 @@ public static class EditorExtensions
                         ctx.Host.UpdateData(editStateId, false);
                         return Task.CompletedTask;
                     })));
+        }
+
+        return stack;
     }
 
     private static IReadOnlyCollection<Option> ConvertOptionsForToggle(object options)
