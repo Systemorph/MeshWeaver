@@ -5,7 +5,6 @@ using MeshWeaver.Data;
 using MeshWeaver.Domain;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Messaging.Serialization;
-using MeshWeaver.ShortGuid;
 using Microsoft.Extensions.DependencyInjection;
 using Namotion.Reflection;
 
@@ -13,27 +12,38 @@ namespace MeshWeaver.Layout.Domain;
 
 public static class EditLayoutArea
 {
+    /// <summary>
+    /// Builds the Edit view for an entity using the same layout as Overview but with all fields in edit mode.
+    /// </summary>
     public static UiControl Edit(LayoutAreaHost host, ITypeDefinition typeDefinition, object id, RenderingContext ctx)
     {
         // Title with right-aligned navigation icons
-        var navigationIcons = $"<a href=\"/{host.Hub.Address}/DataModel/{typeDefinition.Type.Name}\" title=\"Data Model\" style=\"text-decoration: none; font-size: 2em; line-height: 1;\">⧉</a>";
+        var navigationIcons = $"<a href=\"/{host.Hub.Address}/DataModel/{typeDefinition.Type.Name}\" title=\"Data Model\" style=\"text-decoration: none; font-size: 1.5em; line-height: 1;\">⧉</a>";
         if (!string.IsNullOrWhiteSpace(typeDefinition.CollectionName))
-            navigationIcons += $" <a href=\"/{host.Hub.Address}/Catalog/{typeDefinition.CollectionName}\" title=\"View Catalog\" style=\"text-decoration: none; font-size: 2em; line-height: 1;\">🗃️</a>";
+            navigationIcons += $" <a href=\"/{host.Hub.Address}/Catalog/{typeDefinition.CollectionName}\" title=\"View Catalog\" style=\"text-decoration: none; font-size: 1.5em; line-height: 1;\">🗃️</a>";
 
-        var titleWithNav = $"<div style=\"display: flex !important; justify-content: space-between !important; align-items: center !important; margin-bottom: 1rem; width: 100%;\"><h1 style=\"margin: 0; flex-grow: 1;\">{typeDefinition.DisplayName}</h1><div style=\"flex-shrink: 0;\">{navigationIcons}</div></div>";
-        var ret = new StackControl()
-            .WithView(Controls.Html(titleWithNav));
+        var stack = Controls.Stack.WithWidth("100%");
 
+        // Header with title and navigation
+        var header = Controls.Html($@"
+            <div style=""display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; width: 100%;"">
+                <h1 style=""margin: 0; flex-grow: 1;"">{System.Web.HttpUtility.HtmlEncode(typeDefinition.DisplayName)}</h1>
+                <div style=""flex-shrink: 0;"">{navigationIcons}</div>
+            </div>");
+        stack = stack.WithView(header);
+
+        // Description if available
         var description = typeDefinition.Type.GetXmlDocsSummary();
         if (!string.IsNullOrWhiteSpace(description))
-            ret = ret.WithView(Controls.Html($"<p>{description}</p>"));
+            stack = stack.WithView(Controls.Html($"<p style=\"color: var(--neutral-foreground-hint); margin-bottom: 1rem;\">{description}</p>"));
 
-        return ret.WithView((areaHost, _) => EditLayout(areaHost, typeDefinition, id));
+        // Use Overview with startInEditMode=true for the form
+        return stack.WithView((areaHost, _) => EditLayout(areaHost, typeDefinition, id));
     }
 
     private static UiControl EditLayout(LayoutAreaHost host, ITypeDefinition typeDefinition, object id)
     {
-        var dataId = Guid.NewGuid().AsString();
+        var dataId = GetDataId($"{host.Hub.Address}_{typeDefinition.CollectionName}_{id}");
         var stream = host.Workspace
             .GetStream(new EntityReference(typeDefinition.CollectionName, id));
 
@@ -42,25 +52,25 @@ public static class EditLayoutArea
             .Subscribe(e => host.UpdateData(dataId, e))
         );
 
-        return typeDefinition.Type.GetProperties()
-            .Aggregate(new EditFormControl { DataContext = LayoutAreaReference.GetDataPointer(dataId) }, (form, property) =>
-                MapToEditFormControl(form, property, host));
-    }
-
-    private static EditFormControl MapToEditFormControl(EditFormControl form, PropertyInfo property, LayoutAreaHost host)
-    {
-        return host.Hub.ServiceProvider.MapToControl<EditFormControl, EditFormSkin>(form, property);
+        // Reuse Overview with isToggleable=false for pure edit mode (no toggle back to read-only)
+        return Overview(host, typeDefinition.Type, dataId, canEdit: true, isToggleable: false);
     }
 
     /// <summary>
     /// Builds the property form with grid for regular properties and separate sections for markdown.
     /// Uses MapToToggleableControl for readonly/edit toggle functionality.
     /// </summary>
+    /// <param name="host">The layout area host.</param>
+    /// <param name="contentType">The type of the content being edited.</param>
+    /// <param name="dataId">The data ID used for data binding.</param>
+    /// <param name="canEdit">Whether editing is allowed based on permissions.</param>
+    /// <param name="isToggleable">If true (default), starts read-only and can toggle. If false, stays in edit mode.</param>
     public static UiControl Overview(
         LayoutAreaHost host,
         Type contentType,
         string dataId,
-        bool canEdit)
+        bool canEdit,
+        bool isToggleable = true)
     {
         // Get browsable properties (skip Title - shown in header)
         var properties = contentType.GetProperties()
@@ -86,7 +96,7 @@ public static class EditLayoutArea
 
             foreach (var prop in regularProps)
             {
-                var control = host.Hub.ServiceProvider.MapToToggleableControl(prop, dataId, canEdit, host);
+                var control = host.Hub.ServiceProvider.MapToToggleableControl(prop, dataId, canEdit, host, isToggleable);
                 propsGrid = propsGrid.WithView(control, s => s.WithXs(12).WithMd(6).WithLg(4));
             }
 
@@ -96,7 +106,7 @@ public static class EditLayoutArea
         // Build markdown sections using MapToToggleableControl
         foreach (var prop in markdownProps)
         {
-            var control = host.Hub.ServiceProvider.MapToToggleableControl(prop, dataId, canEdit, host);
+            var control = host.Hub.ServiceProvider.MapToToggleableControl(prop, dataId, canEdit, host, isToggleable);
             stack = stack.WithView(control);
         }
 

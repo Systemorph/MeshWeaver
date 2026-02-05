@@ -91,12 +91,10 @@
         @* Progress message *@
         @if (isCreating)
         {
-            <FluentMessageBar Intent="MessageIntent.Info" Style="width: 100%;">
-                <FluentStack Orientation="Orientation.Horizontal" VerticalAlignment="VerticalAlignment.Center" HorizontalGap="8">
-                    <FluentProgressRing Style="width: 20px; height: 20px;" />
-                    <span>Creating node...</span>
-                </FluentStack>
-            </FluentMessageBar>
+            <div style="display: flex; align-items: center; gap: 12px; padding: 12px; background: var(--neutral-layer-2); border-radius: 4px; width: 100%;">
+                <FluentProgressRing Style="width: 20px; height: 20px;" />
+                <span>Creating node...</span>
+            </div>
         }
 
         @* Error message *@
