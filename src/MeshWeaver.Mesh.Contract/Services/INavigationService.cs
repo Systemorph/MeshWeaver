@@ -3,6 +3,23 @@ using System.Web;
 namespace MeshWeaver.Mesh.Services;
 
 /// <summary>
+/// Options for navigation.
+/// </summary>
+/// <param name="Uri">The URI to navigate to.</param>
+public record NavigationOptions(string Uri)
+{
+    /// <summary>
+    /// If true, forces a full page load.
+    /// </summary>
+    public bool ForceLoad { get; init; }
+
+    /// <summary>
+    /// If true, replaces the current history entry instead of adding a new one.
+    /// </summary>
+    public bool Replace { get; init; }
+}
+
+/// <summary>
 /// Service for navigation and getting the current navigation path and namespace context.
 /// Automatically subscribes to location changes and manages path resolution and creatable types.
 /// </summary>
@@ -64,9 +81,17 @@ public interface INavigationService : IDisposable
     /// <summary>
     /// Navigates to the specified URI.
     /// </summary>
-    /// <param name="uri"></param>
-    /// <param name="forceLoad"></param>
-    void NavigateTo(string uri, bool forceLoad = false);
+    /// <param name="uri">The URI to navigate to.</param>
+    /// <param name="forceLoad">If true, forces a full page load.</param>
+    /// <param name="replace">If true, replaces the current history entry instead of adding a new one.</param>
+    void NavigateTo(string uri, bool forceLoad = false, bool replace = false)
+        => NavigateTo(new NavigationOptions(uri) { ForceLoad = forceLoad, Replace = replace });
+
+    /// <summary>
+    /// Navigates using the specified navigation options.
+    /// </summary>
+    /// <param name="options">The navigation options.</param>
+    void NavigateTo(NavigationOptions options);
 
     /// <summary>
     /// Generates a navigation href from address/area/id combination.

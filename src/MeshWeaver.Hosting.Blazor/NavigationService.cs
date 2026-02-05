@@ -86,9 +86,13 @@ public class NavigationService : INavigationService
     }
 
     /// <inheritdoc />
-    public void NavigateTo(string uri, bool forceLoad = false)
+    public void NavigateTo(string uri, bool forceLoad = false, bool replace = false)
+        => NavigateTo(new MeshWeaver.Mesh.Services.NavigationOptions(uri) { ForceLoad = forceLoad, Replace = replace });
+
+    /// <inheritdoc />
+    public void NavigateTo(MeshWeaver.Mesh.Services.NavigationOptions options)
     {
-        _navigationManager.NavigateTo(uri, forceLoad);
+        _navigationManager.NavigateTo(options.Uri, options.ForceLoad, options.Replace);
     }
 
     /// <inheritdoc />

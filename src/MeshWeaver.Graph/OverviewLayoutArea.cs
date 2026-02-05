@@ -21,6 +21,7 @@ public static class OverviewLayoutArea
 {
     /// <summary>
     /// Builds the property overview for a MeshNode, showing read-only views with click-to-edit.
+    /// Uses the unified ContentViewOptions for consistent layout across Overview, Edit, and Create.
     /// </summary>
     public static UiControl BuildPropertyOverview(LayoutAreaHost host, MeshNode node)
     {
@@ -36,22 +37,27 @@ public static class OverviewLayoutArea
 
         var contentType = instance.GetType();
 
-        // 2. Check access permissions
+        // Check access permissions
         var canEdit = CheckEditAccess(host, node);
 
-        // 3. Set up local data for editing
-        // Content is accessed via MeshNode.Content - there's no separate stream for content types
+        // Set up local data for editing
         var dataId = EditLayoutArea.GetDataId(nodePath);
         host.UpdateData(dataId, instance);
 
-        // 4. Setup auto-save to persist changes via DataChangeRequest
+        // Setup auto-save to persist changes via DataChangeRequest
         if (canEdit)
         {
             SetupAutoSave(host, dataId, instance, node);
         }
 
-        // 5. Build property form with readonly/edit toggle
-        return EditLayoutArea.Overview(host, contentType, dataId, canEdit);
+        // Build using unified content view - Overview mode: toggleable=true, no footer actions
+        return EditLayoutArea.BuildContentView(host, new ContentViewOptions
+        {
+            DataId = dataId,
+            ContentType = contentType,
+            CanEdit = canEdit,
+            IsToggleable = true  // Overview: click-to-edit, blur back to read-only
+        });
     }
 
     /// <summary>

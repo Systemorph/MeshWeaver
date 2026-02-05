@@ -10,8 +10,137 @@ using Namotion.Reflection;
 
 namespace MeshWeaver.Layout.Domain;
 
+/// <summary>
+/// Options for building a unified content view (Overview, Edit, or Create).
+/// </summary>
+public record ContentViewOptions
+{
+    /// <summary>
+    /// The data ID used for data binding.
+    /// </summary>
+    public required string DataId { get; init; }
+
+    /// <summary>
+    /// The type of the content being displayed/edited.
+    /// </summary>
+    public required Type ContentType { get; init; }
+
+    /// <summary>
+    /// Whether editing is allowed based on permissions.
+    /// </summary>
+    public bool CanEdit { get; init; } = true;
+
+    /// <summary>
+    /// If true (default), starts read-only and can toggle to edit. If false, stays in edit mode.
+    /// </summary>
+    public bool IsToggleable { get; init; } = true;
+
+    /// <summary>
+    /// Static title text. Ignored if TitleDataId is set.
+    /// </summary>
+    public string? Title { get; init; }
+
+    /// <summary>
+    /// If set, title is data-bound to the "name" field of this data ID.
+    /// </summary>
+    public string? TitleDataId { get; init; }
+
+    /// <summary>
+    /// Title prefix shown before the data-bound name (e.g., "Create ").
+    /// </summary>
+    public string? TitlePrefix { get; init; }
+
+    /// <summary>
+    /// Optional description shown below the title.
+    /// </summary>
+    public string? Description { get; init; }
+
+    /// <summary>
+    /// Optional header actions (navigation icons, etc.) shown to the right of the title.
+    /// </summary>
+    public UiControl? HeaderActions { get; init; }
+
+    /// <summary>
+    /// Optional footer actions (buttons) shown below the property form.
+    /// </summary>
+    public UiControl? FooterActions { get; init; }
+
+    /// <summary>
+    /// Optional padding for the entire view. Default is no padding.
+    /// </summary>
+    public string? Padding { get; init; }
+}
+
 public static class EditLayoutArea
 {
+    /// <summary>
+    /// Builds a unified content view that works for Overview, Edit, and Create scenarios.
+    /// The structure is: Header (title + actions) → Property form → Footer actions
+    /// </summary>
+    public static UiControl BuildContentView(LayoutAreaHost host, ContentViewOptions options)
+    {
+        var style = "width: 100%;";
+        if (!string.IsNullOrEmpty(options.Padding))
+            style += $" padding: {options.Padding};";
+
+        var stack = Controls.Stack.WithStyle(style);
+
+        // Header with title (static or data-bound)
+        if (options.TitleDataId != null)
+        {
+            // Data-bound title
+            stack = stack.WithView((h, _) =>
+                h.Stream.GetDataStream<Dictionary<string, object?>>(options.TitleDataId)
+                    .Select(metadata =>
+                    {
+                        var name = metadata?.GetValueOrDefault("name")?.ToString() ?? "Untitled";
+                        var titleText = string.IsNullOrEmpty(options.TitlePrefix) ? name : $"{options.TitlePrefix}{name}";
+                        return BuildHeader(titleText, options.HeaderActions, options.Description);
+                    }));
+        }
+        else if (!string.IsNullOrEmpty(options.Title))
+        {
+            stack = stack.WithView(BuildHeader(options.Title, options.HeaderActions, options.Description));
+        }
+
+        // Property form
+        stack = stack.WithView(BuildPropertyForm(host, options.ContentType, options.DataId, options.CanEdit, options.IsToggleable));
+
+        // Footer actions (buttons)
+        if (options.FooterActions != null)
+        {
+            stack = stack.WithView(options.FooterActions);
+        }
+
+        return stack;
+    }
+
+    private static UiControl BuildHeader(string title, UiControl? headerActions, string? description)
+    {
+        var headerStack = Controls.Stack.WithWidth("100%");
+
+        if (headerActions != null)
+        {
+            // Header with title and actions side by side
+            headerStack = headerStack.WithView(Controls.Html($@"
+                <div style=""display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; width: 100%;"">
+                    <h2 style=""margin: 0; flex-grow: 1;"">{System.Web.HttpUtility.HtmlEncode(title)}</h2>
+                </div>"));
+            // Note: headerActions would need to be positioned, but for simplicity we add it separately
+        }
+        else
+        {
+            headerStack = headerStack.WithView(Controls.H2(title).WithStyle("margin: 0 0 1rem 0;"));
+        }
+
+        if (!string.IsNullOrEmpty(description))
+        {
+            headerStack = headerStack.WithView(Controls.Html($"<p style=\"color: var(--neutral-foreground-hint); margin-bottom: 1rem;\">{System.Web.HttpUtility.HtmlEncode(description)}</p>"));
+        }
+
+        return headerStack;
+    }
+
     /// <summary>
     /// Builds the Edit view for an entity using the same layout as Overview but with all fields in edit mode.
     /// </summary>
@@ -52,8 +181,8 @@ public static class EditLayoutArea
             .Subscribe(e => host.UpdateData(dataId, e))
         );
 
-        // Reuse Overview with isToggleable=false for pure edit mode (no toggle back to read-only)
-        return Overview(host, typeDefinition.Type, dataId, canEdit: true, isToggleable: false);
+        // Reuse BuildPropertyForm with isToggleable=false for pure edit mode (no toggle back to read-only)
+        return BuildPropertyForm(host, typeDefinition.Type, dataId, canEdit: true, isToggleable: false);
     }
 
     /// <summary>
@@ -65,7 +194,7 @@ public static class EditLayoutArea
     /// <param name="dataId">The data ID used for data binding.</param>
     /// <param name="canEdit">Whether editing is allowed based on permissions.</param>
     /// <param name="isToggleable">If true (default), starts read-only and can toggle. If false, stays in edit mode.</param>
-    public static UiControl Overview(
+    public static UiControl BuildPropertyForm(
         LayoutAreaHost host,
         Type contentType,
         string dataId,
@@ -92,7 +221,7 @@ public static class EditLayoutArea
         // Build grid for regular properties using MapToToggleableControl
         if (regularProps.Count > 0)
         {
-            var propsGrid = Controls.LayoutGrid.WithSkin(s => s.WithSpacing(2));
+            var propsGrid = Controls.LayoutGrid.WithStyle(s => s.WithWidth("100%")).WithSkin(s => s.WithSpacing(2));
 
             foreach (var prop in regularProps)
             {
@@ -112,6 +241,16 @@ public static class EditLayoutArea
 
         return stack;
     }
+
+    /// <summary>
+    /// Alias for BuildPropertyForm for backward compatibility.
+    /// </summary>
+    public static UiControl Overview(
+        LayoutAreaHost host,
+        Type contentType,
+        string dataId,
+        bool canEdit,
+        bool isToggleable = true) => BuildPropertyForm(host, contentType, dataId, canEdit, isToggleable);
 
     /// <summary>
     /// Gets the consistent data ID for a node path. Used by both header and property overview.

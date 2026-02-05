@@ -28,7 +28,7 @@ public class PortalApplication(IMessageHub hub, IRoutingService routingService, 
             .AddContentCollections()
             .WithHandler<NavigationRequest>((_, delivery) =>
             {
-                navigationService.NavigateTo(delivery.Message.Uri, delivery.Message.ForceLoad);
+                navigationService.NavigateTo(delivery.Message.Uri, delivery.Message.ForceLoad, delivery.Message.Replace);
                 return delivery.Processed();
             });
 

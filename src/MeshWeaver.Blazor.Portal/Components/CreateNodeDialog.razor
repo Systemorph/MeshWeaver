@@ -310,7 +310,8 @@
             await Dialog.CloseAsync(Content);
 
             // Navigate to the Create area for the transient node
-            NavigationService.NavigateTo($"/{nodePath}/Create");
+            // Use replace: true so browser back skips the Create page
+            NavigationService.NavigateTo($"/{nodePath}/Create", replace: true);
         }
         catch (Exception ex)
         {

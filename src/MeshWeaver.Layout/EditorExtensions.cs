@@ -583,8 +583,8 @@ public static class EditorExtensions
         // Regular property: Label + reactive read/edit view
         var displayName = GetToggleableDisplayName(property);
 
-        // Apply style from UiControlAttribute if present
-        var containerStyle = "padding: 4px 8px;";
+        // Apply style from UiControlAttribute if present - minimal padding for alignment
+        var containerStyle = "padding: 4px 0;";
         if (!string.IsNullOrEmpty(uiControlAttr?.Style))
         {
             containerStyle += " " + uiControlAttr.Style;
@@ -593,7 +593,7 @@ public static class EditorExtensions
         return Controls.Stack
             .WithStyle(containerStyle)
             .WithView(Controls.Label(displayName)
-                .WithStyle("font-weight: 600; color: var(--neutral-foreground-hint); font-size: 0.875rem; padding-left: 12px;"))
+                .WithStyle("font-weight: 600; color: var(--neutral-foreground-hint); font-size: 0.875rem;"))
             .WithView((h, _) => editStateStream
                 .Select(isEditing => isEditing && isEditable
                     ? BuildEditControl(h, property, dataId, editStateId, isToggleable)
@@ -1039,13 +1039,13 @@ public static class EditorExtensions
         {
             return Controls.Stack
                 .WithWidth("100%")
-                .WithStyle("margin-top: 24px;")
+                .WithStyle("margin-top: 16px;")
                 .WithView(BuildMarkdownEditView(host, property, dataId, editStateId, isToggleable));
         }
 
         return Controls.Stack
             .WithWidth("100%")
-            .WithStyle("margin-top: 24px;")
+            .WithStyle("margin-top: 16px;")
             .WithView((h, _) =>
                 editStateStream
                     .DistinctUntilChanged()
@@ -1072,8 +1072,8 @@ public static class EditorExtensions
 
         var contentStack = Controls.Stack
             .WithWidth("100%")
-            .WithStyle("background: var(--neutral-fill-rest); border-radius: 8px; padding: 16px 20px;" + (isEditable ? " cursor: pointer;" : ""))
-            .WithView(Controls.H3(displayName).WithStyle("margin-bottom: 12px;"))
+            .WithStyle("background: var(--neutral-fill-rest); border-radius: 4px; padding: 12px;" + (isEditable ? " cursor: pointer;" : ""))
+            .WithView(Controls.Label(displayName).WithStyle("font-weight: 600; color: var(--neutral-foreground-hint); font-size: 0.875rem; margin-bottom: 8px;"))
             .WithView(markdownControl);
 
         if (isEditable)
@@ -1110,7 +1110,6 @@ public static class EditorExtensions
 
         var stack = Controls.Stack
             .WithWidth("100%")
-            .WithStyle("background: var(--neutral-fill-rest); border-radius: 8px; padding: 16px 20px;")
             .WithView(editor);
 
         // Only show Done button when toggleable
