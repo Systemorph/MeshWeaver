@@ -6,6 +6,7 @@ using MeshWeaver.Data;
 using MeshWeaver.Domain;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
+using MeshWeaver.Layout.Domain;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
@@ -97,36 +98,13 @@ public static class CreateLayoutArea
             contentInstance = meshDataSource.CreateContentInstance(node);
         }
 
-        var stack = Controls.Stack.WithWidth("100%").WithStyle("padding: 24px;");
-
-        // Header: "Create {Name}" with Cancel button on right
         var cancelUrl = !string.IsNullOrEmpty(parentPath)
             ? MeshNodeLayoutAreas.BuildContentUrl(parentPath, MeshNodeLayoutAreas.OverviewArea)
             : MeshNodeLayoutAreas.BuildContentUrl(nodePath, MeshNodeLayoutAreas.OverviewArea);
         var meshCatalog = host.Hub.ServiceProvider.GetRequiredService<IMeshCatalog>();
         var logger = host.Hub.ServiceProvider.GetService<ILogger<LayoutAreaHost>>();
 
-        stack = stack.WithView(Controls.Stack
-            .WithOrientation(Orientation.Horizontal)
-            .WithStyle("align-items: center; justify-content: space-between; margin-bottom: 24px;")
-            .WithView(Controls.H2($"Create {node.Name ?? node.Id}").WithStyle("margin: 0;"))
-            .WithView(Controls.Button("Cancel")
-                .WithAppearance(Appearance.Lightweight)
-                .WithClickAction(async ctx =>
-                {
-                    // Delete transient node and navigate back
-                    try
-                    {
-                        await meshCatalog.DeleteNodeAsync(nodePath);
-                    }
-                    catch
-                    {
-                        // Ignore deletion errors
-                    }
-                    ctx.NavigateTo(cancelUrl);
-                })));
-
-        // Set up metadata data binding for Name and Id fields
+        // Set up metadata data binding for Name field
         var metadataDataId = $"create_metadata_{nodePath.Replace("/", "_")}";
         var metadataFormData = new Dictionary<string, object?>
         {
@@ -136,31 +114,28 @@ public static class CreateLayoutArea
         };
         host.UpdateData(metadataDataId, metadataFormData);
 
-        // Metadata section: Name and Id fields
+        var stack = Controls.Stack.WithWidth("100%").WithStyle("padding: 24px;");
+
+        // Header: "Create {Name}" - data-bound to name field
+        stack = stack.WithView((h, _) =>
+            h.Stream.GetDataStream<Dictionary<string, object?>>(metadataDataId)
+                .Select(metadata =>
+                {
+                    var name = metadata?.GetValueOrDefault("name")?.ToString() ?? node.Name ?? node.Id;
+                    return Controls.H2($"Create {name}").WithStyle("margin: 0 0 24px 0;");
+                }));
+
+        // Name field only (Id is hidden - computed from Name)
         stack = stack.WithView(Controls.Stack
             .WithWidth("100%")
-            .WithStyle("margin-bottom: 24px; padding: 16px; background: var(--neutral-layer-1); border-radius: 8px;")
-            .WithView(Controls.Stack
-                .WithWidth("100%")
-                .WithStyle("margin-bottom: 16px;")
-                .WithView(Controls.Body("Name").WithStyle("font-weight: 600; margin-bottom: 4px;"))
-                .WithView(new TextFieldControl(new JsonPointerReference("name"))
-                {
-                    Placeholder = "Display name",
-                    Immediate = true,
-                    DataContext = LayoutAreaReference.GetDataPointer(metadataDataId)
-                }.WithStyle("width: 100%;")))
-            .WithView(Controls.Stack
-                .WithWidth("100%")
-                .WithStyle("margin-bottom: 16px;")
-                .WithView(Controls.Body("Id").WithStyle("font-weight: 600; margin-bottom: 4px;"))
-                .WithView(new TextFieldControl(new JsonPointerReference("id"))
-                {
-                    Placeholder = "Identifier (used in URL path)",
-                    Immediate = true,
-                    DataContext = LayoutAreaReference.GetDataPointer(metadataDataId)
-                }.WithStyle("width: 100%;"))
-                .WithView(Controls.Body("This will be the node's identifier in the path. Changing it creates a new node.").WithStyle("font-size: 12px; color: var(--neutral-foreground-hint); margin-top: 4px;"))));
+            .WithStyle("margin-bottom: 24px;")
+            .WithView(Controls.Body("Name").WithStyle("font-weight: 600; margin-bottom: 4px;"))
+            .WithView(new TextFieldControl(new JsonPointerReference("name"))
+            {
+                Placeholder = "Display name",
+                Immediate = true,
+                DataContext = LayoutAreaReference.GetDataPointer(metadataDataId)
+            }.WithStyle("width: 100%;")));
 
         // Content type editor - use Overview with isToggleable=false for pure edit mode
         if (contentType != null && contentInstance != null)
@@ -171,9 +146,18 @@ public static class CreateLayoutArea
             var editor = Layout.Domain.EditLayoutArea.Overview(host, contentType, dataId, canEdit: true, isToggleable: false);
             stack = stack.WithView(editor);
 
-            // Create button with Id change handling
+            // Buttons: Create and Cancel, right-aligned
             stack = stack.WithView(Controls.Stack
-                .WithStyle("margin-top: 24px;")
+                .WithOrientation(Orientation.Horizontal)
+                .WithHorizontalGap(12)
+                .WithStyle("margin-top: 24px; justify-content: flex-end;")
+                .WithView(Controls.Button("Cancel")
+                    .WithAppearance(Appearance.Neutral)
+                    .WithClickAction(async ctx =>
+                    {
+                        try { await meshCatalog.DeleteNodeAsync(nodePath); } catch { }
+                        ctx.NavigateTo(cancelUrl);
+                    }))
                 .WithView(Controls.Button("Create")
                     .WithAppearance(Appearance.Accent)
                     .WithIconStart(FluentIcons.Add())
@@ -186,8 +170,6 @@ public static class CreateLayoutArea
                                 metadata =>
                                 {
                                     var currentName = metadata.GetValueOrDefault("name")?.ToString()?.Trim() ?? node.Name;
-                                    var currentId = metadata.GetValueOrDefault("id")?.ToString()?.Trim() ?? transientId;
-                                    var idChanged = currentId != transientId;
 
                                     ctx.Host.Stream.GetDataStream<JsonElement>(dataId)
                                         .Take(1)
@@ -197,19 +179,8 @@ public static class CreateLayoutArea
                                                 try
                                                 {
                                                     var currentContent = jsonContent.Deserialize(contentType!, ctx.Host.Hub.JsonSerializerOptions);
-
-                                                    if (idChanged && !string.IsNullOrEmpty(node.Namespace))
-                                                    {
-                                                        // Id changed: Create new node at new path, delete transient
-                                                        HandleIdChangeCreate(ctx, host, meshCatalog, logger, node,
-                                                            currentName, currentId, currentContent, contentType);
-                                                    }
-                                                    else
-                                                    {
-                                                        // Id unchanged: Confirm transient at same path
-                                                        HandleConfirmCreate(ctx, host, logger, node, nodePath,
-                                                            currentName, currentContent, contentType);
-                                                    }
+                                                    HandleConfirmCreate(ctx, host, logger, node, nodePath,
+                                                        currentName, currentContent, contentType);
                                                 }
                                                 catch (Exception ex)
                                                 {
@@ -235,9 +206,18 @@ public static class CreateLayoutArea
             // Fallback: basic properties form for nodes without ContentType
             stack = stack.WithView(BuildBasicPropertiesForm(host, node));
 
-            // Create button for basic form with Id change handling
+            // Buttons: Create and Cancel, right-aligned
             stack = stack.WithView(Controls.Stack
-                .WithStyle("margin-top: 24px;")
+                .WithOrientation(Orientation.Horizontal)
+                .WithHorizontalGap(12)
+                .WithStyle("margin-top: 24px; justify-content: flex-end;")
+                .WithView(Controls.Button("Cancel")
+                    .WithAppearance(Appearance.Neutral)
+                    .WithClickAction(async ctx =>
+                    {
+                        try { await meshCatalog.DeleteNodeAsync(nodePath); } catch { }
+                        ctx.NavigateTo(cancelUrl);
+                    }))
                 .WithView(Controls.Button("Create")
                     .WithAppearance(Appearance.Accent)
                     .WithIconStart(FluentIcons.Add())
@@ -251,21 +231,8 @@ public static class CreateLayoutArea
                                     try
                                     {
                                         var currentName = metadata.GetValueOrDefault("name")?.ToString()?.Trim() ?? node.Name;
-                                        var currentId = metadata.GetValueOrDefault("id")?.ToString()?.Trim() ?? transientId;
-                                        var idChanged = currentId != transientId;
-
-                                        if (idChanged && !string.IsNullOrEmpty(node.Namespace))
-                                        {
-                                            // Id changed: Create new node at new path, delete transient
-                                            HandleIdChangeCreate(ctx, host, meshCatalog, logger, node,
-                                                currentName, currentId, null, null);
-                                        }
-                                        else
-                                        {
-                                            // Id unchanged: Confirm transient at same path
-                                            HandleConfirmCreate(ctx, host, logger, node, nodePath,
-                                                currentName, null, null);
-                                        }
+                                        HandleConfirmCreate(ctx, host, logger, node, nodePath,
+                                            currentName, null, null);
                                     }
                                     catch (Exception ex)
                                     {
@@ -324,7 +291,7 @@ public static class CreateLayoutArea
                         {
                             logger?.LogInformation("Successfully confirmed node at {NodePath}", nodePath);
                             var overviewUrl = MeshNodeLayoutAreas.BuildContentUrl(nodePath, MeshNodeLayoutAreas.OverviewArea);
-                            ctx.NavigateTo(overviewUrl);
+                            ctx.NavigateTo(overviewUrl, replace: true);
                         }
                         else
                         {
@@ -408,7 +375,7 @@ public static class CreateLayoutArea
 
                             // Navigate to the new node
                             var overviewUrl = MeshNodeLayoutAreas.BuildContentUrl(newPath, MeshNodeLayoutAreas.OverviewArea);
-                            ctx.NavigateTo(overviewUrl);
+                            ctx.NavigateTo(overviewUrl, replace: true);
                         }
                         else
                         {
@@ -516,7 +483,7 @@ public static class CreateLayoutArea
         }
 
         // Grid of type cards
-        var grid = Controls.LayoutGrid.WithSkin(s => s.WithSpacing(3));
+        var grid = Controls.LayoutGrid.WithStyle(s => s.WithWidth("100%")).WithSkin(s => s.WithSpacing(3));
 
         foreach (var typeInfo in creatableTypes)
         {
@@ -614,11 +581,15 @@ public static class CreateLayoutArea
         // Description field (optional)
         stack = stack.WithView(BuildDescriptionField(host, dataId));
 
-        // Button row
+        // Button row - right-aligned
         var buttonRow = Controls.Stack
             .WithOrientation(Orientation.Horizontal)
             .WithHorizontalGap(12)
-            .WithStyle("margin-top: 24px;");
+            .WithStyle("margin-top: 24px; justify-content: flex-end;");
+        // Cancel button first (leftmost in right-aligned row)
+        buttonRow = buttonRow.WithView(Controls.Button("Cancel")
+            .WithAppearance(Appearance.Neutral)
+            .WithNavigateToHref(MeshNodeLayoutAreas.BuildContentUrl(parentPath, MeshNodeLayoutAreas.OverviewArea)));
         // Next button - creates transient node and redirects to node's Create area
         buttonRow = buttonRow.WithView(Controls.Button("Next")
             .WithAppearance(Appearance.Accent)
@@ -698,11 +669,6 @@ public static class CreateLayoutArea
                     actx.Host.UpdateArea(DialogControl.DialogArea, errorDialog);
                 }
             }));
-
-        // Cancel button
-        buttonRow = buttonRow.WithView(Controls.Button("Cancel")
-            .WithAppearance(Appearance.Neutral)
-            .WithNavigateToHref(MeshNodeLayoutAreas.BuildContentUrl(parentPath, MeshNodeLayoutAreas.OverviewArea)));
 
         stack = stack.WithView(buttonRow);
         return stack;
