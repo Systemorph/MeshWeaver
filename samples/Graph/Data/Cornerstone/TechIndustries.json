@@ -1,0 +1,19 @@
+{
+  "id": "TechIndustries",
+  "namespace": "Cornerstone",
+  "name": "Tech Industries GmbH",
+  "nodeType": "Cornerstone/Insured",
+  "category": "Clients",
+  "description": "German technology manufacturing company - Insurance client",
+  "iconName": "Building",
+  "isPersistent": true,
+  "content": {
+    "$type": "Insured",
+    "id": "TechIndustries",
+    "name": "Tech Industries GmbH",
+    "description": "German technology manufacturing company",
+    "address": "Industriestrasse 42, 80333 Munich, Germany",
+    "industry": "Technology Manufacturing",
+    "location": "Germany"
+  }
+}

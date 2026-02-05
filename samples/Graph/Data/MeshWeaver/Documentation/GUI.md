@@ -22,6 +22,7 @@ MeshWeaver provides a control-based GUI system that renders reactive user interf
 | Make content update automatically | [Static vs Dynamic Views](MeshWeaver/Documentation/GUI/Observables) - Observables, reactivity |
 | Control how data flows | [Data Binding](MeshWeaver/Documentation/GUI/DataBinding) - DataContext, UpdatePointer |
 | Customize field behavior | [Attributes](MeshWeaver/Documentation/GUI/Attributes) - Validation, display options |
+| Build complex interactive dialogs | [Reactive Dialogs](MeshWeaver/Documentation/GUI/ReactiveDialogs) - Subjects, streaming computation |
 
 ---
 

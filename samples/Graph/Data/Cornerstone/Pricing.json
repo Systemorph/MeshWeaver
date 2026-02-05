@@ -1,0 +1,19 @@
+{
+  "id": "Pricing",
+  "namespace": "Cornerstone",
+  "name": "Pricing",
+  "nodeType": "NodeType",
+  "category": "Types",
+  "description": "Cornerstone Insurance pricing with property risks and reinsurance structure",
+  "iconName": "DocumentBulletList",
+  "isPersistent": true,
+  "content": {
+    "$type": "NodeTypeDefinition",
+    "id": "Pricing",
+    "namespace": "Cornerstone",
+    "displayName": "Pricing",
+    "iconName": "DocumentBulletList",
+    "description": "Cornerstone Insurance pricing with property risks and reinsurance structure",
+    "configuration": "config => config.WithContentType<Pricing>().AddContentCollection(sp => { var hub = sp.GetRequiredService<IMessageHub>(); var pricingId = hub.Address.Id; var basePath = System.IO.Path.Combine(\"../../samples/Graph/Data/Cornerstone\", hub.Address.Segments[1], hub.Address.Segments[2], \"Submissions\"); return new ContentCollectionConfig { SourceType = FileSystemStreamProvider.SourceType, Name = $\"Submissions@{pricingId}\", BasePath = basePath, DisplayName = \"Submission Files\" }; }).AddData(data => data.AddSource(source => source.WithType<LineOfBusiness>(t => t.WithInitialData(LineOfBusiness.All)).WithType<Country>(t => t.WithInitialData(Country.All)).WithType<Currency>(t => t.WithInitialData(Currency.All)).WithType<LegalEntity>(t => t.WithInitialData(LegalEntity.All)).WithType<PricingStatus>(t => t.WithInitialData(PricingStatus.All)).WithType<PropertyRisk>().WithType<ReinsuranceAcceptance>().WithType<ReinsuranceSection>().WithType<ExcelImportConfiguration>())).AddDefaultLayoutAreas().AddLayout(layout => layout.WithDefaultArea(\"Overview\").AddPricingViews())"
+  }
+}

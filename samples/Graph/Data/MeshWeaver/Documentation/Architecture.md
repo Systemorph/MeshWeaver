@@ -9,6 +9,21 @@ Icon: /static/storage/content/MeshWeaver/Documentation/Architecture/icon.svg
 
 MeshWeaver is a distributed platform for building data-driven applications with AI capabilities. This documentation covers the core architectural concepts.
 
+## What MeshWeaver Does
+
+- Build Blazor Server portals with reactive layout areas (addressable UI surfaces that embed data + business logic)
+- Route commands/events through the Message Hub for concurrency, activity tracking, and request/response
+- Standardize CRUD: catalogs, details, data model visualization, import, and business rules
+- Integrate AI: chat/command agents, autocomplete, and provider abstraction for Azure OpenAI/Foundry/Claude
+- Deploy flexibly: single-process portal or Orleans-based distributed setup via .NET Aspire
+
+## What MeshWeaver Is Not
+
+- Not a static-site CMS; it assumes live hubs and services
+- Not a mobile/native UI toolkit; primary UI is Blazor Server
+- Cloud targets are flexible, but samples assume Azure services (Blob, OpenAI/Foundry, PostgreSQL/Cosmos options)
+- No out-of-the-box multi-tenant SaaS provisioning; security hardening guidance is minimal today
+
 ## Architecture Overview
 
 @@MeshWeaver/Documentation/Architecture/content:platform-overview.svg
@@ -98,3 +113,65 @@ Flexible security through `IDataValidator`:
 ## Getting Started
 
 Explore each architecture topic in depth through the linked articles above, or browse the `MeshWeaver/Documentation/Architecture` namespace.
+
+---
+
+## Tech Stack
+
+| Layer | Technologies |
+|-------|--------------|
+| **Language/Runtime** | C# on .NET 9 |
+| **UI** | Blazor Server, SignalR, Radzen, ChartJS, Google Maps; Interactive Markdown for embedded areas |
+| **Distributed/Hosting** | Orleans, .NET Aspire orchestration; Azure Blob/PostgreSQL/Cosmos options for storage |
+| **AI** | Agent abstractions with Azure OpenAI/Foundry/Claude; Semantic-Kernel-style plugins; chat memory persistence |
+| **Tooling** | Central package management (Directory.Packages.props), xUnit v3 + FluentAssertions for tests |
+
+---
+
+## Folder Structure
+
+| Path | Description |
+|------|-------------|
+| `portal/` | Monolith portal (MeshWeaver.Portal) with Blazor UI and SignalR |
+| `portal/aspire/` | Aspire AppHost + service projects for distributed runs (requires Docker for deps) |
+| `loom/` | Alternate portal flavor added in 3.0 (monolith + Aspire + shared Razor UI and auth config) |
+| `samples/` | Domain samples (Northwind, Todo, Graph) and documentation content under Documentation/ |
+| `src/` | Core libraries (Messaging.Hub, Layout, AI, Hosting, Blazor controls, Graph, Charting, Import, BusinessRules) |
+| `modules/` | Domain/feature modules (e.g., Documentation AI demos) to plug into hubs/layout |
+| `test/` | xUnit v3 suites for core and modules |
+
+---
+
+## Feature-to-Component Matrix
+
+| Feature | Components |
+|---------|------------|
+| Addressable UI (layout areas), catalogs/details, CRUD grids | Layout + Domain modules + Portal |
+| Messaging, routing, activity tracking, request/response | Messaging.Hub + Hosting |
+| AI chat, commands, autocomplete, provider abstraction | MeshWeaver.AI + AzureFoundry/OpenAI providers + Portal chat UI |
+| Visualization (charts/maps/graph editors) | Blazor.ChartJs, Blazor.Radzen, Blazor.GoogleMaps, Graph modules |
+| Content collections and documentation delivery | ContentCollections + Markdown system + Portal |
+| Deployment elasticity | Orleans + Aspire (distributed) or ASP.NET/Blazor (monolith) |
+
+---
+
+## Extending MeshWeaver
+
+| Extension Type | How To |
+|---------------|--------|
+| **Add a module** | Register hub handlers, layout areas, and content collections under an address (e.g., `@app/MyDomain`) |
+| **Add a layout area** | Static class with data/view logic; expose via layout configuration; becomes addressable and embeddable |
+| **Add AI capabilities** | Create a plugin/command handler, register with the command registry, configure provider in appsettings |
+| **Choose hosting** | Start with monolith; move to Aspire/Orleans when scaling or integrating external services |
+
+---
+
+## Known Documentation Gaps
+
+As of version 3.0:
+
+- Security/auth hardening (OIDC, cookies, roles/claims) and production guidance
+- Observability and ops (logging, tracing, health, metrics, DR/backup, scaling knobs)
+- AI configuration details (models, rate limits, safety controls, command lifecycle examples)
+- Performance/concurrency tuning (hub actor settings, Orleans silo sizing)
+- Migration/upgrade notes and multi-tenancy/partitioning patterns beyond address-based routing
