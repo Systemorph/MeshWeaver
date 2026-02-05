@@ -79,4 +79,9 @@ public record NavigationRequest(string Uri)
     /// Whether to force a full page load.
     /// </summary>
     public bool ForceLoad { get; init; }
+
+    /// <summary>
+    /// Whether to replace the current history entry instead of adding a new one.
+    /// </summary>
+    public bool Replace { get; init; }
 }

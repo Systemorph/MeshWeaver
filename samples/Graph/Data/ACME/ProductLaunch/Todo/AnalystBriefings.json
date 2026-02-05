@@ -9,7 +9,6 @@
   "isPersistent": true,
   "content": {
     "$type": "Todo",
-    "id": "AnalystBriefings",
     "title": "Schedule analyst briefings",
     "description": "Reach out to Gartner, Forrester, and IDC analysts covering workflow automation. Schedule pre-launch briefings and prepare analyst-specific materials.",
     "category": "PR",

@@ -6,6 +6,7 @@ using MeshWeaver.Data;
 using MeshWeaver.Domain;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
+using MeshWeaver.Layout.Domain;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
@@ -29,7 +30,7 @@ public static class CreateLayoutArea
     /// - If ?type= query param is present: shows CreateChild form.
     /// - Otherwise: shows type selection grid for CreateChild.
     /// </summary>
-    public static IObservable<UiControl?> Create(LayoutAreaHost host, RenderingContext ctx)
+    public static IObservable<UiControl?> Create(LayoutAreaHost host, RenderingContext _)
     {
         var currentPath = host.Hub.Address.ToString();
         var nodeTypeService = host.Hub.ServiceProvider.GetService<INodeTypeService>();
@@ -70,8 +71,8 @@ public static class CreateLayoutArea
     /// Builds the Create editor for a transient node (own node).
     /// 1. Resolves ContentType from MeshDataSource
     /// 2. Creates content instance using MeshDataSource.CreateContentInstance
-    /// 3. Shows edit form for content type
-    /// 4. Create button: updates node with Content and state=Active
+    /// 3. Shows edit form for content type with editable Id field
+    /// 4. Create button: If Id unchanged, confirm at same path. If Id changed, create new node + delete transient.
     /// 5. Cancel button: removes transient node and navigates back
     /// </summary>
     private static UiControl BuildCreateEditor(
@@ -80,6 +81,8 @@ public static class CreateLayoutArea
     {
         var nodePath = node.Path;
         var parentPath = node.GetParentPath();
+        var transientId = node.Id; // The GUID-based transient Id
+        var desiredId = node.DesiredId ?? transientId; // User's intended Id (from dialog)
 
         // Get MeshDataSource from workspace to resolve ContentType
         var workspace = host.Workspace;
@@ -95,120 +98,105 @@ public static class CreateLayoutArea
             contentInstance = meshDataSource.CreateContentInstance(node);
         }
 
-        var stack = Controls.Stack.WithWidth("100%").WithStyle("padding: 24px;");
-
-        // Header: "Create {Name}" with Cancel button on right
         var cancelUrl = !string.IsNullOrEmpty(parentPath)
             ? MeshNodeLayoutAreas.BuildContentUrl(parentPath, MeshNodeLayoutAreas.OverviewArea)
             : MeshNodeLayoutAreas.BuildContentUrl(nodePath, MeshNodeLayoutAreas.OverviewArea);
         var meshCatalog = host.Hub.ServiceProvider.GetRequiredService<IMeshCatalog>();
         var logger = host.Hub.ServiceProvider.GetService<ILogger<LayoutAreaHost>>();
 
-        stack = stack.WithView(Controls.Stack
-            .WithOrientation(Orientation.Horizontal)
-            .WithStyle("align-items: center; justify-content: space-between; margin-bottom: 24px;")
-            .WithView(Controls.H2($"Create {node.Name ?? node.Id}").WithStyle("margin: 0;"))
-            .WithView(Controls.Button("Cancel")
-                .WithAppearance(Appearance.Lightweight)
-                .WithClickAction(async ctx =>
-                {
-                    // Delete transient node and navigate back
-                    try
-                    {
-                        await meshCatalog.DeleteNodeAsync(nodePath);
-                    }
-                    catch
-                    {
-                        // Ignore deletion errors
-                    }
-                    ctx.NavigateTo(cancelUrl);
-                })));
+        // Set up metadata data binding for Name field
+        var metadataDataId = $"create_metadata_{nodePath.Replace("/", "_")}";
+        var metadataFormData = new Dictionary<string, object?>
+        {
+            ["name"] = node.Name ?? "",
+            ["id"] = desiredId,
+            ["description"] = node.Description ?? ""
+        };
+        host.UpdateData(metadataDataId, metadataFormData);
 
-        // Content type editor
+        var stack = Controls.Stack.WithWidth("100%").WithStyle("padding: 24px;");
+
+        // Header: "Create {Name}" - data-bound to name field
+        stack = stack.WithView((h, _) =>
+            h.Stream.GetDataStream<Dictionary<string, object?>>(metadataDataId)
+                .Select(metadata =>
+                {
+                    var name = metadata?.GetValueOrDefault("name")?.ToString() ?? node.Name ?? node.Id;
+                    return Controls.H2($"Create {name}").WithStyle("margin: 0 0 24px 0;");
+                }));
+
+        // Name field only (Id is hidden - computed from Name)
+        stack = stack.WithView(Controls.Stack
+            .WithWidth("100%")
+            .WithStyle("margin-bottom: 24px;")
+            .WithView(Controls.Body("Name").WithStyle("font-weight: 600; margin-bottom: 4px;"))
+            .WithView(new TextFieldControl(new JsonPointerReference("name"))
+            {
+                Placeholder = "Display name",
+                Immediate = true,
+                DataContext = LayoutAreaReference.GetDataPointer(metadataDataId)
+            }.WithStyle("width: 100%;")));
+
+        // Content type editor - use Overview with isToggleable=false for pure edit mode
         if (contentType != null && contentInstance != null)
         {
             var dataId = $"create_{nodePath.Replace("/", "_")}";
             host.UpdateData(dataId, contentInstance);
 
-            var editor = host.Hub.ServiceProvider.Edit(contentType, dataId);
+            var editor = Layout.Domain.EditLayoutArea.Overview(host, contentType, dataId, canEdit: true, isToggleable: false);
             stack = stack.WithView(editor);
 
-            // Create button
-            // Note: Uses Post + RegisterCallback instead of AwaitResponse to avoid deadlock.
-            // Actors are single-threaded, and AwaitResponse blocks the actor's queue while waiting
-            // for a response that would be processed by the same blocked queue - causing deadlock.
+            // Buttons: Create and Cancel, right-aligned
             stack = stack.WithView(Controls.Stack
-                .WithStyle("margin-top: 24px;")
+                .WithOrientation(Orientation.Horizontal)
+                .WithHorizontalGap(12)
+                .WithStyle("margin-top: 24px; justify-content: flex-end;")
+                .WithView(Controls.Button("Cancel")
+                    .WithAppearance(Appearance.Neutral)
+                    .WithClickAction(async ctx =>
+                    {
+                        try { await meshCatalog.DeleteNodeAsync(nodePath); } catch { }
+                        ctx.NavigateTo(cancelUrl);
+                    }))
                 .WithView(Controls.Button("Create")
                     .WithAppearance(Appearance.Accent)
                     .WithIconStart(FluentIcons.Add())
                     .WithClickAction(ctx =>
                     {
-                        // Get current content from data stream and process asynchronously
-                        // Use JsonElement and deserialize with correct contentType to preserve typed properties
-                        ctx.Host.Stream.GetDataStream<JsonElement>(dataId)
+                        // Get metadata and content from data streams
+                        ctx.Host.Stream.GetDataStream<Dictionary<string, object?>>(metadataDataId)
                             .Take(1)
                             .Subscribe(
-                                jsonContent =>
+                                metadata =>
                                 {
-                                    try
-                                    {
-                                        // Deserialize with the correct content type to preserve typed properties
-                                        // This fixes the issue where GetDataStream<object> returns JsonElement
-                                        // instead of the typed content, causing content fields to be empty
-                                        var currentContent = jsonContent.Deserialize(contentType!, ctx.Host.Hub.JsonSerializerOptions);
+                                    var currentName = metadata.GetValueOrDefault("name")?.ToString()?.Trim() ?? node.Name;
 
-                                        // Update node with content and state=Active
-                                        var updatedNode = node with
-                                        {
-                                            Content = currentContent,
-                                            State = MeshNodeState.Active
-                                        };
-
-                                        // Post without blocking - use callback for response handling
-                                        var delivery = host.Hub.Post(
-                                            new CreateNodeRequest(updatedNode),
-                                            o => o.WithTarget(host.Hub.Address));
-
-                                        if (delivery != null)
-                                        {
-                                            // Register callback to handle response asynchronously
-                                            host.Hub.RegisterCallback(delivery, d =>
+                                    ctx.Host.Stream.GetDataStream<JsonElement>(dataId)
+                                        .Take(1)
+                                        .Subscribe(
+                                            jsonContent =>
                                             {
                                                 try
                                                 {
-                                                    if (d.Message is CreateNodeResponse response)
-                                                    {
-                                                        if (response.Success)
-                                                        {
-                                                            var overviewUrl = MeshNodeLayoutAreas.BuildContentUrl(nodePath, MeshNodeLayoutAreas.OverviewArea);
-                                                            ctx.NavigateTo(overviewUrl);
-                                                        }
-                                                        else
-                                                        {
-                                                            logger?.LogWarning("CreateNodeRequest failed for {NodePath}: {Error}", nodePath, response.Error);
-                                                            ShowErrorDialog(ctx, "Creation Failed", response.Error ?? "Unknown error");
-                                                        }
-                                                    }
+                                                    var currentContent = jsonContent.Deserialize(contentType!, ctx.Host.Hub.JsonSerializerOptions);
+                                                    HandleConfirmCreate(ctx, host, logger, node, nodePath,
+                                                        currentName, currentContent, contentType);
                                                 }
                                                 catch (Exception ex)
                                                 {
-                                                    logger?.LogError(ex, "Error processing CreateNodeResponse for {NodePath}", nodePath);
+                                                    logger?.LogError(ex, "Error preparing CreateNodeRequest for {NodePath}", nodePath);
                                                     ShowErrorDialog(ctx, "Creation Failed", ex.Message);
                                                 }
-                                                return d;
+                                            },
+                                            ex =>
+                                            {
+                                                logger?.LogError(ex, "Error getting content from data stream for {NodePath}", nodePath);
+                                                ShowErrorDialog(ctx, "Creation Failed", ex.Message);
                                             });
-                                        }
-                                    }
-                                    catch (Exception ex)
-                                    {
-                                        logger?.LogError(ex, "Error preparing CreateNodeRequest for {NodePath}", nodePath);
-                                        ShowErrorDialog(ctx, "Creation Failed", ex.Message);
-                                    }
                                 },
                                 ex =>
                                 {
-                                    logger?.LogError(ex, "Error getting content from data stream for {NodePath}", nodePath);
+                                    logger?.LogError(ex, "Error getting metadata from data stream for {NodePath}", nodePath);
                                     ShowErrorDialog(ctx, "Creation Failed", ex.Message);
                                 });
                     })));
@@ -218,65 +206,192 @@ public static class CreateLayoutArea
             // Fallback: basic properties form for nodes without ContentType
             stack = stack.WithView(BuildBasicPropertiesForm(host, node));
 
-            // Create button for basic form
-            // Note: Uses Post + RegisterCallback instead of AwaitResponse to avoid deadlock.
-            // See architecture documentation for actor model patterns.
+            // Buttons: Create and Cancel, right-aligned
             stack = stack.WithView(Controls.Stack
-                .WithStyle("margin-top: 24px;")
+                .WithOrientation(Orientation.Horizontal)
+                .WithHorizontalGap(12)
+                .WithStyle("margin-top: 24px; justify-content: flex-end;")
+                .WithView(Controls.Button("Cancel")
+                    .WithAppearance(Appearance.Neutral)
+                    .WithClickAction(async ctx =>
+                    {
+                        try { await meshCatalog.DeleteNodeAsync(nodePath); } catch { }
+                        ctx.NavigateTo(cancelUrl);
+                    }))
                 .WithView(Controls.Button("Create")
                     .WithAppearance(Appearance.Accent)
                     .WithIconStart(FluentIcons.Add())
                     .WithClickAction(ctx =>
                     {
-                        try
-                        {
-                            // Update node state to Active
-                            var updatedNode = node with { State = MeshNodeState.Active };
-
-                            // Post without blocking - use callback for response handling
-                            var delivery = host.Hub.Post(
-                                new CreateNodeRequest(updatedNode),
-                                o => o.WithTarget(host.Hub.Address));
-
-                            if (delivery != null)
-                            {
-                                // Register callback to handle response asynchronously
-                                host.Hub.RegisterCallback(delivery, d =>
+                        ctx.Host.Stream.GetDataStream<Dictionary<string, object?>>(metadataDataId)
+                            .Take(1)
+                            .Subscribe(
+                                metadata =>
                                 {
                                     try
                                     {
-                                        if (d.Message is CreateNodeResponse response)
-                                        {
-                                            if (response.Success)
-                                            {
-                                                var overviewUrl = MeshNodeLayoutAreas.BuildContentUrl(nodePath, MeshNodeLayoutAreas.OverviewArea);
-                                                ctx.NavigateTo(overviewUrl);
-                                            }
-                                            else
-                                            {
-                                                logger?.LogWarning("CreateNodeRequest failed for {NodePath}: {Error}", nodePath, response.Error);
-                                                ShowErrorDialog(ctx, "Creation Failed", response.Error ?? "Unknown error");
-                                            }
-                                        }
+                                        var currentName = metadata.GetValueOrDefault("name")?.ToString()?.Trim() ?? node.Name;
+                                        HandleConfirmCreate(ctx, host, logger, node, nodePath,
+                                            currentName, null, null);
                                     }
                                     catch (Exception ex)
                                     {
-                                        logger?.LogError(ex, "Error processing CreateNodeResponse for {NodePath}", nodePath);
+                                        logger?.LogError(ex, "Error preparing CreateNodeRequest for {NodePath}", nodePath);
                                         ShowErrorDialog(ctx, "Creation Failed", ex.Message);
                                     }
-                                    return d;
+                                },
+                                ex =>
+                                {
+                                    logger?.LogError(ex, "Error getting metadata from data stream for {NodePath}", nodePath);
+                                    ShowErrorDialog(ctx, "Creation Failed", ex.Message);
                                 });
-                            }
-                        }
-                        catch (Exception ex)
-                        {
-                            logger?.LogError(ex, "Error preparing CreateNodeRequest for {NodePath}", nodePath);
-                            ShowErrorDialog(ctx, "Creation Failed", ex.Message);
-                        }
                     })));
         }
 
         return stack;
+    }
+
+    /// <summary>
+    /// Handles Create when Id is unchanged - confirms transient node at same path.
+    /// </summary>
+    private static void HandleConfirmCreate(
+        UiActionContext ctx,
+        LayoutAreaHost host,
+        ILogger? logger,
+        MeshNode node,
+        string nodePath,
+        string? currentName,
+        object? currentContent,
+        Type? contentType)
+    {
+        // Update node with content and state=Active
+        var updatedNode = node with
+        {
+            Name = currentName ?? node.Name,
+            Content = currentContent ?? node.Content,
+            State = MeshNodeState.Active
+        };
+
+        logger?.LogInformation("Confirming transient node at {NodePath} with content type {ContentType}",
+            nodePath, contentType?.Name ?? "none");
+
+        var delivery = host.Hub.Post(
+            new CreateNodeRequest(updatedNode),
+            o => o.WithTarget(host.Hub.Address));
+
+        if (delivery != null)
+        {
+            host.Hub.RegisterCallback(delivery, d =>
+            {
+                try
+                {
+                    if (d.Message is CreateNodeResponse response)
+                    {
+                        if (response.Success)
+                        {
+                            logger?.LogInformation("Successfully confirmed node at {NodePath}", nodePath);
+                            var overviewUrl = MeshNodeLayoutAreas.BuildContentUrl(nodePath, MeshNodeLayoutAreas.OverviewArea);
+                            ctx.NavigateTo(overviewUrl, replace: true);
+                        }
+                        else
+                        {
+                            logger?.LogWarning("CreateNodeRequest failed for {NodePath}: {Error}", nodePath, response.Error);
+                            ShowErrorDialog(ctx, "Creation Failed", response.Error ?? "Unknown error");
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    logger?.LogError(ex, "Error processing CreateNodeResponse for {NodePath}", nodePath);
+                    ShowErrorDialog(ctx, "Creation Failed", ex.Message);
+                }
+                return d;
+            });
+        }
+    }
+
+    /// <summary>
+    /// Handles Create when Id is changed - creates new node at new path and deletes transient.
+    /// </summary>
+    private static void HandleIdChangeCreate(
+        UiActionContext ctx,
+        LayoutAreaHost host,
+        IMeshCatalog meshCatalog,
+        ILogger? logger,
+        MeshNode transientNode,
+        string? currentName,
+        string newId,
+        object? currentContent,
+        Type? contentType)
+    {
+        // Build new path with the changed Id
+        var newPath = $"{transientNode.Namespace}/{newId}";
+        var transientPath = transientNode.Path;
+
+        // Create the new node at the new path
+        var newNode = MeshNode.FromPath(newPath) with
+        {
+            Name = currentName ?? transientNode.Name,
+            NodeType = transientNode.NodeType,
+            Description = transientNode.Description,
+            Icon = transientNode.Icon,
+            Category = transientNode.Category,
+            Content = currentContent ?? transientNode.Content,
+            State = MeshNodeState.Active
+        };
+
+        logger?.LogInformation("Creating new node at {NewPath} (Id changed from transient {TransientPath})",
+            newPath, transientPath);
+
+        var delivery = host.Hub.Post(
+            new CreateNodeRequest(newNode),
+            o => o.WithTarget(new Address(newNode.Namespace ?? "")));
+
+        if (delivery != null)
+        {
+            host.Hub.RegisterCallback(delivery, d =>
+            {
+                try
+                {
+                    if (d.Message is CreateNodeResponse response)
+                    {
+                        if (response.Success)
+                        {
+                            logger?.LogInformation("Successfully created node at {NewPath}", newPath);
+
+                            // Delete the transient node asynchronously
+                            _ = Task.Run(async () =>
+                            {
+                                try
+                                {
+                                    await meshCatalog.DeleteNodeAsync(transientPath);
+                                    logger?.LogInformation("Deleted transient node at {TransientPath}", transientPath);
+                                }
+                                catch (Exception ex)
+                                {
+                                    logger?.LogWarning(ex, "Failed to delete transient node at {TransientPath}", transientPath);
+                                }
+                            });
+
+                            // Navigate to the new node
+                            var overviewUrl = MeshNodeLayoutAreas.BuildContentUrl(newPath, MeshNodeLayoutAreas.OverviewArea);
+                            ctx.NavigateTo(overviewUrl, replace: true);
+                        }
+                        else
+                        {
+                            logger?.LogWarning("CreateNodeRequest failed for {NewPath}: {Error}", newPath, response.Error);
+                            ShowErrorDialog(ctx, "Creation Failed", response.Error ?? "Unknown error");
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    logger?.LogError(ex, "Error processing CreateNodeResponse for {NewPath}", newPath);
+                    ShowErrorDialog(ctx, "Creation Failed", ex.Message);
+                }
+                return d;
+            });
+        }
     }
 
     private static void ShowErrorDialog(UiActionContext ctx, string title, string message)
@@ -338,7 +453,7 @@ public static class CreateLayoutArea
     /// Builds the type selection grid showing all creatable types as cards.
     /// </summary>
     private static async Task<UiControl> BuildTypeSelectionAsync(
-        LayoutAreaHost host,
+        LayoutAreaHost _,
         INodeTypeService nodeTypeService,
         string parentPath,
         CancellationToken ct)
@@ -368,7 +483,7 @@ public static class CreateLayoutArea
         }
 
         // Grid of type cards
-        var grid = Controls.LayoutGrid.WithSkin(s => s.WithSpacing(3));
+        var grid = Controls.LayoutGrid.WithStyle(s => s.WithWidth("100%")).WithSkin(s => s.WithSpacing(3));
 
         foreach (var typeInfo in creatableTypes)
         {
@@ -413,6 +528,7 @@ public static class CreateLayoutArea
         string parentPath,
         string nodeTypePath)
     {
+        var logger = host.Hub.ServiceProvider.GetService<ILogger<LayoutAreaHost>>();
         var typeName = GetLastPathSegment(nodeTypePath);
 
         // Compute the namespace: parentPath + last segment of nodeType
@@ -465,12 +581,15 @@ public static class CreateLayoutArea
         // Description field (optional)
         stack = stack.WithView(BuildDescriptionField(host, dataId));
 
-        // Button row
+        // Button row - right-aligned
         var buttonRow = Controls.Stack
             .WithOrientation(Orientation.Horizontal)
             .WithHorizontalGap(12)
-            .WithStyle("margin-top: 24px;");
-
+            .WithStyle("margin-top: 24px; justify-content: flex-end;");
+        // Cancel button first (leftmost in right-aligned row)
+        buttonRow = buttonRow.WithView(Controls.Button("Cancel")
+            .WithAppearance(Appearance.Neutral)
+            .WithNavigateToHref(MeshNodeLayoutAreas.BuildContentUrl(parentPath, MeshNodeLayoutAreas.OverviewArea)));
         // Next button - creates transient node and redirects to node's Create area
         buttonRow = buttonRow.WithView(Controls.Button("Next")
             .WithAppearance(Appearance.Accent)
@@ -533,7 +652,9 @@ public static class CreateLayoutArea
                     }
 
                     // Create the transient node via the catalog
+                    logger?.LogInformation("Creating transient node at {NodePath} with type {NodeType}", nodePath, nodeTypePath);
                     await meshCatalog.CreateTransientNodeAsync(newNode, ct: CancellationToken.None);
+                    logger?.LogInformation("Successfully created transient node at {NodePath}", nodePath);
 
                     // Navigate to the node's Create area for ContentType editing
                     var createUrl2 = MeshNodeLayoutAreas.BuildContentUrl(nodePath, MeshNodeLayoutAreas.CreateNodeArea);
@@ -549,11 +670,6 @@ public static class CreateLayoutArea
                 }
             }));
 
-        // Cancel button
-        buttonRow = buttonRow.WithView(Controls.Button("Cancel")
-            .WithAppearance(Appearance.Neutral)
-            .WithNavigateToHref(MeshNodeLayoutAreas.BuildContentUrl(parentPath, MeshNodeLayoutAreas.OverviewArea)));
-
         stack = stack.WithView(buttonRow);
         return stack;
     }
@@ -561,7 +677,7 @@ public static class CreateLayoutArea
     /// <summary>
     /// Builds the Name field (required).
     /// </summary>
-    private static UiControl BuildNameField(LayoutAreaHost host, string dataId)
+    private static UiControl BuildNameField(LayoutAreaHost _, string dataId)
     {
         return Controls.Stack
             .WithWidth("100%")
@@ -579,7 +695,7 @@ public static class CreateLayoutArea
     /// <summary>
     /// Builds the Description field as a markdown editor.
     /// </summary>
-    private static UiControl BuildDescriptionField(LayoutAreaHost host, string dataId)
+    private static UiControl BuildDescriptionField(LayoutAreaHost _, string dataId)
     {
         return Controls.Stack
             .WithWidth("100%")

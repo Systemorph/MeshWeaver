@@ -9,7 +9,6 @@
   "isPersistent": true,
   "content": {
     "$type": "Todo",
-    "id": "CalculateRiskScore",
     "title": "Calculate risk score",
     "description": "Calculate comprehensive risk score using underwriting model. Factor in: industry hazard class, loss history, safety programs, financial strength, and geographic exposure.",
     "category": "Research",

@@ -11,13 +11,6 @@ using MeshWeaver.Domain;
 public record Todo : IContentInitializable
 {
     /// <summary>
-    /// Unique identifier for the task.
-    /// </summary>
-    [Key]
-    [Browsable(false)]
-    public string Id { get; init; } = string.Empty;
-
-    /// <summary>
     /// Short title describing the task.
     /// </summary>
     [Required]

@@ -1,13 +1,8 @@
-﻿using System.Collections;
-using System.ComponentModel;
-using System.ComponentModel.DataAnnotations;
+﻿using System.ComponentModel;
 using System.Reactive.Linq;
-using System.Reflection;
-using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Schema;
-using Json.More;
 using MeshWeaver.Application.Styles;
 using MeshWeaver.ContentCollections;
 using MeshWeaver.Data;
@@ -15,7 +10,6 @@ using MeshWeaver.Domain;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
-using MeshWeaver.Layout.DataBinding;
 using MeshWeaver.Layout.DataGrid;
 using MeshWeaver.Layout.Domain;
 using MeshWeaver.Markdown;
@@ -23,11 +17,9 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
-using MeshWeaver.Reflection;
 using MeshWeaver.ShortGuid;
 using MeshWeaver.Utils;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Logging;
 using Namotion.Reflection;
 
 namespace MeshWeaver.Graph;
@@ -110,17 +102,13 @@ public static class MeshNodeLayoutAreas
 
         // Get the node from the workspace stream
         var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? Array.Empty<MeshNode>())
-            ?? Observable.Return<MeshNode[]>(Array.Empty<MeshNode>());
+            ?? Observable.Return(Array.Empty<MeshNode>());
 
-        // Get the NodeTypeDefinition from the workspace stream (for ShowChildrenInDetails)
-        var nodeTypeDefStream = host.Workspace.GetStream<NodeTypeDefinition>()?.Select(defs => defs?.FirstOrDefault())
-            ?? Observable.Return<NodeTypeDefinition?>(null);
-
-        // Combine streams to get both node and type definition
-        return nodeStream.CombineLatest(nodeTypeDefStream, (nodes, typeDef) =>
+        // Map nodes to control - children shown by default (typeDef controls via NodeTypeView.Overview)
+        return nodeStream.Select(nodes =>
         {
             var node = nodes.FirstOrDefault(n => n.Path == hubPath);
-            return BuildDetailsContent(host, node, typeDef);
+            return host.BuildDetailsContent(node, null);
         });
     }
 
@@ -161,7 +149,7 @@ public static class MeshNodeLayoutAreas
     /// <summary>
     /// Builds the header with icon and click-to-edit title.
     /// </summary>
-    private static UiControl BuildHeader(LayoutAreaHost host, MeshNode? node)
+    internal static UiControl BuildHeader(LayoutAreaHost host, MeshNode? node)
     {
         var nodePath = node?.Namespace ?? host.Hub.Address.ToString();
         var title = node?.Name ?? host.Hub.Address.ToString();

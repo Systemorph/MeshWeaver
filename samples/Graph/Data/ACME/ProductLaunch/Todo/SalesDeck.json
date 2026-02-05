@@ -9,7 +9,6 @@
   "isPersistent": true,
   "content": {
     "$type": "Todo",
-    "id": "SalesDeck",
     "title": "Build sales presentation deck",
     "description": "Design a 15-slide sales deck covering problem statement, solution overview, key features, customer success stories, pricing, and next steps.",
     "category": "Sales",

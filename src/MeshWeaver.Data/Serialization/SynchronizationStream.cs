@@ -302,7 +302,7 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
 
         if (Hub.Disposal is not null)
         {
-            logger.LogWarning("[SYNC_STREAM] UpdateStream skipped for {StreamId} - hub is disposing", StreamId);
+            logger.LogDebug("[SYNC_STREAM] UpdateStream skipped for {StreamId} - hub is disposing", StreamId);
             return;
         }
 

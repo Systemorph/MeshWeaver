@@ -1,6 +1,5 @@
 using Azure;
 using Azure.AI.OpenAI;
-using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Options;

@@ -7,7 +7,6 @@
   "isPersistent": true,
   "content": {
     "$type": "Organization",
-    "id": "MeshWeaver",
     "name": "MeshWeaver",
     "description": "Open source platform for building modular, reactive applications with a graph-based data model",
     "website": "https://github.com/systemorph/MeshWeaver",

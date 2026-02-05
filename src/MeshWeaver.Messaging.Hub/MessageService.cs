@@ -425,7 +425,7 @@ public class MessageService : IMessageService
                 return null;
             var ret = PostImpl(message, opt);
             if (ShouldLogMessage(message))
-                logger.LogDebug("Posting message {Delivery} (ID: {MessageId}) in {Address}",
+                logger.LogInformation("Posting message {Delivery} (ID: {MessageId}) in {Address}",
                     JsonSerializer.Serialize(ret, LoggingSerializerOptions), ret.Id, Address);
             return ret;
         }

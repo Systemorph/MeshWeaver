@@ -9,7 +9,6 @@
   "isPersistent": true,
   "content": {
     "$type": "Todo",
-    "id": "SalesTraining",
     "title": "Train sales team",
     "description": "Run 3-hour training workshop covering product features, demo flow, objection handling, and competitive positioning. Provide battle cards and cheat sheets.",
     "category": "Sales",

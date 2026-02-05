@@ -24,8 +24,9 @@ public static class UiActionContextExtensions
     /// <param name="context">The UI action context.</param>
     /// <param name="uri">The URI to navigate to.</param>
     /// <param name="forceLoad">Whether to force a full page reload.</param>
-    public static void NavigateTo(this UiActionContext context, string uri, bool forceLoad = false)
+    /// <param name="replace">Whether to replace the current history entry instead of adding a new one.</param>
+    public static void NavigateTo(this UiActionContext context, string uri, bool forceLoad = false, bool replace = false)
     {
-        context.Host.NavigateTo(uri, forceLoad);
+        context.Host.NavigateTo(uri, forceLoad, replace);
     }
 }

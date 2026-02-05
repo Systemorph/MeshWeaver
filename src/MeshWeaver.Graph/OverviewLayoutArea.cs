@@ -1,17 +1,12 @@
-﻿using System.ComponentModel.DataAnnotations;
-using System.Reactive.Linq;
-using System.Reflection;
+﻿using System.Reactive.Linq;
 using System.Text.Json;
 using MeshWeaver.Data;
-using MeshWeaver.Domain;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Layout.Domain;
 using MeshWeaver.Layout.DataBinding;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
-using MeshWeaver.Reflection;
-using MeshWeaver.Utils;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.Graph;
@@ -20,12 +15,13 @@ namespace MeshWeaver.Graph;
 /// Builds an overview layout for MeshNode content with read-only display and click-to-edit.
 /// Shows read-only views by default, click switches to edit mode, blur auto-switches back.
 /// Markdown properties are handled separately with full width and Done button.
-/// Uses workspace stream pattern (like DomainDetails) for automatic bidirectional data binding.
+/// Content is accessed via MeshNode.Content with auto-save to persist changes.
 /// </summary>
 public static class OverviewLayoutArea
 {
     /// <summary>
     /// Builds the property overview for a MeshNode, showing read-only views with click-to-edit.
+    /// Uses the unified ContentViewOptions for consistent layout across Overview, Edit, and Create.
     /// </summary>
     public static UiControl BuildPropertyOverview(LayoutAreaHost host, MeshNode node)
     {
@@ -41,39 +37,27 @@ public static class OverviewLayoutArea
 
         var contentType = instance.GetType();
 
-        // 2. Check access permissions
+        // Check access permissions
         var canEdit = CheckEditAccess(host, node);
 
-        // 3. Set up workspace stream for bidirectional data binding (DomainDetails pattern)
+        // Set up local data for editing
         var dataId = EditLayoutArea.GetDataId(nodePath);
-        var typeDefinition = host.Workspace.DataContext.TypeRegistry.GetTypeDefinition(contentType);
-        if (typeDefinition is null)
-            throw new InvalidOperationException($"Type definition not found for content type {contentType.FullName}");
+        host.UpdateData(dataId, instance);
 
-        var entityId = node.Id;
-        var stream = host.Workspace.GetStream(new EntityReference(typeDefinition.CollectionName, entityId));
-        if (stream != null)
-        {
-            // Subscribe to workspace stream - this handles bidirectional sync automatically
-            host.RegisterForDisposal(stream
-                .Where(e => e?.Value != null)
-                .Subscribe(e => host.UpdateData(dataId, e!.Value!))
-            );
-        }
-        else
-        {
-            // Fallback: store JsonElement directly
-            host.UpdateData(dataId, instance);
-        }
-
-        // 4. Setup auto-save to persist changes via DataChangeRequest
+        // Setup auto-save to persist changes via DataChangeRequest
         if (canEdit)
         {
             SetupAutoSave(host, dataId, instance, node);
         }
 
-        // 5. Build property form with readonly/edit toggle
-        return EditLayoutArea.Overview(host, contentType, dataId, canEdit);
+        // Build using unified content view - Overview mode: toggleable=true, no footer actions
+        return EditLayoutArea.BuildContentView(host, new ContentViewOptions
+        {
+            DataId = dataId,
+            ContentType = contentType,
+            CanEdit = canEdit,
+            IsToggleable = true  // Overview: click-to-edit, blur back to read-only
+        });
     }
 
     /// <summary>
@@ -139,33 +123,6 @@ public static class OverviewLayoutArea
         });
 
         return titleField;
-    }
-
-    private static object? GetEntityId(JsonElement jsonContent, Type contentType, ITypeRegistry typeRegistry)
-    {
-        var keyProperty = contentType.GetProperties()
-            .FirstOrDefault(p => p.HasAttribute<KeyAttribute>());
-
-        if (keyProperty == null)
-        {
-            keyProperty = contentType.GetProperty("Id") ?? contentType.GetProperty("ID");
-        }
-
-        if (keyProperty == null)
-            return null;
-
-        var propName = keyProperty.Name.ToCamelCase();
-        if (propName != null && jsonContent.TryGetProperty(propName, out var idElement))
-        {
-            return idElement.ValueKind switch
-            {
-                JsonValueKind.String => idElement.GetString(),
-                JsonValueKind.Number => idElement.TryGetInt64(out var longVal) ? longVal : idElement.GetDouble(),
-                _ => null
-            };
-        }
-
-        return null;
     }
 
     /// <summary>
