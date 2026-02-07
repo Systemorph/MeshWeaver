@@ -504,7 +504,7 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
 
         Output.WriteLine($"Step 1: Calling Catalog.CreateTransientNodeAsync for {nodePath}");
 
-        var createdNode = await Catalog.CreateTransientNodeAsync(node, "test-user", ct);
+        var createdNode = await ((MeshCatalog)Catalog).CreateTransientNodeAsync(node, "test-user", ct);
         Output.WriteLine($"CreateTransientNodeAsync completed: Path={createdNode.Path}, State={createdNode.State}");
         createdNode.State.Should().Be(MeshNodeState.Transient, "Node should be in Transient state");
 

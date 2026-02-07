@@ -331,52 +331,47 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     /// Creates a new thread lazily on first message.
     /// Thread is created under {parentPath}/Threads/{threadId}
     /// </summary>
-    private async Task CreateThreadAsync()
+    private void CreateThreadAsync()
     {
-        try
+        var threadId = Guid.NewGuid().AsString();
+        var parentPath = initialContext;
+
+        // Construct the thread path: {parentPath}/Threads/{threadId}
+        var threadNamespace = string.IsNullOrEmpty(parentPath) ? "Threads" : $"{parentPath}/Threads";
+        threadPath = $"{threadNamespace}/{threadId}";
+
+        // Generate title from first user message
+        var title = GetThreadTitle() ?? $"Chat {DateTime.UtcNow:yyyy-MM-dd HH:mm}";
+
+        // Create thread content
+        var threadContent = MeshThread.FromChatMessages(messages, parentPath);
+
+        var newNode = new MeshNode(threadPath)
         {
-            var threadId = Guid.NewGuid().AsString();
-            var parentPath = initialContext;
+            Name = title,
+            NodeType = ThreadNodeType.NodeType,
+            Content = threadContent
+        };
 
-            // Construct the thread path: {parentPath}/Threads/{threadId}
-            var threadNamespace = string.IsNullOrEmpty(parentPath) ? "Threads" : $"{parentPath}/Threads";
-            threadPath = $"{threadNamespace}/{threadId}";
+        var meshCatalog = Hub.ServiceProvider.GetRequiredService<IMeshCatalog>();
 
-            // Generate title from first user message
-            var title = GetThreadTitle() ?? $"Chat {DateTime.UtcNow:yyyy-MM-dd HH:mm}";
-
-            // Create thread content
-            var threadContent = MeshThread.FromChatMessages(messages, parentPath);
-
-            var newNode = new MeshNode(threadPath)
+        meshCatalog.CreateNodeAsync(newNode, GetCurrentUserId())
+            .ContinueWith(task =>
             {
-                Name = title,
-                NodeType = ThreadNodeType.NodeType,
-                Content = threadContent
-            };
-
-            var request = new CreateNodeRequest(newNode) { CreatedBy = GetCurrentUserId() };
-            var response = await Hub.AwaitResponse(request, o => o.WithTarget(Hub.Address));
-
-            if (response.Message.Success && response.Message.Node != null)
-            {
-                threadPath = response.Message.Node.Path;
-                chat?.SetThreadId(threadPath);
-
-                // Sync with ChatWindowStateService
-                ChatWindowState.SetCurrentThread(threadPath);
-
-                Logger.LogDebug("[ThreadChat:{InstanceId}] Created thread: {Path}", _instanceId, threadPath);
-            }
-            else
-            {
-                Logger.LogWarning("[ThreadChat:{InstanceId}] Failed to create thread: {Error}", _instanceId, response.Message.Error);
-            }
-        }
-        catch (Exception ex)
-        {
-            Logger.LogError(ex, "[ThreadChat:{InstanceId}] Error creating thread", _instanceId);
-        }
+                if (task.IsCompletedSuccessfully)
+                {
+                    threadPath = task.Result.Path;
+                    chat?.SetThreadId(threadPath);
+                    ChatWindowState.SetCurrentThread(threadPath);
+                    Logger.LogDebug("[ThreadChat:{InstanceId}] Created thread: {Path}", _instanceId, threadPath);
+                    _ = InvokeAsync(StateHasChanged);
+                }
+                else if (task.IsFaulted)
+                {
+                    Logger.LogWarning(task.Exception, "[ThreadChat:{InstanceId}] Failed to create thread", _instanceId);
+                    _ = InvokeAsync(StateHasChanged);
+                }
+            });
     }
 
     private string GetCurrentUserId()
@@ -483,7 +478,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         // Create thread lazily on first message if no threadPath
         if (string.IsNullOrEmpty(threadPath))
         {
-            await CreateThreadAsync();
+            CreateThreadAsync();
         }
 
         currentResponseCancellation = new CancellationTokenSource();
