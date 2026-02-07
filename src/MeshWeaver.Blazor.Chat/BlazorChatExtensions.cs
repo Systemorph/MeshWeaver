@@ -11,15 +11,14 @@ namespace MeshWeaver.Blazor.Chat;
 public static class BlazorChatExtensions
 {
     /// <summary>
-    /// Adds the Chat Blazor views (AgentChatView, ThreadChatView) to the configuration.
+    /// Adds the Chat Blazor views (ThreadChatView) to the configuration.
     /// </summary>
     public static MessageHubConfiguration AddChatViews(this MessageHubConfiguration configuration)
     {
         return configuration
-            .WithTypes(typeof(AgentChatControl), typeof(ThreadChatControl))
+            .WithTypes(typeof(ThreadChatControl))
             .AddChatTypes()
             .AddViews(registry => registry
-                .WithView<AgentChatControl, AgentChatView>()
                 .WithView<ThreadChatControl, ThreadChatView>());
     }
 

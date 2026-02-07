@@ -54,7 +54,7 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
     protected IReadOnlyList<CreatableTypeInfo> CreatableTypes => NavigationService.CreatableTypes;
     protected bool IsLoadingCreatableTypes => NavigationService.IsLoadingCreatableTypes;
 
-    private readonly AgentChatControl chatControl = new();
+    private ChatSidePanel? chatPanel;
     private IJSObjectReference? jsModule;
     private DotNetObjectReference<PortalLayoutBase>? dotNetRef;
 
@@ -188,7 +188,6 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
     }
 
     public bool IsAIChatVisible => ChatState.IsVisible;
-    private AgentChatView? chatComponent;
     protected ChatPosition ChatPositionValue => ChatState.Position;
 
     public async Task ToggleAIChatVisibility()
@@ -235,14 +234,6 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
             "import", "./_content/MeshWeaver.Blazor.Portal/Layout/PortalLayoutBase.razor.js");
     }
 
-
-    protected async Task HandleNewChatAsync()
-    {
-        if (chatComponent != null)
-        {
-            await chatComponent.ResetConversationAsync();
-        }
-    }
 
     protected void HandleChatPositionChanged(ChatPosition newPosition)
     {

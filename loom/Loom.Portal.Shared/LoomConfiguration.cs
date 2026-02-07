@@ -2,9 +2,7 @@
 using MeshWeaver.AI;
 using MeshWeaver.AI.AzureFoundry;
 using MeshWeaver.AI.AzureOpenAI;
-#if CLAUDE_CODE_ENABLED
 using MeshWeaver.AI.ClaudeCode;
-#endif
 using MeshWeaver.AI.Copilot;
 using MeshWeaver.AI.Layout;
 using MeshWeaver.AI.Persistence;
@@ -100,13 +98,11 @@ public static class LoomConfiguration
             config.DisplayOrder = 30;  // GitHub Copilot
         });
 
-#if CLAUDE_CODE_ENABLED
         services.AddClaudeCode(config =>
         {
             builder.Configuration.GetSection("ClaudeCode").Bind(config);
             config.DisplayOrder = 5;  // Claude Code (high priority)
         });
-#endif
 
         // Register the AI chat services (must be after all factory registrations)
         services.AddAgentChatServices();
@@ -288,7 +284,7 @@ public static class LoomConfiguration
                 .AddRadzenCharts()
                 .AddGoogleMaps()
                 .AddGraphViews()  // Also enables @ autocomplete in markdown editors
-                .AddChatViews()   // Register ThreadChatView and AgentChatView
+                .AddChatViews()   // Register ThreadChatView
             )
             .AddBlazor(layoutClient => layoutClient
                 .WithPortalConfiguration(c => c)

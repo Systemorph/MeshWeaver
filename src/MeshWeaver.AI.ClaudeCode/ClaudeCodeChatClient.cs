@@ -1,6 +1,6 @@
 using System.Runtime.CompilerServices;
 using System.Text;
-using Claude.AgentSdk;
+using ClaudeAgentSdk;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 
@@ -79,39 +79,27 @@ public class ClaudeCodeChatClient : IChatClient
         var userPrompt = BuildPromptFromMessages(messageList);
 
         // Build options
-        var optionsBuilder = Claude.AgentSdk.Claude.Options();
+        var claudeOptions = new ClaudeAgentOptions();
 
         if (!string.IsNullOrEmpty(modelName))
         {
-            optionsBuilder.Model(modelName);
+            claudeOptions.Model = modelName;
         }
 
         if (!string.IsNullOrEmpty(configuration.SystemPrompt))
         {
-            optionsBuilder.SystemPrompt(configuration.SystemPrompt);
+            claudeOptions.SystemPrompt = configuration.SystemPrompt;
         }
 
         if (configuration.MaxTurns.HasValue)
         {
-            optionsBuilder.MaxTurns(configuration.MaxTurns.Value);
-        }
-
-        if (configuration.MaxBudgetUsd.HasValue)
-        {
-            optionsBuilder.MaxBudget(configuration.MaxBudgetUsd.Value);
-        }
-
-        if (!string.IsNullOrEmpty(configuration.CliPath))
-        {
-            optionsBuilder.CliPath(configuration.CliPath);
+            claudeOptions.MaxTurns = configuration.MaxTurns.Value;
         }
 
         if (!string.IsNullOrEmpty(configuration.WorkingDirectory))
         {
-            optionsBuilder.Cwd(configuration.WorkingDirectory);
+            claudeOptions.Cwd = configuration.WorkingDirectory;
         }
-
-        var claudeOptions = optionsBuilder.Build();
 
         logger?.LogInformation("Starting Claude Code query with model {Model}", modelName);
 
@@ -120,7 +108,7 @@ public class ClaudeCodeChatClient : IChatClient
         using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutCts.Token);
 
         // Use the static QueryAsync method for streaming
-        await foreach (var message in Claude.AgentSdk.Claude.QueryAsync(userPrompt, claudeOptions, cancellationToken: linkedCts.Token))
+        await foreach (var message in ClaudeAgent.QueryAsync(userPrompt, claudeOptions).WithCancellation(linkedCts.Token))
         {
             // Process different message types
             switch (message)
@@ -142,18 +130,12 @@ public class ClaudeCodeChatClient : IChatClient
                                 var toolId = toolUseBlock.Id ?? Guid.NewGuid().ToString();
                                 IDictionary<string, object?>? arguments = null;
 
-                                if (toolUseBlock.Input.ValueKind != System.Text.Json.JsonValueKind.Undefined &&
-                                    toolUseBlock.Input.ValueKind != System.Text.Json.JsonValueKind.Null)
+                                if (toolUseBlock.Input != null && toolUseBlock.Input.Count > 0)
                                 {
-                                    try
-                                    {
-                                        var inputJson = System.Text.Json.JsonSerializer.Serialize(toolUseBlock.Input);
-                                        arguments = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, object?>>(inputJson);
-                                    }
-                                    catch
-                                    {
-                                        // Ignore deserialization errors
-                                    }
+                                    // Input is already a Dictionary<string, object>, convert to nullable version
+                                    arguments = toolUseBlock.Input.ToDictionary(
+                                        kvp => kvp.Key,
+                                        kvp => (object?)kvp.Value);
                                 }
 
                                 var functionCall = new FunctionCallContent(toolId, toolUseBlock.Name ?? "unknown", arguments);
@@ -178,7 +160,7 @@ public class ClaudeCodeChatClient : IChatClient
                     logger?.LogInformation(
                         "Claude query completed. Duration: {Duration}ms, Cost: ${Cost:F4}",
                         resultMessage.DurationMs,
-                        resultMessage.TotalCostUsd ?? 0m);
+                        resultMessage.TotalCostUsd ?? 0.0);
                     break;
             }
         }

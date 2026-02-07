@@ -218,7 +218,7 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
     public async Task CreateThread_InThreadsSubNamespace_FollowsPattern()
     {
         // Arrange - Verifies the Threads sub-namespace pattern: {parentPath}/Threads/{threadId}
-        // This is the pattern used by CreateNodeDialog and AgentChatView
+        // This is the pattern used by CreateNodeDialog and ThreadChatView
         var userId = "TestUser";
         var parentPath = "TestProject";
         var threadId = Guid.NewGuid().ToString("N");
@@ -266,7 +266,7 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
     public async Task CreateThread_AsChildOfParent_Succeeds()
     {
         // Arrange - Test creating thread as child of a parent node
-        // This tests the pattern used by AgentChatView where threads are
+        // This tests the pattern used by ThreadChatView where threads are
         // created under the current navigation context with Threads sub-namespace
         var userId = "TestUser";
         var parentPath = $"TestParent_{Guid.NewGuid()}";

@@ -16,7 +16,6 @@
     <ProjectReference Include="..\MeshWeaver.AI\MeshWeaver.AI.csproj" />
     <ProjectReference Include="..\MeshWeaver.Mesh.Contract\MeshWeaver.Mesh.Contract.csproj" />
     <ProjectReference Include="..\MeshWeaver.Messaging.Hub\MeshWeaver.Messaging.Hub.csproj" />
-    <!-- Local reference to Claude Agent SDK (clone from https://github.com/0xeb/claude-agent-sdk-dotnet) -->
-    <ProjectReference Include="..\..\..\claude-agent-sdk-dotnet\src\Claude.AgentSdk\Claude.AgentSdk.csproj" />
+    <PackageReference Include="ClaudeAgentSdk" />
   </ItemGroup>
 </Project>

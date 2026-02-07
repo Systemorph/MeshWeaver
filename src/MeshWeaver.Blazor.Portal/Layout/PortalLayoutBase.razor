@@ -119,7 +119,7 @@
         <FluentMultiSplitterPane Size="@ChatPaneSizeWithVisibility" Min="@(IsAIChatVisible ? "250px" : "0")" Max="60%" Resizable="@IsAIChatVisible" Collapsible="true" Collapsed="@(!IsAIChatVisible)">
             @* Chat panel - persists across navigation, independent from @Body *@
             <div class="ai-chat-content" style="@(IsAIChatVisible ? "" : "display: none;")">
-                <AgentChatView @key="@("chat-singleton")" @ref="chatComponent" ViewModel="@chatControl" OnCloseRequested="ToggleAIChatVisibility" OnPositionChanged="HandleChatPositionChanged" />
+                <ChatSidePanel @key="@("chat-singleton")" @ref="chatPanel" OnCloseRequested="ToggleAIChatVisibility" OnPositionChanged="HandleChatPositionChanged" />
             </div>
         </FluentMultiSplitterPane>
     </FluentMultiSplitter>
