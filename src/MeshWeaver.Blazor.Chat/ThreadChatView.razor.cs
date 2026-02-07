@@ -9,6 +9,7 @@ using MeshWeaver.Data.Completion;
 using MeshWeaver.Layout;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.ShortGuid;
 using Microsoft.AspNetCore.Components;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
@@ -20,6 +21,9 @@ namespace MeshWeaver.Blazor.Chat;
 
 public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatView>
 {
+    [Inject] private INavigationService NavigationService { get; set; } = null!;
+    [Inject] private ChatWindowStateService ChatWindowState { get; set; } = null!;
+
     private bool _isDisposed;
     private readonly string _instanceId = Guid.NewGuid().ToString("N")[..8];
 
@@ -27,6 +31,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     private string? threadPath;
     private string? initialContext;
     private string? initialContextDisplayName;
+    private string? lastContextUrl; // Track URL for context change detection
     private bool isLoadingThread;
     private bool isGeneratingResponse;
 
@@ -54,6 +59,18 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     protected override async Task OnInitializedAsync()
     {
         Logger.LogDebug("[ThreadChat:{InstanceId}] OnInitializedAsync started", _instanceId);
+
+        // Capture initial URL context
+        lastContextUrl = NavigationManager.Uri;
+        if (string.IsNullOrEmpty(initialContext))
+        {
+            var path = NavigationManager.ToBaseRelativePath(NavigationManager.Uri);
+            if (!string.IsNullOrEmpty(path) && path != "chat")
+            {
+                initialContext = path;
+                initialContextDisplayName = await ResolveContextDisplayNameAsync(path);
+            }
+        }
 
         try
         {
@@ -83,6 +100,31 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         }
 
         Logger.LogDebug("[ThreadChat:{InstanceId}] OnInitializedAsync completed", _instanceId);
+    }
+
+    private async Task<string?> ResolveContextDisplayNameAsync(string? path)
+    {
+        if (string.IsNullOrEmpty(path))
+            return null;
+
+        try
+        {
+            var meshCatalog = Hub.ServiceProvider.GetService<IMeshCatalog>();
+            if (meshCatalog == null)
+                return null;
+
+            var resolution = await meshCatalog.ResolvePathAsync(path);
+            if (resolution == null)
+                return null;
+
+            var node = await meshCatalog.GetNodeAsync((Address)resolution.Prefix);
+            return node?.Name ?? node?.Id;
+        }
+        catch (Exception ex)
+        {
+            Logger.LogDebug(ex, "Error resolving context display name for path: {Path}", path);
+            return null;
+        }
     }
 
     protected override void BindData()
@@ -213,12 +255,14 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
 
         try
         {
-            // Create thread content from messages
-            var threadContent = MeshThread.FromChatMessages(messages);
-
-            // Load existing node to preserve metadata
+            // Load existing node to preserve metadata and ParentPath
             var meshCatalog = Hub.ServiceProvider.GetService<IMeshCatalog>();
             var existingNode = meshCatalog != null ? await meshCatalog.GetNodeAsync(new Address(threadPath)) : null;
+            var existingContent = existingNode?.Content as MeshThread;
+
+            // Create thread content from messages, preserving the ParentPath
+            var parentPath = existingContent?.ParentPath ?? initialContext;
+            var threadContent = MeshThread.FromChatMessages(messages, parentPath);
 
             var updatedNode = existingNode != null
                 ? existingNode with { Content = threadContent }
@@ -250,6 +294,95 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         }
 
         return null;
+    }
+
+    /// <summary>
+    /// Checks if the navigation context has changed since the last message and updates the context if needed.
+    /// </summary>
+    private async Task CheckAndUpdateContextAsync()
+    {
+        var currentUrl = NavigationManager.Uri;
+
+        // Check if URL has changed
+        if (lastContextUrl != currentUrl)
+        {
+            var newPath = NavigationManager.ToBaseRelativePath(currentUrl);
+
+            // Only update if we have a meaningful path (not root or chat)
+            if (!string.IsNullOrEmpty(newPath) && newPath != "chat")
+            {
+                // Only update if path is actually different from current context
+                if (newPath != initialContext)
+                {
+                    Logger.LogDebug("[ThreadChat:{InstanceId}] Context changed from {OldContext} to {NewContext}",
+                        _instanceId, initialContext, newPath);
+
+                    initialContext = newPath;
+                    initialContextDisplayName = await ResolveContextDisplayNameAsync(newPath);
+                    StateHasChanged();
+                }
+            }
+
+            lastContextUrl = currentUrl;
+        }
+    }
+
+    /// <summary>
+    /// Creates a new thread lazily on first message.
+    /// Thread is created under {parentPath}/Threads/{threadId}
+    /// </summary>
+    private async Task CreateThreadAsync()
+    {
+        try
+        {
+            var threadId = Guid.NewGuid().AsString();
+            var parentPath = initialContext;
+
+            // Construct the thread path: {parentPath}/Threads/{threadId}
+            var threadNamespace = string.IsNullOrEmpty(parentPath) ? "Threads" : $"{parentPath}/Threads";
+            threadPath = $"{threadNamespace}/{threadId}";
+
+            // Generate title from first user message
+            var title = GetThreadTitle() ?? $"Chat {DateTime.UtcNow:yyyy-MM-dd HH:mm}";
+
+            // Create thread content
+            var threadContent = MeshThread.FromChatMessages(messages, parentPath);
+
+            var newNode = new MeshNode(threadPath)
+            {
+                Name = title,
+                NodeType = ThreadNodeType.NodeType,
+                Content = threadContent
+            };
+
+            var request = new CreateNodeRequest(newNode) { CreatedBy = GetCurrentUserId() };
+            var response = await Hub.AwaitResponse(request, o => o.WithTarget(Hub.Address));
+
+            if (response.Message.Success && response.Message.Node != null)
+            {
+                threadPath = response.Message.Node.Path;
+                chat?.SetThreadId(threadPath);
+
+                // Sync with ChatWindowStateService
+                ChatWindowState.SetCurrentThread(threadPath);
+
+                Logger.LogDebug("[ThreadChat:{InstanceId}] Created thread: {Path}", _instanceId, threadPath);
+            }
+            else
+            {
+                Logger.LogWarning("[ThreadChat:{InstanceId}] Failed to create thread: {Error}", _instanceId, response.Message.Error);
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "[ThreadChat:{InstanceId}] Error creating thread", _instanceId);
+        }
+    }
+
+    private string GetCurrentUserId()
+    {
+        var accessService = Hub.ServiceProvider.GetService<AccessService>();
+        return accessService?.Context?.ObjectId ?? "anonymous";
     }
 
     private void OnMessageTextChanged(string? newText)
@@ -331,6 +464,9 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
 
         CancelAnyCurrentResponse();
 
+        // Check for context change before sending
+        await CheckAndUpdateContextAsync();
+
         var userMessageText = MessageText;
         MessageText = null;
 
@@ -343,6 +479,12 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
 
         var userMessage = new ChatMessage(ChatRole.User, userMessageText);
         messages.Add(userMessage);
+
+        // Create thread lazily on first message if no threadPath
+        if (string.IsNullOrEmpty(threadPath))
+        {
+            await CreateThreadAsync();
+        }
 
         currentResponseCancellation = new CancellationTokenSource();
         isGeneratingResponse = true;

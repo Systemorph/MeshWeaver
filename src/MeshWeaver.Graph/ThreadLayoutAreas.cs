@@ -47,15 +47,41 @@ public static class ThreadLayoutAreas
     /// <summary>
     /// Renders the Chat area with an interactive chat interface.
     /// Provides markdown editing with @ completion, reference chips, and streaming responses.
+    /// When viewing a thread directly, the context is set to the thread's ParentPath (the main object).
     /// </summary>
     public static IObservable<UiControl?> ChatView(LayoutAreaHost host, RenderingContext _)
     {
         var hubPath = host.Hub.Address.ToString();
 
-        return Observable.Return<UiControl?>(new ThreadChatControl()
-            .WithThreadPath(hubPath)
-            .WithInitialContext(hubPath)
-            .WithInitialContextDisplayName(GetThreadTitle(GetNodeFromWorkspace(host, hubPath))));
+        // Get the node stream to extract ParentPath from thread content
+        var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? Array.Empty<MeshNode>())
+            ?? Observable.Return<MeshNode[]>(Array.Empty<MeshNode>());
+
+        return nodeStream.Select(nodes =>
+        {
+            var node = nodes.FirstOrDefault(n => n.Path == hubPath);
+            var threadContent = node?.Content as MeshThread;
+
+            // Use ParentPath as context if available (the main object), otherwise fall back to hubPath
+            var contextPath = !string.IsNullOrEmpty(threadContent?.ParentPath)
+                ? threadContent.ParentPath
+                : hubPath;
+            var contextDisplayName = !string.IsNullOrEmpty(threadContent?.ParentPath)
+                ? GetContextDisplayName(threadContent.ParentPath)
+                : GetThreadTitle(node);
+
+            return (UiControl?)new ThreadChatControl()
+                .WithThreadPath(hubPath)
+                .WithInitialContext(contextPath)
+                .WithInitialContextDisplayName(contextDisplayName);
+        });
+    }
+
+    private static string GetContextDisplayName(string path)
+    {
+        // Extract the last segment of the path as display name
+        var segments = path.Split('/');
+        return segments.Length > 0 ? segments[^1] : path;
     }
 
     private static MeshNode? GetNodeFromWorkspace(LayoutAreaHost host, string path)

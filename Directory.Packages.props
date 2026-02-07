@@ -31,6 +31,7 @@
     <PackageVersion Include="Azure.Storage.Queues" Version="12.21.0" />
     <PackageVersion Include="Microsoft.Azure.Cosmos" Version="3.57.0" />
     <PackageVersion Include="BlazorMonaco" Version="3.4.0" />
+    <PackageVersion Include="ClaudeAgentSdk" Version="0.2.1" />
     <PackageVersion Include="Radzen.Blazor" Version="8.7.4" />
     <PackageVersion Include="Castle.Core" Version="5.1.1" />
     <PackageVersion Include="ClosedXML" Version="0.105.0" />

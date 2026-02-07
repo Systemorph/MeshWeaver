@@ -1,8 +1,8 @@
 @page "/chat"
-@using MeshWeaver.AI
+@using MeshWeaver.Layout
 
-<AgentChatView ViewModel="@chatControl" />
+<ThreadChatView ViewModel="@chatControl" />
 
 @code {
-    private AgentChatControl chatControl = new AgentChatControl();
+    private ThreadChatControl chatControl = new ThreadChatControl();
 }
