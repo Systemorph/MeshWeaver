@@ -92,7 +92,18 @@ public class ClaudeCodeChatClient : IChatClient
         }
 
         // Build options
-        var claudeOptions = new ClaudeAgentOptions();
+        var claudeOptions = new ClaudeAgentOptions
+        {
+            // Set UTF-8 encoding environment variables for proper character handling on Windows
+            Env = new Dictionary<string, string>
+            {
+                ["PYTHONUTF8"] = "1",                    // Python UTF-8 mode
+                ["PYTHONIOENCODING"] = "utf-8",          // Python I/O encoding
+                ["LANG"] = "en_US.UTF-8",                // Unix locale
+                ["LC_ALL"] = "en_US.UTF-8",              // Unix locale override
+                ["CHCP"] = "65001"                       // Windows code page hint
+            }
+        };
 
         if (!string.IsNullOrEmpty(modelName))
         {
@@ -114,7 +125,17 @@ public class ClaudeCodeChatClient : IChatClient
             claudeOptions.Cwd = configuration.WorkingDirectory;
         }
 
-        logger?.LogInformation("Starting Claude Code query with model {Model}", modelName);
+        logger?.LogInformation("Starting Claude Code query with model {Model}, prompt length: {PromptLength}",
+            modelName, userPrompt?.Length ?? 0);
+        logger?.LogDebug("Claude Code prompt: {Prompt}", userPrompt);
+
+        // Validate prompt is not empty
+        if (string.IsNullOrWhiteSpace(userPrompt))
+        {
+            logger?.LogWarning("Empty prompt received for Claude Code query");
+            yield return new ChatResponseUpdate(ChatRole.Assistant, "No message content received.");
+            yield break;
+        }
 
         // Set up timeout
         using var timeoutCts = new CancellationTokenSource(configuration.SessionTimeoutMs);
@@ -220,6 +241,11 @@ public class ClaudeCodeChatClient : IChatClient
 
     private static string GetTextContent(ChatMessage message)
     {
+        // First try the Text property (set by simple string constructor)
+        if (!string.IsNullOrEmpty(message.Text))
+            return message.Text;
+
+        // Fallback to Contents collection (for messages with explicit content items)
         if (message.Contents.Count == 0)
             return string.Empty;
 
