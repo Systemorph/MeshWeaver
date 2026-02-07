@@ -1,6 +1,7 @@
 ﻿using System.IdentityModel.Tokens.Jwt;
 using MeshWeaver.AI;
 using MeshWeaver.AI.AzureFoundry;
+using MeshWeaver.Blazor.AI;
 using MeshWeaver.AI.AzureOpenAI;
 using MeshWeaver.AI.ClaudeCode;
 using MeshWeaver.AI.Copilot;
@@ -321,9 +322,17 @@ public static class LoomConfiguration
 
         //app.MapMeshWeaverSignalRHubs();
 
+        // Map MCP endpoint
+        app.MapMeshMcp();
+
         app.MapMeshWeaver();
         app.UseMiddleware<UserContextMiddleware>();
-        app.UseHttpsRedirection();
+
+        // Use HTTPS redirection only for non-MCP paths (MCP needs HTTP for Claude Code)
+        app.UseWhen(
+            context => !context.Request.Path.StartsWithSegments("/mcp"),
+            appBuilder => appBuilder.UseHttpsRedirection()
+        );
         app.MapStaticAssets();
         app.MapControllers();
         app.MapRazorComponents<TApp>()
