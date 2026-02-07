@@ -300,7 +300,11 @@
                 State = MeshNodeState.Transient
             };
 
-            await meshCatalog.CreateTransientNodeAsync(transientNode);
+            var persistence = Hub.ServiceProvider.GetService<IPersistenceService>();
+            if (persistence != null)
+            {
+                await persistence.SaveNodeAsync(transientNode);
+            }
 
             // Store result data for navigation
             Content.ResultPath = nodePath;

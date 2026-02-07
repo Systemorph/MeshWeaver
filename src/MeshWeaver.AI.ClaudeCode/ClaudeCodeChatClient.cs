@@ -78,6 +78,19 @@ public class ClaudeCodeChatClient : IChatClient
         var messageList = messages.ToList();
         var userPrompt = BuildPromptFromMessages(messageList);
 
+        // If CliDirectory is specified, add it to PATH for CLI discovery
+        // This must be done BEFORE calling the SDK as FindCli() checks PATH
+        if (!string.IsNullOrEmpty(configuration.CliDirectory))
+        {
+            // Expand environment variables like %APPDATA% and normalize path separators
+            var expandedPath = Environment.ExpandEnvironmentVariables(configuration.CliDirectory);
+            // Normalize path separators for the current platform
+            expandedPath = Path.GetFullPath(expandedPath);
+            logger?.LogDebug("ClaudeCode CliDirectory: configured={Configured}, expanded={Expanded}",
+                configuration.CliDirectory, expandedPath);
+            EnsureCliInPath(expandedPath);
+        }
+
         // Build options
         var claudeOptions = new ClaudeAgentOptions();
 
@@ -215,5 +228,29 @@ public class ClaudeCodeChatClient : IChatClient
             .Select(c => c.Text);
 
         return string.Join("", textParts);
+    }
+
+    private static readonly object PathLock = new();
+    private static bool _pathModified;
+
+    /// <summary>
+    /// Ensures the CLI directory is in the process's PATH environment variable.
+    /// This is needed because the SDK's FindCli() checks PATH before we can set options.
+    /// </summary>
+    private static void EnsureCliInPath(string cliDirectory)
+    {
+        lock (PathLock)
+        {
+            if (_pathModified)
+                return;
+
+            var currentPath = Environment.GetEnvironmentVariable("PATH") ?? "";
+            if (!currentPath.Contains(cliDirectory, StringComparison.OrdinalIgnoreCase))
+            {
+                var newPath = $"{cliDirectory}{Path.PathSeparator}{currentPath}";
+                Environment.SetEnvironmentVariable("PATH", newPath);
+            }
+            _pathModified = true;
+        }
     }
 }

@@ -5,6 +5,9 @@ using MeshWeaver.Messaging;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using System.Runtime.CompilerServices;
+
+[assembly: InternalsVisibleTo("MeshWeaver.Hosting.Monolith.Test")]
 
 namespace MeshWeaver.Hosting;
 
@@ -157,15 +160,58 @@ public sealed class MeshCatalog(
         Persistence.SaveNodeAsync(node);
 
     /// <inheritdoc />
-    public async Task<MeshNode> CreateNodeAsync(MeshNode node, string? createdBy = null, CancellationToken ct = default)
+    public Task<MeshNode> CreateNodeAsync(MeshNode node, string? createdBy = null, CancellationToken ct = default)
     {
-        // Create transient node and immediately confirm it
-        var transientNode = await CreateTransientNodeAsync(node, createdBy, ct);
-        return await ConfirmNodeAsync(transientNode.Path, ct);
+        var tcs = new TaskCompletionSource<MeshNode>();
+
+        // Post CreateNodeRequest to the mesh hub where handlers are registered
+        var request = new CreateNodeRequest(node) { CreatedBy = createdBy };
+        var delivery = hub.Post(request, o => o.WithTarget(hub.Address));
+
+        if (delivery == null)
+        {
+            tcs.SetException(new InvalidOperationException("Failed to post CreateNodeRequest"));
+            return tcs.Task;
+        }
+
+        // Use typed callback for proper response handling
+        hub.RegisterCallback<CreateNodeResponse>(delivery, response =>
+        {
+            if (ct.IsCancellationRequested)
+            {
+                tcs.TrySetCanceled(ct);
+                return response;
+            }
+
+            var createResponse = response.Message;
+            if (createResponse.Success && createResponse.Node != null)
+            {
+                cache.Set(createResponse.Node.Path, createResponse.Node, cacheOptions);
+                tcs.TrySetResult(createResponse.Node);
+            }
+            else
+            {
+                Exception exception = createResponse.RejectionReason switch
+                {
+                    NodeCreationRejectionReason.ValidationFailed =>
+                        new UnauthorizedAccessException(createResponse.Error ?? "Access denied"),
+                    NodeCreationRejectionReason.NodeAlreadyExists =>
+                        new InvalidOperationException($"Node already exists: {node.Path}"),
+                    _ => new InvalidOperationException(createResponse.Error ?? "Node creation failed")
+                };
+                tcs.TrySetException(exception);
+            }
+            return response;
+        });
+
+        return tcs.Task;
     }
 
-    /// <inheritdoc />
-    public async Task<MeshNode> CreateTransientNodeAsync(MeshNode node, string? createdBy = null, CancellationToken ct = default)
+    /// <summary>
+    /// Creates a new node in Transient state without confirming it.
+    /// This is internal - used by handlers that need direct node creation after validation.
+    /// </summary>
+    internal async Task<MeshNode> CreateTransientNodeAsync(MeshNode node, string? createdBy = null, CancellationToken ct = default)
     {
         // 1. Check if node already exists in cache
         if (cache.TryGetValue(node.Path, out var cachedValue) && cachedValue is MeshNode cachedNode)
@@ -217,8 +263,11 @@ public sealed class MeshCatalog(
         return savedNode;
     }
 
-    /// <inheritdoc />
-    public async Task<MeshNode> ConfirmNodeAsync(string path, CancellationToken ct = default)
+    /// <summary>
+    /// Confirms a transient node, updating its state to Active.
+    /// This is internal - used by handlers after validation.
+    /// </summary>
+    internal async Task<MeshNode> ConfirmNodeAsync(string path, CancellationToken ct = default)
     {
         // Get the current node
         var node = await Persistence.GetNodeAsync(path, ct);

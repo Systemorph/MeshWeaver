@@ -125,18 +125,16 @@ public static class ThreadLayoutAreas
                 Content = threadContent
             };
 
-            var request = new CreateNodeRequest(newNode);
-            // Send to the mesh hub (not parent) since we're using full path
-            var response = await host.Hub.AwaitResponse(request, o => o.WithTarget(host.Hub.Address));
-
-            if (response.Message.Success && response.Message.Node != null)
+            var meshCatalog = host.Hub.ServiceProvider.GetRequiredService<IMeshCatalog>();
+            try
             {
-                var nodePath = response.Message.Node.Path;
-                return (UiControl?)new RedirectControl(MeshNodeLayoutAreas.BuildContentUrl(nodePath!, ChatArea));
+                var createdNode = await meshCatalog.CreateNodeAsync(newNode).ConfigureAwait(false);
+                return (UiControl?)new RedirectControl(MeshNodeLayoutAreas.BuildContentUrl(createdNode.Path!, ChatArea));
             }
-
-            // If creation failed, show error
-            return (UiControl?)Controls.Html($"<p style=\"color: var(--error-foreground);\">Failed to create thread: {response.Message.Error}</p>");
+            catch (Exception ex)
+            {
+                return (UiControl?)Controls.Html($"<p style=\"color: var(--error-foreground);\">Failed to create thread: {ex.Message}</p>");
+            }
         });
     }
 

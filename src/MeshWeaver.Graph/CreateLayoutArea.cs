@@ -275,39 +275,23 @@ public static class CreateLayoutArea
         logger?.LogInformation("Confirming transient node at {NodePath} with content type {ContentType}",
             nodePath, contentType?.Name ?? "none");
 
-        var delivery = host.Hub.Post(
-            new CreateNodeRequest(updatedNode),
-            o => o.WithTarget(host.Hub.Address));
-
-        if (delivery != null)
-        {
-            host.Hub.RegisterCallback(delivery, d =>
+        var meshCatalog = host.Hub.ServiceProvider.GetRequiredService<IMeshCatalog>();
+        meshCatalog.CreateNodeAsync(updatedNode)
+            .ContinueWith(task =>
             {
-                try
+                if (task.IsCompletedSuccessfully)
                 {
-                    if (d.Message is CreateNodeResponse response)
-                    {
-                        if (response.Success)
-                        {
-                            logger?.LogInformation("Successfully confirmed node at {NodePath}", nodePath);
-                            var overviewUrl = MeshNodeLayoutAreas.BuildContentUrl(nodePath, MeshNodeLayoutAreas.OverviewArea);
-                            ctx.NavigateTo(overviewUrl, replace: true);
-                        }
-                        else
-                        {
-                            logger?.LogWarning("CreateNodeRequest failed for {NodePath}: {Error}", nodePath, response.Error);
-                            ShowErrorDialog(ctx, "Creation Failed", response.Error ?? "Unknown error");
-                        }
-                    }
+                    logger?.LogInformation("Successfully confirmed node at {NodePath}", nodePath);
+                    var overviewUrl = MeshNodeLayoutAreas.BuildContentUrl(nodePath, MeshNodeLayoutAreas.OverviewArea);
+                    ctx.NavigateTo(overviewUrl, replace: true);
                 }
-                catch (Exception ex)
+                else if (task.IsFaulted)
                 {
-                    logger?.LogError(ex, "Error processing CreateNodeResponse for {NodePath}", nodePath);
-                    ShowErrorDialog(ctx, "Creation Failed", ex.Message);
+                    var error = task.Exception?.InnerException?.Message ?? "Unknown error";
+                    logger?.LogWarning("CreateNodeRequest failed for {NodePath}: {Error}", nodePath, error);
+                    ShowErrorDialog(ctx, "Creation Failed", error);
                 }
-                return d;
             });
-        }
     }
 
     /// <summary>
@@ -343,55 +327,38 @@ public static class CreateLayoutArea
         logger?.LogInformation("Creating new node at {NewPath} (Id changed from transient {TransientPath})",
             newPath, transientPath);
 
-        var delivery = host.Hub.Post(
-            new CreateNodeRequest(newNode),
-            o => o.WithTarget(new Address(newNode.Namespace ?? "")));
-
-        if (delivery != null)
-        {
-            host.Hub.RegisterCallback(delivery, d =>
+        meshCatalog.CreateNodeAsync(newNode)
+            .ContinueWith(task =>
             {
-                try
+                if (task.IsCompletedSuccessfully)
                 {
-                    if (d.Message is CreateNodeResponse response)
+                    logger?.LogInformation("Successfully created node at {NewPath}", newPath);
+
+                    // Delete the transient node asynchronously
+                    _ = Task.Run(async () =>
                     {
-                        if (response.Success)
+                        try
                         {
-                            logger?.LogInformation("Successfully created node at {NewPath}", newPath);
-
-                            // Delete the transient node asynchronously
-                            _ = Task.Run(async () =>
-                            {
-                                try
-                                {
-                                    await meshCatalog.DeleteNodeAsync(transientPath);
-                                    logger?.LogInformation("Deleted transient node at {TransientPath}", transientPath);
-                                }
-                                catch (Exception ex)
-                                {
-                                    logger?.LogWarning(ex, "Failed to delete transient node at {TransientPath}", transientPath);
-                                }
-                            });
-
-                            // Navigate to the new node
-                            var overviewUrl = MeshNodeLayoutAreas.BuildContentUrl(newPath, MeshNodeLayoutAreas.OverviewArea);
-                            ctx.NavigateTo(overviewUrl, replace: true);
+                            await meshCatalog.DeleteNodeAsync(transientPath);
+                            logger?.LogInformation("Deleted transient node at {TransientPath}", transientPath);
                         }
-                        else
+                        catch (Exception ex)
                         {
-                            logger?.LogWarning("CreateNodeRequest failed for {NewPath}: {Error}", newPath, response.Error);
-                            ShowErrorDialog(ctx, "Creation Failed", response.Error ?? "Unknown error");
+                            logger?.LogWarning(ex, "Failed to delete transient node at {TransientPath}", transientPath);
                         }
-                    }
+                    });
+
+                    // Navigate to the new node
+                    var overviewUrl = MeshNodeLayoutAreas.BuildContentUrl(newPath, MeshNodeLayoutAreas.OverviewArea);
+                    ctx.NavigateTo(overviewUrl, replace: true);
                 }
-                catch (Exception ex)
+                else if (task.IsFaulted)
                 {
-                    logger?.LogError(ex, "Error processing CreateNodeResponse for {NewPath}", newPath);
-                    ShowErrorDialog(ctx, "Creation Failed", ex.Message);
+                    var error = task.Exception?.InnerException?.Message ?? "Unknown error";
+                    logger?.LogWarning("CreateNodeRequest failed for {NewPath}: {Error}", newPath, error);
+                    ShowErrorDialog(ctx, "Creation Failed", error);
                 }
-                return d;
             });
-        }
     }
 
     private static void ShowErrorDialog(UiActionContext ctx, string title, string message)
@@ -651,9 +618,13 @@ public static class CreateLayoutArea
                         }
                     }
 
-                    // Create the transient node via the catalog
+                    // Create the transient node via CreateNodeRequest (stays Transient until user confirms)
                     logger?.LogInformation("Creating transient node at {NodePath} with type {NodeType}", nodePath, nodeTypePath);
-                    await meshCatalog.CreateTransientNodeAsync(newNode, ct: CancellationToken.None);
+                    var persistence = host.Hub.ServiceProvider.GetService<IPersistenceService>();
+                    if (persistence != null)
+                    {
+                        await persistence.SaveNodeAsync(newNode);
+                    }
                     logger?.LogInformation("Successfully created transient node at {NodePath}", nodePath);
 
                     // Navigate to the node's Create area for ContentType editing

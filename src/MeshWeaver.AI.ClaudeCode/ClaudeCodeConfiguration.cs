@@ -8,6 +8,13 @@ namespace MeshWeaver.AI.ClaudeCode;
 public class ClaudeCodeConfiguration
 {
     /// <summary>
+    /// Directory containing the Claude CLI executable.
+    /// On Windows with npm global install: %APPDATA%\npm (contains claude.cmd)
+    /// If not specified, the CLI must be in PATH.
+    /// </summary>
+    public string? CliDirectory { get; set; }
+
+    /// <summary>
     /// Working directory for the Claude CLI (Cwd).
     /// </summary>
     public string? WorkingDirectory { get; set; }
