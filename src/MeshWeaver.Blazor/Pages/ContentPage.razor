@@ -1,9 +1,8 @@
 @* Content page routes:
-   - /content/{Collection}/{**Path} - global content from portal hub
-   - /content/{AddressType}/{AddressId}/{Collection}/{**Path} - hub-scoped content
+   - /content/{**path} - handles both global and address-scoped content
+   Uses IMeshCatalog.ResolvePathAsync to dynamically resolve address from path
 *@
-@page "/content/{Collection}/{**Path}"
-@page "/content/{AddressType}/{AddressId}/{Collection}/{**Path}"
+@page "/content/{**FullPath}"
 @inject NavigationManager NavigationManager
 
 @if (!string.IsNullOrEmpty(ErrorMessage))

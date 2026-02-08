@@ -1,5 +1,6 @@
 ﻿using MeshWeaver.Blazor.Infrastructure;
 using MeshWeaver.ContentCollections;
+using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.AspNetCore.Components;
 using Microsoft.Extensions.DependencyInjection;
@@ -7,33 +8,18 @@ using Microsoft.Extensions.DependencyInjection;
 namespace MeshWeaver.Blazor.Pages;
 
 /// <summary>
-/// Content page that handles both global content URLs (/content/{collection}/{path})
-/// and address-scoped content URLs (/content/{addressType}/{addressId}/{collection}/{path}).
+/// Content page that handles content URLs using dynamic path resolution.
+/// Uses IMeshCatalog.ResolvePathAsync to resolve address from path, similar to static file endpoint.
 /// </summary>
 public partial class ContentPage : ComponentBase, IDisposable
 {
     /// <summary>
-    /// Address type parameter from the URL route (optional, for address-scoped content).
+    /// Full path from the URL route (catch-all parameter).
     /// </summary>
-    [Parameter] public string? AddressType { get; set; }
+    [Parameter] public string? FullPath { get; set; }
 
     /// <summary>
-    /// Address ID parameter from the URL route (optional, for address-scoped content).
-    /// </summary>
-    [Parameter] public string? AddressId { get; set; }
-
-    /// <summary>
-    /// Collection parameter from the URL route.
-    /// </summary>
-    [Parameter] public string? Collection { get; set; }
-
-    /// <summary>
-    /// Path parameter from the URL route (catch-all).
-    /// </summary>
-    [Parameter] public string? Path { get; set; }
-
-    /// <summary>
-    /// The resolved collection name (same as Collection for global content).
+    /// The resolved collection name.
     /// </summary>
     public string? ResolvedCollection { get; set; }
 
@@ -43,7 +29,7 @@ public partial class ContentPage : ComponentBase, IDisposable
     public string? ResolvedPath { get; set; }
 
     /// <summary>
-    /// The target address for the content (portal hub address for global content).
+    /// The target address for the content.
     /// </summary>
     public Address? TargetAddress { get; set; }
 
@@ -58,19 +44,65 @@ public partial class ContentPage : ComponentBase, IDisposable
     {
         await base.OnInitializedAsync();
 
-        ResolvedCollection = Collection;
-        ResolvedPath = Path;
-
-        // Determine target address based on route
-        if (!string.IsNullOrEmpty(AddressType) && !string.IsNullOrEmpty(AddressId))
+        if (string.IsNullOrEmpty(FullPath))
         {
-            // Address-scoped content: /content/{AddressType}/{AddressId}/{Collection}/{Path}
-            TargetAddress = new Address(AddressType, AddressId);
+            ErrorMessage = "Path is required";
+            return;
+        }
+
+        var pathParts = FullPath.Split('/');
+        if (pathParts.Length < 2)
+        {
+            ErrorMessage = "Invalid path format. Expected: /content/{collection}/{path} or /content/{address}/{collection}/{path}";
+            return;
+        }
+
+        var firstSegment = pathParts[0];
+
+        // Decode collection name: '~' is used as escape for '/' in collection names
+        var decodedFirstSegment = DecodeCollectionName(firstSegment);
+
+        // Check if first segment is a known collection name (global content)
+        var knownCollection = ContentService.GetCollectionConfig(decodedFirstSegment);
+
+        if (knownCollection != null)
+        {
+            // Pattern 1: /content/{collection}/{path} - global content from portal hub
+            ResolvedCollection = decodedFirstSegment;
+            ResolvedPath = string.Join("/", pathParts.Skip(1));
+            TargetAddress = PortalApplication.Hub.Address;
         }
         else
         {
-            // Global content: /content/{Collection}/{Path} - use portal hub address
-            TargetAddress = PortalApplication.Hub.Address;
+            // Pattern 2: /content/{address}/{collection}/{path} - address-scoped content
+            // Use IMeshCatalog to resolve the address from the path
+            var meshCatalog = PortalApplication.Hub.ServiceProvider.GetRequiredService<IMeshCatalog>();
+            var resolution = await meshCatalog.ResolvePathAsync(FullPath);
+
+            if (resolution == null)
+            {
+                ErrorMessage = $"No matching address found for path '{FullPath}'";
+                return;
+            }
+
+            // Parse remainder: first segment is collection (with ~ encoding), rest is file path
+            if (string.IsNullOrEmpty(resolution.Remainder))
+            {
+                ErrorMessage = "Collection and file path are required";
+                return;
+            }
+
+            var remainderParts = resolution.Remainder.Split('/');
+            if (remainderParts.Length < 1)
+            {
+                ErrorMessage = "Invalid path format. Expected: /content/{address}/{collection}/{path}";
+                return;
+            }
+
+            // Decode collection name: '~' is used as escape for '/' (e.g., "Submissions@Microsoft~2026")
+            ResolvedCollection = DecodeCollectionName(remainderParts[0]);
+            ResolvedPath = remainderParts.Length > 1 ? string.Join("/", remainderParts.Skip(1)) : null;
+            TargetAddress = (Address)resolution.Prefix;
         }
 
         // Add configuration for address-scoped content collections
@@ -87,7 +119,7 @@ public partial class ContentPage : ComponentBase, IDisposable
         var collection = await ContentService.GetCollectionAsync(ResolvedCollection!);
         if (collection is null)
         {
-            ErrorMessage = $"Collection '{ResolvedCollection}' does not exist.";
+            ErrorMessage = $"Collection '{ResolvedCollection}' not found at address '{TargetAddress}'";
             return;
         }
 
@@ -118,4 +150,11 @@ public partial class ContentPage : ComponentBase, IDisposable
     {
         Content?.Dispose();
     }
+
+    /// <summary>
+    /// Decodes a collection name from a URL by replacing '~' back to '/'.
+    /// Collection names with slashes (e.g., "Submissions@Microsoft/2026") are encoded
+    /// with '~' in URLs to avoid path parsing issues.
+    /// </summary>
+    private static string DecodeCollectionName(string encodedName) => encodedName.Replace("~", "/");
 }

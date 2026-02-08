@@ -148,22 +148,34 @@ public partial class FileBrowser
     }
     private string GetLink(FileItem item)
     {
-        var address = Address;
-        var addressType = address?.Type;
-        var addressId = address?.Id;
+        // Use full address string (e.g., "Cornerstone/Microsoft/2026") for URL generation
+        // Both /static and /content endpoints use IMeshCatalog.ResolvePathAsync for dynamic resolution
+        var addressString = Address?.ToString();
 
-        // Use /Content/ for files that can be rendered (markdown, text, images)
-        // Use /static/ for files that should be downloaded (documents, spreadsheets, archives)
-        var pathSegment = ShouldDownload(item.Name) ? "static" : "Content";
-        var baseUrl = $"/{addressType}/{addressId}/{pathSegment}/{CollectionName}{item.Path}";
+        // Encode slashes in collection name as ~ to avoid URL path parsing issues
+        // e.g., "Submissions@Microsoft/2026" becomes "Submissions@Microsoft~2026"
+        var encodedCollection = EncodeCollectionName(CollectionName ?? "");
 
-        // For download files, add download query parameter
         if (ShouldDownload(item.Name))
         {
-            return $"{baseUrl}?download";
+            // Download files: /static/{address}/{encodedCollection}{item.Path}?download
+            return $"/static/{addressString}/{encodedCollection}{item.Path}?download";
         }
-        return baseUrl;
+
+        // Previewable files: /content/{address}/{encodedCollection}{item.Path}
+        return $"/content/{addressString}/{encodedCollection}{item.Path}";
     }
+
+    /// <summary>
+    /// Encodes a collection name for use in URLs by replacing '/' with '~'.
+    /// This avoids issues with ASP.NET Core URL-decoding %2F before route matching.
+    /// </summary>
+    private static string EncodeCollectionName(string collectionName) => collectionName.Replace("/", "~");
+
+    /// <summary>
+    /// Decodes a collection name from a URL by replacing '~' back to '/'.
+    /// </summary>
+    internal static string DecodeCollectionName(string encodedName) => encodedName.Replace("~", "/");
 
     private static bool ShouldDownload(string fileName)
     {
@@ -236,15 +248,17 @@ public partial class FileBrowser
 
         try
         {
-            var address = Hub.Address;
-            var addressType = address.Type;
-            var addressId = address.Id;
+            // Use full address string for URL generation
+            var addressString = Address?.ToString();
+
+            // Encode slashes in collection name as ~ to avoid URL path parsing issues
+            var encodedCollection = EncodeCollectionName(CollectionName ?? "");
 
             // Download each file by opening it in a new window/tab
             // The browser will handle the download based on the content-disposition header
             foreach (var file in filesToDownload)
             {
-                var downloadUrl = $"/static/{addressType}/{addressId}/{CollectionName}{file.Path}?download";
+                var downloadUrl = $"/static/{addressString}/{encodedCollection}{file.Path}?download";
                 await JSRuntime.InvokeVoidAsync("open", downloadUrl, "_blank");
                 // Add a small delay between downloads to avoid browser blocking multiple downloads
                 await Task.Delay(100);

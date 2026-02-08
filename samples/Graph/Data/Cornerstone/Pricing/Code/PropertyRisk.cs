@@ -50,6 +50,7 @@ public record PropertyRisk
     /// Synonyms: Plant Description, Site Name, Location Name.
     /// </summary>
     [DisplayName("Location Name")]
+    [Description("Human-friendly name for the site or facility (e.g., 'Main Manufacturing Plant')")]
     public string? LocationName { get; init; }
 
     /// <summary>
@@ -57,24 +58,28 @@ public record PropertyRisk
     /// Synonyms: Country Code, Country.
     /// </summary>
     [Dimension<Country>]
+    [Description("Country where the property is located")]
     public string? Country { get; init; }
 
     /// <summary>
     /// Street address.
     /// Synonyms: Property Address, Address.
     /// </summary>
+    [Description("Full street address of the property location")]
     public string? Address { get; init; }
 
     /// <summary>
     /// State/region/province.
     /// Synonyms: State/Province, Region.
     /// </summary>
+    [Description("State, province, or region where the property is located")]
     public string? State { get; init; }
 
     /// <summary>
     /// County/district.
     /// Synonyms: District, County.
     /// </summary>
+    [Description("County or administrative district")]
     public string? County { get; init; }
 
     /// <summary>
@@ -82,11 +87,13 @@ public record PropertyRisk
     /// Synonyms: ZIP, Postcode.
     /// </summary>
     [DisplayName("ZIP Code")]
+    [Description("Postal or ZIP code for the property address")]
     public string? ZipCode { get; init; }
 
     /// <summary>
     /// City or town.
     /// </summary>
+    [Description("City or town where the property is located")]
     public string? City { get; init; }
 
     /// <summary>
@@ -94,6 +101,7 @@ public record PropertyRisk
     /// Synonyms: Currency, Curr., Curr, CCY.
     /// </summary>
     [Dimension<Currency>]
+    [Description("Base currency for all monetary values at this location")]
     public string? Currency { get; init; }
 
     /// <summary>
@@ -101,6 +109,8 @@ public record PropertyRisk
     /// Synonyms: Buildings, Building Value, TSI Building(s).
     /// </summary>
     [DisplayName("TSI Building")]
+    [Description("Total Sum Insured for building structures at this location")]
+    [Range(0, double.MaxValue, ErrorMessage = "TSI Building must be non-negative")]
     public double TsiBuilding { get; init; }
 
     /// <summary>
@@ -114,6 +124,8 @@ public record PropertyRisk
     /// Synonyms: Stock, Fixtures, Fittings, IT Equipment, Equipment.
     /// </summary>
     [DisplayName("TSI Content")]
+    [Description("Total Sum Insured for contents (stock, fixtures, equipment)")]
+    [Range(0, double.MaxValue, ErrorMessage = "TSI Content must be non-negative")]
     public double TsiContent { get; init; }
 
     /// <summary>
@@ -127,6 +139,8 @@ public record PropertyRisk
     /// Synonyms: BI, Business Interruption, Gross Profit.
     /// </summary>
     [DisplayName("TSI BI")]
+    [Description("Total Sum Insured for Business Interruption coverage")]
+    [Range(0, double.MaxValue, ErrorMessage = "TSI BI must be non-negative")]
     public double TsiBi { get; init; }
 
     /// <summary>
@@ -146,47 +160,58 @@ public record PropertyRisk
     /// Occupancy scheme / taxonomy name.
     /// </summary>
     [DisplayName("Occupancy Scheme")]
+    [Description("Occupancy classification scheme (e.g., ISO, AIR, RMS)")]
     public string? OccupancyScheme { get; init; }
 
     /// <summary>
     /// Occupancy code within the scheme.
     /// </summary>
     [DisplayName("Occupancy Code")]
+    [Description("Specific occupancy code within the selected scheme")]
     public string? OccupancyCode { get; init; }
 
     /// <summary>
     /// Construction classification scheme.
     /// </summary>
     [DisplayName("Construction Scheme")]
+    [Description("Construction classification scheme (e.g., ISO, AIR, RMS)")]
     public string? ConstructionScheme { get; init; }
 
     /// <summary>
     /// Construction code within scheme.
     /// </summary>
     [DisplayName("Construction Code")]
+    [Description("Specific construction code within the selected scheme")]
     public string? ConstructionCode { get; init; }
 
     /// <summary>
     /// Original build year (YYYY).
     /// </summary>
     [DisplayName("Build Year")]
+    [Description("Year the building was originally constructed")]
+    [Range(1800, 2100, ErrorMessage = "Build Year must be between 1800 and 2100")]
     public int? BuildYear { get; init; }
 
     /// <summary>
     /// Major upgrade/renovation year (YYYY).
     /// </summary>
     [DisplayName("Upgrade Year")]
+    [Description("Year of last major renovation or upgrade")]
+    [Range(1800, 2100, ErrorMessage = "Upgrade Year must be between 1800 and 2100")]
     public int? UpgradeYear { get; init; }
 
     /// <summary>
     /// Number of above-ground stories/floors.
     /// </summary>
     [DisplayName("Number of Stories")]
+    [Description("Number of above-ground floors in the building")]
+    [Range(1, 200, ErrorMessage = "Number of Stories must be between 1 and 200")]
     public int? NumberOfStories { get; init; }
 
     /// <summary>
     /// Automatic sprinkler protection present.
     /// </summary>
+    [Description("Whether automatic sprinkler fire protection is installed")]
     public bool? Sprinklers { get; init; }
 }
 

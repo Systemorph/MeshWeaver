@@ -29,41 +29,51 @@ public record LineOfBusiness : INamed
     /// </summary>
     public string? Description { get; init; }
 
+    /// <summary>
+    /// Display order in lists.
+    /// </summary>
+    public int Order { get; init; }
+
     string INamed.DisplayName => Name;
 
     public static readonly LineOfBusiness Property = new()
     {
         Id = "PROP",
         Name = "Property",
-        Description = "Property insurance covering buildings, contents, and business interruption"
+        Description = "Property insurance covering buildings, contents, and business interruption",
+        Order = 0
     };
 
     public static readonly LineOfBusiness Casualty = new()
     {
         Id = "CAS",
         Name = "Casualty",
-        Description = "Casualty insurance covering liability and workers compensation"
+        Description = "Casualty insurance covering liability and workers compensation",
+        Order = 1
     };
 
     public static readonly LineOfBusiness Marine = new()
     {
         Id = "MARINE",
         Name = "Marine",
-        Description = "Marine and cargo insurance"
+        Description = "Marine and cargo insurance",
+        Order = 2
     };
 
     public static readonly LineOfBusiness Aviation = new()
     {
         Id = "AVIATION",
         Name = "Aviation",
-        Description = "Aviation and aerospace insurance"
+        Description = "Aviation and aerospace insurance",
+        Order = 3
     };
 
     public static readonly LineOfBusiness Energy = new()
     {
         Id = "ENERGY",
         Name = "Energy",
-        Description = "Energy sector insurance including oil & gas"
+        Description = "Energy sector insurance including oil & gas",
+        Order = 4
     };
 
     public static readonly LineOfBusiness[] All = [Property, Casualty, Marine, Aviation, Energy];

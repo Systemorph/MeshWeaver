@@ -34,12 +34,12 @@ Property risks are imported from Excel files at runtime.
 ## Lines of Business
 - PROP: Property
 - CAS: Casualty
-- MAR: Marine
-- AVI: Aviation
-- ENE: Energy
+- MARINE: Marine
+- AVIATION: Aviation
+- ENERGY: Energy
 
 ## Countries
-US, GB, DE, FR, JP, CN, AU, CA, CH, SG
+US, GB, DE, FR, JP, CN, AU, CA, CH, SG, IE, IN
 
 ## Currencies
 USD, EUR, GBP, JPY, CHF, AUD, CAD
