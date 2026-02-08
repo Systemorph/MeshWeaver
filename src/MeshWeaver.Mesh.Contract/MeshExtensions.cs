@@ -130,13 +130,41 @@ public static class MeshExtensions
                 return request.Processed();
             }
 
-            // 3. Create the node using the catalog
-            var createdNode = await catalog.CreateNodeAsync(node, createRequest.CreatedBy, ct);
+            // 3. Validate NodeType exists (if specified)
+            if (!string.IsNullOrEmpty(node.NodeType))
+            {
+                var nodeTypeExists = catalog.Configuration.Nodes.ContainsKey(node.NodeType)
+                    || (persistence != null && await persistence.ExistsAsync(node.NodeType, ct));
+                if (!nodeTypeExists)
+                {
+                    hub.Post(
+                        CreateNodeResponse.Fail($"NodeType '{node.NodeType}' is not registered", NodeCreationRejectionReason.InvalidNodeType),
+                        o => o.ResponseFor(request));
+                    return request.Processed();
+                }
+            }
 
-            // 4. Return success response
-            hub.Post(CreateNodeResponse.Ok(createdNode), o => o.ResponseFor(request));
+            // 4. Create node with Active state (validated, ready to persist)
+            var newNode = node with { State = MeshNodeState.Active };
 
-            logger.LogInformation("Node created at {Path}", createdNode.Path);
+            // 5. Enrich with HubConfiguration based on NodeType
+            var nodeTypeService = hub.ServiceProvider.GetService<INodeTypeService>();
+            if (nodeTypeService != null)
+            {
+                newNode = await nodeTypeService.EnrichWithNodeTypeAsync(newNode, ct);
+            }
+
+            // 6. Save to persistence
+            if (persistence != null)
+            {
+                newNode = await persistence.SaveNodeAsync(newNode, ct);
+            }
+
+            logger.LogInformation("Node created at {Path} by {CreatedBy}", newNode.Path, createRequest.CreatedBy ?? "system");
+
+            // 7. Return success response
+            hub.Post(CreateNodeResponse.Ok(newNode), o => o.ResponseFor(request));
+
             return request.Processed();
         }
         catch (InvalidOperationException ex)
