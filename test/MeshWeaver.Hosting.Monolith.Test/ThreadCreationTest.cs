@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
@@ -11,6 +12,7 @@ using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
+using MeshWeaver.ShortGuid;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 using MeshThread = MeshWeaver.AI.Thread;
@@ -19,6 +21,7 @@ namespace MeshWeaver.Hosting.Monolith.Test;
 
 /// <summary>
 /// Tests for thread creation via IMeshCatalog.CreateNodeAsync.
+/// Threads store messages as child MeshNodes with nodeType="ThreadMessage".
 /// </summary>
 public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
@@ -39,7 +42,7 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
         var catalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
         var threadContent = new MeshThread
         {
-            Messages = new List<ThreadMessage>()
+            ParentPath = $"User/{userId}"
         };
         var threadPath = $"User/{userId}/Threads/{Guid.NewGuid()}";
         var node = new MeshNode(threadPath)
@@ -60,42 +63,66 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
     }
 
     [Fact]
-    public async Task CreateThread_WithMessages_Succeeds()
+    public async Task CreateThread_WithMessageAsChildNode_Succeeds()
     {
-        // Arrange
+        // Arrange - Create thread and then add a message as a child node
         var userId = "TestUser";
         var catalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
+        var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
+
         var threadContent = new MeshThread
         {
-            Messages =
-            [
-                new ThreadMessage
-                {
-                    Id = Guid.NewGuid().ToString(),
-                    Role = "user",
-                    Text = "Hello, world!",
-                    Timestamp = DateTime.UtcNow
-                }
-            ]
+            ParentPath = $"User/{userId}"
         };
         var threadPath = $"User/{userId}/Threads/{Guid.NewGuid()}";
-        var node = new MeshNode(threadPath)
+        var threadNode = new MeshNode(threadPath)
         {
-            Name = "Thread with Messages",
+            Name = "Thread with Child Messages",
             NodeType = ThreadNodeType.NodeType,
             Content = threadContent
         };
 
-        // Act
-        var createdNode = await catalog.CreateNodeAsync(node, userId, TestTimeout);
+        // Create the thread
+        var createdThread = await catalog.CreateNodeAsync(threadNode, userId, TestTimeout);
+
+        // Create a message as child node
+        var messageId = Guid.NewGuid().AsString();
+        var messagePath = $"{threadPath}/{messageId}";
+        var messageContent = new ThreadMessage
+        {
+            Id = messageId,
+            Role = "user",
+            Text = "Hello, world!",
+            Timestamp = DateTime.UtcNow,
+            Type = ThreadMessageType.ExecutedInput
+        };
+        var messageNode = new MeshNode(messagePath)
+        {
+            NodeType = ThreadMessageNodeType.NodeType,
+            Content = messageContent
+        };
+
+        // Act - Create the message child node
+        var createdMessage = await catalog.CreateNodeAsync(messageNode, userId, TestTimeout);
 
         // Assert
-        createdNode.Should().NotBeNull();
-        createdNode.Path.Should().Be(threadPath);
-        createdNode.State.Should().Be(MeshNodeState.Active);
-        var content = createdNode.Content.Should().BeOfType<MeshThread>().Subject;
-        content.Messages.Should().HaveCount(1);
-        content.Messages![0].Text.Should().Be("Hello, world!");
+        createdThread.Should().NotBeNull();
+        createdMessage.Should().NotBeNull();
+        createdMessage.Path.Should().Be(messagePath);
+        createdMessage.NodeType.Should().Be(ThreadMessageNodeType.NodeType);
+
+        var content = createdMessage.Content.Should().BeOfType<ThreadMessage>().Subject;
+        content.Text.Should().Be("Hello, world!");
+        content.Type.Should().Be(ThreadMessageType.ExecutedInput);
+
+        // Query child messages
+        var children = await meshQuery.QueryAsync<MeshNode>(
+            $"path:{threadPath} nodeType:{ThreadMessageNodeType.NodeType} scope:children"
+        ).ToListAsync();
+
+        children.Should().HaveCount(1);
+        var childContent = children[0].Content.Should().BeOfType<ThreadMessage>().Subject;
+        childContent.Text.Should().Be("Hello, world!");
     }
 
     [Fact]
@@ -106,7 +133,7 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
         var catalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
         var threadContent = new MeshThread
         {
-            Messages = new List<ThreadMessage>()
+            ParentPath = $"User/{userId}"
         };
         var threadPath = $"User/{userId}/Threads/{Guid.NewGuid()}";
         var node = new MeshNode(threadPath)
@@ -186,7 +213,6 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
         var catalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
         var threadContent = new MeshThread
         {
-            Messages = new List<ThreadMessage>(),
             ParentPath = parentPath  // Store where the thread was created
         };
         // Full path includes "Threads" sub-namespace
@@ -236,7 +262,6 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
         var threadPath = $"{parentPath}/Threads/{threadId}";
         var threadContent = new MeshThread
         {
-            Messages = new List<ThreadMessage>(),
             ParentPath = parentPath
         };
         var threadNode = new MeshNode(threadPath)
@@ -285,7 +310,6 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
         var threadPath = $"{parentPath}/Threads/{threadId}";
         var threadContent = new MeshThread
         {
-            Messages = new List<ThreadMessage>(),
             ParentPath = parentPath  // Store parent path for navigation back
         };
         var threadNode = new MeshNode(threadPath)
@@ -318,34 +342,33 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
     }
 
     [Fact]
-    public void Thread_ToChatMessages_ConvertsCorrectly()
+    public void ThreadMessages_ToChatMessages_ConvertsCorrectly()
     {
-        // Arrange
-        var thread = new MeshThread
+        // Arrange - Use the extension method on a list of ThreadMessages
+        var messages = new List<ThreadMessage>
         {
-            Messages = new List<ThreadMessage>
+            new ThreadMessage
             {
-                new ThreadMessage
-                {
-                    Id = "1",
-                    Role = "user",
-                    Text = "Hello",
-                    AuthorName = "Alice",
-                    Timestamp = DateTime.UtcNow
-                },
-                new ThreadMessage
-                {
-                    Id = "2",
-                    Role = "assistant",
-                    Text = "Hi there!",
-                    AuthorName = "Bot",
-                    Timestamp = DateTime.UtcNow
-                }
+                Id = "1",
+                Role = "user",
+                Text = "Hello",
+                AuthorName = "Alice",
+                Timestamp = DateTime.UtcNow,
+                Type = ThreadMessageType.ExecutedInput
+            },
+            new ThreadMessage
+            {
+                Id = "2",
+                Role = "assistant",
+                Text = "Hi there!",
+                AuthorName = "Bot",
+                Timestamp = DateTime.UtcNow,
+                Type = ThreadMessageType.AgentResponse
             }
         };
 
         // Act
-        var chatMessages = thread.ToChatMessages();
+        var chatMessages = messages.ToChatMessages();
 
         // Assert
         chatMessages.Should().HaveCount(2);
@@ -358,7 +381,48 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
     }
 
     [Fact]
-    public void Thread_FromChatMessages_ConvertsCorrectly()
+    public void ThreadMessages_ToChatMessages_ExcludesEditingPrompts()
+    {
+        // Arrange - EditingPrompt messages should be excluded from chat
+        var messages = new List<ThreadMessage>
+        {
+            new ThreadMessage
+            {
+                Id = "1",
+                Role = "user",
+                Text = "Submitted message",
+                Timestamp = DateTime.UtcNow,
+                Type = ThreadMessageType.ExecutedInput
+            },
+            new ThreadMessage
+            {
+                Id = "2",
+                Role = "user",
+                Text = "Currently typing...",
+                Timestamp = DateTime.UtcNow,
+                Type = ThreadMessageType.EditingPrompt // Should be excluded
+            },
+            new ThreadMessage
+            {
+                Id = "3",
+                Role = "assistant",
+                Text = "Response",
+                Timestamp = DateTime.UtcNow,
+                Type = ThreadMessageType.AgentResponse
+            }
+        };
+
+        // Act
+        var chatMessages = messages.ToChatMessages();
+
+        // Assert
+        chatMessages.Should().HaveCount(2, "EditingPrompt should be excluded");
+        chatMessages[0].Text.Should().Be("Submitted message");
+        chatMessages[1].Text.Should().Be("Response");
+    }
+
+    [Fact]
+    public void ThreadMessageExtensions_FromChatMessages_ConvertsCorrectly()
     {
         // Arrange
         var chatMessages = new List<Microsoft.Extensions.AI.ChatMessage>
@@ -372,24 +436,111 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
                 "Hi there!")
             { AuthorName = "Bot" }
         };
-        var parentPath = "ACME/Project";
 
         // Act
-        var thread = MeshThread.FromChatMessages(chatMessages, parentPath);
+        var threadMessages = ThreadMessageExtensions.FromChatMessages(chatMessages);
 
         // Assert
-        thread.Messages.Should().HaveCount(2);
-        thread.Messages![0].Role.Should().Be("user");
-        thread.Messages[0].Text.Should().Be("Hello");
-        thread.Messages[0].AuthorName.Should().Be("Alice");
-        thread.Messages[1].Role.Should().Be("assistant");
-        thread.Messages[1].Text.Should().Be("Hi there!");
-        thread.Messages[1].AuthorName.Should().Be("Bot");
-        thread.ParentPath.Should().Be(parentPath);
+        threadMessages.Should().HaveCount(2);
+        threadMessages[0].Role.Should().Be("user");
+        threadMessages[0].Text.Should().Be("Hello");
+        threadMessages[0].AuthorName.Should().Be("Alice");
+        threadMessages[0].Type.Should().Be(ThreadMessageType.ExecutedInput);
+        threadMessages[1].Role.Should().Be("assistant");
+        threadMessages[1].Text.Should().Be("Hi there!");
+        threadMessages[1].AuthorName.Should().Be("Bot");
+        threadMessages[1].Type.Should().Be(ThreadMessageType.AgentResponse);
     }
 
     [Fact]
-    public void Thread_EmptyMessages_ToChatMessages_ReturnsEmptyList()
+    public void ThreadMessage_DefaultType_IsExecutedInput()
+    {
+        // Arrange & Act
+        var message = new ThreadMessage
+        {
+            Id = "1",
+            Role = "user",
+            Text = "Hello"
+        };
+
+        // Assert - Default type should be ExecutedInput for backward compatibility
+        message.Type.Should().Be(ThreadMessageType.ExecutedInput);
+    }
+
+    [Fact]
+    public async Task CreateThreadMessage_WithDifferentTypes_PreservesType()
+    {
+        // Arrange
+        var userId = "TestUser";
+        var catalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
+        var threadPath = $"User/{userId}/Threads/{Guid.NewGuid()}";
+
+        // Use a longer timeout since we're creating multiple nodes
+        var longTimeout = new CancellationTokenSource(30.Seconds()).Token;
+
+        // Create thread first
+        var threadNode = new MeshNode(threadPath)
+        {
+            Name = "Test Thread",
+            NodeType = ThreadNodeType.NodeType,
+            Content = new MeshThread { ParentPath = $"User/{userId}" }
+        };
+        await catalog.CreateNodeAsync(threadNode, userId, longTimeout);
+
+        // Create a single message to test type preservation (simplify test)
+        var responseMessage = new ThreadMessage
+        {
+            Id = Guid.NewGuid().AsString(),
+            Role = "assistant",
+            Text = "Response",
+            Type = ThreadMessageType.AgentResponse
+        };
+
+        // Act - Create message node
+        var responseNode = new MeshNode($"{threadPath}/{responseMessage.Id}")
+        {
+            NodeType = ThreadMessageNodeType.NodeType,
+            Content = responseMessage
+        };
+
+        var createdResponse = await catalog.CreateNodeAsync(responseNode, userId, longTimeout);
+
+        // Assert - Type should be preserved
+        var responseContent = createdResponse.Content.Should().BeOfType<ThreadMessage>().Subject;
+        responseContent.Type.Should().Be(ThreadMessageType.AgentResponse);
+        responseContent.Text.Should().Be("Response");
+        responseContent.Role.Should().Be("assistant");
+    }
+
+#pragma warning disable CS0618 // Type or member is obsolete - testing backward compatibility
+    [Fact]
+    public void LegacyThread_ToChatMessages_StillWorks()
+    {
+        // Arrange - Test backward compatibility with legacy inline Messages
+        var thread = new MeshThread
+        {
+            Messages = new List<ThreadMessage>
+            {
+                new ThreadMessage
+                {
+                    Id = "1",
+                    Role = "user",
+                    Text = "Legacy message",
+                    Timestamp = DateTime.UtcNow
+                }
+            }
+        };
+
+        // Act
+        var chatMessages = thread.ToChatMessages();
+
+        // Assert
+        chatMessages.Should().HaveCount(1);
+        chatMessages[0].Text.Should().Be("Legacy message");
+    }
+
+    [Fact]
+    public void LegacyThread_EmptyMessages_ToChatMessages_ReturnsEmptyList()
     {
         // Arrange
         var thread = new MeshThread { Messages = null };
@@ -400,4 +551,5 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
         // Assert
         chatMessages.Should().BeEmpty();
     }
+#pragma warning restore CS0618
 }
