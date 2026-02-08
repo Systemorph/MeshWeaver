@@ -47,15 +47,41 @@ public static class ThreadLayoutAreas
     /// <summary>
     /// Renders the Chat area with an interactive chat interface.
     /// Provides markdown editing with @ completion, reference chips, and streaming responses.
+    /// When viewing a thread directly, the context is set to the thread's ParentPath (the main object).
     /// </summary>
     public static IObservable<UiControl?> ChatView(LayoutAreaHost host, RenderingContext _)
     {
         var hubPath = host.Hub.Address.ToString();
 
-        return Observable.Return<UiControl?>(new ThreadChatControl()
-            .WithThreadPath(hubPath)
-            .WithInitialContext(hubPath)
-            .WithInitialContextDisplayName(GetThreadTitle(GetNodeFromWorkspace(host, hubPath))));
+        // Get the node stream to extract ParentPath from thread content
+        var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? Array.Empty<MeshNode>())
+            ?? Observable.Return<MeshNode[]>(Array.Empty<MeshNode>());
+
+        return nodeStream.Select(nodes =>
+        {
+            var node = nodes.FirstOrDefault(n => n.Path == hubPath);
+            var threadContent = node?.Content as MeshThread;
+
+            // Use ParentPath as context if available (the main object), otherwise fall back to hubPath
+            var contextPath = !string.IsNullOrEmpty(threadContent?.ParentPath)
+                ? threadContent.ParentPath
+                : hubPath;
+            var contextDisplayName = !string.IsNullOrEmpty(threadContent?.ParentPath)
+                ? GetContextDisplayName(threadContent.ParentPath)
+                : GetThreadTitle(node);
+
+            return (UiControl?)new ThreadChatControl()
+                .WithThreadPath(hubPath)
+                .WithInitialContext(contextPath)
+                .WithInitialContextDisplayName(contextDisplayName);
+        });
+    }
+
+    private static string GetContextDisplayName(string path)
+    {
+        // Extract the last segment of the path as display name
+        var segments = path.Split('/');
+        return segments.Length > 0 ? segments[^1] : path;
     }
 
     private static MeshNode? GetNodeFromWorkspace(LayoutAreaHost host, string path)
@@ -84,7 +110,6 @@ public static class ThreadLayoutAreas
 
             var threadContent = new MeshThread
             {
-                Messages = new List<ThreadMessage>(),
                 ParentPath = parentPath
             };
 
@@ -99,41 +124,59 @@ public static class ThreadLayoutAreas
                 Content = threadContent
             };
 
-            var request = new CreateNodeRequest(newNode);
-            // Send to the mesh hub (not parent) since we're using full path
-            var response = await host.Hub.AwaitResponse(request, o => o.WithTarget(host.Hub.Address));
-
-            if (response.Message.Success && response.Message.Node != null)
+            var meshCatalog = host.Hub.ServiceProvider.GetRequiredService<IMeshCatalog>();
+            try
             {
-                var nodePath = response.Message.Node.Path;
-                return (UiControl?)new RedirectControl(MeshNodeLayoutAreas.BuildContentUrl(nodePath!, ChatArea));
+                var createdNode = await meshCatalog.CreateNodeAsync(newNode).ConfigureAwait(false);
+                return (UiControl?)new RedirectControl(MeshNodeLayoutAreas.BuildContentUrl(createdNode.Path!, ChatArea));
             }
-
-            // If creation failed, show error
-            return (UiControl?)Controls.Html($"<p style=\"color: var(--error-foreground);\">Failed to create thread: {response.Message.Error}</p>");
+            catch (Exception ex)
+            {
+                return (UiControl?)Controls.Html($"<p style=\"color: var(--error-foreground);\">Failed to create thread: {ex.Message}</p>");
+            }
         });
     }
 
     /// <summary>
     /// Renders the Thread area showing the conversation content.
-    /// Displays the message history stored in the Thread.
+    /// Queries child ThreadMessage nodes for message history.
+    /// Falls back to legacy inline Messages for backward compatibility.
     /// </summary>
     public static IObservable<UiControl?> ThreadView(LayoutAreaHost host, RenderingContext _)
     {
         var hubPath = host.Hub.Address.ToString();
+        var meshQuery = host.Hub.ServiceProvider.GetService<IMeshQuery>();
 
         // Get the node from the workspace stream
         var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? Array.Empty<MeshNode>())
             ?? Observable.Return<MeshNode[]>(Array.Empty<MeshNode>());
 
-        return nodeStream.Select(nodes =>
+        // Query for child ThreadMessage nodes
+        var messagesStream = Observable.FromAsync(async () =>
+        {
+            if (meshQuery == null)
+                return Array.Empty<MeshNode>() as IReadOnlyList<MeshNode>;
+
+            try
+            {
+                return await meshQuery.QueryAsync<MeshNode>(
+                    $"path:{hubPath} nodeType:{ThreadMessageNodeType.NodeType} scope:children"
+                ).ToListAsync() as IReadOnlyList<MeshNode>;
+            }
+            catch
+            {
+                return Array.Empty<MeshNode>() as IReadOnlyList<MeshNode>;
+            }
+        });
+
+        return nodeStream.CombineLatest(messagesStream, (nodes, messageNodes) =>
         {
             var node = nodes.FirstOrDefault(n => n.Path == hubPath);
-            return BuildThreadView(host, node, hubPath);
+            return BuildThreadView(host, node, hubPath, messageNodes ?? Array.Empty<MeshNode>());
         });
     }
 
-    private static UiControl BuildThreadView(LayoutAreaHost host, MeshNode? node, string threadPath)
+    private static UiControl BuildThreadView(LayoutAreaHost host, MeshNode? node, string threadPath, IReadOnlyList<MeshNode> messageNodes)
     {
         var container = Controls.Stack
             .WithWidth("100%")
@@ -164,8 +207,23 @@ public static class ThreadLayoutAreas
 
         container = container.WithView(header);
 
-        // Thread messages content (reuse content variable from above)
-        var messages = content?.Messages ?? new List<ThreadMessage>();
+        // Extract messages from child nodes, sorted by timestamp
+        var messages = messageNodes
+            .Select(n => n.Content as ThreadMessage)
+            .Where(m => m != null && m.Type != ThreadMessageType.EditingPrompt) // Exclude editing prompts
+            .OrderBy(m => m!.Timestamp)
+            .ToList();
+
+        // Fall back to legacy inline messages if no child nodes
+#pragma warning disable CS0618 // Type or member is obsolete
+        if (messages.Count == 0 && content?.Messages?.Count > 0)
+        {
+            messages = content.Messages
+                .Where(m => m.Type != ThreadMessageType.EditingPrompt)
+                .OrderBy(m => m.Timestamp)
+                .ToList()!;
+        }
+#pragma warning restore CS0618
 
         if (messages.Count == 0)
         {
@@ -188,7 +246,7 @@ public static class ThreadLayoutAreas
 
             foreach (var message in messages)
             {
-                messagesContainer = messagesContainer.WithView(BuildMessageBubble(message));
+                messagesContainer = messagesContainer.WithView(BuildMessageBubble(message!));
             }
 
             container = container.WithView(messagesContainer);
@@ -364,39 +422,74 @@ public static class ThreadLayoutAreas
     /// <summary>
     /// Renders a compact thumbnail for thread nodes in catalogs.
     /// Shows title, last activity time, and message preview.
+    /// Queries child ThreadMessage nodes for message count and preview.
     /// </summary>
     public static IObservable<UiControl?> Thumbnail(LayoutAreaHost host, RenderingContext _)
     {
         var hubPath = host.Hub.Address.ToString();
+        var meshQuery = host.Hub.ServiceProvider.GetService<IMeshQuery>();
 
         var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? Array.Empty<MeshNode>())
             ?? Observable.Return<MeshNode[]>(Array.Empty<MeshNode>());
 
-        return nodeStream.Select(nodes =>
+        // Query for child ThreadMessage nodes
+        var messagesStream = Observable.FromAsync(async () =>
+        {
+            if (meshQuery == null)
+                return Array.Empty<MeshNode>() as IReadOnlyList<MeshNode>;
+
+            try
+            {
+                return await meshQuery.QueryAsync<MeshNode>(
+                    $"path:{hubPath} nodeType:{ThreadMessageNodeType.NodeType} scope:children"
+                ).ToListAsync() as IReadOnlyList<MeshNode>;
+            }
+            catch
+            {
+                return Array.Empty<MeshNode>() as IReadOnlyList<MeshNode>;
+            }
+        });
+
+        return nodeStream.CombineLatest(messagesStream, (nodes, messageNodes) =>
         {
             var node = nodes.FirstOrDefault(n => n.Path == hubPath);
-            return BuildThumbnail(node, hubPath);
+            return BuildThumbnail(node, hubPath, messageNodes ?? Array.Empty<MeshNode>());
         });
     }
 
-    private static UiControl BuildThumbnail(MeshNode? node, string hubPath)
+    private static UiControl BuildThumbnail(MeshNode? node, string hubPath, IReadOnlyList<MeshNode> messageNodes)
     {
         var content = node?.Content as MeshThread;
         var title = node?.Name ?? "Thread";
         var lastActivity = node?.LastModified.ToString("g") ?? "";
-        var messageCount = content?.Messages?.Count ?? 0;
+
+        // Extract messages from child nodes
+        var messages = messageNodes
+            .Select(n => n.Content as ThreadMessage)
+            .Where(m => m != null && m.Type != ThreadMessageType.EditingPrompt)
+            .OrderBy(m => m!.Timestamp)
+            .ToList();
+
+        // Fall back to legacy inline messages
+#pragma warning disable CS0618 // Type or member is obsolete
+        if (messages.Count == 0 && content?.Messages?.Count > 0)
+        {
+            messages = content.Messages
+                .Where(m => m.Type != ThreadMessageType.EditingPrompt)
+                .ToList()!;
+        }
+#pragma warning restore CS0618
+
+        var messageCount = messages.Count;
 
         // Get preview from last message
         var preview = "";
-        if (content?.Messages?.Count > 0)
+        var lastMessage = messages.LastOrDefault();
+        if (lastMessage != null)
         {
-            var lastMessage = content.Messages.LastOrDefault();
-            if (lastMessage != null)
-            {
-                preview = lastMessage.Text.Length > 60
-                    ? lastMessage.Text[..57] + "..."
-                    : lastMessage.Text;
-            }
+            preview = lastMessage.Text.Length > 60
+                ? lastMessage.Text[..57] + "..."
+                : lastMessage.Text;
         }
 
         return Controls.Stack

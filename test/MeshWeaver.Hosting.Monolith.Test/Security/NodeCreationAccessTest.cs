@@ -5,6 +5,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
 using FluentAssertions.Extensions;
+using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Hosting.Security;
@@ -31,19 +32,21 @@ public class NodeCreationAccessTest(ITestOutputHelper output) : MonolithMeshTest
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
     {
         // Add Row-Level Security for access control testing
-        return base.ConfigureMesh(builder).AddRowLevelSecurity();
+        // Add graph configuration to register NodeTypes like "Markdown"
+        return base.ConfigureMesh(builder)
+            .AddRowLevelSecurity()
+            .AddJsonGraphConfiguration(TestPaths.SamplesGraphData);
     }
 
     /// <summary>
-    /// Tests that creating a node without Create permission returns Unauthorized.
+    /// Tests that creating a node without Create permission throws UnauthorizedAccessException.
     /// The RlsNodeValidator should check permission on the parent path.
     /// </summary>
     [Fact]
-    public async Task CreateNode_WithoutPermission_ReturnsUnauthorized()
+    public async Task CreateNode_WithoutPermission_ThrowsUnauthorized()
     {
         // Arrange
         var catalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
-        var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
 
         const string userId = "unauthorized-user";
         const string parentPath = "Restricted/Parent";
@@ -54,35 +57,21 @@ public class NodeCreationAccessTest(ITestOutputHelper output) : MonolithMeshTest
         var node = MeshNode.FromPath(nodePath) with
         {
             Name = "Test Node",
-            NodeType = "Markdown",
-            State = MeshNodeState.Transient
+            NodeType = "Markdown"
         };
 
-        // Act
-        var createRequest = new CreateNodeRequest(node) { CreatedBy = userId };
-
-        // Send CreateNodeRequest via hub to trigger validation
-        var client = GetClient();
-        var response = await client.AwaitResponse(
-            createRequest,
-            o => o.WithTarget(new Address(parentPath)),
-            TestTimeout);
-
-        // Assert
-        response.Message.Should().BeOfType<CreateNodeResponse>();
-        var createResponse = (CreateNodeResponse)response.Message;
-
-        Output.WriteLine($"Response: Success={createResponse.Success}, Error={createResponse.Error}");
-
-        createResponse.Success.Should().BeFalse("Creation should fail without permission");
-        createResponse.Error.Should().Contain("Access denied", "Should indicate authorization failure");
+        // Act & Assert - CreateNodeAsync should throw UnauthorizedAccessException
+        var act = async () => await catalog.CreateNodeAsync(node, userId, TestTimeout);
+        var exception = await act.Should().ThrowAsync<UnauthorizedAccessException>();
+        exception.Which.Message.Should().Contain("Access denied", "Should indicate authorization failure");
+        Output.WriteLine($"Exception thrown as expected: {exception.Which.Message}");
     }
 
     /// <summary>
-    /// Tests that creating a node with Create permission succeeds and creates a transient node.
+    /// Tests that creating a node with Create permission succeeds via IMeshCatalog.CreateNodeAsync.
     /// </summary>
     [Fact]
-    public async Task CreateNode_WithPermission_CreatesTransientNode()
+    public async Task CreateNode_WithPermission_Succeeds()
     {
         // Arrange
         var catalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
@@ -100,16 +89,15 @@ public class NodeCreationAccessTest(ITestOutputHelper output) : MonolithMeshTest
         {
             Name = "Test Node With Permission",
             NodeType = "Markdown",
-            State = MeshNodeState.Transient,
             DesiredId = "MyDesiredId" // User's intended final Id
         };
 
-        // Act
-        var createdNode = await catalog.CreateTransientNodeAsync(node, userId, TestTimeout);
+        // Act - Use public CreateNodeAsync which goes through message-based validation
+        var createdNode = await catalog.CreateNodeAsync(node, userId, TestTimeout);
 
         // Assert
         createdNode.Should().NotBeNull("Node should be created");
-        createdNode.State.Should().Be(MeshNodeState.Transient, "Node should be in Transient state");
+        createdNode.State.Should().Be(MeshNodeState.Active, "Node should be in Active state");
         createdNode.Path.Should().Be(nodePath, "Node should be at the specified path");
         createdNode.Name.Should().Be("Test Node With Permission");
         createdNode.DesiredId.Should().Be("MyDesiredId", "DesiredId should be preserved");
@@ -117,7 +105,7 @@ public class NodeCreationAccessTest(ITestOutputHelper output) : MonolithMeshTest
         // Verify node exists in catalog
         var fetchedNode = await catalog.GetNodeAsync(new Address(nodePath));
         fetchedNode.Should().NotBeNull("Node should be retrievable from catalog");
-        fetchedNode!.State.Should().Be(MeshNodeState.Transient);
+        fetchedNode!.State.Should().Be(MeshNodeState.Active);
 
         // Cleanup
         await catalog.DeleteNodeAsync(nodePath, ct: TestTimeout);
@@ -153,7 +141,7 @@ public class NodeCreationAccessTest(ITestOutputHelper output) : MonolithMeshTest
             DesiredId = desiredId // User wants this as final Id
         };
 
-        var createdTransient = await catalog.CreateTransientNodeAsync(transientNode, userId, TestTimeout);
+        var createdTransient = await ((MeshCatalog)catalog).CreateTransientNodeAsync(transientNode, userId, TestTimeout);
         createdTransient.Should().NotBeNull("Transient node should be created");
         Output.WriteLine($"Transient node created at: {createdTransient.Path}");
 
@@ -216,7 +204,7 @@ public class NodeCreationAccessTest(ITestOutputHelper output) : MonolithMeshTest
         };
 
         // Act
-        var createdNode = await catalog.CreateTransientNodeAsync(node, userId, TestTimeout);
+        var createdNode = await ((MeshCatalog)catalog).CreateTransientNodeAsync(node, userId, TestTimeout);
 
         // Assert
         createdNode.Should().NotBeNull();
@@ -258,11 +246,11 @@ public class NodeCreationAccessTest(ITestOutputHelper output) : MonolithMeshTest
             State = MeshNodeState.Transient
         };
 
-        var createdTransient = await catalog.CreateTransientNodeAsync(transientNode, userId, TestTimeout);
+        var createdTransient = await ((MeshCatalog)catalog).CreateTransientNodeAsync(transientNode, userId, TestTimeout);
         createdTransient.State.Should().Be(MeshNodeState.Transient);
 
         // Step 2: Confirm via ConfirmNodeAsync
-        var confirmedNode = await catalog.ConfirmNodeAsync(nodePath, TestTimeout);
+        var confirmedNode = await ((MeshCatalog)catalog).ConfirmNodeAsync(nodePath, TestTimeout);
 
         // Assert
         confirmedNode.Should().NotBeNull("Confirmed node should be returned");

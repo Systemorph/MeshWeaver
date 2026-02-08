@@ -7,6 +7,7 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.AspNetCore.Components;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.FluentUI.AspNetCore.Components;
 
 namespace MeshWeaver.Blazor.Articles;
@@ -116,23 +117,16 @@ public partial class ArticleView
                         NodeType = AddressExtensions.KernelType
                     };
 
-                    try
-                    {
-                        var meshAddress = Hub.Configuration.ParentHub?.Address ?? Hub.Address;
-                        var response = await Hub.AwaitResponse(
-                            new CreateNodeRequest(kernelNode),
-                            o => o.WithTarget(meshAddress));
-
-                        // If node already exists, that's fine - it means another instance already created it
-                        if (!response.Message.Success && !response.Message.Error?.Contains("already exists") == true)
+                    var meshCatalog = Hub.ServiceProvider.GetService<IMeshCatalog>();
+                    meshCatalog?.CreateNodeAsync(kernelNode)
+                        .ContinueWith(task =>
                         {
-                            Console.WriteLine($"Warning: Failed to create kernel node: {response.Message.Error}");
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        Console.WriteLine($"Warning: Error creating kernel node: {ex.Message}");
-                    }
+                            // If node already exists, that's fine - it means another instance already created it
+                            if (task.IsFaulted && task.Exception?.InnerException?.Message?.Contains("already exists") != true)
+                            {
+                                Console.WriteLine($"Warning: Failed to create kernel node: {task.Exception?.InnerException?.Message}");
+                            }
+                        });
                 }
 
                 // Now submit the code to the kernel

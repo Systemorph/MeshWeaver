@@ -241,7 +241,7 @@ public static class SharedPortalConfiguration
         app.MapRazorComponents<App>()
             .AddAdditionalAssemblies(
                 typeof(ApplicationPage).Assembly,
-                typeof(Blazor.Chat.AgentChatView).Assembly,
+                typeof(Blazor.Chat.ThreadChatView).Assembly,
                 typeof(RadzenPivotGridView).Assembly)
             .AddInteractiveServerRenderMode();
 

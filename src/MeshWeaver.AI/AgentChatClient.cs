@@ -818,6 +818,11 @@ public class AgentChatClient : IAgentChat
 
     private string ExtractTextFromMessage(ChatMessage message)
     {
+        // First check the Text property (set by simple string constructor)
+        if (!string.IsNullOrEmpty(message.Text))
+            return message.Text;
+
+        // Fallback to Contents collection
         var textBuilder = new StringBuilder();
         foreach (var content in message.Contents)
         {

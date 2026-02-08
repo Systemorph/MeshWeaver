@@ -1,5 +1,6 @@
 ﻿using System.Text.Json;
 using MeshWeaver.Blazor;
+using MeshWeaver.Blazor.AI;
 using MeshWeaver.Blazor.Infrastructure;
 using MeshWeaver.ContentCollections;
 using MeshWeaver.Data;
@@ -24,6 +25,7 @@ public static class BlazorHostingExtensions
                 .AddFluentUIComponents()
                 .AddScoped<PortalApplication>()
                 .AddScoped<INavigationService, NavigationService>()
+                .AddMeshMcp()
             )
             .ConfigureHub(hub => hub.AddBlazor(clientConfig));
 

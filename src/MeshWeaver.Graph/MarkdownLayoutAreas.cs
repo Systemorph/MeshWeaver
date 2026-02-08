@@ -191,7 +191,7 @@ public static class MarkdownLayoutAreas
         // Show view mode toolbar if document has annotations (even in non-markup view)
         if (hasAnnotations && annotations.Count > 0)
         {
-            container = container.WithView(BuildReactiveViewModeToolbar(viewModeSubject, viewMode, annotations));
+            container = container.WithView(BuildReactiveViewModeToolbar(host, node, rawContent, viewModeSubject, viewMode, annotations));
         }
 
         if (!string.IsNullOrWhiteSpace(content))
@@ -275,7 +275,7 @@ public static class MarkdownLayoutAreas
     }
 
     /// <summary>
-    /// Builds the split layout with content on the left and inline annotations on the right (Word-style).
+    /// Builds the split layout with content on the left and inline annotations on the right (Word Online-style).
     /// Annotations are positioned at the same height as their markers with connecting lines.
     /// </summary>
     private static UiControl BuildSplitLayoutWithAnnotations(
@@ -291,10 +291,10 @@ public static class MarkdownLayoutAreas
         IReadOnlyList<MeshNode> markdownChildren)
     {
         var nodePath = node?.Path ?? host.Hub.Address.ToString();
-        // Outer container - centered with max width
+        // Outer container - wider to accommodate larger annotation cards
         var outerContainer = Controls.Stack
             .WithWidth("100%")
-            .WithStyle("max-width: 1200px; margin: 0 auto; padding: 24px; background: var(--neutral-layer-1); position: relative;");
+            .WithStyle("max-width: 1400px; margin: 0 auto; padding: 24px; background: var(--neutral-layer-1); position: relative;");
 
         // Action menu positioned at top-right of content area
         var actionMenu = Controls.Stack
@@ -303,35 +303,36 @@ public static class MarkdownLayoutAreas
 
         outerContainer = outerContainer.WithView(actionMenu);
 
-        // Reactive view mode toolbar
-        outerContainer = outerContainer.WithView(BuildReactiveViewModeToolbar(viewModeSubject, currentViewMode, annotations));
+        // Reactive view mode toolbar - pass node and raw content for persistence
+        var rawContent = GetMarkdownContent(node);
+        outerContainer = outerContainer.WithView(BuildReactiveViewModeToolbar(host, node, rawContent, viewModeSubject, currentViewMode, annotations));
 
         // Split layout using nested stacks with position:relative for SVG lines
         var splitLayout = Controls.Stack
             .WithOrientation(Orientation.Horizontal)
             .WithWidth("100%")
-            .WithStyle("gap: 16px; align-items: flex-start; position: relative;");
+            .WithStyle("gap: 24px; align-items: flex-start; position: relative;");
 
-        // Left: Content area with markdown
+        // Left: Content area with markdown - takes remaining space
         var contentArea = Controls.Stack
-            .WithStyle("flex: 7; min-width: 0; max-width: 700px; position: relative;")
+            .WithStyle("flex: 1; min-width: 0; max-width: 750px; position: relative;")
             .WithView(Controls.Html($"<div id=\"{containerId}\" class=\"markdown-annotations-container\" style=\"line-height: 1.7; font-size: 1rem;\">"))
             .WithView(new MarkdownControl(content))
             .WithView(Controls.Html("</div>"));
 
-        // Right: Annotations column - narrower for compact cards
+        // Right: Annotations column - all annotations (comments + track changes with Accept/Reject buttons)
         var annotationsColumn = Controls.Stack
-            .WithStyle("flex: 0 0 260px; min-width: 200px; max-width: 280px; position: relative; padding-left: 8px;");
+            .WithStyle("flex: 0 0 340px; min-width: 300px; max-width: 380px; position: relative;");
 
         // Add open tag for annotations container
         annotationsColumn = annotationsColumn.WithView(
             Controls.Html($"<div id=\"{containerId}-annotations\" class=\"annotations-column\">"));
 
-        // Build annotation cards as UiControls
+        // Build annotation cards for all annotations (comments get Reply/Resolve, track changes get Accept/Reject)
         foreach (var annotation in annotations)
         {
             annotationsColumn = annotationsColumn.WithView(
-                BuildAnnotationCard(host, annotation, panelState, panelStateSubject, viewModeSubject));
+                BuildAnnotationCard(host, node, rawContent, annotation, panelState, panelStateSubject, viewModeSubject));
         }
 
         // Close annotations container
@@ -355,10 +356,13 @@ public static class MarkdownLayoutAreas
     }
 
     /// <summary>
-    /// Builds a collapsible annotation card with reactive buttons.
+    /// Builds an annotation card in Word Online style - always expanded, readable.
+    /// Accept/Reject buttons persist changes via DataChangeRequest.
     /// </summary>
     private static UiControl BuildAnnotationCard(
         LayoutAreaHost host,
+        MeshNode? node,
+        string rawContent,
         ParsedAnnotation annotation,
         AnnotationPanelState panelState,
         BehaviorSubject<AnnotationPanelState> panelStateSubject,
@@ -372,129 +376,151 @@ public static class MarkdownLayoutAreas
             _ => "#6b7280"
         };
 
-        // Use simple symbols instead of emojis for cleaner look
-        var typeSymbol = annotation.Type switch
+        var typeLabel = annotation.Type switch
         {
-            AnnotationType.Comment => "C",
-            AnnotationType.Insert => "+",
-            AnnotationType.Delete => "−",
-            _ => "•"
+            AnnotationType.Comment => "Comment",
+            AnnotationType.Insert => "Inserted",
+            AnnotationType.Delete => "Deleted",
+            _ => "Change"
         };
 
-        var author = annotation.Author ?? "";
-        var shortAuthor = author.Length > 8 ? author[..6] + ".." : author;
-        var shortPreview = annotation.HighlightedText.Length > 15
-            ? annotation.HighlightedText[..12] + "..."
-            : annotation.HighlightedText;
-
-        var isExpanded = panelState.ExpandedAnnotationIds.Contains(annotation.Id);
+        var author = annotation.Author ?? "Unknown";
+        var authorInitial = author.Length > 0 ? author[0].ToString().ToUpper() : "?";
         var isReplyingToThis = panelState.ReplyingToAnnotationId == annotation.Id;
-        var replyCount = panelState.Replies.TryGetValue(annotation.Id, out var replies) ? replies.Count : 0;
+        panelState.Replies.TryGetValue(annotation.Id, out var replies);
 
-        // Toggle expansion function
-        void ToggleExpand()
+        // Card container - Word Online style with proper sizing
+        var card = Controls.Stack
+            .WithStyle($"padding: 12px; background: var(--neutral-layer-1); border-radius: 6px; border-left: 4px solid {typeColor}; margin-bottom: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.12);");
+
+        // Header row: Avatar + Author + Type badge
+        var headerHtml = $@"
+            <div style=""display: flex; align-items: center; gap: 8px; margin-bottom: 8px;"">
+                <div style=""width: 32px; height: 32px; border-radius: 50%; background: {typeColor}; color: white;
+                            display: flex; align-items: center; justify-content: center; font-weight: 600; font-size: 14px;"">
+                    {System.Web.HttpUtility.HtmlEncode(authorInitial)}
+                </div>
+                <div style=""flex: 1;"">
+                    <div style=""font-weight: 600; font-size: 0.9rem; color: var(--neutral-foreground-rest);"">{System.Web.HttpUtility.HtmlEncode(author)}</div>
+                    <div style=""font-size: 0.75rem; color: var(--neutral-foreground-hint);"">{typeLabel}</div>
+                </div>
+            </div>";
+        card = card.WithView(Controls.Html(headerHtml));
+
+        // Quoted/highlighted text from document
+        var highlightedText = annotation.HighlightedText;
+        if (!string.IsNullOrEmpty(highlightedText))
         {
-            var newExpanded = new HashSet<string>(panelState.ExpandedAnnotationIds);
-            if (isExpanded)
-                newExpanded.Remove(annotation.Id);
-            else
-                newExpanded.Add(annotation.Id);
-            panelStateSubject.OnNext(panelState with { ExpandedAnnotationIds = newExpanded });
+            var bgColor = annotation.Type switch
+            {
+                AnnotationType.Insert => "rgba(34, 197, 94, 0.15)",
+                AnnotationType.Delete => "rgba(239, 68, 68, 0.15)",
+                _ => "rgba(59, 130, 246, 0.1)"
+            };
+            var textDecoration = annotation.Type == AnnotationType.Delete ? "text-decoration: line-through;" : "";
+
+            card = card.WithView(Controls.Html($@"
+                <div style=""font-size: 0.85rem; color: var(--neutral-foreground-rest); padding: 8px 10px;
+                            background: {bgColor}; border-radius: 4px; margin-bottom: 8px;
+                            border-left: 2px solid {typeColor}; font-style: italic; {textDecoration}"">
+                    ""{System.Web.HttpUtility.HtmlEncode(highlightedText)}""
+                </div>"));
         }
 
-        // Build the card container - very compact when collapsed (like Word's sidebar)
-        var cardStyle = isExpanded
-            ? $"padding: 6px 8px; background: var(--neutral-layer-1); border-radius: 3px; border-left: 3px solid {typeColor}; margin-bottom: 2px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);"
-            : $"padding: 2px 6px; background: var(--neutral-layer-1); border-radius: 3px; border-left: 2px solid {typeColor}; margin-bottom: 2px; opacity: 0.85;";
-
-        var card = Controls.Stack.WithStyle(cardStyle);
-
-        // Collapsed header - minimal info, single line
-        var headerContent = isExpanded
-            ? $"<span style=\"display:inline-flex;align-items:center;justify-content:center;width:14px;height:14px;border-radius:50%;background:{typeColor};color:white;font-size:9px;font-weight:bold;margin-right:4px;\">{typeSymbol}</span><b style=\"color:{typeColor};font-size:0.7rem;\">{System.Web.HttpUtility.HtmlEncode(shortAuthor)}</b>: \"{System.Web.HttpUtility.HtmlEncode(shortPreview)}\""
-            : $"<span style=\"display:inline-flex;align-items:center;justify-content:center;width:12px;height:12px;border-radius:50%;background:{typeColor};color:white;font-size:8px;font-weight:bold;margin-right:3px;\">{typeSymbol}</span><span style=\"font-size:0.65rem;color:var(--neutral-foreground-hint);\">{System.Web.HttpUtility.HtmlEncode(shortAuthor)}</span>" + (replyCount > 0 ? $"<span style=\"font-size:0.6rem;color:var(--accent-fill-rest);margin-left:2px;\">+{replyCount}</span>" : "");
-
-        var headerStyle = isExpanded
-            ? "display: flex; align-items: center; gap: 2px; font-size: 0.7rem; cursor: pointer; user-select: none; line-height: 1.2;"
-            : "display: flex; align-items: center; gap: 2px; font-size: 0.65rem; cursor: pointer; user-select: none; white-space: nowrap; overflow: hidden; line-height: 1.1;";
-
-        card = card.WithView(
-            Controls.Html($"<div style=\"{headerStyle}\">{headerContent}</div>")
-        );
-
-        // Make header clickable
-        card = card.WithClickAction(_ => ToggleExpand());
-
-        // Expanded content
-        if (isExpanded)
+        // Comment text (for comments)
+        if (annotation.Type == AnnotationType.Comment && !string.IsNullOrEmpty(annotation.CommentText))
         {
-            // Comment text (more compact)
-            if (!string.IsNullOrEmpty(annotation.CommentText))
+            card = card.WithView(Controls.Html($@"
+                <div style=""font-size: 0.9rem; color: var(--neutral-foreground-rest); line-height: 1.5; margin-bottom: 8px;"">
+                    {System.Web.HttpUtility.HtmlEncode(annotation.CommentText)}
+                </div>"));
+        }
+
+        // Replies
+        if (replies != null && replies.Count > 0)
+        {
+            foreach (var reply in replies)
             {
                 card = card.WithView(Controls.Html($@"
-                    <div style=""font-size: 0.7rem; color: var(--neutral-foreground-rest); margin: 4px 0; padding: 3px 5px; background: var(--neutral-layer-2); border-radius: 2px; line-height: 1.3;"">
-                        {System.Web.HttpUtility.HtmlEncode(annotation.CommentText)}
+                    <div style=""font-size: 0.85rem; padding: 8px; margin: 4px 0; background: var(--neutral-layer-2);
+                               border-radius: 4px; border-left: 3px solid var(--accent-fill-rest);"">
+                        <div style=""font-weight: 600; color: var(--accent-fill-rest); margin-bottom: 4px;"">{System.Web.HttpUtility.HtmlEncode(reply.Author)}</div>
+                        <div style=""color: var(--neutral-foreground-rest);"">{System.Web.HttpUtility.HtmlEncode(reply.Text)}</div>
                     </div>"));
             }
+        }
 
-            // Replies (compact)
-            if (replies != null && replies.Count > 0)
+        // Action buttons - always visible
+        if (annotation.Type == AnnotationType.Comment)
+        {
+            if (isReplyingToThis)
             {
-                foreach (var reply in replies)
-                {
-                    card = card.WithView(Controls.Html($@"
-                        <div style=""font-size: 0.65rem; padding: 2px 4px; margin: 2px 0; background: var(--neutral-layer-3);
-                                   border-radius: 2px; border-left: 2px solid var(--accent-fill-rest); line-height: 1.2;"">
-                            <span style=""font-weight: 500; color: var(--accent-fill-rest);"">{System.Web.HttpUtility.HtmlEncode(reply.Author)}</span>: {System.Web.HttpUtility.HtmlEncode(reply.Text)}
-                        </div>"));
-                }
-            }
-
-            // Reply form or action buttons (compact)
-            if (annotation.Type == AnnotationType.Comment)
-            {
-                if (isReplyingToThis)
-                {
-                    card = card.WithView(BuildReplyForm(host, annotation.Id, panelState, panelStateSubject));
-                }
-                else
-                {
-                    var buttonRow = Controls.Stack
-                        .WithOrientation(Orientation.Horizontal)
-                        .WithStyle("gap: 3px; margin-top: 3px;");
-
-                    buttonRow = buttonRow.WithView(
-                        Controls.Button("Reply")
-                            .WithStyle("padding: 1px 5px; font-size: 0.6rem;")
-                            .WithClickAction(_ => panelStateSubject.OnNext(
-                                panelState with { ReplyingToAnnotationId = annotation.Id })));
-
-                    buttonRow = buttonRow.WithView(
-                        Controls.Button("✓")
-                            .WithAppearance(Appearance.Stealth)
-                            .WithStyle("padding: 1px 5px; font-size: 0.6rem; border: 1px solid var(--neutral-stroke-rest);"));
-
-                    card = card.WithView(buttonRow);
-                }
+                card = card.WithView(BuildReplyForm(host, annotation.Id, panelState, panelStateSubject));
             }
             else
             {
                 var buttonRow = Controls.Stack
                     .WithOrientation(Orientation.Horizontal)
-                    .WithStyle("gap: 3px; margin-top: 3px;");
+                    .WithStyle("gap: 8px; margin-top: 8px;");
 
                 buttonRow = buttonRow.WithView(
-                    Controls.Button("✓")
-                        .WithStyle("padding: 1px 6px; font-size: 0.6rem; background: #22c55e; color: white;")
-                        .WithClickAction(_ => viewModeSubject.OnNext(AnnotationViewMode.Accepted)));
+                    Controls.Button("Reply")
+                        .WithAppearance(Appearance.Neutral)
+                        .WithStyle("padding: 6px 16px; font-size: 0.85rem;")
+                        .WithClickAction(_ => panelStateSubject.OnNext(
+                            panelState with { ReplyingToAnnotationId = annotation.Id })));
 
                 buttonRow = buttonRow.WithView(
-                    Controls.Button("✗")
-                        .WithStyle("padding: 1px 6px; font-size: 0.6rem; background: #ef4444; color: white;")
-                        .WithClickAction(_ => viewModeSubject.OnNext(AnnotationViewMode.Original)));
+                    Controls.Button("Resolve")
+                        .WithAppearance(Appearance.Stealth)
+                        .WithStyle("padding: 6px 16px; font-size: 0.85rem;")
+                        .WithClickAction(_ =>
+                        {
+                            if (node == null) return;
+                            var newContent = AnnotationMarkdownExtension.ResolveComment(rawContent, annotation.Id);
+                            var updatedNode = node with { Content = new MarkdownContent { Content = newContent } };
+                            host.Hub.Post(
+                                new DataChangeRequest().WithUpdates(updatedNode),
+                                o => o.WithTarget(host.Hub.Address));
+                        }));
 
                 card = card.WithView(buttonRow);
             }
+        }
+        else
+        {
+            // Track changes - Accept/Reject buttons
+            var buttonRow = Controls.Stack
+                .WithOrientation(Orientation.Horizontal)
+                .WithStyle("gap: 8px; margin-top: 8px;");
+
+            buttonRow = buttonRow.WithView(
+                Controls.Button("Accept")
+                    .WithStyle("padding: 6px 16px; font-size: 0.85rem; background: #22c55e; color: white; border: none; border-radius: 4px;")
+                    .WithClickAction(_ =>
+                    {
+                        if (node == null) return;
+                        var newContent = AnnotationMarkdownExtension.AcceptChange(rawContent, annotation.Id);
+                        var updatedNode = node with { Content = new MarkdownContent { Content = newContent } };
+                        host.Hub.Post(
+                            new DataChangeRequest().WithUpdates(updatedNode),
+                            o => o.WithTarget(host.Hub.Address));
+                    }));
+
+            buttonRow = buttonRow.WithView(
+                Controls.Button("Reject")
+                    .WithStyle("padding: 6px 16px; font-size: 0.85rem; background: #ef4444; color: white; border: none; border-radius: 4px;")
+                    .WithClickAction(_ =>
+                    {
+                        if (node == null) return;
+                        var newContent = AnnotationMarkdownExtension.RejectChange(rawContent, annotation.Id);
+                        var updatedNode = node with { Content = new MarkdownContent { Content = newContent } };
+                        host.Hub.Post(
+                            new DataChangeRequest().WithUpdates(updatedNode),
+                            o => o.WithTarget(host.Hub.Address));
+                    }));
+
+            card = card.WithView(buttonRow);
         }
 
         // Wrap in a div with data attributes for positioning and line drawing
@@ -516,14 +542,14 @@ public static class MarkdownLayoutAreas
         var replyDataId = $"Reply_{annotationId}";
 
         var form = Controls.Stack
-            .WithStyle("margin-top: 8px; padding: 8px; background: var(--neutral-layer-2); border-radius: 4px;");
+            .WithStyle("margin-top: 12px; padding: 12px; background: var(--neutral-layer-2); border-radius: 6px;");
 
         // Reply textarea using host.Edit with ReplyFormModel
         var editControl = host.Edit(new ReplyFormModel(), replyDataId);
         if (editControl != null)
         {
             var editWrapper = Controls.Stack
-                .WithStyle("margin-bottom: 8px;")
+                .WithStyle("margin-bottom: 12px;")
                 .WithView(editControl);
             form = form.WithView(editWrapper);
         }
@@ -531,18 +557,19 @@ public static class MarkdownLayoutAreas
         // Button row
         var buttonRow = Controls.Stack
             .WithOrientation(Orientation.Horizontal)
-            .WithStyle("gap: 6px; justify-content: flex-end;");
+            .WithStyle("gap: 8px; justify-content: flex-end;");
 
         buttonRow = buttonRow.WithView(
             Controls.Button("Cancel")
                 .WithAppearance(Appearance.Stealth)
-                .WithStyle("padding: 4px 12px; font-size: 0.75rem;")
+                .WithStyle("padding: 6px 16px; font-size: 0.85rem;")
                 .WithClickAction(_ => panelStateSubject.OnNext(
                     panelState with { ReplyingToAnnotationId = null })));
 
         buttonRow = buttonRow.WithView(
             Controls.Button("Submit")
-                .WithStyle("padding: 4px 12px; font-size: 0.75rem;")
+                .WithAppearance(Appearance.Accent)
+                .WithStyle("padding: 6px 16px; font-size: 0.85rem;")
                 .WithClickAction(async ctx =>
                 {
                     // Get the reply text from the form data
@@ -578,7 +605,7 @@ public static class MarkdownLayoutAreas
 <script>
 (function() {{
     var containerId = '{containerId}';
-    var minCardGap = 1; // Minimal gap between cards
+    var minCardGap = 12; // Gap between larger cards
 
     function drawConnectingLines() {{
         var container = document.getElementById(containerId);
@@ -595,15 +622,16 @@ public static class MarkdownLayoutAreas
 
         var svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
         svg.id = containerId + '-lines';
-        svg.style.cssText = 'position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;z-index:1;overflow:visible;';
+        var svgHeight = Math.max(splitLayout.scrollHeight, container.scrollHeight, annotationsCol.scrollHeight);
+        svg.style.cssText = 'position:absolute;top:0;left:0;pointer-events:none;z-index:1;overflow:visible;';
+        svg.setAttribute('width', splitLayout.scrollWidth);
+        svg.setAttribute('height', svgHeight);
         splitLayout.insertBefore(svg, splitLayout.firstChild);
 
         var splitRect = splitLayout.getBoundingClientRect();
-        var containerRect = container.getBoundingClientRect();
-
-        // Update SVG size
-        svg.setAttribute('width', splitLayout.scrollWidth);
-        svg.setAttribute('height', Math.max(splitLayout.scrollHeight, container.scrollHeight, annotationsCol.scrollHeight));
+        // Account for scroll position when converting viewport coords to layout-relative coords
+        var scrollLeft = window.pageXOffset || document.documentElement.scrollLeft;
+        var scrollTop = window.pageYOffset || document.documentElement.scrollTop;
 
         var cards = annotationsCol.querySelectorAll('.annotation-card');
         cards.forEach(function(card) {{
@@ -616,20 +644,20 @@ public static class MarkdownLayoutAreas
                 var markerRect = marker.getBoundingClientRect();
                 var cardRect = card.getBoundingClientRect();
 
-                // Calculate positions relative to split layout
-                var markerX = markerRect.right - splitRect.left + 2;
-                var markerY = markerRect.top + markerRect.height / 2 - splitRect.top;
-                var cardX = cardRect.left - splitRect.left - 2;
-                var cardY = cardRect.top + 8 - splitRect.top;
+                // Calculate positions relative to split layout, accounting for scroll
+                var markerX = markerRect.right - splitRect.left + splitLayout.scrollLeft + 4;
+                var markerY = markerRect.top + markerRect.height / 2 - splitRect.top + splitLayout.scrollTop;
+                var cardX = cardRect.left - splitRect.left + splitLayout.scrollLeft - 4;
+                var cardY = cardRect.top + Math.min(24, cardRect.height / 2) - splitRect.top + splitLayout.scrollTop;
 
-                // Simple horizontal line with small turn
+                // Smooth curved line from marker to card
                 var path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-                var midX = markerX + 10;
-                path.setAttribute('d', 'M ' + markerX + ' ' + markerY + ' H ' + midX + ' L ' + cardX + ' ' + cardY);
+                var midX = (markerX + cardX) / 2;
+                path.setAttribute('d', 'M ' + markerX + ' ' + markerY + ' Q ' + midX + ' ' + markerY + ' ' + midX + ' ' + ((markerY + cardY) / 2) + ' Q ' + midX + ' ' + cardY + ' ' + cardX + ' ' + cardY);
                 path.setAttribute('stroke', color);
-                path.setAttribute('stroke-width', '1');
+                path.setAttribute('stroke-width', '1.5');
                 path.setAttribute('fill', 'none');
-                path.setAttribute('opacity', '0.4');
+                path.setAttribute('opacity', '0.5');
                 path.setAttribute('data-annotation', annotationId);
                 svg.appendChild(path);
 
@@ -637,9 +665,9 @@ public static class MarkdownLayoutAreas
                 var circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
                 circle.setAttribute('cx', markerX);
                 circle.setAttribute('cy', markerY);
-                circle.setAttribute('r', '2');
+                circle.setAttribute('r', '3');
                 circle.setAttribute('fill', color);
-                circle.setAttribute('opacity', '0.6');
+                circle.setAttribute('opacity', '0.7');
                 svg.appendChild(circle);
             }}
         }});
@@ -703,33 +731,56 @@ public static class MarkdownLayoutAreas
         requestAnimationFrame(drawConnectingLines);
     }}
 
-    // Initialize
-    function init() {{
-        setTimeout(positionAnnotationCards, 50);
-        setTimeout(positionAnnotationCards, 200);
-        setTimeout(positionAnnotationCards, 500);
+    // Poll until markers are in the DOM, then position cards
+    function waitForMarkersAndPosition() {{
+        var container = document.getElementById(containerId);
+        var annotationsCol = document.getElementById(containerId + '-annotations');
+        if (!container || !annotationsCol) {{
+            requestAnimationFrame(waitForMarkersAndPosition);
+            return;
+        }}
+
+        var markers = container.querySelectorAll('[data-comment-id], [data-change-id]');
+        var cards = annotationsCol.querySelectorAll('.annotation-card');
+        if (markers.length === 0 || cards.length === 0) {{
+            requestAnimationFrame(waitForMarkersAndPosition);
+            return;
+        }}
+
+        // Markers found - position cards
+        positionAnnotationCards();
+        // Re-run once more after a short delay to catch late layout shifts
+        requestAnimationFrame(function() {{
+            requestAnimationFrame(positionAnnotationCards);
+        }});
     }}
 
     if (document.readyState === 'loading') {{
-        document.addEventListener('DOMContentLoaded', init);
+        document.addEventListener('DOMContentLoaded', waitForMarkersAndPosition);
     }} else {{
-        init();
+        requestAnimationFrame(waitForMarkersAndPosition);
     }}
 
     window.addEventListener('resize', function() {{
         requestAnimationFrame(positionAnnotationCards);
     }});
 
-    // Re-run when cards expand/collapse
-    var observer = new MutationObserver(function(mutations) {{
+    // Observe both annotations column and content container for changes
+    var observer = new MutationObserver(function() {{
         requestAnimationFrame(positionAnnotationCards);
     }});
-    setTimeout(function() {{
+
+    function setupObservers() {{
+        var container = document.getElementById(containerId);
         var annotationsCol = document.getElementById(containerId + '-annotations');
         if (annotationsCol) {{
             observer.observe(annotationsCol, {{ childList: true, subtree: true, attributes: true, characterData: true }});
         }}
-    }}, 100);
+        if (container) {{
+            observer.observe(container, {{ childList: true, subtree: true }});
+        }}
+    }}
+    requestAnimationFrame(setupObservers);
 
     // Highlight on click
     document.addEventListener('click', function(e) {{
@@ -779,29 +830,47 @@ public static class MarkdownLayoutAreas
             }});
         }}
     }};
+
 }})();
 </script>
 <style>
 .annotations-column {{
     position: relative;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
 }}
 .annotation-card {{
-    transition: all 0.15s ease;
+    transition: all 0.2s ease;
 }}
 .annotation-card:hover {{
-    opacity: 1 !important;
-    box-shadow: 0 1px 4px rgba(0,0,0,0.12) !important;
+    transform: translateX(-2px);
+    box-shadow: 0 2px 8px rgba(0,0,0,0.15) !important;
     z-index: 10;
 }}
 .annotation-card.active {{
-    opacity: 1 !important;
-    box-shadow: 0 0 0 1px var(--accent-fill-rest), 0 1px 4px rgba(0,0,0,0.15) !important;
+    box-shadow: 0 0 0 2px var(--accent-fill-rest), 0 2px 8px rgba(0,0,0,0.18) !important;
     z-index: 10;
 }}
 .annotation-active {{
-    background: rgba(59, 130, 246, 0.12) !important;
-    box-shadow: 0 0 0 1px var(--accent-fill-rest);
-    border-radius: 2px;
+    background: rgba(59, 130, 246, 0.15) !important;
+    box-shadow: 0 0 0 2px var(--accent-fill-rest);
+    border-radius: 3px;
+}}
+/* Highlighted text styles */
+.comment-highlight {{
+    background: rgba(59, 130, 246, 0.2);
+    border-bottom: 2px solid #3b82f6;
+    cursor: pointer;
+}}
+.track-insert {{
+    background: rgba(34, 197, 94, 0.2);
+    border-bottom: 2px solid #22c55e;
+}}
+.track-delete {{
+    background: rgba(239, 68, 68, 0.2);
+    border-bottom: 2px solid #ef4444;
+    text-decoration: line-through;
 }}
 </style>
         ");
@@ -809,8 +878,15 @@ public static class MarkdownLayoutAreas
 
     /// <summary>
     /// Builds a reactive view mode toolbar that re-renders the markdown on mode change.
+    /// Accept All and Reject All persist changes via DataChangeRequest.
     /// </summary>
-    private static UiControl BuildReactiveViewModeToolbar(ViewModeSubject viewModeSubject, AnnotationViewMode currentMode, List<ParsedAnnotation> annotations)
+    private static UiControl BuildReactiveViewModeToolbar(
+        LayoutAreaHost host,
+        MeshNode? node,
+        string rawContent,
+        ViewModeSubject viewModeSubject,
+        AnnotationViewMode currentMode,
+        List<ParsedAnnotation> annotations)
     {
         var trackChanges = annotations.Where(a => a.Type != AnnotationType.Comment).ToList();
 
@@ -832,19 +908,35 @@ public static class MarkdownLayoutAreas
         // Separator
         toolbar = toolbar.WithView(Controls.Html("<div style=\"width: 1px; height: 20px; background: var(--neutral-stroke-rest); margin: 0 8px;\"></div>"));
 
-        // Accept All button - switches to accepted view
+        // Accept All button - persists changes via DataChangeRequest
         toolbar = toolbar.WithView(
             Controls.Button("✓ Accept All")
                 .WithAppearance(Appearance.Stealth)
                 .WithStyle("color: #22c55e; font-size: 0.85rem;")
-                .WithClickAction(_ => viewModeSubject.OnNext(AnnotationViewMode.Accepted)));
+                .WithClickAction(_ =>
+                {
+                    if (node == null) return;
+                    var acceptedContent = AnnotationMarkdownExtension.GetAcceptedContent(rawContent);
+                    var updatedNode = node with { Content = new MarkdownContent { Content = acceptedContent } };
+                    host.Hub.Post(
+                        new DataChangeRequest().WithUpdates(updatedNode),
+                        o => o.WithTarget(host.Hub.Address));
+                }));
 
-        // Reject All button - switches to original view
+        // Reject All button - persists changes via DataChangeRequest
         toolbar = toolbar.WithView(
             Controls.Button("✗ Reject All")
                 .WithAppearance(Appearance.Stealth)
                 .WithStyle("color: #ef4444; font-size: 0.85rem;")
-                .WithClickAction(_ => viewModeSubject.OnNext(AnnotationViewMode.Original)));
+                .WithClickAction(_ =>
+                {
+                    if (node == null) return;
+                    var rejectedContent = AnnotationMarkdownExtension.GetRejectedContent(rawContent);
+                    var updatedNode = node with { Content = new MarkdownContent { Content = rejectedContent } };
+                    host.Hub.Post(
+                        new DataChangeRequest().WithUpdates(updatedNode),
+                        o => o.WithTarget(host.Hub.Address));
+                }));
 
         return toolbar;
     }

@@ -14,9 +14,12 @@
 
 .thread-chat-input-area {
     flex-shrink: 0;
-    padding: 12px 16px;
-    border-top: 1px solid var(--neutral-stroke-rest);
-    background: var(--neutral-layer-1);
+    padding: 16px;
+    margin: 0 16px 16px 16px;
+    border: 1px solid var(--neutral-stroke-rest);
+    border-radius: 8px;
+    background: var(--neutral-layer-card-container);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
 }
 
 .input-container {

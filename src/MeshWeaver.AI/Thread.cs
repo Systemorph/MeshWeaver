@@ -4,9 +4,34 @@ using MeshWeaver.ShortGuid;
 namespace MeshWeaver.AI;
 
 /// <summary>
+/// Defines the type of a thread message for rendering purposes.
+/// </summary>
+public enum ThreadMessageType
+{
+    /// <summary>
+    /// User is currently editing this message (not yet submitted).
+    /// Rendered with MarkdownEditorControl.
+    /// </summary>
+    EditingPrompt,
+
+    /// <summary>
+    /// Submitted user message.
+    /// Rendered with MarkdownControl (readonly).
+    /// </summary>
+    ExecutedInput,
+
+    /// <summary>
+    /// Assistant/agent response message.
+    /// Rendered with MarkdownControl (readonly).
+    /// </summary>
+    AgentResponse
+}
+
+/// <summary>
 /// Content stored in Thread MeshNodes.
 /// Threads are stored as MeshNodes with nodeType="Thread".
 /// Title is stored in MeshNode.Name, LastModified tracks activity.
+/// Messages are stored as child MeshNodes with nodeType="ThreadMessage".
 /// </summary>
 public record Thread
 {
@@ -16,8 +41,11 @@ public record Thread
     public JsonElement? SessionState { get; init; }
 
     /// <summary>
-    /// Thread messages stored inline.
+    /// Legacy: Thread messages stored inline.
+    /// New threads use child MeshNodes instead.
+    /// Kept for backward compatibility with existing threads.
     /// </summary>
+    [Obsolete("Use child MeshNodes with nodeType=ThreadMessage instead. Kept for backward compatibility.")]
     public List<ThreadMessage>? Messages { get; init; }
 
     /// <summary>
@@ -25,62 +53,81 @@ public record Thread
     /// Used for navigation back to context.
     /// </summary>
     public string? ParentPath { get; init; }
+}
 
+/// <summary>
+/// Extension methods for Thread message operations.
+/// </summary>
+public static class ThreadMessageExtensions
+{
     /// <summary>
-    /// Converts Thread messages to Microsoft.Extensions.AI.ChatMessage format.
+    /// Converts ThreadMessage collection to Microsoft.Extensions.AI.ChatMessage format.
     /// </summary>
-    public List<Microsoft.Extensions.AI.ChatMessage> ToChatMessages()
+    public static List<Microsoft.Extensions.AI.ChatMessage> ToChatMessages(this IEnumerable<ThreadMessage> messages)
     {
-        if (Messages == null || Messages.Count == 0)
-            return [];
-
-        return Messages.Select(msg => new Microsoft.Extensions.AI.ChatMessage(
-            new Microsoft.Extensions.AI.ChatRole(msg.Role),
-            msg.Text)
-        {
-            AuthorName = msg.AuthorName
-        }).ToList();
-    }
-
-    /// <summary>
-    /// Creates a Thread from Microsoft.Extensions.AI.ChatMessage collection.
-    /// </summary>
-    public static Thread FromChatMessages(IEnumerable<Microsoft.Extensions.AI.ChatMessage> messages, string? parentPath = null)
-    {
-        return new Thread
-        {
-            Messages = messages.Select(msg => new ThreadMessage
+        return messages
+            .Where(msg => msg.Type != ThreadMessageType.EditingPrompt) // Exclude editing prompts
+            .Select(msg => new Microsoft.Extensions.AI.ChatMessage(
+                new Microsoft.Extensions.AI.ChatRole(msg.Role),
+                msg.Text)
             {
-                Id = Guid.NewGuid().AsString(),
-                Role = msg.Role.Value,
-                AuthorName = msg.AuthorName,
-                Text = msg.Text ?? string.Empty,
-                Timestamp = DateTime.UtcNow
-            }).ToList(),
-            ParentPath = parentPath
-        };
+                AuthorName = msg.AuthorName
+            }).ToList();
     }
 
     /// <summary>
-    /// Adds messages from ChatMessage collection to this thread.
+    /// Creates ThreadMessage records from Microsoft.Extensions.AI.ChatMessage collection.
     /// </summary>
-    public Thread WithMessages(IEnumerable<Microsoft.Extensions.AI.ChatMessage> messages)
+    public static List<ThreadMessage> FromChatMessages(
+        IEnumerable<Microsoft.Extensions.AI.ChatMessage> messages,
+        ThreadMessageType defaultType = ThreadMessageType.ExecutedInput)
     {
-        var newMessages = messages.Select(msg => new ThreadMessage
+        return messages.Select(msg => new ThreadMessage
         {
             Id = Guid.NewGuid().AsString(),
             Role = msg.Role.Value,
             AuthorName = msg.AuthorName,
             Text = msg.Text ?? string.Empty,
-            Timestamp = DateTime.UtcNow
+            Timestamp = DateTime.UtcNow,
+            Type = msg.Role.Value.Equals("user", StringComparison.OrdinalIgnoreCase)
+                ? ThreadMessageType.ExecutedInput
+                : ThreadMessageType.AgentResponse
         }).ToList();
+    }
 
-        return this with { Messages = newMessages };
+    /// <summary>
+    /// Converts legacy Thread with inline Messages to ChatMessages.
+    /// </summary>
+#pragma warning disable CS0618 // Type or member is obsolete
+    public static List<Microsoft.Extensions.AI.ChatMessage> ToChatMessages(this Thread thread)
+    {
+        if (thread.Messages == null || thread.Messages.Count == 0)
+            return [];
+
+        return thread.Messages.ToChatMessages();
+    }
+#pragma warning restore CS0618
+
+    /// <summary>
+    /// Creates a legacy Thread from Microsoft.Extensions.AI.ChatMessage collection.
+    /// For backward compatibility only - new code should use child MeshNodes.
+    /// </summary>
+    [Obsolete("Use child MeshNodes with nodeType=ThreadMessage instead.")]
+    public static Thread FromChatMessagesToThread(IEnumerable<Microsoft.Extensions.AI.ChatMessage> messages, string? parentPath = null)
+    {
+#pragma warning disable CS0618 // Type or member is obsolete
+        return new Thread
+        {
+            Messages = FromChatMessages(messages),
+            ParentPath = parentPath
+        };
+#pragma warning restore CS0618
     }
 }
 
 /// <summary>
 /// Represents a single message in a thread conversation.
+/// Stored as content of child MeshNodes under a Thread node.
 /// </summary>
 public record ThreadMessage
 {
@@ -113,4 +160,10 @@ public record ThreadMessage
     /// If this message triggered a delegation, path to the sub-thread node.
     /// </summary>
     public string? DelegationPath { get; init; }
+
+    /// <summary>
+    /// The type of this message for rendering purposes.
+    /// Defaults to ExecutedInput for backward compatibility.
+    /// </summary>
+    public ThreadMessageType Type { get; init; } = ThreadMessageType.ExecutedInput;
 }

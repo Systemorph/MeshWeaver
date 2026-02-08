@@ -1,6 +1,6 @@
 using System.Runtime.CompilerServices;
 using System.Text;
-using Claude.AgentSdk;
+using ClaudeAgentSdk;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 
@@ -76,51 +76,94 @@ public class ClaudeCodeChatClient : IChatClient
     {
         // Build the prompt from messages
         var messageList = messages.ToList();
+
+        // Debug: Log all incoming messages
+        logger?.LogInformation("ClaudeCode received {Count} messages", messageList.Count);
+        foreach (var msg in messageList)
+        {
+            logger?.LogInformation("  Message: Role={Role}, Text='{Text}', ContentsCount={ContentsCount}",
+                msg.Role.Value,
+                msg.Text?.Substring(0, Math.Min(100, msg.Text?.Length ?? 0)) ?? "(null)",
+                msg.Contents?.Count ?? 0);
+
+            if (msg.Contents != null)
+            {
+                foreach (var content in msg.Contents)
+                {
+                    logger?.LogInformation("    Content type: {Type}, Value: {Value}",
+                        content.GetType().Name,
+                        content is TextContent tc ? tc.Text?.Substring(0, Math.Min(50, tc.Text?.Length ?? 0)) : "(non-text)");
+                }
+            }
+        }
+
         var userPrompt = BuildPromptFromMessages(messageList);
 
+        // If CliDirectory is specified, add it to PATH for CLI discovery
+        // This must be done BEFORE calling the SDK as FindCli() checks PATH
+        if (!string.IsNullOrEmpty(configuration.CliDirectory))
+        {
+            // Expand environment variables like %APPDATA% and normalize path separators
+            var expandedPath = Environment.ExpandEnvironmentVariables(configuration.CliDirectory);
+            // Normalize path separators for the current platform
+            expandedPath = Path.GetFullPath(expandedPath);
+            logger?.LogDebug("ClaudeCode CliDirectory: configured={Configured}, expanded={Expanded}",
+                configuration.CliDirectory, expandedPath);
+            EnsureCliInPath(expandedPath);
+        }
+
         // Build options
-        var optionsBuilder = Claude.AgentSdk.Claude.Options();
+        var claudeOptions = new ClaudeAgentOptions
+        {
+            // Set UTF-8 encoding environment variables for proper character handling on Windows
+            Env = new Dictionary<string, string>
+            {
+                ["PYTHONUTF8"] = "1",                    // Python UTF-8 mode
+                ["PYTHONIOENCODING"] = "utf-8",          // Python I/O encoding
+                ["LANG"] = "en_US.UTF-8",                // Unix locale
+                ["LC_ALL"] = "en_US.UTF-8",              // Unix locale override
+                ["CHCP"] = "65001"                       // Windows code page hint
+            }
+        };
 
         if (!string.IsNullOrEmpty(modelName))
         {
-            optionsBuilder.Model(modelName);
+            claudeOptions.Model = modelName;
         }
 
         if (!string.IsNullOrEmpty(configuration.SystemPrompt))
         {
-            optionsBuilder.SystemPrompt(configuration.SystemPrompt);
+            claudeOptions.SystemPrompt = configuration.SystemPrompt;
         }
 
         if (configuration.MaxTurns.HasValue)
         {
-            optionsBuilder.MaxTurns(configuration.MaxTurns.Value);
-        }
-
-        if (configuration.MaxBudgetUsd.HasValue)
-        {
-            optionsBuilder.MaxBudget(configuration.MaxBudgetUsd.Value);
-        }
-
-        if (!string.IsNullOrEmpty(configuration.CliPath))
-        {
-            optionsBuilder.CliPath(configuration.CliPath);
+            claudeOptions.MaxTurns = configuration.MaxTurns.Value;
         }
 
         if (!string.IsNullOrEmpty(configuration.WorkingDirectory))
         {
-            optionsBuilder.Cwd(configuration.WorkingDirectory);
+            claudeOptions.Cwd = configuration.WorkingDirectory;
         }
 
-        var claudeOptions = optionsBuilder.Build();
+        logger?.LogInformation("Starting Claude Code query with model {Model}, prompt length: {PromptLength}",
+            modelName, userPrompt?.Length ?? 0);
+        logger?.LogDebug("Claude Code prompt: {Prompt}", userPrompt);
 
-        logger?.LogInformation("Starting Claude Code query with model {Model}", modelName);
+        // Validate prompt is not empty
+        if (string.IsNullOrWhiteSpace(userPrompt))
+        {
+            logger?.LogWarning("Empty prompt received for Claude Code query");
+            yield return new ChatResponseUpdate(ChatRole.Assistant, "No message content received.");
+            yield break;
+        }
 
         // Set up timeout
         using var timeoutCts = new CancellationTokenSource(configuration.SessionTimeoutMs);
         using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutCts.Token);
 
         // Use the static QueryAsync method for streaming
-        await foreach (var message in Claude.AgentSdk.Claude.QueryAsync(userPrompt, claudeOptions, cancellationToken: linkedCts.Token))
+        await foreach (var message in ClaudeAgent.QueryAsync(userPrompt, claudeOptions).WithCancellation(linkedCts.Token))
         {
             // Process different message types
             switch (message)
@@ -142,18 +185,12 @@ public class ClaudeCodeChatClient : IChatClient
                                 var toolId = toolUseBlock.Id ?? Guid.NewGuid().ToString();
                                 IDictionary<string, object?>? arguments = null;
 
-                                if (toolUseBlock.Input.ValueKind != System.Text.Json.JsonValueKind.Undefined &&
-                                    toolUseBlock.Input.ValueKind != System.Text.Json.JsonValueKind.Null)
+                                if (toolUseBlock.Input != null && toolUseBlock.Input.Count > 0)
                                 {
-                                    try
-                                    {
-                                        var inputJson = System.Text.Json.JsonSerializer.Serialize(toolUseBlock.Input);
-                                        arguments = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, object?>>(inputJson);
-                                    }
-                                    catch
-                                    {
-                                        // Ignore deserialization errors
-                                    }
+                                    // Input is already a Dictionary<string, object>, convert to nullable version
+                                    arguments = toolUseBlock.Input.ToDictionary(
+                                        kvp => kvp.Key,
+                                        kvp => (object?)kvp.Value);
                                 }
 
                                 var functionCall = new FunctionCallContent(toolId, toolUseBlock.Name ?? "unknown", arguments);
@@ -178,7 +215,7 @@ public class ClaudeCodeChatClient : IChatClient
                     logger?.LogInformation(
                         "Claude query completed. Duration: {Duration}ms, Cost: ${Cost:F4}",
                         resultMessage.DurationMs,
-                        resultMessage.TotalCostUsd ?? 0m);
+                        resultMessage.TotalCostUsd ?? 0.0);
                     break;
             }
         }
@@ -225,6 +262,11 @@ public class ClaudeCodeChatClient : IChatClient
 
     private static string GetTextContent(ChatMessage message)
     {
+        // First try the Text property (set by simple string constructor)
+        if (!string.IsNullOrEmpty(message.Text))
+            return message.Text;
+
+        // Fallback to Contents collection (for messages with explicit content items)
         if (message.Contents.Count == 0)
             return string.Empty;
 
@@ -233,5 +275,29 @@ public class ClaudeCodeChatClient : IChatClient
             .Select(c => c.Text);
 
         return string.Join("", textParts);
+    }
+
+    private static readonly object PathLock = new();
+    private static bool _pathModified;
+
+    /// <summary>
+    /// Ensures the CLI directory is in the process's PATH environment variable.
+    /// This is needed because the SDK's FindCli() checks PATH before we can set options.
+    /// </summary>
+    private static void EnsureCliInPath(string cliDirectory)
+    {
+        lock (PathLock)
+        {
+            if (_pathModified)
+                return;
+
+            var currentPath = Environment.GetEnvironmentVariable("PATH") ?? "";
+            if (!currentPath.Contains(cliDirectory, StringComparison.OrdinalIgnoreCase))
+            {
+                var newPath = $"{cliDirectory}{Path.PathSeparator}{currentPath}";
+                Environment.SetEnvironmentVariable("PATH", newPath);
+            }
+            _pathModified = true;
+        }
     }
 }

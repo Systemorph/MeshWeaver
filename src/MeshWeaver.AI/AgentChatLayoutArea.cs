@@ -16,16 +16,8 @@ public static class AgentChatLayoutArea
 
     private static UiControl RenderChat(LayoutAreaHost host, RenderingContext ctx)
     {
-        // Get the context and title from the store using pointers
-        var contextReference = ctx.Area + ContextPointer;
-        var titleReference = ctx.Area + TitlePointer;
-
-        var control = new AgentChatControl
-        {
-            Context = contextReference,
-            Title = titleReference
-        };
-
+        // Use ThreadChatControl for the chat layout area
+        var control = new ThreadChatControl();
         return control;
     }
 }

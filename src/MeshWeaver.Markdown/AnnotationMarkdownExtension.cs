@@ -99,7 +99,7 @@ public class AnnotationMarkdownExtension : IMarkdownExtension
         var authorAttr = !string.IsNullOrEmpty(author) ? $" data-author=\"{EscapeHtml(author)}\"" : "";
         var dateAttr = !string.IsNullOrEmpty(date) ? $" data-date=\"{EscapeHtml(date)}\"" : "";
 
-        // Simple styled span - buttons will be in side panel
+        // Highlighted span only - Accept/Reject buttons are in the side panel
         return $"<span class=\"{cssClass}\" data-change-id=\"{id}\"{authorAttr}{dateAttr}>{content}</span>";
     }
 
@@ -175,6 +175,90 @@ public class AnnotationMarkdownExtension : IMarkdownExtension
         var result = CommentMarkerPattern.Replace(markdown, "$2");
         result = InsertMarkerPattern.Replace(result, ""); // Remove inserted content
         result = DeleteMarkerPattern.Replace(result, "$2");
+
+        return result;
+    }
+
+    /// <summary>
+    /// Accepts a single tracked change by ID.
+    /// For inserts: keeps the text, removes markers.
+    /// For deletes: removes both text and markers.
+    /// </summary>
+    public static string AcceptChange(string markdown, string changeId)
+    {
+        if (string.IsNullOrEmpty(markdown) || string.IsNullOrEmpty(changeId))
+            return markdown;
+
+        var escapedId = Regex.Escape(changeId);
+
+        // Accept insert: keep text, remove markers
+        var insertPattern = new Regex(
+            $@"<!--insert:{escapedId}(?::[^:]*:[^-]*)?-->(.*?)<!--/insert:{escapedId}-->",
+            RegexOptions.Singleline);
+        var result = insertPattern.Replace(markdown, "$1");
+
+        // Accept delete: remove both markers and text
+        var deletePattern = new Regex(
+            $@"<!--delete:{escapedId}(?::[^:]*:[^-]*)?-->.*?<!--/delete:{escapedId}-->",
+            RegexOptions.Singleline);
+        result = deletePattern.Replace(result, "");
+
+        return result;
+    }
+
+    /// <summary>
+    /// Rejects a single tracked change by ID.
+    /// For inserts: removes the text and markers.
+    /// For deletes: keeps the text, removes markers.
+    /// </summary>
+    public static string RejectChange(string markdown, string changeId)
+    {
+        if (string.IsNullOrEmpty(markdown) || string.IsNullOrEmpty(changeId))
+            return markdown;
+
+        var escapedId = Regex.Escape(changeId);
+
+        // Reject insert: remove both markers and text
+        var insertPattern = new Regex(
+            $@"<!--insert:{escapedId}(?::[^:]*:[^-]*)?-->.*?<!--/insert:{escapedId}-->",
+            RegexOptions.Singleline);
+        var result = insertPattern.Replace(markdown, "");
+
+        // Reject delete: keep text, remove markers
+        var deletePattern = new Regex(
+            $@"<!--delete:{escapedId}(?::[^:]*:[^-]*)?-->(.*?)<!--/delete:{escapedId}-->",
+            RegexOptions.Singleline);
+        result = deletePattern.Replace(result, "$1");
+
+        return result;
+    }
+
+    /// <summary>
+    /// Resolves a comment by ID - removes the comment markers but keeps the highlighted text.
+    /// </summary>
+    public static string ResolveComment(string markdown, string commentId)
+    {
+        if (string.IsNullOrEmpty(markdown) || string.IsNullOrEmpty(commentId))
+            return markdown;
+
+        var escapedId = Regex.Escape(commentId);
+
+        // Remove comment markers, keep highlighted text
+        // Match both simple and metadata formats
+        var commentWithTextPattern = new Regex(
+            $@"<!--comment:{escapedId}:[^:]*:[^|]*\|[^-]*-->(.*?)<!--/comment:{escapedId}-->",
+            RegexOptions.Singleline);
+        var result = commentWithTextPattern.Replace(markdown, "$1");
+
+        var commentWithMetaPattern = new Regex(
+            $@"<!--comment:{escapedId}:[^:]*:[^-]*-->(.*?)<!--/comment:{escapedId}-->",
+            RegexOptions.Singleline);
+        result = commentWithMetaPattern.Replace(result, "$1");
+
+        var commentSimplePattern = new Regex(
+            $@"<!--comment:{escapedId}-->(.*?)<!--/comment:{escapedId}-->",
+            RegexOptions.Singleline);
+        result = commentSimplePattern.Replace(result, "$1");
 
         return result;
     }

@@ -3,18 +3,19 @@ namespace MeshWeaver.AI.ClaudeCode;
 /// <summary>
 /// Configuration for Claude Code (Claude Agent SDK) integration.
 /// Requires Claude Code CLI >= 2.0.0 installed via: npm install -g @anthropic-ai/claude-code
+/// Uses the ClaudeAgentSdk NuGet package.
 /// </summary>
 public class ClaudeCodeConfiguration
 {
     /// <summary>
-    /// Optional explicit path to the Claude CLI executable.
-    /// If not specified, searches PATH for 'claude' (or 'claude.cmd' on Windows).
-    /// Can also be set via CLAUDE_CLI_PATH environment variable.
+    /// Directory containing the Claude CLI executable.
+    /// On Windows with npm global install: %APPDATA%\npm (contains claude.cmd)
+    /// If not specified, the CLI must be in PATH.
     /// </summary>
-    public string? CliPath { get; set; }
+    public string? CliDirectory { get; set; }
 
     /// <summary>
-    /// Working directory for the Claude CLI.
+    /// Working directory for the Claude CLI (Cwd).
     /// </summary>
     public string? WorkingDirectory { get; set; }
 
@@ -32,11 +33,6 @@ public class ClaudeCodeConfiguration
     /// Maximum conversation turns before stopping.
     /// </summary>
     public int? MaxTurns { get; set; }
-
-    /// <summary>
-    /// Maximum budget in USD for the conversation.
-    /// </summary>
-    public decimal? MaxBudgetUsd { get; set; }
 
     /// <summary>
     /// Custom system prompt to use.

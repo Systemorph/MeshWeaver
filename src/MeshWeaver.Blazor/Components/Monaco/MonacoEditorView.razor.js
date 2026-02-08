@@ -255,6 +255,14 @@ export function initEditor(editorId, placeholder, dotNetRef, codeEditMode = fals
 
     // Get the monaco editor instance
     const editorInstance = monaco.editor.getEditors().find(e => e.getContainerDomNode()?.id === editorId);
+
+    // Apply theme immediately to this editor instance to ensure correct colors
+    // This is needed because the editor may be created before the global theme sync runs
+    if (editorInstance) {
+        const currentTheme = detectThemeFromDOM();
+        const monacoTheme = currentTheme === 'dark' ? 'vs-dark' : 'vs';
+        monaco.editor.setTheme(monacoTheme);
+    }
     if (editorInstance) {
         // Handle content changes for placeholder
         editorInstance.onDidChangeModelContent(() => {
