@@ -76,6 +76,27 @@ public class ClaudeCodeChatClient : IChatClient
     {
         // Build the prompt from messages
         var messageList = messages.ToList();
+
+        // Debug: Log all incoming messages
+        logger?.LogInformation("ClaudeCode received {Count} messages", messageList.Count);
+        foreach (var msg in messageList)
+        {
+            logger?.LogInformation("  Message: Role={Role}, Text='{Text}', ContentsCount={ContentsCount}",
+                msg.Role.Value,
+                msg.Text?.Substring(0, Math.Min(100, msg.Text?.Length ?? 0)) ?? "(null)",
+                msg.Contents?.Count ?? 0);
+
+            if (msg.Contents != null)
+            {
+                foreach (var content in msg.Contents)
+                {
+                    logger?.LogInformation("    Content type: {Type}, Value: {Value}",
+                        content.GetType().Name,
+                        content is TextContent tc ? tc.Text?.Substring(0, Math.Min(50, tc.Text?.Length ?? 0)) : "(non-text)");
+                }
+            }
+        }
+
         var userPrompt = BuildPromptFromMessages(messageList);
 
         // If CliDirectory is specified, add it to PATH for CLI discovery

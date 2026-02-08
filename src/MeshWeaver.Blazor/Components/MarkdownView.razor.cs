@@ -2,6 +2,7 @@
 using Markdig;
 using Markdig.Syntax;
 using MeshWeaver.Data;
+using MeshWeaver.Domain;
 using MeshWeaver.Kernel;
 using MeshWeaver.Layout;
 using MeshWeaver.Markdown;
