@@ -80,6 +80,10 @@ public static class GraphConfigurationExtensions
             // This provides HubConfiguration for nodes with nodeType="Thread" (AI conversation threads).
             builder.AddMeshNodes(Configuration.ThreadNodeConfiguration.CreateMeshNode());
 
+            // Register the built-in "ThreadMessage" MeshNode
+            // This provides HubConfiguration for nodes with nodeType="ThreadMessage" (individual messages in threads).
+            builder.AddMeshNodes(Configuration.ThreadMessageNodeConfiguration.CreateMeshNode());
+
             // Register services that don't need hub-level dependencies at the mesh level
             builder.ConfigureServices(services =>
             {

@@ -207,35 +207,66 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
 
             // Load thread node via IMeshCatalog
             var meshCatalog = Hub.ServiceProvider.GetService<IMeshCatalog>();
+            var meshQuery = Hub.ServiceProvider.GetService<IMeshQuery>();
             var node = meshCatalog != null ? await meshCatalog.GetNodeAsync(new Address(threadPath)) : null;
             var threadContent = node?.Content as MeshThread;
 
-            if (threadContent != null)
+            messages.Clear();
+
+            // Try to load messages from child ThreadMessage nodes first
+            if (meshQuery != null)
             {
-                messages.Clear();
+                var messageNodes = await meshQuery.QueryAsync<MeshNode>(
+                    $"path:{threadPath} nodeType:{ThreadMessageNodeType.NodeType} scope:children"
+                ).ToListAsync();
+
+                var threadMessages = messageNodes
+                    .Select(n => n.Content as ThreadMessage)
+                    .Where(m => m != null && m.Type != ThreadMessageType.EditingPrompt)
+                    .Select(m => m!) // Remove nullability after filtering
+                    .OrderBy(m => m.Timestamp)
+                    .ToList();
+
+                if (threadMessages.Count > 0)
+                {
+                    // Load from child nodes
+                    foreach (var msg in threadMessages.ToChatMessages())
+                    {
+                        messages.Add(msg);
+                    }
+                    Logger.LogDebug("[ThreadChat:{InstanceId}] Loaded {Count} messages from child nodes", _instanceId, threadMessages.Count);
+                }
+            }
+
+            // Fall back to legacy inline messages if no child nodes found
+#pragma warning disable CS0618 // Type or member is obsolete
+            if (messages.Count == 0 && threadContent?.Messages?.Count > 0)
+            {
                 var loadedMessages = threadContent.ToChatMessages();
                 foreach (var msg in loadedMessages)
                 {
                     messages.Add(msg);
                 }
-
-                // Resume chat with loaded messages
-                if (chat is AgentChatClient agentChatClient)
-                {
-                    var conversation = new ChatConversation
-                    {
-                        Id = threadPath,
-                        Title = node?.Name ?? initialContextDisplayName ?? "Thread",
-                        CreatedAt = DateTime.UtcNow,
-                        LastModifiedAt = DateTime.UtcNow,
-                        Messages = messages.ToList()
-                    };
-                    await agentChatClient.ResumeAsync(conversation);
-                }
-
-                chat?.SetThreadId(threadPath);
-                Logger.LogDebug("[ThreadChat:{InstanceId}] Loaded thread: {Path}", _instanceId, threadPath);
+                Logger.LogDebug("[ThreadChat:{InstanceId}] Loaded {Count} legacy inline messages", _instanceId, loadedMessages.Count);
             }
+#pragma warning restore CS0618
+
+            // Resume chat with loaded messages
+            if (chat is AgentChatClient agentChatClient && messages.Count > 0)
+            {
+                var conversation = new ChatConversation
+                {
+                    Id = threadPath,
+                    Title = node?.Name ?? initialContextDisplayName ?? "Thread",
+                    CreatedAt = DateTime.UtcNow,
+                    LastModifiedAt = DateTime.UtcNow,
+                    Messages = messages.ToList()
+                };
+                await agentChatClient.ResumeAsync(conversation);
+            }
+
+            chat?.SetThreadId(threadPath);
+            Logger.LogDebug("[ThreadChat:{InstanceId}] Loaded thread: {Path}", _instanceId, threadPath);
         }
         catch (Exception ex)
         {
@@ -248,35 +279,73 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         }
     }
 
+    /// <summary>
+    /// Saves the thread by updating its LastModified timestamp.
+    /// Individual messages are saved as child nodes via SaveMessageAsChildNodeAsync.
+    /// </summary>
     private async Task SaveThreadAsync()
     {
-        if (!messages.Any() || string.IsNullOrEmpty(threadPath))
+        if (string.IsNullOrEmpty(threadPath))
             return;
 
         try
         {
-            // Load existing node to preserve metadata and ParentPath
+            // Load existing node to update LastModified
             var meshCatalog = Hub.ServiceProvider.GetService<IMeshCatalog>();
             var existingNode = meshCatalog != null ? await meshCatalog.GetNodeAsync(new Address(threadPath)) : null;
-            var existingContent = existingNode?.Content as MeshThread;
 
-            // Create thread content from messages, preserving the ParentPath
-            var parentPath = existingContent?.ParentPath ?? initialContext;
-            var threadContent = MeshThread.FromChatMessages(messages, parentPath);
+            if (existingNode != null)
+            {
+                // Touch the thread to update LastModified
+                var updatedNode = existingNode with { LastModified = DateTime.UtcNow };
+                var nodeJson = JsonSerializer.SerializeToElement(updatedNode, Hub.JsonSerializerOptions);
+                Hub.Post(new DataChangeRequest { Updates = [nodeJson] }, o => o.WithTarget(new Address(threadPath)));
+            }
 
-            var updatedNode = existingNode != null
-                ? existingNode with { Content = threadContent }
-                : new MeshNode(threadPath) { NodeType = ThreadNodeType.NodeType, Content = threadContent };
-
-            // Update via DataChangeRequest
-            var nodeJson = JsonSerializer.SerializeToElement(updatedNode, Hub.JsonSerializerOptions);
-            Hub.Post(new DataChangeRequest { Updates = [nodeJson] }, o => o.WithTarget(new Address(threadPath)));
-
-            Logger.LogDebug("[ThreadChat:{InstanceId}] Saved thread: {Path}", _instanceId, threadPath);
+            Logger.LogDebug("[ThreadChat:{InstanceId}] Updated thread timestamp: {Path}", _instanceId, threadPath);
         }
         catch (Exception ex)
         {
             Logger.LogError(ex, "[ThreadChat:{InstanceId}] Error saving thread", _instanceId);
+        }
+    }
+
+    /// <summary>
+    /// Saves a message as a child node of the thread.
+    /// </summary>
+    private async Task SaveMessageAsChildNodeAsync(ChatMessage message, ThreadMessageType messageType)
+    {
+        if (string.IsNullOrEmpty(threadPath))
+            return;
+
+        try
+        {
+            var meshCatalog = Hub.ServiceProvider.GetRequiredService<IMeshCatalog>();
+            var messageId = Guid.NewGuid().AsString();
+            var messagePath = $"{threadPath}/{messageId}";
+
+            var threadMessage = new ThreadMessage
+            {
+                Id = messageId,
+                Role = message.Role.Value,
+                AuthorName = message.AuthorName,
+                Text = message.Text ?? string.Empty,
+                Timestamp = DateTime.UtcNow,
+                Type = messageType
+            };
+
+            var messageNode = new MeshNode(messagePath)
+            {
+                NodeType = ThreadMessageNodeType.NodeType,
+                Content = threadMessage
+            };
+
+            await meshCatalog.CreateNodeAsync(messageNode, GetCurrentUserId());
+            Logger.LogDebug("[ThreadChat:{InstanceId}] Saved message as child node: {Path}", _instanceId, messagePath);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "[ThreadChat:{InstanceId}] Error saving message as child node", _instanceId);
         }
     }
 
@@ -330,6 +399,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     /// <summary>
     /// Creates a new thread lazily on first message.
     /// Thread is created under {parentPath}/Threads/{threadId}
+    /// Messages are stored as child nodes, not inline.
     /// </summary>
     private void CreateThreadAsync()
     {
@@ -343,8 +413,11 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         // Generate title from first user message
         var title = GetThreadTitle() ?? $"Chat {DateTime.UtcNow:yyyy-MM-dd HH:mm}";
 
-        // Create thread content
-        var threadContent = MeshThread.FromChatMessages(messages, parentPath);
+        // Create empty thread content (messages stored as child nodes)
+        var threadContent = new MeshThread
+        {
+            ParentPath = parentPath
+        };
 
         var newNode = new MeshNode(threadPath)
         {
@@ -356,7 +429,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         var meshCatalog = Hub.ServiceProvider.GetRequiredService<IMeshCatalog>();
 
         meshCatalog.CreateNodeAsync(newNode, GetCurrentUserId())
-            .ContinueWith(task =>
+            .ContinueWith(async task =>
             {
                 if (task.IsCompletedSuccessfully)
                 {
@@ -364,12 +437,22 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
                     chat?.SetThreadId(threadPath);
                     ChatWindowState.SetCurrentThread(threadPath);
                     Logger.LogDebug("[ThreadChat:{InstanceId}] Created thread: {Path}", _instanceId, threadPath);
-                    _ = InvokeAsync(StateHasChanged);
+
+                    // Save existing messages as child nodes
+                    foreach (var msg in messages)
+                    {
+                        var messageType = msg.Role.Value.Equals("user", StringComparison.OrdinalIgnoreCase)
+                            ? ThreadMessageType.ExecutedInput
+                            : ThreadMessageType.AgentResponse;
+                        await SaveMessageAsChildNodeAsync(msg, messageType);
+                    }
+
+                    await InvokeAsync(StateHasChanged);
                 }
                 else if (task.IsFaulted)
                 {
                     Logger.LogWarning(task.Exception, "[ThreadChat:{InstanceId}] Failed to create thread", _instanceId);
-                    _ = InvokeAsync(StateHasChanged);
+                    await InvokeAsync(StateHasChanged);
                 }
             });
     }
@@ -476,9 +559,15 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         messages.Add(userMessage);
 
         // Create thread lazily on first message if no threadPath
-        if (string.IsNullOrEmpty(threadPath))
+        var isNewThread = string.IsNullOrEmpty(threadPath);
+        if (isNewThread)
         {
             CreateThreadAsync();
+        }
+        else
+        {
+            // Save user message as child node (for existing threads)
+            await SaveMessageAsChildNodeAsync(userMessage, ThreadMessageType.ExecutedInput);
         }
 
         currentResponseCancellation = new CancellationTokenSource();
@@ -504,6 +593,8 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
                     if (!string.IsNullOrWhiteSpace(currentResponseMessage?.Text))
                     {
                         messages.Add(currentResponseMessage!);
+                        // Save completed agent message as child node
+                        await SaveMessageAsChildNodeAsync(currentResponseMessage!, ThreadMessageType.AgentResponse);
                     }
 
                     lastRole = currentAuthor;
@@ -531,7 +622,10 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
             Logger.LogError(ex, "[ThreadChat:{InstanceId}] Error during streaming", _instanceId);
 
             if (!string.IsNullOrWhiteSpace(currentResponseMessage?.Text))
+            {
                 messages.Add(currentResponseMessage!);
+                await SaveMessageAsChildNodeAsync(currentResponseMessage!, ThreadMessageType.AgentResponse);
+            }
 
             var errorText = new TextContent($"An error occurred: {ex.Message}");
             currentResponseMessage = new ChatMessage(ChatRole.Assistant, [errorText]);
@@ -542,6 +636,8 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
             if (!string.IsNullOrWhiteSpace(currentResponseMessage?.Text))
             {
                 messages.Add(currentResponseMessage!);
+                // Save final agent response as child node
+                await SaveMessageAsChildNodeAsync(currentResponseMessage!, ThreadMessageType.AgentResponse);
                 currentResponseMessage = null;
                 await SaveThreadAsync();
             }
