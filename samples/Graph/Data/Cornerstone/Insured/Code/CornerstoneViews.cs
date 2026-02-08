@@ -59,47 +59,18 @@ public static class CornerstoneViews
     {
         var hubPath = host.Hub.Address.ToString();
         var query = $"path:{hubPath} nodeType:Cornerstone/Pricing state:Active scope:subtree";
-        var simpleQuery = $"path:{hubPath} scope:subtree"; // Query without filters
 
         var statuses = host.Workspace.GetObservable<PricingStatus>()
             .Select(s => s.OrderBy(x => x.Order).ToList());
 
         var meshQuery = host.Hub.ServiceProvider.GetRequiredService<IMeshQuery>();
 
-        // Main query with filters
         var nodes = meshQuery
             .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(query))
             .Scan(new Dictionary<string, MeshNode>(StringComparer.OrdinalIgnoreCase), ApplyChanges);
 
-        // Debug query without filters to see all descendants
-        var allNodes = meshQuery
-            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(simpleQuery))
-            .Scan(new Dictionary<string, MeshNode>(StringComparer.OrdinalIgnoreCase), ApplyChanges);
-
-        return nodes.CombineLatest(allNodes, statuses, (dict, allDict, statusList) =>
+        return nodes.CombineLatest(statuses, (dict, statusList) =>
         {
-            // Debug info
-            var debugInfo = $"**Debug Info:**\n- Hub Path: `{hubPath}`\n- Query: `{query}`\n- Nodes found (filtered): {dict.Count}\n- Nodes found (all descendants): {allDict.Count}\n- Statuses: {statusList.Count}\n";
-
-            if (allDict.Any())
-            {
-                debugInfo += "\n**All descendant nodes:**\n";
-                foreach (var node in allDict.Values.Take(20))
-                {
-                    var status = GetProp(node, "status") ?? "null";
-                    var contentType = node.Content?.GetType().Name ?? "null";
-                    debugInfo += $"- `{node.Path}` (nodeType: {node.NodeType ?? "null"}, state: {node.State}, status: {status}, contentType: {contentType})\n";
-                }
-                if (allDict.Count > 20)
-                    debugInfo += $"- ... and {allDict.Count - 20} more\n";
-            }
-            else
-            {
-                debugInfo += "\n**No descendant nodes found at all!** This means either:\n";
-                debugInfo += "- The Microsoft/2026.json file isn't being loaded\n";
-                debugInfo += "- The file path doesn't match expected structure\n";
-            }
-
             var groups = statusList.Select(status =>
             {
                 var items = dict.Values
@@ -119,12 +90,10 @@ public static class CornerstoneViews
 
             if (!groups.Any())
             {
-                return (UiControl?)Controls.Markdown($"# Cornerstone Pricing Catalog\n\n{debugInfo}\n\n*No pricings available. Create a new pricing to get started.*");
+                return (UiControl?)Controls.Markdown("*No pricings available. Create a new pricing to get started.*");
             }
 
-            return (UiControl?)Controls.Stack
-                .WithView(Controls.Markdown($"# Cornerstone Pricing Catalog\n\n{debugInfo}"))
-                .WithView(new CatalogControl().WithGroups(groups));
+            return (UiControl?)new CatalogControl().WithGroups(groups);
         });
     }
 }

@@ -34,6 +34,11 @@ public record Currency : INamed
     /// </summary>
     public int DecimalPlaces { get; init; } = 2;
 
+    /// <summary>
+    /// Display order in lists.
+    /// </summary>
+    public int Order { get; init; }
+
     string INamed.DisplayName => Name;
 
     public static readonly Currency USD = new()
@@ -41,7 +46,8 @@ public record Currency : INamed
         Id = "USD",
         Name = "US Dollar",
         Symbol = "$",
-        DecimalPlaces = 2
+        DecimalPlaces = 2,
+        Order = 0
     };
 
     public static readonly Currency EUR = new()
@@ -49,7 +55,8 @@ public record Currency : INamed
         Id = "EUR",
         Name = "Euro",
         Symbol = "\u20ac",
-        DecimalPlaces = 2
+        DecimalPlaces = 2,
+        Order = 1
     };
 
     public static readonly Currency GBP = new()
@@ -57,7 +64,8 @@ public record Currency : INamed
         Id = "GBP",
         Name = "British Pound",
         Symbol = "\u00a3",
-        DecimalPlaces = 2
+        DecimalPlaces = 2,
+        Order = 2
     };
 
     public static readonly Currency JPY = new()
@@ -65,7 +73,8 @@ public record Currency : INamed
         Id = "JPY",
         Name = "Japanese Yen",
         Symbol = "\u00a5",
-        DecimalPlaces = 0
+        DecimalPlaces = 0,
+        Order = 3
     };
 
     public static readonly Currency CHF = new()
@@ -73,7 +82,8 @@ public record Currency : INamed
         Id = "CHF",
         Name = "Swiss Franc",
         Symbol = "CHF",
-        DecimalPlaces = 2
+        DecimalPlaces = 2,
+        Order = 4
     };
 
     public static readonly Currency AUD = new()
@@ -81,7 +91,8 @@ public record Currency : INamed
         Id = "AUD",
         Name = "Australian Dollar",
         Symbol = "A$",
-        DecimalPlaces = 2
+        DecimalPlaces = 2,
+        Order = 5
     };
 
     public static readonly Currency CAD = new()
@@ -89,7 +100,8 @@ public record Currency : INamed
         Id = "CAD",
         Name = "Canadian Dollar",
         Symbol = "C$",
-        DecimalPlaces = 2
+        DecimalPlaces = 2,
+        Order = 6
     };
 
     public static readonly Currency[] All = [USD, EUR, GBP, JPY, CHF, AUD, CAD];

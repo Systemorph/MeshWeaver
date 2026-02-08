@@ -6,7 +6,6 @@
 using System.Collections.Immutable;
 using System.ComponentModel.DataAnnotations;
 using System.Reactive.Linq;
-using System.Text;
 using System.Text.Json;
 using MeshWeaver.ContentCollections;
 using MeshWeaver.Data;
@@ -37,14 +36,6 @@ public static class PricingViews
             .WithView("Submission", Submission)
             .WithView("ImportConfigs", ImportConfigs)
             .WithView("Thumbnail", Thumbnail);
-
-    // Color definitions for Structure diagram
-    private static readonly string PricingColor = "#2c7bb6";
-    private static readonly string PricingTextColor = "#ffffff";
-    private static readonly string AcceptanceColor = "#fdae61";
-    private static readonly string AcceptanceTextColor = "#000000";
-    private static readonly string SectionColor = "#abd9e9";
-    private static readonly string SectionTextColor = "#000000";
 
     /// <summary>
     /// Builds a navigation toolbar for pricing views.
@@ -102,7 +93,10 @@ public static class PricingViews
     public static IObservable<UiControl?> Overview(LayoutAreaHost host, RenderingContext _)
     {
         var pricingPath = host.Hub.Address.ToString();
-        var nodeStream = host.Workspace.GetStream<MeshNode>();
+        var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? Array.Empty<MeshNode>());
+
+        if (nodeStream is null)
+            return Observable.Return((UiControl?)Controls.Markdown("# Pricing Overview\n\n*Unable to load pricing data.*"));
 
         return nodeStream.Select(nodes =>
         {
@@ -307,27 +301,22 @@ public static class PricingViews
     }
 
     /// <summary>
-    /// Structure view showing reinsurance hierarchy as a Mermaid flowchart.
+    /// Structure view showing reinsurance layers and sections in data grid tables.
     /// </summary>
     [Display(GroupName = "Data", Order = 3)]
     public static IObservable<UiControl?> Structure(LayoutAreaHost host, RenderingContext _)
     {
         var pricingPath = host.Hub.Address.ToString();
-        var pricingId = host.Hub.Address.Id;
 
-        var nodeStream = host.Workspace.GetStream<MeshNode>();
         var acceptanceStream = host.Workspace.GetStream<ReinsuranceAcceptance>();
         var sectionStream = host.Workspace.GetStream<ReinsuranceSection>();
 
         return Observable.CombineLatest(
-            nodeStream,
             acceptanceStream,
             sectionStream,
-            (nodes, acceptances, sections) => (nodes, acceptances, sections))
+            (acceptances, sections) => (acceptances, sections))
             .Select(data =>
             {
-                var node = data.nodes?.FirstOrDefault();
-                var pricing = ExtractPricing(node);
                 var acceptanceList = data.acceptances?.ToList() ?? new List<ReinsuranceAcceptance>();
                 var sectionList = data.sections?.ToList() ?? new List<ReinsuranceSection>();
 
@@ -338,135 +327,84 @@ public static class PricingViews
                         .WithView(Controls.Markdown("# Reinsurance Structure\n\n*No reinsurance acceptances loaded. Import or add acceptances to begin.*"));
                 }
 
-                var diagram = BuildMermaidDiagram(pricingId, pricing, acceptanceList, sectionList);
-                var mermaidControl = new MarkdownControl($"```mermaid\n{diagram}\n```")
-                    .WithStyle(style => style.WithWidth("100%").WithHeight("600px"));
+                var acceptancesGrid = RenderAcceptancesDataGrid(host, acceptanceList);
+                var sectionsGrid = RenderSectionsDataGrid(host, sectionList);
 
                 return (UiControl?)Controls.Stack
                     .WithView(BuildToolbar(pricingPath, "Structure"))
                     .WithView(Controls.Title("Reinsurance Structure", 1))
-                    .WithView(mermaidControl);
+                    .WithView(Controls.Title("Layers", 2))
+                    .WithView(acceptancesGrid)
+                    .WithView(Controls.Title("Sections", 2))
+                    .WithView(sectionsGrid);
             })
             .StartWith((UiControl?)Controls.Stack
                 .WithView(BuildToolbar(pricingPath, "Structure"))
                 .WithView(Controls.Markdown("# Reinsurance Structure\n\n*Loading...*")));
     }
 
-    private static string BuildMermaidDiagram(string pricingId, Pricing? pricing, List<ReinsuranceAcceptance> acceptances, List<ReinsuranceSection> sections)
+    private static UiControl RenderAcceptancesDataGrid(LayoutAreaHost host, IReadOnlyCollection<ReinsuranceAcceptance> acceptances)
     {
-        var sb = new StringBuilder();
-
-        sb.AppendLine("flowchart TD");
-        sb.AppendLine("    classDef leftAlign text-align:left");
-
-        // Add the pricing node
-        var pricingContent = new StringBuilder();
-        pricingContent.Append($"<b>Pricing: {pricingId}</b>");
-
-        if (pricing?.PrimaryInsurance != null)
+        var acceptanceDetails = acceptances.Select(a => new AcceptanceDetailsModel
         {
-            pricingContent.Append($"<br/>Primary: {pricing.PrimaryInsurance}");
-        }
+            Id = a.Id,
+            Name = a.Name,
+            EPI = a.EPI,
+            Rate = a.Rate,
+            Brokerage = a.Brokerage,
+            Commission = a.Commission
+        }).OrderBy(a => a.Name ?? a.Id).ToList();
 
-        if (pricing?.BrokerName != null)
-        {
-            pricingContent.Append($"<br/>Broker: {pricing.BrokerName}");
-        }
+        var id = Guid.NewGuid().ToString();
 
-        sb.AppendLine($"    pricing[\"{pricingContent}\"]");
-        sb.AppendLine($"    style pricing fill:{PricingColor},color:{PricingTextColor},stroke:#333,stroke-width:1px");
-        sb.AppendLine($"    class pricing leftAlign");
+        host.RegisterForDisposal(Observable.Return(acceptanceDetails)
+            .Subscribe(data => host.UpdateData(id, data)));
 
-        // Group sections by acceptanceId
-        var sectionsByAcceptance = sections
-            .Where(s => s.AcceptanceId != null)
-            .GroupBy(s => s.AcceptanceId)
-            .ToDictionary(g => g.Key!, g => g.ToList());
+        var dataGrid = new DataGridControl(new JsonPointerReference(LayoutAreaReference.GetDataPointer(id)))
+            .WithColumn(new PropertyColumnControl<string> { Property = nameof(AcceptanceDetailsModel.Id).ToCamelCase() }.WithTitle("ID"))
+            .WithColumn(new PropertyColumnControl<string> { Property = nameof(AcceptanceDetailsModel.Name).ToCamelCase() }.WithTitle("Layer Name"))
+            .WithColumn(new PropertyColumnControl<double> { Property = nameof(AcceptanceDetailsModel.EPI).ToCamelCase() }.WithTitle("EPI").WithFormat("N0"))
+            .WithColumn(new PropertyColumnControl<double> { Property = nameof(AcceptanceDetailsModel.Rate).ToCamelCase() }.WithTitle("Rate").WithFormat("P4"))
+            .WithColumn(new PropertyColumnControl<double> { Property = nameof(AcceptanceDetailsModel.Brokerage).ToCamelCase() }.WithTitle("Brokerage").WithFormat("P2"))
+            .WithColumn(new PropertyColumnControl<double> { Property = nameof(AcceptanceDetailsModel.Commission).ToCamelCase() }.WithTitle("Commission").WithFormat("P2"))
+            .WithItemSize(40)
+            .Resizable();
 
-        // Add acceptances and their sections
-        foreach (var acceptance in acceptances.OrderBy(a => a.Name ?? a.Id))
-        {
-            RenderAcceptance(sb, acceptance);
-
-            if (sectionsByAcceptance.TryGetValue(acceptance.Id, out var acceptanceSections))
-            {
-                foreach (var section in acceptanceSections.OrderBy(s => s.LineOfBusiness).ThenBy(s => s.Attach))
-                {
-                    RenderSection(sb, section, acceptance.Id);
-                }
-            }
-        }
-
-        return sb.ToString();
+        return dataGrid;
     }
 
-    private static void RenderAcceptance(StringBuilder sb, ReinsuranceAcceptance acceptance)
+    private static UiControl RenderSectionsDataGrid(LayoutAreaHost host, IReadOnlyCollection<ReinsuranceSection> sections)
     {
-        string acceptanceId = SanitizeId(acceptance.Id);
-        var acceptanceName = acceptance.Name ?? acceptance.Id;
-
-        var acceptanceContent = new StringBuilder();
-        acceptanceContent.Append($"<b>{acceptanceName}</b>");
-
-        if (acceptance.EPI > 0)
-            acceptanceContent.Append($"<br/>EPI: {acceptance.EPI:N0}");
-
-        if (acceptance.Rate > 0)
-            acceptanceContent.Append($"<br/>Rate: {acceptance.Rate:P2}");
-
-        if (acceptance.Share > 0)
-            acceptanceContent.Append($"<br/>Share: {acceptance.Share:P2}");
-
-        if (acceptance.Cession > 0)
-            acceptanceContent.Append($"<br/>Cession: {acceptance.Cession:P2}");
-
-        if (acceptance.Brokerage > 0)
-            acceptanceContent.Append($"<br/>Brokerage: {acceptance.Brokerage:P2}");
-
-        if (acceptance.Commission > 0)
-            acceptanceContent.Append($"<br/>Commission: {acceptance.Commission:P2}");
-
-        sb.AppendLine($"    acc_{acceptanceId}[\"{acceptanceContent}\"]");
-        sb.AppendLine($"    style acc_{acceptanceId} fill:{AcceptanceColor},color:{AcceptanceTextColor},stroke:#333,stroke-width:1px");
-        sb.AppendLine($"    class acc_{acceptanceId} leftAlign");
-        sb.AppendLine($"    pricing --> acc_{acceptanceId}");
-    }
-
-    private static void RenderSection(StringBuilder sb, ReinsuranceSection section, string acceptanceId)
-    {
-        string sectionId = SanitizeId(section.Id);
-        string sanitizedAcceptanceId = SanitizeId(acceptanceId);
-
-        var sectionContent = new StringBuilder();
-        sectionContent.Append($"<b>{section.Name ?? section.LineOfBusiness ?? section.Id}</b><br/>");
-
-        if (!string.IsNullOrEmpty(section.LineOfBusiness) && section.LineOfBusiness != section.Name)
+        var sectionDetails = sections.Select(s => new SectionDetailsModel
         {
-            sectionContent.Append($"LoB: {section.LineOfBusiness}<br/>");
-        }
+            Id = s.Id,
+            AcceptanceId = s.AcceptanceId,
+            Name = s.Name,
+            LineOfBusiness = s.LineOfBusiness,
+            Attach = s.Attach,
+            Limit = s.Limit,
+            AggAttach = s.AggAttach,
+            AggLimit = s.AggLimit
+        }).OrderBy(s => s.AcceptanceId).ThenBy(s => s.Name).ToList();
 
-        sectionContent.Append($"Attach: {section.Attach:N0}<br/>");
-        sectionContent.Append($"Limit: {section.Limit:N0}<br/>");
+        var id = Guid.NewGuid().ToString();
 
-        if (section.AggAttach.HasValue && section.AggAttach.Value > 0)
-        {
-            sectionContent.Append($"AAD: {section.AggAttach.Value:N0}<br/>");
-        }
+        host.RegisterForDisposal(Observable.Return(sectionDetails)
+            .Subscribe(data => host.UpdateData(id, data)));
 
-        if (section.AggLimit.HasValue && section.AggLimit.Value > 0)
-        {
-            sectionContent.Append($"AAL: {section.AggLimit.Value:N0}");
-        }
+        var dataGrid = new DataGridControl(new JsonPointerReference(LayoutAreaReference.GetDataPointer(id)))
+            .WithColumn(new PropertyColumnControl<string> { Property = nameof(SectionDetailsModel.Id).ToCamelCase() }.WithTitle("ID"))
+            .WithColumn(new PropertyColumnControl<string> { Property = nameof(SectionDetailsModel.AcceptanceId).ToCamelCase() }.WithTitle("Layer"))
+            .WithColumn(new PropertyColumnControl<string> { Property = nameof(SectionDetailsModel.Name).ToCamelCase() }.WithTitle("Section Name"))
+            .WithColumn(new PropertyColumnControl<string> { Property = nameof(SectionDetailsModel.LineOfBusiness).ToCamelCase() }.WithTitle("LoB"))
+            .WithColumn(new PropertyColumnControl<decimal> { Property = nameof(SectionDetailsModel.Attach).ToCamelCase() }.WithTitle("Attachment").WithFormat("N0"))
+            .WithColumn(new PropertyColumnControl<decimal> { Property = nameof(SectionDetailsModel.Limit).ToCamelCase() }.WithTitle("Limit").WithFormat("N0"))
+            .WithColumn(new PropertyColumnControl<decimal?> { Property = nameof(SectionDetailsModel.AggAttach).ToCamelCase() }.WithTitle("Agg. Attach").WithFormat("N0"))
+            .WithColumn(new PropertyColumnControl<decimal?> { Property = nameof(SectionDetailsModel.AggLimit).ToCamelCase() }.WithTitle("Agg. Limit").WithFormat("N0"))
+            .WithItemSize(40)
+            .Resizable();
 
-        sb.AppendLine($"    sec_{sectionId}[\"{sectionContent}\"]");
-        sb.AppendLine($"    style sec_{sectionId} fill:{SectionColor},color:{SectionTextColor},stroke:#333,stroke-width:1px");
-        sb.AppendLine($"    class sec_{sectionId} leftAlign");
-        sb.AppendLine($"    acc_{sanitizedAcceptanceId} --> sec_{sectionId}");
-    }
-
-    private static string SanitizeId(string id)
-    {
-        return id.Replace("-", "_").Replace(" ", "_").Replace(".", "_");
+        return dataGrid;
     }
 
     /// <summary>
@@ -477,7 +415,10 @@ public static class PricingViews
     {
         var pricingPath = host.Hub.Address.ToString();
         var pricingId = host.Hub.Address.Id;
-        var nodeStream = host.Workspace.GetStream<MeshNode>();
+        var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? Array.Empty<MeshNode>());
+
+        if (nodeStream is null)
+            return Observable.Return((UiControl?)Controls.Markdown("# Submission\n\n*Unable to load submission data.*"));
 
         // Get content service and collection config outside the Select to avoid disposal issues
         var contentService = host.Hub.ServiceProvider.GetService<IContentService>();
@@ -553,12 +494,18 @@ public static class PricingViews
 
     /// <summary>
     /// Thumbnail view for catalog display.
+    /// Note: Uses Controls.Html for styled card layout as there's no generic Card control
+    /// in MeshWeaver.Layout that supports the required domain-specific fields (status badge,
+    /// coverage period, etc.). This is an acceptable pattern for complex styled components.
     /// </summary>
     [Display(GroupName = "Cards", Order = 0)]
     public static IObservable<UiControl?> Thumbnail(LayoutAreaHost host, RenderingContext _)
     {
         var pricingPath = host.Hub.Address.ToString();
-        var nodeStream = host.Workspace.GetStream<MeshNode>();
+        var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? Array.Empty<MeshNode>());
+
+        if (nodeStream is null)
+            return Observable.Return((UiControl?)Controls.Html(BuildPricingCardHtml(pricingPath, null, null, null)));
 
         return nodeStream.Select(nodes =>
         {
@@ -567,35 +514,66 @@ public static class PricingViews
 
             if (pricing is null)
             {
-                var loadingHtml = $@"<a href='/{pricingPath}' style='display:block;text-decoration:none;color:inherit;padding:16px;border:1px solid #e0e0e0;border-radius:8px;background:#fafafa;min-width:280px;max-width:320px;'>
-  <em>Loading...</em>
-</a>";
-                return (UiControl?)Controls.Html(loadingHtml);
+                return (UiControl?)Controls.Html(BuildPricingCardHtml(pricingPath, null, null, null));
             }
 
             var status = PricingStatus.GetById(pricing.Status);
-
             var coveragePeriod = pricing.InceptionDate.HasValue && pricing.ExpirationDate.HasValue
                 ? $"{pricing.InceptionDate:MMM yyyy} - {pricing.ExpirationDate:MMM yyyy}"
                 : "Coverage period not set";
 
-            var html = $@"<a href='/{pricingPath}' style='display:block;text-decoration:none;color:inherit;padding:16px;border:1px solid #e0e0e0;border-radius:8px;background:#fafafa;min-width:280px;max-width:320px;cursor:pointer;'>
-  <div style='display:flex;flex-direction:column;gap:8px;'>
-    <div style='display:flex;justify-content:space-between;align-items:flex-start;'>
-      <div style='font-size:1.1em;font-weight:600;color:#333;'>{System.Net.WebUtility.HtmlEncode(pricing.InsuredName)}</div>
-      <div style='background:{GetStatusColor(status.Id)};color:white;padding:2px 8px;border-radius:4px;font-size:0.8em;white-space:nowrap;'>{status.Emoji} {status.Name}</div>
+            return (UiControl?)Controls.Html(BuildPricingCardHtml(pricingPath, pricing, status, coveragePeriod));
+        });
+    }
+
+    /// <summary>
+    /// Builds the HTML for a pricing card thumbnail.
+    /// </summary>
+    private static string BuildPricingCardHtml(string pricingPath, Pricing? pricing, PricingStatus? status, string? coveragePeriod)
+    {
+        if (pricing is null)
+        {
+            return $@"<a href='/{pricingPath}' class='pricing-card pricing-card--loading'>
+  <em>Loading...</em>
+</a>
+<style>
+.pricing-card {{ display:block;text-decoration:none;color:inherit;padding:16px;border:1px solid #e0e0e0;border-radius:8px;background:#fafafa;min-width:280px;max-width:320px;cursor:pointer; }}
+.pricing-card:hover {{ border-color:#ccc;background:#f5f5f5; }}
+</style>";
+        }
+
+        var insuredName = System.Net.WebUtility.HtmlEncode(pricing.InsuredName ?? "Unknown");
+        var statusColor = GetStatusColor(status?.Id ?? "Draft");
+        var statusEmoji = status?.Emoji ?? "";
+        var statusName = status?.Name ?? "Unknown";
+        var lob = pricing.LineOfBusiness ?? "N/A";
+        var country = pricing.Country ?? "N/A";
+        var currency = pricing.Currency ?? "N/A";
+
+        return $@"<a href='/{pricingPath}' class='pricing-card'>
+  <div class='pricing-card__content'>
+    <div class='pricing-card__header'>
+      <div class='pricing-card__title'>{insuredName}</div>
+      <div class='pricing-card__status' style='background:{statusColor};'>{statusEmoji} {statusName}</div>
     </div>
-    <div style='color:#666;font-size:0.9em;'>{coveragePeriod}</div>
-    <div style='display:flex;gap:16px;color:#888;font-size:0.85em;'>
-      <span>{pricing.LineOfBusiness ?? "N/A"}</span>
-      <span>{pricing.Country ?? "N/A"}</span>
-      <span>{pricing.Currency ?? "N/A"}</span>
+    <div class='pricing-card__period'>{coveragePeriod}</div>
+    <div class='pricing-card__meta'>
+      <span>{lob}</span>
+      <span>{country}</span>
+      <span>{currency}</span>
     </div>
   </div>
-</a>";
-
-            return (UiControl?)Controls.Html(html);
-        });
+</a>
+<style>
+.pricing-card {{ display:block;text-decoration:none;color:inherit;padding:16px;border:1px solid #e0e0e0;border-radius:8px;background:#fafafa;min-width:280px;max-width:320px;cursor:pointer; }}
+.pricing-card:hover {{ border-color:#ccc;background:#f5f5f5; }}
+.pricing-card__content {{ display:flex;flex-direction:column;gap:8px; }}
+.pricing-card__header {{ display:flex;justify-content:space-between;align-items:flex-start; }}
+.pricing-card__title {{ font-size:1.1em;font-weight:600;color:#333; }}
+.pricing-card__status {{ color:white;padding:2px 8px;border-radius:4px;font-size:0.8em;white-space:nowrap; }}
+.pricing-card__period {{ color:#666;font-size:0.9em; }}
+.pricing-card__meta {{ display:flex;gap:16px;color:#888;font-size:0.85em; }}
+</style>";
     }
 
     private static string GetStatusColor(string statusId)
@@ -615,19 +593,47 @@ public static class PricingViews
 /// <summary>
 /// Display model for property risk details in the data grid.
 /// </summary>
-internal class PropertyRiskDetailsModel
+internal record PropertyRiskDetailsModel
 {
-    public string? Id { get; set; }
-    public int? SourceRow { get; set; }
-    public string? LocationName { get; set; }
-    public string? Address { get; set; }
-    public string? City { get; set; }
-    public string? State { get; set; }
-    public string? Country { get; set; }
-    public double TsiBuilding { get; set; }
-    public double TsiContent { get; set; }
-    public double TsiBi { get; set; }
-    public string? Currency { get; set; }
-    public double? Latitude { get; set; }
-    public double? Longitude { get; set; }
+    public string? Id { get; init; }
+    public int? SourceRow { get; init; }
+    public string? LocationName { get; init; }
+    public string? Address { get; init; }
+    public string? City { get; init; }
+    public string? State { get; init; }
+    public string? Country { get; init; }
+    public double TsiBuilding { get; init; }
+    public double TsiContent { get; init; }
+    public double TsiBi { get; init; }
+    public string? Currency { get; init; }
+    public double? Latitude { get; init; }
+    public double? Longitude { get; init; }
+}
+
+/// <summary>
+/// Display model for reinsurance acceptance (layer) details in the data grid.
+/// </summary>
+internal record AcceptanceDetailsModel
+{
+    public string? Id { get; init; }
+    public string? Name { get; init; }
+    public double EPI { get; init; }
+    public double Rate { get; init; }
+    public double Brokerage { get; init; }
+    public double Commission { get; init; }
+}
+
+/// <summary>
+/// Display model for reinsurance section details in the data grid.
+/// </summary>
+internal record SectionDetailsModel
+{
+    public string? Id { get; init; }
+    public string? AcceptanceId { get; init; }
+    public string? Name { get; init; }
+    public string? LineOfBusiness { get; init; }
+    public decimal Attach { get; init; }
+    public decimal Limit { get; init; }
+    public decimal? AggAttach { get; init; }
+    public decimal? AggLimit { get; init; }
 }

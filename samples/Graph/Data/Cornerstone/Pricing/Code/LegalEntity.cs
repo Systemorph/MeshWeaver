@@ -34,6 +34,11 @@ public record LegalEntity : INamed
     /// </summary>
     public string? EntityType { get; init; }
 
+    /// <summary>
+    /// Display order in lists.
+    /// </summary>
+    public int Order { get; init; }
+
     string INamed.DisplayName => Name;
 
     public static readonly LegalEntity CornerstoneUS = new()
@@ -41,7 +46,8 @@ public record LegalEntity : INamed
         Id = "CS-US",
         Name = "Cornerstone Insurance US Inc.",
         CountryOfIncorporation = "US",
-        EntityType = "Corporation"
+        EntityType = "Corporation",
+        Order = 0
     };
 
     public static readonly LegalEntity CornerstoneUK = new()
@@ -49,7 +55,8 @@ public record LegalEntity : INamed
         Id = "CS-UK",
         Name = "Cornerstone Insurance UK Ltd.",
         CountryOfIncorporation = "GB",
-        EntityType = "Limited Company"
+        EntityType = "Limited Company",
+        Order = 1
     };
 
     public static readonly LegalEntity CornerstoneEU = new()
@@ -57,7 +64,8 @@ public record LegalEntity : INamed
         Id = "CS-EU",
         Name = "Cornerstone Insurance Europe AG",
         CountryOfIncorporation = "CH",
-        EntityType = "Corporation"
+        EntityType = "Corporation",
+        Order = 2
     };
 
     public static readonly LegalEntity CornerstoneAsia = new()
@@ -65,7 +73,8 @@ public record LegalEntity : INamed
         Id = "CS-ASIA",
         Name = "Cornerstone Insurance Asia Pte. Ltd.",
         CountryOfIncorporation = "SG",
-        EntityType = "Private Limited"
+        EntityType = "Private Limited",
+        Order = 3
     };
 
     public static readonly LegalEntity MeshWeaverUS = new()
@@ -73,7 +82,8 @@ public record LegalEntity : INamed
         Id = "MW-US",
         Name = "MeshWeaver Insurance US Inc.",
         CountryOfIncorporation = "US",
-        EntityType = "Corporation"
+        EntityType = "Corporation",
+        Order = 4
     };
 
     public static readonly LegalEntity MeshWeaverUK = new()
@@ -81,7 +91,8 @@ public record LegalEntity : INamed
         Id = "MW-UK",
         Name = "MeshWeaver Insurance UK Ltd.",
         CountryOfIncorporation = "GB",
-        EntityType = "Limited Company"
+        EntityType = "Limited Company",
+        Order = 5
     };
 
     public static readonly LegalEntity MeshWeaverEU = new()
@@ -89,7 +100,8 @@ public record LegalEntity : INamed
         Id = "MW-EU",
         Name = "MeshWeaver Insurance Europe AG",
         CountryOfIncorporation = "DE",
-        EntityType = "Corporation"
+        EntityType = "Corporation",
+        Order = 6
     };
 
     public static readonly LegalEntity[] All = [CornerstoneUS, CornerstoneUK, CornerstoneEU, CornerstoneAsia, MeshWeaverUS, MeshWeaverUK, MeshWeaverEU];
