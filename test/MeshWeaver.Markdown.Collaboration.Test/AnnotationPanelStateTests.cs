@@ -13,7 +13,7 @@ public class AnnotationPanelStateTests
     [Fact]
     public void AnnotationPanelState_DefaultState_HasNoReplyingAnnotation()
     {
-        var state = new MarkdownView.AnnotationPanelState();
+        var state = new MarkdownLayoutAreas.AnnotationPanelState();
 
         state.ReplyingToAnnotationId.Should().BeNull();
         state.Replies.Should().BeEmpty();
@@ -22,7 +22,7 @@ public class AnnotationPanelStateTests
     [Fact]
     public void AnnotationPanelState_SetReplyingToAnnotation_TracksCorrectly()
     {
-        var state = new MarkdownView.AnnotationPanelState();
+        var state = new MarkdownLayoutAreas.AnnotationPanelState();
 
         var newState = state with { ReplyingToAnnotationId = "c1" };
 
@@ -32,7 +32,7 @@ public class AnnotationPanelStateTests
     [Fact]
     public void AnnotationPanelState_ClearReplyingAnnotation_ResetsToNull()
     {
-        var state = new MarkdownView.AnnotationPanelState { ReplyingToAnnotationId = "c1" };
+        var state = new MarkdownLayoutAreas.AnnotationPanelState { ReplyingToAnnotationId = "c1" };
 
         var newState = state with { ReplyingToAnnotationId = null };
 
@@ -42,7 +42,7 @@ public class AnnotationPanelStateTests
     [Fact]
     public void AnnotationPanelState_AddReply_StoresInRepliesCollection()
     {
-        var state = new MarkdownView.AnnotationPanelState();
+        var state = new MarkdownLayoutAreas.AnnotationPanelState();
         var annotationId = "c1";
         var replyText = "This is a reply";
         var author = "TestUser";
@@ -55,7 +55,7 @@ public class AnnotationPanelStateTests
             (author, replyText, timestamp)
         };
 
-        var newState = new MarkdownView.AnnotationPanelState
+        var newState = new MarkdownLayoutAreas.AnnotationPanelState
         {
             ReplyingToAnnotationId = null,
             Replies = newReplies
@@ -70,7 +70,7 @@ public class AnnotationPanelStateTests
     [Fact]
     public void AnnotationPanelState_AddMultipleReplies_StoresAllReplies()
     {
-        var state = new MarkdownView.AnnotationPanelState();
+        var state = new MarkdownLayoutAreas.AnnotationPanelState();
         var annotationId = "c1";
 
         // Add first reply
@@ -79,12 +79,12 @@ public class AnnotationPanelStateTests
         {
             ("Alice", "First reply", DateTimeOffset.Now)
         };
-        var state1 = new MarkdownView.AnnotationPanelState { Replies = replies1 };
+        var state1 = new MarkdownLayoutAreas.AnnotationPanelState { Replies = replies1 };
 
         // Add second reply
         var replies2 = new Dictionary<string, List<(string Author, string Text, DateTimeOffset Time)>>(state1.Replies);
         replies2[annotationId].Add(("Bob", "Second reply", DateTimeOffset.Now));
-        var state2 = new MarkdownView.AnnotationPanelState { Replies = replies2 };
+        var state2 = new MarkdownLayoutAreas.AnnotationPanelState { Replies = replies2 };
 
         state2.Replies[annotationId].Should().HaveCount(2);
         state2.Replies[annotationId][0].Author.Should().Be("Alice");
@@ -100,7 +100,7 @@ public class AnnotationPanelStateTests
             ["c2"] = new List<(string, string, DateTimeOffset)> { ("Bob", "Reply to c2", DateTimeOffset.Now) }
         };
 
-        var state = new MarkdownView.AnnotationPanelState { Replies = replies };
+        var state = new MarkdownLayoutAreas.AnnotationPanelState { Replies = replies };
 
         state.Replies.Should().HaveCount(2);
         state.Replies["c1"][0].Author.Should().Be("Alice");
@@ -114,7 +114,7 @@ public class AnnotationPanelStateTests
     [Fact]
     public void ReplyFormModel_DefaultState_HasEmptyText()
     {
-        var model = new MarkdownView.ReplyFormModel();
+        var model = new MarkdownLayoutAreas.ReplyFormModel();
 
         model.Text.Should().BeEmpty();
     }
@@ -122,7 +122,7 @@ public class AnnotationPanelStateTests
     [Fact]
     public void ReplyFormModel_SetText_StoresCorrectly()
     {
-        var model = new MarkdownView.ReplyFormModel { Text = "My reply text" };
+        var model = new MarkdownLayoutAreas.ReplyFormModel { Text = "My reply text" };
 
         model.Text.Should().Be("My reply text");
     }
@@ -135,7 +135,7 @@ public class AnnotationPanelStateTests
     public void ReplyWorkflow_ClickReply_SetsReplyingAnnotationId()
     {
         // Simulate: User clicks Reply button on annotation "c1"
-        var initialState = new MarkdownView.AnnotationPanelState();
+        var initialState = new MarkdownLayoutAreas.AnnotationPanelState();
 
         var afterClick = initialState with { ReplyingToAnnotationId = "c1" };
 
@@ -146,7 +146,7 @@ public class AnnotationPanelStateTests
     public void ReplyWorkflow_ClickCancel_ClearsReplyingAnnotationId()
     {
         // Simulate: User clicks Cancel on reply form
-        var replyingState = new MarkdownView.AnnotationPanelState { ReplyingToAnnotationId = "c1" };
+        var replyingState = new MarkdownLayoutAreas.AnnotationPanelState { ReplyingToAnnotationId = "c1" };
 
         var afterCancel = replyingState with { ReplyingToAnnotationId = null };
 
@@ -158,7 +158,7 @@ public class AnnotationPanelStateTests
     {
         // Simulate: User types reply and clicks Submit
         var annotationId = "c1";
-        var replyingState = new MarkdownView.AnnotationPanelState { ReplyingToAnnotationId = annotationId };
+        var replyingState = new MarkdownLayoutAreas.AnnotationPanelState { ReplyingToAnnotationId = annotationId };
 
         // User typed "Great point!" and clicks Submit
         var replyText = "Great point!";
@@ -169,7 +169,7 @@ public class AnnotationPanelStateTests
         }
         newReplies[annotationId].Add(("You", replyText, DateTimeOffset.Now));
 
-        var afterSubmit = new MarkdownView.AnnotationPanelState
+        var afterSubmit = new MarkdownLayoutAreas.AnnotationPanelState
         {
             ReplyingToAnnotationId = null,
             Replies = newReplies
@@ -189,7 +189,7 @@ public class AnnotationPanelStateTests
     {
         // Simulate: User clicks Submit without typing anything
         var annotationId = "c1";
-        var replyingState = new MarkdownView.AnnotationPanelState { ReplyingToAnnotationId = annotationId };
+        var replyingState = new MarkdownLayoutAreas.AnnotationPanelState { ReplyingToAnnotationId = annotationId };
 
         // Empty reply text - simulate validation
         var replyText = "";
@@ -204,22 +204,22 @@ public class AnnotationPanelStateTests
     public void ReplyWorkflow_MultipleRepliesInSequence_AllPreserved()
     {
         var annotationId = "c1";
-        var state = new MarkdownView.AnnotationPanelState();
+        var state = new MarkdownLayoutAreas.AnnotationPanelState();
 
         // First reply
         var replies1 = new Dictionary<string, List<(string Author, string Text, DateTimeOffset Time)>>();
         replies1[annotationId] = new List<(string, string, DateTimeOffset)> { ("Alice", "First", DateTimeOffset.Now) };
-        state = new MarkdownView.AnnotationPanelState { Replies = replies1 };
+        state = new MarkdownLayoutAreas.AnnotationPanelState { Replies = replies1 };
 
         // Second reply
         var replies2 = new Dictionary<string, List<(string Author, string Text, DateTimeOffset Time)>>(state.Replies);
         replies2[annotationId].Add(("Bob", "Second", DateTimeOffset.Now));
-        state = new MarkdownView.AnnotationPanelState { Replies = replies2 };
+        state = new MarkdownLayoutAreas.AnnotationPanelState { Replies = replies2 };
 
         // Third reply
         var replies3 = new Dictionary<string, List<(string Author, string Text, DateTimeOffset Time)>>(state.Replies);
         replies3[annotationId].Add(("Carol", "Third", DateTimeOffset.Now));
-        state = new MarkdownView.AnnotationPanelState { Replies = replies3 };
+        state = new MarkdownLayoutAreas.AnnotationPanelState { Replies = replies3 };
 
         state.Replies[annotationId].Should().HaveCount(3);
         state.Replies[annotationId][0].Author.Should().Be("Alice");
