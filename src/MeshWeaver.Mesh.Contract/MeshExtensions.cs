@@ -73,8 +73,23 @@ public static class MeshExtensions
             var createRequest = request.Message;
             var node = createRequest.Node;
 
+            // 0. Validate path is not empty or whitespace
+            if (string.IsNullOrWhiteSpace(node.Id) || string.IsNullOrWhiteSpace(node.Path))
+            {
+                hub.Post(
+                    CreateNodeResponse.Fail("Node path and Id must not be empty", NodeCreationRejectionReason.ValidationFailed),
+                    o => o.ResponseFor(request));
+                return request.Processed();
+            }
+
             // 1. Check if node already exists
-            var existingNode = await catalog.GetNodeAsync(new Address(node.Path));
+            // Use persistence directly (not catalog.GetNodeAsync which auto-creates from templates)
+            var existingNode = persistence != null
+                ? await persistence.GetNodeAsync(node.Path, ct)
+                : null;
+            // Also check in-memory configuration for statically registered nodes
+            if (existingNode == null && catalog.Configuration.Nodes.TryGetValue(node.Path, out var configNode))
+                existingNode = configNode;
             if (existingNode != null)
             {
                 // If existing node is Transient and request wants Active, this is a "confirm" operation
