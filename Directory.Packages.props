@@ -8,11 +8,13 @@
     <PackageVersion Include="AspectCore.Extensions.Reflection" Version="2.4.0" />
     <PackageVersion Include="Aspire.Azure.Storage.Blobs" Version="13.1.0" />
     <PackageVersion Include="Aspire.Hosting.AppHost" Version="13.1.0" />
+    <PackageVersion Include="Aspire.Hosting.Azure.CosmosDB" Version="13.1.0" />
     <PackageVersion Include="Aspire.Hosting.Azure.AppContainers" Version="13.1.0" />
     <PackageVersion Include="Aspire.Hosting.Azure.ApplicationInsights" Version="13.1.0" />
     <PackageVersion Include="Aspire.Hosting.Azure.KeyVault" Version="13.1.0" />
     <PackageVersion Include="Aspire.Hosting.Azure.PostgreSQL" Version="13.1.0" />
     <PackageVersion Include="Aspire.Hosting.Orleans" Version="13.1.0" />
+    <PackageVersion Include="Aspire.Microsoft.Azure.Cosmos" Version="13.1.0" />
     <PackageVersion Include="Aspire.Hosting.PostgreSQL" Version="13.1.0" />
     <PackageVersion Include="Aspire.Npgsql" Version="13.1.0" />
     <PackageVersion Include="Aspire.Npgsql.EntityFrameworkCore.PostgreSQL" Version="13.1.0" />

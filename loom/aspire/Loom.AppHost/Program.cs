@@ -24,15 +24,29 @@ if (useOrleans)
     // Create Azure Table resources for Orleans clustering
     var orleansTables = appStorage.AddTables("orleans-clustering");
 
+    // Azure Blob for content collection "storage"
+    var storageBlobs = appStorage.AddBlobs("storage");
+
     var orleans = builder.AddOrleans("loom-mesh")
         .WithClustering(orleansTables);
+
+    // Cosmos DB for graph persistence
+    var cosmos = builder.AddAzureCosmosDB("loomcosmos");
+    if (builder.Environment.IsDevelopment())
+    {
+        cosmos = cosmos.RunAsEmulator();
+    }
+    var cosmosDb = cosmos.AddCosmosDatabase("loomdb");
 
     // Loom Orleans (co-hosted silo + web)
     builder
         .AddProject<Projects.Loom_Portal_Orleans>("loom-orleans")
         .WithExternalHttpEndpoints()
         .WithReference(orleans)
-        .WaitFor(orleansTables);
+        .WithReference(cosmosDb)
+        .WithReference(storageBlobs)
+        .WaitFor(orleansTables)
+        .WaitFor(cosmosDb);
 }
 
 if (useMonolith)
