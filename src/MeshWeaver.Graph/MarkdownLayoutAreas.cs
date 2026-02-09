@@ -149,7 +149,6 @@ public static class MarkdownLayoutAreas
         IReadOnlyList<MeshNode> markdownChildren)
     {
         var nodePath = node?.Path ?? host.Hub.Address.ToString();
-        var containerId = $"markdown-container-{Guid.NewGuid():N}";
 
         // Check if content has annotations
         var rawContent = GetMarkdownContent(node);
@@ -173,7 +172,7 @@ public static class MarkdownLayoutAreas
         // If we have annotations and in markup mode, use a split layout (Word-style)
         if (hasAnnotations && annotations.Count > 0 && viewMode == AnnotationViewMode.Markup)
         {
-            return BuildSplitLayoutWithAnnotations(host, node, content, containerId, annotations, viewModeSubject, viewMode, panelState, panelStateSubject, markdownChildren);
+            return BuildSplitLayoutWithAnnotations(host, node, content, annotations, viewModeSubject, viewMode, panelState, panelStateSubject, markdownChildren);
         }
 
         // No annotations or non-markup mode - simple layout with menu positioned at top-right of content
@@ -282,7 +281,6 @@ public static class MarkdownLayoutAreas
         LayoutAreaHost host,
         MeshNode? node,
         string content,
-        string containerId,
         List<ParsedAnnotation> annotations,
         ViewModeSubject viewModeSubject,
         AnnotationViewMode currentViewMode,
@@ -315,18 +313,14 @@ public static class MarkdownLayoutAreas
 
         // Left: Content area with markdown - takes remaining space
         var contentArea = Controls.Stack
-            .WithStyle("flex: 1; min-width: 0; max-width: 750px; position: relative;")
-            .WithView(Controls.Html($"<div id=\"{containerId}\" class=\"markdown-annotations-container\" style=\"line-height: 1.7; font-size: 1rem;\">"))
-            .WithView(new MarkdownControl(content))
-            .WithView(Controls.Html("</div>"));
+            .WithClass("markdown-annotations-container")
+            .WithStyle("flex: 1; min-width: 0; max-width: 750px; position: relative; line-height: 1.7; font-size: 1rem;")
+            .WithView(new MarkdownControl(content));
 
         // Right: Annotations column - all annotations (comments + track changes with Accept/Reject buttons)
         var annotationsColumn = Controls.Stack
+            .WithClass("annotations-column")
             .WithStyle("flex: 0 0 340px; min-width: 300px; max-width: 380px; position: relative;");
-
-        // Add open tag for annotations container
-        annotationsColumn = annotationsColumn.WithView(
-            Controls.Html($"<div id=\"{containerId}-annotations\" class=\"annotations-column\">"));
 
         // Build annotation cards for all annotations (comments get Reply/Resolve, track changes get Accept/Reject)
         foreach (var annotation in annotations)
@@ -335,16 +329,13 @@ public static class MarkdownLayoutAreas
                 BuildAnnotationCard(host, node, rawContent, annotation, panelState, panelStateSubject, viewModeSubject));
         }
 
-        // Close annotations container
-        annotationsColumn = annotationsColumn.WithView(Controls.Html("</div>"));
-
         splitLayout = splitLayout.WithView(contentArea);
         splitLayout = splitLayout.WithView(annotationsColumn);
 
         outerContainer = outerContainer.WithView(splitLayout);
 
         // Add JavaScript for positioning and connecting lines
-        outerContainer = outerContainer.WithView(BuildInlineAnnotationScript(containerId));
+        outerContainer = outerContainer.WithView(BuildInlineAnnotationScript());
 
         // Add Markdown children section if there are any
         if (markdownChildren.Count > 0)
@@ -523,11 +514,9 @@ public static class MarkdownLayoutAreas
             card = card.WithView(buttonRow);
         }
 
-        // Wrap in a div with data attributes for positioning and line drawing
-        return Controls.Stack
-            .WithView(Controls.Html($"<div class=\"annotation-card\" data-annotation-id=\"{annotation.Id}\" data-annotation-type=\"{annotation.Type}\" data-color=\"{typeColor}\">"))
-            .WithView(card)
-            .WithView(Controls.Html("</div>"));
+        // Use WithClass for identification (class-based selectors work reliably in Blazor)
+        return card
+            .WithClass($"annotation-card annotation-for-{annotation.Id} annotation-type-{annotation.Type.ToString().ToLowerInvariant()}");
     }
 
     /// <summary>
@@ -598,22 +587,36 @@ public static class MarkdownLayoutAreas
 
     /// <summary>
     /// Builds JavaScript for positioning annotation cards and drawing SVG connecting lines.
+    /// Uses class-based selectors (not IDs) since WithClass renders to HTML but WithId does not in Blazor.
     /// </summary>
-    private static UiControl BuildInlineAnnotationScript(string containerId)
+    private static UiControl BuildInlineAnnotationScript()
     {
-        return Controls.Html($@"
+        return Controls.Html(@"
 <script>
-(function() {{
-    var containerId = '{containerId}';
-    var minCardGap = 12; // Gap between larger cards
+(function() {
+    var minCardGap = 12;
 
-    function drawConnectingLines() {{
-        var container = document.getElementById(containerId);
-        var annotationsCol = document.getElementById(containerId + '-annotations');
+    // Extract annotation ID from class list (e.g., 'annotation-for-c1' → 'c1')
+    function getAnnotationIdFromCard(card) {
+        var cls = Array.from(card.classList).find(function(c) { return c.startsWith('annotation-for-'); });
+        return cls ? cls.replace('annotation-for-', '') : null;
+    }
+
+    // Get annotation type color from card classes
+    function getAnnotationColor(card) {
+        if (card.classList.contains('annotation-type-insert')) return '#22c55e';
+        if (card.classList.contains('annotation-type-delete')) return '#ef4444';
+        if (card.classList.contains('annotation-type-comment')) return '#3b82f6';
+        return '#6b7280';
+    }
+
+    function drawConnectingLines() {
+        var container = document.querySelector('.markdown-annotations-container');
+        var annotationsCol = document.querySelector('.annotations-column');
         if (!container || !annotationsCol) return;
 
         // Remove old SVG if exists
-        var oldSvg = document.getElementById(containerId + '-lines');
+        var oldSvg = document.querySelector('.annotation-connecting-lines');
         if (oldSvg) oldSvg.remove();
 
         // Create SVG in the split layout parent
@@ -621,7 +624,7 @@ public static class MarkdownLayoutAreas
         if (!splitLayout) return;
 
         var svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-        svg.id = containerId + '-lines';
+        svg.classList.add('annotation-connecting-lines');
         var svgHeight = Math.max(splitLayout.scrollHeight, container.scrollHeight, annotationsCol.scrollHeight);
         svg.style.cssText = 'position:absolute;top:0;left:0;pointer-events:none;z-index:1;overflow:visible;';
         svg.setAttribute('width', splitLayout.scrollWidth);
@@ -629,28 +632,24 @@ public static class MarkdownLayoutAreas
         splitLayout.insertBefore(svg, splitLayout.firstChild);
 
         var splitRect = splitLayout.getBoundingClientRect();
-        // Account for scroll position when converting viewport coords to layout-relative coords
-        var scrollLeft = window.pageXOffset || document.documentElement.scrollLeft;
-        var scrollTop = window.pageYOffset || document.documentElement.scrollTop;
 
         var cards = annotationsCol.querySelectorAll('.annotation-card');
-        cards.forEach(function(card) {{
-            var annotationId = card.dataset.annotationId;
-            var color = card.dataset.color || '#6b7280';
+        cards.forEach(function(card) {
+            var annotationId = getAnnotationIdFromCard(card);
+            if (!annotationId) return;
+            var color = getAnnotationColor(card);
             var marker = container.querySelector('[data-comment-id=""' + annotationId + '""]') ||
                          container.querySelector('[data-change-id=""' + annotationId + '""]');
 
-            if (marker && card.offsetParent) {{
+            if (marker && card.offsetParent) {
                 var markerRect = marker.getBoundingClientRect();
                 var cardRect = card.getBoundingClientRect();
 
-                // Calculate positions relative to split layout, accounting for scroll
                 var markerX = markerRect.right - splitRect.left + splitLayout.scrollLeft + 4;
                 var markerY = markerRect.top + markerRect.height / 2 - splitRect.top + splitLayout.scrollTop;
                 var cardX = cardRect.left - splitRect.left + splitLayout.scrollLeft - 4;
                 var cardY = cardRect.top + Math.min(24, cardRect.height / 2) - splitRect.top + splitLayout.scrollTop;
 
-                // Smooth curved line from marker to card
                 var path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
                 var midX = (markerX + cardX) / 2;
                 path.setAttribute('d', 'M ' + markerX + ' ' + markerY + ' Q ' + midX + ' ' + markerY + ' ' + midX + ' ' + ((markerY + cardY) / 2) + ' Q ' + midX + ' ' + cardY + ' ' + cardX + ' ' + cardY);
@@ -661,7 +660,6 @@ public static class MarkdownLayoutAreas
                 path.setAttribute('data-annotation', annotationId);
                 svg.appendChild(path);
 
-                // Small dot at marker end
                 var circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
                 circle.setAttribute('cx', markerX);
                 circle.setAttribute('cy', markerY);
@@ -669,209 +667,260 @@ public static class MarkdownLayoutAreas
                 circle.setAttribute('fill', color);
                 circle.setAttribute('opacity', '0.7');
                 svg.appendChild(circle);
-            }}
-        }});
-    }}
+            }
+        });
+    }
 
-    function positionAnnotationCards() {{
-        var container = document.getElementById(containerId);
-        var annotationsCol = document.getElementById(containerId + '-annotations');
+    function positionAnnotationCards() {
+        var container = document.querySelector('.markdown-annotations-container');
+        var annotationsCol = document.querySelector('.annotations-column');
         if (!container || !annotationsCol) return;
 
         var cards = annotationsCol.querySelectorAll('.annotation-card');
         var positions = [];
 
-        // Calculate desired positions based on marker locations
-        cards.forEach(function(card) {{
-            var annotationId = card.dataset.annotationId;
+        cards.forEach(function(card) {
+            var annotationId = getAnnotationIdFromCard(card);
+            if (!annotationId) return;
+
             var marker = container.querySelector('[data-comment-id=""' + annotationId + '""]') ||
                          container.querySelector('[data-change-id=""' + annotationId + '""]');
 
-            if (marker) {{
+            if (marker) {
                 var markerRect = marker.getBoundingClientRect();
-                var containerRect = container.getBoundingClientRect();
-                var desiredTop = markerRect.top - containerRect.top;
+                var colRect = annotationsCol.getBoundingClientRect();
+                var desiredTop = markerRect.top - colRect.top + annotationsCol.scrollTop;
 
-                positions.push({{
+                positions.push({
                     card: card,
-                    marker: marker,
                     annotationId: annotationId,
                     desiredTop: desiredTop,
-                    height: card.offsetHeight || 18
-                }});
-            }}
-        }});
+                    height: card.offsetHeight || 80
+                });
+            }
+        });
 
-        // Sort by desired position
-        positions.sort(function(a, b) {{ return a.desiredTop - b.desiredTop; }});
+        positions.sort(function(a, b) { return a.desiredTop - b.desiredTop; });
 
-        // Resolve overlaps - push cards down if they would overlap
         var lastBottom = 0;
-        positions.forEach(function(pos) {{
+        positions.forEach(function(pos) {
             var actualTop = Math.max(pos.desiredTop, lastBottom + minCardGap);
             pos.actualTop = actualTop;
             lastBottom = actualTop + pos.height;
-        }});
+        });
 
-        // Apply positions
-        positions.forEach(function(pos) {{
+        positions.forEach(function(pos) {
             pos.card.style.position = 'absolute';
             pos.card.style.top = pos.actualTop + 'px';
             pos.card.style.left = '0';
             pos.card.style.right = '0';
-        }});
+        });
 
-        // Set minimum height for annotations column
-        if (positions.length > 0) {{
+        if (positions.length > 0) {
             var lastPos = positions[positions.length - 1];
             annotationsCol.style.minHeight = (lastPos.actualTop + lastPos.height + 16) + 'px';
-        }}
+        }
 
-        // Draw lines after positioning
         requestAnimationFrame(drawConnectingLines);
-    }}
+    }
 
-    // Poll until markers are in the DOM, then position cards
-    function waitForMarkersAndPosition() {{
-        var container = document.getElementById(containerId);
-        var annotationsCol = document.getElementById(containerId + '-annotations');
-        if (!container || !annotationsCol) {{
+    function waitForMarkersAndPosition() {
+        var container = document.querySelector('.markdown-annotations-container');
+        var annotationsCol = document.querySelector('.annotations-column');
+        if (!container || !annotationsCol) {
             requestAnimationFrame(waitForMarkersAndPosition);
             return;
-        }}
+        }
 
         var markers = container.querySelectorAll('[data-comment-id], [data-change-id]');
         var cards = annotationsCol.querySelectorAll('.annotation-card');
-        if (markers.length === 0 || cards.length === 0) {{
+        if (markers.length === 0 || cards.length === 0) {
             requestAnimationFrame(waitForMarkersAndPosition);
             return;
-        }}
+        }
 
-        // Markers found - position cards
         positionAnnotationCards();
-        // Re-run once more after a short delay to catch late layout shifts
-        requestAnimationFrame(function() {{
+        requestAnimationFrame(function() {
             requestAnimationFrame(positionAnnotationCards);
-        }});
-    }}
+        });
+    }
 
-    if (document.readyState === 'loading') {{
+    if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', waitForMarkersAndPosition);
-    }} else {{
+    } else {
         requestAnimationFrame(waitForMarkersAndPosition);
-    }}
+    }
 
-    window.addEventListener('resize', function() {{
+    window.addEventListener('resize', function() {
         requestAnimationFrame(positionAnnotationCards);
-    }});
+    });
 
-    // Observe both annotations column and content container for changes
-    var observer = new MutationObserver(function() {{
+    var observer = new MutationObserver(function() {
         requestAnimationFrame(positionAnnotationCards);
-    }});
+    });
 
-    function setupObservers() {{
-        var container = document.getElementById(containerId);
-        var annotationsCol = document.getElementById(containerId + '-annotations');
-        if (annotationsCol) {{
-            observer.observe(annotationsCol, {{ childList: true, subtree: true, attributes: true, characterData: true }});
-        }}
-        if (container) {{
-            observer.observe(container, {{ childList: true, subtree: true }});
-        }}
-    }}
+    function setupObservers() {
+        var container = document.querySelector('.markdown-annotations-container');
+        var annotationsCol = document.querySelector('.annotations-column');
+        if (annotationsCol) {
+            observer.observe(annotationsCol, { childList: true, subtree: true, attributes: true, characterData: true });
+        }
+        if (container) {
+            observer.observe(container, { childList: true, subtree: true });
+        }
+    }
     requestAnimationFrame(setupObservers);
 
-    // Highlight on click
-    document.addEventListener('click', function(e) {{
-        var marker = e.target.closest('[data-comment-id], [data-change-id]');
-        if (marker) {{
-            var id = marker.dataset.commentId || marker.dataset.changeId;
-            highlightAnnotation(id);
-        }}
-    }});
+    // Click handler for track change inline popovers and comment highlights
+    document.addEventListener('click', function(e) {
+        // Handle Accept/Reject buttons inside inline popovers
+        var actionBtn = e.target.closest('.annotation-actions button');
+        if (actionBtn) {
+            var changeId = actionBtn.dataset.changeId;
+            var action = actionBtn.dataset.action;
+            if (changeId && action) {
+                // Find the matching card in the side panel and click the corresponding button
+                var panelCard = document.querySelector('.annotation-for-' + changeId);
+                if (panelCard) {
+                    panelCard.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                    panelCard.classList.add('active');
+                    // Find and click the Accept or Reject button in the panel card
+                    var btnText = action === 'accept' ? 'Accept' : 'Reject';
+                    var panelButtons = panelCard.querySelectorAll('fluent-button, button');
+                    panelButtons.forEach(function(btn) {
+                        if (btn.textContent.trim() === btnText) {
+                            btn.click();
+                        }
+                    });
+                }
+            }
+            e.stopPropagation();
+            return;
+        }
 
-    window.highlightAnnotation = function(annotationId) {{
-        var container = document.getElementById(containerId);
+        // Close all open track change popovers first
+        document.querySelectorAll('.show-label').forEach(function(el) {
+            el.classList.remove('show-label');
+        });
+
+        // Toggle popover on track change spans
+        var trackSpan = e.target.closest('.track-insert, .track-delete');
+        if (trackSpan) {
+            trackSpan.classList.add('show-label');
+            e.stopPropagation();
+            return;
+        }
+
+        // Highlight on comment click → scroll to card in side panel
+        var commentMarker = e.target.closest('[data-comment-id]');
+        if (commentMarker) {
+            var id = commentMarker.dataset.commentId;
+            highlightAnnotation(id);
+            return;
+        }
+    });
+
+    // Click on annotation card → highlight the corresponding text
+    document.addEventListener('click', function(e) {
+        var card = e.target.closest('.annotation-card');
+        if (card) {
+            var annotationId = getAnnotationIdFromCard(card);
+            if (annotationId) {
+                highlightAnnotation(annotationId);
+            }
+        }
+    });
+
+    window.highlightAnnotation = function(annotationId) {
+        var container = document.querySelector('.markdown-annotations-container');
         if (!container) return;
 
         // Remove previous highlights
-        document.querySelectorAll('.annotation-active').forEach(function(el) {{
+        document.querySelectorAll('.annotation-active').forEach(function(el) {
             el.classList.remove('annotation-active');
-        }});
-        document.querySelectorAll('.annotation-card.active').forEach(function(el) {{
+        });
+        document.querySelectorAll('.annotation-card.active').forEach(function(el) {
             el.classList.remove('active');
-        }});
+        });
 
-        // Highlight marker
+        // Highlight marker in content
         var marker = container.querySelector('[data-comment-id=""' + annotationId + '""]') ||
                      container.querySelector('[data-change-id=""' + annotationId + '""]');
-        if (marker) {{
+        if (marker) {
             marker.classList.add('annotation-active');
-        }}
+        }
 
-        // Highlight card and line
-        var card = document.querySelector('.annotation-card[data-annotation-id=""' + annotationId + '""]');
-        if (card) {{
+        // Highlight card in side panel
+        var card = document.querySelector('.annotation-for-' + annotationId);
+        if (card) {
             card.classList.add('active');
-        }}
+            card.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        }
 
         // Highlight the SVG line
-        var svg = document.getElementById(containerId + '-lines');
-        if (svg) {{
-            svg.querySelectorAll('path').forEach(function(p) {{
-                if (p.dataset.annotation === annotationId) {{
+        var svg = document.querySelector('.annotation-connecting-lines');
+        if (svg) {
+            svg.querySelectorAll('path').forEach(function(p) {
+                if (p.dataset.annotation === annotationId) {
                     p.setAttribute('opacity', '0.8');
                     p.setAttribute('stroke-width', '2');
-                }} else {{
+                } else {
                     p.setAttribute('opacity', '0.3');
                     p.setAttribute('stroke-width', '1');
-                }}
-            }});
-        }}
-    }};
+                }
+            });
+        }
+    };
 
-}})();
+})();
 </script>
 <style>
-.annotations-column {{
+.annotations-column {
     position: relative;
     display: flex;
     flex-direction: column;
     gap: 8px;
-}}
-.annotation-card {{
+}
+.annotation-card {
     transition: all 0.2s ease;
-}}
-.annotation-card:hover {{
+}
+.annotation-card:hover {
     transform: translateX(-2px);
     box-shadow: 0 2px 8px rgba(0,0,0,0.15) !important;
     z-index: 10;
-}}
-.annotation-card.active {{
+}
+.annotation-card.active {
     box-shadow: 0 0 0 2px var(--accent-fill-rest), 0 2px 8px rgba(0,0,0,0.18) !important;
     z-index: 10;
-}}
-.annotation-active {{
+}
+.annotation-active {
     background: rgba(59, 130, 246, 0.15) !important;
     box-shadow: 0 0 0 2px var(--accent-fill-rest);
     border-radius: 3px;
-}}
-/* Highlighted text styles */
-.comment-highlight {{
-    background: rgba(59, 130, 246, 0.2);
-    border-bottom: 2px solid #3b82f6;
+}
+/* Track changes: hidden inline by default, text looks normal */
+.track-insert {
+    background: transparent !important;
+    border-bottom: none !important;
+    text-decoration: none !important;
+    color: inherit !important;
+    padding: 0 !important;
     cursor: pointer;
-}}
-.track-insert {{
-    background: rgba(34, 197, 94, 0.2);
-    border-bottom: 2px solid #22c55e;
-}}
-.track-delete {{
-    background: rgba(239, 68, 68, 0.2);
-    border-bottom: 2px solid #ef4444;
-    text-decoration: line-through;
-}}
+    position: relative;
+}
+.track-delete {
+    background: transparent !important;
+    border-bottom: none !important;
+    text-decoration: none !important;
+    color: inherit !important;
+    padding: 0 !important;
+    cursor: pointer;
+    position: relative;
+}
+/* Comment highlights remain visible */
+.comment-highlight {
+    cursor: pointer;
+}
 </style>
         ");
     }

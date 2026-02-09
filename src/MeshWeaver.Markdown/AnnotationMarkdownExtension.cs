@@ -98,9 +98,18 @@ public class AnnotationMarkdownExtension : IMarkdownExtension
     {
         var authorAttr = !string.IsNullOrEmpty(author) ? $" data-author=\"{EscapeHtml(author)}\"" : "";
         var dateAttr = !string.IsNullOrEmpty(date) ? $" data-date=\"{EscapeHtml(date)}\"" : "";
+        var typeLabel = cssClass == "track-insert" ? "Inserted" : "Deleted";
+        var authorDisplay = !string.IsNullOrEmpty(author) ? EscapeHtml(author) : "Unknown";
 
-        // Highlighted span only - Accept/Reject buttons are in the side panel
-        return $"<span class=\"{cssClass}\" data-change-id=\"{id}\"{authorAttr}{dateAttr}>{content}</span>";
+        // Inline popover content (hidden by default, shown via .show-label CSS)
+        var popover = $"<div class=\"annotation-margin-label\">"
+            + $"<div class=\"annotation-meta\">{typeLabel} by {authorDisplay}</div>"
+            + $"<div class=\"annotation-actions\">"
+            + $"<button class=\"accept-btn\" data-action=\"accept\" data-change-id=\"{id}\">Accept</button>"
+            + $"<button class=\"reject-btn\" data-action=\"reject\" data-change-id=\"{id}\">Reject</button>"
+            + $"</div></div>";
+
+        return $"<span class=\"{cssClass}\" data-change-id=\"{id}\"{authorAttr}{dateAttr}>{content}{popover}</span>";
     }
 
     private static string EscapeHtml(string text)
