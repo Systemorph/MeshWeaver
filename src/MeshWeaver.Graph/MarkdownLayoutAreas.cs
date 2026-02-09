@@ -74,16 +74,15 @@ public static class MarkdownLayoutAreas
         public string? ReplyingToAnnotationId { get; init; }
 
         /// <summary>
+        /// Path of the reply MeshNode currently being edited inline, or null if none.
+        /// </summary>
+        public string? EditingReplyPath { get; init; }
+
+        /// <summary>
         /// IDs of annotations that are expanded (collapsed by default).
         /// </summary>
         public IReadOnlySet<string> ExpandedAnnotationIds { get; init; }
             = new HashSet<string>();
-
-        /// <summary>
-        /// Replies that have been added (in-memory for now).
-        /// </summary>
-        public IReadOnlyDictionary<string, List<(string Author, string Text, DateTimeOffset Time)>> Replies { get; init; }
-            = new Dictionary<string, List<(string Author, string Text, DateTimeOffset Time)>>();
     }
 
     /// <summary>
@@ -143,7 +142,7 @@ public static class MarkdownLayoutAreas
         // Query for Comment child MeshNodes
         var commentNodesStream = meshQuery != null
             ? meshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
-                $"path:{hubPath} nodeType:{CommentNodeType.NodeType} scope:children"))
+                $"path:{hubPath} nodeType:{CommentNodeType.NodeType} scope:descendants"))
                 .Scan(new List<MeshNode>(), (list, change) =>
                 {
                     if (change.ChangeType == QueryChangeType.Initial || change.ChangeType == QueryChangeType.Reset)
@@ -371,14 +370,27 @@ public static class MarkdownLayoutAreas
             .WithClass("annotations-column")
             .WithStyle(columnStyle);
 
-        // Visible comment cards built from Comment MeshNodes
-        foreach (var commentNode in commentNodes)
+        // Separate top-level comments from replies
+        var topLevelComments = commentNodes
+            .Where(n => n.Content is Comment c && string.IsNullOrEmpty(c.ParentCommentId))
+            .ToList();
+
+        var repliesByParent = commentNodes
+            .Where(n => n.Content is Comment c && !string.IsNullOrEmpty(c.ParentCommentId))
+            .GroupBy(n => ((Comment)n.Content!).ParentCommentId!)
+            .ToDictionary(g => g.Key, g => g.ToList());
+
+        // Visible comment cards built from top-level Comment MeshNodes
+        foreach (var commentNode in topLevelComments)
         {
             var comment = commentNode.Content as Comment;
             if (comment == null) continue;
 
+            repliesByParent.TryGetValue(comment.Id, out var replyNodes);
+
             annotationsColumn = annotationsColumn.WithView(
-                BuildCommentNodeCard(host, node, rawContent, comment, commentNode.Path!, panelState, panelStateSubject));
+                BuildCommentNodeCard(host, node, rawContent, comment, commentNode.Path!, panelState, panelStateSubject,
+                    replyNodes ?? new List<MeshNode>()));
         }
 
         // Hidden track change cards (Accept/Reject Blazor buttons as action targets for inline popover JS)
@@ -426,13 +438,13 @@ public static class MarkdownLayoutAreas
         Comment comment,
         string commentPath,
         AnnotationPanelState panelState,
-        BehaviorSubject<AnnotationPanelState> panelStateSubject)
+        BehaviorSubject<AnnotationPanelState> panelStateSubject,
+        IReadOnlyList<MeshNode> replyNodes)
     {
         var typeColor = "#3b82f6";
         var author = comment.Author ?? "Unknown";
         var authorInitial = author.Length > 0 ? author[0].ToString().ToUpper() : "?";
         var markerId = comment.MarkerId ?? comment.Id;
-        var isReplyingToThis = panelState.ReplyingToAnnotationId == comment.Id;
 
         // Card container
         var card = Controls.Stack
@@ -447,7 +459,7 @@ public static class MarkdownLayoutAreas
                 </div>
                 <div style=""flex: 1;"">
                     <div style=""font-weight: 600; font-size: 0.9rem; color: var(--neutral-foreground-rest);"">{System.Web.HttpUtility.HtmlEncode(author)}</div>
-                    <div style=""font-size: 0.75rem; color: var(--neutral-foreground-hint);"">Comment</div>
+                    <div style=""font-size: 0.75rem; color: var(--neutral-foreground-hint);"">{Graph.CommentsView.FormatTimeAgo(comment.CreatedAt)}</div>
                 </div>
             </div>";
         card = card.WithView(Controls.Html(headerHtml));
@@ -472,77 +484,129 @@ public static class MarkdownLayoutAreas
                 </div>"));
         }
 
-        // Replies from Comment.Replies (nested Comment records)
-        if (comment.Replies.Count > 0)
+        // Render reply MeshNodes as Thumbnail or inline edit form
+        foreach (var replyNode in replyNodes.OrderBy(r => ((Comment)r.Content!).CreatedAt))
         {
-            foreach (var reply in comment.Replies)
+            if (replyNode.Path == panelState.EditingReplyPath)
             {
-                card = card.WithView(Controls.Html($@"
-                    <div style=""font-size: 0.85rem; padding: 8px; margin: 4px 0; background: var(--neutral-layer-2);
-                               border-radius: 4px; border-left: 3px solid var(--accent-fill-rest);"">
-                        <div style=""font-weight: 600; color: var(--accent-fill-rest); margin-bottom: 4px;"">{System.Web.HttpUtility.HtmlEncode(reply.Author)}</div>
-                        <div style=""color: var(--neutral-foreground-rest);"">{System.Web.HttpUtility.HtmlEncode(reply.Text)}</div>
-                    </div>"));
+                // Show inline edit form for this reply
+                card = card.WithView(BuildReplyEditForm(host, replyNode, panelState, panelStateSubject));
+            }
+            else
+            {
+                // Show as CommentNodeType Thumbnail
+                card = card.WithView(CommentLayoutAreas.BuildThumbnail(replyNode));
             }
         }
 
-        // In-memory replies from panel state
-        panelState.Replies.TryGetValue(comment.Id, out var inMemoryReplies);
-        if (inMemoryReplies != null && inMemoryReplies.Count > 0)
-        {
-            foreach (var reply in inMemoryReplies)
-            {
-                card = card.WithView(Controls.Html($@"
-                    <div style=""font-size: 0.85rem; padding: 8px; margin: 4px 0; background: var(--neutral-layer-2);
-                               border-radius: 4px; border-left: 3px solid var(--accent-fill-rest);"">
-                        <div style=""font-weight: 600; color: var(--accent-fill-rest); margin-bottom: 4px;"">{System.Web.HttpUtility.HtmlEncode(reply.Author)}</div>
-                        <div style=""color: var(--neutral-foreground-rest);"">{System.Web.HttpUtility.HtmlEncode(reply.Text)}</div>
-                    </div>"));
-            }
-        }
+        // Action buttons — Reply creates a MeshNode immediately, Resolve removes marker + deletes node
+        var buttonRow = Controls.Stack
+            .WithOrientation(Orientation.Horizontal)
+            .WithStyle("gap: 8px; margin-top: 8px;");
 
-        // Action buttons
-        if (isReplyingToThis)
-        {
-            card = card.WithView(BuildCommentReplyForm(host, comment.Id, commentPath, panelState, panelStateSubject));
-        }
-        else
-        {
-            var buttonRow = Controls.Stack
-                .WithOrientation(Orientation.Horizontal)
-                .WithStyle("gap: 8px; margin-top: 8px;");
-
-            buttonRow = buttonRow.WithView(
-                Controls.Button("Reply")
-                    .WithAppearance(Appearance.Neutral)
-                    .WithStyle("padding: 6px 16px; font-size: 0.85rem;")
-                    .WithClickAction(_ => panelStateSubject.OnNext(
-                        panelState with { ReplyingToAnnotationId = comment.Id })));
-
-            buttonRow = buttonRow.WithView(
-                Controls.Button("Resolve")
-                    .WithAppearance(Appearance.Stealth)
-                    .WithStyle("padding: 6px 16px; font-size: 0.85rem;")
-                    .WithClickAction(async _ =>
+        buttonRow = buttonRow.WithView(
+            Controls.Button("Reply")
+                .WithAppearance(Appearance.Neutral)
+                .WithStyle("padding: 6px 16px; font-size: 0.85rem;")
+                .WithClickAction(async _ =>
+                {
+                    var replyId = Guid.NewGuid().AsString();
+                    var replyComment = new Comment
                     {
-                        if (node == null) return;
-                        // Remove marker from markdown
-                        var newContent = AnnotationMarkdownExtension.ResolveComment(rawContent, markerId);
-                        var updatedNode = node with { Content = new MarkdownContent { Content = newContent } };
-                        host.Hub.Post(
-                            new DataChangeRequest().WithUpdates(updatedNode),
-                            o => o.WithTarget(host.Hub.Address));
+                        Id = replyId,
+                        NodePath = commentPath,
+                        Author = "",
+                        Text = "",
+                        ParentCommentId = comment.Id,
+                        Status = CommentStatus.Active
+                    };
+                    var replyNode = new MeshNode($"{commentPath}/{replyId}")
+                    {
+                        Name = "Reply",
+                        NodeType = CommentNodeType.NodeType,
+                        Content = replyComment
+                    };
 
-                        // Delete the Comment MeshNode
-                        var meshCatalog = host.Hub.ServiceProvider.GetRequiredService<IMeshCatalog>();
-                        await meshCatalog.DeleteNodeAsync(commentPath, recursive: true);
-                    }));
+                    var meshCatalog = host.Hub.ServiceProvider.GetRequiredService<IMeshCatalog>();
+                    await meshCatalog.CreateNodeAsync(replyNode);
 
-            card = card.WithView(buttonRow);
-        }
+                    panelStateSubject.OnNext(panelState with
+                    {
+                        EditingReplyPath = replyNode.Path
+                    });
+                }));
+
+        buttonRow = buttonRow.WithView(
+            Controls.Button("Resolve")
+                .WithAppearance(Appearance.Stealth)
+                .WithStyle("padding: 6px 16px; font-size: 0.85rem;")
+                .WithClickAction(async _ =>
+                {
+                    if (node == null) return;
+                    // Remove marker from markdown
+                    var newContent = AnnotationMarkdownExtension.ResolveComment(rawContent, markerId);
+                    var updatedNode = node with { Content = new MarkdownContent { Content = newContent } };
+                    host.Hub.Post(
+                        new DataChangeRequest().WithUpdates(updatedNode),
+                        o => o.WithTarget(host.Hub.Address));
+
+                    // Delete the Comment MeshNode
+                    var meshCatalog = host.Hub.ServiceProvider.GetRequiredService<IMeshCatalog>();
+                    await meshCatalog.DeleteNodeAsync(commentPath, recursive: true);
+                }));
+
+        card = card.WithView(buttonRow);
 
         return card
             .WithClass($"annotation-card annotation-for-{markerId} annotation-type-comment");
+    }
+
+    /// <summary>
+    /// Builds an inline edit form for a reply MeshNode using the property overview (auto-save).
+    /// Shows Author + Text fields (other Comment properties hidden via [Browsable(false)]).
+    /// Done closes the form; Cancel deletes the reply node.
+    /// </summary>
+    private static UiControl BuildReplyEditForm(
+        LayoutAreaHost host,
+        MeshNode replyNode,
+        AnnotationPanelState panelState,
+        BehaviorSubject<AnnotationPanelState> panelStateSubject)
+    {
+        var form = Controls.Stack
+            .WithStyle("margin: 4px 0; padding: 12px; background: var(--neutral-layer-2); border-radius: 6px; border-left: 3px solid var(--accent-fill-rest);");
+
+        // Property editor with auto-save
+        form = form.WithView(OverviewLayoutArea.BuildPropertyOverview(host, replyNode));
+
+        // Done/Cancel buttons
+        var buttonRow = Controls.Stack
+            .WithOrientation(Orientation.Horizontal)
+            .WithStyle("gap: 8px; justify-content: flex-end; margin-top: 8px;");
+
+        buttonRow = buttonRow.WithView(
+            Controls.Button("Cancel")
+                .WithAppearance(Appearance.Stealth)
+                .WithStyle("padding: 6px 16px; font-size: 0.85rem;")
+                .WithClickAction(async _ =>
+                {
+                    // Delete the empty reply node
+                    var meshCatalog = host.Hub.ServiceProvider.GetRequiredService<IMeshCatalog>();
+                    await meshCatalog.DeleteNodeAsync(replyNode.Path!, recursive: false);
+                    panelStateSubject.OnNext(panelState with { EditingReplyPath = null });
+                }));
+
+        buttonRow = buttonRow.WithView(
+            Controls.Button("Done")
+                .WithAppearance(Appearance.Accent)
+                .WithStyle("padding: 6px 16px; font-size: 0.85rem;")
+                .WithClickAction(_ =>
+                {
+                    // Auto-save already persisted; just close the edit form
+                    panelStateSubject.OnNext(panelState with { EditingReplyPath = null });
+                }));
+
+        form = form.WithView(buttonRow);
+        return form;
     }
 
     /// <summary>
@@ -610,11 +674,8 @@ public static class MarkdownLayoutAreas
                         var meshCatalog = host.Hub.ServiceProvider.GetRequiredService<IMeshCatalog>();
                         await meshCatalog.CreateNodeAsync(replyNode);
 
-                        panelStateSubject.OnNext(new AnnotationPanelState
-                        {
-                            ReplyingToAnnotationId = null,
-                            Replies = panelState.Replies
-                        });
+                        // Just close the form — reactive subscription handles display
+                        panelStateSubject.OnNext(panelState with { ReplyingToAnnotationId = null });
                     }
                 }));
 
@@ -766,7 +827,6 @@ public static class MarkdownLayoutAreas
         var author = annotation.Author ?? "Unknown";
         var authorInitial = author.Length > 0 ? author[0].ToString().ToUpper() : "?";
         var isReplyingToThis = panelState.ReplyingToAnnotationId == annotation.Id;
-        panelState.Replies.TryGetValue(annotation.Id, out var replies);
 
         // Card container - Word Online style with proper sizing
         var card = Controls.Stack
@@ -813,20 +873,6 @@ public static class MarkdownLayoutAreas
                 <div style=""font-size: 0.9rem; color: var(--neutral-foreground-rest); line-height: 1.5; margin-bottom: 8px;"">
                     {System.Web.HttpUtility.HtmlEncode(annotation.CommentText)}
                 </div>"));
-        }
-
-        // Replies
-        if (replies != null && replies.Count > 0)
-        {
-            foreach (var reply in replies)
-            {
-                card = card.WithView(Controls.Html($@"
-                    <div style=""font-size: 0.85rem; padding: 8px; margin: 4px 0; background: var(--neutral-layer-2);
-                               border-radius: 4px; border-left: 3px solid var(--accent-fill-rest);"">
-                        <div style=""font-weight: 600; color: var(--accent-fill-rest); margin-bottom: 4px;"">{System.Web.HttpUtility.HtmlEncode(reply.Author)}</div>
-                        <div style=""color: var(--neutral-foreground-rest);"">{System.Web.HttpUtility.HtmlEncode(reply.Text)}</div>
-                    </div>"));
-            }
         }
 
         // Action buttons - always visible
@@ -953,19 +999,8 @@ public static class MarkdownLayoutAreas
                     var replyModel = await ctx.Host.Stream.GetDataAsync<ReplyFormModel>(replyDataId);
                     if (replyModel != null && !string.IsNullOrWhiteSpace(replyModel.Text))
                     {
-                        // Add the reply to the state
-                        var newReplies = new Dictionary<string, List<(string Author, string Text, DateTimeOffset Time)>>(panelState.Replies);
-                        if (!newReplies.ContainsKey(annotationId))
-                        {
-                            newReplies[annotationId] = new List<(string, string, DateTimeOffset)>();
-                        }
-                        newReplies[annotationId].Add(("You", replyModel.Text, DateTimeOffset.Now));
-
-                        panelStateSubject.OnNext(new AnnotationPanelState
-                        {
-                            ReplyingToAnnotationId = null,
-                            Replies = newReplies
-                        });
+                        // Close the form — track change replies are informational only
+                        panelStateSubject.OnNext(panelState with { ReplyingToAnnotationId = null });
                     }
                 }));
 
