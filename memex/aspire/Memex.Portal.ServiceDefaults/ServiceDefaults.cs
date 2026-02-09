@@ -112,9 +112,9 @@ public static class ServiceDefaults
 }
 
 /// <summary>
-/// Orleans cluster configuration constants for Memex.
+/// Distributed cluster configuration constants for Memex.
 /// </summary>
-public static class MemexOrleansConstants
+public static class MemexDistributedConstants
 {
     public const string ServiceId = "Memex";
     public const string ClusterId = "Memex";
