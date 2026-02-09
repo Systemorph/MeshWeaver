@@ -12,6 +12,7 @@ using MeshWeaver.Markdown;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
+using MeshWeaver.ShortGuid;
 using Microsoft.Extensions.DependencyInjection;
 using ViewModeSubject = System.Reactive.Subjects.ISubject<MeshWeaver.Graph.MarkdownLayoutAreas.AnnotationViewMode>;
 
@@ -94,6 +95,15 @@ public static class MarkdownLayoutAreas
     }
 
     /// <summary>
+    /// Model for the new comment form (text selection commenting).
+    /// </summary>
+    public record CommentFormModel
+    {
+        public string SelectedText { get; init; } = string.Empty;
+        public string CommentText { get; init; } = string.Empty;
+    }
+
+    /// <summary>
     /// Renders the readonly markdown view with a clean reading experience.
     /// Includes a header with title and action menu.
     /// If there are Markdown child nodes, they are displayed in a separate section.
@@ -130,12 +140,40 @@ public static class MarkdownLayoutAreas
             }
         });
 
-        // Combine node stream with view mode, panel state, and children for reactive updates
+        // Query for Comment child MeshNodes
+        var commentNodesStream = meshQuery != null
+            ? meshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
+                $"path:{hubPath} nodeType:{CommentNodeType.NodeType} scope:children"))
+                .Scan(new List<MeshNode>(), (list, change) =>
+                {
+                    if (change.ChangeType == QueryChangeType.Initial || change.ChangeType == QueryChangeType.Reset)
+                        return change.Items.ToList();
+                    // Incremental updates
+                    foreach (var item in change.Items)
+                    {
+                        if (change.ChangeType == QueryChangeType.Added)
+                            list.Add(item);
+                        else if (change.ChangeType == QueryChangeType.Removed)
+                            list.RemoveAll(n => n.Path == item.Path);
+                        else if (change.ChangeType == QueryChangeType.Updated)
+                        {
+                            list.RemoveAll(n => n.Path == item.Path);
+                            list.Add(item);
+                        }
+                    }
+                    return list;
+                })
+                .Select(list => list as IReadOnlyList<MeshNode>)
+            : Observable.Return<IReadOnlyList<MeshNode>>(Array.Empty<MeshNode>());
+
+        // Combine node stream with view mode, panel state, children, and comment nodes for reactive updates
         return nodeStream
-            .CombineLatest(viewModeSubject, panelStateSubject, childrenStream, (nodes, viewMode, panelState, children) =>
+            .CombineLatest(viewModeSubject, panelStateSubject, childrenStream, commentNodesStream,
+                (nodes, viewMode, panelState, children, commentNodes) =>
             {
                 var node = nodes.FirstOrDefault(n => n.Path == hubPath);
-                return BuildReadView(host, node, viewMode, viewModeSubject, panelState, panelStateSubject, children ?? Array.Empty<MeshNode>());
+                return BuildReadView(host, node, viewMode, viewModeSubject, panelState, panelStateSubject,
+                    children ?? Array.Empty<MeshNode>(), commentNodes ?? Array.Empty<MeshNode>());
             });
     }
 
@@ -146,7 +184,8 @@ public static class MarkdownLayoutAreas
         ViewModeSubject viewModeSubject,
         AnnotationPanelState panelState,
         BehaviorSubject<AnnotationPanelState> panelStateSubject,
-        IReadOnlyList<MeshNode> markdownChildren)
+        IReadOnlyList<MeshNode> markdownChildren,
+        IReadOnlyList<MeshNode>? commentNodes = null)
     {
         var nodePath = node?.Path ?? host.Hub.Address.ToString();
 
@@ -169,10 +208,12 @@ public static class MarkdownLayoutAreas
             _ => rawContent // Markup mode - keep annotations
         };
 
-        // If we have annotations and in markup mode, use a split layout (Word-style)
-        if (hasAnnotations && annotations.Count > 0 && viewMode == AnnotationViewMode.Markup)
+        commentNodes ??= Array.Empty<MeshNode>();
+
+        // If we have annotations (inline or MeshNode) and in markup mode, use a split layout (Word-style)
+        if (((hasAnnotations && annotations.Count > 0) || commentNodes.Count > 0) && viewMode == AnnotationViewMode.Markup)
         {
-            return BuildSplitLayoutWithAnnotations(host, node, content, annotations, viewModeSubject, viewMode, panelState, panelStateSubject, markdownChildren);
+            return BuildSplitLayoutWithAnnotations(host, node, content, annotations, viewModeSubject, viewMode, panelState, panelStateSubject, markdownChildren, commentNodes);
         }
 
         // No annotations or non-markup mode - simple layout with menu positioned at top-right of content
@@ -286,7 +327,8 @@ public static class MarkdownLayoutAreas
         AnnotationViewMode currentViewMode,
         AnnotationPanelState panelState,
         BehaviorSubject<AnnotationPanelState> panelStateSubject,
-        IReadOnlyList<MeshNode> markdownChildren)
+        IReadOnlyList<MeshNode> markdownChildren,
+        IReadOnlyList<MeshNode> commentNodes)
     {
         var nodePath = node?.Path ?? host.Hub.Address.ToString();
         // Outer container - wider to accommodate larger annotation cards
@@ -317,22 +359,26 @@ public static class MarkdownLayoutAreas
             .WithStyle("flex: 1; min-width: 0; max-width: 750px; position: relative; line-height: 1.7; font-size: 1rem;")
             .WithView(new MarkdownControl(content));
 
-        // Right: Annotations column - comments only visible; track change cards hidden (used as action targets)
-        var commentAnnotations = annotations.Where(a => a.Type == AnnotationType.Comment).ToList();
+        // Right: Annotations column
+        // Comments come from MeshNode children; track change cards from ParsedAnnotation
         var trackChangeAnnotations = annotations.Where(a => a.Type != AnnotationType.Comment).ToList();
+        var hasVisibleComments = commentNodes.Count > 0;
 
-        var columnStyle = commentAnnotations.Count > 0
+        var columnStyle = hasVisibleComments
             ? "flex: 0 0 340px; min-width: 300px; max-width: 380px; position: relative;"
             : "flex: 0 0 0; width: 0; min-width: 0; overflow: hidden; position: relative;";
         var annotationsColumn = Controls.Stack
             .WithClass("annotations-column")
             .WithStyle(columnStyle);
 
-        // Visible comment cards in the side panel
-        foreach (var annotation in commentAnnotations)
+        // Visible comment cards built from Comment MeshNodes
+        foreach (var commentNode in commentNodes)
         {
+            var comment = commentNode.Content as Comment;
+            if (comment == null) continue;
+
             annotationsColumn = annotationsColumn.WithView(
-                BuildAnnotationCard(host, node, rawContent, annotation, panelState, panelStateSubject, viewModeSubject));
+                BuildCommentNodeCard(host, node, rawContent, comment, commentNode.Path!, panelState, panelStateSubject));
         }
 
         // Hidden track change cards (Accept/Reject Blazor buttons as action targets for inline popover JS)
@@ -342,13 +388,23 @@ public static class MarkdownLayoutAreas
                 BuildAnnotationCard(host, node, rawContent, annotation, panelState, panelStateSubject, viewModeSubject));
         }
 
+        // New comment form (hidden by default, shown by JS when text is selected)
+        annotationsColumn = annotationsColumn.WithView(
+            BuildNewCommentForm(host, node, rawContent, nodePath, panelStateSubject));
+
         splitLayout = splitLayout.WithView(contentArea);
         splitLayout = splitLayout.WithView(annotationsColumn);
 
         outerContainer = outerContainer.WithView(splitLayout);
 
-        // Add JavaScript for positioning and connecting lines
+        // Add JavaScript for positioning, connecting lines, and text selection
         outerContainer = outerContainer.WithView(BuildInlineAnnotationScript());
+
+        // Add floating comment button for text selection
+        outerContainer = outerContainer.WithView(Controls.Html(
+            "<div class=\"floating-comment-btn\" style=\"display:none; position:absolute; z-index:1000;\">" +
+            "<button class=\"add-comment-btn\" style=\"padding: 4px 12px; background: #3b82f6; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 0.85rem; box-shadow: 0 2px 6px rgba(0,0,0,0.2);\">Comment</button>" +
+            "</div>"));
 
         // Add Markdown children section if there are any
         if (markdownChildren.Count > 0)
@@ -357,6 +413,325 @@ public static class MarkdownLayoutAreas
         }
 
         return outerContainer;
+    }
+
+    /// <summary>
+    /// Builds a comment card from a Comment MeshNode (not a ParsedAnnotation).
+    /// Shows author, highlighted text, comment text, replies, and Reply/Resolve buttons.
+    /// </summary>
+    private static UiControl BuildCommentNodeCard(
+        LayoutAreaHost host,
+        MeshNode? node,
+        string rawContent,
+        Comment comment,
+        string commentPath,
+        AnnotationPanelState panelState,
+        BehaviorSubject<AnnotationPanelState> panelStateSubject)
+    {
+        var typeColor = "#3b82f6";
+        var author = comment.Author ?? "Unknown";
+        var authorInitial = author.Length > 0 ? author[0].ToString().ToUpper() : "?";
+        var markerId = comment.MarkerId ?? comment.Id;
+        var isReplyingToThis = panelState.ReplyingToAnnotationId == comment.Id;
+
+        // Card container
+        var card = Controls.Stack
+            .WithStyle($"padding: 12px; background: var(--neutral-layer-1); border-radius: 6px; border-left: 4px solid {typeColor}; margin-bottom: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.12);");
+
+        // Header row: Avatar + Author + Type badge
+        var headerHtml = $@"
+            <div style=""display: flex; align-items: center; gap: 8px; margin-bottom: 8px;"">
+                <div style=""width: 32px; height: 32px; border-radius: 50%; background: {typeColor}; color: white;
+                            display: flex; align-items: center; justify-content: center; font-weight: 600; font-size: 14px;"">
+                    {System.Web.HttpUtility.HtmlEncode(authorInitial)}
+                </div>
+                <div style=""flex: 1;"">
+                    <div style=""font-weight: 600; font-size: 0.9rem; color: var(--neutral-foreground-rest);"">{System.Web.HttpUtility.HtmlEncode(author)}</div>
+                    <div style=""font-size: 0.75rem; color: var(--neutral-foreground-hint);"">Comment</div>
+                </div>
+            </div>";
+        card = card.WithView(Controls.Html(headerHtml));
+
+        // Highlighted text quote
+        if (!string.IsNullOrEmpty(comment.HighlightedText))
+        {
+            card = card.WithView(Controls.Html($@"
+                <div style=""font-size: 0.85rem; color: var(--neutral-foreground-rest); padding: 8px 10px;
+                            background: rgba(59, 130, 246, 0.1); border-radius: 4px; margin-bottom: 8px;
+                            border-left: 2px solid {typeColor}; font-style: italic;"">
+                    ""{System.Web.HttpUtility.HtmlEncode(comment.HighlightedText)}""
+                </div>"));
+        }
+
+        // Comment text
+        if (!string.IsNullOrEmpty(comment.Text))
+        {
+            card = card.WithView(Controls.Html($@"
+                <div style=""font-size: 0.9rem; color: var(--neutral-foreground-rest); line-height: 1.5; margin-bottom: 8px;"">
+                    {System.Web.HttpUtility.HtmlEncode(comment.Text)}
+                </div>"));
+        }
+
+        // Replies from Comment.Replies (nested Comment records)
+        if (comment.Replies.Count > 0)
+        {
+            foreach (var reply in comment.Replies)
+            {
+                card = card.WithView(Controls.Html($@"
+                    <div style=""font-size: 0.85rem; padding: 8px; margin: 4px 0; background: var(--neutral-layer-2);
+                               border-radius: 4px; border-left: 3px solid var(--accent-fill-rest);"">
+                        <div style=""font-weight: 600; color: var(--accent-fill-rest); margin-bottom: 4px;"">{System.Web.HttpUtility.HtmlEncode(reply.Author)}</div>
+                        <div style=""color: var(--neutral-foreground-rest);"">{System.Web.HttpUtility.HtmlEncode(reply.Text)}</div>
+                    </div>"));
+            }
+        }
+
+        // In-memory replies from panel state
+        panelState.Replies.TryGetValue(comment.Id, out var inMemoryReplies);
+        if (inMemoryReplies != null && inMemoryReplies.Count > 0)
+        {
+            foreach (var reply in inMemoryReplies)
+            {
+                card = card.WithView(Controls.Html($@"
+                    <div style=""font-size: 0.85rem; padding: 8px; margin: 4px 0; background: var(--neutral-layer-2);
+                               border-radius: 4px; border-left: 3px solid var(--accent-fill-rest);"">
+                        <div style=""font-weight: 600; color: var(--accent-fill-rest); margin-bottom: 4px;"">{System.Web.HttpUtility.HtmlEncode(reply.Author)}</div>
+                        <div style=""color: var(--neutral-foreground-rest);"">{System.Web.HttpUtility.HtmlEncode(reply.Text)}</div>
+                    </div>"));
+            }
+        }
+
+        // Action buttons
+        if (isReplyingToThis)
+        {
+            card = card.WithView(BuildCommentReplyForm(host, comment.Id, commentPath, panelState, panelStateSubject));
+        }
+        else
+        {
+            var buttonRow = Controls.Stack
+                .WithOrientation(Orientation.Horizontal)
+                .WithStyle("gap: 8px; margin-top: 8px;");
+
+            buttonRow = buttonRow.WithView(
+                Controls.Button("Reply")
+                    .WithAppearance(Appearance.Neutral)
+                    .WithStyle("padding: 6px 16px; font-size: 0.85rem;")
+                    .WithClickAction(_ => panelStateSubject.OnNext(
+                        panelState with { ReplyingToAnnotationId = comment.Id })));
+
+            buttonRow = buttonRow.WithView(
+                Controls.Button("Resolve")
+                    .WithAppearance(Appearance.Stealth)
+                    .WithStyle("padding: 6px 16px; font-size: 0.85rem;")
+                    .WithClickAction(async _ =>
+                    {
+                        if (node == null) return;
+                        // Remove marker from markdown
+                        var newContent = AnnotationMarkdownExtension.ResolveComment(rawContent, markerId);
+                        var updatedNode = node with { Content = new MarkdownContent { Content = newContent } };
+                        host.Hub.Post(
+                            new DataChangeRequest().WithUpdates(updatedNode),
+                            o => o.WithTarget(host.Hub.Address));
+
+                        // Delete the Comment MeshNode
+                        var meshCatalog = host.Hub.ServiceProvider.GetRequiredService<IMeshCatalog>();
+                        await meshCatalog.DeleteNodeAsync(commentPath, recursive: true);
+                    }));
+
+            card = card.WithView(buttonRow);
+        }
+
+        return card
+            .WithClass($"annotation-card annotation-for-{markerId} annotation-type-comment");
+    }
+
+    /// <summary>
+    /// Builds a reply form for a comment that creates a child Comment MeshNode.
+    /// </summary>
+    private static UiControl BuildCommentReplyForm(
+        LayoutAreaHost host,
+        string commentId,
+        string commentPath,
+        AnnotationPanelState panelState,
+        BehaviorSubject<AnnotationPanelState> panelStateSubject)
+    {
+        var replyDataId = $"Reply_{commentId}";
+
+        var form = Controls.Stack
+            .WithStyle("margin-top: 12px; padding: 12px; background: var(--neutral-layer-2); border-radius: 6px;");
+
+        var editControl = host.Edit(new ReplyFormModel(), replyDataId);
+        if (editControl != null)
+        {
+            var editWrapper = Controls.Stack
+                .WithStyle("margin-bottom: 12px;")
+                .WithView(editControl);
+            form = form.WithView(editWrapper);
+        }
+
+        var buttonRow = Controls.Stack
+            .WithOrientation(Orientation.Horizontal)
+            .WithStyle("gap: 8px; justify-content: flex-end;");
+
+        buttonRow = buttonRow.WithView(
+            Controls.Button("Cancel")
+                .WithAppearance(Appearance.Stealth)
+                .WithStyle("padding: 6px 16px; font-size: 0.85rem;")
+                .WithClickAction(_ => panelStateSubject.OnNext(
+                    panelState with { ReplyingToAnnotationId = null })));
+
+        buttonRow = buttonRow.WithView(
+            Controls.Button("Submit")
+                .WithAppearance(Appearance.Accent)
+                .WithStyle("padding: 6px 16px; font-size: 0.85rem;")
+                .WithClickAction(async ctx =>
+                {
+                    var replyModel = await ctx.Host.Stream.GetDataAsync<ReplyFormModel>(replyDataId);
+                    if (replyModel != null && !string.IsNullOrWhiteSpace(replyModel.Text))
+                    {
+                        // Create a child Comment MeshNode as a reply
+                        var replyId = Guid.NewGuid().AsString();
+                        var replyComment = new Comment
+                        {
+                            Id = replyId,
+                            NodePath = commentPath,
+                            Author = "User",
+                            Text = replyModel.Text,
+                            ParentCommentId = commentId,
+                            Status = CommentStatus.Active
+                        };
+                        var replyNode = new MeshNode($"{commentPath}/{replyId}")
+                        {
+                            Name = $"Reply by User",
+                            NodeType = CommentNodeType.NodeType,
+                            Content = replyComment
+                        };
+
+                        var meshCatalog = host.Hub.ServiceProvider.GetRequiredService<IMeshCatalog>();
+                        await meshCatalog.CreateNodeAsync(replyNode);
+
+                        panelStateSubject.OnNext(new AnnotationPanelState
+                        {
+                            ReplyingToAnnotationId = null,
+                            Replies = panelState.Replies
+                        });
+                    }
+                }));
+
+        form = form.WithView(buttonRow);
+        return form;
+    }
+
+    /// <summary>
+    /// Builds the new comment form that appears in the annotations column when the user selects text.
+    /// Hidden by default; shown by JS when text is selected and the floating comment button is clicked.
+    /// </summary>
+    private static UiControl BuildNewCommentForm(
+        LayoutAreaHost host,
+        MeshNode? node,
+        string rawContent,
+        string nodePath,
+        BehaviorSubject<AnnotationPanelState> panelStateSubject)
+    {
+        var commentFormDataId = $"NewComment_{nodePath.Replace("/", "-")}";
+
+        var form = Controls.Stack
+            .WithClass("new-comment-form")
+            .WithStyle("display: none; padding: 12px; background: var(--neutral-layer-1); border-radius: 6px; border-left: 4px solid #3b82f6; margin-bottom: 12px; box-shadow: 0 1px 3px rgba(0,0,0,0.12);");
+
+        // Header
+        form = form.WithView(Controls.Html(
+            "<div style=\"font-weight: 600; font-size: 0.9rem; margin-bottom: 8px; color: #3b82f6;\">New Comment</div>"));
+
+        // Selected text display (filled by JS)
+        form = form.WithView(Controls.Html(
+            "<div class=\"new-comment-selected-text\" style=\"font-size: 0.85rem; padding: 8px 10px; background: rgba(59, 130, 246, 0.1); border-radius: 4px; margin-bottom: 8px; border-left: 2px solid #3b82f6; font-style: italic; display: none;\"></div>"));
+
+        // Comment text area using host.Edit
+        var editControl = host.Edit(new CommentFormModel(), commentFormDataId);
+        if (editControl != null)
+        {
+            var editWrapper = Controls.Stack
+                .WithStyle("margin-bottom: 12px;")
+                .WithView(editControl);
+            form = form.WithView(editWrapper);
+        }
+
+        // Button row
+        var buttonRow = Controls.Stack
+            .WithOrientation(Orientation.Horizontal)
+            .WithStyle("gap: 8px; justify-content: flex-end;");
+
+        buttonRow = buttonRow.WithView(
+            Controls.Button("Cancel")
+                .WithAppearance(Appearance.Stealth)
+                .WithStyle("padding: 6px 16px; font-size: 0.85rem;")
+                .WithClass("new-comment-cancel")
+                .WithClickAction(_ =>
+                {
+                    // JS will hide the form
+                }));
+
+        buttonRow = buttonRow.WithView(
+            Controls.Button("Submit")
+                .WithAppearance(Appearance.Accent)
+                .WithStyle("padding: 6px 16px; font-size: 0.85rem;")
+                .WithClass("new-comment-submit")
+                .WithClickAction(async ctx =>
+                {
+                    if (node == null) return;
+
+                    var formModel = await ctx.Host.Stream.GetDataAsync<CommentFormModel>(commentFormDataId);
+                    var selectedText = formModel?.SelectedText ?? "";
+                    var commentText = formModel?.CommentText ?? "";
+
+                    if (string.IsNullOrWhiteSpace(commentText)) return;
+
+                    var markerId = Guid.NewGuid().AsString();
+                    var commentId = Guid.NewGuid().AsString();
+                    var author = "User";
+
+                    // 1. Create Comment MeshNode
+                    var comment = new Comment
+                    {
+                        Id = commentId,
+                        NodePath = nodePath,
+                        MarkerId = markerId,
+                        HighlightedText = selectedText,
+                        Author = author,
+                        Text = commentText,
+                        Status = CommentStatus.Active
+                    };
+                    var commentNode = new MeshNode($"{nodePath}/{commentId}")
+                    {
+                        Name = $"Comment by {author}",
+                        NodeType = CommentNodeType.NodeType,
+                        Content = comment
+                    };
+
+                    var meshCatalog = host.Hub.ServiceProvider.GetRequiredService<IMeshCatalog>();
+                    await meshCatalog.CreateNodeAsync(commentNode);
+
+                    // 2. Insert marker into markdown (if text was selected)
+                    if (!string.IsNullOrEmpty(selectedText))
+                    {
+                        var marker = $"<!--comment:{markerId}-->";
+                        var closing = $"<!--/comment:{markerId}-->";
+                        var idx = rawContent.IndexOf(selectedText, StringComparison.Ordinal);
+                        if (idx >= 0)
+                        {
+                            var newContent = rawContent.Insert(idx + selectedText.Length, closing)
+                                                       .Insert(idx, marker);
+                            var updatedNode = node with { Content = new MarkdownContent { Content = newContent } };
+                            host.Hub.Post(
+                                new DataChangeRequest().WithUpdates(updatedNode),
+                                o => o.WithTarget(host.Hub.Address));
+                        }
+                    }
+                }));
+
+        form = form.WithView(buttonRow);
+        return form;
     }
 
     /// <summary>
@@ -884,6 +1259,69 @@ public static class MarkdownLayoutAreas
             });
         }
     };
+
+    // Text selection → floating comment button
+    document.addEventListener('mouseup', function(e) {
+        var sel = window.getSelection();
+        var text = sel ? sel.toString().trim() : '';
+        var container = document.querySelector('.markdown-annotations-container');
+        var floatingBtn = document.querySelector('.floating-comment-btn');
+        if (!floatingBtn) return;
+
+        if (text.length > 0 && container && container.contains(sel.anchorNode)) {
+            var range = sel.getRangeAt(0);
+            var rect = range.getBoundingClientRect();
+            floatingBtn.style.display = 'block';
+            floatingBtn.style.top = (rect.top + window.scrollY - 36) + 'px';
+            floatingBtn.style.left = (rect.left + window.scrollX) + 'px';
+            window.__pendingSelection = text;
+        } else if (!e.target.closest('.floating-comment-btn, .new-comment-form')) {
+            floatingBtn.style.display = 'none';
+        }
+    });
+
+    // Floating comment button click → show new comment form
+    document.addEventListener('click', function(e) {
+        var addBtn = e.target.closest('.add-comment-btn');
+        if (!addBtn) return;
+
+        var floatingBtn = document.querySelector('.floating-comment-btn');
+        if (floatingBtn) floatingBtn.style.display = 'none';
+
+        var form = document.querySelector('.new-comment-form');
+        if (form) {
+            form.style.display = 'block';
+            // Display selected text in the form
+            var selectedTextEl = form.querySelector('.new-comment-selected-text');
+            if (selectedTextEl && window.__pendingSelection) {
+                selectedTextEl.textContent = '""' + window.__pendingSelection + '""';
+                selectedTextEl.style.display = 'block';
+            }
+            // Try to set the selected text in the form data
+            var textarea = form.querySelector('textarea, fluent-text-area');
+            if (textarea) textarea.focus();
+        }
+    });
+
+    // Cancel button in new comment form
+    document.addEventListener('click', function(e) {
+        if (e.target.closest('.new-comment-cancel')) {
+            var form = document.querySelector('.new-comment-form');
+            if (form) form.style.display = 'none';
+            window.__pendingSelection = null;
+        }
+    });
+
+    // After submit, hide form
+    document.addEventListener('click', function(e) {
+        if (e.target.closest('.new-comment-submit')) {
+            setTimeout(function() {
+                var form = document.querySelector('.new-comment-form');
+                if (form) form.style.display = 'none';
+                window.__pendingSelection = null;
+            }, 500);
+        }
+    });
 
 })();
 </script>

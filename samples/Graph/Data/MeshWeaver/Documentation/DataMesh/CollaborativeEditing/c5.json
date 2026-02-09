@@ -1,0 +1,20 @@
+{
+  "$type": "MeshNode",
+  "id": "c5",
+  "path": "MeshWeaver/Documentation/DataMesh/CollaborativeEditing/c5",
+  "name": "Comment by Dave",
+  "nodeType": "Comment",
+  "lastModified": "2025-12-25T10:00:00+00:00",
+  "content": {
+    "$type": "Comment",
+    "id": "c5",
+    "nodePath": "MeshWeaver/Documentation/DataMesh/CollaborativeEditing",
+    "markerId": "c5",
+    "highlightedText": "proposed timeline",
+    "author": "Dave",
+    "text": "This timeline seems too aggressive. Can we discuss?",
+    "createdAt": "2025-12-25T10:00:00+00:00",
+    "status": "Active",
+    "replies": []
+  }
+}
