@@ -41,15 +41,15 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Identity.Web;
 using Microsoft.Identity.Web.UI;
 
-namespace Loom.Portal.Shared;
+namespace Memex.Portal.Shared;
 
-public static class LoomConfiguration
+public static class MemexConfiguration
 {
     /// <summary>
-    /// Configures web portal services for Loom.
+    /// Configures web portal services for Memex.
     /// Pattern taken from MeshWeaver.Portal's SharedPortalConfiguration.
     /// </summary>
-    public static void ConfigureLoomServices(this WebApplicationBuilder builder)
+    public static void ConfigureMemexServices(this WebApplicationBuilder builder)
     {
         builder.Configuration.AddJsonFile("appsettings.json", optional: false, reloadOnChange: true)
             .AddJsonFile($"appsettings.{builder.Environment.EnvironmentName}.json", optional: true,
@@ -154,11 +154,11 @@ public static class LoomConfiguration
                 // Persist data protection keys so cookies survive app restarts
                 var keysPath = Path.Combine(
                     Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                    "Loom", "DataProtection-Keys");
+                    "Memex", "DataProtection-Keys");
                 Directory.CreateDirectory(keysPath);
                 services.AddDataProtection()
                     .PersistKeysToFileSystem(new DirectoryInfo(keysPath))
-                    .SetApplicationName("LoomPortal");
+                    .SetApplicationName("MemexPortal");
 
                 services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationScheme)
                     .AddCookie(options =>
@@ -167,7 +167,7 @@ public static class LoomConfiguration
                         options.LogoutPath = "/dev/logout";
                         options.ExpireTimeSpan = TimeSpan.FromDays(7);
                         options.SlidingExpiration = true;
-                        options.Cookie.Name = "LoomDevAuth";
+                        options.Cookie.Name = "MemexDevAuth";
                         options.Cookie.HttpOnly = true;
                         options.Cookie.IsEssential = true;
                         options.Cookie.SameSite = SameSiteMode.Lax;
@@ -189,7 +189,7 @@ public static class LoomConfiguration
         /// - Graph:Storage:ConnectionString - Connection string for AzureBlob/Cosmos
         /// - storage - Content collection configuration (Name, SourceType, BasePath)
         /// </summary>
-        public TBuilder ConfigureLoomMesh(IConfiguration configuration, bool isDevelopment = false)
+        public TBuilder ConfigureMemexMesh(IConfiguration configuration, bool isDevelopment = false)
         {
             // Read graph storage config
             var graphStorageConfig = configuration.GetSection("Graph:Storage").Get<GraphStorageConfig>();
@@ -278,7 +278,7 @@ public static class LoomConfiguration
         /// <summary>
         /// Configures the portal with Graph views, Charts, GoogleMaps, and Radzen.
         /// </summary>
-        public TBuilder ConfigureLoomPortal() => (TBuilder)builder
+        public TBuilder ConfigureMemexPortal() => (TBuilder)builder
             .ConfigureHub(mesh => mesh
                 .AddMeshTypes()
                 .AddRadzenDataGrid()
@@ -293,14 +293,14 @@ public static class LoomConfiguration
     }
 
     /// <summary>
-    /// Starts the Loom portal application with the specified App component type.
+    /// Starts the Memex portal application with the specified App component type.
     /// Pattern taken from MeshWeaver.Portal's StartPortalApplication.
     /// </summary>
-    public static void StartLoomApplication<TApp>(this WebApplication app) where TApp : IComponent
+    public static void StartMemexApplication<TApp>(this WebApplication app) where TApp : IComponent
     {
-        var logger = app.Services.GetRequiredService<ILoggerFactory>().CreateLogger(typeof(LoomConfiguration));
+        var logger = app.Services.GetRequiredService<ILoggerFactory>().CreateLogger(typeof(MemexConfiguration));
 #pragma warning disable CA1416
-        logger.LogInformation("Starting Loom portal on PID: {PID}", Environment.ProcessId);
+        logger.LogInformation("Starting Memex portal on PID: {PID}", Environment.ProcessId);
 #pragma warning restore CA1416
 
         // Configure the HTTP request pipeline.
@@ -341,7 +341,7 @@ public static class LoomConfiguration
 
         app.Run();
 #pragma warning disable CA1416
-        logger.LogInformation("Started Loom portal on PID: {PID}", Environment.ProcessId);
+        logger.LogInformation("Started Memex portal on PID: {PID}", Environment.ProcessId);
 #pragma warning restore CA1416
     }
 
