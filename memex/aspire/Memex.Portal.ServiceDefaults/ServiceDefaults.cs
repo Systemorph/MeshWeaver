@@ -8,10 +8,10 @@ using OpenTelemetry;
 using OpenTelemetry.Metrics;
 using OpenTelemetry.Trace;
 
-namespace Loom.Portal.ServiceDefaults;
+namespace Memex.Portal.ServiceDefaults;
 
 /// <summary>
-/// Common .NET Aspire services for Loom portal: service discovery, resilience, health checks, and OpenTelemetry.
+/// Common .NET Aspire services for Memex portal: service discovery, resilience, health checks, and OpenTelemetry.
 /// </summary>
 public static class ServiceDefaults
 {
@@ -112,10 +112,10 @@ public static class ServiceDefaults
 }
 
 /// <summary>
-/// Orleans cluster configuration constants for Loom.
+/// Orleans cluster configuration constants for Memex.
 /// </summary>
-public static class LoomOrleansConstants
+public static class MemexOrleansConstants
 {
-    public const string ServiceId = "Loom";
-    public const string ClusterId = "Loom";
+    public const string ServiceId = "Memex";
+    public const string ClusterId = "Memex";
 }

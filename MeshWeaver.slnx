@@ -32,14 +32,14 @@
   <Folder Name="/samples/Graph/">
     <!-- MeshWeaver.Samples.Graph.csproj excluded from build - used for browsing data files in VS -->
   </Folder>
-  <Folder Name="/loom/">
-    <Project Path="loom/Loom.Portal.Shared/Loom.Portal.Shared.csproj" />
-    <Project Path="loom/Loom.Portal.Monolith/Loom.Portal.Monolith.csproj" />
+  <Folder Name="/memex/">
+    <Project Path="memex/Memex.Portal.Shared/Memex.Portal.Shared.csproj" />
+    <Project Path="memex/Memex.Portal.Monolith/Memex.Portal.Monolith.csproj" />
   </Folder>
-  <Folder Name="/loom/aspire/">
-    <Project Path="loom/aspire/Loom.AppHost/Loom.AppHost.csproj" />
-    <Project Path="loom/aspire/Loom.Portal.Orleans/Loom.Portal.Orleans.csproj" />
-    <Project Path="loom/aspire/Loom.Portal.ServiceDefaults/Loom.Portal.ServiceDefaults.csproj" />
+  <Folder Name="/memex/aspire/">
+    <Project Path="memex/aspire/Memex.AppHost/Memex.AppHost.csproj" />
+    <Project Path="memex/aspire/Memex.Portal.Orleans/Memex.Portal.Orleans.csproj" />
+    <Project Path="memex/aspire/Memex.Portal.ServiceDefaults/Memex.Portal.ServiceDefaults.csproj" />
   </Folder>
   <Folder Name="/portal/">
     <File Path="portal/Directory.Build.props" />

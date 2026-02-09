@@ -5,12 +5,12 @@
     <OutputType>Exe</OutputType>
     <ImplicitUsings>enable</ImplicitUsings>
     <IsAspireHost>true</IsAspireHost>
-    <UserSecretsId>loom-apphost</UserSecretsId>
+    <UserSecretsId>memex-apphost</UserSecretsId>
   </PropertyGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\Loom.Portal.Orleans\Loom.Portal.Orleans.csproj" />
-    <ProjectReference Include="..\..\Loom.Portal.Monolith\Loom.Portal.Monolith.csproj" />
+    <ProjectReference Include="..\Memex.Portal.Orleans\Memex.Portal.Orleans.csproj" />
+    <ProjectReference Include="..\..\Memex.Portal.Monolith\Memex.Portal.Monolith.csproj" />
   </ItemGroup>
 
   <ItemGroup>

@@ -11,8 +11,8 @@
     <ProjectReference Include="..\..\..\src\MeshWeaver.Hosting.Blazor\MeshWeaver.Hosting.Blazor.csproj" />
     <ProjectReference Include="..\..\..\src\MeshWeaver.Hosting.Orleans\MeshWeaver.Hosting.Orleans.csproj" />
     <ProjectReference Include="..\..\..\src\MeshWeaver.ServiceProvider\MeshWeaver.ServiceProvider.csproj" />
-    <ProjectReference Include="..\..\Loom.Portal.Shared\Loom.Portal.Shared.csproj" />
-    <ProjectReference Include="..\Loom.Portal.ServiceDefaults\Loom.Portal.ServiceDefaults.csproj" />
+    <ProjectReference Include="..\..\Memex.Portal.Shared\Memex.Portal.Shared.csproj" />
+    <ProjectReference Include="..\Memex.Portal.ServiceDefaults\Memex.Portal.ServiceDefaults.csproj" />
     <ProjectReference Include="..\..\..\src\MeshWeaver.Hosting.Cosmos\MeshWeaver.Hosting.Cosmos.csproj" />
   </ItemGroup>
 

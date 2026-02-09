@@ -6,7 +6,7 @@ using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Mvc;
 
-namespace Loom.Portal.Shared.Authentication;
+namespace Memex.Portal.Shared.Authentication;
 
 [ApiController]
 [Route("dev")]

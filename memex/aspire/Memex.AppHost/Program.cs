@@ -12,7 +12,7 @@ var useMonolith = mode == "monolith";
 if (useOrleans)
 {
     // Application storage for Orleans clustering
-    var appStorage = builder.AddAzureStorage("loomblobs");
+    var appStorage = builder.AddAzureStorage("memexblobs");
     if (builder.Environment.IsDevelopment())
     {
         appStorage = appStorage.RunAsEmulator(
@@ -27,20 +27,20 @@ if (useOrleans)
     // Azure Blob for content collection "storage"
     var storageBlobs = appStorage.AddBlobs("storage");
 
-    var orleans = builder.AddOrleans("loom-mesh")
+    var orleans = builder.AddOrleans("memex-mesh")
         .WithClustering(orleansTables);
 
     // Cosmos DB for graph persistence
-    var cosmos = builder.AddAzureCosmosDB("loomcosmos");
+    var cosmos = builder.AddAzureCosmosDB("memexcosmos");
     if (builder.Environment.IsDevelopment())
     {
         cosmos = cosmos.RunAsEmulator();
     }
-    var cosmosDb = cosmos.AddCosmosDatabase("loomdb");
+    var cosmosDb = cosmos.AddCosmosDatabase("memexdb");
 
-    // Loom Orleans (co-hosted silo + web)
+    // Memex Orleans (co-hosted silo + web)
     builder
-        .AddProject<Projects.Loom_Portal_Orleans>("loom-orleans")
+        .AddProject<Projects.Memex_Portal_Orleans>("memex-orleans")
         .WithExternalHttpEndpoints()
         .WithReference(orleans)
         .WithReference(cosmosDb)
@@ -51,9 +51,9 @@ if (useOrleans)
 
 if (useMonolith)
 {
-    // Loom Monolith (standalone, no Orleans)
+    // Memex Monolith (standalone, no Orleans)
     builder
-        .AddProject<Projects.Loom_Portal_Monolith>("loom-monolith")
+        .AddProject<Projects.Memex_Portal_Monolith>("memex-monolith")
         .WithExternalHttpEndpoints();
 }
 
