@@ -12,6 +12,7 @@ using MeshWeaver.Markdown;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
+using MeshWeaver.ShortGuid;
 using Microsoft.Extensions.DependencyInjection;
 using ViewModeSubject = System.Reactive.Subjects.ISubject<MeshWeaver.Graph.MarkdownLayoutAreas.AnnotationViewMode>;
 
@@ -94,6 +95,15 @@ public static class MarkdownLayoutAreas
     }
 
     /// <summary>
+    /// Model for the new comment form (text selection commenting).
+    /// </summary>
+    public record CommentFormModel
+    {
+        public string SelectedText { get; init; } = string.Empty;
+        public string CommentText { get; init; } = string.Empty;
+    }
+
+    /// <summary>
     /// Renders the readonly markdown view with a clean reading experience.
     /// Includes a header with title and action menu.
     /// If there are Markdown child nodes, they are displayed in a separate section.
@@ -130,12 +140,40 @@ public static class MarkdownLayoutAreas
             }
         });
 
-        // Combine node stream with view mode, panel state, and children for reactive updates
+        // Query for Comment child MeshNodes
+        var commentNodesStream = meshQuery != null
+            ? meshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
+                $"path:{hubPath} nodeType:{CommentNodeType.NodeType} scope:children"))
+                .Scan(new List<MeshNode>(), (list, change) =>
+                {
+                    if (change.ChangeType == QueryChangeType.Initial || change.ChangeType == QueryChangeType.Reset)
+                        return change.Items.ToList();
+                    // Incremental updates
+                    foreach (var item in change.Items)
+                    {
+                        if (change.ChangeType == QueryChangeType.Added)
+                            list.Add(item);
+                        else if (change.ChangeType == QueryChangeType.Removed)
+                            list.RemoveAll(n => n.Path == item.Path);
+                        else if (change.ChangeType == QueryChangeType.Updated)
+                        {
+                            list.RemoveAll(n => n.Path == item.Path);
+                            list.Add(item);
+                        }
+                    }
+                    return list;
+                })
+                .Select(list => list as IReadOnlyList<MeshNode>)
+            : Observable.Return<IReadOnlyList<MeshNode>>(Array.Empty<MeshNode>());
+
+        // Combine node stream with view mode, panel state, children, and comment nodes for reactive updates
         return nodeStream
-            .CombineLatest(viewModeSubject, panelStateSubject, childrenStream, (nodes, viewMode, panelState, children) =>
+            .CombineLatest(viewModeSubject, panelStateSubject, childrenStream, commentNodesStream,
+                (nodes, viewMode, panelState, children, commentNodes) =>
             {
                 var node = nodes.FirstOrDefault(n => n.Path == hubPath);
-                return BuildReadView(host, node, viewMode, viewModeSubject, panelState, panelStateSubject, children ?? Array.Empty<MeshNode>());
+                return BuildReadView(host, node, viewMode, viewModeSubject, panelState, panelStateSubject,
+                    children ?? Array.Empty<MeshNode>(), commentNodes ?? Array.Empty<MeshNode>());
             });
     }
 
@@ -146,10 +184,10 @@ public static class MarkdownLayoutAreas
         ViewModeSubject viewModeSubject,
         AnnotationPanelState panelState,
         BehaviorSubject<AnnotationPanelState> panelStateSubject,
-        IReadOnlyList<MeshNode> markdownChildren)
+        IReadOnlyList<MeshNode> markdownChildren,
+        IReadOnlyList<MeshNode>? commentNodes = null)
     {
         var nodePath = node?.Path ?? host.Hub.Address.ToString();
-        var containerId = $"markdown-container-{Guid.NewGuid():N}";
 
         // Check if content has annotations
         var rawContent = GetMarkdownContent(node);
@@ -170,10 +208,12 @@ public static class MarkdownLayoutAreas
             _ => rawContent // Markup mode - keep annotations
         };
 
-        // If we have annotations and in markup mode, use a split layout (Word-style)
-        if (hasAnnotations && annotations.Count > 0 && viewMode == AnnotationViewMode.Markup)
+        commentNodes ??= Array.Empty<MeshNode>();
+
+        // If we have annotations (inline or MeshNode) and in markup mode, use a split layout (Word-style)
+        if (((hasAnnotations && annotations.Count > 0) || commentNodes.Count > 0) && viewMode == AnnotationViewMode.Markup)
         {
-            return BuildSplitLayoutWithAnnotations(host, node, content, containerId, annotations, viewModeSubject, viewMode, panelState, panelStateSubject, markdownChildren);
+            return BuildSplitLayoutWithAnnotations(host, node, content, annotations, viewModeSubject, viewMode, panelState, panelStateSubject, markdownChildren, commentNodes);
         }
 
         // No annotations or non-markup mode - simple layout with menu positioned at top-right of content
@@ -282,13 +322,13 @@ public static class MarkdownLayoutAreas
         LayoutAreaHost host,
         MeshNode? node,
         string content,
-        string containerId,
         List<ParsedAnnotation> annotations,
         ViewModeSubject viewModeSubject,
         AnnotationViewMode currentViewMode,
         AnnotationPanelState panelState,
         BehaviorSubject<AnnotationPanelState> panelStateSubject,
-        IReadOnlyList<MeshNode> markdownChildren)
+        IReadOnlyList<MeshNode> markdownChildren,
+        IReadOnlyList<MeshNode> commentNodes)
     {
         var nodePath = node?.Path ?? host.Hub.Address.ToString();
         // Outer container - wider to accommodate larger annotation cards
@@ -315,36 +355,56 @@ public static class MarkdownLayoutAreas
 
         // Left: Content area with markdown - takes remaining space
         var contentArea = Controls.Stack
-            .WithStyle("flex: 1; min-width: 0; max-width: 750px; position: relative;")
-            .WithView(Controls.Html($"<div id=\"{containerId}\" class=\"markdown-annotations-container\" style=\"line-height: 1.7; font-size: 1rem;\">"))
-            .WithView(new MarkdownControl(content))
-            .WithView(Controls.Html("</div>"));
+            .WithClass("markdown-annotations-container")
+            .WithStyle("flex: 1; min-width: 0; max-width: 750px; position: relative; line-height: 1.7; font-size: 1rem;")
+            .WithView(new MarkdownControl(content));
 
-        // Right: Annotations column - all annotations (comments + track changes with Accept/Reject buttons)
+        // Right: Annotations column
+        // Comments come from MeshNode children; track change cards from ParsedAnnotation
+        var trackChangeAnnotations = annotations.Where(a => a.Type != AnnotationType.Comment).ToList();
+        var hasVisibleComments = commentNodes.Count > 0;
+
+        var columnStyle = hasVisibleComments
+            ? "flex: 0 0 340px; min-width: 300px; max-width: 380px; position: relative;"
+            : "flex: 0 0 0; width: 0; min-width: 0; overflow: hidden; position: relative;";
         var annotationsColumn = Controls.Stack
-            .WithStyle("flex: 0 0 340px; min-width: 300px; max-width: 380px; position: relative;");
+            .WithClass("annotations-column")
+            .WithStyle(columnStyle);
 
-        // Add open tag for annotations container
-        annotationsColumn = annotationsColumn.WithView(
-            Controls.Html($"<div id=\"{containerId}-annotations\" class=\"annotations-column\">"));
+        // Visible comment cards built from Comment MeshNodes
+        foreach (var commentNode in commentNodes)
+        {
+            var comment = commentNode.Content as Comment;
+            if (comment == null) continue;
 
-        // Build annotation cards for all annotations (comments get Reply/Resolve, track changes get Accept/Reject)
-        foreach (var annotation in annotations)
+            annotationsColumn = annotationsColumn.WithView(
+                BuildCommentNodeCard(host, node, rawContent, comment, commentNode.Path!, panelState, panelStateSubject));
+        }
+
+        // Hidden track change cards (Accept/Reject Blazor buttons as action targets for inline popover JS)
+        foreach (var annotation in trackChangeAnnotations)
         {
             annotationsColumn = annotationsColumn.WithView(
                 BuildAnnotationCard(host, node, rawContent, annotation, panelState, panelStateSubject, viewModeSubject));
         }
 
-        // Close annotations container
-        annotationsColumn = annotationsColumn.WithView(Controls.Html("</div>"));
+        // New comment form (hidden by default, shown by JS when text is selected)
+        annotationsColumn = annotationsColumn.WithView(
+            BuildNewCommentForm(host, node, rawContent, nodePath, panelStateSubject));
 
         splitLayout = splitLayout.WithView(contentArea);
         splitLayout = splitLayout.WithView(annotationsColumn);
 
         outerContainer = outerContainer.WithView(splitLayout);
 
-        // Add JavaScript for positioning and connecting lines
-        outerContainer = outerContainer.WithView(BuildInlineAnnotationScript(containerId));
+        // Add JavaScript for positioning, connecting lines, and text selection
+        outerContainer = outerContainer.WithView(BuildInlineAnnotationScript());
+
+        // Add floating comment button for text selection
+        outerContainer = outerContainer.WithView(Controls.Html(
+            "<div class=\"floating-comment-btn\" style=\"display:none; position:absolute; z-index:1000;\">" +
+            "<button class=\"add-comment-btn\" style=\"padding: 4px 12px; background: #3b82f6; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 0.85rem; box-shadow: 0 2px 6px rgba(0,0,0,0.2);\">Comment</button>" +
+            "</div>"));
 
         // Add Markdown children section if there are any
         if (markdownChildren.Count > 0)
@@ -353,6 +413,325 @@ public static class MarkdownLayoutAreas
         }
 
         return outerContainer;
+    }
+
+    /// <summary>
+    /// Builds a comment card from a Comment MeshNode (not a ParsedAnnotation).
+    /// Shows author, highlighted text, comment text, replies, and Reply/Resolve buttons.
+    /// </summary>
+    private static UiControl BuildCommentNodeCard(
+        LayoutAreaHost host,
+        MeshNode? node,
+        string rawContent,
+        Comment comment,
+        string commentPath,
+        AnnotationPanelState panelState,
+        BehaviorSubject<AnnotationPanelState> panelStateSubject)
+    {
+        var typeColor = "#3b82f6";
+        var author = comment.Author ?? "Unknown";
+        var authorInitial = author.Length > 0 ? author[0].ToString().ToUpper() : "?";
+        var markerId = comment.MarkerId ?? comment.Id;
+        var isReplyingToThis = panelState.ReplyingToAnnotationId == comment.Id;
+
+        // Card container
+        var card = Controls.Stack
+            .WithStyle($"padding: 12px; background: var(--neutral-layer-1); border-radius: 6px; border-left: 4px solid {typeColor}; margin-bottom: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.12);");
+
+        // Header row: Avatar + Author + Type badge
+        var headerHtml = $@"
+            <div style=""display: flex; align-items: center; gap: 8px; margin-bottom: 8px;"">
+                <div style=""width: 32px; height: 32px; border-radius: 50%; background: {typeColor}; color: white;
+                            display: flex; align-items: center; justify-content: center; font-weight: 600; font-size: 14px;"">
+                    {System.Web.HttpUtility.HtmlEncode(authorInitial)}
+                </div>
+                <div style=""flex: 1;"">
+                    <div style=""font-weight: 600; font-size: 0.9rem; color: var(--neutral-foreground-rest);"">{System.Web.HttpUtility.HtmlEncode(author)}</div>
+                    <div style=""font-size: 0.75rem; color: var(--neutral-foreground-hint);"">Comment</div>
+                </div>
+            </div>";
+        card = card.WithView(Controls.Html(headerHtml));
+
+        // Highlighted text quote
+        if (!string.IsNullOrEmpty(comment.HighlightedText))
+        {
+            card = card.WithView(Controls.Html($@"
+                <div style=""font-size: 0.85rem; color: var(--neutral-foreground-rest); padding: 8px 10px;
+                            background: rgba(59, 130, 246, 0.1); border-radius: 4px; margin-bottom: 8px;
+                            border-left: 2px solid {typeColor}; font-style: italic;"">
+                    ""{System.Web.HttpUtility.HtmlEncode(comment.HighlightedText)}""
+                </div>"));
+        }
+
+        // Comment text
+        if (!string.IsNullOrEmpty(comment.Text))
+        {
+            card = card.WithView(Controls.Html($@"
+                <div style=""font-size: 0.9rem; color: var(--neutral-foreground-rest); line-height: 1.5; margin-bottom: 8px;"">
+                    {System.Web.HttpUtility.HtmlEncode(comment.Text)}
+                </div>"));
+        }
+
+        // Replies from Comment.Replies (nested Comment records)
+        if (comment.Replies.Count > 0)
+        {
+            foreach (var reply in comment.Replies)
+            {
+                card = card.WithView(Controls.Html($@"
+                    <div style=""font-size: 0.85rem; padding: 8px; margin: 4px 0; background: var(--neutral-layer-2);
+                               border-radius: 4px; border-left: 3px solid var(--accent-fill-rest);"">
+                        <div style=""font-weight: 600; color: var(--accent-fill-rest); margin-bottom: 4px;"">{System.Web.HttpUtility.HtmlEncode(reply.Author)}</div>
+                        <div style=""color: var(--neutral-foreground-rest);"">{System.Web.HttpUtility.HtmlEncode(reply.Text)}</div>
+                    </div>"));
+            }
+        }
+
+        // In-memory replies from panel state
+        panelState.Replies.TryGetValue(comment.Id, out var inMemoryReplies);
+        if (inMemoryReplies != null && inMemoryReplies.Count > 0)
+        {
+            foreach (var reply in inMemoryReplies)
+            {
+                card = card.WithView(Controls.Html($@"
+                    <div style=""font-size: 0.85rem; padding: 8px; margin: 4px 0; background: var(--neutral-layer-2);
+                               border-radius: 4px; border-left: 3px solid var(--accent-fill-rest);"">
+                        <div style=""font-weight: 600; color: var(--accent-fill-rest); margin-bottom: 4px;"">{System.Web.HttpUtility.HtmlEncode(reply.Author)}</div>
+                        <div style=""color: var(--neutral-foreground-rest);"">{System.Web.HttpUtility.HtmlEncode(reply.Text)}</div>
+                    </div>"));
+            }
+        }
+
+        // Action buttons
+        if (isReplyingToThis)
+        {
+            card = card.WithView(BuildCommentReplyForm(host, comment.Id, commentPath, panelState, panelStateSubject));
+        }
+        else
+        {
+            var buttonRow = Controls.Stack
+                .WithOrientation(Orientation.Horizontal)
+                .WithStyle("gap: 8px; margin-top: 8px;");
+
+            buttonRow = buttonRow.WithView(
+                Controls.Button("Reply")
+                    .WithAppearance(Appearance.Neutral)
+                    .WithStyle("padding: 6px 16px; font-size: 0.85rem;")
+                    .WithClickAction(_ => panelStateSubject.OnNext(
+                        panelState with { ReplyingToAnnotationId = comment.Id })));
+
+            buttonRow = buttonRow.WithView(
+                Controls.Button("Resolve")
+                    .WithAppearance(Appearance.Stealth)
+                    .WithStyle("padding: 6px 16px; font-size: 0.85rem;")
+                    .WithClickAction(async _ =>
+                    {
+                        if (node == null) return;
+                        // Remove marker from markdown
+                        var newContent = AnnotationMarkdownExtension.ResolveComment(rawContent, markerId);
+                        var updatedNode = node with { Content = new MarkdownContent { Content = newContent } };
+                        host.Hub.Post(
+                            new DataChangeRequest().WithUpdates(updatedNode),
+                            o => o.WithTarget(host.Hub.Address));
+
+                        // Delete the Comment MeshNode
+                        var meshCatalog = host.Hub.ServiceProvider.GetRequiredService<IMeshCatalog>();
+                        await meshCatalog.DeleteNodeAsync(commentPath, recursive: true);
+                    }));
+
+            card = card.WithView(buttonRow);
+        }
+
+        return card
+            .WithClass($"annotation-card annotation-for-{markerId} annotation-type-comment");
+    }
+
+    /// <summary>
+    /// Builds a reply form for a comment that creates a child Comment MeshNode.
+    /// </summary>
+    private static UiControl BuildCommentReplyForm(
+        LayoutAreaHost host,
+        string commentId,
+        string commentPath,
+        AnnotationPanelState panelState,
+        BehaviorSubject<AnnotationPanelState> panelStateSubject)
+    {
+        var replyDataId = $"Reply_{commentId}";
+
+        var form = Controls.Stack
+            .WithStyle("margin-top: 12px; padding: 12px; background: var(--neutral-layer-2); border-radius: 6px;");
+
+        var editControl = host.Edit(new ReplyFormModel(), replyDataId);
+        if (editControl != null)
+        {
+            var editWrapper = Controls.Stack
+                .WithStyle("margin-bottom: 12px;")
+                .WithView(editControl);
+            form = form.WithView(editWrapper);
+        }
+
+        var buttonRow = Controls.Stack
+            .WithOrientation(Orientation.Horizontal)
+            .WithStyle("gap: 8px; justify-content: flex-end;");
+
+        buttonRow = buttonRow.WithView(
+            Controls.Button("Cancel")
+                .WithAppearance(Appearance.Stealth)
+                .WithStyle("padding: 6px 16px; font-size: 0.85rem;")
+                .WithClickAction(_ => panelStateSubject.OnNext(
+                    panelState with { ReplyingToAnnotationId = null })));
+
+        buttonRow = buttonRow.WithView(
+            Controls.Button("Submit")
+                .WithAppearance(Appearance.Accent)
+                .WithStyle("padding: 6px 16px; font-size: 0.85rem;")
+                .WithClickAction(async ctx =>
+                {
+                    var replyModel = await ctx.Host.Stream.GetDataAsync<ReplyFormModel>(replyDataId);
+                    if (replyModel != null && !string.IsNullOrWhiteSpace(replyModel.Text))
+                    {
+                        // Create a child Comment MeshNode as a reply
+                        var replyId = Guid.NewGuid().AsString();
+                        var replyComment = new Comment
+                        {
+                            Id = replyId,
+                            NodePath = commentPath,
+                            Author = "User",
+                            Text = replyModel.Text,
+                            ParentCommentId = commentId,
+                            Status = CommentStatus.Active
+                        };
+                        var replyNode = new MeshNode($"{commentPath}/{replyId}")
+                        {
+                            Name = $"Reply by User",
+                            NodeType = CommentNodeType.NodeType,
+                            Content = replyComment
+                        };
+
+                        var meshCatalog = host.Hub.ServiceProvider.GetRequiredService<IMeshCatalog>();
+                        await meshCatalog.CreateNodeAsync(replyNode);
+
+                        panelStateSubject.OnNext(new AnnotationPanelState
+                        {
+                            ReplyingToAnnotationId = null,
+                            Replies = panelState.Replies
+                        });
+                    }
+                }));
+
+        form = form.WithView(buttonRow);
+        return form;
+    }
+
+    /// <summary>
+    /// Builds the new comment form that appears in the annotations column when the user selects text.
+    /// Hidden by default; shown by JS when text is selected and the floating comment button is clicked.
+    /// </summary>
+    private static UiControl BuildNewCommentForm(
+        LayoutAreaHost host,
+        MeshNode? node,
+        string rawContent,
+        string nodePath,
+        BehaviorSubject<AnnotationPanelState> panelStateSubject)
+    {
+        var commentFormDataId = $"NewComment_{nodePath.Replace("/", "-")}";
+
+        var form = Controls.Stack
+            .WithClass("new-comment-form")
+            .WithStyle("display: none; padding: 12px; background: var(--neutral-layer-1); border-radius: 6px; border-left: 4px solid #3b82f6; margin-bottom: 12px; box-shadow: 0 1px 3px rgba(0,0,0,0.12);");
+
+        // Header
+        form = form.WithView(Controls.Html(
+            "<div style=\"font-weight: 600; font-size: 0.9rem; margin-bottom: 8px; color: #3b82f6;\">New Comment</div>"));
+
+        // Selected text display (filled by JS)
+        form = form.WithView(Controls.Html(
+            "<div class=\"new-comment-selected-text\" style=\"font-size: 0.85rem; padding: 8px 10px; background: rgba(59, 130, 246, 0.1); border-radius: 4px; margin-bottom: 8px; border-left: 2px solid #3b82f6; font-style: italic; display: none;\"></div>"));
+
+        // Comment text area using host.Edit
+        var editControl = host.Edit(new CommentFormModel(), commentFormDataId);
+        if (editControl != null)
+        {
+            var editWrapper = Controls.Stack
+                .WithStyle("margin-bottom: 12px;")
+                .WithView(editControl);
+            form = form.WithView(editWrapper);
+        }
+
+        // Button row
+        var buttonRow = Controls.Stack
+            .WithOrientation(Orientation.Horizontal)
+            .WithStyle("gap: 8px; justify-content: flex-end;");
+
+        buttonRow = buttonRow.WithView(
+            Controls.Button("Cancel")
+                .WithAppearance(Appearance.Stealth)
+                .WithStyle("padding: 6px 16px; font-size: 0.85rem;")
+                .WithClass("new-comment-cancel")
+                .WithClickAction(_ =>
+                {
+                    // JS will hide the form
+                }));
+
+        buttonRow = buttonRow.WithView(
+            Controls.Button("Submit")
+                .WithAppearance(Appearance.Accent)
+                .WithStyle("padding: 6px 16px; font-size: 0.85rem;")
+                .WithClass("new-comment-submit")
+                .WithClickAction(async ctx =>
+                {
+                    if (node == null) return;
+
+                    var formModel = await ctx.Host.Stream.GetDataAsync<CommentFormModel>(commentFormDataId);
+                    var selectedText = formModel?.SelectedText ?? "";
+                    var commentText = formModel?.CommentText ?? "";
+
+                    if (string.IsNullOrWhiteSpace(commentText)) return;
+
+                    var markerId = Guid.NewGuid().AsString();
+                    var commentId = Guid.NewGuid().AsString();
+                    var author = "User";
+
+                    // 1. Create Comment MeshNode
+                    var comment = new Comment
+                    {
+                        Id = commentId,
+                        NodePath = nodePath,
+                        MarkerId = markerId,
+                        HighlightedText = selectedText,
+                        Author = author,
+                        Text = commentText,
+                        Status = CommentStatus.Active
+                    };
+                    var commentNode = new MeshNode($"{nodePath}/{commentId}")
+                    {
+                        Name = $"Comment by {author}",
+                        NodeType = CommentNodeType.NodeType,
+                        Content = comment
+                    };
+
+                    var meshCatalog = host.Hub.ServiceProvider.GetRequiredService<IMeshCatalog>();
+                    await meshCatalog.CreateNodeAsync(commentNode);
+
+                    // 2. Insert marker into markdown (if text was selected)
+                    if (!string.IsNullOrEmpty(selectedText))
+                    {
+                        var marker = $"<!--comment:{markerId}-->";
+                        var closing = $"<!--/comment:{markerId}-->";
+                        var idx = rawContent.IndexOf(selectedText, StringComparison.Ordinal);
+                        if (idx >= 0)
+                        {
+                            var newContent = rawContent.Insert(idx + selectedText.Length, closing)
+                                                       .Insert(idx, marker);
+                            var updatedNode = node with { Content = new MarkdownContent { Content = newContent } };
+                            host.Hub.Post(
+                                new DataChangeRequest().WithUpdates(updatedNode),
+                                o => o.WithTarget(host.Hub.Address));
+                        }
+                    }
+                }));
+
+        form = form.WithView(buttonRow);
+        return form;
     }
 
     /// <summary>
@@ -523,11 +902,9 @@ public static class MarkdownLayoutAreas
             card = card.WithView(buttonRow);
         }
 
-        // Wrap in a div with data attributes for positioning and line drawing
-        return Controls.Stack
-            .WithView(Controls.Html($"<div class=\"annotation-card\" data-annotation-id=\"{annotation.Id}\" data-annotation-type=\"{annotation.Type}\" data-color=\"{typeColor}\">"))
-            .WithView(card)
-            .WithView(Controls.Html("</div>"));
+        // Use WithClass for identification (class-based selectors work reliably in Blazor)
+        return card
+            .WithClass($"annotation-card annotation-for-{annotation.Id} annotation-type-{annotation.Type.ToString().ToLowerInvariant()}");
     }
 
     /// <summary>
@@ -598,22 +975,36 @@ public static class MarkdownLayoutAreas
 
     /// <summary>
     /// Builds JavaScript for positioning annotation cards and drawing SVG connecting lines.
+    /// Uses class-based selectors (not IDs) since WithClass renders to HTML but WithId does not in Blazor.
     /// </summary>
-    private static UiControl BuildInlineAnnotationScript(string containerId)
+    private static UiControl BuildInlineAnnotationScript()
     {
-        return Controls.Html($@"
+        return Controls.Html(@"
 <script>
-(function() {{
-    var containerId = '{containerId}';
-    var minCardGap = 12; // Gap between larger cards
+(function() {
+    var minCardGap = 12;
 
-    function drawConnectingLines() {{
-        var container = document.getElementById(containerId);
-        var annotationsCol = document.getElementById(containerId + '-annotations');
+    // Extract annotation ID from class list (e.g., 'annotation-for-c1' → 'c1')
+    function getAnnotationIdFromCard(card) {
+        var cls = Array.from(card.classList).find(function(c) { return c.startsWith('annotation-for-'); });
+        return cls ? cls.replace('annotation-for-', '') : null;
+    }
+
+    // Get annotation type color from card classes
+    function getAnnotationColor(card) {
+        if (card.classList.contains('annotation-type-insert')) return '#22c55e';
+        if (card.classList.contains('annotation-type-delete')) return '#ef4444';
+        if (card.classList.contains('annotation-type-comment')) return '#3b82f6';
+        return '#6b7280';
+    }
+
+    function drawConnectingLines() {
+        var container = document.querySelector('.markdown-annotations-container');
+        var annotationsCol = document.querySelector('.annotations-column');
         if (!container || !annotationsCol) return;
 
         // Remove old SVG if exists
-        var oldSvg = document.getElementById(containerId + '-lines');
+        var oldSvg = document.querySelector('.annotation-connecting-lines');
         if (oldSvg) oldSvg.remove();
 
         // Create SVG in the split layout parent
@@ -621,7 +1012,7 @@ public static class MarkdownLayoutAreas
         if (!splitLayout) return;
 
         var svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-        svg.id = containerId + '-lines';
+        svg.classList.add('annotation-connecting-lines');
         var svgHeight = Math.max(splitLayout.scrollHeight, container.scrollHeight, annotationsCol.scrollHeight);
         svg.style.cssText = 'position:absolute;top:0;left:0;pointer-events:none;z-index:1;overflow:visible;';
         svg.setAttribute('width', splitLayout.scrollWidth);
@@ -629,28 +1020,24 @@ public static class MarkdownLayoutAreas
         splitLayout.insertBefore(svg, splitLayout.firstChild);
 
         var splitRect = splitLayout.getBoundingClientRect();
-        // Account for scroll position when converting viewport coords to layout-relative coords
-        var scrollLeft = window.pageXOffset || document.documentElement.scrollLeft;
-        var scrollTop = window.pageYOffset || document.documentElement.scrollTop;
 
-        var cards = annotationsCol.querySelectorAll('.annotation-card');
-        cards.forEach(function(card) {{
-            var annotationId = card.dataset.annotationId;
-            var color = card.dataset.color || '#6b7280';
-            var marker = container.querySelector('[data-comment-id=""' + annotationId + '""]') ||
-                         container.querySelector('[data-change-id=""' + annotationId + '""]');
+        // Only draw lines for comment cards (track change cards are hidden)
+        var cards = annotationsCol.querySelectorAll('.annotation-card.annotation-type-comment');
+        cards.forEach(function(card) {
+            var annotationId = getAnnotationIdFromCard(card);
+            if (!annotationId) return;
+            var color = getAnnotationColor(card);
+            var marker = container.querySelector('[data-comment-id=""' + annotationId + '""]');
 
-            if (marker && card.offsetParent) {{
+            if (marker && card.offsetParent) {
                 var markerRect = marker.getBoundingClientRect();
                 var cardRect = card.getBoundingClientRect();
 
-                // Calculate positions relative to split layout, accounting for scroll
                 var markerX = markerRect.right - splitRect.left + splitLayout.scrollLeft + 4;
                 var markerY = markerRect.top + markerRect.height / 2 - splitRect.top + splitLayout.scrollTop;
                 var cardX = cardRect.left - splitRect.left + splitLayout.scrollLeft - 4;
                 var cardY = cardRect.top + Math.min(24, cardRect.height / 2) - splitRect.top + splitLayout.scrollTop;
 
-                // Smooth curved line from marker to card
                 var path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
                 var midX = (markerX + cardX) / 2;
                 path.setAttribute('d', 'M ' + markerX + ' ' + markerY + ' Q ' + midX + ' ' + markerY + ' ' + midX + ' ' + ((markerY + cardY) / 2) + ' Q ' + midX + ' ' + cardY + ' ' + cardX + ' ' + cardY);
@@ -661,7 +1048,6 @@ public static class MarkdownLayoutAreas
                 path.setAttribute('data-annotation', annotationId);
                 svg.appendChild(path);
 
-                // Small dot at marker end
                 var circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
                 circle.setAttribute('cx', markerX);
                 circle.setAttribute('cy', markerY);
@@ -669,209 +1055,314 @@ public static class MarkdownLayoutAreas
                 circle.setAttribute('fill', color);
                 circle.setAttribute('opacity', '0.7');
                 svg.appendChild(circle);
-            }}
-        }});
-    }}
+            }
+        });
+    }
 
-    function positionAnnotationCards() {{
-        var container = document.getElementById(containerId);
-        var annotationsCol = document.getElementById(containerId + '-annotations');
+    function positionAnnotationCards() {
+        var container = document.querySelector('.markdown-annotations-container');
+        var annotationsCol = document.querySelector('.annotations-column');
         if (!container || !annotationsCol) return;
 
-        var cards = annotationsCol.querySelectorAll('.annotation-card');
+        // Only position comment cards (track change cards are hidden)
+        var cards = annotationsCol.querySelectorAll('.annotation-card.annotation-type-comment');
         var positions = [];
 
-        // Calculate desired positions based on marker locations
-        cards.forEach(function(card) {{
-            var annotationId = card.dataset.annotationId;
-            var marker = container.querySelector('[data-comment-id=""' + annotationId + '""]') ||
-                         container.querySelector('[data-change-id=""' + annotationId + '""]');
+        cards.forEach(function(card) {
+            var annotationId = getAnnotationIdFromCard(card);
+            if (!annotationId) return;
 
-            if (marker) {{
+            var marker = container.querySelector('[data-comment-id=""' + annotationId + '""]');
+
+            if (marker) {
                 var markerRect = marker.getBoundingClientRect();
-                var containerRect = container.getBoundingClientRect();
-                var desiredTop = markerRect.top - containerRect.top;
+                var colRect = annotationsCol.getBoundingClientRect();
+                var desiredTop = markerRect.top - colRect.top + annotationsCol.scrollTop;
 
-                positions.push({{
+                positions.push({
                     card: card,
-                    marker: marker,
                     annotationId: annotationId,
                     desiredTop: desiredTop,
-                    height: card.offsetHeight || 18
-                }});
-            }}
-        }});
+                    height: card.offsetHeight || 80
+                });
+            }
+        });
 
-        // Sort by desired position
-        positions.sort(function(a, b) {{ return a.desiredTop - b.desiredTop; }});
+        positions.sort(function(a, b) { return a.desiredTop - b.desiredTop; });
 
-        // Resolve overlaps - push cards down if they would overlap
         var lastBottom = 0;
-        positions.forEach(function(pos) {{
+        positions.forEach(function(pos) {
             var actualTop = Math.max(pos.desiredTop, lastBottom + minCardGap);
             pos.actualTop = actualTop;
             lastBottom = actualTop + pos.height;
-        }});
+        });
 
-        // Apply positions
-        positions.forEach(function(pos) {{
+        positions.forEach(function(pos) {
             pos.card.style.position = 'absolute';
             pos.card.style.top = pos.actualTop + 'px';
             pos.card.style.left = '0';
             pos.card.style.right = '0';
-        }});
+        });
 
-        // Set minimum height for annotations column
-        if (positions.length > 0) {{
+        if (positions.length > 0) {
             var lastPos = positions[positions.length - 1];
             annotationsCol.style.minHeight = (lastPos.actualTop + lastPos.height + 16) + 'px';
-        }}
+        }
 
-        // Draw lines after positioning
         requestAnimationFrame(drawConnectingLines);
-    }}
+    }
 
-    // Poll until markers are in the DOM, then position cards
-    function waitForMarkersAndPosition() {{
-        var container = document.getElementById(containerId);
-        var annotationsCol = document.getElementById(containerId + '-annotations');
-        if (!container || !annotationsCol) {{
+    function waitForMarkersAndPosition() {
+        var container = document.querySelector('.markdown-annotations-container');
+        var annotationsCol = document.querySelector('.annotations-column');
+        if (!container || !annotationsCol) {
             requestAnimationFrame(waitForMarkersAndPosition);
             return;
-        }}
+        }
 
         var markers = container.querySelectorAll('[data-comment-id], [data-change-id]');
         var cards = annotationsCol.querySelectorAll('.annotation-card');
-        if (markers.length === 0 || cards.length === 0) {{
+        if (markers.length === 0 || cards.length === 0) {
             requestAnimationFrame(waitForMarkersAndPosition);
             return;
-        }}
+        }
 
-        // Markers found - position cards
         positionAnnotationCards();
-        // Re-run once more after a short delay to catch late layout shifts
-        requestAnimationFrame(function() {{
+        requestAnimationFrame(function() {
             requestAnimationFrame(positionAnnotationCards);
-        }});
-    }}
+        });
+    }
 
-    if (document.readyState === 'loading') {{
+    if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', waitForMarkersAndPosition);
-    }} else {{
+    } else {
         requestAnimationFrame(waitForMarkersAndPosition);
-    }}
+    }
 
-    window.addEventListener('resize', function() {{
+    window.addEventListener('resize', function() {
         requestAnimationFrame(positionAnnotationCards);
-    }});
+    });
 
-    // Observe both annotations column and content container for changes
-    var observer = new MutationObserver(function() {{
+    var observer = new MutationObserver(function() {
         requestAnimationFrame(positionAnnotationCards);
-    }});
+    });
 
-    function setupObservers() {{
-        var container = document.getElementById(containerId);
-        var annotationsCol = document.getElementById(containerId + '-annotations');
-        if (annotationsCol) {{
-            observer.observe(annotationsCol, {{ childList: true, subtree: true, attributes: true, characterData: true }});
-        }}
-        if (container) {{
-            observer.observe(container, {{ childList: true, subtree: true }});
-        }}
-    }}
+    function setupObservers() {
+        var container = document.querySelector('.markdown-annotations-container');
+        var annotationsCol = document.querySelector('.annotations-column');
+        if (annotationsCol) {
+            observer.observe(annotationsCol, { childList: true, subtree: true, attributes: true, characterData: true });
+        }
+        if (container) {
+            observer.observe(container, { childList: true, subtree: true });
+        }
+    }
     requestAnimationFrame(setupObservers);
 
-    // Highlight on click
-    document.addEventListener('click', function(e) {{
-        var marker = e.target.closest('[data-comment-id], [data-change-id]');
-        if (marker) {{
-            var id = marker.dataset.commentId || marker.dataset.changeId;
-            highlightAnnotation(id);
-        }}
-    }});
+    // Click handler for track change inline popovers and comment highlights
+    document.addEventListener('click', function(e) {
+        // Handle Accept/Reject buttons inside inline popovers
+        var actionBtn = e.target.closest('.annotation-actions button');
+        if (actionBtn) {
+            var changeId = actionBtn.dataset.changeId;
+            var action = actionBtn.dataset.action;
+            if (changeId && action) {
+                // Find the matching card in the side panel and click the corresponding button
+                var panelCard = document.querySelector('.annotation-for-' + changeId);
+                if (panelCard) {
+                    panelCard.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                    panelCard.classList.add('active');
+                    // Find and click the Accept or Reject button in the panel card
+                    var btnText = action === 'accept' ? 'Accept' : 'Reject';
+                    var panelButtons = panelCard.querySelectorAll('fluent-button, button');
+                    panelButtons.forEach(function(btn) {
+                        if (btn.textContent.trim() === btnText) {
+                            btn.click();
+                        }
+                    });
+                }
+            }
+            e.stopPropagation();
+            return;
+        }
 
-    window.highlightAnnotation = function(annotationId) {{
-        var container = document.getElementById(containerId);
+        // Close all open track change popovers first
+        document.querySelectorAll('.show-label').forEach(function(el) {
+            el.classList.remove('show-label');
+        });
+
+        // Toggle popover on track change spans
+        var trackSpan = e.target.closest('.track-insert, .track-delete');
+        if (trackSpan) {
+            trackSpan.classList.add('show-label');
+            e.stopPropagation();
+            return;
+        }
+
+        // Highlight on comment click → scroll to card in side panel
+        var commentMarker = e.target.closest('[data-comment-id]');
+        if (commentMarker) {
+            var id = commentMarker.dataset.commentId;
+            highlightAnnotation(id);
+            return;
+        }
+    });
+
+    // Click on annotation card → highlight the corresponding text
+    document.addEventListener('click', function(e) {
+        var card = e.target.closest('.annotation-card');
+        if (card) {
+            var annotationId = getAnnotationIdFromCard(card);
+            if (annotationId) {
+                highlightAnnotation(annotationId);
+            }
+        }
+    });
+
+    window.highlightAnnotation = function(annotationId) {
+        var container = document.querySelector('.markdown-annotations-container');
         if (!container) return;
 
         // Remove previous highlights
-        document.querySelectorAll('.annotation-active').forEach(function(el) {{
+        document.querySelectorAll('.annotation-active').forEach(function(el) {
             el.classList.remove('annotation-active');
-        }});
-        document.querySelectorAll('.annotation-card.active').forEach(function(el) {{
+        });
+        document.querySelectorAll('.annotation-card.active').forEach(function(el) {
             el.classList.remove('active');
-        }});
+        });
 
-        // Highlight marker
+        // Highlight marker in content
         var marker = container.querySelector('[data-comment-id=""' + annotationId + '""]') ||
                      container.querySelector('[data-change-id=""' + annotationId + '""]');
-        if (marker) {{
+        if (marker) {
             marker.classList.add('annotation-active');
-        }}
+        }
 
-        // Highlight card and line
-        var card = document.querySelector('.annotation-card[data-annotation-id=""' + annotationId + '""]');
-        if (card) {{
+        // Highlight card in side panel
+        var card = document.querySelector('.annotation-for-' + annotationId);
+        if (card) {
             card.classList.add('active');
-        }}
+            card.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        }
 
         // Highlight the SVG line
-        var svg = document.getElementById(containerId + '-lines');
-        if (svg) {{
-            svg.querySelectorAll('path').forEach(function(p) {{
-                if (p.dataset.annotation === annotationId) {{
+        var svg = document.querySelector('.annotation-connecting-lines');
+        if (svg) {
+            svg.querySelectorAll('path').forEach(function(p) {
+                if (p.dataset.annotation === annotationId) {
                     p.setAttribute('opacity', '0.8');
                     p.setAttribute('stroke-width', '2');
-                }} else {{
+                } else {
                     p.setAttribute('opacity', '0.3');
                     p.setAttribute('stroke-width', '1');
-                }}
-            }});
-        }}
-    }};
+                }
+            });
+        }
+    };
 
-}})();
+    // Text selection → floating comment button
+    document.addEventListener('mouseup', function(e) {
+        var sel = window.getSelection();
+        var text = sel ? sel.toString().trim() : '';
+        var container = document.querySelector('.markdown-annotations-container');
+        var floatingBtn = document.querySelector('.floating-comment-btn');
+        if (!floatingBtn) return;
+
+        if (text.length > 0 && container && container.contains(sel.anchorNode)) {
+            var range = sel.getRangeAt(0);
+            var rect = range.getBoundingClientRect();
+            floatingBtn.style.display = 'block';
+            floatingBtn.style.top = (rect.top + window.scrollY - 36) + 'px';
+            floatingBtn.style.left = (rect.left + window.scrollX) + 'px';
+            window.__pendingSelection = text;
+        } else if (!e.target.closest('.floating-comment-btn, .new-comment-form')) {
+            floatingBtn.style.display = 'none';
+        }
+    });
+
+    // Floating comment button click → show new comment form
+    document.addEventListener('click', function(e) {
+        var addBtn = e.target.closest('.add-comment-btn');
+        if (!addBtn) return;
+
+        var floatingBtn = document.querySelector('.floating-comment-btn');
+        if (floatingBtn) floatingBtn.style.display = 'none';
+
+        var form = document.querySelector('.new-comment-form');
+        if (form) {
+            form.style.display = 'block';
+            // Display selected text in the form
+            var selectedTextEl = form.querySelector('.new-comment-selected-text');
+            if (selectedTextEl && window.__pendingSelection) {
+                selectedTextEl.textContent = '""' + window.__pendingSelection + '""';
+                selectedTextEl.style.display = 'block';
+            }
+            // Try to set the selected text in the form data
+            var textarea = form.querySelector('textarea, fluent-text-area');
+            if (textarea) textarea.focus();
+        }
+    });
+
+    // Cancel button in new comment form
+    document.addEventListener('click', function(e) {
+        if (e.target.closest('.new-comment-cancel')) {
+            var form = document.querySelector('.new-comment-form');
+            if (form) form.style.display = 'none';
+            window.__pendingSelection = null;
+        }
+    });
+
+    // After submit, hide form
+    document.addEventListener('click', function(e) {
+        if (e.target.closest('.new-comment-submit')) {
+            setTimeout(function() {
+                var form = document.querySelector('.new-comment-form');
+                if (form) form.style.display = 'none';
+                window.__pendingSelection = null;
+            }, 500);
+        }
+    });
+
+})();
 </script>
 <style>
-.annotations-column {{
+.annotations-column {
     position: relative;
     display: flex;
     flex-direction: column;
     gap: 8px;
-}}
-.annotation-card {{
+}
+.annotation-card {
     transition: all 0.2s ease;
-}}
-.annotation-card:hover {{
+}
+.annotation-card:hover {
     transform: translateX(-2px);
     box-shadow: 0 2px 8px rgba(0,0,0,0.15) !important;
     z-index: 10;
-}}
-.annotation-card.active {{
+}
+.annotation-card.active {
     box-shadow: 0 0 0 2px var(--accent-fill-rest), 0 2px 8px rgba(0,0,0,0.18) !important;
     z-index: 10;
-}}
-.annotation-active {{
+}
+.annotation-active {
     background: rgba(59, 130, 246, 0.15) !important;
     box-shadow: 0 0 0 2px var(--accent-fill-rest);
     border-radius: 3px;
-}}
-/* Highlighted text styles */
-.comment-highlight {{
-    background: rgba(59, 130, 246, 0.2);
-    border-bottom: 2px solid #3b82f6;
+}
+/* Track changes: visible inline with highlighting, click to show popover */
+.track-insert, .track-delete {
     cursor: pointer;
-}}
-.track-insert {{
-    background: rgba(34, 197, 94, 0.2);
-    border-bottom: 2px solid #22c55e;
-}}
-.track-delete {{
-    background: rgba(239, 68, 68, 0.2);
-    border-bottom: 2px solid #ef4444;
-    text-decoration: line-through;
-}}
+    position: relative;
+}
+/* Comment highlights remain visible */
+.comment-highlight {
+    cursor: pointer;
+}
+/* Hide track change cards in side panel (they exist only as Blazor action targets) */
+.annotation-type-insert,
+.annotation-type-delete {
+    display: none !important;
+}
 </style>
         ");
     }

@@ -41,7 +41,7 @@ public static class GraphConfigurationExtensions
         ///
         /// Note: This method does NOT configure content collections. Callers should configure
         /// storage collections and default node hub mappings separately based on their needs.
-        /// See LoomConfiguration.ConfigureLoomMesh for an example.
+        /// See MemexConfiguration.ConfigureMemexMesh for an example.
         /// </summary>
         public TBuilder AddJsonGraphConfiguration(string dataDirectory)
         {
@@ -84,6 +84,10 @@ public static class GraphConfigurationExtensions
             // This provides HubConfiguration for nodes with nodeType="ThreadMessage" (individual messages in threads).
             builder.AddMeshNodes(Configuration.ThreadMessageNodeConfiguration.CreateMeshNode());
 
+            // Register the built-in "Comment" MeshNode
+            // This provides HubConfiguration for nodes with nodeType="Comment" (comments on document nodes).
+            builder.AddMeshNodes(Configuration.CommentNodeConfiguration.CreateMeshNode());
+
             // Register services that don't need hub-level dependencies at the mesh level
             builder.ConfigureServices(services =>
             {
@@ -116,7 +120,7 @@ public static class GraphConfigurationExtensions
             // Note: MeshDataSource is added automatically via NodeTypeService.WrapWithMeshDataSource
             // Node types are compiled on-demand via IMeshNodeCompilationService.
             // MeshCatalog loads NodeTypeConfiguration from compiled assemblies when nodes are accessed.
-            // Content collections should be configured by the caller (e.g., LoomConfiguration.ConfigureLoomMesh).
+            // Content collections should be configured by the caller (e.g., MemexConfiguration.ConfigureMemexMesh).
             builder.ConfigureHub(config => MeshNodeLayoutAreas.AddDefaultLayoutAreas(config)
                 .WithServices(services =>
                 {

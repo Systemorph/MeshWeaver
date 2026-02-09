@@ -1,0 +1,144 @@
+@page "/dev/login"
+@using Memex.Portal.Shared.Authentication
+@using System.Text.Json
+@inject NavigationManager Navigation
+@inject IHttpClientFactory HttpClientFactory
+
+<PageTitle>Developer Login - Memex Portal</PageTitle>
+
+<div class="dev-login-container">
+    <div class="dev-login-card">
+        <div class="dev-login-header">
+            <FluentIcon Value="@(new Icons.Regular.Size24.PersonKey())" />
+            <h1>Developer Login</h1>
+            <p class="dev-login-subtitle">Select a person to log in as</p>
+        </div>
+
+        @if (isLoading)
+        {
+            <div class="loading-container">
+                <FluentProgressRing />
+                <span>Loading persons...</span>
+            </div>
+        }
+        else if (!string.IsNullOrEmpty(error))
+        {
+            <FluentMessageBar Intent="@MessageIntent.Error" Style="margin-bottom: 1rem;">
+                @error
+            </FluentMessageBar>
+        }
+        else if (persons.Count == 0)
+        {
+            <FluentMessageBar Intent="@MessageIntent.Warning">
+                No persons found. Add Person nodes to the graph to enable dev login.
+            </FluentMessageBar>
+        }
+        else
+        {
+            <FluentStack Orientation="Orientation.Vertical" VerticalGap="8">
+                @foreach (var person in persons)
+                {
+                    <div class="person-card" @onclick="() => LoginAs(person)">
+                        <FluentStack Orientation="Orientation.Horizontal" VerticalAlignment="VerticalAlignment.Center" HorizontalGap="12" Style="width: 100%;">
+                            @if (!string.IsNullOrEmpty(person.Avatar))
+                            {
+                                <img class="avatar" src="@person.Avatar" alt="@person.Name" />
+                            }
+                            else
+                            {
+                                <div class="avatar">@GetInitials(person.Name)</div>
+                            }
+
+                            <FluentStack Orientation="Orientation.Vertical" VerticalGap="2" Style="flex: 1; min-width: 0;">
+                                <FluentStack Orientation="Orientation.Horizontal" VerticalAlignment="VerticalAlignment.Center" HorizontalGap="8" Wrap="true">
+                                    <span class="person-name">@person.Name</span>
+                                    @if (!string.IsNullOrEmpty(person.Role))
+                                    {
+                                        <span class="person-role">@person.Role</span>
+                                    }
+                                </FluentStack>
+                                @if (!string.IsNullOrEmpty(person.Email))
+                                {
+                                    <span class="person-email">@person.Email</span>
+                                }
+                            </FluentStack>
+
+                            <FluentIcon Value="@(new Icons.Regular.Size20.ChevronRight())" Color="Color.Neutral" />
+                        </FluentStack>
+                    </div>
+                }
+            </FluentStack>
+        }
+    </div>
+</div>
+
+@code {
+    [SupplyParameterFromQuery]
+    public string? ReturnUrl { get; set; }
+
+    private List<PersonInfo> persons = new();
+    private bool isLoading = true;
+    private string? error;
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            var client = HttpClientFactory.CreateClient();
+            var baseUri = new Uri(Navigation.BaseUri);
+            client.BaseAddress = baseUri;
+
+            var response = await client.GetAsync("/dev/persons");
+            if (response.IsSuccessStatusCode)
+            {
+                var json = await response.Content.ReadAsStringAsync();
+                persons = JsonSerializer.Deserialize<List<PersonInfo>>(json,
+                    new JsonSerializerOptions { PropertyNameCaseInsensitive = true }) ?? new();
+            }
+            else
+            {
+                error = $"Failed to load persons: {response.StatusCode}";
+            }
+        }
+        catch (Exception ex)
+        {
+            error = $"Error loading persons: {ex.Message}";
+        }
+        finally
+        {
+            isLoading = false;
+        }
+    }
+
+    private void LoginAs(PersonInfo person)
+    {
+        var returnPath = ReturnUrl ?? "/";
+        Navigation.NavigateTo(
+            $"/dev/login/confirm?personId={Uri.EscapeDataString(person.Id)}&returnUrl={Uri.EscapeDataString(returnPath)}",
+            forceLoad: true);
+    }
+
+    private static string GetInitials(string name)
+    {
+        if (string.IsNullOrEmpty(name)) return "?";
+        var parts = name.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length >= 2)
+            return $"{parts[0][0]}{parts[^1][0]}".ToUpperInvariant();
+        return parts[0][0].ToString().ToUpperInvariant();
+    }
+
+    private static class Icons
+    {
+        public static class Regular
+        {
+            public static class Size24
+            {
+                public class PersonKey : Microsoft.FluentUI.AspNetCore.Components.Icons.Regular.Size24.PersonKey { }
+            }
+            public static class Size20
+            {
+                public class ChevronRight : Microsoft.FluentUI.AspNetCore.Components.Icons.Regular.Size20.ChevronRight { }
+            }
+        }
+    }
+}

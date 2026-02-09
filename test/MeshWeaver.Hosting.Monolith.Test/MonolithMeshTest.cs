@@ -59,7 +59,8 @@ public class MonolithMeshTest(ITestOutputHelper output) : MonolithMeshTestBase(o
             })
                 .AddMeshNodes(MeshNode.FromPath($"{AddressExtensions.AppType}/Kernel") with
                 {
-                    Name = "Kernel"
+                    Name = "Kernel",
+                    HubConfiguration = x => x
                 })
             .AddKernel();
 }
