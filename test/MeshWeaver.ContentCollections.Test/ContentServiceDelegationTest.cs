@@ -150,7 +150,7 @@ public class MapContentCollectionTest(ITestOutputHelper output) : HubTestBase(ou
 
     protected override MessageHubConfiguration ConfigureMesh(MessageHubConfiguration configuration)
     {
-        // Register "storage" collection at mesh level (like in LoomConfiguration)
+        // Register "storage" collection at mesh level (like in MemexConfiguration)
         return configuration
             .AddContentCollections()
             .AddFileSystemContentCollection("storage", _ => _storagePath);
