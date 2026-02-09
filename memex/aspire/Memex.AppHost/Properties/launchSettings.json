@@ -13,9 +13,9 @@
         "DOTNET_RESOURCE_SERVICE_ENDPOINT_URL": "https://localhost:22200"
       }
     },
-    "Orleans": {
+    "Distributed": {
       "commandName": "Project",
-      "commandLineArgs": "--mode orleans",
+      "commandLineArgs": "--mode distributed",
       "dotnetRunMessages": true,
       "launchBrowser": true,
       "applicationUrl": "https://localhost:17200",

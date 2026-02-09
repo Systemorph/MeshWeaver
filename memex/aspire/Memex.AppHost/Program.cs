@@ -3,13 +3,13 @@ using Microsoft.Extensions.Hosting;
 
 var builder = DistributedApplication.CreateBuilder(args);
 
-// Mode: "monolith" (default) or "orleans"
-// Pass as command line argument: dotnet run -- --mode orleans
+// Mode: "monolith" (default) or "distributed"
+// Pass as command line argument: dotnet run -- --mode distributed
 var mode = builder.Configuration["mode"]?.ToLowerInvariant() ?? "monolith";
-var useOrleans = mode == "orleans";
+var useDistributed = mode == "distributed";
 var useMonolith = mode == "monolith";
 
-if (useOrleans)
+if (useDistributed)
 {
     // Application storage for Orleans clustering
     var appStorage = builder.AddAzureStorage("memexblobs");
@@ -30,17 +30,19 @@ if (useOrleans)
     var orleans = builder.AddOrleans("memex-mesh")
         .WithClustering(orleansTables);
 
-    // Cosmos DB for graph persistence
+    // Cosmos DB for graph persistence (persistent container with data volume)
     var cosmos = builder.AddAzureCosmosDB("memexcosmos");
     if (builder.Environment.IsDevelopment())
     {
-        cosmos = cosmos.RunAsEmulator();
+        cosmos = cosmos.RunAsEmulator(emulator => emulator
+            .WithDataVolume()
+            .WithLifetime(ContainerLifetime.Persistent));
     }
     var cosmosDb = cosmos.AddCosmosDatabase("memexdb");
 
-    // Memex Orleans (co-hosted silo + web)
+    // Memex Distributed (co-hosted silo + web)
     builder
-        .AddProject<Projects.Memex_Portal_Orleans>("memex-orleans")
+        .AddProject<Projects.Memex_Portal_Distributed>("memex-distributed")
         .WithExternalHttpEndpoints()
         .WithReference(orleans)
         .WithReference(cosmosDb)
