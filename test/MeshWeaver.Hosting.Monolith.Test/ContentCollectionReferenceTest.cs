@@ -707,7 +707,7 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
 
     /// <summary>
     /// Tests that Markdown node's default area is $Content, not Catalog.
-    /// This uses the same configuration pattern as LoomConfiguration.cs.
+    /// This uses the same configuration pattern as MemexConfiguration.cs.
     /// When requesting the default area (empty area), it should resolve to $Content for Markdown nodes.
     /// </summary>
     [Fact(Timeout = 15000)]

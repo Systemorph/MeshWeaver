@@ -800,8 +800,7 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
         using var doc = JsonDocument.Parse(contentJson);
         var root = doc.RootElement;
 
-        // Verify expected properties exist
-        root.TryGetProperty("id", out _).Should().BeTrue("Content should have id");
+        // Verify expected properties exist (Todo content has title, category, priority, status - no id)
         root.TryGetProperty("title", out _).Should().BeTrue("Content should have title");
         root.TryGetProperty("category", out _).Should().BeTrue("Content should have category");
         root.TryGetProperty("priority", out _).Should().BeTrue("Content should have priority");

@@ -15,7 +15,7 @@ To add a comment, select the text you want to comment on and click the **Comment
 
 The following paragraph demonstrates how comments appear in a document:
 
-> MeshWeaver is a <!--comment:c1:Alice:Dec 15|Can we add specific metrics here? Like number of users or performance benchmarks?-->powerful platform<!--/comment:c1--> for building <!--comment:c2:Bob:Dec 16|Would be great to include examples like real-time collaboration, shared editing, etc.-->collaborative applications<!--/comment:c2-->. It provides real-time synchronization and <!--comment:c3:Carol:Dec 17|What technology powers this? CRDTs or OT?-->conflict-free editing<!--/comment:c3-->.
+> MeshWeaver is a <!--comment:c1-->powerful platform<!--/comment:c1--> for building <!--comment:c2-->collaborative applications<!--/comment:c2-->. It provides real-time synchronization and <!--comment:c3-->conflict-free editing<!--/comment:c3-->.
 
 In this example:
 - "powerful platform" has a comment asking for more specific metrics
@@ -44,7 +44,7 @@ Text you want to remove appears with a <!--delete:d1:Carol:Dec 20-->red striketh
 
 Here's a paragraph with multiple suggestions:
 
-> Our team has completed the <!--delete:d3:Bob:Dec 22-->initial<!--/delete:d3--><!--insert:i3:Bob:Dec 22-->comprehensive<!--/insert:i3--> analysis of the <!--comment:c4:Carol:Dec 22|Should we cite the source of these market trends?-->market trends<!--/comment:c4-->. We recommend <!--insert:i4:Alice:Dec 23-->immediate action on the following priorities<!--/insert:i4-->:
+> Our team has completed the <!--delete:d3:Bob:Dec 22-->initial<!--/delete:d3--><!--insert:i3:Bob:Dec 22-->comprehensive<!--/insert:i3--> analysis of the <!--comment:c4-->market trends<!--/comment:c4-->. We recommend <!--insert:i4:Alice:Dec 23-->immediate action on the following priorities<!--/insert:i4-->:
 >
 > 1. <!--insert:i5:Bob:Dec 23-->Expand into European markets<!--/insert:i5-->
 > 2. <!--delete:d4:Carol:Dec 23-->Reduce marketing budget<!--/delete:d4--><!--insert:i6:Carol:Dec 23-->Reallocate marketing spend to digital channels<!--/insert:i6-->
@@ -85,9 +85,9 @@ When multiple people edit the same document:
 
 > **Project Proposal** *(3 collaborators editing)*
 >
-> The <!--comment:c5:Dave:Dec 25|This timeline seems too aggressive. Can we discuss?-->proposed timeline<!--/comment:c5--> for Phase 1 is <!--delete:d6-->6 months<!--/delete:d6--><!--insert:i8-->4 months<!--/insert:i8-->. This <!--insert:i9-->aggressive but achievable<!--/insert:i9--> schedule requires:
+> The <!--comment:c5-->proposed timeline<!--/comment:c5--> for Phase 1 is <!--delete:d6-->6 months<!--/delete:d6--><!--insert:i8-->4 months<!--/insert:i8-->. This <!--insert:i9-->aggressive but achievable<!--/insert:i9--> schedule requires:
 >
-> - <!--comment:c6:Eve:Dec 25|We need to confirm headcount with HR first-->Additional resources<!--/comment:c6--> from the engineering team
+> - <!--comment:c6-->Additional resources<!--/comment:c6--> from the engineering team
 > - <!--delete:d7-->Weekly<!--/delete:d7--><!--insert:i10-->Daily<!--/insert:i10--> standup meetings
 > - <!--insert:i11-->A dedicated project manager<!--/insert:i11-->
 

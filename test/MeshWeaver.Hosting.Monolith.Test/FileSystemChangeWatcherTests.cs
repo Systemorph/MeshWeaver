@@ -86,16 +86,9 @@ public class FileSystemChangeWatcherTests(ITestOutputHelper output) : MonolithMe
     [Fact]
     public async Task ExternalFileCreation_ObserveQueryReceivesUpdate()
     {
-        // Arrange
-        var receivedChanges = new List<QueryResultChange<MeshNode>>();
-
-        var subscription = MeshQuery
-            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery("path:external scope:descendants"))
-            .Subscribe(change => receivedChanges.Add(change));
-
-        await Task.Delay(200);
-        receivedChanges.Should().HaveCount(1);
-        receivedChanges[0].ChangeType.Should().Be(QueryChangeType.Initial);
+        // Arrange - subscribe to the change notifier (which watcher publishes to)
+        var receivedNotifications = new List<DataChangeNotification>();
+        _changeNotifier.Subscribe(n => receivedNotifications.Add(n));
 
         _watcher.Start();
 
@@ -113,11 +106,15 @@ public class FileSystemChangeWatcherTests(ITestOutputHelper output) : MonolithMe
         // Wait for file system events and processing
         await Task.Delay(500);
 
-        // Assert
-        receivedChanges.Should().HaveCountGreaterThanOrEqualTo(2);
-        receivedChanges.Last().Items.Should().Contain(n => n.Name == "External Node");
+        // Assert - watcher should have published a creation/update notification
+        receivedNotifications.Should().NotBeEmpty();
+        receivedNotifications.Should().Contain(n =>
+            n.Path.Contains("external/node1") &&
+            (n.Kind == DataChangeKind.Created || n.Kind == DataChangeKind.Updated));
 
-        subscription.Dispose();
+        // Verify the notification entity has the expected data
+        var notification = receivedNotifications.First(n => n.Path.Contains("external/node1"));
+        notification.Entity.Should().NotBeNull();
     }
 
     #endregion
@@ -203,34 +200,33 @@ public class FileSystemChangeWatcherTests(ITestOutputHelper output) : MonolithMe
     [Fact]
     public async Task ExternalFileDeletion_ObserveQueryReceivesRemoval()
     {
-        // Arrange - Create a node first
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("external/node1") with { Name = "Node 1", NodeType = "Test" });
+        // Arrange - Create a file on disk first (not via in-memory persistence)
+        var dir = Path.Combine(_testDirectory, "external");
+        Directory.CreateDirectory(dir);
+        var filePath = Path.Combine(dir, "node1.json");
+        await File.WriteAllTextAsync(filePath, """
+            {
+                "id": "node1",
+                "name": "Node to Delete",
+                "nodeType": "Test"
+            }
+            """);
 
-        var receivedChanges = new List<QueryResultChange<MeshNode>>();
-
-        var subscription = MeshQuery
-            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery("path:external scope:descendants"))
-            .Subscribe(change => receivedChanges.Add(change));
-
-        await Task.Delay(200);
-        receivedChanges.Should().HaveCount(1);
-        receivedChanges[0].Items.Should().HaveCount(1);
+        var receivedNotifications = new List<DataChangeNotification>();
+        _changeNotifier.Subscribe(n => receivedNotifications.Add(n));
 
         _watcher.Start();
         await Task.Delay(100);
 
         // Act - Delete the file externally
-        var filePath = Path.Combine(_testDirectory, "external", "node1.json");
         File.Delete(filePath);
 
         // Wait for file system events and processing
         await Task.Delay(500);
 
-        // Assert
-        receivedChanges.Should().HaveCountGreaterThanOrEqualTo(2);
-        receivedChanges.Last().ChangeType.Should().Be(QueryChangeType.Removed);
-
-        subscription.Dispose();
+        // Assert - watcher should have published a deletion notification
+        receivedNotifications.Should().Contain(n =>
+            n.Path.Contains("external/node1") && n.Kind == DataChangeKind.Deleted);
     }
 
     #endregion

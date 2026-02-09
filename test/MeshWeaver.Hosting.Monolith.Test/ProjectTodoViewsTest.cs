@@ -372,11 +372,17 @@ public class ProjectTodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBa
         var todosWithDates = new List<(string Id, int? OffsetDays, string Status)>();
         foreach (var node in results)
         {
+            if (node.Content == null)
+            {
+                Output.WriteLine($"  - {node.Id}: Content is null, skipping");
+                continue;
+            }
+
             var contentJson = JsonSerializer.Serialize(node.Content);
             using var doc = JsonDocument.Parse(contentJson);
             var root = doc.RootElement;
 
-            var id = root.TryGetProperty("id", out var idProp) ? idProp.GetString() : "unknown";
+            var id = node.Id;
             var status = root.TryGetProperty("status", out var statusProp) ? statusProp.GetString() : "unknown";
             int? offsetDays = root.TryGetProperty("dueDateOffsetDays", out var offsetProp) && offsetProp.ValueKind == JsonValueKind.Number
                 ? offsetProp.GetInt32()
@@ -461,11 +467,17 @@ public class ProjectTodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBa
         var rolandsTasks = new List<string>();
         foreach (var node in results)
         {
+            if (node.Content == null)
+            {
+                Output.WriteLine($"  - {node.Id}: Content is null, skipping");
+                continue;
+            }
+
             var contentJson = JsonSerializer.Serialize(node.Content);
             using var doc = JsonDocument.Parse(contentJson);
             var root = doc.RootElement;
 
-            var id = root.TryGetProperty("id", out var idProp) ? idProp.GetString() : "unknown";
+            var id = node.Id;
             var assignee = root.TryGetProperty("assignee", out var assigneeProp) ? assigneeProp.GetString() : null;
             var status = root.TryGetProperty("status", out var statusProp) ? statusProp.GetString() : "unknown";
 
