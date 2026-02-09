@@ -13,10 +13,13 @@
     <ProjectReference Include="..\..\..\src\MeshWeaver.ServiceProvider\MeshWeaver.ServiceProvider.csproj" />
     <ProjectReference Include="..\..\Loom.Portal.Shared\Loom.Portal.Shared.csproj" />
     <ProjectReference Include="..\Loom.Portal.ServiceDefaults\Loom.Portal.ServiceDefaults.csproj" />
+    <ProjectReference Include="..\..\..\src\MeshWeaver.Hosting.Cosmos\MeshWeaver.Hosting.Cosmos.csproj" />
   </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="Aspire.Azure.Data.Tables" />
+    <PackageReference Include="Aspire.Microsoft.Azure.Cosmos" />
+    <PackageReference Include="Aspire.Azure.Storage.Blobs" />
     <PackageReference Include="Microsoft.Orleans.Clustering.AzureStorage" />
     <PackageReference Include="Microsoft.Orleans.Server" />
     <PackageReference Include="Microsoft.Orleans.Sdk" />
