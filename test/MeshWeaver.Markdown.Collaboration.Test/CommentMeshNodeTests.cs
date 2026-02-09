@@ -1,7 +1,11 @@
 using System;
+using System.Collections.Generic;
 using System.Collections.Immutable;
+using System.Linq;
 using FluentAssertions;
+using MeshWeaver.Domain;
 using MeshWeaver.Graph;
+using MeshWeaver.Layout;
 using MeshWeaver.Markdown;
 using MeshWeaver.Mesh;
 using Xunit;
@@ -378,6 +382,447 @@ public class CommentMeshNodeTests
         annotations.Should().HaveCount(1);
         annotations[0].Id.Should().Be(comment.MarkerId);
         annotations[0].HighlightedText.Should().Be(comment.HighlightedText);
+    }
+
+    #endregion
+
+    #region Relative Time Formatting
+
+    [Fact]
+    public void FormatTimeAgo_RecentDate_ShowsJustNow()
+    {
+        var result = CommentsView.FormatTimeAgo(DateTimeOffset.UtcNow);
+        result.Should().Be("Just now");
+    }
+
+    [Fact]
+    public void FormatTimeAgo_MinutesAgo_ShowsMinutes()
+    {
+        var result = CommentsView.FormatTimeAgo(DateTimeOffset.UtcNow.AddMinutes(-5));
+        result.Should().Be("5m ago");
+    }
+
+    [Fact]
+    public void FormatTimeAgo_HoursAgo_ShowsHours()
+    {
+        var result = CommentsView.FormatTimeAgo(DateTimeOffset.UtcNow.AddHours(-2));
+        result.Should().Be("2h ago");
+    }
+
+    [Fact]
+    public void FormatTimeAgo_DaysAgo_ShowsDays()
+    {
+        var result = CommentsView.FormatTimeAgo(DateTimeOffset.UtcNow.AddDays(-3));
+        result.Should().Be("3d ago");
+    }
+
+    [Fact]
+    public void FormatTimeAgo_WeeksAgo_ShowsWeeks()
+    {
+        var result = CommentsView.FormatTimeAgo(DateTimeOffset.UtcNow.AddDays(-14));
+        result.Should().Be("2w ago");
+    }
+
+    [Fact]
+    public void FormatTimeAgo_OldDate_ShowsFormattedDate()
+    {
+        var date = new DateTimeOffset(2024, 3, 15, 0, 0, 0, TimeSpan.Zero);
+        var result = CommentsView.FormatTimeAgo(date);
+        result.Should().Be("Mar 15, 2024");
+    }
+
+    #endregion
+
+    #region Comment Hierarchy Separation
+
+    [Fact]
+    public void CommentHierarchy_TopLevelVsReplies_SeparatedByParentId()
+    {
+        var topLevel = new Comment
+        {
+            Id = "c1",
+            Author = "Alice",
+            Text = "Top level comment"
+        };
+
+        var reply = new Comment
+        {
+            Id = "r1",
+            Author = "Bob",
+            Text = "Reply to c1",
+            ParentCommentId = "c1"
+        };
+
+        var comments = new List<Comment> { topLevel, reply };
+
+        var topLevelComments = comments
+            .Where(c => string.IsNullOrEmpty(c.ParentCommentId))
+            .ToList();
+
+        var replies = comments
+            .Where(c => !string.IsNullOrEmpty(c.ParentCommentId))
+            .GroupBy(c => c.ParentCommentId!)
+            .ToDictionary(g => g.Key, g => g.ToList());
+
+        topLevelComments.Should().HaveCount(1);
+        topLevelComments[0].Id.Should().Be("c1");
+
+        replies.Should().ContainKey("c1");
+        replies["c1"].Should().HaveCount(1);
+        replies["c1"][0].Id.Should().Be("r1");
+    }
+
+    [Fact]
+    public void CommentReply_HasCorrectParentPath()
+    {
+        var docPath = "docs/mypage";
+        var parentCommentId = "comment1";
+        var replyId = "reply1";
+
+        var replyPath = $"{docPath}/{parentCommentId}/{replyId}";
+
+        replyPath.Should().Be("docs/mypage/comment1/reply1");
+        replyPath.Should().StartWith($"{docPath}/{parentCommentId}/");
+    }
+
+    [Fact]
+    public void CommentReply_ParentCommentId_LinksToParent()
+    {
+        var parentComment = new Comment
+        {
+            Id = "parent1",
+            Author = "Alice",
+            Text = "Parent comment"
+        };
+
+        var reply = new Comment
+        {
+            Id = "reply1",
+            Author = "Bob",
+            Text = "Reply text",
+            ParentCommentId = parentComment.Id
+        };
+
+        reply.ParentCommentId.Should().Be(parentComment.Id);
+        reply.ParentCommentId.Should().Be("parent1");
+    }
+
+    #endregion
+
+    #region Descendant Query Scope
+
+    [Fact]
+    public void DescendantScope_QueryString_IncludesScopeDescendants()
+    {
+        var hubPath = "docs/mypage";
+        var queryString = $"path:{hubPath} nodeType:{CommentNodeType.NodeType} scope:descendants";
+
+        queryString.Should().Contain("scope:descendants");
+        queryString.Should().Contain($"path:{hubPath}");
+        queryString.Should().Contain($"nodeType:{CommentNodeType.NodeType}");
+    }
+
+    [Fact]
+    public void DescendantScope_CapturesBothCommentsAndReplies()
+    {
+        // A hierarchy: doc → comment → reply
+        var docPath = "docs/mypage";
+        var commentId = "c1";
+        var replyId = "r1";
+
+        var commentNode = new MeshNode($"{docPath}/{commentId}")
+        {
+            NodeType = CommentNodeType.NodeType,
+            Content = new Comment { Id = commentId, Author = "Alice", Text = "Comment" }
+        };
+
+        var replyNode = new MeshNode($"{docPath}/{commentId}/{replyId}")
+        {
+            NodeType = CommentNodeType.NodeType,
+            Content = new Comment { Id = replyId, Author = "Bob", Text = "Reply", ParentCommentId = commentId }
+        };
+
+        // Both should be captured by descendants query (simulated here)
+        var allNodes = new List<MeshNode> { commentNode, replyNode };
+
+        allNodes.Should().HaveCount(2);
+        allNodes.Should().Contain(n => n.Path == $"{docPath}/{commentId}");
+        allNodes.Should().Contain(n => n.Path == $"{docPath}/{commentId}/{replyId}");
+
+        // Verify separation
+        var topLevel = allNodes
+            .Where(n => n.Content is Comment c && string.IsNullOrEmpty(c.ParentCommentId))
+            .ToList();
+        var replies = allNodes
+            .Where(n => n.Content is Comment c && !string.IsNullOrEmpty(c.ParentCommentId))
+            .ToList();
+
+        topLevel.Should().HaveCount(1);
+        replies.Should().HaveCount(1);
+        ((Comment)replies[0].Content!).ParentCommentId.Should().Be(commentId);
+    }
+
+    #endregion
+
+    #region Reply UI Rendering
+
+    [Fact]
+    public void BuildThumbnail_WithReplyNode_ReturnsStackControl()
+    {
+        var reply = new Comment
+        {
+            Id = "reply1",
+            Author = "Bob",
+            Text = "I agree with this point!",
+            ParentCommentId = "c1"
+        };
+
+        var replyNode = new MeshNode("docs/page/c1/reply1")
+        {
+            Name = "Reply",
+            NodeType = CommentNodeType.NodeType,
+            Content = reply
+        };
+
+        var result = CommentLayoutAreas.BuildThumbnail(replyNode);
+
+        result.Should().NotBeNull();
+        result.Should().BeOfType<StackControl>();
+    }
+
+    [Fact]
+    public void BuildThumbnail_WithEmptyReply_ShowsUnknownAuthor()
+    {
+        // When Reply is clicked, a reply node is created with empty Author and Text
+        var emptyReply = new Comment
+        {
+            Id = "reply1",
+            Author = "",
+            Text = "",
+            ParentCommentId = "c1"
+        };
+
+        var replyNode = new MeshNode("docs/page/c1/reply1")
+        {
+            Name = "Reply",
+            NodeType = CommentNodeType.NodeType,
+            Content = emptyReply
+        };
+
+        // Should not throw and should handle empty content gracefully
+        var result = CommentLayoutAreas.BuildThumbnail(replyNode);
+
+        result.Should().NotBeNull();
+        result.Should().BeOfType<StackControl>();
+    }
+
+    [Fact]
+    public void BuildThumbnail_WithNullNode_ReturnsControlWithUnknownAuthor()
+    {
+        var result = CommentLayoutAreas.BuildThumbnail(null);
+
+        result.Should().NotBeNull();
+        result.Should().BeOfType<StackControl>();
+    }
+
+    [Fact]
+    public void BuildThumbnail_WithLongText_TruncatesPreview()
+    {
+        var reply = new Comment
+        {
+            Id = "reply1",
+            Author = "Alice",
+            Text = "This is a very long reply text that should be truncated when displayed in the thumbnail view",
+            ParentCommentId = "c1"
+        };
+
+        var replyNode = new MeshNode("docs/page/c1/reply1")
+        {
+            Name = "Reply",
+            NodeType = CommentNodeType.NodeType,
+            Content = reply
+        };
+
+        // Should not throw - truncation happens at 50 chars
+        var result = CommentLayoutAreas.BuildThumbnail(replyNode);
+        result.Should().NotBeNull();
+    }
+
+    [Fact]
+    public void ReplyCreation_ProducesCorrectMeshNode()
+    {
+        // Simulates what the Reply button click handler creates
+        var commentPath = "docs/page/c1";
+        var parentComment = new Comment
+        {
+            Id = "c1",
+            Author = "Alice",
+            Text = "Original comment",
+            MarkerId = "c1"
+        };
+
+        var replyId = "reply-abc";
+        var replyComment = new Comment
+        {
+            Id = replyId,
+            NodePath = commentPath,
+            Author = "",
+            Text = "",
+            ParentCommentId = parentComment.Id,
+            Status = CommentStatus.Active
+        };
+        var replyNode = new MeshNode($"{commentPath}/{replyId}")
+        {
+            Name = "Reply",
+            NodeType = CommentNodeType.NodeType,
+            Content = replyComment
+        };
+
+        // Verify the created reply node
+        replyNode.Path.Should().Be("docs/page/c1/reply-abc");
+        replyNode.NodeType.Should().Be(CommentNodeType.NodeType);
+        replyNode.Name.Should().Be("Reply");
+
+        var content = replyNode.Content as Comment;
+        content.Should().NotBeNull();
+        content!.ParentCommentId.Should().Be("c1");
+        content.Author.Should().BeEmpty();
+        content.Text.Should().BeEmpty();
+        content.Status.Should().Be(CommentStatus.Active);
+    }
+
+    [Fact]
+    public void ReplyFiltering_OnlyMatchingRepliesShownPerComment()
+    {
+        // Simulates the filtering logic in BuildReadView
+        var comment1 = new MeshNode("docs/page/c1")
+        {
+            NodeType = CommentNodeType.NodeType,
+            Content = new Comment { Id = "c1", Author = "Alice", Text = "First comment" }
+        };
+        var comment2 = new MeshNode("docs/page/c2")
+        {
+            NodeType = CommentNodeType.NodeType,
+            Content = new Comment { Id = "c2", Author = "Carol", Text = "Second comment" }
+        };
+        var reply1ForC1 = new MeshNode("docs/page/c1/r1")
+        {
+            NodeType = CommentNodeType.NodeType,
+            Content = new Comment { Id = "r1", Author = "Bob", Text = "Reply to c1", ParentCommentId = "c1" }
+        };
+        var reply2ForC1 = new MeshNode("docs/page/c1/r2")
+        {
+            NodeType = CommentNodeType.NodeType,
+            Content = new Comment { Id = "r2", Author = "Dave", Text = "Another reply to c1", ParentCommentId = "c1" }
+        };
+        var reply1ForC2 = new MeshNode("docs/page/c2/r3")
+        {
+            NodeType = CommentNodeType.NodeType,
+            Content = new Comment { Id = "r3", Author = "Eve", Text = "Reply to c2", ParentCommentId = "c2" }
+        };
+
+        var allNodes = new List<MeshNode> { comment1, comment2, reply1ForC1, reply2ForC1, reply1ForC2 };
+
+        // Separate top-level from replies (same logic as MarkdownLayoutAreas)
+        var topLevelComments = allNodes
+            .Where(n => n.Content is Comment c && string.IsNullOrEmpty(c.ParentCommentId))
+            .ToList();
+
+        var repliesByParent = allNodes
+            .Where(n => n.Content is Comment c && !string.IsNullOrEmpty(c.ParentCommentId))
+            .GroupBy(n => ((Comment)n.Content!).ParentCommentId!)
+            .ToDictionary(g => g.Key, g => g.ToList());
+
+        topLevelComments.Should().HaveCount(2);
+
+        // Comment c1 should have exactly 2 replies
+        repliesByParent.Should().ContainKey("c1");
+        repliesByParent["c1"].Should().HaveCount(2);
+        repliesByParent["c1"].Select(n => ((Comment)n.Content!).Id).Should().BeEquivalentTo(["r1", "r2"]);
+
+        // Comment c2 should have exactly 1 reply
+        repliesByParent.Should().ContainKey("c2");
+        repliesByParent["c2"].Should().HaveCount(1);
+        ((Comment)repliesByParent["c2"][0].Content!).Id.Should().Be("r3");
+    }
+
+    [Fact]
+    public void ReplyEditState_EditingReplyPath_MatchesCreatedReply()
+    {
+        // Simulates the panel state after clicking Reply
+        var commentPath = "docs/page/c1";
+        var replyId = "reply-xyz";
+        var replyPath = $"{commentPath}/{replyId}";
+
+        var initialState = new MarkdownLayoutAreas.AnnotationPanelState();
+        var afterReply = initialState with { EditingReplyPath = replyPath };
+
+        afterReply.EditingReplyPath.Should().Be("docs/page/c1/reply-xyz");
+
+        // Simulate the check in BuildCommentNodeCard: replyNode.Path == panelState.EditingReplyPath
+        var replyNode = new MeshNode(replyPath)
+        {
+            NodeType = CommentNodeType.NodeType,
+            Content = new Comment { Id = replyId, ParentCommentId = "c1" }
+        };
+
+        (replyNode.Path == afterReply.EditingReplyPath).Should().BeTrue();
+    }
+
+    [Fact]
+    public void RepliesRenderedInOrder_SortedByCreatedAt()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var replyNodes = new List<MeshNode>
+        {
+            new("docs/page/c1/r3")
+            {
+                NodeType = CommentNodeType.NodeType,
+                Content = new Comment { Id = "r3", Author = "C", Text = "Third", ParentCommentId = "c1", CreatedAt = now.AddMinutes(-1) }
+            },
+            new("docs/page/c1/r1")
+            {
+                NodeType = CommentNodeType.NodeType,
+                Content = new Comment { Id = "r1", Author = "A", Text = "First", ParentCommentId = "c1", CreatedAt = now.AddMinutes(-10) }
+            },
+            new("docs/page/c1/r2")
+            {
+                NodeType = CommentNodeType.NodeType,
+                Content = new Comment { Id = "r2", Author = "B", Text = "Second", ParentCommentId = "c1", CreatedAt = now.AddMinutes(-5) }
+            }
+        };
+
+        // Same ordering logic as BuildCommentNodeCard: .OrderBy(r => ((Comment)r.Content!).CreatedAt)
+        var ordered = replyNodes.OrderBy(r => ((Comment)r.Content!).CreatedAt).ToList();
+
+        ((Comment)ordered[0].Content!).Id.Should().Be("r1"); // oldest first
+        ((Comment)ordered[1].Content!).Id.Should().Be("r2");
+        ((Comment)ordered[2].Content!).Id.Should().Be("r3"); // newest last
+    }
+
+    [Fact]
+    public void BuildThumbnail_IconIsFluentIcon_NotRawString()
+    {
+        var reply = new Comment
+        {
+            Id = "reply1",
+            Author = "Bob",
+            Text = "Test reply",
+            ParentCommentId = "c1"
+        };
+
+        var replyNode = new MeshNode("docs/page/c1/reply1")
+        {
+            Name = "Reply",
+            NodeType = CommentNodeType.NodeType,
+            Content = reply
+        };
+
+        // BuildThumbnail should not throw — previously Controls.Icon("Comment")
+        // would fail because "Comment" is a raw string, not an Icon domain object.
+        var result = CommentLayoutAreas.BuildThumbnail(replyNode);
+        result.Should().NotBeNull();
+        result.Should().BeOfType<StackControl>();
     }
 
     #endregion

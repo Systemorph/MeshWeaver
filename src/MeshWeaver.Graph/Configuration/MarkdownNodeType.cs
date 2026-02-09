@@ -24,7 +24,7 @@ public static class MarkdownNodeType
     {
         Name = "Markdown",
         Description = "A markdown node with collaborative editing support",
-        Icon = "Document",
+        Icon = "/static/NodeTypeIcons/document.svg",
         HubConfiguration = config => config
             .AddMarkdownViews()
             .AddMeshDataSource()

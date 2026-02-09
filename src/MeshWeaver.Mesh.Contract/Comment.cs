@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.ComponentModel;
 using System.ComponentModel.DataAnnotations;
 
 namespace MeshWeaver.Mesh;
@@ -28,23 +29,27 @@ public record Comment
     /// <summary>
     /// Unique identifier for the comment.
     /// </summary>
+    [Browsable(false)]
     [Key]
     public string Id { get; init; } = Guid.NewGuid().ToString();
 
     /// <summary>
     /// Path of the node this comment belongs to.
     /// </summary>
+    [Browsable(false)]
     public string NodePath { get; init; } = string.Empty;
 
     /// <summary>
     /// Marker ID linking this comment to highlighted text in the document.
     /// Corresponds to the ID in &lt;!--comment:markerId--&gt; markers.
     /// </summary>
+    [Browsable(false)]
     public string? MarkerId { get; init; }
 
     /// <summary>
     /// The original text that was highlighted when the comment was created.
     /// </summary>
+    [Browsable(false)]
     public string? HighlightedText { get; init; }
 
     /// <summary>
@@ -60,22 +65,26 @@ public record Comment
     /// <summary>
     /// When the comment was created.
     /// </summary>
+    [Browsable(false)]
     public DateTimeOffset CreatedAt { get; init; } = DateTimeOffset.UtcNow;
 
     /// <summary>
     /// Optional parent comment ID for threaded discussions.
     /// Null for top-level comments.
     /// </summary>
+    [Browsable(false)]
     public string? ParentCommentId { get; init; }
 
     /// <summary>
     /// Status of the comment (Active or Resolved).
     /// </summary>
+    [Browsable(false)]
     public CommentStatus Status { get; init; } = CommentStatus.Active;
 
     /// <summary>
     /// Replies to this comment (for threaded discussions).
     /// </summary>
+    [Browsable(false)]
     public ImmutableList<Comment> Replies { get; init; } = ImmutableList<Comment>.Empty;
 }
 
