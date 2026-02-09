@@ -317,13 +317,26 @@ public static class MarkdownLayoutAreas
             .WithStyle("flex: 1; min-width: 0; max-width: 750px; position: relative; line-height: 1.7; font-size: 1rem;")
             .WithView(new MarkdownControl(content));
 
-        // Right: Annotations column - all annotations (comments + track changes with Accept/Reject buttons)
+        // Right: Annotations column - comments only visible; track change cards hidden (used as action targets)
+        var commentAnnotations = annotations.Where(a => a.Type == AnnotationType.Comment).ToList();
+        var trackChangeAnnotations = annotations.Where(a => a.Type != AnnotationType.Comment).ToList();
+
+        var columnStyle = commentAnnotations.Count > 0
+            ? "flex: 0 0 340px; min-width: 300px; max-width: 380px; position: relative;"
+            : "flex: 0 0 0; width: 0; min-width: 0; overflow: hidden; position: relative;";
         var annotationsColumn = Controls.Stack
             .WithClass("annotations-column")
-            .WithStyle("flex: 0 0 340px; min-width: 300px; max-width: 380px; position: relative;");
+            .WithStyle(columnStyle);
 
-        // Build annotation cards for all annotations (comments get Reply/Resolve, track changes get Accept/Reject)
-        foreach (var annotation in annotations)
+        // Visible comment cards in the side panel
+        foreach (var annotation in commentAnnotations)
+        {
+            annotationsColumn = annotationsColumn.WithView(
+                BuildAnnotationCard(host, node, rawContent, annotation, panelState, panelStateSubject, viewModeSubject));
+        }
+
+        // Hidden track change cards (Accept/Reject Blazor buttons as action targets for inline popover JS)
+        foreach (var annotation in trackChangeAnnotations)
         {
             annotationsColumn = annotationsColumn.WithView(
                 BuildAnnotationCard(host, node, rawContent, annotation, panelState, panelStateSubject, viewModeSubject));
@@ -633,13 +646,13 @@ public static class MarkdownLayoutAreas
 
         var splitRect = splitLayout.getBoundingClientRect();
 
-        var cards = annotationsCol.querySelectorAll('.annotation-card');
+        // Only draw lines for comment cards (track change cards are hidden)
+        var cards = annotationsCol.querySelectorAll('.annotation-card.annotation-type-comment');
         cards.forEach(function(card) {
             var annotationId = getAnnotationIdFromCard(card);
             if (!annotationId) return;
             var color = getAnnotationColor(card);
-            var marker = container.querySelector('[data-comment-id=""' + annotationId + '""]') ||
-                         container.querySelector('[data-change-id=""' + annotationId + '""]');
+            var marker = container.querySelector('[data-comment-id=""' + annotationId + '""]');
 
             if (marker && card.offsetParent) {
                 var markerRect = marker.getBoundingClientRect();
@@ -676,15 +689,15 @@ public static class MarkdownLayoutAreas
         var annotationsCol = document.querySelector('.annotations-column');
         if (!container || !annotationsCol) return;
 
-        var cards = annotationsCol.querySelectorAll('.annotation-card');
+        // Only position comment cards (track change cards are hidden)
+        var cards = annotationsCol.querySelectorAll('.annotation-card.annotation-type-comment');
         var positions = [];
 
         cards.forEach(function(card) {
             var annotationId = getAnnotationIdFromCard(card);
             if (!annotationId) return;
 
-            var marker = container.querySelector('[data-comment-id=""' + annotationId + '""]') ||
-                         container.querySelector('[data-change-id=""' + annotationId + '""]');
+            var marker = container.querySelector('[data-comment-id=""' + annotationId + '""]');
 
             if (marker) {
                 var markerRect = marker.getBoundingClientRect();
@@ -898,28 +911,19 @@ public static class MarkdownLayoutAreas
     box-shadow: 0 0 0 2px var(--accent-fill-rest);
     border-radius: 3px;
 }
-/* Track changes: hidden inline by default, text looks normal */
-.track-insert {
-    background: transparent !important;
-    border-bottom: none !important;
-    text-decoration: none !important;
-    color: inherit !important;
-    padding: 0 !important;
-    cursor: pointer;
-    position: relative;
-}
-.track-delete {
-    background: transparent !important;
-    border-bottom: none !important;
-    text-decoration: none !important;
-    color: inherit !important;
-    padding: 0 !important;
+/* Track changes: visible inline with highlighting, click to show popover */
+.track-insert, .track-delete {
     cursor: pointer;
     position: relative;
 }
 /* Comment highlights remain visible */
 .comment-highlight {
     cursor: pointer;
+}
+/* Hide track change cards in side panel (they exist only as Blazor action targets) */
+.annotation-type-insert,
+.annotation-type-delete {
+    display: none !important;
 }
 </style>
         ");
