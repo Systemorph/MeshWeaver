@@ -28,7 +28,8 @@ public class AnnotationMarkdownExtensionTests
         var result = AnnotationMarkdownExtension.TransformAnnotations(markdown);
 
         result.Should().Contain("<span class=\"track-insert\" data-change-id=\"i1\">");
-        result.Should().Contain(">new text</span>");
+        result.Should().Contain(">new text<div class=\"annotation-margin-label\">");
+        result.Should().Contain("Inserted by Unknown");
     }
 
     [Fact]
@@ -39,7 +40,8 @@ public class AnnotationMarkdownExtensionTests
         var result = AnnotationMarkdownExtension.TransformAnnotations(markdown);
 
         result.Should().Contain("<span class=\"track-delete\" data-change-id=\"d1\">");
-        result.Should().Contain(">old text</span>");
+        result.Should().Contain(">old text<div class=\"annotation-margin-label\">");
+        result.Should().Contain("Deleted by Unknown");
     }
 
     [Fact]
@@ -243,16 +245,18 @@ public class AnnotationMarkdownExtensionTests
     }
 
     [Fact]
-    public void TransformAnnotations_TrackChange_ProducesCleanSpan()
+    public void TransformAnnotations_TrackChange_ProducesSpanWithPopover()
     {
         var markdown = "<!--insert:i1-->new text<!--/insert:i1-->";
 
         var result = AnnotationMarkdownExtension.TransformAnnotations(markdown);
 
-        // Clean span without inline buttons (buttons are in side panel)
+        // Track change span includes inline popover for Accept/Reject
         result.Should().Contain("<span class=\"track-insert\" data-change-id=\"i1\">");
-        result.Should().Contain(">new text</span>");
-        result.Should().NotContain("annotation-margin-label");
+        result.Should().Contain(">new text<div class=\"annotation-margin-label\">");
+        result.Should().Contain("annotation-margin-label");
+        result.Should().Contain("accept-btn");
+        result.Should().Contain("reject-btn");
     }
 
     [Fact]
