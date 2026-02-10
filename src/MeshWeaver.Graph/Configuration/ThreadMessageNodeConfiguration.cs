@@ -18,7 +18,7 @@ public static class ThreadMessageNodeConfiguration
     {
         Name = "Thread Message",
         Description = "A single message in a conversation thread",
-        Icon = "Chat",
+        Icon = "/static/NodeTypeIcons/message.svg",
         HubConfiguration = config => config
             .AddThreadMessageViews()
             .AddMeshDataSource(source => source.WithContentType<ThreadMessage>())

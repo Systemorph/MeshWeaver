@@ -51,7 +51,7 @@ public static class GraphConfigurationExtensions
             {
                 Name = "Node Type",
                 Description = "Definition for a node type",
-                Icon = "Code",
+                Icon = "/static/NodeTypeIcons/code.svg",
                 HubConfiguration = config => config
                     .AddMeshDataSource(source => source
                         .WithContentType<NodeTypeDefinition>()
@@ -65,7 +65,7 @@ public static class GraphConfigurationExtensions
             {
                 Name = "Agent",
                 Description = "AI Agent configuration",
-                Icon = "Bot",
+                Icon = "/static/NodeTypeIcons/bot.svg",
                 HubConfiguration = config => config
                     .AddMeshDataSource(source => source
                         .WithContentType<AgentConfiguration>())
@@ -122,6 +122,9 @@ public static class GraphConfigurationExtensions
             // MeshCatalog loads NodeTypeConfiguration from compiled assemblies when nodes are accessed.
             // Content collections should be configured by the caller (e.g., MemexConfiguration.ConfigureMemexMesh).
             builder.ConfigureHub(config => MeshNodeLayoutAreas.AddDefaultLayoutAreas(config)
+                .AddContentCollections()
+                .AddEmbeddedResourceContentCollection("NodeTypeIcons",
+                    typeof(GraphConfigurationExtensions).Assembly, "Icons")
                 .WithServices(services =>
                 {
                     // Register MeshNodeCompilationService as both concrete and interface

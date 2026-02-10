@@ -1,6 +1,8 @@
 using System.Reactive.Linq;
 using MeshWeaver.AI;
+using MeshWeaver.Application.Styles;
 using MeshWeaver.Data;
+using MeshWeaver.Domain;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Mesh;
@@ -118,7 +120,7 @@ public static class ThreadMessageLayoutAreas
             bubble = bubble.WithView(Controls.Stack
                 .WithOrientation(Orientation.Horizontal)
                 .WithStyle("margin-top: 8px; padding-top: 8px; border-top: 1px solid rgba(255,255,255,0.2);")
-                .WithView(Controls.Icon("ArrowRight").WithStyle("font-size: 14px;"))
+                .WithView(Controls.Icon(FluentIcons.ArrowRight(IconSize.Size16)).WithStyle("font-size: 14px;"))
                 .WithView(new NavLinkControl("View delegation", null, $"/{message.DelegationPath}/Thread")));
         }
 
@@ -152,7 +154,7 @@ public static class ThreadMessageLayoutAreas
             bubble = bubble.WithView(Controls.Stack
                 .WithOrientation(Orientation.Horizontal)
                 .WithStyle("margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--neutral-stroke-rest);")
-                .WithView(Controls.Icon("ArrowRight").WithStyle("font-size: 14px;"))
+                .WithView(Controls.Icon(FluentIcons.ArrowRight(IconSize.Size16)).WithStyle("font-size: 14px;"))
                 .WithView(new NavLinkControl("View delegation", null, $"/{message.DelegationPath}/Thread")));
         }
 

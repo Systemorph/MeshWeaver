@@ -164,7 +164,7 @@ public static class CommentsView
         return card;
     }
 
-    private static string FormatTimeAgo(DateTimeOffset dateTime)
+    internal static string FormatTimeAgo(DateTimeOffset dateTime)
     {
         var timeSpan = DateTimeOffset.UtcNow - dateTime;
 

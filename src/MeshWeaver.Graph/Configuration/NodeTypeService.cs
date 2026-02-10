@@ -229,7 +229,7 @@ internal class NodeTypeService : INodeTypeService, IDisposable
             {
                 // NodeType config is compiled - return combined config immediately
                 var cachedHubConfig = GetCachedHubConfiguration(nodeType);
-                return node with { HubConfiguration = cachedHubConfig };
+                return CopyIconFromNodeType(node with { HubConfiguration = cachedHubConfig }, nodeType);
             }
 
             // Check if this is a built-in NodeType (registered via AddMeshNodes)
@@ -237,12 +237,12 @@ internal class NodeTypeService : INodeTypeService, IDisposable
                 builtInNode.HubConfiguration != null)
             {
                 // Use the built-in configuration directly
-                return node with { HubConfiguration = builtInNode.HubConfiguration };
+                return CopyIconFromNodeType(node with { HubConfiguration = builtInNode.HubConfiguration }, nodeType);
             }
 
             // NodeType not compiled yet - return with whatever default config is available
             // Use EnrichWithNodeTypeAsync for full async compilation support
-            return node with { HubConfiguration = GetCachedHubConfiguration(nodeType) };
+            return CopyIconFromNodeType(node with { HubConfiguration = GetCachedHubConfiguration(nodeType) }, nodeType);
         }
 
         // No NodeType - return default config if available
@@ -270,7 +270,7 @@ internal class NodeTypeService : INodeTypeService, IDisposable
             if (_hubConfigurations.ContainsKey(nodeType))
             {
                 // NodeType config is compiled - return combined config immediately
-                return node with { HubConfiguration = GetCachedHubConfiguration(nodeType) };
+                return CopyIconFromNodeType(node with { HubConfiguration = GetCachedHubConfiguration(nodeType) }, nodeType);
             }
 
             // Check if this is a built-in NodeType (registered via AddMeshNodes)
@@ -278,7 +278,7 @@ internal class NodeTypeService : INodeTypeService, IDisposable
                 builtInNode.HubConfiguration != null)
             {
                 // Use the built-in configuration directly
-                return node with { HubConfiguration = builtInNode.HubConfiguration };
+                return CopyIconFromNodeType(node with { HubConfiguration = builtInNode.HubConfiguration }, nodeType);
             }
 
             // NodeType not compiled yet - trigger async compilation and wait
@@ -286,7 +286,7 @@ internal class NodeTypeService : INodeTypeService, IDisposable
             await GetAssemblyPathAsync(nodeType, ct);
 
             // After compilation, check cache again
-            return node with { HubConfiguration = GetCachedHubConfiguration(nodeType) };
+            return CopyIconFromNodeType(node with { HubConfiguration = GetCachedHubConfiguration(nodeType) }, nodeType);
         }
 
         // No NodeType - return default config if available
@@ -296,6 +296,20 @@ internal class NodeTypeService : INodeTypeService, IDisposable
             return node with { HubConfiguration = defaultConfig };
         }
 
+        return node;
+    }
+
+    /// <summary>
+    /// Copies the Icon from the built-in node type definition to the instance if the instance has no Icon set.
+    /// </summary>
+    private MeshNode CopyIconFromNodeType(MeshNode node, string nodeType)
+    {
+        if (string.IsNullOrEmpty(node.Icon) &&
+            meshConfiguration.Nodes.TryGetValue(nodeType, out var builtInNode) &&
+            !string.IsNullOrEmpty(builtInNode.Icon))
+        {
+            return node with { Icon = builtInNode.Icon };
+        }
         return node;
     }
 

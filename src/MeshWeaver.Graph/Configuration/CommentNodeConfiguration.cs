@@ -17,7 +17,7 @@ public static class CommentNodeConfiguration
     {
         Name = "Comment",
         Description = "A comment on a document node",
-        Icon = "Comment",
+        Icon = "/static/NodeTypeIcons/comment.svg",
         HubConfiguration = config => config
             .AddCommentNodeViews()
             .AddMeshDataSource(source => source.WithContentType<Comment>())
