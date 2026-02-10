@@ -15,7 +15,9 @@ namespace MeshWeaver.Hosting.Cosmos;
 /// <summary>
 /// Factory for creating CosmosStorageAdapter instances from IOptions&lt;CosmosStorageOptions&gt;.
 /// </summary>
-public class CosmosStorageAdapterFactory(IOptions<CosmosStorageOptions> options) : IStorageAdapterFactory
+public class CosmosStorageAdapterFactory(
+    IOptions<CosmosStorageOptions> options,
+    ILogger<CosmosStorageAdapterFactory> logger) : IStorageAdapterFactory
 {
     public const string StorageType = "Cosmos";
 
@@ -30,6 +32,12 @@ public class CosmosStorageAdapterFactory(IOptions<CosmosStorageOptions> options)
                 "Set CosmosStorageOptions.ConnectionString or Graph:Storage:ConnectionString.");
 
         var cosmosClient = new CosmosClient(connectionString);
+
+        // Ensure database and containers exist
+        CosmosContainerInitializer
+            .EnsureDatabaseAndContainersAsync(cosmosClient, opts, logger)
+            .GetAwaiter().GetResult();
+
         var database = cosmosClient.GetDatabase(opts.DatabaseName);
         var nodesContainer = database.GetContainer(opts.NodesContainerName);
         var partitionsContainer = database.GetContainer(opts.PartitionsContainerName);
@@ -317,15 +325,4 @@ public static class PersistenceExtensions
         return services.AddCosmosPersistence(cosmosClient, databaseName);
     }
 
-    /// <summary>
-    /// Registers the Cosmos DB data seeder hosted service.
-    /// The seeder reads data from the file system and writes it to Cosmos DB at startup.
-    /// </summary>
-    public static IServiceCollection AddCosmosSeeding(
-        this IServiceCollection services, Action<CosmosSeederOptions> configure)
-    {
-        services.Configure(configure);
-        services.AddHostedService<CosmosDataSeeder>();
-        return services;
-    }
 }

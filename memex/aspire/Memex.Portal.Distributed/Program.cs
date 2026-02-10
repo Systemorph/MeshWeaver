@@ -39,12 +39,6 @@ builder.UseOrleansMeshServer(address, silo =>
         {
             opts.ConnectionString = cosmosConnectionString;
             opts.DatabaseName = "memexdb";
-        })
-        .AddCosmosSeeding(opts =>
-        {
-            opts.Enabled = builder.Environment.IsDevelopment();
-            opts.SeedDataPath = Path.GetFullPath(
-                Path.Combine(AppContext.BaseDirectory, "../../../../samples/Graph/Data"));
         }))
     .ConfigureMemexMesh(builder.Configuration, builder.Environment.IsDevelopment())
     .ConfigureMemexPortal();

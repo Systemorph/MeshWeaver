@@ -1,0 +1,104 @@
+using System.Text.Json;
+using MeshWeaver.Hosting.Cosmos;
+using MeshWeaver.Hosting.Persistence;
+using Microsoft.Azure.Cosmos;
+using Microsoft.Extensions.Logging;
+
+// Parse arguments
+string? sourcePath = null;
+string? connectionString = null;
+string database = "memexdb";
+bool force = false;
+
+for (int i = 0; i < args.Length; i++)
+{
+    switch (args[i])
+    {
+        case "--source-path" when i + 1 < args.Length:
+            sourcePath = args[++i];
+            break;
+        case "--connection-string" when i + 1 < args.Length:
+            connectionString = args[++i];
+            break;
+        case "--database" when i + 1 < args.Length:
+            database = args[++i];
+            break;
+        case "--force":
+            force = true;
+            break;
+        case "--help":
+            PrintUsage();
+            return 0;
+    }
+}
+
+if (string.IsNullOrEmpty(sourcePath) || string.IsNullOrEmpty(connectionString))
+{
+    Console.Error.WriteLine("Error: --source-path and --connection-string are required.");
+    PrintUsage();
+    return 1;
+}
+
+if (!Directory.Exists(sourcePath))
+{
+    Console.Error.WriteLine($"Error: Source path does not exist: {sourcePath}");
+    return 1;
+}
+
+using var loggerFactory = LoggerFactory.Create(builder => builder.AddConsole());
+var logger = loggerFactory.CreateLogger<StorageImporter>();
+
+// Set up source (file system)
+var source = new FileSystemStorageAdapter(sourcePath);
+
+// Set up target (Cosmos DB)
+var cosmosClient = new CosmosClient(connectionString);
+var cosmosOptions = new CosmosStorageOptions { DatabaseName = database };
+
+logger.LogInformation("Ensuring Cosmos DB database and containers exist...");
+await CosmosContainerInitializer.EnsureDatabaseAndContainersAsync(
+    cosmosClient, cosmosOptions, logger);
+
+var db = cosmosClient.GetDatabase(database);
+var nodesContainer = db.GetContainer(cosmosOptions.NodesContainerName);
+var partitionsContainer = db.GetContainer(cosmosOptions.PartitionsContainerName);
+var target = new CosmosStorageAdapter(nodesContainer, partitionsContainer);
+
+// Idempotency check
+if (!force)
+{
+    var exists = await target.ExistsAsync("Organization");
+    if (exists)
+    {
+        logger.LogInformation("Cosmos DB already contains data. Use --force to re-import.");
+        return 0;
+    }
+}
+
+// Run import
+var importer = new StorageImporter(source, target, logger);
+var result = await importer.ImportAsync(new StorageImportOptions
+{
+    OnProgress = (nodes, partitions, path) =>
+    {
+        if (nodes % 25 == 0)
+            Console.WriteLine($"  Progress: {nodes} nodes, {partitions} partitions (current: {path})");
+    }
+});
+
+Console.WriteLine($"Import complete: {result.NodesImported} nodes, {result.PartitionsImported} partitions in {result.Elapsed.TotalSeconds:F1}s");
+return 0;
+
+static void PrintUsage()
+{
+    Console.WriteLine("""
+        Usage: dotnet run --project tools/MeshWeaver.Tools.CosmosImport -- [options]
+
+        Options:
+          --source-path <path>           Path to seed data directory (e.g., samples/Graph/Data)
+          --connection-string <string>   Cosmos DB connection string
+          --database <name>              Database name (default: memexdb)
+          --force                        Force re-import even if data exists
+          --help                         Show this help
+        """);
+}
