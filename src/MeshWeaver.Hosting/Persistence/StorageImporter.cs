@@ -43,6 +43,8 @@ public record StorageImportResult
 {
     public int NodesImported { get; init; }
     public int PartitionsImported { get; init; }
+    public int NodesSkipped { get; init; }
+    public int PartitionsSkipped { get; init; }
     public TimeSpan Elapsed { get; init; }
 }
 
@@ -57,6 +59,8 @@ public class StorageImporter
 
     private int _nodeCount;
     private int _partitionCount;
+    private int _nodesSkipped;
+    private int _partitionsSkipped;
 
     public StorageImporter(IStorageAdapter source, IStorageAdapter target, ILogger? logger = null)
     {
@@ -74,6 +78,8 @@ public class StorageImporter
         var sw = Stopwatch.StartNew();
         _nodeCount = 0;
         _partitionCount = 0;
+        _nodesSkipped = 0;
+        _partitionsSkipped = 0;
 
         await ImportRecursivelyAsync(
             string.IsNullOrEmpty(options.RootPath) ? null : options.RootPath,
@@ -85,13 +91,15 @@ public class StorageImporter
         sw.Stop();
 
         _logger?.LogInformation(
-            "Import complete: {Nodes} nodes, {Partitions} partitions in {Elapsed}",
-            _nodeCount, _partitionCount, sw.Elapsed);
+            "Import complete: {Nodes} nodes, {Partitions} partitions, {NodesSkipped} nodes skipped, {PartitionsSkipped} partitions skipped in {Elapsed}",
+            _nodeCount, _partitionCount, _nodesSkipped, _partitionsSkipped, sw.Elapsed);
 
         return new StorageImportResult
         {
             NodesImported = _nodeCount,
             PartitionsImported = _partitionCount,
+            NodesSkipped = _nodesSkipped,
+            PartitionsSkipped = _partitionsSkipped,
             Elapsed = sw.Elapsed
         };
     }
@@ -154,6 +162,7 @@ public class StorageImporter
             catch (Exception ex)
             {
                 _logger?.LogWarning(ex, "Failed to read node {Path}, skipping", nodePath);
+                _nodesSkipped++;
             }
 
             if (node != null)
@@ -166,6 +175,7 @@ public class StorageImporter
                 {
                     _logger?.LogWarning(ex, "Failed to write node {Path} (Id={Id}, Namespace={Namespace}), skipping",
                         nodePath, node.Id, node.Namespace);
+                    _nodesSkipped++;
                     continue;
                 }
                 _nodeCount++;
@@ -177,18 +187,27 @@ public class StorageImporter
                     var subPaths = await _source.ListPartitionSubPathsAsync(nodePath, ct);
                     foreach (var subPath in subPaths)
                     {
-                        var objects = new List<object>();
-                        await foreach (var obj in _source.GetPartitionObjectsAsync(nodePath, subPath, options, ct))
+                        try
                         {
-                            objects.Add(obj);
-                        }
+                            var objects = new List<object>();
+                            await foreach (var obj in _source.GetPartitionObjectsAsync(nodePath, subPath, options, ct))
+                            {
+                                objects.Add(obj);
+                            }
 
-                        if (objects.Count > 0)
+                            if (objects.Count > 0)
+                            {
+                                await _target.SavePartitionObjectsAsync(nodePath, subPath, objects, options, ct);
+                                _partitionCount++;
+                                _logger?.LogDebug("Imported partition {NodePath}/{SubPath} ({Count} objects)",
+                                    nodePath, subPath, objects.Count);
+                            }
+                        }
+                        catch (Exception ex)
                         {
-                            await _target.SavePartitionObjectsAsync(nodePath, subPath, objects, options, ct);
-                            _partitionCount++;
-                            _logger?.LogDebug("Imported partition {NodePath}/{SubPath} ({Count} objects)",
-                                nodePath, subPath, objects.Count);
+                            _logger?.LogWarning(ex, "Failed to import partition {NodePath}/{SubPath}, skipping",
+                                nodePath, subPath);
+                            _partitionsSkipped++;
                         }
                     }
                 }

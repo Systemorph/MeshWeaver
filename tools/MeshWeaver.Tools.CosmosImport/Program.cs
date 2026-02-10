@@ -77,9 +77,13 @@ var cosmosClient = new CosmosClient(connectionString, clientOptions);
 var cosmosOptions = new CosmosStorageOptions { DatabaseName = database };
 
 Console.WriteLine($"Connecting to Cosmos DB at {connectionString[..connectionString.IndexOf(';')]}...");
-Console.WriteLine("Creating database and containers...");
-await CosmosContainerInitializer.EnsureDatabaseAndContainersAsync(
-    cosmosClient, cosmosOptions, logger);
+
+// Ensure database and containers exist (idempotent — safe to call even if AppHost already created them)
+var dbResponse = await cosmosClient.CreateDatabaseIfNotExistsAsync(database);
+await dbResponse.Database.CreateContainerIfNotExistsAsync(
+    new ContainerProperties(cosmosOptions.NodesContainerName, "/namespace") { DefaultTimeToLive = -1 });
+await dbResponse.Database.CreateContainerIfNotExistsAsync(
+    new ContainerProperties(cosmosOptions.PartitionsContainerName, "/partitionKey") { DefaultTimeToLive = -1 });
 Console.WriteLine("Database and containers ready.");
 
 var db = cosmosClient.GetDatabase(database);
@@ -111,6 +115,11 @@ var result = await importer.ImportAsync(new StorageImportOptions
 });
 
 Console.WriteLine($"Import complete: {result.NodesImported} nodes, {result.PartitionsImported} partitions in {result.Elapsed.TotalSeconds:F1}s");
+if (result.NodesSkipped > 0 || result.PartitionsSkipped > 0)
+{
+    Console.Error.WriteLine($"Warning: {result.NodesSkipped} nodes skipped, {result.PartitionsSkipped} partitions skipped");
+    return 2;
+}
 return 0;
 
 static void PrintUsage()

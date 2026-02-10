@@ -80,7 +80,7 @@ public static class OrleansServerRegistryExtensions
     public static IServiceCollection AddOrleansMeshServices(this IServiceCollection services)
     {
         // Register defaults if not already registered - user can register their own first
-        services.TryAddSingleton<IPersistenceServiceCore>(new InMemoryPersistenceService());
+        services.AddInMemoryPersistence();
         services.TryAddSingleton<IRoutingService, OrleansRoutingService>();
         services.TryAddSingleton<IMeshCatalog, MeshCatalog>();
 

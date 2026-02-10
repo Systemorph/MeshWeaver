@@ -1,7 +1,8 @@
-﻿using MeshWeaver.Mesh.Services;
+﻿using System.Collections.Concurrent;
+using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using MeshWeaver.Utils;
-using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Orleans.Streams;
@@ -14,67 +15,93 @@ public class OrleansRoutingService(
     IServiceProvider serviceProvider,
     ILogger<OrleansRoutingService> logger) : IRoutingService
 {
-    private readonly MemoryCache cache = new(new MemoryCacheOptions());
-    public async Task<IMessageDelivery> DeliverMessageAsync(IMessageDelivery delivery, CancellationToken cancellationToken = default)
+    private readonly ConcurrentDictionary<Address, AsyncDelivery> streams = new();
+
+    public Task<IMessageDelivery> DeliverMessageAsync(IMessageDelivery delivery, CancellationToken cancellationToken = default)
     {
         var target = delivery.Target;
-        var streamInfo = await GetStreamInfoAsync(target!);
+        if (target == null)
+            return Task.FromResult(delivery);
 
-        switch (streamInfo?.Type)
+        var address = GetHostAddress(target);
+
+        // 1. Check registered local streams (portals, in-process clients)
+        if (streams.TryGetValue(address, out var callback))
+            return callback(delivery, cancellationToken);
+
+        // 2. Fire-and-forget routing to avoid deadlocks
+        RouteAsync(delivery, address);
+        return Task.FromResult(delivery.Forwarded(address));
+    }
+
+    private async void RouteAsync(IMessageDelivery delivery, Address address)
+    {
+        try
         {
-            case StreamType.Channel:
-                var grain = grainFactory.GetGrain<IMessageHubGrain>(target!.ToString());
+            // Resolve address to find the best grain key
+            var resolution = await meshCatalog.ResolvePathAsync(address.ToString());
+            var grainKey = resolution?.Prefix;
+
+            if (grainKey != null)
+            {
+                // Known mesh node → delegate to grain
+                var grain = grainFactory.GetGrain<IMessageHubGrain>(grainKey);
                 await grain.DeliverMessage(delivery);
-                return delivery.Forwarded();
-            case StreamType.Stream:
-                var stream = GetStreamProvider(streamInfo.Provider)
-                    .GetStream<IMessageDelivery>(streamInfo.Namespace);
-                await stream.OnNextAsync(delivery);
-                return delivery.Forwarded();
-
-            default:
-                logger.LogError("No stream info found for {MessageType} (ID: {MessageId})",
-                    delivery.Message.GetType().Name, delivery.Id);
-                return delivery.Failed($"No route found for {delivery.Target}");
+            }
+            else
+            {
+                // Not in local catalog → try grain with address string directly
+                // (client may not have all nodes, but silo grain will activate on demand)
+                // If this also doesn't work, fall back to Orleans memory stream
+                try
+                {
+                    var grain = grainFactory.GetGrain<IMessageHubGrain>(address.ToString());
+                    await grain.DeliverMessage(delivery);
+                }
+                catch
+                {
+                    // Grain not found → route via Orleans memory stream (e.g., for client addresses)
+                    var stream = GetStreamProvider(StreamProviders.Memory)
+                        .GetStream<IMessageDelivery>(address.ToString());
+                    await stream.OnNextAsync(delivery);
+                }
+            }
         }
-
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Failed to deliver to {Address}", address);
+        }
     }
 
-    private async Task<StreamInfo?> GetStreamInfoAsync(Address target)
+    public async Task<IAsyncDisposable> RegisterStreamAsync(Address address, AsyncDelivery callback)
     {
-        if (target.Host != null)
-            return await GetStreamInfoAsync(target.Host);
-        var streamInfo = cache.TryGetValue(target, out var cached)
-            ? cached as StreamInfo
-            : await GetStreamInfoFromRoutingGrainAsync(target);
-        return streamInfo;
-    }
+        streams[address] = callback;
 
-    private async Task<StreamInfo?> GetStreamInfoFromRoutingGrainAsync(Address target)
-    {
-        var ret = await meshCatalog
-            .GetStreamInfoAsync(target.ToString());
-        cache.Set(target, ret);
-        return ret;
+        // Also subscribe to Orleans memory stream so cross-process messages arrive
+        var stream = GetStreamProvider(StreamProviders.Memory)
+            .GetStream<IMessageDelivery>(address.ToString());
+        var subscription = await stream.SubscribeAsync((v, _) =>
+            callback.Invoke(v, CancellationToken.None));
+
+        return new AnonymousAsyncDisposable(async () =>
+        {
+            streams.TryRemove(address, out _);
+            await subscription.UnsubscribeAsync();
+        });
     }
 
     private IStreamProvider GetStreamProvider(string streamProvider) =>
         serviceProvider.GetRequiredKeyedService<IStreamProvider>(streamProvider);
 
-    public async Task<IAsyncDisposable> RegisterStreamAsync(Address address, AsyncDelivery callback)
+    private static Address GetHostAddress(Address address)
     {
-        var streamInfo = await GetStreamInfoAsync(address);
-        if (streamInfo is null)
-            return null!;
-
-        var stream = serviceProvider.GetRequiredKeyedService<IStreamProvider>(streamInfo.Provider)
-            .GetStream<IMessageDelivery>(address.ToString());
-        var subscription = await stream.SubscribeAsync((v, _) =>
-            callback.Invoke(v, CancellationToken.None));
-        return new AnonymousAsyncDisposable(async () =>
+        if (address.Host != null)
         {
-            await subscription.UnsubscribeAsync();
-        });
+            var host = GetHostAddress(address.Host);
+            if (host.Type == AddressExtensions.MeshType)
+                return address with { Host = null };
+            return host;
+        }
+        return address;
     }
-
 }

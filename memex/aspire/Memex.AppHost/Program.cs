@@ -45,6 +45,8 @@ if (useDistributed)
             .WithLifetime(ContainerLifetime.Persistent));
     }
     var cosmosDb = cosmos.AddCosmosDatabase("memexdb");
+    cosmosDb.AddContainer("nodes", "/namespace");
+    cosmosDb.AddContainer("partitions", "/partitionKey");
 
     // Memex Distributed (co-hosted silo + web)
     builder

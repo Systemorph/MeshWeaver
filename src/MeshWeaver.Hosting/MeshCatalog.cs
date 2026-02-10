@@ -343,16 +343,6 @@ public sealed class MeshCatalog(
         return true;
     }
 
-    private readonly Dictionary<string, StreamInfo> channelTypes = new()
-    {
-        { AddressExtensions.AppType, new(StreamType.Channel, StreamProviders.Hub, ChannelNames.Hub) },
-        { AddressExtensions.KernelType, new(StreamType.Channel, StreamProviders.Hub, ChannelNames.Hub) }
-    };
-    public Task<StreamInfo> GetStreamInfoAsync(Address address)
-    {
-        return Task.FromResult(channelTypes.GetValueOrDefault(address.Type) ?? new StreamInfo(StreamType.Stream, StreamProviders.Memory, address.ToString()));
-    }
-
     /// <inheritdoc />
     public async Task<AddressResolution?> ResolvePathAsync(string path)
     {
