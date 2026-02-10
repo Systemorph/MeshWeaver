@@ -207,6 +207,28 @@ public class FileSystemStorageAdapter : IStorageAdapter
         return Task.FromResult(filePath != null && File.Exists(filePath));
     }
 
+    public Task<IEnumerable<string>> ListPartitionSubPathsAsync(string nodePath, CancellationToken ct = default)
+    {
+        var nodeDir = Path.Combine(_baseDirectory, nodePath.Trim('/').Replace('/', Path.DirectorySeparatorChar));
+        if (!Directory.Exists(nodeDir))
+            return Task.FromResult<IEnumerable<string>>(Enumerable.Empty<string>());
+
+        var partitionSubPaths = new List<string>();
+        foreach (var subDir in Directory.GetDirectories(nodeDir))
+        {
+            var subDirName = Path.GetFileName(subDir);
+
+            // Skip if this subdirectory corresponds to a child node (has a sibling .md/.cs/.json file)
+            if (SupportedExtensions.Any(ext => File.Exists(Path.Combine(nodeDir, subDirName + ext))))
+                continue;
+
+            // This is a partition directory
+            partitionSubPaths.Add(subDirName);
+        }
+
+        return Task.FromResult<IEnumerable<string>>(partitionSubPaths);
+    }
+
     #region Partition Storage
 
     public async IAsyncEnumerable<object> GetPartitionObjectsAsync(

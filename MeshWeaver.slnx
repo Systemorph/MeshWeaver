@@ -150,9 +150,11 @@
     <Project Path="test/MeshWeaver.Hub.Fixture/MeshWeaver.Hub.Fixture.csproj" />
     <Project Path="test/MeshWeaver.Kernel.Test/MeshWeaver.Kernel.Test.csproj" />
     <Project Path="test/MeshWeaver.Markdown.Collaboration.Test/MeshWeaver.Markdown.Collaboration.Test.csproj" />
+    <Project Path="test/MeshWeaver.StorageImport.Test/MeshWeaver.StorageImport.Test.csproj" />
   </Folder>
   <Folder Name="/tools/">
     <Project Path="tools/MeshWeaver.TemplateGenerator/MeshWeaver.TemplateGenerator.csproj" />
     <Project Path="tools/MeshWeaver.ThumbnailGenerator/MeshWeaver.ThumbnailGenerator.csproj" />
+    <Project Path="tools/MeshWeaver.Tools.CosmosImport/MeshWeaver.Tools.CosmosImport.csproj" />
   </Folder>
 </Solution>
