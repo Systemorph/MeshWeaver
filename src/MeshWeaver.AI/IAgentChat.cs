@@ -7,6 +7,11 @@ namespace MeshWeaver.AI;
 public interface IAgentChat
 {
     void SetContext(AgentContext? applicationContext);
+
+    /// <summary>Sets the currently selected agent by name.</summary>
+    /// <param name="agentName">The name/ID of the agent to use</param>
+    void SetSelectedAgent(string? agentName);
+
     Task ResumeAsync(ChatConversation conversation);
 
     /// <summary>

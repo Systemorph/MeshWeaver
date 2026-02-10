@@ -79,11 +79,10 @@ public class CopilotChatClient : IChatClient, IAsyncDisposable
     {
         var client = await GetOrCreateClientAsync(cancellationToken);
 
-        // Build session configuration
-        var sessionConfig = BuildSessionConfig(options);
-
-        // Get the user prompt (last user message) and history
         var messageList = messages.ToList();
+
+        // Build session configuration, including system messages as SystemMessage
+        var sessionConfig = BuildSessionConfig(options, messageList);
         var lastUserMessage = messageList.LastOrDefault(m => m.Role == ChatRole.User);
         var userPrompt = lastUserMessage != null ? GetTextContent(lastUserMessage) : string.Empty;
 
@@ -293,7 +292,7 @@ public class CopilotChatClient : IChatClient, IAsyncDisposable
         }
     }
 
-    private SessionConfig BuildSessionConfig(ChatOptions? options)
+    private SessionConfig BuildSessionConfig(ChatOptions? options, List<ChatMessage>? messages = null)
     {
         var config = new SessionConfig
         {
@@ -304,6 +303,25 @@ public class CopilotChatClient : IChatClient, IAsyncDisposable
         if (!string.IsNullOrEmpty(modelName))
         {
             config.Model = modelName;
+        }
+
+        // Extract system messages (agent instructions from ChatClientAgent) and set as SystemMessage
+        if (messages != null)
+        {
+            var systemParts = messages
+                .Where(m => m.Role == ChatRole.System)
+                .Select(GetTextContent)
+                .Where(t => !string.IsNullOrEmpty(t))
+                .ToList();
+
+            if (systemParts.Count > 0)
+            {
+                config.SystemMessage = new SystemMessageConfig
+                {
+                    Content = string.Join("\n\n", systemParts),
+                    Mode = SystemMessageMode.Append
+                };
+            }
         }
 
         // Add tools if provided - the SDK accepts AIFunction from Microsoft.Extensions.AI.Abstractions

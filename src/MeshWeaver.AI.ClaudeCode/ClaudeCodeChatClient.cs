@@ -76,27 +76,6 @@ public class ClaudeCodeChatClient : IChatClient
     {
         // Build the prompt from messages
         var messageList = messages.ToList();
-
-        // Debug: Log all incoming messages
-        logger?.LogInformation("ClaudeCode received {Count} messages", messageList.Count);
-        foreach (var msg in messageList)
-        {
-            logger?.LogInformation("  Message: Role={Role}, Text='{Text}', ContentsCount={ContentsCount}",
-                msg.Role.Value,
-                msg.Text?.Substring(0, Math.Min(100, msg.Text?.Length ?? 0)) ?? "(null)",
-                msg.Contents?.Count ?? 0);
-
-            if (msg.Contents != null)
-            {
-                foreach (var content in msg.Contents)
-                {
-                    logger?.LogInformation("    Content type: {Type}, Value: {Value}",
-                        content.GetType().Name,
-                        content is TextContent tc ? tc.Text?.Substring(0, Math.Min(50, tc.Text?.Length ?? 0)) : "(non-text)");
-                }
-            }
-        }
-
         var userPrompt = BuildPromptFromMessages(messageList);
 
         // If CliDirectory is specified, add it to PATH for CLI discovery
@@ -131,9 +110,11 @@ public class ClaudeCodeChatClient : IChatClient
             claudeOptions.Model = modelName;
         }
 
-        if (!string.IsNullOrEmpty(configuration.SystemPrompt))
+        // Build system prompt: combine agent instructions (from system messages) with configuration
+        var systemPrompt = BuildSystemPrompt(messageList);
+        if (!string.IsNullOrEmpty(systemPrompt))
         {
-            claudeOptions.SystemPrompt = configuration.SystemPrompt;
+            claudeOptions.SystemPrompt = systemPrompt;
         }
 
         if (configuration.MaxTurns.HasValue)
@@ -233,6 +214,34 @@ public class ClaudeCodeChatClient : IChatClient
     public void Dispose()
     {
         // No resources to dispose - each query creates its own connection
+    }
+
+    /// <summary>
+    /// Builds the system prompt by combining agent instructions (from system messages in the list)
+    /// with the global configuration system prompt.
+    /// ChatClientAgent passes its instructions as a system message in the messages collection.
+    /// </summary>
+    private string BuildSystemPrompt(List<ChatMessage> messages)
+    {
+        var parts = new List<string>();
+
+        // Extract system messages (agent instructions from ChatClientAgent)
+        foreach (var msg in messages.Where(m => m.Role == ChatRole.System))
+        {
+            var text = GetTextContent(msg);
+            if (!string.IsNullOrEmpty(text))
+            {
+                parts.Add(text);
+            }
+        }
+
+        // Add global configuration system prompt
+        if (!string.IsNullOrEmpty(configuration.SystemPrompt))
+        {
+            parts.Add(configuration.SystemPrompt);
+        }
+
+        return string.Join("\n\n", parts);
     }
 
     private static string BuildPromptFromMessages(List<ChatMessage> messages)

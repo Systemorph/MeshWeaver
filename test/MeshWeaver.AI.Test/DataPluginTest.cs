@@ -143,6 +143,8 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
         public Task<IReadOnlyList<AgentDisplayInfo>> GetOrderedAgentsAsync()
             => Task.FromResult<IReadOnlyList<AgentDisplayInfo>>(new List<AgentDisplayInfo>());
 
+        public void SetSelectedAgent(string? agentName) { }
+
     }
 
 }
