@@ -11,6 +11,7 @@ builder.AddServiceDefaults();
 // Register Aspire-injected clients
 builder.AddKeyedAzureTableServiceClient("orleans-clustering");
 builder.AddKeyedAzureBlobServiceClient("storage");
+builder.AddKeyedAzureBlobServiceClient("orleans-grain-state");
 
 // Read Cosmos connection string from Aspire configuration
 // The name "memexdb" matches the database resource name in the AppHost:
