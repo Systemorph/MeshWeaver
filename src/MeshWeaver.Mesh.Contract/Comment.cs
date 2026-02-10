@@ -1,4 +1,3 @@
-using System.Collections.Immutable;
 using System.ComponentModel;
 using System.ComponentModel.DataAnnotations;
 
@@ -81,11 +80,6 @@ public record Comment
     [Browsable(false)]
     public CommentStatus Status { get; init; } = CommentStatus.Active;
 
-    /// <summary>
-    /// Replies to this comment (for threaded discussions).
-    /// </summary>
-    [Browsable(false)]
-    public ImmutableList<Comment> Replies { get; init; } = ImmutableList<Comment>.Empty;
 }
 
 /// <summary>

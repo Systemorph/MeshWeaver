@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
-using System.Text.Json;
 using System.Threading.Tasks;
 using FluentAssertions;
 using MeshWeaver.Hosting.Persistence;
@@ -18,7 +17,7 @@ public class StorageImporterTests : IDisposable
     {
         // Resolve samples/Graph/Data relative to the test assembly location
         var assemblyDir = Path.GetDirectoryName(typeof(StorageImporterTests).Assembly.Location)!;
-        _sourceDir = Path.GetFullPath(Path.Combine(assemblyDir, "../../../../../../samples/Graph/Data"));
+        _sourceDir = Path.GetFullPath(Path.Combine(assemblyDir, "../../../../../samples/Graph/Data"));
         _targetDir = Path.Combine(Path.GetTempPath(), $"StorageImporterTest_{Guid.NewGuid():N}");
     }
 
@@ -44,10 +43,12 @@ public class StorageImporterTests : IDisposable
         result.NodesImported.Should().BeGreaterThan(0, "sample data should contain nodes");
         result.Elapsed.Should().BeGreaterThan(TimeSpan.Zero);
 
-        // Verify a known node was copied
-        var jsonOptions = new JsonSerializerOptions();
-        var orgNode = await target.ReadAsync("Organization", jsonOptions);
-        orgNode.Should().NotBeNull("Organization node should exist in target");
+        // Verify known nodes were copied (use .md nodes which don't require polymorphic JSON)
+        var executorExists = await target.ExistsAsync("Executor");
+        executorExists.Should().BeTrue("Executor.md node should exist in target");
+
+        var plannerExists = await target.ExistsAsync("Planner");
+        plannerExists.Should().BeTrue("Planner.md node should exist in target");
     }
 
     [Fact]
@@ -65,15 +66,13 @@ public class StorageImporterTests : IDisposable
         // Assert
         result.NodesImported.Should().BeGreaterThan(0);
 
-        var jsonOptions = new JsonSerializerOptions();
-
         // ACME children should be copied
-        var acmeExists = await target.ExistsAsync("ACME/Project");
-        acmeExists.Should().BeTrue("ACME/Project should have been imported");
+        var todoAgentExists = await target.ExistsAsync("ACME/Project/TodoAgent");
+        todoAgentExists.Should().BeTrue("ACME/Project/TodoAgent should have been imported");
 
         // Nodes outside ACME should NOT be copied
-        var orgExists = await target.ExistsAsync("Organization");
-        orgExists.Should().BeFalse("Organization is not under ACME and should not be imported");
+        var executorExists = await target.ExistsAsync("Executor");
+        executorExists.Should().BeFalse("Executor is not under ACME and should not be imported");
     }
 
     [Fact]
@@ -89,6 +88,7 @@ public class StorageImporterTests : IDisposable
         var result = await importer.ImportAsync(new StorageImportOptions { ImportPartitions = true });
 
         // Assert
+        result.NodesImported.Should().BeGreaterThan(0);
         result.PartitionsImported.Should().BeGreaterThanOrEqualTo(0, "partitions may or may not exist in sample data");
     }
 

@@ -1,4 +1,3 @@
-using System.Text.Json;
 using MeshWeaver.Hosting.Cosmos;
 using MeshWeaver.Hosting.Persistence;
 using Microsoft.Azure.Cosmos;
@@ -9,6 +8,7 @@ string? sourcePath = null;
 string? connectionString = null;
 string database = "memexdb";
 bool force = false;
+bool allowInsecureSsl = false;
 
 for (int i = 0; i < args.Length; i++)
 {
@@ -25,6 +25,9 @@ for (int i = 0; i < args.Length; i++)
             break;
         case "--force":
             force = true;
+            break;
+        case "--allow-insecure-ssl":
+            allowInsecureSsl = true;
             break;
         case "--help":
             PrintUsage();
@@ -51,13 +54,33 @@ var logger = loggerFactory.CreateLogger<StorageImporter>();
 // Set up source (file system)
 var source = new FileSystemStorageAdapter(sourcePath);
 
-// Set up target (Cosmos DB)
-var cosmosClient = new CosmosClient(connectionString);
+// Build serialization options matching the hub's pipeline
+var jsonOptions = StorageImporter.CreateFullImportOptions();
+
+// Set up target (Cosmos DB) — configured with System.Text.Json serializer
+var clientOptions = new CosmosClientOptions
+{
+    RequestTimeout = TimeSpan.FromSeconds(30),
+    UseSystemTextJsonSerializerWithOptions = jsonOptions
+};
+if (allowInsecureSsl)
+{
+    clientOptions.HttpClientFactory = () => new HttpClient(new HttpClientHandler
+    {
+        ServerCertificateCustomValidationCallback =
+            HttpClientHandler.DangerousAcceptAnyServerCertificateValidator
+    });
+    clientOptions.ConnectionMode = ConnectionMode.Gateway;
+    clientOptions.LimitToEndpoint = true;
+}
+var cosmosClient = new CosmosClient(connectionString, clientOptions);
 var cosmosOptions = new CosmosStorageOptions { DatabaseName = database };
 
-logger.LogInformation("Ensuring Cosmos DB database and containers exist...");
+Console.WriteLine($"Connecting to Cosmos DB at {connectionString[..connectionString.IndexOf(';')]}...");
+Console.WriteLine("Creating database and containers...");
 await CosmosContainerInitializer.EnsureDatabaseAndContainersAsync(
     cosmosClient, cosmosOptions, logger);
+Console.WriteLine("Database and containers ready.");
 
 var db = cosmosClient.GetDatabase(database);
 var nodesContainer = db.GetContainer(cosmosOptions.NodesContainerName);
@@ -79,6 +102,7 @@ if (!force)
 var importer = new StorageImporter(source, target, logger);
 var result = await importer.ImportAsync(new StorageImportOptions
 {
+    JsonOptions = jsonOptions,
     OnProgress = (nodes, partitions, path) =>
     {
         if (nodes % 25 == 0)
@@ -99,6 +123,7 @@ static void PrintUsage()
           --connection-string <string>   Cosmos DB connection string
           --database <name>              Database name (default: memexdb)
           --force                        Force re-import even if data exists
+          --allow-insecure-ssl           Accept self-signed SSL certificates (for local emulator)
           --help                         Show this help
         """);
 }
