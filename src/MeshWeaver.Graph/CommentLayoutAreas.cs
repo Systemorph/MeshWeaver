@@ -1,11 +1,15 @@
+using System.Collections.Immutable;
 using System.Reactive.Linq;
 using MeshWeaver.Application.Styles;
 using MeshWeaver.Data;
 using MeshWeaver.Domain;
 using MeshWeaver.Layout;
+using MeshWeaver.Layout.Catalog;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.Graph;
 
@@ -34,18 +38,45 @@ public static class CommentLayoutAreas
     public static IObservable<UiControl?> Overview(LayoutAreaHost host, RenderingContext _)
     {
         var hubPath = host.Hub.Address.ToString();
+        var meshQuery = host.Hub.ServiceProvider.GetService<IMeshQuery>();
 
         var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? Array.Empty<MeshNode>())
             ?? Observable.Return<MeshNode[]>(Array.Empty<MeshNode>());
 
-        return nodeStream.Select(nodes =>
-        {
-            var node = nodes.FirstOrDefault(n => n.Path == hubPath);
-            return BuildOverview(node, hubPath);
-        });
+        // Query for reply MeshNodes (Comment children with scope:descendants)
+        var replyNodesStream = meshQuery != null
+            ? meshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
+                $"path:{hubPath} nodeType:{CommentNodeType.NodeType} scope:descendants"))
+                .Scan(new List<MeshNode>(), (list, change) =>
+                {
+                    if (change.ChangeType == QueryChangeType.Initial || change.ChangeType == QueryChangeType.Reset)
+                        return change.Items.ToList();
+                    foreach (var item in change.Items)
+                    {
+                        if (change.ChangeType == QueryChangeType.Added)
+                            list.Add(item);
+                        else if (change.ChangeType == QueryChangeType.Removed)
+                            list.RemoveAll(n => n.Path == item.Path);
+                        else if (change.ChangeType == QueryChangeType.Updated)
+                        {
+                            list.RemoveAll(n => n.Path == item.Path);
+                            list.Add(item);
+                        }
+                    }
+                    return list;
+                })
+                .Select(list => list as IReadOnlyList<MeshNode>)
+            : Observable.Return<IReadOnlyList<MeshNode>>(Array.Empty<MeshNode>());
+
+        return nodeStream
+            .CombineLatest(replyNodesStream, (nodes, replyNodes) =>
+            {
+                var node = nodes.FirstOrDefault(n => n.Path == hubPath);
+                return BuildOverview(node, hubPath, replyNodes ?? Array.Empty<MeshNode>());
+            });
     }
 
-    private static UiControl BuildOverview(MeshNode? node, string hubPath)
+    internal static UiControl BuildOverview(MeshNode? node, string hubPath, IReadOnlyList<MeshNode> replyNodes)
     {
         var comment = node?.Content as Comment;
         if (comment == null)
@@ -96,20 +127,15 @@ public static class CommentLayoutAreas
                 </div>"));
         }
 
-        // Replies
-        if (comment.Replies.Count > 0)
+        // Replies from MeshNode children — expandable catalog
+        var matchingReplies = replyNodes
+            .Where(n => n.Content is Comment c && c.ParentCommentId == comment.Id)
+            .OrderBy(n => ((Comment)n.Content!).CreatedAt)
+            .ToList();
+
+        if (matchingReplies.Count > 0)
         {
-            container = container.WithView(Controls.Html("<div style=\"font-weight: 600; font-size: 0.9rem; margin-bottom: 8px;\">Replies</div>"));
-            foreach (var reply in comment.Replies)
-            {
-                var replyInitial = !string.IsNullOrEmpty(reply.Author) ? reply.Author[0].ToString().ToUpper() : "?";
-                container = container.WithView(Controls.Html($@"
-                    <div style=""padding: 8px; margin: 4px 0; background: var(--neutral-layer-2);
-                                border-radius: 4px; border-left: 3px solid var(--accent-fill-rest);"">
-                        <div style=""font-weight: 600; font-size: 0.85rem; color: var(--accent-fill-rest); margin-bottom: 4px;"">{System.Web.HttpUtility.HtmlEncode(reply.Author)}</div>
-                        <div style=""font-size: 0.9rem;"">{System.Web.HttpUtility.HtmlEncode(reply.Text)}</div>
-                    </div>"));
-            }
+            container = container.WithView(BuildRepliesCatalog(matchingReplies));
         }
 
         return container;
@@ -130,6 +156,32 @@ public static class CommentLayoutAreas
             var node = nodes.FirstOrDefault(n => n.Path == hubPath);
             return BuildThumbnail(node);
         });
+    }
+
+    /// <summary>
+    /// Builds a collapsible "Replies (N)" catalog from reply MeshNodes.
+    /// Each reply is rendered as a Thumbnail.
+    /// </summary>
+    internal static UiControl BuildRepliesCatalog(IReadOnlyList<MeshNode> replyNodes)
+    {
+        var items = replyNodes.Select(r => (UiControl)BuildThumbnail(r)).ToImmutableList();
+        return new CatalogControl
+            {
+                CollapsibleSections = true,
+                ShowCounts = true,
+                Xs = 12, Sm = 12, Md = 12, Lg = 12,
+                CardHeight = 60,
+                Spacing = 1,
+                SectionGap = 0,
+            }
+            .WithGroup(new CatalogGroup
+            {
+                Key = "replies",
+                Label = "Replies",
+                IsExpanded = false,
+                TotalCount = replyNodes.Count,
+                Items = items,
+            });
     }
 
     internal static UiControl BuildThumbnail(MeshNode? node)

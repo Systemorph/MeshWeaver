@@ -1,7 +1,9 @@
+using System.Text.Json;
 using Microsoft.Azure.Cosmos;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using MeshWeaver.Domain;
 using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Hosting.Persistence.Query;
 using MeshWeaver.Mesh.Security;
@@ -31,7 +33,14 @@ public class CosmosStorageAdapterFactory(
                 "Cosmos DB connection string is not configured. " +
                 "Set CosmosStorageOptions.ConnectionString or Graph:Storage:ConnectionString.");
 
-        var cosmosClient = new CosmosClient(connectionString);
+        // Build System.Text.Json options matching the hub's serialization pipeline
+        var typeRegistry = serviceProvider.GetService<ITypeRegistry>();
+        var jsonOptions = StorageImporter.CreateFullImportOptions(typeRegistry);
+
+        var cosmosClient = new CosmosClient(connectionString, new CosmosClientOptions
+        {
+            UseSystemTextJsonSerializerWithOptions = jsonOptions
+        });
 
         // Ensure database and containers exist
         CosmosContainerInitializer

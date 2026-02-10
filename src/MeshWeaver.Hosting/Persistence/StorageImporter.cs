@@ -1,6 +1,10 @@
 using System.Diagnostics;
 using System.Text.Json;
+using System.Text.Json.Serialization;
+using MeshWeaver.Domain;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Messaging;
+using MeshWeaver.Messaging.Serialization;
 using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Hosting.Persistence;
@@ -66,7 +70,7 @@ public class StorageImporter
         CancellationToken ct = default)
     {
         options ??= new StorageImportOptions();
-        var jsonOptions = options.JsonOptions ?? new JsonSerializerOptions();
+        var jsonOptions = options.JsonOptions ?? CreateDefaultImportOptions();
         var sw = Stopwatch.StartNew();
         _nodeCount = 0;
         _partitionCount = 0;
@@ -92,6 +96,45 @@ public class StorageImporter
         };
     }
 
+    /// <summary>
+    /// Creates JsonSerializerOptions suitable for importing nodes.
+    /// Handles case-insensitive property names, string enums, and unknown $type discriminators.
+    /// </summary>
+    public static JsonSerializerOptions CreateDefaultImportOptions() => new()
+    {
+        PropertyNameCaseInsensitive = true,
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        Converters = { new JsonStringEnumConverter() },
+        UnmappedMemberHandling = JsonUnmappedMemberHandling.Skip
+    };
+
+    /// <summary>
+    /// Creates JsonSerializerOptions matching the full application serialization pipeline.
+    /// Use this when writing to Cosmos DB or other targets that require polymorphic serialization.
+    /// </summary>
+    public static JsonSerializerOptions CreateFullImportOptions(ITypeRegistry? typeRegistry = null)
+    {
+        typeRegistry ??= MessageHubExtensions.CreateTypeRegistry();
+        var options = new JsonSerializerOptions
+        {
+            PropertyNameCaseInsensitive = true,
+            PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+            DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingDefault,
+            UnmappedMemberHandling = JsonUnmappedMemberHandling.Skip,
+            ReadCommentHandling = JsonCommentHandling.Skip,
+            AllowTrailingCommas = true,
+            IncludeFields = true,
+        };
+        options.Converters.Add(new EnumMemberJsonStringEnumConverter());
+        options.Converters.Add(new ObjectPolymorphicConverter(typeRegistry));
+        options.Converters.Add(new ReadOnlyCollectionConverterFactory());
+        options.Converters.Add(new JsonNodeConverter());
+        options.Converters.Add(new ImmutableDictionaryOfStringObjectConverter());
+        options.Converters.Add(new RawJsonConverter());
+        options.TypeInfoResolver = new PolymorphicTypeInfoResolver(typeRegistry);
+        return options;
+    }
+
     private async Task ImportRecursivelyAsync(
         string? parentPath,
         JsonSerializerOptions options,
@@ -103,10 +146,28 @@ public class StorageImporter
 
         foreach (var nodePath in nodePaths)
         {
-            var node = await _source.ReadAsync(nodePath, options, ct);
+            MeshWeaver.Mesh.MeshNode? node = null;
+            try
+            {
+                node = await _source.ReadAsync(nodePath, options, ct);
+            }
+            catch (Exception ex)
+            {
+                _logger?.LogWarning(ex, "Failed to read node {Path}, skipping", nodePath);
+            }
+
             if (node != null)
             {
-                await _target.WriteAsync(node, options, ct);
+                try
+                {
+                    await _target.WriteAsync(node, options, ct);
+                }
+                catch (Exception ex)
+                {
+                    _logger?.LogWarning(ex, "Failed to write node {Path} (Id={Id}, Namespace={Namespace}), skipping",
+                        nodePath, node.Id, node.Namespace);
+                    continue;
+                }
                 _nodeCount++;
 
                 _logger?.LogDebug("Imported node {Path}", nodePath);
@@ -133,10 +194,10 @@ public class StorageImporter
                 }
 
                 onProgress?.Invoke(_nodeCount, _partitionCount, nodePath);
-
-                // Recurse into children
-                await ImportRecursivelyAsync(nodePath, options, importPartitions, onProgress, ct);
             }
+
+            // Always recurse into children (even if this node failed to read, children may be fine)
+            await ImportRecursivelyAsync(nodePath, options, importPartitions, onProgress, ct);
         }
 
         // Scan directories that aren't nodes

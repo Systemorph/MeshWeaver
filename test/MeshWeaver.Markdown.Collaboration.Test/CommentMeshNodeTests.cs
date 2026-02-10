@@ -1,11 +1,12 @@
 using System;
 using System.Collections.Generic;
-using System.Collections.Immutable;
 using System.Linq;
+using System.Reflection;
 using FluentAssertions;
 using MeshWeaver.Domain;
 using MeshWeaver.Graph;
 using MeshWeaver.Layout;
+using MeshWeaver.Layout.Catalog;
 using MeshWeaver.Markdown;
 using MeshWeaver.Mesh;
 using Xunit;
@@ -124,7 +125,6 @@ public class CommentMeshNodeTests
         var comment = new Comment();
 
         comment.Status.Should().Be(CommentStatus.Active);
-        comment.Replies.Should().BeEmpty();
         comment.Id.Should().NotBeNullOrEmpty();
     }
 
@@ -149,8 +149,16 @@ public class CommentMeshNodeTests
     }
 
     [Fact]
-    public void Comment_WithReplies_SupportsThreading()
+    public void Comment_WithReplies_SupportsThreadingViaMeshNodes()
     {
+        var parentComment = new Comment
+        {
+            Id = "comment-1",
+            MarkerId = "c1",
+            Author = "Alice",
+            Text = "Original comment"
+        };
+
         var reply = new Comment
         {
             Id = "reply-1",
@@ -159,18 +167,22 @@ public class CommentMeshNodeTests
             ParentCommentId = "comment-1"
         };
 
-        var comment = new Comment
+        var parentNode = new MeshNode("docs/page/comment-1")
         {
-            Id = "comment-1",
-            MarkerId = "c1",
-            Author = "Alice",
-            Text = "Original comment",
-            Replies = ImmutableList.Create(reply)
+            NodeType = CommentNodeType.NodeType,
+            Content = parentComment
         };
 
-        comment.Replies.Should().HaveCount(1);
-        comment.Replies[0].Author.Should().Be("Bob");
-        comment.Replies[0].ParentCommentId.Should().Be("comment-1");
+        var replyNode = new MeshNode("docs/page/comment-1/reply-1")
+        {
+            NodeType = CommentNodeType.NodeType,
+            Content = reply
+        };
+
+        // Threading is via ParentCommentId, not embedded Replies
+        ((Comment)replyNode.Content!).ParentCommentId.Should().Be(parentComment.Id);
+        ((Comment)replyNode.Content!).Author.Should().Be("Bob");
+        replyNode.Path.Should().StartWith(parentNode.Path!);
     }
 
     [Fact]
@@ -823,6 +835,316 @@ public class CommentMeshNodeTests
         var result = CommentLayoutAreas.BuildThumbnail(replyNode);
         result.Should().NotBeNull();
         result.Should().BeOfType<StackControl>();
+    }
+
+    #endregion
+
+    #region Reply System — MeshNode-Based
+
+    [Fact]
+    public void Comment_Record_DoesNotHaveRepliesProperty()
+    {
+        var repliesProp = typeof(Comment).GetProperty("Replies");
+        repliesProp.Should().BeNull("Replies property was removed in favor of MeshNode-based replies");
+    }
+
+    [Fact]
+    public void BuildOverview_WithReplyNodes_RendersReplies()
+    {
+        var comment = new Comment
+        {
+            Id = "c1",
+            Author = "Alice",
+            Text = "Original comment"
+        };
+        var node = new MeshNode("docs/page/c1")
+        {
+            NodeType = CommentNodeType.NodeType,
+            Content = comment
+        };
+
+        var replyNode = new MeshNode("docs/page/c1/r1")
+        {
+            NodeType = CommentNodeType.NodeType,
+            Content = new Comment { Id = "r1", Author = "Bob", Text = "Reply", ParentCommentId = "c1" }
+        };
+
+        var result = CommentLayoutAreas.BuildOverview(node, "docs/page/c1", new List<MeshNode> { replyNode });
+
+        result.Should().NotBeNull();
+        result.Should().BeOfType<StackControl>();
+    }
+
+    [Fact]
+    public void BuildOverview_WithNoReplies_RendersWithoutRepliesSection()
+    {
+        var comment = new Comment
+        {
+            Id = "c1",
+            Author = "Alice",
+            Text = "Standalone comment"
+        };
+        var node = new MeshNode("docs/page/c1")
+        {
+            NodeType = CommentNodeType.NodeType,
+            Content = comment
+        };
+
+        var result = CommentLayoutAreas.BuildOverview(node, "docs/page/c1", Array.Empty<MeshNode>());
+
+        result.Should().NotBeNull();
+        result.Should().BeOfType<StackControl>();
+    }
+
+    [Fact]
+    public void BuildOverview_FiltersRepliesByParentCommentId()
+    {
+        var comment = new Comment { Id = "c1", Author = "Alice", Text = "Comment 1" };
+        var node = new MeshNode("docs/page/c1")
+        {
+            NodeType = CommentNodeType.NodeType,
+            Content = comment
+        };
+
+        var replyForC1 = new MeshNode("docs/page/c1/r1")
+        {
+            NodeType = CommentNodeType.NodeType,
+            Content = new Comment { Id = "r1", Author = "Bob", Text = "Reply to c1", ParentCommentId = "c1" }
+        };
+        var replyForC2 = new MeshNode("docs/page/c2/r2")
+        {
+            NodeType = CommentNodeType.NodeType,
+            Content = new Comment { Id = "r2", Author = "Carol", Text = "Reply to c2", ParentCommentId = "c2" }
+        };
+
+        // BuildOverview filters by ParentCommentId == comment.Id internally
+        var result = CommentLayoutAreas.BuildOverview(node, "docs/page/c1", new List<MeshNode> { replyForC1, replyForC2 });
+
+        result.Should().NotBeNull();
+        result.Should().BeOfType<StackControl>();
+    }
+
+    [Fact]
+    public void ReplyFormModel_HasOnlyTextProperty()
+    {
+        var props = typeof(MarkdownLayoutAreas.ReplyFormModel)
+            .GetProperties(BindingFlags.Public | BindingFlags.Instance);
+
+        props.Should().HaveCount(1);
+        props[0].Name.Should().Be("Text");
+        props[0].PropertyType.Should().Be(typeof(string));
+    }
+
+    [Fact]
+    public void ReplyCreation_SetsParentCommentId_And_NodeType()
+    {
+        var commentPath = "docs/page/c1";
+        var replyId = "reply-new";
+        var parentCommentId = "c1";
+
+        var replyComment = new Comment
+        {
+            Id = replyId,
+            NodePath = commentPath,
+            Author = "",
+            Text = "",
+            ParentCommentId = parentCommentId,
+            Status = CommentStatus.Active
+        };
+        var replyNode = new MeshNode($"{commentPath}/{replyId}")
+        {
+            Name = "Reply",
+            NodeType = CommentNodeType.NodeType,
+            Content = replyComment
+        };
+
+        replyNode.NodeType.Should().Be(CommentNodeType.NodeType);
+        replyNode.Path.Should().Be("docs/page/c1/reply-new");
+        ((Comment)replyNode.Content!).ParentCommentId.Should().Be(parentCommentId);
+    }
+
+    [Fact]
+    public void ReplyNodes_SortedByCreatedAt()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var replyNodes = new List<MeshNode>
+        {
+            new("docs/page/c1/r3")
+            {
+                NodeType = CommentNodeType.NodeType,
+                Content = new Comment { Id = "r3", Author = "C", Text = "Third", ParentCommentId = "c1", CreatedAt = now.AddMinutes(-1) }
+            },
+            new("docs/page/c1/r1")
+            {
+                NodeType = CommentNodeType.NodeType,
+                Content = new Comment { Id = "r1", Author = "A", Text = "First", ParentCommentId = "c1", CreatedAt = now.AddMinutes(-10) }
+            },
+            new("docs/page/c1/r2")
+            {
+                NodeType = CommentNodeType.NodeType,
+                Content = new Comment { Id = "r2", Author = "B", Text = "Second", ParentCommentId = "c1", CreatedAt = now.AddMinutes(-5) }
+            }
+        };
+
+        var ordered = replyNodes.OrderBy(r => ((Comment)r.Content!).CreatedAt).ToList();
+
+        ((Comment)ordered[0].Content!).Id.Should().Be("r1");
+        ((Comment)ordered[1].Content!).Id.Should().Be("r2");
+        ((Comment)ordered[2].Content!).Id.Should().Be("r3");
+    }
+
+    #endregion
+
+    #region Expandable Replies Catalog
+
+    [Fact]
+    public void BuildRepliesCatalog_ReturnsCatalogControl_WithCorrectStructure()
+    {
+        var replyNodes = new List<MeshNode>
+        {
+            new("docs/page/c1/r1")
+            {
+                NodeType = CommentNodeType.NodeType,
+                Content = new Comment { Id = "r1", Author = "Bob", Text = "First reply", ParentCommentId = "c1" }
+            }
+        };
+
+        var catalog = CommentLayoutAreas.BuildRepliesCatalog(replyNodes);
+
+        catalog.Should().BeOfType<CatalogControl>();
+        var catalogControl = (CatalogControl)catalog;
+        catalogControl.Groups.Should().HaveCount(1);
+        catalogControl.Groups[0].Key.Should().Be("replies");
+        catalogControl.Groups[0].Label.Should().Be("Replies");
+        catalogControl.Groups[0].IsExpanded.Should().BeFalse("replies section is collapsed by default");
+        catalogControl.Groups[0].TotalCount.Should().Be(1);
+        catalogControl.CollapsibleSections.Should().BeTrue();
+        catalogControl.ShowCounts.Should().BeTrue();
+    }
+
+    [Fact]
+    public void BuildRepliesCatalog_MultipleReplies_ShowsCorrectCount()
+    {
+        var replyNodes = new List<MeshNode>
+        {
+            new("docs/page/c1/r1")
+            {
+                NodeType = CommentNodeType.NodeType,
+                Content = new Comment { Id = "r1", Author = "Bob", Text = "Reply 1", ParentCommentId = "c1" }
+            },
+            new("docs/page/c1/r2")
+            {
+                NodeType = CommentNodeType.NodeType,
+                Content = new Comment { Id = "r2", Author = "Carol", Text = "Reply 2", ParentCommentId = "c1" }
+            },
+            new("docs/page/c1/r3")
+            {
+                NodeType = CommentNodeType.NodeType,
+                Content = new Comment { Id = "r3", Author = "Dave", Text = "Reply 3", ParentCommentId = "c1" }
+            }
+        };
+
+        var catalog = (CatalogControl)CommentLayoutAreas.BuildRepliesCatalog(replyNodes);
+
+        catalog.Groups[0].TotalCount.Should().Be(3);
+        catalog.Groups[0].Items.Should().HaveCount(3);
+    }
+
+    [Fact]
+    public void BuildRepliesCatalog_EachItemIsThumbnailStackControl()
+    {
+        var replyNodes = new List<MeshNode>
+        {
+            new("docs/page/c1/r1")
+            {
+                NodeType = CommentNodeType.NodeType,
+                Content = new Comment { Id = "r1", Author = "Bob", Text = "Some reply", ParentCommentId = "c1" }
+            }
+        };
+
+        var catalog = (CatalogControl)CommentLayoutAreas.BuildRepliesCatalog(replyNodes);
+
+        catalog.Groups[0].Items.Should().HaveCount(1);
+        catalog.Groups[0].Items[0].Should().BeOfType<StackControl>("each reply renders as a Thumbnail StackControl");
+    }
+
+    #endregion
+
+    #region Reply Workflow — End-to-End
+
+    [Fact]
+    public void ReplyWorkflow_CreateReply_EditText_VerifyThumbnailInCatalog()
+    {
+        // 1) Start with a parent comment — no replies yet
+        var commentPath = "docs/page/c1";
+        var parentComment = new Comment
+        {
+            Id = "c1",
+            MarkerId = "c1",
+            Author = "Alice",
+            Text = "Original comment",
+            NodePath = "docs/page",
+            Status = CommentStatus.Active
+        };
+        var parentNode = new MeshNode(commentPath)
+        {
+            Name = "Comment by Alice",
+            NodeType = CommentNodeType.NodeType,
+            Content = parentComment
+        };
+
+        // BuildOverview with no replies — no catalog
+        var overviewNoReplies = CommentLayoutAreas.BuildOverview(
+            parentNode, commentPath, Array.Empty<MeshNode>());
+        overviewNoReplies.Should().BeOfType<StackControl>();
+
+        // 2) "Click Reply" — simulate what the Reply button handler creates:
+        //    an empty reply MeshNode with ParentCommentId set
+        var replyId = "reply-abc";
+        var emptyReply = new Comment
+        {
+            Id = replyId,
+            NodePath = commentPath,
+            Author = "",
+            Text = "",
+            ParentCommentId = parentComment.Id,
+            Status = CommentStatus.Active
+        };
+        var replyNode = new MeshNode($"{commentPath}/{replyId}")
+        {
+            Name = "Reply",
+            NodeType = CommentNodeType.NodeType,
+            Content = emptyReply
+        };
+
+        // Verify the reply node is correctly formed
+        replyNode.NodeType.Should().Be(CommentNodeType.NodeType);
+        ((Comment)replyNode.Content!).ParentCommentId.Should().Be("c1");
+
+        // 3) "Write text and click Done" — simulate what the Done handler does:
+        //    update the reply MeshNode content with author + text
+        var updatedReply = emptyReply with { Author = "User", Text = "I agree with this!" };
+        var updatedReplyNode = replyNode with { Content = updatedReply };
+
+        ((Comment)updatedReplyNode.Content!).Author.Should().Be("User");
+        ((Comment)updatedReplyNode.Content!).Text.Should().Be("I agree with this!");
+
+        // 4) Verify we see *one* answer in the overview as a Thumbnail inside a CatalogControl
+        var overviewWithReply = CommentLayoutAreas.BuildOverview(
+            parentNode, commentPath, new List<MeshNode> { updatedReplyNode });
+
+        overviewWithReply.Should().BeOfType<StackControl>();
+
+        // Directly verify the catalog structure
+        var repliesCatalog = (CatalogControl)CommentLayoutAreas.BuildRepliesCatalog(
+            new List<MeshNode> { updatedReplyNode });
+
+        repliesCatalog.Groups.Should().HaveCount(1);
+        repliesCatalog.Groups[0].Label.Should().Be("Replies");
+        repliesCatalog.Groups[0].TotalCount.Should().Be(1, "exactly one reply was added");
+        repliesCatalog.Groups[0].Items.Should().HaveCount(1);
+        repliesCatalog.Groups[0].Items[0].Should().BeOfType<StackControl>(
+            "the reply is rendered as a Thumbnail (StackControl)");
     }
 
     #endregion

@@ -484,19 +484,18 @@ public static class MarkdownLayoutAreas
                 </div>"));
         }
 
-        // Render reply MeshNodes as Thumbnail or inline edit form
-        foreach (var replyNode in replyNodes.OrderBy(r => ((Comment)r.Content!).CreatedAt))
+        // Render reply MeshNodes — editing reply shown inline, rest in expandable catalog
+        var orderedReplies = replyNodes.OrderBy(r => ((Comment)r.Content!).CreatedAt).ToList();
+        var editingReply = orderedReplies.FirstOrDefault(r => r.Path == panelState.EditingReplyPath);
+        if (editingReply != null)
         {
-            if (replyNode.Path == panelState.EditingReplyPath)
-            {
-                // Show inline edit form for this reply
-                card = card.WithView(BuildReplyEditForm(host, replyNode, panelState, panelStateSubject));
-            }
-            else
-            {
-                // Show as CommentNodeType Thumbnail
-                card = card.WithView(CommentLayoutAreas.BuildThumbnail(replyNode));
-            }
+            card = card.WithView(BuildReplyEditForm(host, editingReply, panelState, panelStateSubject));
+        }
+
+        var displayReplies = orderedReplies.Where(r => r.Path != panelState.EditingReplyPath).ToList();
+        if (displayReplies.Count > 0)
+        {
+            card = card.WithView(CommentLayoutAreas.BuildRepliesCatalog(displayReplies));
         }
 
         // Action buttons — Reply creates a MeshNode immediately, Resolve removes marker + deletes node
@@ -562,9 +561,9 @@ public static class MarkdownLayoutAreas
     }
 
     /// <summary>
-    /// Builds an inline edit form for a reply MeshNode using the property overview (auto-save).
-    /// Shows Author + Text fields (other Comment properties hidden via [Browsable(false)]).
-    /// Done closes the form; Cancel deletes the reply node.
+    /// Builds an inline edit form for a reply MeshNode using a simple text field.
+    /// Done reads the text, updates the reply MeshNode, and closes the form.
+    /// Cancel deletes the empty reply node.
     /// </summary>
     private static UiControl BuildReplyEditForm(
         LayoutAreaHost host,
@@ -572,11 +571,21 @@ public static class MarkdownLayoutAreas
         AnnotationPanelState panelState,
         BehaviorSubject<AnnotationPanelState> panelStateSubject)
     {
+        var replyComment = replyNode.Content as Comment;
+        var replyDataId = $"ReplyEdit_{replyComment?.Id ?? replyNode.Path!.Replace("/", "-")}";
+
         var form = Controls.Stack
             .WithStyle("margin: 4px 0; padding: 12px; background: var(--neutral-layer-2); border-radius: 6px; border-left: 3px solid var(--accent-fill-rest);");
 
-        // Property editor with auto-save
-        form = form.WithView(OverviewLayoutArea.BuildPropertyOverview(host, replyNode));
+        // Single text field via host.Edit
+        var editControl = host.Edit(new ReplyFormModel(), replyDataId);
+        if (editControl != null)
+        {
+            var editWrapper = Controls.Stack
+                .WithStyle("margin-bottom: 8px;")
+                .WithView(editControl);
+            form = form.WithView(editWrapper);
+        }
 
         // Done/Cancel buttons
         var buttonRow = Controls.Stack
@@ -599,9 +608,22 @@ public static class MarkdownLayoutAreas
             Controls.Button("Done")
                 .WithAppearance(Appearance.Accent)
                 .WithStyle("padding: 6px 16px; font-size: 0.85rem;")
-                .WithClickAction(_ =>
+                .WithClickAction(async ctx =>
                 {
-                    // Auto-save already persisted; just close the edit form
+                    var replyModel = await ctx.Host.Stream.GetDataAsync<ReplyFormModel>(replyDataId);
+                    if (replyModel != null && !string.IsNullOrWhiteSpace(replyModel.Text))
+                    {
+                        // Update the reply MeshNode with the text
+                        var updatedComment = (replyComment ?? new Comment()) with
+                        {
+                            Author = "User",
+                            Text = replyModel.Text
+                        };
+                        var updatedNode = replyNode with { Content = updatedComment };
+                        host.Hub.Post(
+                            new DataChangeRequest().WithUpdates(updatedNode),
+                            o => o.WithTarget(host.Hub.Address));
+                    }
                     panelStateSubject.OnNext(panelState with { EditingReplyPath = null });
                 }));
 

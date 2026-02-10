@@ -96,12 +96,13 @@ public class CosmosStorageAdapter : IStorageAdapter, IAsyncDisposable
 
     public async Task WriteAsync(MeshNode node, JsonSerializerOptions options, CancellationToken ct = default)
     {
-        // Serialize manually to apply NotMapped property exclusion
-        var json = JsonSerializer.Serialize(node, options);
-        using var document = JsonDocument.Parse(json);
+        // Ensure namespace is never null — Cosmos partition key /namespace requires the field to be present
+        var nodeToWrite = node.Namespace is null ? node with { Namespace = "" } : node;
+        // The CosmosClient is configured with UseSystemTextJsonSerializerWithOptions,
+        // so UpsertItemAsync uses System.Text.Json with the hub's serialization pipeline
         await _nodesContainer.UpsertItemAsync(
-            document.RootElement,
-            new PartitionKey(node.Namespace ?? ""),
+            nodeToWrite,
+            new PartitionKey(nodeToWrite.Namespace),
             cancellationToken: ct);
     }
 
