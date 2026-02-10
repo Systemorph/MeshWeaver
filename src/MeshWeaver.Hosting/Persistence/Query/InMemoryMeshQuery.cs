@@ -308,7 +308,7 @@ public class InMemoryMeshQuery : IMeshQueryCore
         [EnumeratorCancellation] CancellationToken ct = default)
     {
         var normalizedPath = NormalizePath(basePath);
-        var normalizedPrefix = prefix?.ToLowerInvariant() ?? "";
+        var normalizedPrefix = prefix ?? "";
 
         var suggestions = new List<QuerySuggestion>();
 
@@ -316,23 +316,23 @@ public class InMemoryMeshQuery : IMeshQueryCore
         await foreach (var node in _persistence.GetDescendantsSecureAsync(normalizedPath, userId, options).WithCancellation(ct))
         {
             var name = node.Name ?? node.Id ?? node.Path ?? "";
-            var nameLower = name.ToLowerInvariant();
-            var pathLower = (node.Path ?? "").ToLowerInvariant();
+            var nameLower = name;
+            var pathLower = node.Path ?? "";
 
             // Calculate match score based on prefix match (check both name and path)
             double score = 0;
 
             // Name matches (higher priority)
-            if (nameLower.StartsWith(normalizedPrefix))
+            if (nameLower.StartsWith(normalizedPrefix, StringComparison.OrdinalIgnoreCase))
             {
                 score = 100 - (nameLower.Length - normalizedPrefix.Length); // Exact prefix match, shorter is better
             }
-            else if (nameLower.Contains(normalizedPrefix))
+            else if (nameLower.Contains(normalizedPrefix, StringComparison.OrdinalIgnoreCase))
             {
                 score = 50 - (nameLower.IndexOf(normalizedPrefix, StringComparison.OrdinalIgnoreCase)); // Contains match
             }
             // Path matches (lower priority than name)
-            else if (pathLower.Contains(normalizedPrefix))
+            else if (pathLower.Contains(normalizedPrefix, StringComparison.OrdinalIgnoreCase))
             {
                 score = 30 - (pathLower.IndexOf(normalizedPrefix, StringComparison.OrdinalIgnoreCase) * 0.1); // Path contains match
             }
@@ -456,7 +456,7 @@ public class InMemoryMeshQuery : IMeshQueryCore
             var normalizedBasePath = NormalizePath(effectivePath);
 
             // Track current result set for detecting changes
-            var currentItems = new Dictionary<string, T>();
+            var currentItems = new Dictionary<string, T>(StringComparer.OrdinalIgnoreCase);
 
             // Emit initial results
             try
@@ -469,7 +469,7 @@ public class InMemoryMeshQuery : IMeshQueryCore
                         initialItems.Add(typedItem);
                         var itemPath = GetItemPath(item);
                         if (!string.IsNullOrEmpty(itemPath))
-                            currentItems[itemPath.ToLowerInvariant()] = typedItem;
+                            currentItems[itemPath] = typedItem;
                     }
                 }
 
@@ -543,18 +543,18 @@ public class InMemoryMeshQuery : IMeshQueryCore
 
         // Group changes by path to handle multiple changes to the same item
         var changesByPath = batch
-            .GroupBy(c => c.Path.ToLowerInvariant())
-            .ToDictionary(g => g.Key, g => g.Last());
+            .GroupBy(c => c.Path, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => g.Last(), StringComparer.OrdinalIgnoreCase);
 
         // Re-query to get current matching items
-        var newItems = new Dictionary<string, T>();
+        var newItems = new Dictionary<string, T>(StringComparer.OrdinalIgnoreCase);
         await foreach (var item in QueryAsync(request, options, ct))
         {
             if (item is T typedItem)
             {
                 var itemPath = GetItemPath(item);
                 if (!string.IsNullOrEmpty(itemPath))
-                    newItems[itemPath.ToLowerInvariant()] = typedItem;
+                    newItems[itemPath] = typedItem;
             }
         }
 

@@ -1,4 +1,3 @@
-using System.Text.Json;
 using Microsoft.Azure.Cosmos;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -18,8 +17,7 @@ namespace MeshWeaver.Hosting.Cosmos;
 /// Factory for creating CosmosStorageAdapter instances from IOptions&lt;CosmosStorageOptions&gt;.
 /// </summary>
 public class CosmosStorageAdapterFactory(
-    IOptions<CosmosStorageOptions> options,
-    ILogger<CosmosStorageAdapterFactory> logger) : IStorageAdapterFactory
+    IOptions<CosmosStorageOptions> options) : IStorageAdapterFactory
 {
     public const string StorageType = "Cosmos";
 
@@ -42,11 +40,8 @@ public class CosmosStorageAdapterFactory(
             UseSystemTextJsonSerializerWithOptions = jsonOptions
         });
 
-        // Ensure database and containers exist
-        CosmosContainerInitializer
-            .EnsureDatabaseAndContainersAsync(cosmosClient, opts, logger)
-            .GetAwaiter().GetResult();
-
+        // Database and containers are created by the Aspire AppHost (AddContainer)
+        // or by the CLI import tool — not here.
         var database = cosmosClient.GetDatabase(opts.DatabaseName);
         var nodesContainer = database.GetContainer(opts.NodesContainerName);
         var partitionsContainer = database.GetContainer(opts.PartitionsContainerName);

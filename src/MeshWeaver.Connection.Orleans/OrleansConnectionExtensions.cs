@@ -36,8 +36,7 @@ public static class OrleansConnectionExtensions
 
     private static IServiceCollection AddOrleansMeshServices(this IServiceCollection services)
     {
-        // Register defaults - MeshCatalog requires IPersistenceServiceCore
-        services.TryAddSingleton<IPersistenceServiceCore>(new InMemoryPersistenceService());
+        services.AddInMemoryPersistence();
         services.TryAddSingleton<IRoutingService, OrleansRoutingService>();
         return services;
     }
@@ -62,7 +61,7 @@ public static class OrleansConnectionExtensions
             return services;
         });
         builder.ConfigureHub(conf => conf
-            .WithTypes(typeof(Article), typeof(StreamInfo))
+            .WithTypes(typeof(Article))
             .AddMeshTypes()
         );
     }

@@ -67,7 +67,7 @@ public class CosmosStorageAdapter : IStorageAdapter, IAsyncDisposable
     }
 
     private static string NormalizePath(string? path) =>
-        path?.Trim('/').ToLowerInvariant() ?? "";
+        path?.Trim('/') ?? "";
 
     public async Task<MeshNode?> ReadAsync(string path, JsonSerializerOptions options, CancellationToken ct = default)
     {
@@ -82,15 +82,30 @@ public class CosmosStorageAdapter : IStorageAdapter, IAsyncDisposable
 
         try
         {
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            cts.CancelAfter(TimeSpan.FromSeconds(10));
+            Console.WriteLine($"[Cosmos] ReadAsync: id={id}, partition={ns}, container={_nodesContainer.Id}");
             var response = await _nodesContainer.ReadItemAsync<MeshNode>(
                 id,
                 new PartitionKey(ns),
-                cancellationToken: ct);
+                cancellationToken: cts.Token);
+            Console.WriteLine($"[Cosmos] ReadAsync OK: {response.StatusCode}, RU={response.RequestCharge}");
             return response.Resource;
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            Console.WriteLine($"[Cosmos] ReadAsync TIMEOUT after 10s: id={id}, partition={ns}");
+            throw new TimeoutException($"Cosmos ReadItemAsync timed out for id={id}, partition={ns}");
         }
         catch (CosmosException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound)
         {
+            Console.WriteLine($"[Cosmos] ReadAsync NotFound: id={id}, partition={ns}");
             return null;
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[Cosmos] ReadAsync ERROR: {ex.GetType().Name}: {ex.Message}");
+            throw;
         }
     }
 
