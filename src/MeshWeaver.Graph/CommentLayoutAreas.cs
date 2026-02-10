@@ -1,5 +1,7 @@
 using System.Reactive.Linq;
+using MeshWeaver.Application.Styles;
 using MeshWeaver.Data;
+using MeshWeaver.Domain;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Mesh;
@@ -130,7 +132,7 @@ public static class CommentLayoutAreas
         });
     }
 
-    private static UiControl BuildThumbnail(MeshNode? node)
+    internal static UiControl BuildThumbnail(MeshNode? node)
     {
         var comment = node?.Content as Comment;
         var author = comment?.Author ?? "Unknown";
@@ -142,7 +144,7 @@ public static class CommentLayoutAreas
             .WithView(Controls.Stack
                 .WithOrientation(Orientation.Horizontal)
                 .WithStyle("align-items: center; gap: 8px;")
-                .WithView(Controls.Icon("Comment").WithStyle("font-size: 16px; color: #3b82f6;"))
+                .WithView(Controls.Icon(FluentIcons.Comment(IconSize.Size16)).WithStyle("color: #3b82f6;"))
                 .WithView(Controls.Html($"<span style=\"font-size: 0.85rem; font-weight: 500;\">{System.Web.HttpUtility.HtmlEncode(author)}</span>")))
             .WithView(Controls.Html($"<p style=\"margin: 4px 0 0 0; font-size: 0.85rem; color: var(--neutral-foreground-hint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;\">{System.Web.HttpUtility.HtmlEncode(preview)}</p>"));
     }

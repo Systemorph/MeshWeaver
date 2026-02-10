@@ -309,7 +309,7 @@ public static class ThreadLayoutAreas
             bubble = bubble.WithView(Controls.Stack
                 .WithOrientation(Orientation.Horizontal)
                 .WithStyle("margin-top: 8px; padding-top: 8px; border-top: 1px solid rgba(255,255,255,0.2);")
-                .WithView(Controls.Icon("ArrowRight").WithStyle("font-size: 14px;"))
+                .WithView(Controls.Icon(FluentIcons.ArrowRight(IconSize.Size16)).WithStyle("font-size: 14px;"))
                 .WithView(new NavLinkControl("View delegation", null, $"/{message.DelegationPath}/{ThreadArea}")));
         }
 
@@ -413,7 +413,7 @@ public static class ThreadLayoutAreas
             .WithView(Controls.Stack
                 .WithOrientation(Orientation.Horizontal)
                 .WithStyle("align-items: center; gap: 8px; margin-bottom: 8px;")
-                .WithView(Controls.Icon("Chat").WithStyle("color: var(--accent-fill-rest);"))
+                .WithView(Controls.Icon(FluentIcons.Chat(IconSize.Size20)).WithStyle("color: var(--accent-fill-rest);"))
                 .WithView(Controls.Html($"<strong>{System.Web.HttpUtility.HtmlEncode(title)}</strong>")))
             .WithView(Controls.Html($"<span style=\"font-size: 0.85rem; color: var(--neutral-foreground-hint);\">{timestamp}</span>"))
             .WithView(new NavLinkControl("", null, $"/{path}/{ThreadArea}"));
@@ -497,7 +497,7 @@ public static class ThreadLayoutAreas
             .WithView(Controls.Stack
                 .WithOrientation(Orientation.Horizontal)
                 .WithStyle("align-items: center; gap: 12px; margin-bottom: 8px;")
-                .WithView(Controls.Icon("Chat").WithStyle("font-size: 24px; color: var(--accent-fill-rest);"))
+                .WithView(Controls.Icon(FluentIcons.Chat(IconSize.Size24)).WithStyle("color: var(--accent-fill-rest);"))
                 .WithView(Controls.Stack
                     .WithView(Controls.Html($"<strong style=\"display: block;\">{System.Web.HttpUtility.HtmlEncode(title)}</strong>"))
                     .WithView(Controls.Html($"<span style=\"font-size: 0.85rem; color: var(--neutral-foreground-hint);\">{lastActivity}</span>"))))

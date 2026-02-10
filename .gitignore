@@ -363,3 +363,9 @@ samples/Graph/Data/test/
 # Chat partitions (user-specific chat history)
 **/chats/
 **/Chat/
+/memex/Azurite/Data/__azurite_db_blob__.json
+/memex/Azurite/Data/__azurite_db_blob_extent__.json
+/memex/Azurite/Data/__azurite_db_queue__.json
+/memex/Azurite/Data/__azurite_db_queue_extent__.json
+/memex/Azurite/Data/__azurite_db_table__.json
+/memex/Azurite/Data/AzuriteConfig

@@ -1,6 +1,7 @@
 using Microsoft.Azure.Cosmos;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Hosting.Persistence.Query;
 using MeshWeaver.Mesh.Security;
@@ -12,27 +13,26 @@ using MeshWeaver.Messaging;
 namespace MeshWeaver.Hosting.Cosmos;
 
 /// <summary>
-/// Factory for creating CosmosStorageAdapter instances from configuration.
+/// Factory for creating CosmosStorageAdapter instances from IOptions&lt;CosmosStorageOptions&gt;.
 /// </summary>
-public class CosmosStorageAdapterFactory : IStorageAdapterFactory
+public class CosmosStorageAdapterFactory(IOptions<CosmosStorageOptions> options) : IStorageAdapterFactory
 {
     public const string StorageType = "Cosmos";
 
     public IStorageAdapter Create(GraphStorageConfig config, IServiceProvider serviceProvider)
     {
-        var connectionString = config.ConnectionString
-            ?? throw new InvalidOperationException(
-                "Graph:Storage:ConnectionString is required for Cosmos storage. " +
-                "Configure it in appsettings.json.");
+        var opts = options.Value;
 
-        var databaseName = config.DatabaseName ?? "MeshWeaver";
-        var nodesContainerName = config.Settings?.GetValueOrDefault("NodesContainer") ?? "nodes";
-        var partitionsContainerName = config.Settings?.GetValueOrDefault("PartitionsContainer") ?? "partitions";
+        var connectionString = opts.ConnectionString
+            ?? config.ConnectionString
+            ?? throw new InvalidOperationException(
+                "Cosmos DB connection string is not configured. " +
+                "Set CosmosStorageOptions.ConnectionString or Graph:Storage:ConnectionString.");
 
         var cosmosClient = new CosmosClient(connectionString);
-        var database = cosmosClient.GetDatabase(databaseName);
-        var nodesContainer = database.GetContainer(nodesContainerName);
-        var partitionsContainer = database.GetContainer(partitionsContainerName);
+        var database = cosmosClient.GetDatabase(opts.DatabaseName);
+        var nodesContainer = database.GetContainer(opts.NodesContainerName);
+        var partitionsContainer = database.GetContainer(opts.PartitionsContainerName);
 
         return new CosmosStorageAdapter(nodesContainer, partitionsContainer);
     }
@@ -46,8 +46,11 @@ public static class PersistenceExtensions
     /// <summary>
     /// Registers the Cosmos storage adapter factory for use with AddPersistenceFromConfig.
     /// </summary>
-    public static IServiceCollection AddCosmosStorageFactory(this IServiceCollection services)
+    public static IServiceCollection AddCosmosStorageFactory(
+        this IServiceCollection services, Action<CosmosStorageOptions>? configure = null)
     {
+        if (configure != null)
+            services.Configure(configure);
         services.AddKeyedSingleton<IStorageAdapterFactory, CosmosStorageAdapterFactory>(
             CosmosStorageAdapterFactory.StorageType);
         return services;
@@ -312,5 +315,17 @@ public static class PersistenceExtensions
             });
 
         return services.AddCosmosPersistence(cosmosClient, databaseName);
+    }
+
+    /// <summary>
+    /// Registers the Cosmos DB data seeder hosted service.
+    /// The seeder reads data from the file system and writes it to Cosmos DB at startup.
+    /// </summary>
+    public static IServiceCollection AddCosmosSeeding(
+        this IServiceCollection services, Action<CosmosSeederOptions> configure)
+    {
+        services.Configure(configure);
+        services.AddHostedService<CosmosDataSeeder>();
+        return services;
     }
 }
