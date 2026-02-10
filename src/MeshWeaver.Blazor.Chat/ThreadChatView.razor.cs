@@ -192,6 +192,13 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         var model = selectedModelInfo?.Name ?? availableModels.FirstOrDefault()?.Name ?? string.Empty;
         var chatClient = new AgentChatClient(Hub.ServiceProvider);
         await chatClient.InitializeAsync(initialContext, model);
+
+        // Set the explicitly selected agent from the dropdown
+        if (selectedAgentInfo != null)
+        {
+            chatClient.SetSelectedAgent(selectedAgentInfo.Name);
+        }
+
         return chatClient;
     }
 
@@ -503,6 +510,9 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
             return;
 
         selectedAgentInfo = newAgent;
+
+        // Set the selected agent on the current chat instance
+        chat?.SetSelectedAgent(newAgent.Name);
 
         var preferredModel = GetPreferredModelInfoForAgent(newAgent.Name);
         if (preferredModel != null && preferredModel.Name != selectedModelInfo?.Name)

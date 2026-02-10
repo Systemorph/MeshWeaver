@@ -92,7 +92,13 @@
       "Bash(claude:*)",
       "Bash(tail:*)",
       "Bash(for f in /Users/samuelglauser/Documents/work/2026_Systemorph/projekte/MeshWeaver/samples/Graph/Data/Cornerstone/Pricing/Code/*.cs)",
-      "Bash(git -C /Users/samuelglauser/Documents/work/2026_Systemorph/projekte/MeshWeaver log --all --oneline --name-only -- **/Insurance/**)"
+      "Bash(git -C /Users/samuelglauser/Documents/work/2026_Systemorph/projekte/MeshWeaver log --all --oneline --name-only -- **/Insurance/**)",
+      "Bash(ASPNETCORE_ENVIRONMENT=Development dotnet run:*)",
+      "Bash(git diff:*)",
+      "Bash(dotnet-ildasm:*)",
+      "Bash(unzip:*)",
+      "Bash(ilspycmd:*)",
+      "Bash(nm:*)"
     ],
     "deny": []
   },
