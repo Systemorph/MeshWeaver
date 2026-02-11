@@ -23,11 +23,14 @@ if (useDistributed)
     }
     var storageBlobs = contentStorage.AddBlobs("storage");
 
-    // Ephemeral storage for Orleans (fresh clustering table on each restart)
+    // Persistent storage for Orleans (survives AppHost restarts for faster startup)
     var orleansStorage = builder.AddAzureStorage("orleansstorage");
     if (builder.Environment.IsDevelopment())
     {
-        orleansStorage = orleansStorage.RunAsEmulator();
+        orleansStorage = orleansStorage.RunAsEmulator(
+            azurite => azurite
+                .WithDataBindMount("../../Azurite/Orleans")
+                .WithLifetime(ContainerLifetime.Persistent));
     }
     var orleansTables = orleansStorage.AddTables("orleans-clustering");
     var grainStateBlobs = orleansStorage.AddBlobs("orleans-grain-state");
@@ -55,6 +58,7 @@ if (useDistributed)
         .WithReference(orleans)
         .WithReference(cosmosDb)
         .WithReference(storageBlobs)
+        .WaitFor(storageBlobs)
         .WaitFor(orleansTables)
         .WaitFor(grainStateBlobs)
         .WaitFor(cosmosDb);

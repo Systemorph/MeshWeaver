@@ -7,7 +7,6 @@
     <ItemGroup>
         <PackageReference Include="Microsoft.AspNetCore.TestHost" />
         <PackageReference Include="Testcontainers" />
-        <PackageReference Include="Testcontainers.PostgreSql" />
         <PackageReference Include="Microsoft.Extensions.Azure" />
         <PackageReference Include="Azure.Storage.Blobs" />
         <PackageReference Include="Namotion.Reflection" />

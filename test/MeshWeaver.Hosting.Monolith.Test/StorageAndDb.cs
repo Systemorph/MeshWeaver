@@ -2,8 +2,6 @@
 using System.Net.NetworkInformation;
 using DotNet.Testcontainers.Builders;
 using DotNet.Testcontainers.Containers;
-using Testcontainers.PostgreSql;
-
 namespace MeshWeaver.Hosting.Monolith.Test;
 
 
@@ -74,12 +72,5 @@ public static class ContainerExtensions
         .WithPortBinding(10002, 10002) // Table storage
         .WithWaitStrategy(Wait.ForUnixContainer().UntilExternalTcpPortIsAvailable(10000))
         .WithCleanUp(true) // Ensure container is cleaned up
-        .Build();
-
-    public static PostgreSqlContainer Postgres() => new PostgreSqlBuilder("postgres:latest")
-        .WithDatabase("TestDb")
-        .WithUsername("postgres")
-        .WithPassword("password")
-        .WithPortBinding(PostgreSqlBuilder.PostgreSqlPort, true)
         .Build();
 }

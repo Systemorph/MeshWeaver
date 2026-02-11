@@ -50,39 +50,21 @@ dotnet restore
 
 ### Running Applications
 
-#### Loom Portal (Recommended for Development)
+#### Memex Portal (Recommended for Development)
 ```bash
-cd loom/Loom.Portal.Monolith
+cd memex/Memex.Portal.Monolith
 dotnet run
 # Access at https://localhost:7122
 ```
 
-The Loom Portal uses `AddJsonGraphConfiguration()` to dynamically load Graph nodes from `samples/Graph/Data/`, including the MeshWeaver documentation and Architecture articles. This is the recommended portal for development.
-
-#### Standard Portal (Legacy/Pre-compiled Applications)
-```bash
-cd portal/MeshWeaver.Portal
-dotnet run
-# Access at https://localhost:65260
-```
-
-Note: The Standard Portal uses `InstallAssemblies()` for pre-compiled sample applications (Northwind, Todo, Insurance) but does NOT support the Graph data in `samples/Graph/Data/`.
+The Memex Portal uses `AddJsonGraphConfiguration()` to dynamically load Graph nodes from `samples/Graph/Data/`, including the MeshWeaver documentation and Architecture articles. This is the recommended portal for development.
 
 #### Microservices Portal (.NET Aspire)
 ```bash
-cd portal/aspire/MeshWeaver.Portal.AppHost
+cd memex/aspire/Memex.AppHost
 dotnet run
 # Access Aspire dashboard for service management
 # Requires Docker for dependencies
-```
-
-### Project Templates
-```bash
-# Install MeshWeaver project templates
-dotnet new install MeshWeaver.ProjectTemplates
-
-# Create new solution from template  
-dotnet new meshweaver-solution -n MyApp
 ```
 
 ## Architecture Overview
@@ -109,12 +91,8 @@ dotnet new meshweaver-solution -n MyApp
   - `Northwind/` - Sample business application with analytics
   - `Todo/` - Simple CRUD demonstration
 
-- **`loom/`** - Loom Portal (recommended for development)
-  - `Loom.Portal.Monolith/` - Development portal with full Graph support
-  - `aspire/` - Microservices with .NET Aspire orchestration
-
-- **`portal/`** - Standard Portal (legacy/pre-compiled applications)
-  - `MeshWeaver.Portal/` - Monolithic deployment (no Graph support)
+- **`memex/`** - Memex Portal (recommended for development)
+  - `Memex.Portal.Monolith/` - Development portal with full Graph support
   - `aspire/` - Microservices with .NET Aspire orchestration
 
 ### Architectural Patterns
