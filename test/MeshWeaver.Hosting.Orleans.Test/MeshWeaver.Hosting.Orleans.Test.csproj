@@ -6,6 +6,11 @@
         <Content Include="Markdown\**">
             <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
         </Content>
+        <!-- Pre-copy samples/Graph for Organization compilation tests -->
+        <Content Include="..\..\samples\Graph\**">
+            <Link>SamplesGraph\%(RecursiveDir)%(Filename)%(Extension)</Link>
+            <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+        </Content>
     </ItemGroup>
 
     <ItemGroup>
@@ -23,6 +28,7 @@
 
     <ItemGroup>
       <ProjectReference Include="..\..\src\MeshWeaver.Hosting.Cosmos\MeshWeaver.Hosting.Cosmos.csproj" />
+      <ProjectReference Include="..\..\src\MeshWeaver.Graph\MeshWeaver.Graph.csproj" />
     </ItemGroup>
 
 

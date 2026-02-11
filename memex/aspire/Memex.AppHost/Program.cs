@@ -23,14 +23,11 @@ if (useDistributed)
     }
     var storageBlobs = contentStorage.AddBlobs("storage");
 
-    // Persistent storage for Orleans (survives AppHost restarts for faster startup)
+    // Ephemeral storage for Orleans (fresh cluster on each restart to avoid stale silo entries)
     var orleansStorage = builder.AddAzureStorage("orleansstorage");
     if (builder.Environment.IsDevelopment())
     {
-        orleansStorage = orleansStorage.RunAsEmulator(
-            azurite => azurite
-                .WithDataBindMount("../../Azurite/Orleans")
-                .WithLifetime(ContainerLifetime.Persistent));
+        orleansStorage = orleansStorage.RunAsEmulator();
     }
     var orleansTables = orleansStorage.AddTables("orleans-clustering");
     var grainStateBlobs = orleansStorage.AddBlobs("orleans-grain-state");

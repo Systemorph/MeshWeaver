@@ -105,7 +105,8 @@ public sealed class MeshCatalog(
                 var templateBasedNode = MeshNode.FromPath(addressKey) with
                 {
                     NodeType = templatePath,
-                    HubConfiguration = templateNode.HubConfiguration
+                    HubConfiguration = templateNode.HubConfiguration,
+                    AssemblyLocation = templateNode.AssemblyLocation
                 };
                 logger.LogDebug("GetNodeAsync: Created node at {Path} from template {Template}", addressKey, templatePath);
                 cache.Set(templateBasedNode.Path, templateBasedNode, cacheOptions);
