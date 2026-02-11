@@ -193,7 +193,7 @@ public static class PersistenceExtensions
 
         // Core services remain singletons (for shared caches)
         services.AddSingleton(persistenceServiceCore);
-        services.AddSingleton<IMeshQueryCore, InMemoryMeshQuery>();
+        services.TryAddSingleton<IMeshQueryCore, InMemoryMeshQuery>();
 
         // Wrapper services are scoped (per hub)
         services.AddScoped<IPersistenceService, PersistenceService>();
@@ -213,7 +213,7 @@ public static class PersistenceExtensions
 
         // Core services remain singletons (for shared caches)
         services.AddSingleton<IPersistenceServiceCore, TPersistenceCore>();
-        services.AddSingleton<IMeshQueryCore, InMemoryMeshQuery>();
+        services.TryAddSingleton<IMeshQueryCore, InMemoryMeshQuery>();
 
         // Wrapper services are scoped (per hub)
         services.AddScoped<IPersistenceService, PersistenceService>();

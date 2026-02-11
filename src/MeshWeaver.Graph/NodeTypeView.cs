@@ -220,7 +220,20 @@ public static class NodeTypeView
 
         // Get data streams directly
         var definitionStream = host.Workspace.GetNodeContent<NodeTypeDefinition>();
-        var codeFilesStream = host.Workspace.GetStream<CodeConfiguration>()!;
+        var persistence = host.Hub.ServiceProvider.GetService<IPersistenceService>();
+        var codeFilesStream = Observable.FromAsync(async () =>
+        {
+            if (persistence == null)
+                return Array.Empty<CodeConfiguration>() as IReadOnlyCollection<CodeConfiguration>;
+            var codeParentPath = $"{hubPath}/Code";
+            var codeFiles = new List<CodeConfiguration>();
+            await foreach (var child in persistence.GetChildrenAsync(codeParentPath))
+            {
+                if (child.Content is CodeConfiguration cf)
+                    codeFiles.Add(cf);
+            }
+            return codeFiles as IReadOnlyCollection<CodeConfiguration>;
+        });
         var selectionStream = host.Stream.GetDataStream<string?>(SelectionDataId);
 
         // Query for NodeType nodes under this namespace

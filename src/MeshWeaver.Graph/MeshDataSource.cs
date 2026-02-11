@@ -290,15 +290,6 @@ public record MeshDataSource : GenericUnpartitionedDataSource<MeshDataSource>
     }
 
     /// <summary>
-    /// Adds CodeConfiguration as a type source from the "Code" sub-partition.
-    /// CodeConfigurations are stored in the hub's Code sub-partition and accessible via workspace.GetStream&lt;CodeConfiguration&gt;().
-    /// </summary>
-    public MeshDataSource WithCodeConfiguration()
-    {
-        return WithType<CodeConfiguration>("Code", "Code");
-    }
-
-    /// <summary>
     /// Creates an instance of the ContentType, initializing properties from a MeshNode.
     /// Pre-populates ContentType properties from MeshNode properties using [MeshNodeProperty] attribute mappings.
     /// </summary>

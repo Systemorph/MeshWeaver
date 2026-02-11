@@ -5,7 +5,6 @@ using Microsoft.Extensions.Options;
 using MeshWeaver.Domain;
 using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Hosting.Persistence.Query;
-using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 
@@ -73,6 +72,18 @@ public static class PersistenceExtensions
             services.Configure(configure);
         services.AddKeyedSingleton<IStorageAdapterFactory, CosmosStorageAdapterFactory>(
             CosmosStorageAdapterFactory.StorageType);
+
+        // Register CosmosMeshQuery so it takes priority over InMemoryMeshQuery (via TryAddSingleton)
+        services.AddSingleton<IMeshQueryCore>(sp =>
+        {
+            var adapter = sp.GetRequiredService<IStorageAdapter>() as CosmosStorageAdapter
+                ?? throw new InvalidOperationException(
+                    "CosmosMeshQuery requires CosmosStorageAdapter. " +
+                    "Ensure Cosmos storage is configured.");
+            var changeNotifier = sp.GetService<IDataChangeNotifier>();
+            return new CosmosMeshQuery(adapter, changeNotifier);
+        });
+
         return services;
     }
 
@@ -97,10 +108,25 @@ public static class PersistenceExtensions
         var partitionsContainer = database.GetContainer(partitionsContainerName);
 
         var storageAdapter = new CosmosStorageAdapter(nodesContainer, partitionsContainer);
-        var persistenceService = new InMemoryPersistenceService(storageAdapter);
+        return services.AddCosmosPersistence(storageAdapter);
+    }
 
-        services.AddSingleton<IStorageAdapter>(storageAdapter);
-        services.AddSingleton<IPersistenceServiceCore>(persistenceService);
+    /// <summary>
+    /// Adds Cosmos DB persistence services using a pre-configured storage adapter.
+    /// Registers CosmosMeshQuery for native Cosmos SQL queries.
+    /// </summary>
+    /// <param name="services">The service collection</param>
+    /// <param name="storageAdapter">The Cosmos storage adapter</param>
+    /// <returns>The service collection for chaining</returns>
+    public static IServiceCollection AddCosmosPersistence(
+        this IServiceCollection services,
+        CosmosStorageAdapter storageAdapter)
+    {
+        // Register CosmosMeshQuery BEFORE AddPersistence so TryAddSingleton picks it up
+        services.AddSingleton<IMeshQueryCore>(sp =>
+            new CosmosMeshQuery(storageAdapter, sp.GetService<IDataChangeNotifier>()));
+
+        services.AddPersistence(storageAdapter);
 
         return services;
     }
@@ -177,12 +203,10 @@ public static class PersistenceExtensions
                 storageAdapter,
                 sp.GetService<IDataChangeNotifier>()));
 
-        // Register IMeshQueryCore with change notifier
+        // Register CosmosMeshQuery with change notifier for native Cosmos SQL queries
         services.AddSingleton<IMeshQueryCore>(sp =>
-            new InMemoryMeshQuery(
-                sp.GetRequiredService<IPersistenceServiceCore>(),
-                sp.GetService<ISecurityService>(),
-                sp.GetService<AccessService>(),
+            new CosmosMeshQuery(
+                storageAdapter,
                 sp.GetService<IDataChangeNotifier>()));
 
         // Register the Change Feed Processor
