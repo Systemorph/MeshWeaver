@@ -54,8 +54,7 @@ public static class GraphConfigurationExtensions
                 Icon = "/static/NodeTypeIcons/code.svg",
                 HubConfiguration = config => config
                     .AddMeshDataSource(source => source
-                        .WithContentType<NodeTypeDefinition>()
-                        .WithType<CodeConfiguration>("Code"))
+                        .WithContentType<NodeTypeDefinition>())
                     .AddNodeTypeView()
             });
 

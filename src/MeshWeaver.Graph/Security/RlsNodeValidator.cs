@@ -3,7 +3,7 @@ using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using Microsoft.Extensions.Logging;
 
-namespace MeshWeaver.Hosting.Security;
+namespace MeshWeaver.Graph.Security;
 
 /// <summary>
 /// Node validator that enforces Row-Level Security based on permissions.
@@ -109,9 +109,9 @@ public class RlsNodeValidator : INodeValidator
         // Fall back to request-specific user properties
         return context.Request switch
         {
-            MeshWeaver.Mesh.CreateNodeRequest createReq => createReq.CreatedBy,
-            MeshWeaver.Mesh.UpdateNodeRequest updateReq => updateReq.UpdatedBy,
-            MeshWeaver.Mesh.DeleteNodeRequest deleteReq => deleteReq.DeletedBy,
+            CreateNodeRequest createReq => createReq.CreatedBy,
+            UpdateNodeRequest updateReq => updateReq.UpdatedBy,
+            DeleteNodeRequest deleteReq => deleteReq.DeletedBy,
             _ => null
         };
     }

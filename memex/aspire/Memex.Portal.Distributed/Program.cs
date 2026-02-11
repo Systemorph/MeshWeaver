@@ -1,9 +1,9 @@
+﻿using Memex.Portal.ServiceDefaults;
+using Memex.Portal.Shared;
 using MeshWeaver.Hosting.Cosmos;
 using MeshWeaver.Hosting.Orleans;
 using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Messaging;
-using Memex.Portal.ServiceDefaults;
-using Memex.Portal.Shared;
 using Orleans.Configuration;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -35,10 +35,6 @@ builder.UseOrleansMeshServer(address, silo =>
         {
             opts.ClusterId = MemexDistributedConstants.ClusterId;
             opts.ServiceId = MemexDistributedConstants.ServiceId;
-        })
-        .Configure<ConnectionOptions>(options =>
-        {
-            options.OpenConnectionTimeout = TimeSpan.FromMinutes(1);
         })
     )
     .ConfigureServices(services => services

@@ -1,3 +1,6 @@
+using MeshWeaver.Domain;
+using MeshWeaver.Graph.Configuration;
+
 namespace MeshWeaver.Mesh;
 
 /// <summary>
@@ -20,5 +23,17 @@ public static class MeshNodeExtensions
     {
         var segments = path.Split('/', StringSplitOptions.RemoveEmptyEntries);
         return segments.Length <= 1 ? null : string.Join("/", segments.Take(segments.Length - 1));
+    }
+
+    /// <summary>
+    /// Registers graph-related content types with the type registry for polymorphic deserialization.
+    /// Call this to ensure NodeTypeDefinition and other graph types are properly deserialized
+    /// when stored as MeshNode.Content.
+    /// </summary>
+    public static ITypeRegistry WithGraphTypes(this ITypeRegistry typeRegistry)
+    {
+        typeRegistry.WithType(typeof(NodeTypeDefinition), nameof(NodeTypeDefinition));
+        typeRegistry.WithType(typeof(CodeConfiguration), nameof(CodeConfiguration));
+        return typeRegistry;
     }
 }
