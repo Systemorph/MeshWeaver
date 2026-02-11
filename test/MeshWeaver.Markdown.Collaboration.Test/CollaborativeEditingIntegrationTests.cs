@@ -213,7 +213,7 @@ public class CollaborativeEditingIntegrationTests
 
         // Assert
         var content = _coordinator.GetDocumentContent(docId);
-        var comments = MarkdownAnnotationParser.ExtractComments(content);
+        var comments = MarkdownAnnotationParser.ExtractComments(content!);
         comments.Should().HaveCount(1);
         // The annotated text should now include "very "
         comments[0].AnnotatedText.Should().Contain("very");
@@ -242,7 +242,7 @@ public class CollaborativeEditingIntegrationTests
 
         // Assert
         var content = _coordinator.GetDocumentContent(docId);
-        var comments = MarkdownAnnotationParser.ExtractComments(content);
+        var comments = MarkdownAnnotationParser.ExtractComments(content!);
         comments.Should().HaveCount(2);
         comments.Should().Contain(c => c.MarkerId == "c1");
         comments.Should().Contain(c => c.MarkerId == "c2");
@@ -594,7 +594,7 @@ public class CollaborativeEditingIntegrationTests
 
         // Assert
         var content = _coordinator.GetDocumentContent(docId);
-        content.Length.Should().Be(10002); // Original + 2 inserts
+        content!.Length.Should().Be(10002); // Original + 2 inserts
         content[100].Should().Be('A');
         content[9001].Should().Be('B'); // Shifted by 1 due to first insert
     }

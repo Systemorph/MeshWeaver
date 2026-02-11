@@ -1,5 +1,6 @@
 using MeshWeaver.Hosting.Cosmos;
 using MeshWeaver.Hosting.Orleans;
+using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Messaging;
 using Memex.Portal.ServiceDefaults;
 using Memex.Portal.Shared;
@@ -13,10 +14,16 @@ builder.AddKeyedAzureTableServiceClient("orleans-clustering");
 builder.AddKeyedAzureBlobServiceClient("storage");
 builder.AddKeyedAzureBlobServiceClient("orleans-grain-state");
 
-// Read Cosmos connection string from Aspire configuration
-// The name "memexdb" matches the database resource name in the AppHost:
-//   cosmos.AddCosmosDatabase("memexdb") → .WithReference(cosmosDb)
-var cosmosConnectionString = builder.Configuration.GetConnectionString("memexdb");
+// Register Aspire-injected Cosmos database and containers as keyed services.
+// The connection name "memexdb" matches the AppHost: cosmos.AddCosmosDatabase("memexdb")
+builder.AddAzureCosmosDatabase("memexdb",
+    configureClientOptions: cosmosOptions =>
+    {
+        cosmosOptions.UseSystemTextJsonSerializerWithOptions =
+            StorageImporter.CreateFullImportOptions();
+    })
+    .AddKeyedContainer("nodes")
+    .AddKeyedContainer("partitions");
 
 // Add web portal services
 builder.ConfigureMemexServices();
@@ -37,7 +44,6 @@ builder.UseOrleansMeshServer(address, silo =>
     .ConfigureServices(services => services
         .AddCosmosStorageFactory(opts =>
         {
-            opts.ConnectionString = cosmosConnectionString;
             opts.DatabaseName = "memexdb";
         }))
     .ConfigureMemexMesh(builder.Configuration, builder.Environment.IsDevelopment())
