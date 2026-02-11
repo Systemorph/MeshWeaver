@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using MeshWeaver.Domain;
+using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using MeshWeaver.Messaging.Serialization;
@@ -123,6 +124,7 @@ public class StorageImporter
     public static JsonSerializerOptions CreateFullImportOptions(ITypeRegistry? typeRegistry = null)
     {
         typeRegistry ??= MessageHubExtensions.CreateTypeRegistry();
+        typeRegistry.WithGraphTypes();
         var options = new JsonSerializerOptions
         {
             PropertyNameCaseInsensitive = true,

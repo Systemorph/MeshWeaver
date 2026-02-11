@@ -126,8 +126,7 @@ internal class NodeTypeService : INodeTypeService, IDisposable
         return _notCreatableTypes.GetValueOrDefault(nodeTypePath);
     }
 
-    /// <inheritdoc />
-    public Task<string?> GetAssemblyPathAsync(string nodeTypePath, CancellationToken ct = default)
+    private Task<string?> GetAssemblyPathAsync(string nodeTypePath, CancellationToken ct = default)
     {
         // Use ConcurrentDictionary.GetOrAdd with a Task to ensure only one compilation runs per key.
         // On failure, remove from dictionary to allow retry on next access.
@@ -182,8 +181,7 @@ internal class NodeTypeService : INodeTypeService, IDisposable
         return hubConfig ?? defaultConfig;
     }
 
-    /// <inheritdoc />
-    public void InvalidateCache(string nodeTypePath)
+    internal void InvalidateCache(string nodeTypePath)
     {
         logger.LogDebug("Invalidating cache for {NodeTypePath}", nodeTypePath);
 
@@ -201,8 +199,7 @@ internal class NodeTypeService : INodeTypeService, IDisposable
         }
     }
 
-    /// <inheritdoc />
-    public MeshNode EnrichWithNodeType(MeshNode node)
+    private MeshNode EnrichWithNodeType(MeshNode node)
     {
         // Skip if HubConfiguration is already set
         if (node.HubConfiguration != null)
@@ -313,8 +310,7 @@ internal class NodeTypeService : INodeTypeService, IDisposable
         return node;
     }
 
-    /// <inheritdoc />
-    public async Task<Func<MessageHubConfiguration, MessageHubConfiguration>?> GetHubConfigurationAsync(Address address, CancellationToken ct = default)
+    private async Task<Func<MessageHubConfiguration, MessageHubConfiguration>?> GetHubConfigurationAsync(Address address, CancellationToken ct = default)
     {
         logger.LogDebug("Getting HubConfiguration for {Address}", address);
 

@@ -308,7 +308,7 @@ public static class NodeTypeView
 
         // Node type definition entry - switches main view to configuration
         // ID comes from hub address, not from content
-        var nodeId = hubAddress is Address addr ? addr.Segments.LastOrDefault() : hubAddress.ToString().Split('/').LastOrDefault() ?? "Unknown";
+        var nodeId = hubAddress is Address addr ? addr.Segments.LastOrDefault() : (hubAddress.ToString() ?? "Unknown").Split('/').LastOrDefault() ?? "Unknown";
         navMenu = navMenu.WithView(
             new NavLinkControl(content.DisplayName ?? nodeId, FluentIcons.Settings(), null)
                 .WithClickAction(actx => host.UpdateData(SelectionDataId, "configuration"))
@@ -436,13 +436,13 @@ public static class NodeTypeView
     {
         var editHref = new LayoutAreaReference(HubConfigEditArea).ToHref(hubAddress);
         // ID comes from hub address, not from content
-        var nodeId = hubAddress is Address addr ? addr.Segments.LastOrDefault() : hubAddress.ToString().Split('/').LastOrDefault() ?? "Unknown";
+        var nodeId = hubAddress is Address addr ? addr.Segments.LastOrDefault() : (hubAddress.ToString() ?? "Unknown").Split('/').LastOrDefault() ?? "Unknown";
 
         // Header with edit button
         var headerRow = Controls.Stack
             .WithOrientation(Orientation.Horizontal)
             .WithStyle("justify-content: space-between; align-items: center; margin-bottom: 16px;")
-            .WithView(Controls.H2(definition.DisplayName ?? nodeId))
+            .WithView(Controls.H2(definition.DisplayName ?? nodeId ?? "Unknown"))
             .WithView(
                 Controls.Button("")
                     .WithIconStart(FluentIcons.Edit())
@@ -455,7 +455,7 @@ public static class NodeTypeView
         var propsCard = Controls.Stack
             .WithStyle("background: var(--neutral-layer-2); border-radius: 8px; padding: 20px; margin-bottom: 24px;");
 
-        propsCard = propsCard.WithView(BuildInfoRow("ID", nodeId));
+        propsCard = propsCard.WithView(BuildInfoRow("ID", nodeId ?? "Unknown"));
         propsCard = propsCard.WithView(BuildInfoRow("Namespace", definition.Namespace));
 
         if (!string.IsNullOrEmpty(definition.DisplayName))

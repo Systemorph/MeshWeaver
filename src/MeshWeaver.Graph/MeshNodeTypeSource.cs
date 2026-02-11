@@ -144,7 +144,6 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
         CancellationToken ct)
     {
         // Load own MeshNode doc only (stored in parent's partition)
-        // File location: parentPath/ownNodeName.json (e.g., "graph/org1.json")
         // Note: Children are NOT loaded here - they are accessed via their own hubs
         var ownNode = await _persistence.GetNodeAsync(_hubPath, ct);
 
