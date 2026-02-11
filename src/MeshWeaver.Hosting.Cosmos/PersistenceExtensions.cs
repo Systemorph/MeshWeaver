@@ -24,29 +24,37 @@ public class CosmosStorageAdapterFactory(
     public IStorageAdapter Create(GraphStorageConfig config, IServiceProvider serviceProvider)
     {
         var opts = options.Value;
+        var logger = serviceProvider.GetService<ILogger<CosmosStorageAdapterFactory>>();
 
+        // Prefer Aspire-injected keyed containers (registered via AddAzureCosmosDatabase + AddKeyedContainer)
+        logger?.LogDebug("Resolving keyed Container '{Name}'", opts.NodesContainerName);
+        var nodesContainer = serviceProvider.GetKeyedService<Container>(opts.NodesContainerName);
+        logger?.LogDebug("nodes={Found}, resolving '{Name}'", nodesContainer != null, opts.PartitionsContainerName);
+        var partitionsContainer = serviceProvider.GetKeyedService<Container>(opts.PartitionsContainerName);
+        logger?.LogDebug("partitions={Found}", partitionsContainer != null);
+
+        if (nodesContainer != null && partitionsContainer != null)
+            return new CosmosStorageAdapter(nodesContainer, partitionsContainer);
+
+        // Fallback: create CosmosClient manually from connection string (non-Aspire scenarios)
         var connectionString = opts.ConnectionString
             ?? config.ConnectionString
             ?? throw new InvalidOperationException(
-                "Cosmos DB connection string is not configured. " +
-                "Set CosmosStorageOptions.ConnectionString or Graph:Storage:ConnectionString.");
+                "Cosmos DB containers not found in DI. " +
+                "Register via Aspire (AddAzureCosmosDatabase + AddKeyedContainer), " +
+                "or set CosmosStorageOptions.ConnectionString.");
 
-        // Build System.Text.Json options matching the hub's serialization pipeline
         var typeRegistry = serviceProvider.GetService<ITypeRegistry>();
         var jsonOptions = StorageImporter.CreateFullImportOptions(typeRegistry);
-
         var cosmosClient = new CosmosClient(connectionString, new CosmosClientOptions
         {
             UseSystemTextJsonSerializerWithOptions = jsonOptions
         });
 
-        // Database and containers are created by the Aspire AppHost (AddContainer)
-        // or by the CLI import tool — not here.
         var database = cosmosClient.GetDatabase(opts.DatabaseName);
-        var nodesContainer = database.GetContainer(opts.NodesContainerName);
-        var partitionsContainer = database.GetContainer(opts.PartitionsContainerName);
-
-        return new CosmosStorageAdapter(nodesContainer, partitionsContainer);
+        return new CosmosStorageAdapter(
+            database.GetContainer(opts.NodesContainerName),
+            database.GetContainer(opts.PartitionsContainerName));
     }
 }
 

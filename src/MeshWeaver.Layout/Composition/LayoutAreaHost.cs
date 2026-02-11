@@ -523,7 +523,7 @@ public record LayoutAreaHost : IDisposable
         var subscriber = Stream.Get<Address>(nameof(SubscribeRequest.Subscriber));
         if (subscriber != null)
         {
-            if (subscriber?.Host is { })
+            if (subscriber.Host is { })
                 subscriber = subscriber.Host;
             Stream.Hub.Post(new NavigationRequest(uri) { ForceLoad = forceLoad, Replace = replace }, o => o.WithTarget(subscriber));
         }

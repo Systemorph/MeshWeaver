@@ -18,6 +18,11 @@
     <ItemGroup>
       <PackageReference Include="Microsoft.Orleans.TestingHost" />
       <PackageReference Include="Microsoft.Orleans.Sdk" />
+      <PackageReference Include="Testcontainers.CosmosDb" />
+    </ItemGroup>
+
+    <ItemGroup>
+      <ProjectReference Include="..\..\src\MeshWeaver.Hosting.Cosmos\MeshWeaver.Hosting.Cosmos.csproj" />
     </ItemGroup>
 
 

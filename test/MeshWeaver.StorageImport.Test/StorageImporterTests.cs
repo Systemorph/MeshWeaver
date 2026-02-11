@@ -36,18 +36,20 @@ public class StorageImporterTests : IDisposable
         var target = new FileSystemStorageAdapter(_targetDir);
         var importer = new StorageImporter(source, target);
 
+        var ct = TestContext.Current.CancellationToken;
+
         // Act
-        var result = await importer.ImportAsync();
+        var result = await importer.ImportAsync(ct: ct);
 
         // Assert
         result.NodesImported.Should().BeGreaterThan(0, "sample data should contain nodes");
         result.Elapsed.Should().BeGreaterThan(TimeSpan.Zero);
 
         // Verify known nodes were copied (use .md nodes which don't require polymorphic JSON)
-        var executorExists = await target.ExistsAsync("Executor");
+        var executorExists = await target.ExistsAsync("Executor", ct);
         executorExists.Should().BeTrue("Executor.md node should exist in target");
 
-        var plannerExists = await target.ExistsAsync("Planner");
+        var plannerExists = await target.ExistsAsync("Planner", ct);
         plannerExists.Should().BeTrue("Planner.md node should exist in target");
     }
 
@@ -60,18 +62,20 @@ public class StorageImporterTests : IDisposable
         var target = new FileSystemStorageAdapter(_targetDir);
         var importer = new StorageImporter(source, target);
 
+        var ct = TestContext.Current.CancellationToken;
+
         // Act
-        var result = await importer.ImportAsync(new StorageImportOptions { RootPath = "ACME" });
+        var result = await importer.ImportAsync(new StorageImportOptions { RootPath = "ACME" }, ct);
 
         // Assert
         result.NodesImported.Should().BeGreaterThan(0);
 
         // ACME children should be copied
-        var todoAgentExists = await target.ExistsAsync("ACME/Project/TodoAgent");
+        var todoAgentExists = await target.ExistsAsync("ACME/Project/TodoAgent", ct);
         todoAgentExists.Should().BeTrue("ACME/Project/TodoAgent should have been imported");
 
         // Nodes outside ACME should NOT be copied
-        var executorExists = await target.ExistsAsync("Executor");
+        var executorExists = await target.ExistsAsync("Executor", ct);
         executorExists.Should().BeFalse("Executor is not under ACME and should not be imported");
     }
 
@@ -84,8 +88,10 @@ public class StorageImporterTests : IDisposable
         var target = new FileSystemStorageAdapter(_targetDir);
         var importer = new StorageImporter(source, target);
 
+        var ct = TestContext.Current.CancellationToken;
+
         // Act
-        var result = await importer.ImportAsync(new StorageImportOptions { ImportPartitions = true });
+        var result = await importer.ImportAsync(new StorageImportOptions { ImportPartitions = true }, ct);
 
         // Assert
         result.NodesImported.Should().BeGreaterThan(0);
@@ -103,11 +109,13 @@ public class StorageImporterTests : IDisposable
 
         var progressCalls = new List<(int Nodes, int Partitions, string Path)>();
 
+        var ct = TestContext.Current.CancellationToken;
+
         // Act
         var result = await importer.ImportAsync(new StorageImportOptions
         {
             OnProgress = (nodes, partitions, path) => progressCalls.Add((nodes, partitions, path))
-        });
+        }, ct);
 
         // Assert
         progressCalls.Should().NotBeEmpty("progress callback should fire for each imported node");
@@ -126,7 +134,7 @@ public class StorageImporterTests : IDisposable
         var importer = new StorageImporter(source, target);
 
         // Act
-        var result = await importer.ImportAsync();
+        var result = await importer.ImportAsync(ct: TestContext.Current.CancellationToken);
 
         // Assert
         result.NodesImported.Should().Be(0);
