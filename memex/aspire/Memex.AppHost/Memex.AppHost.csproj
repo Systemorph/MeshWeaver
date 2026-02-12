@@ -6,6 +6,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <IsAspireHost>true</IsAspireHost>
     <UserSecretsId>memex-apphost</UserSecretsId>
+    <NoWarn>$(NoWarn);ASPIRECOSMOSDB001</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>
