@@ -184,7 +184,7 @@ public static class MemexConfiguration
         /// Configures the mesh with Graph domain only.
         ///
         /// Configuration is read from appsettings:
-        /// - Graph:Storage:Type - Storage type: "FileSystem", "AzureBlob", or "Cosmos"
+        /// - Graph:Storage:Type - Storage type: "FileSystem", "AzureBlob", "PostgreSql", or "Cosmos"
         /// - Graph:Storage:BasePath - Base path for FileSystem storage
         /// - Graph:Storage:ConnectionString - Connection string for AzureBlob/Cosmos
         /// - storage - Content collection configuration (Name, SourceType, BasePath)
@@ -230,6 +230,17 @@ public static class MemexConfiguration
                         BasePath = Path.GetFullPath(Path.Combine(Directory.GetCurrentDirectory(), contentStorageConfig.BasePath))
                     };
                 }
+
+                // Ensure Settings are populated for AzureBlob source type
+                if (contentStorageConfig.SourceType == "AzureBlob")
+                {
+                    var settings = contentStorageConfig.Settings ?? new Dictionary<string, string>();
+                    if (!settings.ContainsKey("ContainerName"))
+                        settings["ContainerName"] = "content";
+                    if (!settings.ContainsKey("ClientName"))
+                        settings["ClientName"] = contentStorageConfig.Name;
+                    contentStorageConfig = contentStorageConfig with { Settings = settings };
+                }
             }
 
             return (TBuilder)builder
@@ -249,13 +260,13 @@ public static class MemexConfiguration
                     services.AddSingleton<IMeshCatalog, MeshCatalog>();
                     return services;
                 })
-                // Add content collections at mesh level (infrastructure + storage config, no layout areas)
+                // Add content collections at mesh level with storage config
                 // The storage collection is registered as a source for node hub mappings
                 .ConfigureHub(hub =>
                 {
                     if (contentStorageConfig == null)
                         return hub;
-                    return hub.AddContentCollections([contentStorageConfig]);
+                    return hub.AddContentCollection(_ => contentStorageConfig);
                 })
                 // Configure default views and content collections for each node hub
                 // Order matters: AddContentCollections registers $Content area first,

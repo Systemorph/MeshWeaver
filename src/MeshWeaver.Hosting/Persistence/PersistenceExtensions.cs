@@ -68,11 +68,10 @@ public static class PersistenceExtensions
             var factory = sp.GetKeyedService<IStorageAdapterFactory>(config.Type);
             if (factory == null)
             {
-                var registeredTypes = string.Join(", ", new[] { "FileSystem", "AzureBlob", "Cosmos" });
                 throw new InvalidOperationException(
                     $"Unknown storage type: '{config.Type}'. " +
-                    $"Supported types: {registeredTypes}. " +
-                    $"Ensure the appropriate package is referenced (e.g., MeshWeaver.Hosting.AzureStorage for AzureBlob).");
+                    $"Ensure the appropriate storage factory is registered " +
+                    $"(e.g., AddPostgreSqlStorageFactory, AddCosmosStorageFactory).");
             }
 
             return factory.Create(config, sp);
