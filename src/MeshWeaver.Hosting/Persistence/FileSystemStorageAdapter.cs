@@ -61,14 +61,20 @@ public class FileSystemStorageAdapter : IStorageAdapter
         if (node == null)
             return null;
 
-        // Derive namespace from file path if not set
+        // Derive namespace and id from file path if not set
         // Path "User/Alice" means namespace="User", id="Alice"
         var normalizedPath = path.Trim('/');
         var lastSlash = normalizedPath.LastIndexOf('/');
-        if (lastSlash > 0 && string.IsNullOrEmpty(node.Namespace))
+        if (lastSlash > 0)
         {
-            var derivedNamespace = normalizedPath[..lastSlash];
-            node = node with { Namespace = derivedNamespace };
+            if (string.IsNullOrEmpty(node.Namespace))
+                node = node with { Namespace = normalizedPath[..lastSlash] };
+            if (string.IsNullOrEmpty(node.Id))
+                node = node with { Id = normalizedPath[(lastSlash + 1)..] };
+        }
+        else if (string.IsNullOrEmpty(node.Id))
+        {
+            node = node with { Id = normalizedPath };
         }
 
         // Use file system last modified time if not specified

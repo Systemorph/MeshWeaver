@@ -1,5 +1,4 @@
-using Aspire.Hosting;
-using Microsoft.Extensions.Hosting;
+﻿using Microsoft.Extensions.Hosting;
 
 var builder = DistributedApplication.CreateBuilder(args);
 
@@ -40,13 +39,15 @@ if (useDistributed)
     var cosmos = builder.AddAzureCosmosDB("memexcosmos");
     if (builder.Environment.IsDevelopment())
     {
-        cosmos = cosmos.RunAsEmulator(emulator => emulator
-            .WithDataVolume()
+#pragma warning disable ASPIRECOSMOSDB001
+        cosmos = cosmos.RunAsPreviewEmulator(emulator => emulator
+            .WithDataVolume("memexcosmos-preview-data")
             .WithLifetime(ContainerLifetime.Persistent));
+#pragma warning restore ASPIRECOSMOSDB001
     }
     var cosmosDb = cosmos.AddCosmosDatabase("memexdb");
-    cosmosDb.AddContainer("nodes", "/namespace");
-    cosmosDb.AddContainer("partitions", "/partitionKey");
+    var nodesContainer = cosmosDb.AddContainer("nodes", "/namespace");
+    var partitions = cosmosDb.AddContainer("partitions", "/partitionKey");
 
     // Memex Distributed (co-hosted silo + web)
     builder
