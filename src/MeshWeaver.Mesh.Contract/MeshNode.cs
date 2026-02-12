@@ -198,7 +198,7 @@ public record MeshNode([property: Key] string Id, [property: Editable(false)] st
     /// <summary>
     /// File path to the dynamically compiled assembly for this node type.
     /// </summary>
-    [NotMapped]
+    [JsonIgnore, NotMapped]
     public string? AssemblyLocation { get; init; }
     /// <summary>
     /// Hub configuration function that configures the message hub for this node.
