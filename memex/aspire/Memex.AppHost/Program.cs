@@ -35,31 +35,25 @@ if (useDistributed)
         .WithClustering(orleansTables)
         .WithGrainStorage("Default", grainStateBlobs);
 
-    // Cosmos DB for graph persistence (persistent container with data volume)
-    var cosmos = builder.AddAzureCosmosDB("memexcosmos");
-    if (builder.Environment.IsDevelopment())
-    {
-#pragma warning disable ASPIRECOSMOSDB001
-        cosmos = cosmos.RunAsPreviewEmulator(emulator => emulator
-            .WithDataVolume("memexcosmos-preview-data")
-            .WithLifetime(ContainerLifetime.Persistent));
-#pragma warning restore ASPIRECOSMOSDB001
-    }
-    var cosmosDb = cosmos.AddCosmosDatabase("memexdb");
-    var nodesContainer = cosmosDb.AddContainer("nodes", "/namespace");
-    var partitions = cosmosDb.AddContainer("partitions", "/partitionKey");
+    // PostgreSQL with pgvector for graph persistence
+    var postgres = builder.AddPostgres("memex-postgres")
+        .WithImage("pgvector/pgvector", "pg17")
+        .WithDataVolume("memex-pgdata")
+        .WithLifetime(ContainerLifetime.Persistent)
+        .WithPgAdmin(pgAdmin => pgAdmin.WithLifetime(ContainerLifetime.Persistent));
+    var postgresDb = postgres.AddDatabase("meshweaver");
 
     // Memex Distributed (co-hosted silo + web)
     builder
         .AddProject<Projects.Memex_Portal_Distributed>("memex-distributed")
         .WithExternalHttpEndpoints()
         .WithReference(orleans)
-        .WithReference(cosmosDb)
+        .WithReference(postgresDb)
         .WithReference(storageBlobs)
         .WaitFor(storageBlobs)
         .WaitFor(orleansTables)
         .WaitFor(grainStateBlobs)
-        .WaitFor(cosmosDb);
+        .WaitFor(postgresDb);
 }
 
 if (useMonolith)
