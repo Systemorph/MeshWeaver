@@ -191,6 +191,7 @@ public class PostgreSqlStorageAdapter : IStorageAdapter, IAsyncDisposable
         while (await reader.ReadAsync(ct))
         {
             var json = reader.GetString(0);
+            json = EnsureTypeDiscriminatorFirst(json);
             var typeName = reader.IsDBNull(1) ? null : reader.GetString(1);
 
             Type? type = null;
@@ -414,6 +415,7 @@ public class PostgreSqlStorageAdapter : IStorageAdapter, IAsyncDisposable
         if (!reader.IsDBNull(contentOrd))
         {
             var json = reader.GetString(contentOrd);
+            json = EnsureTypeDiscriminatorFirst(json);
             content = JsonSerializer.Deserialize<object>(json, options);
         }
 
@@ -431,6 +433,67 @@ public class PostgreSqlStorageAdapter : IStorageAdapter, IAsyncDisposable
             Content = content,
             DesiredId = reader.IsDBNull(reader.GetOrdinal("desired_id")) ? null : reader.GetString(reader.GetOrdinal("desired_id"))
         };
+    }
+
+    /// <summary>
+    /// PostgreSQL jsonb reorders keys alphabetically at ALL nesting levels,
+    /// which breaks System.Text.Json polymorphic deserialization (requires $type as the first property).
+    /// This method recursively moves $type to the front in every object throughout the JSON tree.
+    /// </summary>
+    private static string EnsureTypeDiscriminatorFirst(string json)
+    {
+        if (!json.Contains("\"$type\"", StringComparison.Ordinal))
+            return json; // No discriminator anywhere
+
+        using var doc = JsonDocument.Parse(json);
+        using var ms = new MemoryStream();
+        using (var writer = new Utf8JsonWriter(ms))
+        {
+            WriteElementWithTypeFirst(writer, doc.RootElement);
+        }
+
+        return System.Text.Encoding.UTF8.GetString(ms.ToArray());
+    }
+
+    /// <summary>
+    /// Recursively writes a JsonElement, ensuring $type is the first property in every object.
+    /// </summary>
+    private static void WriteElementWithTypeFirst(Utf8JsonWriter writer, JsonElement element)
+    {
+        switch (element.ValueKind)
+        {
+            case JsonValueKind.Object:
+                writer.WriteStartObject();
+                // Write $type first if present
+                if (element.TryGetProperty("$type", out var typeValue))
+                {
+                    writer.WritePropertyName("$type");
+                    typeValue.WriteTo(writer);
+                }
+                // Write remaining properties (recursively)
+                foreach (var prop in element.EnumerateObject())
+                {
+                    if (prop.Name == "$type")
+                        continue;
+                    writer.WritePropertyName(prop.Name);
+                    WriteElementWithTypeFirst(writer, prop.Value);
+                }
+                writer.WriteEndObject();
+                break;
+
+            case JsonValueKind.Array:
+                writer.WriteStartArray();
+                foreach (var item in element.EnumerateArray())
+                {
+                    WriteElementWithTypeFirst(writer, item);
+                }
+                writer.WriteEndArray();
+                break;
+
+            default:
+                element.WriteTo(writer);
+                break;
+        }
     }
 
     private static string GetPartitionStorageKey(string nodePath, string? subPath)

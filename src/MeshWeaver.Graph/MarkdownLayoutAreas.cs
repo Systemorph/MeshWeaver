@@ -142,7 +142,7 @@ public static class MarkdownLayoutAreas
         // Query for Comment child MeshNodes
         var commentNodesStream = meshQuery != null
             ? meshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
-                $"path:{hubPath} nodeType:{CommentNodeType.NodeType} scope:descendants"))
+                $"path:{hubPath} nodeType:{CommentNodeType.NodeType} scope:children"))
                 .Scan(new List<MeshNode>(), (list, change) =>
                 {
                     if (change.ChangeType == QueryChangeType.Initial || change.ChangeType == QueryChangeType.Reset)
@@ -717,7 +717,7 @@ public static class MarkdownLayoutAreas
                     var replyModel = await ctx.Host.Stream.GetDataAsync<ReplyFormModel>(replyDataId);
                     if (replyModel != null && !string.IsNullOrWhiteSpace(replyModel.Text))
                     {
-                        // Save reply via IPersistenceService — auto-update author + timestamp
+                        // Update reply via DataChangeRequest targeting the reply node's own hub
                         var accessService = host.Hub.ServiceProvider.GetService<AccessService>();
                         var currentUser = accessService?.Context?.Name ?? "Unknown";
                         var updatedComment = (replyComment ?? new Comment()) with
@@ -727,8 +727,9 @@ public static class MarkdownLayoutAreas
                             Text = replyModel.Text
                         };
                         var updatedNode = replyNode with { Content = updatedComment };
-                        var persistence = host.Hub.ServiceProvider.GetRequiredService<IPersistenceService>();
-                        await persistence.SaveNodeAsync(updatedNode);
+                        host.Hub.Post(
+                            new DataChangeRequest().WithUpdates(updatedNode),
+                            o => o.WithTarget(new Address(replyNode.Path!)));
                     }
                     panelStateSubject.OnNext(panelState with { EditingReplyPath = null });
                 }));

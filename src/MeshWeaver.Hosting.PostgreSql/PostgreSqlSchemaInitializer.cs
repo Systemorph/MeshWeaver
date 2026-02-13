@@ -61,6 +61,22 @@ public static class PostgreSqlSchemaInitializer
                 PRIMARY KEY (partition_key, id)
             );
 
+            -- user_activity
+            CREATE TABLE IF NOT EXISTS user_activity (
+                user_id         TEXT        NOT NULL,
+                node_path       TEXT        NOT NULL,
+                activity_type   SMALLINT    NOT NULL DEFAULT 0,
+                first_accessed  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                last_accessed   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                access_count    INTEGER     NOT NULL DEFAULT 1,
+                node_name       TEXT,
+                node_type       TEXT,
+                namespace       TEXT,
+                PRIMARY KEY (user_id, node_path)
+            );
+            CREATE INDEX IF NOT EXISTS idx_ua_user_last ON user_activity (user_id, last_accessed DESC);
+            CREATE INDEX IF NOT EXISTS idx_ua_node_type ON user_activity (user_id, node_type);
+
             -- access_control
             CREATE TABLE IF NOT EXISTS access_control (
                 namespace       TEXT        NOT NULL,

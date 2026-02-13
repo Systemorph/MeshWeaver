@@ -17,6 +17,7 @@ public class PostgreSqlFixture : IAsyncLifetime
     public string ConnectionString { get; private set; } = null!;
     public PostgreSqlStorageAdapter StorageAdapter { get; private set; } = null!;
     public PostgreSqlAccessControl AccessControl { get; private set; } = null!;
+    public PostgreSqlActivityStore ActivityStore { get; private set; } = null!;
 
     public async ValueTask InitializeAsync()
     {
@@ -40,6 +41,7 @@ public class PostgreSqlFixture : IAsyncLifetime
 
         StorageAdapter = new PostgreSqlStorageAdapter(DataSource);
         AccessControl = new PostgreSqlAccessControl(DataSource);
+        ActivityStore = new PostgreSqlActivityStore(DataSource);
     }
 
     public async ValueTask DisposeAsync()
@@ -58,6 +60,7 @@ public class PostgreSqlFixture : IAsyncLifetime
             """
             DELETE FROM partition_objects;
             DELETE FROM mesh_nodes;
+            DELETE FROM user_activity;
             DELETE FROM user_effective_permissions;
             DELETE FROM user_effective_permissions_shadow;
             DELETE FROM access_control;
