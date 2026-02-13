@@ -283,7 +283,8 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
 
         var result = AnnotationMarkdownExtension.TransformAnnotations(content);
 
-        result.Should().Contain("<span class=\"track-insert\" data-change-id=\"i1\">newly inserted</span>");
+        result.Should().Contain("<span class=\"track-insert\" data-change-id=\"i1\">newly inserted");
+        result.Should().Contain("Inserted by Unknown");
     }
 
     /// <summary>
@@ -296,7 +297,8 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
 
         var result = AnnotationMarkdownExtension.TransformAnnotations(content);
 
-        result.Should().Contain("<span class=\"track-delete\" data-change-id=\"d1\">was deleted</span>");
+        result.Should().Contain("<span class=\"track-delete\" data-change-id=\"d1\">was deleted");
+        result.Should().Contain("Deleted by Unknown");
     }
 
     /// <summary>

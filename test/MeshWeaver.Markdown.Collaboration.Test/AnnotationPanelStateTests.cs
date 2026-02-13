@@ -10,52 +10,32 @@ public class AnnotationPanelStateTests
     #region AnnotationPanelState Tests
 
     [Fact]
-    public void AnnotationPanelState_DefaultState_HasNoReplyingAnnotation()
+    public void AnnotationPanelState_DefaultState_HasNoEditingReplyPath()
     {
         var state = new MarkdownLayoutAreas.AnnotationPanelState();
 
-        state.ReplyingToAnnotationId.Should().BeNull();
+        state.EditingReplyPath.Should().BeNull();
         state.ExpandedAnnotationIds.Should().BeEmpty();
     }
 
     [Fact]
-    public void AnnotationPanelState_SetReplyingToAnnotation_TracksCorrectly()
+    public void AnnotationPanelState_SetEditingReplyPath_TracksCorrectly()
     {
         var state = new MarkdownLayoutAreas.AnnotationPanelState();
 
-        var newState = state with { ReplyingToAnnotationId = "c1" };
+        var newState = state with { EditingReplyPath = "docs/mypage/comment1/reply1" };
 
-        newState.ReplyingToAnnotationId.Should().Be("c1");
+        newState.EditingReplyPath.Should().Be("docs/mypage/comment1/reply1");
     }
 
     [Fact]
-    public void AnnotationPanelState_ClearReplyingAnnotation_ResetsToNull()
+    public void AnnotationPanelState_ClearEditingReplyPath_ResetsToNull()
     {
-        var state = new MarkdownLayoutAreas.AnnotationPanelState { ReplyingToAnnotationId = "c1" };
+        var state = new MarkdownLayoutAreas.AnnotationPanelState { EditingReplyPath = "docs/mypage/comment1/reply1" };
 
-        var newState = state with { ReplyingToAnnotationId = null };
+        var newState = state with { EditingReplyPath = null };
 
-        newState.ReplyingToAnnotationId.Should().BeNull();
-    }
-
-    #endregion
-
-    #region ReplyFormModel Tests
-
-    [Fact]
-    public void ReplyFormModel_DefaultState_HasEmptyText()
-    {
-        var model = new MarkdownLayoutAreas.ReplyFormModel();
-
-        model.Text.Should().BeEmpty();
-    }
-
-    [Fact]
-    public void ReplyFormModel_SetText_StoresCorrectly()
-    {
-        var model = new MarkdownLayoutAreas.ReplyFormModel { Text = "My reply text" };
-
-        model.Text.Should().Be("My reply text");
+        newState.EditingReplyPath.Should().BeNull();
     }
 
     #endregion
@@ -63,38 +43,36 @@ public class AnnotationPanelStateTests
     #region Reply Workflow Tests
 
     [Fact]
-    public void ReplyWorkflow_ClickReply_SetsReplyingAnnotationId()
+    public void ReplyWorkflow_ClickReply_SetsEditingReplyPath()
     {
-        // Simulate: User clicks Reply button on annotation "c1"
+        // Simulate: User clicks Reply button — creates a MeshNode and sets editing path
         var initialState = new MarkdownLayoutAreas.AnnotationPanelState();
 
-        var afterClick = initialState with { ReplyingToAnnotationId = "c1" };
+        var afterClick = initialState with { EditingReplyPath = "docs/mypage/comment1/reply1" };
 
-        afterClick.ReplyingToAnnotationId.Should().Be("c1");
+        afterClick.EditingReplyPath.Should().Be("docs/mypage/comment1/reply1");
     }
 
     [Fact]
-    public void ReplyWorkflow_ClickCancel_ClearsReplyingAnnotationId()
+    public void ReplyWorkflow_ClickCancel_ClearsEditingReplyPath()
     {
-        // Simulate: User clicks Cancel on reply form
-        var replyingState = new MarkdownLayoutAreas.AnnotationPanelState { ReplyingToAnnotationId = "c1" };
+        // Simulate: User clicks Cancel on reply edit form
+        var editingState = new MarkdownLayoutAreas.AnnotationPanelState { EditingReplyPath = "docs/mypage/comment1/reply1" };
 
-        var afterCancel = replyingState with { ReplyingToAnnotationId = null };
+        var afterCancel = editingState with { EditingReplyPath = null };
 
-        afterCancel.ReplyingToAnnotationId.Should().BeNull();
+        afterCancel.EditingReplyPath.Should().BeNull();
     }
 
     [Fact]
-    public void ReplyWorkflow_SubmitReply_ClearsDialog()
+    public void ReplyWorkflow_ClickDone_ClearsEditingReplyPath()
     {
-        // Simulate: User types reply and clicks Submit — reply is now a MeshNode, not in-memory state
-        var annotationId = "c1";
-        var replyingState = new MarkdownLayoutAreas.AnnotationPanelState { ReplyingToAnnotationId = annotationId };
+        // Simulate: User clicks Done after editing — auto-save handles persistence
+        var editingState = new MarkdownLayoutAreas.AnnotationPanelState { EditingReplyPath = "docs/mypage/comment1/reply1" };
 
-        // After submit: just close the form (reactive subscription handles display)
-        var afterSubmit = replyingState with { ReplyingToAnnotationId = null };
+        var afterDone = editingState with { EditingReplyPath = null };
 
-        afterSubmit.ReplyingToAnnotationId.Should().BeNull();
+        afterDone.EditingReplyPath.Should().BeNull();
     }
 
     [Fact]

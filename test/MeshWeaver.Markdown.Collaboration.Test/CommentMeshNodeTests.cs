@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Reflection;
 using FluentAssertions;
 using MeshWeaver.Domain;
 using MeshWeaver.Graph;
@@ -21,7 +20,6 @@ namespace MeshWeaver.Markdown.Collaboration.Test;
 /// - Comment data lives in MeshNode (not in markdown markers)
 /// - MarkerId links MeshNode to markdown marker
 /// - Resolve removes markers from markdown
-/// - CommentFormModel captures text selection data
 /// </summary>
 public class CommentMeshNodeTests
 {
@@ -253,32 +251,6 @@ public class CommentMeshNodeTests
 
         commentPath.Should().Be("docs/mypage/comment1");
         replyPath.Should().Be("docs/mypage/comment1/reply1");
-    }
-
-    #endregion
-
-    #region CommentFormModel
-
-    [Fact]
-    public void CommentFormModel_DefaultState_HasEmptyFields()
-    {
-        var model = new MarkdownLayoutAreas.CommentFormModel();
-
-        model.SelectedText.Should().BeEmpty();
-        model.CommentText.Should().BeEmpty();
-    }
-
-    [Fact]
-    public void CommentFormModel_CapturesTextSelection()
-    {
-        var model = new MarkdownLayoutAreas.CommentFormModel
-        {
-            SelectedText = "highlighted text",
-            CommentText = "My comment about this"
-        };
-
-        model.SelectedText.Should().Be("highlighted text");
-        model.CommentText.Should().Be("My comment about this");
     }
 
     #endregion
@@ -869,7 +841,7 @@ public class CommentMeshNodeTests
             Content = new Comment { Id = "r1", Author = "Bob", Text = "Reply", ParentCommentId = "c1" }
         };
 
-        var result = CommentLayoutAreas.BuildOverview(node, "docs/page/c1", new List<MeshNode> { replyNode });
+        var result = CommentLayoutAreas.BuildOverview(null!, node, "docs/page/c1", new List<MeshNode> { replyNode }, "");
 
         result.Should().NotBeNull();
         result.Should().BeOfType<StackControl>();
@@ -890,7 +862,7 @@ public class CommentMeshNodeTests
             Content = comment
         };
 
-        var result = CommentLayoutAreas.BuildOverview(node, "docs/page/c1", Array.Empty<MeshNode>());
+        var result = CommentLayoutAreas.BuildOverview(null!, node, "docs/page/c1", Array.Empty<MeshNode>(), "");
 
         result.Should().NotBeNull();
         result.Should().BeOfType<StackControl>();
@@ -918,21 +890,10 @@ public class CommentMeshNodeTests
         };
 
         // BuildOverview filters by ParentCommentId == comment.Id internally
-        var result = CommentLayoutAreas.BuildOverview(node, "docs/page/c1", new List<MeshNode> { replyForC1, replyForC2 });
+        var result = CommentLayoutAreas.BuildOverview(null!, node, "docs/page/c1", new List<MeshNode> { replyForC1, replyForC2 }, "");
 
         result.Should().NotBeNull();
         result.Should().BeOfType<StackControl>();
-    }
-
-    [Fact]
-    public void ReplyFormModel_HasOnlyTextProperty()
-    {
-        var props = typeof(MarkdownLayoutAreas.ReplyFormModel)
-            .GetProperties(BindingFlags.Public | BindingFlags.Instance);
-
-        props.Should().HaveCount(1);
-        props[0].Name.Should().Be("Text");
-        props[0].PropertyType.Should().Be(typeof(string));
     }
 
     [Fact]
@@ -1095,7 +1056,7 @@ public class CommentMeshNodeTests
 
         // BuildOverview with no replies — no catalog
         var overviewNoReplies = CommentLayoutAreas.BuildOverview(
-            parentNode, commentPath, Array.Empty<MeshNode>());
+            null!, parentNode, commentPath, Array.Empty<MeshNode>(), "");
         overviewNoReplies.Should().BeOfType<StackControl>();
 
         // 2) "Click Reply" — simulate what the Reply button handler creates:
@@ -1131,7 +1092,7 @@ public class CommentMeshNodeTests
 
         // 4) Verify we see *one* answer in the overview as a Thumbnail inside a CatalogControl
         var overviewWithReply = CommentLayoutAreas.BuildOverview(
-            parentNode, commentPath, new List<MeshNode> { updatedReplyNode });
+            null!, parentNode, commentPath, new List<MeshNode> { updatedReplyNode }, "");
 
         overviewWithReply.Should().BeOfType<StackControl>();
 
