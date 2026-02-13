@@ -19,6 +19,9 @@ public partial class SearchBar : IAsyncDisposable
     [Inject]
     public IMeshQuery? MeshQuery { get; set; }
 
+    [Inject]
+    public INavigationService? NavigationService { get; set; }
+
     private FluentTextField? textField;
     private string? searchTerm;
     private QuerySuggestion[] suggestions = [];
@@ -111,8 +114,9 @@ public partial class SearchBar : IAsyncDisposable
                 prefix = input;
             }
 
+            var contextPath = NavigationService?.CurrentNamespace;
             var results = await MeshQuery
-                .AutocompleteAsync(basePath, prefix, AutocompleteMode.RelevanceFirst, MaxResults, ct)
+                .AutocompleteAsync(basePath, prefix, AutocompleteMode.RelevanceFirst, MaxResults, contextPath, ct)
                 .ToArrayAsync(ct);
 
             if (!ct.IsCancellationRequested)
@@ -247,8 +251,9 @@ public partial class SearchBar : IAsyncDisposable
             showDropdown = true;
             try
             {
+                var contextPath = NavigationService?.CurrentNamespace;
                 suggestions = await MeshQuery
-                    .AutocompleteAsync("", "", AutocompleteMode.RelevanceFirst, MaxResults)
+                    .AutocompleteAsync("", "", AutocompleteMode.RelevanceFirst, MaxResults, contextPath)
                     .ToArrayAsync();
                 isLoading = false;
                 StateHasChanged();

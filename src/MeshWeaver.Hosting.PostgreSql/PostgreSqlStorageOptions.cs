@@ -11,9 +11,9 @@ public class PostgreSqlStorageOptions
     public string? ConnectionString { get; set; }
 
     /// <summary>
-    /// Vector embedding dimensions (default: 1536 for OpenAI text-embedding-3-small).
+    /// Vector embedding dimensions (default: 1024 for Cohere embed-v4).
     /// </summary>
-    public int VectorDimensions { get; set; } = 1536;
+    public int VectorDimensions { get; set; } = 1024;
 
     /// <summary>
     /// Database schema name (default: "public").

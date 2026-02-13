@@ -47,6 +47,22 @@ public class PostgreSqlStorageAdapterFactory(
 public static class PostgreSqlExtensions
 {
     /// <summary>
+    /// Registers the Azure Foundry embedding provider from an <see cref="EmbeddingOptions"/> instance.
+    /// </summary>
+    public static IServiceCollection AddAzureFoundryEmbeddings(
+        this IServiceCollection services, EmbeddingOptions options)
+    {
+        if (string.IsNullOrEmpty(options.Endpoint) || string.IsNullOrEmpty(options.ApiKey))
+            return services;
+
+        services.AddSingleton<IEmbeddingProvider>(
+            new AzureFoundryEmbeddingProvider(options.Endpoint, options.ApiKey,
+                options.Model, options.Dimensions));
+        services.Configure<PostgreSqlStorageOptions>(o => o.VectorDimensions = options.Dimensions);
+        return services;
+    }
+
+    /// <summary>
     /// Registers the PostgreSQL storage adapter factory for use with AddPersistenceFromConfig.
     /// Also registers PostgreSqlMeshQuery for native SQL queries.
     /// </summary>

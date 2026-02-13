@@ -41,6 +41,7 @@ public interface IMeshQuery
     /// <param name="prefix">Prefix to match (partial name/path)</param>
     /// <param name="mode">Ordering mode (PathFirst or RelevanceFirst)</param>
     /// <param name="limit">Maximum number of suggestions to return</param>
+    /// <param name="contextPath">Context path for proximity-based scoring (null for no proximity boost)</param>
     /// <param name="ct">Cancellation token</param>
     /// <returns>Suggestions ordered according to mode</returns>
     IAsyncEnumerable<QuerySuggestion> AutocompleteAsync(
@@ -48,6 +49,7 @@ public interface IMeshQuery
         string prefix,
         AutocompleteMode mode,
         int limit = 10,
+        string? contextPath = null,
         CancellationToken ct = default);
 
     /// <summary>
@@ -102,6 +104,13 @@ public record MeshQueryRequest
     /// before calling query methods.
     /// </summary>
     public string? DefaultPath { get; init; }
+
+    /// <summary>
+    /// Context path for proximity-based scoring.
+    /// When set, results closer to this path in the graph hierarchy receive a score boost.
+    /// Typically set to the user's current namespace (e.g., "Systemorph/Marketing").
+    /// </summary>
+    public string? ContextPath { get; init; }
 
     /// <summary>
     /// Number of results to skip (for paging).

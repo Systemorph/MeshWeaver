@@ -214,6 +214,9 @@ public static class PersistenceExtensions
         services.AddSingleton<IPersistenceServiceCore, TPersistenceCore>();
         services.TryAddSingleton<IMeshQueryCore, InMemoryMeshQuery>();
 
+        // Import service
+        services.TryAddSingleton<IMeshImportService, MeshImportService>();
+
         // Wrapper services are scoped (per hub)
         services.AddScoped<IPersistenceService, PersistenceService>();
         services.AddScoped<IMeshQuery, MeshQueryService>();
