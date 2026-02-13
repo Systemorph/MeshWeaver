@@ -125,7 +125,7 @@ public class PostgreSqlMeshQuery : IMeshQueryCore
                 score = 30;
 
             if (score > 0 || string.IsNullOrEmpty(normalizedPrefix))
-                suggestions.Add(new QuerySuggestion(node.Path ?? "", name, node.NodeType, score));
+                suggestions.Add(new QuerySuggestion(node.Path ?? "", name, node.NodeType, score, node.Icon));
         }
 
         IEnumerable<QuerySuggestion> ordered = mode switch

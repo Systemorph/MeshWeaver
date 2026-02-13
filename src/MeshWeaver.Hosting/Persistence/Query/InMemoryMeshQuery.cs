@@ -343,7 +343,7 @@ public class InMemoryMeshQuery : IMeshQueryCore
 
             if (score > 0)
             {
-                suggestions.Add(new QuerySuggestion(node.Path ?? "", name, node.NodeType, score));
+                suggestions.Add(new QuerySuggestion(node.Path ?? "", name, node.NodeType, score, node.Icon));
             }
         }
 

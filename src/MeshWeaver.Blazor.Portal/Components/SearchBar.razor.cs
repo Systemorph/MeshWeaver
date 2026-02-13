@@ -8,6 +8,7 @@ namespace MeshWeaver.Blazor.Portal.Components;
 public partial class SearchBar : IAsyncDisposable
 {
     private const string SearchPlaceholder = "Type / to search, @ for references...";
+    private const int MaxResults = 10;
 
     [Inject]
     public required NavigationManager NavigationManager { get; set; }
@@ -86,7 +87,6 @@ public partial class SearchBar : IAsyncDisposable
 
         try
         {
-            // Parse @ reference syntax: @basePath/prefix
             string basePath;
             string prefix;
 
@@ -112,7 +112,7 @@ public partial class SearchBar : IAsyncDisposable
             }
 
             var results = await MeshQuery
-                .AutocompleteAsync(basePath, prefix, AutocompleteMode.RelevanceFirst, 10, ct)
+                .AutocompleteAsync(basePath, prefix, AutocompleteMode.RelevanceFirst, MaxResults, ct)
                 .ToArrayAsync(ct);
 
             if (!ct.IsCancellationRequested)
@@ -186,7 +186,6 @@ public partial class SearchBar : IAsyncDisposable
 
             if (spaceIndex < 0)
             {
-                // Just @path with no space - navigate directly
                 var path = afterAt.TrimEnd('/');
                 if (!string.IsNullOrEmpty(path))
                 {
@@ -197,7 +196,6 @@ public partial class SearchBar : IAsyncDisposable
             }
             else
             {
-                // @path query - convert to namespace:path scope:descendants query
                 var path = afterAt[..spaceIndex].TrimEnd('/');
                 var query = afterAt[(spaceIndex + 1)..].Trim();
 
@@ -212,7 +210,7 @@ public partial class SearchBar : IAsyncDisposable
             }
         }
 
-        // Plain search query (no @ prefix)
+        // Plain search query - navigate to search page which uses QueryAsync
         var encodedPlainQuery = Uri.EscapeDataString(trimmed);
         NavigationManager.NavigateTo($"/search?q={encodedPlainQuery}");
         ClearSearch();
@@ -242,7 +240,7 @@ public partial class SearchBar : IAsyncDisposable
             return;
         }
 
-        // When focused with no text, show recent/top-level items
+        // When focused with no text, show top-level items
         if (string.IsNullOrWhiteSpace(searchTerm) && MeshQuery != null)
         {
             isLoading = true;
@@ -250,7 +248,7 @@ public partial class SearchBar : IAsyncDisposable
             try
             {
                 suggestions = await MeshQuery
-                    .AutocompleteAsync("", "", AutocompleteMode.RelevanceFirst, 10)
+                    .AutocompleteAsync("", "", AutocompleteMode.RelevanceFirst, MaxResults)
                     .ToArrayAsync();
                 isLoading = false;
                 StateHasChanged();
@@ -265,7 +263,6 @@ public partial class SearchBar : IAsyncDisposable
 
     private async Task OnBlur()
     {
-        // Delay to allow mousedown on dropdown items to fire first
         await Task.Delay(200);
         showDropdown = false;
         highlightedIndex = -1;

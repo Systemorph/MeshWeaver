@@ -29,7 +29,14 @@
                          @onmousedown="() => NavigateToSuggestion(suggestion)"
                          @onmousedown:preventDefault>
                         <div class="search-dropdown-icon">
-                            <span class="search-dropdown-initial">@GetInitial(suggestion)</span>
+                            @if (!string.IsNullOrEmpty(suggestion.Icon))
+                            {
+                                <img src="@suggestion.Icon" alt="" />
+                            }
+                            else
+                            {
+                                <span class="search-dropdown-initial">@GetInitial(suggestion)</span>
+                            }
                         </div>
                         <div class="search-dropdown-text">
                             <div class="search-dropdown-name">@suggestion.Name</div>
