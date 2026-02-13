@@ -1,4 +1,5 @@
-﻿using MeshWeaver.Data;
+﻿using System.Text.Json;
+using MeshWeaver.Data;
 using MeshWeaver.Domain;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
@@ -144,9 +145,14 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
         CancellationToken ct)
     {
         // Load own MeshNode doc only (stored in parent's partition)
-        // File location: parentPath/ownNodeName.json (e.g., "graph/org1.json")
         // Note: Children are NOT loaded here - they are accessed via their own hubs
         var ownNode = await _persistence.GetNodeAsync(_hubPath, ct);
+
+        // Resolve JsonElement content to proper types.
+        // This handles cases where the $type discriminator in the database doesn't match
+        // the registered short name (e.g., "MeshWeaver.Markdown.MarkdownContent" vs "MarkdownContent").
+        if (ownNode != null)
+            ownNode = ResolveJsonElementContent(ownNode);
 
         // Restore hub version from persisted MeshNode
         if (ownNode is { Version: > 0 })
@@ -162,5 +168,56 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
 
         _lastSaved = new InstanceCollection(allNodes, node => ((MeshNode)node).Path);
         return _lastSaved;
+    }
+
+    /// <summary>
+    /// Resolves JsonElement content to the proper CLR type by looking up the $type discriminator
+    /// in the hub's TypeRegistry. Handles both short names (e.g., "MarkdownContent") and
+    /// full namespace-qualified names (e.g., "MeshWeaver.Markdown.MarkdownContent").
+    /// </summary>
+    private MeshNode ResolveJsonElementContent(MeshNode node)
+    {
+        if (node.Content is not JsonElement je || je.ValueKind != JsonValueKind.Object)
+            return node;
+
+        // Try to extract $type discriminator
+        if (!je.TryGetProperty("$type", out var typeProp))
+            return node;
+
+        var typeName = typeProp.GetString();
+        if (string.IsNullOrEmpty(typeName))
+            return node;
+
+        var registry = _workspace.Hub.TypeRegistry;
+
+        // Try the full type name as-is
+        if (!registry.TryGetType(typeName, out var typeDef) || typeDef?.Type == null)
+        {
+            // Try the short name (last segment after '.')
+            if (!typeName.Contains('.'))
+                return node;
+
+            var shortName = typeName.Split('.').Last();
+            if (!registry.TryGetType(shortName, out typeDef) || typeDef?.Type == null)
+                return node;
+        }
+
+        try
+        {
+            var raw = je.GetRawText();
+            var deserialized = JsonSerializer.Deserialize(raw, typeDef.Type, _workspace.Hub.JsonSerializerOptions);
+            if (deserialized != null)
+            {
+                _logger?.LogDebug("MeshNodeTypeSource: Resolved JsonElement content to {Type} for {Path}",
+                    typeDef.Type.Name, node.Path);
+                return node with { Content = deserialized };
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogDebug(ex, "MeshNodeTypeSource: Failed to resolve JsonElement content for {Path}", node.Path);
+        }
+
+        return node;
     }
 }

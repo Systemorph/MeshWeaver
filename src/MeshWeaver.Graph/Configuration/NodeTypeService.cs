@@ -126,8 +126,7 @@ internal class NodeTypeService : INodeTypeService, IDisposable
         return _notCreatableTypes.GetValueOrDefault(nodeTypePath);
     }
 
-    /// <inheritdoc />
-    public Task<string?> GetAssemblyPathAsync(string nodeTypePath, CancellationToken ct = default)
+    private Task<string?> GetAssemblyPathAsync(string nodeTypePath, CancellationToken ct = default)
     {
         // Use ConcurrentDictionary.GetOrAdd with a Task to ensure only one compilation runs per key.
         // On failure, remove from dictionary to allow retry on next access.
@@ -182,8 +181,7 @@ internal class NodeTypeService : INodeTypeService, IDisposable
         return hubConfig ?? defaultConfig;
     }
 
-    /// <inheritdoc />
-    public void InvalidateCache(string nodeTypePath)
+    internal void InvalidateCache(string nodeTypePath)
     {
         logger.LogDebug("Invalidating cache for {NodeTypePath}", nodeTypePath);
 
@@ -201,8 +199,7 @@ internal class NodeTypeService : INodeTypeService, IDisposable
         }
     }
 
-    /// <inheritdoc />
-    public MeshNode EnrichWithNodeType(MeshNode node)
+    private MeshNode EnrichWithNodeType(MeshNode node)
     {
         // Skip if HubConfiguration is already set
         if (node.HubConfiguration != null)
@@ -258,42 +255,42 @@ internal class NodeTypeService : INodeTypeService, IDisposable
     /// <inheritdoc />
     public async Task<MeshNode> EnrichWithNodeTypeAsync(MeshNode node, CancellationToken ct = default)
     {
-        // Skip if HubConfiguration is already set
-        if (node.HubConfiguration != null)
+        // Skip only if fully enriched (both HubConfiguration and AssemblyLocation are set)
+        if (node.HubConfiguration != null && node.AssemblyLocation != null)
             return node;
 
         var nodeType = node.NodeType;
 
         if (!string.IsNullOrEmpty(nodeType))
         {
-            // Check if this specific nodeType config is cached
-            if (_hubConfigurations.ContainsKey(nodeType))
+            // Get assembly path (triggers compilation if needed for dynamic types, returns null for built-ins)
+            var assemblyPath = await GetAssemblyPathAsync(nodeType, ct);
+
+            // For built-in types, get AssemblyLocation from the registered node definition
+            if (assemblyPath == null && meshConfiguration.Nodes.TryGetValue(nodeType, out var builtInNode))
             {
-                // NodeType config is compiled - return combined config immediately
-                return CopyIconFromNodeType(node with { HubConfiguration = GetCachedHubConfiguration(nodeType) }, nodeType);
+                assemblyPath = builtInNode.AssemblyLocation;
             }
 
-            // Check if this is a built-in NodeType (registered via AddMeshNodes)
-            if (meshConfiguration.Nodes.TryGetValue(nodeType, out var builtInNode) &&
-                builtInNode.HubConfiguration != null)
+            // Get hub configuration: keep existing or resolve from cache/built-in
+            var hubConfig = node.HubConfiguration
+                ?? GetCachedHubConfiguration(nodeType);
+
+            return CopyIconFromNodeType(node with
             {
-                // Use the built-in configuration directly
-                return CopyIconFromNodeType(node with { HubConfiguration = builtInNode.HubConfiguration }, nodeType);
-            }
-
-            // NodeType not compiled yet - trigger async compilation and wait
-            logger.LogDebug("Triggering async compilation for NodeType {NodeType}", nodeType);
-            await GetAssemblyPathAsync(nodeType, ct);
-
-            // After compilation, check cache again
-            return CopyIconFromNodeType(node with { HubConfiguration = GetCachedHubConfiguration(nodeType) }, nodeType);
+                HubConfiguration = hubConfig,
+                AssemblyLocation = assemblyPath ?? node.AssemblyLocation
+            }, nodeType);
         }
 
         // No NodeType - return default config if available
-        var defaultConfig = meshConfiguration.DefaultNodeHubConfiguration;
-        if (defaultConfig != null)
+        if (node.HubConfiguration == null)
         {
-            return node with { HubConfiguration = defaultConfig };
+            var defaultConfig = meshConfiguration.DefaultNodeHubConfiguration;
+            if (defaultConfig != null)
+            {
+                return node with { HubConfiguration = defaultConfig };
+            }
         }
 
         return node;
@@ -313,8 +310,7 @@ internal class NodeTypeService : INodeTypeService, IDisposable
         return node;
     }
 
-    /// <inheritdoc />
-    public async Task<Func<MessageHubConfiguration, MessageHubConfiguration>?> GetHubConfigurationAsync(Address address, CancellationToken ct = default)
+    private async Task<Func<MessageHubConfiguration, MessageHubConfiguration>?> GetHubConfigurationAsync(Address address, CancellationToken ct = default)
     {
         logger.LogDebug("Getting HubConfiguration for {Address}", address);
 
@@ -483,18 +479,23 @@ internal class NodeTypeService : INodeTypeService, IDisposable
     /// </summary>
     private async Task<(NodeTypeRelease? Release, MeshNode? Node)> GatherInputsAsync(string nodeTypePath, CancellationToken ct)
     {
-        var persistence = meshHub.ServiceProvider.GetService<IPersistenceService>();
-        if (persistence == null)
+        var meshQuery = meshHub.ServiceProvider.GetService<IMeshQuery>();
+        if (meshQuery == null)
         {
-            logger.LogWarning("IPersistenceService not available for {NodeTypePath}", nodeTypePath);
+            logger.LogWarning("IMeshQuery not available for {NodeTypePath}", nodeTypePath);
             return (null, null);
         }
 
-        // Get the node from persistence
-        var node = await persistence.GetNodeAsync(nodeTypePath, ct);
+        // Get the node via mesh query
+        MeshNode? node = null;
+        await foreach (var n in meshQuery.QueryAsync<MeshNode>($"path:{nodeTypePath}", ct: ct).WithCancellation(ct))
+        {
+            node = n;
+            break;
+        }
         if (node == null)
         {
-            logger.LogDebug("No node found in persistence for {NodeTypePath}", nodeTypePath);
+            logger.LogDebug("No node found for {NodeTypePath}", nodeTypePath);
             return (null, null);
         }
 
@@ -506,13 +507,13 @@ internal class NodeTypeService : INodeTypeService, IDisposable
             return (null, null);
         }
 
-        // Get CodeConfigurations from /Code sub-partition
-        // Collect ALL CodeConfiguration files (dataModel.json, views.json, etc.) and combine them
+        // Get CodeConfigurations from child MeshNodes under /Code path
+        // Collect ALL CodeConfiguration files and combine them
         var codeFiles = new List<string>();
-        var codePartition = $"{nodeTypePath}/Code";
-        await foreach (var obj in persistence.GetPartitionObjectsAsync(codePartition, null).WithCancellation(ct))
+        var codeQuery = $"namespace:{nodeTypePath}/Code";
+        await foreach (var codeNode in meshQuery.QueryAsync<MeshNode>(codeQuery, ct: ct).WithCancellation(ct))
         {
-            if (obj is CodeConfiguration codeConfig && !string.IsNullOrEmpty(codeConfig.Code))
+            if (codeNode.Content is CodeConfiguration codeConfig && !string.IsNullOrEmpty(codeConfig.Code))
             {
                 codeFiles.Add(codeConfig.Code);
             }

@@ -118,10 +118,10 @@ public static class PathMatcher
     }
 
     /// <summary>
-    /// Normalizes a path by trimming slashes and converting to lowercase.
+    /// Normalizes a path by trimming slashes.
     /// </summary>
     private static string NormalizePath(string? path) =>
-        path?.Trim('/').ToLowerInvariant() ?? "";
+        path?.Trim('/') ?? "";
 
     /// <summary>
     /// Splits a path into segments.

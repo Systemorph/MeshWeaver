@@ -429,7 +429,6 @@ public class AutocompleteServiceTest
             throw new System.NotImplementedException();
         }
 
-        public Task<Mesh.Services.StreamInfo> GetStreamInfoAsync(Messaging.Address address) => throw new System.NotImplementedException();
         public Task<Mesh.Services.AddressResolution?> ResolvePathAsync(string path) => Task.FromResult(ResolvePath(path));
 
         public Mesh.Services.AddressResolution? ResolvePath(string path)

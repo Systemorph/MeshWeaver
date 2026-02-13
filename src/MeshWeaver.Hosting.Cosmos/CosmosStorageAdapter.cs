@@ -67,7 +67,7 @@ public class CosmosStorageAdapter : IStorageAdapter, IAsyncDisposable
     }
 
     private static string NormalizePath(string? path) =>
-        path?.Trim('/').ToLowerInvariant() ?? "";
+        path?.Trim('/') ?? "";
 
     public async Task<MeshNode?> ReadAsync(string path, JsonSerializerOptions options, CancellationToken ct = default)
     {
@@ -96,12 +96,13 @@ public class CosmosStorageAdapter : IStorageAdapter, IAsyncDisposable
 
     public async Task WriteAsync(MeshNode node, JsonSerializerOptions options, CancellationToken ct = default)
     {
-        // Serialize manually to apply NotMapped property exclusion
-        var json = JsonSerializer.Serialize(node, options);
-        using var document = JsonDocument.Parse(json);
+        // Ensure namespace is never null — Cosmos partition key /namespace requires the field to be present
+        var nodeToWrite = node.Namespace is null ? node with { Namespace = "" } : node;
+        // The CosmosClient is configured with UseSystemTextJsonSerializerWithOptions,
+        // so UpsertItemAsync uses System.Text.Json with the hub's serialization pipeline
         await _nodesContainer.UpsertItemAsync(
-            document.RootElement,
-            new PartitionKey(node.Namespace ?? ""),
+            nodeToWrite,
+            new PartitionKey(nodeToWrite.Namespace),
             cancellationToken: ct);
     }
 
@@ -145,15 +146,15 @@ public class CosmosStorageAdapter : IStorageAdapter, IAsyncDisposable
                 .WithParameter("@parent", normalizedParent);
 
         var paths = new List<string>();
-        using var iterator = _nodesContainer.GetItemQueryIterator<dynamic>(query);
+        using var iterator = _nodesContainer.GetItemQueryIterator<JsonElement>(query);
 
         while (iterator.HasMoreResults)
         {
             var response = await iterator.ReadNextAsync(ct);
             foreach (var item in response)
             {
-                var ns = (string?)item.@namespace ?? "";
-                var id = (string)item.id;
+                var ns = item.TryGetProperty("namespace", out var nsProp) ? nsProp.GetString() ?? "" : "";
+                var id = item.GetProperty("id").GetString()!;
                 var path = string.IsNullOrEmpty(ns) ? id : $"{ns}/{id}";
                 paths.Add(path);
             }
@@ -239,7 +240,7 @@ public class CosmosStorageAdapter : IStorageAdapter, IAsyncDisposable
             "SELECT c.id FROM c WHERE c.partitionKey = @partitionKey")
             .WithParameter("@partitionKey", partitionKey);
 
-        using var iterator = _partitionsContainer.GetItemQueryIterator<dynamic>(query);
+        using var iterator = _partitionsContainer.GetItemQueryIterator<JsonElement>(query);
 
         while (iterator.HasMoreResults)
         {
@@ -248,8 +249,9 @@ public class CosmosStorageAdapter : IStorageAdapter, IAsyncDisposable
             {
                 try
                 {
+                    var id = item.GetProperty("id").GetString()!;
                     await _partitionsContainer.DeleteItemAsync<object>(
-                        (string)item.id,
+                        id,
                         new PartitionKey(partitionKey),
                         cancellationToken: ct);
                 }
@@ -272,15 +274,17 @@ public class CosmosStorageAdapter : IStorageAdapter, IAsyncDisposable
             "SELECT MAX(c.lastModified) as maxTime FROM c WHERE c.partitionKey = @partitionKey")
             .WithParameter("@partitionKey", partitionKey);
 
-        using var iterator = _partitionsContainer.GetItemQueryIterator<dynamic>(query);
+        using var iterator = _partitionsContainer.GetItemQueryIterator<JsonElement>(query);
 
         if (iterator.HasMoreResults)
         {
             var response = await iterator.ReadNextAsync(ct);
-            var result = response.FirstOrDefault();
-            if (result?.maxTime != null)
+            foreach (var item in response)
             {
-                return DateTimeOffset.Parse((string)result.maxTime);
+                if (item.TryGetProperty("maxTime", out var maxTimeProp) && maxTimeProp.ValueKind != JsonValueKind.Null)
+                {
+                    return DateTimeOffset.Parse(maxTimeProp.GetString()!);
+                }
             }
         }
 

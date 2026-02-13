@@ -298,9 +298,9 @@ public class DynamicMeshNodeAttributeGeneratorTest
         // Act
         var source = _generator.GenerateAttributeSource(node, codeConfig, null);
 
-        // Assert - NodeType nodes use ConfigureMeshHub with WithCodeConfiguration
-        source.Should().Contain("ConfigureMeshHub().WithCodeConfiguration().Build()",
-            "Generated code must include ConfigureMeshHub with WithCodeConfiguration for NodeType definition nodes");
+        // Assert - NodeType nodes now use AddMeshDataSource like all other nodes
+        source.Should().Contain("AddMeshDataSource()",
+            "Generated code must include AddMeshDataSource() for NodeType definition nodes");
     }
 
     [Fact]

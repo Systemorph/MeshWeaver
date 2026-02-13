@@ -38,19 +38,6 @@
     <Project Path="memex/aspire/Memex.Portal.Distributed/Memex.Portal.Distributed.csproj" />
     <Project Path="memex/aspire/Memex.Portal.ServiceDefaults/Memex.Portal.ServiceDefaults.csproj" />
   </Folder>
-  <Folder Name="/portal/">
-    <File Path="portal/Directory.Build.props" />
-    <Project Path="portal/MeshWeaver.Portal.Shared.Mesh/MeshWeaver.Portal.Shared.Mesh.csproj" />
-    <Project Path="portal/MeshWeaver.Portal.Shared.Web/MeshWeaver.Portal.Shared.Web.csproj" />
-    <Project Path="portal/MeshWeaver.Portal/MeshWeaver.Portal.csproj" />
-  </Folder>
-  <Folder Name="/portal/aspire/">
-    <Project Path="portal/aspire/MeshWeaver.Portal.AppHost/MeshWeaver.Portal.AppHost.csproj" />
-    <Project Path="portal/aspire/MeshWeaver.Portal.MigrationService/MeshWeaver.Portal.MigrationService.csproj" />
-    <Project Path="portal/aspire/MeshWeaver.Portal.Orleans/MeshWeaver.Portal.Orleans.csproj" />
-    <Project Path="portal/aspire/MeshWeaver.Portal.ServiceDefaults/MeshWeaver.Portal.ServiceDefaults.csproj" />
-    <Project Path="portal/aspire/MeshWeaver.Portal.Web/MeshWeaver.Portal.Web.csproj" />
-  </Folder>
   <Folder Name="/Solution Items/">
     <File Path=".editorconfig" />
     <File Path=".gitignore" />
@@ -92,14 +79,12 @@
     <Project Path="src/MeshWeaver.GoogleMaps/MeshWeaver.GoogleMaps.csproj" />
     <Project Path="src/MeshWeaver.Graph/MeshWeaver.Graph.csproj" />
     <Project Path="src/MeshWeaver.GridModel/MeshWeaver.GridModel.csproj" />
-    <Project Path="src/MeshWeaver.Hierarchies/MeshWeaver.Hierarchies.csproj" />
     <Project Path="src/MeshWeaver.Hosting.AzureBlob/MeshWeaver.Hosting.AzureBlob.csproj" />
     <Project Path="src/MeshWeaver.Hosting.Blazor/MeshWeaver.Hosting.Blazor.csproj" />
     <Project Path="src/MeshWeaver.Hosting.Monolith/MeshWeaver.Hosting.Monolith.csproj" />
     <Project Path="src/MeshWeaver.Hosting.Orleans/MeshWeaver.Hosting.Orleans.csproj" />
     <Project Path="src/MeshWeaver.Hosting.AzureStorage/MeshWeaver.Hosting.AzureStorage.csproj" />
     <Project Path="src/MeshWeaver.Hosting.Cosmos/MeshWeaver.Hosting.Cosmos.csproj" />
-    <Project Path="src/MeshWeaver.Hosting.PostgreSql/MeshWeaver.Hosting.PostgreSql.csproj" />
     <Project Path="src/MeshWeaver.Hosting/MeshWeaver.Hosting.csproj" />
     <Project Path="src/MeshWeaver.Import/MeshWeaver.Import.csproj" />
     <Project Path="src/MeshWeaver.Kernel.Hub/MeshWeaver.Kernel.Hub.csproj" />
@@ -115,9 +100,6 @@
     <Project Path="src/MeshWeaver.ShortGuid/MeshWeaver.ShortGuid.csproj" />
     <Project Path="src/MeshWeaver.Utils/MeshWeaver.Utils.csproj" />
   </Folder>
-  <Folder Name="/Templates/">
-    <Project Path="templates/packaging/MeshWeaver.ProjectTemplates.csproj" />
-  </Folder>
   <Folder Name="/test/">
     <File Path="test/appsettings.json" />
     <File Path="test/Directory.Build.props" />
@@ -130,7 +112,6 @@
     <Project Path="test/MeshWeaver.Data.TestDomain/MeshWeaver.Data.TestDomain.csproj" />
     <Project Path="test/MeshWeaver.DataSetReader.Test/MeshWeaver.DataSetReader.Test.csproj" />
     <Project Path="test/MeshWeaver.Documentation.Test/MeshWeaver.Documentation.Test.csproj" />
-    <Project Path="test/MeshWeaver.Hierarchies.Test/MeshWeaver.Hierarchies.Test.csproj" />
     <Project Path="test/MeshWeaver.Hosting.Monolith.Test/MeshWeaver.Hosting.Monolith.Test.csproj" />
     <Project Path="test/MeshWeaver.Hosting.Orleans.Test/MeshWeaver.Hosting.Orleans.Test.csproj" />
     <Project Path="test/MeshWeaver.Import.Test/MeshWeaver.Import.Test.csproj" />
@@ -146,9 +127,12 @@
     <Project Path="test/MeshWeaver.Hub.Fixture/MeshWeaver.Hub.Fixture.csproj" />
     <Project Path="test/MeshWeaver.Kernel.Test/MeshWeaver.Kernel.Test.csproj" />
     <Project Path="test/MeshWeaver.Markdown.Collaboration.Test/MeshWeaver.Markdown.Collaboration.Test.csproj" />
+    <Project Path="test/MeshWeaver.StorageImport.Test/MeshWeaver.StorageImport.Test.csproj" />
+    <Project Path="test/MeshWeaver.Hosting.Cosmos.Test/MeshWeaver.Hosting.Cosmos.Test.csproj" />
+    <Project Path="test/MeshWeaver.Hosting.PostgreSql.Test/MeshWeaver.Hosting.PostgreSql.Test.csproj" />
   </Folder>
   <Folder Name="/tools/">
-    <Project Path="tools/MeshWeaver.TemplateGenerator/MeshWeaver.TemplateGenerator.csproj" />
     <Project Path="tools/MeshWeaver.ThumbnailGenerator/MeshWeaver.ThumbnailGenerator.csproj" />
+    <Project Path="tools/MeshWeaver.Tools.CosmosImport/MeshWeaver.Tools.CosmosImport.csproj" />
   </Folder>
 </Solution>

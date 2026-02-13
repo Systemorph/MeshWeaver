@@ -101,7 +101,7 @@ public class CosmosSqlGenerator
         if (string.IsNullOrEmpty(basePath))
             return ("", parameters);
 
-        var normalizedPath = basePath.Trim('/').ToLowerInvariant();
+        var normalizedPath = basePath.Trim('/');
 
         var clause = scope switch
         {

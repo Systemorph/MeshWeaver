@@ -68,8 +68,15 @@ public class MeshNodeCompilationServiceTest : IDisposable
         }
     }
 
-    private MeshNodeCompilationService CreateService(IPersistenceServiceCore persistenceCore) =>
-        new(new PersistenceService(persistenceCore, _mockHub), _cacheService, _cacheOptions, _mockHub, NullLogger<MeshNodeCompilationService>.Instance);
+    private MeshNodeCompilationService CreateService(IPersistenceServiceCore persistenceCore)
+    {
+        var meshQueryCore = new MeshWeaver.Hosting.Persistence.Query.InMemoryMeshQuery(persistenceCore);
+        var meshQuery = new MeshWeaver.Hosting.Persistence.Query.MeshQueryService(meshQueryCore, _mockHub);
+        var serviceProvider = Substitute.For<IServiceProvider>();
+        serviceProvider.GetService(typeof(IMeshQuery)).Returns(meshQuery);
+        _mockHub.ServiceProvider.Returns(serviceProvider);
+        return new(_cacheService, _cacheOptions, _mockHub, NullLogger<MeshNodeCompilationService>.Instance);
+    }
 
     private async Task SetupNodeType(InMemoryPersistenceService persistence, string nodeType, NodeTypeDefinition definition, CodeConfiguration? codeFile = null)
     {
@@ -83,8 +90,14 @@ public class MeshNodeCompilationServiceTest : IDisposable
 
         if (codeFile != null)
         {
-            // CodeConfiguration is stored in the "Code" sub-partition (e.g., "type/project/Code")
-            await persistence.SavePartitionObjectsAsync($"type/{nodeType}", "Code", [codeFile], SetupJsonOptions);
+            // Code is stored as a child MeshNode under the Code path
+            var codeNode = new MeshNode(codeFile.Id ?? "code", $"type/{nodeType}/Code")
+            {
+                NodeType = "Code",
+                Name = codeFile.DisplayName ?? codeFile.Id ?? "Code",
+                Content = codeFile
+            };
+            await persistence.SaveNodeAsync(codeNode, SetupJsonOptions);
         }
     }
 
@@ -446,5 +459,233 @@ public record RecordType
         idProperty!.GetValue(instance).Should().Be("default-id");
         titleProperty!.GetValue(instance).Should().Be("Default Title");
         countProperty!.GetValue(instance).Should().Be(42);
+    }
+
+    [Fact(Timeout = 25000)]
+    public async Task GetAssemblyLocationAsync_OrganizationFromCosmos_Compiles()
+    {
+        var persistence = new InMemoryPersistenceService();
+
+        // Store the NodeType definition (mirrors Organization.json)
+        var orgDefinition = new NodeTypeDefinition
+        {
+            Id = "Organization", Namespace = "",
+            DisplayName = "Organization",
+            Icon = "Building",
+            Description = "An organization containing projects",
+            Configuration = "config => config.WithContentType<Organization>()"
+        };
+        await SetupNodeType(persistence, "Organization", orgDefinition);
+
+        // Store Code as child MeshNode (NOT partition object)
+        var codeNode = new MeshNode("Organization", "type/Organization/Code")
+        {
+            NodeType = "Code",
+            Name = "Organization Data Model",
+            Content = new CodeConfiguration
+            {
+                Id = "Organization",
+                Code = @"
+public record Organization
+{
+    [System.ComponentModel.DataAnnotations.Key]
+    public string Name { get; init; } = string.Empty;
+    public string? Description { get; init; }
+}",
+                DisplayName = "Organization Data Model"
+            }
+        };
+        await persistence.SaveNodeAsync(codeNode, SetupJsonOptions);
+
+        var service = CreateService(persistence);
+        var node = MeshNode.FromPath("acme") with
+        {
+            Name = "ACME",
+            NodeType = "type/Organization",
+            LastModified = DateTimeOffset.UtcNow
+        };
+
+        var assemblyPath = await service.GetAssemblyLocationAsync(node, TestContext.Current.CancellationToken);
+        assemblyPath.Should().NotBeNull();
+        var assembly = Assembly.LoadFrom(assemblyPath!);
+        assembly.GetType("Organization").Should().NotBeNull();
+    }
+
+    [Fact(Timeout = 25000)]
+    public async Task GetAssemblyLocationAsync_MultipleCodeFiles_CombinesAndCompiles()
+    {
+        // Simulates Cosmos scenario: NodeType with multiple Code child MeshNodes
+        var persistence = new InMemoryPersistenceService();
+
+        var definition = new NodeTypeDefinition
+        {
+            Id = "Project", Namespace = "",
+            DisplayName = "Project",
+            Configuration = "config => config.WithContentType<Project>()"
+        };
+        await SetupNodeType(persistence, "Project", definition);
+
+        // First code file: data model
+        var dataModelNode = new MeshNode("ProjectDataModel", "type/Project/Code")
+        {
+            NodeType = "Code",
+            Name = "Project Data Model",
+            Content = new CodeConfiguration
+            {
+                Id = "ProjectDataModel",
+                Code = @"
+public record Project
+{
+    [System.ComponentModel.DataAnnotations.Key]
+    public string Name { get; init; } = string.Empty;
+    public string? Description { get; init; }
+    public ProjectStatus Status { get; init; }
+}"
+            }
+        };
+        await persistence.SaveNodeAsync(dataModelNode, SetupJsonOptions);
+
+        // Second code file: enum
+        var enumNode = new MeshNode("ProjectStatus", "type/Project/Code")
+        {
+            NodeType = "Code",
+            Name = "Project Status Enum",
+            Content = new CodeConfiguration
+            {
+                Id = "ProjectStatus",
+                Code = @"
+public enum ProjectStatus
+{
+    Draft,
+    Active,
+    Completed,
+    Archived
+}"
+            }
+        };
+        await persistence.SaveNodeAsync(enumNode, SetupJsonOptions);
+
+        var service = CreateService(persistence);
+        var node = MeshNode.FromPath("acme/web") with
+        {
+            Name = "Web Project",
+            NodeType = "type/Project",
+            LastModified = DateTimeOffset.UtcNow
+        };
+
+        var assemblyPath = await service.GetAssemblyLocationAsync(node, TestContext.Current.CancellationToken);
+        assemblyPath.Should().NotBeNull();
+        var assembly = Assembly.LoadFrom(assemblyPath!);
+        assembly.GetType("Project").Should().NotBeNull("Data model type should be compiled");
+        assembly.GetType("ProjectStatus").Should().NotBeNull("Enum type from second code file should be compiled");
+    }
+
+    [Fact(Timeout = 25000)]
+    public async Task GetAssemblyLocationAsync_NodeTypeDefinitionNode_CompilesOwnCode()
+    {
+        // Simulates Cosmos: navigating to the NodeType node itself (e.g., type/Organization)
+        // The NodeType node compiles its OWN Code children (at its own path)
+        var persistence = new InMemoryPersistenceService();
+
+        var definition = new NodeTypeDefinition
+        {
+            Id = "Task", Namespace = "",
+            DisplayName = "Task",
+            Configuration = "config => config.WithContentType<TaskItem>()"
+        };
+        await SetupNodeType(persistence, "Task", definition, new CodeConfiguration
+        {
+            Id = "TaskItem",
+            Code = @"
+public record TaskItem
+{
+    [System.ComponentModel.DataAnnotations.Key]
+    public string Title { get; init; } = string.Empty;
+    public bool Done { get; init; }
+}"
+        });
+
+        var service = CreateService(persistence);
+
+        // The node IS the NodeType definition itself
+        var nodeTypeNode = MeshNode.FromPath("type/Task") with
+        {
+            Name = "Task",
+            NodeType = MeshNode.NodeTypePath,
+            Content = definition,
+            LastModified = DateTimeOffset.UtcNow
+        };
+
+        var assemblyPath = await service.GetAssemblyLocationAsync(nodeTypeNode, TestContext.Current.CancellationToken);
+        assemblyPath.Should().NotBeNull();
+        var assembly = Assembly.LoadFrom(assemblyPath!);
+        assembly.GetType("TaskItem").Should().NotBeNull();
+    }
+
+    [Fact(Timeout = 25000)]
+    public async Task GetAssemblyLocationAsync_NoCodeChildren_CompilesWithoutUserCode()
+    {
+        // Simulates Cosmos: NodeType exists but has no Code children yet
+        var persistence = new InMemoryPersistenceService();
+
+        var definition = new NodeTypeDefinition
+        {
+            Id = "EmptyType", Namespace = "",
+            DisplayName = "Empty Type"
+        };
+        await SetupNodeType(persistence, "EmptyType", definition);
+
+        var service = CreateService(persistence);
+        var node = MeshNode.FromPath("test/empty") with
+        {
+            Name = "Empty",
+            NodeType = "type/EmptyType",
+            LastModified = DateTimeOffset.UtcNow
+        };
+
+        // Should still compile (generates MeshNodeAttribute without user types)
+        var assemblyPath = await service.GetAssemblyLocationAsync(node, TestContext.Current.CancellationToken);
+        assemblyPath.Should().NotBeNull();
+    }
+
+    [Fact(Timeout = 25000)]
+    public async Task GetAssemblyLocationAsync_ConfigurationWithContentType_GeneratesHubConfig()
+    {
+        // Simulates Cosmos: NodeType with Configuration that references compiled type
+        var persistence = new InMemoryPersistenceService();
+
+        var definition = new NodeTypeDefinition
+        {
+            Id = "Contact", Namespace = "",
+            DisplayName = "Contact",
+            Description = "A business contact",
+            Configuration = "config => config.WithContentType<Contact>()"
+        };
+        await SetupNodeType(persistence, "Contact", definition, new CodeConfiguration
+        {
+            Id = "Contact",
+            Code = @"
+public record Contact
+{
+    [System.ComponentModel.DataAnnotations.Key]
+    public string Email { get; init; } = string.Empty;
+    public string FirstName { get; init; } = string.Empty;
+    public string LastName { get; init; } = string.Empty;
+}"
+        });
+
+        var service = CreateService(persistence);
+        var node = MeshNode.FromPath("contacts/john") with
+        {
+            Name = "John Doe",
+            NodeType = "type/Contact",
+            LastModified = DateTimeOffset.UtcNow
+        };
+
+        var result = await service.CompileAndGetConfigurationsAsync(node, TestContext.Current.CancellationToken);
+        result.Should().NotBeNull();
+        result!.AssemblyLocation.Should().NotBeNullOrEmpty();
+        result.NodeTypeConfigurations.Should().NotBeEmpty("Should extract HubConfiguration from compiled assembly");
+        result.NodeTypeConfigurations.First().HubConfiguration.Should().NotBeNull();
     }
 }

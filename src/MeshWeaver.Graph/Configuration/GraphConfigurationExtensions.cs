@@ -45,6 +45,8 @@ public static class GraphConfigurationExtensions
         /// </summary>
         public TBuilder AddJsonGraphConfiguration(string dataDirectory)
         {
+            var assemblyLocation = typeof(GraphConfigurationExtensions).Assembly.Location;
+
             // Register the built-in "NodeType" MeshNode
             // This provides HubConfiguration for nodes with nodeType="NodeType" (type definition nodes).
             builder.AddMeshNodes(new MeshNode(MeshNode.NodeTypePath)
@@ -52,10 +54,10 @@ public static class GraphConfigurationExtensions
                 Name = "Node Type",
                 Description = "Definition for a node type",
                 Icon = "/static/NodeTypeIcons/code.svg",
+                AssemblyLocation = assemblyLocation,
                 HubConfiguration = config => config
                     .AddMeshDataSource(source => source
-                        .WithContentType<NodeTypeDefinition>()
-                        .WithType<CodeConfiguration>("Code"))
+                        .WithContentType<NodeTypeDefinition>())
                     .AddNodeTypeView()
             });
 
@@ -66,6 +68,7 @@ public static class GraphConfigurationExtensions
                 Name = "Agent",
                 Description = "AI Agent configuration",
                 Icon = "/static/NodeTypeIcons/bot.svg",
+                AssemblyLocation = assemblyLocation,
                 HubConfiguration = config => config
                     .AddMeshDataSource(source => source
                         .WithContentType<AgentConfiguration>())
@@ -74,19 +77,19 @@ public static class GraphConfigurationExtensions
 
             // Register the built-in "Markdown" MeshNode
             // This provides HubConfiguration for nodes with nodeType="Markdown" (markdown documentation nodes).
-            builder.AddMeshNodes(Configuration.MarkdownNodeType.CreateMeshNode());
+            builder.AddMeshNodes(Configuration.MarkdownNodeType.CreateMeshNode() with { AssemblyLocation = assemblyLocation });
 
             // Register the built-in "Thread" MeshNode
             // This provides HubConfiguration for nodes with nodeType="Thread" (AI conversation threads).
-            builder.AddMeshNodes(Configuration.ThreadNodeConfiguration.CreateMeshNode());
+            builder.AddMeshNodes(Configuration.ThreadNodeConfiguration.CreateMeshNode() with { AssemblyLocation = assemblyLocation });
 
             // Register the built-in "ThreadMessage" MeshNode
             // This provides HubConfiguration for nodes with nodeType="ThreadMessage" (individual messages in threads).
-            builder.AddMeshNodes(Configuration.ThreadMessageNodeConfiguration.CreateMeshNode());
+            builder.AddMeshNodes(Configuration.ThreadMessageNodeConfiguration.CreateMeshNode() with { AssemblyLocation = assemblyLocation });
 
             // Register the built-in "Comment" MeshNode
             // This provides HubConfiguration for nodes with nodeType="Comment" (comments on document nodes).
-            builder.AddMeshNodes(Configuration.CommentNodeConfiguration.CreateMeshNode());
+            builder.AddMeshNodes(Configuration.CommentNodeConfiguration.CreateMeshNode() with { AssemblyLocation = assemblyLocation });
 
             // Register services that don't need hub-level dependencies at the mesh level
             builder.ConfigureServices(services =>
@@ -94,18 +97,9 @@ public static class GraphConfigurationExtensions
                 // Register Graph configuration types in the mesh-level ITypeRegistry
                 // for polymorphic JSON deserialization by FileSystemStorageAdapter.
                 // This must happen at mesh level so the types are available before any hub is created.
+                // All content types are registered centrally via WithGraphTypes().
                 var typeRegistry = services.BuildServiceProvider().GetService<ITypeRegistry>();
-                if (typeRegistry != null)
-                {
-                    typeRegistry.WithType(typeof(NodeTypeDefinition), nameof(NodeTypeDefinition));
-                    typeRegistry.WithType(typeof(CodeConfiguration), nameof(CodeConfiguration));
-                    typeRegistry.WithType(typeof(AgentConfiguration), nameof(AgentConfiguration));
-                    typeRegistry.WithType(typeof(AgentDelegation), nameof(AgentDelegation));
-                    typeRegistry.WithType(typeof(Comment), nameof(Comment));
-                    typeRegistry.WithType(typeof(MarkdownContent), nameof(MarkdownContent));
-                    typeRegistry.WithType(typeof(MeshWeaver.AI.Thread), nameof(MeshWeaver.AI.Thread));
-                    typeRegistry.WithType(typeof(ThreadMessage), nameof(ThreadMessage));
-                }
+                typeRegistry?.WithGraphTypes();
 
                 // Register compilation cache options
                 services.AddOptions<CompilationCacheOptions>();
@@ -168,11 +162,12 @@ public static class GraphConfigurationExtensions
             // The node type path is the hub address (e.g., "type/Person")
             var nodeTypePath = hub.Address.ToString();
 
-            // Get CodeConfiguration from the partition
+            // Get CodeConfiguration from child MeshNodes under the Code path
             CodeConfiguration? codeFile = null;
-            await foreach (var obj in persistence.GetPartitionObjectsAsync(nodeTypePath, null).WithCancellation(ct))
+            var codeParentPath = $"{nodeTypePath}/Code";
+            await foreach (var child in persistence.GetChildrenAsync(codeParentPath).WithCancellation(ct))
             {
-                if (obj is CodeConfiguration cf)
+                if (child.Content is CodeConfiguration cf)
                 {
                     codeFile = cf;
                     break;

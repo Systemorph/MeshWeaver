@@ -343,7 +343,7 @@ public class InMemoryPersistenceService : IPersistenceServiceCore
     }
 
     private static string NormalizePath(string? path) =>
-        path?.Trim('/').ToLowerInvariant() ?? "";
+        path?.Trim('/') ?? "";
 
     #region Comments
 
@@ -393,10 +393,10 @@ public class InMemoryPersistenceService : IPersistenceServiceCore
 
     private static string GetPartitionKey(string nodePath, string? subPath)
     {
-        var key = nodePath.Trim('/').ToLowerInvariant();
+        var key = nodePath.Trim('/');
         if (!string.IsNullOrEmpty(subPath))
         {
-            key = $"{key}/{subPath.Trim('/').ToLowerInvariant()}";
+            key = $"{key}/{subPath.Trim('/')}";
         }
         return key;
     }

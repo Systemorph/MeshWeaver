@@ -14,6 +14,7 @@
   <ItemGroup>
     <ProjectReference Include="..\MeshWeaver.Kernel\MeshWeaver.Kernel.csproj" />
     <ProjectReference Include="..\MeshWeaver.Markdown\MeshWeaver.Markdown.csproj" />
+    <ProjectReference Include="..\MeshWeaver.Graph\MeshWeaver.Graph.csproj" />
     <ProjectReference Include="..\MeshWeaver.Mesh.Contract\MeshWeaver.Mesh.Contract.csproj" />
     <ProjectReference Include="..\MeshWeaver.AI\MeshWeaver.AI.csproj" />
     <ProjectReference Include="..\MeshWeaver.ServiceProvider\MeshWeaver.ServiceProvider.csproj" />

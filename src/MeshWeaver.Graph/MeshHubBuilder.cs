@@ -16,7 +16,6 @@ public class MeshHubBuilder
     private readonly List<Func<MessageHubConfiguration, MessageHubConfiguration>> _hubConfigurations = new();
     private Func<IMessageHub, CancellationToken, Task>? _initializationFunc;
     private bool _addMeshNavigation = true;
-    private bool _includeCodeConfiguration;
     private Type? DataType { get; set; }
 
     /// <summary>
@@ -46,17 +45,6 @@ public class MeshHubBuilder
     public MeshHubBuilder WithDataType(Type dataType)
     {
         DataType = dataType;
-        return this;
-    }
-
-    /// <summary>
-    /// Includes CodeConfiguration in the data source for this hub.
-    /// CodeConfigurations are loaded from the hub's persistence partition.
-    /// Use this for NodeType hubs that need to access code files.
-    /// </summary>
-    public MeshHubBuilder WithCodeConfiguration()
-    {
-        _includeCodeConfiguration = true;
         return this;
     }
 
@@ -97,26 +85,17 @@ public class MeshHubBuilder
     {
         var config = _configuration;
         var dataType = DataType; // Capture for lambda
-        var includeCodeConfiguration = _includeCodeConfiguration; // Capture for lambda
 
-        // Configure data source with MeshNode and optional CodeConfiguration
+        // Configure data source with MeshNode
         config = config.AddMeshDataSource(source =>
         {
             var logger = source.Workspace.Hub.ServiceProvider.GetService<ILogger<MeshHubBuilder>>();
 
-            logger?.LogDebug("MeshHubBuilder: Building data source for {HubPath}, dataType={DataType}, includeCodeConfiguration={IncludeCodeConfiguration}",
-                source.Workspace.Hub.Address, dataType?.Name ?? "null", includeCodeConfiguration);
+            logger?.LogDebug("MeshHubBuilder: Building data source for {HubPath}, dataType={DataType}",
+                source.Workspace.Hub.Address, dataType?.Name ?? "null");
 
             // Add MeshNode with persistence sync
             var result = source.WithMeshNodes();
-
-            // Add CodeConfiguration if requested (for NodeType hubs only)
-            // CodeConfiguration is stored in the "Code" sub-partition (e.g., "Type/Organizations/Code")
-            // Registered with collection name "Code" (not "CodeConfiguration")
-            if (includeCodeConfiguration)
-            {
-                result = result.WithCodeConfiguration();
-            }
 
             // Add content type if specified
             if (dataType is not null)

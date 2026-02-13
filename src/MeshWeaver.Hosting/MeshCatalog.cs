@@ -105,7 +105,8 @@ public sealed class MeshCatalog(
                 var templateBasedNode = MeshNode.FromPath(addressKey) with
                 {
                     NodeType = templatePath,
-                    HubConfiguration = templateNode.HubConfiguration
+                    HubConfiguration = templateNode.HubConfiguration,
+                    AssemblyLocation = templateNode.AssemblyLocation
                 };
                 logger.LogDebug("GetNodeAsync: Created node at {Path} from template {Template}", addressKey, templatePath);
                 cache.Set(templateBasedNode.Path, templateBasedNode, cacheOptions);
@@ -341,16 +342,6 @@ public sealed class MeshCatalog(
         }
 
         return true;
-    }
-
-    private readonly Dictionary<string, StreamInfo> channelTypes = new()
-    {
-        { AddressExtensions.AppType, new(StreamType.Channel, StreamProviders.Hub, ChannelNames.Hub) },
-        { AddressExtensions.KernelType, new(StreamType.Channel, StreamProviders.Hub, ChannelNames.Hub) }
-    };
-    public Task<StreamInfo> GetStreamInfoAsync(Address address)
-    {
-        return Task.FromResult(channelTypes.GetValueOrDefault(address.Type) ?? new StreamInfo(StreamType.Stream, StreamProviders.Memory, address.ToString()));
     }
 
     /// <inheritdoc />

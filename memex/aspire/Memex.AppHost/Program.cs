@@ -1,5 +1,4 @@
-using Aspire.Hosting;
-using Microsoft.Extensions.Hosting;
+﻿using Microsoft.Extensions.Hosting;
 
 var builder = DistributedApplication.CreateBuilder(args);
 
@@ -11,44 +10,50 @@ var useMonolith = mode == "monolith";
 
 if (useDistributed)
 {
-    // Application storage for Orleans clustering
-    var appStorage = builder.AddAzureStorage("memexblobs");
+    // Persistent storage for content (survives AppHost restarts)
+    var contentStorage = builder.AddAzureStorage("memexblobs");
     if (builder.Environment.IsDevelopment())
     {
-        appStorage = appStorage.RunAsEmulator(
+        contentStorage = contentStorage.RunAsEmulator(
             azurite => azurite
                 .WithDataBindMount("../../Azurite/Data")
+                .WithLifetime(ContainerLifetime.Persistent)
                 .WithExternalHttpEndpoints());
     }
+    var storageBlobs = contentStorage.AddBlobs("storage");
 
-    // Create Azure Table resources for Orleans clustering
-    var orleansTables = appStorage.AddTables("orleans-clustering");
-
-    // Azure Blob for content collection "storage"
-    var storageBlobs = appStorage.AddBlobs("storage");
-
-    var orleans = builder.AddOrleans("memex-mesh")
-        .WithClustering(orleansTables);
-
-    // Cosmos DB for graph persistence (persistent container with data volume)
-    var cosmos = builder.AddAzureCosmosDB("memexcosmos");
+    // Ephemeral storage for Orleans (fresh cluster on each restart to avoid stale silo entries)
+    var orleansStorage = builder.AddAzureStorage("orleansstorage");
     if (builder.Environment.IsDevelopment())
     {
-        cosmos = cosmos.RunAsEmulator(emulator => emulator
-            .WithDataVolume()
-            .WithLifetime(ContainerLifetime.Persistent));
+        orleansStorage = orleansStorage.RunAsEmulator();
     }
-    var cosmosDb = cosmos.AddCosmosDatabase("memexdb");
+    var orleansTables = orleansStorage.AddTables("orleans-clustering");
+    var grainStateBlobs = orleansStorage.AddBlobs("orleans-grain-state");
+
+    var orleans = builder.AddOrleans("memex-mesh")
+        .WithClustering(orleansTables)
+        .WithGrainStorage("Default", grainStateBlobs);
+
+    // PostgreSQL with pgvector for graph persistence
+    var postgres = builder.AddPostgres("memex-postgres")
+        .WithImage("pgvector/pgvector", "pg17")
+        .WithDataVolume("memex-pgdata")
+        .WithLifetime(ContainerLifetime.Persistent)
+        .WithPgAdmin(pgAdmin => pgAdmin.WithLifetime(ContainerLifetime.Persistent));
+    var postgresDb = postgres.AddDatabase("meshweaver");
 
     // Memex Distributed (co-hosted silo + web)
     builder
         .AddProject<Projects.Memex_Portal_Distributed>("memex-distributed")
         .WithExternalHttpEndpoints()
         .WithReference(orleans)
-        .WithReference(cosmosDb)
+        .WithReference(postgresDb)
         .WithReference(storageBlobs)
+        .WaitFor(storageBlobs)
         .WaitFor(orleansTables)
-        .WaitFor(cosmosDb);
+        .WaitFor(grainStateBlobs)
+        .WaitFor(postgresDb);
 }
 
 if (useMonolith)

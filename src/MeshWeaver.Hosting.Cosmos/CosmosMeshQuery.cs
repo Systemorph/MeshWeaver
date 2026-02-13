@@ -1,0 +1,385 @@
+using System.Reactive.Disposables;
+using System.Reactive.Linq;
+using System.Reactive.Subjects;
+using System.Runtime.CompilerServices;
+using System.Text.Json;
+using MeshWeaver.Hosting.Persistence.Query;
+using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Services;
+
+namespace MeshWeaver.Hosting.Cosmos;
+
+/// <summary>
+/// Cosmos DB native implementation of IMeshQueryCore.
+/// Translates parsed queries directly into Cosmos SQL via CosmosStorageAdapter.QueryNodesAsync,
+/// bypassing the in-memory persistence layer for much better performance and reliability.
+/// </summary>
+public class CosmosMeshQuery : IMeshQueryCore
+{
+    private readonly CosmosStorageAdapter _adapter;
+    private readonly IDataChangeNotifier? _changeNotifier;
+    private readonly QueryParser _parser = new();
+    private long _version;
+
+    public static readonly TimeSpan DefaultDebounceInterval = TimeSpan.FromMilliseconds(100);
+
+    public CosmosMeshQuery(
+        CosmosStorageAdapter adapter,
+        IDataChangeNotifier? changeNotifier = null)
+    {
+        _adapter = adapter;
+        _changeNotifier = changeNotifier;
+    }
+
+    /// <inheritdoc />
+    public async IAsyncEnumerable<object> QueryAsync(
+        MeshQueryRequest request,
+        JsonSerializerOptions options,
+        [EnumeratorCancellation] CancellationToken ct = default)
+    {
+        var parsedQuery = _parser.Parse(request.Query);
+
+        // Override limit from request if provided
+        if (request.Limit.HasValue)
+        {
+            parsedQuery = parsedQuery with { Limit = request.Limit };
+        }
+
+        // Strip $type filters — all items in the nodes container are MeshNodes,
+        // so $type:MeshNode is always true and other $type values always false.
+        parsedQuery = StripTypeFilter(parsedQuery);
+
+        // Apply default path/scope logic (same as InMemoryMeshQuery)
+        var effectivePath = parsedQuery.Path;
+        var effectiveScope = parsedQuery.Scope;
+        if (string.IsNullOrEmpty(effectivePath))
+        {
+            if (!string.IsNullOrEmpty(request.DefaultPath))
+            {
+                effectivePath = request.DefaultPath;
+            }
+            if (parsedQuery.Scope == QueryScope.Exact)
+            {
+                effectiveScope = QueryScope.Children;
+            }
+        }
+
+        // Build the final parsed query with effective path/scope
+        parsedQuery = parsedQuery with { Path = effectivePath, Scope = effectiveScope };
+
+        var count = 0;
+        var skip = request.Skip ?? 0;
+
+        await foreach (var node in _adapter.QueryNodesAsync(parsedQuery, ct: ct))
+        {
+            // Apply skip for paging
+            if (skip > 0)
+            {
+                skip--;
+                continue;
+            }
+
+            yield return node;
+
+            // Apply limit
+            count++;
+            if (parsedQuery.Limit.HasValue && count >= parsedQuery.Limit.Value)
+                yield break;
+        }
+    }
+
+    /// <inheritdoc />
+    public IAsyncEnumerable<QuerySuggestion> AutocompleteAsync(
+        string basePath,
+        string prefix,
+        JsonSerializerOptions options,
+        int limit = 10,
+        CancellationToken ct = default)
+        => AutocompleteAsync(basePath, prefix, options, AutocompleteMode.PathFirst, limit, ct);
+
+    /// <inheritdoc />
+    public async IAsyncEnumerable<QuerySuggestion> AutocompleteAsync(
+        string basePath,
+        string prefix,
+        JsonSerializerOptions options,
+        AutocompleteMode mode,
+        int limit = 10,
+        [EnumeratorCancellation] CancellationToken ct = default)
+    {
+        var normalizedPrefix = (prefix ?? "").ToLowerInvariant();
+
+        // Use descendants scope from basePath to find matching nodes
+        var query = new ParsedQuery(
+            Filter: null,
+            TextSearch: string.IsNullOrEmpty(normalizedPrefix) ? null : normalizedPrefix,
+            Path: basePath,
+            Scope: QueryScope.Descendants);
+
+        var suggestions = new List<QuerySuggestion>();
+
+        await foreach (var node in _adapter.QueryNodesAsync(query, ct: ct))
+        {
+            var name = node.Name ?? node.Id ?? node.Path ?? "";
+            double score = 0;
+
+            if (name.StartsWith(normalizedPrefix, StringComparison.OrdinalIgnoreCase))
+                score = 100 - (name.Length - normalizedPrefix.Length);
+            else if (name.Contains(normalizedPrefix, StringComparison.OrdinalIgnoreCase))
+                score = 50;
+            else if ((node.Path ?? "").Contains(normalizedPrefix, StringComparison.OrdinalIgnoreCase))
+                score = 30;
+
+            if (score > 0 || string.IsNullOrEmpty(normalizedPrefix))
+            {
+                suggestions.Add(new QuerySuggestion(node.Path ?? "", name, node.NodeType, score));
+            }
+        }
+
+        IEnumerable<QuerySuggestion> ordered = mode switch
+        {
+            AutocompleteMode.RelevanceFirst => suggestions
+                .OrderByDescending(s => s.Score)
+                .ThenBy(s => s.Path.Length)
+                .ThenBy(s => s.Name),
+            _ => suggestions
+                .OrderBy(s => s.Path.Length)
+                .ThenByDescending(s => s.Score)
+                .ThenBy(s => s.Name)
+        };
+
+        foreach (var suggestion in ordered.Take(limit))
+        {
+            yield return suggestion;
+        }
+    }
+
+    /// <inheritdoc />
+    public IObservable<QueryResultChange<T>> ObserveQuery<T>(MeshQueryRequest request, JsonSerializerOptions options)
+    {
+        return Observable.Create<QueryResultChange<T>>(async (observer, ct) =>
+        {
+            var parsedQuery = _parser.Parse(request.Query);
+
+            var effectivePath = parsedQuery.Path;
+            var effectiveScope = parsedQuery.Scope;
+            if (string.IsNullOrEmpty(effectivePath))
+            {
+                effectivePath = request.DefaultPath ?? "";
+                if (parsedQuery.Scope == QueryScope.Exact)
+                    effectiveScope = QueryScope.Children;
+            }
+            var normalizedBasePath = effectivePath?.Trim('/') ?? "";
+
+            // Track current result set for detecting changes
+            var currentItems = new Dictionary<string, T>(StringComparer.OrdinalIgnoreCase);
+
+            // Emit initial results
+            try
+            {
+                var initialItems = new List<T>();
+                await foreach (var item in QueryAsync(request, options, ct))
+                {
+                    if (item is T typedItem)
+                    {
+                        initialItems.Add(typedItem);
+                        var itemPath = (item as MeshNode)?.Path;
+                        if (!string.IsNullOrEmpty(itemPath))
+                            currentItems[itemPath] = typedItem;
+                    }
+                }
+
+                observer.OnNext(new QueryResultChange<T>
+                {
+                    ChangeType = QueryChangeType.Initial,
+                    Items = initialItems,
+                    Query = parsedQuery,
+                    Version = Interlocked.Increment(ref _version),
+                    Timestamp = DateTimeOffset.UtcNow
+                });
+            }
+            catch (Exception ex)
+            {
+                observer.OnError(ex);
+                return Disposable.Empty;
+            }
+
+            if (_changeNotifier == null)
+            {
+                observer.OnCompleted();
+                return Disposable.Empty;
+            }
+
+            // Subscribe to changes with debouncing
+            var changeBuffer = new Subject<DataChangeNotification>();
+            var subscription = new CompositeDisposable();
+
+            var notifierSubscription = _changeNotifier
+                .Where(n => PathMatcher.ShouldNotify(n.Path, normalizedBasePath, effectiveScope))
+                .Subscribe(changeBuffer);
+            subscription.Add(notifierSubscription);
+
+            var debounceSubscription = changeBuffer
+                .Buffer(DefaultDebounceInterval)
+                .Where(batch => batch.Count > 0)
+                .Subscribe(async batch =>
+                {
+                    try
+                    {
+                        await ProcessChangeBatchAsync(batch, request, options, parsedQuery, currentItems, observer, ct);
+                    }
+                    catch (Exception ex)
+                    {
+                        observer.OnError(ex);
+                    }
+                });
+            subscription.Add(debounceSubscription);
+            subscription.Add(changeBuffer);
+
+            return subscription;
+        });
+    }
+
+    private async Task ProcessChangeBatchAsync<T>(
+        IList<DataChangeNotification> batch,
+        MeshQueryRequest request,
+        JsonSerializerOptions options,
+        ParsedQuery parsedQuery,
+        Dictionary<string, T> currentItems,
+        IObserver<QueryResultChange<T>> observer,
+        CancellationToken ct)
+    {
+        var changesByPath = batch
+            .GroupBy(c => c.Path, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => g.Last(), StringComparer.OrdinalIgnoreCase);
+
+        var newItems = new Dictionary<string, T>(StringComparer.OrdinalIgnoreCase);
+        await foreach (var item in QueryAsync(request, options, ct))
+        {
+            if (item is T typedItem)
+            {
+                var itemPath = (item as MeshNode)?.Path;
+                if (!string.IsNullOrEmpty(itemPath))
+                    newItems[itemPath] = typedItem;
+            }
+        }
+
+        var addedItems = new List<T>();
+        var updatedItems = new List<T>();
+        var removedItems = new List<T>();
+
+        foreach (var (path, item) in newItems)
+        {
+            if (currentItems.ContainsKey(path))
+            {
+                if (changesByPath.ContainsKey(path))
+                    updatedItems.Add(item);
+            }
+            else
+            {
+                addedItems.Add(item);
+            }
+        }
+
+        foreach (var (path, item) in currentItems)
+        {
+            if (!newItems.ContainsKey(path))
+                removedItems.Add(item);
+        }
+
+        currentItems.Clear();
+        foreach (var (path, item) in newItems)
+            currentItems[path] = item;
+
+        if (addedItems.Count > 0)
+        {
+            observer.OnNext(new QueryResultChange<T>
+            {
+                ChangeType = QueryChangeType.Added,
+                Items = addedItems,
+                Query = parsedQuery,
+                Version = Interlocked.Increment(ref _version),
+                Timestamp = DateTimeOffset.UtcNow
+            });
+        }
+
+        if (updatedItems.Count > 0)
+        {
+            observer.OnNext(new QueryResultChange<T>
+            {
+                ChangeType = QueryChangeType.Updated,
+                Items = updatedItems,
+                Query = parsedQuery,
+                Version = Interlocked.Increment(ref _version),
+                Timestamp = DateTimeOffset.UtcNow
+            });
+        }
+
+        if (removedItems.Count > 0)
+        {
+            observer.OnNext(new QueryResultChange<T>
+            {
+                ChangeType = QueryChangeType.Removed,
+                Items = removedItems,
+                Query = parsedQuery,
+                Version = Interlocked.Increment(ref _version),
+                Timestamp = DateTimeOffset.UtcNow
+            });
+        }
+    }
+
+    /// <summary>
+    /// Strips $type filter conditions from the parsed query AST.
+    /// All items in the Cosmos nodes container are MeshNodes, so $type:MeshNode is redundant
+    /// and any other $type value would match nothing.
+    /// </summary>
+    private static ParsedQuery StripTypeFilter(ParsedQuery query)
+    {
+        if (query.Filter == null)
+            return query;
+
+        var stripped = StripTypeFromNode(query.Filter);
+        return query with { Filter = stripped };
+    }
+
+    private static QueryNode? StripTypeFromNode(QueryNode node)
+    {
+        return node switch
+        {
+            QueryComparison comparison when comparison.Condition.Selector == "$type" => null,
+            QueryComparison => node,
+            QueryAnd and => StripTypeFromAnd(and),
+            QueryOr or => StripTypeFromOr(or),
+            _ => node
+        };
+    }
+
+    private static QueryNode? StripTypeFromAnd(QueryAnd and)
+    {
+        var remaining = and.Children
+            .Select(StripTypeFromNode)
+            .Where(n => n != null)
+            .ToList();
+
+        return remaining.Count switch
+        {
+            0 => null,
+            1 => remaining[0],
+            _ => new QueryAnd(remaining!)
+        };
+    }
+
+    private static QueryNode? StripTypeFromOr(QueryOr or)
+    {
+        var remaining = or.Children
+            .Select(StripTypeFromNode)
+            .Where(n => n != null)
+            .ToList();
+
+        return remaining.Count switch
+        {
+            0 => null,
+            1 => remaining[0],
+            _ => new QueryOr(remaining!)
+        };
+    }
+}

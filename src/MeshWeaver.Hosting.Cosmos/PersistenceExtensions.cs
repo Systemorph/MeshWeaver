@@ -2,9 +2,9 @@ using Microsoft.Azure.Cosmos;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using MeshWeaver.Domain;
 using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Hosting.Persistence.Query;
-using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 
@@ -15,26 +15,45 @@ namespace MeshWeaver.Hosting.Cosmos;
 /// <summary>
 /// Factory for creating CosmosStorageAdapter instances from IOptions&lt;CosmosStorageOptions&gt;.
 /// </summary>
-public class CosmosStorageAdapterFactory(IOptions<CosmosStorageOptions> options) : IStorageAdapterFactory
+public class CosmosStorageAdapterFactory(
+    IOptions<CosmosStorageOptions> options) : IStorageAdapterFactory
 {
     public const string StorageType = "Cosmos";
 
     public IStorageAdapter Create(GraphStorageConfig config, IServiceProvider serviceProvider)
     {
         var opts = options.Value;
+        var logger = serviceProvider.GetService<ILogger<CosmosStorageAdapterFactory>>();
 
+        // Prefer Aspire-injected keyed containers (registered via AddAzureCosmosDatabase + AddKeyedContainer)
+        logger?.LogDebug("Resolving keyed Container '{Name}'", opts.NodesContainerName);
+        var nodesContainer = serviceProvider.GetKeyedService<Container>(opts.NodesContainerName);
+        logger?.LogDebug("nodes={Found}, resolving '{Name}'", nodesContainer != null, opts.PartitionsContainerName);
+        var partitionsContainer = serviceProvider.GetKeyedService<Container>(opts.PartitionsContainerName);
+        logger?.LogDebug("partitions={Found}", partitionsContainer != null);
+
+        if (nodesContainer != null && partitionsContainer != null)
+            return new CosmosStorageAdapter(nodesContainer, partitionsContainer);
+
+        // Fallback: create CosmosClient manually from connection string (non-Aspire scenarios)
         var connectionString = opts.ConnectionString
             ?? config.ConnectionString
             ?? throw new InvalidOperationException(
-                "Cosmos DB connection string is not configured. " +
-                "Set CosmosStorageOptions.ConnectionString or Graph:Storage:ConnectionString.");
+                "Cosmos DB containers not found in DI. " +
+                "Register via Aspire (AddAzureCosmosDatabase + AddKeyedContainer), " +
+                "or set CosmosStorageOptions.ConnectionString.");
 
-        var cosmosClient = new CosmosClient(connectionString);
+        var typeRegistry = serviceProvider.GetService<ITypeRegistry>();
+        var jsonOptions = StorageImporter.CreateFullImportOptions(typeRegistry);
+        var cosmosClient = new CosmosClient(connectionString, new CosmosClientOptions
+        {
+            UseSystemTextJsonSerializerWithOptions = jsonOptions
+        });
+
         var database = cosmosClient.GetDatabase(opts.DatabaseName);
-        var nodesContainer = database.GetContainer(opts.NodesContainerName);
-        var partitionsContainer = database.GetContainer(opts.PartitionsContainerName);
-
-        return new CosmosStorageAdapter(nodesContainer, partitionsContainer);
+        return new CosmosStorageAdapter(
+            database.GetContainer(opts.NodesContainerName),
+            database.GetContainer(opts.PartitionsContainerName));
     }
 }
 
@@ -53,6 +72,18 @@ public static class PersistenceExtensions
             services.Configure(configure);
         services.AddKeyedSingleton<IStorageAdapterFactory, CosmosStorageAdapterFactory>(
             CosmosStorageAdapterFactory.StorageType);
+
+        // Register CosmosMeshQuery so it takes priority over InMemoryMeshQuery (via TryAddSingleton)
+        services.AddSingleton<IMeshQueryCore>(sp =>
+        {
+            var adapter = sp.GetRequiredService<IStorageAdapter>() as CosmosStorageAdapter
+                ?? throw new InvalidOperationException(
+                    "CosmosMeshQuery requires CosmosStorageAdapter. " +
+                    "Ensure Cosmos storage is configured.");
+            var changeNotifier = sp.GetService<IDataChangeNotifier>();
+            return new CosmosMeshQuery(adapter, changeNotifier);
+        });
+
         return services;
     }
 
@@ -77,10 +108,25 @@ public static class PersistenceExtensions
         var partitionsContainer = database.GetContainer(partitionsContainerName);
 
         var storageAdapter = new CosmosStorageAdapter(nodesContainer, partitionsContainer);
-        var persistenceService = new InMemoryPersistenceService(storageAdapter);
+        return services.AddCosmosPersistence(storageAdapter);
+    }
 
-        services.AddSingleton<IStorageAdapter>(storageAdapter);
-        services.AddSingleton<IPersistenceServiceCore>(persistenceService);
+    /// <summary>
+    /// Adds Cosmos DB persistence services using a pre-configured storage adapter.
+    /// Registers CosmosMeshQuery for native Cosmos SQL queries.
+    /// </summary>
+    /// <param name="services">The service collection</param>
+    /// <param name="storageAdapter">The Cosmos storage adapter</param>
+    /// <returns>The service collection for chaining</returns>
+    public static IServiceCollection AddCosmosPersistence(
+        this IServiceCollection services,
+        CosmosStorageAdapter storageAdapter)
+    {
+        // Register CosmosMeshQuery BEFORE AddPersistence so TryAddSingleton picks it up
+        services.AddSingleton<IMeshQueryCore>(sp =>
+            new CosmosMeshQuery(storageAdapter, sp.GetService<IDataChangeNotifier>()));
+
+        services.AddPersistence(storageAdapter);
 
         return services;
     }
@@ -157,12 +203,10 @@ public static class PersistenceExtensions
                 storageAdapter,
                 sp.GetService<IDataChangeNotifier>()));
 
-        // Register IMeshQueryCore with change notifier
+        // Register CosmosMeshQuery with change notifier for native Cosmos SQL queries
         services.AddSingleton<IMeshQueryCore>(sp =>
-            new InMemoryMeshQuery(
-                sp.GetRequiredService<IPersistenceServiceCore>(),
-                sp.GetService<ISecurityService>(),
-                sp.GetService<AccessService>(),
+            new CosmosMeshQuery(
+                storageAdapter,
                 sp.GetService<IDataChangeNotifier>()));
 
         // Register the Change Feed Processor
@@ -317,15 +361,4 @@ public static class PersistenceExtensions
         return services.AddCosmosPersistence(cosmosClient, databaseName);
     }
 
-    /// <summary>
-    /// Registers the Cosmos DB data seeder hosted service.
-    /// The seeder reads data from the file system and writes it to Cosmos DB at startup.
-    /// </summary>
-    public static IServiceCollection AddCosmosSeeding(
-        this IServiceCollection services, Action<CosmosSeederOptions> configure)
-    {
-        services.Configure(configure);
-        services.AddHostedService<CosmosDataSeeder>();
-        return services;
-    }
 }

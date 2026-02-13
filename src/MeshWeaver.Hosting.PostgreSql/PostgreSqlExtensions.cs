@@ -1,37 +1,181 @@
-﻿using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.Configuration;
+using MeshWeaver.Hosting.Persistence;
+using MeshWeaver.Mesh.Activity;
+using MeshWeaver.Mesh.Services;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
+using Npgsql;
 
 namespace MeshWeaver.Hosting.PostgreSql;
 
 /// <summary>
-/// Extension methods for registering the database context in dependency injection.
+/// Factory for creating PostgreSqlStorageAdapter instances from configuration.
+/// </summary>
+public class PostgreSqlStorageAdapterFactory(
+    IOptions<PostgreSqlStorageOptions> options) : IStorageAdapterFactory
+{
+    public const string StorageType = "PostgreSql";
+
+    public IStorageAdapter Create(GraphStorageConfig config, IServiceProvider serviceProvider)
+    {
+        // Try to use an Aspire-injected or externally-registered NpgsqlDataSource first
+        var dataSource = serviceProvider.GetService<NpgsqlDataSource>();
+
+        if (dataSource == null)
+        {
+            var opts = options.Value;
+            var connectionString = opts.ConnectionString
+                ?? config.ConnectionString
+                ?? throw new InvalidOperationException(
+                    "PostgreSQL connection string not configured. " +
+                    "Set PostgreSqlStorageOptions.ConnectionString or Graph:Storage:ConnectionString.");
+
+            var dataSourceBuilder = new NpgsqlDataSourceBuilder(connectionString);
+            dataSourceBuilder.UseVector();
+            dataSource = dataSourceBuilder.Build();
+        }
+
+        var embeddingProvider = serviceProvider.GetService<IEmbeddingProvider>();
+        return new PostgreSqlStorageAdapter(dataSource, embeddingProvider);
+    }
+}
+
+/// <summary>
+/// Extension methods for configuring PostgreSQL persistence.
 /// </summary>
 public static class PostgreSqlExtensions
 {
     /// <summary>
-    /// Adds the MeshWeaver PostgreSQL DbContext to the service collection.
+    /// Registers the PostgreSQL storage adapter factory for use with AddPersistenceFromConfig.
+    /// Also registers PostgreSqlMeshQuery for native SQL queries.
     /// </summary>
-    /// <param name="services">The service collection to add the DbContext to.</param>
-    /// <param name="connectionStringOrName">Either a direct connection string or a named connection.</param>
-    /// <returns>The updated service collection.</returns>
-    public static IServiceCollection AddPostgreSqlMeshContext(this IServiceCollection services,
-        string connectionStringOrName)
+    public static IServiceCollection AddPostgreSqlStorageFactory(
+        this IServiceCollection services, Action<PostgreSqlStorageOptions>? configure = null)
     {
-        services.AddDbContext<MeshWeaverDbContext>((sp, options) =>
-        {
-            var configuration = sp.GetRequiredService<IConfiguration>();
-            // Try to get as a connection string name first
-            var connectionString = configuration.GetConnectionString(connectionStringOrName)
-                                  ?? connectionStringOrName; // Fall back to direct connection string
+        if (configure != null)
+            services.Configure(configure);
+        services.AddKeyedSingleton<IStorageAdapterFactory, PostgreSqlStorageAdapterFactory>(
+            PostgreSqlStorageAdapterFactory.StorageType);
 
-            options.UseNpgsql(connectionString, npgsqlOptions =>
-            {
-                // Enable resilient PostgreSQL connections
-                npgsqlOptions.EnableRetryOnFailure();
-            });
+        // Register PostgreSqlMeshQuery so it takes priority over InMemoryMeshQuery
+        services.AddSingleton<IMeshQueryCore>(sp =>
+        {
+            var adapter = sp.GetRequiredService<IStorageAdapter>() as PostgreSqlStorageAdapter
+                ?? throw new InvalidOperationException(
+                    "PostgreSqlMeshQuery requires PostgreSqlStorageAdapter.");
+            var changeNotifier = sp.GetService<IDataChangeNotifier>();
+            return new PostgreSqlMeshQuery(adapter, changeNotifier);
+        });
+
+        // Register PostgreSqlActivityStore for activity tracking
+        services.TryAddSingleton<IActivityStore>(sp =>
+        {
+            var dataSource = sp.GetRequiredService<NpgsqlDataSource>();
+            return new PostgreSqlActivityStore(dataSource);
         });
 
         return services;
+    }
+
+    /// <summary>
+    /// Adds PostgreSQL persistence services with automatic schema creation.
+    /// </summary>
+    public static IServiceCollection AddPostgreSqlPersistence(
+        this IServiceCollection services,
+        string connectionString,
+        Action<PostgreSqlStorageOptions>? configure = null)
+    {
+        var opts = new PostgreSqlStorageOptions { ConnectionString = connectionString };
+        configure?.Invoke(opts);
+
+        var dataSourceBuilder = new NpgsqlDataSourceBuilder(connectionString);
+        dataSourceBuilder.UseVector();
+        var dataSource = dataSourceBuilder.Build();
+
+        var embeddingProvider = services.BuildServiceProvider().GetService<IEmbeddingProvider>();
+        var storageAdapter = new PostgreSqlStorageAdapter(dataSource, embeddingProvider);
+
+        // Register PostgreSqlMeshQuery BEFORE AddPersistence so TryAddSingleton picks it up
+        services.AddSingleton<IMeshQueryCore>(sp =>
+            new PostgreSqlMeshQuery(storageAdapter, sp.GetService<IDataChangeNotifier>()));
+
+        services.AddPersistence(storageAdapter);
+
+        // Register access control
+        services.TryAddSingleton(new PostgreSqlAccessControl(dataSource));
+
+        return services;
+    }
+
+    /// <summary>
+    /// Adds PostgreSQL persistence with LISTEN/NOTIFY change notification support.
+    /// </summary>
+    public static IServiceCollection AddPostgreSqlPersistenceWithChangeNotifications(
+        this IServiceCollection services,
+        string connectionString,
+        Action<PostgreSqlStorageOptions>? configure = null)
+    {
+        var opts = new PostgreSqlStorageOptions { ConnectionString = connectionString };
+        configure?.Invoke(opts);
+
+        var dataSourceBuilder = new NpgsqlDataSourceBuilder(connectionString);
+        dataSourceBuilder.UseVector();
+        var dataSource = dataSourceBuilder.Build();
+
+        var embeddingProvider = services.BuildServiceProvider().GetService<IEmbeddingProvider>();
+        var storageAdapter = new PostgreSqlStorageAdapter(dataSource, embeddingProvider);
+
+        // Register the data change notifier
+        services.AddSingleton<IDataChangeNotifier, DataChangeNotifier>();
+
+        // Register the storage adapter
+        services.AddSingleton<IStorageAdapter>(storageAdapter);
+        services.AddSingleton(storageAdapter);
+
+        // Register persistence service
+        services.AddSingleton<IPersistenceServiceCore>(sp =>
+            new InMemoryPersistenceService(
+                storageAdapter,
+                sp.GetService<IDataChangeNotifier>()));
+
+        // Register PostgreSqlMeshQuery with change notifier
+        services.AddSingleton<IMeshQueryCore>(sp =>
+            new PostgreSqlMeshQuery(
+                storageAdapter,
+                sp.GetService<IDataChangeNotifier>()));
+
+        // Register the Change Listener
+        services.AddSingleton(sp =>
+        {
+            var notifier = sp.GetRequiredService<IDataChangeNotifier>();
+            var logger = sp.GetService<ILogger<PostgreSqlChangeListener>>();
+            return new PostgreSqlChangeListener(dataSource, notifier, logger);
+        });
+
+        // Register access control
+        services.TryAddSingleton(new PostgreSqlAccessControl(dataSource));
+
+        return services;
+    }
+
+    /// <summary>
+    /// Initializes the PostgreSQL schema (tables, indexes, triggers).
+    /// Call this during application startup.
+    /// </summary>
+    public static async Task InitializePostgreSqlSchemaAsync(
+        this IServiceProvider serviceProvider,
+        CancellationToken ct = default)
+    {
+        // Try to get data source from a registered PostgreSqlStorageAdapter, or from DI directly
+        var dataSource = (serviceProvider.GetService<IStorageAdapter>() as PostgreSqlStorageAdapter)?.DataSource
+            ?? serviceProvider.GetService<NpgsqlDataSource>()
+            ?? throw new InvalidOperationException(
+                "No NpgsqlDataSource found. Register via AddPostgreSqlPersistence or Aspire AddNpgsqlDataSource.");
+
+        var options = serviceProvider.GetService<IOptions<PostgreSqlStorageOptions>>()?.Value
+            ?? new PostgreSqlStorageOptions();
+
+        await PostgreSqlSchemaInitializer.InitializeAsync(dataSource, options, ct);
     }
 }

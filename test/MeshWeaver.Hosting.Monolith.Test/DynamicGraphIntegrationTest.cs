@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reactive.Linq;
@@ -67,6 +68,17 @@ public class DynamicGraphIntegrationTest : MonolithMeshTestBase
         await SeedHierarchyAsync(persistence);
     }
 
+    private static async Task SaveCodeAsChildNodeAsync(IPersistenceService persistence, string nodeTypePath, CodeConfiguration codeConfig)
+    {
+        var codeNode = new MeshNode(codeConfig.Id ?? "code", $"{nodeTypePath}/Code")
+        {
+            NodeType = "Code",
+            Name = codeConfig.DisplayName ?? codeConfig.Id ?? "Code",
+            Content = codeConfig
+        };
+        await persistence.SaveNodeAsync(codeNode);
+    }
+
     private static async Task SetupTestConfigurationAsync(IPersistenceService persistence)
     {
         // Create Story type using "type/" Namespace for global types
@@ -112,7 +124,7 @@ public enum StoryStatus
             }
         };
         await persistence.SaveNodeAsync(storyNode);
-        await persistence.SavePartitionObjectsAsync("type/story", "Code", [storyCodeConfig]);
+        await SaveCodeAsChildNodeAsync(persistence, "type/story", storyCodeConfig);
 
         // Create Organization type
         var orgCodeConfig = new CodeConfiguration
@@ -146,7 +158,7 @@ public record Organization
             }
         };
         await persistence.SaveNodeAsync(orgNode);
-        await persistence.SavePartitionObjectsAsync("type/org", "Code", [orgCodeConfig]);
+        await SaveCodeAsChildNodeAsync(persistence, "type/org", orgCodeConfig);
 
         // Create Project type
         var projectCodeConfig = new CodeConfiguration
@@ -180,7 +192,7 @@ public record Project
             }
         };
         await persistence.SaveNodeAsync(projectNode);
-        await persistence.SavePartitionObjectsAsync("type/project", "Code", [projectCodeConfig]);
+        await SaveCodeAsChildNodeAsync(persistence, "type/project", projectCodeConfig);
 
         // Create Graph type
         var graphCodeConfig = new CodeConfiguration
@@ -213,7 +225,7 @@ public record Graph
             }
         };
         await persistence.SaveNodeAsync(graphTypeNode);
-        await persistence.SavePartitionObjectsAsync("type/graph", "Code", [graphCodeConfig]);
+        await SaveCodeAsChildNodeAsync(persistence, "type/graph", graphCodeConfig);
     }
 
     private static async Task SeedHierarchyAsync(IPersistenceService persistence)
@@ -872,16 +884,21 @@ public class DynamicGraphFileSystemPersistenceTest : MonolithMeshTestBase
         """;
         File.WriteAllText(Path.Combine(typeDir, "Organizations.json"), organizationsTypeJson);
 
-        // 2. Create Type/Organizations/Code/codeConfiguration.json - the CodeConfiguration
-        // CodeConfiguration is stored in the "Code" sub-partition for NodeType hubs
+        // 2. Create Type/Organizations/Code/codeConfiguration.json - Code as child MeshNode
         var organizationsTypeDir = Path.Combine(typeDir, "Organizations");
         var codeDir = Path.Combine(organizationsTypeDir, "Code");
         Directory.CreateDirectory(codeDir);
 
         var codeConfigJson = """
         {
-          "$type": "CodeConfiguration",
-          "code": "public record Organizations { }"
+          "id": "codeConfiguration",
+          "namespace": "Type/Organizations/Code",
+          "name": "Code",
+          "nodeType": "Code",
+          "content": {
+            "$type": "CodeConfiguration",
+            "code": "public record Organizations { }"
+          }
         }
         """;
         File.WriteAllText(Path.Combine(codeDir, "codeConfiguration.json"), codeConfigJson);
@@ -934,16 +951,22 @@ public class DynamicGraphFileSystemPersistenceTest : MonolithMeshTestBase
         """;
         File.WriteAllText(Path.Combine(typeGraphDir, "graph.json"), graphTypeJson);
 
-        var graphTypeDataDir = Path.Combine(typeGraphDir, "graph");
-        Directory.CreateDirectory(graphTypeDataDir);
+        var graphCodeDir = Path.Combine(typeGraphDir, "graph", "Code");
+        Directory.CreateDirectory(graphCodeDir);
 
         var graphCodeConfigJson = """
         {
-          "$type": "CodeConfiguration",
-          "code": "public record Graph { }"
+          "id": "codeConfiguration",
+          "namespace": "type/graph/Code",
+          "name": "Code",
+          "nodeType": "Code",
+          "content": {
+            "$type": "CodeConfiguration",
+            "code": "public record Graph { }"
+          }
         }
         """;
-        File.WriteAllText(Path.Combine(graphTypeDataDir, "codeConfiguration.json"), graphCodeConfigJson);
+        File.WriteAllText(Path.Combine(graphCodeDir, "codeConfiguration.json"), graphCodeConfigJson);
     }
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
@@ -1006,52 +1029,30 @@ public class DynamicGraphFileSystemPersistenceTest : MonolithMeshTestBase
     }
 
     /// <summary>
-    /// Tests that CodeConfiguration can be loaded from the Code sub-partition via messaging.
-    /// This validates that PartitionTypeSource properly loads CodeConfiguration from the hub.
+    /// Tests that CodeConfiguration can be loaded from child MeshNodes under the Code path.
+    /// Code is now stored as regular MeshNodes with nodeType="Code" and content=CodeConfiguration.
     /// </summary>
     [Fact(Timeout = 30000)]
-    public async Task FileSystem_CodeConfiguration_LoadedFromCodeSubPartition()
+    public async Task FileSystem_CodeConfiguration_LoadedFromChildMeshNodes()
     {
-        // Arrange - first trigger compilation so the hub is configured
-        var meshCatalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
-        var organizationsAddress = new Address("Type/Organizations");
+        // Arrange
+        var persistence = Mesh.ServiceProvider.GetRequiredService<IPersistenceService>();
 
-        // This triggers compilation and hub creation with CodeConfiguration support
-        var node = await meshCatalog.GetNodeAsync(organizationsAddress);
-        node.Should().NotBeNull("Type/Organizations node should exist");
-        node.HubConfiguration.Should().NotBeNull("Node should have HubConfiguration from compiled assembly");
-
-        // Create a client that can query the hub
-        // Register CodeConfiguration with collection name "Code" matching the hub's registration
-        // Using generic WithType<T> to properly set up key function from [Key] attribute
-        var client = GetClient(c => c
-            .AddData(data => data)
-            .WithType<CodeConfiguration>("Code"));
-        var workspace = client.GetWorkspace();
-
-        // Act - get CodeConfiguration stream from the Type/Organizations hub
-        // CollectionReference returns InstanceCollection (not EntityStore)
-        // because CollectionReference : WorkspaceReference<InstanceCollection>
-        var stream = workspace.GetRemoteStream<InstanceCollection, CollectionReference>(
-            organizationsAddress,
-            new CollectionReference("Code"));
-
-        // Wait for data
-        var instanceCollection = await stream
-            .Where(x => x.Value != null)
-            .Timeout(TimeSpan.FromSeconds(20))
-            .Select(x => x.Value!)
-            .FirstAsync();
+        // Act - get children of the Code path
+        var codeChildren = new List<MeshNode>();
+        await foreach (var child in persistence.GetChildrenAsync("Type/Organizations/Code"))
+        {
+            codeChildren.Add(child);
+        }
 
         // Assert
-        instanceCollection.Should().NotBeNull("InstanceCollection should not be null");
-        instanceCollection.Instances.Should().NotBeEmpty(
-            "InstanceCollection should contain CodeConfiguration instances");
-
-        var codeConfigs = instanceCollection.Get<CodeConfiguration>().ToList();
-        codeConfigs.Should().NotBeNullOrEmpty(
-            "CodeConfiguration should be loaded from Type/Organizations/Code partition via messaging.");
-        codeConfigs.First().Code.Should().NotBeNullOrEmpty(
+        codeChildren.Should().NotBeEmpty("Code path should have child MeshNodes with CodeConfiguration");
+        var codeNode = codeChildren.First();
+        codeNode.NodeType.Should().Be("Code");
+        codeNode.Content.Should().BeOfType<CodeConfiguration>(
+            "Code child node Content should be deserialized as CodeConfiguration via $type discriminator");
+        var codeConfig = (CodeConfiguration)codeNode.Content!;
+        codeConfig.Code.Should().NotBeNullOrEmpty(
             "CodeConfiguration.Code should contain C# source code.");
     }
 
@@ -1274,8 +1275,7 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
         var client = GetClient(c => c
             .WithInitialization((h, _) => RoutingService.RegisterStreamAsync(h))
             .AddLayoutClient(cc => cc)
-            .AddData(data => data)
-            .WithType<CodeConfiguration>("Code"));
+            .AddData(data => data));
         var workspace = client.GetWorkspace();
 
         // Request the Code view area
@@ -1296,43 +1296,32 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
     }
 
     /// <summary>
-    /// Test that CodeConfiguration stream for Organization is not empty.
+    /// Test that CodeConfiguration can be loaded from child MeshNodes via persistence.
+    /// Code is stored as child MeshNodes with nodeType="Code" under the Organization/Code path.
     /// </summary>
     [Fact(Timeout = 30000)]
-    public async Task Organization_CodeConfigurationStream_IsNotEmpty()
+    public async Task Organization_CodeConfiguration_LoadedFromChildMeshNodes()
     {
-        var organizationAddress = new Address("Organization");
-        var client = GetClient(c => c
-            .AddData(data => data)
-            .WithType<CodeConfiguration>("Code"));
-        var workspace = client.GetWorkspace();
+        var persistence = Mesh.ServiceProvider.GetRequiredService<IPersistenceService>();
 
-        Output.WriteLine("Getting Code collection stream for Organization...");
-        var stream = workspace.GetRemoteStream<InstanceCollection, CollectionReference>(
-            organizationAddress,
-            new CollectionReference("Code"));
-
-        var instanceCollection = await stream
-            .Where(x => x.Value != null)
-            .Timeout(TimeSpan.FromSeconds(20))
-            .Select(x => x.Value!)
-            .FirstAsync();
-
-        Output.WriteLine($"Received InstanceCollection with {instanceCollection.Instances.Count} instances");
-
-        instanceCollection.Should().NotBeNull();
-        instanceCollection.Instances.Should().NotBeEmpty("Code collection should have CodeConfiguration instances");
-
-        var codeConfigs = instanceCollection.Get<CodeConfiguration>().ToList();
-        Output.WriteLine($"Found {codeConfigs.Count} CodeConfiguration(s)");
-
-        foreach (var config in codeConfigs)
+        Output.WriteLine("Getting Code children for Organization...");
+        var codeChildren = new List<MeshNode>();
+        await foreach (var child in persistence.GetChildrenAsync("Organization/Code"))
         {
-            Output.WriteLine($"CodeConfiguration.Code: {config.Code?.Substring(0, Math.Min(100, config.Code?.Length ?? 0))}...");
+            codeChildren.Add(child);
+            Output.WriteLine($"Found code child: {child.Path}, NodeType={child.NodeType}");
         }
 
-        codeConfigs.Should().NotBeEmpty("Should have CodeConfiguration instances");
-        codeConfigs.First().Code.Should().NotBeNullOrEmpty("CodeConfiguration.Code should have content");
+        codeChildren.Should().NotBeEmpty("Organization/Code should have child MeshNodes");
+
+        foreach (var codeNode in codeChildren)
+        {
+            codeNode.Content.Should().BeOfType<CodeConfiguration>(
+                "Code child node Content should be CodeConfiguration");
+            var codeConfig = (CodeConfiguration)codeNode.Content!;
+            Output.WriteLine($"CodeConfiguration.Code: {codeConfig.Code?.Substring(0, Math.Min(100, codeConfig.Code?.Length ?? 0))}...");
+            codeConfig.Code.Should().NotBeNullOrEmpty("CodeConfiguration.Code should have content");
+        }
     }
 
     /// <summary>
@@ -1348,8 +1337,7 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
         var client = GetClient(c => c
             .WithInitialization((h, _) => RoutingService.RegisterStreamAsync(h))
             .AddLayoutClient(cc => cc)
-            .AddData(data => data)
-            .WithType<CodeConfiguration>("Code"));
+            .AddData(data => data));
 
         var workspace = client.GetWorkspace();
 
@@ -1392,8 +1380,7 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
         var client = GetClient(c => c
             .WithInitialization((h, _) => RoutingService.RegisterStreamAsync(h))
             .AddLayoutClient(cc => cc)
-            .AddData(data => data)
-            .WithType<CodeConfiguration>("Code"));
+            .AddData(data => data));
 
         var workspace = client.GetWorkspace();
 
@@ -1462,8 +1449,7 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
         var client = GetClient(c => c
             .WithInitialization((h, _) => RoutingService.RegisterStreamAsync(h))
             .AddLayoutClient(cc => cc)
-            .AddData(data => data)
-            .WithType<CodeConfiguration>("Code"));
+            .AddData(data => data));
 
         var workspace = client.GetWorkspace();
 
