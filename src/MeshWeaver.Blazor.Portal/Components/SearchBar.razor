@@ -1,15 +1,49 @@
-@using MeshWeaver.Mesh
-@using MeshWeaver.Blazor.Components.Monaco
-@using Microsoft.FluentUI.AspNetCore.Components
+@using MeshWeaver.Mesh.Services
 
-<div class="search-bar-container" style="width: 100%;">
-    <MonacoEditorView @ref="monacoEditor"
-                      @bind-Value="searchTerm"
-                      OnSubmit="HandleSubmit"
-                      Placeholder="@SearchPlaceholder"
-                      Height="38px"
-                      MaxHeight="38px"
-                      ShowBorder="true"
-                      CodeEditMode="false"
-                      AsyncCompletionCallback="@GetCompletionsAsync" />
+<div class="search-bar-container">
+    <FluentTextField @ref="textField"
+                     Value="@searchTerm"
+                     ValueChanged="OnSearchTermChanged"
+                     Immediate="true"
+                     AutoComplete="off"
+                     Placeholder="@SearchPlaceholder"
+                     @onkeydown="HandleKeyDown"
+                     @onfocus="OnFocus"
+                     @onblur="OnBlur"
+                     Style="width: 100%;" />
+
+    @if (showDropdown && (isLoading || suggestions.Length > 0))
+    {
+        <div class="search-dropdown">
+            @if (isLoading && suggestions.Length == 0)
+            {
+                <div class="search-dropdown-loading">Searching...</div>
+            }
+            else
+            {
+                @for (var i = 0; i < suggestions.Length; i++)
+                {
+                    var index = i;
+                    var suggestion = suggestions[i];
+                    <div class="search-dropdown-item @(index == highlightedIndex ? "highlighted" : "")"
+                         @onmousedown="() => NavigateToSuggestion(suggestion)"
+                         @onmousedown:preventDefault>
+                        <div class="search-dropdown-icon">
+                            <span class="search-dropdown-initial">@GetInitial(suggestion)</span>
+                        </div>
+                        <div class="search-dropdown-text">
+                            <div class="search-dropdown-name">@suggestion.Name</div>
+                            <div class="search-dropdown-path">
+                                @suggestion.Path
+                                @if (!string.IsNullOrEmpty(suggestion.NodeType))
+                                {
+                                    <span> &middot; @GetNodeTypeDisplay(suggestion.NodeType)</span>
+                                }
+                            </div>
+                        </div>
+                    </div>
+                }
+            }
+        </div>
+    }
 </div>
