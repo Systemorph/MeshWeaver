@@ -138,7 +138,8 @@ public record MeshQueryRequest
 /// <param name="Name">Display name of the node</param>
 /// <param name="NodeType">Type of the node (may be null)</param>
 /// <param name="Score">Relevance score (higher is better match)</param>
-public record QuerySuggestion(string Path, string Name, string? NodeType, double Score);
+/// <param name="Icon">Icon URL or identifier for display in UI (may be null)</param>
+public record QuerySuggestion(string Path, string Name, string? NodeType, double Score, string? Icon = null);
 
 /// <summary>
 /// Autocomplete ordering mode.
