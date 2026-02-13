@@ -207,7 +207,7 @@ public class MapToToggleableControlPersistenceTest(ITestOutputHelper output) : M
     /// are not properly persisted to the data store when going through
     /// the monolith mesh with serialization.
     /// </summary>
-    [Fact]
+    [Fact(Timeout = 15000)]
     public async Task EditAndPersist_ThroughMonolithMesh_ShouldPersistToDataStore()
     {
         var client = GetClient();
@@ -270,7 +270,7 @@ public class MapToToggleableControlPersistenceTest(ITestOutputHelper output) : M
     /// <summary>
     /// THIS TEST SHOULD FAIL - demonstrates that DateTime? edits are not persisted.
     /// </summary>
-    [Fact]
+    [Fact(Timeout = 15000)]
     public async Task EditAndPersist_NullableDateTime_ThroughMonolithMesh()
     {
         var client = GetClient();
@@ -325,7 +325,7 @@ public class MapToToggleableControlPersistenceTest(ITestOutputHelper output) : M
     /// THIS TEST SHOULD FAIL - demonstrates that edit state resets
     /// when workspace stream emits after data change.
     /// </summary>
-    [Fact]
+    [Fact(Timeout = 15000)]
     public async Task EditState_ShouldSurviveWorkspaceStreamEmit()
     {
         var client = GetClient();
@@ -394,7 +394,7 @@ public class MapToToggleableControlPersistenceTest(ITestOutputHelper output) : M
     /// This test subscribes directly to GetDataStream and counts emissions
     /// to detect if there's an infinite loop.
     /// </summary>
-    [Fact]
+    [Fact(Timeout = 15000)]
     public async Task GetDataStream_ShouldNotCauseEndlessEmissions()
     {
         var client = GetClient();
@@ -466,7 +466,7 @@ public class MapToToggleableControlPersistenceTest(ITestOutputHelper output) : M
     /// <summary>
     /// Tests that editing in the UI doesn't cause endless emissions in the host data stream.
     /// </summary>
-    [Fact]
+    [Fact(Timeout = 15000)]
     public async Task EditInUI_ShouldNotCauseEndlessDataStreamEmissions()
     {
         var client = GetClient();
@@ -537,7 +537,7 @@ public class MapToToggleableControlPersistenceTest(ITestOutputHelper output) : M
     /// Tests that selecting a different option in a Dimension combobox doesn't cause endless emissions.
     /// This is the main scenario reported by the user - selecting in a combobox causes endless messages.
     /// </summary>
-    [Fact]
+    [Fact(Timeout = 15000)]
     public async Task DimensionCombobox_SelectionShouldNotCauseEndlessEmissions()
     {
         var client = GetClient();
@@ -621,7 +621,7 @@ public class MapToToggleableControlPersistenceTest(ITestOutputHelper output) : M
     /// This specifically tests the issue where CombineLatest of dataStream and collectionStream
     /// fires indefinitely because UpdateData triggers more emissions.
     /// </summary>
-    [Fact]
+    [Fact(Timeout = 15000)]
     public async Task BuildDimensionReadOnlyLabel_CombineLatest_ShouldNotCauseEndlessEmissions()
     {
         var client = GetClient();
@@ -697,7 +697,7 @@ public class MapToToggleableControlPersistenceTest(ITestOutputHelper output) : M
     /// and then selecting a different value doesn't cause endless emissions.
     /// This tests the full click-to-edit -> select -> blur flow.
     /// </summary>
-    [Fact]
+    [Fact(Timeout = 15000)]
     public async Task DimensionCombobox_ClickEditSelectBlur_ShouldNotCauseEndlessEmissions()
     {
         var client = GetClient();

@@ -499,7 +499,7 @@ public class SearchQueryTests : MonolithMeshTestBase
 
     #region QueryParser Tests
 
-    [Fact]
+    [Fact(Timeout = 15000)]
     public void QueryParser_ParsesTextSearchFromCatalogQuery()
     {
         // Arrange - this is the exact query pattern from Catalog
@@ -520,7 +520,7 @@ public class SearchQueryTests : MonolithMeshTestBase
         parsed.Scope.Should().Be(MeshWeaver.Mesh.QueryScope.Descendants);
     }
 
-    [Fact]
+    [Fact(Timeout = 15000)]
     public void QueryParser_MultipleTextTerms_JoinedWithSpace()
     {
         var parser = new MeshWeaver.Mesh.QueryParser();

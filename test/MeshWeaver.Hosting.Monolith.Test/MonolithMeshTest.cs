@@ -13,7 +13,7 @@ namespace MeshWeaver.Hosting.Monolith.Test;
 
 public class MonolithMeshTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
-    [Fact]
+    [Fact(Timeout = 30000)]
     public async Task PingPong()
     {
         var client = GetClient();
@@ -26,7 +26,7 @@ public class MonolithMeshTest(ITestOutputHelper output) : MonolithMeshTestBase(o
     }
 
 
-    [Theory]
+    [Theory(Timeout = 30000)]
     [InlineData("HubFactory")]
     [InlineData("Kernel")]
     public async Task HubWorksAfterDisposal(string id)

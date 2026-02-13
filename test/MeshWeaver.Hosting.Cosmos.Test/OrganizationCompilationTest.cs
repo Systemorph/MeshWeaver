@@ -72,7 +72,7 @@ public class OrganizationCompilationTest(ITestOutputHelper output) : TestBase(ou
             "Organization.json and Code files should be imported into Cosmos");
     }
 
-    [Fact]
+    [Fact(Timeout = 60000)]
     public async Task OrganizationTypeCompiles_FromCosmosData()
     {
         // Arrange: create a client hub
