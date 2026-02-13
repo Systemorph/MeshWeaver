@@ -1,4 +1,5 @@
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Activity;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
@@ -13,7 +14,7 @@ public static class ActivityTrackingExtensions
 {
     /// <summary>
     /// Adds user activity tracking to the persistence service.
-    /// Tracks all read/write operations per user to _activity/{userId} partition.
+    /// Requires an IActivityStore to be registered (e.g., PostgreSqlActivityStore).
     /// </summary>
     public static MeshBuilder AddActivityTracking(this MeshBuilder builder)
     {
@@ -41,9 +42,10 @@ public static class ActivityTrackingExtensions
                         sp =>
                         {
                             var inner = (IPersistenceServiceCore)descriptor.ImplementationFactory(sp);
+                            var activityStore = sp.GetRequiredService<IActivityStore>();
                             var accessService = sp.GetRequiredService<AccessService>();
                             var logger = sp.GetRequiredService<ILogger<ActivityTrackingPersistenceDecorator>>();
-                            return new ActivityTrackingPersistenceDecorator(inner, accessService, logger);
+                            return new ActivityTrackingPersistenceDecorator(inner, activityStore, accessService, logger);
                         },
                         descriptor.Lifetime));
                     return services;
@@ -57,9 +59,10 @@ public static class ActivityTrackingExtensions
                         var inner = descriptor.ImplementationType != null
                             ? (IPersistenceServiceCore)sp.GetRequiredService(descriptor.ImplementationType)
                             : (IPersistenceServiceCore)descriptor.ImplementationInstance!;
+                        var activityStore = sp.GetRequiredService<IActivityStore>();
                         var accessService = sp.GetRequiredService<AccessService>();
                         var logger = sp.GetRequiredService<ILogger<ActivityTrackingPersistenceDecorator>>();
-                        return new ActivityTrackingPersistenceDecorator(inner, accessService, logger);
+                        return new ActivityTrackingPersistenceDecorator(inner, activityStore, accessService, logger);
                     },
                     descriptor.Lifetime));
             }

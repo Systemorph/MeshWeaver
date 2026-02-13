@@ -1,5 +1,7 @@
+using MeshWeaver.AI;
 using MeshWeaver.Domain;
 using MeshWeaver.Graph.Configuration;
+using MeshWeaver.Markdown;
 
 namespace MeshWeaver.Mesh;
 
@@ -26,14 +28,20 @@ public static class MeshNodeExtensions
     }
 
     /// <summary>
-    /// Registers graph-related content types with the type registry for polymorphic deserialization.
-    /// Call this to ensure NodeTypeDefinition and other graph types are properly deserialized
-    /// when stored as MeshNode.Content.
+    /// Registers all graph-related content types with the type registry for polymorphic deserialization.
+    /// This is the global registry for content types — used by the import tool, persistence layer,
+    /// and runtime serialization. All built-in content types must be registered here.
     /// </summary>
     public static ITypeRegistry WithGraphTypes(this ITypeRegistry typeRegistry)
     {
         typeRegistry.WithType(typeof(NodeTypeDefinition), nameof(NodeTypeDefinition));
         typeRegistry.WithType(typeof(CodeConfiguration), nameof(CodeConfiguration));
+        typeRegistry.WithType(typeof(AgentConfiguration), nameof(AgentConfiguration));
+        typeRegistry.WithType(typeof(AgentDelegation), nameof(AgentDelegation));
+        typeRegistry.WithType(typeof(Comment), nameof(Comment));
+        typeRegistry.WithType(typeof(MarkdownContent), nameof(MarkdownContent));
+        typeRegistry.WithType(typeof(AI.Thread), nameof(AI.Thread));
+        typeRegistry.WithType(typeof(ThreadMessage), nameof(ThreadMessage));
         return typeRegistry;
     }
 }

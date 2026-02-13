@@ -97,18 +97,9 @@ public static class GraphConfigurationExtensions
                 // Register Graph configuration types in the mesh-level ITypeRegistry
                 // for polymorphic JSON deserialization by FileSystemStorageAdapter.
                 // This must happen at mesh level so the types are available before any hub is created.
+                // All content types are registered centrally via WithGraphTypes().
                 var typeRegistry = services.BuildServiceProvider().GetService<ITypeRegistry>();
-                if (typeRegistry != null)
-                {
-                    typeRegistry.WithType(typeof(NodeTypeDefinition), nameof(NodeTypeDefinition));
-                    typeRegistry.WithType(typeof(CodeConfiguration), nameof(CodeConfiguration));
-                    typeRegistry.WithType(typeof(AgentConfiguration), nameof(AgentConfiguration));
-                    typeRegistry.WithType(typeof(AgentDelegation), nameof(AgentDelegation));
-                    typeRegistry.WithType(typeof(Comment), nameof(Comment));
-                    typeRegistry.WithType(typeof(MarkdownContent), nameof(MarkdownContent));
-                    typeRegistry.WithType(typeof(MeshWeaver.AI.Thread), nameof(MeshWeaver.AI.Thread));
-                    typeRegistry.WithType(typeof(ThreadMessage), nameof(ThreadMessage));
-                }
+                typeRegistry?.WithGraphTypes();
 
                 // Register compilation cache options
                 services.AddOptions<CompilationCacheOptions>();
