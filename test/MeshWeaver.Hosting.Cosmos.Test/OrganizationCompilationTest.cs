@@ -8,6 +8,7 @@ using MeshWeaver.Connection.Orleans;
 using MeshWeaver.Fixture;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Cosmos;
+using MeshWeaver.Hosting.Orleans;
 using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
@@ -19,7 +20,7 @@ using Orleans.Hosting;
 using Orleans.TestingHost;
 using Xunit;
 
-namespace MeshWeaver.Hosting.Orleans.Test;
+namespace MeshWeaver.Hosting.Cosmos.Test;
 
 /// <summary>
 /// Tests that verify Organization node type compilation works end-to-end

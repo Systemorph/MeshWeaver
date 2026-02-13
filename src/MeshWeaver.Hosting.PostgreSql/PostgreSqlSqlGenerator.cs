@@ -33,6 +33,18 @@ public class PostgreSqlSqlGenerator
     };
 
     /// <summary>
+    /// Non-text columns where case-insensitive comparison should NOT be applied.
+    /// Everything else (text columns + JSONB content fields extracted via ->>) is treated as text.
+    /// </summary>
+    private static readonly HashSet<string> NonTextColumns = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "displayOrder", "display_order", "version", "state", "lastModified", "last_modified"
+    };
+
+    private static bool IsTextField(string selector) =>
+        !NonTextColumns.Contains(selector);
+
+    /// <summary>
     /// Maps a selector from the query AST to a PostgreSQL column expression.
     /// </summary>
     public static string MapSelector(string selector)
@@ -319,6 +331,11 @@ public class PostgreSqlSqlGenerator
             case QueryOperator.Equal:
             {
                 var paramName = NextParam();
+                if (IsTextField(condition.Selector))
+                {
+                    _parameters[paramName] = condition.Value.ToLowerInvariant();
+                    return $"LOWER({selector}) = {paramName}";
+                }
                 _parameters[paramName] = ConvertValue(condition.Value);
                 return $"{selector} = {paramName}";
             }
@@ -326,6 +343,11 @@ public class PostgreSqlSqlGenerator
             case QueryOperator.NotEqual:
             {
                 var paramName = NextParam();
+                if (IsTextField(condition.Selector))
+                {
+                    _parameters[paramName] = condition.Value.ToLowerInvariant();
+                    return $"LOWER({selector}) != {paramName}";
+                }
                 _parameters[paramName] = ConvertValue(condition.Value);
                 return $"{selector} != {paramName}";
             }
@@ -377,24 +399,30 @@ public class PostgreSqlSqlGenerator
             }
 
             case QueryOperator.In:
+                var isTextIn = IsTextField(condition.Selector);
                 var inParams = new List<string>();
                 foreach (var value in condition.Values)
                 {
                     var inParamName = NextParam();
-                    _parameters[inParamName] = ConvertValue(value);
+                    _parameters[inParamName] = isTextIn ? value.ToLowerInvariant() : ConvertValue(value);
                     inParams.Add(inParamName);
                 }
-                return $"{selector} IN ({string.Join(", ", inParams)})";
+                return isTextIn
+                    ? $"LOWER({selector}) IN ({string.Join(", ", inParams)})"
+                    : $"{selector} IN ({string.Join(", ", inParams)})";
 
             case QueryOperator.NotIn:
+                var isTextNotIn = IsTextField(condition.Selector);
                 var notInParams = new List<string>();
                 foreach (var value in condition.Values)
                 {
                     var notInParamName = NextParam();
-                    _parameters[notInParamName] = ConvertValue(value);
+                    _parameters[notInParamName] = isTextNotIn ? value.ToLowerInvariant() : ConvertValue(value);
                     notInParams.Add(notInParamName);
                 }
-                return $"{selector} NOT IN ({string.Join(", ", notInParams)})";
+                return isTextNotIn
+                    ? $"LOWER({selector}) NOT IN ({string.Join(", ", notInParams)})"
+                    : $"{selector} NOT IN ({string.Join(", ", notInParams)})";
 
             default:
                 return "";

@@ -7,7 +7,7 @@ using Microsoft.Azure.Cosmos;
 using Testcontainers.CosmosDb;
 using Xunit;
 
-namespace MeshWeaver.Hosting.Orleans.Test;
+namespace MeshWeaver.Hosting.Cosmos.Test;
 
 /// <summary>
 /// Shared fixture that starts a Cosmos DB emulator container.

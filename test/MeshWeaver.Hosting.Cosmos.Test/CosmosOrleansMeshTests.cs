@@ -6,6 +6,7 @@ using FluentAssertions;
 using MeshWeaver.Connection.Orleans;
 using MeshWeaver.Fixture;
 using MeshWeaver.Hosting.Cosmos;
+using MeshWeaver.Hosting.Orleans;
 using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
@@ -17,7 +18,7 @@ using Orleans.Hosting;
 using Orleans.TestingHost;
 using Xunit;
 
-namespace MeshWeaver.Hosting.Orleans.Test;
+namespace MeshWeaver.Hosting.Cosmos.Test;
 
 /// <summary>
 /// Tests that verify Orleans + Cosmos DB integration end-to-end.
@@ -31,7 +32,7 @@ public class CosmosOrleansMeshTests(ITestOutputHelper output) : CosmosOrleansTes
     {
         var client = await GetClientAsync();
         var response = await client
-            .AwaitResponse(new PingRequest(), o => o.WithTarget(OrleansTestMeshNodeAttribute.Address)
+            .AwaitResponse(new PingRequest(), o => o.WithTarget(CosmosTestMeshNodeAttribute.Address)
                 , TestContext.Current.CancellationToken
             );
         response.Should().NotBeNull();

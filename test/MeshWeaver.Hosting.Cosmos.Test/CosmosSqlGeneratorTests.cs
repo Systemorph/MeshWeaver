@@ -4,7 +4,7 @@ using MeshWeaver.Hosting.Cosmos;
 using MeshWeaver.Mesh;
 using Xunit;
 
-namespace MeshWeaver.Hosting.Monolith.Test;
+namespace MeshWeaver.Hosting.Cosmos.Test;
 
 public class CosmosSqlGeneratorTests
 {

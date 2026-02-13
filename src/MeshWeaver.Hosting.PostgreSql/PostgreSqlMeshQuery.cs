@@ -91,9 +91,22 @@ public class PostgreSqlMeshQuery : IMeshQueryCore
     {
         var normalizedPrefix = (prefix ?? "").ToLowerInvariant();
 
+        // Use ILIKE-based filter instead of plainto_tsquery for substring prefix matching.
+        // plainto_tsquery requires full words; ILIKE matches partial prefixes (e.g., "mar" matches "Markdown").
+        QueryNode? filter = null;
+        if (!string.IsNullOrEmpty(normalizedPrefix))
+        {
+            filter = new QueryOr([
+                new QueryComparison(new QueryCondition("name", QueryOperator.Like, [normalizedPrefix])),
+                new QueryComparison(new QueryCondition("path", QueryOperator.Like, [normalizedPrefix])),
+                new QueryComparison(new QueryCondition("description", QueryOperator.Like, [normalizedPrefix])),
+                new QueryComparison(new QueryCondition("nodeType", QueryOperator.Like, [normalizedPrefix])),
+            ]);
+        }
+
         var query = new ParsedQuery(
-            Filter: null,
-            TextSearch: string.IsNullOrEmpty(normalizedPrefix) ? null : normalizedPrefix,
+            Filter: filter,
+            TextSearch: null,
             Path: basePath,
             Scope: QueryScope.Descendants);
 

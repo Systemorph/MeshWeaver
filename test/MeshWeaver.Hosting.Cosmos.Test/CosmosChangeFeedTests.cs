@@ -8,7 +8,7 @@ using MeshWeaver.Mesh.Services;
 using Microsoft.Azure.Cosmos;
 using Xunit;
 
-namespace MeshWeaver.Hosting.Monolith.Test;
+namespace MeshWeaver.Hosting.Cosmos.Test;
 
 /// <summary>
 /// Tests for Cosmos DB Change Feed integration.
