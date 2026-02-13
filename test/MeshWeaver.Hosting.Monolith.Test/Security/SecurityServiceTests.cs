@@ -33,7 +33,7 @@ public class SecurityServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
         return base.ConfigureMesh(builder).AddRowLevelSecurity();
     }
 
-    [Fact]
+    [Fact(Timeout = 10000)]
     public async Task GetEffectivePermissions_WithAdminRole_ReturnsAllPermissions()
     {
         // Arrange
@@ -51,7 +51,7 @@ public class SecurityServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
         permissions.Should().Be(Permission.All);
     }
 
-    [Fact]
+    [Fact(Timeout = 10000)]
     public async Task GetEffectivePermissions_WithViewerRole_ReturnsReadOnly()
     {
         // Arrange
@@ -69,7 +69,7 @@ public class SecurityServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
         permissions.Should().Be(Permission.Read);
     }
 
-    [Fact]
+    [Fact(Timeout = 10000)]
     public async Task GetEffectivePermissions_WithEditorRole_ReturnsReadCreateUpdate()
     {
         // Arrange
@@ -87,7 +87,7 @@ public class SecurityServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
         permissions.Should().Be(Permission.Read | Permission.Create | Permission.Update);
     }
 
-    [Fact]
+    [Fact(Timeout = 10000)]
     public async Task GetEffectivePermissions_NoRoles_ReturnsNone()
     {
         // Arrange
@@ -102,7 +102,7 @@ public class SecurityServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
         permissions.Should().Be(Permission.None);
     }
 
-    [Fact]
+    [Fact(Timeout = 10000)]
     public async Task GetEffectivePermissions_WithInheritance_InheritsFromParent()
     {
         // Arrange
@@ -121,7 +121,7 @@ public class SecurityServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
         permissions.Should().Be(Permission.All);
     }
 
-    [Fact]
+    [Fact(Timeout = 10000)]
     public async Task GetEffectivePermissions_WithGlobalRole_AppliesEverywhere()
     {
         // Arrange
@@ -139,7 +139,7 @@ public class SecurityServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
         permissions.Should().Be(Permission.All);
     }
 
-    [Fact]
+    [Fact(Timeout = 10000)]
     public async Task GetEffectivePermissions_CombinesMultipleRoles()
     {
         // Arrange
@@ -159,7 +159,7 @@ public class SecurityServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
         permissions.Should().Be(Permission.Read | Permission.Create | Permission.Update);
     }
 
-    [Fact]
+    [Fact(Timeout = 10000)]
     public async Task HasPermission_WithSufficientPermissions_ReturnsTrue()
     {
         // Arrange
@@ -175,7 +175,7 @@ public class SecurityServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
         canRead.Should().BeTrue();
     }
 
-    [Fact]
+    [Fact(Timeout = 10000)]
     public async Task HasPermission_WithoutSufficientPermissions_ReturnsFalse()
     {
         // Arrange
@@ -191,7 +191,7 @@ public class SecurityServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
         canDelete.Should().BeFalse();
     }
 
-    [Fact]
+    [Fact(Timeout = 10000)]
     public async Task AddUserRole_CreatesAssignment()
     {
         // Arrange
@@ -208,7 +208,7 @@ public class SecurityServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
         userAccess!.Roles.Should().ContainSingle(r => r.RoleId == "Editor");
     }
 
-    [Fact]
+    [Fact(Timeout = 10000)]
     public async Task RemoveUserRole_RemovesAssignment()
     {
         // Arrange
@@ -227,7 +227,7 @@ public class SecurityServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
         hasRole.Should().BeFalse();
     }
 
-    [Fact]
+    [Fact(Timeout = 10000)]
     public async Task PublicUser_GetsAnonymousPermissions()
     {
         // Arrange
@@ -244,7 +244,7 @@ public class SecurityServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
         permissions.Should().Be(Permission.Read);
     }
 
-    [Fact]
+    [Fact(Timeout = 10000)]
     public async Task GetRole_ReturnsBuiltInRole()
     {
         // Arrange
@@ -258,7 +258,7 @@ public class SecurityServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
         adminRole!.Permissions.Should().Be(Permission.All);
     }
 
-    [Fact]
+    [Fact(Timeout = 10000)]
     public async Task SaveRole_PersistsCustomRole()
     {
         // Arrange
@@ -280,7 +280,7 @@ public class SecurityServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
         retrievedRole!.Permissions.Should().Be(Permission.Read | Permission.Create);
     }
 
-    [Fact]
+    [Fact(Timeout = 10000)]
     public async Task GetRoles_ReturnsAllRoles()
     {
         // Arrange
@@ -318,7 +318,7 @@ public class RlsNodeValidatorTests(ITestOutputHelper output) : MonolithMeshTestB
         return base.ConfigureMesh(builder).AddRowLevelSecurity();
     }
 
-    [Fact]
+    [Fact(Timeout = 10000)]
     public async Task ValidateAsync_WithoutPermission_ReturnsUnauthorized()
     {
         // Arrange
@@ -342,7 +342,7 @@ public class RlsNodeValidatorTests(ITestOutputHelper output) : MonolithMeshTestB
         result.Reason.Should().Be(NodeRejectionReason.Unauthorized);
     }
 
-    [Fact]
+    [Fact(Timeout = 10000)]
     public async Task ValidateAsync_WithPermission_ReturnsValid()
     {
         // Arrange
@@ -371,7 +371,7 @@ public class RlsNodeValidatorTests(ITestOutputHelper output) : MonolithMeshTestB
         result.IsValid.Should().BeTrue();
     }
 
-    [Fact]
+    [Fact(Timeout = 10000)]
     public void SupportedOperations_ReturnsCreateUpdateDeleteOperations()
     {
         // Arrange
@@ -420,7 +420,7 @@ public class SampleDataSecurityTests(ITestOutputHelper output) : MonolithMeshTes
             .AddRowLevelSecurity();
     }
 
-    [Fact]
+    [Fact(Timeout = 10000)]
     public async Task Roland_WithGlobalAdminRole_CanEditArchitectureNode()
     {
         // Arrange
@@ -437,7 +437,7 @@ public class SampleDataSecurityTests(ITestOutputHelper output) : MonolithMeshTes
         canEdit.Should().BeTrue("Roland should be able to edit the Architecture node");
     }
 
-    [Fact]
+    [Fact(Timeout = 10000)]
     public async Task Roland_GlobalAdmin_CanEditAnyNode()
     {
         // Arrange
@@ -463,7 +463,7 @@ public class SampleDataSecurityTests(ITestOutputHelper output) : MonolithMeshTes
         }
     }
 
-    [Fact]
+    [Fact(Timeout = 10000)]
     public async Task Alice_WithAcmeEditorRole_CanEditInAcmeOnly()
     {
         // Arrange
@@ -483,7 +483,7 @@ public class SampleDataSecurityTests(ITestOutputHelper output) : MonolithMeshTes
         canEditMeshWeaver.Should().BeFalse("Alice should NOT be able to edit in MeshWeaver namespace");
     }
 
-    [Fact]
+    [Fact(Timeout = 10000)]
     public async Task PublicUser_WithMeshWeaverViewerRole_CannotEdit()
     {
         // Arrange
@@ -501,7 +501,7 @@ public class SampleDataSecurityTests(ITestOutputHelper output) : MonolithMeshTes
         canEdit.Should().BeFalse("Public user should NOT be able to edit MeshWeaver content");
     }
 
-    [Fact]
+    [Fact(Timeout = 10000)]
     public async Task GetUserAccess_Roland_ReturnsGlobalAdminRole()
     {
         // Arrange

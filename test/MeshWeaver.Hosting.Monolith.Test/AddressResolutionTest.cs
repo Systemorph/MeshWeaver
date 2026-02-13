@@ -46,7 +46,7 @@ public class AddressResolutionTest(ITestOutputHelper output) : MonolithMeshTestB
 
     #region ResolvePath Score-Based Tests
 
-    [Fact]
+    [Fact(Timeout = 10000)]
     public async Task ResolvePath_SingleSegmentNode_MatchesAndReturnsRemainder()
     {
         // Arrange
@@ -62,7 +62,7 @@ public class AddressResolutionTest(ITestOutputHelper output) : MonolithMeshTestB
         resolution.Remainder.Should().Be("Microsoft/2026/Overview/details");
     }
 
-    [Fact]
+    [Fact(Timeout = 10000)]
     public async Task ResolvePath_AppPath_ReturnsPrefixAndRemainder()
     {
         // Arrange
@@ -78,7 +78,7 @@ public class AddressResolutionTest(ITestOutputHelper output) : MonolithMeshTestB
         resolution.Remainder.Should().Be("Todo/Dashboard/123");
     }
 
-    [Fact]
+    [Fact(Timeout = 10000)]
     public async Task ResolvePath_ExactMatch_ReturnsNullRemainder()
     {
         // Arrange
@@ -93,7 +93,7 @@ public class AddressResolutionTest(ITestOutputHelper output) : MonolithMeshTestB
         resolution.Remainder.Should().BeNull();
     }
 
-    [Fact]
+    [Fact(Timeout = 10000)]
     public async Task ResolvePath_WithLeadingSlash_ParsesCorrectly()
     {
         // Arrange
@@ -108,7 +108,7 @@ public class AddressResolutionTest(ITestOutputHelper output) : MonolithMeshTestB
         resolution.Remainder.Should().Be("Microsoft/2026");
     }
 
-    [Fact]
+    [Fact(Timeout = 10000)]
     public async Task ResolvePath_UnknownPath_ReturnsNull()
     {
         // Arrange
@@ -121,7 +121,7 @@ public class AddressResolutionTest(ITestOutputHelper output) : MonolithMeshTestB
         resolution.Should().BeNull();
     }
 
-    [Theory]
+    [Theory(Timeout = 10000)]
     [InlineData("pricing", "pricing", null)]
     [InlineData("pricing/ACME", "pricing", "ACME")]
     [InlineData("pricing/ACME/2025", "pricing", "ACME/2025")]
@@ -144,7 +144,7 @@ public class AddressResolutionTest(ITestOutputHelper output) : MonolithMeshTestB
         resolution.Remainder.Should().Be(expectedRemainder);
     }
 
-    [Fact]
+    [Fact(Timeout = 10000)]
     public async Task ResolvePath_EmptyPath_ReturnsNull()
     {
         // Arrange
@@ -157,7 +157,7 @@ public class AddressResolutionTest(ITestOutputHelper output) : MonolithMeshTestB
         resolution.Should().BeNull();
     }
 
-    [Fact]
+    [Fact(Timeout = 10000)]
     public async Task ResolvePath_NullPath_ReturnsNull()
     {
         // Arrange
@@ -174,7 +174,7 @@ public class AddressResolutionTest(ITestOutputHelper output) : MonolithMeshTestB
 
     #region Score-Based Matching Priority Tests
 
-    [Fact]
+    [Fact(Timeout = 10000)]
     public async Task ResolvePath_MultipleNodes_HighestScoreWins()
     {
         // This test requires registering additional nodes with different segment depths
@@ -190,7 +190,7 @@ public class AddressResolutionTest(ITestOutputHelper output) : MonolithMeshTestB
         resolution.Remainder.Should().Be("Microsoft/2026");
     }
 
-    [Fact]
+    [Fact(Timeout = 10000)]
     public async Task ResolvePath_CaseInsensitive_MatchesCorrectly()
     {
         // Arrange
