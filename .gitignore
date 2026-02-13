@@ -369,3 +369,10 @@ samples/Graph/Data/test/
 /memex/Azurite/Data/__azurite_db_queue_extent__.json
 /memex/Azurite/Data/__azurite_db_table__.json
 /memex/Azurite/Data/AzuriteConfig
+/memex/Azurite/Orleans/__azurite_db_blob__.json
+/memex/Azurite/Orleans/__azurite_db_blob_extent__.json
+/memex/Azurite/Orleans/__azurite_db_queue__.json
+/memex/Azurite/Orleans/__azurite_db_queue_extent__.json
+/memex/Azurite/Orleans/__azurite_db_table__.json
+/memex/Azurite/Orleans/AzuriteConfig
+/memex/Azurite/Data/__blobstorage__/e7429c6f-7085-4422-ae51-515f33ac8fc1

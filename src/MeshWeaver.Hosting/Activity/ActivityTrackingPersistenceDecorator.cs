@@ -10,12 +10,13 @@ namespace MeshWeaver.Hosting.Activity;
 
 /// <summary>
 /// Decorator that tracks user activity on persistence operations.
-/// Records reads and writes to _activity/{userId} partition storage.
+/// Records reads and writes via IActivityStore.
 /// Flushes activity records synchronously on each save operation.
 /// </summary>
 public class ActivityTrackingPersistenceDecorator : IPersistenceServiceCore
 {
     private readonly IPersistenceServiceCore _inner;
+    private readonly IActivityStore _activityStore;
     private readonly AccessService _accessService;
     private readonly ILogger<ActivityTrackingPersistenceDecorator> _logger;
 
@@ -25,10 +26,12 @@ public class ActivityTrackingPersistenceDecorator : IPersistenceServiceCore
 
     public ActivityTrackingPersistenceDecorator(
         IPersistenceServiceCore inner,
+        IActivityStore activityStore,
         AccessService accessService,
         ILogger<ActivityTrackingPersistenceDecorator> logger)
     {
         _inner = inner;
+        _activityStore = activityStore;
         _accessService = accessService;
         _logger = logger;
     }
@@ -67,7 +70,7 @@ public class ActivityTrackingPersistenceDecorator : IPersistenceServiceCore
         TrackActivity(result.Path, result, ActivityType.Write);
 
         // Flush pending activities on save
-        await FlushPendingActivitiesAsync(options);
+        await FlushPendingActivitiesAsync();
 
         return result;
     }
@@ -84,13 +87,8 @@ public class ActivityTrackingPersistenceDecorator : IPersistenceServiceCore
 
     private void TrackActivity(string path, MeshNode? node, ActivityType type)
     {
-        // Skip tracking for _activity paths to avoid infinite loop
-        if (string.IsNullOrEmpty(path) || path.StartsWith("_activity/", StringComparison.OrdinalIgnoreCase) ||
-            path.StartsWith("_activity", StringComparison.OrdinalIgnoreCase))
-            return;
-
-        // Skip system paths
-        if (path.StartsWith("_", StringComparison.OrdinalIgnoreCase))
+        // Skip tracking for system paths
+        if (string.IsNullOrEmpty(path) || path.StartsWith('_'))
             return;
 
         var userId = _accessService.Context?.ObjectId;
@@ -127,10 +125,9 @@ public class ActivityTrackingPersistenceDecorator : IPersistenceServiceCore
     }
 
     /// <summary>
-    /// Flushes any pending activity records to persistence.
-    /// Call this explicitly when activities need to be persisted immediately.
+    /// Flushes any pending activity records to the activity store.
     /// </summary>
-    public async Task FlushPendingActivitiesAsync(JsonSerializerOptions options)
+    public async Task FlushPendingActivitiesAsync()
     {
         if (_pendingUpdates.IsEmpty)
             return;
@@ -140,7 +137,6 @@ public class ActivityTrackingPersistenceDecorator : IPersistenceServiceCore
 
         try
         {
-            // Group by user
             var userGroups = _pendingUpdates.Values
                 .GroupBy(a => a.UserId)
                 .ToList();
@@ -149,46 +145,14 @@ public class ActivityTrackingPersistenceDecorator : IPersistenceServiceCore
             {
                 try
                 {
-                    var userId = group.Key;
-                    var activityPath = $"_activity/{userId}";
+                    var records = group.ToList();
+                    await _activityStore.SaveActivitiesAsync(group.Key, records);
 
-                    // Load existing activities
-                    var existing = new Dictionary<string, UserActivityRecord>(StringComparer.OrdinalIgnoreCase);
-                    await foreach (var obj in _inner.GetPartitionObjectsAsync(activityPath, null, options))
-                    {
-                        if (obj is UserActivityRecord record)
-                            existing[record.NodePath] = record;
-                    }
+                    // Remove flushed entries
+                    foreach (var record in records)
+                        _pendingUpdates.TryRemove($"{group.Key}:{record.NodePath}", out _);
 
-                    // Merge with pending
-                    foreach (var pending in group)
-                    {
-                        if (existing.TryGetValue(pending.NodePath, out var ex))
-                        {
-                            existing[pending.NodePath] = ex with
-                            {
-                                LastAccessedAt = pending.LastAccessedAt,
-                                AccessCount = ex.AccessCount + pending.AccessCount,
-                                ActivityType = pending.ActivityType,
-                                NodeName = pending.NodeName ?? ex.NodeName,
-                                NodeType = pending.NodeType ?? ex.NodeType,
-                                Namespace = pending.Namespace ?? ex.Namespace
-                            };
-                        }
-                        else
-                        {
-                            existing[pending.NodePath] = pending;
-                        }
-                        _pendingUpdates.TryRemove($"{userId}:{pending.NodePath}", out _);
-                    }
-
-                    // Save merged activities
-                    await _inner.SavePartitionObjectsAsync(
-                        activityPath, null,
-                        existing.Values.Cast<object>().ToList(),
-                        options);
-
-                    _logger.LogDebug("Flushed {Count} activity records for user {UserId}", group.Count(), userId);
+                    _logger.LogDebug("Flushed {Count} activity records for user {UserId}", records.Count, group.Key);
                 }
                 catch (Exception ex)
                 {

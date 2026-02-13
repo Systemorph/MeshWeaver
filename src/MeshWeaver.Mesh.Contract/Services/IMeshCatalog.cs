@@ -41,13 +41,6 @@ public interface IMeshCatalog
     Task DeleteNodeAsync(string path, bool recursive = false, CancellationToken ct = default);
 
     /// <summary>
-    /// Gets stream information for the specified address.
-    /// </summary>
-    /// <param name="address">The address to get stream info for.</param>
-    /// <returns>Stream information for the address.</returns>
-    Task<StreamInfo> GetStreamInfoAsync(Address address);
-
-    /// <summary>
     /// Resolves a full URL path to an address using score-based matching.
     /// Returns the best matching node's address and the remaining path segments.
     /// Score is the number of matching segments from the path start.
@@ -65,33 +58,6 @@ public interface IMeshCatalog
     /// <returns>Async enumerable of matching child nodes</returns>
     IAsyncEnumerable<MeshNode> QueryAsync(string? parentPath, string? query = null, int? maxResults = null, CancellationToken ct = default);
 
-}
-
-/// <summary>
-/// Information about a stream including its type and provider.
-/// </summary>
-/// <param name="Type">The type of stream (Stream or Channel).</param>
-/// <param name="Provider">The stream provider name.</param>
-/// <param name="Namespace">The namespace for the stream.</param>
-public record StreamInfo(
-    StreamType Type,
-    string Provider,
-    string Namespace);
-
-/// <summary>
-/// Type of stream.
-/// </summary>
-public enum StreamType
-{
-    /// <summary>
-    /// A data stream.
-    /// </summary>
-    Stream,
-
-    /// <summary>
-    /// A communication channel.
-    /// </summary>
-    Channel
 }
 
 /// <summary>

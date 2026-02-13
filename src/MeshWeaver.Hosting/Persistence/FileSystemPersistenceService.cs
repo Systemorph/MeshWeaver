@@ -30,7 +30,7 @@ public class FileSystemPersistenceService : IPersistenceServiceCore
     }
 
     private static string NormalizePath(string? path) =>
-        path?.Trim('/').ToLowerInvariant() ?? "";
+        path?.Trim('/') ?? "";
 
     public Task InitializeAsync(CancellationToken ct = default) => Task.CompletedTask;
 

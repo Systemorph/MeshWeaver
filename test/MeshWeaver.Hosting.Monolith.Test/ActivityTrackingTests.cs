@@ -21,10 +21,12 @@ namespace MeshWeaver.Hosting.Monolith.Test;
 public class ActivityTrackingTests(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
     private readonly InMemoryPersistenceService _innerPersistence = new();
+    private readonly InMemoryActivityStore _activityStore = new();
     private readonly AccessService _accessService = new();
     private ActivityTrackingPersistenceDecorator? _decoratorInstance;
     private ActivityTrackingPersistenceDecorator _decorator => _decoratorInstance ??= new(
         _innerPersistence,
+        _activityStore,
         _accessService,
         NullLogger<ActivityTrackingPersistenceDecorator>.Instance);
     private JsonSerializerOptions JsonOptions => Mesh.ServiceProvider.GetRequiredService<IMessageHub>().JsonSerializerOptions;
@@ -43,15 +45,13 @@ public class ActivityTrackingTests(ITestOutputHelper output) : MonolithMeshTestB
 
         // Act
         var node = await _decorator.GetNodeAsync("org/acme", JsonOptions);
-        await _decorator.FlushPendingActivitiesAsync(JsonOptions);
+        await _decorator.FlushPendingActivitiesAsync();
 
         // Assert
         node.Should().NotBeNull();
 
         // Check activity was recorded
-        var activities = await _innerPersistence.GetPartitionObjectsAsync($"_activity/{userId}", null, JsonOptions)
-            .OfType<UserActivityRecord>()
-            .ToListAsync();
+        var activities = await _activityStore.GetActivitiesAsync(userId);
 
         activities.Should().ContainSingle();
         var activity = activities.First();
@@ -76,9 +76,7 @@ public class ActivityTrackingTests(ITestOutputHelper output) : MonolithMeshTestB
         }, JsonOptions);
 
         // Assert
-        var activities = await _innerPersistence.GetPartitionObjectsAsync($"_activity/{userId}", null, JsonOptions)
-            .OfType<UserActivityRecord>()
-            .ToListAsync();
+        var activities = await _activityStore.GetActivitiesAsync(userId);
 
         activities.Should().ContainSingle();
         var activity = activities.First();
@@ -98,12 +96,10 @@ public class ActivityTrackingTests(ITestOutputHelper output) : MonolithMeshTestB
         await _decorator.GetNodeAsync("org/fabrikam", JsonOptions);
         await _decorator.GetNodeAsync("org/fabrikam", JsonOptions);
         await _decorator.GetNodeAsync("org/fabrikam", JsonOptions);
-        await _decorator.FlushPendingActivitiesAsync(JsonOptions);
+        await _decorator.FlushPendingActivitiesAsync();
 
         // Assert
-        var activities = await _innerPersistence.GetPartitionObjectsAsync($"_activity/{userId}", null, JsonOptions)
-            .OfType<UserActivityRecord>()
-            .ToListAsync();
+        var activities = await _activityStore.GetActivitiesAsync(userId);
 
         activities.Should().ContainSingle();
         activities.First().AccessCount.Should().Be(3);
@@ -118,11 +114,10 @@ public class ActivityTrackingTests(ITestOutputHelper output) : MonolithMeshTestB
 
         // Act
         await _decorator.GetNodeAsync("org/anonymous", JsonOptions);
-        await _decorator.FlushPendingActivitiesAsync(JsonOptions);
+        await _decorator.FlushPendingActivitiesAsync();
 
-        // Assert - no activity partition should exist
-        var activities = await _innerPersistence.GetPartitionObjectsAsync("_activity/", null, JsonOptions)
-            .ToListAsync();
+        // Assert - no activity should exist (no user context)
+        var activities = await _activityStore.GetActivitiesAsync("");
         activities.Should().BeEmpty();
     }
 
@@ -136,12 +131,10 @@ public class ActivityTrackingTests(ITestOutputHelper output) : MonolithMeshTestB
 
         // Act
         await _decorator.GetNodeAsync("_activity/test", JsonOptions);
-        await _decorator.FlushPendingActivitiesAsync(JsonOptions);
+        await _decorator.FlushPendingActivitiesAsync();
 
-        // Assert - should not track access to _activity paths (avoids infinite loop)
-        var activities = await _innerPersistence.GetPartitionObjectsAsync($"_activity/{userId}", null, JsonOptions)
-            .OfType<UserActivityRecord>()
-            .ToListAsync();
+        // Assert - should not track access to _activity paths (system paths skipped)
+        var activities = await _activityStore.GetActivitiesAsync(userId);
         activities.Should().BeEmpty();
     }
 
@@ -168,13 +161,12 @@ public class ActivityTrackingTests(ITestOutputHelper output) : MonolithMeshTestB
         await _decorator.GetNodeAsync("org/alpha", JsonOptions);
         await _decorator.GetNodeAsync("org/beta", JsonOptions);
         await _decorator.GetNodeAsync("org/alpha", JsonOptions); // Access alpha again
-        await _decorator.FlushPendingActivitiesAsync(JsonOptions);
+        await _decorator.FlushPendingActivitiesAsync();
 
-        // Act - query user's activity directly from partition
-        var activityRecords = await _innerPersistence.GetPartitionObjectsAsync($"_activity/{userId}", null, JsonOptions)
-            .OfType<UserActivityRecord>()
+        // Act - query user's activity
+        var activityRecords = (await _activityStore.GetActivitiesAsync(userId))
             .OrderByDescending(a => a.AccessCount)
-            .ToListAsync();
+            .ToList();
 
         // Assert
         activityRecords.Should().HaveCount(2);
@@ -214,13 +206,10 @@ public class ActivityTrackingTests(ITestOutputHelper output) : MonolithMeshTestB
         await _decorator.GetNodeAsync("org/second", JsonOptions);
         await Task.Delay(10);
         await _decorator.GetNodeAsync("org/third", JsonOptions);
-        await _decorator.FlushPendingActivitiesAsync(JsonOptions);
+        await _decorator.FlushPendingActivitiesAsync();
 
         // Act - get activity records ordered by lastAccessedAt descending (most recent first)
-        var results = await _innerPersistence.GetPartitionObjectsAsync($"_activity/{userId}", null, JsonOptions)
-            .OfType<UserActivityRecord>()
-            .OrderByDescending(a => a.LastAccessedAt)
-            .ToListAsync();
+        var results = (await _activityStore.GetActivitiesAsync(userId)).ToList();
 
         // Assert
         results.Should().HaveCount(3);
@@ -272,8 +261,10 @@ public class CatalogFallbackTests(ITestOutputHelper output) : MonolithMeshTestBa
         var accessService = new AccessService();
         accessService.SetContext(new AccessContext { ObjectId = "catalog-user" });
 
+        var activityStore = new InMemoryActivityStore();
         var decorator = new ActivityTrackingPersistenceDecorator(
             innerPersistence,
+            activityStore,
             accessService,
             NullLogger<ActivityTrackingPersistenceDecorator>.Instance);
 
@@ -300,13 +291,10 @@ public class CatalogFallbackTests(ITestOutputHelper output) : MonolithMeshTestBa
         await decorator.GetNodeAsync("org/gamma", JsonOptions);
         await Task.Delay(10);
         await decorator.GetNodeAsync("org/alpha", JsonOptions);
-        await decorator.FlushPendingActivitiesAsync(JsonOptions);
+        await decorator.FlushPendingActivitiesAsync();
 
         // Act - get activity records ordered by lastAccessedAt
-        var activityRecords = await innerPersistence.GetPartitionObjectsAsync("_activity/catalog-user", null, JsonOptions)
-            .OfType<UserActivityRecord>()
-            .OrderByDescending(a => a.LastAccessedAt)
-            .ToListAsync();
+        var activityRecords = (await activityStore.GetActivitiesAsync("catalog-user")).ToList();
 
         // Load actual nodes from activity records (as Catalog does)
         var nodes = new List<MeshNode>();
@@ -350,42 +338,34 @@ public class CatalogFallbackTests(ITestOutputHelper output) : MonolithMeshTestBa
         }, JsonOptions);
 
         // PHASE 1: Initial access order - doc1, doc2, doc3
+        var activityStore = new InMemoryActivityStore();
         var decorator1 = new ActivityTrackingPersistenceDecorator(
-            innerPersistence, accessService, NullLogger<ActivityTrackingPersistenceDecorator>.Instance);
+            innerPersistence, activityStore, accessService, NullLogger<ActivityTrackingPersistenceDecorator>.Instance);
         await decorator1.GetNodeAsync("doc/doc1", JsonOptions);
         await Task.Delay(10);
         await decorator1.GetNodeAsync("doc/doc2", JsonOptions);
         await Task.Delay(10);
         await decorator1.GetNodeAsync("doc/doc3", JsonOptions);
-        await decorator1.FlushPendingActivitiesAsync(JsonOptions);
+        await decorator1.FlushPendingActivitiesAsync();
 
         // Query initial order
-        var initialOrder = await GetActivityOrder(innerPersistence, "reorder-user", JsonOptions);
+        var initialOrder = (await activityStore.GetActivitiesAsync("reorder-user")).Select(a => a.NodePath).ToList();
         initialOrder[0].Should().Be("doc/doc3"); // Most recent
         initialOrder[1].Should().Be("doc/doc2");
         initialOrder[2].Should().Be("doc/doc1"); // Least recent
 
         // PHASE 2: Access doc1 again - it should become most recent
         var decorator2 = new ActivityTrackingPersistenceDecorator(
-            innerPersistence, accessService, NullLogger<ActivityTrackingPersistenceDecorator>.Instance);
+            innerPersistence, activityStore, accessService, NullLogger<ActivityTrackingPersistenceDecorator>.Instance);
         await Task.Delay(20);
         await decorator2.GetNodeAsync("doc/doc1", JsonOptions);
-        await decorator2.FlushPendingActivitiesAsync(JsonOptions);
+        await decorator2.FlushPendingActivitiesAsync();
 
         // Query new order
-        var newOrder = await GetActivityOrder(innerPersistence, "reorder-user", JsonOptions);
+        var newOrder = (await activityStore.GetActivitiesAsync("reorder-user")).Select(a => a.NodePath).ToList();
         newOrder[0].Should().Be("doc/doc1"); // Now most recent
         newOrder[1].Should().Be("doc/doc3");
         newOrder[2].Should().Be("doc/doc2");
-    }
-
-    private async Task<List<string>> GetActivityOrder(InMemoryPersistenceService persistence, string userId, JsonSerializerOptions options)
-    {
-        return await persistence.GetPartitionObjectsAsync($"_activity/{userId}", null, options)
-            .OfType<UserActivityRecord>()
-            .OrderByDescending(a => a.LastAccessedAt)
-            .Select(a => a.NodePath)
-            .ToListAsync();
     }
 }
 
@@ -558,20 +538,18 @@ public class CatalogSearchAndPaginationTests(ITestOutputHelper output) : Monolit
         }, JsonOptions);
 
         // Access all nodes to create activity
+        var activityStore = new InMemoryActivityStore();
         var decorator = new ActivityTrackingPersistenceDecorator(
-            innerPersistence, accessService, NullLogger<ActivityTrackingPersistenceDecorator>.Instance);
+            innerPersistence, activityStore, accessService, NullLogger<ActivityTrackingPersistenceDecorator>.Instance);
         await decorator.GetNodeAsync("data/project1", JsonOptions);
         await Task.Delay(10);
         await decorator.GetNodeAsync("data/doc1", JsonOptions);
         await Task.Delay(10);
         await decorator.GetNodeAsync("data/project2", JsonOptions);
-        await decorator.FlushPendingActivitiesAsync(JsonOptions);
+        await decorator.FlushPendingActivitiesAsync();
 
         // Act - get activity records and filter by nodeType manually (as catalog would do)
-        var allActivityRecords = await innerPersistence.GetPartitionObjectsAsync("_activity/search-user", null, JsonOptions)
-            .OfType<UserActivityRecord>()
-            .OrderByDescending(a => a.LastAccessedAt)
-            .ToListAsync();
+        var allActivityRecords = (await activityStore.GetActivitiesAsync("search-user")).ToList();
 
         // Load nodes and filter by type
         var projectRecords = new List<UserActivityRecord>();

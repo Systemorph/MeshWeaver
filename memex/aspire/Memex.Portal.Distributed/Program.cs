@@ -1,8 +1,9 @@
-using MeshWeaver.Hosting.Cosmos;
-using MeshWeaver.Hosting.Orleans;
-using MeshWeaver.Messaging;
-using Memex.Portal.ServiceDefaults;
+﻿using Memex.Portal.ServiceDefaults;
 using Memex.Portal.Shared;
+using MeshWeaver.Hosting.Orleans;
+using MeshWeaver.Hosting.PostgreSql;
+using MeshWeaver.Messaging;
+using Npgsql;
 using Orleans.Configuration;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -11,11 +12,11 @@ builder.AddServiceDefaults();
 // Register Aspire-injected clients
 builder.AddKeyedAzureTableServiceClient("orleans-clustering");
 builder.AddKeyedAzureBlobServiceClient("storage");
+builder.AddKeyedAzureBlobServiceClient("orleans-grain-state");
 
-// Read Cosmos connection string from Aspire configuration
-// The name "memexdb" matches the database resource name in the AppHost:
-//   cosmos.AddCosmosDatabase("memexdb") → .WithReference(cosmosDb)
-var cosmosConnectionString = builder.Configuration.GetConnectionString("memexdb");
+// Register Aspire-injected PostgreSQL data source (with pgvector support)
+builder.AddNpgsqlDataSource("meshweaver",
+    configureDataSourceBuilder: dsb => dsb.UseVector());
 
 // Add web portal services
 builder.ConfigureMemexServices();
@@ -28,26 +29,17 @@ builder.UseOrleansMeshServer(address, silo =>
             opts.ClusterId = MemexDistributedConstants.ClusterId;
             opts.ServiceId = MemexDistributedConstants.ServiceId;
         })
-        .Configure<ConnectionOptions>(options =>
-        {
-            options.OpenConnectionTimeout = TimeSpan.FromMinutes(1);
-        })
     )
     .ConfigureServices(services => services
-        .AddCosmosStorageFactory(opts =>
-        {
-            opts.ConnectionString = cosmosConnectionString;
-            opts.DatabaseName = "memexdb";
-        })
-        .AddCosmosSeeding(opts =>
-        {
-            opts.Enabled = builder.Environment.IsDevelopment();
-            opts.SeedDataPath = Path.GetFullPath(
-                Path.Combine(AppContext.BaseDirectory, "../../../../samples/Graph/Data"));
-        }))
+        .AddPostgreSqlStorageFactory())
     .ConfigureMemexMesh(builder.Configuration, builder.Environment.IsDevelopment())
     .ConfigureMemexPortal();
 
 var app = builder.Build();
+
+// Initialize PostgreSQL schema and seed data
+await app.Services.InitializePostgreSqlSchemaAsync();
+
 app.MapDefaultEndpoints();
 app.StartMemexApplication<Memex.Portal.Shared.App>();
+

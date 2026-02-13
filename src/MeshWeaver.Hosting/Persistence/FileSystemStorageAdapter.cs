@@ -61,14 +61,20 @@ public class FileSystemStorageAdapter : IStorageAdapter
         if (node == null)
             return null;
 
-        // Derive namespace from file path if not set
+        // Derive namespace and id from file path if not set
         // Path "User/Alice" means namespace="User", id="Alice"
         var normalizedPath = path.Trim('/');
         var lastSlash = normalizedPath.LastIndexOf('/');
-        if (lastSlash > 0 && string.IsNullOrEmpty(node.Namespace))
+        if (lastSlash > 0)
         {
-            var derivedNamespace = normalizedPath[..lastSlash];
-            node = node with { Namespace = derivedNamespace };
+            if (string.IsNullOrEmpty(node.Namespace))
+                node = node with { Namespace = normalizedPath[..lastSlash] };
+            if (string.IsNullOrEmpty(node.Id))
+                node = node with { Id = normalizedPath[(lastSlash + 1)..] };
+        }
+        else if (string.IsNullOrEmpty(node.Id))
+        {
+            node = node with { Id = normalizedPath };
         }
 
         // Use file system last modified time if not specified
@@ -205,6 +211,28 @@ public class FileSystemStorageAdapter : IStorageAdapter
     {
         var (filePath, _) = FindFileWithExtension(path);
         return Task.FromResult(filePath != null && File.Exists(filePath));
+    }
+
+    public Task<IEnumerable<string>> ListPartitionSubPathsAsync(string nodePath, CancellationToken ct = default)
+    {
+        var nodeDir = Path.Combine(_baseDirectory, nodePath.Trim('/').Replace('/', Path.DirectorySeparatorChar));
+        if (!Directory.Exists(nodeDir))
+            return Task.FromResult<IEnumerable<string>>(Enumerable.Empty<string>());
+
+        var partitionSubPaths = new List<string>();
+        foreach (var subDir in Directory.GetDirectories(nodeDir))
+        {
+            var subDirName = Path.GetFileName(subDir);
+
+            // Skip if this subdirectory corresponds to a child node (has a sibling .md/.cs/.json file)
+            if (SupportedExtensions.Any(ext => File.Exists(Path.Combine(nodeDir, subDirName + ext))))
+                continue;
+
+            // This is a partition directory
+            partitionSubPaths.Add(subDirName);
+        }
+
+        return Task.FromResult<IEnumerable<string>>(partitionSubPaths);
     }
 
     #region Partition Storage

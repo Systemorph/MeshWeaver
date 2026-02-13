@@ -6,6 +6,7 @@ using MeshWeaver.Messaging;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.Emit;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
@@ -17,7 +18,6 @@ namespace MeshWeaver.Graph.Configuration;
 /// Implements IMeshNodeCompilationService from MeshWeaver.Mesh.Contract.
 /// </summary>
 internal class MeshNodeCompilationService(
-    IPersistenceService persistence,
     ICompilationCacheService cacheService,
     IOptions<CompilationCacheOptions> cacheOptions,
     IMessageHub hub,
@@ -100,19 +100,24 @@ internal class MeshNodeCompilationService(
             return dllPath;
         }
 
-        // Get CodeConfiguration from the Code sub-partition
+        // Get CodeConfiguration from child MeshNodes under the Code path
         // For NodeType nodes (where Content is NodeTypeDefinition), use the node's own path
         // For instance nodes, use the NodeType's path (e.g., "Person/Code" for Alice with NodeType="Person")
-        // Collect ALL CodeConfiguration files (dataModel.json, views.json, etc.) and combine them
+        // Collect ALL CodeConfiguration files and combine them
+        var meshQuery = hub.ServiceProvider.GetService<IMeshQuery>();
         var codeFiles = new List<CodeConfiguration>();
-        var codePartition = node.Content is NodeTypeDefinition
-            ? $"{node.Path}/Code"    // NodeType node - use its own Code partition
-            : $"{node.NodeType}/Code"; // Instance node - use NodeType's Code partition
-        await foreach (var obj in persistence.GetPartitionObjectsAsync(codePartition, null).WithCancellation(ct))
+        var codeParentPath = node.Content is NodeTypeDefinition
+            ? $"{node.Path}/Code"    // NodeType node - use its own Code path
+            : $"{node.NodeType}/Code"; // Instance node - use NodeType's Code path
+        if (meshQuery != null)
         {
-            if (obj is CodeConfiguration cf && !string.IsNullOrWhiteSpace(cf.Code))
+            var codeQuery = $"namespace:{codeParentPath}";
+            await foreach (var codeNode in meshQuery.QueryAsync<MeshNode>(codeQuery, ct: ct).WithCancellation(ct))
             {
-                codeFiles.Add(cf);
+                if (codeNode.Content is CodeConfiguration cf && !string.IsNullOrWhiteSpace(cf.Code))
+                {
+                    codeFiles.Add(cf);
+                }
             }
         }
 
@@ -136,14 +141,17 @@ internal class MeshNodeCompilationService(
             configuration = selfDef.Configuration;
             contentCollections = selfDef.ContentCollections;
         }
-        else
+        else if (meshQuery != null)
         {
             // Instance node - look up the NodeType to get its Configuration
-            var nodeTypeNode = await persistence.GetNodeAsync(node.NodeType, ct);
-            if (nodeTypeNode?.Content is NodeTypeDefinition ntd)
+            await foreach (var nodeTypeNode in meshQuery.QueryAsync<MeshNode>($"path:{node.NodeType}", ct: ct).WithCancellation(ct))
             {
-                configuration = ntd.Configuration;
-                contentCollections = ntd.ContentCollections;
+                if (nodeTypeNode?.Content is NodeTypeDefinition ntd)
+                {
+                    configuration = ntd.Configuration;
+                    contentCollections = ntd.ContentCollections;
+                }
+                break;
             }
         }
 

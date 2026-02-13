@@ -48,7 +48,7 @@ public record DataChangeNotification(
         new(NormalizePath(path), DataChangeKind.Deleted, entity, DateTimeOffset.UtcNow);
 
     private static string NormalizePath(string? path) =>
-        path?.Trim('/').ToLowerInvariant() ?? "";
+        path?.Trim('/') ?? "";
 }
 
 /// <summary>

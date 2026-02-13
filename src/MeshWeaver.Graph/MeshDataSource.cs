@@ -201,6 +201,8 @@ public record MeshDataSource : GenericUnpartitionedDataSource<MeshDataSource>
 
     /// <summary>
     /// Adds MeshNode type source with persistence sync.
+    /// For built-in nodes (registered via AddMeshNodes), uses the in-memory node directly
+    /// without querying persistence. For all other nodes, loads from persistence.
     /// Idempotent - if MeshNode is already registered, returns this unchanged.
     /// </summary>
     public MeshDataSource WithMeshNodes()
@@ -211,6 +213,16 @@ public record MeshDataSource : GenericUnpartitionedDataSource<MeshDataSource>
 
         // Register MeshNode in TypeRegistry for JSON serialization
         Workspace.Hub.TypeRegistry.WithType(typeof(MeshNode), nameof(MeshNode));
+
+        // Check if this hub path corresponds to a built-in node (registered via AddMeshNodes).
+        // Built-in nodes (NodeType, Markdown, Agent, etc.) are pre-loaded — no persistence needed.
+        var meshConfig = Workspace.Hub.ServiceProvider.GetService<MeshConfiguration>();
+        if (meshConfig != null && meshConfig.Nodes.TryGetValue(_hubPath, out var builtInNode))
+        {
+            return WithType<MeshNode>(ts => ts
+                .WithKey(n => n.Path)
+                .WithInitialData([builtInNode]));
+        }
 
         if (_persistence == null)
         {
@@ -275,15 +287,6 @@ public record MeshDataSource : GenericUnpartitionedDataSource<MeshDataSource>
 
         var partitionTypeSource = new PartitionTypeSource<T>(Workspace, Id, _persistence, _hubPath, subPartition, collectionName);
         return WithTypeSource(typeof(T), partitionTypeSource);
-    }
-
-    /// <summary>
-    /// Adds CodeConfiguration as a type source from the "Code" sub-partition.
-    /// CodeConfigurations are stored in the hub's Code sub-partition and accessible via workspace.GetStream&lt;CodeConfiguration&gt;().
-    /// </summary>
-    public MeshDataSource WithCodeConfiguration()
-    {
-        return WithType<CodeConfiguration>("Code", "Code");
     }
 
     /// <summary>

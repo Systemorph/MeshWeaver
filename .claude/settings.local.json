@@ -98,7 +98,8 @@
       "Bash(dotnet-ildasm:*)",
       "Bash(unzip:*)",
       "Bash(ilspycmd:*)",
-      "Bash(nm:*)"
+      "Bash(nm:*)",
+      "Bash(docker run:*)"
     ],
     "deny": []
   },
