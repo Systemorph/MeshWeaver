@@ -73,7 +73,7 @@ public class OrleansGraphDataTest(ITestOutputHelper output) : TestBase(output)
         return portalHub;
     }
 
-    [Fact]
+    [Fact(Timeout = 60000)]
     public async Task OrganizationSearch_ShouldRender()
     {
         var portal = await CreatePortalHubAsync();
@@ -98,7 +98,7 @@ public class OrleansGraphDataTest(ITestOutputHelper output) : TestBase(output)
         value.Should().NotBe(default(JsonElement), "Search view should render for Organization");
     }
 
-    [Fact]
+    [Fact(Timeout = 60000)]
     public async Task OrganizationDefault_ShouldRender()
     {
         var portal = await CreatePortalHubAsync();
@@ -122,7 +122,7 @@ public class OrleansGraphDataTest(ITestOutputHelper output) : TestBase(output)
         value.Should().NotBe(default(JsonElement), "Default view should render for Organization");
     }
 
-    [Fact]
+    [Fact(Timeout = 30000)]
     public async Task DiagnosticTest_CheckSiloServices()
     {
         // Access the silo's service provider to check if persistence is set up correctly
@@ -151,7 +151,7 @@ public class OrleansGraphDataTest(ITestOutputHelper output) : TestBase(output)
         resolution.Should().NotBeNull("Organization path should resolve");
     }
 
-    [Fact]
+    [Fact(Timeout = 60000)]
     public async Task PingOrganization()
     {
         var portal = await CreatePortalHubAsync();

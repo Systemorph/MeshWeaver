@@ -27,7 +27,7 @@ namespace MeshWeaver.Hosting.Cosmos.Test;
 [Collection("CosmosEmulator")]
 public class CosmosOrleansMeshTests(ITestOutputHelper output) : CosmosOrleansTestBase(output)
 {
-    [Fact]
+    [Fact(Timeout = 60000)]
     public async Task PingPongWithCosmosPersistence()
     {
         var client = await GetClientAsync();
@@ -39,7 +39,7 @@ public class CosmosOrleansMeshTests(ITestOutputHelper output) : CosmosOrleansTes
         response.Message.Should().BeOfType<PingResponse>();
     }
 
-    [Fact]
+    [Fact(Timeout = 60000)]
     public async Task CosmosStorageAdapter_WriteAndRead()
     {
         var cosmosClient = CosmosEmulatorFixture.SharedClient!;
@@ -63,7 +63,7 @@ public class CosmosOrleansMeshTests(ITestOutputHelper output) : CosmosOrleansTes
         readNode.Name.Should().Be("Test Node");
     }
 
-    [Fact]
+    [Fact(Timeout = 60000)]
     public async Task CosmosStorageAdapter_ListChildren()
     {
         var cosmosClient = CosmosEmulatorFixture.SharedClient!;
@@ -90,7 +90,7 @@ public class CosmosOrleansMeshTests(ITestOutputHelper output) : CosmosOrleansTes
         nodePaths.Should().Contain("Parent/Child2");
     }
 
-    [Fact]
+    [Fact(Timeout = 60000)]
     public async Task CosmosStorageAdapter_DeleteNode()
     {
         var cosmosClient = CosmosEmulatorFixture.SharedClient!;

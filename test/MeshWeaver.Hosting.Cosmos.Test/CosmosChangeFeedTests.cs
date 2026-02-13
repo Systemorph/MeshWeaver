@@ -79,7 +79,7 @@ public class CosmosChangeFeedTests : IAsyncLifetime
         _cosmosClient?.Dispose();
     }
 
-    [Fact]
+    [Fact(Timeout = 30000)]
     public async Task CosmosChangeFeedProcessor_StartsAndStops_Successfully()
     {
         if (!_emulatorAvailable)
@@ -110,7 +110,7 @@ public class CosmosChangeFeedTests : IAsyncLifetime
         await processor.DisposeAsync();
     }
 
-    [Fact]
+    [Fact(Timeout = 30000)]
     public async Task CosmosStorageAdapter_WithChangeFeedProcessor_CanBeAttached()
     {
         if (!_emulatorAvailable)
@@ -141,7 +141,7 @@ public class CosmosChangeFeedTests : IAsyncLifetime
         await storageAdapter.DisposeAsync();
     }
 
-    [Fact]
+    [Fact(Timeout = 30000)]
     public async Task CreateLeaseContainerAsync_CreatesContainer_WhenNotExists()
     {
         if (!_emulatorAvailable)
