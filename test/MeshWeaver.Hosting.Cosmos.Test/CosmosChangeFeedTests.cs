@@ -99,10 +99,10 @@ public class CosmosChangeFeedTests : IAsyncLifetime
             changeNotifier);
 
         // Act & Assert - Start
-        await processor.StartAsync();
+        await processor.StartAsync(TestContext.Current.CancellationToken);
 
         // Should not throw
-        await Task.Delay(100);
+        await Task.Delay(100, TestContext.Current.CancellationToken);
 
         // Act & Assert - Stop
         await processor.StopAsync();
@@ -133,8 +133,8 @@ public class CosmosChangeFeedTests : IAsyncLifetime
         // Act
         storageAdapter.AttachChangeFeedProcessor(processor);
 
-        await storageAdapter.StartChangeFeedProcessorAsync();
-        await Task.Delay(100);
+        await storageAdapter.StartChangeFeedProcessorAsync(TestContext.Current.CancellationToken);
+        await Task.Delay(100, TestContext.Current.CancellationToken);
         await storageAdapter.StopChangeFeedProcessorAsync();
 
         // Assert - Should not throw
@@ -155,14 +155,15 @@ public class CosmosChangeFeedTests : IAsyncLifetime
         // Act
         var leaseContainer = await CosmosChangeFeedProcessor.CreateLeaseContainerAsync(
             _database!,
-            testLeaseContainerName);
+            testLeaseContainerName,
+            TestContext.Current.CancellationToken);
 
         // Assert
         leaseContainer.Should().NotBeNull();
         leaseContainer.Id.Should().Be(testLeaseContainerName);
 
         // Cleanup
-        await leaseContainer.DeleteContainerAsync();
+        await leaseContainer.DeleteContainerAsync(cancellationToken: TestContext.Current.CancellationToken);
     }
 
     [Fact]
@@ -219,7 +220,7 @@ public class CosmosChangeFeedTests : IAsyncLifetime
         var deleted = DataChangeNotification.Deleted("Test/Path", entity);
 
         // Assert
-        created.Path.Should().Be("test/path"); // Normalized
+        created.Path.Should().Be("Test/Path"); // NormalizePath only trims slashes
         created.Kind.Should().Be(DataChangeKind.Created);
         created.Entity.Should().Be(entity);
         created.Timestamp.Should().BeCloseTo(DateTimeOffset.UtcNow, TimeSpan.FromSeconds(1));

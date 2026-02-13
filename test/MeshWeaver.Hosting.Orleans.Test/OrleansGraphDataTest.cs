@@ -140,7 +140,7 @@ public class OrleansGraphDataTest(ITestOutputHelper output) : TestBase(output)
 
         // Check if Organization node exists in persistence
         var persistence = siloServiceProvider.GetRequiredService<IPersistenceService>();
-        var orgNode = await persistence.GetNodeAsync("Organization");
+        var orgNode = await persistence.GetNodeAsync("Organization", TestContext.Current.CancellationToken);
         Output.WriteLine($"Organization node from persistence: {orgNode?.Path ?? "null"}");
         orgNode.Should().NotBeNull("Organization node should exist in FileSystem persistence");
 

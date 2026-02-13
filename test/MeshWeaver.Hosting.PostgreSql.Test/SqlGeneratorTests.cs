@@ -48,8 +48,8 @@ public class SqlGeneratorTests
         var (sql, parameters) = gen.GenerateSelectQuery(query);
 
         sql.Should().Contain("WHERE");
-        sql.Should().Contain("n.node_type = @p0");
-        parameters["@p0"].Should().Be("Story");
+        sql.Should().Contain("LOWER(n.node_type) = @p0");
+        parameters["@p0"].Should().Be("story");
     }
 
     [Fact]

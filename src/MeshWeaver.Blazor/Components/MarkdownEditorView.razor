@@ -22,10 +22,12 @@
                 @if (BoundTrackChangesEnabled)
                 {
                     <TrackChangesToolbar DocumentId="@BoundDocumentId"
+                                          TrackedChanges="@TrackedChanges"
                                           OnAcceptChange="@OnAcceptChange"
                                           OnRejectChange="@OnRejectChange"
                                           OnAcceptAll="@OnAcceptAllChanges"
-                                          OnRejectAll="@OnRejectAllChanges" />
+                                          OnRejectAll="@OnRejectAllChanges"
+                                          OnNavigateToChange="@OnNavigateToChange" />
                 }
                 <MonacoEditorView @ref="editorRef"
                                   Value="@BoundValue"
@@ -55,10 +57,12 @@
                 @if (BoundTrackChangesEnabled)
                 {
                     <TrackChangesToolbar DocumentId="@BoundDocumentId"
+                                          TrackedChanges="@TrackedChanges"
                                           OnAcceptChange="@OnAcceptChange"
                                           OnRejectChange="@OnRejectChange"
                                           OnAcceptAll="@OnAcceptAllChanges"
-                                          OnRejectAll="@OnRejectAllChanges" />
+                                          OnRejectAll="@OnRejectAllChanges"
+                                          OnNavigateToChange="@OnNavigateToChange" />
                 }
                 <MonacoEditorView @ref="editorRef"
                                   Value="@BoundValue"
@@ -150,7 +154,13 @@
                         // Track that we applied this external update
                         autoSaveHandler?.OnExternalUpdateApplied(value);
 
-                        InvokeAsync(StateHasChanged);
+                        InvokeAsync(async () =>
+                        {
+                            StateHasChanged();
+                            // Update Monaco decorations after render
+                            if (editorRef != null)
+                                await editorRef.UpdateAnnotationDecorationsAsync();
+                        });
                         isUpdatingFromStream = false;
                     }
                 }));
@@ -312,6 +322,10 @@
         ExtractAnnotations(value);
         UpdatePreview(value);
 
+        // Update Monaco decorations for track changes highlighting
+        if (editorRef != null && BoundTrackChangesEnabled)
+            _ = editorRef.UpdateAnnotationDecorationsAsync();
+
         // NOTE: We no longer call UpdatePointer immediately here.
         // The pointer update is now handled in AutoSaveContent after throttling.
         // This prevents the race condition where:
@@ -427,6 +441,14 @@
         return Task.CompletedTask;
     }
 
+    private async Task OnNavigateToChange(string markerId)
+    {
+        if (editorRef != null && !string.IsNullOrEmpty(markerId))
+        {
+            await editorRef.NavigateToAnnotationAsync(markerId);
+        }
+    }
+
     private async Task UpdateContent(string newContent)
     {
         BoundValue = newContent;
@@ -436,6 +458,8 @@
         if (editorRef != null)
         {
             await editorRef.SetValueAsync(newContent);
+            // Refresh decorations after content update
+            await editorRef.UpdateAnnotationDecorationsAsync();
         }
 
         if (ValuePointer != null)

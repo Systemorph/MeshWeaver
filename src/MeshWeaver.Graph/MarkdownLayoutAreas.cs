@@ -58,8 +58,7 @@ public static class MarkdownLayoutAreas
     public enum AnnotationViewMode
     {
         Markup,     // Show all annotations with highlighting
-        Clean,      // Hide all markup, show plain text
-        Accepted,   // Show document as if all changes were accepted
+        HideMarkup, // Show document as if all changes were accepted (no markers)
         Original    // Show document as if all changes were rejected (original)
     }
 
@@ -68,11 +67,6 @@ public static class MarkdownLayoutAreas
     /// </summary>
     public record AnnotationPanelState
     {
-        /// <summary>
-        /// ID of the annotation currently showing the reply dialog, or null if none.
-        /// </summary>
-        public string? ReplyingToAnnotationId { get; init; }
-
         /// <summary>
         /// Path of the reply MeshNode currently being edited inline, or null if none.
         /// </summary>
@@ -86,21 +80,11 @@ public static class MarkdownLayoutAreas
     }
 
     /// <summary>
-    /// Model for the reply form.
+    /// Data model for the view mode dropdown selector.
     /// </summary>
-    public record ReplyFormModel
-    {
-        public string Text { get; init; } = string.Empty;
-    }
+    public record ViewModeToolbar(string ViewMode = nameof(AnnotationViewMode.Markup));
 
-    /// <summary>
-    /// Model for the new comment form (text selection commenting).
-    /// </summary>
-    public record CommentFormModel
-    {
-        public string SelectedText { get; init; } = string.Empty;
-        public string CommentText { get; init; } = string.Empty;
-    }
+    private const string ViewModeDataId = "AnnotationViewMode";
 
     /// <summary>
     /// Renders the readonly markdown view with a clean reading experience.
@@ -115,6 +99,24 @@ public static class MarkdownLayoutAreas
         // Create a subject for view mode changes
         var viewModeSubject = new BehaviorSubject<AnnotationViewMode>(AnnotationViewMode.Markup);
         host.RegisterForDisposal(viewModeSubject);
+
+        // Subscribe to view mode dropdown changes from Template.Bind data
+        var viewModeDataSubscription = host.GetDataStream<ViewModeToolbar>(ViewModeDataId)
+            .Subscribe(toolbar =>
+            {
+                if (toolbar != null)
+                {
+                    var mode = toolbar.ViewMode switch
+                    {
+                        nameof(AnnotationViewMode.HideMarkup) => AnnotationViewMode.HideMarkup,
+                        nameof(AnnotationViewMode.Original) => AnnotationViewMode.Original,
+                        _ => AnnotationViewMode.Markup
+                    };
+                    if (mode != viewModeSubject.Value)
+                        viewModeSubject.OnNext(mode);
+                }
+            });
+        host.RegisterForDisposal(viewModeDataSubscription);
 
         // Create a subject for annotation panel state (reply dialogs, etc.)
         var panelStateSubject = new BehaviorSubject<AnnotationPanelState>(new AnnotationPanelState());
@@ -201,8 +203,7 @@ public static class MarkdownLayoutAreas
         // Transform content based on view mode
         var content = viewMode switch
         {
-            AnnotationViewMode.Clean => AnnotationMarkdownExtension.StripAnnotations(rawContent),
-            AnnotationViewMode.Accepted => AnnotationMarkdownExtension.GetAcceptedContent(rawContent),
+            AnnotationViewMode.HideMarkup => AnnotationMarkdownExtension.GetAcceptedContent(rawContent),
             AnnotationViewMode.Original => AnnotationMarkdownExtension.GetRejectedContent(rawContent),
             _ => rawContent // Markup mode - keep annotations
         };
@@ -517,7 +518,7 @@ public static class MarkdownLayoutAreas
                     if (reply.Path == panelState.EditingReplyPath)
                         card = card.WithView(BuildReplyEditArea(host, reply, panelState, panelStateSubject));
                     else
-                        card = card.WithView(BuildReplyOverview(reply, panelState, panelStateSubject));
+                        card = card.WithView(BuildReplyOverview(host, reply, panelState, panelStateSubject));
                 }
             }
         }
@@ -597,6 +598,7 @@ public static class MarkdownLayoutAreas
     /// Small avatar + author name + time ago + reply text + Edit button.
     /// </summary>
     private static UiControl BuildReplyOverview(
+        LayoutAreaHost host,
         MeshNode replyNode,
         AnnotationPanelState panelState,
         BehaviorSubject<AnnotationPanelState> panelStateSubject)
@@ -607,10 +609,15 @@ public static class MarkdownLayoutAreas
         var text = comment?.Text ?? "";
         var createdAt = comment?.CreatedAt ?? DateTimeOffset.MinValue;
 
+        var accessService = host.Hub.ServiceProvider.GetService<AccessService>();
+        var currentUser = accessService?.Context?.Name ?? "";
+        var isAuthor = !string.IsNullOrEmpty(currentUser)
+            && string.Equals(comment?.Author, currentUser, StringComparison.OrdinalIgnoreCase);
+
         var replyCard = Controls.Stack
             .WithStyle("padding: 6px 0; margin-left: 8px; border-left: 2px solid var(--neutral-stroke-rest); padding-left: 10px;");
 
-        // Header row: avatar + author + time + Edit button
+        // Header row: avatar + author + time + Edit button (author only)
         var headerRow = Controls.Stack
             .WithOrientation(Orientation.Horizontal)
             .WithStyle("align-items: center; gap: 6px;");
@@ -625,20 +632,23 @@ public static class MarkdownLayoutAreas
                 <span style=""font-size: 0.8rem; color: var(--neutral-foreground-hint);"">{Graph.CommentsView.FormatTimeAgo(createdAt)}</span>
             </div>"));
 
-        headerRow = headerRow.WithView(
-            Controls.Button("Edit")
-                .WithAppearance(Appearance.Stealth)
-                .WithStyle("padding: 2px 8px; font-size: 0.75rem; min-width: auto;")
-                .WithClickAction(_ =>
-                    panelStateSubject.OnNext(panelState with { EditingReplyPath = replyNode.Path })));
+        if (isAuthor)
+        {
+            headerRow = headerRow.WithView(
+                Controls.Button("Edit")
+                    .WithAppearance(Appearance.Stealth)
+                    .WithStyle("padding: 2px 8px; font-size: 0.75rem; min-width: auto;")
+                    .WithClickAction(_ =>
+                        panelStateSubject.OnNext(panelState with { EditingReplyPath = replyNode.Path })));
+        }
 
         replyCard = replyCard.WithView(headerRow);
 
         // Reply text
         if (!string.IsNullOrEmpty(text))
         {
-            replyCard = replyCard.WithView(Controls.Html($@"
-                <div style=""font-size: 0.85rem; color: var(--neutral-foreground-rest); line-height: 1.4; margin-top: 2px; margin-left: 26px;"">{System.Web.HttpUtility.HtmlEncode(text)}</div>"));
+            replyCard = replyCard.WithView(new MarkdownControl(text)
+                .WithStyle("font-size: 0.85rem; margin-top: 2px; margin-left: 26px;"));
         }
 
         return replyCard;
@@ -646,8 +656,7 @@ public static class MarkdownLayoutAreas
 
     /// <summary>
     /// Builds an inline edit form for a reply MeshNode.
-    /// Shows read-only author/timestamp header and editable text field.
-    /// Done saves via IPersistenceService.SaveNodeAsync and auto-updates author + timestamp.
+    /// Uses BuildPropertyOverview for auto-generated MarkdownEditor on the Text field.
     /// Cancel deletes new (empty) replies; for existing replies just closes the form.
     /// </summary>
     private static UiControl BuildReplyEditArea(
@@ -657,7 +666,6 @@ public static class MarkdownLayoutAreas
         BehaviorSubject<AnnotationPanelState> panelStateSubject)
     {
         var replyComment = replyNode.Content as Comment;
-        var replyDataId = $"ReplyEdit_{replyComment?.Id ?? replyNode.Path!.Replace("/", "-")}";
         var isNewReply = string.IsNullOrWhiteSpace(replyComment?.Text);
 
         var form = Controls.Stack
@@ -677,15 +685,10 @@ public static class MarkdownLayoutAreas
                 <span style=""font-size: 0.8rem; color: var(--neutral-foreground-hint);"">{Graph.CommentsView.FormatTimeAgo(createdAt)}</span>
             </div>"));
 
-        // Text field pre-populated with existing text
-        var initialModel = new ReplyFormModel { Text = replyComment?.Text ?? string.Empty };
-        var editControl = host.Edit(initialModel, replyDataId);
-        if (editControl != null)
+        // Property editor (auto-generates MarkdownEditorControl for [Markdown] Text field)
+        if (replyNode.Content != null)
         {
-            var editWrapper = Controls.Stack
-                .WithStyle("margin-bottom: 8px;")
-                .WithView(editControl);
-            form = form.WithView(editWrapper);
+            form = form.WithView(OverviewLayoutArea.BuildPropertyOverview(host, replyNode));
         }
 
         // Done/Cancel buttons
@@ -712,25 +715,9 @@ public static class MarkdownLayoutAreas
             Controls.Button("Done")
                 .WithAppearance(Appearance.Accent)
                 .WithStyle("padding: 6px 16px; font-size: 0.85rem;")
-                .WithClickAction(async ctx =>
+                .WithClickAction(_ =>
                 {
-                    var replyModel = await ctx.Host.Stream.GetDataAsync<ReplyFormModel>(replyDataId);
-                    if (replyModel != null && !string.IsNullOrWhiteSpace(replyModel.Text))
-                    {
-                        // Update reply via DataChangeRequest targeting the reply node's own hub
-                        var accessService = host.Hub.ServiceProvider.GetService<AccessService>();
-                        var currentUser = accessService?.Context?.Name ?? "Unknown";
-                        var updatedComment = (replyComment ?? new Comment()) with
-                        {
-                            Author = currentUser,
-                            CreatedAt = DateTimeOffset.UtcNow,
-                            Text = replyModel.Text
-                        };
-                        var updatedNode = replyNode with { Content = updatedComment };
-                        host.Hub.Post(
-                            new DataChangeRequest().WithUpdates(updatedNode),
-                            o => o.WithTarget(new Address(replyNode.Path!)));
-                    }
+                    // BuildPropertyOverview auto-saves via SetupAutoSave, so just close the editor
                     panelStateSubject.OnNext(panelState with { EditingReplyPath = null });
                 }));
 
@@ -741,6 +728,7 @@ public static class MarkdownLayoutAreas
     /// <summary>
     /// Builds the new comment form that appears in the annotations column when the user selects text.
     /// Hidden by default; shown by JS when text is selected and the floating comment button is clicked.
+    /// Creates a Comment MeshNode and switches to inline Edit mode.
     /// </summary>
     private static UiControl BuildNewCommentForm(
         LayoutAreaHost host,
@@ -749,8 +737,6 @@ public static class MarkdownLayoutAreas
         string nodePath,
         BehaviorSubject<AnnotationPanelState> panelStateSubject)
     {
-        var commentFormDataId = $"NewComment_{nodePath.Replace("/", "-")}";
-
         var form = Controls.Stack
             .WithClass("new-comment-form")
             .WithStyle("display: none; padding: 12px; background: var(--neutral-layer-1); border-radius: 6px; border-left: 4px solid #3b82f6; margin-bottom: 12px; box-shadow: 0 1px 3px rgba(0,0,0,0.12);");
@@ -762,16 +748,6 @@ public static class MarkdownLayoutAreas
         // Selected text display (filled by JS)
         form = form.WithView(Controls.Html(
             "<div class=\"new-comment-selected-text\" style=\"font-size: 0.85rem; padding: 8px 10px; background: rgba(59, 130, 246, 0.1); border-radius: 4px; margin-bottom: 8px; border-left: 2px solid #3b82f6; font-style: italic; display: none;\"></div>"));
-
-        // Comment text area using host.Edit
-        var editControl = host.Edit(new CommentFormModel(), commentFormDataId);
-        if (editControl != null)
-        {
-            var editWrapper = Controls.Stack
-                .WithStyle("margin-bottom: 12px;")
-                .WithView(editControl);
-            form = form.WithView(editWrapper);
-        }
 
         // Button row
         var buttonRow = Controls.Stack
@@ -789,34 +765,27 @@ public static class MarkdownLayoutAreas
                 }));
 
         buttonRow = buttonRow.WithView(
-            Controls.Button("Submit")
+            Controls.Button("Comment")
                 .WithAppearance(Appearance.Accent)
                 .WithStyle("padding: 6px 16px; font-size: 0.85rem;")
                 .WithClass("new-comment-submit")
-                .WithClickAction(async ctx =>
+                .WithClickAction(async _ =>
                 {
                     if (node == null) return;
-
-                    var formModel = await ctx.Host.Stream.GetDataAsync<CommentFormModel>(commentFormDataId);
-                    var selectedText = formModel?.SelectedText ?? "";
-                    var commentText = formModel?.CommentText ?? "";
-
-                    if (string.IsNullOrWhiteSpace(commentText)) return;
 
                     var markerId = Guid.NewGuid().AsString();
                     var commentId = Guid.NewGuid().AsString();
                     var accessService = host.Hub.ServiceProvider.GetService<AccessService>();
                     var author = accessService?.Context?.Name ?? "Unknown";
 
-                    // 1. Create Comment MeshNode
+                    // Create Comment MeshNode with empty text (user edits via inline Edit area)
                     var comment = new Comment
                     {
                         Id = commentId,
                         NodePath = nodePath,
                         MarkerId = markerId,
-                        HighlightedText = selectedText,
                         Author = author,
-                        Text = commentText,
+                        Text = "",
                         Status = CommentStatus.Active
                     };
                     var commentNode = new MeshNode(commentId, nodePath)
@@ -826,25 +795,24 @@ public static class MarkdownLayoutAreas
                         Content = comment
                     };
 
+                    // Set editing path BEFORE creating node so UI is ready when reactive stream delivers the update
+                    panelStateSubject.OnNext(panelStateSubject.Value with
+                    {
+                        EditingReplyPath = commentNode.Path
+                    });
+
                     var meshCatalog = host.Hub.ServiceProvider.GetRequiredService<IMeshCatalog>();
                     await meshCatalog.CreateNodeAsync(commentNode);
 
-                    // 2. Insert marker into markdown (if text was selected)
-                    if (!string.IsNullOrEmpty(selectedText))
-                    {
-                        var marker = $"<!--comment:{markerId}-->";
-                        var closing = $"<!--/comment:{markerId}-->";
-                        var idx = rawContent.IndexOf(selectedText, StringComparison.Ordinal);
-                        if (idx >= 0)
-                        {
-                            var newContent = rawContent.Insert(idx + selectedText.Length, closing)
-                                                       .Insert(idx, marker);
-                            var updatedNode = node with { Content = new MarkdownContent { Content = newContent } };
-                            host.Hub.Post(
-                                new DataChangeRequest().WithUpdates(updatedNode),
-                                o => o.WithTarget(host.Hub.Address));
-                        }
-                    }
+                    // Insert marker into markdown
+                    var marker = $"<!--comment:{markerId}-->";
+                    var closing = $"<!--/comment:{markerId}-->";
+                    // Marker pair wraps nothing initially; text association via Comment.MarkerId
+                    var updatedContent = rawContent + $"\n{marker}{closing}";
+                    var updatedNode = node with { Content = new MarkdownContent { Content = updatedContent } };
+                    host.Hub.Post(
+                        new DataChangeRequest().WithUpdates(updatedNode),
+                        o => o.WithTarget(host.Hub.Address));
                 }));
 
         form = form.WithView(buttonRow);
@@ -882,8 +850,6 @@ public static class MarkdownLayoutAreas
 
         var author = annotation.Author ?? "Unknown";
         var authorInitial = author.Length > 0 ? author[0].ToString().ToUpper() : "?";
-        var isReplyingToThis = panelState.ReplyingToAnnotationId == annotation.Id;
-
         // Card container - Word Online style with proper sizing
         var card = Controls.Stack
             .WithStyle($"padding: 12px; background: var(--neutral-layer-1); border-radius: 6px; border-left: 4px solid {typeColor}; margin-bottom: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.12);");
@@ -931,46 +897,8 @@ public static class MarkdownLayoutAreas
                 </div>"));
         }
 
-        // Action buttons - always visible
-        if (annotation.Type == AnnotationType.Comment)
+        // Track changes - Accept/Reject buttons
         {
-            if (isReplyingToThis)
-            {
-                card = card.WithView(BuildReplyForm(host, annotation.Id, panelState, panelStateSubject));
-            }
-            else
-            {
-                var buttonRow = Controls.Stack
-                    .WithOrientation(Orientation.Horizontal)
-                    .WithStyle("gap: 8px; margin-top: 8px;");
-
-                buttonRow = buttonRow.WithView(
-                    Controls.Button("Reply")
-                        .WithAppearance(Appearance.Neutral)
-                        .WithStyle("padding: 6px 16px; font-size: 0.85rem;")
-                        .WithClickAction(_ => panelStateSubject.OnNext(
-                            panelState with { ReplyingToAnnotationId = annotation.Id })));
-
-                buttonRow = buttonRow.WithView(
-                    Controls.Button("Resolve")
-                        .WithAppearance(Appearance.Stealth)
-                        .WithStyle("padding: 6px 16px; font-size: 0.85rem;")
-                        .WithClickAction(_ =>
-                        {
-                            if (node == null) return;
-                            var newContent = AnnotationMarkdownExtension.ResolveComment(rawContent, annotation.Id);
-                            var updatedNode = node with { Content = new MarkdownContent { Content = newContent } };
-                            host.Hub.Post(
-                                new DataChangeRequest().WithUpdates(updatedNode),
-                                o => o.WithTarget(host.Hub.Address));
-                        }));
-
-                card = card.WithView(buttonRow);
-            }
-        }
-        else
-        {
-            // Track changes - Accept/Reject buttons
             var buttonRow = Controls.Stack
                 .WithOrientation(Orientation.Horizontal)
                 .WithStyle("gap: 8px; margin-top: 8px;");
@@ -1007,61 +935,6 @@ public static class MarkdownLayoutAreas
         // Use WithClass for identification (class-based selectors work reliably in Blazor)
         return card
             .WithClass($"annotation-card annotation-for-{annotation.Id} annotation-type-{annotation.Type.ToString().ToLowerInvariant()}");
-    }
-
-    /// <summary>
-    /// Builds the inline reply form for a comment using host.Edit().
-    /// </summary>
-    private static UiControl BuildReplyForm(
-        LayoutAreaHost host,
-        string annotationId,
-        AnnotationPanelState panelState,
-        BehaviorSubject<AnnotationPanelState> panelStateSubject)
-    {
-        var replyDataId = $"Reply_{annotationId}";
-
-        var form = Controls.Stack
-            .WithStyle("margin-top: 12px; padding: 12px; background: var(--neutral-layer-2); border-radius: 6px;");
-
-        // Reply textarea using host.Edit with ReplyFormModel
-        var editControl = host.Edit(new ReplyFormModel(), replyDataId);
-        if (editControl != null)
-        {
-            var editWrapper = Controls.Stack
-                .WithStyle("margin-bottom: 12px;")
-                .WithView(editControl);
-            form = form.WithView(editWrapper);
-        }
-
-        // Button row
-        var buttonRow = Controls.Stack
-            .WithOrientation(Orientation.Horizontal)
-            .WithStyle("gap: 8px; justify-content: flex-end;");
-
-        buttonRow = buttonRow.WithView(
-            Controls.Button("Cancel")
-                .WithAppearance(Appearance.Stealth)
-                .WithStyle("padding: 6px 16px; font-size: 0.85rem;")
-                .WithClickAction(_ => panelStateSubject.OnNext(
-                    panelState with { ReplyingToAnnotationId = null })));
-
-        buttonRow = buttonRow.WithView(
-            Controls.Button("Submit")
-                .WithAppearance(Appearance.Accent)
-                .WithStyle("padding: 6px 16px; font-size: 0.85rem;")
-                .WithClickAction(async ctx =>
-                {
-                    // Get the reply text from the form data
-                    var replyModel = await ctx.Host.Stream.GetDataAsync<ReplyFormModel>(replyDataId);
-                    if (replyModel != null && !string.IsNullOrWhiteSpace(replyModel.Text))
-                    {
-                        // Close the form — track change replies are informational only
-                        panelStateSubject.OnNext(panelState with { ReplyingToAnnotationId = null });
-                    }
-                }));
-
-        form = form.WithView(buttonRow);
-        return form;
     }
 
     /// <summary>
@@ -1459,8 +1332,8 @@ public static class MarkdownLayoutAreas
     }
 
     /// <summary>
-    /// Builds a reactive view mode toolbar that re-renders the markdown on mode change.
-    /// Accept All and Reject All persist changes via DataChangeRequest.
+    /// Builds a reactive view mode toolbar with a dropdown selector and Accept All / Reject All buttons.
+    /// The dropdown uses Template.Bind to push changes through the workspace data stream.
     /// </summary>
     private static UiControl BuildReactiveViewModeToolbar(
         LayoutAreaHost host,
@@ -1470,29 +1343,33 @@ public static class MarkdownLayoutAreas
         AnnotationViewMode currentMode,
         List<ParsedAnnotation> annotations)
     {
-        var trackChanges = annotations.Where(a => a.Type != AnnotationType.Comment).ToList();
-
         var toolbar = Controls.Stack
             .WithOrientation(Orientation.Horizontal)
             .WithWidth("100%")
             .WithStyle("align-items: center; gap: 8px; margin-bottom: 16px; padding: 8px 12px; background: var(--neutral-layer-2); border-radius: 6px; flex-wrap: wrap;");
 
-        // Label
-        toolbar = toolbar.WithView(
-            Controls.Html("<span style=\"font-size: 0.85rem; color: var(--neutral-foreground-hint); margin-right: 8px;\">View:</span>"));
+        // View mode dropdown using Template.Bind + Controls.Select
+        var currentModeStr = currentMode.ToString();
+        var options = new Option<string>[]
+        {
+            new(nameof(AnnotationViewMode.Markup), "Markup"),
+            new(nameof(AnnotationViewMode.HideMarkup), "Hide Markup"),
+            new(nameof(AnnotationViewMode.Original), "Original")
+        }.Cast<Option>().ToArray();
 
-        // View mode buttons using Controls.Button with click actions
-        toolbar = toolbar.WithView(CreateViewModeButton("Markup", AnnotationViewMode.Markup, currentMode, viewModeSubject));
-        toolbar = toolbar.WithView(CreateViewModeButton("Clean", AnnotationViewMode.Clean, currentMode, viewModeSubject));
-        toolbar = toolbar.WithView(CreateViewModeButton("Accepted", AnnotationViewMode.Accepted, currentMode, viewModeSubject));
-        toolbar = toolbar.WithView(CreateViewModeButton("Original", AnnotationViewMode.Original, currentMode, viewModeSubject));
+        var select = Template.Bind(
+            new ViewModeToolbar(currentModeStr),
+            tb => Controls.Select(tb.ViewMode, options).WithLabel("View"),
+            ViewModeDataId);
+
+        toolbar = toolbar.WithView(select);
 
         // Separator
         toolbar = toolbar.WithView(Controls.Html("<div style=\"width: 1px; height: 20px; background: var(--neutral-stroke-rest); margin: 0 8px;\"></div>"));
 
         // Accept All button - persists changes via DataChangeRequest
         toolbar = toolbar.WithView(
-            Controls.Button("✓ Accept All")
+            Controls.Button("Accept All")
                 .WithAppearance(Appearance.Stealth)
                 .WithStyle("color: #22c55e; font-size: 0.85rem;")
                 .WithClickAction(_ =>
@@ -1507,7 +1384,7 @@ public static class MarkdownLayoutAreas
 
         // Reject All button - persists changes via DataChangeRequest
         toolbar = toolbar.WithView(
-            Controls.Button("✗ Reject All")
+            Controls.Button("Reject All")
                 .WithAppearance(Appearance.Stealth)
                 .WithStyle("color: #ef4444; font-size: 0.85rem;")
                 .WithClickAction(_ =>
@@ -1521,22 +1398,6 @@ public static class MarkdownLayoutAreas
                 }));
 
         return toolbar;
-    }
-
-    /// <summary>
-    /// Creates a view mode button with appropriate styling.
-    /// </summary>
-    private static UiControl CreateViewModeButton(string label, AnnotationViewMode mode, AnnotationViewMode currentMode, ViewModeSubject viewModeSubject)
-    {
-        var isActive = mode == currentMode;
-        var style = isActive
-            ? "background: var(--accent-fill-rest); color: white; border: 1px solid var(--accent-fill-rest); padding: 4px 12px; border-radius: 4px; font-size: 0.85rem;"
-            : "background: var(--neutral-layer-1); border: 1px solid var(--neutral-stroke-rest); padding: 4px 12px; border-radius: 4px; font-size: 0.85rem;";
-
-        return Controls.Button(label)
-            .WithAppearance(Appearance.Stealth)
-            .WithStyle(style)
-            .WithClickAction(_ => viewModeSubject.OnNext(mode));
     }
 
     private static UiControl BuildActionMenu(LayoutAreaHost host, MeshNode? node)

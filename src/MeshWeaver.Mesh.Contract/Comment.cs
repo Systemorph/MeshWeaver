@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.ComponentModel.DataAnnotations;
+using MeshWeaver.Layout;
 
 namespace MeshWeaver.Mesh;
 
@@ -54,11 +55,13 @@ public record Comment
     /// <summary>
     /// Author of the comment (username or display name).
     /// </summary>
+    [Browsable(false)]
     public string Author { get; init; } = string.Empty;
 
     /// <summary>
     /// Comment text content (markdown supported).
     /// </summary>
+    [Markdown(EditorHeight = "150px", ShowPreview = false)]
     public string Text { get; init; } = string.Empty;
 
     /// <summary>

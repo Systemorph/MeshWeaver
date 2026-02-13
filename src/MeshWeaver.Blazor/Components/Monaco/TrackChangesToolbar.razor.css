@@ -22,6 +22,14 @@
     padding-right: 8px;
 }
 
+.toolbar-count {
+    font-size: 12px;
+    color: var(--neutral-foreground-hint, #605e5c);
+    padding: 2px 6px;
+    background: var(--neutral-layer-3, #ebebeb);
+    border-radius: 3px;
+}
+
 ::deep fluent-divider[orientation="vertical"] {
     height: 24px;
     margin: 0 4px;

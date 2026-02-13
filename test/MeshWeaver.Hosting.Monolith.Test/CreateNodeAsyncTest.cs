@@ -1,0 +1,199 @@
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
+using FluentAssertions;
+using FluentAssertions.Extensions;
+using MeshWeaver.Data;
+using MeshWeaver.Graph;
+using MeshWeaver.Graph.Configuration;
+using MeshWeaver.Hosting.Monolith.TestBase;
+using MeshWeaver.Hosting.Persistence;
+using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Services;
+using MeshWeaver.Messaging;
+using MeshWeaver.ShortGuid;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
+using Xunit;
+
+namespace MeshWeaver.Hosting.Monolith.Test;
+
+/// <summary>
+/// Tests for IMeshCatalog.CreateNodeAsync with FileSystem persistence,
+/// focusing on Comment node creation and reply linking.
+/// </summary>
+[Collection("SamplesGraphData")]
+public class CreateNodeAsyncTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
+{
+    private static readonly string SharedCacheDirectory = Path.Combine(
+        Path.GetTempPath(),
+        "MeshWeaverCreateNodeTests",
+        ".mesh-cache");
+
+    private CancellationToken TestTimeout => new CancellationTokenSource(30.Seconds()).Token;
+
+    protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
+    {
+        var graphPath = TestPaths.SamplesGraph;
+        var dataDirectory = TestPaths.SamplesGraphData;
+        Directory.CreateDirectory(SharedCacheDirectory);
+
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Graph:Storage:SourceType"] = "FileSystem",
+                ["Graph:Storage:BasePath"] = graphPath
+            })
+            .Build();
+
+        return builder
+            .UseMonolithMesh()
+            .AddFileSystemPersistence(dataDirectory)
+            .ConfigureServices(services =>
+            {
+                services.Configure<CompilationCacheOptions>(o =>
+                {
+                    o.CacheDirectory = SharedCacheDirectory;
+                    o.EnableDiskCache = true;
+                });
+                services.AddSingleton<IConfiguration>(configuration);
+                return services;
+            })
+            .AddJsonGraphConfiguration(dataDirectory)
+            .ConfigureDefaultNodeHub(config => config.AddDefaultLayoutAreas());
+    }
+
+    [Fact(Timeout = 30000)]
+    public async Task CreateNodeAsync_ShouldPersistCommentNode()
+    {
+        // Arrange
+        var catalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
+        var parentPath = "MeshWeaver/Documentation/DataMesh/CollaborativeEditing";
+        var commentId = Guid.NewGuid().AsString();
+        var commentPath = $"{parentPath}/{commentId}";
+
+        var comment = new Comment
+        {
+            Id = commentId,
+            NodePath = parentPath,
+            Author = "TestUser",
+            Text = "This is a test comment",
+            HighlightedText = "some selected text",
+            MarkerId = Guid.NewGuid().AsString(),
+            CreatedAt = DateTimeOffset.UtcNow,
+            Status = CommentStatus.Active
+        };
+
+        var node = new MeshNode(commentPath)
+        {
+            Name = $"Comment by TestUser",
+            NodeType = CommentNodeType.NodeType,
+            Content = comment
+        };
+
+        // Act
+        var createdNode = await catalog.CreateNodeAsync(node, "TestUser", TestTimeout);
+
+        // Assert
+        createdNode.Should().NotBeNull();
+        createdNode.Path.Should().Be(commentPath);
+        createdNode.State.Should().Be(MeshNodeState.Active);
+        createdNode.NodeType.Should().Be(CommentNodeType.NodeType);
+
+        var createdComment = createdNode.Content.Should().BeOfType<Comment>().Subject;
+        createdComment.Id.Should().Be(commentId);
+        createdComment.Author.Should().Be("TestUser");
+        createdComment.Text.Should().Be("This is a test comment");
+        createdComment.HighlightedText.Should().Be("some selected text");
+        createdComment.Status.Should().Be(CommentStatus.Active);
+
+        // Verify round-trip via GetNodeAsync
+        var retrievedNode = await catalog.GetNodeAsync(new Address(commentPath));
+        retrievedNode.Should().NotBeNull();
+        retrievedNode!.Path.Should().Be(commentPath);
+        var retrievedComment = retrievedNode.Content.Should().BeOfType<Comment>().Subject;
+        retrievedComment.Text.Should().Be("This is a test comment");
+
+        // Cleanup
+        await catalog.DeleteNodeAsync(commentPath, recursive: false, ct: TestTimeout);
+    }
+
+    [Fact(Timeout = 30000)]
+    public async Task CreateNodeAsync_ReplyNode_ShouldLinkToParent()
+    {
+        // Arrange
+        var catalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
+        var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
+        var parentPath = "MeshWeaver/Documentation/DataMesh/CollaborativeEditing";
+
+        // Create parent comment
+        var parentCommentId = Guid.NewGuid().AsString();
+        var parentCommentPath = $"{parentPath}/{parentCommentId}";
+        var parentComment = new Comment
+        {
+            Id = parentCommentId,
+            NodePath = parentPath,
+            Author = "Alice",
+            Text = "Original comment",
+            CreatedAt = DateTimeOffset.UtcNow,
+            Status = CommentStatus.Active
+        };
+        var parentNode = new MeshNode(parentCommentPath)
+        {
+            Name = "Comment by Alice",
+            NodeType = CommentNodeType.NodeType,
+            Content = parentComment
+        };
+        await catalog.CreateNodeAsync(parentNode, "Alice", TestTimeout);
+
+        // Create reply with ParentCommentId
+        var replyId = Guid.NewGuid().AsString();
+        var replyPath = $"{parentPath}/{replyId}";
+        var replyComment = new Comment
+        {
+            Id = replyId,
+            NodePath = parentPath,
+            Author = "Bob",
+            Text = "This is a reply",
+            ParentCommentId = parentCommentId,
+            CreatedAt = DateTimeOffset.UtcNow,
+            Status = CommentStatus.Active
+        };
+        var replyNode = new MeshNode(replyPath)
+        {
+            Name = "Comment by Bob",
+            NodeType = CommentNodeType.NodeType,
+            Content = replyComment
+        };
+
+        // Act
+        var createdReply = await catalog.CreateNodeAsync(replyNode, "Bob", TestTimeout);
+
+        // Assert
+        createdReply.Should().NotBeNull();
+        var replyContent = createdReply.Content.Should().BeOfType<Comment>().Subject;
+        replyContent.ParentCommentId.Should().Be(parentCommentId);
+        replyContent.Author.Should().Be("Bob");
+        replyContent.Text.Should().Be("This is a reply");
+
+        // Verify both nodes are queryable
+        var comments = await meshQuery.QueryAsync<MeshNode>(
+            $"path:{parentPath} nodeType:{CommentNodeType.NodeType} scope:children"
+        ).ToListAsync();
+
+        comments.Should().Contain(n => n.Path == parentCommentPath);
+        comments.Should().Contain(n => n.Path == replyPath);
+
+        // Verify ParentCommentId round-trips
+        var retrievedReply = await catalog.GetNodeAsync(new Address(replyPath));
+        var retrievedContent = retrievedReply?.Content.Should().BeOfType<Comment>().Subject;
+        retrievedContent?.ParentCommentId.Should().Be(parentCommentId);
+
+        // Cleanup
+        await catalog.DeleteNodeAsync(parentCommentPath, recursive: false, ct: TestTimeout);
+        await catalog.DeleteNodeAsync(replyPath, recursive: false, ct: TestTimeout);
+    }
+}
