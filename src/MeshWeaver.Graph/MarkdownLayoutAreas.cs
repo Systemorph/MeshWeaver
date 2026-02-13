@@ -127,7 +127,7 @@ public static class MarkdownLayoutAreas
         var childrenStream = Observable.FromAsync(async () =>
         {
             if (meshQuery == null)
-                return Array.Empty<MeshNode>() as IReadOnlyList<MeshNode>;
+                return Array.Empty<MeshNode>();
 
             try
             {
@@ -172,7 +172,7 @@ public static class MarkdownLayoutAreas
             {
                 var node = nodes.FirstOrDefault(n => n.Path == hubPath);
                 return BuildReadView(host, node, viewMode, viewModeSubject, panelState, panelStateSubject,
-                    children ?? Array.Empty<MeshNode>(), commentNodes ?? Array.Empty<MeshNode>());
+                    children, commentNodes);
             });
     }
 
