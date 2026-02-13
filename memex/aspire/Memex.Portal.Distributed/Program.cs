@@ -21,6 +21,10 @@ builder.AddNpgsqlDataSource("meshweaver",
 // Add web portal services
 builder.ConfigureMemexServices();
 
+// Register embedding provider if configured (Cohere embed-v4 via Azure Foundry)
+var embeddingOptions = builder.Configuration.GetSection("Embedding").Get<EmbeddingOptions>() ?? new EmbeddingOptions();
+builder.Services.AddAzureFoundryEmbeddings(embeddingOptions);
+
 // Configure Orleans with Azure Table Storage (co-hosted silo + web)
 var address = AddressExtensions.CreateMeshAddress();
 builder.UseOrleansMeshServer(address, silo =>

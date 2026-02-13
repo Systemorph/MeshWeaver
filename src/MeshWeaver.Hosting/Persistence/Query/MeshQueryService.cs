@@ -29,8 +29,9 @@ public class MeshQueryService(IMeshQueryCore core, IMessageHub hub) : IMeshQuery
         string prefix,
         AutocompleteMode mode,
         int limit = 10,
+        string? contextPath = null,
         CancellationToken ct = default)
-        => core.AutocompleteAsync(basePath, prefix, Options, mode, limit, ct);
+        => core.AutocompleteAsync(basePath, prefix, Options, mode, limit, contextPath, ct);
 
     public IObservable<QueryResultChange<T>> ObserveQuery<T>(MeshQueryRequest request)
         => core.ObserveQuery<T>(request, Options);

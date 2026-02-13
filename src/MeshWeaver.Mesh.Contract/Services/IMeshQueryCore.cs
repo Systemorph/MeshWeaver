@@ -47,6 +47,7 @@ public interface IMeshQueryCore
     /// <param name="options">JSON serializer options for type polymorphism</param>
     /// <param name="mode">Ordering mode (PathFirst or RelevanceFirst)</param>
     /// <param name="limit">Maximum number of suggestions to return</param>
+    /// <param name="contextPath">Context path for proximity-based scoring (null for no proximity boost)</param>
     /// <param name="ct">Cancellation token</param>
     /// <returns>Suggestions ordered according to mode</returns>
     IAsyncEnumerable<QuerySuggestion> AutocompleteAsync(
@@ -55,6 +56,7 @@ public interface IMeshQueryCore
         JsonSerializerOptions options,
         AutocompleteMode mode,
         int limit = 10,
+        string? contextPath = null,
         CancellationToken ct = default);
 
     /// <summary>

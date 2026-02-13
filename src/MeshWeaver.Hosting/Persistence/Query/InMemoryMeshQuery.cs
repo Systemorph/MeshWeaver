@@ -108,6 +108,7 @@ public class InMemoryMeshQuery : IMeshQueryCore
                 if (_evaluator.Matches(node, parsedQuery))
                 {
                     var score = _evaluator.GetFuzzyScore(node, parsedQuery.TextSearch);
+                    score += (int)PathProximity.ComputeBoost(request.ContextPath, node.Path);
                     results.Add((node, score));
                 }
             }
@@ -118,6 +119,7 @@ public class InMemoryMeshQuery : IMeshQueryCore
                 if (_evaluator.Matches(obj, parsedQuery))
                 {
                     var score = _evaluator.GetFuzzyScore(obj, parsedQuery.TextSearch);
+                    score += (int)PathProximity.ComputeBoost(request.ContextPath, GetItemPath(obj));
                     results.Add((obj, score));
                 }
             }
@@ -132,6 +134,7 @@ public class InMemoryMeshQuery : IMeshQueryCore
                 if (_evaluator.Matches(child, parsedQuery))
                 {
                     var score = _evaluator.GetFuzzyScore(child, parsedQuery.TextSearch);
+                    score += (int)PathProximity.ComputeBoost(request.ContextPath, child.Path);
                     // Avoid duplicates
                     if (!results.Any(r => ReferenceEquals(r.Item, child)))
                         results.Add((child, score));
@@ -144,6 +147,7 @@ public class InMemoryMeshQuery : IMeshQueryCore
                     if (_evaluator.Matches(obj, parsedQuery))
                     {
                         var score = _evaluator.GetFuzzyScore(obj, parsedQuery.TextSearch);
+                        score += (int)PathProximity.ComputeBoost(request.ContextPath, GetItemPath(obj));
                         results.Add((obj, score));
                     }
                 }
@@ -168,6 +172,7 @@ public class InMemoryMeshQuery : IMeshQueryCore
                     if (_evaluator.Matches(child, parsedQuery))
                     {
                         var score = _evaluator.GetFuzzyScore(child, parsedQuery.TextSearch);
+                        score += (int)PathProximity.ComputeBoost(request.ContextPath, child.Path);
                         // Avoid duplicates
                         if (!results.Any(r => ReferenceEquals(r.Item, child)))
                             results.Add((child, score));
@@ -180,6 +185,7 @@ public class InMemoryMeshQuery : IMeshQueryCore
                         if (_evaluator.Matches(obj, parsedQuery))
                         {
                             var score = _evaluator.GetFuzzyScore(obj, parsedQuery.TextSearch);
+                            score += (int)PathProximity.ComputeBoost(request.ContextPath, GetItemPath(obj));
                             results.Add((obj, score));
                         }
                     }
@@ -196,6 +202,7 @@ public class InMemoryMeshQuery : IMeshQueryCore
                 if (_evaluator.Matches(descendant, parsedQuery))
                 {
                     var score = _evaluator.GetFuzzyScore(descendant, parsedQuery.TextSearch);
+                    score += (int)PathProximity.ComputeBoost(request.ContextPath, descendant.Path);
                     // Avoid duplicates
                     if (!results.Any(r => ReferenceEquals(r.Item, descendant)))
                         results.Add((descendant, score));
@@ -208,15 +215,16 @@ public class InMemoryMeshQuery : IMeshQueryCore
                     if (_evaluator.Matches(obj, parsedQuery))
                     {
                         var score = _evaluator.GetFuzzyScore(obj, parsedQuery.TextSearch);
+                        score += (int)PathProximity.ComputeBoost(request.ContextPath, GetItemPath(obj));
                         results.Add((obj, score));
                     }
                 }
             }
         }
 
-        // Order by fuzzy score (higher first) for text searches, otherwise preserve order
+        // Order by fuzzy score (higher first) for text searches or when proximity boost is active
         IEnumerable<object> orderedResults;
-        if (!string.IsNullOrEmpty(parsedQuery.TextSearch))
+        if (!string.IsNullOrEmpty(parsedQuery.TextSearch) || !string.IsNullOrEmpty(request.ContextPath))
         {
             orderedResults = results.OrderByDescending(r => r.Score).Select(r => r.Item);
         }
@@ -283,7 +291,7 @@ public class InMemoryMeshQuery : IMeshQueryCore
         JsonSerializerOptions options,
         int limit = 10,
         CancellationToken ct = default)
-        => AutocompleteAsync(basePath, prefix, options, null, AutocompleteMode.PathFirst, limit, ct);
+        => AutocompleteAsync(basePath, prefix, options, null, AutocompleteMode.PathFirst, limit, null, ct);
 
     /// <inheritdoc />
     public IAsyncEnumerable<QuerySuggestion> AutocompleteAsync(
@@ -292,8 +300,9 @@ public class InMemoryMeshQuery : IMeshQueryCore
         JsonSerializerOptions options,
         AutocompleteMode mode,
         int limit = 10,
+        string? contextPath = null,
         CancellationToken ct = default)
-        => AutocompleteAsync(basePath, prefix, options, null, mode, limit, ct);
+        => AutocompleteAsync(basePath, prefix, options, null, mode, limit, contextPath, ct);
 
     /// <summary>
     /// Autocomplete with user ID for access control filtering.
@@ -305,6 +314,7 @@ public class InMemoryMeshQuery : IMeshQueryCore
         string? userId,
         AutocompleteMode mode,
         int limit = 10,
+        string? contextPath = null,
         [EnumeratorCancellation] CancellationToken ct = default)
     {
         var normalizedPath = NormalizePath(basePath);
@@ -340,6 +350,8 @@ public class InMemoryMeshQuery : IMeshQueryCore
             {
                 score = 25; // Fuzzy match on name
             }
+
+            score += PathProximity.ComputeBoost(contextPath, node.Path);
 
             if (score > 0)
             {
