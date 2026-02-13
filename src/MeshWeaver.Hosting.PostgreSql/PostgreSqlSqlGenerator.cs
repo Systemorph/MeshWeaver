@@ -455,9 +455,34 @@ public class PostgreSqlSqlGenerator
 
     private string GenerateTextSearchClause(string textSearch)
     {
-        var paramName = $"@p{_paramIndex++}";
-        _parameters[paramName] = textSearch;
-        return $"to_tsvector('english', COALESCE(n.name,'') || ' ' || COALESCE(n.description,'') || ' ' || COALESCE(n.node_type,'')) @@ plainto_tsquery('english', {paramName})";
+        // Split into terms — ALL terms must match as substrings (mirrors InMemory QueryEvaluator behavior).
+        // Uses ILIKE for substring/prefix matching instead of plainto_tsquery which only matches full words.
+        var terms = textSearch.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        if (terms.Length == 0)
+            return "";
+
+        var textExpr = "COALESCE(n.name,'') || ' ' || COALESCE(n.path,'') || ' ' || COALESCE(n.description,'') || ' ' || COALESCE(n.node_type,'')";
+        var clauses = new List<string>();
+
+        foreach (var term in terms)
+        {
+            var paramName = $"@p{_paramIndex++}";
+            _parameters[paramName] = $"%{EscapeLikePattern(term)}%";
+            clauses.Add($"{textExpr} ILIKE {paramName}");
+        }
+
+        return clauses.Count == 1 ? clauses[0] : $"({string.Join(" AND ", clauses)})";
+    }
+
+    /// <summary>
+    /// Escapes special LIKE/ILIKE pattern characters (%, _, \) in user input.
+    /// </summary>
+    private static string EscapeLikePattern(string input)
+    {
+        return input
+            .Replace("\\", "\\\\")
+            .Replace("%", "\\%")
+            .Replace("_", "\\_");
     }
 
     private string GenerateAccessControlClause(string userId)

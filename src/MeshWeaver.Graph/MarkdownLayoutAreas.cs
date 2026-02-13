@@ -389,9 +389,18 @@ public static class MarkdownLayoutAreas
 
             repliesByParent.TryGetValue(comment.Id, out var replyNodes);
 
-            annotationsColumn = annotationsColumn.WithView(
-                BuildCommentAndReplies(host, node, rawContent, comment, commentNode.Path!, panelState, panelStateSubject,
-                    replyNodes ?? new List<MeshNode>()));
+            // If this top-level comment is being edited inline, show the edit form
+            if (commentNode.Path == panelState.EditingReplyPath)
+            {
+                annotationsColumn = annotationsColumn.WithView(
+                    BuildReplyEditArea(host, commentNode, panelState, panelStateSubject));
+            }
+            else
+            {
+                annotationsColumn = annotationsColumn.WithView(
+                    BuildCommentAndReplies(host, node, rawContent, comment, commentNode.Path!, panelState, panelStateSubject,
+                        replyNodes ?? new List<MeshNode>()));
+            }
         }
 
         // Hidden track change cards (Accept/Reject Blazor buttons as action targets for inline popover JS)
@@ -655,9 +664,10 @@ public static class MarkdownLayoutAreas
     }
 
     /// <summary>
-    /// Builds an inline edit form for a reply MeshNode.
-    /// Uses BuildPropertyOverview for auto-generated MarkdownEditor on the Text field.
-    /// Cancel deletes new (empty) replies; for existing replies just closes the form.
+    /// Builds an inline edit form for a comment/reply MeshNode.
+    /// Uses host.Edit with the Comment object directly (which has [Markdown] on Text).
+    /// Done persists via DataChangeRequest targeting the comment node's own address.
+    /// Cancel deletes new (empty) comments; for existing ones just closes the form.
     /// </summary>
     private static UiControl BuildReplyEditArea(
         LayoutAreaHost host,
@@ -666,7 +676,8 @@ public static class MarkdownLayoutAreas
         BehaviorSubject<AnnotationPanelState> panelStateSubject)
     {
         var replyComment = replyNode.Content as Comment;
-        var isNewReply = string.IsNullOrWhiteSpace(replyComment?.Text);
+        var replyDataId = $"CommentEdit_{replyNode.Path!.Replace("/", "_")}";
+        var isNewComment = string.IsNullOrWhiteSpace(replyComment?.Text);
 
         var form = Controls.Stack
             .WithStyle("margin: 4px 0; padding: 12px; background: var(--neutral-layer-2); border-radius: 6px; border-left: 3px solid var(--accent-fill-rest);");
@@ -685,10 +696,15 @@ public static class MarkdownLayoutAreas
                 <span style=""font-size: 0.8rem; color: var(--neutral-foreground-hint);"">{Graph.CommentsView.FormatTimeAgo(createdAt)}</span>
             </div>"));
 
-        // Property editor (auto-generates MarkdownEditorControl for [Markdown] Text field)
-        if (replyNode.Content != null)
+        // Editable text field — Comment has [Markdown] on Text, [Browsable(false)] on everything else
+        var editComment = replyComment ?? new Comment();
+        var editControl = host.Edit(editComment, replyDataId);
+        if (editControl != null)
         {
-            form = form.WithView(OverviewLayoutArea.BuildPropertyOverview(host, replyNode));
+            var editWrapper = Controls.Stack
+                .WithStyle("margin-bottom: 8px;")
+                .WithView(editControl);
+            form = form.WithView(editWrapper);
         }
 
         // Done/Cancel buttons
@@ -702,9 +718,9 @@ public static class MarkdownLayoutAreas
                 .WithStyle("padding: 6px 16px; font-size: 0.85rem;")
                 .WithClickAction(async _ =>
                 {
-                    if (isNewReply)
+                    if (isNewComment)
                     {
-                        // Delete the empty reply node that was just created
+                        // Delete the empty comment node that was just created
                         var meshCatalog = host.Hub.ServiceProvider.GetRequiredService<IMeshCatalog>();
                         await meshCatalog.DeleteNodeAsync(replyNode.Path!, recursive: false);
                     }
@@ -715,9 +731,25 @@ public static class MarkdownLayoutAreas
             Controls.Button("Done")
                 .WithAppearance(Appearance.Accent)
                 .WithStyle("padding: 6px 16px; font-size: 0.85rem;")
-                .WithClickAction(_ =>
+                .WithClickAction(async ctx =>
                 {
-                    // BuildPropertyOverview auto-saves via SetupAutoSave, so just close the editor
+                    var editedComment = await ctx.Host.Stream.GetDataAsync<Comment>(replyDataId);
+                    if (editedComment != null && !string.IsNullOrWhiteSpace(editedComment.Text))
+                    {
+                        // Merge edited text back into the full Comment (preserving Author, MarkerId, etc.)
+                        var accessService = host.Hub.ServiceProvider.GetService<AccessService>();
+                        var currentUser = accessService?.Context?.Name ?? "Unknown";
+                        var updatedComment = (replyComment ?? new Comment()) with
+                        {
+                            Author = currentUser,
+                            CreatedAt = DateTimeOffset.UtcNow,
+                            Text = editedComment.Text
+                        };
+                        var updatedNode = replyNode with { Content = updatedComment };
+                        // Save directly via persistence (comment hub may not be running)
+                        var persistence = host.Hub.ServiceProvider.GetRequiredService<IPersistenceService>();
+                        await persistence.SaveNodeAsync(updatedNode);
+                    }
                     panelStateSubject.OnNext(panelState with { EditingReplyPath = null });
                 }));
 
@@ -730,6 +762,8 @@ public static class MarkdownLayoutAreas
     /// Hidden by default; shown by JS when text is selected and the floating comment button is clicked.
     /// Creates a Comment MeshNode and switches to inline Edit mode.
     /// </summary>
+    private const string NewCommentFormDataId = "NewCommentForm";
+
     private static UiControl BuildNewCommentForm(
         LayoutAreaHost host,
         MeshNode? node,
@@ -748,6 +782,15 @@ public static class MarkdownLayoutAreas
         // Selected text display (filled by JS)
         form = form.WithView(Controls.Html(
             "<div class=\"new-comment-selected-text\" style=\"font-size: 0.85rem; padding: 8px 10px; background: rgba(59, 130, 246, 0.1); border-radius: 4px; margin-bottom: 8px; border-left: 2px solid #3b82f6; font-style: italic; display: none;\"></div>"));
+
+        // Text editor — Comment has [Markdown] on Text, [Browsable(false)] on everything else
+        var editControl = host.Edit(new Comment(), NewCommentFormDataId);
+        if (editControl != null)
+        {
+            form = form.WithView(Controls.Stack
+                .WithStyle("margin-bottom: 8px;")
+                .WithView(editControl));
+        }
 
         // Button row
         var buttonRow = Controls.Stack
@@ -769,23 +812,27 @@ public static class MarkdownLayoutAreas
                 .WithAppearance(Appearance.Accent)
                 .WithStyle("padding: 6px 16px; font-size: 0.85rem;")
                 .WithClass("new-comment-submit")
-                .WithClickAction(async _ =>
+                .WithClickAction(async ctx =>
                 {
                     if (node == null) return;
+
+                    // Read the comment text from the editor
+                    var editedComment = await ctx.Host.Stream.GetDataAsync<Comment>(NewCommentFormDataId);
+                    var commentText = editedComment?.Text ?? "";
 
                     var markerId = Guid.NewGuid().AsString();
                     var commentId = Guid.NewGuid().AsString();
                     var accessService = host.Hub.ServiceProvider.GetService<AccessService>();
                     var author = accessService?.Context?.Name ?? "Unknown";
 
-                    // Create Comment MeshNode with empty text (user edits via inline Edit area)
+                    // Create Comment MeshNode with the text from the editor
                     var comment = new Comment
                     {
                         Id = commentId,
                         NodePath = nodePath,
                         MarkerId = markerId,
                         Author = author,
-                        Text = "",
+                        Text = commentText,
                         Status = CommentStatus.Active
                     };
                     var commentNode = new MeshNode(commentId, nodePath)
@@ -794,12 +841,6 @@ public static class MarkdownLayoutAreas
                         NodeType = CommentNodeType.NodeType,
                         Content = comment
                     };
-
-                    // Set editing path BEFORE creating node so UI is ready when reactive stream delivers the update
-                    panelStateSubject.OnNext(panelStateSubject.Value with
-                    {
-                        EditingReplyPath = commentNode.Path
-                    });
 
                     var meshCatalog = host.Hub.ServiceProvider.GetRequiredService<IMeshCatalog>();
                     await meshCatalog.CreateNodeAsync(commentNode);
@@ -1651,7 +1692,6 @@ public static class MarkdownLayoutAreas
                 .WithDocumentId(hubPath)
                 .WithHeight("100%")
                 .WithMaxHeight("none")
-                .WithTrackChanges(false)
                 .WithPlaceholder("Start writing your markdown content...");
 
             var editorWrapper = Controls.Stack

@@ -237,6 +237,7 @@ public class CosmosSqlGeneratorTests
         sql.Should().Contain("CONTAINS(LOWER(c.name");
         sql.Should().Contain("CONTAINS(LOWER(c.description");
         sql.Should().Contain("CONTAINS(LOWER(c.nodeType");
+        sql.Should().Contain("CONTAINS(LOWER(c.path");
         sql.Should().Contain(" OR ");
         parameters["@p0"].Should().Be("laptop");
     }

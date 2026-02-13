@@ -81,9 +81,9 @@ public class SqlGeneratorTests
 
         var (sql, parameters) = gen.GenerateSelectQuery(query);
 
-        sql.Should().Contain("to_tsvector");
-        sql.Should().Contain("plainto_tsquery");
-        parameters.Values.Should().Contain("laptop");
+        sql.Should().Contain("ILIKE");
+        sql.Should().Contain("COALESCE(n.name,'')");
+        parameters.Values.Should().Contain("%laptop%");
     }
 
     [Fact]
