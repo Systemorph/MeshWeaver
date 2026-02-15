@@ -52,6 +52,22 @@
                         }
                         <FluentDivider Style="margin: 4px 0;" />
                         <FluentMenuItem OnClick="@(() => OpenCreateNodeDialogAsync(null))">Other...</FluentMenuItem>
+                        @if (HasCreatePermission)
+                        {
+                            <FluentDivider Style="margin: 4px 0;" />
+                            <FluentMenuItem OnClick="@NavigateToImportNodes">
+                                <FluentIcon Value="@(new Icons.Regular.Size16.ArrowImport())" Style="margin-right: 8px;" />
+                                Import Nodes
+                            </FluentMenuItem>
+                            @foreach (var collection in EditableCollections)
+                            {
+                                var col = collection;
+                                <FluentMenuItem OnClick="@(() => NavigateToImportContent(col.Name))">
+                                    <FluentIcon Value="@(new Icons.Regular.Size16.Folder())" Style="margin-right: 8px;" />
+                                    Import @(col.DisplayName ?? col.Name)
+                                </FluentMenuItem>
+                            }
+                        }
                     }
                 </FluentMenu>
                 <FluentButton Id="create-menu-anchor" Appearance="Appearance.Stealth"

@@ -3,6 +3,7 @@ using MeshWeaver.Mesh.Activity;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Hosting.Activity;
@@ -14,12 +15,14 @@ public static class ActivityTrackingExtensions
 {
     /// <summary>
     /// Adds user activity tracking to the persistence service.
-    /// Requires an IActivityStore to be registered (e.g., PostgreSqlActivityStore).
+    /// Falls back to InMemoryActivityStore if no IActivityStore has been registered.
     /// </summary>
     public static MeshBuilder AddActivityTracking(this MeshBuilder builder)
     {
         return builder.ConfigureServices(services =>
         {
+            // Ensure an IActivityStore is available (in-memory fallback if none registered)
+            services.TryAddSingleton<IActivityStore, InMemoryActivityStore>();
             // Use the decorator pattern manually: wrap the existing IPersistenceServiceCore
             // with ActivityTrackingPersistenceDecorator
             var descriptor = services.FirstOrDefault(d => d.ServiceType == typeof(IPersistenceServiceCore));

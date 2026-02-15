@@ -144,13 +144,15 @@ public partial class SearchBar : IAsyncDisposable
             case "ArrowDown":
                 if (suggestions.Length > 0)
                 {
-                    highlightedIndex = (highlightedIndex + 1) % suggestions.Length;
+                    showDropdown = true;
+                    highlightedIndex = highlightedIndex < 0 ? 0 : (highlightedIndex + 1) % suggestions.Length;
                 }
                 break;
 
             case "ArrowUp":
                 if (suggestions.Length > 0)
                 {
+                    showDropdown = true;
                     highlightedIndex = highlightedIndex <= 0
                         ? suggestions.Length - 1
                         : highlightedIndex - 1;
