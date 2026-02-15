@@ -1,8 +1,6 @@
-using MeshWeaver.AI;
-using MeshWeaver.ContentCollections;
+﻿using MeshWeaver.ContentCollections;
 using MeshWeaver.Data;
 using MeshWeaver.Domain;
-using MeshWeaver.Markdown;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
@@ -115,7 +113,8 @@ public static class GraphConfigurationExtensions
             // Node types are compiled on-demand via IMeshNodeCompilationService.
             // MeshCatalog loads NodeTypeConfiguration from compiled assemblies when nodes are accessed.
             // Content collections should be configured by the caller (e.g., MemexConfiguration.ConfigureMemexMesh).
-            builder.ConfigureHub(config => MeshNodeLayoutAreas.AddDefaultLayoutAreas(config)
+            builder.ConfigureHub(config => config
+                .AddDefaultLayoutAreas()
                 .AddContentCollections()
                 .AddEmbeddedResourceContentCollection("NodeTypeIcons",
                     typeof(GraphConfigurationExtensions).Assembly, "Icons")

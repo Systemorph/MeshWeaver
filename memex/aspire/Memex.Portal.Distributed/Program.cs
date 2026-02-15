@@ -41,9 +41,6 @@ builder.UseOrleansMeshServer(address, silo =>
 
 var app = builder.Build();
 
-// Initialize PostgreSQL schema and seed data
-await app.Services.InitializePostgreSqlSchemaAsync();
-
 app.MapDefaultEndpoints();
 app.StartMemexApplication<Memex.Portal.Shared.App>();
 
