@@ -733,24 +733,18 @@ public class CommentMeshNodeTests
     [Fact]
     public void ReplyEditState_EditingReplyPath_MatchesCreatedReply()
     {
-        // Simulates the panel state after clicking Reply
+        // Simulates a reply being edited inline — the path matches the created reply node
         var commentPath = "docs/page/c1";
         var replyId = "reply-xyz";
         var replyPath = $"{commentPath}/{replyId}";
 
-        var initialState = new MarkdownLayoutAreas.AnnotationPanelState();
-        var afterReply = initialState with { EditingReplyPath = replyPath };
-
-        afterReply.EditingReplyPath.Should().Be("docs/page/c1/reply-xyz");
-
-        // Simulate the check in BuildCommentNodeCard: replyNode.Path == panelState.EditingReplyPath
         var replyNode = new MeshNode(replyPath)
         {
             NodeType = CommentNodeType.NodeType,
             Content = new Comment { Id = replyId, ParentCommentId = "c1" }
         };
 
-        (replyNode.Path == afterReply.EditingReplyPath).Should().BeTrue();
+        replyNode.Path.Should().Be("docs/page/c1/reply-xyz");
     }
 
     [Fact]

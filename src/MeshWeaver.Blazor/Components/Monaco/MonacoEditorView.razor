@@ -38,6 +38,12 @@
     [Parameter]
     public EventCallback OnBlur { get; set; }
 
+    /// <summary>
+    /// Fires after the Monaco editor is fully initialized (JS module loaded, editor ready).
+    /// </summary>
+    [Parameter]
+    public EventCallback OnEditorReady { get; set; }
+
     [Parameter]
     public bool IsDisabled { get; set; }
 
@@ -177,6 +183,9 @@
             // Register completion provider if configured
             await TryRegisterCompletionProvider();
         }
+
+        // Notify parent that editor is fully ready
+        await OnEditorReady.InvokeAsync();
     }
 
     private async Task TryRegisterCompletionProvider()
@@ -399,18 +408,38 @@
 
     /// <summary>
     /// Updates annotation decorations (track changes highlighting) in the editor.
+    /// Accepts pre-computed ranges mapped to clean content offsets.
     /// </summary>
-    public async Task UpdateAnnotationDecorationsAsync()
+    public async Task UpdateAnnotationDecorationsAsync(object[]? ranges = null)
     {
         if (jsModule != null && isInitialized)
         {
             try
             {
-                await jsModule.InvokeVoidAsync("updateAnnotationDecorations", EditorId);
+                await jsModule.InvokeVoidAsync("updateAnnotationDecorations", EditorId, ranges);
             }
             catch (Exception ex)
             {
                 Logger.LogDebug(ex, "Error updating annotation decorations");
+            }
+        }
+    }
+
+    /// <summary>
+    /// Enables or disables track changes mode in the editor.
+    /// When enabled, edits are wrapped in annotation markers (insert/delete).
+    /// </summary>
+    public async Task SetTrackChangesModeAsync(bool enabled)
+    {
+        if (jsModule != null && isInitialized)
+        {
+            try
+            {
+                await jsModule.InvokeVoidAsync("setTrackChangesMode", EditorId, enabled);
+            }
+            catch (Exception ex)
+            {
+                Logger.LogDebug(ex, "Error setting track changes mode");
             }
         }
     }

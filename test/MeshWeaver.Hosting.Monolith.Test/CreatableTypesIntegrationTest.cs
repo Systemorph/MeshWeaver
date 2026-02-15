@@ -448,7 +448,7 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
             .AddData(data => data));
 
         var workspace = client.GetWorkspace();
-        var readReference = new LayoutAreaReference(MarkdownLayoutAreas.ReadArea);
+        var readReference = new LayoutAreaReference(MarkdownLayoutAreas.OverviewArea);
 
         Output.WriteLine($"Requesting Read layout for {nodeAddress}...");
         var readStream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(nodeAddress, readReference);

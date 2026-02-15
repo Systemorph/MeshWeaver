@@ -4,32 +4,39 @@ namespace MeshWeaver.Markdown.Collaboration;
 
 /// <summary>
 /// Parses and manipulates annotation markers embedded in markdown content.
-/// Markers follow the pattern: &lt;!--type:id--&gt;content&lt;!--/type:id--&gt;
+/// Supports both simple format: &lt;!--type:id--&gt;content&lt;!--/type:id--&gt;
+/// and extended format: &lt;!--type:id:author:date--&gt;content&lt;!--/type:id--&gt;
+/// The closing tag always uses just the id (no metadata).
 /// </summary>
 public static partial class MarkdownAnnotationParser
 {
     /// <summary>
-    /// Regex pattern for comment markers: &lt;!--comment:id--&gt;...&lt;!--/comment:id--&gt;
+    /// Regex pattern for comment markers. Captures id (group 1) and content (group 2).
+    /// Handles both simple and extended (with :author:date) opening tags.
     /// </summary>
-    [GeneratedRegex(@"<!--comment:([^-]+)-->(.*?)<!--/comment:\1-->", RegexOptions.Singleline)]
+    [GeneratedRegex(@"<!--comment:([^:-]+)(?::[^-]*)??-->(.*?)<!--/comment:\1-->", RegexOptions.Singleline)]
     private static partial Regex CommentMarkerRegex();
 
     /// <summary>
-    /// Regex pattern for insert markers: &lt;!--insert:id--&gt;...&lt;!--/insert:id--&gt;
+    /// Regex pattern for insert markers. Captures id (group 1) and content (group 2).
+    /// Handles both simple and extended (with :author:date) opening tags.
     /// </summary>
-    [GeneratedRegex(@"<!--insert:([^-]+)-->(.*?)<!--/insert:\1-->", RegexOptions.Singleline)]
+    [GeneratedRegex(@"<!--insert:([^:-]+)(?::[^-]*)??-->(.*?)<!--/insert:\1-->", RegexOptions.Singleline)]
     private static partial Regex InsertMarkerRegex();
 
     /// <summary>
-    /// Regex pattern for delete markers: &lt;!--delete:id--&gt;...&lt;!--/delete:id--&gt;
+    /// Regex pattern for delete markers. Captures id (group 1) and content (group 2).
+    /// Handles both simple and extended (with :author:date) opening tags.
     /// </summary>
-    [GeneratedRegex(@"<!--delete:([^-]+)-->(.*?)<!--/delete:\1-->", RegexOptions.Singleline)]
+    [GeneratedRegex(@"<!--delete:([^:-]+)(?::[^-]*)??-->(.*?)<!--/delete:\1-->", RegexOptions.Singleline)]
     private static partial Regex DeleteMarkerRegex();
 
     /// <summary>
     /// Regex pattern for any annotation marker.
+    /// Group 1: type, Group 2: id, Group 3: content.
+    /// Handles both simple and extended (with :author:date) opening tags.
     /// </summary>
-    [GeneratedRegex(@"<!--(comment|insert|delete):([^-]+)-->(.*?)<!--/\1:\2-->", RegexOptions.Singleline)]
+    [GeneratedRegex(@"<!--(comment|insert|delete):([^:-]+)(?::[^-]*)??-->(.*?)<!--/\1:\2-->", RegexOptions.Singleline)]
     private static partial Regex AnyMarkerRegex();
 
     /// <summary>
@@ -123,9 +130,11 @@ public static partial class MarkdownAnnotationParser
         if (annotation == null)
             return null;
 
-        // Calculate position of the actual text within the markers
-        var openingMarkerLength = $"<!--{annotation.Type.ToString().ToLower()}:{markerId}-->".Length;
-        var textStart = annotation.StartPosition + openingMarkerLength;
+        // The annotated text starts after the opening tag and before the closing tag.
+        // Compute opening tag length from the full match: fullMatch = openTag + annotatedText + closeTag
+        var closeTag = $"<!--/{annotation.Type.ToString().ToLower()}:{markerId}-->";
+        var openingTagLength = annotation.FullMatch.Length - annotation.AnnotatedText.Length - closeTag.Length;
+        var textStart = annotation.StartPosition + openingTagLength;
         var textEnd = textStart + annotation.AnnotatedText.Length;
 
         return (textStart, textEnd);
@@ -225,6 +234,135 @@ public static partial class MarkdownAnnotationParser
     }
 
     /// <summary>
+    /// Regex matching any individual opening or closing tag (not paired).
+    /// </summary>
+    [GeneratedRegex(@"<!--/?(comment|insert|delete):[^-]+-->")]
+    private static partial Regex AnyTagRegex();
+
+    [GeneratedRegex(@"<!--(comment|insert|delete):([^-]+)-->")]
+    private static partial Regex OpeningTagRegex();
+
+    [GeneratedRegex(@"<!--/(comment|insert|delete):([^-]+)-->")]
+    private static partial Regex ClosingTagRegex();
+
+    /// <summary>
+    /// Strips all markers and returns the clean content plus annotation ranges
+    /// mapped to positions in the clean content.
+    /// </summary>
+    public static (string CleanContent, CleanAnnotationRange[] Ranges) StripMarkersWithRanges(string content)
+    {
+        if (string.IsNullOrEmpty(content))
+            return (content ?? "", []);
+
+        var annotations = ExtractAllAnnotations(content);
+        var clean = StripAllMarkers(content);
+        var ranges = new List<CleanAnnotationRange>();
+
+        int cumulativeTagLength = 0;
+        foreach (var ann in annotations)
+        {
+            // Total tag overhead = full match length minus the annotated text length
+            // This correctly handles both simple (<!--type:id-->) and extended (<!--type:id:author:date-->) formats
+            var totalTagLength = ann.FullMatch.Length - ann.AnnotatedText.Length;
+
+            int cleanStart = ann.StartPosition - cumulativeTagLength;
+            int cleanEnd = cleanStart + ann.AnnotatedText.Length;
+
+            ranges.Add(new CleanAnnotationRange(
+                ann.Type.ToString().ToLower(),
+                ann.MarkerId,
+                cleanStart,
+                cleanEnd
+            ));
+
+            cumulativeTagLength += totalTagLength;
+        }
+
+        return (clean, ranges.ToArray());
+    }
+
+    /// <summary>
+    /// Reconstructs annotated content after an edit was made to the display (clean) content.
+    /// Maps the edit from clean-content positions back to annotated-content positions.
+    /// </summary>
+    public static string ReconstructAnnotatedContent(string annotated, string oldClean, string newClean)
+    {
+        if (oldClean == newClean) return annotated;
+        if (string.IsNullOrEmpty(annotated)) return newClean;
+
+        // Find common prefix
+        int prefixLen = 0;
+        int maxPrefix = Math.Min(oldClean.Length, newClean.Length);
+        while (prefixLen < maxPrefix && oldClean[prefixLen] == newClean[prefixLen])
+            prefixLen++;
+
+        // Find common suffix (not overlapping with prefix)
+        int suffixLen = 0;
+        int maxSuffix = Math.Min(oldClean.Length - prefixLen, newClean.Length - prefixLen);
+        while (suffixLen < maxSuffix &&
+               oldClean[oldClean.Length - 1 - suffixLen] == newClean[newClean.Length - 1 - suffixLen])
+            suffixLen++;
+
+        string insertedText = newClean.Substring(prefixLen, newClean.Length - prefixLen - suffixLen);
+
+        var map = BuildDisplayToAnnotatedMap(annotated);
+
+        // Map edit start to annotated position
+        int aStart = prefixLen < map.Length ? map[prefixLen] : annotated.Length;
+
+        // Map edit end (start of suffix in old clean) to annotated position
+        int delEnd = oldClean.Length - suffixLen;
+        int aEnd = delEnd > 0 && delEnd < map.Length ? map[delEnd]
+                 : delEnd >= map.Length ? annotated.Length
+                 : aStart;
+
+        var result = string.Concat(annotated.AsSpan(0, aStart), insertedText, annotated.AsSpan(aEnd));
+
+        return CleanupOrphanedTags(result);
+    }
+
+    /// <summary>
+    /// Builds a map from display character index to annotated character index.
+    /// </summary>
+    private static int[] BuildDisplayToAnnotatedMap(string annotated)
+    {
+        var tags = AnyTagRegex().Matches(annotated).OrderBy(m => m.Index).ToList();
+        var map = new List<int>();
+        int tagIdx = 0;
+
+        for (int i = 0; i < annotated.Length;)
+        {
+            if (tagIdx < tags.Count && i == tags[tagIdx].Index)
+            {
+                i += tags[tagIdx].Length;
+                tagIdx++;
+            }
+            else
+            {
+                map.Add(i);
+                i++;
+            }
+        }
+
+        return map.ToArray();
+    }
+
+    /// <summary>
+    /// Removes orphaned annotation tags (opening without closing or vice versa).
+    /// </summary>
+    private static string CleanupOrphanedTags(string content)
+    {
+        var openIds = new HashSet<string>(OpeningTagRegex().Matches(content).Select(m => m.Groups[2].Value));
+        var closeIds = new HashSet<string>(ClosingTagRegex().Matches(content).Select(m => m.Groups[2].Value));
+        var pairedIds = new HashSet<string>(openIds.Intersect(closeIds));
+
+        var result = OpeningTagRegex().Replace(content, m => pairedIds.Contains(m.Groups[2].Value) ? m.Value : "");
+        result = ClosingTagRegex().Replace(result, m => pairedIds.Contains(m.Groups[2].Value) ? m.Value : "");
+
+        return result;
+    }
+
+    /// <summary>
     /// Checks if content contains any annotation markers.
     /// </summary>
     public static bool HasAnnotations(string content)
@@ -316,3 +454,8 @@ public enum AnnotationType
     /// </summary>
     Delete
 }
+
+/// <summary>
+/// An annotation range mapped to positions in stripped (clean) content.
+/// </summary>
+public record CleanAnnotationRange(string Type, string MarkerId, int Start, int End);

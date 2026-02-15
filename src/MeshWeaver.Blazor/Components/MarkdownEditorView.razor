@@ -1,25 +1,32 @@
-@using MeshWeaver.Layout
-@using MeshWeaver.Layout.Client
-@using MeshWeaver.Data
-@using MeshWeaver.Data.Completion
 @using MeshWeaver.Blazor
 @using MeshWeaver.Blazor.Components.Monaco
+@using MeshWeaver.Data.Completion
+@using MeshWeaver.Layout.Client
 @using MeshWeaver.Markdown
 @using MeshWeaver.Markdown.Collaboration
 @using MeshWeaver.Messaging
 @using Microsoft.Extensions.Logging
-@using System.Reactive.Linq
-@using Microsoft.FluentUI.AspNetCore.Components
 @using MarkdownAnnotationType = MeshWeaver.Markdown.Collaboration.AnnotationType
 @namespace MeshWeaver.Blazor.Components
 @inherits BlazorView<MarkdownEditorControl, MarkdownEditorView>
 
+<link href="_content/MeshWeaver.Blazor/css/collaborative-annotations.css" rel="stylesheet" />
+
 <div class="collaborative-editor-container">
+    @if (HasAnnotations || TrackChangesActive)
+    {
+        <div class="track-changes-toggle" style="display: flex; align-items: center; gap: 8px; padding: 4px 8px;">
+            <FluentSwitch @bind-Value="@TrackChangesActive"
+                          @bind-Value:after="@OnTrackChangesToggled"
+                          Label="Track Changes" />
+        </div>
+    }
+
     @if (BoundShowCommentsPanel)
     {
         <div class="editor-main-content with-panel">
             <div class="editor-area">
-                @if (BoundTrackChangesEnabled)
+                @if (HasAnnotations)
                 {
                     <TrackChangesToolbar DocumentId="@BoundDocumentId"
                                           TrackedChanges="@TrackedChanges"
@@ -41,7 +48,8 @@
                                   CodeEditMode="true"
                                   CompletionProvider="@GetCompletionConfig()"
                                   AsyncCompletionCallback="@GetCompletionsAsync"
-                                  ValueChanged="@OnValueChanged" />
+                                  ValueChanged="@OnValueChanged"
+                                  OnEditorReady="@OnEditorReady" />
             </div>
             <CommentPanel DocumentId="@BoundDocumentId"
                           Comments="@Comments"
@@ -54,7 +62,7 @@
     {
         <div class="editor-main-content">
             <div class="editor-area">
-                @if (BoundTrackChangesEnabled)
+                @if (HasAnnotations)
                 {
                     <TrackChangesToolbar DocumentId="@BoundDocumentId"
                                           TrackedChanges="@TrackedChanges"
@@ -76,7 +84,8 @@
                                   CodeEditMode="true"
                                   CompletionProvider="@GetCompletionConfig()"
                                   AsyncCompletionCallback="@GetCompletionsAsync"
-                                  ValueChanged="@OnValueChanged" />
+                                  ValueChanged="@OnValueChanged"
+                                  OnEditorReady="@OnEditorReady" />
             </div>
         </div>
     }
@@ -99,7 +108,7 @@
     private static readonly TimeSpan AutoSaveThrottleInterval = TimeSpan.FromMilliseconds(500);
 
     // Bound properties
-    private string BoundValue = "";
+    private string BoundValue = "";  // Clean content (stripped of markers) — what Monaco displays
     private string BoundDocumentId = "";
     private string BoundHeight = "100%";
     private string BoundMaxHeight = "none";
@@ -111,10 +120,16 @@
     private string? BoundAutoSaveAddress;
     private string? BoundNodePath;
 
+    // Annotated content (with markers) — source of truth for annotations
+    private string AnnotatedContent = "";
+    private CleanAnnotationRange[] CurrentAnnotationRanges = [];
+
     // Collaborative editing state
     private List<RangeComment> Comments = new();
     private List<TrackedChange> TrackedChanges = new();
     private string RenderedPreview = "";
+    private bool HasAnnotations => TrackedChanges.Count > 0 || Comments.Count > 0;
+    private bool TrackChangesActive = false;
 
     // Data pointer for two-way binding
     private JsonPointerReference? ValuePointer;
@@ -139,7 +154,7 @@
                 .DataBind<string>(ValuePointer, DataContext)
                 .Subscribe(value =>
                 {
-                    if (value != null && value != BoundValue)
+                    if (value != null && value != AnnotatedContent)
                     {
                         // Check if we should apply this external update
                         // Rejects echoes of our own sync and updates during active local editing
@@ -147,7 +162,7 @@
                             return;
 
                         isUpdatingFromStream = true;
-                        BoundValue = value;
+                        SetAnnotatedContent(value);
                         UpdatePreview(value);
                         ExtractAnnotations(value);
 
@@ -157,9 +172,8 @@
                         InvokeAsync(async () =>
                         {
                             StateHasChanged();
-                            // Update Monaco decorations after render
                             if (editorRef != null)
-                                await editorRef.UpdateAnnotationDecorationsAsync();
+                                await editorRef.UpdateAnnotationDecorationsAsync(BuildJsRanges());
                         });
                         isUpdatingFromStream = false;
                     }
@@ -184,9 +198,23 @@
         var initialValue = GetInitialValue();
         if (!string.IsNullOrEmpty(initialValue))
         {
-            BoundValue = initialValue;
+            SetAnnotatedContent(initialValue);
             ExtractAnnotations(initialValue);
             UpdatePreview(initialValue);
+
+            // Auto-enable track changes if content contains annotations
+            if (HasAnnotations)
+                TrackChangesActive = true;
+        }
+    }
+
+    private async Task OnEditorReady()
+    {
+        if (editorRef != null && HasAnnotations)
+        {
+            await editorRef.UpdateAnnotationDecorationsAsync(BuildJsRanges());
+            if (TrackChangesActive)
+                await editorRef.SetTrackChangesModeAsync(true);
         }
     }
 
@@ -296,6 +324,33 @@
             .ToList();
     }
 
+    /// <summary>
+    /// Sets annotated content and computes the stripped display value + ranges.
+    /// </summary>
+    private void SetAnnotatedContent(string annotated)
+    {
+        AnnotatedContent = annotated;
+        var (clean, ranges) = MarkdownAnnotationParser.StripMarkersWithRanges(annotated);
+        BoundValue = clean;
+        CurrentAnnotationRanges = ranges;
+    }
+
+    /// <summary>
+    /// Builds JS-compatible annotation range objects for passing to Monaco decorations.
+    /// </summary>
+    private object[]? BuildJsRanges()
+    {
+        if (CurrentAnnotationRanges.Length == 0)
+            return null;
+
+        return CurrentAnnotationRanges.Select(r => (object)new
+        {
+            type = r.Type,
+            start = r.Start,
+            end = r.End
+        }).ToArray();
+    }
+
     private void UpdatePreview(string content)
     {
         if (string.IsNullOrEmpty(content))
@@ -308,43 +363,45 @@
         RenderedPreview = $"<pre>{System.Web.HttpUtility.HtmlEncode(cleanContent)}</pre>";
     }
 
-    private void OnValueChanged(string value)
+    private void OnValueChanged(string newDisplayValue)
     {
         // Don't write back if this change came from the stream subscription
         if (isUpdatingFromStream)
             return;
 
         // Only update if value actually changed
-        if (BoundValue == value)
+        if (BoundValue == newDisplayValue)
             return;
 
-        BoundValue = value;
-        ExtractAnnotations(value);
-        UpdatePreview(value);
+        // Reconstruct annotated content by mapping the edit back
+        var oldDisplay = BoundValue;
+        AnnotatedContent = MarkdownAnnotationParser.ReconstructAnnotatedContent(
+            AnnotatedContent, oldDisplay, newDisplayValue);
 
-        // Update Monaco decorations for track changes highlighting
-        if (editorRef != null && BoundTrackChangesEnabled)
-            _ = editorRef.UpdateAnnotationDecorationsAsync();
+        // Re-strip to update BoundValue and ranges
+        var (clean, ranges) = MarkdownAnnotationParser.StripMarkersWithRanges(AnnotatedContent);
+        BoundValue = clean;
+        CurrentAnnotationRanges = ranges;
 
-        // NOTE: We no longer call UpdatePointer immediately here.
-        // The pointer update is now handled in AutoSaveContent after throttling.
-        // This prevents the race condition where:
-        // 1. User types "H", UpdatePointer("H") sends to stream
-        // 2. User types "e", UpdatePointer("He") sends to stream
-        // 3. Stream echoes "H" back, overwriting "He" and losing characters
+        ExtractAnnotations(AnnotatedContent);
+        UpdatePreview(AnnotatedContent);
 
-        // Trigger throttled auto-save (which will also update the pointer)
-        autoSaveHandler?.OnValueChanged(value);
+        // Update Monaco decorations with new ranges
+        if (editorRef != null)
+            _ = editorRef.UpdateAnnotationDecorationsAsync(BuildJsRanges());
+
+        // Trigger throttled auto-save with annotated content
+        autoSaveHandler?.OnValueChanged(AnnotatedContent);
     }
 
     /// <summary>
     /// Auto-saves content by posting a DataChangeRequest to the target hub.
     /// Also updates the data pointer to sync with the stream.
+    /// Content passed here is the annotated content (with markers).
     /// </summary>
     private void AutoSaveContent(string content)
     {
-        // Update the pointer now that throttling is complete
-        // This is the only place we sync to the stream, preventing race conditions
+        // Update the pointer with annotated content (preserving markers)
         if (ValuePointer != null)
         {
             UpdatePointer(content, ValuePointer);
@@ -449,26 +506,33 @@
         }
     }
 
-    private async Task UpdateContent(string newContent)
+    private async Task OnTrackChangesToggled()
     {
-        BoundValue = newContent;
-        ExtractAnnotations(newContent);
-        UpdatePreview(newContent);
+        if (editorRef != null)
+        {
+            await editorRef.SetTrackChangesModeAsync(TrackChangesActive);
+        }
+    }
+
+    private async Task UpdateContent(string newAnnotatedContent)
+    {
+        SetAnnotatedContent(newAnnotatedContent);
+        ExtractAnnotations(newAnnotatedContent);
+        UpdatePreview(newAnnotatedContent);
 
         if (editorRef != null)
         {
-            await editorRef.SetValueAsync(newContent);
-            // Refresh decorations after content update
-            await editorRef.UpdateAnnotationDecorationsAsync();
+            await editorRef.SetValueAsync(BoundValue);
+            await editorRef.UpdateAnnotationDecorationsAsync(BuildJsRanges());
         }
 
         if (ValuePointer != null)
         {
-            UpdatePointer(newContent, ValuePointer);
+            UpdatePointer(newAnnotatedContent, ValuePointer);
         }
 
         // Auto-save immediately for track changes operations (no debounce)
-        AutoSaveContent(newContent);
+        AutoSaveContent(newAnnotatedContent);
 
         StateHasChanged();
     }

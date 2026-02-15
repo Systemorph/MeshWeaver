@@ -1,0 +1,125 @@
+.collab-md-container {
+    width: 100%;
+    padding: 24px 0;
+    background: var(--neutral-layer-1);
+    position: relative;
+}
+
+.collab-md-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 16px;
+    padding: 8px 12px;
+    background: var(--neutral-layer-2);
+    border-radius: 6px;
+    flex-wrap: wrap;
+}
+
+.collab-md-toolbar-separator {
+    width: 1px;
+    height: 20px;
+    background: var(--neutral-stroke-rest);
+    margin: 0 8px;
+}
+
+.collab-md-split {
+    display: flex;
+    gap: 24px;
+    align-items: flex-start;
+    position: relative;
+}
+
+.collab-md-content {
+    flex: 1;
+    min-width: 0;
+    max-width: 750px;
+    position: relative;
+    line-height: 1.7;
+    font-size: 1rem;
+}
+
+.collab-md-split:not(.with-sidebar) .collab-md-content {
+    max-width: 1100px;
+}
+
+.collab-md-sidebar {
+    flex: 0 0 340px;
+    min-width: 300px;
+    max-width: 380px;
+    position: relative;
+}
+
+/* Card styles */
+.collab-md-card-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 8px;
+}
+
+.collab-md-avatar {
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    color: white;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 600;
+    font-size: 14px;
+    flex-shrink: 0;
+}
+
+.collab-md-avatar-sm {
+    width: 20px;
+    height: 20px;
+    font-size: 10px;
+}
+
+.collab-md-card-meta {
+    display: flex;
+    flex-direction: column;
+}
+
+.collab-md-author {
+    font-weight: 600;
+    font-size: 0.9rem;
+    color: var(--neutral-foreground-rest);
+}
+
+.collab-md-time {
+    font-size: 0.75rem;
+    color: var(--neutral-foreground-hint);
+}
+
+.collab-md-quote {
+    font-size: 0.85rem;
+    color: var(--neutral-foreground-rest);
+    padding: 8px 10px;
+    border-radius: 4px;
+    margin-bottom: 8px;
+    border-left: 2px solid;
+    font-style: italic;
+}
+
+.collab-md-text {
+    font-size: 0.9rem;
+    color: var(--neutral-foreground-rest);
+    line-height: 1.5;
+    margin-bottom: 8px;
+}
+
+.collab-md-actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 8px;
+}
+
+.collab-md-reply {
+    padding: 6px 0;
+    margin-left: 8px;
+    border-left: 2px solid var(--neutral-stroke-rest);
+    padding-left: 10px;
+}
+

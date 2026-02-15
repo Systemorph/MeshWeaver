@@ -6,8 +6,6 @@ using MeshWeaver.Layout.Composition;
 using MeshWeaver.Layout.Domain;
 using MeshWeaver.Layout.DataBinding;
 using MeshWeaver.Mesh;
-using MeshWeaver.Mesh.Security;
-using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.Graph;
 
@@ -161,23 +159,8 @@ public static class OverviewLayoutArea
 
     private static bool CheckEditAccess(LayoutAreaHost host, MeshNode node)
     {
-        var baseEditable = true;
-
-        var securityService = host.Hub.ServiceProvider.GetService<ISecurityService>();
-        if (securityService != null)
-        {
-            var nodePath = node.Path;
-            try
-            {
-                var permissions = securityService.GetEffectivePermissionsAsync(nodePath).GetAwaiter().GetResult();
-                return permissions.HasFlag(Permission.Update);
-            }
-            catch
-            {
-                return baseEditable;
-            }
-        }
-
-        return baseEditable;
+        // Permission enforcement happens at save time (DataChangeRequest).
+        // Default to editable to avoid blocking the render pipeline.
+        return true;
     }
 }

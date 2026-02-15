@@ -241,9 +241,14 @@ export function initEditor(editorId, placeholder, dotNetRef, codeEditMode = fals
     // Register theme sync callback (only once, when first editor initializes)
     ensureThemeCallbackRegistered();
 
+    // Get the monaco editor instance via BlazorMonaco's registry (reliable lookup)
+    const editorInstance = window.blazorMonaco?.editor?.getEditor(editorId);
+
     // Store state for this editor
     editorState.set(editorId, {
         dotNetRef: dotNetRef,
+        editorInstance: editorInstance,
+        annotationDecorationIds: [],
         completionConfig: null,
         completionDisposable: null,
         codeEditMode: codeEditMode,
@@ -252,9 +257,6 @@ export function initEditor(editorId, placeholder, dotNetRef, codeEditMode = fals
 
     // Add placeholder styling
     updatePlaceholder(editorId, placeholder, showLineNumbers);
-
-    // Get the monaco editor instance
-    const editorInstance = monaco.editor.getEditors().find(e => e.getContainerDomNode()?.id === editorId);
 
     // Apply theme immediately to this editor instance to ensure correct colors
     // This is needed because the editor may be created before the global theme sync runs
@@ -377,9 +379,9 @@ function updatePlaceholder(editorId, placeholder, showLineNumbers = false) {
     placeholderEl.textContent = placeholder;
 
     // Check initial visibility
-    const editorInstance = monaco.editor.getEditors().find(e => e.getContainerDomNode()?.id === editorId);
-    if (editorInstance) {
-        const value = editorInstance.getValue();
+    const state = editorState.get(editorId);
+    if (state?.editorInstance) {
+        const value = state.editorInstance.getValue();
         updatePlaceholderVisibility(editorId, !value);
     }
 }
@@ -455,7 +457,7 @@ export function registerCompletionProvider(editorId, config) {
         triggerCharacters: triggerCharacters,
         provideCompletionItems: async (model, position) => {
             // Check if this model belongs to our editor
-            const editorInstance = monaco.editor.getEditors().find(e => e.getContainerDomNode()?.id === editorId);
+            const editorInstance = editorState.get(editorId)?.editorInstance;
             if (!editorInstance || editorInstance.getModel() !== model) {
                 // This completion request is not for our editor, skip it
                 return null;
@@ -591,7 +593,7 @@ export function isAutocompleteVisible(editorId) {
     }
 
     // Fallback: check editor contribution state
-    const editorInstance = monaco.editor.getEditors().find(e => e.getContainerDomNode()?.id === editorId);
+    const editorInstance = editorState.get(editorId)?.editorInstance;
     if (editorInstance) {
         try {
             const contribution = editorInstance.getContribution('editor.contrib.suggestController');
@@ -612,7 +614,7 @@ export function isAutocompleteVisible(editorId) {
 
 // Trigger the suggestion/autocomplete popup programmatically
 export function triggerSuggest(editorId) {
-    const editorInstance = monaco.editor.getEditors().find(e => e.getContainerDomNode()?.id === editorId);
+    const editorInstance = editorState.get(editorId)?.editorInstance;
     if (editorInstance) {
         // Trigger the suggest action
         editorInstance.trigger('keyboard', 'editor.action.triggerSuggest', {});
@@ -623,7 +625,7 @@ export function triggerSuggest(editorId) {
 
 // Set cursor position to end of content
 export function setCursorToEnd(editorId) {
-    const editorInstance = monaco.editor.getEditors().find(e => e.getContainerDomNode()?.id === editorId);
+    const editorInstance = editorState.get(editorId)?.editorInstance;
     if (editorInstance) {
         const model = editorInstance.getModel();
         if (model) {
@@ -640,75 +642,167 @@ export function setCursorToEnd(editorId) {
 // Annotation Decorations for Track Changes
 // =============================================================================
 
-// Regex patterns to find annotation markers in content
-const annotationPatterns = [
-    { regex: /<!--insert:([^:]+)(?::[^:]*:[^-]*)?(-->)([\s\S]*?)<!--\/insert:\1-->/g, type: 'insert' },
-    { regex: /<!--delete:([^:]+)(?::[^:]*:[^-]*)?(-->)([\s\S]*?)<!--\/delete:\1-->/g, type: 'delete' },
-    { regex: /<!--comment:([^:]+)(?::[^:]*:[^|]*(?:\|[^-]*)?)?(-->)([\s\S]*?)<!--\/comment:\1-->/g, type: 'comment' }
-];
+// Generate a short unique marker ID
+function generateMarkerId() {
+    return Date.now().toString(36) + Math.random().toString(36).substring(2, 6);
+}
 
 /**
- * Updates Monaco editor decorations to visually highlight annotation markers.
- * Inserts get green background, deletes get red strikethrough, comments get yellow highlight.
+ * Updates Monaco editor decorations to visually highlight annotation ranges.
+ * Accepts pre-computed ranges from C# (offsets in clean content).
+ * Each range: { type: 'insert'|'delete'|'comment', start: number, end: number }
  */
-export function updateAnnotationDecorations(editorId) {
-    const editorInstance = monaco.editor.getEditors().find(e => e.getContainerDomNode()?.id === editorId);
-    if (!editorInstance) return;
+export function updateAnnotationDecorations(editorId, ranges) {
+    const state = editorState.get(editorId);
+    if (!state?.editorInstance) return;
 
+    // If no ranges provided, keep existing decorations (no-op)
+    if (!Array.isArray(ranges)) return;
+
+    const editorInstance = state.editorInstance;
     const model = editorInstance.getModel();
     if (!model) return;
 
-    const content = model.getValue();
     const decorations = [];
 
-    for (const pattern of annotationPatterns) {
-        // Reset regex lastIndex for global patterns
-        pattern.regex.lastIndex = 0;
-        let match;
-        while ((match = pattern.regex.exec(content)) !== null) {
-            // Find the annotated text (group 3) position
-            const fullMatch = match[0];
-            const openTagEnd = match.index + fullMatch.indexOf(match[3]);
-            const textStart = openTagEnd;
-            const textEnd = textStart + match[3].length;
+    for (const range of ranges) {
+            const startPos = model.getPositionAt(range.start);
+            const endPos = model.getPositionAt(range.end);
 
-            const startPos = model.getPositionAt(textStart);
-            const endPos = model.getPositionAt(textEnd);
-
-            let className, glyphClassName;
-            switch (pattern.type) {
+            let className;
+            switch (range.type) {
                 case 'insert':
                     className = 'monaco-insert-decoration';
-                    glyphClassName = 'monaco-insert-glyph';
                     break;
                 case 'delete':
                     className = 'monaco-delete-decoration';
-                    glyphClassName = 'monaco-delete-glyph';
                     break;
                 case 'comment':
                     className = 'monaco-comment-decoration';
-                    glyphClassName = 'monaco-comment-glyph';
                     break;
+                default:
+                    continue;
             }
 
             decorations.push({
                 range: new monaco.Range(startPos.lineNumber, startPos.column, endPos.lineNumber, endPos.column),
                 options: {
                     inlineClassName: className,
-                    glyphMarginClassName: glyphClassName,
                     stickiness: monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges
                 }
             });
-        }
     }
 
     // Store decoration IDs on state for future delta updates
+    state.annotationDecorationIds = editorInstance.deltaDecorations(
+        state.annotationDecorationIds || [],
+        decorations
+    );
+}
+
+/**
+ * Enables or disables track changes mode for the editor.
+ * When enabled, new edits are wrapped in <!--insert:id--> markers
+ * and deletions of non-marker text are wrapped in <!--delete:id--> markers.
+ */
+export function setTrackChangesMode(editorId, enabled) {
     const state = editorState.get(editorId);
-    if (state) {
-        state.annotationDecorationIds = editorInstance.deltaDecorations(
-            state.annotationDecorationIds || [],
-            decorations
-        );
+    if (!state?.editorInstance) return;
+    const editorInstance = state.editorInstance;
+
+    state.trackChangesEnabled = enabled;
+
+    if (enabled && !state.trackChangesDisposable) {
+        state.trackChangesProcessing = false;
+
+        // Listen to content changes and wrap them in annotation markers
+        state.trackChangesDisposable = editorInstance.onDidChangeModelContent((e) => {
+            if (state.trackChangesProcessing || !state.trackChangesEnabled) return;
+
+            const model = editorInstance.getModel();
+            if (!model) return;
+
+            // Process each change in the event
+            const edits = [];
+            let needsUpdate = false;
+
+            // Process changes in reverse order to maintain position accuracy
+            const changes = [...e.changes].sort((a, b) => b.rangeOffset - a.rangeOffset);
+
+            for (const change of changes) {
+                const isInsertion = change.text.length > 0 && change.rangeLength === 0;
+                const isDeletion = change.text.length === 0 && change.rangeLength > 0;
+                const isReplacement = change.text.length > 0 && change.rangeLength > 0;
+
+                // Check if we're editing inside an existing annotation marker tag
+                const content = model.getValue();
+                const beforeChange = content.substring(Math.max(0, change.rangeOffset - 200), change.rangeOffset);
+                const isInsideTag = /<!--(?:insert|delete|comment):[^>]*$/.test(beforeChange) ||
+                                     /<!--\/(?:insert|delete|comment):[^>]*$/.test(beforeChange);
+                if (isInsideTag) continue;
+
+                const markerId = generateMarkerId();
+
+                if (isInsertion) {
+                    // Wrap inserted text in insert markers
+                    const insertedText = change.text;
+                    // Don't wrap if text is just whitespace or newline
+                    if (insertedText.trim().length === 0) continue;
+
+                    const pos = model.getPositionAt(change.rangeOffset);
+                    // Replace the just-inserted text with marker-wrapped version
+                    const endPos = model.getPositionAt(change.rangeOffset + insertedText.length);
+                    edits.push({
+                        range: new monaco.Range(pos.lineNumber, pos.column, endPos.lineNumber, endPos.column),
+                        text: `<!--insert:${markerId}-->${insertedText}<!--/insert:${markerId}-->`
+                    });
+                    needsUpdate = true;
+                } else if (isDeletion) {
+                    // Get the text that was deleted (from the original content before the change)
+                    const deletedText = content.substring(change.rangeOffset, change.rangeOffset + change.rangeLength);
+                    // Don't wrap if it's already a marker tag
+                    if (/^<!--\/?(?:insert|delete|comment):/.test(deletedText)) continue;
+                    // Don't wrap if text is just whitespace
+                    if (deletedText.trim().length === 0) continue;
+
+                    // Instead of deleting, insert a delete marker around the text
+                    // The text is already gone (the change already happened), so we insert the marker with the text
+                    const pos = model.getPositionAt(change.rangeOffset);
+                    edits.push({
+                        range: new monaco.Range(pos.lineNumber, pos.column, pos.lineNumber, pos.column),
+                        text: `<!--delete:${markerId}-->${deletedText}<!--/delete:${markerId}-->`
+                    });
+                    needsUpdate = true;
+                } else if (isReplacement) {
+                    // Replacement = deletion + insertion
+                    const deletedText = content.substring(change.rangeOffset, change.rangeOffset + change.rangeLength);
+                    if (/^<!--\/?(?:insert|delete|comment):/.test(deletedText)) continue;
+
+                    const delMarkerId = generateMarkerId();
+                    const insMarkerId = generateMarkerId();
+                    const pos = model.getPositionAt(change.rangeOffset);
+                    const endPos = model.getPositionAt(change.rangeOffset + change.text.length);
+                    edits.push({
+                        range: new monaco.Range(pos.lineNumber, pos.column, endPos.lineNumber, endPos.column),
+                        text: `<!--delete:${delMarkerId}-->${deletedText}<!--/delete:${delMarkerId}--><!--insert:${insMarkerId}-->${change.text}<!--/insert:${insMarkerId}-->`
+                    });
+                    needsUpdate = true;
+                }
+            }
+
+            if (needsUpdate && edits.length > 0) {
+                state.trackChangesProcessing = true;
+                try {
+                    editorInstance.executeEdits('track-changes', edits);
+                    // Decorations will be updated by C# after it processes the content change
+                } finally {
+                    state.trackChangesProcessing = false;
+                }
+            }
+        });
+    } else if (!enabled && state.trackChangesDisposable) {
+        state.trackChangesDisposable.dispose();
+        state.trackChangesDisposable = null;
     }
 }
 
@@ -717,14 +811,14 @@ export function updateAnnotationDecorations(editorId) {
  * Returns the line number if found, or 0 if not found.
  */
 export function navigateToAnnotation(editorId, markerId) {
-    const editorInstance = monaco.editor.getEditors().find(e => e.getContainerDomNode()?.id === editorId);
-    if (!editorInstance) return 0;
+    const state = editorState.get(editorId);
+    if (!state?.editorInstance) return 0;
+    const editorInstance = state.editorInstance;
 
     const model = editorInstance.getModel();
     if (!model) return 0;
 
     const content = model.getValue();
-    // Search for any annotation marker with this ID
     const markerRegex = new RegExp(`<!--(?:insert|delete|comment):${markerId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[^>]*-->`, 'g');
     const match = markerRegex.exec(content);
     if (!match) return 0;
