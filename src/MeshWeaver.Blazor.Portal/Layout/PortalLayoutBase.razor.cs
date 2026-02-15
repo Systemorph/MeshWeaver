@@ -2,10 +2,13 @@ using MeshWeaver.AI;
 using MeshWeaver.Blazor.Chat;
 using MeshWeaver.Blazor.Portal.Components;
 using MeshWeaver.Blazor.Portal.Resize;
+using MeshWeaver.ContentCollections;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.AspNetCore.Components;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.FluentUI.AspNetCore.Components;
 using Microsoft.JSInterop;
 
@@ -54,6 +57,14 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
     protected IReadOnlyList<CreatableTypeInfo> CreatableTypes => NavigationService.CreatableTypes;
     protected bool IsLoadingCreatableTypes => NavigationService.IsLoadingCreatableTypes;
 
+    // Permission check for import/create (cached for 5 minutes per path)
+    protected bool HasCreatePermission { get; private set; } = true;
+    private readonly Dictionary<string, (bool hasCreate, DateTime expiresAt)> _permissionCache = new();
+    private static readonly TimeSpan PermissionCacheDuration = TimeSpan.FromMinutes(5);
+
+    // Editable content collections for import menu
+    protected IReadOnlyList<ContentCollectionConfig> EditableCollections { get; private set; } = [];
+
     private ChatSidePanel? chatPanel;
     private IJSObjectReference? jsModule;
     private DotNetObjectReference<PortalLayoutBase>? dotNetRef;
@@ -76,9 +87,62 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
         InvokeAsync(StateHasChanged);
     }
 
-    protected void ToggleCreateMenu()
+    private async Task CheckCreatePermissionAsync()
+    {
+        var currentPath = NavigationService.CurrentNamespace ?? "";
+
+        // Check cache
+        if (_permissionCache.TryGetValue(currentPath, out var cached) && cached.expiresAt > DateTime.UtcNow)
+        {
+            HasCreatePermission = cached.hasCreate;
+            return;
+        }
+
+        HasCreatePermission = true; // Default: allow if no security service
+        var securityService = Hub.ServiceProvider.GetService(typeof(ISecurityService)) as ISecurityService;
+        if (securityService != null)
+        {
+            try
+            {
+                var permissions = await securityService.GetEffectivePermissionsAsync(currentPath);
+                HasCreatePermission = permissions.HasFlag(Permission.Create);
+            }
+            catch
+            {
+                HasCreatePermission = true; // Fallback: allow on error
+            }
+        }
+
+        _permissionCache[currentPath] = (HasCreatePermission, DateTime.UtcNow + PermissionCacheDuration);
+    }
+
+    protected async Task ToggleCreateMenu()
     {
         isCreateMenuOpen = !isCreateMenuOpen;
+
+        if (isCreateMenuOpen)
+        {
+            // 1) Check create permission (async, cached)
+            await CheckCreatePermissionAsync();
+
+            // 2) Load creatable types if we have create permission
+            if (HasCreatePermission)
+            {
+                await NavigationService.EnsureCreatableTypesLoadedAsync();
+                LoadEditableCollections();
+            }
+        }
+    }
+
+    private void LoadEditableCollections()
+    {
+        var contentService = Hub.ServiceProvider.GetService<IContentService>();
+        if (contentService != null)
+        {
+            EditableCollections = contentService.GetAllCollectionConfigs()
+                .Where(c => c.IsEditable)
+                .ToList();
+        }
     }
 
     /// <summary>
@@ -108,6 +172,32 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
         var result = await dialog.Result;
 
         // Dialog handles navigation on success
+    }
+
+    /// <summary>
+    /// Navigates to the Import Nodes page for the current namespace.
+    /// </summary>
+    protected void NavigateToImportNodes()
+    {
+        isCreateMenuOpen = false;
+        var currentPath = NavigationService.CurrentNamespace ?? "";
+        var importUrl = string.IsNullOrEmpty(currentPath)
+            ? "/Import?target=nodes"
+            : $"/{currentPath}/Import?target=nodes";
+        NavigationManager.NavigateTo(importUrl);
+    }
+
+    /// <summary>
+    /// Navigates to the Files page for a specific content collection.
+    /// </summary>
+    protected void NavigateToImportContent(string collectionName)
+    {
+        isCreateMenuOpen = false;
+        var currentPath = NavigationService.CurrentNamespace ?? "";
+        var filesUrl = string.IsNullOrEmpty(currentPath)
+            ? $"/Files?collection={Uri.EscapeDataString(collectionName)}"
+            : $"/{currentPath}/Files?collection={Uri.EscapeDataString(collectionName)}";
+        NavigationManager.NavigateTo(filesUrl);
     }
 
     /// <summary>

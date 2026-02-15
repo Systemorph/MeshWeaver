@@ -54,21 +54,44 @@ public class PostgreSqlMeshQuery : IMeshQueryCore
 
         parsedQuery = parsedQuery with { Path = effectivePath, Scope = effectiveScope };
 
-        var count = 0;
-        var skip = request.Skip ?? 0;
+        // When ContextPath is set, buffer results to apply proximity re-ranking
+        if (!string.IsNullOrEmpty(request.ContextPath))
+        {
+            var buffered = new List<(MeshNode Node, double Score)>();
+            await foreach (var node in _adapter.QueryNodesAsync(parsedQuery, options, request.UserId, ct: ct))
+            {
+                var boost = PathProximity.ComputeBoost(request.ContextPath, node.Path);
+                buffered.Add((node, boost));
+            }
+
+            var skip = request.Skip ?? 0;
+            var count = 0;
+            foreach (var (node, _) in buffered.OrderByDescending(b => b.Score))
+            {
+                if (skip > 0) { skip--; continue; }
+                yield return node;
+                count++;
+                if (parsedQuery.Limit.HasValue && count >= parsedQuery.Limit.Value)
+                    yield break;
+            }
+            yield break;
+        }
+
+        var skipOrig = request.Skip ?? 0;
+        var countOrig = 0;
 
         await foreach (var node in _adapter.QueryNodesAsync(parsedQuery, options, request.UserId, ct: ct))
         {
-            if (skip > 0)
+            if (skipOrig > 0)
             {
-                skip--;
+                skipOrig--;
                 continue;
             }
 
             yield return node;
 
-            count++;
-            if (parsedQuery.Limit.HasValue && count >= parsedQuery.Limit.Value)
+            countOrig++;
+            if (parsedQuery.Limit.HasValue && countOrig >= parsedQuery.Limit.Value)
                 yield break;
         }
     }
@@ -79,7 +102,7 @@ public class PostgreSqlMeshQuery : IMeshQueryCore
         JsonSerializerOptions options,
         int limit = 10,
         CancellationToken ct = default)
-        => AutocompleteAsync(basePath, prefix, options, AutocompleteMode.PathFirst, limit, ct);
+        => AutocompleteAsync(basePath, prefix, options, AutocompleteMode.PathFirst, limit, null, ct);
 
     public async IAsyncEnumerable<QuerySuggestion> AutocompleteAsync(
         string basePath,
@@ -87,6 +110,7 @@ public class PostgreSqlMeshQuery : IMeshQueryCore
         JsonSerializerOptions options,
         AutocompleteMode mode,
         int limit = 10,
+        string? contextPath = null,
         [EnumeratorCancellation] CancellationToken ct = default)
     {
         var normalizedPrefix = (prefix ?? "").ToLowerInvariant();
@@ -124,8 +148,10 @@ public class PostgreSqlMeshQuery : IMeshQueryCore
             else if ((node.Path ?? "").Contains(normalizedPrefix, StringComparison.OrdinalIgnoreCase))
                 score = 30;
 
+            score += PathProximity.ComputeBoost(contextPath, node.Path);
+
             if (score > 0 || string.IsNullOrEmpty(normalizedPrefix))
-                suggestions.Add(new QuerySuggestion(node.Path ?? "", name, node.NodeType, score));
+                suggestions.Add(new QuerySuggestion(node.Path ?? "", name, node.NodeType, score, node.Icon));
         }
 
         IEnumerable<QuerySuggestion> ordered = mode switch

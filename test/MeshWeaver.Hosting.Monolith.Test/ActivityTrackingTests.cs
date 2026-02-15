@@ -31,7 +31,7 @@ public class ActivityTrackingTests(ITestOutputHelper output) : MonolithMeshTestB
         NullLogger<ActivityTrackingPersistenceDecorator>.Instance);
     private JsonSerializerOptions JsonOptions => Mesh.ServiceProvider.GetRequiredService<IMessageHub>().JsonSerializerOptions;
 
-    [Fact]
+    [Fact(Timeout = 10000)]
     public async Task GetNodeAsync_TracksReadActivity()
     {
         // Arrange
@@ -61,7 +61,7 @@ public class ActivityTrackingTests(ITestOutputHelper output) : MonolithMeshTestB
         activity.AccessCount.Should().Be(1);
     }
 
-    [Fact]
+    [Fact(Timeout = 10000)]
     public async Task SaveNodeAsync_TracksWriteActivity()
     {
         // Arrange
@@ -84,7 +84,7 @@ public class ActivityTrackingTests(ITestOutputHelper output) : MonolithMeshTestB
         activity.ActivityType.Should().Be(ActivityType.Write);
     }
 
-    [Fact]
+    [Fact(Timeout = 10000)]
     public async Task MultipleAccesses_IncrementsAccessCount()
     {
         // Arrange
@@ -105,7 +105,7 @@ public class ActivityTrackingTests(ITestOutputHelper output) : MonolithMeshTestB
         activities.First().AccessCount.Should().Be(3);
     }
 
-    [Fact]
+    [Fact(Timeout = 10000)]
     public async Task NoUserContext_DoesNotTrackActivity()
     {
         // Arrange - no user context set
@@ -121,7 +121,7 @@ public class ActivityTrackingTests(ITestOutputHelper output) : MonolithMeshTestB
         activities.Should().BeEmpty();
     }
 
-    [Fact]
+    [Fact(Timeout = 10000)]
     public async Task ActivityPaths_NotTracked()
     {
         // Arrange
@@ -138,7 +138,7 @@ public class ActivityTrackingTests(ITestOutputHelper output) : MonolithMeshTestB
         activities.Should().BeEmpty();
     }
 
-    [Fact]
+    [Fact(Timeout = 10000)]
     public async Task ActivityRecords_CanBeQueried_FromPartition()
     {
         // Arrange
@@ -176,7 +176,7 @@ public class ActivityTrackingTests(ITestOutputHelper output) : MonolithMeshTestB
         activityRecords.Last().AccessCount.Should().Be(1);
     }
 
-    [Fact]
+    [Fact(Timeout = 10000)]
     public async Task ActivityRecords_OrderByLastAccessedAt_ReturnsCorrectOrder()
     {
         // Arrange
@@ -223,7 +223,7 @@ public class CatalogFallbackTests(ITestOutputHelper output) : MonolithMeshTestBa
 {
     private JsonSerializerOptions JsonOptions => Mesh.ServiceProvider.GetRequiredService<IMessageHub>().JsonSerializerOptions;
 
-    [Fact]
+    [Fact(Timeout = 10000)]
     public async Task Catalog_NoActivity_FallsBackToActualNodes()
     {
         // Arrange - create persistence with nodes but no activity
@@ -253,7 +253,7 @@ public class CatalogFallbackTests(ITestOutputHelper output) : MonolithMeshTestBa
         results.Select(n => n.Name).Should().Contain(["Acme", "Contoso"]);
     }
 
-    [Fact]
+    [Fact(Timeout = 10000)]
     public async Task Catalog_WithActivity_CanLoadNodesFromActivityPaths()
     {
         // Arrange
@@ -312,7 +312,7 @@ public class CatalogFallbackTests(ITestOutputHelper output) : MonolithMeshTestBa
         nodes[2].Name.Should().Be("Beta"); // First accessed
     }
 
-    [Fact]
+    [Fact(Timeout = 10000)]
     public async Task Catalog_ActivityChangesOrder_AfterNewAccess()
     {
         // Arrange
@@ -373,7 +373,7 @@ public class CatalogSearchAndPaginationTests(ITestOutputHelper output) : Monolit
 {
     private JsonSerializerOptions JsonOptions => Mesh.ServiceProvider.GetRequiredService<IMessageHub>().JsonSerializerOptions;
 
-    [Fact]
+    [Fact(Timeout = 10000)]
     public async Task Catalog_SearchWithQuery_FiltersResults()
     {
         // Arrange
@@ -408,7 +408,7 @@ public class CatalogSearchAndPaginationTests(ITestOutputHelper output) : Monolit
         results.First().Name.Should().Be("Acme Corporation");
     }
 
-    [Fact]
+    [Fact(Timeout = 10000)]
     public async Task Catalog_TextSearch_FiltersResults()
     {
         // Arrange
@@ -439,7 +439,7 @@ public class CatalogSearchAndPaginationTests(ITestOutputHelper output) : Monolit
         results.First().Name.Should().Be("Annual Report 2024");
     }
 
-    [Fact]
+    [Fact(Timeout = 10000)]
     public async Task Catalog_Pagination_LoadsMoreItems()
     {
         // Arrange
@@ -477,7 +477,7 @@ public class CatalogSearchAndPaginationTests(ITestOutputHelper output) : Monolit
         allItems.Should().HaveCount(10);
     }
 
-    [Fact]
+    [Fact(Timeout = 10000)]
     public async Task Catalog_HasMore_DetectedCorrectly()
     {
         // Arrange
@@ -512,7 +512,7 @@ public class CatalogSearchAndPaginationTests(ITestOutputHelper output) : Monolit
         results.Should().HaveCount(3);
     }
 
-    [Fact]
+    [Fact(Timeout = 10000)]
     public async Task Catalog_ActivityRecords_CanBeFilteredByNodeType()
     {
         // Arrange

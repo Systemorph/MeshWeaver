@@ -162,7 +162,7 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
     /// <summary>
     /// Test that markdown content with embedded comment markers can be parsed.
     /// </summary>
-    [Fact]
+    [Fact(Timeout = 15000)]
     public void MarkdownAnnotationParser_ExtractsCommentsFromContent()
     {
         var content = "This is <!--comment:c1-->highlighted text<!--/comment:c1--> with a comment.";
@@ -177,7 +177,7 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
     /// <summary>
     /// Test that markdown content with track change markers can be parsed.
     /// </summary>
-    [Fact]
+    [Fact(Timeout = 15000)]
     public void MarkdownAnnotationParser_ExtractsTrackChangesFromContent()
     {
         var content = "Here is <!--insert:i1-->newly inserted<!--/insert:i1--> and <!--delete:d1-->deleted<!--/delete:d1--> text.";
@@ -197,7 +197,7 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
     /// <summary>
     /// Test that accepting an insertion removes markers but keeps text.
     /// </summary>
-    [Fact]
+    [Fact(Timeout = 15000)]
     public void MarkdownAnnotationParser_AcceptInsertion_RemovesMarkersKeepsText()
     {
         var content = "Hello <!--insert:i1-->beautiful <!--/insert:i1-->world!";
@@ -210,7 +210,7 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
     /// <summary>
     /// Test that rejecting an insertion removes markers and text.
     /// </summary>
-    [Fact]
+    [Fact(Timeout = 15000)]
     public void MarkdownAnnotationParser_RejectInsertion_RemovesMarkersAndText()
     {
         var content = "Hello <!--insert:i1-->ugly <!--/insert:i1-->world!";
@@ -223,7 +223,7 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
     /// <summary>
     /// Test that accepting a deletion removes markers and text.
     /// </summary>
-    [Fact]
+    [Fact(Timeout = 15000)]
     public void MarkdownAnnotationParser_AcceptDeletion_RemovesMarkersAndText()
     {
         var content = "Hello <!--delete:d1-->ugly <!--/delete:d1-->world!";
@@ -236,7 +236,7 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
     /// <summary>
     /// Test that rejecting a deletion removes markers but keeps text.
     /// </summary>
-    [Fact]
+    [Fact(Timeout = 15000)]
     public void MarkdownAnnotationParser_RejectDeletion_RemovesMarkersKeepsText()
     {
         var content = "Hello <!--delete:d1-->beautiful <!--/delete:d1-->world!";
@@ -249,7 +249,7 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
     /// <summary>
     /// Test that stripping all markers produces clean markdown.
     /// </summary>
-    [Fact]
+    [Fact(Timeout = 15000)]
     public void MarkdownAnnotationParser_StripAllMarkers_ProducesCleanMarkdown()
     {
         var content = "<!--comment:c1-->Hello<!--/comment:c1--> <!--insert:i1-->beautiful<!--/insert:i1--> <!--delete:d1-->ugly<!--/delete:d1--> world";
@@ -262,7 +262,7 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
     /// <summary>
     /// Test that AnnotationMarkdownExtension transforms markers to HTML spans.
     /// </summary>
-    [Fact]
+    [Fact(Timeout = 15000)]
     public void AnnotationMarkdownExtension_TransformAnnotations_CreatesSpans()
     {
         var content = "This is <!--comment:c1-->highlighted text<!--/comment:c1--> with a comment.";
@@ -276,33 +276,35 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
     /// <summary>
     /// Test that AnnotationMarkdownExtension transforms insert markers.
     /// </summary>
-    [Fact]
+    [Fact(Timeout = 15000)]
     public void AnnotationMarkdownExtension_TransformAnnotations_CreatesInsertSpans()
     {
         var content = "Here is <!--insert:i1-->newly inserted<!--/insert:i1--> text.";
 
         var result = AnnotationMarkdownExtension.TransformAnnotations(content);
 
-        result.Should().Contain("<span class=\"track-insert\" data-change-id=\"i1\">newly inserted</span>");
+        result.Should().Contain("<span class=\"track-insert\" data-change-id=\"i1\">newly inserted");
+        result.Should().Contain("Inserted by Unknown");
     }
 
     /// <summary>
     /// Test that AnnotationMarkdownExtension transforms delete markers.
     /// </summary>
-    [Fact]
+    [Fact(Timeout = 15000)]
     public void AnnotationMarkdownExtension_TransformAnnotations_CreatesDeleteSpans()
     {
         var content = "Text <!--delete:d1-->was deleted<!--/delete:d1--> here.";
 
         var result = AnnotationMarkdownExtension.TransformAnnotations(content);
 
-        result.Should().Contain("<span class=\"track-delete\" data-change-id=\"d1\">was deleted</span>");
+        result.Should().Contain("<span class=\"track-delete\" data-change-id=\"d1\">was deleted");
+        result.Should().Contain("Deleted by Unknown");
     }
 
     /// <summary>
     /// Test that AnnotationMarkdownExtension handles mixed annotations.
     /// </summary>
-    [Fact]
+    [Fact(Timeout = 15000)]
     public void AnnotationMarkdownExtension_TransformAnnotations_HandlesMixedAnnotations()
     {
         var content = "<!--comment:c1-->Hello<!--/comment:c1--> <!--insert:i1-->beautiful<!--/insert:i1--> <!--delete:d1-->ugly<!--/delete:d1--> world";
@@ -322,7 +324,7 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
     /// <summary>
     /// Test that the coordinator can handle concurrent inserts from multiple users.
     /// </summary>
-    [Fact]
+    [Fact(Timeout = 15000)]
     public void CollaborativeEditingCoordinator_ConcurrentInserts_BothApplied()
     {
         var coordinator = new CollaborativeEditingCoordinator();
@@ -363,7 +365,7 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
     /// <summary>
     /// Test that the coordinator tracks session presence.
     /// </summary>
-    [Fact]
+    [Fact(Timeout = 15000)]
     public void CollaborativeEditingCoordinator_TracksSessionPresence()
     {
         var coordinator = new CollaborativeEditingCoordinator();
@@ -398,7 +400,7 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
     /// <summary>
     /// Test that the coordinator updates cursor positions.
     /// </summary>
-    [Fact]
+    [Fact(Timeout = 15000)]
     public void CollaborativeEditingCoordinator_UpdatesCursorPositions()
     {
         var coordinator = new CollaborativeEditingCoordinator();
@@ -423,7 +425,7 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
     /// <summary>
     /// Test that the coordinator maintains vector clock for conflict detection.
     /// </summary>
-    [Fact]
+    [Fact(Timeout = 15000)]
     public void CollaborativeEditingCoordinator_MaintainsVectorClock()
     {
         var coordinator = new CollaborativeEditingCoordinator();
@@ -560,7 +562,7 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
     /// Test that data: self-reference (empty path) parses to null Id.
     /// This should trigger showing the current node's data (the MeshNode itself).
     /// </summary>
-    [Fact]
+    [Fact(Timeout = 15000)]
     public void DataSelfReference_ParsesCorrectly()
     {
         var markdown = "@@MeshWeaver/Documentation/DataMesh/CollaborativeEditing/data:";
@@ -579,7 +581,7 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
     /// Test that data:TypeName parses correctly for data type references.
     /// Example: @Systemorph/data:Organization should reference Organization type.
     /// </summary>
-    [Fact]
+    [Fact(Timeout = 15000)]
     public void DataTypeReference_ParsesCorrectly()
     {
         var markdown = "@Systemorph/data:Organization";
@@ -597,7 +599,7 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
     /// <summary>
     /// Test that keyword without colon parses correctly (e.g., @Systemorph/data).
     /// </summary>
-    [Fact]
+    [Fact(Timeout = 15000)]
     public void KeywordWithoutColon_Data_ParsesCorrectly()
     {
         var markdown = "@Systemorph/data";
@@ -615,7 +617,7 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
     /// <summary>
     /// Test that keyword without colon with path parses correctly (e.g., @Systemorph/data/Organization).
     /// </summary>
-    [Fact]
+    [Fact(Timeout = 15000)]
     public void KeywordWithoutColon_DataWithPath_ParsesCorrectly()
     {
         var markdown = "@Systemorph/data/Organization";
@@ -633,7 +635,7 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
     /// <summary>
     /// Test that schema without colon parses correctly.
     /// </summary>
-    [Fact]
+    [Fact(Timeout = 15000)]
     public void KeywordWithoutColon_Schema_ParsesCorrectly()
     {
         var markdown = "@@MeshWeaver/Documentation/DataMesh/UnifiedPath/schema";
@@ -652,7 +654,7 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
     /// Test that model without colon parses correctly.
     /// Note: Content collections require colon syntax (content:), unlike reserved keywords.
     /// </summary>
-    [Fact]
+    [Fact(Timeout = 15000)]
     public void KeywordWithoutColon_Model_ParsesCorrectly()
     {
         var markdown = "@@Systemorph/Marketing/model";
@@ -807,7 +809,7 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
     /// Test that data: prefix with colon but no path returns the MeshNode (self-reference).
     /// Syntax: @address/data: (with colon, nothing after)
     /// </summary>
-    [Fact]
+    [Fact(Timeout = 15000)]
     public void DataColonSelfReference_ParsesCorrectly()
     {
         var markdown = "@@MeshWeaver/Documentation/DataMesh/UnifiedPath/data:";
@@ -826,7 +828,7 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
     /// Test that schema: prefix with colon but no path returns self-reference.
     /// Syntax: @address/schema:
     /// </summary>
-    [Fact]
+    [Fact(Timeout = 15000)]
     public void SchemaColonSelfReference_ParsesCorrectly()
     {
         var markdown = "@@MeshWeaver/Documentation/DataMesh/UnifiedPath/schema:";
@@ -845,7 +847,7 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
     /// Test that content: prefix with colon but no path returns self-reference (icon).
     /// Syntax: @address/content:
     /// </summary>
-    [Fact]
+    [Fact(Timeout = 15000)]
     public void ContentColonSelfReference_ParsesCorrectly()
     {
         var markdown = "@@MeshWeaver/Documentation/DataMesh/UnifiedPath/content:";
@@ -864,7 +866,7 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
     /// Test that model: prefix with colon but no path returns self-reference.
     /// Syntax: @address/model:
     /// </summary>
-    [Fact]
+    [Fact(Timeout = 15000)]
     public void ModelColonSelfReference_ParsesCorrectly()
     {
         var markdown = "@@MeshWeaver/Documentation/DataMesh/UnifiedPath/model:";
@@ -923,7 +925,7 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
     /// Test that parsing Interactive Markdown extracts ExecutableCodeBlock with render flags.
     /// This validates that the markdown parsing correctly identifies code blocks with --render.
     /// </summary>
-    [Fact]
+    [Fact(Timeout = 15000)]
     public async Task InteractiveMarkdown_ParsesExecutableCodeBlocks()
     {
         var persistence = Mesh.ServiceProvider.GetRequiredService<IPersistenceService>();
@@ -987,7 +989,7 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
     /// Test that the prerendered HTML contains the kernel address placeholder.
     /// This is needed for the client to replace with actual kernel address.
     /// </summary>
-    [Fact]
+    [Fact(Timeout = 15000)]
     public async Task InteractiveMarkdown_PrerenderedHtml_ContainsKernelPlaceholder()
     {
         var persistence = Mesh.ServiceProvider.GetRequiredService<IPersistenceService>();
@@ -1030,7 +1032,7 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
     /// Test that kernel is configured and can be used to create kernel addresses.
     /// This verifies that .AddKernel() is properly called in the configuration.
     /// </summary>
-    [Fact]
+    [Fact(Timeout = 15000)]
     public void InteractiveMarkdown_KernelIsConfigured()
     {
         // Verify kernel address can be created (this works if .AddKernel() was called)

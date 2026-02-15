@@ -636,6 +636,106 @@ export function setCursorToEnd(editorId) {
     return false;
 }
 
+// =============================================================================
+// Annotation Decorations for Track Changes
+// =============================================================================
+
+// Regex patterns to find annotation markers in content
+const annotationPatterns = [
+    { regex: /<!--insert:([^:]+)(?::[^:]*:[^-]*)?(-->)([\s\S]*?)<!--\/insert:\1-->/g, type: 'insert' },
+    { regex: /<!--delete:([^:]+)(?::[^:]*:[^-]*)?(-->)([\s\S]*?)<!--\/delete:\1-->/g, type: 'delete' },
+    { regex: /<!--comment:([^:]+)(?::[^:]*:[^|]*(?:\|[^-]*)?)?(-->)([\s\S]*?)<!--\/comment:\1-->/g, type: 'comment' }
+];
+
+/**
+ * Updates Monaco editor decorations to visually highlight annotation markers.
+ * Inserts get green background, deletes get red strikethrough, comments get yellow highlight.
+ */
+export function updateAnnotationDecorations(editorId) {
+    const editorInstance = monaco.editor.getEditors().find(e => e.getContainerDomNode()?.id === editorId);
+    if (!editorInstance) return;
+
+    const model = editorInstance.getModel();
+    if (!model) return;
+
+    const content = model.getValue();
+    const decorations = [];
+
+    for (const pattern of annotationPatterns) {
+        // Reset regex lastIndex for global patterns
+        pattern.regex.lastIndex = 0;
+        let match;
+        while ((match = pattern.regex.exec(content)) !== null) {
+            // Find the annotated text (group 3) position
+            const fullMatch = match[0];
+            const openTagEnd = match.index + fullMatch.indexOf(match[3]);
+            const textStart = openTagEnd;
+            const textEnd = textStart + match[3].length;
+
+            const startPos = model.getPositionAt(textStart);
+            const endPos = model.getPositionAt(textEnd);
+
+            let className, glyphClassName;
+            switch (pattern.type) {
+                case 'insert':
+                    className = 'monaco-insert-decoration';
+                    glyphClassName = 'monaco-insert-glyph';
+                    break;
+                case 'delete':
+                    className = 'monaco-delete-decoration';
+                    glyphClassName = 'monaco-delete-glyph';
+                    break;
+                case 'comment':
+                    className = 'monaco-comment-decoration';
+                    glyphClassName = 'monaco-comment-glyph';
+                    break;
+            }
+
+            decorations.push({
+                range: new monaco.Range(startPos.lineNumber, startPos.column, endPos.lineNumber, endPos.column),
+                options: {
+                    inlineClassName: className,
+                    glyphMarginClassName: glyphClassName,
+                    stickiness: monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges
+                }
+            });
+        }
+    }
+
+    // Store decoration IDs on state for future delta updates
+    const state = editorState.get(editorId);
+    if (state) {
+        state.annotationDecorationIds = editorInstance.deltaDecorations(
+            state.annotationDecorationIds || [],
+            decorations
+        );
+    }
+}
+
+/**
+ * Navigates the editor cursor to a specific annotation marker by ID.
+ * Returns the line number if found, or 0 if not found.
+ */
+export function navigateToAnnotation(editorId, markerId) {
+    const editorInstance = monaco.editor.getEditors().find(e => e.getContainerDomNode()?.id === editorId);
+    if (!editorInstance) return 0;
+
+    const model = editorInstance.getModel();
+    if (!model) return 0;
+
+    const content = model.getValue();
+    // Search for any annotation marker with this ID
+    const markerRegex = new RegExp(`<!--(?:insert|delete|comment):${markerId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[^>]*-->`, 'g');
+    const match = markerRegex.exec(content);
+    if (!match) return 0;
+
+    const pos = model.getPositionAt(match.index);
+    editorInstance.setPosition(pos);
+    editorInstance.revealLineInCenter(pos.lineNumber);
+    editorInstance.focus();
+    return pos.lineNumber;
+}
+
 export function dispose(editorId) {
     const state = editorState.get(editorId);
     if (state) {

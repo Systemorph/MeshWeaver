@@ -43,6 +43,11 @@ if (useDistributed)
         .WithPgAdmin(pgAdmin => pgAdmin.WithLifetime(ContainerLifetime.Persistent));
     var postgresDb = postgres.AddDatabase("meshweaver");
 
+    // Embedding configuration (Cohere embed-v4 via Azure Foundry)
+    var embeddingEndpoint = builder.AddParameter("embedding-endpoint", secret: false);
+    var embeddingKey = builder.AddParameter("embedding-key", secret: true);
+    var embeddingModel = builder.AddParameter("embedding-model", secret: false);
+
     // Memex Distributed (co-hosted silo + web)
     builder
         .AddProject<Projects.Memex_Portal_Distributed>("memex-distributed")
@@ -50,6 +55,9 @@ if (useDistributed)
         .WithReference(orleans)
         .WithReference(postgresDb)
         .WithReference(storageBlobs)
+        .WithEnvironment("Embedding__Endpoint", embeddingEndpoint)
+        .WithEnvironment("Embedding__ApiKey", embeddingKey)
+        .WithEnvironment("Embedding__Model", embeddingModel)
         .WaitFor(storageBlobs)
         .WaitFor(orleansTables)
         .WaitFor(grainStateBlobs)

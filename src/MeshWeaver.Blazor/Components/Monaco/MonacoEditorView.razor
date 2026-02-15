@@ -397,6 +397,44 @@
         }
     }
 
+    /// <summary>
+    /// Updates annotation decorations (track changes highlighting) in the editor.
+    /// </summary>
+    public async Task UpdateAnnotationDecorationsAsync()
+    {
+        if (jsModule != null && isInitialized)
+        {
+            try
+            {
+                await jsModule.InvokeVoidAsync("updateAnnotationDecorations", EditorId);
+            }
+            catch (Exception ex)
+            {
+                Logger.LogDebug(ex, "Error updating annotation decorations");
+            }
+        }
+    }
+
+    /// <summary>
+    /// Navigates the editor cursor to a specific annotation marker by ID.
+    /// Returns the line number if found, or 0 if not found.
+    /// </summary>
+    public async Task<int> NavigateToAnnotationAsync(string markerId)
+    {
+        if (jsModule != null && isInitialized)
+        {
+            try
+            {
+                return await jsModule.InvokeAsync<int>("navigateToAnnotation", EditorId, markerId);
+            }
+            catch (Exception ex)
+            {
+                Logger.LogDebug(ex, "Error navigating to annotation");
+            }
+        }
+        return 0;
+    }
+
     private bool pendingParameterUpdate = false;
 
     protected override Task OnParametersSetAsync()

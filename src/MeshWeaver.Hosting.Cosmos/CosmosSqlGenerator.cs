@@ -346,21 +346,27 @@ public class CosmosSqlGenerator
 
     private string GenerateTextSearchClause(string textSearch, string alias)
     {
-        // For text search, we search common string fields
-        // In a real implementation, you might want to configure which fields to search
-        // or use Cosmos DB full-text search capabilities
-        var paramName = $"@p{_paramIndex++}";
-        _parameters[paramName] = textSearch.ToLowerInvariant();
+        // Split into terms — ALL terms must match as substrings (mirrors InMemory QueryEvaluator behavior).
+        var terms = textSearch.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        if (terms.Length == 0)
+            return "";
 
-        // Search in common fields - customize based on your schema
-        var searchClauses = new[]
+        var searchFields = new[] { "name", "description", "nodeType", "path" };
+        var termClauses = new List<string>();
+
+        foreach (var term in terms)
         {
-            $"CONTAINS(LOWER({alias}.name ?? \"\"), {paramName})",
-            $"CONTAINS(LOWER({alias}.description ?? \"\"), {paramName})",
-            $"CONTAINS(LOWER({alias}.nodeType ?? \"\"), {paramName})"
-        };
+            var paramName = $"@p{_paramIndex++}";
+            _parameters[paramName] = term.ToLowerInvariant();
 
-        return $"({string.Join(" OR ", searchClauses)})";
+            // Each term must appear in at least one field
+            var fieldClauses = searchFields
+                .Select(f => $"CONTAINS(LOWER({alias}.{f} ?? \"\"), {paramName})")
+                .ToArray();
+            termClauses.Add($"({string.Join(" OR ", fieldClauses)})");
+        }
+
+        return termClauses.Count == 1 ? termClauses[0] : $"({string.Join(" AND ", termClauses)})";
     }
 
     private static object ConvertValue(string value)

@@ -20,6 +20,7 @@ namespace MeshWeaver.Graph;
 public static class CommentLayoutAreas
 {
     public const string OverviewArea = "Overview";
+    public const string EditArea = "Edit";
 
     /// <summary>
     /// Adds the comment node views to the hub's layout.
@@ -29,6 +30,7 @@ public static class CommentLayoutAreas
             .AddLayout(layout => layout
                 .WithDefaultArea(OverviewArea)
                 .WithView(OverviewArea, Overview)
+                .WithView(EditArea, Edit)
                 .WithView(MeshNodeLayoutAreas.ThumbnailArea, Thumbnail));
 
     /// <summary>
@@ -39,6 +41,8 @@ public static class CommentLayoutAreas
     {
         var hubPath = host.Hub.Address.ToString();
         var meshQuery = host.Hub.ServiceProvider.GetService<IMeshQuery>();
+        var accessService = host.Hub.ServiceProvider.GetService<AccessService>();
+        var currentUser = accessService?.Context?.Name ?? "";
 
         var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? Array.Empty<MeshNode>())
             ?? Observable.Return<MeshNode[]>(Array.Empty<MeshNode>());
@@ -72,11 +76,32 @@ public static class CommentLayoutAreas
             .CombineLatest(replyNodesStream, (nodes, replyNodes) =>
             {
                 var node = nodes.FirstOrDefault(n => n.Path == hubPath);
-                return BuildOverview(node, hubPath, replyNodes ?? Array.Empty<MeshNode>());
+                return BuildOverview(host, node, hubPath, replyNodes ?? Array.Empty<MeshNode>(), currentUser);
             });
     }
 
-    internal static UiControl BuildOverview(MeshNode? node, string hubPath, IReadOnlyList<MeshNode> replyNodes)
+    /// <summary>
+    /// Renders the Edit area for a Comment node.
+    /// Uses BuildPropertyOverview for auto-generated MarkdownEditor on the Text field.
+    /// Only the comment author can edit; others see a read-only message.
+    /// </summary>
+    public static IObservable<UiControl?> Edit(LayoutAreaHost host, RenderingContext _)
+    {
+        var hubPath = host.Hub.Address.ToString();
+        var accessService = host.Hub.ServiceProvider.GetService<AccessService>();
+        var currentUser = accessService?.Context?.Name ?? "";
+
+        var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? Array.Empty<MeshNode>())
+            ?? Observable.Return<MeshNode[]>(Array.Empty<MeshNode>());
+
+        return nodeStream.Select(nodes =>
+        {
+            var node = nodes.FirstOrDefault(n => n.Path == hubPath);
+            return (UiControl?)BuildEditContent(host, node, hubPath, currentUser);
+        });
+    }
+
+    internal static UiControl BuildOverview(LayoutAreaHost host, MeshNode? node, string hubPath, IReadOnlyList<MeshNode> replyNodes, string currentUser)
     {
         var comment = node?.Content as Comment;
         if (comment == null)
@@ -94,8 +119,12 @@ public static class CommentLayoutAreas
         var statusColor = comment.Status == CommentStatus.Resolved ? "#22c55e" : "#3b82f6";
         var statusLabel = comment.Status == CommentStatus.Resolved ? "Resolved" : "Active";
 
-        container = container.WithView(Controls.Html($@"
-            <div style=""display: flex; align-items: center; gap: 8px; margin-bottom: 12px;"">
+        var headerRow = Controls.Stack
+            .WithOrientation(Orientation.Horizontal)
+            .WithStyle("align-items: center; margin-bottom: 12px;");
+
+        headerRow = headerRow.WithView(Controls.Html($@"
+            <div style=""display: flex; align-items: center; gap: 8px; flex: 1;"">
                 <div style=""width: 36px; height: 36px; border-radius: 50%; background: #3b82f6; color: white;
                             display: flex; align-items: center; justify-content: center; font-weight: 600; font-size: 16px;"">
                     {System.Web.HttpUtility.HtmlEncode(authorInitial)}
@@ -106,6 +135,14 @@ public static class CommentLayoutAreas
                 </div>
                 <span style=""padding: 2px 8px; border-radius: 4px; font-size: 0.8rem; background: {statusColor}20; color: {statusColor};"">{statusLabel}</span>
             </div>"));
+
+        // Action menu for the comment author
+        if (!string.IsNullOrEmpty(currentUser) && string.Equals(comment.Author, currentUser, StringComparison.OrdinalIgnoreCase))
+        {
+            headerRow = headerRow.WithView(BuildCommentActionMenu(host, hubPath));
+        }
+
+        container = container.WithView(headerRow);
 
         // Highlighted text quote
         if (!string.IsNullOrEmpty(comment.HighlightedText))
@@ -121,10 +158,8 @@ public static class CommentLayoutAreas
         // Comment text
         if (!string.IsNullOrEmpty(comment.Text))
         {
-            container = container.WithView(Controls.Html($@"
-                <div style=""font-size: 0.95rem; line-height: 1.5; margin-bottom: 16px;"">
-                    {System.Web.HttpUtility.HtmlEncode(comment.Text)}
-                </div>"));
+            container = container.WithView(new MarkdownControl(comment.Text)
+                .WithStyle("font-size: 0.95rem; line-height: 1.5; margin-bottom: 16px;"));
         }
 
         // Replies from MeshNode children — expandable catalog
@@ -139,6 +174,83 @@ public static class CommentLayoutAreas
         }
 
         return container;
+    }
+
+    /// <summary>
+    /// Builds the action menu (Edit / Delete) for a comment owned by the current user.
+    /// </summary>
+    private static UiControl BuildCommentActionMenu(LayoutAreaHost host, string hubPath)
+    {
+        var menu = Controls.MenuItem("", FluentIcons.MoreHorizontal(IconSize.Size20))
+            .WithAppearance(Appearance.Stealth)
+            .WithIconOnly();
+
+        // Edit option
+        var editHref = MeshNodeLayoutAreas.BuildContentUrl(hubPath, EditArea);
+        menu = menu.WithView(new NavLinkControl("Edit", FluentIcons.Edit(IconSize.Size16), editHref));
+
+        // Delete option
+        menu = menu.WithView(
+            Controls.MenuItem("Delete", FluentIcons.Delete(IconSize.Size16))
+                .WithClickAction(async _ =>
+                {
+                    var meshCatalog = host.Hub.ServiceProvider.GetRequiredService<IMeshCatalog>();
+                    await meshCatalog.DeleteNodeAsync(hubPath, recursive: true);
+                }));
+
+        return menu;
+    }
+
+    /// <summary>
+    /// Builds the Edit content for a Comment node.
+    /// Uses BuildPropertyOverview for auto-generated MarkdownEditor on the Text field.
+    /// </summary>
+    private static UiControl BuildEditContent(LayoutAreaHost host, MeshNode? node, string hubPath, string currentUser)
+    {
+        var stack = Controls.Stack.WithWidth("100%").WithStyle("padding: 16px; max-width: 600px;");
+
+        if (node == null)
+        {
+            return stack.WithView(Controls.Html("<p style=\"color: var(--warning-color);\">Comment not found.</p>"));
+        }
+
+        var comment = node.Content as Comment;
+
+        // Author check — only the author can edit
+        if (comment != null && !string.IsNullOrEmpty(currentUser)
+            && !string.Equals(comment.Author, currentUser, StringComparison.OrdinalIgnoreCase))
+        {
+            return stack.WithView(Controls.Html("<p style=\"color: var(--neutral-foreground-hint);\">You can only edit your own comments.</p>"))
+                .WithView(Controls.Button("Back")
+                    .WithAppearance(Appearance.Lightweight)
+                    .WithIconStart(FluentIcons.ArrowLeft())
+                    .WithNavigateToHref(MeshNodeLayoutAreas.BuildContentUrl(hubPath, OverviewArea)));
+        }
+
+        // Header with Done button
+        var doneHref = MeshNodeLayoutAreas.BuildContentUrl(hubPath, OverviewArea);
+
+        stack = stack.WithView(Controls.Stack
+            .WithOrientation(Orientation.Horizontal)
+            .WithHorizontalGap(16)
+            .WithStyle("align-items: center; margin-bottom: 16px; justify-content: space-between;")
+            .WithView(Controls.Stack
+                .WithOrientation(Orientation.Horizontal)
+                .WithHorizontalGap(16)
+                .WithStyle("align-items: center;")
+                .WithView(Controls.Button("Done")
+                    .WithAppearance(Appearance.Lightweight)
+                    .WithIconStart(FluentIcons.ArrowLeft())
+                    .WithNavigateToHref(doneHref))
+                .WithView(Controls.H2("Edit Comment").WithStyle("margin: 0;"))));
+
+        // Property editor (auto-generates MarkdownEditorControl for [Markdown] Text field)
+        if (node.Content != null)
+        {
+            stack = stack.WithView(OverviewLayoutArea.BuildPropertyOverview(host, node));
+        }
+
+        return stack;
     }
 
     /// <summary>

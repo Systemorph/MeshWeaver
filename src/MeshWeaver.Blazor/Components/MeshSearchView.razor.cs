@@ -488,12 +488,13 @@ public partial class MeshSearchView : IDisposable
 
         builder.OpenComponent<FluentCard>(seq++);
         builder.AddAttribute(seq++, "Class", "mesh-search-card");
-        builder.AddAttribute(seq++, "onclick", EventCallback.Factory.Create(this, () => NavigateTo(node.Path)));
+        builder.AddAttribute(seq++, "Style", "cursor: pointer;");
         builder.AddAttribute(seq++, "ChildContent", (RenderFragment)(cardBuilder =>
         {
             var cardSeq = 0;
-            cardBuilder.OpenElement(cardSeq++, "div");
-            cardBuilder.AddAttribute(cardSeq++, "style", "display: flex; flex-direction: row; align-items: center; gap: 12px; padding: 8px; min-height: 60px;");
+            cardBuilder.OpenElement(cardSeq++, "a");
+            cardBuilder.AddAttribute(cardSeq++, "href", $"/{node.Path}");
+            cardBuilder.AddAttribute(cardSeq++, "style", "display: flex; flex-direction: row; align-items: center; gap: 12px; padding: 8px; min-height: 60px; height: 76px; text-decoration: none; color: inherit;");
 
             if (!string.IsNullOrEmpty(imageUrl))
             {

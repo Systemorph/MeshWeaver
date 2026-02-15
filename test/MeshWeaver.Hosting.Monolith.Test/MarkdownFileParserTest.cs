@@ -17,7 +17,7 @@ public class MarkdownFileParserTest
 
     #region Parse Tests
 
-    [Fact]
+    [Fact(Timeout = 10000)]
     public async Task Parse_WithFullYamlFrontMatter_ExtractsAllProperties()
     {
         // Arrange
@@ -64,7 +64,7 @@ public class MarkdownFileParserTest
         mdContent.Content.Should().Contain("# My Article");
     }
 
-    [Fact]
+    [Fact(Timeout = 10000)]
     public async Task Parse_WithMinimalYaml_UsesDefaults()
     {
         // Arrange
@@ -87,7 +87,7 @@ public class MarkdownFileParserTest
         node.State.Should().Be(MeshNodeState.Active); // Default
     }
 
-    [Fact]
+    [Fact(Timeout = 10000)]
     public async Task Parse_WithoutYaml_UsesIdAsName()
     {
         // Arrange
@@ -107,7 +107,7 @@ public class MarkdownFileParserTest
         node.NodeType.Should().Be("Markdown");
     }
 
-    [Fact]
+    [Fact(Timeout = 10000)]
     public async Task Parse_WithLegacyArticleProperties_MapsCorrectly()
     {
         // Arrange - Uses legacy Title/Abstract instead of Name/Description
@@ -129,7 +129,7 @@ public class MarkdownFileParserTest
         node.Description.Should().Be("This is the legacy abstract"); // Mapped from Abstract
     }
 
-    [Fact]
+    [Fact(Timeout = 10000)]
     public async Task Parse_DerivesPathFromRelativePath()
     {
         // Arrange
@@ -149,7 +149,7 @@ public class MarkdownFileParserTest
 
     #region Serialize Tests
 
-    [Fact]
+    [Fact(Timeout = 10000)]
     public async Task Serialize_WithAllProperties_WritesCompleteYaml()
     {
         // Arrange
@@ -190,7 +190,7 @@ public class MarkdownFileParserTest
         result.Should().Contain("Content here.");
     }
 
-    [Fact]
+    [Fact(Timeout = 10000)]
     public async Task Serialize_OmitsDefaultValues()
     {
         // Arrange - Node with default values that should be omitted
@@ -214,7 +214,7 @@ public class MarkdownFileParserTest
         result.Should().Contain("# Content");
     }
 
-    [Fact]
+    [Fact(Timeout = 10000)]
     public async Task Serialize_WithStringContent_WritesDirectly()
     {
         // Arrange
@@ -233,7 +233,7 @@ public class MarkdownFileParserTest
         result.Should().Contain("This is string content.");
     }
 
-    [Fact]
+    [Fact(Timeout = 10000)]
     public async Task Serialize_WithNullContent_WritesOnlyYaml()
     {
         // Arrange
@@ -257,7 +257,7 @@ public class MarkdownFileParserTest
 
     #region Round-Trip Tests
 
-    [Fact]
+    [Fact(Timeout = 10000)]
     public async Task RoundTrip_PreservesAllData()
     {
         // Arrange
@@ -306,28 +306,28 @@ public class MarkdownFileParserTest
 
     #region CanSerialize Tests
 
-    [Fact]
+    [Fact(Timeout = 10000)]
     public void CanSerialize_WithMarkdownNodeType_ReturnsTrue()
     {
         var node = new MeshNode("doc") { NodeType = "Markdown" };
         _parser.CanSerialize(node).Should().BeTrue();
     }
 
-    [Fact]
+    [Fact(Timeout = 10000)]
     public void CanSerialize_WithMarkdownContent_ReturnsTrue()
     {
         var node = new MeshNode("doc") { Content = new MarkdownContent { Content = "test" } };
         _parser.CanSerialize(node).Should().BeTrue();
     }
 
-    [Fact]
+    [Fact(Timeout = 10000)]
     public void CanSerialize_WithStringContent_ReturnsTrue()
     {
         var node = new MeshNode("doc") { Content = "# Markdown string" };
         _parser.CanSerialize(node).Should().BeTrue();
     }
 
-    [Fact]
+    [Fact(Timeout = 10000)]
     public void CanSerialize_WithOtherNodeType_ReturnsFalse()
     {
         var node = new MeshNode("doc") { NodeType = "Organization", Content = new { Id = "test" } };
@@ -338,7 +338,7 @@ public class MarkdownFileParserTest
 
     #region Edge Cases
 
-    [Fact]
+    [Fact(Timeout = 10000)]
     public async Task Parse_WithMalformedYaml_UsesDefaults()
     {
         // Arrange
@@ -359,7 +359,7 @@ public class MarkdownFileParserTest
         node.Name.Should().Be("malformed"); // Falls back to Id
     }
 
-    [Fact]
+    [Fact(Timeout = 10000)]
     public async Task Parse_WithEmptyContent_ReturnsEmptyMarkdownContent()
     {
         // Arrange
@@ -374,7 +374,7 @@ public class MarkdownFileParserTest
         mdContent.Content.Should().BeEmpty();
     }
 
-    [Fact]
+    [Fact(Timeout = 10000)]
     public async Task Serialize_WithSpecialCharacters_EscapesCorrectly()
     {
         // Arrange
