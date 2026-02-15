@@ -2,6 +2,7 @@ using Azure;
 using Azure.AI.OpenAI;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.AI;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
 namespace MeshWeaver.AI.AzureOpenAI;
@@ -11,10 +12,23 @@ namespace MeshWeaver.AI.AzureOpenAI;
 /// </summary>
 public class AzureOpenAIChatClientAgentFactory(
     IMessageHub hub,
-    IOptions<AzureOpenAIConfiguration> options)
+    IOptions<AzureOpenAIConfiguration> options,
+    ILogger<AzureOpenAIChatClientAgentFactory> logger)
     : ChatClientAgentFactory(hub)
 {
-    private readonly AzureOpenAIConfiguration credentials = options.Value ?? throw new ArgumentNullException(nameof(options));
+    private readonly AzureOpenAIConfiguration credentials = InitAndLog(options, logger);
+
+    private static AzureOpenAIConfiguration InitAndLog(IOptions<AzureOpenAIConfiguration> options, ILogger logger)
+    {
+        var config = options.Value ?? throw new ArgumentNullException(nameof(options));
+        logger.LogInformation(
+            "[AzureOpenAIChatClientAgentFactory] Initialized with Endpoint={Endpoint}, ApiKey={HasApiKey}, Models ({ModelCount}): [{Models}]",
+            config.Endpoint ?? "(null)",
+            !string.IsNullOrEmpty(config.ApiKey) ? "set" : "MISSING",
+            config.Models.Length,
+            string.Join(", ", config.Models));
+        return config;
+    }
 
     public override string Name => "Azure OpenAI";
 

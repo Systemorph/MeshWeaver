@@ -1,0 +1,17 @@
+{
+  "$type": "MeshNode",
+  "id": "Threads/QGcP4VpazUKjSi4ECnU7Zg/QG9JUDEvAU-0jxf7BZcvbg",
+  "path": "Threads/QGcP4VpazUKjSi4ECnU7Zg/QG9JUDEvAU-0jxf7BZcvbg",
+  "nodeType": "ThreadMessage",
+  "icon": "/static/NodeTypeIcons/message.svg",
+  "lastModified": "2026-02-12T08:48:51.020839+00:00",
+  "state": "Active",
+  "content": {
+    "$type": "ThreadMessage",
+    "id": "QG9JUDEvAU-0jxf7BZcvbg",
+    "role": "assistant",
+    "text": "An error occurred: Unavailable model: gpt-4o-mini\nStatus: 400 (Bad Request)\nErrorCode: unavailable_model\n\nContent:\n{\u0022error\u0022:{\u0022code\u0022:\u0022unavailable_model\u0022,\u0022message\u0022:\u0022Unavailable model: gpt-4o-mini\u0022,\u0022details\u0022:\u0022Unavailable model: gpt-4o-mini\u0022}}\n\nHeaders:\nTransfer-Encoding: chunked\napim-request-id: REDACTED\nrequest-context: REDACTED\nStrict-Transport-Security: REDACTED\nX-Content-Type-Options: REDACTED\nx-ms-region: REDACTED\nDate: Thu, 12 Feb 2026 08:48:50 GMT\nContent-Type: application/json; charset=utf-8\n",
+    "timestamp": "2026-02-12T08:48:51.020437Z",
+    "type": "AgentResponse"
+  }
+}

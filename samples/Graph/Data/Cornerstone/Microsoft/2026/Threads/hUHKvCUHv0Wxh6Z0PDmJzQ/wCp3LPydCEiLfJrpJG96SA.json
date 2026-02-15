@@ -1,0 +1,18 @@
+{
+  "$type": "MeshNode",
+  "id": "Cornerstone/Microsoft/2026/Threads/hUHKvCUHv0Wxh6Z0PDmJzQ/wCp3LPydCEiLfJrpJG96SA",
+  "path": "Cornerstone/Microsoft/2026/Threads/hUHKvCUHv0Wxh6Z0PDmJzQ/wCp3LPydCEiLfJrpJG96SA",
+  "nodeType": "ThreadMessage",
+  "icon": "/static/NodeTypeIcons/message.svg",
+  "lastModified": "2026-02-10T12:30:17.326106+00:00",
+  "state": "Active",
+  "content": {
+    "$type": "ThreadMessage",
+    "id": "wCp3LPydCEiLfJrpJG96SA",
+    "role": "Navigator",
+    "authorName": "Navigator",
+    "text": "I\u0027m Claude, an AI assistant made by Anthropic. I\u0027m here to help you with software engineering tasks and other questions.\n\nIt looks like you may have pasted some text about \u0022MeshPlugin tools\u0022 - I don\u0027t have specific documentation about that in my context. Could you share the documentation you\u0027re referring to, or let me know what you\u0027d like help with?",
+    "timestamp": "2026-02-10T12:30:17.325908Z",
+    "type": "AgentResponse"
+  }
+}

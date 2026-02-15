@@ -1,0 +1,17 @@
+{
+  "$type": "MeshNode",
+  "id": "Threads/f3MgsRNCbUqFHcUB0Axzeg/dlgywdyM-0-utkHPJ4ZZ-A",
+  "path": "Threads/f3MgsRNCbUqFHcUB0Axzeg/dlgywdyM-0-utkHPJ4ZZ-A",
+  "nodeType": "ThreadMessage",
+  "icon": "/static/NodeTypeIcons/message.svg",
+  "lastModified": "2026-02-10T14:31:16.391064+00:00",
+  "state": "Active",
+  "content": {
+    "$type": "ThreadMessage",
+    "id": "dlgywdyM-0-utkHPJ4ZZ-A",
+    "role": "user",
+    "text": "Can you have a look here: samples/Graph/Data/Cornerstone/Pricing/PricingAgent.md",
+    "timestamp": "2026-02-10T14:31:16.390246Z",
+    "type": "ExecutedInput"
+  }
+}

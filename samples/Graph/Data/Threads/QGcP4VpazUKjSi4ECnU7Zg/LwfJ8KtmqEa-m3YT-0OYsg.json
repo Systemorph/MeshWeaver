@@ -1,0 +1,18 @@
+{
+  "$type": "MeshNode",
+  "id": "Threads/QGcP4VpazUKjSi4ECnU7Zg/LwfJ8KtmqEa-m3YT-0OYsg",
+  "path": "Threads/QGcP4VpazUKjSi4ECnU7Zg/LwfJ8KtmqEa-m3YT-0OYsg",
+  "nodeType": "ThreadMessage",
+  "icon": "/static/NodeTypeIcons/message.svg",
+  "lastModified": "2026-02-12T08:52:59.217556+00:00",
+  "state": "Active",
+  "content": {
+    "$type": "ThreadMessage",
+    "id": "LwfJ8KtmqEa-m3YT-0OYsg",
+    "role": "Navigator",
+    "authorName": "Navigator",
+    "text": "I\u0027m **Navigator**, your primary agent for understanding intent and navigating the mesh.\n\nI help you:\n- **Explore** the mesh hierarchy and find information\n- **Display** nodes visually\n- **Delegate** complex tasks to specialized agents\n\nWhat would you like to explore or accomplish?",
+    "timestamp": "2026-02-12T08:52:59.216995Z",
+    "type": "AgentResponse"
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "id": "ArticlesCatalog",
+  "namespace": "Northwind",
+  "name": "Articles Catalog",
+  "nodeType": "NodeType",
+  "category": "Types",
+  "description": "A catalog of articles and documentation content",
+  "iconName": "Document",
+  "isPersistent": true,
+  "content": {
+    "$type": "NodeTypeDefinition",
+    "id": "ArticlesCatalog",
+    "namespace": "Northwind",
+    "displayName": "Articles Catalog",
+    "iconName": "Document",
+    "description": "A catalog of articles and documentation content",
+    "configuration": "config => config.AddDefaultLayoutAreas().AddLayout(layout => layout.WithDefaultArea(\"Articles\")).AddArticles()"
+  }
+}
