@@ -266,6 +266,8 @@ public static class MemexConfiguration
                 {
                     if (contentStorageConfig == null)
                         return hub;
+                    // Storage collection is not editable (managed by the system)
+                    contentStorageConfig = contentStorageConfig with { IsEditable = false };
                     return hub.AddContentCollection(_ => contentStorageConfig);
                 })
                 // Configure default views and content collections for each node hub
