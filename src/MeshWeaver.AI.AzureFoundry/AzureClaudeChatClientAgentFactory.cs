@@ -14,7 +14,19 @@ public class AzureClaudeChatClientAgentFactory(
     ILogger<AzureClaudeChatClientAgentFactory> logger)
     : ChatClientAgentFactory(hub)
 {
-    private readonly AzureClaudeConfiguration configuration = options.Value ?? throw new ArgumentNullException(nameof(options));
+    private readonly AzureClaudeConfiguration configuration = InitAndLog(options, logger);
+
+    private static AzureClaudeConfiguration InitAndLog(IOptions<AzureClaudeConfiguration> options, ILogger logger)
+    {
+        var config = options.Value ?? throw new ArgumentNullException(nameof(options));
+        logger.LogInformation(
+            "[AzureClaudeChatClientAgentFactory] Initialized with Endpoint={Endpoint}, ApiKey={HasApiKey}, Models ({ModelCount}): [{Models}]",
+            config.Endpoint ?? "(null)",
+            !string.IsNullOrEmpty(config.ApiKey) ? "set" : "MISSING",
+            config.Models.Length,
+            string.Join(", ", config.Models));
+        return config;
+    }
 
     public override string Name => "Azure Claude";
 

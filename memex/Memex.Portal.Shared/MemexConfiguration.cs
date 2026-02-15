@@ -22,6 +22,7 @@ using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting;
 using MeshWeaver.Hosting.Activity;
 using MeshWeaver.Hosting.AzureBlob;
+using MeshWeaver.Mesh.Activity;
 using MeshWeaver.Hosting.Blazor;
 using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Hosting.Security;
@@ -281,6 +282,12 @@ public static class MemexConfiguration
                     }
 
                     return config.AddDefaultLayoutAreas().AddThreadsLayoutArea();
+                })
+                // Register in-memory activity store for non-database scenarios
+                .ConfigureServices(services =>
+                {
+                    services.AddSingleton<IActivityStore, InMemoryActivityStore>();
+                    return services;
                 })
                 // Add activity tracking to record user access patterns
                 .AddActivityTracking();

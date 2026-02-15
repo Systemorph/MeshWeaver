@@ -17,11 +17,10 @@ public static class BlazorGraphExtensions
     public static MessageHubConfiguration AddGraphViews(this MessageHubConfiguration configuration)
     {
         return configuration
-            .WithTypes(typeof(MeshNodeEditorControl), typeof(MeshNodeThumbnailControl), typeof(CollaborativeMarkdownControl))
+            .WithTypes(typeof(MeshNodeEditorControl), typeof(MeshNodeThumbnailControl))
             .AddViews(registry => registry
                 .WithView<MeshNodeEditorControl, MeshNodeEditorView>()
-                .WithView<MeshNodeThumbnailControl, MeshNodeThumbnailView>()
-                .WithView<CollaborativeMarkdownControl, CollaborativeMarkdownView>())
+                .WithView<MeshNodeThumbnailControl, MeshNodeThumbnailView>())
             .AddMeshNavigation();  // Enable @ autocomplete in markdown editors
     }
 }

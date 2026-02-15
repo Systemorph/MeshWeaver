@@ -1,0 +1,18 @@
+{
+  "id": "Northwind",
+  "name": "Northwind Traders",
+  "nodeType": "Organization",
+  "description": "Northwind Traders - Gourmet food distribution analytics with sales, orders, products, and customer insights",
+  "iconName": "ChartMultiple",
+  "isPersistent": true,
+  "content": {
+    "$type": "Organization",
+    "id": "Northwind",
+    "name": "Northwind Traders",
+    "description": "Northwind Traders is a gourmet food distribution company supplying specialty food products to retailers and restaurants worldwide. Analytics cover 77 products, 91 customers, 9 employees, 29 suppliers, and 830 orders.",
+    "website": "https://northwind.example.com",
+    "location": "United States",
+    "email": "info@northwind.example.com",
+    "isVerified": false
+  }
+}

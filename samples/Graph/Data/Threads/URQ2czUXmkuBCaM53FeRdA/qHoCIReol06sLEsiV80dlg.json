@@ -1,0 +1,17 @@
+{
+  "$type": "MeshNode",
+  "id": "Threads/URQ2czUXmkuBCaM53FeRdA/qHoCIReol06sLEsiV80dlg",
+  "path": "Threads/URQ2czUXmkuBCaM53FeRdA/qHoCIReol06sLEsiV80dlg",
+  "nodeType": "ThreadMessage",
+  "icon": "/static/NodeTypeIcons/message.svg",
+  "lastModified": "2026-02-10T13:31:28.866264+00:00",
+  "state": "Active",
+  "content": {
+    "$type": "ThreadMessage",
+    "id": "qHoCIReol06sLEsiV80dlg",
+    "role": "user",
+    "text": "Aren\u0027t you supposed to be the PricingAgent?",
+    "timestamp": "2026-02-10T13:31:28.865651Z",
+    "type": "ExecutedInput"
+  }
+}

@@ -137,8 +137,17 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
 
     private async Task InitializeAgentAndModelSelectionsAsync()
     {
+        // Log factory resolution
+        var factories = ChatClientFactories.ToList();
+        Logger.LogInformation("[ThreadChat:{InstanceId}] IChatClientFactory instances resolved: {Count}", _instanceId, factories.Count);
+        foreach (var f in factories)
+        {
+            Logger.LogInformation("[ThreadChat:{InstanceId}] Factory: {Name}, DisplayOrder: {Order}, Models ({ModelCount}): [{Models}]",
+                _instanceId, f.Name, f.DisplayOrder, f.Models.Count, string.Join(", ", f.Models));
+        }
+
         // Get available models from all factories
-        availableModels = ChatClientFactories
+        availableModels = factories
             .OrderBy(f => f.DisplayOrder)
             .SelectMany(f => f.Models.Select(m => new ModelInfo
             {
@@ -147,6 +156,9 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
                 DisplayOrder = f.DisplayOrder
             }))
             .ToList();
+
+        Logger.LogInformation("[ThreadChat:{InstanceId}] Available models ({Count}): [{Models}]",
+            _instanceId, availableModels.Count, string.Join(", ", availableModels.Select(m => $"{m.Name} ({m.Provider})")));
 
         // Create a temporary chat to get ordered agents
         var tempChat = new AgentChatClient(Hub.ServiceProvider);
@@ -190,8 +202,18 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     private async Task<IAgentChat> CreateChatAsync()
     {
         var model = selectedModelInfo?.Name ?? availableModels.FirstOrDefault()?.Name ?? string.Empty;
+
+        // Ensure we have context path — initialContext may be cleared by data binding
+        var contextPath = initialContext;
+        if (string.IsNullOrEmpty(contextPath))
+        {
+            var path = NavigationManager.ToBaseRelativePath(NavigationManager.Uri);
+            if (!string.IsNullOrEmpty(path) && path != "chat")
+                contextPath = path;
+        }
+
         var chatClient = new AgentChatClient(Hub.ServiceProvider);
-        await chatClient.InitializeAsync(initialContext, model);
+        await chatClient.InitializeAsync(contextPath, model);
 
         // Set the explicitly selected agent from the dropdown
         if (selectedAgentInfo != null)

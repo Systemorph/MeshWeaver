@@ -20,7 +20,7 @@ public static class ArticlesLayoutArea
     public static UiControl Articles(LayoutAreaHost host, RenderingContext _)
     {
         var selectedCollection = host.Reference.Id?.ToString();
-        if (selectedCollection is not null)
+        if (!string.IsNullOrEmpty(selectedCollection))
             return GetCollectionFromId(host, selectedCollection);
 
         var config = host.Hub.ServiceProvider.GetRequiredService<ArticlesConfiguration>();

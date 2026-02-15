@@ -1,0 +1,17 @@
+{
+  "id": "Analytics",
+  "namespace": "Northwind",
+  "name": "Analytics",
+  "nodeType": "Northwind/Catalog",
+  "category": "Analytics",
+  "description": "Dashboards and analytics views for Northwind Traders data",
+  "iconName": "ChartMultiple",
+  "displayOrder": 2,
+  "isPersistent": true,
+  "content": {
+    "$type": "CatalogContent",
+    "id": "Analytics",
+    "name": "Analytics",
+    "description": "Interactive dashboards and analytics views exploring sales, orders, products, customers, and employees of Northwind Traders."
+  }
+}

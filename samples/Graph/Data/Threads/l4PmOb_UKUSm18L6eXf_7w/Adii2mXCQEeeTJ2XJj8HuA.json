@@ -1,0 +1,18 @@
+{
+  "$type": "MeshNode",
+  "id": "Threads/l4PmOb_UKUSm18L6eXf_7w/Adii2mXCQEeeTJ2XJj8HuA",
+  "path": "Threads/l4PmOb_UKUSm18L6eXf_7w/Adii2mXCQEeeTJ2XJj8HuA",
+  "nodeType": "ThreadMessage",
+  "icon": "/static/NodeTypeIcons/message.svg",
+  "lastModified": "2026-02-12T13:22:11.500671+00:00",
+  "state": "Active",
+  "content": {
+    "$type": "ThreadMessage",
+    "id": "Adii2mXCQEeeTJ2XJj8HuA",
+    "role": "PricingAgent",
+    "authorName": "PricingAgent",
+    "text": "Hello \u2014 I\u2019m the Pricing Agent for Cornerstone Insurance. I manage reinsurance pricings and related property risks. I can help with:\n\n- Listing, creating, and updating pricings (Draft \u2192 Quoted \u2192 Bound, etc.)\n- Managing property risks and geocoded locations (import from Excel, edit TSIs, addresses)\n- Viewing reinsurance structures and coverage layers (layers, attachments, limits, EPI/rates)\n- Importing Excel property lists (I can call the ImportAgent to create mappings)\n- Delegating tasks to Navigator, Executor, Planner, or Research when needed\n\nTell me what you\u2019d like to do next, for example:\n- \u201CList pricings for Microsoft\u201D\n- \u201CCreate a new pricing for Insured X, inception 2026-01-01, expiry 2027-01-01, LOB PROP, country US, currency USD\u201D\n- \u201CShow pricing Microsoft/2026\u201D\n- \u201CImport property exposures from file\u201D (attach the file or ask me to start the import)\n\nWhich task should we start with?",
+    "timestamp": "2026-02-12T13:22:11.500104Z",
+    "type": "AgentResponse"
+  }
+}

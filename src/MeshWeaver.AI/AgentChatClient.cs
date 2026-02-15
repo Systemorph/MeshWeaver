@@ -542,7 +542,7 @@ public class AgentChatClient : IAgentChat
             }
             catch (Exception ex)
             {
-                logger.LogDebug(ex, "[AgentChatClient] Error getting NodeType for {ContextPath}", contextPath);
+                logger.LogWarning(ex, "Error getting NodeType for {ContextPath}", contextPath);
             }
         }
 
@@ -561,7 +561,7 @@ public class AgentChatClient : IAgentChat
         }
         catch (Exception ex)
         {
-            logger.LogDebug(ex, "[AgentChatClient] Error querying path hierarchy {ContextPath}", contextPath ?? "root");
+            logger.LogWarning(ex, "Error querying path hierarchy for {ContextPath}", contextPath ?? "root");
         }
 
         // 3. Query agents from root namespace subtree (to find sibling agents)
@@ -573,7 +573,8 @@ public class AgentChatClient : IAgentChat
                 var rootNamespace = contextPath.Split('/').FirstOrDefault(s => !string.IsNullOrEmpty(s));
                 if (!string.IsNullOrEmpty(rootNamespace))
                 {
-                    await foreach (var node in meshQuery.QueryAsync<MeshNode>($"path:{rootNamespace} nodeType:Agent scope:Subtree"))
+                    var subtreeQuery = $"path:{rootNamespace} nodeType:Agent scope:Subtree";
+                    await foreach (var node in meshQuery.QueryAsync<MeshNode>(subtreeQuery))
                     {
                         if (node.Content is AgentConfiguration config && !agentsDict.ContainsKey(config.Id))
                             agentsDict[config.Id] = (config, node.Path ?? "");
@@ -582,7 +583,7 @@ public class AgentChatClient : IAgentChat
             }
             catch (Exception ex)
             {
-                logger.LogDebug(ex, "[AgentChatClient] Error querying root namespace subtree for {ContextPath}", contextPath);
+                logger.LogWarning(ex, "Error querying root namespace subtree for {ContextPath}", contextPath);
             }
         }
 
@@ -591,7 +592,8 @@ public class AgentChatClient : IAgentChat
         {
             try
             {
-                await foreach (var node in meshQuery.QueryAsync<MeshNode>($"path:{nodeTypePath} nodeType:Agent scope:AncestorsAndSelf"))
+                var nodeTypeQuery = $"path:{nodeTypePath} nodeType:Agent scope:AncestorsAndSelf";
+                await foreach (var node in meshQuery.QueryAsync<MeshNode>(nodeTypeQuery))
                 {
                     if (node.Content is AgentConfiguration config && !agentsDict.ContainsKey(config.Id))
                         agentsDict[config.Id] = (config, node.Path ?? "");
@@ -599,7 +601,7 @@ public class AgentChatClient : IAgentChat
             }
             catch (Exception ex)
             {
-                logger.LogDebug(ex, "[AgentChatClient] Error querying NodeType hierarchy {NodeType}", nodeTypePath);
+                logger.LogWarning(ex, "Error querying NodeType hierarchy for {NodeType}", nodeTypePath);
             }
         }
 
@@ -620,7 +622,10 @@ public class AgentChatClient : IAgentChat
         var contextPathNorm = contextPath?.TrimStart('/') ?? "";
         var nodeTypePathNorm = nodeTypePath?.TrimStart('/') ?? "";
 
-        return AgentOrderingHelper.OrderByRelevance(displayInfos, contextPathNorm, nodeTypePathNorm).ToList();
+        var result = AgentOrderingHelper.OrderByRelevance(displayInfos, contextPathNorm, nodeTypePathNorm).ToList();
+        logger.LogDebug("Loaded {Count} agents for context {ContextPath}: [{Agents}]",
+            result.Count, contextPath ?? "(none)", string.Join(", ", result.Select(a => a.Name)));
+        return result;
     }
 
     /// <summary>
@@ -709,7 +714,7 @@ public class AgentChatClient : IAgentChat
     /// <summary>
     /// Orders agents for creation: non-delegating first, delegating second, default last.
     /// </summary>
-    private static IEnumerable<AgentConfiguration> OrderAgentsForCreation(IEnumerable<AgentConfiguration> configs)
+    internal static IEnumerable<AgentConfiguration> OrderAgentsForCreation(IEnumerable<AgentConfiguration> configs)
     {
         var agentList = configs.ToList();
 
@@ -727,7 +732,7 @@ public class AgentChatClient : IAgentChat
     /// <summary>
     /// Finds agents that have cyclic delegations.
     /// </summary>
-    private static IEnumerable<AgentConfiguration> FindCyclicDelegations(IEnumerable<AgentConfiguration> configs)
+    internal static IEnumerable<AgentConfiguration> FindCyclicDelegations(IEnumerable<AgentConfiguration> configs)
     {
         var delegatingAgents = configs.Where(a => a.Delegations is { Count: > 0 }).ToList();
         var cyclicAgents = new HashSet<string>();

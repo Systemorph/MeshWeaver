@@ -99,7 +99,16 @@
       "Bash(unzip:*)",
       "Bash(ilspycmd:*)",
       "Bash(nm:*)",
-      "Bash(docker run:*)"
+      "Bash(docker run:*)",
+      "Bash(git ls-tree:*)",
+      "Bash(git rev-parse:*)",
+      "Bash(wc:*)",
+      "Bash(git -C /Users/samuelglauser/Documents/work/2026_Systemorph/projekte/MeshWeaver status --short)",
+      "Bash(git -C /Users/samuelglauser/Documents/work/2026_Systemorph/projekte/MeshWeaver add .claude/settings.local.json)",
+      "Bash(git -C /Users/samuelglauser/Documents/work/2026_Systemorph/projekte/MeshWeaver log --oneline -5 -- src/MeshWeaver.AI/AgentChatClient.cs)",
+      "Bash(git -C /Users/samuelglauser/Documents/work/2026_Systemorph/projekte/MeshWeaver log --oneline -5 -- src/MeshWeaver.AI.ClaudeCode/ClaudeCodeChatClient.cs)",
+      "Bash(git -C /Users/samuelglauser/Documents/work/2026_Systemorph/projekte/MeshWeaver diff --cached -- src/MeshWeaver.AI/AgentChatClient.cs)",
+      "Bash(git -C /Users/samuelglauser/Documents/work/2026_Systemorph/projekte/MeshWeaver show:*)"
     ],
     "deny": []
   },

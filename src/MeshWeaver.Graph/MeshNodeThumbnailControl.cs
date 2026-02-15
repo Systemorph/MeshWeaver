@@ -113,10 +113,7 @@ public record MeshNodeThumbnailControl(
             }
         }
 
-        // Fall back to node.Icon (for stories, projects, etc.)
-        if (!string.IsNullOrEmpty(node.Icon))
-            return node.Icon;
-
-        return null;
+        // Fall back to node.Icon only if it looks like an image URL (not a Fluent icon name)
+        return MeshNodeImageHelper.GetIconAsImageUrl(node.Icon);
     }
 }

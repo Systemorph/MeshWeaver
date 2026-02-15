@@ -16,7 +16,19 @@ public class AzureFoundryChatClientAgentFactory(
     ILogger<AzureFoundryChatClientAgentFactory> logger)
     : ChatClientAgentFactory(hub)
 {
-    private readonly AzureFoundryConfiguration configuration = options.Value ?? throw new ArgumentNullException(nameof(options));
+    private readonly AzureFoundryConfiguration configuration = InitAndLog(options, logger);
+
+    private static AzureFoundryConfiguration InitAndLog(IOptions<AzureFoundryConfiguration> options, ILogger logger)
+    {
+        var config = options.Value ?? throw new ArgumentNullException(nameof(options));
+        logger.LogInformation(
+            "[AzureFoundryChatClientAgentFactory] Initialized with Endpoint={Endpoint}, ApiKey={HasApiKey}, Models ({ModelCount}): [{Models}]",
+            config.Endpoint ?? "(null)",
+            !string.IsNullOrEmpty(config.ApiKey) ? "set" : "MISSING",
+            config.Models.Length,
+            string.Join(", ", config.Models));
+        return config;
+    }
 
     public override string Name => "Azure Foundry";
 

@@ -1,0 +1,18 @@
+{
+  "$type": "MeshNode",
+  "id": "Threads/l4PmOb_UKUSm18L6eXf_7w/XzKm4lMNsU-c_wegqHFt7A",
+  "path": "Threads/l4PmOb_UKUSm18L6eXf_7w/XzKm4lMNsU-c_wegqHFt7A",
+  "nodeType": "ThreadMessage",
+  "icon": "/static/NodeTypeIcons/message.svg",
+  "lastModified": "2026-02-12T13:22:54.926693+00:00",
+  "state": "Active",
+  "content": {
+    "$type": "ThreadMessage",
+    "id": "XzKm4lMNsU-c_wegqHFt7A",
+    "role": "PricingAgent",
+    "authorName": "PricingAgent",
+    "text": "Hello! I\u2019m the **Pricing Agent** for **Cornerstone Insurance**, a reinsurance company.\n\nI specialize in managing reinsurance pricings, including:\n- **Creating, updating, and listing pricings** (e.g., for insureds like Microsoft, Apple, or Tesla).\n- **Managing property risks**, including geocoded locations and total sum insured (TSI) values.\n- **Viewing reinsurance structures**, such as coverage layers, attachment points, and financial terms.\n- **Importing property risk data** from Excel files.",
+    "timestamp": "2026-02-12T13:22:54.926088Z",
+    "type": "AgentResponse"
+  }
+}

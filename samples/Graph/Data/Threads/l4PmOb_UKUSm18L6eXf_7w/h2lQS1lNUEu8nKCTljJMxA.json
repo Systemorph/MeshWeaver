@@ -1,0 +1,18 @@
+{
+  "$type": "MeshNode",
+  "id": "Threads/l4PmOb_UKUSm18L6eXf_7w/h2lQS1lNUEu8nKCTljJMxA",
+  "path": "Threads/l4PmOb_UKUSm18L6eXf_7w/h2lQS1lNUEu8nKCTljJMxA",
+  "nodeType": "ThreadMessage",
+  "icon": "/static/NodeTypeIcons/message.svg",
+  "lastModified": "2026-02-12T13:22:43.852638+00:00",
+  "state": "Active",
+  "content": {
+    "$type": "ThreadMessage",
+    "id": "h2lQS1lNUEu8nKCTljJMxA",
+    "role": "PricingAgent",
+    "authorName": "PricingAgent",
+    "text": "Hello! I\u0027m the Pricing Agent, specialized in managing reinsurance pricings for Cornerstone Insurance. How can I assist you today?",
+    "timestamp": "2026-02-12T13:22:43.851965Z",
+    "type": "AgentResponse"
+  }
+}

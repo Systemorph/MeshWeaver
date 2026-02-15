@@ -125,10 +125,9 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
             // 1) Check create permission (async, cached)
             await CheckCreatePermissionAsync();
 
-            // 2) Load creatable types if we have create permission
+            // 2) Load editable collections if we have create permission
             if (HasCreatePermission)
             {
-                await NavigationService.EnsureCreatableTypesLoadedAsync();
                 LoadEditableCollections();
             }
         }
@@ -140,7 +139,6 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
         if (contentService != null)
         {
             EditableCollections = contentService.GetAllCollectionConfigs()
-                .Where(c => c.IsEditable)
                 .ToList();
         }
     }

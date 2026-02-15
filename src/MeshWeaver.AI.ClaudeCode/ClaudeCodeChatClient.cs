@@ -221,7 +221,7 @@ public class ClaudeCodeChatClient : IChatClient
     /// with the global configuration system prompt.
     /// ChatClientAgent passes its instructions as a system message in the messages collection.
     /// </summary>
-    private string BuildSystemPrompt(List<ChatMessage> messages)
+    internal string BuildSystemPrompt(List<ChatMessage> messages)
     {
         var parts = new List<string>();
 

@@ -10,6 +10,7 @@ using MeshWeaver.Blazor.Components.Monaco;
 using MeshWeaver.Data;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Catalog;
+using MeshWeaver.Graph;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 
@@ -552,7 +553,8 @@ public partial class MeshSearchView : IDisposable
             if (json.TryGetProperty("Logo", out var Logo) && Logo.ValueKind == JsonValueKind.String)
                 return Logo.GetString();
         }
-        return node.Icon;
+        // Fall back to node.Icon only if it looks like an image URL (not a Fluent icon name)
+        return MeshNodeImageHelper.GetIconAsImageUrl(node.Icon);
     }
 
     private string Truncate(string text, int maxLength)

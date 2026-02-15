@@ -21,7 +21,7 @@
 }
 else if(ContentType == "text/markdown")
 {
-    <LayoutArea Address="@TargetAddress" Area="Content" Id="@(ResolvedCollection + '/' + ResolvedPath)"/>
+    <LayoutArea Address="@TargetAddress" Area="@ContentCollectionsExtensions.ContentAreaName" Id="@(ResolvedCollection + '/' + ResolvedPath)"/>
 }
 else if (Content != null)
 {

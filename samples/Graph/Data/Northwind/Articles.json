@@ -1,0 +1,11 @@
+{
+  "id": "Articles",
+  "namespace": "Northwind",
+  "name": "Articles",
+  "nodeType": "Northwind/ArticlesCatalog",
+  "category": "Documentation",
+  "description": "Interactive articles and reports analyzing Northwind Traders data",
+  "iconName": "Document",
+  "displayOrder": 1,
+  "isPersistent": true
+}
