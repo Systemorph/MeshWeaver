@@ -181,7 +181,8 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
             .ConfigureServices(services => services
                 .AddPersistence(persistence)
                 .Configure<CompilationCacheOptions>(o => o.CacheDirectory = cacheDirectory))
-            .AddJsonGraphConfiguration(testDataDirectory);
+            .AddJsonGraphConfiguration(testDataDirectory)
+            .ConfigureDefaultNodeHub(config => config.AddDefaultLayoutAreas());
     }
 
     [Fact(Timeout = 30000)]

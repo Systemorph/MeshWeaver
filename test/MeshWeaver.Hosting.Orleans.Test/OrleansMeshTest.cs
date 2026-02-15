@@ -12,7 +12,7 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 
 public class OrleansMeshTests(ITestOutputHelper output) : OrleansTestBase(output)
 {
-    [Fact]
+    [Fact(Timeout = 30000)]
     public async Task PingPong()
     {
         var client = await GetClientAsync();
@@ -24,7 +24,7 @@ public class OrleansMeshTests(ITestOutputHelper output) : OrleansTestBase(output
         response.Message.Should().BeOfType<PingResponse>();
     }
 
-    [Theory]
+    [Theory(Timeout = 30000)]
     [InlineData("HubFactory")]
     [InlineData("Kernel")]
     public async Task HubWorksAfterDisposal(string id)

@@ -756,11 +756,18 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
         if (data is JsonElement jsonElement)
         {
             return jsonElement.EnumerateArray()
-                .Select(e => new ContentCollectionConfig
+                .Select(e =>
                 {
-                    Name = e.GetProperty("name").GetString() ?? "",
-                    SourceType = e.GetProperty("sourceType").GetString() ?? "",
-                    BasePath = e.GetProperty("basePath").GetString()
+                    var config = new ContentCollectionConfig
+                    {
+                        Name = e.TryGetProperty("name", out var name) ? name.GetString() ?? ""
+                             : e.TryGetProperty("Name", out name) ? name.GetString() ?? "" : "",
+                        SourceType = e.TryGetProperty("sourceType", out var st) ? st.GetString() ?? ""
+                                   : e.TryGetProperty("SourceType", out st) ? st.GetString() ?? "" : "",
+                        BasePath = e.TryGetProperty("basePath", out var bp) ? bp.GetString()
+                                 : e.TryGetProperty("BasePath", out bp) ? bp.GetString() : null
+                    };
+                    return config;
                 })
                 .ToArray();
         }
