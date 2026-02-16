@@ -71,7 +71,6 @@ public record Story
         {
             Name = "Story",
             NodeType = "NodeType",
-            Description = "A user story",
             Icon = "Document",
             DisplayOrder = 30,
             Content = new NodeTypeDefinition
@@ -103,7 +102,6 @@ public record Graph
         {
             Name = "Graph",
             NodeType = "NodeType",
-            Description = "The graph root",
             Icon = "Diagram",
             DisplayOrder = 0,
             Content = new NodeTypeDefinition

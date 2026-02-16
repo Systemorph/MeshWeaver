@@ -30,59 +30,51 @@ public class HierarchicalBrowsingTests(ITestOutputHelper output) : MonolithMeshT
         await Persistence.SaveNodeAsync(MeshNode.FromPath("Systemorph/Marketing") with
         {
             Name = "Marketing",
-            NodeType = "Namespace",
-            Description = "Marketing namespace"
+            NodeType = "Namespace"
         });
 
         await Persistence.SaveNodeAsync(MeshNode.FromPath("Systemorph/Marketing/ClaimsProcessing") with
         {
             Name = "Claims Processing",
-            NodeType = "Systemorph/Marketing/Story",
-            Description = "Claims processing and email management use case"
+            NodeType = "Systemorph/Marketing/Story"
         });
 
         await Persistence.SaveNodeAsync(MeshNode.FromPath("Systemorph/Marketing/DataIngestionStrategy") with
         {
             Name = "Data Ingestion Strategy",
-            NodeType = "Systemorph/Marketing/Story",
-            Description = "Data ingestion and integration patterns"
+            NodeType = "Systemorph/Marketing/Story"
         });
 
         // Sub-stories of ClaimsProcessing
         await Persistence.SaveNodeAsync(MeshNode.FromPath("Systemorph/Marketing/ClaimsProcessing/EmailTriage") with
         {
             Name = "Email Triage",
-            NodeType = "Systemorph/Marketing/Story",
-            Description = "AI-driven email classification, prioritization, and routing"
+            NodeType = "Systemorph/Marketing/Story"
         });
 
         await Persistence.SaveNodeAsync(MeshNode.FromPath("Systemorph/Marketing/ClaimsProcessing/DocumentExtraction") with
         {
             Name = "Document Extraction",
-            NodeType = "Systemorph/Marketing/Story",
-            Description = "Extract structured data from claims documents"
+            NodeType = "Systemorph/Marketing/Story"
         });
 
         await Persistence.SaveNodeAsync(MeshNode.FromPath("Systemorph/Marketing/ClaimsProcessing/ClientCorrespondence") with
         {
             Name = "Client Correspondence",
-            NodeType = "Systemorph/Marketing/Story",
-            Description = "AI-assisted client communication"
+            NodeType = "Systemorph/Marketing/Story"
         });
 
         // Sub-stories of DataIngestionStrategy
         await Persistence.SaveNodeAsync(MeshNode.FromPath("Systemorph/Marketing/DataIngestionStrategy/AnnotatedDataModel") with
         {
             Name = "Annotated Data Model",
-            NodeType = "Systemorph/Marketing/Story",
-            Description = "Self-documenting data models"
+            NodeType = "Systemorph/Marketing/Story"
         });
 
         await Persistence.SaveNodeAsync(MeshNode.FromPath("Systemorph/Marketing/DataIngestionStrategy/HistoricIngestion") with
         {
             Name = "Historic Ingestion",
-            NodeType = "Systemorph/Marketing/Story",
-            Description = "Batch ingestion of historical data"
+            NodeType = "Systemorph/Marketing/Story"
         });
     }
 

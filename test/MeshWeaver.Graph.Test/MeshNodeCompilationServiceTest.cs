@@ -320,7 +320,6 @@ public record WidgetType
         {
             Name = "My Widget",
             NodeType = "type/widget",
-            Description = "A test widget",
             LastModified = DateTimeOffset.UtcNow
         };
 
@@ -367,7 +366,6 @@ public record ComponentType
         {
             Name = "Header Component",
             NodeType = "type/component",
-            Description = "The main header",
             Icon = "Header",
             DisplayOrder = 1,
             LastModified = DateTimeOffset.UtcNow
@@ -399,7 +397,6 @@ public record ComponentType
         loadedNode.Path.Should().Be("app/components/header");
         loadedNode.Name.Should().Be("Header Component");
         loadedNode.NodeType.Should().Be("type/component");
-        loadedNode.Description.Should().Be("The main header");
         loadedNode.Icon.Should().Be("Header");
         loadedNode.DisplayOrder.Should().Be(1);
     }

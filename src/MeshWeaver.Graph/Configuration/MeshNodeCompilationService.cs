@@ -226,7 +226,6 @@ internal class MeshNodeCompilationService(
                                     DataType = typeof(object),
                                     HubConfiguration = hubConfig,
                                     DisplayName = meshNode.Name,
-                                    Description = meshNode.Description,
                                     Icon = meshNode.Icon,
                                     DisplayOrder = meshNode.DisplayOrder
                                 });
@@ -533,7 +532,6 @@ internal class MeshNodeCompilationService(
                                     DataType = typeof(object),
                                     HubConfiguration = hubConfig,
                                     DisplayName = meshNode.Name,
-                                    Description = meshNode.Description,
                                     Icon = meshNode.Icon,
                                     DisplayOrder = meshNode.DisplayOrder
                                 });

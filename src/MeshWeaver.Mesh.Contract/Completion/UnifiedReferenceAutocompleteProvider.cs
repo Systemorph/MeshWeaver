@@ -217,7 +217,7 @@ public class UnifiedReferenceAutocompleteProvider(
                     yield return new AutocompleteItem(
                         Label: $"{node.Path}/",
                         InsertText: $"@{node.Path}/",
-                        Description: node.Description ?? node.Name,
+                        Description: node.Name,
                         Category: "Types",
                         Priority: PrefixPriority - (node.DisplayOrder ?? 0),
                         Kind: AutocompleteKind.Other

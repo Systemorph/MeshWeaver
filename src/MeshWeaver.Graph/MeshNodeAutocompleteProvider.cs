@@ -28,7 +28,7 @@ public class MeshNodeAutocompleteProvider(IMeshCatalog meshCatalog, IMessageHub 
             yield return new AutocompleteItem(
                 Label: $"@{node.Path}/",
                 InsertText: $"@{node.Path}/",
-                Description: node.Name ?? node.Description ?? node.NodeType,
+                Description: node.Name ?? node.NodeType,
                 Category: node.NodeType ?? "Nodes",
                 Priority: 1000 - (node.DisplayOrder ?? 0),
                 Kind: AutocompleteKind.Other

@@ -350,7 +350,6 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
         var transientNode = MeshNode.FromPath(nodePath) with
         {
             Name = "Create Test Task",
-            Description = "Testing CreateNodeRequest flow",
             NodeType = "ACME/Project/Todo",
             State = MeshNodeState.Transient
         };
@@ -436,7 +435,6 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
         var transientNode = MeshNode.FromPath(nodePath) with
         {
             Name = "E2E Test Task",
-            Description = "Test description",
             NodeType = "ACME/Project/Todo",
             State = MeshNodeState.Transient
         };
@@ -543,7 +541,6 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
         var transientNode = MeshNode.FromPath(nodePath) with
         {
             Name = "UI Flow Test Task",
-            Description = "Testing UI flow content preservation",
             NodeType = "ACME/Project/Todo",
             State = MeshNodeState.Transient
             // NOTE: No Content set - this is how CreateChild creates the node
@@ -677,7 +674,6 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
         var transientNode = MeshNode.FromPath(nodePath) with
         {
             Name = "Data Request Test Task",
-            Description = "Testing GetDataRequest retrieval",
             NodeType = "ACME/Project/Todo",
             State = MeshNodeState.Transient,
             Content = todoContent

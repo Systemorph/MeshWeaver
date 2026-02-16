@@ -224,7 +224,6 @@ public class InMemoryPersistenceService : IPersistenceServiceCore
         {
             Name = sourceNode.Name,
             NodeType = sourceNode.NodeType,
-            Description = sourceNode.Description,
             Icon = sourceNode.Icon,
             DisplayOrder = sourceNode.DisplayOrder,
             Content = sourceNode.Content,
@@ -248,7 +247,6 @@ public class InMemoryPersistenceService : IPersistenceServiceCore
                 {
                     Name = descendantNode.Name,
                     NodeType = descendantNode.NodeType,
-                    Description = descendantNode.Description,
                     Icon = descendantNode.Icon,
                     DisplayOrder = descendantNode.DisplayOrder,
                     Content = descendantNode.Content,
@@ -316,10 +314,8 @@ public class InMemoryPersistenceService : IPersistenceServiceCore
                     }
                 }
 
-                // Search in Name, Description, and Content
+                // Search in Name and Content
                 if (n.Name?.Contains(query, StringComparison.OrdinalIgnoreCase) == true)
-                    return true;
-                if (n.Description?.Contains(query, StringComparison.OrdinalIgnoreCase) == true)
                     return true;
                 if (n.Content?.ToString()?.Contains(query, StringComparison.OrdinalIgnoreCase) == true)
                     return true;

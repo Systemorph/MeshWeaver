@@ -48,7 +48,6 @@ public class InteractiveMarkdownTest(ITestOutputHelper output) : MonolithMeshTes
         node.Namespace.Should().Be("Test");
         node.Name.Should().Be("Northwind Overview");
         node.Category.Should().Be("Documentation");
-        node.Description.Should().Be("This is a sample description of the article.");
         node.NodeType.Should().Be("Markdown");
         node.Content.Should().BeOfType<MarkdownContent>();
         ((MarkdownContent)node.Content!).Content.Should().Contain("# Northwind");
@@ -92,7 +91,6 @@ public class InteractiveMarkdownTest(ITestOutputHelper output) : MonolithMeshTes
         {
             Name = "Test Document",
             Category = "Testing",
-            Description = "A test document",
             NodeType = "Markdown",
             Content = "# Hello World\n\nThis is content."
         };
@@ -104,7 +102,6 @@ public class InteractiveMarkdownTest(ITestOutputHelper output) : MonolithMeshTes
         markdown.Should().Contain("---");
         markdown.Should().Contain("Name: Test Document");
         markdown.Should().Contain("Category: Testing");
-        markdown.Should().Contain("Description: A test document");
         markdown.Should().Contain("# Hello World");
     }
 

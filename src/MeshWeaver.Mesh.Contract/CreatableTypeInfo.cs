@@ -19,3 +19,14 @@ public record CreatableTypeInfo(
     int DisplayOrder = 0,
     Type? ContentType = null,
     string? SubNamespace = null);
+
+/// <summary>
+/// Snapshot of creatable types emitted by the observable.
+/// <see cref="IsLoading"/> is true while more items may still arrive.
+/// </summary>
+public record CreatableTypesSnapshot(IReadOnlyList<CreatableTypeInfo> Items, bool IsLoading)
+{
+    public static readonly CreatableTypesSnapshot Empty = new([], false);
+    public static CreatableTypesSnapshot Loading(IReadOnlyList<CreatableTypeInfo> items) => new(items, true);
+    public static CreatableTypesSnapshot Done(IReadOnlyList<CreatableTypeInfo> items) => new(items, false);
+}

@@ -349,12 +349,6 @@ public record MeshDataSource : GenericUnpartitionedDataSource<MeshDataSource>
             instance = SetPropertyValue(instance, nameProp, node.Name);
         }
 
-        // Map MeshNode.Description
-        if (mappings.TryGetValue("Description", out var descProp) && !string.IsNullOrEmpty(node.Description))
-        {
-            instance = SetPropertyValue(instance, descProp, node.Description);
-        }
-
         // Map MeshNode.Icon
         if (mappings.TryGetValue("Icon", out var iconProp) && !string.IsNullOrEmpty(node.Icon))
         {

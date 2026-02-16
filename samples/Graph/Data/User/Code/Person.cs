@@ -31,7 +31,6 @@ public record Person
     /// <summary>
     /// Short biography or description.
     /// </summary>
-    [MeshNodeProperty(nameof(MeshNode.Description))]
     public string? Bio { get; init; }
 
     /// <summary>
