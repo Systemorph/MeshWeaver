@@ -97,7 +97,7 @@ public static class NodeTypeView
     private static UiControl BuildNodeTypeDetailsContent(this LayoutAreaHost host, MeshNode? node, NodeTypeDefinition? typeDef)
     {
         var nodePath = node?.Namespace ?? host.Hub.Address.ToString();
-        var stack = Controls.Stack.WithWidth("100%").WithStyle("position: relative;");
+        var stack = Controls.Stack.WithWidth("100%").WithStyle(MeshNodeLayoutAreas.GetContainerStyle(host, typeDef));
 
         // Action menu (top-right)
         stack = stack.WithView(Controls.Stack

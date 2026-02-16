@@ -31,6 +31,20 @@ namespace MeshWeaver.Graph;
 public record NodeTypeCatalogMode;
 
 /// <summary>
+/// Page layout options that can be set per node type via hub configuration.
+/// Use <c>configuration.Set(new PageLayoutOptions { MaxWidth = "960px" })</c>.
+/// </summary>
+public record PageLayoutOptions
+{
+    /// <summary>
+    /// Maximum width for the page content area (e.g., "960px", "1200px").
+    /// Applied as CSS max-width with centered margins.
+    /// Default: null (no constraint, full width).
+    /// </summary>
+    public string? MaxWidth { get; init; }
+}
+
+/// <summary>
 /// Layout areas for mesh node content.
 /// - Overview: Main content display with action menu (readonly content + navigation)
 /// - Thumbnail: Compact card view for use in catalogs and lists
@@ -52,6 +66,7 @@ public static class MeshNodeLayoutAreas
     public const string AccessControlArea = "AccessControl";
     public const string CreateNodeArea = "Create";
     public const string EditArea = "Edit";
+    public const string DeleteArea = "Delete";
 
     // UCR (Unified Content Reference) special areas
     public const string ContentArea = "$Content";
@@ -84,6 +99,7 @@ public static class MeshNodeLayoutAreas
             .WithView(AccessControlArea, AccessControl)
             .WithView(CreateNodeArea, CreateNode)
             .WithView(EditArea, Edit)
+            .WithView(DeleteArea, DeleteLayoutArea.Delete)
             // UCR special areas
             .WithView(DataArea, Data)
             .WithView(SchemaArea, Schema)
@@ -112,10 +128,19 @@ public static class MeshNodeLayoutAreas
         });
     }
 
+    internal static string GetContainerStyle(LayoutAreaHost host, NodeTypeDefinition? typeDef = null)
+    {
+        var pageMaxWidth = typeDef?.PageMaxWidth
+            ?? host.Hub.Configuration.Get<PageLayoutOptions>()?.MaxWidth;
+        return string.IsNullOrEmpty(pageMaxWidth)
+            ? "position: relative; padding: 0 24px;"
+            : $"position: relative; max-width: {pageMaxWidth}; margin: 0 auto; padding: 0 24px;";
+    }
+
     private static UiControl BuildDetailsContent(this LayoutAreaHost host, MeshNode? node, NodeTypeDefinition? typeDef)
     {
         var nodePath = node?.Namespace ?? host.Hub.Address.ToString();
-        var stack = Controls.Stack.WithWidth("100%").WithStyle("position: relative;");
+        var stack = Controls.Stack.WithWidth("100%").WithStyle(GetContainerStyle(host, typeDef));
 
         // Action menu (top-right)
         stack = stack.WithView(Controls.Stack
@@ -189,24 +214,6 @@ public static class MeshNodeLayoutAreas
             var typeRegistry = host.Hub.ServiceProvider.GetService<ITypeRegistry>();
             var contentType = !string.IsNullOrEmpty(typeName) ? typeRegistry?.GetType(typeName) : null;
             hasTitleProperty = contentType?.GetProperty("Title") != null;
-
-            // Check edit permissions
-            if (hasTitleProperty)
-            {
-                var securityService = host.Hub.ServiceProvider.GetService<ISecurityService>();
-                if (securityService != null)
-                {
-                    try
-                    {
-                        var permissions = securityService.GetEffectivePermissionsAsync(nodePath).GetAwaiter().GetResult();
-                        canEdit = permissions.HasFlag(Permission.Update);
-                    }
-                    catch
-                    {
-                        canEdit = true; // fallback
-                    }
-                }
-            }
         }
 
         // Title - click-to-edit if we have Title property, otherwise static
@@ -251,6 +258,10 @@ public static class MeshNodeLayoutAreas
         var editHref = $"/{nodePath}/{EditArea}";
         menu = menu.WithView(new NavLinkControl("Edit", FluentIcons.Edit(IconSize.Size16), editHref));
 
+        // Delete current node — navigates to confirmation page
+        var deleteHref = $"/{nodePath}/{DeleteArea}";
+        menu = menu.WithView(new NavLinkControl("Delete", FluentIcons.Delete(IconSize.Size16), deleteHref));
+
         // Comments option (only if comments are enabled)
         if (host.Hub.Configuration.HasComments())
         {
@@ -258,9 +269,29 @@ public static class MeshNodeLayoutAreas
             menu = menu.WithView(new NavLinkControl("Comments", FluentIcons.Comment(IconSize.Size16), commentsHref));
         }
 
-        // Files option (Content folder)
-        var filesHref = $"/{nodePath}/{FilesArea}";
-        menu = menu.WithView(new NavLinkControl("Files", FluentIcons.Folder(IconSize.Size16), filesHref));
+        // Files sub-menu listing editable content collections
+        var filesContentService = host.Hub.ServiceProvider.GetService<IContentService>();
+        var editableCollections = filesContentService?.GetAllCollectionConfigs()
+            .Where(c => c.IsEditable).ToList();
+        if (editableCollections is { Count: > 0 })
+        {
+            var filesMenu = Controls.MenuItem("Files", FluentIcons.Folder(IconSize.Size16));
+            foreach (var config in editableCollections)
+            {
+                var collectionFilesHref = $"/{nodePath}/{FilesArea}?collection={Uri.EscapeDataString(config.Name)}";
+                filesMenu = filesMenu.WithView(new NavLinkControl(
+                    config.DisplayName ?? config.Name,
+                    FluentIcons.Folder(IconSize.Size16),
+                    collectionFilesHref));
+            }
+            menu = menu.WithView(filesMenu);
+        }
+        else
+        {
+            // Fallback: single Files link for the default "content" collection
+            var filesHref = $"/{nodePath}/{FilesArea}";
+            menu = menu.WithView(new NavLinkControl("Files", FluentIcons.Folder(IconSize.Size16), filesHref));
+        }
 
         // Metadata option
         var metadataHref = $"/{nodePath}/{MetadataArea}";
@@ -771,13 +802,13 @@ public static class MeshNodeLayoutAreas
     /// <summary>
     /// Renders a file browser for the node's content directory.
     /// Uses FileBrowserControl to display and manage files in the content collection.
+    /// Reads ?collection= query parameter to select which collection to browse.
     /// </summary>
     [Browsable(false)]
     public static UiControl Files(LayoutAreaHost host, RenderingContext _)
     {
-        return new FileBrowserControl("content")
-            .WithTopLevel(host.Hub.Address.ToString());
-
+        var collection = host.GetQueryStringParamValue("collection") ?? "content";
+        return new FileBrowserControl(collection);
     }
 
     #region UCR Special Areas

@@ -286,11 +286,11 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
             TestTimeout);
 
         var workspace = client.GetWorkspace();
-        var reference = new LayoutAreaReference(MarkdownLayoutAreas.ReadArea);
+        var reference = new LayoutAreaReference(MarkdownLayoutAreas.OverviewArea);
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(docAddress, reference);
 
         var initialControl = await stream
-            .GetControlStream(MarkdownLayoutAreas.ReadArea)
+            .GetControlStream(MarkdownLayoutAreas.OverviewArea)
             .Timeout(20.Seconds())
             .FirstAsync(x => x is StackControl);
         initialControl.Should().NotBeNull("Initial Read view should render");
@@ -324,7 +324,7 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
         await Task.Delay(2000); // Give time for reactive stream to deliver
 
         var updatedControl = await stream
-            .GetControlStream(MarkdownLayoutAreas.ReadArea)
+            .GetControlStream(MarkdownLayoutAreas.OverviewArea)
             .Timeout(10.Seconds())
             .FirstAsync(x => x is StackControl);
 

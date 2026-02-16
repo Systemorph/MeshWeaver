@@ -120,4 +120,11 @@ public record NodeTypeDefinition
     /// Default: true.
     /// </summary>
     public bool IncludeGlobalTypes { get; init; } = true;
+
+    /// <summary>
+    /// Maximum width for the page content area (e.g., "960px", "1200px", "100%").
+    /// Applied as CSS max-width on the outer container.
+    /// If null, defaults to "100%" (no constraint).
+    /// </summary>
+    public string? PageMaxWidth { get; init; }
 }

@@ -1509,7 +1509,7 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
         // Step 4: Request default Read layout area (this is what the GUI does after edit)
         Output.WriteLine($"Step 4: Requesting Read layout area (default view)");
 
-        var readReference = new LayoutAreaReference(MarkdownLayoutAreas.ReadArea);
+        var readReference = new LayoutAreaReference(MarkdownLayoutAreas.OverviewArea);
         var readStream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(nodeAddress, readReference);
         var readLayout = await readStream.Timeout(30.Seconds()).FirstAsync();
 
@@ -1626,14 +1626,14 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
         Output.WriteLine($"After-edit resolution: Prefix={afterEditResolution!.Prefix}, Remainder={afterEditResolution.Remainder}");
 
         // Also test with area suffix (like /path/Read)
-        var withAreaResolution = await catalog.ResolvePathAsync($"{nodePath}/{MarkdownLayoutAreas.ReadArea}");
+        var withAreaResolution = await catalog.ResolvePathAsync($"{nodePath}/{MarkdownLayoutAreas.OverviewArea}");
         withAreaResolution.Should().NotBeNull("Path with area should resolve after edit");
         Output.WriteLine($"With-area resolution: Prefix={withAreaResolution!.Prefix}, Remainder={withAreaResolution.Remainder}");
 
         // Step 5: Verify we can still get the Read layout
         Output.WriteLine($"Step 5: Requesting Read layout after edit");
 
-        var readReference = new LayoutAreaReference(MarkdownLayoutAreas.ReadArea);
+        var readReference = new LayoutAreaReference(MarkdownLayoutAreas.OverviewArea);
         var readStream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(nodeAddress, readReference);
         var readLayout = await readStream.Timeout(30.Seconds()).FirstAsync();
 
