@@ -41,7 +41,6 @@ public class MetadataReferenceTest
         {
             Name = "Test Node",
             NodeType = "generic",
-            Description = "A test node with content",
             Content = new { Id = "test1", Title = "Test Content" }
         };
 
@@ -52,7 +51,6 @@ public class MetadataReferenceTest
         metadataNode.Path.Should().Be(originalNode.Path);
         metadataNode.Name.Should().Be(originalNode.Name);
         metadataNode.NodeType.Should().Be(originalNode.NodeType);
-        metadataNode.Description.Should().Be(originalNode.Description);
         metadataNode.Content.Should().BeNull("Content should be stripped for metadata");
     }
 

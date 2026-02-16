@@ -21,7 +21,6 @@ public partial class MeshNodeEditorView
     private string _lastSegment = string.Empty;
     private string _originalPath = string.Empty;
     private string _name = string.Empty;
-    private string _description = string.Empty;
     private string? _nodeType;
 
     // Content field
@@ -73,7 +72,6 @@ public partial class MeshNodeEditorView
                 }
 
                 _name = _node.Name ?? string.Empty;
-                _description = _node.Description ?? string.Empty;
                 _nodeType = _node.NodeType?.ToLowerInvariant();
 
                 // Load content based on node type
@@ -164,7 +162,6 @@ public partial class MeshNodeEditorView
             {
                 Name = _name,
                 NodeType = _node.NodeType,
-                Description = _description,
                 Icon = _node.Icon,
                 DisplayOrder = _node.DisplayOrder,
                 Content = _node.Content,
@@ -243,7 +240,6 @@ public partial class MeshNodeEditorView
             {
                 Name = _node.Name,
                 NodeType = _node.NodeType,
-                Description = _node.Description,
                 Icon = _node.Icon,
                 DisplayOrder = _node.DisplayOrder,
                 Content = newContent,

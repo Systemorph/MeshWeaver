@@ -189,20 +189,19 @@ public class MeshCatalogQueryTest(ITestOutputHelper output) : MonolithMeshTestBa
     {
         // Arrange
         var persistence = new InMemoryPersistenceService();
-        await persistence.SaveNodeAsync(MeshNode.FromPath("org/acme") with { Name = "Acme Corp", Description = "Technology company" }, JsonOptions);
-        await persistence.SaveNodeAsync(MeshNode.FromPath("org/contoso") with { Name = "Contoso Ltd", Description = "Software company" }, JsonOptions);
-        await persistence.SaveNodeAsync(MeshNode.FromPath("org/fabrikam") with { Name = "Fabrikam Inc", Description = "Hardware manufacturer" }, JsonOptions);
+        await persistence.SaveNodeAsync(MeshNode.FromPath("org/acme") with { Name = "Acme Corp" }, JsonOptions);
+        await persistence.SaveNodeAsync(MeshNode.FromPath("org/contoso") with { Name = "Contoso Software" }, JsonOptions);
+        await persistence.SaveNodeAsync(MeshNode.FromPath("org/fabrikam") with { Name = "Fabrikam Inc" }, JsonOptions);
 
         // Act - simulate QueryAsync filtering
         var children = await persistence.GetChildrenAsync("org", JsonOptions).ToListAsync(TestContext.Current.CancellationToken);
         var filtered = children.Where(n =>
             (n.Name?.Contains("soft", StringComparison.OrdinalIgnoreCase) ?? false) ||
-            (n.Description?.Contains("soft", StringComparison.OrdinalIgnoreCase) ?? false) ||
             n.Path.Contains("soft", StringComparison.OrdinalIgnoreCase)).ToList();
 
         // Assert
         filtered.Should().HaveCount(1);
-        filtered.First().Name.Should().Be("Contoso Ltd");
+        filtered.First().Name.Should().Be("Contoso Software");
     }
 
     [Fact]
@@ -250,7 +249,6 @@ public class MeshCatalogQueryTest(ITestOutputHelper output) : MonolithMeshTestBa
         var children = await persistence.GetChildrenAsync("org", JsonOptions).ToListAsync(TestContext.Current.CancellationToken);
         var filtered = children.Where(n =>
             (n.Name?.Contains("acme-", StringComparison.OrdinalIgnoreCase) ?? false) ||
-            (n.Description?.Contains("acme-", StringComparison.OrdinalIgnoreCase) ?? false) ||
             n.Path.Contains("acme-", StringComparison.OrdinalIgnoreCase)).ToList();
 
         // Assert

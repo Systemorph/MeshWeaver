@@ -131,8 +131,7 @@ public partial class MarkdownView
                 var kernelNode = new MeshNode(_kernelId, AddressExtensions.KernelType)
                 {
                     Name = $"Kernel-{_kernelId}",
-                    NodeType = AddressExtensions.KernelType,
-                    Description = $"Interactive markdown view kernel (scope: {Stream?.Owner?.ToString() ?? "anonymous"})"
+                    NodeType = AddressExtensions.KernelType
                 };
 
                 try

@@ -877,7 +877,7 @@ internal class NodeTypeService : INodeTypeService, IDisposable
             NodeTypePath: node.Path,
             DisplayName: typeDef?.DisplayName ?? node.Name ?? GetLastPathSegment(node.Path),
             Icon: icon,
-            Description: typeDef?.Description ?? node.Description,
+            Description: typeDef?.Description,
             DisplayOrder: typeDef?.DisplayOrder ?? node.DisplayOrder ?? 0
         );
     }

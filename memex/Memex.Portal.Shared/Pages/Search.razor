@@ -127,9 +127,9 @@
                 <!-- Text content -->
                 <div style="flex: 1; min-width: 0; overflow: hidden;">
                     <div style="font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--neutral-foreground-rest);">@node.Name</div>
-                    @if (!string.IsNullOrEmpty(node.Description))
+                    @if (!string.IsNullOrEmpty(node.NodeType))
                     {
-                        <div style="font-size: 13px; color: var(--neutral-foreground-hint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 4px;">@TruncateDescription(node.Description)</div>
+                        <div style="font-size: 13px; color: var(--neutral-foreground-hint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 4px;">@node.NodeType</div>
                     }
                     <div style="font-size: 12px; color: var(--neutral-foreground-hint); opacity: 0.7; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 4px;">@node.Path</div>
                 </div>
@@ -360,11 +360,6 @@
     private string GetInitial(MeshNode node)
     {
         return !string.IsNullOrEmpty(node.Name) ? node.Name[0].ToString().ToUpper() : "?";
-    }
-
-    private string TruncateDescription(string description)
-    {
-        return description.Length > 80 ? description.Substring(0, 77) + "..." : description;
     }
 
     private string? GetImageUrl(MeshNode? node)

@@ -81,8 +81,6 @@ public partial class MarkdownFileParser : IFileFormatParser
             // Name: prefer Name, then Title (legacy), then id
             Name = frontMatter?.Name ?? frontMatter?.Title ?? id,
             Category = frontMatter?.Category,
-            // Description: prefer Description, then Abstract (legacy)
-            Description = frontMatter?.Description ?? frontMatter?.Abstract,
             // Icon: prefer Icon, then Thumbnail (legacy)
             Icon = frontMatter?.Icon ?? frontMatter?.Thumbnail ?? DefaultMarkdownIcon,
             State = ParseState(frontMatter?.State),
@@ -106,7 +104,6 @@ public partial class MarkdownFileParser : IFileFormatParser
             NodeType = node.NodeType != "Markdown" ? node.NodeType : null,
             Name = node.Name != node.Id ? node.Name : null,
             Category = node.Category,
-            Description = node.Description,
             Icon = node.Icon != DefaultMarkdownIcon ? node.Icon : null,
             State = node.State != MeshNodeState.Active ? node.State.ToString() : null,
             Authors = mdContent?.Authors?.ToList(),
@@ -118,7 +115,6 @@ public partial class MarkdownFileParser : IFileFormatParser
         var hasYamlContent = frontMatter.NodeType != null ||
                             frontMatter.Name != null ||
                             frontMatter.Category != null ||
-                            frontMatter.Description != null ||
                             frontMatter.Icon != null ||
                             frontMatter.State != null ||
                             frontMatter.Authors?.Count > 0 ||

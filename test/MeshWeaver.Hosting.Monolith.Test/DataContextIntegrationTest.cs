@@ -75,7 +75,6 @@ public class DataContextIntegrationTest : MonolithMeshTestBase
         {
             Name = "Story",
             NodeType = "NodeType",
-            Description = "A user story or task",
             Icon = "Document",
             DisplayOrder = 30,
             Content = new NodeTypeDefinition
@@ -101,7 +100,6 @@ public class DataContextIntegrationTest : MonolithMeshTestBase
         {
             Name = "Graph",
             NodeType = "NodeType",
-            Description = "The graph root",
             Icon = "Diagram",
             DisplayOrder = 0,
             Content = new NodeTypeDefinition

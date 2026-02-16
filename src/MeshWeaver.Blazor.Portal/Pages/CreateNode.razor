@@ -258,7 +258,6 @@
             var node = MeshNode.FromPath(nodePath) with
             {
                 Name = trimmedName,
-                Description = string.IsNullOrWhiteSpace(nodeDescription) ? null : nodeDescription.Trim(),
                 NodeType = selectedType.NodeTypePath,
                 Icon = string.IsNullOrWhiteSpace(nodeIcon) ? null : nodeIcon.Trim(),
                 Content = content

@@ -99,7 +99,6 @@ public static class MeshCatalogView
         return new DataGridControl(new JsonPointerReference(LayoutAreaReference.GetDataPointer(dataId)))
             .WithColumn(new PropertyColumnControl<string> { Property = "name" }.WithTitle("Name"))
             .WithColumn(new PropertyColumnControl<string> { Property = "nodeType" }.WithTitle("Type"))
-            .WithColumn(new PropertyColumnControl<string> { Property = "description" }.WithTitle("Description"))
             .WithClickAction(HandleNodeClick);
     }
 
@@ -158,7 +157,6 @@ public record MeshNodeViewModel
     public string Path { get; init; } = string.Empty;
     public string? Name { get; init; }
     public string? NodeType { get; init; }
-    public string? Description { get; init; }
     public string? Icon { get; init; }
 
     public MeshNodeViewModel() { }
@@ -168,7 +166,6 @@ public record MeshNodeViewModel
         Path = node.Path;
         Name = node.Name;
         NodeType = node.NodeType;
-        Description = node.Description;
         Icon = node.Icon;
     }
 }

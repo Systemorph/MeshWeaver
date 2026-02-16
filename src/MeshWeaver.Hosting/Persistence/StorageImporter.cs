@@ -31,6 +31,12 @@ public record StorageImportOptions
     public bool ImportPartitions { get; init; } = true;
 
     /// <summary>
+    /// If true, delete nodes in the target that don't exist in the source.
+    /// Only applies within the scanned paths (respects RootPath).
+    /// </summary>
+    public bool RemoveMissing { get; init; }
+
+    /// <summary>
     /// Optional progress callback invoked after each node is imported.
     /// Parameters: (nodesImported, partitionsImported, currentPath).
     /// </summary>
@@ -46,6 +52,7 @@ public record StorageImportResult
     public int PartitionsImported { get; init; }
     public int NodesSkipped { get; init; }
     public int PartitionsSkipped { get; init; }
+    public int NodesRemoved { get; init; }
     public TimeSpan Elapsed { get; init; }
 }
 
@@ -62,6 +69,8 @@ public class StorageImporter
     private int _partitionCount;
     private int _nodesSkipped;
     private int _partitionsSkipped;
+    private int _nodesRemoved;
+    private readonly HashSet<string> _importedNodePaths = new(StringComparer.OrdinalIgnoreCase);
 
     public StorageImporter(IStorageAdapter source, IStorageAdapter target, ILogger? logger = null)
     {
@@ -81,19 +90,28 @@ public class StorageImporter
         _partitionCount = 0;
         _nodesSkipped = 0;
         _partitionsSkipped = 0;
+        _nodesRemoved = 0;
+        _importedNodePaths.Clear();
+
+        var rootPath = string.IsNullOrEmpty(options.RootPath) ? null : options.RootPath;
 
         await ImportRecursivelyAsync(
-            string.IsNullOrEmpty(options.RootPath) ? null : options.RootPath,
+            rootPath,
             jsonOptions,
             options.ImportPartitions,
             options.OnProgress,
             ct);
 
+        if (options.RemoveMissing)
+        {
+            await RemoveMissingNodesAsync(rootPath, jsonOptions, ct);
+        }
+
         sw.Stop();
 
         _logger?.LogInformation(
-            "Import complete: {Nodes} nodes, {Partitions} partitions, {NodesSkipped} nodes skipped, {PartitionsSkipped} partitions skipped in {Elapsed}",
-            _nodeCount, _partitionCount, _nodesSkipped, _partitionsSkipped, sw.Elapsed);
+            "Import complete: {Nodes} nodes, {Partitions} partitions, {NodesSkipped} skipped, {PartitionsSkipped} partitions skipped, {Removed} removed in {Elapsed}",
+            _nodeCount, _partitionCount, _nodesSkipped, _partitionsSkipped, _nodesRemoved, sw.Elapsed);
 
         return new StorageImportResult
         {
@@ -101,6 +119,7 @@ public class StorageImporter
             PartitionsImported = _partitionCount,
             NodesSkipped = _nodesSkipped,
             PartitionsSkipped = _partitionsSkipped,
+            NodesRemoved = _nodesRemoved,
             Elapsed = sw.Elapsed
         };
     }
@@ -169,6 +188,14 @@ public class StorageImporter
 
             if (node != null)
             {
+                // Override Namespace/Id to match the source file path,
+                // ensuring the target structure mirrors the source.
+                var lastSlash = nodePath.LastIndexOf('/');
+                if (lastSlash > 0)
+                    node = node with { Namespace = nodePath[..lastSlash], Id = nodePath[(lastSlash + 1)..] };
+                else
+                    node = node with { Namespace = null, Id = nodePath };
+
                 try
                 {
                     await _target.WriteAsync(node, options, ct);
@@ -181,14 +208,31 @@ public class StorageImporter
                     continue;
                 }
                 _nodeCount++;
+                _importedNodePaths.Add(nodePath);
 
                 _logger?.LogDebug("Imported node {Path}", nodePath);
 
                 if (importPartitions)
                 {
                     var subPaths = await _source.ListPartitionSubPathsAsync(nodePath, ct);
+
+                    // Determine which partition sub-paths also appear as child directories;
+                    // those will be traversed recursively as child directories, so skip
+                    // partition save to avoid creating duplicate files with wrong names.
+                    HashSet<string>? childDirNames = null;
+                    if (subPaths.Any())
+                    {
+                        var (_, childDirPaths) = await _source.ListChildPathsAsync(nodePath, ct);
+                        childDirNames = new HashSet<string>(
+                            childDirPaths.Select(cd => cd[(cd.LastIndexOf('/') + 1)..]),
+                            StringComparer.OrdinalIgnoreCase);
+                    }
+
                     foreach (var subPath in subPaths)
                     {
+                        if (childDirNames != null && childDirNames.Contains(subPath))
+                            continue; // Content will be imported as child nodes during recursion
+
                         try
                         {
                             var objects = new List<object>();
@@ -225,6 +269,47 @@ public class StorageImporter
         foreach (var dirPath in directoryPaths)
         {
             await ImportRecursivelyAsync(dirPath, options, importPartitions, onProgress, ct);
+        }
+    }
+
+    private async Task RemoveMissingNodesAsync(string? parentPath, JsonSerializerOptions options, CancellationToken ct)
+    {
+        var (targetNodePaths, targetDirPaths) = await _target.ListChildPathsAsync(parentPath, ct);
+        var (sourceNodePaths, sourceDirPaths) = await _source.ListChildPathsAsync(parentPath, ct);
+        var sourceNodeSet = new HashSet<string>(sourceNodePaths, StringComparer.OrdinalIgnoreCase);
+        var sourceDirSet = new HashSet<string>(sourceDirPaths, StringComparer.OrdinalIgnoreCase);
+
+        foreach (var nodePath in targetNodePaths)
+        {
+            if (!sourceNodeSet.Contains(nodePath))
+            {
+                try
+                {
+                    await _target.DeleteAsync(nodePath, ct);
+                    await _target.DeletePartitionObjectsAsync(nodePath, ct: ct);
+                    _nodesRemoved++;
+                    _logger?.LogInformation("Removed missing node {Path}", nodePath);
+                }
+                catch (Exception ex)
+                {
+                    _logger?.LogWarning(ex, "Failed to remove node {Path}", nodePath);
+                }
+            }
+            else
+            {
+                // Recurse into children of nodes that exist in source
+                await RemoveMissingNodesAsync(nodePath, options, ct);
+            }
+        }
+
+        // Only recurse into directories that also exist in source
+        // (avoids traversing target-only dirs created by partition saves)
+        foreach (var dirPath in targetDirPaths)
+        {
+            if (sourceDirSet.Contains(dirPath))
+            {
+                await RemoveMissingNodesAsync(dirPath, options, ct);
+            }
         }
     }
 }

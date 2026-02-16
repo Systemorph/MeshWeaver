@@ -24,16 +24,18 @@ public record ImportNodesResponse
     public int PartitionsImported { get; init; }
     public int NodesSkipped { get; init; }
     public int PartitionsSkipped { get; init; }
+    public int NodesRemoved { get; init; }
     public TimeSpan Elapsed { get; init; }
     public string? Error { get; init; }
     public bool Success => Error == null;
 
-    public static ImportNodesResponse Ok(int nodesImported, int partitionsImported, int nodesSkipped, int partitionsSkipped, TimeSpan elapsed) => new()
+    public static ImportNodesResponse Ok(int nodesImported, int partitionsImported, int nodesSkipped, int partitionsSkipped, TimeSpan elapsed, int nodesRemoved = 0) => new()
     {
         NodesImported = nodesImported,
         PartitionsImported = partitionsImported,
         NodesSkipped = nodesSkipped,
         PartitionsSkipped = partitionsSkipped,
+        NodesRemoved = nodesRemoved,
         Elapsed = elapsed
     };
 

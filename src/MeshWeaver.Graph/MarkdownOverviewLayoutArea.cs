@@ -1,4 +1,6 @@
 using System.Reactive.Linq;
+using MeshWeaver.Application.Styles;
+using MeshWeaver.Domain;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Markdown;
@@ -13,6 +15,9 @@ namespace MeshWeaver.Graph;
 /// </summary>
 public static class MarkdownOverviewLayoutArea
 {
+    // Track which edit states have been initialized to avoid resetting on re-render
+    private static readonly HashSet<string> EditStateInitialized = new();
+
     public static IObservable<UiControl?> Overview(LayoutAreaHost host, RenderingContext _)
     {
         var hubPath = host.Hub.Address.ToString();
@@ -31,6 +36,8 @@ public static class MarkdownOverviewLayoutArea
     {
         var nodePath = node?.Path ?? host.Hub.Address.ToString();
         var rawContent = GetMarkdownContent(node);
+        var canEdit = true; // Permission enforcement happens at save time
+        var hasContent = !string.IsNullOrWhiteSpace(rawContent);
 
         var container = Controls.Stack.WithWidth("100%").WithStyle(MeshNodeLayoutAreas.GetContainerStyle(host));
 
@@ -42,20 +49,22 @@ public static class MarkdownOverviewLayoutArea
         // Standard header with title/icon
         container = container.WithView(MeshNodeLayoutAreas.BuildHeader(host, node));
 
-        // CollaborativeMarkdownControl handles annotation rendering in Blazor
-        if (!string.IsNullOrWhiteSpace(rawContent))
+        // Toggleable markdown content: click to edit, Done button to return to read-only
+        // Empty content starts in edit mode immediately; only initialize once to prevent
+        // nodeStream re-emissions from resetting the edit state while user is typing.
+        var editStateId = $"editState_markdown_{nodePath.Replace("/", "_")}";
+        if (!EditStateInitialized.Contains(editStateId))
         {
-            container = container.WithView(
-                new CollaborativeMarkdownControl()
-                    .WithValue(rawContent)
-                    .WithNodePath(nodePath)
-                    .WithHubAddress(host.Hub.Address.ToString()));
+            host.UpdateData(editStateId, !hasContent);
+            EditStateInitialized.Add(editStateId);
         }
-        else
-        {
-            container = container.WithView(
-                Controls.Html("<p style=\"color: var(--neutral-foreground-hint); font-style: italic;\">No content yet. Click Edit to add content.</p>"));
-        }
+
+        container = container.WithView((h, _) =>
+            h.Stream.GetDataStream<bool>(editStateId)
+                .DistinctUntilChanged()
+                .Select(isEditing => isEditing && canEdit
+                    ? BuildEditorView(host, nodePath, rawContent, editStateId)
+                    : BuildReadOnlyView(host, nodePath, rawContent, canEdit, editStateId)));
 
         // Standard children section
         container = container.WithView(LayoutAreaControl.Children(host.Hub));
@@ -69,7 +78,72 @@ public static class MarkdownOverviewLayoutArea
         return container;
     }
 
-    public static UiControl Thumbnail(LayoutAreaHost host, RenderingContext ctx)
+    private static UiControl BuildReadOnlyView(
+        LayoutAreaHost host, string nodePath, string rawContent,
+        bool canEdit, string editStateId)
+    {
+        var view = Controls.Stack
+            .WithWidth("100%")
+            .WithStyle(canEdit ? "cursor: pointer;" : "");
+
+        if (!string.IsNullOrWhiteSpace(rawContent))
+        {
+            view = view.WithView(
+                new CollaborativeMarkdownControl()
+                    .WithValue(rawContent)
+                    .WithNodePath(nodePath)
+                    .WithHubAddress(host.Hub.Address.ToString()));
+        }
+        else
+        {
+            view = view.WithView(
+                Controls.Html("<p style=\"color: var(--neutral-foreground-hint); font-style: italic;\">No content yet. Click to start writing.</p>"));
+        }
+
+        if (canEdit)
+        {
+            view = view.WithClickAction(ctx =>
+            {
+                ctx.Host.UpdateData(editStateId, true);
+                return Task.CompletedTask;
+            });
+        }
+
+        return view;
+    }
+
+    private static UiControl BuildEditorView(
+        LayoutAreaHost host, string nodePath, string rawContent, string editStateId)
+    {
+        var stack = Controls.Stack.WithWidth("100%");
+
+        // Done button to switch back to read-only
+        stack = stack.WithView(Controls.Stack
+            .WithOrientation(Orientation.Horizontal)
+            .WithStyle("justify-content: flex-end; margin-bottom: 8px;")
+            .WithView(Controls.Html("<span style=\"color: var(--neutral-foreground-hint); font-size: 0.85rem; align-self: center; margin-right: 8px;\">Changes are saved automatically</span>"))
+            .WithView(Controls.Button("Done")
+                .WithAppearance(Appearance.Accent)
+                .WithClickAction(ctx =>
+                {
+                    ctx.Host.UpdateData(editStateId, false);
+                    return Task.CompletedTask;
+                })));
+
+        // Editor with auto-save
+        var editor = new MarkdownEditorControl()
+            .WithDocumentId(nodePath)
+            .WithValue(rawContent ?? "")
+            .WithHeight("400px")
+            .WithTrackChanges(true)
+            .WithPlaceholder("Start writing your markdown content...")
+            .WithAutoSave(host.Hub.Address.ToString(), nodePath);
+        stack = stack.WithView(editor);
+
+        return stack;
+    }
+
+    public static UiControl Thumbnail(LayoutAreaHost host, RenderingContext _)
     {
         var hubPath = host.Hub.Address.ToString();
 
@@ -113,6 +187,6 @@ public static class MarkdownOverviewLayoutArea
             }
         }
 
-        return node.Description ?? string.Empty;
+        return string.Empty;
     }
 }

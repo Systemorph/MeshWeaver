@@ -22,7 +22,6 @@ public record Todo : IContentInitializable
     /// Detailed description of what needs to be done.
     /// </summary>
     [Markdown(EditorHeight = "200px", ShowPreview = false)]
-    [MeshNodeProperty(nameof(MeshNode.Description))]
     public string? Description { get; init; }
 
     /// <summary>

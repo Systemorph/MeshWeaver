@@ -266,6 +266,9 @@ public class NavigationServiceTest
     {
         // Arrange
         var service = CreateService();
+        CreatableTypesSnapshot? lastSnapshot = null;
+        service.CreatableTypes.Subscribe(s => lastSnapshot = s);
+
         _meshCatalog.ResolvePathAsync(Arg.Any<string>())
             .Returns(new AddressResolution("ACME", null));
 
@@ -289,9 +292,10 @@ public class NavigationServiceTest
         await Task.Delay(200);
 
         // Assert
-        service.CreatableTypes.Should().HaveCount(2);
-        service.CreatableTypes.Should().Contain(t => t.NodeTypePath == "ACME/Project/Story");
-        service.CreatableTypes.Should().Contain(t => t.NodeTypePath == "ACME/Project/Todo");
+        lastSnapshot.Should().NotBeNull();
+        lastSnapshot!.Items.Should().HaveCount(2);
+        lastSnapshot.Items.Should().Contain(t => t.NodeTypePath == "ACME/Project/Story");
+        lastSnapshot.Items.Should().Contain(t => t.NodeTypePath == "ACME/Project/Todo");
     }
 
     [Fact]
@@ -326,13 +330,13 @@ public class NavigationServiceTest
     }
 
     [Fact]
-    public async Task LoadCreatableTypes_RaisesOnCreatableTypesChangedIncrementally()
+    public async Task LoadCreatableTypes_EmitsIncrementalSnapshots()
     {
         // Arrange
         var service = CreateService();
-        var eventCounts = new List<int>();
+        var snapshots = new List<CreatableTypesSnapshot>();
 
-        service.OnCreatableTypesChanged += types => eventCounts.Add(types.Count);
+        service.CreatableTypes.Subscribe(s => snapshots.Add(s));
 
         _meshCatalog.ResolvePathAsync(Arg.Any<string>())
             .Returns(new AddressResolution("ACME/Project", null));
@@ -346,20 +350,20 @@ public class NavigationServiceTest
         await service.InitializeAsync();
         await Task.Delay(300);
 
-        // Assert - should see incremental updates: 0 (clear), 1, 2, 2 (final with loading=false)
-        eventCounts.Should().Contain(0); // Initial clear
-        eventCounts.Should().Contain(1); // First item
-        eventCounts.Should().Contain(2); // Second item and final
+        // Assert - should see incremental updates: 0 (loading), 1 (loading), 2 (loading), 2 (done)
+        snapshots.Should().Contain(s => s.Items.Count == 0 && s.IsLoading); // Initial clear
+        snapshots.Should().Contain(s => s.Items.Count == 1 && s.IsLoading); // First item
+        snapshots.Should().Contain(s => s.Items.Count == 2 && !s.IsLoading); // Final
     }
 
     [Fact]
-    public async Task IsLoadingCreatableTypes_TrueWhileLoading()
+    public async Task CreatableTypesSnapshot_IsLoadingTransitions()
     {
         // Arrange
         var service = CreateService();
         var loadingStates = new List<bool>();
 
-        service.OnCreatableTypesChanged += _ => loadingStates.Add(service.IsLoadingCreatableTypes);
+        service.CreatableTypes.Subscribe(s => loadingStates.Add(s.IsLoading));
 
         _meshCatalog.ResolvePathAsync(Arg.Any<string>())
             .Returns(new AddressResolution("ACME", null));

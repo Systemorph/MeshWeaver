@@ -6,6 +6,7 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
+using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Hosting.Security;
@@ -29,6 +30,10 @@ public class SecurityService : ISecurityService
     // In-memory cache for performance
     private readonly ConcurrentDictionary<string, List<UserAccess>> _accessCache = new();
     private readonly SemaphoreSlim _cacheLock = new(1, 1);
+
+    // Permission result cache (keyed by "userId:nodePath")
+    private readonly IMemoryCache _permissionCache = new MemoryCache(new MemoryCacheOptions());
+    private static readonly MemoryCacheEntryOptions PermissionCacheOptions = new() { SlidingExpiration = TimeSpan.FromMinutes(5) };
 
     // Built-in roles lookup
     private static readonly Dictionary<string, Role> BuiltInRoles = new()
@@ -93,6 +98,10 @@ public class SecurityService : ISecurityService
         if (string.IsNullOrEmpty(userId))
             userId = WellKnownUsers.Public;
 
+        var cacheKey = $"{userId}:{nodePath}";
+        if (_permissionCache.TryGetValue(cacheKey, out Permission cached))
+            return cached;
+
         // Collect effective permissions from role assignments
         var effectivePermissions = Permission.None;
 
@@ -124,6 +133,7 @@ public class SecurityService : ISecurityService
         _logger.LogTrace("User {UserId} has permissions {Permissions} on node {NodePath}",
             userId, effectivePermissions, nodePath);
 
+        _permissionCache.Set(cacheKey, effectivePermissions, PermissionCacheOptions);
         return effectivePermissions;
     }
 
@@ -547,6 +557,7 @@ public class SecurityService : ISecurityService
     public void ClearAccessCache()
     {
         _accessCache.Clear();
+        (_permissionCache as MemoryCache)?.Clear();
     }
 
     #endregion

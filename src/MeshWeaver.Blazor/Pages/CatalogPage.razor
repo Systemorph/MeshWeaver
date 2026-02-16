@@ -49,10 +49,6 @@
                             }
                             <div class="catalog-card-text">
                                 <FluentLabel Typo="Fluent.Typography.Body" Weight="Fluent.FontWeight.Bold">@(node.Name ?? node.Id)</FluentLabel>
-                                @if (!string.IsNullOrEmpty(node.Description))
-                                {
-                                    <FluentLabel Typo="Fluent.Typography.Body" Class="catalog-card-description">@Truncate(node.Description, 60)</FluentLabel>
-                                }
                             </div>
                         </div>
                     </FluentCard>

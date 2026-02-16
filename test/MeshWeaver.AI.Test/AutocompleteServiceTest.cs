@@ -303,13 +303,11 @@ public class AutocompleteServiceTest
             new Mesh.MeshNode("pricing")
             {
                 Name = "Pricing",
-                Description = "Insurance pricing submissions",
                 DisplayOrder = 100
             },
             new Mesh.MeshNode("northwind")
             {
                 Name = "Northwind",
-                Description = "Northwind sample data",
                 DisplayOrder = 200
             }
         ]);
@@ -326,7 +324,7 @@ public class AutocompleteServiceTest
         items.Should().Contain(i => i.Label == "@model/");
 
         var pricingItem = items.First(i => i.Label == "@pricing/");
-        pricingItem.Description.Should().Be("Insurance pricing submissions");
+        pricingItem.Description.Should().Be("Pricing");
     }
 
     [Fact]
@@ -335,7 +333,7 @@ public class AutocompleteServiceTest
         // arrange
         var mockCatalog = new MockMeshCatalog(
         [
-            new Mesh.MeshNode("pricing") { Name = "Pricing", Description = "Insurance pricing" }
+            new Mesh.MeshNode("pricing") { Name = "Pricing" }
         ]);
         var catalogProvider = new MeshCatalogAutocompleteProvider(mockCatalog);
         var fuzzyScorer = new FuzzyScorer();

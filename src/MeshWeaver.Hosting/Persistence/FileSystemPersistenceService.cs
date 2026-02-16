@@ -130,7 +130,6 @@ public class FileSystemPersistenceService : IPersistenceServiceCore
         {
             Name = sourceNode.Name,
             NodeType = sourceNode.NodeType,
-            Description = sourceNode.Description,
             Icon = sourceNode.Icon,
             DisplayOrder = sourceNode.DisplayOrder,
             Content = sourceNode.Content,
@@ -160,7 +159,6 @@ public class FileSystemPersistenceService : IPersistenceServiceCore
         await foreach (var node in GetDescendantsAsync(parentPath, options))
         {
             if (node.Name?.Contains(query, StringComparison.OrdinalIgnoreCase) == true ||
-                node.Description?.Contains(query, StringComparison.OrdinalIgnoreCase) == true ||
                 node.Content?.ToString()?.Contains(query, StringComparison.OrdinalIgnoreCase) == true)
             {
                 yield return node;

@@ -418,23 +418,20 @@ public class UserAccessTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
         await persistenceService.SaveNodeAsync(new MeshNode("Organization")
         {
             Name = "Organization",
-            NodeType = "NodeType",
-            Description = "An organization containing projects"
+            NodeType = "NodeType"
         }, TestTimeout);
 
         // Create two organizations - one public (Systemorph), one private (ACME)
         await persistenceService.SaveNodeAsync(new MeshNode("Systemorph")
         {
             Name = "Systemorph",
-            NodeType = "Organization",
-            Description = "The company behind MeshWeaver"
+            NodeType = "Organization"
         }, TestTimeout);
 
         await persistenceService.SaveNodeAsync(new MeshNode("ACME")
         {
             Name = "ACME",
-            NodeType = "Organization",
-            Description = "Private organization"
+            NodeType = "Organization"
         }, TestTimeout);
 
         // Configure Systemorph as public (Public user has Viewer role)
@@ -469,23 +466,20 @@ public class UserAccessTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
         await persistenceService.SaveNodeAsync(new MeshNode("Organization2")
         {
             Name = "Organization2",
-            NodeType = "NodeType",
-            Description = "An organization containing projects"
+            NodeType = "NodeType"
         }, TestTimeout);
 
         // Create two organizations - one public (MeshWeaver), one private (SecretOrg)
         await persistenceService.SaveNodeAsync(new MeshNode("MeshWeaver2")
         {
             Name = "MeshWeaver2",
-            NodeType = "Organization2",
-            Description = "The MeshWeaver project"
+            NodeType = "Organization2"
         }, TestTimeout);
 
         await persistenceService.SaveNodeAsync(new MeshNode("SecretOrg")
         {
             Name = "SecretOrg",
-            NodeType = "Organization2",
-            Description = "Secret organization"
+            NodeType = "Organization2"
         }, TestTimeout);
 
         // Configure MeshWeaver2 as public (Public user has Viewer role)

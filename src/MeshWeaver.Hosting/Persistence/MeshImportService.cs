@@ -29,6 +29,7 @@ public class MeshImportService : IMeshImportService
         string sourcePath,
         string? targetRootPath = null,
         bool force = false,
+        bool removeMissing = false,
         Action<int, int, string>? onProgress = null,
         CancellationToken ct = default)
     {
@@ -39,7 +40,7 @@ public class MeshImportService : IMeshImportService
         {
             var source = new FileSystemStorageAdapter(sourcePath);
             return await ImportHelper.RunImportAsync(
-                source, _storageAdapter, _logger, force, targetRootPath, onProgress, ct);
+                source, _storageAdapter, _logger, force, targetRootPath, removeMissing, onProgress, ct);
         }
         catch (Exception ex)
         {

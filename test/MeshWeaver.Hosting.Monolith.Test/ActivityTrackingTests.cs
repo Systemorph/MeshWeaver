@@ -417,14 +417,12 @@ public class CatalogSearchAndPaginationTests(ITestOutputHelper output) : Monolit
 
         await persistence.SaveNodeAsync(MeshNode.FromPath("doc/report1") with
         {
-            Name = "Annual Report 2024",
-            Description = "Financial summary for fiscal year",
+            Name = "Annual Financial Report 2024",
             NodeType = "Document"
         }, JsonOptions);
         await persistence.SaveNodeAsync(MeshNode.FromPath("doc/memo1") with
         {
             Name = "Team Meeting Notes",
-            Description = "Weekly sync discussion points",
             NodeType = "Document"
         }, JsonOptions);
 
@@ -436,7 +434,7 @@ public class CatalogSearchAndPaginationTests(ITestOutputHelper output) : Monolit
 
         // Assert
         results.Should().ContainSingle();
-        results.First().Name.Should().Be("Annual Report 2024");
+        results.First().Name.Should().Be("Annual Financial Report 2024");
     }
 
     [Fact(Timeout = 10000)]

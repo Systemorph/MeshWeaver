@@ -18,6 +18,7 @@ public static class ImportHelper
     /// <param name="logger">Logger for progress and errors</param>
     /// <param name="force">If true, skip idempotency check</param>
     /// <param name="rootPath">Optional root path to import from</param>
+    /// <param name="removeMissing">If true, delete target nodes not present in source</param>
     /// <param name="onProgress">Optional progress callback</param>
     /// <param name="ct">Cancellation token</param>
     /// <returns>Import result</returns>
@@ -27,6 +28,7 @@ public static class ImportHelper
         ILogger logger,
         bool force = false,
         string? rootPath = null,
+        bool removeMissing = false,
         Action<int, int, string>? onProgress = null,
         CancellationToken ct = default)
     {
@@ -46,6 +48,7 @@ public static class ImportHelper
         var result = await importer.ImportAsync(new StorageImportOptions
         {
             RootPath = rootPath,
+            RemoveMissing = removeMissing,
             JsonOptions = jsonOptions,
             OnProgress = onProgress ?? ((nodes, partitions, path) =>
             {
@@ -60,6 +63,7 @@ public static class ImportHelper
             result.PartitionsImported,
             result.NodesSkipped,
             result.PartitionsSkipped,
-            result.Elapsed);
+            result.Elapsed,
+            result.NodesRemoved);
     }
 }

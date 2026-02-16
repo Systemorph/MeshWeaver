@@ -260,7 +260,7 @@ public partial class MeshSearchView : IDisposable
             "Category" or "category" => node.Category,
             "NodeType" or "nodeType" => node.NodeType,
             "Name" or "name" => node.Name,
-            "Description" or "description" => node.Description,
+            "Description" or "description" => null,
             "Path" or "path" => node.Path,
             "Id" or "id" => node.Id,
             _ => GetContentProperty(node.Content, property)
@@ -343,7 +343,7 @@ public partial class MeshSearchView : IDisposable
             {
                 Label = node.Name ?? node.Id,
                 InsertText = node.Name ?? node.Id,
-                Description = node.Description ?? "",
+                Description = node.NodeType ?? "",
                 Path = node.Path,
                 Category = node.Category ?? ""
             }).ToArray();
@@ -483,7 +483,7 @@ public partial class MeshSearchView : IDisposable
     {
         var imageUrl = GetImageUrl(node);
         var title = node.Name ?? node.Id;
-        var description = node.Description ?? "";
+        var description = node.NodeType ?? "";
         var initial = !string.IsNullOrEmpty(title) ? title[0].ToString().ToUpper() : "?";
 
         builder.OpenComponent<FluentCard>(seq++);

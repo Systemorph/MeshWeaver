@@ -17,7 +17,6 @@ public static class ThreadMessageNodeConfiguration
     public static MeshNode CreateMeshNode() => new(ThreadMessageNodeType.NodeType)
     {
         Name = "Thread Message",
-        Description = "A single message in a conversation thread",
         Icon = "/static/NodeTypeIcons/message.svg",
         HubConfiguration = config => config
             .AddThreadMessageViews()

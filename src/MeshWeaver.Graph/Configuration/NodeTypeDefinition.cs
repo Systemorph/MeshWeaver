@@ -43,7 +43,6 @@ public record NodeTypeDefinition
     /// <summary>
     /// Description of this node type.
     /// </summary>
-    [MeshNodeProperty(nameof(MeshNode.Description))]
     public string? Description { get; init; }
 
     /// <summary>

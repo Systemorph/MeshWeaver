@@ -109,7 +109,6 @@ public enum StoryStatus
         {
             Name = "Story",
             NodeType = "NodeType",
-            Description = "A user story or task",
             Icon = "Document",
             DisplayOrder = 30,
             Content = new NodeTypeDefinition
@@ -143,7 +142,6 @@ public record Organization
         {
             Name = "Organization",
             NodeType = "NodeType",
-            Description = "An organization",
             Icon = "Building",
             DisplayOrder = 10,
             Content = new NodeTypeDefinition
@@ -177,7 +175,6 @@ public record Project
         {
             Name = "Project",
             NodeType = "NodeType",
-            Description = "A project",
             Icon = "Folder",
             DisplayOrder = 20,
             Content = new NodeTypeDefinition
@@ -210,7 +207,6 @@ public record Graph
         {
             Name = "Graph",
             NodeType = "NodeType",
-            Description = "The graph root",
             Icon = "Diagram",
             DisplayOrder = 0,
             Content = new NodeTypeDefinition
@@ -233,8 +229,8 @@ public record Graph
         // Pre-seed the hierarchy: graph -> org -> project -> story
         // NodeType uses full path to type definition (e.g., "type/graph", "type/org")
         await persistence.SaveNodeAsync(MeshNode.FromPath("graph") with { Name = "Graph", NodeType = "type/graph" });
-        await persistence.SaveNodeAsync(MeshNode.FromPath("graph/org1") with { Name = "Organization 1", NodeType = "type/org", Description = "First org" });
-        await persistence.SaveNodeAsync(MeshNode.FromPath("graph/org2") with { Name = "Organization 2", NodeType = "type/org", Description = "Second org" });
+        await persistence.SaveNodeAsync(MeshNode.FromPath("graph/org1") with { Name = "Organization 1", NodeType = "type/org" });
+        await persistence.SaveNodeAsync(MeshNode.FromPath("graph/org2") with { Name = "Organization 2", NodeType = "type/org" });
         await persistence.SaveNodeAsync(MeshNode.FromPath("graph/org1/proj1") with { Name = "Project 1", NodeType = "type/project" });
         await persistence.SaveNodeAsync(MeshNode.FromPath("graph/org1/proj2") with { Name = "Project 2", NodeType = "type/project" });
         await persistence.SaveNodeAsync(MeshNode.FromPath("graph/org1/proj1/story1") with { Name = "Story 1", NodeType = "type/story" });

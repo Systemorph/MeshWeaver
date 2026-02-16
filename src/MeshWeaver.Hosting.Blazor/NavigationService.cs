@@ -1,3 +1,4 @@
+using System.Reactive.Subjects;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
@@ -19,11 +20,10 @@ public class NavigationService : INavigationService
     private readonly IMessageHub _hub;
 
     private NavigationContext? _context;
-    private List<CreatableTypeInfo> _creatableTypes = new();
+    private readonly BehaviorSubject<CreatableTypesSnapshot> _creatableTypes = new(CreatableTypesSnapshot.Empty);
     private string? _lastLoadedNodePath;
     private CancellationTokenSource? _loadingCts;
     private bool _isInitialized;
-    private bool _isLoadingCreatableTypes;
     private bool _disposed;
 
     public NavigationService(
@@ -49,13 +49,17 @@ public class NavigationService : INavigationService
     public event Action<NavigationContext?>? OnNavigationContextChanged;
 
     /// <inheritdoc />
-    public IReadOnlyList<CreatableTypeInfo> CreatableTypes => _creatableTypes;
+    public IObservable<CreatableTypesSnapshot> CreatableTypes => _creatableTypes;
 
     /// <inheritdoc />
-    public event Action<IReadOnlyList<CreatableTypeInfo>>? OnCreatableTypesChanged;
+    public void RefreshCreatableTypes()
+    {
+        var snapshot = _creatableTypes.Value;
+        if (snapshot.IsLoading || snapshot.Items.Count > 0)
+            return;
 
-    /// <inheritdoc />
-    public bool IsLoadingCreatableTypes => _isLoadingCreatableTypes;
+        _ = LoadCreatableTypesAsync(CurrentNamespace ?? "");
+    }
 
     /// <inheritdoc />
     public async Task InitializeAsync()
@@ -79,9 +83,10 @@ public class NavigationService : INavigationService
         CurrentNamespace = @namespace;
 
         // Load creatable types in background when namespace changes
-        if (@namespace != _lastLoadedNodePath)
+        var effectiveNamespace = @namespace ?? "";
+        if (effectiveNamespace != _lastLoadedNodePath)
         {
-            _ = LoadCreatableTypesAsync(@namespace ?? "");
+            _ = LoadCreatableTypesAsync(effectiveNamespace);
         }
     }
 
@@ -150,10 +155,10 @@ public class NavigationService : INavigationService
         OnNavigationContextChanged?.Invoke(context);
 
         // Load creatable types in background when namespace changes
-        var currentNodePath = context.Namespace;
+        var currentNodePath = context.Namespace ?? "";
         if (currentNodePath != _lastLoadedNodePath)
         {
-            _ = LoadCreatableTypesAsync(currentNodePath ?? "");
+            _ = LoadCreatableTypesAsync(currentNodePath);
         }
     }
 
@@ -206,16 +211,15 @@ public class NavigationService : INavigationService
         var ct = _loadingCts.Token;
 
         _lastLoadedNodePath = nodePath;
-        _creatableTypes = new List<CreatableTypeInfo>();
-        _isLoadingCreatableTypes = true;
-        OnCreatableTypesChanged?.Invoke(_creatableTypes);
+        var items = new List<CreatableTypeInfo>();
+        _creatableTypes.OnNext(CreatableTypesSnapshot.Loading(items.ToArray()));
 
         try
         {
             await foreach (var typeInfo in nodeTypeService.GetCreatableTypesAsync(nodePath, ct).WithCancellation(ct))
             {
-                _creatableTypes.Add(typeInfo);
-                OnCreatableTypesChanged?.Invoke(_creatableTypes);
+                items.Add(typeInfo);
+                _creatableTypes.OnNext(CreatableTypesSnapshot.Loading(items.ToArray()));
             }
         }
         catch (OperationCanceledException)
@@ -228,8 +232,7 @@ public class NavigationService : INavigationService
         }
         finally
         {
-            _isLoadingCreatableTypes = false;
-            OnCreatableTypesChanged?.Invoke(_creatableTypes);
+            _creatableTypes.OnNext(CreatableTypesSnapshot.Done(items.ToArray()));
         }
     }
 
@@ -242,6 +245,7 @@ public class NavigationService : INavigationService
         _disposed = true;
         _loadingCts?.Cancel();
         _loadingCts?.Dispose();
+        _creatableTypes.Dispose();
 
         // Only unsubscribe if we actually subscribed (InitializeAsync was called)
         // Wrap in try-catch because NavigationManager may not be initialized if circuit was never established

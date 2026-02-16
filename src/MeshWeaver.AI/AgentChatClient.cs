@@ -158,8 +158,8 @@ public class AgentChatClient : IAgentChat
             {
                 return contentElement.GetString() ?? string.Empty;
             }
-            // If content is not a simple string, return the description or fallback
-            return node?.Description ?? string.Empty;
+            // If content is not a simple string, return empty
+            return string.Empty;
         }
         catch
         {

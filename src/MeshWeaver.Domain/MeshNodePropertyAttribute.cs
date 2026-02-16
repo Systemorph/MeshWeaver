@@ -6,7 +6,7 @@ namespace MeshWeaver.Domain;
 /// will have their values copied to the specified MeshNode property.
 /// When MeshNode is updated, the values can be synced back to the content.
 /// </summary>
-/// <param name="meshNodeProperty">The MeshNode property to map to (e.g., "Name", "Description", "Icon", "Category").</param>
+/// <param name="meshNodeProperty">The MeshNode property to map to (e.g., "Name", "Icon", "Category").</param>
 [AttributeUsage(AttributeTargets.Property, AllowMultiple = false)]
 public class MeshNodePropertyAttribute(string meshNodeProperty) : Attribute
 {
