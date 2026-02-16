@@ -744,11 +744,11 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
         var rawText = value.GetRawText();
         Output.WriteLine($"Received value: {rawText.Substring(0, Math.Min(500, rawText.Length))}...");
 
-        // For Markdown nodes, default area should be Read which renders the markdown content
+        // For Markdown nodes, default area should be Overview which renders the markdown content
         // NOT $Catalog which shows a search grid
-        // Check that the resolved area is Read, not $Catalog
-        rawText.Should().Contain("\"area\":\"Read\"",
-            "Markdown node default should resolve to Read area, not $Catalog");
+        // Check that the resolved area is Overview, not $Catalog
+        rawText.Should().Contain("\"area\":\"Overview\"",
+            "Markdown node default should resolve to Overview area, not $Catalog");
     }
 
     private static IReadOnlyCollection<ContentCollectionConfig>? ParseCollectionConfigs(object? data)

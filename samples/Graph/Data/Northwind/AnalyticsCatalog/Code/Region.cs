@@ -18,12 +18,4 @@ public record Region : INamed
     public string RegionDescription { get; init; } = string.Empty;
 
     string INamed.DisplayName => RegionDescription;
-
-    public static readonly Region[] All =
-    [
-        new() { RegionId = 1, RegionDescription = "Eastern" },
-        new() { RegionId = 2, RegionDescription = "Western" },
-        new() { RegionId = 3, RegionDescription = "Northern" },
-        new() { RegionId = 4, RegionDescription = "Southern" },
-    ];
 }

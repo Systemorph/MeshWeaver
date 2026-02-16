@@ -32,4 +32,4 @@ Below is an overview of key financial metrics and performance indicators:
 
 @@("Northwind/Analytics/FinancialSummary")
 
-Please have a look at the [Northwind Articles](/Northwind/Articles) for a detailed look.
+Please have a look at the [Northwind Reports](/Northwind/Reports) for detailed data analysis and the [Northwind Articles](/Northwind/Articles) for reference documentation.

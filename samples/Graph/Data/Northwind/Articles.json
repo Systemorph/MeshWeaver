@@ -2,9 +2,9 @@
   "id": "Articles",
   "namespace": "Northwind",
   "name": "Articles",
-  "nodeType": "Northwind/ArticlesCatalog",
+  "nodeType": "Northwind/ContentCatalog",
   "category": "Documentation",
-  "description": "Interactive articles and reports analyzing Northwind Traders data",
+  "description": "Conceptual articles and reference documentation for Northwind Traders",
   "iconName": "Document",
   "displayOrder": 1,
   "isPersistent": true

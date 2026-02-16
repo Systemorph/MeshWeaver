@@ -201,7 +201,7 @@ public static class MeshNodeLayoutAreas
             else
             {
                 titleContent = titleContent.WithView(
-                    Controls.Icon(iconValue).WithStyle("font-size: 48px; color: var(--accent-fill-rest);"));
+                    Controls.Icon(new Icon(FluentIcons.Provider, iconValue)).WithStyle("font-size: 48px; color: var(--accent-fill-rest);"));
             }
         }
 

@@ -11,23 +11,31 @@ Understanding the architectural patterns in the Northwind sample helps you build
 
 ## Node Structure
 
-Northwind uses a Catalog NodeType to organize analytics views and data sources:
+Northwind uses an AnalyticsCatalog NodeType to organize analytics views and data sources:
 
 ```
 Northwind/                           # Root namespace
-├── Catalog.json                     # NodeType: 53 layout areas, data sources
+├── AnalyticsCatalog.json             # NodeType: 53 layout areas, data sources
 ├── Analytics.json                   # Instance: Root database node
 ├── NorthwindAgent.md                # AI agent definition
 ├── Access/
 │   └── Public.json                  # Public viewer access
 ├── Data/
 │   ├── orders.csv                   # Order transactions
-│   └── orders_details.csv           # Order line items
-└── Catalog/Code/                    # View implementations
+│   ├── orders_details.csv           # Order line items
+│   ├── products.csv                 # Product catalog
+│   ├── customers.csv                # Customer directory
+│   ├── employees.csv                # Employee records
+│   ├── suppliers.csv                # Supplier directory
+│   ├── categories.csv               # Product categories
+│   ├── regions.csv                  # Geographic regions
+│   ├── territories.csv              # Sales territories
+│   └── shippers.csv                 # Shipping companies
+└── AnalyticsCatalog/Code/            # View implementations
     ├── Order.cs                     # Order entity
     ├── OrderDetails.cs              # OrderDetails entity
-    ├── Product.cs                   # Product entity (embedded)
-    ├── Customer.cs                  # Customer entity (embedded)
+    ├── Product.cs                   # Product entity
+    ├── Customer.cs                  # Customer entity
     ├── NorthwindDataCube.cs         # Virtual fact table
     ├── NorthwindDataLoader.cs       # CSV data loading
     ├── DashboardViews.cs            # Dashboard (1 view)
@@ -45,7 +53,7 @@ Northwind/                           # Root namespace
 
 | Node | Type | Purpose |
 |------|------|---------|
-| `Northwind/Catalog` | NodeType | Defines data sources, views, and behavior |
+| `Northwind/AnalyticsCatalog` | NodeType | Defines data sources, views, and behavior |
 | `Northwind/Analytics` | Instance | Actual database with data |
 
 ## Data Loading Pattern
@@ -54,23 +62,24 @@ Northwind demonstrates CSV-based data loading with reactive updates.
 
 ### Data Source Configuration
 
-The Catalog NodeType configures multiple data sources:
+The AnalyticsCatalog NodeType configures multiple data sources:
 
 ```csharp
 config.AddData(data => data
-    // CSV-based transactional data
-    .AddCsvSource<Order>("orders.csv")
-    .AddCsvSource<OrderDetails>("orders_details.csv")
-
-    // Embedded reference data
-    .AddHubSource<Product>()
-    .AddHubSource<Customer>()
-    .AddHubSource<Employee>()
-    .AddHubSource<Supplier>()
-    .AddHubSource<Category>()
-
+    .AddSource(source => source
+        // All entity data loaded from CSV files via NorthwindDataLoader
+        .WithType<Order>(t => t.WithInitialData(NorthwindDataLoader.LoadOrdersAsync))
+        .WithType<OrderDetails>(t => t.WithInitialData(NorthwindDataLoader.LoadOrderDetailsAsync))
+        .WithType<Product>(t => t.WithInitialData(NorthwindDataLoader.LoadProductsAsync))
+        .WithType<Customer>(t => t.WithInitialData(NorthwindDataLoader.LoadCustomersAsync))
+        .WithType<Employee>(t => t.WithInitialData(NorthwindDataLoader.LoadEmployeesAsync))
+        .WithType<Supplier>(t => t.WithInitialData(NorthwindDataLoader.LoadSuppliersAsync))
+        .WithType<Category>(t => t.WithInitialData(NorthwindDataLoader.LoadCategoriesAsync))
+        .WithType<Region>(t => t.WithInitialData(NorthwindDataLoader.LoadRegionsAsync))
+        .WithType<Territory>(t => t.WithInitialData(NorthwindDataLoader.LoadTerritoriesAsync))
+        .WithType<Shipper>(t => t.WithInitialData(NorthwindDataLoader.LoadShippersAsync)))
     // Virtual data cube
-    .AddVirtualSource<NorthwindDataCube>())
+    .WithVirtualDataSource("NorthwindDataCube", ...))
 ```
 
 ### CSV Loading (`NorthwindDataLoader.cs`)
@@ -93,18 +102,22 @@ public static IEnumerable<Order> LoadOrders(string csvPath)
 }
 ```
 
-### Reference Data (`NorthwindSampleData.cs`)
+### Reference Data (CSV-based)
 
-Embedded reference data for categories, regions, and territories:
+All reference data is loaded from CSV files via `NorthwindDataLoader.cs`, following the same pattern as transactional data:
 
 ```csharp
-public static IEnumerable<Category> GetCategories() => new[]
+public static Task<IEnumerable<Category>> LoadCategoriesAsync(CancellationToken ct)
 {
-    new Category(1, "Beverages", "Soft drinks, coffees, teas, beers, ales"),
-    new Category(2, "Condiments", "Sweet and savory sauces, relishes, spreads"),
-    new Category(3, "Confections", "Desserts, candies, sweetbreads"),
-    // ...
-};
+    // CSV: categoryid,categoryname,description,picture
+    var lines = File.ReadAllLines(Path.Combine(BasePath, "categories.csv"));
+    return Task.FromResult(ParseCsv(lines, parts => new Category
+    {
+        CategoryId = ParseInt(parts[0]),
+        CategoryName = parts[1],
+        Description = Get(parts, 2),
+    }));
+}
 ```
 
 ## Virtual Data Cube
@@ -203,7 +216,7 @@ Views are organized into 8 categories with 53 total views.
 
 ### View Registration
 
-Views are registered in the Catalog NodeType:
+Views are registered in the AnalyticsCatalog NodeType:
 
 ```csharp
 config.AddLayout(layout => layout

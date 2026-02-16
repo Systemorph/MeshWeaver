@@ -27,7 +27,7 @@ Northwind Traders is a **gourmet food distribution company** that supplies speci
 # Data Location
 
 All data (reference data, orders, and the analytics data cube) is stored in the Catalog node (Northwind/Analytics).
-Views include a year toolbar dropdown to filter by year. The Catalog NodeType is defined at Northwind/Catalog.
+Views include a year toolbar dropdown to filter by year. The AnalyticsCatalog NodeType is defined at Northwind/AnalyticsCatalog.
 
 # Reference Data
 

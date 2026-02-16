@@ -23,110 +23,110 @@ This document showcases all addressable items in the Northwind application.
 Display all orders:
 
 ```
-@Northwind/Analytics/data/Order
+@@("Northwind/Analytics/data/Order")
 ```
 
-@Northwind/Analytics/data/Order
+@@("Northwind/Analytics/data/Order")
 
 ### Single Order
 
 Display a specific order:
 
 ```
-@Northwind/Analytics/data/Order/10248
+@@("Northwind/Analytics/data/Order/10248")
 ```
 
-@Northwind/Analytics/data/Order/10248
+@@("Northwind/Analytics/data/Order/10248")
 
 ### Order Details Collection
 
 Display all order details:
 
 ```
-@Northwind/Analytics/data/OrderDetails
+@@("Northwind/Analytics/data/OrderDetails")
 ```
 
-@Northwind/Analytics/data/OrderDetails
+@@("Northwind/Analytics/data/OrderDetails")
 
 ### Customer Collection
 
 Display all customers:
 
 ```
-@Northwind/Analytics/data/Customer
+@@("Northwind/Analytics/data/Customer")
 ```
 
-@Northwind/Analytics/data/Customer
+@@("Northwind/Analytics/data/Customer")
 
 ### Single Customer
 
 Display a specific customer:
 
 ```
-@Northwind/Analytics/data/Customer/ALFKI
+@@("Northwind/Analytics/data/Customer/ALFKI")
 ```
 
-@Northwind/Analytics/data/Customer/ALFKI
+@@("Northwind/Analytics/data/Customer/ALFKI")
 
 ### Product Collection
 
 Display all products:
 
 ```
-@Northwind/Analytics/data/Product
+@@("Northwind/Analytics/data/Product")
 ```
 
-@Northwind/Analytics/data/Product
+@@("Northwind/Analytics/data/Product")
 
 ### Single Product
 
 Display a specific product:
 
 ```
-@Northwind/Analytics/data/Product/1
+@@("Northwind/Analytics/data/Product/1")
 ```
 
-@Northwind/Analytics/data/Product/1
+@@("Northwind/Analytics/data/Product/1")
 
 ### Employee Collection
 
 Display all employees:
 
 ```
-@Northwind/Analytics/data/Employee
+@@("Northwind/Analytics/data/Employee")
 ```
 
-@Northwind/Analytics/data/Employee
+@@("Northwind/Analytics/data/Employee")
 
 ### Single Employee
 
 Display a specific employee:
 
 ```
-@Northwind/Analytics/data/Employee/1
+@@("Northwind/Analytics/data/Employee/1")
 ```
 
-@Northwind/Analytics/data/Employee/1
+@@("Northwind/Analytics/data/Employee/1")
 
 ### Supplier Collection
 
 Display all suppliers:
 
 ```
-@Northwind/Analytics/data/Supplier
+@@("Northwind/Analytics/data/Supplier")
 ```
 
-@Northwind/Analytics/data/Supplier
+@@("Northwind/Analytics/data/Supplier")
 
 ### Single Supplier
 
 Display a specific supplier:
 
 ```
-@Northwind/Analytics/data/Supplier/1
+@@("Northwind/Analytics/data/Supplier/1")
 ```
 
-@Northwind/Analytics/data/Supplier/1
+@@("Northwind/Analytics/data/Supplier/1")
 
 ## Reference Data
 
@@ -135,60 +135,60 @@ Display a specific supplier:
 Display all categories:
 
 ```
-@Northwind/Analytics/data/Category
+@@("Northwind/Analytics/data/Category")
 ```
 
-@Northwind/Analytics/data/Category
+@@("Northwind/Analytics/data/Category")
 
 ### Single Category
 
 Display a specific category:
 
 ```
-@Northwind/Analytics/data/Category/1
+@@("Northwind/Analytics/data/Category/1")
 ```
 
-@Northwind/Analytics/data/Category/1
+@@("Northwind/Analytics/data/Category/1")
 
 ### Region Collection
 
 Display all regions:
 
 ```
-@Northwind/Analytics/data/Region
+@@("Northwind/Analytics/data/Region")
 ```
 
-@Northwind/Analytics/data/Region
+@@("Northwind/Analytics/data/Region")
 
 ### Single Region
 
 Display a specific region:
 
 ```
-@Northwind/Analytics/data/Region/1
+@@("Northwind/Analytics/data/Region/1")
 ```
 
-@Northwind/Analytics/data/Region/1
+@@("Northwind/Analytics/data/Region/1")
 
 ### Territory Collection
 
 Display all territories:
 
 ```
-@Northwind/Analytics/data/Territory
+@@("Northwind/Analytics/data/Territory")
 ```
 
-@Northwind/Analytics/data/Territory
+@@("Northwind/Analytics/data/Territory")
 
 ### Single Territory
 
 Display a specific territory:
 
 ```
-@Northwind/Analytics/data/Territory/01581
+@@("Northwind/Analytics/data/Territory/01581")
 ```
 
-@Northwind/Analytics/data/Territory/01581
+@@("Northwind/Analytics/data/Territory/01581")
 
 ## Layout Area References
 
@@ -197,20 +197,20 @@ Display a specific territory:
 The main Northwind dashboard with business metrics:
 
 ```
-@Northwind/Analytics/Dashboard
+@@("Northwind/Analytics/Dashboard")
 ```
 
-@Northwind/Analytics/Dashboard
+@@("Northwind/Analytics/Dashboard")
 
 ### Annual Report Summary
 
 Annual business performance summary:
 
 ```
-@Northwind/Analytics/AnnualReportSummary
+@@("Northwind/Analytics/AnnualReportSummary")
 ```
 
-@Northwind/Analytics/AnnualReportSummary
+@@("Northwind/Analytics/AnnualReportSummary")
 
 ### Orders Views
 
@@ -219,273 +219,273 @@ Annual business performance summary:
 Top orders summary:
 
 ```
-@Northwind/Analytics/OrderSummary
+@@("Northwind/Analytics/OrderSummary")
 ```
 
-@Northwind/Analytics/OrderSummary
+@@("Northwind/Analytics/OrderSummary")
 
 #### Orders Overview
 
 Orders count and average value:
 
 ```
-@Northwind/Analytics/OrdersCount
+@@("Northwind/Analytics/OrdersCount")
 ```
 
-@Northwind/Analytics/OrdersCount
+@@("Northwind/Analytics/OrdersCount")
 
 ```
-@Northwind/Analytics/AvgOrderValue
+@@("Northwind/Analytics/AvgOrderValue")
 ```
 
-@Northwind/Analytics/AvgOrderValue
+@@("Northwind/Analytics/AvgOrderValue")
 
 #### Orders Analysis
 
 Detailed orders analysis:
 
 ```
-@Northwind/Analytics/OrdersSummaryReport
+@@("Northwind/Analytics/OrdersSummaryReport")
 ```
 
-@Northwind/Analytics/OrdersSummaryReport
+@@("Northwind/Analytics/OrdersSummaryReport")
 
 ```
-@Northwind/Analytics/MonthlyOrdersTable
+@@("Northwind/Analytics/MonthlyOrdersTable")
 ```
 
-@Northwind/Analytics/MonthlyOrdersTable
+@@("Northwind/Analytics/MonthlyOrdersTable")
 
 ### Customer Views
 
 #### Customer Summary
 
 ```
-@Northwind/Analytics/CustomerSummary
+@@("Northwind/Analytics/CustomerSummary")
 ```
 
-@Northwind/Analytics/CustomerSummary
+@@("Northwind/Analytics/CustomerSummary")
 
 #### Customer Analysis
 
 ```
-@Northwind/Analytics/TopCustomersByRevenue
+@@("Northwind/Analytics/TopCustomersByRevenue")
 ```
 
-@Northwind/Analytics/TopCustomersByRevenue
+@@("Northwind/Analytics/TopCustomersByRevenue")
 
 ```
-@Northwind/Analytics/CustomerLifetimeValue
+@@("Northwind/Analytics/CustomerLifetimeValue")
 ```
 
-@Northwind/Analytics/CustomerLifetimeValue
+@@("Northwind/Analytics/CustomerLifetimeValue")
 
 ```
-@Northwind/Analytics/CustomerSegmentation
+@@("Northwind/Analytics/CustomerSegmentation")
 ```
 
-@Northwind/Analytics/CustomerSegmentation
+@@("Northwind/Analytics/CustomerSegmentation")
 
 ### Product Views
 
 #### Product Overview
 
 ```
-@Northwind/Analytics/ProductOverview
+@@("Northwind/Analytics/ProductOverview")
 ```
 
-@Northwind/Analytics/ProductOverview
+@@("Northwind/Analytics/ProductOverview")
 
 #### Product Analysis
 
 ```
-@Northwind/Analytics/TopProductsByRevenue
+@@("Northwind/Analytics/TopProductsByRevenue")
 ```
 
-@Northwind/Analytics/TopProductsByRevenue
+@@("Northwind/Analytics/TopProductsByRevenue")
 
 ```
-@Northwind/Analytics/ProductPerformanceTrends
+@@("Northwind/Analytics/ProductPerformanceTrends")
 ```
 
-@Northwind/Analytics/ProductPerformanceTrends
+@@("Northwind/Analytics/ProductPerformanceTrends")
 
 ```
-@Northwind/Analytics/TopProducts
+@@("Northwind/Analytics/TopProducts")
 ```
 
-@Northwind/Analytics/TopProducts
+@@("Northwind/Analytics/TopProducts")
 
 ```
-@Northwind/Analytics/TopProductsByCategory
+@@("Northwind/Analytics/TopProductsByCategory")
 ```
 
-@Northwind/Analytics/TopProductsByCategory
+@@("Northwind/Analytics/TopProductsByCategory")
 
 ### Sales Views
 
 #### Sales by Category
 
 ```
-@Northwind/Analytics/SalesByCategory
+@@("Northwind/Analytics/SalesByCategory")
 ```
 
-@Northwind/Analytics/SalesByCategory
+@@("Northwind/Analytics/SalesByCategory")
 
 ```
-@Northwind/Analytics/SalesByCategoryComparison
+@@("Northwind/Analytics/SalesByCategoryComparison")
 ```
 
-@Northwind/Analytics/SalesByCategoryComparison
+@@("Northwind/Analytics/SalesByCategoryComparison")
 
 ```
-@Northwind/Analytics/SalesInOneCategory
+@@("Northwind/Analytics/SalesInOneCategory")
 ```
 
-@Northwind/Analytics/SalesInOneCategory
+@@("Northwind/Analytics/SalesInOneCategory")
 
 #### Sales Geography
 
 ```
-@Northwind/Analytics/CountrySalesComparison
+@@("Northwind/Analytics/CountrySalesComparison")
 ```
 
-@Northwind/Analytics/CountrySalesComparison
+@@("Northwind/Analytics/CountrySalesComparison")
 
 ```
-@Northwind/Analytics/RegionalAnalysis
+@@("Northwind/Analytics/RegionalAnalysis")
 ```
 
-@Northwind/Analytics/RegionalAnalysis
+@@("Northwind/Analytics/RegionalAnalysis")
 
 #### Sales Growth
 
 ```
-@Northwind/Analytics/SalesGrowthSummary
+@@("Northwind/Analytics/SalesGrowthSummary")
 ```
 
-@Northwind/Analytics/SalesGrowthSummary
+@@("Northwind/Analytics/SalesGrowthSummary")
 
 ### Employee Views
 
 #### Employee Performance
 
 ```
-@Northwind/Analytics/TopEmployeesByRevenue
+@@("Northwind/Analytics/TopEmployeesByRevenue")
 ```
 
-@Northwind/Analytics/TopEmployeesByRevenue
+@@("Northwind/Analytics/TopEmployeesByRevenue")
 
 ```
-@Northwind/Analytics/EmployeeMetrics
+@@("Northwind/Analytics/EmployeeMetrics")
 ```
 
-@Northwind/Analytics/EmployeeMetrics
+@@("Northwind/Analytics/EmployeeMetrics")
 
 ```
-@Northwind/Analytics/TopEmployees
+@@("Northwind/Analytics/TopEmployees")
 ```
 
-@Northwind/Analytics/TopEmployees
+@@("Northwind/Analytics/TopEmployees")
 
 ### Supplier Views
 
 ```
-@Northwind/Analytics/SupplierSummary
+@@("Northwind/Analytics/SupplierSummary")
 ```
 
-@Northwind/Analytics/SupplierSummary
+@@("Northwind/Analytics/SupplierSummary")
 
 ```
-@Northwind/Analytics/SupplierAnalysis
+@@("Northwind/Analytics/SupplierAnalysis")
 ```
 
-@Northwind/Analytics/SupplierAnalysis
+@@("Northwind/Analytics/SupplierAnalysis")
 
 ### Financial Views
 
 #### Financial Summary
 
 ```
-@Northwind/Analytics/FinancialSummary
+@@("Northwind/Analytics/FinancialSummary")
 ```
 
-@Northwind/Analytics/FinancialSummary
+@@("Northwind/Analytics/FinancialSummary")
 
 ```
-@Northwind/Analytics/RevenueSummary
+@@("Northwind/Analytics/RevenueSummary")
 ```
 
-@Northwind/Analytics/RevenueSummary
+@@("Northwind/Analytics/RevenueSummary")
 
 ### Discount Analysis
 
 ```
-@Northwind/Analytics/DiscountSummary
+@@("Northwind/Analytics/DiscountSummary")
 ```
 
-@Northwind/Analytics/DiscountSummary
+@@("Northwind/Analytics/DiscountSummary")
 
 ```
-@Northwind/Analytics/DiscountPercentage
+@@("Northwind/Analytics/DiscountPercentage")
 ```
 
-@Northwind/Analytics/DiscountPercentage
+@@("Northwind/Analytics/DiscountPercentage")
 
 ```
-@Northwind/Analytics/DiscountVsRevenue
+@@("Northwind/Analytics/DiscountVsRevenue")
 ```
 
-@Northwind/Analytics/DiscountVsRevenue
+@@("Northwind/Analytics/DiscountVsRevenue")
 
 ### Inventory Analysis
 
 ```
-@Northwind/Analytics/StockLevelsAnalysis
+@@("Northwind/Analytics/StockLevelsAnalysis")
 ```
 
-@Northwind/Analytics/StockLevelsAnalysis
+@@("Northwind/Analytics/StockLevelsAnalysis")
 
 ### Time Series Analysis
 
 ```
-@Northwind/Analytics/MonthlySalesTrend
+@@("Northwind/Analytics/MonthlySalesTrend")
 ```
 
-@Northwind/Analytics/MonthlySalesTrend
+@@("Northwind/Analytics/MonthlySalesTrend")
 
 ```
-@Northwind/Analytics/QuarterlyPerformance
+@@("Northwind/Analytics/QuarterlyPerformance")
 ```
 
-@Northwind/Analytics/QuarterlyPerformance
+@@("Northwind/Analytics/QuarterlyPerformance")
 
 ### Top Clients
 
 ```
-@Northwind/Analytics/TopClients
+@@("Northwind/Analytics/TopClients")
 ```
 
-@Northwind/Analytics/TopClients
+@@("Northwind/Analytics/TopClients")
 
 ```
-@Northwind/Analytics/TopClientsTable
+@@("Northwind/Analytics/TopClientsTable")
 ```
 
-@Northwind/Analytics/TopClientsTable
+@@("Northwind/Analytics/TopClientsTable")
 
 ### Reports
 
 #### Detailed Reports
 
 ```
-@Northwind/Analytics/OrderDetailsReport
+@@("Northwind/Analytics/OrderDetailsReport")
 ```
 
-@Northwind/Analytics/OrderDetailsReport
+@@("Northwind/Analytics/OrderDetailsReport")
 
 ```
-@Northwind/Analytics/ProductSalesReport
+@@("Northwind/Analytics/ProductSalesReport")
 ```
 
-@Northwind/Analytics/ProductSalesReport
+@@("Northwind/Analytics/ProductSalesReport")
