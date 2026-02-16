@@ -18,6 +18,12 @@ public record ContentCollectionConfig
     public Address? Address { get; set; }
 
     /// <summary>
+    /// Whether this collection supports editing (file upload, delete, etc.).
+    /// EmbeddedResource collections default to false. FileSystem and other writable sources default to true.
+    /// </summary>
+    public bool IsEditable { get; set; } = true;
+
+    /// <summary>
     /// Additional provider-specific settings
     /// </summary>
     public Dictionary<string, string>? Settings { get; set; }

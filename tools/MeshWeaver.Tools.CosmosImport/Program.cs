@@ -91,27 +91,11 @@ var nodesContainer = db.GetContainer(cosmosOptions.NodesContainerName);
 var partitionsContainer = db.GetContainer(cosmosOptions.PartitionsContainerName);
 var target = new CosmosStorageAdapter(nodesContainer, partitionsContainer);
 
-// Idempotency check
-if (!force)
+// Run import using shared helper
+var result = await ImportHelper.RunImportAsync(source, target, logger, force, onProgress: (nodes, partitions, path) =>
 {
-    var exists = await target.ExistsAsync("Organization");
-    if (exists)
-    {
-        logger.LogInformation("Cosmos DB already contains data. Use --force to re-import.");
-        return 0;
-    }
-}
-
-// Run import
-var importer = new StorageImporter(source, target, logger);
-var result = await importer.ImportAsync(new StorageImportOptions
-{
-    JsonOptions = jsonOptions,
-    OnProgress = (nodes, partitions, path) =>
-    {
-        if (nodes % 25 == 0)
-            Console.WriteLine($"  Progress: {nodes} nodes, {partitions} partitions (current: {path})");
-    }
+    if (nodes % 25 == 0)
+        Console.WriteLine($"  Progress: {nodes} nodes, {partitions} partitions (current: {path})");
 });
 
 Console.WriteLine($"Import complete: {result.NodesImported} nodes, {result.PartitionsImported} partitions in {result.Elapsed.TotalSeconds:F1}s");

@@ -94,7 +94,7 @@ public class CollaborativeEditingReplyTest(ITestOutputHelper output) : MonolithM
             TestContext.Current.CancellationToken);
 
         var workspace = client.GetWorkspace();
-        var reference = new LayoutAreaReference(MarkdownLayoutAreas.ReadArea);
+        var reference = new LayoutAreaReference(MarkdownLayoutAreas.OverviewArea);
 
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
             docAddress,
@@ -102,7 +102,7 @@ public class CollaborativeEditingReplyTest(ITestOutputHelper output) : MonolithM
 
         Output.WriteLine("Waiting for Read view to render...");
         var control = await stream
-            .GetControlStream(MarkdownLayoutAreas.ReadArea)
+            .GetControlStream(MarkdownLayoutAreas.OverviewArea)
             .Timeout(20.Seconds())
             .FirstAsync(x => x is StackControl);
 
@@ -154,10 +154,10 @@ public class CollaborativeEditingReplyTest(ITestOutputHelper output) : MonolithM
         var workspace = client.GetWorkspace();
         var layoutStream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
             docAddress,
-            new LayoutAreaReference(MarkdownLayoutAreas.ReadArea));
+            new LayoutAreaReference(MarkdownLayoutAreas.OverviewArea));
 
         var readControl = await layoutStream
-            .GetControlStream(MarkdownLayoutAreas.ReadArea)
+            .GetControlStream(MarkdownLayoutAreas.OverviewArea)
             .Timeout(20.Seconds())
             .FirstAsync(x => x is StackControl);
         readControl.Should().NotBeNull("Read view should render");

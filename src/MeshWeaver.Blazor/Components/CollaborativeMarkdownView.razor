@@ -1,0 +1,116 @@
+@using MeshWeaver.Blazor
+@using MeshWeaver.Layout
+@using MeshWeaver.Markdown
+@using MeshWeaver.Mesh
+@using Microsoft.Extensions.Logging
+@namespace MeshWeaver.Blazor.Components
+@inherits BlazorView<CollaborativeMarkdownControl, CollaborativeMarkdownView>
+
+<link href="_content/MeshWeaver.Blazor/css/collaborative-annotations.css" rel="stylesheet" />
+
+<div class="collab-md-container @ViewModeClass" @ref="containerRef">
+    @* View mode toolbar — only shown when document has annotations *@
+    @if (HasAnnotations)
+    {
+        <div class="collab-md-toolbar">
+            <FluentSelect TOption="string"
+                          Value="@CurrentViewMode"
+                          ValueChanged="@OnViewModeChanged"
+                          Label="View"
+                          Style="min-width: 140px;">
+                <FluentOption Value="Markup">Markup</FluentOption>
+                <FluentOption Value="HideMarkup">Hide Markup</FluentOption>
+                <FluentOption Value="Original">Original</FluentOption>
+            </FluentSelect>
+
+            <div class="collab-md-toolbar-separator"></div>
+
+            <FluentButton Appearance="Microsoft.FluentUI.AspNetCore.Components.Appearance.Stealth"
+                          OnClick="@OnAcceptAll"
+                          Style="color: #22c55e; font-size: 0.85rem;">Accept All</FluentButton>
+            <FluentButton Appearance="Microsoft.FluentUI.AspNetCore.Components.Appearance.Stealth"
+                          OnClick="@OnRejectAll"
+                          Style="color: #ef4444; font-size: 0.85rem;">Reject All</FluentButton>
+        </div>
+    }
+
+    @* Split layout: content + annotation cards *@
+    <div class="collab-md-split @(HasSideAnnotations ? "with-sidebar" : "")">
+        <div class="collab-md-content markdown-annotations-container" @ref="contentRef">
+            @((MarkupString)RenderedHtml)
+        </div>
+
+        @if (HasSideAnnotations)
+        {
+            <div class="collab-md-sidebar annotations-column" @ref="sidebarRef">
+                @* Comment annotation cards *@
+                @foreach (var ann in CommentAnnotations)
+                {
+                    <div class="annotation-card annotation-for-@ann.Id annotation-type-comment"
+                         @onclick="() => HighlightAnnotation(ann.Id)">
+                        <div class="collab-md-card-header">
+                            <div class="collab-md-avatar" style="background: #3b82f6;">@GetInitial(ann.Author)</div>
+                            <div class="collab-md-card-meta">
+                                <span class="collab-md-author">@(ann.Author ?? "Unknown")</span>
+                                @if (!string.IsNullOrEmpty(ann.Date))
+                                {
+                                    <span class="collab-md-time">@ann.Date</span>
+                                }
+                            </div>
+                        </div>
+
+                        @if (!string.IsNullOrEmpty(ann.HighlightedText))
+                        {
+                            <div class="collab-md-quote" style="border-left-color: #3b82f6; background: rgba(59, 130, 246, 0.1);">
+                                "@ann.HighlightedText"
+                            </div>
+                        }
+
+                        @if (!string.IsNullOrEmpty(ann.CommentText))
+                        {
+                            <div class="collab-md-text">@ann.CommentText</div>
+                        }
+
+                        <div class="collab-md-actions">
+                            <FluentButton Appearance="Microsoft.FluentUI.AspNetCore.Components.Appearance.Stealth"
+                                          OnClick="@(() => OnResolveComment(ann.Id))"
+                                          Style="padding: 6px 16px; font-size: 0.85rem;">Resolve</FluentButton>
+                        </div>
+                    </div>
+                }
+
+                @* Track change cards *@
+                @foreach (var tc in TrackChangeAnnotations)
+                {
+                    <div class="annotation-card annotation-for-@tc.Id annotation-type-@tc.Type.ToString().ToLowerInvariant()"
+                         @onclick="() => HighlightAnnotation(tc.Id)">
+                        <div class="collab-md-card-header">
+                            <div class="collab-md-avatar" style="background: @GetTypeColor(tc.Type);">@GetInitial(tc.Author)</div>
+                            <div class="collab-md-card-meta">
+                                <span class="collab-md-author">@(tc.Author ?? "Unknown")</span>
+                                <span class="collab-md-time">@GetTypeLabel(tc.Type)@(!string.IsNullOrEmpty(tc.Date) ? $" - {tc.Date}" : "")</span>
+                            </div>
+                        </div>
+                        @if (!string.IsNullOrEmpty(tc.HighlightedText))
+                        {
+                            <div class="collab-md-quote" style="border-left-color: @GetTypeColor(tc.Type); background: @GetTypeBg(tc.Type); @(tc.Type == AnnotationType.Delete ? "text-decoration: line-through;" : "")">
+                                "@tc.HighlightedText"
+                            </div>
+                        }
+                        <div class="collab-md-actions">
+                            <FluentButton OnClick="@(() => OnAcceptChange(tc.Id))"
+                                          Style="padding: 6px 16px; font-size: 0.85rem; background: #22c55e; color: white; border: none; border-radius: 4px;">Accept</FluentButton>
+                            <FluentButton OnClick="@(() => OnRejectChange(tc.Id))"
+                                          Style="padding: 6px 16px; font-size: 0.85rem; background: #ef4444; color: white; border: none; border-radius: 4px;">Reject</FluentButton>
+                        </div>
+                    </div>
+                }
+            </div>
+        }
+    </div>
+
+    @if (string.IsNullOrWhiteSpace(RenderedHtml))
+    {
+        <p style="color: var(--neutral-foreground-hint); font-style: italic;">No content yet. Click Edit to add content.</p>
+    }
+</div>

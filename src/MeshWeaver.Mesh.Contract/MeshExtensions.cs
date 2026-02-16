@@ -35,6 +35,14 @@ public static class MeshExtensions
         config.TypeRegistry.WithType(typeof(UpdateNodeResponse), nameof(UpdateNodeResponse));
         config.TypeRegistry.WithType(typeof(NodeUpdateRejectionReason), nameof(NodeUpdateRejectionReason));
 
+        // Import/Delete types
+        config.TypeRegistry.WithType(typeof(ImportNodesRequest), nameof(ImportNodesRequest));
+        config.TypeRegistry.WithType(typeof(ImportNodesResponse), nameof(ImportNodesResponse));
+        config.TypeRegistry.WithType(typeof(ImportContentRequest), nameof(ImportContentRequest));
+        config.TypeRegistry.WithType(typeof(ImportContentResponse), nameof(ImportContentResponse));
+        config.TypeRegistry.WithType(typeof(DeleteContentRequest), nameof(DeleteContentRequest));
+        config.TypeRegistry.WithType(typeof(DeleteContentResponse), nameof(DeleteContentResponse));
+
         // Security types for row-level security (stored in JSON files)
         config.TypeRegistry.WithType(typeof(UserAccess), nameof(UserAccess));
         return config;

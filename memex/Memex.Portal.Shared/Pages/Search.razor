@@ -4,9 +4,11 @@
 @using MeshWeaver.Mesh.Services
 @using MeshWeaver.Messaging
 @using Microsoft.FluentUI.AspNetCore.Components
+@using Microsoft.JSInterop
 @inject IMeshQuery? MeshQuery
 @inject INavigationService NavigationService
 @inject IMessageHub Hub
+@inject IJSRuntime JS
 
 <PageTitle>Search - Memex</PageTitle>
 
@@ -81,6 +83,8 @@
     private MeshNode[]? results;
     private bool isLoading;
     private bool isInitialized;
+    private int selectedIndex = -1;
+    private MeshNode[]? flatResults;
 
     protected override async Task OnParametersSetAsync()
     {
@@ -103,10 +107,10 @@
     {
         var marginLeft = indentLevel * 32;
         <div style="margin-left: @(marginLeft)px; margin-bottom: 12px;">
-            <div class="thumbnail-card" @onclick="@(() => NavigateToNode(node))"
-                 style="display: flex; gap: 12px; padding: 16px; background: var(--neutral-layer-card-container); border: 1px solid var(--neutral-stroke-rest); border-radius: 8px; cursor: pointer; transition: all 0.15s ease;"
+            <div class="thumbnail-card" id="search-result-@GetFlatIndex(node)" @onclick="@(() => NavigateToNode(node))"
+                 style="display: flex; gap: 12px; padding: 16px; background: var(--neutral-layer-card-container); border: 1px solid @(IsSelected(node) ? "var(--accent-fill-rest)" : "var(--neutral-stroke-rest)"); border-radius: 8px; cursor: pointer; transition: all 0.15s ease; @(IsSelected(node) ? "box-shadow: 0 2px 8px rgba(0,0,0,0.1);" : "")"
                  onmouseover="this.style.borderColor='var(--accent-fill-rest)'; this.style.boxShadow='0 2px 8px rgba(0,0,0,0.1)';"
-                 onmouseout="this.style.borderColor='var(--neutral-stroke-rest)'; this.style.boxShadow='none';">
+                 onmouseout="this.style.borderColor='@(IsSelected(node) ? "var(--accent-fill-rest)" : "var(--neutral-stroke-rest)")'; this.style.boxShadow='@(IsSelected(node) ? "0 2px 8px rgba(0,0,0,0.1)" : "none")';">
 
                 <!-- Image/Icon -->
                 <div style="width: 48px; height: 48px; flex-shrink: 0; border-radius: 8px; overflow: hidden; background: var(--neutral-layer-floating); display: flex; align-items: center; justify-content: center;">
@@ -243,6 +247,8 @@
                 .ThenBy(n => n.DisplayOrder ?? int.MaxValue)
                 .ThenBy(n => n.Name)
                 .ToArray();
+            flatResults = null;
+            selectedIndex = -1;
         }
         catch
         {
@@ -271,11 +277,80 @@
 
     private async Task HandleKeyDown(KeyboardEventArgs e)
     {
-        if (e.Key == "Enter")
+        var flat = GetFlatResults();
+
+        switch (e.Key)
         {
-            await ExecuteSearch();
+            case "ArrowDown":
+                if (flat.Length > 0)
+                {
+                    selectedIndex = selectedIndex < flat.Length - 1 ? selectedIndex + 1 : 0;
+                    await ScrollToSelected();
+                }
+                break;
+
+            case "ArrowUp":
+                if (flat.Length > 0)
+                {
+                    selectedIndex = selectedIndex > 0 ? selectedIndex - 1 : flat.Length - 1;
+                    await ScrollToSelected();
+                }
+                break;
+
+            case "Enter":
+                if (selectedIndex >= 0 && selectedIndex < flat.Length)
+                {
+                    NavigateToNode(flat[selectedIndex]);
+                }
+                else
+                {
+                    await ExecuteSearch();
+                }
+                break;
+
+            case "Escape":
+                selectedIndex = -1;
+                break;
         }
     }
+
+    private async Task ScrollToSelected()
+    {
+        await JS.InvokeVoidAsync("eval", $"document.getElementById('search-result-{selectedIndex}')?.scrollIntoView({{block:'nearest'}})");
+    }
+
+    private MeshNode[] GetFlatResults()
+    {
+        if (flatResults != null)
+            return flatResults;
+
+        if (results == null || results.Length == 0)
+            return [];
+
+        var flat = new List<MeshNode>();
+        foreach (var group in GetHierarchicalGroups())
+        {
+            foreach (var rootNode in group.RootNodes)
+                FlattenNode(rootNode, flat);
+        }
+        flatResults = flat.ToArray();
+        return flatResults;
+    }
+
+    private void FlattenNode(MeshNode node, List<MeshNode> flat)
+    {
+        flat.Add(node);
+        foreach (var child in FindDirectChildren(node))
+            FlattenNode(child, flat);
+    }
+
+    private int GetFlatIndex(MeshNode node)
+    {
+        var flat = GetFlatResults();
+        return Array.IndexOf(flat, node);
+    }
+
+    private bool IsSelected(MeshNode node) => selectedIndex >= 0 && GetFlatIndex(node) == selectedIndex;
 
     private void NavigateToNode(MeshNode node)
     {

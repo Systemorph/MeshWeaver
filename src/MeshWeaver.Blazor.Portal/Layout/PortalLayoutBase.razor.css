@@ -63,6 +63,8 @@
 
     ::deep.layout>header {
         grid-area: head;
+        position: relative;
+        z-index: 50;
     }
 
     ::deep.layout>.fluent-appbar {
@@ -257,6 +259,8 @@
 
     ::deep.layout>header {
         grid-area: head;
+        position: relative;
+        z-index: 50;
     }
 
     ::deep.layout>.fluent-appbar {

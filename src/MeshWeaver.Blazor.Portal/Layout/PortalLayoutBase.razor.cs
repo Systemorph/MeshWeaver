@@ -62,7 +62,7 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
     private readonly Dictionary<string, (bool hasCreate, DateTime expiresAt)> _permissionCache = new();
     private static readonly TimeSpan PermissionCacheDuration = TimeSpan.FromMinutes(5);
 
-    // Editable content collections for import menu
+    // Editable content collections
     protected IReadOnlyList<ContentCollectionConfig> EditableCollections { get; private set; } = [];
 
     private ChatSidePanel? chatPanel;
@@ -122,7 +122,6 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
 
         if (isCreateMenuOpen)
         {
-            // 1) Check create permission (async, cached)
             await CheckCreatePermissionAsync();
 
             // 2) Load editable collections if we have create permission
@@ -173,29 +172,28 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
     }
 
     /// <summary>
-    /// Navigates to the Import Nodes page for the current namespace.
+    /// Opens the Import Nodes dialog.
     /// </summary>
-    protected void NavigateToImportNodes()
+    protected async Task OpenImportNodeDialogAsync()
     {
         isCreateMenuOpen = false;
-        var currentPath = NavigationService.CurrentNamespace ?? "";
-        var importUrl = string.IsNullOrEmpty(currentPath)
-            ? "/Import?target=nodes"
-            : $"/{currentPath}/Import?target=nodes";
-        NavigationManager.NavigateTo(importUrl);
-    }
 
-    /// <summary>
-    /// Navigates to the Files page for a specific content collection.
-    /// </summary>
-    protected void NavigateToImportContent(string collectionName)
-    {
-        isCreateMenuOpen = false;
-        var currentPath = NavigationService.CurrentNamespace ?? "";
-        var filesUrl = string.IsNullOrEmpty(currentPath)
-            ? $"/Files?collection={Uri.EscapeDataString(collectionName)}"
-            : $"/{currentPath}/Files?collection={Uri.EscapeDataString(collectionName)}";
-        NavigationManager.NavigateTo(filesUrl);
+        var dialogData = new ImportNodeDialogData
+        {
+            InitialNamespace = NavigationService.CurrentNamespace ?? ""
+        };
+
+        var dialog = await DialogService.ShowDialogAsync<ImportNodeDialog>(dialogData, new DialogParameters
+        {
+            Title = "Import Nodes",
+            PrimaryAction = null,
+            SecondaryAction = null,
+            Width = "500px",
+            PreventDismissOnOverlayClick = true,
+            PreventScroll = true
+        });
+
+        await dialog.Result;
     }
 
     /// <summary>

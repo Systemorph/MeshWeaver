@@ -78,7 +78,7 @@ public class NavigationService : INavigationService
 
         CurrentNamespace = @namespace;
 
-        // Reload creatable types if namespace changed
+        // Load creatable types in background when namespace changes
         if (@namespace != _lastLoadedNodePath)
         {
             _ = LoadCreatableTypesAsync(@namespace ?? "");
@@ -149,11 +149,11 @@ public class NavigationService : INavigationService
 
         OnNavigationContextChanged?.Invoke(context);
 
-        // Check if node path changed and reload creatable types if needed
+        // Load creatable types in background when namespace changes
         var currentNodePath = context.Namespace;
         if (currentNodePath != _lastLoadedNodePath)
         {
-            await LoadCreatableTypesAsync(currentNodePath);
+            _ = LoadCreatableTypesAsync(currentNodePath ?? "");
         }
     }
 
