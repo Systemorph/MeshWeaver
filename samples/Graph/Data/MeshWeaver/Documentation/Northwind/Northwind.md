@@ -28,13 +28,13 @@ Northwind Traders is a gourmet food distribution company with analytics views fo
 
 ```
 Northwind/                           # Analytics platform
-├── Catalog.json                     # NodeType definition (53 views)
+├── AnalyticsCatalog.json             # NodeType definition (53 views)
 ├── Analytics.json                   # Root database node
 ├── NorthwindAgent.md                # AI analytics agent
 ├── Data/                            # CSV data sources
 │   ├── orders.csv                   # Order transactions
 │   └── orders_details.csv           # Order line items
-└── Catalog/Code/                    # View implementations
+└── AnalyticsCatalog/Code/            # View implementations
     ├── DashboardViews.cs            # Main dashboard
     ├── SalesViews.cs                # Sales analytics
     ├── OrderViews.cs                # Order analysis

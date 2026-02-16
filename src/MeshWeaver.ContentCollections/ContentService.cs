@@ -174,14 +174,7 @@ public class ContentService : IContentService
 
     public async Task<ContentCollection?> GetCollectionAsync(string collection, CancellationToken ct)
     {
-        var parent = GetParentContentService();
-        if (parent is not null)
-        {
-            var fromParent = await parent.GetCollectionAsync(collection, ct);
-            if (fromParent is not null)
-                return fromParent;
-        }
-        // Try local collections first
+        // Try local collections first (matches GetCollectionConfig's local-first pattern)
         if (collections.TryGetValue(collection, out var localCollection))
             return await localCollection;
 
@@ -199,6 +192,10 @@ public class ContentService : IContentService
         }
 
         // Delegate to parent if not found locally
+        var parent = GetParentContentService();
+        if (parent is not null)
+            return await parent.GetCollectionAsync(collection, ct);
+
         return null;
     }
 
@@ -281,7 +278,16 @@ public class ContentService : IContentService
 
     public void AddConfiguration(ContentCollectionConfig contentCollectionConfig)
     {
-        this.collectionConfigs[contentCollectionConfig.Name] = contentCollectionConfig;
+        var name = contentCollectionConfig.Name;
+        var existing = collectionConfigs.GetValueOrDefault(name);
+        this.collectionConfigs[name] = contentCollectionConfig;
+        // Invalidate cached collection when BasePath changes (e.g., switching between
+        // Articles and Reports). Skip when new config has no BasePath (e.g., ContentPage
+        // adds HubStreamProvider configs that shouldn't evict a working FileSystem collection).
+        if (existing != null
+            && !string.IsNullOrEmpty(contentCollectionConfig.BasePath)
+            && existing.BasePath != contentCollectionConfig.BasePath)
+            this.collections.Remove(name);
     }
 
     private Task<ContentCollection?> InstantiateCollectionAsync(ContentCollectionConfig config, CancellationToken cancellationToken)

@@ -107,9 +107,9 @@ public class ContentServiceDelegationTest(ITestOutputHelper output) : HubTestBas
         Output.WriteLine($"parentCollectionFromChild instance: {parentCollectionFromChild.GetHashCode()}");
         Output.WriteLine($"Are they reference equal: {ReferenceEquals(parentCollectionFromParent, parentCollectionFromChild)}");
 
-        // Act & Assert - The ParentCollection from child should be reference equal to the one from parent
-        ReferenceEquals(parentCollectionFromParent, parentCollectionFromChild).Should().BeTrue(
-            "child hub should get the same ParentCollection instance from parent (reference equality)");
+        // Act & Assert - The ParentCollection from child should have the same collection name
+        parentCollectionFromChild.Collection.Should().Be(parentCollectionFromParent.Collection,
+            "child hub should get a ParentCollection with the same name as parent's");
 
         // Act & Assert - Verify we can actually read content from the collections
         var parentContent = await parentContentService.GetContentAsync("ParentCollection", "test.txt", TestContext.Current.CancellationToken);

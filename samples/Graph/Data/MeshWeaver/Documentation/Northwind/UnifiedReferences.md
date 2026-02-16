@@ -17,7 +17,7 @@ The Northwind sample follows this hierarchy:
 
 ```
 Northwind/                           # Root namespace
-├── Catalog.json                     # NodeType definition
+├── AnalyticsCatalog.json             # NodeType definition
 ├── Analytics.json                   # Database instance
 ├── NorthwindAgent.md                # AI agent
 ├── Access/
@@ -25,7 +25,7 @@ Northwind/                           # Root namespace
 ├── Data/
 │   ├── orders.csv                   # Order data
 │   └── orders_details.csv           # Order details
-└── Catalog/Code/                    # View implementations
+└── AnalyticsCatalog/Code/            # View implementations
     ├── Order.cs
     ├── OrderDetails.cs
     ├── Product.cs
@@ -39,7 +39,7 @@ Northwind/                           # Root namespace
 | Path | Description |
 |------|-------------|
 | `Northwind` | The root namespace |
-| `Northwind/Catalog` | Catalog NodeType definition |
+| `Northwind/AnalyticsCatalog` | AnalyticsCatalog NodeType definition |
 | `Northwind/Analytics` | Database instance |
 | `Northwind/NorthwindAgent` | AI analytics agent |
 
@@ -47,7 +47,7 @@ Northwind/                           # Root namespace
 
 | Path | Description |
 |------|-------------|
-| `Northwind/Catalog` | Catalog NodeType with 53 views |
+| `Northwind/AnalyticsCatalog` | AnalyticsCatalog NodeType with 53 views |
 
 ## Data References
 
@@ -55,7 +55,7 @@ See [Data Prefix](MeshWeaver/Documentation/DataMesh/UnifiedPath/DataPrefix) for 
 
 ### Data Types
 
-Northwind exposes these data types through the Catalog:
+Northwind exposes these data types through the AnalyticsCatalog:
 
 | Reference | Description |
 |-----------|-------------|

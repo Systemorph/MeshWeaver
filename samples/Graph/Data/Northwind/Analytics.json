@@ -2,11 +2,11 @@
   "id": "Analytics",
   "namespace": "Northwind",
   "name": "Analytics",
-  "nodeType": "Northwind/Catalog",
+  "nodeType": "Northwind/AnalyticsCatalog",
   "category": "Analytics",
   "description": "Dashboards and analytics views for Northwind Traders data",
   "iconName": "ChartMultiple",
-  "displayOrder": 2,
+  "displayOrder": 3,
   "isPersistent": true,
   "content": {
     "$type": "CatalogContent",
