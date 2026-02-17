@@ -62,7 +62,6 @@ public class MeshPlugin(IMessageHub hub, IAgentChat chat)
                             node.Path,
                             node.Name,
                             node.NodeType,
-                            node.Description,
                             node.Icon
                         });
                     }
@@ -111,14 +110,11 @@ public class MeshPlugin(IMessageHub hub, IAgentChat chat)
 
             // Apply updates from JSON
             string? name = null;
-            string? description = null;
             string? nodeType = null;
             object? content = null;
 
             if (updates.TryGetProperty("name", out var nameProp))
                 name = nameProp.GetString();
-            if (updates.TryGetProperty("description", out var descProp))
-                description = descProp.GetString();
             if (updates.TryGetProperty("nodeType", out var typeProp))
                 nodeType = typeProp.GetString();
             if (updates.TryGetProperty("content", out var contentProp))
@@ -127,7 +123,6 @@ public class MeshPlugin(IMessageHub hub, IAgentChat chat)
             node = node with
             {
                 Name = name ?? existingNode?.Name ?? node.Id,
-                Description = description ?? existingNode?.Description,
                 NodeType = nodeType ?? existingNode?.NodeType,
                 Content = content ?? existingNode?.Content
             };
@@ -189,8 +184,7 @@ public class MeshPlugin(IMessageHub hub, IAgentChat chat)
                     {
                         node.Path,
                         node.Name,
-                        node.NodeType,
-                        node.Description
+                        node.NodeType
                     });
                 }
                 else

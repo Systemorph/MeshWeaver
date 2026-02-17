@@ -132,7 +132,7 @@
                 Label = node.Name ?? node.Id,           // Row 1: Node name
                 InsertText = node.Name ?? node.Id,
                 Path = node.Path,                        // Row 2: Full path
-                Description = node.Description ?? "",
+                Description = node.NodeType ?? "",
                 Category = node.Category ?? ""
             }).ToArray();
         }

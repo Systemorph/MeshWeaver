@@ -60,7 +60,6 @@ public class MeshNodeTypeSourceTest(ITestOutputHelper output) : HubTestBase(outp
         var node = MeshNode.FromPath(hubPath) with
         {
             Name = "Test Node",
-            Description = "Test Description",
             Icon = "Star",
             Category = "Testing",
             NodeType = "test",
@@ -85,7 +84,6 @@ public class MeshNodeTypeSourceTest(ITestOutputHelper output) : HubTestBase(outp
         var loadedNode = loadedNodes.FirstOrDefault();
         loadedNode.Should().NotBeNull();
         loadedNode!.Name.Should().Be("Test Node");
-        loadedNode.Description.Should().Be("Test Description");
         loadedNode.Icon.Should().Be("Star");
         loadedNode.Category.Should().Be("Testing");
         loadedNode.Content.Should().NotBeNull();
@@ -100,7 +98,6 @@ public class MeshNodeTypeSourceTest(ITestOutputHelper output) : HubTestBase(outp
         var node = MeshNode.FromPath(hubPath) with
         {
             Name = "Original Name",
-            Description = "Original Description",
             NodeType = "test",
             Content = content
         };
@@ -121,8 +118,7 @@ public class MeshNodeTypeSourceTest(ITestOutputHelper output) : HubTestBase(outp
         // Act - Update the node via workspace
         var updatedNode = node with
         {
-            Name = "Updated Name",
-            Description = "Updated Description"
+            Name = "Updated Name"
         };
         workspace.RequestChange(DataChangeRequest.Update([updatedNode]), null, null);
 
@@ -136,7 +132,6 @@ public class MeshNodeTypeSourceTest(ITestOutputHelper output) : HubTestBase(outp
         var persistedNode = await _persistence.GetNodeAsync(hubPath, JsonOptions);
         persistedNode.Should().NotBeNull();
         persistedNode!.Name.Should().Be("Updated Name");
-        persistedNode.Description.Should().Be("Updated Description");
     }
 
     [HubFact]
@@ -148,7 +143,6 @@ public class MeshNodeTypeSourceTest(ITestOutputHelper output) : HubTestBase(outp
         var node = MeshNode.FromPath(hubPath) with
         {
             Name = "Node Name",
-            Description = "Node Description",
             NodeType = "test",
             Content = content
         };
@@ -172,8 +166,7 @@ public class MeshNodeTypeSourceTest(ITestOutputHelper output) : HubTestBase(outp
         var updatedNode = currentNode with
         {
             Content = updatedContent,
-            Name = "Synced Title",
-            Description = "Synced notes"
+            Name = "Synced Title"
         };
         workspace.RequestChange(DataChangeRequest.Update([updatedNode]), null, null);
 
@@ -187,7 +180,6 @@ public class MeshNodeTypeSourceTest(ITestOutputHelper output) : HubTestBase(outp
         var persistedNode = await _persistence.GetNodeAsync(hubPath, JsonOptions);
         persistedNode.Should().NotBeNull();
         persistedNode!.Name.Should().Be("Synced Title");
-        persistedNode.Description.Should().Be("Synced notes");
     }
 
     [HubFact]
@@ -278,6 +270,5 @@ public record TestContent
     [MeshNodeProperty("Name")]
     public string Title { get; init; } = "";
 
-    [MeshNodeProperty("Description")]
     public string Notes { get; init; } = "";
 }

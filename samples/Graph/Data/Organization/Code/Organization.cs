@@ -20,7 +20,6 @@ public record Organization
     /// <summary>
     /// Brief description of the organization.
     /// </summary>
-    [MeshNodeProperty(nameof(MeshNode.Description))]
     public string? Description { get; init; }
 
     /// <summary>

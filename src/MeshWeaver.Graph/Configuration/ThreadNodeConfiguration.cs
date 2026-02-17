@@ -19,7 +19,6 @@ public static class ThreadNodeConfiguration
     public static MeshNode CreateMeshNode() => new(ThreadNodeType.NodeType)
     {
         Name = "Thread",
-        Description = "A conversation thread with AI agents. Messages are stored as child ThreadMessage nodes.",
         Icon = "/static/NodeTypeIcons/chat.svg",
         HubConfiguration = config => config
             .AddThreadViews()

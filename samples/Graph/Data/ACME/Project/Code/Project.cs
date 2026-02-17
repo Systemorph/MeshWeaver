@@ -20,7 +20,6 @@ public record Project
     /// <summary>
     /// Detailed description of the project.
     /// </summary>
-    [MeshNodeProperty(nameof(MeshNode.Description))]
     public string? Description { get; init; }
 
     /// <summary>

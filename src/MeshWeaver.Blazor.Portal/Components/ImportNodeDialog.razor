@@ -65,6 +65,12 @@
             <FluentCheckbox @bind-Value="@forceReimport" Label="Force re-import (overwrite existing data)" />
         </div>
 
+        @* Remove missing nodes checkbox *@
+        <div class="field-group">
+            <FluentCheckbox @bind-Value="@removeMissing" Label="Remove nodes missing from source" />
+            <span class="field-hint">Deletes target nodes that don't exist in the uploaded files.</span>
+        </div>
+
         @* Progress *@
         @if (isImporting)
         {
@@ -83,6 +89,10 @@
                     Imported @importResult.NodesImported nodes, @importResult.PartitionsImported partitions
                     (@importResult.Elapsed.TotalSeconds.ToString("F1")s).
                     Skipped @importResult.NodesSkipped nodes, @importResult.PartitionsSkipped partitions.
+                    @if (importResult.NodesRemoved > 0)
+                    {
+                        <text>Removed @importResult.NodesRemoved nodes.</text>
+                    }
                 </FluentMessageBar>
             }
             else
@@ -106,10 +116,7 @@
 <FluentDialogFooter>
     @if (importResult is { Success: true })
     {
-        <FluentButton Appearance="Appearance.Accent" OnClick="@ResetForAnotherImport">
-            Import Another
-        </FluentButton>
-        <FluentButton Appearance="Appearance.Neutral" OnClick="@CloseAsync">
+        <FluentButton Appearance="Appearance.Accent" OnClick="@CloseAsync">
             Done
         </FluentButton>
     }
@@ -154,6 +161,7 @@
     // Form state
     private QuerySuggestion? selectedNamespace;
     private bool forceReimport;
+    private bool removeMissing;
     private bool isImporting;
     private int progressPercent;
     private string progressMessage = "";
@@ -292,6 +300,7 @@
                 importDir,
                 targetRootPath: null,
                 force: true,
+                removeMissing: removeMissing,
                 onProgress: (nodes, partitions, currentPath) =>
                 {
                     progressPercent = Math.Min(30 + (nodes + partitions) * 5, 99);
@@ -329,17 +338,6 @@
 
             StateHasChanged();
         }
-    }
-
-    private void ResetForAnotherImport()
-    {
-        importResult = null;
-        errorMessage = null;
-        uploadedFileNames.Clear();
-        progressPercent = 0;
-        progressMessage = "";
-        CleanupTempDir();
-        StateHasChanged();
     }
 
     private async Task CloseAsync()

@@ -45,8 +45,7 @@ public class AgentSelectionTest
         var productLaunchNode = new MeshNode("ProductLaunch", "ACME")
         {
             Name = "MeshFlow Product Launch",
-            NodeType = nodeTypePath,
-            Description = "Launch campaign for MeshFlow"
+            NodeType = nodeTypePath
         };
 
         // The TodoAgent defined in the ACME/Project namespace
@@ -127,8 +126,7 @@ public class AgentSelectionTest
         var productLaunchNode = new MeshNode("ProductLaunch", "ACME")
         {
             Name = "MeshFlow Product Launch",
-            NodeType = "Markdown", // Generic markdown - should be ignored
-            Description = "Launch campaign"
+            NodeType = "Markdown" // Generic markdown - should be ignored
         };
 
         // A root-level agent

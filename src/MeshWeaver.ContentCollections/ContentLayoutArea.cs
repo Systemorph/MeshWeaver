@@ -205,8 +205,7 @@ public static class ContentLayoutArea
         if (node.Content is string strContent)
             return strContent;
 
-        // Fall back to Description
-        return node.Description ?? string.Empty;
+        return string.Empty;
     }
 
     /// <summary>

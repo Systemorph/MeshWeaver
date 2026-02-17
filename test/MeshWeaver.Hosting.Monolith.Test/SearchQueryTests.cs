@@ -672,11 +672,11 @@ public class SearchQueryTests : MonolithMeshTestBase
 
         Output.WriteLine($"Found {allResults.Length} total results in Systemorph namespace");
 
-        // Now search with a specific term that exists
-        var filteredRequest = new MeshQueryRequest { Query = "namespace:Systemorph scope:descendants Marketing", Limit = 100 };
+        // Now search with a specific term that only matches some node names
+        var filteredRequest = new MeshQueryRequest { Query = "namespace:Systemorph scope:descendants Data", Limit = 100 };
         var filteredResults = await MeshQuery.QueryAsync<MeshNode>(filteredRequest, null, TestContext.Current.CancellationToken).ToArrayAsync(TestContext.Current.CancellationToken);
 
-        Output.WriteLine($"Found {filteredResults.Length} results with 'Marketing' filter");
+        Output.WriteLine($"Found {filteredResults.Length} results with 'Data' filter");
         foreach (var r in filteredResults)
             Output.WriteLine($"  - {r.Path}: {r.Name}");
 

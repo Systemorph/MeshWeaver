@@ -277,8 +277,10 @@
         {
             // Create node path using user-provided Id
             var finalId = nodeId.Trim();
-            var subPartition = selectedType.SubNamespace ?? GetLastSegment(selectedType.NodeTypePath);
-            var nodeNamespace = $"{SelectedNamespacePath}/{subPartition}";
+            // Only insert sub-namespace folder when explicitly configured (e.g., Thread → "Threads")
+            var nodeNamespace = !string.IsNullOrEmpty(selectedType.SubNamespace)
+                ? $"{SelectedNamespacePath}/{selectedType.SubNamespace}"
+                : SelectedNamespacePath;
             var nodePath = $"{nodeNamespace}/{finalId}";
 
             // Send CreateNodeRequest to create transient node

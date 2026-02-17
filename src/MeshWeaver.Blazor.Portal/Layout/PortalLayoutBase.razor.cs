@@ -1,4 +1,4 @@
-using MeshWeaver.AI;
+﻿using MeshWeaver.AI;
 using MeshWeaver.Blazor.Chat;
 using MeshWeaver.Blazor.Portal.Components;
 using MeshWeaver.Blazor.Portal.Resize;
@@ -8,7 +8,6 @@ using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.AspNetCore.Components;
-using Microsoft.Extensions.DependencyInjection;
 using Microsoft.FluentUI.AspNetCore.Components;
 using Microsoft.JSInterop;
 
@@ -53,14 +52,14 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
 
     private bool isCreateMenuOpen;
 
-    // Creatable types - delegated to NavigationService
-    protected IReadOnlyList<CreatableTypeInfo> CreatableTypes => NavigationService.CreatableTypes;
-    protected bool IsLoadingCreatableTypes => NavigationService.IsLoadingCreatableTypes;
+    // Creatable types - from NavigationService observable
+    private CreatableTypesSnapshot _creatableTypesSnapshot = CreatableTypesSnapshot.Empty;
+    private IDisposable? _creatableTypesSubscription;
+    protected IReadOnlyList<CreatableTypeInfo> CreatableTypes => _creatableTypesSnapshot.Items;
+    protected bool IsLoadingCreatableTypes => _creatableTypesSnapshot.IsLoading;
 
-    // Permission check for import/create (cached for 5 minutes per path)
+    // Permission check for import/create
     protected bool HasCreatePermission { get; private set; } = true;
-    private readonly Dictionary<string, (bool hasCreate, DateTime expiresAt)> _permissionCache = new();
-    private static readonly TimeSpan PermissionCacheDuration = TimeSpan.FromMinutes(5);
 
     // Editable content collections
     protected IReadOnlyList<ContentCollectionConfig> EditableCollections { get; private set; } = [];
@@ -73,7 +72,11 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
     {
         base.OnInitialized();
         ChatState.OnStateChanged += OnChatStateChanged;
-        NavigationService.OnCreatableTypesChanged += OnCreatableTypesChanged;
+        _creatableTypesSubscription = NavigationService.CreatableTypes.Subscribe(snapshot =>
+        {
+            _creatableTypesSnapshot = snapshot;
+            InvokeAsync(StateHasChanged);
+        });
     }
 
     protected override async Task OnInitializedAsync()
@@ -82,28 +85,15 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
         await NavigationService.InitializeAsync();
     }
 
-    private void OnCreatableTypesChanged(IReadOnlyList<CreatableTypeInfo> types)
-    {
-        InvokeAsync(StateHasChanged);
-    }
-
     private async Task CheckCreatePermissionAsync()
     {
-        var currentPath = NavigationService.CurrentNamespace ?? "";
-
-        // Check cache
-        if (_permissionCache.TryGetValue(currentPath, out var cached) && cached.expiresAt > DateTime.UtcNow)
-        {
-            HasCreatePermission = cached.hasCreate;
-            return;
-        }
-
         HasCreatePermission = true; // Default: allow if no security service
         var securityService = Hub.ServiceProvider.GetService(typeof(ISecurityService)) as ISecurityService;
         if (securityService != null)
         {
             try
             {
+                var currentPath = NavigationService.CurrentNamespace ?? "";
                 var permissions = await securityService.GetEffectivePermissionsAsync(currentPath);
                 HasCreatePermission = permissions.HasFlag(Permission.Create);
             }
@@ -112,16 +102,14 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
                 HasCreatePermission = true; // Fallback: allow on error
             }
         }
-
-        _permissionCache[currentPath] = (HasCreatePermission, DateTime.UtcNow + PermissionCacheDuration);
     }
 
-    protected async Task ToggleCreateMenu()
+    private async Task ToggleCreateMenu()
     {
         isCreateMenuOpen = !isCreateMenuOpen;
-
         if (isCreateMenuOpen)
         {
+            NavigationService.RefreshCreatableTypes();
             await CheckCreatePermissionAsync();
 
             // 2) Load editable collections if we have create permission
@@ -140,6 +128,11 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
             EditableCollections = contentService.GetAllCollectionConfigs()
                 .ToList();
         }
+    }
+
+    private void OnCreateMenuOpenChanged(bool open)
+    {
+        isCreateMenuOpen = open;
     }
 
     /// <summary>
@@ -329,7 +322,7 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
     public void Dispose()
     {
         ChatState.OnStateChanged -= OnChatStateChanged;
-        NavigationService.OnCreatableTypesChanged -= OnCreatableTypesChanged;
+        _creatableTypesSubscription?.Dispose();
         dotNetRef?.Dispose();
         jsModule?.DisposeAsync();
     }

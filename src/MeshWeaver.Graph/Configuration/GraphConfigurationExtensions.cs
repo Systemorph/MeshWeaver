@@ -41,7 +41,7 @@ public static class GraphConfigurationExtensions
         /// storage collections and default node hub mappings separately based on their needs.
         /// See MemexConfiguration.ConfigureMemexMesh for an example.
         /// </summary>
-        public TBuilder AddJsonGraphConfiguration(string dataDirectory)
+        public TBuilder AddJsonGraphConfiguration(string _)
         {
             var assemblyLocation = typeof(GraphConfigurationExtensions).Assembly.Location;
 
@@ -50,7 +50,6 @@ public static class GraphConfigurationExtensions
             builder.AddMeshNodes(new MeshNode(MeshNode.NodeTypePath)
             {
                 Name = "Node Type",
-                Description = "Definition for a node type",
                 Icon = "/static/NodeTypeIcons/code.svg",
                 AssemblyLocation = assemblyLocation,
                 HubConfiguration = config => config
@@ -64,7 +63,6 @@ public static class GraphConfigurationExtensions
             builder.AddMeshNodes(new MeshNode(AgentNodeType)
             {
                 Name = "Agent",
-                Description = "AI Agent configuration",
                 Icon = "/static/NodeTypeIcons/bot.svg",
                 AssemblyLocation = assemblyLocation,
                 HubConfiguration = config => config

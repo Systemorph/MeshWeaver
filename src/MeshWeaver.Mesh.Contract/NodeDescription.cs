@@ -5,7 +5,7 @@ namespace MeshWeaver.Mesh;
 /// <summary>
 /// Generic entity for nodes without a specific entity type.
 /// Provides a markdown-enabled description field for rich node content.
-/// This coexists with MeshNode.Description which serves as a summary.
+/// Used as MeshNode.Content for nodes without a specific entity type.
 /// </summary>
 public record NodeDescription
 {

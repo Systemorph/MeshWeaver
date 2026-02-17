@@ -48,7 +48,7 @@ public class PostgreSqlStorageAdapter : IStorageAdapter, IAsyncDisposable
         var (ns, id) = SplitPath(normalizedPath);
 
         await using var cmd = _dataSource.CreateCommand(
-            "SELECT id, namespace, name, node_type, description, category, icon, display_order, " +
+            "SELECT id, namespace, name, node_type, category, icon, display_order, " +
             "last_modified, version, state, content, desired_id " +
             "FROM mesh_nodes WHERE namespace = $1 AND id = $2");
         cmd.Parameters.AddWithValue(ns);
@@ -67,7 +67,7 @@ public class PostgreSqlStorageAdapter : IStorageAdapter, IAsyncDisposable
 
         // Generate embedding
         var embeddingText = string.Join(" ",
-            new[] { node.Name, node.Description, node.NodeType }
+            new[] { node.Name, node.NodeType }
                 .Where(s => !string.IsNullOrEmpty(s)));
         var embeddingVector = await _embeddingProvider.GenerateEmbeddingAsync(embeddingText);
 
@@ -77,13 +77,12 @@ public class PostgreSqlStorageAdapter : IStorageAdapter, IAsyncDisposable
 
         await using var cmd = _dataSource.CreateCommand(
             """
-            INSERT INTO mesh_nodes (namespace, id, name, node_type, description, category, icon, display_order,
+            INSERT INTO mesh_nodes (namespace, id, name, node_type, category, icon, display_order,
                                     last_modified, version, state, content, desired_id, embedding)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb, $13, $14)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12, $13)
             ON CONFLICT (namespace, id) DO UPDATE SET
                 name = EXCLUDED.name,
                 node_type = EXCLUDED.node_type,
-                description = EXCLUDED.description,
                 category = EXCLUDED.category,
                 icon = EXCLUDED.icon,
                 display_order = EXCLUDED.display_order,
@@ -99,7 +98,6 @@ public class PostgreSqlStorageAdapter : IStorageAdapter, IAsyncDisposable
         cmd.Parameters.AddWithValue(node.Id);
         cmd.Parameters.AddWithValue((object?)node.Name ?? DBNull.Value);
         cmd.Parameters.AddWithValue((object?)node.NodeType ?? DBNull.Value);
-        cmd.Parameters.AddWithValue((object?)node.Description ?? DBNull.Value);
         cmd.Parameters.AddWithValue((object?)node.Category ?? DBNull.Value);
         cmd.Parameters.AddWithValue((object?)node.Icon ?? DBNull.Value);
         cmd.Parameters.AddWithValue(node.DisplayOrder.HasValue ? node.DisplayOrder.Value : DBNull.Value);
@@ -423,7 +421,6 @@ public class PostgreSqlStorageAdapter : IStorageAdapter, IAsyncDisposable
         {
             Name = reader.IsDBNull(reader.GetOrdinal("name")) ? null : reader.GetString(reader.GetOrdinal("name")),
             NodeType = reader.IsDBNull(reader.GetOrdinal("node_type")) ? null : reader.GetString(reader.GetOrdinal("node_type")),
-            Description = reader.IsDBNull(reader.GetOrdinal("description")) ? null : reader.GetString(reader.GetOrdinal("description")),
             Category = reader.IsDBNull(reader.GetOrdinal("category")) ? null : reader.GetString(reader.GetOrdinal("category")),
             Icon = reader.IsDBNull(reader.GetOrdinal("icon")) ? null : reader.GetString(reader.GetOrdinal("icon")),
             DisplayOrder = reader.IsDBNull(reader.GetOrdinal("display_order")) ? null : reader.GetInt32(reader.GetOrdinal("display_order")),

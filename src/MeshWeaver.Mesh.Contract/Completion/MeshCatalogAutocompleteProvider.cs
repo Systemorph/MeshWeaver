@@ -37,7 +37,7 @@ public class MeshCatalogAutocompleteProvider(IMeshCatalog? meshCatalog) : IAutoc
                 yield return new AutocompleteItem(
                     Label: $"@{node.Path}/",
                     InsertText: $"@{node.Path}/",
-                    Description: node.Description ?? node.Name,
+                    Description: node.Name,
                     Category: "Prefixes",
                     Priority: PrefixCategoryPriority - (node.DisplayOrder ?? 0),
                     Kind: AutocompleteKind.Other

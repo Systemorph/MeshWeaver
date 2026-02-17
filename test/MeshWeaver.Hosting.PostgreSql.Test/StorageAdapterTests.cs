@@ -27,8 +27,7 @@ public class StorageAdapterTests
         var node = new MeshNode("Story1", "ACME/Project")
         {
             Name = "Story One",
-            NodeType = "Story",
-            Description = "A test story"
+            NodeType = "Story"
         };
 
         await adapter.WriteAsync(node, _options);
@@ -39,7 +38,6 @@ public class StorageAdapterTests
         result.Namespace.Should().Be("ACME/Project");
         result.Name.Should().Be("Story One");
         result.NodeType.Should().Be("Story");
-        result.Description.Should().Be("A test story");
         result.Path.Should().Be("ACME/Project/Story1");
     }
 

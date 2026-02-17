@@ -56,7 +56,6 @@ public class ContentPropertySyncTest(ITestOutputHelper output) : HubTestBase(out
         var node = MeshNode.FromPath(hubPath) with
         {
             Name = "Initial Name",
-            Description = "Initial Description",
             NodeType = nodeType,
             Content = content
         };
@@ -118,8 +117,7 @@ public class ContentPropertySyncTest(ITestOutputHelper output) : HubTestBase(out
         var updatedNode = node with
         {
             Content = updatedTodo,
-            Name = "Updated Title",
-            Description = "Updated Desc"
+            Name = "Updated Title"
         };
         workspace.RequestChange(DataChangeRequest.Update([updatedNode]), null, null);
 
@@ -133,7 +131,6 @@ public class ContentPropertySyncTest(ITestOutputHelper output) : HubTestBase(out
         var meshNode = await _persistence.GetNodeAsync(hubPath, JsonOptions);
         meshNode.Should().NotBeNull();
         meshNode!.Name.Should().Be("Updated Title");
-        meshNode.Description.Should().Be("Updated Desc");
     }
 
     [HubFact]
@@ -199,7 +196,6 @@ public class ContentPropertySyncTest(ITestOutputHelper output) : HubTestBase(out
         var node = MeshNode.FromPath(hubPath) with
         {
             Name = "Manually Set Name",
-            Description = "Manually Set Description",
             NodeType = "minimal",
             Content = initialContent
         };
@@ -236,11 +232,10 @@ public class ContentPropertySyncTest(ITestOutputHelper output) : HubTestBase(out
             .Timeout(5.Seconds())
             .FirstAsync();
 
-        // Assert - MeshNode should preserve manually set Name/Description
+        // Assert - MeshNode should preserve manually set Name
         var meshNode = await _persistence.GetNodeAsync(hubPath, JsonOptions);
         meshNode.Should().NotBeNull();
         meshNode!.Name.Should().Be("Manually Set Name", "MeshNode.Name should be preserved");
-        meshNode.Description.Should().Be("Manually Set Description", "MeshNode.Description should be preserved");
     }
 
     [HubFact]
@@ -275,7 +270,6 @@ public class ContentPropertySyncTest(ITestOutputHelper output) : HubTestBase(out
         var updatedNode = currentNode with
         {
             Name = "Updated Name",
-            Description = "Updated Description",
             Icon = "Star",
             Category = "Premium"
         };
@@ -291,7 +285,6 @@ public class ContentPropertySyncTest(ITestOutputHelper output) : HubTestBase(out
         var meshNode = await _persistence.GetNodeAsync(hubPath, JsonOptions);
         meshNode.Should().NotBeNull();
         meshNode!.Name.Should().Be("Updated Name");
-        meshNode.Description.Should().Be("Updated Description");
         meshNode.Icon.Should().Be("Star");
         meshNode.Category.Should().Be("Premium");
     }
@@ -352,7 +345,6 @@ public record AttributeMappedItem
     [MeshNodeProperty("Name")]
     public string DisplayTitle { get; init; } = "";
 
-    [MeshNodeProperty("Description")]
     public string Notes { get; init; } = "";
 }
 
@@ -404,7 +396,6 @@ public record FullMappingItem
     [MeshNodeProperty("Name")]
     public string DisplayName { get; init; } = "";
 
-    [MeshNodeProperty("Description")]
     public string Summary { get; init; } = "";
 
     [MeshNodeProperty("Icon")]

@@ -22,48 +22,22 @@
                     <SearchBar />
                 </div>
                 @* Create button with type menu *@
-                <FluentMenu Anchor="create-menu-anchor" @bind-Open="isCreateMenuOpen">
-                    @if (IsLoadingCreatableTypes)
-                    {
-                        <FluentMenuItem>Loading...</FluentMenuItem>
-                    }
-                    else if (CreatableTypes.Count == 0)
-                    {
-                        <FluentMenuItem OnClick="@(() => OpenCreateNodeDialogAsync(null))">Create New...</FluentMenuItem>
-                    }
-                    else
-                    {
-                        @foreach (var type in CreatableTypes)
-                        {
-                            <FluentMenuItem OnClick="@(() => OpenCreateNodeDialogAsync(type))">
-                                @if (!string.IsNullOrEmpty(type.Icon))
-                                {
-                                    @if (IsEmoji(type.Icon))
-                                    {
-                                        <span style="margin-right: 8px;">@type.Icon</span>
-                                    }
-                                    else
-                                    {
-                                        <img src="@type.Icon" alt="" style="width: 16px; height: 16px; margin-right: 8px;" />
-                                    }
-                                }
-                                @(type.DisplayName ?? type.NodeTypePath)
-                            </FluentMenuItem>
-                        }
-                        <FluentDivider Style="margin: 4px 0;" />
-                        <FluentMenuItem OnClick="@(() => OpenCreateNodeDialogAsync(null))">Other...</FluentMenuItem>
-                    }
+                <FluentMenu Anchor="create-menu-anchor" Open="@isCreateMenuOpen" OpenChanged="@OnCreateMenuOpenChanged">
+                    <FluentMenuItem OnClick="@(() => OpenCreateNodeDialogAsync(null))">
+                        <FluentIcon Value="@(new Icons.Regular.Size16.Add())" Style="margin-right: 8px;" />
+                        Create
+                    </FluentMenuItem>
                     @if (HasCreatePermission)
                     {
-                        <FluentDivider Style="margin: 4px 0;" />
                         <FluentMenuItem OnClick="@OpenImportNodeDialogAsync">
                             <FluentIcon Value="@(new Icons.Regular.Size16.ArrowImport())" Style="margin-right: 8px;" />
-                            Import Nodes
+                            Import
                         </FluentMenuItem>
                     }
                 </FluentMenu>
                 <FluentButton Id="create-menu-anchor" Appearance="Appearance.Stealth"
-                    Title="Create new" aria-label="Create new" @onclick="ToggleCreateMenu">
+                    Title="Create new" aria-label="Create new"
+                    OnClick="@ToggleCreateMenu">
                     <FluentIcon Value="@(new Icons.Regular.Size20.Add())" Color="Color.FillInverse" />
                 </FluentButton>
                 @HeaderLinks

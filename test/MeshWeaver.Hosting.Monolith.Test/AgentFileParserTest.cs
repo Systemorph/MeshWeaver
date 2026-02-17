@@ -41,7 +41,6 @@ public class AgentFileParserTest
         node.Namespace.Should().Be("test");
         node.NodeType.Should().Be("Agent");
         node.Name.Should().Be("Test Agent");
-        node.Description.Should().Be("A test agent");
         node.Icon.Should().Be("Bot");
         node.Category.Should().Be("Testing");
 
@@ -214,7 +213,6 @@ public class AgentFileParserTest
         {
             NodeType = "Agent",
             Name = "Test Agent",
-            Description = "A test agent",
             Icon = "Bot",
             Category = "Agents",
             Content = agentConfig
@@ -356,7 +354,6 @@ public class AgentFileParserTest
         reparsed.Should().NotBeNull();
         reparsed!.NodeType.Should().Be("Agent");
         reparsed.Name.Should().Be("Complete Agent");
-        reparsed.Description.Should().Be("Agent with all properties");
 
         var agentConfig = reparsed.Content.Should().BeOfType<AgentConfiguration>().Subject;
         agentConfig.GroupName.Should().Be("TestGroup");

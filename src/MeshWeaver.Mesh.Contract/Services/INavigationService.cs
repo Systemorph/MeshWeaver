@@ -48,21 +48,18 @@ public interface INavigationService : IDisposable
     event Action<NavigationContext?>? OnNavigationContextChanged;
 
     /// <summary>
-    /// Gets the list of creatable types for the current node path.
+    /// Observable that emits the current creatable types snapshot for the current node path.
     /// Automatically reloaded when the node path changes.
+    /// Emits incrementally as types are loaded. <see cref="CreatableTypesSnapshot.IsLoading"/>
+    /// indicates whether more items may still arrive.
     /// </summary>
-    IReadOnlyList<CreatableTypeInfo> CreatableTypes { get; }
+    IObservable<CreatableTypesSnapshot> CreatableTypes { get; }
 
     /// <summary>
-    /// Event raised when the creatable types list changes.
-    /// Fired incrementally as types are loaded.
+    /// Triggers a background reload of creatable types for the current namespace
+    /// if they haven't been loaded yet. Results arrive through <see cref="CreatableTypes"/>.
     /// </summary>
-    event Action<IReadOnlyList<CreatableTypeInfo>>? OnCreatableTypesChanged;
-
-    /// <summary>
-    /// Gets whether creatable types are currently being loaded.
-    /// </summary>
-    bool IsLoadingCreatableTypes { get; }
+    void RefreshCreatableTypes();
 
     /// <summary>
     /// Initializes the service and subscribes to NavigationManager.LocationChanged.

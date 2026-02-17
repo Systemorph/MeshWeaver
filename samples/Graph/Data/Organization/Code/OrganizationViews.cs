@@ -40,7 +40,7 @@ public static class OrganizationViews
         string hubPath)
     {
         var name = org?.Name ?? node?.Name ?? "Organization";
-        var description = org?.Description ?? node?.Description;
+        var description = org?.Description;
         var logo = org?.Logo ?? GetNodeLogo(node);
         var website = org?.Website;
         var location = org?.Location;

@@ -147,8 +147,7 @@ public class FileSystemObservableQueryTests(ITestOutputHelper output) : Monolith
         await Persistence.SaveNodeAsync(MeshNode.FromPath("ACME/Project1") with
         {
             Name = "Updated Project 1",
-            NodeType = "Project",
-            Description = "New description"
+            NodeType = "Project"
         });
 
         // Wait for debounce and processing
@@ -159,7 +158,6 @@ public class FileSystemObservableQueryTests(ITestOutputHelper output) : Monolith
         receivedChanges[1].ChangeType.Should().Be(QueryChangeType.Updated);
         receivedChanges[1].Items.Should().HaveCount(1);
         receivedChanges[1].Items[0].Name.Should().Be("Updated Project 1");
-        receivedChanges[1].Items[0].Description.Should().Be("New description");
 
         subscription.Dispose();
     }

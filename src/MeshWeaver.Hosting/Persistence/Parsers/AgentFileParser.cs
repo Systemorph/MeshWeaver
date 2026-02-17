@@ -125,7 +125,6 @@ public class AgentFileParser : IFileFormatParser
             NodeType = AgentNodeType,
             Name = frontMatter.Name ?? frontMatter.DisplayName ?? id,
             Category = frontMatter.Category ?? "Agents",
-            Description = frontMatter.Description,
             Icon = frontMatter.Icon ?? DefaultAgentIcon,
             State = ParseState(frontMatter.State),
             LastModified = lastModified,
@@ -153,11 +152,11 @@ public class AgentFileParser : IFileFormatParser
             NodeType = AgentNodeType,
             Name = node.Name != node.Id ? node.Name : null,
             Category = node.Category != "Agents" ? node.Category : null,
-            Description = node.Description,
             Icon = node.Icon != DefaultAgentIcon ? node.Icon : null,
             State = node.State != MeshNodeState.Active ? node.State.ToString() : null,
 
             // AgentConfiguration-specific properties
+            Description = agentConfig?.Description,
             DisplayName = agentConfig?.DisplayName != node.Name ? agentConfig?.DisplayName : null,
             GroupName = agentConfig?.GroupName,
             IsDefault = agentConfig?.IsDefault ?? false,

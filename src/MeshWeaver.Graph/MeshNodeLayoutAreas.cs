@@ -48,7 +48,7 @@ public record PageLayoutOptions
 /// Layout areas for mesh node content.
 /// - Overview: Main content display with action menu (readonly content + navigation)
 /// - Thumbnail: Compact card view for use in catalogs and lists
-/// - Metadata: Node metadata display (name, type, description, path)
+/// - Metadata: Node metadata display (name, type, path)
 /// - Settings: Node settings with NodeType link navigation
 /// - Children: Child nodes grouped by type
 /// </summary>
@@ -369,7 +369,7 @@ public static class MeshNodeLayoutAreas
     }
 
     /// <summary>
-    /// Renders the Metadata area showing node properties (name, type, description, path).
+    /// Renders the Metadata area showing node properties (name, type, path).
     /// Uses GetStream for reactive data binding instead of direct persistence access.
     /// </summary>
     [Browsable(false)]
@@ -413,11 +413,6 @@ public static class MeshNodeLayoutAreas
         if (!string.IsNullOrEmpty(node.NodeType))
         {
             stack = stack.WithView(Controls.Html($"<p><strong>Type:</strong> {node.NodeType}</p>"));
-        }
-
-        if (!string.IsNullOrWhiteSpace(node.Description))
-        {
-            stack = stack.WithView(Controls.Html($"<p><strong>Description:</strong> {node.Description}</p>"));
         }
 
         var parentPath = node.GetParentPath();
@@ -520,7 +515,6 @@ public static class MeshNodeLayoutAreas
         sb.AppendLine($"| **Path** | `{node.Path}` |");
         sb.AppendLine($"| **Namespace** | `{node.Namespace ?? ""}` |");
         sb.AppendLine($"| **NodeType** | {(string.IsNullOrEmpty(node.NodeType) ? "*not set*" : $"[{node.NodeType}](/{node.NodeType})")} |");
-        sb.AppendLine($"| **Description** | {node.Description ?? "*not set*"} |");
         sb.AppendLine($"| **Icon** | {node.Icon ?? "*not set*"} |");
         sb.AppendLine($"| **DisplayOrder** | {node.DisplayOrder} |");
         sb.AppendLine($"| **State** | {node.State} |");
@@ -586,8 +580,7 @@ public static class MeshNodeLayoutAreas
         if (node.Content is NodeDescription nd)
             return nd.Description;
 
-        // Fall back to Description field
-        return node.Description ?? string.Empty;
+        return string.Empty;
     }
 
 

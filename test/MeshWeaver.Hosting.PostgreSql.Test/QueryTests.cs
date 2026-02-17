@@ -29,7 +29,6 @@ public class QueryTests
         {
             Name = "Story One",
             NodeType = "Story",
-            Description = "A high priority story",
             Content = JsonSerializer.Deserialize<object>("""{"status":"Open","priority":"High"}""", _options)
         }, _options);
 
@@ -37,22 +36,19 @@ public class QueryTests
         {
             Name = "Story Two",
             NodeType = "Story",
-            Description = "A low priority story",
             Content = JsonSerializer.Deserialize<object>("""{"status":"Closed","priority":"Low"}""", _options)
         }, _options);
 
         await adapter.WriteAsync(new MeshNode("Alice", "ACME/Team")
         {
             Name = "Alice",
-            NodeType = "Person",
-            Description = "Team member Alice"
+            NodeType = "Person"
         }, _options);
 
         await adapter.WriteAsync(new MeshNode("Project", "Contoso")
         {
             Name = "Contoso Project",
-            NodeType = "Project",
-            Description = "A contoso project"
+            NodeType = "Project"
         }, _options);
     }
 

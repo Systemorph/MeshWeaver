@@ -23,7 +23,6 @@ public static class MarkdownNodeType
     public static MeshNode CreateMeshNode() => new(NodeType)
     {
         Name = "Markdown",
-        Description = "A markdown node with collaborative editing support",
         Icon = "/static/NodeTypeIcons/document.svg",
         HubConfiguration = config => config
             .AddMarkdownViews()

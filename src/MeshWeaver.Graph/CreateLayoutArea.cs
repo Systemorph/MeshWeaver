@@ -39,16 +39,20 @@ public static class CreateLayoutArea
         var nodeTypePath = host.GetQueryStringParamValue("type");
         if (!string.IsNullOrEmpty(nodeTypePath))
         {
+            var subNamespace = host.GetQueryStringParamValue("subns");
             return Observable.Return<UiControl?>(
-                BuildCreateChildForm(host, currentPath, nodeTypePath)
+                BuildCreateChildForm(host, currentPath, nodeTypePath, subNamespace)
             );
         }
 
-        // Get current node to check if it's transient
+        // Check current node state once (Take(1)) to decide which view to show.
+        // We must NOT react to every nodeStream emission, because BuildCreateEditor
+        // calls host.UpdateData which resets form data — causing the editor to lose
+        // user input and rebuild the UI on every stream emission.
         var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? Array.Empty<MeshNode>())
             ?? Observable.Return<MeshNode[]>(Array.Empty<MeshNode>());
 
-        return nodeStream.SelectMany(async nodes =>
+        return nodeStream.Take(1).SelectMany(async nodes =>
         {
             var currentNode = nodes.FirstOrDefault(n => n.Path == currentPath);
 
@@ -109,8 +113,7 @@ public static class CreateLayoutArea
         var metadataFormData = new Dictionary<string, object?>
         {
             ["name"] = node.Name ?? "",
-            ["id"] = desiredId,
-            ["description"] = node.Description ?? ""
+            ["id"] = desiredId
         };
         host.UpdateData(metadataDataId, metadataFormData);
 
@@ -193,6 +196,59 @@ public static class CreateLayoutArea
                                                 logger?.LogError(ex, "Error getting content from data stream for {NodePath}", nodePath);
                                                 ShowErrorDialog(ctx, "Creation Failed", ex.Message);
                                             });
+                                },
+                                ex =>
+                                {
+                                    logger?.LogError(ex, "Error getting metadata from data stream for {NodePath}", nodePath);
+                                    ShowErrorDialog(ctx, "Creation Failed", ex.Message);
+                                });
+                    })));
+        }
+        else if (node.NodeType == "Markdown")
+        {
+            // Markdown editor with auto-save (no Done button — Create/Cancel handles state)
+            var rawContent = MarkdownOverviewLayoutArea.GetMarkdownContent(node);
+            var editor = new MarkdownEditorControl()
+                .WithDocumentId(nodePath)
+                .WithValue(rawContent ?? "")
+                .WithHeight("400px")
+                .WithPlaceholder("Start writing your markdown content...")
+                .WithAutoSave(host.Hub.Address.ToString(), nodePath);
+            stack = stack.WithView(editor);
+
+            // Buttons: Create and Cancel, right-aligned
+            stack = stack.WithView(Controls.Stack
+                .WithOrientation(Orientation.Horizontal)
+                .WithHorizontalGap(12)
+                .WithStyle("margin-top: 24px; justify-content: flex-end;")
+                .WithView(Controls.Button("Cancel")
+                    .WithAppearance(Appearance.Neutral)
+                    .WithClickAction(async ctx =>
+                    {
+                        try { await meshCatalog.DeleteNodeAsync(nodePath); } catch { }
+                        ctx.NavigateTo(cancelUrl);
+                    }))
+                .WithView(Controls.Button("Create")
+                    .WithAppearance(Appearance.Accent)
+                    .WithIconStart(FluentIcons.Add())
+                    .WithClickAction(ctx =>
+                    {
+                        ctx.Host.Stream.GetDataStream<Dictionary<string, object?>>(metadataDataId)
+                            .Take(1)
+                            .Subscribe(
+                                metadata =>
+                                {
+                                    try
+                                    {
+                                        var currentName = metadata.GetValueOrDefault("name")?.ToString()?.Trim() ?? node.Name;
+                                        HandleConfirmCreate(ctx, host, logger, node, nodePath,
+                                            currentName, null, null);
+                                    }
+                                    catch (Exception ex)
+                                    {
+                                        logger?.LogError(ex, "Error preparing CreateNodeRequest for {NodePath}", nodePath);
+                                        ShowErrorDialog(ctx, "Creation Failed", ex.Message);
+                                    }
                                 },
                                 ex =>
                                 {
@@ -317,7 +373,6 @@ public static class CreateLayoutArea
         {
             Name = currentName ?? transientNode.Name,
             NodeType = transientNode.NodeType,
-            Description = transientNode.Description,
             Icon = transientNode.Icon,
             Category = transientNode.Category,
             Content = currentContent ?? transientNode.Content,
@@ -379,7 +434,6 @@ public static class CreateLayoutArea
         var formData = new Dictionary<string, object?>
         {
             ["name"] = node.Name ?? "",
-            ["description"] = node.Description ?? "",
             ["category"] = node.Category ?? "",
             ["icon"] = node.Icon ?? ""
         };
@@ -398,20 +452,6 @@ public static class CreateLayoutArea
                 Immediate = true,
                 DataContext = LayoutAreaReference.GetDataPointer(dataId)
             }.WithStyle("width: 100%;")));
-
-        // Description field
-        stack = stack.WithView(Controls.Stack
-            .WithWidth("100%")
-            .WithStyle("margin-bottom: 8px;")
-            .WithView(Controls.Body("Description").WithStyle("font-weight: 600; margin-bottom: 4px;"))
-            .WithView(new MarkdownEditorControl()
-            {
-                Value = new JsonPointerReference("description"),
-                DocumentId = $"{dataId}_description",
-                Height = "200px",
-                Placeholder = "Enter a description (supports Markdown)",
-                DataContext = LayoutAreaReference.GetDataPointer(dataId)
-            }));
 
         return stack;
     }
@@ -472,7 +512,10 @@ public static class CreateLayoutArea
         var description = string.IsNullOrEmpty(typeInfo.Description) ? "No description" : typeInfo.Description;
 
         // Navigate to create form with type query parameter
-        var createUrl = MeshNodeLayoutAreas.BuildContentUrl(parentPath, MeshNodeLayoutAreas.CreateNodeArea, $"type={Uri.EscapeDataString(typeInfo.NodeTypePath)}");
+        var queryParams = $"type={Uri.EscapeDataString(typeInfo.NodeTypePath)}";
+        if (!string.IsNullOrEmpty(typeInfo.SubNamespace))
+            queryParams += $"&subns={Uri.EscapeDataString(typeInfo.SubNamespace)}";
+        var createUrl = MeshNodeLayoutAreas.BuildContentUrl(parentPath, MeshNodeLayoutAreas.CreateNodeArea, queryParams);
 
         return Controls.Stack
             .WithStyle("padding: 16px; border: 1px solid var(--neutral-stroke-rest); border-radius: 8px; background: var(--neutral-layer-card-container); cursor: pointer;")
@@ -493,14 +536,16 @@ public static class CreateLayoutArea
     private static UiControl BuildCreateChildForm(
         LayoutAreaHost host,
         string parentPath,
-        string nodeTypePath)
+        string nodeTypePath,
+        string? subNamespace = null)
     {
         var logger = host.Hub.ServiceProvider.GetService<ILogger<LayoutAreaHost>>();
         var typeName = GetLastPathSegment(nodeTypePath);
 
-        // Compute the namespace: parentPath + last segment of nodeType
-        var subPartition = GetLastPathSegment(nodeTypePath);
-        var defaultNamespace = $"{parentPath}/{subPartition}";
+        // Only add sub-namespace folder when explicitly configured (e.g., Thread → "Threads")
+        var defaultNamespace = !string.IsNullOrEmpty(subNamespace)
+            ? $"{parentPath}/{subNamespace}"
+            : parentPath;
 
         var stack = Controls.Stack.WithWidth("100%").WithStyle("padding: 24px;");
 
@@ -537,16 +582,12 @@ public static class CreateLayoutArea
         var dataId = $"create_{parentPath.Replace("/", "_")}_{Guid.NewGuid().AsString()}";
         var formData = new Dictionary<string, object?>
         {
-            ["name"] = "",
-            ["description"] = ""
+            ["name"] = ""
         };
         host.UpdateData(dataId, formData);
 
         // Name field (required)
         stack = stack.WithView(BuildNameField(host, dataId));
-
-        // Description field (optional)
-        stack = stack.WithView(BuildDescriptionField(host, dataId));
 
         // Button row - right-aligned
         var buttonRow = Controls.Stack
@@ -590,7 +631,6 @@ public static class CreateLayoutArea
                     {
                         Name = name,
                         NodeType = nodeTypePath,
-                        Description = formValues.GetValueOrDefault("description")?.ToString()?.Trim(),
                         State = MeshNodeState.Transient
                     };
                     var meshCatalog = host.Hub.ServiceProvider.GetRequiredService<IMeshCatalog>();
@@ -661,25 +701,6 @@ public static class CreateLayoutArea
                 Immediate = true,
                 DataContext = LayoutAreaReference.GetDataPointer(dataId)
             }.WithStyle("width: 100%;"));
-    }
-
-    /// <summary>
-    /// Builds the Description field as a markdown editor.
-    /// </summary>
-    private static UiControl BuildDescriptionField(LayoutAreaHost _, string dataId)
-    {
-        return Controls.Stack
-            .WithWidth("100%")
-            .WithStyle("margin-bottom: 8px;")
-            .WithView(Controls.Body("Description").WithStyle("font-weight: 600; margin-bottom: 4px;"))
-            .WithView(new MarkdownEditorControl()
-            {
-                Value = new JsonPointerReference("description"),
-                DocumentId = $"{dataId}_description",
-                Height = "200px",
-                Placeholder = "Enter a description (supports Markdown)",
-                DataContext = LayoutAreaReference.GetDataPointer(dataId)
-            });
     }
 
     /// <summary>
