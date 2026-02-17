@@ -58,7 +58,7 @@ public interface IPersistenceService
     Task<MeshNode> MoveNodeAsync(string sourcePath, string targetPath, CancellationToken ct = default);
 
     /// <summary>
-    /// Searches nodes by query text within their Name, Description, or Content.
+    /// Searches nodes by query text within their Name or Content.
     /// </summary>
     /// <param name="parentPath">Parent path to search under (null for all)</param>
     /// <param name="query">Search query</param>

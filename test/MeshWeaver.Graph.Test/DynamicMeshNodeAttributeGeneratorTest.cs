@@ -87,7 +87,6 @@ public class DynamicMeshNodeAttributeGeneratorTest
         {
             Name = "Acme Corp",
             NodeType = "organization",
-            Description = "Test organization",
             Icon = "Building",
             DisplayOrder = 10,
             LastModified = DateTimeOffset.Parse("2024-01-15T10:30:00Z")
@@ -104,7 +103,6 @@ public class DynamicMeshNodeAttributeGeneratorTest
         // Assert
         source.Should().Contain("Name = \"Acme Corp\"");
         source.Should().Contain("NodeType = \"organization\"");
-        source.Should().Contain("Description = \"Test organization\"");
         source.Should().Contain("Icon = \"Building\"");
         source.Should().Contain("DisplayOrder = 10");
     }
@@ -167,7 +165,6 @@ public class DynamicMeshNodeAttributeGeneratorTest
         var node = new MeshNode("test")
         {
             Name = "Test \"quoted\" name",
-            Description = "Line1\nLine2",
             NodeType = "test",
             LastModified = DateTimeOffset.UtcNow
         };
@@ -182,7 +179,6 @@ public class DynamicMeshNodeAttributeGeneratorTest
 
         // Assert
         source.Should().Contain("\\\"quoted\\\"");
-        source.Should().Contain("\\n");
     }
 
     [Fact]

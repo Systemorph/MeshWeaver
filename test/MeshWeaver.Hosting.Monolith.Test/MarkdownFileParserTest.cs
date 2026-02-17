@@ -53,7 +53,6 @@ public class MarkdownFileParserTest
         node.NodeType.Should().Be("Article");
         node.Name.Should().Be("My Article");
         node.Category.Should().Be("Documentation");
-        node.Description.Should().Be("A detailed article");
         node.Icon.Should().Be("BookOpen");
         node.State.Should().Be(MeshNodeState.Transient);
 
@@ -126,7 +125,6 @@ public class MarkdownFileParserTest
         // Assert
         node.Should().NotBeNull();
         node!.Name.Should().Be("Legacy Article"); // Mapped from Title
-        node.Description.Should().Be("This is the legacy abstract"); // Mapped from Abstract
     }
 
     [Fact(Timeout = 10000)]
@@ -158,7 +156,6 @@ public class MarkdownFileParserTest
             NodeType = "Article",
             Name = "Test Article",
             Category = "Docs",
-            Description = "Test description",
             Icon = "BookOpen",
             State = MeshNodeState.Transient,
             Content = new MarkdownContent
@@ -178,7 +175,6 @@ public class MarkdownFileParserTest
         result.Should().Contain("NodeType: Article");
         result.Should().Contain("Name: Test Article");
         result.Should().Contain("Category: Docs");
-        result.Should().Contain("Description: Test description");
         result.Should().Contain("Icon: BookOpen");
         result.Should().Contain("State: Transient");
         result.Should().Contain("Author 1");
@@ -292,7 +288,6 @@ public class MarkdownFileParserTest
         reparsed!.NodeType.Should().Be("Tutorial");
         reparsed.Name.Should().Be("Complete Tutorial");
         reparsed.Category.Should().Be("Learning");
-        reparsed.Description.Should().Be("A comprehensive tutorial");
         reparsed.Icon.Should().Be("School");
 
         var mdContent = reparsed.Content.Should().BeOfType<MarkdownContent>().Subject;
@@ -381,7 +376,6 @@ public class MarkdownFileParserTest
         var node = new MeshNode("doc", "test")
         {
             Name = "Doc with: colons",
-            Description = "Has \"quotes\" and 'apostrophes'",
             Content = new MarkdownContent { Content = "# Content" }
         };
 
@@ -393,7 +387,6 @@ public class MarkdownFileParserTest
 
         // Assert
         reparsed!.Name.Should().Be("Doc with: colons");
-        reparsed.Description.Should().Be("Has \"quotes\" and 'apostrophes'");
     }
 
     #endregion

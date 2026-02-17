@@ -115,7 +115,6 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
             // A partial update typically has Content but is missing other metadata fields
             var isPartialUpdate = incomingNode.Content != null &&
                                   string.IsNullOrEmpty(incomingNode.Name) &&
-                                  string.IsNullOrEmpty(incomingNode.Description) &&
                                   string.IsNullOrEmpty(incomingNode.Category) &&
                                   string.IsNullOrEmpty(incomingNode.Icon);
 

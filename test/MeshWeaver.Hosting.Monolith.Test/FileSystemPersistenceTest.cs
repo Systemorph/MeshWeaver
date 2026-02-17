@@ -52,7 +52,6 @@ public class FileSystemPersistenceTest(ITestOutputHelper output) : MonolithMeshT
         var node = MeshNode.FromPath("graph/org1") with
         {
             Name = "Organization 1",
-            Description = "First organization",
             NodeType = "org",
             Icon = "Building",
             DisplayOrder = 10
@@ -69,7 +68,6 @@ public class FileSystemPersistenceTest(ITestOutputHelper output) : MonolithMeshT
         var savedNode = await _persistence.GetNodeAsync("graph/org1", JsonOptions);
         savedNode.Should().NotBeNull();
         savedNode!.Name.Should().Be("Organization 1");
-        savedNode.Description.Should().Be("First organization");
         savedNode.NodeType.Should().Be("org");
     }
 
@@ -119,7 +117,7 @@ public class FileSystemPersistenceTest(ITestOutputHelper output) : MonolithMeshT
     public async Task Read_ExistingNode_ReturnsNode()
     {
         // Arrange
-        await _persistence.SaveNodeAsync(MeshNode.FromPath("graph/org1") with { Name = "Org 1", Description = "Test org" }, JsonOptions);
+        await _persistence.SaveNodeAsync(MeshNode.FromPath("graph/org1") with { Name = "Org 1" }, JsonOptions);
 
         // Act
         var node = await _persistence.GetNodeAsync("graph/org1", JsonOptions);
@@ -127,7 +125,6 @@ public class FileSystemPersistenceTest(ITestOutputHelper output) : MonolithMeshT
         // Assert
         node.Should().NotBeNull();
         node!.Name.Should().Be("Org 1");
-        node.Description.Should().Be("Test org");
     }
 
     [Fact]
@@ -190,16 +187,16 @@ public class FileSystemPersistenceTest(ITestOutputHelper output) : MonolithMeshT
     public async Task Read_Search_FindsMatchingNodes()
     {
         // Arrange
-        await _persistence.SaveNodeAsync(MeshNode.FromPath("graph/acme") with { Name = "Acme Corporation", Description = "Tech company" }, JsonOptions);
-        await _persistence.SaveNodeAsync(MeshNode.FromPath("graph/contoso") with { Name = "Contoso Ltd", Description = "Software company" }, JsonOptions);
-        await _persistence.SaveNodeAsync(MeshNode.FromPath("graph/fabrikam") with { Name = "Fabrikam Inc", Description = "Hardware manufacturer" }, JsonOptions);
+        await _persistence.SaveNodeAsync(MeshNode.FromPath("graph/acme") with { Name = "Acme Corporation" }, JsonOptions);
+        await _persistence.SaveNodeAsync(MeshNode.FromPath("graph/contoso") with { Name = "Contoso Software" }, JsonOptions);
+        await _persistence.SaveNodeAsync(MeshNode.FromPath("graph/fabrikam") with { Name = "Fabrikam Inc" }, JsonOptions);
 
         // Act
         var results = await _persistence.SearchAsync(null, "software", JsonOptions).ToListAsync(TestContext.Current.CancellationToken);
 
         // Assert
         results.Should().HaveCount(1);
-        results.First().Name.Should().Be("Contoso Ltd");
+        results.First().Name.Should().Be("Contoso Software");
     }
 
     #endregion
@@ -213,13 +210,12 @@ public class FileSystemPersistenceTest(ITestOutputHelper output) : MonolithMeshT
         await _persistence.SaveNodeAsync(MeshNode.FromPath("graph/org1") with { Name = "Original Name" }, JsonOptions);
 
         // Act
-        await _persistence.SaveNodeAsync(MeshNode.FromPath("graph/org1") with { Name = "Updated Name", Description = "New description" }, JsonOptions);
+        await _persistence.SaveNodeAsync(MeshNode.FromPath("graph/org1") with { Name = "Updated Name" }, JsonOptions);
 
         // Assert
         var node = await _persistence.GetNodeAsync("graph/org1", JsonOptions);
         node.Should().NotBeNull();
         node!.Name.Should().Be("Updated Name");
-        node.Description.Should().Be("New description");
     }
 
     [Fact]
@@ -504,8 +500,7 @@ public class FileSystemPersistenceTest(ITestOutputHelper output) : MonolithMeshT
         // Arrange
         var node = MeshNode.FromPath("graph/org1") with
         {
-            Name = "Org with 'quotes' and \"double quotes\"",
-            Description = "Contains <html> and & special chars"
+            Name = "Org with 'quotes' and \"double quotes\""
         };
 
         // Act
@@ -515,7 +510,6 @@ public class FileSystemPersistenceTest(ITestOutputHelper output) : MonolithMeshT
         // Assert
         loaded.Should().NotBeNull();
         loaded!.Name.Should().Be("Org with 'quotes' and \"double quotes\"");
-        loaded.Description.Should().Be("Contains <html> and & special chars");
     }
 
     [Fact]
@@ -568,7 +562,6 @@ public class FileSystemPersistenceTest(ITestOutputHelper output) : MonolithMeshT
         node.Name.Should().Be("Test Document");
         node.NodeType.Should().Be("Markdown");
         node.Category.Should().Be("Documentation");
-        node.Description.Should().Be("A test document");
         node.Icon.Should().Be("/static/storage/content/test/icon.svg");
         node.Content.Should().BeOfType<MarkdownContent>();
         var markdownContent = (MarkdownContent)node.Content!;
@@ -634,7 +627,6 @@ public class FileSystemPersistenceTest(ITestOutputHelper output) : MonolithMeshT
             Name = "My Document",
             NodeType = "Markdown",
             Category = "Test",
-            Description = "Test description",
             Content = "# My Document\n\nContent here."
         };
 

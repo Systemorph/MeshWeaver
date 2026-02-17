@@ -124,7 +124,6 @@ public class MarkdownParsingTest(ITestOutputHelper output) : HubTestBase(output)
             node!.Id.Should().Be("Overview");
             node.Name.Should().Be("Northwind Overview");
             node.Category.Should().Be("Documentation");
-            node.Description.Should().Be("This is a sample description of the article.");
             node.NodeType.Should().Be("Markdown");
             node.Content.Should().BeOfType<MeshWeaver.Markdown.MarkdownContent>();
             ((MeshWeaver.Markdown.MarkdownContent)node.Content!).Content.Should().Contain("# Northwind");

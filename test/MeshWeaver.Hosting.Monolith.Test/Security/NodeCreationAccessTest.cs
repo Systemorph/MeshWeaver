@@ -150,8 +150,7 @@ public class NodeCreationAccessTest(ITestOutputHelper output) : MonolithMeshTest
         {
             Name = "My New Project",
             NodeType = "Markdown",
-            State = MeshNodeState.Active,
-            Description = "Project created with Id change"
+            State = MeshNodeState.Active
         };
 
         // Create the final node

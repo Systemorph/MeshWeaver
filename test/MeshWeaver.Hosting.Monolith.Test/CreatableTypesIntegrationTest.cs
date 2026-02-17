@@ -79,8 +79,7 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
         var acmeNode = MeshNode.FromPath("ACME") with
         {
             Name = "ACME Corp",
-            NodeType = "Organization",
-            Description = "A sample organization"
+            NodeType = "Organization"
         };
         ((IPersistenceServiceCore)persistence).SaveNodeAsync(acmeNode, SetupJsonOptions).GetAwaiter().GetResult();
 
@@ -122,8 +121,7 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
         var productLaunchNode = MeshNode.FromPath("ACME/ProductLaunch") with
         {
             Name = "Product Launch",
-            NodeType = "ACME/Project",
-            Description = "2024 Product Launch Project"
+            NodeType = "ACME/Project"
         };
         ((IPersistenceServiceCore)persistence).SaveNodeAsync(productLaunchNode, SetupJsonOptions).GetAwaiter().GetResult();
 
@@ -256,8 +254,7 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
         var newTodoNode = MeshNode.FromPath("ACME/ProductLaunch/my-todo") with
         {
             Name = "My Todo",
-            NodeType = "ACME/Project/Todo",
-            Description = "A test todo item"
+            NodeType = "ACME/Project/Todo"
         };
 
         // Act
@@ -342,7 +339,6 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
         var node = MeshNode.FromPath(nodePath) with
         {
             Name = "Test Markdown Node",
-            Description = "A test node for create flow",
             NodeType = "Markdown",
             Icon = "Document",
             Content = MarkdownContent.Parse($"# Test Markdown Node\n\nThis is a test.", nodePath)
@@ -497,7 +493,6 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
         var node = MeshNode.FromPath(nodePath) with
         {
             Name = "Test Transient Node",
-            Description = "A transient node for testing",
             NodeType = "Markdown",
             State = MeshNodeState.Transient, // Explicitly transient
             Content = MarkdownContent.Parse($"# Test Transient\n\nThis is transient.", nodePath)

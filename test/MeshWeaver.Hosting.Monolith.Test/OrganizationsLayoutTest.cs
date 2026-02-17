@@ -67,7 +67,6 @@ namespace MeshWeaver.Hosting.Monolith.Test
             {
                 Name = "Organization",
                 NodeType = "NodeType",
-                Description = "An organization containing projects",
                 Icon = "Building",
                 DisplayOrder = 10,
                 Content = new NodeTypeDefinition
@@ -90,7 +89,6 @@ namespace MeshWeaver.Hosting.Monolith.Test
             {
                 Name = "Acme Corporation",
                 NodeType = "Organization",
-                Description = "A famous company",
                 Icon = "Building",
                 Content = new { Id = "Acme", Name = "Acme Corporation", Description = "A famous company", Logo = "/static/Organization/logos/acme.png" }
             };
@@ -100,7 +98,6 @@ namespace MeshWeaver.Hosting.Monolith.Test
             {
                 Name = "Contoso Ltd",
                 NodeType = "Organization",
-                Description = "Another company",
                 Icon = "Building",
                 Content = new { Id = "Contoso", Name = "Contoso Ltd", Description = "Another company", Logo = "/static/Organization/logos/contoso.png" }
             };
@@ -110,7 +107,6 @@ namespace MeshWeaver.Hosting.Monolith.Test
             {
                 Name = "Fabrikam Inc",
                 NodeType = "Organization",
-                Description = "Yet another company",
                 Icon = "Building",
                 Content = new { Id = "Fabrikam", Name = "Fabrikam Inc", Description = "Yet another company", Logo = "/static/Organization/logos/fabrikam.png" }
             };

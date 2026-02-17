@@ -11,6 +11,7 @@ public interface IMeshImportService
     /// <param name="sourcePath">Server-side source directory path</param>
     /// <param name="targetRootPath">Target root path in the mesh (empty for root)</param>
     /// <param name="force">If true, re-import even if data already exists</param>
+    /// <param name="removeMissing">If true, delete target nodes not present in source</param>
     /// <param name="onProgress">Optional progress callback (nodesImported, partitionsImported, currentPath)</param>
     /// <param name="ct">Cancellation token</param>
     /// <returns>Import result with counts and timing</returns>
@@ -18,6 +19,7 @@ public interface IMeshImportService
         string sourcePath,
         string? targetRootPath = null,
         bool force = false,
+        bool removeMissing = false,
         Action<int, int, string>? onProgress = null,
         CancellationToken ct = default);
 

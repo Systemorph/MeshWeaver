@@ -144,12 +144,6 @@ public record MeshNode([property: Key] string Id, [property: Editable(false)] st
     public string? NodeType { get; init; }
 
     /// <summary>
-    /// Human-readable description of this mesh node for display in autocomplete and UI.
-    /// Rendered as markdown in the UI.
-    /// </summary>
-    public string? Description { get; init; }
-
-    /// <summary>
     /// Category for grouping in catalog views.
     /// When set, overrides NodeType as the grouping title.
     /// </summary>

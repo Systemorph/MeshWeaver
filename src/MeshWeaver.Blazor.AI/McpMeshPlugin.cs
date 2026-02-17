@@ -74,7 +74,6 @@ public class McpMeshPlugin
                             node.Path,
                             node.Name,
                             node.NodeType,
-                            node.Description,
                             node.Icon
                         });
                     }
@@ -122,8 +121,7 @@ public class McpMeshPlugin
                     {
                         node.Path,
                         node.Name,
-                        node.NodeType,
-                        node.Description
+                        node.NodeType
                     });
                 }
                 else
@@ -145,7 +143,7 @@ public class McpMeshPlugin
     [Description("Creates or updates a node at a path. Provide the path and a JSON object with fields to update.")]
     public async Task<string> Update(
         [Description("Path to update (e.g., @graph/neworg)")] string path,
-        [Description("JSON object with fields to update (name, description, nodeType, content)")] string json)
+        [Description("JSON object with fields to update (name, nodeType, content)")] string json)
     {
         logger.LogInformation("MCP Update called with path={Path}", path);
 
@@ -168,14 +166,11 @@ public class McpMeshPlugin
 
             // Apply updates from JSON
             string? name = null;
-            string? description = null;
             string? nodeType = null;
             object? content = null;
 
             if (updates.TryGetProperty("name", out var nameProp))
                 name = nameProp.GetString();
-            if (updates.TryGetProperty("description", out var descProp))
-                description = descProp.GetString();
             if (updates.TryGetProperty("nodeType", out var typeProp))
                 nodeType = typeProp.GetString();
             if (updates.TryGetProperty("content", out var contentProp))
@@ -184,7 +179,6 @@ public class McpMeshPlugin
             node = node with
             {
                 Name = name ?? existingNode?.Name ?? node.Id,
-                Description = description ?? existingNode?.Description,
                 NodeType = nodeType ?? existingNode?.NodeType,
                 Content = content ?? existingNode?.Content
             };

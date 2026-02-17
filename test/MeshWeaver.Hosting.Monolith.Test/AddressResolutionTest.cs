@@ -28,7 +28,6 @@ public class AddressResolutionTest(ITestOutputHelper output) : MonolithMeshTestB
                 new MeshNode(PricingType)
                 {
                     Name = "Pricing",
-                    Description = "Insurance pricing submissions",
                     Icon = "Calculator",
                     DisplayOrder = 100,
                     HubConfiguration = c => c
@@ -36,7 +35,6 @@ public class AddressResolutionTest(ITestOutputHelper output) : MonolithMeshTestB
                 new MeshNode(AppType)
                 {
                     Name = "Applications",
-                    Description = "Standard applications",
                     Icon = "App",
                     DisplayOrder = 200,
                     HubConfiguration = c => c

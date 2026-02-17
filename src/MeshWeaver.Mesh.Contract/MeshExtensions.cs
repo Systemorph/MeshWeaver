@@ -108,7 +108,6 @@ public static class MeshExtensions
                     {
                         State = MeshNodeState.Active,
                         Name = node.Name ?? existingNode.Name,
-                        Description = node.Description ?? existingNode.Description,
                         Icon = node.Icon ?? existingNode.Icon,
                         Category = node.Category ?? existingNode.Category,
                         Content = node.Content ?? existingNode.Content

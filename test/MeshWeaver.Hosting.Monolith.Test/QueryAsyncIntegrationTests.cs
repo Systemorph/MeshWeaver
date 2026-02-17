@@ -35,8 +35,8 @@ public class QueryAsyncIntegrationTests(ITestOutputHelper output) : MonolithMesh
     public async Task QueryAsync_FilterWithTextSearch_ReturnsFuzzyMatches()
     {
         // Arrange
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("products/laptop") with { Name = "Gaming Laptop Pro", Description = "High performance gaming laptop" });
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("products/desktop") with { Name = "Desktop Computer", Description = "Standard desktop" });
+        await Persistence.SaveNodeAsync(MeshNode.FromPath("products/laptop") with { Name = "Gaming Laptop Pro" });
+        await Persistence.SaveNodeAsync(MeshNode.FromPath("products/desktop") with { Name = "Desktop Computer" });
 
         // Act - use path: in query string with scope:descendants
         var query = "path:products laptop scope:descendants";
@@ -310,24 +310,21 @@ public class QueryAsyncIntegrationTests(ITestOutputHelper output) : MonolithMesh
         await Persistence.SaveNodeAsync(MeshNode.FromPath("ACME/Project") with
         {
             Name = "Project",
-            NodeType = "NodeType",
-            Description = "A project containing tasks and deliverables"
+            NodeType = "NodeType"
         });
 
         // Agent defined as a child of the NodeType
         await Persistence.SaveNodeAsync(MeshNode.FromPath("ACME/Project/TodoAgent") with
         {
             Name = "Project Task Agent",
-            NodeType = "Agent",
-            Description = "Handles all questions and actions related to project tasks"
+            NodeType = "Agent"
         });
 
         // Instance of the NodeType
         await Persistence.SaveNodeAsync(MeshNode.FromPath("ACME/ProductLaunch") with
         {
             Name = "MeshFlow Product Launch",
-            NodeType = "ACME/Project",  // This points to the NodeType
-            Description = "Launch campaign for MeshFlow"
+            NodeType = "ACME/Project"  // This points to the NodeType
         });
 
         // Act - Simulate the agent discovery flow
@@ -431,8 +428,7 @@ public class QueryAsyncIntegrationTests(ITestOutputHelper output) : MonolithMesh
         await Persistence.SaveNodeAsync(MeshNode.FromPath("Navigator") with
         {
             Name = "Navigator",
-            NodeType = "Agent",
-            Description = "Global navigation agent"
+            NodeType = "Agent"
         });
 
         // ACME namespace agent
@@ -445,8 +441,7 @@ public class QueryAsyncIntegrationTests(ITestOutputHelper output) : MonolithMesh
         await Persistence.SaveNodeAsync(MeshNode.FromPath("ACME/ACMEAgent") with
         {
             Name = "ACME Agent",
-            NodeType = "Agent",
-            Description = "ACME-level agent"
+            NodeType = "Agent"
         });
 
         // NodeType at ACME/Project

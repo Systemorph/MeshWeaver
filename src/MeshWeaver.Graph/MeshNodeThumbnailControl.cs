@@ -22,11 +22,10 @@ public record MeshNodeThumbnailControl(
     {
         var nodePath = node?.Path ?? fallbackPath;
         var title = node?.Name ?? fallbackPath;
-        var description = node?.Description;
         var imageUrl = GetImageUrl(node);
         var nodeType = node?.NodeType;
 
-        return new MeshNodeThumbnailControl(nodePath, title, description, imageUrl, nodeType);
+        return new MeshNodeThumbnailControl(nodePath, title, null, imageUrl, nodeType);
     }
 
     /// <summary>
