@@ -202,8 +202,10 @@ public partial class CollaborativeMarkdownView
             Content = new MarkdownContent { Content = newContent }
         };
 
+        // Set ChangedBy to the stream's ClientId so the echo-filter suppresses
+        // our own change from being pushed back (avoiding unnecessary re-render).
         Hub.Post(
-            new DataChangeRequest().WithUpdates(nodeUpdate),
+            new DataChangeRequest { ChangedBy = Stream?.ClientId }.WithUpdates(nodeUpdate),
             o => o.WithTarget(new Address(BoundHubAddress)));
     }
 

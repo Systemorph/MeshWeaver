@@ -420,8 +420,11 @@
             };
 
             // Post the DataChangeRequest to the target hub via messaging
+            // Set ChangedBy to the stream's ClientId so the echo-filter in
+            // JsonSynchronizationStream suppresses our own change from being
+            // pushed back to us (which would destroy/recreate the editor).
             Hub.Post(
-                new DataChangeRequest().WithUpdates(nodeUpdate),
+                new DataChangeRequest { ChangedBy = Stream?.ClientId }.WithUpdates(nodeUpdate),
                 o => o.WithTarget(new Address(BoundAutoSaveAddress)));
 
             Logger.LogDebug("Auto-saved content to {Address} for node {Path}", BoundAutoSaveAddress, BoundNodePath);
