@@ -1,3 +1,4 @@
+using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
@@ -55,6 +56,16 @@ public static class PermissionHelper
     {
         var permissions = await GetEffectivePermissionsAsync(hub, nodePath);
         return permissions.HasFlag(Permission.Delete);
+    }
+
+    /// <summary>
+    /// Gets effective permissions, resolving satellite nodes to their primary path.
+    /// </summary>
+    public static async Task<Permission> GetEffectivePermissionsForNodeAsync(
+        IMessageHub hub, MeshNode node)
+    {
+        var path = node.GetPrimaryPath();
+        return await GetEffectivePermissionsAsync(hub, path);
     }
 
     /// <summary>

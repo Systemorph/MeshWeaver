@@ -24,7 +24,7 @@ public enum CommentStatus
 /// Represents a comment on a mesh node.
 /// Comments can be nested via ParentCommentId for threading.
 /// </summary>
-public record Comment
+public record Comment : ISatelliteContent
 {
     /// <summary>
     /// Unique identifier for the comment.
@@ -92,6 +92,11 @@ public record Comment
     [Browsable(false)]
     public CommentStatus Status { get; init; } = CommentStatus.Active;
 
+    /// <summary>
+    /// ISatelliteContent: permissions are checked against the document, not the comment itself.
+    /// </summary>
+    [Browsable(false)]
+    public string? PrimaryNodePath => DocumentPath;
 }
 
 /// <summary>

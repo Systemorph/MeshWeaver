@@ -3,7 +3,6 @@ using MeshWeaver.Blazor.Chat;
 using MeshWeaver.Blazor.Portal.Components;
 using MeshWeaver.Blazor.Portal.Resize;
 using MeshWeaver.Mesh;
-using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.AspNetCore.Components;
@@ -19,6 +18,7 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
     [Inject] protected ChatWindowStateService ChatState { get; set; } = null!;
     [Inject] protected IMessageHub Hub { get; set; } = null!;
     [Inject] protected INavigationService NavigationService { get; set; } = null!;
+    [Inject] protected INodeMenuService NodeMenuService { get; set; } = null!;
 
     // Splitter pane sizes - default 3:1 ratio (75% main, 25% chat)
     private string MainPaneSize => ChatState.Width.HasValue ? $"{100 - ChatState.Width.Value}%" : "75%";
@@ -51,15 +51,12 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
 
     private bool isNodeMenuOpen;
 
-    // Creatable types - from NavigationService observable
-    private CreatableTypesSnapshot _creatableTypesSnapshot = CreatableTypesSnapshot.Empty;
-    private IDisposable? _creatableTypesSubscription;
-    protected IReadOnlyList<CreatableTypeInfo> CreatableTypes => _creatableTypesSnapshot.Items;
-    protected bool IsLoadingCreatableTypes => _creatableTypesSnapshot.IsLoading;
+    // Menu state from NodeMenuService
+    private NodeMenuState _menuState = NodeMenuState.Empty;
+    private IDisposable? _menuSubscription;
 
-    // Permission checks for menu items
-    protected bool HasCreatePermission { get; private set; } = true;
-    protected bool HasDeletePermission { get; private set; } = true;
+    protected IReadOnlyList<CreatableTypeInfo> CreatableTypes => _menuState.CreatableTypes.Items;
+    protected bool IsLoadingCreatableTypes => _menuState.CreatableTypes.IsLoading;
 
     private ChatSidePanel? chatPanel;
     private IJSObjectReference? jsModule;
@@ -69,9 +66,9 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
     {
         base.OnInitialized();
         ChatState.OnStateChanged += OnChatStateChanged;
-        _creatableTypesSubscription = NavigationService.CreatableTypes.Subscribe(snapshot =>
+        _menuSubscription = NodeMenuService.State.Subscribe(state =>
         {
-            _creatableTypesSnapshot = snapshot;
+            _menuState = state;
             InvokeAsync(StateHasChanged);
         });
     }
@@ -82,36 +79,11 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
         await NavigationService.InitializeAsync();
     }
 
-    private async Task CheckPermissionsAsync()
-    {
-        HasCreatePermission = true; // Default: allow if no security service
-        HasDeletePermission = true;
-        var securityService = Hub.ServiceProvider.GetService(typeof(ISecurityService)) as ISecurityService;
-        if (securityService != null)
-        {
-            try
-            {
-                var currentPath = NavigationService.CurrentNamespace ?? "";
-                var permissions = await securityService.GetEffectivePermissionsAsync(currentPath);
-                HasCreatePermission = permissions.HasFlag(Permission.Create);
-                HasDeletePermission = permissions.HasFlag(Permission.Delete);
-            }
-            catch
-            {
-                HasCreatePermission = true; // Fallback: allow on error
-                HasDeletePermission = true;
-            }
-        }
-    }
-
-    private async Task ToggleNodeMenu()
+    private void ToggleNodeMenu()
     {
         isNodeMenuOpen = !isNodeMenuOpen;
         if (isNodeMenuOpen)
-        {
-            NavigationService.RefreshCreatableTypes();
-            await CheckPermissionsAsync();
-        }
+            NodeMenuService.Refresh();
     }
 
     private void OnNodeMenuOpenChanged(bool open)
@@ -316,7 +288,7 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
     public void Dispose()
     {
         ChatState.OnStateChanged -= OnChatStateChanged;
-        _creatableTypesSubscription?.Dispose();
+        _menuSubscription?.Dispose();
         dotNetRef?.Dispose();
         jsModule?.DisposeAsync();
     }

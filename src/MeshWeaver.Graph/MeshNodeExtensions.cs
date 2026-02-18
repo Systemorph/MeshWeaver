@@ -28,6 +28,18 @@ public static class MeshNodeExtensions
     }
 
     /// <summary>
+    /// Gets the primary node path for this node.
+    /// For satellite nodes (Comment, Thread), returns the primary node's path.
+    /// For regular nodes, returns the node's own path.
+    /// </summary>
+    public static string GetPrimaryPath(this MeshNode node)
+    {
+        if (node.Content is ISatelliteContent satellite && !string.IsNullOrEmpty(satellite.PrimaryNodePath))
+            return satellite.PrimaryNodePath;
+        return node.Path;
+    }
+
+    /// <summary>
     /// Registers all graph-related content types with the type registry for polymorphic deserialization.
     /// This is the global registry for content types — used by the import tool, persistence layer,
     /// and runtime serialization. All built-in content types must be registered here.

@@ -23,7 +23,7 @@
                 </div>
                 @* Node menu (Cube icon) *@
                 <FluentMenu Anchor="node-menu-anchor" Open="@isNodeMenuOpen" OpenChanged="@OnNodeMenuOpenChanged">
-                    @if (HasCreatePermission)
+                    @if (_menuState.CanCreate)
                     {
                         <FluentMenuItem OnClick="@(() => OpenCreateNodeDialogAsync(null))">
                             <FluentIcon Value="@(new Icons.Regular.Size16.Add())" Style="margin-right: 8px;" />
@@ -38,7 +38,7 @@
                         <FluentIcon Value="@(new Icons.Regular.Size16.Settings())" Style="margin-right: 8px;" />
                         Settings
                     </FluentMenuItem>
-                    @if (HasDeletePermission)
+                    @if (_menuState.CanDelete)
                     {
                         <FluentMenuItem OnClick="@NavigateToNodeDelete">
                             <FluentIcon Value="@(new Icons.Regular.Size16.Delete())" Style="margin-right: 8px;" />
