@@ -232,8 +232,9 @@ public static class CommentLayoutAreas
                         if (string.IsNullOrEmpty(replyPath))
                             return (UiControl)Controls.Stack; // empty placeholder
 
+                        // Reserve min-height for 2 rows of editor so the comment expands immediately
                         return (UiControl)Controls.Stack
-                            .WithStyle("margin-top: 8px; margin-left: 12px; padding-left: 8px; border-left: 2px solid var(--accent-fill-rest);")
+                            .WithStyle("margin-top: 8px; margin-left: 12px; padding-left: 8px; border-left: 2px solid var(--accent-fill-rest); min-height: 120px;")
                             .WithView(Controls.LayoutArea(replyPath, MeshNodeLayoutAreas.CreateNodeArea));
                     });
             });
@@ -371,7 +372,7 @@ public static class CommentLayoutAreas
     }
 
     /// <summary>
-    /// Builds the Reply icon button. Creates a transient reply node and shows inline Create area.
+    /// Builds the Reply icon button. Creates a transient reply node via IMeshCatalog and shows inline Create area.
     /// </summary>
     private static UiControl BuildReplyButton(LayoutAreaHost host, string hubPath, Comment comment, string currentUser)
     {
@@ -394,16 +395,15 @@ public static class CommentLayoutAreas
                     {
                         Id = replyId,
                         NodePath = hubPath,
-                        DocumentPath = comment.DocumentPath,
+                        PrimaryNodePath = comment.PrimaryNodePath,
                         Author = currentUser,
                         ParentCommentId = comment.Id,
                         Status = CommentStatus.Active
                     }
                 };
 
-                var persistence = host.Hub.ServiceProvider.GetService<IPersistenceService>();
-                if (persistence != null)
-                    await persistence.SaveNodeAsync(replyNode);
+                var meshCatalog = host.Hub.ServiceProvider.GetRequiredService<IMeshCatalog>();
+                await meshCatalog.CreateNodeAsync(replyNode, currentUser);
 
                 host.UpdateData(replyPathStateId, replyPath);
             });
@@ -432,9 +432,9 @@ public static class CommentLayoutAreas
                 }
 
                 // Remove comment markers from the document markdown
-                if (!string.IsNullOrEmpty(comment.DocumentPath) && !string.IsNullOrEmpty(comment.MarkerId))
+                if (!string.IsNullOrEmpty(comment.PrimaryNodePath) && !string.IsNullOrEmpty(comment.MarkerId))
                 {
-                    var docNode = await persistence.GetNodeAsync(comment.DocumentPath);
+                    var docNode = await persistence.GetNodeAsync(comment.PrimaryNodePath);
                     if (docNode?.Content is string docContent)
                     {
                         var cleaned = AnnotationMarkdownExtension.ResolveComment(docContent, comment.MarkerId);

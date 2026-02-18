@@ -23,7 +23,7 @@ public class SatelliteContentAndMenuStateTest
         {
             Text = "Test comment",
             Author = "user",
-            DocumentPath = "docs/readme"
+            PrimaryNodePath = "docs/readme"
         };
 
         comment.Should().BeAssignableTo<ISatelliteContent>();
@@ -31,16 +31,16 @@ public class SatelliteContentAndMenuStateTest
     }
 
     [Fact]
-    public void Comment_PrimaryNodePath_ReturnsDocumentPath()
+    public void Comment_PrimaryNodePath_ReturnsPrimaryNodePath()
     {
-        var comment = new Comment { DocumentPath = "org/project/doc" };
+        var comment = new Comment { PrimaryNodePath = "org/project/doc" };
         comment.PrimaryNodePath.Should().Be("org/project/doc");
     }
 
     [Fact]
-    public void Comment_PrimaryNodePath_WhenDocumentPathEmpty_ReturnsEmpty()
+    public void Comment_PrimaryNodePath_WhenPrimaryNodePathEmpty_ReturnsEmpty()
     {
-        var comment = new Comment { DocumentPath = "" };
+        var comment = new Comment { PrimaryNodePath = "" };
         comment.PrimaryNodePath.Should().Be("");
     }
 
@@ -86,9 +86,9 @@ public class SatelliteContentAndMenuStateTest
     }
 
     [Fact]
-    public void GetPrimaryPath_ForCommentNode_ReturnsDocumentPath()
+    public void GetPrimaryPath_ForCommentNode_ReturnsPrimaryNodePath()
     {
-        var comment = new Comment { DocumentPath = "org/project/doc" };
+        var comment = new Comment { PrimaryNodePath = "org/project/doc" };
         var node = new MeshNode("comment1", "org/project/doc/comments") { Content = comment };
 
         node.GetPrimaryPath().Should().Be("org/project/doc");
@@ -104,11 +104,11 @@ public class SatelliteContentAndMenuStateTest
     }
 
     [Fact]
-    public void GetPrimaryPath_ForCommentWithEmptyDocumentPath_ReturnsNodePath()
+    public void GetPrimaryPath_ForCommentWithEmptyPrimaryNodePath_ReturnsNodePath()
     {
-        // When DocumentPath is empty, PrimaryNodePath is empty,
+        // When PrimaryNodePath is empty, PrimaryNodePath is empty,
         // so GetPrimaryPath falls back to node's own path
-        var comment = new Comment { DocumentPath = "" };
+        var comment = new Comment { PrimaryNodePath = "" };
         var node = new MeshNode("comment1", "some/path") { Content = comment };
 
         node.GetPrimaryPath().Should().Be("some/path/comment1");
@@ -148,9 +148,9 @@ public class SatelliteContentAndMenuStateTest
     }
 
     [Fact]
-    public void NavigationContext_PrimaryPath_ForCommentNode_ReturnsDocumentPath()
+    public void NavigationContext_PrimaryPath_ForCommentNode_ReturnsPrimaryNodePath()
     {
-        var comment = new Comment { DocumentPath = "org/project/doc" };
+        var comment = new Comment { PrimaryNodePath = "org/project/doc" };
         var node = new MeshNode("c1", "org/project/doc/comments") { Content = comment };
         var ctx = CreateContext(node, "org/project/doc/comments/c1");
 
@@ -181,7 +181,7 @@ public class SatelliteContentAndMenuStateTest
     [Fact]
     public void NavigationContext_IsSatellite_ForEmptyPrimaryNodePath_ReturnsFalse()
     {
-        var comment = new Comment { DocumentPath = "" };
+        var comment = new Comment { PrimaryNodePath = "" };
         var node = new MeshNode("c1", "path") { Content = comment };
         var ctx = CreateContext(node, "path/c1");
 
@@ -269,7 +269,7 @@ public class SatelliteContentAndMenuStateTest
     {
         // Verifies that GetPrimaryPath correctly resolves satellite nodes
         // so PermissionHelper.GetEffectivePermissionsForNodeAsync checks the right path
-        var comment = new Comment { DocumentPath = "org/doc" };
+        var comment = new Comment { PrimaryNodePath = "org/doc" };
         var commentNode = new MeshNode("c1", "org/doc/comments") { Content = comment };
 
         // Permission check should go to "org/doc", not "org/doc/comments/c1"

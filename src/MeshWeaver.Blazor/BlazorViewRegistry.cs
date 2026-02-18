@@ -88,6 +88,7 @@ public static class BlazorViewRegistry
             NodeImportControl nodeImport => StandardView<NodeImportControl, NodeImportView>(nodeImport, stream, area),
             ProgressControl progress => StandardView<ProgressControl, ProgressView>(progress, stream, area),
             CheckBoxControl checkbox => StandardView<CheckBoxControl, Checkbox>(checkbox, stream, area),
+            SwitchControl switchCtrl => StandardView<SwitchControl, Switch>(switchCtrl, stream, area),
             ItemTemplateControl itemTemplate
                 => StandardView<ItemTemplateControl, ItemTemplate>(itemTemplate, stream, area),
             MarkdownControl markdown => StandardView<MarkdownControl, Components.MarkdownView>(markdown, stream, area),

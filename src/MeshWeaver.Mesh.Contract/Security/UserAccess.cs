@@ -1,4 +1,5 @@
 using System.ComponentModel.DataAnnotations;
+using MeshWeaver.ShortGuid;
 
 namespace MeshWeaver.Mesh.Security;
 
@@ -16,11 +17,16 @@ public static class WellKnownUsers
 
 /// <summary>
 /// Represents a user's access to a namespace.
-/// Stored in {namespace}/Access/{userId}.json for namespace-specific access,
-/// or Access/{userId}.json for global access.
+/// Stored in {namespace}/Access/{id}.json for namespace-specific access,
+/// or Access/{id}.json for global access.
 /// </summary>
 public record UserAccess
 {
+    /// <summary>
+    /// Unique identifier for this access record (used as file name).
+    /// </summary>
+    public string Id { get; init; } = Guid.NewGuid().AsString();
+
     /// <summary>
     /// The user's ObjectId (from AccessContext or Person node id).
     /// Use "Public" for anonymous access.

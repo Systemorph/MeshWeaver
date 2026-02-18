@@ -1,0 +1,20 @@
+@inherits FormComponentBase<SwitchControl, Switch, bool>
+
+<FluentSwitch @bind-Value="@Value"
+              Label="@Label"
+              CheckedMessage="@CheckedMessage"
+              UncheckedMessage="@UncheckedMessage"
+              Disabled="@Disabled"
+              ReadOnly="@Readonly" />
+
+@code {
+    protected string? CheckedMessage { get; set; }
+    protected string? UncheckedMessage { get; set; }
+
+    protected override void BindData()
+    {
+        base.BindData();
+        DataBind(ViewModel.CheckedMessage, x => x.CheckedMessage);
+        DataBind(ViewModel.UncheckedMessage, x => x.UncheckedMessage);
+    }
+}

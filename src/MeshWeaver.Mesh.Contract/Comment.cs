@@ -40,13 +40,13 @@ public record Comment : ISatelliteContent
     public string NodePath { get; init; } = string.Empty;
 
     /// <summary>
-    /// Path of the root document node this comment thread belongs to.
+    /// Path of the primary node this comment belongs to (ISatelliteContent).
     /// Used for permission checks (edit access on the document).
     /// For top-level comments, this equals NodePath.
     /// For replies, this is the original document path (not the parent comment).
     /// </summary>
     [Browsable(false)]
-    public string DocumentPath { get; init; } = string.Empty;
+    public string? PrimaryNodePath { get; init; } = string.Empty;
 
     /// <summary>
     /// Marker ID linking this comment to highlighted text in the document.
@@ -92,11 +92,6 @@ public record Comment : ISatelliteContent
     [Browsable(false)]
     public CommentStatus Status { get; init; } = CommentStatus.Active;
 
-    /// <summary>
-    /// ISatelliteContent: permissions are checked against the document, not the comment itself.
-    /// </summary>
-    [Browsable(false)]
-    public string? PrimaryNodePath => DocumentPath;
 }
 
 /// <summary>

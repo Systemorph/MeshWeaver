@@ -134,6 +134,9 @@ public static class Controls
     public static CheckBoxControl CheckBox(object isChecked) =>
         new(isChecked);
 
+    public static SwitchControl Switch(object isChecked) =>
+        new(isChecked);
+
     public static SliderControl Slider(int min, int max, int step) => new(min, max, step);
 
     /// <summary>

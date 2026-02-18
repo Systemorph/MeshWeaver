@@ -221,7 +221,7 @@ public static class SettingsLayoutArea
 
         host.RegisterForDisposal($"autosave_{dataId}",
             host.Stream.GetDataStream<object>(dataId)
-                .Debounce(TimeSpan.FromMilliseconds(300))
+                .Throttle(TimeSpan.FromMilliseconds(300))
                 .Subscribe(updated =>
                 {
                     if (object.Equals(current, updated))
