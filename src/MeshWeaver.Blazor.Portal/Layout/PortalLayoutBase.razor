@@ -23,12 +23,12 @@
                 </div>
                 @* Node menu (Cube icon) *@
                 <FluentMenu Anchor="node-menu-anchor" Open="@isNodeMenuOpen" OpenChanged="@OnNodeMenuOpenChanged">
-                    <FluentMenuItem OnClick="@(() => OpenCreateNodeDialogAsync(null))">
-                        <FluentIcon Value="@(new Icons.Regular.Size16.Add())" Style="margin-right: 8px;" />
-                        Create
-                    </FluentMenuItem>
                     @if (HasCreatePermission)
                     {
+                        <FluentMenuItem OnClick="@(() => OpenCreateNodeDialogAsync(null))">
+                            <FluentIcon Value="@(new Icons.Regular.Size16.Add())" Style="margin-right: 8px;" />
+                            Create
+                        </FluentMenuItem>
                         <FluentMenuItem OnClick="@OpenImportNodeDialogAsync">
                             <FluentIcon Value="@(new Icons.Regular.Size16.ArrowImport())" Style="margin-right: 8px;" />
                             Import
@@ -38,10 +38,13 @@
                         <FluentIcon Value="@(new Icons.Regular.Size16.Settings())" Style="margin-right: 8px;" />
                         Settings
                     </FluentMenuItem>
-                    <FluentMenuItem OnClick="@NavigateToNodeDelete">
-                        <FluentIcon Value="@(new Icons.Regular.Size16.Delete())" Style="margin-right: 8px;" />
-                        Delete
-                    </FluentMenuItem>
+                    @if (HasDeletePermission)
+                    {
+                        <FluentMenuItem OnClick="@NavigateToNodeDelete">
+                            <FluentIcon Value="@(new Icons.Regular.Size16.Delete())" Style="margin-right: 8px;" />
+                            Delete
+                        </FluentMenuItem>
+                    }
                 </FluentMenu>
                 <FluentButton Id="node-menu-anchor" Appearance="Appearance.Stealth"
                     Title="Node menu" aria-label="Node menu"

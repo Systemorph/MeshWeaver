@@ -57,8 +57,9 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
     protected IReadOnlyList<CreatableTypeInfo> CreatableTypes => _creatableTypesSnapshot.Items;
     protected bool IsLoadingCreatableTypes => _creatableTypesSnapshot.IsLoading;
 
-    // Permission check for import/create
+    // Permission checks for menu items
     protected bool HasCreatePermission { get; private set; } = true;
+    protected bool HasDeletePermission { get; private set; } = true;
 
     private ChatSidePanel? chatPanel;
     private IJSObjectReference? jsModule;
@@ -81,9 +82,10 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
         await NavigationService.InitializeAsync();
     }
 
-    private async Task CheckCreatePermissionAsync()
+    private async Task CheckPermissionsAsync()
     {
         HasCreatePermission = true; // Default: allow if no security service
+        HasDeletePermission = true;
         var securityService = Hub.ServiceProvider.GetService(typeof(ISecurityService)) as ISecurityService;
         if (securityService != null)
         {
@@ -92,10 +94,12 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
                 var currentPath = NavigationService.CurrentNamespace ?? "";
                 var permissions = await securityService.GetEffectivePermissionsAsync(currentPath);
                 HasCreatePermission = permissions.HasFlag(Permission.Create);
+                HasDeletePermission = permissions.HasFlag(Permission.Delete);
             }
             catch
             {
                 HasCreatePermission = true; // Fallback: allow on error
+                HasDeletePermission = true;
             }
         }
     }
@@ -106,7 +110,7 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
         if (isNodeMenuOpen)
         {
             NavigationService.RefreshCreatableTypes();
-            await CheckCreatePermissionAsync();
+            await CheckPermissionsAsync();
         }
     }
 

@@ -62,6 +62,25 @@ public static class CreateLayoutArea
                 return (UiControl?)BuildCreateEditor(host, currentNode);
             }
 
+            // Permission gate: check Create permission on current path
+            var canCreate = await PermissionHelper.CanCreateAsync(host.Hub, currentPath);
+            if (!canCreate)
+            {
+                var backHref = MeshNodeLayoutAreas.BuildContentUrl(currentPath, MeshNodeLayoutAreas.OverviewArea);
+                return (UiControl?)Controls.Stack.WithWidth("100%").WithStyle("padding: 24px;")
+                    .WithView(Controls.Stack
+                        .WithOrientation(Orientation.Horizontal)
+                        .WithHorizontalGap(16)
+                        .WithStyle("align-items: center; margin-bottom: 24px;")
+                        .WithView(Controls.Button("Back")
+                            .WithAppearance(Appearance.Lightweight)
+                            .WithIconStart(FluentIcons.ArrowLeft())
+                            .WithNavigateToHref(backHref))
+                        .WithView(Controls.H2("Access Denied").WithStyle("margin: 0;")))
+                    .WithView(Controls.Html(
+                        "<p style=\"color: var(--neutral-foreground-hint);\">You do not have permission to create nodes here.</p>"));
+            }
+
             // No type specified - show type selection grid for CreateChild
             if (nodeTypeService != null)
             {

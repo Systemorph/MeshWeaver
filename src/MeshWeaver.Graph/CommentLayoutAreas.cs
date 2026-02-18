@@ -7,6 +7,7 @@ using MeshWeaver.Layout;
 using MeshWeaver.Layout.Catalog;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
@@ -79,12 +80,18 @@ public static class CommentLayoutAreas
         var editStateId = $"editState_comment_{hubPath.Replace("/", "_")}";
         var initialized = new[] { false };
 
+        // Check permissions once (parent path for comment permissions)
+        var parentPath = hubPath.Contains('/') ? hubPath[..hubPath.LastIndexOf('/')] : hubPath;
+        var permissionsStream = Observable.FromAsync(() => PermissionHelper.GetEffectivePermissionsAsync(host.Hub, parentPath));
+
         return nodeStream
-            .CombineLatest(repliesStream, (nodes, replies) =>
+            .CombineLatest(repliesStream, permissionsStream, (nodes, replies, perms) =>
             {
                 var node = nodes.FirstOrDefault(n => n.Path == hubPath);
+                var canComment = perms.HasFlag(Permission.Comment) || perms.HasFlag(Permission.Update);
+                var canDelete = perms.HasFlag(Permission.Delete);
                 return BuildOverview(host, node, hubPath, editStateId, initialized,
-                    replies ?? Array.Empty<MeshNode>(), currentUser);
+                    replies ?? Array.Empty<MeshNode>(), currentUser, canComment, canDelete);
             });
     }
 
@@ -102,15 +109,17 @@ public static class CommentLayoutAreas
         var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? Array.Empty<MeshNode>())
             ?? Observable.Return<MeshNode[]>(Array.Empty<MeshNode>());
 
-        return nodeStream.Select(nodes =>
+        return nodeStream.SelectMany(async nodes =>
         {
             var node = nodes.FirstOrDefault(n => n.Path == hubPath);
-            return (UiControl?)BuildEditContent(host, node, hubPath, currentUser);
+            var canComment = await PermissionHelper.CanCommentAsync(host.Hub, hubPath);
+            return (UiControl?)BuildEditContent(host, node, hubPath, currentUser, canComment);
         });
     }
 
     internal static UiControl BuildOverview(LayoutAreaHost host, MeshNode? node, string hubPath,
-        string editStateId, bool[] initialized, IReadOnlyList<MeshNode> replyNodes, string currentUser)
+        string editStateId, bool[] initialized, IReadOnlyList<MeshNode> replyNodes, string currentUser,
+        bool canComment = true, bool canDelete = true)
     {
         var comment = node?.Content as Comment;
         if (comment == null)
@@ -118,9 +127,9 @@ public static class CommentLayoutAreas
             return Controls.Html("<div style=\"color: var(--neutral-foreground-hint); padding: 8px;\">No comment content</div>");
         }
 
-        // Author-only editing: only the comment author can edit
-        var canEdit = !CommentNodeType.AuthorEditOnly
-            || string.Equals(comment.Author, currentUser, StringComparison.OrdinalIgnoreCase);
+        // Permission + author check: need Comment permission AND (author match OR !AuthorEditOnly)
+        var isAuthor = string.Equals(comment.Author, currentUser, StringComparison.OrdinalIgnoreCase);
+        var canEdit = canComment && (!CommentNodeType.AuthorEditOnly || isAuthor);
 
         var hasContent = !string.IsNullOrWhiteSpace(comment.Text);
 
@@ -301,26 +310,32 @@ public static class CommentLayoutAreas
     }
 
     /// <summary>
-    /// Builds the action menu (Edit / Delete) for a comment owned by the current user.
+    /// Builds the action menu (Edit / Delete) for a comment, gated by permissions.
     /// </summary>
-    private static UiControl BuildCommentActionMenu(LayoutAreaHost host, string hubPath)
+    private static UiControl BuildCommentActionMenu(LayoutAreaHost host, string hubPath, bool canComment, bool canDelete)
     {
         var menu = Controls.MenuItem("", FluentIcons.MoreHorizontal(IconSize.Size20))
             .WithAppearance(Appearance.Stealth)
             .WithIconOnly();
 
-        // Edit option
-        var editHref = MeshNodeLayoutAreas.BuildContentUrl(hubPath, EditArea);
-        menu = menu.WithView(new NavLinkControl("Edit", FluentIcons.Edit(IconSize.Size16), editHref));
+        // Edit option (requires Comment permission)
+        if (canComment)
+        {
+            var editHref = MeshNodeLayoutAreas.BuildContentUrl(hubPath, EditArea);
+            menu = menu.WithView(new NavLinkControl("Edit", FluentIcons.Edit(IconSize.Size16), editHref));
+        }
 
-        // Delete option
-        menu = menu.WithView(
-            Controls.MenuItem("Delete", FluentIcons.Delete(IconSize.Size16))
-                .WithClickAction(async _ =>
-                {
-                    var meshCatalog = host.Hub.ServiceProvider.GetRequiredService<IMeshCatalog>();
-                    await meshCatalog.DeleteNodeAsync(hubPath, recursive: true);
-                }));
+        // Delete option (requires Delete permission)
+        if (canDelete)
+        {
+            menu = menu.WithView(
+                Controls.MenuItem("Delete", FluentIcons.Delete(IconSize.Size16))
+                    .WithClickAction(async _ =>
+                    {
+                        var meshCatalog = host.Hub.ServiceProvider.GetRequiredService<IMeshCatalog>();
+                        await meshCatalog.DeleteNodeAsync(hubPath, recursive: true);
+                    }));
+        }
 
         return menu;
     }
@@ -329,7 +344,7 @@ public static class CommentLayoutAreas
     /// Builds the Edit content for a Comment node.
     /// Uses BuildPropertyOverview for auto-generated MarkdownEditor on the Text field.
     /// </summary>
-    private static UiControl BuildEditContent(LayoutAreaHost host, MeshNode? node, string hubPath, string currentUser)
+    private static UiControl BuildEditContent(LayoutAreaHost host, MeshNode? node, string hubPath, string currentUser, bool canComment = true)
     {
         var stack = Controls.Stack.WithWidth("100%").WithStyle("padding: 16px; max-width: 600px;");
 
@@ -340,8 +355,18 @@ public static class CommentLayoutAreas
 
         var comment = node.Content as Comment;
 
-        // Author check — only the author can edit
-        if (comment != null && !string.IsNullOrEmpty(currentUser)
+        // Permission check — need Comment permission
+        if (!canComment)
+        {
+            return stack.WithView(Controls.Html("<p style=\"color: var(--neutral-foreground-hint);\">You do not have permission to edit comments.</p>"))
+                .WithView(Controls.Button("Back")
+                    .WithAppearance(Appearance.Lightweight)
+                    .WithIconStart(FluentIcons.ArrowLeft())
+                    .WithNavigateToHref(MeshNodeLayoutAreas.BuildContentUrl(hubPath, OverviewArea)));
+        }
+
+        // Author check — only the author can edit (when AuthorEditOnly is enabled)
+        if (comment != null && CommentNodeType.AuthorEditOnly && !string.IsNullOrEmpty(currentUser)
             && !string.Equals(comment.Author, currentUser, StringComparison.OrdinalIgnoreCase))
         {
             return stack.WithView(Controls.Html("<p style=\"color: var(--neutral-foreground-hint);\">You can only edit your own comments.</p>"))

@@ -118,11 +118,12 @@ public static class MeshNodeLayoutAreas
         var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? Array.Empty<MeshNode>())
             ?? Observable.Return(Array.Empty<MeshNode>());
 
-        // Map nodes to control - children shown by default (typeDef controls via NodeTypeView.Overview)
-        return nodeStream.Select(nodes =>
+        // Map nodes to control - use SelectMany for async permission check
+        return nodeStream.SelectMany(async nodes =>
         {
             var node = nodes.FirstOrDefault(n => n.Path == hubPath);
-            return host.BuildDetailsContent(node, null);
+            var canEdit = await PermissionHelper.CanEditAsync(host.Hub, hubPath);
+            return (UiControl?)host.BuildDetailsContent(node, null, canEdit);
         });
     }
 
@@ -135,17 +136,17 @@ public static class MeshNodeLayoutAreas
             : $"position: relative; max-width: {pageMaxWidth}; margin: 0 auto; padding: 0 24px;";
     }
 
-    internal static UiControl BuildDetailsContent(this LayoutAreaHost host, MeshNode? node, NodeTypeDefinition? typeDef)
+    internal static UiControl BuildDetailsContent(this LayoutAreaHost host, MeshNode? node, NodeTypeDefinition? typeDef, bool canEdit = true)
     {
         var stack = Controls.Stack.WithWidth("100%").WithStyle(GetContainerStyle(host, typeDef));
 
         // Header with title/icon
-        stack = stack.WithView(BuildHeader(host, node));
+        stack = stack.WithView(BuildHeader(host, node, canEdit));
 
         // Property overview (read-only with click-to-edit)
         if (node != null)
         {
-            stack = stack.WithView(OverviewLayoutArea.BuildPropertyOverview(host, node));
+            stack = stack.WithView(OverviewLayoutArea.BuildPropertyOverview(host, node, canEdit));
         }
 
         // Children
@@ -166,7 +167,7 @@ public static class MeshNodeLayoutAreas
     /// <summary>
     /// Builds the header with icon and click-to-edit title.
     /// </summary>
-    internal static UiControl BuildHeader(LayoutAreaHost host, MeshNode? node)
+    internal static UiControl BuildHeader(LayoutAreaHost host, MeshNode? node, bool canEdit = true)
     {
         var nodePath = node?.Namespace ?? host.Hub.Address.ToString();
         var title = node?.Name ?? host.Hub.Address.ToString();
@@ -199,7 +200,6 @@ public static class MeshNodeLayoutAreas
 
         // Check if content has Title property for click-to-edit
         bool hasTitleProperty = false;
-        bool canEdit = true;
         if (node?.Content is JsonElement jsonElement && jsonElement.TryGetProperty("$type", out var typeProperty))
         {
             var typeName = typeProperty.GetString();
@@ -1067,7 +1067,7 @@ public static class MeshNodeLayoutAreas
             "    { \"roleId\": \"Editor\", \"namespace\": \"ACME\" }\n" +
             "  ]\n" +
             "}</pre>" +
-            "<p style=\"margin: 8px 0 0 0;\"><strong>Roles:</strong> Admin (full access), Editor (read/create/update), Viewer (read only)</p>" +
+            "<p style=\"margin: 8px 0 0 0;\"><strong>Roles:</strong> Admin (full access), Editor (read/create/update/comment), Commenter (read/comment), Viewer (read only)</p>" +
             "<p style=\"margin: 8px 0 0 0;\"><strong>Inheritance:</strong> Roles on a parent namespace apply to all children.</p>" +
             "</div>"));
 

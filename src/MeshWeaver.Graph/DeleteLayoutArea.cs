@@ -27,9 +27,14 @@ public static class DeleteLayoutArea
         var backHref = MeshNodeLayoutAreas.BuildContentUrl(nodePath, MeshNodeLayoutAreas.OverviewArea);
         var persistence = host.Hub.ServiceProvider.GetService<IPersistenceService>();
 
-        // Count descendants asynchronously
+        // Count descendants and check permissions asynchronously
         return Observable.FromAsync(async () =>
         {
+            // Permission gate: check Delete permission
+            var canDelete = await PermissionHelper.CanDeleteAsync(host.Hub, nodePath);
+            if (!canDelete)
+                return -1; // Sentinel value for access denied
+
             var descendantCount = 0;
             if (persistence != null)
             {
@@ -39,108 +44,131 @@ public static class DeleteLayoutArea
             return descendantCount;
         }).Select(descendantCount =>
         {
-            // Set up data binding for confirmation field
-            var dataId = $"delete_nodes_{nodePath.Replace("/", "_")}";
-            var formData = new Dictionary<string, object?>
+            // Access denied
+            if (descendantCount < 0)
             {
-                ["confirmation"] = ""
-            };
-            host.UpdateData(dataId, formData);
+                return (UiControl?)Controls.Stack.WithWidth("100%").WithStyle("padding: 24px;")
+                    .WithView(Controls.Stack
+                        .WithOrientation(Orientation.Horizontal)
+                        .WithHorizontalGap(16)
+                        .WithStyle("align-items: center; margin-bottom: 24px;")
+                        .WithView(Controls.Button("Back")
+                            .WithAppearance(Appearance.Lightweight)
+                            .WithIconStart(FluentIcons.ArrowLeft())
+                            .WithNavigateToHref(backHref))
+                        .WithView(Controls.H2("Access Denied").WithStyle("margin: 0; color: var(--error);")))
+                    .WithView(Controls.Html(
+                        "<p style=\"color: var(--neutral-foreground-hint);\">You do not have permission to delete this node.</p>"));
+            }
 
-            var stack = Controls.Stack.WithWidth("100%").WithStyle("padding: 24px;");
+            return BuildDeletePage(host, nodePath, backHref, descendantCount);
+        });
+    }
 
-            // Header
-            stack = stack.WithView(Controls.Stack
-                .WithOrientation(Orientation.Horizontal)
-                .WithHorizontalGap(16)
-                .WithStyle("align-items: center; margin-bottom: 24px;")
-                .WithView(Controls.Button("Back")
-                    .WithAppearance(Appearance.Lightweight)
-                    .WithIconStart(FluentIcons.ArrowLeft())
-                    .WithNavigateToHref(backHref))
-                .WithView(Controls.H2("Delete Node").WithStyle("margin: 0; color: var(--error);")));
+    private static UiControl BuildDeletePage(LayoutAreaHost host, string nodePath, string backHref, int descendantCount)
+    {
+        // Set up data binding for confirmation field
+        var dataId = $"delete_nodes_{nodePath.Replace("/", "_")}";
+        var formData = new Dictionary<string, object?>
+        {
+            ["confirmation"] = ""
+        };
+        host.UpdateData(dataId, formData);
 
-            // Warning
-            var warningText = descendantCount > 0
-                ? $"This will permanently delete this node and <strong>{descendantCount} descendant node(s)</strong> under <code>{nodePath}</code>."
-                : $"This will permanently delete the node at <code>{nodePath}</code>.";
+        var stack = Controls.Stack.WithWidth("100%").WithStyle("padding: 24px;");
 
-            stack = stack.WithView(Controls.Html(
-                "<div style=\"padding: 16px; background: var(--error-container, #fde8e8); border-radius: 8px; " +
-                "border: 1px solid var(--error, #d32f2f); margin-bottom: 24px;\">" +
-                "<p style=\"margin: 0 0 8px 0; font-weight: 600; color: var(--error, #d32f2f);\">Warning: This action cannot be undone!</p>" +
-                $"<p style=\"margin: 0;\">{warningText}</p>" +
-                "</div>"));
+        // Header
+        stack = stack.WithView(Controls.Stack
+            .WithOrientation(Orientation.Horizontal)
+            .WithHorizontalGap(16)
+            .WithStyle("align-items: center; margin-bottom: 24px;")
+            .WithView(Controls.Button("Back")
+                .WithAppearance(Appearance.Lightweight)
+                .WithIconStart(FluentIcons.ArrowLeft())
+                .WithNavigateToHref(backHref))
+            .WithView(Controls.H2("Delete Node").WithStyle("margin: 0; color: var(--error);")));
 
-            // Confirmation field
-            stack = stack.WithView(Controls.Stack
-                .WithWidth("100%")
-                .WithStyle("margin-bottom: 24px;")
-                .WithView(Controls.Body("Type DELETE to confirm:").WithStyle("font-weight: 600; margin-bottom: 4px;"))
-                .WithView(new TextFieldControl(new JsonPointerReference("confirmation"))
+        // Warning
+        var warningText = descendantCount > 0
+            ? $"This will permanently delete this node and <strong>{descendantCount} descendant node(s)</strong> under <code>{nodePath}</code>."
+            : $"This will permanently delete the node at <code>{nodePath}</code>.";
+
+        stack = stack.WithView(Controls.Html(
+            "<div style=\"padding: 16px; background: var(--error-container, #fde8e8); border-radius: 8px; " +
+            "border: 1px solid var(--error, #d32f2f); margin-bottom: 24px;\">" +
+            "<p style=\"margin: 0 0 8px 0; font-weight: 600; color: var(--error, #d32f2f);\">Warning: This action cannot be undone!</p>" +
+            $"<p style=\"margin: 0;\">{warningText}</p>" +
+            "</div>"));
+
+        // Confirmation field
+        stack = stack.WithView(Controls.Stack
+            .WithWidth("100%")
+            .WithStyle("margin-bottom: 24px;")
+            .WithView(Controls.Body("Type DELETE to confirm:").WithStyle("font-weight: 600; margin-bottom: 4px;"))
+            .WithView(new TextFieldControl(new JsonPointerReference("confirmation"))
+            {
+                Placeholder = "DELETE",
+                Immediate = true,
+                DataContext = LayoutAreaReference.GetDataPointer(dataId)
+            }.WithStyle("width: 300px;")));
+
+        // Button row — uses IMeshCatalog.DeleteNodeAsync which routes through message flow
+        // and runs validators (including RlsNodeValidator)
+        stack = stack.WithView(Controls.Stack
+            .WithOrientation(Orientation.Horizontal)
+            .WithHorizontalGap(12)
+            .WithStyle("justify-content: flex-end;")
+            .WithView(Controls.Button("Cancel")
+                .WithAppearance(Appearance.Neutral)
+                .WithNavigateToHref(backHref))
+            .WithView(Controls.Button("Delete")
+                .WithAppearance(Appearance.Accent)
+                .WithStyle("background: var(--error, #d32f2f); color: white;")
+                .WithIconStart(FluentIcons.Delete())
+                .WithClickAction(async ctx =>
                 {
-                    Placeholder = "DELETE",
-                    Immediate = true,
-                    DataContext = LayoutAreaReference.GetDataPointer(dataId)
-                }.WithStyle("width: 300px;")));
+                    var formValues = await ctx.Host.Stream
+                        .GetDataStream<Dictionary<string, object?>>(dataId).FirstAsync();
 
-            // Button row
-            stack = stack.WithView(Controls.Stack
-                .WithOrientation(Orientation.Horizontal)
-                .WithHorizontalGap(12)
-                .WithStyle("justify-content: flex-end;")
-                .WithView(Controls.Button("Cancel")
-                    .WithAppearance(Appearance.Neutral)
-                    .WithNavigateToHref(backHref))
-                .WithView(Controls.Button("Delete")
-                    .WithAppearance(Appearance.Accent)
-                    .WithStyle("background: var(--error, #d32f2f); color: white;")
-                    .WithIconStart(FluentIcons.Delete())
-                    .WithClickAction(async ctx =>
+                    var confirmation = formValues.GetValueOrDefault("confirmation")?.ToString()?.Trim();
+                    if (confirmation != "DELETE")
                     {
-                        var formValues = await ctx.Host.Stream
-                            .GetDataStream<Dictionary<string, object?>>(dataId).FirstAsync();
+                        ShowDialog(ctx, "Confirmation Required",
+                            "Please type **DELETE** in the confirmation field to proceed.");
+                        return;
+                    }
 
-                        var confirmation = formValues.GetValueOrDefault("confirmation")?.ToString()?.Trim();
-                        if (confirmation != "DELETE")
+                    ShowDialog(ctx, "Deleting...", "Deletion in progress. Please wait...");
+
+                    try
+                    {
+                        var meshCatalog = host.Hub.ServiceProvider.GetService<IMeshCatalog>();
+                        if (meshCatalog == null)
                         {
-                            ShowDialog(ctx, "Confirmation Required",
-                                "Please type **DELETE** in the confirmation field to proceed.");
+                            ShowDialog(ctx, "Error", "Catalog service is not available.");
                             return;
                         }
 
-                        ShowDialog(ctx, "Deleting...", "Deletion in progress. Please wait...");
+                        await meshCatalog.DeleteNodeAsync(nodePath, recursive: true);
 
-                        try
-                        {
-                            var persistence2 = host.Hub.ServiceProvider.GetService<IPersistenceService>();
-                            if (persistence2 == null)
-                            {
-                                ShowDialog(ctx, "Error", "Persistence service is not available.");
-                                return;
-                            }
+                        // Navigate to parent on success
+                        var parentPath = GetParentPath(nodePath);
+                        var parentHref = !string.IsNullOrEmpty(parentPath)
+                            ? MeshNodeLayoutAreas.BuildContentUrl(parentPath, MeshNodeLayoutAreas.OverviewArea)
+                            : "/";
 
-                            await persistence2.DeleteNodeAsync(nodePath, recursive: true);
+                        ShowDialog(ctx, "Deleted",
+                            $"Successfully deleted node **{nodePath}** and its descendants.\n\nRedirecting...");
 
-                            // Navigate to parent on success
-                            var parentPath = GetParentPath(nodePath);
-                            var parentHref = !string.IsNullOrEmpty(parentPath)
-                                ? MeshNodeLayoutAreas.BuildContentUrl(parentPath, MeshNodeLayoutAreas.OverviewArea)
-                                : "/";
+                        ctx.NavigateTo(parentHref);
+                    }
+                    catch (Exception ex)
+                    {
+                        ShowDialog(ctx, "Delete Failed", ex.Message);
+                    }
+                })));
 
-                            ShowDialog(ctx, "Deleted",
-                                $"Successfully deleted node **{nodePath}** and its descendants.\n\nRedirecting...");
-
-                            ctx.NavigateTo(parentHref);
-                        }
-                        catch (Exception ex)
-                        {
-                            ShowDialog(ctx, "Delete Failed", ex.Message);
-                        }
-                    })));
-
-            return (UiControl?)stack;
-        });
+        return stack;
     }
 
     private static void ShowDialog(UiActionContext ctx, string title, string message)

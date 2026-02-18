@@ -45,14 +45,14 @@ public record Role
     };
 
     /// <summary>
-    /// Built-in Editor role with read, create, and update permissions.
+    /// Built-in Editor role with read, create, update, and comment permissions.
     /// </summary>
     public static Role Editor => new()
     {
         Id = "Editor",
         DisplayName = "Editor",
-        Description = "Can read, create, and update nodes",
-        Permissions = Permission.Read | Permission.Create | Permission.Update,
+        Description = "Can read, create, update nodes, and comment",
+        Permissions = Permission.Read | Permission.Create | Permission.Update | Permission.Comment,
         IsInheritable = true
     };
 
@@ -65,6 +65,19 @@ public record Role
         DisplayName = "Viewer",
         Description = "Read-only access",
         Permissions = Permission.Read,
+        IsInheritable = true
+    };
+
+    /// <summary>
+    /// Built-in Commenter role with read and comment permissions.
+    /// Can be assigned to the Public user to enable public commenting.
+    /// </summary>
+    public static Role Commenter => new()
+    {
+        Id = "Commenter",
+        DisplayName = "Commenter",
+        Description = "Can read and comment",
+        Permissions = Permission.Read | Permission.Comment,
         IsInheritable = true
     };
 }

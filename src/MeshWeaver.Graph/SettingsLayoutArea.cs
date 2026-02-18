@@ -52,7 +52,8 @@ public static class SettingsLayoutArea
         return nodeStream.SelectMany(async nodes =>
         {
             var node = nodes.FirstOrDefault(n => n.Path == hubPath);
-            return (UiControl?)BuildSettingsPage(host, node, hubAddress, hubPath, tabId);
+            var canEdit = await PermissionHelper.CanEditAsync(host.Hub, hubPath);
+            return (UiControl?)BuildSettingsPage(host, node, hubAddress, hubPath, tabId, canEdit);
         });
     }
 
@@ -61,9 +62,10 @@ public static class SettingsLayoutArea
         MeshNode? node,
         object hubAddress,
         string hubPath,
-        string tabId)
+        string tabId,
+        bool canEdit = true)
     {
-        return Controls.Splitter
+        var settingsPage = Controls.Splitter
             .WithSkin(s => s.WithOrientation(Orientation.Horizontal).WithWidth("100%").WithHeight("calc(100vh - 100px)"))
             .WithView(
                 BuildNavMenu(host, node, hubAddress, hubPath, tabId),
@@ -73,6 +75,18 @@ public static class SettingsLayoutArea
                 BuildContentPane(host, node, hubPath, tabId),
                 skin => skin.WithSize("*")
             );
+
+        if (!canEdit)
+        {
+            // Show read-only indicator at the top
+            return Controls.Stack.WithWidth("100%")
+                .WithView(Controls.Html(
+                    "<div style=\"padding: 8px 16px; background: var(--neutral-layer-3); border-bottom: 1px solid var(--neutral-stroke-rest); " +
+                    "color: var(--neutral-foreground-hint); font-size: 0.85rem; text-align: center;\">Read-only — you do not have edit permissions</div>"))
+                .WithView(settingsPage);
+        }
+
+        return settingsPage;
     }
 
     private static UiControl BuildNavMenu(

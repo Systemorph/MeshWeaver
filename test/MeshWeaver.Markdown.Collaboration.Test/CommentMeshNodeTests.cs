@@ -835,7 +835,7 @@ public class CommentMeshNodeTests
             Content = new Comment { Id = "r1", Author = "Bob", Text = "Reply", ParentCommentId = "c1" }
         };
 
-        var result = CommentLayoutAreas.BuildOverview(null!, node, "docs/page/c1", new List<MeshNode> { replyNode }, "");
+        var result = CommentLayoutAreas.BuildOverview(null!, node, "docs/page/c1", "editState_test", new[] { true }, new List<MeshNode> { replyNode }, "");
 
         result.Should().NotBeNull();
         result.Should().BeOfType<StackControl>();
@@ -856,7 +856,7 @@ public class CommentMeshNodeTests
             Content = comment
         };
 
-        var result = CommentLayoutAreas.BuildOverview(null!, node, "docs/page/c1", Array.Empty<MeshNode>(), "");
+        var result = CommentLayoutAreas.BuildOverview(null!, node, "docs/page/c1", "editState_test", new[] { true }, Array.Empty<MeshNode>(), "");
 
         result.Should().NotBeNull();
         result.Should().BeOfType<StackControl>();
@@ -884,7 +884,7 @@ public class CommentMeshNodeTests
         };
 
         // BuildOverview filters by ParentCommentId == comment.Id internally
-        var result = CommentLayoutAreas.BuildOverview(null!, node, "docs/page/c1", new List<MeshNode> { replyForC1, replyForC2 }, "");
+        var result = CommentLayoutAreas.BuildOverview(null!, node, "docs/page/c1", "editState_test", new[] { true }, new List<MeshNode> { replyForC1, replyForC2 }, "");
 
         result.Should().NotBeNull();
         result.Should().BeOfType<StackControl>();
@@ -1050,7 +1050,7 @@ public class CommentMeshNodeTests
 
         // BuildOverview with no replies — no catalog
         var overviewNoReplies = CommentLayoutAreas.BuildOverview(
-            null!, parentNode, commentPath, Array.Empty<MeshNode>(), "");
+            null!, parentNode, commentPath, "editState_test", new[] { true }, Array.Empty<MeshNode>(), "");
         overviewNoReplies.Should().BeOfType<StackControl>();
 
         // 2) "Click Reply" — simulate what the Reply button handler creates:
@@ -1086,7 +1086,7 @@ public class CommentMeshNodeTests
 
         // 4) Verify we see *one* answer in the overview as a Thumbnail inside a CatalogControl
         var overviewWithReply = CommentLayoutAreas.BuildOverview(
-            null!, parentNode, commentPath, new List<MeshNode> { updatedReplyNode }, "");
+            null!, parentNode, commentPath, "editState_test", new[] { true }, new List<MeshNode> { updatedReplyNode }, "");
 
         overviewWithReply.Should().BeOfType<StackControl>();
 
