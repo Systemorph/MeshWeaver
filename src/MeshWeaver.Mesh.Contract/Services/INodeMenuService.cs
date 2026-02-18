@@ -46,8 +46,9 @@ public record NodeMenuState
 
     /// <summary>
     /// Effective permissions on the primary node for the current user.
+    /// Defaults to None — menus are hidden until permissions are actually resolved.
     /// </summary>
-    public Permission Permissions { get; init; } = Permission.All;
+    public Permission Permissions { get; init; } = Permission.None;
 
     /// <summary>
     /// Whether the user can create child nodes.
