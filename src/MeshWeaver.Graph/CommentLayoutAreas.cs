@@ -6,10 +6,12 @@ using MeshWeaver.Domain;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Catalog;
 using MeshWeaver.Layout.Composition;
+using MeshWeaver.Markdown;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
+using MeshWeaver.ShortGuid;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.Graph;
@@ -129,19 +131,57 @@ public static class CommentLayoutAreas
 
         // Permission + author check: need Comment permission AND (author match OR !AuthorEditOnly)
         var isAuthor = string.Equals(comment.Author, currentUser, StringComparison.OrdinalIgnoreCase);
+        var isOwner = string.Equals(comment.Author, currentUser, StringComparison.OrdinalIgnoreCase);
         var canEdit = canComment && (!CommentNodeType.AuthorEditOnly || isAuthor);
+        var canAct = !string.IsNullOrEmpty(currentUser);
 
         var hasContent = !string.IsNullOrWhiteSpace(comment.Text);
 
         var container = Controls.Stack.WithWidth("100%");
 
-        // Author header row
+        // Author header row with action buttons
         var author = comment.Author;
-        container = container.WithView(Controls.Html($@"
-            <div style=""display: flex; align-items: center; gap: 6px; margin-bottom: 4px;"">
-                <span style=""font-weight: 600; font-size: 0.85rem;"">{System.Web.HttpUtility.HtmlEncode(author)}</span>
-                <span style=""font-size: 0.75rem; color: var(--neutral-foreground-hint);"">{comment.CreatedAt:g}</span>
-            </div>"));
+        var headerRow = Controls.Stack
+            .WithOrientation(Orientation.Horizontal)
+            .WithStyle("align-items: center; justify-content: space-between; margin-bottom: 4px;")
+            .WithView(Controls.Html($@"
+                <div style=""display: flex; align-items: center; gap: 6px;"">
+                    <span style=""font-weight: 600; font-size: 0.85rem;"">{System.Web.HttpUtility.HtmlEncode(author)}</span>
+                    <span style=""font-size: 0.75rem; color: var(--neutral-foreground-hint);"">{comment.CreatedAt:g}</span>
+                </div>"));
+
+        // Action buttons (right-aligned)
+        var actionRow = Controls.Stack
+            .WithOrientation(Orientation.Horizontal)
+            .WithStyle("align-items: center; gap: 2px;");
+
+        var hasActions = false;
+
+        // Reply button — visible when authenticated
+        if (canAct)
+        {
+            hasActions = true;
+            actionRow = actionRow.WithView(BuildReplyButton(host, hubPath, comment, currentUser));
+        }
+
+        // Resolve button — visible when authenticated
+        if (canAct)
+        {
+            hasActions = true;
+            actionRow = actionRow.WithView(BuildResolveButton(host, hubPath, comment));
+        }
+
+        // Delete button — visible to owner only
+        if (isOwner)
+        {
+            hasActions = true;
+            actionRow = actionRow.WithView(BuildDeleteButton(host, hubPath));
+        }
+
+        if (hasActions)
+            headerRow = headerRow.WithView(actionRow);
+
+        container = container.WithView(headerRow);
 
         // Toggleable content: click to edit (author only), Done to return
         if (canEdit)
@@ -176,6 +216,27 @@ public static class CommentLayoutAreas
         if (replyNodes.Count > 0)
         {
             container = container.WithView(BuildRepliesSection(host, hubPath, replyNodes));
+        }
+
+        // Inline reply area — rendered when replyPathStateId is non-empty
+        if (host != null)
+        {
+            var replyPathStateId = $"replyPath_{hubPath.Replace("/", "_")}";
+            container = container.WithView((h, _) =>
+            {
+                h.UpdateData(replyPathStateId, "");
+                return h.Stream.GetDataStream<string>(replyPathStateId)
+                    .DistinctUntilChanged()
+                    .Select(replyPath =>
+                    {
+                        if (string.IsNullOrEmpty(replyPath))
+                            return (UiControl)Controls.Stack; // empty placeholder
+
+                        return (UiControl)Controls.Stack
+                            .WithStyle("margin-top: 8px; margin-left: 12px; padding-left: 8px; border-left: 2px solid var(--accent-fill-rest);")
+                            .WithView(Controls.LayoutArea(replyPath, MeshNodeLayoutAreas.CreateNodeArea));
+                    });
+            });
         }
 
         return container;
@@ -307,6 +368,97 @@ public static class CommentLayoutAreas
                 })));
 
         return stack;
+    }
+
+    /// <summary>
+    /// Builds the Reply icon button. Creates a transient reply node and shows inline Create area.
+    /// </summary>
+    private static UiControl BuildReplyButton(LayoutAreaHost host, string hubPath, Comment comment, string currentUser)
+    {
+        return Controls.Button("")
+            .WithIconStart(FluentIcons.ArrowReply(IconSize.Size16))
+            .WithAppearance(Appearance.Stealth)
+            .WithStyle("min-width: 24px; padding: 2px;")
+            .WithClickAction(async _ =>
+            {
+                var replyId = Guid.NewGuid().AsString();
+                var replyPath = $"{hubPath}/{replyId}";
+                var replyPathStateId = $"replyPath_{hubPath.Replace("/", "_")}";
+
+                var replyNode = new MeshNode(replyPath)
+                {
+                    Name = "Reply",
+                    NodeType = CommentNodeType.NodeType,
+                    State = MeshNodeState.Transient,
+                    Content = new Comment
+                    {
+                        Id = replyId,
+                        NodePath = hubPath,
+                        DocumentPath = comment.DocumentPath,
+                        Author = currentUser,
+                        ParentCommentId = comment.Id,
+                        Status = CommentStatus.Active
+                    }
+                };
+
+                var persistence = host.Hub.ServiceProvider.GetService<IPersistenceService>();
+                if (persistence != null)
+                    await persistence.SaveNodeAsync(replyNode);
+
+                host.UpdateData(replyPathStateId, replyPath);
+            });
+    }
+
+    /// <summary>
+    /// Builds the Resolve (checkmark) icon button. Marks the comment as Resolved and strips markers from document.
+    /// </summary>
+    private static UiControl BuildResolveButton(LayoutAreaHost host, string hubPath, Comment comment)
+    {
+        return Controls.Button("")
+            .WithIconStart(FluentIcons.Checkmark(IconSize.Size16))
+            .WithAppearance(Appearance.Stealth)
+            .WithStyle("min-width: 24px; padding: 2px;")
+            .WithClickAction(async _ =>
+            {
+                var persistence = host.Hub.ServiceProvider.GetService<IPersistenceService>();
+                if (persistence == null) return;
+
+                // Update comment status to Resolved
+                var node = await persistence.GetNodeAsync(hubPath);
+                if (node != null)
+                {
+                    var updatedNode = node with { Content = comment with { Status = CommentStatus.Resolved } };
+                    await persistence.SaveNodeAsync(updatedNode);
+                }
+
+                // Remove comment markers from the document markdown
+                if (!string.IsNullOrEmpty(comment.DocumentPath) && !string.IsNullOrEmpty(comment.MarkerId))
+                {
+                    var docNode = await persistence.GetNodeAsync(comment.DocumentPath);
+                    if (docNode?.Content is string docContent)
+                    {
+                        var cleaned = AnnotationMarkdownExtension.ResolveComment(docContent, comment.MarkerId);
+                        var updatedDoc = docNode with { Content = cleaned };
+                        await persistence.SaveNodeAsync(updatedDoc);
+                    }
+                }
+            });
+    }
+
+    /// <summary>
+    /// Builds the Delete (trash) icon button. Deletes the comment node recursively.
+    /// </summary>
+    private static UiControl BuildDeleteButton(LayoutAreaHost host, string hubPath)
+    {
+        return Controls.Button("")
+            .WithIconStart(FluentIcons.Delete(IconSize.Size16))
+            .WithAppearance(Appearance.Stealth)
+            .WithStyle("min-width: 24px; padding: 2px; color: var(--error);")
+            .WithClickAction(async _ =>
+            {
+                var meshCatalog = host.Hub.ServiceProvider.GetRequiredService<IMeshCatalog>();
+                await meshCatalog.DeleteNodeAsync(hubPath, recursive: true);
+            });
     }
 
     /// <summary>

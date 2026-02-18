@@ -12,7 +12,7 @@ public static class OrganizationViews
     /// GitHub-style organization header view with standard children section.
     /// Shows logo, name, description, verified badge, contact info, then delegates to standard view for children.
     /// </summary>
-    public static IObservable<UiControl?> Details(LayoutAreaHost host, RenderingContext _)
+    public static IObservable<UiControl?> Overview(LayoutAreaHost host, RenderingContext _)
     {
         var hubPath = host.Hub.Address.ToString();
 
