@@ -394,10 +394,8 @@ public static class CommentLayoutAreas
                     Content = new Comment
                     {
                         Id = replyId,
-                        NodePath = hubPath,
                         PrimaryNodePath = comment.PrimaryNodePath,
                         Author = currentUser,
-                        ParentCommentId = comment.Id,
                         Status = CommentStatus.Active
                     }
                 };

@@ -198,7 +198,6 @@ public static class CommentsView
                     Content = new Comment
                     {
                         Id = commentId,
-                        NodePath = nodePath,
                         PrimaryNodePath = nodePath,
                         Author = currentUser,
                         Status = CommentStatus.Active

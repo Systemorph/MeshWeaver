@@ -149,7 +149,7 @@ public static class OverviewLayoutArea
 
                     // Issue DataChangeRequest to persist the change
                     host.Hub.Post(
-                        new DataChangeRequest().WithUpdates(updatedNode),
+                        new DataChangeRequest { ChangedBy = host.Stream.ClientId }.WithUpdates(updatedNode),
                         o => o.WithTarget(host.Hub.Address));
                 }));
     }

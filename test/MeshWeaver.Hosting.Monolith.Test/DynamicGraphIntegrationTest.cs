@@ -610,8 +610,8 @@ public record Graph
     {
         // Arrange - create node with comments
         await Persistence.SaveNodeAsync(MeshNode.FromPath("graph/commented") with { Name = "Commented Node", NodeType = "type/org" }, TestContext.Current.CancellationToken);
-        await Persistence.AddCommentAsync(new Comment { NodePath = "graph/commented", Text = "Comment 1", Author = "User1" }, TestContext.Current.CancellationToken);
-        await Persistence.AddCommentAsync(new Comment { NodePath = "graph/commented", Text = "Comment 2", Author = "User2" }, TestContext.Current.CancellationToken);
+        await Persistence.AddCommentAsync(new Comment { PrimaryNodePath = "graph/commented", Text = "Comment 1", Author = "User1" }, TestContext.Current.CancellationToken);
+        await Persistence.AddCommentAsync(new Comment { PrimaryNodePath = "graph/commented", Text = "Comment 2", Author = "User2" }, TestContext.Current.CancellationToken);
 
         // Verify comments exist at old path
         var oldComments = await Persistence.GetCommentsAsync("graph/commented").ToListAsync(TestContext.Current.CancellationToken);

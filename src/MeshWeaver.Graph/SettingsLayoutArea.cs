@@ -235,7 +235,7 @@ public static class SettingsLayoutArea
                     var updatedNode = updatedProps.ApplyTo(node);
 
                     host.Hub.Post(
-                        new DataChangeRequest().WithUpdates(updatedNode),
+                        new DataChangeRequest { ChangedBy = host.Stream.ClientId }.WithUpdates(updatedNode),
                         o => o.WithTarget(host.Hub.Address));
                 }));
     }
