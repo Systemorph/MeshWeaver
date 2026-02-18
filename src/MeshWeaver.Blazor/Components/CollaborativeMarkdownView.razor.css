@@ -173,6 +173,29 @@
     text-decoration: line-through;
 }
 
+.collab-md-quote.quote-comment {
+    border-left-color: var(--annotation-comment-border);
+    background: var(--annotation-comment-bg);
+}
+
+/* Comment text below the quote */
+.collab-md-comment-text {
+    margin-top: 4px;
+    font-size: 0.8rem;
+    line-height: 1.4;
+    color: var(--neutral-foreground-rest);
+}
+
+/* Comment card type styling */
+::deep .annotation-card.annotation-type-comment {
+    border-left: 3px solid var(--annotation-comment-border);
+}
+
+::deep .annotation-card.active.annotation-type-comment {
+    border-color: var(--annotation-comment-border);
+    background: var(--annotation-comment-bg);
+}
+
 /* ==========================================================================
    Inline Annotation Styles (rendered via MarkupString HTML)
    All use ::deep to target dynamic content as descendants of scoped elements

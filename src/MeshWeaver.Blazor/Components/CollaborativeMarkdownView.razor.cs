@@ -38,10 +38,7 @@ public partial class CollaborativeMarkdownView
     private bool HasAnnotations => Annotations.Count > 0;
 
     private bool HasSideAnnotations =>
-        CurrentViewMode == "Markup" && TrackChangeAnnotations.Count > 0;
-
-    private List<ParsedAnnotation> TrackChangeAnnotations =>
-        Annotations.Where(a => a.Type != AnnotationType.Comment).ToList();
+        CurrentViewMode == "Markup" && Annotations.Count > 0;
 
     private string ViewModeClass => CurrentViewMode switch
     {
@@ -94,7 +91,11 @@ public partial class CollaborativeMarkdownView
         if (jsModule != null && !jsInitialized)
         {
             jsInitialized = true;
-            await jsModule.InvokeVoidAsync("init", contentRef);
+            await jsModule.InvokeVoidAsync("init", containerRef);
+        }
+        else if (jsModule != null && jsInitialized && HasSideAnnotations)
+        {
+            await jsModule.InvokeVoidAsync("positionCards");
         }
     }
 
@@ -209,6 +210,9 @@ public partial class CollaborativeMarkdownView
     }
 
     // Helpers
+    private string GetCommentAddress(string commentId) =>
+        $"{BoundNodePath}/{commentId}";
+
     private static string Truncate(string text, int maxLength) =>
         text.Length <= maxLength ? text : text[..maxLength] + "…";
 
@@ -234,6 +238,7 @@ public partial class CollaborativeMarkdownView
     {
         if (jsModule != null)
         {
+            try { await jsModule.InvokeVoidAsync("dispose"); } catch { }
             await jsModule.DisposeAsync();
             jsModule = null;
         }

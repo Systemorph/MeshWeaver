@@ -109,29 +109,43 @@
 
         @if (HasSideAnnotations)
         {
-            <div class="collab-md-sidebar annotations-column">
-                @* Track change cards — comments are shown as child node thumbnails *@
-                @foreach (var tc in TrackChangeAnnotations)
+            <div class="collab-md-sidebar annotations-column" @onclick:stopPropagation="true">
+                @foreach (var ann in Annotations)
                 {
-                    <div class="annotation-card annotation-for-@tc.Id annotation-type-@tc.Type.ToString().ToLowerInvariant() @(activeAnnotationId == tc.Id ? "active" : "")"
-                         @onclick="() => HighlightAnnotation(tc.Id)">
-                        <div class="collab-md-card-header">
-                            <div class="collab-md-card-meta">
-                                <span class="collab-md-author">@(tc.Author ?? "Unknown")</span>
-                                <span class="collab-md-time">@GetTypeLabel(tc.Type)@(!string.IsNullOrEmpty(tc.Date) ? $" · {tc.Date}" : "")</span>
-                            </div>
-                            <div class="collab-md-card-actions">
-                                <button class="btn-accept" title="Accept" @onclick="() => OnAcceptChange(tc.Id)" @onclick:stopPropagation="true">✓</button>
-                                <button class="btn-reject" title="Reject" @onclick="() => OnRejectChange(tc.Id)" @onclick:stopPropagation="true">✗</button>
-                            </div>
+                    @if (ann.Type == AnnotationType.Comment)
+                    {
+                        @* Comments are MeshNodes — render their Overview layout area *@
+                        <div class="annotation-card annotation-for-@ann.Id annotation-type-comment @(activeAnnotationId == ann.Id ? "active" : "")"
+                             @onclick="() => HighlightAnnotation(ann.Id)">
+                            <LayoutArea Address="@GetCommentAddress(ann.Id)" Area="Overview" />
                         </div>
-                        @if (!string.IsNullOrEmpty(tc.HighlightedText))
-                        {
-                            <div class="collab-md-quote @(tc.Type == AnnotationType.Insert ? "quote-insert" : "quote-delete")">
-                                "@Truncate(tc.HighlightedText, 60)"
+                    }
+                    else
+                    {
+                        @* Track changes — compact card with accept/reject *@
+                        <div class="annotation-card annotation-for-@ann.Id annotation-type-@ann.Type.ToString().ToLowerInvariant() @(activeAnnotationId == ann.Id ? "active" : "")"
+                             @onclick="() => HighlightAnnotation(ann.Id)">
+                            <div class="collab-md-card-header">
+                                <div class="collab-md-card-meta">
+                                    @if (!string.IsNullOrEmpty(ann.Author))
+                                    {
+                                        <span class="collab-md-author">@ann.Author</span>
+                                    }
+                                    <span class="collab-md-time">@GetTypeLabel(ann.Type)@(!string.IsNullOrEmpty(ann.Date) ? $" · {ann.Date}" : "")</span>
+                                </div>
+                                <div class="collab-md-card-actions">
+                                    <button class="btn-accept" title="Accept" @onclick="() => OnAcceptChange(ann.Id)" @onclick:stopPropagation="true">✓</button>
+                                    <button class="btn-reject" title="Reject" @onclick="() => OnRejectChange(ann.Id)" @onclick:stopPropagation="true">✗</button>
+                                </div>
                             </div>
-                        }
-                    </div>
+                            @if (!string.IsNullOrEmpty(ann.HighlightedText))
+                            {
+                                <div class="collab-md-quote @(ann.Type == AnnotationType.Insert ? "quote-insert" : "quote-delete")">
+                                    "@Truncate(ann.HighlightedText, 60)"
+                                </div>
+                            }
+                        </div>
+                    }
                 }
             </div>
         }
