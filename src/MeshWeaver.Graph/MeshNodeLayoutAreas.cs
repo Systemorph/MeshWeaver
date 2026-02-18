@@ -90,15 +90,13 @@ public static class MeshNodeLayoutAreas
             .WithDefaultArea(OverviewArea)
             .WithView(OverviewArea, Overview)
             .WithView(ThumbnailArea, Thumbnail)
-            .WithView(MetadataArea, Metadata)
-            .WithView(SettingsArea, Settings)
+            .WithView(SettingsArea, SettingsLayoutArea.Settings)
             .WithView(SearchArea, Search)
             .WithView(FilesArea, Files)
             .WithView(ChildrenArea, Children)
             .WithView(NodeTypesArea, NodeTypes)
             .WithView(AccessControlArea, AccessControl)
             .WithView(CreateNodeArea, CreateNode)
-            .WithView(EditArea, Edit)
             .WithView(DeleteArea, DeleteLayoutArea.Delete)
             // UCR special areas
             .WithView(DataArea, Data)
@@ -137,15 +135,9 @@ public static class MeshNodeLayoutAreas
             : $"position: relative; max-width: {pageMaxWidth}; margin: 0 auto; padding: 0 24px;";
     }
 
-    private static UiControl BuildDetailsContent(this LayoutAreaHost host, MeshNode? node, NodeTypeDefinition? typeDef)
+    internal static UiControl BuildDetailsContent(this LayoutAreaHost host, MeshNode? node, NodeTypeDefinition? typeDef)
     {
-        var nodePath = node?.Namespace ?? host.Hub.Address.ToString();
         var stack = Controls.Stack.WithWidth("100%").WithStyle(GetContainerStyle(host, typeDef));
-
-        // Action menu (top-right)
-        stack = stack.WithView(Controls.Stack
-            .WithStyle("position: absolute; top: 0; right: 0; z-index: 10;")
-            .WithView(BuildActionMenu(host, node)));
 
         // Header with title/icon
         stack = stack.WithView(BuildHeader(host, node));
@@ -235,87 +227,6 @@ public static class MeshNodeLayoutAreas
             .WithView(titleContent);
     }
 
-    /// <summary>
-    /// Builds a dropdown action menu with Edit, Comments, Files, Metadata, NodeType, Catalog, Settings.
-    /// Uses icon-only mode to show just the ellipsis button without a chevron.
-    /// Uses NavLinkControl for instant navigation via href.
-    /// </summary>
-    [Browsable(false)]
-    public static UiControl BuildActionMenu(LayoutAreaHost host, MeshNode? node)
-    {
-        var nodePath = node?.Namespace ?? host.Hub.Address.ToString();
-
-        // Start with the trigger button (MoreHorizontal icon) - icon-only mode hides the chevron
-        var menu = Controls.MenuItem("", FluentIcons.MoreHorizontal(IconSize.Size20))
-            .WithAppearance(Appearance.Stealth)
-            .WithIconOnly();
-
-        // Create option - goes to CreateNode area (first item in menu)
-        var createHref = $"/{nodePath}/{CreateNodeArea}";
-        menu = menu.WithView(new NavLinkControl("Create", FluentIcons.Add(IconSize.Size16), createHref));
-
-        // Edit option
-        var editHref = $"/{nodePath}/{EditArea}";
-        menu = menu.WithView(new NavLinkControl("Edit", FluentIcons.Edit(IconSize.Size16), editHref));
-
-        // Delete current node — navigates to confirmation page
-        var deleteHref = $"/{nodePath}/{DeleteArea}";
-        menu = menu.WithView(new NavLinkControl("Delete", FluentIcons.Delete(IconSize.Size16), deleteHref));
-
-        // Comments option (only if comments are enabled)
-        if (host.Hub.Configuration.HasComments())
-        {
-            var commentsHref = $"/{nodePath}/{CommentsArea}";
-            menu = menu.WithView(new NavLinkControl("Comments", FluentIcons.Comment(IconSize.Size16), commentsHref));
-        }
-
-        // Files sub-menu listing editable content collections
-        var filesContentService = host.Hub.ServiceProvider.GetService<IContentService>();
-        var editableCollections = filesContentService?.GetAllCollectionConfigs()
-            .Where(c => c.IsEditable).ToList();
-        if (editableCollections is { Count: > 0 })
-        {
-            var filesMenu = Controls.MenuItem("Files", FluentIcons.Folder(IconSize.Size16));
-            foreach (var config in editableCollections)
-            {
-                var collectionFilesHref = $"/{nodePath}/{FilesArea}?collection={Uri.EscapeDataString(config.Name)}";
-                filesMenu = filesMenu.WithView(new NavLinkControl(
-                    config.DisplayName ?? config.Name,
-                    FluentIcons.Folder(IconSize.Size16),
-                    collectionFilesHref));
-            }
-            menu = menu.WithView(filesMenu);
-        }
-        else
-        {
-            // Fallback: single Files link for the default "content" collection
-            var filesHref = $"/{nodePath}/{FilesArea}";
-            menu = menu.WithView(new NavLinkControl("Files", FluentIcons.Folder(IconSize.Size16), filesHref));
-        }
-
-        // Metadata option
-        var metadataHref = $"/{nodePath}/{MetadataArea}";
-        menu = menu.WithView(new NavLinkControl("Metadata", FluentIcons.Info(IconSize.Size16), metadataHref));
-
-
-        // Search option
-        var searchHref = $"/{nodePath}/{SearchArea}";
-        menu = menu.WithView(new NavLinkControl("Search", FluentIcons.Grid(IconSize.Size16), searchHref));
-
-        // Node Types option
-        var nodeTypesHref = $"/{nodePath}/{NodeTypesArea}";
-        menu = menu.WithView(new NavLinkControl("Node Types", FluentIcons.Document(IconSize.Size16), nodeTypesHref));
-
-        // Settings option
-        var settingsHref = $"/{nodePath}/{SettingsArea}";
-        menu = menu.WithView(new NavLinkControl("Settings", FluentIcons.Settings(IconSize.Size16), settingsHref));
-
-        // Access Control option
-        var accessControlHref = $"/{nodePath}/{AccessControlArea}";
-        menu = menu.WithView(new NavLinkControl("Access Control", FluentIcons.Shield(IconSize.Size16), accessControlHref));
-
-        return menu;
-    }
 
     /// <summary>
     /// Builds a content URL for navigating to a specific layout area of a node.
@@ -429,112 +340,6 @@ public static class MeshNodeLayoutAreas
         return stack;
     }
 
-    /// <summary>
-    /// Renders the Settings area showing node properties and types catalog.
-    /// Provides read-only view of node metadata with embedded catalog of NodeType children.
-    /// Uses GetStream for reactive data binding instead of direct persistence access.
-    /// </summary>
-    [Browsable(false)]
-    public static IObservable<UiControl?> Settings(LayoutAreaHost host, RenderingContext _)
-    {
-        var hubPath = host.Hub.Address.ToString();
-        var meshQuery = host.Hub.ServiceProvider.GetService<IMeshQuery>();
-
-        // Get node from stream
-        var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? Array.Empty<MeshNode>())
-            ?? Observable.Return<MeshNode[]>(Array.Empty<MeshNode>());
-
-        // Load NodeType children
-        var typesStream = Observable.FromAsync(async () =>
-        {
-            if (meshQuery == null)
-                return Array.Empty<MeshNode>() as IReadOnlyList<MeshNode>;
-
-            try
-            {
-                return await meshQuery.QueryAsync<MeshNode>($"path:{hubPath} nodeType:NodeType scope:descendants").ToListAsync() as IReadOnlyList<MeshNode>;
-            }
-            catch
-            {
-                return Array.Empty<MeshNode>();
-            }
-        });
-
-        return nodeStream.CombineLatest(typesStream, (nodes, types) =>
-        {
-            var node = nodes.FirstOrDefault(n => n.Path == hubPath);
-            return BuildSettingsContent(host, node, types ?? Array.Empty<MeshNode>());
-        });
-    }
-
-    private static UiControl BuildSettingsContent(LayoutAreaHost _, MeshNode? node, IReadOnlyList<MeshNode> nodeTypes)
-    {
-        var stack = Controls.Stack.WithWidth("100%").WithStyle("padding: 24px;");
-
-        // Header
-        stack = stack.WithView(Controls.Html("<h2 style=\"margin: 0 0 24px 0;\">Settings</h2>"));
-
-        if (node == null)
-        {
-            stack = stack.WithView(Controls.Html("<p><em>Node not found.</em></p>"));
-            return stack;
-        }
-
-        // Build markdown representation of MeshNode (excluding content)
-        var markdown = BuildNodeMarkdown(node);
-        stack = stack.WithView(new MarkdownControl(markdown));
-
-        // Types catalog - show NodeType children using standard grid
-        if (nodeTypes.Count > 0)
-        {
-            stack = stack.WithView(Controls.Html($"<h3 style=\"margin: 32px 0 16px 0;\">Types</h3>"));
-
-            var grid = Controls.LayoutGrid.WithSkin(s => s.WithSpacing(3));
-            foreach (var typeNode in nodeTypes.OrderBy(t => t.Name))
-            {
-                grid = grid.WithView(
-                    MeshNodeThumbnailControl.FromNode(typeNode, typeNode.Path),
-                    itemSkin => itemSkin.WithXs(12).WithSm(6).WithMd(4).WithLg(4));
-            }
-            stack = stack.WithView(grid);
-        }
-
-        return stack;
-    }
-
-    private static string BuildNodeMarkdown(MeshNode node)
-    {
-        var sb = new System.Text.StringBuilder();
-
-        sb.AppendLine("## Node Properties");
-        sb.AppendLine();
-        sb.AppendLine("| Property | Value |");
-        sb.AppendLine("|----------|-------|");
-        sb.AppendLine($"| **Id** | `{node.Id}` |");
-        sb.AppendLine($"| **Name** | {node.Name ?? "*not set*"} |");
-        sb.AppendLine($"| **Path** | `{node.Path}` |");
-        sb.AppendLine($"| **Namespace** | `{node.Namespace ?? ""}` |");
-        sb.AppendLine($"| **NodeType** | {(string.IsNullOrEmpty(node.NodeType) ? "*not set*" : $"[{node.NodeType}](/{node.NodeType})")} |");
-        sb.AppendLine($"| **Icon** | {node.Icon ?? "*not set*"} |");
-        sb.AppendLine($"| **DisplayOrder** | {node.DisplayOrder} |");
-        sb.AppendLine($"| **State** | {node.State} |");
-        sb.AppendLine($"| **LastModified** | {node.LastModified:yyyy-MM-dd HH:mm:ss} |");
-        sb.AppendLine($"| **Version** | {node.Version} |");
-
-        if (!string.IsNullOrEmpty(node.AssemblyLocation))
-            sb.AppendLine($"| **AssemblyLocation** | `{node.AssemblyLocation}` |");
-
-        return sb.ToString();
-    }
-
-    private static UiControl BuildSettingsRow(string label, string value)
-    {
-        return Controls.Stack
-            .WithOrientation(Orientation.Horizontal)
-            .WithStyle("padding: 12px 0; border-bottom: 1px solid #e0e0e0;")
-            .WithView(Controls.Html($"<strong style=\"width: 150px; flex-shrink: 0;\">{label}:</strong>"))
-            .WithView(Controls.Html($"<span>{value}</span>"));
-    }
 
     private static string GetNodeContent(MeshNode? node)
     {
@@ -651,7 +456,7 @@ public static class MeshNodeLayoutAreas
         var hubPath = host.Hub.Address.ToString();
 
         return Controls.MeshSearch
-            .WithHiddenQuery($"path:{hubPath} scope:children -nodeType:NodeType")
+            .WithHiddenQuery($"path:{hubPath} scope:children -nodeType:NodeType -nodeType:Comment -nodeType:Thread")
             .WithShowSearchBox(false)
             .WithRenderMode(MeshSearchRenderMode.Grouped)
             // No explicit grouping - defaults to NodeType which gives meaningful labels
@@ -1283,95 +1088,6 @@ public static class MeshNodeLayoutAreas
 
     #endregion
 
-    #region Edit Node
-
-    /// <summary>
-    /// Renders the Edit area for editing the ContentType using .Edit() extension.
-    /// For active nodes only. Transient nodes should use Create area.
-    /// </summary>
-    [Browsable(false)]
-    public static IObservable<UiControl?> Edit(LayoutAreaHost host, RenderingContext _)
-    {
-        var hubPath = host.Hub.Address.ToString();
-
-        // Get the node from the workspace stream
-        var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? Array.Empty<MeshNode>())
-            ?? Observable.Return<MeshNode[]>(Array.Empty<MeshNode>());
-
-        return nodeStream.Select(nodes =>
-        {
-            var node = nodes.FirstOrDefault(n => n.Path == hubPath);
-            return (UiControl?)BuildEditContent(host, node);
-        });
-    }
-
-    private static UiControl BuildEditContent(LayoutAreaHost host, MeshNode? node)
-    {
-        var nodePath = node?.Namespace ?? host.Hub.Address.ToString();
-        var stack = Controls.Stack.WithWidth("100%").WithStyle("padding: 24px;");
-
-        if (node == null)
-        {
-            stack = stack.WithView(Controls.Html("<p style=\"color: var(--warning-color);\">Node not found.</p>"));
-            return stack;
-        }
-
-        // If node is transient, redirect to Create area
-        if (node.State == MeshNodeState.Transient)
-        {
-            stack = stack.WithView(Controls.Html("<p>Redirecting to Create...</p>"));
-            stack = stack.WithView(Controls.Button("Go to Create")
-                .WithAppearance(Appearance.Accent)
-                .WithNavigateToHref(BuildContentUrl(nodePath, CreateNodeArea)));
-            return stack;
-        }
-
-        // Header with Done button
-        var doneHref = BuildContentUrl(nodePath, OverviewArea);
-
-        stack = stack.WithView(Controls.Stack
-            .WithOrientation(Orientation.Horizontal)
-            .WithHorizontalGap(16)
-            .WithStyle("align-items: center; margin-bottom: 24px; justify-content: space-between;")
-            .WithView(Controls.Stack
-                .WithOrientation(Orientation.Horizontal)
-                .WithHorizontalGap(16)
-                .WithStyle("align-items: center;")
-                .WithView(Controls.Button("Done")
-                    .WithAppearance(Appearance.Lightweight)
-                    .WithIconStart(FluentIcons.ArrowLeft())
-                    .WithNavigateToHref(doneHref))
-                .WithView(Controls.H2($"Edit {node.Name ?? node.Id}").WithStyle("margin: 0;"))));
-
-        // Show node type info
-        if (!string.IsNullOrEmpty(node.NodeType))
-        {
-            stack = stack.WithView(Controls.Stack
-                .WithWidth("100%")
-                .WithStyle("margin-bottom: 16px; padding: 12px; background: var(--neutral-layer-card-container); border-radius: 4px;")
-                .WithView(Controls.Stack
-                    .WithOrientation(Orientation.Horizontal)
-                    .WithHorizontalGap(8)
-                    .WithStyle("align-items: center;")
-                    .WithView(Controls.Body("Type:").WithStyle("font-weight: 600; color: var(--neutral-foreground-hint); min-width: 80px;"))
-                    .WithView(Controls.Body(node.NodeType).WithStyle("color: var(--accent-fill-rest);"))));
-        }
-
-        // ContentType editor using .Edit() extension or property overview
-        if (node.Content != null)
-        {
-            // Use the property overview which provides click-to-edit functionality
-            stack = stack.WithView(OverviewLayoutArea.BuildPropertyOverview(host, node));
-        }
-        else
-        {
-            stack = stack.WithView(Controls.Html("<p style=\"color: var(--neutral-foreground-hint);\">No content type defined for this node.</p>"));
-        }
-
-        return stack;
-    }
-
-    #endregion
 }
 
 /// <summary>

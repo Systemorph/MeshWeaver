@@ -23,6 +23,9 @@
     [Parameter] public EventCallback<string> OnSearch { get; set; }
     [Parameter] public EventCallback OnOpenSettings { get; set; }
 
+    [Inject] NavigationManager NavigationManager { get; set; } = null!;
+    [Inject] MeshWeaver.Mesh.Services.INavigationService NavigationService { get; set; } = null!;
+
     private string searchQuery = "";
 
     private async Task HandleSearchKeyDown(KeyboardEventArgs e)
@@ -42,7 +45,9 @@
 
     private async Task HandleSettingsClick()
     {
-        await OnOpenSettings.InvokeAsync();
+        var currentPath = NavigationService.CurrentNamespace ?? "";
+        var settingsUrl = string.IsNullOrEmpty(currentPath) ? "/Settings" : $"/{currentPath}/Settings";
+        NavigationManager.NavigateTo(settingsUrl);
         await OnClose.InvokeAsync();
     }
 }

@@ -71,10 +71,13 @@ public static class MarkdownEditLayoutArea
         container = container.WithView(headerRow);
 
         // MarkdownEditorControl with auto-save
+        // Height proportional to content lines, clamped between 300px and viewport
+        var lineCount = string.IsNullOrEmpty(initialContent) ? 15 : initialContent.Split('\n').Length;
+        var editorHeight = Math.Clamp(lineCount * 22 + 60, 300, 2000);
         var editor = new MarkdownEditorControl()
             .WithDocumentId(hubPath)
             .WithValue(initialContent)
-            .WithHeight("calc(100vh - 150px)")
+            .WithHeight($"{editorHeight}px")
             .WithMaxHeight("none")
             .WithTrackChanges(true)
             .WithPlaceholder("Start writing your markdown content...")
