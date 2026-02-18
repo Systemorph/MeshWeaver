@@ -50,6 +50,13 @@ public record UserRole
     public required string RoleId { get; init; }
 
     /// <summary>
+    /// When true, this assignment denies the role rather than granting it.
+    /// Used for local deny overrides of inherited grants.
+    /// Default is false (granted). Backward compatible with existing JSON.
+    /// </summary>
+    public bool Denied { get; init; }
+
+    /// <summary>
     /// When this role assignment was created.
     /// </summary>
     public DateTimeOffset AssignedAt { get; init; } = DateTimeOffset.UtcNow;

@@ -10,7 +10,6 @@ using MeshWeaver.Domain;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
-using MeshWeaver.Layout.DataGrid;
 using MeshWeaver.Layout.Domain;
 using MeshWeaver.Markdown;
 using MeshWeaver.Mesh;
@@ -975,104 +974,11 @@ public static class MeshNodeLayoutAreas
 
     /// <summary>
     /// Renders the Access Control area for managing user roles and permissions on this node.
-    /// Shows current role assignments and allows adding/removing users with specific roles.
+    /// Delegates to AccessControlLayoutArea for the full management UI.
     /// </summary>
     [Browsable(false)]
-    public static IObservable<UiControl?> AccessControl(LayoutAreaHost host, RenderingContext _)
-    {
-        var hubPath = host.Hub.Address.ToString();
-        var securityService = host.Hub.ServiceProvider.GetService<ISecurityService>();
-
-        if (securityService == null)
-        {
-            return Observable.Return<UiControl?>(
-                Controls.Stack.WithView(
-                    Controls.Html("<p style=\"color: var(--warning-color);\">Row-Level Security is not enabled. Add .AddRowLevelSecurity() to your mesh configuration.</p>")
-                )
-            );
-        }
-
-        // Get the node from the workspace stream
-        var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? [])
-            ?? Observable.Return<MeshNode[]>([]);
-
-        return nodeStream.SelectMany(async nodes =>
-        {
-            var node = nodes.FirstOrDefault(n => n.Namespace == hubPath || n.Path == hubPath);
-            return await BuildAccessControlContentAsync(host, securityService, node, hubPath);
-        });
-    }
-
-    private static async Task<UiControl> BuildAccessControlContentAsync(
-        LayoutAreaHost host,
-        ISecurityService securityService,
-        MeshNode? node,
-        string nodePath)
-    {
-        var stack = Controls.Stack.WithStyle("padding: 24px; gap: 24px;");
-
-        // Header
-        var headerText = node?.Name ?? nodePath.Split('/').LastOrDefault() ?? nodePath;
-        stack = stack.WithView(Controls.H2($"Access Control - {headerText}"));
-
-        // Get users with access to this namespace
-        var usersWithAccess = new List<UserAccess>();
-        await foreach (var userAccess in securityService.GetUsersWithAccessToNamespaceAsync(nodePath))
-        {
-            usersWithAccess.Add(userAccess);
-        }
-
-        // Users table section
-        stack = stack.WithView(Controls.H3("Users with Access"));
-
-        if (usersWithAccess.Count > 0)
-        {
-            // Build view models for the table
-            // Note: In the simplified model, scope distinction requires additional tracking
-            var viewModels = usersWithAccess
-                .Select(u => new AccessControlViewModel(u))
-                .OrderBy(vm => vm.UserId)
-                .ToList();
-
-            // Store data in workspace and create grid with reference
-            var dataId = Guid.NewGuid().AsString();
-            host.UpdateData(dataId, viewModels);
-
-            var grid = new DataGridControl(new JsonPointerReference(LayoutAreaReference.GetDataPointer(dataId)))
-                .WithColumn(new PropertyColumnControl<string> { Property = nameof(AccessControlViewModel.UserId) }.WithTitle("User"))
-                .WithColumn(new PropertyColumnControl<string> { Property = nameof(AccessControlViewModel.DisplayName) }.WithTitle("Display Name"))
-                .WithColumn(new PropertyColumnControl<string> { Property = nameof(AccessControlViewModel.RolesDisplay) }.WithTitle("Roles"))
-                .WithColumn(new PropertyColumnControl<string> { Property = nameof(AccessControlViewModel.ScopeDisplay) }.WithTitle("Scope"));
-
-            stack = stack.WithView(grid);
-        }
-        else
-        {
-            stack = stack.WithView(Controls.Html(
-                "<p style=\"color: var(--neutral-foreground-hint);\">No users have access to this namespace. " +
-                "Create Access data files in the Access partition to grant access.</p>"));
-        }
-
-        // Help section
-        stack = stack.WithView(Controls.Html(
-            "<div style=\"margin-top: 24px; padding: 16px; background: var(--neutral-layer-2); border-radius: 8px;\">" +
-            "<h4 style=\"margin: 0 0 8px 0;\">Managing Access</h4>" +
-            "<p style=\"margin: 0;\">Access is managed via JSON files in the <code>Access</code> partition. " +
-            "Each user has a file with their roles:</p>" +
-            "<pre style=\"margin: 8px 0; padding: 8px; background: var(--neutral-layer-1); border-radius: 4px;\">" +
-            "{\n" +
-            "  \"userId\": \"Alice\",\n" +
-            "  \"displayName\": \"Alice Chen\",\n" +
-            "  \"roles\": [\n" +
-            "    { \"roleId\": \"Editor\", \"namespace\": \"ACME\" }\n" +
-            "  ]\n" +
-            "}</pre>" +
-            "<p style=\"margin: 8px 0 0 0;\"><strong>Roles:</strong> Admin (full access), Editor (read/create/update/comment), Commenter (read/comment), Viewer (read only)</p>" +
-            "<p style=\"margin: 8px 0 0 0;\"><strong>Inheritance:</strong> Roles on a parent namespace apply to all children.</p>" +
-            "</div>"));
-
-        return stack;
-    }
+    public static IObservable<UiControl?> AccessControl(LayoutAreaHost host, RenderingContext ctx)
+        => AccessControlLayoutArea.AccessControl(host, ctx);
 
     #endregion
 
@@ -1088,34 +994,6 @@ public static class MeshNodeLayoutAreas
 
     #endregion
 
-}
-
-/// <summary>
-/// View model for displaying user access in the Access Control DataGrid.
-/// </summary>
-public record AccessControlViewModel
-{
-    public string UserId { get; init; } = string.Empty;
-    public string DisplayName { get; init; } = string.Empty;
-    public string RolesDisplay { get; init; } = string.Empty;
-    public string ScopeDisplay { get; init; } = string.Empty;
-
-    public AccessControlViewModel() { }
-
-    /// <summary>
-    /// Creates a view model from a UserAccess record.
-    /// In the simplified model, roles are stored per-namespace so the scope
-    /// is determined by which partition the UserAccess was retrieved from.
-    /// </summary>
-    /// <param name="userAccess">The user access record</param>
-    /// <param name="scope">The scope of this access: "Global", "Direct", or "Inherited from {namespace}"</param>
-    public AccessControlViewModel(UserAccess userAccess, string scope = "Direct")
-    {
-        UserId = userAccess.UserId;
-        DisplayName = userAccess.DisplayName ?? userAccess.UserId;
-        RolesDisplay = string.Join(", ", userAccess.Roles.Select(r => r.RoleId).Distinct());
-        ScopeDisplay = scope;
-    }
 }
 
 /// <summary>
