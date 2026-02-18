@@ -21,7 +21,7 @@ public static class OverviewLayoutArea
     /// Builds the property overview for a MeshNode, showing read-only views with click-to-edit.
     /// Uses the unified ContentViewOptions for consistent layout across Overview, Edit, and Create.
     /// </summary>
-    public static UiControl BuildPropertyOverview(LayoutAreaHost host, MeshNode node)
+    public static UiControl BuildPropertyOverview(LayoutAreaHost host, MeshNode node, bool canEdit = true)
     {
         var nodePath = node.Namespace ?? host.Hub.Address.ToString();
 
@@ -34,9 +34,6 @@ public static class OverviewLayoutArea
             instance = JsonSerializer.Deserialize<object>(je.GetRawText(), host.Hub.JsonSerializerOptions)!;
 
         var contentType = instance.GetType();
-
-        // Check access permissions
-        var canEdit = CheckEditAccess(host, node);
 
         // Set up local data for editing
         var dataId = EditLayoutArea.GetDataId(nodePath);
@@ -157,10 +154,4 @@ public static class OverviewLayoutArea
                 }));
     }
 
-    private static bool CheckEditAccess(LayoutAreaHost host, MeshNode node)
-    {
-        // Permission enforcement happens at save time (DataChangeRequest).
-        // Default to editable to avoid blocking the render pipeline.
-        return true;
-    }
 }

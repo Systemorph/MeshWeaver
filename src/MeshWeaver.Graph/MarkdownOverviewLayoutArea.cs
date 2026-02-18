@@ -26,25 +26,25 @@ public static class MarkdownOverviewLayoutArea
         var editStateId = $"editState_markdown_{hubPath.Replace("/", "_")}";
         var initialized = new[] { false };
 
-        return nodeStream.Select(nodes =>
+        return nodeStream.SelectMany(async nodes =>
         {
             var node = nodes.FirstOrDefault(n => n.Path == hubPath);
-            return BuildOverview(host, node, editStateId, initialized);
+            var canEdit = await PermissionHelper.CanEditAsync(host.Hub, hubPath);
+            return (UiControl?)BuildOverview(host, node, editStateId, initialized, canEdit);
         });
     }
 
     private static UiControl BuildOverview(LayoutAreaHost host, MeshNode? node,
-        string editStateId, bool[] initialized)
+        string editStateId, bool[] initialized, bool canEdit)
     {
         var nodePath = node?.Path ?? host.Hub.Address.ToString();
         var rawContent = GetMarkdownContent(node);
-        var canEdit = true; // Permission enforcement happens at save time
         var hasContent = !string.IsNullOrWhiteSpace(rawContent);
 
         var container = Controls.Stack.WithWidth("100%").WithStyle(MeshNodeLayoutAreas.GetContainerStyle(host));
 
         // Standard header with title/icon
-        container = container.WithView(MeshNodeLayoutAreas.BuildHeader(host, node));
+        container = container.WithView(MeshNodeLayoutAreas.BuildHeader(host, node, canEdit));
 
         // Toggleable markdown content: click to edit, Done button to return to read-only
         // Empty content starts in edit mode immediately; only initialize once to prevent

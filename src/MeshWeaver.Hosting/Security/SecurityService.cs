@@ -40,7 +40,8 @@ public class SecurityService : ISecurityService
     {
         { "Admin", Role.Admin },
         { "Editor", Role.Editor },
-        { "Viewer", Role.Viewer }
+        { "Viewer", Role.Viewer },
+        { "Commenter", Role.Commenter }
     };
 
     private JsonSerializerOptions JsonOptions => _hub.JsonSerializerOptions;

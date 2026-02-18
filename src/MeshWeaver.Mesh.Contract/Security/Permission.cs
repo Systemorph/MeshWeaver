@@ -33,7 +33,12 @@ public enum Permission
     Delete = 8,
 
     /// <summary>
-    /// All permissions (Read, Create, Update, Delete).
+    /// Permission to create comments and reply to threads.
     /// </summary>
-    All = Read | Create | Update | Delete
+    Comment = 16,
+
+    /// <summary>
+    /// All permissions (Read, Create, Update, Delete, Comment).
+    /// </summary>
+    All = Read | Create | Update | Delete | Comment
 }
