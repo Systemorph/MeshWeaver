@@ -40,6 +40,15 @@ public record Comment
     public string NodePath { get; init; } = string.Empty;
 
     /// <summary>
+    /// Path of the root document node this comment thread belongs to.
+    /// Used for permission checks (edit access on the document).
+    /// For top-level comments, this equals NodePath.
+    /// For replies, this is the original document path (not the parent comment).
+    /// </summary>
+    [Browsable(false)]
+    public string DocumentPath { get; init; } = string.Empty;
+
+    /// <summary>
     /// Marker ID linking this comment to highlighted text in the document.
     /// Corresponds to the ID in &lt;!--comment:markerId--&gt; markers.
     /// </summary>

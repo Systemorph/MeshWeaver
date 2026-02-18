@@ -98,10 +98,11 @@ public static class SettingsLayoutArea
     {
         var navMenu = Controls.NavMenu.WithSkin(s => s.WithWidth(280).WithCollapsible(false));
 
-        // Back to Overview link
-        var overviewHref = new LayoutAreaReference(MeshNodeLayoutAreas.OverviewArea).ToHref(hubAddress);
+        // Back to node link
+        var backHref = $"/{hubPath}";
+        var nodeName = node?.Name ?? "Back";
         navMenu = navMenu.WithView(
-            new NavLinkControl("\u2190 Back to Overview", FluentIcons.ArrowLeft(), overviewHref)
+            new NavLinkControl($"\u2190 {nodeName}", FluentIcons.ArrowLeft(), backHref)
         );
 
         // Properties tab
