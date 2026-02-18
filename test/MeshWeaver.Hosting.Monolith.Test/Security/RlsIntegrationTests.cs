@@ -504,6 +504,145 @@ public class RlsIntegrationTests(ITestOutputHelper output) : MonolithMeshTestBas
     }
 
     [Fact]
+    public async Task CreateNode_Anonymous_NoCreatedBy_Fails()
+    {
+        // Arrange - anonymous: no AccessContext, no CreatedBy, no role assigned
+        var client = GetClient();
+
+        var node = new MeshNode("AnonCreate", "rls/anon")
+        {
+            Name = "Anonymous Create",
+            NodeType = "secure"
+        };
+        // CreatedBy is null — anonymous request
+        var request = new CreateNodeRequest(node);
+
+        // Act
+        var response = await client.AwaitResponse(
+            request,
+            o => o.WithTarget(Mesh.Address),
+            TestTimeout);
+
+        // Assert — must be rejected
+        response.Message.Success.Should().BeFalse("Anonymous user must not be able to create nodes");
+        response.Message.RejectionReason.Should().Be(NodeCreationRejectionReason.ValidationFailed);
+    }
+
+    [Fact]
+    public async Task DeleteNode_Anonymous_NoDeletedBy_Fails()
+    {
+        // Arrange - create a node as admin first
+        var client = GetClient();
+        var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
+
+        const string adminId = "admin_for_anon_delete";
+        const string parentPath = "rls/anon_delete";
+
+        await securityService.AddUserRoleAsync(adminId, "Admin", parentPath, "system", TestTimeout);
+        var node = new MeshNode("ToDeleteAnon", parentPath)
+        {
+            Name = "Delete Me",
+            NodeType = "secure"
+        };
+        var createResp = await client.AwaitResponse(
+            new CreateNodeRequest(node) { CreatedBy = adminId },
+            o => o.WithTarget(Mesh.Address),
+            TestTimeout);
+        createResp.Message.Success.Should().BeTrue();
+
+        // Act — anonymous delete (no DeletedBy)
+        var deleteResponse = await client.AwaitResponse(
+            new DeleteNodeRequest("rls/anon_delete/ToDeleteAnon"),
+            o => o.WithTarget(Mesh.Address),
+            TestTimeout);
+
+        // Assert — must be rejected
+        deleteResponse.Message.Success.Should().BeFalse("Anonymous user must not be able to delete nodes");
+        deleteResponse.Message.RejectionReason.Should().Be(NodeDeletionRejectionReason.ValidationFailed);
+    }
+
+    [Fact]
+    public async Task UpdateNode_Anonymous_NoUpdatedBy_Fails()
+    {
+        // Arrange - create a node as admin first
+        var client = GetClient();
+        var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
+
+        const string adminId = "admin_for_anon_update";
+        const string parentPath = "rls/anon_update";
+
+        await securityService.AddUserRoleAsync(adminId, "Admin", parentPath, "system", TestTimeout);
+        var node = new MeshNode("ToUpdateAnon", parentPath)
+        {
+            Name = "Original",
+            NodeType = "secure"
+        };
+        var createResp = await client.AwaitResponse(
+            new CreateNodeRequest(node) { CreatedBy = adminId },
+            o => o.WithTarget(Mesh.Address),
+            TestTimeout);
+        createResp.Message.Success.Should().BeTrue();
+
+        // Act — anonymous update (no UpdatedBy)
+        var updatedNode = node with { Name = "Hacked" };
+        var updateResponse = await client.AwaitResponse(
+            new UpdateNodeRequest(updatedNode),
+            o => o.WithTarget(Mesh.Address),
+            TestTimeout);
+
+        // Assert — must be rejected
+        updateResponse.Message.Success.Should().BeFalse("Anonymous user must not be able to update nodes");
+        updateResponse.Message.RejectionReason.Should().Be(NodeUpdateRejectionReason.ValidationFailed);
+    }
+
+    [Fact]
+    public async Task AnonymousUser_PermissionsAreNone_ByDefault()
+    {
+        // Arrange — no role assigned to anonymous/"Public" user
+        var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
+
+        // Act — check effective permissions for "Public" on an unassigned path
+        var permissions = await securityService.GetEffectivePermissionsAsync(
+            "rls/no_public_access", WellKnownUsers.Public, TestTimeout);
+
+        // Assert
+        permissions.Should().Be(Permission.None,
+            "Anonymous user must have zero permissions by default");
+    }
+
+    [Fact]
+    public async Task AnonymousUser_WithPublicViewerRole_CannotCreate()
+    {
+        // Arrange — grant Public user Viewer role (Read only)
+        var client = GetClient();
+        var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
+
+        const string parentPath = "rls/public_viewer";
+        await securityService.AddUserRoleAsync(
+            WellKnownUsers.Public, "Viewer", parentPath, "system", TestTimeout);
+
+        // Verify permissions
+        var permissions = await securityService.GetEffectivePermissionsAsync(
+            parentPath, WellKnownUsers.Public, TestTimeout);
+        permissions.Should().Be(Permission.Read, "Public Viewer should only have Read");
+
+        // Act — anonymous Create (CreatedBy = empty, will resolve to Public user)
+        var node = new MeshNode("PublicCreate", parentPath)
+        {
+            Name = "Public Create",
+            NodeType = "secure"
+        };
+        var response = await client.AwaitResponse(
+            new CreateNodeRequest(node),
+            o => o.WithTarget(Mesh.Address),
+            TestTimeout);
+
+        // Assert
+        response.Message.Success.Should().BeFalse(
+            "Public/Viewer user must not be able to create nodes");
+    }
+
+    [Fact]
     public async Task EditorRole_CannotDelete()
     {
         // Arrange

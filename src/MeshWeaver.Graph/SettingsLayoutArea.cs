@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using System.ComponentModel.DataAnnotations;
 using System.Reactive.Linq;
 using MeshWeaver.Application.Styles;
 using MeshWeaver.ContentCollections;
@@ -182,80 +183,61 @@ public static class SettingsLayoutArea
 
     private static UiControl BuildPropertiesTab(LayoutAreaHost host, MeshNode? node, StackControl stack)
     {
-        stack = stack.WithView(Controls.H2("Properties").WithStyle("margin: 0 0 24px 0;"));
-
         if (node == null)
         {
             stack = stack.WithView(Controls.Html("<p><em>Node not found.</em></p>"));
             return stack;
         }
 
-        // Reuse the existing node markdown (properties table)
-        var markdown = BuildNodeMarkdown(node);
-        stack = stack.WithView(new MarkdownControl(markdown));
+        var nodePath = node.Namespace ?? host.Hub.Address.ToString();
+        var props = MeshNodeProperties.FromNode(node);
 
-        // Types catalog - show NodeType children using standard grid
-        var meshQuery = host.Hub.ServiceProvider.GetService<IMeshQuery>();
-        if (meshQuery != null)
+        // Set up local data for editing
+        var dataId = $"nodeProps_{nodePath.Replace("/", "_")}";
+        host.UpdateData(dataId, props);
+
+        // Auto-save: map changes back to MeshNode and persist
+        SetupNodePropertiesAutoSave(host, dataId, props, node);
+
+        // Build click-to-edit property form (same pattern as OverviewLayoutArea)
+        stack = stack.WithView(EditLayoutArea.BuildContentView(host, new ContentViewOptions
         {
-            var hubPath = host.Hub.Address.ToString();
-            stack = stack.WithView(
-                (h, _) => Observable.FromAsync(async () =>
-                {
-                    try
-                    {
-                        var nodeTypes = await meshQuery.QueryAsync<MeshNode>($"path:{hubPath} nodeType:NodeType scope:descendants").ToListAsync();
-                        if (nodeTypes.Count == 0)
-                            return (UiControl?)null;
-
-                        var typesStack = Controls.Stack.WithWidth("100%");
-                        typesStack = typesStack.WithView(Controls.Html("<h3 style=\"margin: 32px 0 16px 0;\">Types</h3>"));
-
-                        var grid = Controls.LayoutGrid.WithSkin(s => s.WithSpacing(3));
-                        foreach (var typeNode in nodeTypes.OrderBy(t => t.Name))
-                        {
-                            grid = grid.WithView(
-                                MeshNodeThumbnailControl.FromNode(typeNode, typeNode.Path),
-                                itemSkin => itemSkin.WithXs(12).WithSm(6).WithMd(4).WithLg(4));
-                        }
-                        typesStack = typesStack.WithView(grid);
-                        return (UiControl?)typesStack;
-                    }
-                    catch
-                    {
-                        return null;
-                    }
-                }),
-                "Types"
-            );
-        }
+            DataId = dataId,
+            ContentType = typeof(MeshNodeProperties),
+            CanEdit = true,
+            IsToggleable = true
+        }));
 
         return stack;
     }
 
-    private static string BuildNodeMarkdown(MeshNode node)
+    private static void SetupNodePropertiesAutoSave(
+        LayoutAreaHost host,
+        string dataId,
+        MeshNodeProperties initial,
+        MeshNode node)
     {
-        var sb = new System.Text.StringBuilder();
+        var current = (object)initial;
 
-        sb.AppendLine("## Node Properties");
-        sb.AppendLine();
-        sb.AppendLine("| Property | Value |");
-        sb.AppendLine("|----------|-------|");
-        sb.AppendLine($"| **Id** | `{node.Id}` |");
-        sb.AppendLine($"| **Name** | {node.Name ?? "*not set*"} |");
-        sb.AppendLine($"| **Path** | `{node.Path}` |");
-        sb.AppendLine($"| **Namespace** | `{node.Namespace ?? ""}` |");
-        sb.AppendLine($"| **NodeType** | {(string.IsNullOrEmpty(node.NodeType) ? "*not set*" : $"[{node.NodeType}](/{node.NodeType})")} |");
-        sb.AppendLine($"| **Icon** | {node.Icon ?? "*not set*"} |");
-        sb.AppendLine($"| **DisplayOrder** | {node.DisplayOrder} |");
-        sb.AppendLine($"| **State** | {node.State} |");
-        sb.AppendLine($"| **LastModified** | {node.LastModified:yyyy-MM-dd HH:mm:ss} |");
-        sb.AppendLine($"| **Version** | {node.Version} |");
+        host.RegisterForDisposal($"autosave_{dataId}",
+            host.Stream.GetDataStream<object>(dataId)
+                .Debounce(TimeSpan.FromMilliseconds(300))
+                .Subscribe(updated =>
+                {
+                    if (object.Equals(current, updated))
+                        return;
 
-        if (!string.IsNullOrEmpty(node.AssemblyLocation))
-            sb.AppendLine($"| **AssemblyLocation** | `{node.AssemblyLocation}` |");
+                    current = updated;
 
-        return sb.ToString();
+                    if (updated is not MeshNodeProperties updatedProps)
+                        return;
+
+                    var updatedNode = updatedProps.ApplyTo(node);
+
+                    host.Hub.Post(
+                        new DataChangeRequest().WithUpdates(updatedNode),
+                        o => o.WithTarget(host.Hub.Address));
+                }));
     }
 
     private static UiControl BuildNodeTypesTab(LayoutAreaHost host, string hubPath, StackControl stack)
@@ -320,4 +302,59 @@ public static class SettingsLayoutArea
         stack = stack.WithView(new AppearanceControl());
         return stack;
     }
+}
+
+/// <summary>
+/// DTO record exposing editable MeshNode properties (excluding Content)
+/// for the Settings Properties tab with click-to-edit support.
+/// </summary>
+public record MeshNodeProperties
+{
+    [Editable(false)]
+    public string? Id { get; init; }
+
+    public string? Name { get; init; }
+
+    [Editable(false)]
+    public string? Namespace { get; init; }
+
+    [Editable(false)]
+    public string? NodeType { get; init; }
+
+    public string? Category { get; init; }
+
+    public string? Icon { get; init; }
+
+    public int? DisplayOrder { get; init; }
+
+    [Editable(false)]
+    public MeshNodeState State { get; init; }
+
+    [Editable(false)]
+    public DateTimeOffset LastModified { get; init; }
+
+    [Editable(false)]
+    public long Version { get; init; }
+
+    public static MeshNodeProperties FromNode(MeshNode node) => new()
+    {
+        Id = node.Id,
+        Name = node.Name,
+        Namespace = node.Namespace,
+        NodeType = node.NodeType,
+        Category = node.Category,
+        Icon = node.Icon,
+        DisplayOrder = node.DisplayOrder,
+        State = node.State,
+        LastModified = node.LastModified,
+        Version = node.Version,
+    };
+
+    public MeshNode ApplyTo(MeshNode node) => node with
+    {
+        Name = Name,
+        Category = Category,
+        Icon = Icon,
+        DisplayOrder = DisplayOrder,
+    };
 }
