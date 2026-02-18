@@ -9,6 +9,7 @@
     "$type": "Comment",
     "id": "c3",
     "nodePath": "MeshWeaver/Documentation/DataMesh/CollaborativeEditing",
+    "primaryNodePath": "MeshWeaver/Documentation/DataMesh/CollaborativeEditing",
     "markerId": "c3",
     "highlightedText": "conflict-free editing",
     "author": "Carol",

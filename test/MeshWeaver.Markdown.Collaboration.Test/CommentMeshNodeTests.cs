@@ -137,7 +137,7 @@ public class CommentMeshNodeTests
             Author = "Alice",
             Text = "Great point!",
             NodePath = "docs/mypage",
-            DocumentPath = "docs/mypage"
+            PrimaryNodePath = "docs/mypage"
         };
 
         comment.MarkerId.Should().Be("c1");
@@ -145,7 +145,7 @@ public class CommentMeshNodeTests
         comment.Author.Should().Be("Alice");
         comment.Text.Should().Be("Great point!");
         comment.NodePath.Should().Be("docs/mypage");
-        comment.DocumentPath.Should().Be("docs/mypage");
+        comment.PrimaryNodePath.Should().Be("docs/mypage");
     }
 
     [Fact]
@@ -165,7 +165,7 @@ public class CommentMeshNodeTests
             Author = "Bob",
             Text = "I agree!",
             ParentCommentId = "comment-1",
-            DocumentPath = "docs/page"
+            PrimaryNodePath = "docs/page"
         };
 
         var parentNode = new MeshNode("docs/page/comment-1")
@@ -199,41 +199,41 @@ public class CommentMeshNodeTests
     }
 
     [Fact]
-    public void Comment_DocumentPath_DistinctFromNodePath_ForReplies()
+    public void Comment_PrimaryNodePath_DistinctFromNodePath_ForReplies()
     {
-        // Top-level comment: DocumentPath == NodePath (the document itself)
+        // Top-level comment: PrimaryNodePath == NodePath (the document itself)
         var topLevel = new Comment
         {
             Id = "c1",
             NodePath = "docs/page",
-            DocumentPath = "docs/page",
+            PrimaryNodePath = "docs/page",
             Author = "Alice",
             Text = "Top-level comment"
         };
 
-        topLevel.DocumentPath.Should().Be(topLevel.NodePath);
+        topLevel.PrimaryNodePath.Should().Be(topLevel.NodePath);
 
-        // Reply: NodePath is the parent comment, DocumentPath is the original document
+        // Reply: NodePath is the parent comment, PrimaryNodePath is the original document
         var reply = new Comment
         {
             Id = "r1",
             NodePath = "docs/page/c1",
-            DocumentPath = "docs/page",
+            PrimaryNodePath = "docs/page",
             Author = "Bob",
             Text = "Reply",
             ParentCommentId = "c1"
         };
 
-        reply.DocumentPath.Should().NotBe(reply.NodePath);
-        reply.DocumentPath.Should().Be("docs/page");
+        reply.PrimaryNodePath.Should().NotBe(reply.NodePath);
+        reply.PrimaryNodePath.Should().Be("docs/page");
         reply.NodePath.Should().Be("docs/page/c1");
     }
 
     [Fact]
-    public void Comment_DocumentPath_DefaultsToEmpty()
+    public void Comment_PrimaryNodePath_DefaultsToEmpty()
     {
         var comment = new Comment();
-        comment.DocumentPath.Should().BeEmpty();
+        comment.PrimaryNodePath.Should().BeEmpty();
     }
 
     #endregion
@@ -257,7 +257,7 @@ public class CommentMeshNodeTests
         {
             Id = "c1",
             NodePath = "docs/page",
-            DocumentPath = "docs/page",
+            PrimaryNodePath = "docs/page",
             MarkerId = "c1",
             HighlightedText = "sample text",
             Author = "Alice",
@@ -396,7 +396,7 @@ public class CommentMeshNodeTests
         {
             Id = "c1",
             NodePath = "MeshWeaver/Documentation/DataMesh/CollaborativeEditing",
-            DocumentPath = "MeshWeaver/Documentation/DataMesh/CollaborativeEditing",
+            PrimaryNodePath = "MeshWeaver/Documentation/DataMesh/CollaborativeEditing",
             MarkerId = "c1",
             HighlightedText = "powerful platform",
             Author = "Alice",
@@ -693,7 +693,7 @@ public class CommentMeshNodeTests
         {
             Id = replyId,
             NodePath = commentPath,
-            DocumentPath = "docs/page",
+            PrimaryNodePath = "docs/page",
             Author = "",
             Text = "",
             ParentCommentId = parentComment.Id,
@@ -717,7 +717,7 @@ public class CommentMeshNodeTests
         content.Author.Should().BeEmpty();
         content.Text.Should().BeEmpty();
         content.Status.Should().Be(CommentStatus.Active);
-        content.DocumentPath.Should().Be("docs/page");
+        content.PrimaryNodePath.Should().Be("docs/page");
     }
 
     [Fact]
@@ -946,7 +946,7 @@ public class CommentMeshNodeTests
         {
             Id = replyId,
             NodePath = commentPath,
-            DocumentPath = "docs/page",
+            PrimaryNodePath = "docs/page",
             Author = "",
             Text = "",
             ParentCommentId = parentCommentId,
@@ -1085,7 +1085,7 @@ public class CommentMeshNodeTests
             Author = "Alice",
             Text = "Original comment",
             NodePath = "docs/page",
-            DocumentPath = "docs/page",
+            PrimaryNodePath = "docs/page",
             Status = CommentStatus.Active
         };
         var parentNode = new MeshNode(commentPath)
@@ -1107,7 +1107,7 @@ public class CommentMeshNodeTests
         {
             Id = replyId,
             NodePath = commentPath,
-            DocumentPath = "docs/page",
+            PrimaryNodePath = "docs/page",
             Author = "",
             Text = "",
             ParentCommentId = parentComment.Id,
