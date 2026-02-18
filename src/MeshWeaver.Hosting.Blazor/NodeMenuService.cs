@@ -33,6 +33,11 @@ public class NodeMenuService : INodeMenuService
             _latestCreatableTypes = snapshot;
             UpdateStateWithCreatableTypes(snapshot);
         });
+
+        // Compute initial state from current context (may already be set)
+        var currentContext = _navigationService.Context;
+        if (currentContext != null)
+            _ = ComputeStateAsync(currentContext);
     }
 
     /// <inheritdoc />

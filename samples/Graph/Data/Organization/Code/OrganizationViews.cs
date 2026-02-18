@@ -126,12 +126,6 @@ public static class OrganizationViews
         infoColumn = infoColumn.WithView(statsRow);
         headerRow = headerRow.WithView(infoColumn);
 
-        // Action menu on the far right
-        headerRow = headerRow.WithView(
-            Controls.Stack
-                .WithStyle("margin-left: auto;")
-                .WithView(MeshWeaver.Graph.MeshNodeLayoutAreas.BuildActionMenu(host, node)));
-
         container = container.WithView(headerRow);
 
         // Divider
