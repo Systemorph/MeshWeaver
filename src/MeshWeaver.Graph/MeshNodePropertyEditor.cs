@@ -358,7 +358,7 @@ public static class MeshNodePropertyEditor
                 try
                 {
                     await ctx.Host.Hub.AwaitResponse<DataChangeResponse>(
-                        new DataChangeRequest().WithUpdates(updatedNode),
+                        new DataChangeRequest { ChangedBy = ctx.Host.Stream.ClientId }.WithUpdates(updatedNode),
                         o => o.WithTarget(targetAddress));
                 }
                 catch { }

@@ -188,14 +188,15 @@ public class FileSystemPersistenceService : IPersistenceServiceCore
             CreatedAt = comment.CreatedAt == default ? DateTimeOffset.UtcNow : comment.CreatedAt
         };
 
+        var commentNodePath = comment.PrimaryNodePath ?? "";
         var comments = new List<Comment>();
-        await foreach (var existing in GetCommentsAsync(comment.NodePath, options))
+        await foreach (var existing in GetCommentsAsync(commentNodePath, options))
         {
             comments.Add(existing);
         }
         comments.Add(savedComment);
 
-        await _storageAdapter.SavePartitionObjectsAsync(comment.NodePath, "comments", comments.Cast<object>().ToList(), options, ct);
+        await _storageAdapter.SavePartitionObjectsAsync(commentNodePath, "comments", comments.Cast<object>().ToList(), options, ct);
         return savedComment;
     }
 

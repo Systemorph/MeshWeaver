@@ -267,12 +267,12 @@ public class InMemoryPersistenceService : IPersistenceServiceCore
                 : normalizedTarget + oldPath.Substring(normalizedSource.Length);
 
             var commentsToMigrate = _comments.Values
-                .Where(c => NormalizePath(c.NodePath).Equals(oldPath, StringComparison.OrdinalIgnoreCase))
+                .Where(c => NormalizePath(c.PrimaryNodePath ?? "").Equals(oldPath, StringComparison.OrdinalIgnoreCase))
                 .ToList();
 
             foreach (var comment in commentsToMigrate)
             {
-                var migratedComment = comment with { NodePath = newPath };
+                var migratedComment = comment with { PrimaryNodePath = newPath };
                 _comments[comment.Id] = migratedComment;
             }
         }
@@ -347,7 +347,7 @@ public class InMemoryPersistenceService : IPersistenceServiceCore
     {
         var normalizedPath = NormalizePath(nodePath);
         var comments = _comments.Values
-            .Where(c => NormalizePath(c.NodePath) == normalizedPath)
+            .Where(c => NormalizePath(c.PrimaryNodePath ?? "") == normalizedPath)
             .OrderBy(c => c.CreatedAt);
 
         foreach (var comment in comments)

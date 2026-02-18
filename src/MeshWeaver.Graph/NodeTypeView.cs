@@ -606,7 +606,7 @@ public static class NodeTypeView
                     // Update via workspace - will sync to persistence
                     using var cts = new CancellationTokenSource(10.Seconds());
                     var response = await actx.Host.Hub.AwaitResponse<DataChangeResponse>(
-                        new DataChangeRequest().WithUpdates(updatedCodeConfiguration),
+                        new DataChangeRequest { ChangedBy = actx.Host.Stream.ClientId }.WithUpdates(updatedCodeConfiguration),
                         o => o.WithTarget(hubAddress),
                         cts.Token);
 
@@ -901,7 +901,7 @@ public static class NodeTypeView
 
                 using var cts = new CancellationTokenSource(10.Seconds());
                 var response = await actx.Host.Hub.AwaitResponse<DataChangeResponse>(
-                    new DataChangeRequest().WithUpdates(updatedNode),
+                    new DataChangeRequest { ChangedBy = actx.Host.Stream.ClientId }.WithUpdates(updatedNode),
                     o => o.WithTarget(hubAddress),
                     cts.Token);
 

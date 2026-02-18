@@ -429,7 +429,7 @@ public static class AgentView
 
                 using var cts = new CancellationTokenSource(10.Seconds());
                 var response = await actx.Host.Hub.AwaitResponse<DataChangeResponse>(
-                    new DataChangeRequest().WithUpdates(updatedAgent),
+                    new DataChangeRequest { ChangedBy = actx.Host.Stream.ClientId }.WithUpdates(updatedAgent),
                     o => o.WithTarget(hubAddress),
                     cts.Token);
 
