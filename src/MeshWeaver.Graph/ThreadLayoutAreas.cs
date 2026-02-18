@@ -40,7 +40,7 @@ public static class ThreadLayoutAreas
                 .WithView(ThreadArea, ThreadView)
                 .WithView(HistoryArea, HistoryView)
                 .WithView(MeshNodeLayoutAreas.CreateNodeArea, CreateView)
-                .WithView(MeshNodeLayoutAreas.SettingsArea, MeshNodeLayoutAreas.Settings)
+                .WithView(MeshNodeLayoutAreas.SettingsArea, SettingsLayoutArea.Settings)
                 .WithView(MeshNodeLayoutAreas.MetadataArea, MeshNodeLayoutAreas.Metadata)
                 .WithView(MeshNodeLayoutAreas.ThumbnailArea, Thumbnail));
 

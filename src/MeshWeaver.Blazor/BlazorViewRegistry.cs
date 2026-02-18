@@ -101,6 +101,7 @@ public static class BlazorViewRegistry
             RedirectControl redirect => StandardView<RedirectControl, RedirectView>(redirect, stream, area),
             SearchBoxControl searchBox => StandardView<SearchBoxControl, SearchBoxView>(searchBox, stream, area),
             MeshSearchControl meshSearch => StandardView<MeshSearchControl, MeshSearchView>(meshSearch, stream, area),
+            AppearanceControl appearance => StandardView<AppearanceControl, AppearanceView>(appearance, stream, area),
             _ => DelegateToDotnetInteractive(instance, stream, area),
         };
     }

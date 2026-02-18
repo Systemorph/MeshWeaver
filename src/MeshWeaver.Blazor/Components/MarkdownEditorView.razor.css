@@ -47,3 +47,56 @@
     padding: 16px;
     overflow: auto;
 }
+
+/* ==========================================================================
+   Monaco Editor Annotation Decoration Styles
+   ========================================================================== */
+
+::deep .monaco-comment-decoration {
+    background-color: var(--annotation-comment-bg) !important;
+    border-bottom: 2px solid var(--annotation-comment-border) !important;
+}
+
+::deep .monaco-insert-decoration {
+    background-color: var(--annotation-insert-bg) !important;
+    border-bottom: 2px solid var(--annotation-insert-border) !important;
+}
+
+::deep .monaco-delete-decoration {
+    background-color: var(--annotation-delete-bg) !important;
+    text-decoration: line-through !important;
+}
+
+/* Annotation tag markers (dim XML tags so content stands out) */
+::deep .monaco-annotation-tag {
+    opacity: 0.35 !important;
+    font-size: 0.85em !important;
+}
+
+::deep .monaco-insert-tag {
+    color: var(--annotation-insert-color) !important;
+}
+
+::deep .monaco-delete-tag {
+    color: var(--annotation-delete-color) !important;
+}
+
+::deep .monaco-comment-tag {
+    color: var(--annotation-comment-border) !important;
+}
+
+/* Gutter icons for Monaco */
+::deep .monaco-comment-glyph {
+    background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath fill='%23bf8700' d='M8 1a7 7 0 0 0-7 7c0 2.4 1.2 4.5 3 5.8V15l2.2-1.5c.6.2 1.2.3 1.8.3a7 7 0 0 0 0-14z'/%3E%3C/svg%3E") center center no-repeat;
+    background-size: 14px;
+}
+
+::deep .monaco-insert-glyph {
+    background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ccircle cx='8' cy='8' r='6' fill='%2322863a'/%3E%3Cpath fill='white' d='M7 4v3H4v2h3v3h2V9h3V7H9V4z'/%3E%3C/svg%3E") center center no-repeat;
+    background-size: 14px;
+}
+
+::deep .monaco-delete-glyph {
+    background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ccircle cx='8' cy='8' r='6' fill='%23cf222e'/%3E%3Cpath fill='white' d='M4 7v2h8V7z'/%3E%3C/svg%3E") center center no-repeat;
+    background-size: 14px;
+}

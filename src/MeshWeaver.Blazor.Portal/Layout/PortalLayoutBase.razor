@@ -21,8 +21,8 @@
                 <div class="search-container">
                     <SearchBar />
                 </div>
-                @* Create button with type menu *@
-                <FluentMenu Anchor="create-menu-anchor" Open="@isCreateMenuOpen" OpenChanged="@OnCreateMenuOpenChanged">
+                @* Node menu (Cube icon) *@
+                <FluentMenu Anchor="node-menu-anchor" Open="@isNodeMenuOpen" OpenChanged="@OnNodeMenuOpenChanged">
                     <FluentMenuItem OnClick="@(() => OpenCreateNodeDialogAsync(null))">
                         <FluentIcon Value="@(new Icons.Regular.Size16.Add())" Style="margin-right: 8px;" />
                         Create
@@ -34,11 +34,19 @@
                             Import
                         </FluentMenuItem>
                     }
+                    <FluentMenuItem OnClick="@NavigateToNodeSettings">
+                        <FluentIcon Value="@(new Icons.Regular.Size16.Settings())" Style="margin-right: 8px;" />
+                        Settings
+                    </FluentMenuItem>
+                    <FluentMenuItem OnClick="@NavigateToNodeDelete">
+                        <FluentIcon Value="@(new Icons.Regular.Size16.Delete())" Style="margin-right: 8px;" />
+                        Delete
+                    </FluentMenuItem>
                 </FluentMenu>
-                <FluentButton Id="create-menu-anchor" Appearance="Appearance.Stealth"
-                    Title="Create new" aria-label="Create new"
-                    OnClick="@ToggleCreateMenu">
-                    <FluentIcon Value="@(new Icons.Regular.Size20.Add())" Color="Color.FillInverse" />
+                <FluentButton Id="node-menu-anchor" Appearance="Appearance.Stealth"
+                    Title="Node menu" aria-label="Node menu"
+                    OnClick="@ToggleNodeMenu">
+                    <FluentIcon Value="@(new Icons.Regular.Size20.Cube())" Color="Color.FillInverse" />
                 </FluentButton>
                 @HeaderLinks
             </div>
@@ -51,9 +59,8 @@
                 </FluentButton>
             </div>
             <div class="settings">
-                <FluentButton BackgroundColor="transparent" OnClick="OpenSiteSettingsAsync" Title="Site settings">
-                    <FluentIcon Value="@(new Icons.Regular.Size20.Settings())" Color="Color.Neutral"
-                        Title="Site settings" />
+                <FluentButton BackgroundColor="transparent" OnClick="NavigateToNodeSettings" Title="Settings">
+                    <FluentIcon Value="@(new Icons.Regular.Size20.Settings())" Color="Color.Neutral" />
                 </FluentButton>
             </div>
             <UserProfile />

@@ -49,7 +49,7 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
     private bool isNavMenuOpen;
     protected bool IsNavMenuOpen => isNavMenuOpen;
 
-    private bool isCreateMenuOpen;
+    private bool isNodeMenuOpen;
 
     // Creatable types - from NavigationService observable
     private CreatableTypesSnapshot _creatableTypesSnapshot = CreatableTypesSnapshot.Empty;
@@ -100,19 +100,45 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
         }
     }
 
-    private async Task ToggleCreateMenu()
+    private async Task ToggleNodeMenu()
     {
-        isCreateMenuOpen = !isCreateMenuOpen;
-        if (isCreateMenuOpen)
+        isNodeMenuOpen = !isNodeMenuOpen;
+        if (isNodeMenuOpen)
         {
             NavigationService.RefreshCreatableTypes();
             await CheckCreatePermissionAsync();
         }
     }
 
-    private void OnCreateMenuOpenChanged(bool open)
+    private void OnNodeMenuOpenChanged(bool open)
     {
-        isCreateMenuOpen = open;
+        isNodeMenuOpen = open;
+    }
+
+    /// <summary>
+    /// Navigates to the current node's Settings page.
+    /// </summary>
+    private void NavigateToNodeSettings()
+    {
+        isNodeMenuOpen = false;
+        var currentPath = NavigationService.CurrentNamespace ?? "";
+        var settingsUrl = string.IsNullOrEmpty(currentPath)
+            ? "/Settings"
+            : $"/{currentPath}/Settings";
+        NavigationManager.NavigateTo(settingsUrl);
+    }
+
+    /// <summary>
+    /// Navigates to the current node's Delete page.
+    /// </summary>
+    private void NavigateToNodeDelete()
+    {
+        isNodeMenuOpen = false;
+        var currentPath = NavigationService.CurrentNamespace ?? "";
+        var deleteUrl = string.IsNullOrEmpty(currentPath)
+            ? "/Delete"
+            : $"/{currentPath}/Delete";
+        NavigationManager.NavigateTo(deleteUrl);
     }
 
     /// <summary>
@@ -120,7 +146,7 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
     /// </summary>
     protected virtual async Task OpenCreateNodeDialogAsync(CreatableTypeInfo? selectedType)
     {
-        isCreateMenuOpen = false;
+        isNodeMenuOpen = false;
 
         var currentPath = NavigationService.CurrentNamespace ?? "";
         var dialogData = new CreateNodeDialogData
@@ -149,7 +175,7 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
     /// </summary>
     protected async Task OpenImportNodeDialogAsync()
     {
-        isCreateMenuOpen = false;
+        isNodeMenuOpen = false;
 
         var dialogData = new ImportNodeDialogData
         {
@@ -229,22 +255,6 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
         StateHasChanged();
     }
 
-    private IDialogReference? dialog;
-
-    protected async Task OpenSiteSettingsAsync()
-    {
-        dialog = await DialogService.ShowPanelAsync<SiteSettingsPanel>(new DialogParameters()
-        {
-            ShowTitle = true,
-            Title = "Site settings",
-            Alignment = HorizontalAlignment.Right,
-            PrimaryAction = "OK",
-            SecondaryAction = null,
-            ShowDismiss = true
-        });
-
-        await dialog.Result;
-    }
 
     public bool IsAIChatVisible => ChatState.IsVisible;
     protected ChatPosition ChatPositionValue => ChatState.Position;

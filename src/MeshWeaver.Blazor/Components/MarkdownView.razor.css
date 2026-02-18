@@ -314,4 +314,35 @@
     border-radius: 3px;
 }
 
-/* Collaborative Editing Annotations are in wwwroot/css/collaborative-annotations.css */
+/* --- SVG Theme Switching --- */
+
+.markdown-body ::deep .svg-theme-container .svg-dark {
+    display: none;
+}
+
+.markdown-body[data-theme="dark"] ::deep .svg-theme-container .svg-light {
+    display: none;
+}
+
+.markdown-body[data-theme="dark"] ::deep .svg-theme-container .svg-dark {
+    display: block;
+}
+
+@media (prefers-color-scheme: dark) {
+    .markdown-body:not([data-theme="light"]) ::deep .svg-theme-container .svg-light {
+        display: none;
+    }
+    .markdown-body:not([data-theme="light"]) ::deep .svg-theme-container .svg-dark {
+        display: block;
+    }
+}
+
+/* --- Layout Area Error --- */
+
+.markdown-body ::deep .layout-area-error {
+    padding: 1rem;
+    background-color: var(--annotation-delete-bg);
+    border-left: 4px solid var(--annotation-delete-border);
+    border-radius: 4px;
+    color: var(--annotation-delete-color);
+}

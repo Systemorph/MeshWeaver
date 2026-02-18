@@ -15,9 +15,6 @@ namespace MeshWeaver.Graph;
 /// </summary>
 public static class MarkdownOverviewLayoutArea
 {
-    // Track which edit states have been initialized to avoid resetting on re-render
-    private static readonly HashSet<string> EditStateInitialized = new();
-
     public static IObservable<UiControl?> Overview(LayoutAreaHost host, RenderingContext _)
     {
         var hubPath = host.Hub.Address.ToString();
@@ -25,14 +22,19 @@ public static class MarkdownOverviewLayoutArea
         var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? Array.Empty<MeshNode>())
             ?? Observable.Return(Array.Empty<MeshNode>());
 
+        // Initialize edit state once per observable subscription (not static)
+        var editStateId = $"editState_markdown_{hubPath.Replace("/", "_")}";
+        var initialized = new[] { false };
+
         return nodeStream.Select(nodes =>
         {
             var node = nodes.FirstOrDefault(n => n.Path == hubPath);
-            return BuildOverview(host, node);
+            return BuildOverview(host, node, editStateId, initialized);
         });
     }
 
-    private static UiControl BuildOverview(LayoutAreaHost host, MeshNode? node)
+    private static UiControl BuildOverview(LayoutAreaHost host, MeshNode? node,
+        string editStateId, bool[] initialized)
     {
         var nodePath = node?.Path ?? host.Hub.Address.ToString();
         var rawContent = GetMarkdownContent(node);
@@ -41,22 +43,16 @@ public static class MarkdownOverviewLayoutArea
 
         var container = Controls.Stack.WithWidth("100%").WithStyle(MeshNodeLayoutAreas.GetContainerStyle(host));
 
-        // Standard action menu (top-right) — same as MeshNodeLayoutAreas.Overview
-        container = container.WithView(Controls.Stack
-            .WithStyle("position: absolute; top: 0; right: 0; z-index: 10;")
-            .WithView(MeshNodeLayoutAreas.BuildActionMenu(host, node)));
-
         // Standard header with title/icon
         container = container.WithView(MeshNodeLayoutAreas.BuildHeader(host, node));
 
         // Toggleable markdown content: click to edit, Done button to return to read-only
         // Empty content starts in edit mode immediately; only initialize once to prevent
         // nodeStream re-emissions from resetting the edit state while user is typing.
-        var editStateId = $"editState_markdown_{nodePath.Replace("/", "_")}";
-        if (!EditStateInitialized.Contains(editStateId))
+        if (!initialized[0])
         {
             host.UpdateData(editStateId, !hasContent);
-            EditStateInitialized.Add(editStateId);
+            initialized[0] = true;
         }
 
         container = container.WithView((h, _) =>
@@ -82,9 +78,12 @@ public static class MarkdownOverviewLayoutArea
         LayoutAreaHost host, string nodePath, string rawContent,
         bool canEdit, string editStateId)
     {
+        var hasAnnotations = !string.IsNullOrWhiteSpace(rawContent)
+            && AnnotationMarkdownExtension.HasAnnotations(rawContent);
+
         var view = Controls.Stack
             .WithWidth("100%")
-            .WithStyle(canEdit ? "cursor: pointer;" : "");
+            .WithStyle(canEdit && !hasAnnotations ? "cursor: pointer;" : "");
 
         if (!string.IsNullOrWhiteSpace(rawContent))
         {
@@ -102,11 +101,29 @@ public static class MarkdownOverviewLayoutArea
 
         if (canEdit)
         {
-            view = view.WithClickAction(ctx =>
+            if (hasAnnotations)
             {
-                ctx.Host.UpdateData(editStateId, true);
-                return Task.CompletedTask;
-            });
+                // When annotations are present, don't use click-to-edit on the whole area.
+                // Show an explicit Edit button instead to avoid conflicting with annotation clicks.
+                view = view.WithView(Controls.Stack
+                    .WithOrientation(Orientation.Horizontal)
+                    .WithStyle("justify-content: flex-end; margin-top: 8px;")
+                    .WithView(Controls.Button("Edit")
+                        .WithAppearance(Appearance.Stealth)
+                        .WithClickAction(ctx =>
+                        {
+                            ctx.Host.UpdateData(editStateId, true);
+                            return Task.CompletedTask;
+                        })));
+            }
+            else
+            {
+                view = view.WithClickAction(ctx =>
+                {
+                    ctx.Host.UpdateData(editStateId, true);
+                    return Task.CompletedTask;
+                });
+            }
         }
 
         return view;
