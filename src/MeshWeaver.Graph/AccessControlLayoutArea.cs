@@ -7,6 +7,7 @@ using MeshWeaver.Layout.Composition;
 using MeshWeaver.Layout.Domain;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
+using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using MeshWeaver.ShortGuid;
 using Microsoft.Extensions.DependencyInjection;
@@ -193,39 +194,90 @@ public static class AccessControlLayoutArea
         ISecurityService securityService,
         string nodePath)
     {
-        // Prepare form data
+        // Prepare form data with nodePath pre-populated
         var formId = $"add_assignment_{Guid.NewGuid().AsString()}";
         ctx.Host.UpdateData(formId, new Dictionary<string, object?>
         {
             ["userId"] = "",
-            ["roleId"] = ""
+            ["roleId"] = "",
+            ["nodePath"] = nodePath
         });
 
-        // Load roles for the select control
+        // Load users for autocomplete
+        var userOptionsId = $"user_options_{Guid.NewGuid().AsString()}";
+        var users = new List<Option>();
+        await foreach (var userAccess in securityService.GetAllUserAccessAsync())
+        {
+            var label = string.IsNullOrEmpty(userAccess.DisplayName)
+                ? userAccess.UserId
+                : $"{userAccess.DisplayName} ({userAccess.UserId})";
+            users.Add(new Option<string>(userAccess.UserId, label));
+        }
+        ctx.Host.UpdateData(userOptionsId, users.ToArray());
+
+        // Load roles with permission descriptions
         var rolesOptionsId = $"roles_options_{Guid.NewGuid().AsString()}";
         var roles = new List<Option>();
         await foreach (var role in securityService.GetRolesAsync())
         {
-            roles.Add(new Option<string>(role.Id, $"{role.DisplayName ?? role.Id}"));
+            var perms = role.Permissions.ToString();
+            var label = $"{role.DisplayName ?? role.Id} ({perms})";
+            roles.Add(new Option<string>(role.Id, label));
         }
         ctx.Host.UpdateData(rolesOptionsId, roles.ToArray());
 
+        // Load node options for node path selector
+        var nodeOptionsId = $"node_options_{Guid.NewGuid().AsString()}";
+        var nodeOptions = new List<Option>();
+        nodeOptions.Add(new Option<string>(nodePath, nodePath));
+        // Add ancestor nodes
+        var segments = nodePath.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        for (var i = segments.Length - 1; i > 0; i--)
+        {
+            var ancestorPath = string.Join("/", segments.Take(i));
+            nodeOptions.Add(new Option<string>(ancestorPath, ancestorPath));
+        }
+        nodeOptions.Add(new Option<string>("", "(Global)"));
+        // Add child nodes via IMeshQuery if available
+        var meshQuery = ctx.Hub.ServiceProvider.GetService<IMeshQuery>();
+        if (meshQuery != null)
+        {
+            await foreach (var suggestion in meshQuery.AutocompleteAsync(nodePath, "", limit: 20))
+            {
+                if (nodeOptions.All(o => ((Option<string>)o).Item != suggestion.Path))
+                    nodeOptions.Add(new Option<string>(suggestion.Path, $"{suggestion.Name} ({suggestion.Path})"));
+            }
+        }
+        ctx.Host.UpdateData(nodeOptionsId, nodeOptions.ToArray());
+
         // Build dialog content
         var formContent = Controls.Stack.WithStyle("gap: 16px; padding: 16px;")
-            .WithView(new TextFieldControl(new JsonPointerReference("userId"))
+            .WithView(new ComboboxControl(
+                new JsonPointerReference("userId"),
+                new JsonPointerReference(LayoutAreaReference.GetDataPointer(userOptionsId)))
             {
-                Placeholder = "Enter user ID...",
-                Label = "User ID",
+                Label = "User",
                 Required = true,
-                Immediate = true,
+                Autocomplete = ComboboxAutocomplete.Both,
+                Placeholder = "Search users...",
                 DataContext = LayoutAreaReference.GetDataPointer(formId)
             })
-            .WithView(new SelectControl(
+            .WithView(new ComboboxControl(
                 new JsonPointerReference("roleId"),
                 new JsonPointerReference(LayoutAreaReference.GetDataPointer(rolesOptionsId)))
             {
                 Label = "Role",
                 Required = true,
+                Autocomplete = ComboboxAutocomplete.List,
+                DataContext = LayoutAreaReference.GetDataPointer(formId)
+            })
+            .WithView(new ComboboxControl(
+                new JsonPointerReference("nodePath"),
+                new JsonPointerReference(LayoutAreaReference.GetDataPointer(nodeOptionsId)))
+            {
+                Label = "Node Path",
+                Autocomplete = ComboboxAutocomplete.Both,
+                Placeholder = "Select or type node path...",
                 DataContext = LayoutAreaReference.GetDataPointer(formId)
             })
             .WithView(Controls.Stack
@@ -244,19 +296,23 @@ public static class AccessControlLayoutArea
                         if (string.IsNullOrEmpty(userId) || string.IsNullOrEmpty(roleId))
                         {
                             var errorDialog = Controls.Dialog(
-                                Controls.Markdown("Please fill in both **User ID** and **Role**."),
+                                Controls.Markdown("Please fill in both **User** and **Role**."),
                                 "Validation Error"
                             ).WithSize("S").WithClosable(true);
                             saveCtx.Host.UpdateArea(DialogControl.DialogArea, errorDialog);
                             return;
                         }
 
+                        var targetPath = formValues.GetValueOrDefault("nodePath")?.ToString()?.Trim();
+                        if (string.IsNullOrEmpty(targetPath))
+                            targetPath = nodePath;
+
                         var svc = saveCtx.Hub.ServiceProvider.GetRequiredService<ISecurityService>();
-                        await svc.AddUserRoleAsync(userId, roleId, nodePath);
+                        await svc.AddUserRoleAsync(userId, roleId, targetPath);
 
                         // Close dialog and refresh data reactively
                         saveCtx.Host.UpdateArea(DialogControl.DialogArea, null!);
-                        await RefreshAssignmentsAsync(svc, nodePath, saveCtx.Host);
+                        await RefreshAssignmentsAsync(svc, targetPath, saveCtx.Host);
                     })));
 
         var dialog = Controls.Dialog(formContent, "Add Role Assignment")

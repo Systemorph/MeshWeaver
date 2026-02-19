@@ -650,10 +650,11 @@ public class SearchQueryTests : MonolithMeshTestBase
     public async Task SelectQuery_SingleProperty_ReturnsDictionaryWithOnlyThatProperty()
     {
         // Arrange - query with select:name to project results to only name
+        // Use non-generic QueryAsync since select: projects to dictionaries (not MeshNode)
         var request = new MeshQueryRequest { Query = "scope:descendants select:name", Limit = 5 };
 
         // Act
-        var results = await MeshQuery.QueryAsync<object>(request, null, TestContext.Current.CancellationToken).ToArrayAsync(TestContext.Current.CancellationToken);
+        var results = await MeshQuery.QueryAsync(request, TestContext.Current.CancellationToken).ToArrayAsync(TestContext.Current.CancellationToken);
 
         // Assert
         Output.WriteLine($"Found {results.Length} results with select:name");
@@ -676,7 +677,7 @@ public class SearchQueryTests : MonolithMeshTestBase
         var request = new MeshQueryRequest { Query = "scope:descendants select:name,nodeType,path", Limit = 5 };
 
         // Act
-        var results = await MeshQuery.QueryAsync<object>(request, null, TestContext.Current.CancellationToken).ToArrayAsync(TestContext.Current.CancellationToken);
+        var results = await MeshQuery.QueryAsync(request, TestContext.Current.CancellationToken).ToArrayAsync(TestContext.Current.CancellationToken);
 
         // Assert
         Output.WriteLine($"Found {results.Length} results with select:name,nodeType,path");
@@ -701,7 +702,7 @@ public class SearchQueryTests : MonolithMeshTestBase
         var request = new MeshQueryRequest { Query = "nodeType:User scope:descendants select:name,path", Limit = 5 };
 
         // Act
-        var results = await MeshQuery.QueryAsync<object>(request, null, TestContext.Current.CancellationToken).ToArrayAsync(TestContext.Current.CancellationToken);
+        var results = await MeshQuery.QueryAsync(request, TestContext.Current.CancellationToken).ToArrayAsync(TestContext.Current.CancellationToken);
 
         // Assert
         Output.WriteLine($"Found {results.Length} User results with select:name,path");
@@ -724,14 +725,15 @@ public class SearchQueryTests : MonolithMeshTestBase
         var request = new MeshQueryRequest { Query = "scope:descendants", Limit = 5 };
 
         // Act
-        var results = await MeshQuery.QueryAsync<MeshNode>(request, null, TestContext.Current.CancellationToken).ToArrayAsync(TestContext.Current.CancellationToken);
+        var results = await MeshQuery.QueryAsync(request, TestContext.Current.CancellationToken).ToArrayAsync(TestContext.Current.CancellationToken);
 
         // Assert
         results.Should().NotBeEmpty("Normal query should return results");
         foreach (var r in results)
         {
             r.Should().BeOfType<MeshNode>("Without select, results should be MeshNode objects");
-            Output.WriteLine($"  - {r.Path}: {r.Name} ({r.NodeType})");
+            var node = (MeshNode)r;
+            Output.WriteLine($"  - {node.Path}: {node.Name} ({node.NodeType})");
         }
     }
 
@@ -742,7 +744,7 @@ public class SearchQueryTests : MonolithMeshTestBase
         var request = new MeshQueryRequest { Query = "scope:descendants select:name,nonExistentProp", Limit = 3 };
 
         // Act
-        var results = await MeshQuery.QueryAsync<object>(request, null, TestContext.Current.CancellationToken).ToArrayAsync(TestContext.Current.CancellationToken);
+        var results = await MeshQuery.QueryAsync(request, TestContext.Current.CancellationToken).ToArrayAsync(TestContext.Current.CancellationToken);
 
         // Assert
         results.Should().NotBeEmpty("Query should still return results");
