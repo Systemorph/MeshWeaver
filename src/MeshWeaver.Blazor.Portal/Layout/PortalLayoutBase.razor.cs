@@ -92,6 +92,19 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
     }
 
     /// <summary>
+    /// Navigates to the current node's Threads catalog.
+    /// </summary>
+    private void NavigateToNodeThreads()
+    {
+        isNodeMenuOpen = false;
+        var currentPath = NavigationService.CurrentNamespace ?? "";
+        var threadsUrl = string.IsNullOrEmpty(currentPath)
+            ? "/Threads"
+            : $"/{currentPath}/Threads";
+        NavigationManager.NavigateTo(threadsUrl);
+    }
+
+    /// <summary>
     /// Navigates to the current node's Settings page.
     /// </summary>
     private void NavigateToNodeSettings()

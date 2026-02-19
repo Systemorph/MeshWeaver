@@ -859,7 +859,6 @@ internal class NodeTypeService : INodeTypeService, IDisposable
 
     private static string? GetGlobalTypeSubNamespace(string globalType) => globalType switch
     {
-        "Thread" => "Threads",
         _ => null // Default: use last segment of NodeTypePath
     };
 
