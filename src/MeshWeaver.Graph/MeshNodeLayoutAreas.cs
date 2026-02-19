@@ -468,6 +468,7 @@ public static class MeshNodeLayoutAreas
 
     /// <summary>
     /// Renders the Threads catalog showing child Thread nodes using MeshSearchControl.
+    /// Modules can override this view (e.g. ThreadLayoutAreas adds a Create button).
     /// </summary>
     [Browsable(false)]
     public static UiControl Threads(LayoutAreaHost host, RenderingContext _)
