@@ -53,7 +53,7 @@ public static class Template
 
         object? current = null;
 
-        return new ItemTemplateControl(view, "/") { DataContext = LayoutAreaReference.GetDataPointer(id) }
+        return new ItemTemplateControl(view, new JsonPointerReference("")) { DataContext = LayoutAreaReference.GetDataPointer(id) }
             .WithBuildup((host, context, store) =>
             {
                 var forwardSubscription = stream.Subscribe(val =>
