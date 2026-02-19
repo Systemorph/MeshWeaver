@@ -1,0 +1,15 @@
+{
+  "$type": "MeshNode",
+  "id": "Northwind/Analytics/Threads/Rw92p4Ba2ku8hHJt5wQZKA",
+  "path": "Northwind/Analytics/Threads/Rw92p4Ba2ku8hHJt5wQZKA",
+  "name": "Can you join orders with customers and show top 5 ...",
+  "nodeType": "Thread",
+  "icon": "/static/NodeTypeIcons/chat.svg",
+  "lastModified": "2026-02-17T14:42:42.735821+00:00",
+  "version": 4,
+  "state": "Active",
+  "content": {
+    "$type": "Thread",
+    "parentPath": "Northwind/Analytics"
+  }
+}

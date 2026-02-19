@@ -1,6 +1,7 @@
 ---
 Title: "Financial Analytical Report on the Number of Orders per Month in 2025"
 Abstract: "This report provides a detailed analysis of the monthly order volumes for the year 2025. The report is essential for understanding the business's performance trends and identifying areas for improvement."
+Icon: "Document"
 Thumbnail: "images/OrdersOverview.png"
 Published: "2024-09-24"
 Authors:

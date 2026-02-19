@@ -1,7 +1,7 @@
 ---
 Name: Unified References in Cornerstone
 Category: Case Studies
-Description: Reference guide for namespace paths, data queries, and layout areas in the Cornerstone sample
+Description: Reference guide for namespace paths, data queries, and views in the Cornerstone sample
 Icon: /static/storage/content/MeshWeaver/Documentation/ACME/icon.svg
 ---
 
@@ -9,39 +9,11 @@ Icon: /static/storage/content/MeshWeaver/Documentation/ACME/icon.svg
 
 This document demonstrates unified references in the Cornerstone Insurance sample. For the complete Unified Path syntax reference, see [Unified Path](MeshWeaver/Documentation/DataMesh/UnifiedPath).
 
-It covers namespace hierarchy, data queries, content paths, and layout areas specific to the Cornerstone reinsurance use case.
+It covers namespace hierarchy, data queries, content paths, and views specific to the Cornerstone reinsurance use case.
 
 ## Organization Structure
 
-The Cornerstone sample follows this hierarchy:
-
-```
-Cornerstone/                           # Reinsurance company
-├── Insured.json                       # Insured NodeType
-├── Pricing.json                       # Pricing NodeType
-├── Pricing/                           # Pricing assets
-│   ├── Code/                          # Business logic
-│   │   ├── Pricing.cs
-│   │   ├── PricingViews.cs
-│   │   ├── PropertyRisk.cs
-│   │   ├── ReinsuranceAcceptance.cs
-│   │   └── ReinsuranceSection.cs
-│   └── PricingAgent.md                # AI agent
-├── Code/                              # Shared dimensions
-│   ├── Country.cs
-│   ├── Currency.cs
-│   ├── LineOfBusiness.cs
-│   └── LegalEntity.cs
-├── Microsoft/                         # Insured instance
-│   └── 2026/                          # Pricing instance
-│       └── Submissions/               # Content collection
-├── GlobalManufacturing/
-│   └── 2024/
-├── EuropeanLogistics/
-│   └── 2024/
-└── TechIndustries/
-    └── 2024/
-```
+For the full namespace hierarchy, see [Cornerstone Architecture](MeshWeaver/Documentation/Cornerstone/Architecture).
 
 ## Namespace Paths
 
@@ -57,7 +29,6 @@ Cornerstone/                           # Reinsurance company
 |------|-------------|
 | `Cornerstone/Insured` | Insured NodeType (client organizations) |
 | `Cornerstone/Pricing` | Pricing NodeType (reinsurance pricings) |
-| `Cornerstone/Pricing/PricingAgent` | AI agent definition |
 
 ### Insured Instances
 
@@ -67,6 +38,8 @@ Cornerstone/                           # Reinsurance company
 | `Cornerstone/GlobalManufacturing` | Global Manufacturing Corp |
 | `Cornerstone/EuropeanLogistics` | European Logistics Ltd |
 | `Cornerstone/TechIndustries` | Tech Industries GmbH |
+| `Cornerstone/Tesla` | Tesla, Inc. |
+| `Cornerstone/Nestle` | Nestle S.A. |
 
 ### Pricing Instances
 
@@ -76,6 +49,8 @@ Cornerstone/                           # Reinsurance company
 | `Cornerstone/GlobalManufacturing/2024` | Global Manufacturing 2024 Pricing |
 | `Cornerstone/EuropeanLogistics/2024` | European Logistics 2024 Pricing |
 | `Cornerstone/TechIndustries/2024` | Tech Industries 2024 Pricing |
+| `Cornerstone/Tesla/2026` | Tesla 2026 Property Reinsurance |
+| `Cornerstone/Nestle/2026` | Nestle 2026 Property Reinsurance |
 
 ## Query Syntax
 
@@ -228,9 +203,9 @@ Content collections allow file references:
 @@Cornerstone/Microsoft/2026/content:Submissions/Microsoft.xlsx
 ```
 
-## Layout Area References
+## View References
 
-Layout areas are defined in `PricingViews.cs` and available for all pricings. See [Area Prefix](MeshWeaver/Documentation/DataMesh/UnifiedPath/AreaPrefix) for layout area syntax.
+Views are defined in `PricingViews.cs` and available for all pricings. See [Area Prefix](MeshWeaver/Documentation/DataMesh/UnifiedPath/AreaPrefix) for view syntax.
 
 ### Overview - Pricing Summary
 
@@ -242,7 +217,7 @@ Shows pricing header with insured details, dates, and financial summary:
 
 @Cornerstone/Microsoft/2026/Overview
 
-### PropertyRisks - Risk Data Grid
+### Property Risks - Risk Data Grid
 
 DataGrid showing all property locations with TSI values:
 
@@ -252,7 +227,7 @@ DataGrid showing all property locations with TSI values:
 
 @Cornerstone/Microsoft/2026/PropertyRisks
 
-### RiskMap - Geographic Visualization
+### Risk Map - Geographic Visualization
 
 Google Maps visualization of geocoded property locations:
 
@@ -264,7 +239,7 @@ Google Maps visualization of geocoded property locations:
 
 ### Structure - Reinsurance Layers
 
-Mermaid diagram showing reinsurance layers and sections:
+DataGrids showing reinsurance layers and sections:
 
 ```
 @Cornerstone/Microsoft/2026/Structure
@@ -282,7 +257,7 @@ File browser for uploaded submission documents:
 
 @Cornerstone/Microsoft/2026/Submission
 
-### ImportConfigs - Import Settings
+### Import Configs - Import Settings
 
 Excel import configuration settings:
 
@@ -311,6 +286,8 @@ All pricings for an insured grouped by status:
 [Global Manufacturing](Cornerstone/GlobalManufacturing)
 [European Logistics](Cornerstone/EuropeanLogistics)
 [Tech Industries](Cornerstone/TechIndustries)
+[Tesla](Cornerstone/Tesla)
+[Nestle](Cornerstone/Nestle)
 ```
 
 ### Link to Pricing
@@ -318,9 +295,11 @@ All pricings for an insured grouped by status:
 ```markdown
 [Microsoft 2026](Cornerstone/Microsoft/2026)
 [Global Manufacturing 2024](Cornerstone/GlobalManufacturing/2024)
+[Tesla 2026](Cornerstone/Tesla/2026)
+[Nestle 2026](Cornerstone/Nestle/2026)
 ```
 
-### Link to Layout Area
+### Link to View
 
 ```markdown
 [Overview](Cornerstone/Microsoft/2026/Overview)
@@ -337,6 +316,8 @@ All pricings for an insured grouped by status:
 | Global Manufacturing Corp | Manufacturing | United States |
 | European Logistics Ltd | Logistics & Transportation | United Kingdom |
 | Tech Industries GmbH | Technology Manufacturing | Germany |
+| Tesla, Inc. | Automotive & Energy | United States |
+| Nestle S.A. | Food & Beverage | Switzerland |
 
 ## Summary
 
@@ -346,7 +327,7 @@ The Cornerstone sample demonstrates MeshWeaver's unified path system for insuran
 - **NodeType references** enable shared definitions across all insureds
 - **Query syntax** allows flexible searching by status, line of business, etc.
 - **Data references** embed live insurance data (PropertyRisk, Reinsurance)
-- **Layout areas** provide consistent views (Overview, PropertyRisks, RiskMap, Structure)
+- **Views** provide consistent displays (Overview, Property Risks, Risk Map, Structure)
 - **Content paths** reference submission files and imported documents
 
 All paths follow the pattern: `Cornerstone/[Insured]/[Pricing]/[View]`

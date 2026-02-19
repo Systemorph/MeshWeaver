@@ -61,6 +61,7 @@ public static class CornerstoneViews
         var query = $"path:{hubPath} nodeType:Cornerstone/Pricing state:Active scope:subtree";
 
         var statuses = host.Workspace.GetObservable<PricingStatus>()
+            .StartWith(PricingStatus.All.ToList())
             .Select(s => s.OrderBy(x => x.Order).ToList());
 
         var meshQuery = host.Hub.ServiceProvider.GetRequiredService<IMeshQuery>();

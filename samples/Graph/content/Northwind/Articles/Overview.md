@@ -3,6 +3,7 @@ Title: "Northwind"
 Abstract: >
   We have modeled the [Northwind Database](https://github.com/microsoft/sql-server-samples/blob/master/samples/databases/northwind-pubs/readme.md)
   as an example for how to build views in a classical data cube scenario.
+Icon: "Document"
 Thumbnail: "images/Northwind.png"
 Published: "2025-01-31"
 Authors:
@@ -32,4 +33,6 @@ Below is an overview of key financial metrics and performance indicators:
 
 @@("Northwind/Analytics/FinancialSummary")
 
-Please have a look at the [Northwind Reports](/Northwind/Reports) for detailed data analysis and the [Northwind Articles](/Northwind/Articles) for reference documentation.
+Please have a look at the [Northwind Analytics](/Northwind/Analytics) for interactive dashboards, the [Northwind Reports](/Northwind/Reports) for detailed data analysis, and the [Northwind Articles](/Northwind/Articles) for reference documentation.
+
+For a comprehensive reference of all addressable items, see the [Northwind Unified References](/Northwind/Articles/NorthwindUnifiedReferences).

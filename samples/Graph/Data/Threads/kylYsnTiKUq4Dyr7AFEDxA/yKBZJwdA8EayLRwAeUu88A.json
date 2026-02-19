@@ -1,0 +1,17 @@
+{
+  "$type": "MeshNode",
+  "id": "Threads/kylYsnTiKUq4Dyr7AFEDxA/yKBZJwdA8EayLRwAeUu88A",
+  "path": "Threads/kylYsnTiKUq4Dyr7AFEDxA/yKBZJwdA8EayLRwAeUu88A",
+  "nodeType": "ThreadMessage",
+  "icon": "/static/NodeTypeIcons/message.svg",
+  "lastModified": "2026-02-18T10:16:44.536825+00:00",
+  "state": "Active",
+  "content": {
+    "$type": "ThreadMessage",
+    "id": "yKBZJwdA8EayLRwAeUu88A",
+    "role": "user",
+    "text": "What is the most important insight from the Northwind data?",
+    "timestamp": "2026-02-18T10:16:44.53613Z",
+    "type": "ExecutedInput"
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "$type": "MeshNode",
+  "id": "Threads/N9zC1tCTLkisNaEx6QmtLw/mFbGS_52lkC4e1qwck06fQ",
+  "path": "Threads/N9zC1tCTLkisNaEx6QmtLw/mFbGS_52lkC4e1qwck06fQ",
+  "nodeType": "ThreadMessage",
+  "icon": "/static/NodeTypeIcons/message.svg",
+  "lastModified": "2026-02-17T16:16:46.257259+00:00",
+  "state": "Active",
+  "content": {
+    "$type": "ThreadMessage",
+    "id": "mFbGS_52lkC4e1qwck06fQ",
+    "role": "NorthwindAgent",
+    "authorName": "NorthwindAgent",
+    "text": "I\u0027ve opened the Top Customers by Revenue view for 2024. It shows the top 10 customers and their contribution to revenue. Would you like the percentage value highlighted, a downloadable table, or a breakdown by country for those top customers?",
+    "timestamp": "2026-02-17T16:16:46.256928Z",
+    "type": "AgentResponse"
+  }
+}

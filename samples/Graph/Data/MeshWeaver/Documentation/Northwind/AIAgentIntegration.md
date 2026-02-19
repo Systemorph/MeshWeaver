@@ -237,46 +237,6 @@ The agent can display any of the 53 available views:
 - **DiscountPercentage**: Discount distribution
 - **DiscountAnalysisReport**: Performance overview
 
-## Agent Definition
-
-The NorthwindAgent is defined in `Northwind/NorthwindAgent.md`:
-
-```markdown
----
-nodeType: Agent
-name: Northwind Agent
-description: Analytics agent for Northwind Traders
-icon: ChartMultiple
-category: Agents
-groupName: Analytics
-isDefault: true
-exposedInNavigator: true
-displayOrder: -10
----
-
-The agent is the Northwind Analytics Agent, specialized in analyzing sales data
-for Northwind Traders (a gourmet food distribution company):
-- Query and analyze orders, products, customers, employees, and suppliers
-- Display charts and reports for sales performance, product analytics, and customer insights
-- Compare year-over-year trends and identify patterns
-
-# Business Context
-Northwind Traders is a gourmet food distribution company...
-
-# Data Location
-Year analytics are stored as MeshNodes under the Northwind/Analytics folder...
-
-# Reference Data
-## Product Categories
-Beverages, Condiments, Confections, Dairy Products...
-
-## Regions
-Eastern, Western, Northern, Southern
-
-# Layout Areas
-[Complete list of available views...]
-```
-
 ## Architecture Benefits
 
 ### Domain Expertise

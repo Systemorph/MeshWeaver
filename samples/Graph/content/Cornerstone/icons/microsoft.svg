@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" fill="none">
+  <defs>
+    <linearGradient id="campusGradient" x1="0%" y1="100%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#1e40af"/>
+      <stop offset="100%" stop-color="#60a5fa"/>
+    </linearGradient>
+  </defs>
+  <!-- Main tower -->
+  <rect x="8" y="4" width="8" height="18" rx="1" fill="url(#campusGradient)"/>
+  <!-- Left wing -->
+  <rect x="2" y="10" width="6" height="12" rx="1" fill="url(#campusGradient)" opacity="0.75"/>
+  <!-- Right wing -->
+  <rect x="16" y="10" width="6" height="12" rx="1" fill="url(#campusGradient)" opacity="0.75"/>
+  <!-- Tower windows -->
+  <rect x="10" y="6" width="1.5" height="1.5" rx="0.3" fill="#e2e8f0"/>
+  <rect x="12.5" y="6" width="1.5" height="1.5" rx="0.3" fill="#e2e8f0"/>
+  <rect x="10" y="9" width="1.5" height="1.5" rx="0.3" fill="#e2e8f0"/>
+  <rect x="12.5" y="9" width="1.5" height="1.5" rx="0.3" fill="#e2e8f0"/>
+  <rect x="10" y="12" width="1.5" height="1.5" rx="0.3" fill="#e2e8f0"/>
+  <rect x="12.5" y="12" width="1.5" height="1.5" rx="0.3" fill="#e2e8f0"/>
+  <!-- Left wing windows -->
+  <rect x="3.5" y="12" width="1.5" height="1.5" rx="0.3" fill="#e2e8f0"/>
+  <rect x="5.5" y="12" width="1.5" height="1.5" rx="0.3" fill="#e2e8f0"/>
+  <rect x="3.5" y="15" width="1.5" height="1.5" rx="0.3" fill="#e2e8f0"/>
+  <rect x="5.5" y="15" width="1.5" height="1.5" rx="0.3" fill="#e2e8f0"/>
+  <!-- Right wing windows -->
+  <rect x="17" y="12" width="1.5" height="1.5" rx="0.3" fill="#e2e8f0"/>
+  <rect x="19" y="12" width="1.5" height="1.5" rx="0.3" fill="#e2e8f0"/>
+  <rect x="17" y="15" width="1.5" height="1.5" rx="0.3" fill="#e2e8f0"/>
+  <rect x="19" y="15" width="1.5" height="1.5" rx="0.3" fill="#e2e8f0"/>
+  <!-- Entrance -->
+  <rect x="10.5" y="17" width="3" height="5" rx="0.5" fill="#e2e8f0"/>
+</svg>

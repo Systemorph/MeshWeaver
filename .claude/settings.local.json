@@ -108,7 +108,8 @@
       "Bash(git -C /Users/samuelglauser/Documents/work/2026_Systemorph/projekte/MeshWeaver log --oneline -5 -- src/MeshWeaver.AI/AgentChatClient.cs)",
       "Bash(git -C /Users/samuelglauser/Documents/work/2026_Systemorph/projekte/MeshWeaver log --oneline -5 -- src/MeshWeaver.AI.ClaudeCode/ClaudeCodeChatClient.cs)",
       "Bash(git -C /Users/samuelglauser/Documents/work/2026_Systemorph/projekte/MeshWeaver diff --cached -- src/MeshWeaver.AI/AgentChatClient.cs)",
-      "Bash(git -C /Users/samuelglauser/Documents/work/2026_Systemorph/projekte/MeshWeaver show:*)"
+      "Bash(git -C /Users/samuelglauser/Documents/work/2026_Systemorph/projekte/MeshWeaver show:*)",
+      "Bash(git show:*)"
     ],
     "deny": []
   },

@@ -50,7 +50,7 @@ public static class ContentCollectionsExtensions
                 throw new InvalidOperationException(
                     $"No content collection configured for hub at address '{config.Address.Id}'. " +
                     "Ensure a content collection is registered for this hub.");
-            return new ArticlesConfiguration() { CollectionConfigurations = [collection] };
+            return new ArticlesConfiguration() { CollectionConfigurations = [collection], Collections = [collection.Name] };
 
         }
 

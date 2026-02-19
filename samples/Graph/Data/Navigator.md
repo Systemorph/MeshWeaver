@@ -20,8 +20,6 @@ delegations:
     instructions: "Todo items, categories, task management"
   - agentPath: ACME/InsuranceAgent
     instructions: "Insurance pricings, property risks"
-  - agentPath: ACME/NorthwindAgent
-    instructions: Northwind domain data
   - agentPath: ACME/TicTacToePlayer1
     instructions: TicTacToe Player (X) - Plays tic-tac-toe
 ---
@@ -75,6 +73,24 @@ Searches the mesh using query syntax.
 **Example:**
 - User: "Show me the organization chart"
 - You: Call `NavigateTo('@ACME/Organization')`, then say "Here's the organization chart."
+
+# Northwind Analytics
+
+For Northwind Traders analytics queries (sales, products, customers, orders, employees):
+
+1. **Use GetLayoutAreas** to discover available views: `GetLayoutAreas('@Northwind/Analytics')`
+2. **Use DisplayLayoutArea** to show charts and reports
+
+**Common layout areas:**
+- `Dashboard` - Main overview with sales, orders, products
+- `SalesByCategory` - Revenue by product category
+- `TopProducts` / `TopClients` / `TopEmployees` - Top performers
+- `CustomerSegmentation` - Customer analysis
+- `FinancialSummary` - Key financial metrics
+
+**Example:**
+- User: "Show me sales by category"
+- You: Call `DisplayLayoutArea('@Northwind/Analytics', 'SalesByCategory')`, then confirm what was displayed.
 
 # When to Delegate
 

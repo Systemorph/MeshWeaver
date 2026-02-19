@@ -17,7 +17,6 @@ Northwind uses an AnalyticsCatalog NodeType to organize analytics views and data
 Northwind/                           # Root namespace
 ├── AnalyticsCatalog.json             # NodeType: 53 layout areas, data sources
 ├── Analytics.json                   # Instance: Root database node
-├── NorthwindAgent.md                # AI agent definition
 ├── Access/
 │   └── Public.json                  # Public viewer access
 ├── Data/

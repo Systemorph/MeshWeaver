@@ -19,7 +19,6 @@ The Northwind sample follows this hierarchy:
 Northwind/                           # Root namespace
 ├── AnalyticsCatalog.json             # NodeType definition
 ├── Analytics.json                   # Database instance
-├── NorthwindAgent.md                # AI agent
 ├── Access/
 │   └── Public.json                  # Access control
 ├── Data/
@@ -41,7 +40,6 @@ Northwind/                           # Root namespace
 | `Northwind` | The root namespace |
 | `Northwind/AnalyticsCatalog` | AnalyticsCatalog NodeType definition |
 | `Northwind/Analytics` | Database instance |
-| `Northwind/NorthwindAgent` | AI analytics agent |
 
 ### NodeType Definition
 

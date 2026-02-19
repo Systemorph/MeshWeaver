@@ -20,8 +20,7 @@ Cornerstone/                           # Reinsurance company namespace
 ├── Insured.json                       # Insured NodeType definition
 ├── Pricing.json                       # Pricing NodeType definition
 ├── Pricing/                           # Pricing-related code and assets
-│   ├── Code/                          # Pricing.cs, PricingViews.cs, etc.
-│   └── PricingAgent.md                # AI agent for pricing management
+│   └── Code/                          # Pricing.cs, PricingViews.cs, etc.
 ├── Code/                              # Shared reference data
 │   ├── Country.cs
 │   ├── Currency.cs
@@ -44,7 +43,7 @@ Cornerstone/                           # Reinsurance company namespace
 2. **Shared NodeTypes**: The Pricing NodeType is reused across all insureds
 3. **Property Risk Data**: Geocoded locations with TSI values imported from Excel
 4. **Reinsurance Structure**: Multi-layer coverage with sections and financial terms
-5. **AI Agent Integration**: The PricingAgent helps manage pricings with natural language
+5. **AI Agent Integration**: Natural language interaction with pricing data via MeshPlugin
 
 ### Sample Organizations
 
@@ -70,6 +69,14 @@ Cornerstone/                           # Reinsurance company namespace
 - Line of Business: Property
 - Industry: Technology Manufacturing
 
+**Tesla, Inc.** - Electric vehicle and clean energy company:
+- Industry: Automotive & Energy
+- Location: United States
+
+**Nestle S.A.** - Global food and beverage company:
+- Industry: Food & Beverage
+- Location: Switzerland
+
 ## Running the Sample
 
 ### Clone and Build
@@ -83,7 +90,7 @@ dotnet build
 ### Start the Portal
 
 ```bash
-cd loom/Loom.Portal.Monolith
+cd memex/Memex.Portal.Monolith
 dotnet run
 ```
 
@@ -92,7 +99,7 @@ Navigate to `http://localhost:7122` in your browser.
 ### Navigate to Cornerstone
 
 1. Navigate to **Cornerstone** namespace
-2. Explore **Microsoft**, **GlobalManufacturing**, or other insureds
+2. Explore **Microsoft**, **GlobalManufacturing**, **Tesla**, **Nestle**, or other insureds
 3. Select a pricing (e.g., 2026) to view details
 
 ## Exploring the Pricing Interface
@@ -107,16 +114,16 @@ Each insured (Microsoft, GlobalManufacturing, etc.) has these views:
 
 ### Pricing Views
 
-Each pricing instance has these layout areas:
+Each pricing instance has these views:
 
 | View | Description |
 |------|-------------|
 | **Overview** | Pricing header with insured details, dates, and financial summary |
-| **PropertyRisks** | DataGrid showing all property locations with TSI values |
-| **RiskMap** | Google Maps visualization of geocoded property locations |
-| **Structure** | Mermaid diagram showing reinsurance layers and sections |
+| **Property Risks** | DataGrid showing all property locations with TSI values |
+| **Risk Map** | Google Maps visualization of geocoded property locations |
+| **Structure** | DataGrids showing reinsurance layers and sections |
 | **Submission** | File browser for uploaded submission documents |
-| **ImportConfigs** | Excel import configuration settings |
+| **Import Configs** | Excel import configuration settings |
 
 ### Pricing Details View
 
@@ -129,7 +136,7 @@ The Overview displays:
 
 ### Property Risks DataGrid
 
-The PropertyRisks view shows:
+The Property Risks view shows:
 - Location details (address, city, state, country, ZIP)
 - TSI values (Building, Content, Business Interruption)
 - Construction details (build year, occupancy type)
@@ -142,7 +149,7 @@ The Structure view visualizes:
 - Financial terms (EPI, rates, commissions)
 - Sections per layer (Fire, Natural Catastrophe, Business Interruption)
 
-## Using the Pricing Agent
+## Using the AI Agent
 
 The AI chat agent understands natural language and can help manage pricings.
 
@@ -150,13 +157,13 @@ The AI chat agent understands natural language and can help manage pricings.
 
 ```
 "Show me the Microsoft 2026 pricing"
-→ Displays the Overview layout area
+→ Displays the Overview view
 
 "What property risks are in the Microsoft pricing?"
-→ Displays the PropertyRisks DataGrid
+→ Displays the Property Risks DataGrid
 
 "Show me the reinsurance structure"
-→ Displays the Structure diagram
+→ Displays the Structure view
 ```
 
 ### Creating Pricings
@@ -282,31 +289,31 @@ Key features:
 
 Pricings support file uploads for submission documents:
 1. Navigate to a pricing (e.g., Cornerstone/Microsoft/2026)
-2. Select the **Submission** layout area
+2. Select the **Submission** view
 3. Upload files such as slip documents, Excel data, or PDFs
 
 ### Excel Import
 
 Property risk data can be imported from Excel:
 1. Upload an Excel file to Submissions
-2. Configure import settings in **ImportConfigs**
+2. Configure import settings in **Import Configs**
 3. Map columns to PropertyRisk fields
-4. Execute import to populate the PropertyRisks DataGrid
+4. Execute import to populate the Property Risks DataGrid
 
 ## Architecture Deep Dive
 
 For detailed understanding of MeshWeaver's architecture in the context of Cornerstone:
 
 - **[Understanding Cornerstone Architecture](MeshWeaver/Documentation/Cornerstone/Architecture)**: Message hubs, data model, reactive design
-- **[AI Agent Integration](MeshWeaver/Documentation/Cornerstone/AIAgentIntegration)**: How the PricingAgent works with MeshWeaver
+- **[AI Agent Integration](MeshWeaver/Documentation/Cornerstone/AIAgentIntegration)**: How AI agents integrate with MeshWeaver
 - **[Unified References](MeshWeaver/Documentation/Cornerstone/UnifiedReferences)**: Path syntax and reference patterns
 
 ## Next Steps
 
 1. **Explore the Data**: Navigate through Cornerstone insureds and examine pricing data
 2. **Use the Agent**: Try natural language commands in the chat interface
-3. **View Property Risks**: Explore the PropertyRisks and RiskMap views
-4. **Examine the Structure**: Review reinsurance layers in the Structure diagram
+3. **View Property Risks**: Explore the Property Risks and Risk Map views
+4. **Examine the Structure**: Review reinsurance layers in the Structure view
 5. **Upload Submissions**: Try the file upload workflow
 
 The Cornerstone sample provides a complete working example of MeshWeaver's insurance capabilities, from data modeling and views to AI agent integration and file management.
