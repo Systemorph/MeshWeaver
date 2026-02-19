@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
@@ -639,6 +640,120 @@ public class SearchQueryTests : MonolithMeshTestBase
         {
             node.Path.Should().StartWith(hubPath, "All results should be under the searched namespace");
         });
+    }
+
+    #endregion
+
+    #region Select Projection Tests
+
+    [Fact(Timeout = 30000)]
+    public async Task SelectQuery_SingleProperty_ReturnsDictionaryWithOnlyThatProperty()
+    {
+        // Arrange - query with select:name to project results to only name
+        var request = new MeshQueryRequest { Query = "scope:descendants select:name", Limit = 5 };
+
+        // Act
+        var results = await MeshQuery.QueryAsync<object>(request, null, TestContext.Current.CancellationToken).ToArrayAsync(TestContext.Current.CancellationToken);
+
+        // Assert
+        Output.WriteLine($"Found {results.Length} results with select:name");
+        results.Should().NotBeEmpty("Select query should return results");
+
+        foreach (var r in results)
+        {
+            r.Should().BeAssignableTo<IDictionary<string, object?>>("Select should project to dictionaries");
+            var dict = (IDictionary<string, object?>)r;
+            Output.WriteLine($"  - name: {dict["name"]}");
+            dict.Should().ContainKey("name");
+            dict.Should().HaveCount(1, "Only the selected property should be in the dictionary");
+        }
+    }
+
+    [Fact(Timeout = 30000)]
+    public async Task SelectQuery_MultipleProperties_ReturnsDictionaryWithThoseProperties()
+    {
+        // Arrange - query with select:name,nodeType,path
+        var request = new MeshQueryRequest { Query = "scope:descendants select:name,nodeType,path", Limit = 5 };
+
+        // Act
+        var results = await MeshQuery.QueryAsync<object>(request, null, TestContext.Current.CancellationToken).ToArrayAsync(TestContext.Current.CancellationToken);
+
+        // Assert
+        Output.WriteLine($"Found {results.Length} results with select:name,nodeType,path");
+        results.Should().NotBeEmpty("Select query should return results");
+
+        foreach (var r in results)
+        {
+            r.Should().BeAssignableTo<IDictionary<string, object?>>("Select should project to dictionaries");
+            var dict = (IDictionary<string, object?>)r;
+            Output.WriteLine($"  - name: {dict["name"]}, nodeType: {dict["nodeType"]}, path: {dict["path"]}");
+            dict.Should().ContainKey("name");
+            dict.Should().ContainKey("nodeType");
+            dict.Should().ContainKey("path");
+            dict.Should().HaveCount(3, "Exactly the selected properties should be in the dictionary");
+        }
+    }
+
+    [Fact(Timeout = 30000)]
+    public async Task SelectQuery_WithFilter_ProjectsFilteredResults()
+    {
+        // Arrange - combine nodeType filter with select projection
+        var request = new MeshQueryRequest { Query = "nodeType:User scope:descendants select:name,path", Limit = 5 };
+
+        // Act
+        var results = await MeshQuery.QueryAsync<object>(request, null, TestContext.Current.CancellationToken).ToArrayAsync(TestContext.Current.CancellationToken);
+
+        // Assert
+        Output.WriteLine($"Found {results.Length} User results with select:name,path");
+
+        foreach (var r in results)
+        {
+            r.Should().BeAssignableTo<IDictionary<string, object?>>("Select should project to dictionaries");
+            var dict = (IDictionary<string, object?>)r;
+            Output.WriteLine($"  - name: {dict["name"]}, path: {dict["path"]}");
+            dict.Should().ContainKey("name");
+            dict.Should().ContainKey("path");
+            dict.Should().HaveCount(2);
+        }
+    }
+
+    [Fact(Timeout = 30000)]
+    public async Task SelectQuery_WithoutSelect_ReturnsFullMeshNodes()
+    {
+        // Arrange - normal query without select should return MeshNode objects
+        var request = new MeshQueryRequest { Query = "scope:descendants", Limit = 5 };
+
+        // Act
+        var results = await MeshQuery.QueryAsync<MeshNode>(request, null, TestContext.Current.CancellationToken).ToArrayAsync(TestContext.Current.CancellationToken);
+
+        // Assert
+        results.Should().NotBeEmpty("Normal query should return results");
+        foreach (var r in results)
+        {
+            r.Should().BeOfType<MeshNode>("Without select, results should be MeshNode objects");
+            Output.WriteLine($"  - {r.Path}: {r.Name} ({r.NodeType})");
+        }
+    }
+
+    [Fact(Timeout = 30000)]
+    public async Task SelectQuery_NonExistentProperty_ReturnsNullValue()
+    {
+        // Arrange - select a property that doesn't exist on MeshNode
+        var request = new MeshQueryRequest { Query = "scope:descendants select:name,nonExistentProp", Limit = 3 };
+
+        // Act
+        var results = await MeshQuery.QueryAsync<object>(request, null, TestContext.Current.CancellationToken).ToArrayAsync(TestContext.Current.CancellationToken);
+
+        // Assert
+        results.Should().NotBeEmpty("Query should still return results");
+
+        foreach (var r in results)
+        {
+            var dict = (IDictionary<string, object?>)r;
+            dict.Should().ContainKey("name");
+            dict.Should().ContainKey("nonExistentProp");
+            dict["nonExistentProp"].Should().BeNull("Non-existent properties should have null values");
+        }
     }
 
     #endregion

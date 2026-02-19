@@ -8,6 +8,7 @@ using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Layout.Domain;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
@@ -25,7 +26,7 @@ public static class SettingsLayoutArea
     public const string NodeTypesTab = "NodeTypes";
     public const string FilesTab = "Files";
     public const string AccessControlTab = "AccessControl";
-    public const string CommentsTab = "Comments";
+    public const string EffectiveAccessTab = "EffectiveAccess";
     public const string AppearanceTab = "Appearance";
 
     private const string SelectionDataId = "settingsSelection";
@@ -139,14 +140,10 @@ public static class SettingsLayoutArea
             new NavLinkControl("Access Control", FluentIcons.Shield(), accessControlHref)
         );
 
-        // Comments tab (only if enabled)
-        if (host.Hub.Configuration.HasComments())
-        {
-            var commentsHref = new LayoutAreaReference(MeshNodeLayoutAreas.SettingsArea) { Id = CommentsTab }.ToHref(hubAddress);
-            securityGroup = securityGroup.WithView(
-                new NavLinkControl("Comments", FluentIcons.Comment(), commentsHref)
-            );
-        }
+        var effectiveAccessHref = new LayoutAreaReference(MeshNodeLayoutAreas.SettingsArea) { Id = EffectiveAccessTab }.ToHref(hubAddress);
+        securityGroup = securityGroup.WithView(
+            new NavLinkControl("Effective Access", FluentIcons.PersonSearch(), effectiveAccessHref)
+        );
 
         navMenu = navMenu.WithNavGroup(securityGroup);
 
@@ -175,7 +172,7 @@ public static class SettingsLayoutArea
             NodeTypesTab => BuildNodeTypesTab(host, hubPath, stack),
             FilesTab => BuildFilesTab(host, stack),
             AccessControlTab => BuildAccessControlTab(host, node, hubPath, stack),
-            CommentsTab => BuildCommentsTab(host, stack),
+            EffectiveAccessTab => BuildEffectiveAccessTab(host, hubPath, stack),
             AppearanceTab => BuildAppearanceTab(stack),
             _ => BuildPropertiesTab(host, node, stack),
         };
@@ -286,14 +283,97 @@ public static class SettingsLayoutArea
         return stack;
     }
 
-    private static UiControl BuildCommentsTab(LayoutAreaHost host, StackControl stack)
+    private static UiControl BuildEffectiveAccessTab(LayoutAreaHost host, string hubPath, StackControl stack)
     {
-        stack = stack.WithView(Controls.H2("Comments").WithStyle("margin: 0 0 24px 0;"));
-        stack = stack.WithView(
-            (h, ctx) => CommentsView.Comments(h, ctx)!,
-            "CommentsContent"
-        );
+        var securityService = host.Hub.ServiceProvider.GetService<ISecurityService>();
+        if (securityService == null)
+        {
+            return stack.WithView(Controls.Html(
+                "<p style=\"color: var(--warning-color);\">Row-Level Security is not enabled.</p>"));
+        }
+
+        stack = stack.WithView(Controls.H2("Effective Access").WithStyle("margin: 0 0 16px 0;"));
+        stack = stack.WithView(Controls.Html(
+            "<p style=\"font-size: 0.85rem; color: var(--neutral-foreground-hint); margin-bottom: 16px;\">" +
+            "Test what permissions a user has on this node. Enter a user ID and press Enter or click Check.</p>"));
+
+        // Form data area
+        var formId = $"effectiveAccess_{hubPath.Replace("/", "_")}";
+        var resultId = $"effectiveAccessResult_{hubPath.Replace("/", "_")}";
+        host.UpdateData(formId, new Dictionary<string, object?> { ["userId"] = "" });
+        host.UpdateData(resultId, "");
+
+        // User ID input
+        var userField = new TextFieldControl(new JsonPointerReference("userId"))
+        {
+            Placeholder = "Enter user ID (e.g. alice@example.com)...",
+            Label = "User ID",
+            Immediate = true,
+            DataContext = LayoutAreaReference.GetDataPointer(formId)
+        };
+        stack = stack.WithView(userField);
+
+        // Check button
+        stack = stack.WithView(Controls.Stack
+            .WithOrientation(Orientation.Horizontal)
+            .WithStyle("margin-top: 12px; gap: 8px;")
+            .WithView(Controls.Button("Check")
+                .WithAppearance(Appearance.Accent)
+                .WithClickAction(async ctx =>
+                {
+                    var userId = "";
+                    ctx.Host.Stream.GetDataStream<Dictionary<string, object?>>(formId)
+                        .Take(1)
+                        .Subscribe(data => userId = data?.GetValueOrDefault("userId")?.ToString()?.Trim() ?? "");
+
+                    if (string.IsNullOrEmpty(userId))
+                    {
+                        ctx.Host.UpdateData(resultId, "<p style=\"color: var(--warning-color);\">Please enter a user ID.</p>");
+                        return;
+                    }
+
+                    var perms = await securityService.GetEffectivePermissionsAsync(hubPath, userId);
+                    var html = BuildPermissionResultHtml(userId, perms);
+                    ctx.Host.UpdateData(resultId, html);
+                })));
+
+        // Result area — data-bound
+        stack = stack.WithView((h, _) =>
+        {
+            return h.Stream.GetDataStream<string>(resultId)
+                .Select(html => string.IsNullOrEmpty(html)
+                    ? (UiControl)Controls.Stack
+                    : (UiControl)Controls.Html(html));
+        });
+
         return stack;
+    }
+
+    private static string BuildPermissionResultHtml(string userId, Permission perms)
+    {
+        var allPerms = new[] { Permission.Read, Permission.Create, Permission.Update, Permission.Delete, Permission.Comment };
+        var rows = string.Join("", allPerms.Select(p =>
+        {
+            var has = perms.HasFlag(p);
+            var icon = has ? "<span style=\"color: #4ade80;\">&#x2713;</span>" : "<span style=\"color: #f87171;\">&#x2717;</span>";
+            return $"<tr><td style=\"padding: 6px 12px;\">{p}</td><td style=\"padding: 6px 12px;\">{icon} {(has ? "Allowed" : "Denied")}</td></tr>";
+        }));
+
+        return $@"
+            <div style=""margin-top: 16px; border: 1px solid var(--neutral-stroke-rest); border-radius: 6px; overflow: hidden;"">
+                <div style=""padding: 10px 12px; background: var(--neutral-layer-2); font-weight: 600; font-size: 0.85rem;"">
+                    Permissions for <em>{System.Web.HttpUtility.HtmlEncode(userId)}</em> on this node
+                </div>
+                <table style=""width: 100%; border-collapse: collapse; font-size: 0.85rem;"">
+                    <thead>
+                        <tr style=""border-bottom: 1px solid var(--neutral-stroke-rest); background: var(--neutral-layer-3);"">
+                            <th style=""padding: 6px 12px; text-align: left;"">Permission</th>
+                            <th style=""padding: 6px 12px; text-align: left;"">Status</th>
+                        </tr>
+                    </thead>
+                    <tbody>{rows}</tbody>
+                </table>
+            </div>";
     }
 
     private static UiControl BuildAppearanceTab(StackControl stack)

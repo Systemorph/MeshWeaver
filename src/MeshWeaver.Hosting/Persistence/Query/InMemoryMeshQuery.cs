@@ -220,7 +220,9 @@ public class InMemoryMeshQuery : IMeshQueryCore
                 }
             }
 
-            yield return item;
+            yield return parsedQuery.Select != null
+                ? ParsedQuery.ProjectToSelect(item, parsedQuery.Select)
+                : item;
         }
     }
 

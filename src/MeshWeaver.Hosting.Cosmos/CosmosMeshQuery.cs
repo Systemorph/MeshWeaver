@@ -82,7 +82,9 @@ public class CosmosMeshQuery : IMeshQueryCore
             foreach (var (node, _) in buffered.OrderByDescending(b => b.Score))
             {
                 if (skip > 0) { skip--; continue; }
-                yield return node;
+                yield return parsedQuery.Select != null
+                    ? ParsedQuery.ProjectToSelect(node, parsedQuery.Select)
+                    : node;
                 count++;
                 if (parsedQuery.Limit.HasValue && count >= parsedQuery.Limit.Value)
                     yield break;
@@ -102,7 +104,9 @@ public class CosmosMeshQuery : IMeshQueryCore
                 continue;
             }
 
-            yield return node;
+            yield return parsedQuery.Select != null
+                ? ParsedQuery.ProjectToSelect(node, parsedQuery.Select)
+                : node;
 
             // Apply limit
             countOrig++;

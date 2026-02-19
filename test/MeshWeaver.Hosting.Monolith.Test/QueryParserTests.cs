@@ -682,4 +682,61 @@ public class QueryParserTests
     }
 
     #endregion
+
+    #region Select Parameter
+
+    [Fact]
+    public void Parse_SelectSingleProperty_ParsesCorrectly()
+    {
+        var result = _parser.Parse("select:name");
+
+        result.Select.Should().NotBeNull();
+        result.Select.Should().BeEquivalentTo(["name"]);
+        result.Filter.Should().BeNull();
+    }
+
+    [Fact]
+    public void Parse_SelectMultipleProperties_ParsesCommaSeparated()
+    {
+        var result = _parser.Parse("select:name,nodeType,icon");
+
+        result.Select.Should().NotBeNull();
+        result.Select.Should().BeEquivalentTo(["name", "nodeType", "icon"]);
+    }
+
+    [Fact]
+    public void Parse_SelectWithFilter_ParsesBoth()
+    {
+        var result = _parser.Parse("nodeType:Story select:path,name");
+
+        result.Select.Should().NotBeNull();
+        result.Select.Should().BeEquivalentTo(["path", "name"]);
+        result.Filter.Should().BeOfType<QueryComparison>();
+        var comparison = (QueryComparison)result.Filter!;
+        comparison.Condition.Selector.Should().Be("nodeType");
+        comparison.Condition.Value.Should().Be("Story");
+    }
+
+    [Fact]
+    public void Parse_SelectWithAllParams_ParsesAll()
+    {
+        var result = _parser.Parse("namespace:Systemorph select:name,nodeType sort:name limit:10");
+
+        result.Select.Should().NotBeNull();
+        result.Select.Should().BeEquivalentTo(["name", "nodeType"]);
+        result.Path.Should().Be("Systemorph");
+        result.OrderBy.Should().NotBeNull();
+        result.OrderBy!.Property.Should().Be("name");
+        result.Limit.Should().Be(10);
+    }
+
+    [Fact]
+    public void Parse_NoSelect_SelectIsNull()
+    {
+        var result = _parser.Parse("nodeType:Story");
+
+        result.Select.Should().BeNull();
+    }
+
+    #endregion
 }

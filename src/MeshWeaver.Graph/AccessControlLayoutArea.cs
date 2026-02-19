@@ -10,6 +10,7 @@ using MeshWeaver.Mesh.Security;
 using MeshWeaver.Messaging;
 using MeshWeaver.ShortGuid;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Graph;
 
@@ -77,7 +78,7 @@ public static class AccessControlLayoutArea
         var localSubject = new BehaviorSubject<IEnumerable<AccessAssignment>>([]);
 
         // Load initial data and push to subjects
-        LoadAssignmentsAsync(securityService, nodePath, inheritedSubject, localSubject);
+        LoadAssignmentsAsync(securityService, nodePath, inheritedSubject, localSubject, host.Hub.ServiceProvider);
 
         // Inherited Permissions section with data-bound template
         stack = stack.WithView(Controls.H3("Inherited Permissions").WithStyle("margin: 0;"));
@@ -123,21 +124,30 @@ public static class AccessControlLayoutArea
         ISecurityService securityService,
         string nodePath,
         BehaviorSubject<IEnumerable<AccessAssignment>> inheritedSubject,
-        BehaviorSubject<IEnumerable<AccessAssignment>> localSubject)
+        BehaviorSubject<IEnumerable<AccessAssignment>> localSubject,
+        IServiceProvider serviceProvider)
     {
-        var inherited = new List<AccessAssignment>();
-        var local = new List<AccessAssignment>();
-
-        await foreach (var assignment in securityService.GetAccessAssignmentsAsync(nodePath))
+        try
         {
-            if (assignment.IsLocal)
-                local.Add(assignment);
-            else
-                inherited.Add(assignment);
-        }
+            var inherited = new List<AccessAssignment>();
+            var local = new List<AccessAssignment>();
 
-        inheritedSubject.OnNext(inherited.OrderBy(a => a.UserId).ThenBy(a => a.RoleId));
-        localSubject.OnNext(local.OrderBy(a => a.UserId).ThenBy(a => a.RoleId));
+            await foreach (var assignment in securityService.GetAccessAssignmentsAsync(nodePath))
+            {
+                if (assignment.IsLocal)
+                    local.Add(assignment);
+                else
+                    inherited.Add(assignment);
+            }
+
+            inheritedSubject.OnNext(inherited.OrderBy(a => a.UserId).ThenBy(a => a.RoleId));
+            localSubject.OnNext(local.OrderBy(a => a.UserId).ThenBy(a => a.RoleId));
+        }
+        catch (Exception ex)
+        {
+            var logger = serviceProvider.GetService<ILogger<LayoutAreaHost>>();
+            logger?.LogError(ex, "Failed to load access assignments for node {NodePath}", nodePath);
+        }
     }
 
     internal static async Task RefreshAssignmentsAsync(
