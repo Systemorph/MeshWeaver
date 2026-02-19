@@ -113,16 +113,6 @@ public class InMemoryMeshQuery : IMeshQueryCore
                 }
             }
 
-            // Search partition objects at this path
-            await foreach (var obj in _persistence.GetPartitionObjectsAsync(searchPath, null, options).WithCancellation(ct))
-            {
-                if (_evaluator.Matches(obj, parsedQuery))
-                {
-                    var score = _evaluator.GetFuzzyScore(obj, parsedQuery.TextSearch);
-                    score += (int)PathProximity.ComputeBoost(request.ContextPath, GetItemPath(obj));
-                    results.Add((obj, score));
-                }
-            }
         }
 
         // If we're doing scope=children, search immediate children only
@@ -140,17 +130,6 @@ public class InMemoryMeshQuery : IMeshQueryCore
                         results.Add((child, score));
                 }
 
-                // Search partition objects under child
-                var childPath = NormalizePath(child.Path);
-                await foreach (var obj in _persistence.GetPartitionObjectsAsync(childPath, null, options).WithCancellation(ct))
-                {
-                    if (_evaluator.Matches(obj, parsedQuery))
-                    {
-                        var score = _evaluator.GetFuzzyScore(obj, parsedQuery.TextSearch);
-                        score += (int)PathProximity.ComputeBoost(request.ContextPath, GetItemPath(obj));
-                        results.Add((obj, score));
-                    }
-                }
             }
         }
 
@@ -177,18 +156,6 @@ public class InMemoryMeshQuery : IMeshQueryCore
                         if (!results.Any(r => ReferenceEquals(r.Item, child)))
                             results.Add((child, score));
                     }
-
-                    // Search partition objects under child
-                    var childPath = NormalizePath(child.Path);
-                    await foreach (var obj in _persistence.GetPartitionObjectsAsync(childPath, null, options).WithCancellation(ct))
-                    {
-                        if (_evaluator.Matches(obj, parsedQuery))
-                        {
-                            var score = _evaluator.GetFuzzyScore(obj, parsedQuery.TextSearch);
-                            score += (int)PathProximity.ComputeBoost(request.ContextPath, GetItemPath(obj));
-                            results.Add((obj, score));
-                        }
-                    }
                 }
             }
         }
@@ -208,17 +175,6 @@ public class InMemoryMeshQuery : IMeshQueryCore
                         results.Add((descendant, score));
                 }
 
-                // Search partition objects under descendant
-                var descendantPath = NormalizePath(descendant.Path);
-                await foreach (var obj in _persistence.GetPartitionObjectsAsync(descendantPath, null, options).WithCancellation(ct))
-                {
-                    if (_evaluator.Matches(obj, parsedQuery))
-                    {
-                        var score = _evaluator.GetFuzzyScore(obj, parsedQuery.TextSearch);
-                        score += (int)PathProximity.ComputeBoost(request.ContextPath, GetItemPath(obj));
-                        results.Add((obj, score));
-                    }
-                }
             }
         }
 

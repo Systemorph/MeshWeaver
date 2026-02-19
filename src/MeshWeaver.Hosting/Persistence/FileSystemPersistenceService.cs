@@ -256,15 +256,6 @@ public class FileSystemPersistenceService : IPersistenceServiceCore
                 results.Add((node, score));
             }
 
-            // Search partition objects at this path
-            await foreach (var obj in GetPartitionObjectsAsync(searchPath, null, options))
-            {
-                if (evaluator.Matches(obj, parsedQuery))
-                {
-                    var score = evaluator.GetFuzzyScore(obj, parsedQuery.TextSearch);
-                    results.Add((obj, score));
-                }
-            }
         }
 
         // For Descendants and Hierarchy scopes, also search descendant paths
@@ -272,8 +263,6 @@ public class FileSystemPersistenceService : IPersistenceServiceCore
         {
             await foreach (var descendant in GetDescendantsAsync(normalizedPath, options))
             {
-                var descendantPath = NormalizePath(descendant.Path);
-
                 // Evaluate the node itself
                 if (evaluator.Matches(descendant, parsedQuery))
                 {
@@ -282,15 +271,6 @@ public class FileSystemPersistenceService : IPersistenceServiceCore
                         results.Add((descendant, score));
                 }
 
-                // Search partition objects under descendant
-                await foreach (var obj in GetPartitionObjectsAsync(descendantPath, null, options))
-                {
-                    if (evaluator.Matches(obj, parsedQuery))
-                    {
-                        var score = evaluator.GetFuzzyScore(obj, parsedQuery.TextSearch);
-                        results.Add((obj, score));
-                    }
-                }
             }
         }
 
