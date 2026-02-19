@@ -78,7 +78,7 @@ public class CreateNodeAsyncTest(ITestOutputHelper output) : MonolithMeshTestBas
         var comment = new Comment
         {
             Id = commentId,
-            NodePath = parentPath,
+            PrimaryNodePath = parentPath,
             Author = "TestUser",
             Text = "This is a test comment",
             HighlightedText = "some selected text",
@@ -135,7 +135,7 @@ public class CreateNodeAsyncTest(ITestOutputHelper output) : MonolithMeshTestBas
         var parentComment = new Comment
         {
             Id = parentCommentId,
-            NodePath = parentPath,
+            PrimaryNodePath = parentPath,
             Author = "Alice",
             Text = "Original comment",
             CreatedAt = DateTimeOffset.UtcNow,
@@ -149,16 +149,15 @@ public class CreateNodeAsyncTest(ITestOutputHelper output) : MonolithMeshTestBas
         };
         await catalog.CreateNodeAsync(parentNode, "Alice", TestTimeout);
 
-        // Create reply with ParentCommentId
+        // Create reply as child of parent comment node
         var replyId = Guid.NewGuid().AsString();
         var replyPath = $"{parentPath}/{replyId}";
         var replyComment = new Comment
         {
             Id = replyId,
-            NodePath = parentPath,
+            PrimaryNodePath = parentPath,
             Author = "Bob",
             Text = "This is a reply",
-            ParentCommentId = parentCommentId,
             CreatedAt = DateTimeOffset.UtcNow,
             Status = CommentStatus.Active
         };
@@ -175,7 +174,6 @@ public class CreateNodeAsyncTest(ITestOutputHelper output) : MonolithMeshTestBas
         // Assert
         createdReply.Should().NotBeNull();
         var replyContent = createdReply.Content.Should().BeOfType<Comment>().Subject;
-        replyContent.ParentCommentId.Should().Be(parentCommentId);
         replyContent.Author.Should().Be("Bob");
         replyContent.Text.Should().Be("This is a reply");
 
@@ -187,10 +185,10 @@ public class CreateNodeAsyncTest(ITestOutputHelper output) : MonolithMeshTestBas
         comments.Should().Contain(n => n.Path == parentCommentPath);
         comments.Should().Contain(n => n.Path == replyPath);
 
-        // Verify ParentCommentId round-trips
+        // Verify reply round-trips via path
         var retrievedReply = await catalog.GetNodeAsync(new Address(replyPath));
-        var retrievedContent = retrievedReply?.Content.Should().BeOfType<Comment>().Subject;
-        retrievedContent?.ParentCommentId.Should().Be(parentCommentId);
+        retrievedReply.Should().NotBeNull("Reply should be retrievable by path");
+        retrievedReply!.Path.Should().StartWith(parentCommentPath);
 
         // Cleanup
         await catalog.DeleteNodeAsync(parentCommentPath, recursive: false, ct: TestTimeout);

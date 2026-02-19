@@ -178,11 +178,10 @@ public class CollaborativeEditingReplyTest(ITestOutputHelper output) : MonolithM
         var replyComment = new Comment
         {
             Id = replyId,
-            NodePath = docPath,
+            PrimaryNodePath = docPath,
             Author = "TestReviewer",
             Text = "",  // Empty initially, like the Reply button creates
             CreatedAt = DateTimeOffset.UtcNow,
-            ParentCommentId = parentContent.Id,
             Status = CommentStatus.Active
         };
         var replyNode = new MeshNode(replyId, docPath)
@@ -223,9 +222,8 @@ public class CollaborativeEditingReplyTest(ITestOutputHelper output) : MonolithM
         var retrievedReply = await catalog.GetNodeAsync(replyAddress);
         retrievedReply.Should().NotBeNull("Reply should be retrievable after save");
         var retrievedContent = retrievedReply!.Content.Should().BeOfType<Comment>().Subject;
-        retrievedContent.ParentCommentId.Should().Be(parentContent.Id);
         retrievedContent.Author.Should().Be("TestReviewer");
-        Output.WriteLine($"Reply verified: ParentCommentId={retrievedContent.ParentCommentId}, Author={retrievedContent.Author}");
+        Output.WriteLine($"Reply verified: Author={retrievedContent.Author}");
 
         // Step 7: Verify the reply appears in comment children query
         Output.WriteLine("Step 7: Verifying reply in children query...");
@@ -235,12 +233,7 @@ public class CollaborativeEditingReplyTest(ITestOutputHelper output) : MonolithM
 
         allComments.Should().Contain(n => n.Path == createdReply.Path,
             "Reply should appear in comment children query");
-
-        var replies = allComments
-            .Where(n => n.Content is Comment c && c.ParentCommentId == parentContent.Id)
-            .ToList();
-        replies.Should().NotBeEmpty("There should be at least one reply to c1");
-        Output.WriteLine($"Found {replies.Count} replies to comment c1");
+        Output.WriteLine("Reply found in comment children query");
 
         // Cleanup
         Output.WriteLine("Cleaning up reply node...");
@@ -270,10 +263,9 @@ public class CollaborativeEditingReplyTest(ITestOutputHelper output) : MonolithM
             var reply = new Comment
             {
                 Id = replyId,
-                NodePath = docPath,
+                PrimaryNodePath = docPath,
                 Author = $"Reviewer{i + 1}",
                 Text = $"Reply number {i + 1}",
-                ParentCommentId = parentContent.Id,
                 CreatedAt = DateTimeOffset.UtcNow.AddMinutes(i),
                 Status = CommentStatus.Active
             };
@@ -294,16 +286,9 @@ public class CollaborativeEditingReplyTest(ITestOutputHelper output) : MonolithM
             $"path:{docPath} nodeType:{CommentNodeType.NodeType} scope:children"
         ).ToListAsync();
 
-        var replies = allComments
-            .Where(n => n.Content is Comment c && c.ParentCommentId == parentContent.Id)
-            .ToList();
-
-        replies.Should().HaveCountGreaterThanOrEqualTo(3,
-            "All 3 replies should be queryable as children");
-
         foreach (var replyPath in replyPaths)
         {
-            replies.Should().Contain(n => n.Path == replyPath,
+            allComments.Should().Contain(n => n.Path == replyPath,
                 $"Reply at {replyPath} should be in query results");
         }
 

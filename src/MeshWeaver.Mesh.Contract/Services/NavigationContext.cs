@@ -43,4 +43,21 @@ public record NavigationContext
     /// Used as the default namespace for queries when none is specified.
     /// </summary>
     public string Namespace => Address.ToString();
+
+    /// <summary>
+    /// The primary node's path. For satellite nodes (Comment, Thread),
+    /// this is the main node's path. For regular nodes, same as Namespace.
+    /// Used for permission resolution and menu context.
+    /// </summary>
+    public string PrimaryPath =>
+        Node?.Content is ISatelliteContent satellite && !string.IsNullOrEmpty(satellite.PrimaryNodePath)
+            ? satellite.PrimaryNodePath
+            : Namespace;
+
+    /// <summary>
+    /// Whether the current node is a satellite (exists in conjunction with a primary node).
+    /// </summary>
+    public bool IsSatellite =>
+        Node?.Content is ISatelliteContent satellite
+        && !string.IsNullOrEmpty(satellite.PrimaryNodePath);
 }

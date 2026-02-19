@@ -40,7 +40,7 @@ public static class ThreadLayoutAreas
                 .WithView(ThreadArea, ThreadView)
                 .WithView(HistoryArea, HistoryView)
                 .WithView(MeshNodeLayoutAreas.CreateNodeArea, CreateView)
-                .WithView(MeshNodeLayoutAreas.SettingsArea, MeshNodeLayoutAreas.Settings)
+                .WithView(MeshNodeLayoutAreas.SettingsArea, SettingsLayoutArea.Settings)
                 .WithView(MeshNodeLayoutAreas.MetadataArea, MeshNodeLayoutAreas.Metadata)
                 .WithView(MeshNodeLayoutAreas.ThumbnailArea, Thumbnail));
 
@@ -95,6 +95,7 @@ public static class ThreadLayoutAreas
     /// Renders the Create area for Thread nodes.
     /// Auto-creates a thread with generated name and redirects to ChatArea.
     /// Thread nodes are created under a "Threads" sub-namespace: {parentPath}/Threads/{threadId}
+    /// Requires Update permission on the parent node.
     /// </summary>
     public static IObservable<UiControl?> CreateView(LayoutAreaHost host, RenderingContext _)
     {
@@ -104,6 +105,14 @@ public static class ThreadLayoutAreas
         // Auto-create and redirect
         return Observable.FromAsync(async () =>
         {
+            // Permission gate: thread creation requires Update permission
+            var canEdit = await PermissionHelper.CanEditAsync(host.Hub, parentPath);
+            if (!canEdit)
+            {
+                return (UiControl?)Controls.Html(
+                    "<p style=\"color: var(--error-foreground); padding: 24px;\">Access denied: You do not have permission to create threads here.</p>");
+            }
+
             var now = DateTime.UtcNow;
             var nodeId = Guid.NewGuid().AsString();
             var name = $"Thread {now:yyyy-MM-dd HH:mm}";
@@ -510,7 +519,7 @@ public static class ThreadLayoutAreas
     /// <summary>
     /// Builds the action menu for thread nodes.
     /// </summary>
-    private static UiControl BuildThreadActionMenu(LayoutAreaHost host, MeshNode? node, string threadPath)
+    private static UiControl BuildThreadActionMenu(LayoutAreaHost host, MeshNode? node, string threadPath, bool canEdit = true)
     {
         var menu = Controls.MenuItem("", FluentIcons.MoreHorizontal(IconSize.Size20))
             .WithAppearance(Appearance.Stealth)
@@ -528,8 +537,11 @@ public static class ThreadLayoutAreas
         // Metadata option
         menu = menu.WithView(new NavLinkControl("Metadata", FluentIcons.Info(IconSize.Size16), $"/{threadPath}/{MeshNodeLayoutAreas.MetadataArea}"));
 
-        // Settings option
-        menu = menu.WithView(new NavLinkControl("Settings", FluentIcons.Settings(IconSize.Size16), $"/{threadPath}/{MeshNodeLayoutAreas.SettingsArea}"));
+        // Settings option (only when user can edit)
+        if (canEdit)
+        {
+            menu = menu.WithView(new NavLinkControl("Settings", FluentIcons.Settings(IconSize.Size16), $"/{threadPath}/{MeshNodeLayoutAreas.SettingsArea}"));
+        }
 
         return menu;
     }

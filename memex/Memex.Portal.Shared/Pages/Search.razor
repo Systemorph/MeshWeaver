@@ -226,9 +226,10 @@
 
         try
         {
+            var fullQuery = $"{query} -nodeType:Comment -nodeType:Thread";
             var request = new MeshQueryRequest
             {
-                Query = query,
+                Query = fullQuery,
                 Limit = 100
             };
 

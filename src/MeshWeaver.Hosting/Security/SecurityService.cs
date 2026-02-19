@@ -40,7 +40,8 @@ public class SecurityService : ISecurityService
     {
         { "Admin", Role.Admin },
         { "Editor", Role.Editor },
-        { "Viewer", Role.Viewer }
+        { "Viewer", Role.Viewer },
+        { "Commenter", Role.Commenter }
     };
 
     private JsonSerializerOptions JsonOptions => _hub.JsonSerializerOptions;
@@ -444,21 +445,22 @@ public class SecurityService : ISecurityService
         var existingAccess = records.FirstOrDefault(u => u.UserId == userId);
         if (existingAccess != null)
         {
-            // Check if role already exists
-            if (existingAccess.Roles.Any(r => r.RoleId == roleId))
-                return; // Role already assigned
+            // Check if role already exists as a grant (non-denied)
+            if (existingAccess.Roles.Any(r => r.RoleId == roleId && !r.Denied))
+                return; // Role already assigned as grant
 
-            // Add new role to existing access
-            var updatedAccess = existingAccess with
-            {
-                Roles = existingAccess.Roles.Append(new UserRole
+            // Remove any denied version of this role, then add the grant
+            var updatedRoles = existingAccess.Roles
+                .Where(r => r.RoleId != roleId)
+                .Append(new UserRole
                 {
                     RoleId = roleId,
                     AssignedAt = DateTimeOffset.UtcNow,
                     AssignedBy = assignedBy
-                }).ToList()
-            };
+                })
+                .ToList();
 
+            var updatedAccess = existingAccess with { Roles = updatedRoles };
             records = records.Where(u => u.UserId != userId).Append(updatedAccess).ToList();
         }
         else
@@ -522,33 +524,236 @@ public class SecurityService : ISecurityService
     /// <summary>
     /// Gets the effective roles for a user at a specific namespace path.
     /// Considers global roles and hierarchical inheritance from parent namespaces.
+    /// Uses closest-wins semantics: for each roleId, the assignment at the deepest
+    /// (most specific) path wins. If that assignment has Denied=true, the role is excluded.
     /// </summary>
     public async Task<IReadOnlyList<UserRole>> GetEffectiveRolesAsync(string userId, string targetNamespace, CancellationToken ct = default)
     {
-        var effectiveRoles = new List<UserRole>();
+        // Collect all assignments from deepest to shallowest
+        // Order: self path first, then ancestors (deepest to shallowest), then global
+        var roleAssignments = new Dictionary<string, (UserRole Role, int Depth)>();
 
-        // Check global partition first (global roles apply everywhere)
-        var globalRecords = await GetAccessRecordsAsync(AccessPartitionName, ct);
-        var globalAccess = globalRecords.FirstOrDefault(u => u.UserId == userId);
-        if (globalAccess != null)
-        {
-            effectiveRoles.AddRange(globalAccess.Roles);
-        }
-
-        // Check namespace and all ancestor partitions
+        // Check namespace and all ancestor partitions (deepest first from GetPathHierarchy)
         var pathsToCheck = GetPathHierarchy(targetNamespace, true);
-        foreach (var path in pathsToCheck)
+        for (var i = 0; i < pathsToCheck.Count; i++)
         {
+            var path = pathsToCheck[i];
+            var depth = pathsToCheck.Count - i; // deeper paths get higher depth
             var partitionPath = GetAccessPartitionPath(path);
             var records = await GetAccessRecordsAsync(partitionPath, ct);
             var userAccess = records.FirstOrDefault(u => u.UserId == userId);
             if (userAccess != null)
             {
-                effectiveRoles.AddRange(userAccess.Roles);
+                foreach (var role in userAccess.Roles)
+                {
+                    // Only keep the deepest (first encountered) assignment per roleId
+                    if (!roleAssignments.ContainsKey(role.RoleId))
+                    {
+                        roleAssignments[role.RoleId] = (role, depth);
+                    }
+                }
             }
         }
 
-        return effectiveRoles;
+        // Check global partition (depth 0 = shallowest)
+        var globalRecords = await GetAccessRecordsAsync(AccessPartitionName, ct);
+        var globalAccess = globalRecords.FirstOrDefault(u => u.UserId == userId);
+        if (globalAccess != null)
+        {
+            foreach (var role in globalAccess.Roles)
+            {
+                if (!roleAssignments.ContainsKey(role.RoleId))
+                {
+                    roleAssignments[role.RoleId] = (role, 0);
+                }
+            }
+        }
+
+        // Return only non-denied roles
+        return roleAssignments.Values
+            .Where(a => !a.Role.Denied)
+            .Select(a => a.Role)
+            .ToList();
+    }
+
+    /// <summary>
+    /// Gets raw role assignments from all levels (global, ancestors, self) for a node path.
+    /// Each assignment includes its source path and whether it's local or inherited.
+    /// </summary>
+    public async IAsyncEnumerable<AccessAssignment> GetAccessAssignmentsAsync(
+        string nodePath,
+        [EnumeratorCancellation] CancellationToken ct = default)
+    {
+        var pathsToCheck = GetPathHierarchy(nodePath, true);
+        var localPath = pathsToCheck[0]; // The node itself
+
+        // Yield assignments from the node's own partition (IsLocal = true)
+        var localPartition = GetAccessPartitionPath(localPath);
+        var localRecords = await GetAccessRecordsAsync(localPartition, ct);
+        foreach (var record in localRecords)
+        {
+            foreach (var role in record.Roles)
+            {
+                yield return new AccessAssignment(
+                    record.UserId,
+                    record.DisplayName,
+                    role.RoleId,
+                    localPath,
+                    role.Denied,
+                    IsLocal: true
+                );
+            }
+        }
+
+        // Yield assignments from ancestor partitions (IsLocal = false)
+        foreach (var ancestorPath in pathsToCheck.Skip(1))
+        {
+            var ancestorPartition = GetAccessPartitionPath(ancestorPath);
+            var ancestorRecords = await GetAccessRecordsAsync(ancestorPartition, ct);
+            foreach (var record in ancestorRecords)
+            {
+                foreach (var role in record.Roles)
+                {
+                    yield return new AccessAssignment(
+                        record.UserId,
+                        record.DisplayName,
+                        role.RoleId,
+                        ancestorPath,
+                        role.Denied,
+                        IsLocal: false
+                    );
+                }
+            }
+        }
+
+        // Yield assignments from the global partition (IsLocal = false)
+        var globalRecords = await GetAccessRecordsAsync(AccessPartitionName, ct);
+        foreach (var record in globalRecords)
+        {
+            foreach (var role in record.Roles)
+            {
+                yield return new AccessAssignment(
+                    record.UserId,
+                    record.DisplayName,
+                    role.RoleId,
+                    "",
+                    role.Denied,
+                    IsLocal: false
+                );
+            }
+        }
+    }
+
+    /// <summary>
+    /// Toggles a role assignment for a user at a specific path.
+    /// If denying: creates/updates a local UserRole with Denied=true.
+    /// If granting: if there's a local deny record, removes it; otherwise creates a grant.
+    /// </summary>
+    public async Task ToggleRoleAssignmentAsync(
+        string nodePath, string userId, string roleId, bool denied,
+        CancellationToken ct = default)
+    {
+        _logger.LogInformation("Toggling role {RoleId} for user {UserId} on {NodePath} to denied={Denied}",
+            roleId, userId, nodePath, denied);
+
+        var partitionPath = GetAccessPartitionPath(nodePath);
+        var records = await GetAccessRecordsAsync(partitionPath, ct);
+        var existingAccess = records.FirstOrDefault(u => u.UserId == userId);
+
+        if (denied)
+        {
+            // Create or update a local deny record
+            if (existingAccess != null)
+            {
+                // Remove any existing assignment for this role, then add deny
+                var updatedRoles = existingAccess.Roles
+                    .Where(r => r.RoleId != roleId)
+                    .Append(new UserRole
+                    {
+                        RoleId = roleId,
+                        Denied = true,
+                        AssignedAt = DateTimeOffset.UtcNow
+                    })
+                    .ToList();
+
+                var updatedAccess = existingAccess with { Roles = updatedRoles };
+                records = records.Where(u => u.UserId != userId).Append(updatedAccess).ToList();
+            }
+            else
+            {
+                records.Add(new UserAccess
+                {
+                    UserId = userId,
+                    Roles =
+                    [
+                        new UserRole
+                        {
+                            RoleId = roleId,
+                            Denied = true,
+                            AssignedAt = DateTimeOffset.UtcNow
+                        }
+                    ]
+                });
+            }
+        }
+        else
+        {
+            // Granting: remove local deny record if it exists
+            if (existingAccess != null)
+            {
+                var denyRecord = existingAccess.Roles.FirstOrDefault(r => r.RoleId == roleId && r.Denied);
+                if (denyRecord != null)
+                {
+                    // Remove the deny record (let inherited grant take effect)
+                    var updatedRoles = existingAccess.Roles
+                        .Where(r => !(r.RoleId == roleId && r.Denied))
+                        .ToList();
+
+                    if (updatedRoles.Count == 0)
+                    {
+                        records = records.Where(u => u.UserId != userId).ToList();
+                    }
+                    else
+                    {
+                        var updatedAccess = existingAccess with { Roles = updatedRoles };
+                        records = records.Where(u => u.UserId != userId).Append(updatedAccess).ToList();
+                    }
+                }
+                // If no deny record exists and no grant exists, create a grant
+                else if (!existingAccess.Roles.Any(r => r.RoleId == roleId && !r.Denied))
+                {
+                    var updatedRoles = existingAccess.Roles
+                        .Append(new UserRole
+                        {
+                            RoleId = roleId,
+                            AssignedAt = DateTimeOffset.UtcNow
+                        })
+                        .ToList();
+
+                    var updatedAccess = existingAccess with { Roles = updatedRoles };
+                    records = records.Where(u => u.UserId != userId).Append(updatedAccess).ToList();
+                }
+            }
+            else
+            {
+                // No existing record - create a new grant
+                records.Add(new UserAccess
+                {
+                    UserId = userId,
+                    Roles =
+                    [
+                        new UserRole
+                        {
+                            RoleId = roleId,
+                            AssignedAt = DateTimeOffset.UtcNow
+                        }
+                    ]
+                });
+            }
+        }
+
+        await SaveAccessRecordsAsync(partitionPath, records, ct);
+        ClearAccessCache();
     }
 
     /// <summary>

@@ -16,6 +16,6 @@
     "displayName": "Organization",
     "iconName": "Building",
     "description": "An organization containing projects",
-    "configuration": "config => config.WithContentType<Organization>().AddLayout(layout => layout.WithView(\"Overview\", OrganizationViews.Details))"
+    "configuration": "config => config.WithContentType<Organization>().AddLayout(layout => layout.WithView(\"Overview\", OrganizationViews.Overview))"
   }
 }

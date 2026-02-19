@@ -136,5 +136,27 @@ public interface ISecurityService
     /// <param name="ct">Cancellation token</param>
     Task RemoveUserRoleAsync(string userId, string roleId, string? targetNamespace, CancellationToken ct = default);
 
+    /// <summary>
+    /// Gets raw role assignments from all levels (global, ancestors, self) for a node path.
+    /// Each assignment includes its source path and whether it's local or inherited.
+    /// </summary>
+    /// <param name="nodePath">The node path to inspect</param>
+    /// <param name="ct">Cancellation token</param>
+    /// <returns>Async enumerable of access assignments from all levels</returns>
+    IAsyncEnumerable<AccessAssignment> GetAccessAssignmentsAsync(string nodePath, CancellationToken ct = default);
+
+    /// <summary>
+    /// Toggles a role assignment for a user at a specific path.
+    /// If the role is inherited and being denied, creates a local Denied=true record.
+    /// If the role is local and being toggled, updates the local record.
+    /// If undoing a deny, removes the local deny record.
+    /// </summary>
+    /// <param name="nodePath">The node path where the toggle applies</param>
+    /// <param name="userId">The user's ObjectId</param>
+    /// <param name="roleId">The role ID to toggle</param>
+    /// <param name="denied">True to deny, false to grant</param>
+    /// <param name="ct">Cancellation token</param>
+    Task ToggleRoleAssignmentAsync(string nodePath, string userId, string roleId, bool denied, CancellationToken ct = default);
+
     #endregion
 }

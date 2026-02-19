@@ -22,9 +22,9 @@ public enum CommentStatus
 
 /// <summary>
 /// Represents a comment on a mesh node.
-/// Comments can be nested via ParentCommentId for threading.
+/// Comments are nested via MeshNode path hierarchy for threading.
 /// </summary>
-public record Comment
+public record Comment : ISatelliteContent
 {
     /// <summary>
     /// Unique identifier for the comment.
@@ -34,10 +34,13 @@ public record Comment
     public string Id { get; init; } = Guid.NewGuid().ToString();
 
     /// <summary>
-    /// Path of the node this comment belongs to.
+    /// Path of the primary document node this comment belongs to (ISatelliteContent).
+    /// Used for permission checks (edit access on the document).
+    /// For top-level comments, this is the document they annotate.
+    /// For replies, this is the original document path (not the parent comment).
     /// </summary>
     [Browsable(false)]
-    public string NodePath { get; init; } = string.Empty;
+    public string? PrimaryNodePath { get; init; } = string.Empty;
 
     /// <summary>
     /// Marker ID linking this comment to highlighted text in the document.
@@ -69,13 +72,6 @@ public record Comment
     /// </summary>
     [Browsable(false)]
     public DateTimeOffset CreatedAt { get; init; } = DateTimeOffset.UtcNow;
-
-    /// <summary>
-    /// Optional parent comment ID for threaded discussions.
-    /// Null for top-level comments.
-    /// </summary>
-    [Browsable(false)]
-    public string? ParentCommentId { get; init; }
 
     /// <summary>
     /// Status of the comment (Active or Resolved).

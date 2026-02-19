@@ -1,10 +1,13 @@
 using System.Reactive.Linq;
+using MeshWeaver.Application.Styles;
 using MeshWeaver.Data;
 using MeshWeaver.Domain;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Layout.Domain;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Security;
+using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using MeshWeaver.ShortGuid;
 using Microsoft.Extensions.DependencyInjection;
@@ -78,15 +81,26 @@ public static class CommentsView
 
     /// <summary>
     /// Renders the Comments area showing comments for the node (Facebook-style).
-    /// Shows 10 most recent with "Load more" functionality.
+    /// Shows 10 most recent with "Load more" functionality and an "Add Comment" button.
     /// Uses GetStream for reactive data binding when Comment is registered as mapped type.
     /// </summary>
     public static IObservable<UiControl?> Comments(LayoutAreaHost host, RenderingContext _)
     {
         var nodePath = host.Hub.Address.ToString();
+        var accessService = host.Hub.ServiceProvider.GetService<AccessService>();
+        var currentUser = accessService?.Context?.Name ?? "";
+
+        var permissionsStream = Observable.FromAsync(() => PermissionHelper.GetEffectivePermissionsAsync(host.Hub, nodePath));
 
         return host.StreamView<Comment>(
-            (comments, _) => BuildFacebookStyleComments(host, comments.ToList(), nodePath),
+            (comments, h) =>
+            {
+                // Get permissions synchronously from the cached stream
+                var perms = Permission.None;
+                permissionsStream.Take(1).Subscribe(p => perms = p);
+                var canComment = perms.HasFlag(Permission.Comment) || perms.HasFlag(Permission.Update);
+                return BuildFacebookStyleComments(h, comments.ToList(), nodePath, currentUser, canComment);
+            },
             "Comments");
     }
 
@@ -96,44 +110,105 @@ public static class CommentsView
     /// </summary>
     public static UiControl BuildInlineCommentsSection(LayoutAreaHost host)
     {
-        var section = Controls.Stack.WithWidth("100%").WithStyle("margin-top: 32px; border-top: 1px solid #e0e0e0; padding-top: 16px;");
+        var section = Controls.Stack.WithWidth("100%").WithStyle("margin-top: 32px; border-top: 1px solid var(--neutral-stroke-rest); padding-top: 16px;");
 
-        section = section.WithView(Controls.Html("<h3>Comments</h3>"));
-        section = section.WithView(Controls.Html("<p style=\"color: #888; font-size: 0.9em; margin-bottom: 16px;\">Use the AI agent to add comments. Example: \"Add a comment saying 'This looks good'\"</p>"));
+        section = section.WithView(Controls.Html("<h3 style=\"margin: 0 0 12px 0;\">Comments</h3>"));
 
         section = section.WithView(Controls.LayoutArea(host.Hub.Address, MeshNodeLayoutAreas.CommentsArea));
 
         return section;
     }
 
-    private static UiControl BuildFacebookStyleComments(LayoutAreaHost _, List<Comment> comments, string __)
+    private static UiControl BuildFacebookStyleComments(LayoutAreaHost host, List<Comment> comments, string nodePath,
+        string currentUser, bool canComment)
     {
         var container = Controls.Stack.WithWidth("100%");
+
+        // Add Comment button (gated by permission)
+        if (canComment && !string.IsNullOrEmpty(currentUser))
+        {
+            container = container.WithView(BuildAddCommentButton(host, nodePath, currentUser));
+        }
 
         if (comments.Count == 0)
         {
             container = container.WithView(
-                Controls.Html("<p style=\"color: #888; font-style: italic;\">No comments yet.</p>"));
-            return container;
+                Controls.Html("<p style=\"color: var(--neutral-foreground-hint); font-style: italic;\">No comments yet.</p>"));
         }
-
-        var recentComments = comments.OrderByDescending(c => c.CreatedAt).Take(CommentsPageSize).ToList();
-
-        foreach (var comment in recentComments)
+        else
         {
-            container = container.WithView(BuildCommentCard(comment));
+            var recentComments = comments.OrderByDescending(c => c.CreatedAt).Take(CommentsPageSize).ToList();
+
+            foreach (var comment in recentComments)
+            {
+                container = container.WithView(BuildCommentCard(comment));
+            }
+
+            if (comments.Count > CommentsPageSize)
+            {
+                var remainingCount = comments.Count - CommentsPageSize;
+                container = container.WithView(
+                    Controls.Button($"View {remainingCount} more comment{(remainingCount > 1 ? "s" : "")}")
+                        .WithAppearance(Appearance.Lightweight)
+                        .WithStyle("margin-top: 8px;"));
+            }
         }
 
-        if (comments.Count > CommentsPageSize)
+        // Inline comment create area — rendered when newCommentPathStateId is non-empty
+        var newCommentPathStateId = $"newComment_{nodePath.Replace("/", "_")}";
+        container = container.WithView((h, _) =>
         {
-            var remainingCount = comments.Count - CommentsPageSize;
-            container = container.WithView(
-                Controls.Button($"View {remainingCount} more comment{(remainingCount > 1 ? "s" : "")}")
-                    .WithAppearance(Appearance.Lightweight)
-                    .WithStyle("margin-top: 8px;"));
-        }
+            h.UpdateData(newCommentPathStateId, "");
+            return h.Stream.GetDataStream<string>(newCommentPathStateId)
+                .DistinctUntilChanged()
+                .Select(commentPath =>
+                {
+                    if (string.IsNullOrEmpty(commentPath))
+                        return (UiControl)Controls.Stack; // empty placeholder
+
+                    return (UiControl)Controls.Stack
+                        .WithStyle("margin-top: 12px; padding: 12px; border: 1px solid var(--neutral-stroke-rest); border-radius: 8px; min-height: 120px;")
+                        .WithView(Controls.LayoutArea(commentPath, MeshNodeLayoutAreas.CreateNodeArea));
+                });
+        });
 
         return container;
+    }
+
+    /// <summary>
+    /// Builds the "Add Comment" button. Creates a transient comment node with PrimaryNodePath set.
+    /// </summary>
+    private static UiControl BuildAddCommentButton(LayoutAreaHost host, string nodePath, string currentUser)
+    {
+        return Controls.Button("Add Comment")
+            .WithIconStart(FluentIcons.Comment(IconSize.Size16))
+            .WithAppearance(Appearance.Accent)
+            .WithStyle("margin-bottom: 12px;")
+            .WithClickAction(async _ =>
+            {
+                var commentId = Guid.NewGuid().AsString();
+                var commentPath = $"{nodePath}/{commentId}";
+                var newCommentPathStateId = $"newComment_{nodePath.Replace("/", "_")}";
+
+                var commentNode = new MeshNode(commentPath)
+                {
+                    Name = "Comment",
+                    NodeType = CommentNodeType.NodeType,
+                    State = MeshNodeState.Transient,
+                    Content = new Comment
+                    {
+                        Id = commentId,
+                        PrimaryNodePath = nodePath,
+                        Author = currentUser,
+                        Status = CommentStatus.Active
+                    }
+                };
+
+                var meshCatalog = host.Hub.ServiceProvider.GetRequiredService<IMeshCatalog>();
+                await meshCatalog.CreateNodeAsync(commentNode, currentUser);
+
+                host.UpdateData(newCommentPathStateId, commentPath);
+            });
     }
 
     private static UiControl BuildCommentCard(Comment comment)

@@ -84,7 +84,7 @@ public class SecurityServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
         var permissions = await securityService.GetEffectivePermissionsAsync(nodePath, userId, TestTimeout);
 
         // Assert
-        permissions.Should().Be(Permission.Read | Permission.Create | Permission.Update);
+        permissions.Should().Be(Permission.Read | Permission.Create | Permission.Update | Permission.Comment);
     }
 
     [Fact(Timeout = 10000)]
@@ -156,7 +156,7 @@ public class SecurityServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
         var permissions = await securityService.GetEffectivePermissionsAsync(path2, userId, TestTimeout);
 
         // Assert - Should combine Viewer (Read) + Editor (Read, Create, Update) = Read | Create | Update
-        permissions.Should().Be(Permission.Read | Permission.Create | Permission.Update);
+        permissions.Should().Be(Permission.Read | Permission.Create | Permission.Update | Permission.Comment);
     }
 
     [Fact(Timeout = 10000)]
