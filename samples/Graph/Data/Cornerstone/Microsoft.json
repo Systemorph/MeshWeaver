@@ -6,6 +6,7 @@
   "category": "Clients",
   "description": "Global technology company - Insurance client",
   "iconName": "Building",
+  "icon": "/static/storage/content/Cornerstone/icons/microsoft.svg",
   "isPersistent": true,
   "content": {
     "$type": "Insured",

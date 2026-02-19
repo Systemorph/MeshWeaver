@@ -5,7 +5,7 @@
   "nodeType": "Northwind/AnalyticsCatalog",
   "category": "Analytics",
   "description": "Dashboards and analytics views for Northwind Traders data",
-  "iconName": "ChartMultiple",
+  "icon": "/static/storage/content/Northwind/icons/analytics.svg",
   "displayOrder": 3,
   "isPersistent": true,
   "content": {

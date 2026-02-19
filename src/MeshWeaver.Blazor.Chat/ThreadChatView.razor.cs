@@ -614,7 +614,40 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
             {
                 var currentAuthor = update.AuthorName ?? "Assistant";
 
-                if (lastRole == currentAuthor)
+                // Check for non-text content (layout areas, delegations, function calls)
+                var nonTextContents = update.Contents
+                    .Where(c => c is ChatLayoutAreaContent or ChatDelegationContent or FunctionCallContent)
+                    .ToList();
+
+                if (nonTextContents.Count > 0)
+                {
+                    // Flush any accumulated text message before inserting non-text content
+                    if (!string.IsNullOrWhiteSpace(currentResponseMessage?.Text))
+                    {
+                        messages.Add(currentResponseMessage!);
+                        await SaveMessageAsChildNodeAsync(currentResponseMessage!, ThreadMessageType.AgentResponse);
+                    }
+
+                    // Add each non-text content as its own message
+                    foreach (var content in nonTextContents)
+                    {
+                        var contentMessage = new ChatMessage(new ChatRole(currentAuthor), [content])
+                        {
+                            AuthorName = currentAuthor
+                        };
+                        messages.Add(contentMessage);
+                        // Do NOT save non-text content as child nodes (non-serializable)
+                    }
+
+                    // Reset text accumulator for subsequent text
+                    lastRole = currentAuthor;
+                    responseText = new TextContent(string.Empty);
+                    currentResponseMessage = new ChatMessage(new ChatRole(lastRole), [responseText])
+                    {
+                        AuthorName = currentAuthor
+                    };
+                }
+                else if (lastRole == currentAuthor)
                 {
                     responseText.Text += update.Text;
                 }
@@ -623,7 +656,6 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
                     if (!string.IsNullOrWhiteSpace(currentResponseMessage?.Text))
                     {
                         messages.Add(currentResponseMessage!);
-                        // Save completed agent message as child node
                         await SaveMessageAsChildNodeAsync(currentResponseMessage!, ThreadMessageType.AgentResponse);
                     }
 

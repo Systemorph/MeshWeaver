@@ -38,14 +38,13 @@ Cornerstone/                           # Reinsurance company namespace
 ├── Insured.json                       # Insured NodeType definition
 ├── Pricing.json                       # Pricing NodeType definition
 ├── Pricing/                           # Pricing-related assets
-│   ├── Code/                          # Business logic and views
-│   │   ├── Pricing.cs                 # Pricing entity
-│   │   ├── PricingViews.cs            # Layout area views
-│   │   ├── PricingStatus.cs           # Status dimension
-│   │   ├── PropertyRisk.cs            # Risk entity
-│   │   ├── ReinsuranceAcceptance.cs   # Layer entity
-│   │   └── ReinsuranceSection.cs      # Section entity
-│   └── PricingAgent.md                # AI agent definition
+│   └── Code/                          # Business logic and views
+│       ├── Pricing.cs                 # Pricing entity
+│       ├── PricingViews.cs            # View definitions
+│       ├── PricingStatus.cs           # Status dimension
+│       ├── PropertyRisk.cs            # Risk entity
+│       ├── ReinsuranceAcceptance.cs   # Layer entity
+│       └── ReinsuranceSection.cs      # Section entity
 ├── Code/                              # Shared reference data
 │   ├── Country.cs                     # Country dimension
 │   ├── Currency.cs                    # Currency dimension
@@ -56,8 +55,16 @@ Cornerstone/                           # Reinsurance company namespace
 │   └── 2026/                          # Pricing instance
 │       ├── 2026.json                  # Pricing data
 │       └── Submissions/               # Content collection
-└── GlobalManufacturing/               # Another insured
-    └── 2024/                          # Pricing instance
+├── GlobalManufacturing/               # Insured instance
+│   └── 2024/                          # Pricing instance
+├── EuropeanLogistics/                 # Insured instance
+│   └── 2024/                          # Pricing instance
+├── TechIndustries/                    # Insured instance
+│   └── 2024/                          # Pricing instance
+├── Tesla/                             # Insured instance
+│   └── 2026/                          # Pricing instance
+└── Nestle/                            # Insured instance
+    └── 2026/                          # Pricing instance
 ```
 
 ### Path Examples
@@ -150,7 +157,7 @@ This configuration:
 - Configures a ContentCollection for file uploads (Submissions)
 - Registers multiple dimension types (LineOfBusiness, Country, Currency, etc.)
 - Registers business entities (PropertyRisk, ReinsuranceAcceptance, ReinsuranceSection)
-- Sets Overview as the default layout area
+- Sets Overview as the default view
 
 ## Data Model
 
@@ -213,8 +220,8 @@ sequenceDiagram
     participant LayoutArea as PropertyRisks View
 
     Note over Portal,LayoutArea: Initial Setup
-    Portal->>PricingHub: Subscribe to PropertyRisks layout area
-    PricingHub->>LayoutArea: Activate layout area stream
+    Portal->>PricingHub: Subscribe to Property Risks view
+    PricingHub->>LayoutArea: Activate view stream
     LayoutArea->>Portal: Stream initial DataGrid
     Portal->>UI: Render property risks table
 
@@ -230,7 +237,7 @@ sequenceDiagram
 
 ### Step-by-Step Breakdown
 
-1. **Subscription Phase**: The portal subscribes to layout areas in the pricing hub
+1. **Subscription Phase**: The portal subscribes to views in the pricing hub
 2. **User Action**: User uploads an Excel file with property data
 3. **Message Dispatch**: The portal sends the file to the pricing hub
 4. **Data Processing**: The hub processes the Excel and creates PropertyRisk entities
@@ -238,7 +245,7 @@ sequenceDiagram
 6. **Stream Update**: The updated DataGrid is streamed to all subscribed portals
 7. **UI Refresh**: The portal receives the update and refreshes the table
 
-## Views and Layout Areas
+## Views
 
 MeshWeaver follows the MVVM pattern. Views are registered through NodeType configuration and executed reactively.
 
@@ -247,11 +254,11 @@ MeshWeaver follows the MVVM pattern. Views are registered through NodeType confi
 | View | Description | Content |
 |------|-------------|---------|
 | **Overview** | Pricing summary | Header, dates, parties, status |
-| **PropertyRisks** | Risk data | DataGrid with location details and TSI |
-| **RiskMap** | Geographic view | Google Maps with risk markers |
-| **Structure** | Reinsurance layers | Mermaid diagram of coverage |
+| **Property Risks** | Risk data | DataGrid with location details and TSI |
+| **Risk Map** | Geographic view | Google Maps with risk markers |
+| **Structure** | Reinsurance layers | DataGrids showing reinsurance layers and sections |
 | **Submission** | File management | File browser for uploads |
-| **ImportConfigs** | Import settings | Excel column mappings |
+| **Import Configs** | Import settings | Excel column mappings |
 
 ### View Registration
 

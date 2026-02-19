@@ -1,0 +1,18 @@
+{
+  "$type": "MeshNode",
+  "id": "Northwind/Analytics/Threads/Rw92p4Ba2ku8hHJt5wQZKA/FjTWq0-pEUWIKr2aimhzCA",
+  "path": "Northwind/Analytics/Threads/Rw92p4Ba2ku8hHJt5wQZKA/FjTWq0-pEUWIKr2aimhzCA",
+  "nodeType": "ThreadMessage",
+  "icon": "/static/NodeTypeIcons/message.svg",
+  "lastModified": "2026-02-17T14:42:42.727171+00:00",
+  "state": "Active",
+  "content": {
+    "$type": "ThreadMessage",
+    "id": "FjTWq0-pEUWIKr2aimhzCA",
+    "role": "NorthwindAgent",
+    "authorName": "NorthwindAgent",
+    "text": "Thanks \u2014 I refreshed the OrderDetailsReport and applied the customer filter for QUICK-Stop so you should now see all orders for that customer in the view. Use the year toolbar to change the year or tell me if you want additional filters (date range, region, employee) or an export of the order list.",
+    "timestamp": "2026-02-17T14:42:42.726678Z",
+    "type": "AgentResponse"
+  }
+}

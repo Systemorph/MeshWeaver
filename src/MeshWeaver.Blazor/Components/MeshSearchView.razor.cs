@@ -52,7 +52,19 @@ public partial class MeshSearchView : IDisposable
     private string BoundVisibleQuery => ViewModel?.VisibleQuery?.ToString() ?? "";
     private string BoundPlaceholder => ViewModel?.Placeholder?.ToString() ?? "Search...";
     private string BoundNamespace => ViewModel?.Namespace?.ToString() ?? "";
-    private bool BoundShowSearchBox => ViewModel?.ShowSearchBox is bool show ? show : true;
+    private bool BoundShowSearchBox
+    {
+        get
+        {
+            if (ViewModel?.ShowSearchBox is bool show) return show;
+            if (ViewModel?.ShowSearchBox is JsonElement je)
+            {
+                if (je.ValueKind == JsonValueKind.False) return false;
+                if (je.ValueKind == JsonValueKind.True) return true;
+            }
+            return true; // default
+        }
+    }
     private bool BoundExcludeBasePath => ViewModel?.ExcludeBasePath is bool exclude ? exclude : true;
     private bool BoundLiveSearch => ViewModel?.LiveSearch is bool live ? live : true;
     private MeshSearchRenderMode BoundRenderMode => ViewModel?.RenderMode is MeshSearchRenderMode mode ? mode : MeshSearchRenderMode.Grouped;
@@ -77,6 +89,7 @@ public partial class MeshSearchView : IDisposable
     protected override void OnParametersSet()
     {
         base.OnParametersSet();
+
         if (!_initialized && !string.IsNullOrEmpty(BoundVisibleQuery))
         {
             _currentValue = BoundVisibleQuery;

@@ -81,3 +81,15 @@ Learn MeshWeaver through an agent-based pricing process:
 - Document management and Excel import workflows (Submissions + ImportConfigs)
 
 [Explore Cornerstone Insurance Use Case](MeshWeaver/Documentation/Cornerstone)
+
+---
+
+### Northwind Traders
+
+Learn MeshWeaver through gourmet food analytics:
+- Virtual data cube combining Orders, OrderDetails, and Products
+- Multi-year analytics with year-over-year comparison
+- 53 views organized across 8 analytics categories
+- Natural language queries with the NorthwindAgent
+
+[Explore Northwind Use Case](MeshWeaver/Documentation/Northwind)

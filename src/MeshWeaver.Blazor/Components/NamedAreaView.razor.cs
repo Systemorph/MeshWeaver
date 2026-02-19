@@ -56,6 +56,19 @@ public partial class NamedAreaView
                             AreaToBeRendered, control?.GetType().Name ?? "null");
                         RequestStateChange();
                     });
+                },
+                error =>
+                {
+                    Logger.LogError(error, "Error in control stream for area {Area}", AreaToBeRendered);
+                    InvokeAsync(() =>
+                    {
+                        RootControl = new MarkdownControl($"**Error loading area:** {error.Message}");
+                        RequestStateChange();
+                    });
+                },
+                () =>
+                {
+                    Logger.LogDebug("Control stream completed for area {Area}", AreaToBeRendered);
                 }
             )
         );

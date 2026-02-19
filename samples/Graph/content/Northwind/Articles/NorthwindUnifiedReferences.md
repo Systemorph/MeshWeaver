@@ -4,6 +4,7 @@ Abstract: >
   This document demonstrates all addressable items in the Northwind application using MeshWeaver's
   unified content reference notation. It covers operational data, reference data, and layout areas
   specific to the Northwind domain.
+Icon: "Document"
 Thumbnail: "images/UnifiedReferences.svg"
 Published: "2025-12-06"
 Authors:

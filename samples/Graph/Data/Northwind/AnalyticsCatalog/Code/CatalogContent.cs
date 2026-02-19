@@ -19,6 +19,5 @@ public record CatalogContent
     [MeshNodeProperty(nameof(MeshNode.Name))]
     public string Name { get; init; } = string.Empty;
 
-    [MeshNodeProperty(nameof(MeshNode.Description))]
     public string? Description { get; init; }
 }

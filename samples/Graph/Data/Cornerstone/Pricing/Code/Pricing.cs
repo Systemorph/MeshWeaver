@@ -33,7 +33,6 @@ public record Pricing : IContentInitializable
     /// Brief description of the pricing.
     /// </summary>
     [Markdown(EditorHeight = "150px", ShowPreview = false)]
-    [MeshNodeProperty(nameof(MeshNode.Description))]
     [Description("Detailed description of the pricing, coverage scope, and special conditions")]
     public string? Description { get; init; }
 

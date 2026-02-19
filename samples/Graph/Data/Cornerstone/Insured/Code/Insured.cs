@@ -21,7 +21,6 @@ public record Insured
     [Description("Legal name of the insured company or individual")]
     public string Name { get; init; } = string.Empty;
 
-    [MeshNodeProperty(nameof(MeshNode.Description))]
     [Description("Brief description of the insured's business activities")]
     public string? Description { get; init; }
 

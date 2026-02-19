@@ -1,18 +1,14 @@
 {
   "id": "Northwind",
   "name": "Northwind Traders",
-  "nodeType": "Organization",
+  "nodeType": "Markdown",
   "description": "Northwind Traders - Gourmet food distribution analytics with sales, orders, products, and customer insights",
   "iconName": "ChartMultiple",
+  "icon": "/static/storage/content/Northwind/icon.svg",
   "isPersistent": true,
   "content": {
-    "$type": "Organization",
-    "id": "Northwind",
-    "name": "Northwind Traders",
-    "description": "Northwind Traders is a gourmet food distribution company supplying specialty food products to retailers and restaurants worldwide. Analytics cover 77 products, 91 customers, 9 employees, 29 suppliers, and 830 orders.",
-    "website": "https://northwind.example.com",
-    "location": "United States",
-    "email": "info@northwind.example.com",
-    "isVerified": false
+    "$type": "MarkdownDocument",
+    "title": "Northwind Traders",
+    "content": "# Northwind Traders\n\nNorthwind Traders is a gourmet food distribution company supplying specialty food products to retailers and restaurants worldwide. Analytics cover 77 products, 91 customers, 9 employees, 29 suppliers, and 830 orders.\n\nThis is a model for the [Northwind Database](https://github.com/microsoft/sql-server-samples/blob/master/samples/databases/northwind-pubs/readme.md). It is a small data domain modelling an e-commerce store. The complexity is moderate, however it is more realistic than, e.g., a TODO application or a blog application.\n\nThe Northwind Database is ideal to explain basic concepts around data modelling and creating views and interactive articles. We have updated the data only so slightly as to move the dates from the 90ies to the 2020s.\n\nFor the first time ever, we have created an annual report of Northwind, and we demonstrate our ideas to create interactive articles to report and explain data. Here is the major dashboard:\n\n@@(\"Northwind/Analytics/Dashboard\")\n\n## Financial Summary\n\nBelow is an overview of key financial metrics and performance indicators:\n\n@@(\"Northwind/Analytics/FinancialSummary\")\n\nPlease have a look at the [Northwind Analytics](/Northwind/Analytics) for interactive dashboards, the [Northwind Reports](/Northwind/Reports) for detailed data analysis, and the [Northwind Articles](/Northwind/Articles) for reference documentation.\n\nFor a comprehensive reference of all addressable items, see the [Northwind Unified References](/Northwind/Articles/NorthwindUnifiedReferences)."
   }
 }

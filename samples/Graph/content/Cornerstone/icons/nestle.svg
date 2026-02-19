@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" fill="none">
+  <defs>
+    <linearGradient id="nestleGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#2d6a30"/>
+      <stop offset="100%" stop-color="#5cb85c"/>
+    </linearGradient>
+  </defs>
+  <!-- Nest / bowl shape -->
+  <path d="M4 14 Q4 20 12 20 Q20 20 20 14" stroke="url(#nestleGradient)" stroke-width="2" stroke-linecap="round" fill="none"/>
+  <path d="M6 14 Q6 18 12 18 Q18 18 18 14" stroke="url(#nestleGradient)" stroke-width="1.2" stroke-linecap="round" fill="none" opacity="0.6"/>
+  <!-- Three birds above the nest -->
+  <path d="M8 8 Q9 6 10 8" stroke="url(#nestleGradient)" stroke-width="1.5" stroke-linecap="round" fill="none"/>
+  <path d="M11 6 Q12 4 13 6" stroke="url(#nestleGradient)" stroke-width="1.5" stroke-linecap="round" fill="none"/>
+  <path d="M14 8 Q15 6 16 8" stroke="url(#nestleGradient)" stroke-width="1.5" stroke-linecap="round" fill="none"/>
+  <!-- Leaf accent -->
+  <path d="M3 11 Q5 8 8 10" stroke="#5cb85c" stroke-width="1" fill="#5cb85c" opacity="0.4"/>
+  <path d="M21 11 Q19 8 16 10" stroke="#5cb85c" stroke-width="1" fill="#5cb85c" opacity="0.4"/>
+</svg>

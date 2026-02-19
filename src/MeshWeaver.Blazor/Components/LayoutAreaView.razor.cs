@@ -99,7 +99,6 @@ public partial class LayoutAreaView
             DialogStream = SetupDialogAreaMonitoring(AreaStream!);
             DialogStream?.RegisterForDisposal(DialogStream.DistinctUntilChanged().Subscribe(el => OnDialogStreamChanged(el.Value)));
         }
-
     }
 
     private ISynchronizationStream<JsonElement>? DialogStream { get; set; }
@@ -143,9 +142,9 @@ public partial class LayoutAreaView
         }
     }
 
-    protected override void OnAfterRender(bool firstRender)
+    protected override async Task OnAfterRenderAsync(bool firstRender)
     {
-        base.OnAfterRender(firstRender);
+        await base.OnAfterRenderAsync(firstRender);
         if (firstRender)
         {
             IsNotPreRender = true;

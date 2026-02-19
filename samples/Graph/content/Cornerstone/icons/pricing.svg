@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" fill="none">
+  <defs>
+    <linearGradient id="pricingGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#3b82f6"/>
+      <stop offset="100%" stop-color="#8b5cf6"/>
+    </linearGradient>
+  </defs>
+  <!-- Document background -->
+  <path d="M6 2h8l6 6v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2z" fill="#f1f5f9" stroke="url(#pricingGradient)" stroke-width="1.5"/>
+  <!-- Folded corner -->
+  <path d="M14 2v6h6" fill="#e2e8f0" stroke="url(#pricingGradient)" stroke-width="1.5" stroke-linejoin="round"/>
+  <!-- Dollar sign -->
+  <circle cx="12" cy="15.5" r="4.5" fill="url(#pricingGradient)" opacity="0.15"/>
+  <text x="12" y="18" text-anchor="middle" font-family="Arial, sans-serif" font-size="8" font-weight="bold" fill="url(#pricingGradient)">$</text>
+</svg>

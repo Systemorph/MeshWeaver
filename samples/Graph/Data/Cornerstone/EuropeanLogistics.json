@@ -6,6 +6,7 @@
   "category": "Clients",
   "description": "UK logistics and transportation company - Insurance client",
   "iconName": "Building",
+  "icon": "/static/storage/content/Cornerstone/icons/europeanlogistics.svg",
   "isPersistent": true,
   "content": {
     "$type": "Insured",

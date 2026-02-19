@@ -5,7 +5,7 @@
   "nodeType": "Northwind/ContentCatalog",
   "category": "Documentation",
   "description": "Conceptual articles and reference documentation for Northwind Traders",
-  "iconName": "Document",
+  "icon": "/static/storage/content/Northwind/icons/articles.svg",
   "displayOrder": 1,
   "isPersistent": true
 }

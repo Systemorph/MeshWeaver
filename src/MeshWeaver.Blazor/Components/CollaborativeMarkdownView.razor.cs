@@ -1,3 +1,4 @@
+using Markdig;
 using MeshWeaver.Data;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Client;
@@ -130,7 +131,10 @@ public partial class CollaborativeMarkdownView
 
         // Transform annotation markers to HTML spans before markdown rendering
         var transformed = AnnotationMarkdownExtension.TransformAnnotations(content);
-        return Markdig.Markdown.ToHtml(transformed);
+
+        // Use the standard pipeline that includes LayoutAreaMarkdownExtension for @@ syntax
+        var pipeline = MeshWeaver.Markdown.MarkdownExtensions.CreateMarkdownPipeline(null);
+        return Markdig.Markdown.ToHtml(transformed, pipeline);
     }
 
     // View mode

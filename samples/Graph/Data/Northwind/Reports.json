@@ -5,7 +5,7 @@
   "nodeType": "Northwind/ContentCatalog",
   "category": "Reports",
   "description": "Data-driven analytical reports on Northwind Traders sales, orders, products, clients, and employees",
-  "iconName": "DocumentData",
+  "icon": "/static/storage/content/Northwind/icons/reports.svg",
   "displayOrder": 2,
   "isPersistent": true
 }

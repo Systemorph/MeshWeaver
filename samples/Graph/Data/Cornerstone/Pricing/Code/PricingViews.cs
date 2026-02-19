@@ -45,10 +45,10 @@ public static class PricingViews
         return Controls.Toolbar
             .WithView(ToolbarButton("Overview", $"/{pricingPath}/Overview", activeView == "Overview"))
             .WithView(ToolbarButton("Submission", $"/{pricingPath}/Submission", activeView == "Submission"))
-            .WithView(ToolbarButton("Risks", $"/{pricingPath}/PropertyRisks", activeView == "PropertyRisks"))
-            .WithView(ToolbarButton("Map", $"/{pricingPath}/RiskMap", activeView == "RiskMap"))
+            .WithView(ToolbarButton("Property Risks", $"/{pricingPath}/PropertyRisks", activeView == "PropertyRisks"))
+            .WithView(ToolbarButton("Risk Map", $"/{pricingPath}/RiskMap", activeView == "RiskMap"))
             .WithView(ToolbarButton("Structure", $"/{pricingPath}/Structure", activeView == "Structure"))
-            .WithView(ToolbarButton("Import", $"/{pricingPath}/ImportConfigs", activeView == "ImportConfigs"));
+            .WithView(ToolbarButton("Import Configs", $"/{pricingPath}/ImportConfigs", activeView == "ImportConfigs"));
     }
 
     private static ButtonControl ToolbarButton(string text, string href, bool isActive)

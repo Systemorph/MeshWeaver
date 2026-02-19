@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" fill="none">
+  <defs>
+    <linearGradient id="buildingGradient" x1="0%" y1="100%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#1e40af"/>
+      <stop offset="100%" stop-color="#3b82f6"/>
+    </linearGradient>
+  </defs>
+  <!-- Building body -->
+  <rect x="3" y="6" width="12" height="16" rx="1" fill="url(#buildingGradient)"/>
+  <!-- Windows -->
+  <rect x="5" y="8" width="2.5" height="2" rx="0.3" fill="#e2e8f0"/>
+  <rect x="9" y="8" width="2.5" height="2" rx="0.3" fill="#e2e8f0"/>
+  <rect x="5" y="12" width="2.5" height="2" rx="0.3" fill="#e2e8f0"/>
+  <rect x="9" y="12" width="2.5" height="2" rx="0.3" fill="#e2e8f0"/>
+  <!-- Door -->
+  <rect x="7" y="17" width="4" height="5" rx="0.5" fill="#e2e8f0"/>
+  <!-- Shield accent -->
+  <path d="M19 5 L22.5 7 V11 C22.5 13.5 21 15.5 19 16.5 C17 15.5 15.5 13.5 15.5 11 V7 Z" fill="#60a5fa" stroke="#1e40af" stroke-width="0.8"/>
+  <!-- Shield checkmark -->
+  <path d="M17.5 10.5 L18.5 11.5 L20.5 9" stroke="white" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+</svg>
