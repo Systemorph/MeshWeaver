@@ -79,21 +79,41 @@ public static class AccessControlLayoutArea
         // Load initial data and push to subjects
         LoadAssignmentsAsync(securityService, nodePath, inheritedSubject, localSubject);
 
-        // Inherited Permissions section
+        // Inherited Permissions section with data-bound template
         stack = stack.WithView(Controls.H3("Inherited Permissions").WithStyle("margin: 0;"));
-        stack = stack.WithView(BuildAssignmentList(
-            inheritedSubject, InheritedStreamId, host, securityService, nodePath, isAdmin, showSource: true));
+        stack = stack.WithView(
+            inheritedSubject.BindMany(InheritedStreamId, a =>
+                Controls.Stack
+                    .WithOrientation(Orientation.Horizontal)
+                    .WithStyle("padding: 8px 16px; border-bottom: 1px solid var(--neutral-stroke-rest); align-items: center;")
+                    .WithView(Controls.Label(a.DisplayLabel).WithStyle("flex: 1; min-width: 120px;"))
+                    .WithView(Controls.Label(a.RoleId).WithStyle("flex: 1; min-width: 120px;"))
+                    .WithView(Controls.Label(a.SourceDisplay).WithStyle("flex: 1; min-width: 100px;"))
+                    .WithView(Controls.Switch(a.IsActive)
+                        .WithCheckedMessage("Allow")
+                        .WithUncheckedMessage("Deny"))
+            )
+        );
 
-        // Local Assignments section
+        // Local Assignments section with data-bound template
         stack = stack.WithView(Controls.H3("Local Assignments").WithStyle("margin: 0;"));
-        stack = stack.WithView(BuildAssignmentList(
-            localSubject, LocalStreamId, host, securityService, nodePath, isAdmin, showSource: false));
+        stack = stack.WithView(
+            localSubject.BindMany(LocalStreamId, a =>
+                Controls.Stack
+                    .WithOrientation(Orientation.Horizontal)
+                    .WithStyle("padding: 8px 16px; border-bottom: 1px solid var(--neutral-stroke-rest); align-items: center;")
+                    .WithView(Controls.Label(a.DisplayLabel).WithStyle("flex: 1; min-width: 120px;"))
+                    .WithView(Controls.Label(a.RoleId).WithStyle("flex: 1; min-width: 120px;"))
+                    .WithView(Controls.Switch(a.IsActive)
+                        .WithCheckedMessage("Allow")
+                        .WithUncheckedMessage("Deny"))
+            )
+        );
 
         // Add Assignment button (only for admins)
         if (isAdmin)
         {
-            stack = stack.WithView(BuildAddButton(host, securityService, nodePath,
-                inheritedSubject, localSubject));
+            stack = stack.WithView(BuildAddButton(host, securityService, nodePath));
         }
 
         return stack;
@@ -120,77 +140,7 @@ public static class AccessControlLayoutArea
         localSubject.OnNext(local.OrderBy(a => a.UserId).ThenBy(a => a.RoleId));
     }
 
-    private static UiControl BuildAssignmentList(
-        IObservable<IEnumerable<AccessAssignment>> stream,
-        string streamId,
-        LayoutAreaHost host,
-        ISecurityService securityService,
-        string nodePath,
-        bool isAdmin,
-        bool showSource)
-    {
-        return stream.BindMany(streamId, a =>
-            BuildAssignmentRow(a, nodePath, showSource, isAdmin, host, securityService, stream, streamId)
-        );
-    }
-
-    private static StackControl BuildAssignmentRow(
-        AccessAssignment a,
-        string nodePath,
-        bool showSource,
-        bool isAdmin,
-        LayoutAreaHost host,
-        ISecurityService securityService,
-        IObservable<IEnumerable<AccessAssignment>> parentStream,
-        string streamId)
-    {
-        var row = Controls.Stack
-            .WithOrientation(Orientation.Horizontal)
-            .WithStyle("padding: 8px 16px; border-bottom: 1px solid var(--neutral-stroke-rest); align-items: center;")
-            .WithView(Controls.Label(a.DisplayName ?? a.UserId).WithStyle("flex: 1; min-width: 120px;"))
-            .WithView(Controls.Label(a.RoleId).WithStyle("flex: 1; min-width: 120px;"));
-
-        if (showSource)
-        {
-            var sourceDisplay = string.IsNullOrEmpty(a.SourcePath) ? "Global" : a.SourcePath;
-            row = row.WithView(Controls.Label(sourceDisplay).WithStyle("flex: 1; min-width: 100px;"));
-        }
-
-        // Toggle switch: Allow (on) / Deny (off)
-        var toggleId = $"toggle_{Guid.NewGuid().AsString()}";
-        var isActive = !a.Denied;
-        host.UpdateData(toggleId, isActive);
-
-        var toggle = Controls.Switch(new JsonPointerReference(LayoutAreaReference.GetDataPointer(toggleId)))
-            .WithCheckedMessage("Allow")
-            .WithUncheckedMessage("Deny");
-
-        if (!isAdmin)
-            toggle = toggle with { Disabled = true };
-
-        // Handle toggle via click action on a wrapper button
-        var toggleButton = Controls.Button("")
-            .WithStyle("background: transparent; border: none; padding: 0; min-width: auto; width: 80px;")
-            .WithClickAction(async ctx =>
-            {
-                if (!isAdmin) return;
-
-                var svc = ctx.Hub.ServiceProvider.GetRequiredService<ISecurityService>();
-                var newDenied = !a.Denied;
-                await svc.ToggleRoleAssignmentAsync(nodePath, a.UserId, a.RoleId, newDenied);
-
-                // Reload and push new data to the streams
-                await RefreshAssignmentsAsync(svc, nodePath, ctx.Host);
-            });
-
-        row = row.WithView(Controls.Stack
-            .WithStyle("width: 100px; display: flex; justify-content: center;")
-            .WithView(toggle));
-
-        return row;
-    }
-
-    private static async Task RefreshAssignmentsAsync(
+    internal static async Task RefreshAssignmentsAsync(
         ISecurityService securityService,
         string nodePath,
         LayoutAreaHost host)
@@ -217,9 +167,7 @@ public static class AccessControlLayoutArea
     private static UiControl BuildAddButton(
         LayoutAreaHost host,
         ISecurityService securityService,
-        string nodePath,
-        BehaviorSubject<IEnumerable<AccessAssignment>> inheritedSubject,
-        BehaviorSubject<IEnumerable<AccessAssignment>> localSubject)
+        string nodePath)
     {
         return Controls.Button("Add Assignment")
             .WithAppearance(Appearance.Accent)

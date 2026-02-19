@@ -593,16 +593,7 @@ public class SecurityService : ISecurityService
         foreach (var record in localRecords)
         {
             foreach (var role in record.Roles)
-            {
-                yield return new AccessAssignment(
-                    record.UserId,
-                    record.DisplayName,
-                    role.RoleId,
-                    localPath,
-                    role.Denied,
-                    IsLocal: true
-                );
-            }
+                yield return BuildAssignment(record, role, localPath, isLocal: true);
         }
 
         // Yield assignments from ancestor partitions (IsLocal = false)
@@ -613,16 +604,7 @@ public class SecurityService : ISecurityService
             foreach (var record in ancestorRecords)
             {
                 foreach (var role in record.Roles)
-                {
-                    yield return new AccessAssignment(
-                        record.UserId,
-                        record.DisplayName,
-                        role.RoleId,
-                        ancestorPath,
-                        role.Denied,
-                        IsLocal: false
-                    );
-                }
+                    yield return BuildAssignment(record, role, ancestorPath, isLocal: false);
             }
         }
 
@@ -631,17 +613,25 @@ public class SecurityService : ISecurityService
         foreach (var record in globalRecords)
         {
             foreach (var role in record.Roles)
-            {
-                yield return new AccessAssignment(
-                    record.UserId,
-                    record.DisplayName,
-                    role.RoleId,
-                    "",
-                    role.Denied,
-                    IsLocal: false
-                );
-            }
+                yield return BuildAssignment(record, role, "", isLocal: false);
         }
+    }
+
+    private static AccessAssignment BuildAssignment(
+        UserAccess record, UserRole role, string sourcePath, bool isLocal)
+    {
+        return new AccessAssignment
+        {
+            UserId = record.UserId,
+            DisplayName = record.DisplayName,
+            RoleId = role.RoleId,
+            SourcePath = sourcePath,
+            Denied = role.Denied,
+            IsLocal = isLocal,
+            DisplayLabel = record.DisplayName ?? record.UserId,
+            SourceDisplay = string.IsNullOrEmpty(sourcePath) ? "Global" : sourcePath,
+            IsActive = !role.Denied
+        };
     }
 
     /// <summary>
