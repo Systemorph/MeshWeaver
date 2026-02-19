@@ -4,7 +4,6 @@ using MeshWeaver.Blazor.Portal.Components;
 using MeshWeaver.Blazor.Portal.Resize;
 using MeshWeaver.ContentCollections;
 using MeshWeaver.Mesh;
-using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.AspNetCore.Components;
@@ -20,6 +19,7 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
     [Inject] protected ChatWindowStateService ChatState { get; set; } = null!;
     [Inject] protected IMessageHub Hub { get; set; } = null!;
     [Inject] protected INavigationService NavigationService { get; set; } = null!;
+    [Inject] protected INodeMenuService NodeMenuService { get; set; } = null!;
 
     // Splitter pane sizes - default 3:1 ratio (75% main, 25% chat)
     private string MainPaneSize => ChatState.Width.HasValue ? $"{100 - ChatState.Width.Value}%" : "75%";
@@ -50,16 +50,14 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
     private bool isNavMenuOpen;
     protected bool IsNavMenuOpen => isNavMenuOpen;
 
-    private bool isCreateMenuOpen;
+    private bool isNodeMenuOpen;
 
-    // Creatable types - from NavigationService observable
-    private CreatableTypesSnapshot _creatableTypesSnapshot = CreatableTypesSnapshot.Empty;
-    private IDisposable? _creatableTypesSubscription;
-    protected IReadOnlyList<CreatableTypeInfo> CreatableTypes => _creatableTypesSnapshot.Items;
-    protected bool IsLoadingCreatableTypes => _creatableTypesSnapshot.IsLoading;
+    // Menu state from NodeMenuService
+    private NodeMenuState _menuState = NodeMenuState.Empty;
+    private IDisposable? _menuSubscription;
 
-    // Permission check for import/create
-    protected bool HasCreatePermission { get; private set; } = true;
+    protected IReadOnlyList<CreatableTypeInfo> CreatableTypes => _menuState.CreatableTypes.Items;
+    protected bool IsLoadingCreatableTypes => _menuState.CreatableTypes.IsLoading;
 
     // Editable content collections
     protected IReadOnlyList<ContentCollectionConfig> EditableCollections { get; private set; } = [];
@@ -72,9 +70,9 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
     {
         base.OnInitialized();
         ChatState.OnStateChanged += OnChatStateChanged;
-        _creatableTypesSubscription = NavigationService.CreatableTypes.Subscribe(snapshot =>
+        _menuSubscription = NodeMenuService.State.Subscribe(state =>
         {
-            _creatableTypesSnapshot = snapshot;
+            _menuState = state;
             InvokeAsync(StateHasChanged);
         });
     }
@@ -85,54 +83,42 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
         await NavigationService.InitializeAsync();
     }
 
-    private async Task CheckCreatePermissionAsync()
+    private void ToggleNodeMenu()
     {
-        HasCreatePermission = true; // Default: allow if no security service
-        var securityService = Hub.ServiceProvider.GetService(typeof(ISecurityService)) as ISecurityService;
-        if (securityService != null)
-        {
-            try
-            {
-                var currentPath = NavigationService.CurrentNamespace ?? "";
-                var permissions = await securityService.GetEffectivePermissionsAsync(currentPath);
-                HasCreatePermission = permissions.HasFlag(Permission.Create);
-            }
-            catch
-            {
-                HasCreatePermission = true; // Fallback: allow on error
-            }
-        }
+        isNodeMenuOpen = !isNodeMenuOpen;
+        if (isNodeMenuOpen)
+            NodeMenuService.Refresh();
     }
 
-    private async Task ToggleCreateMenu()
+    private void OnNodeMenuOpenChanged(bool open)
     {
-        isCreateMenuOpen = !isCreateMenuOpen;
-        if (isCreateMenuOpen)
-        {
-            NavigationService.RefreshCreatableTypes();
-            await CheckCreatePermissionAsync();
-
-            // 2) Load editable collections if we have create permission
-            if (HasCreatePermission)
-            {
-                LoadEditableCollections();
-            }
-        }
+        isNodeMenuOpen = open;
     }
 
-    private void LoadEditableCollections()
+    /// <summary>
+    /// Navigates to the current node's Settings page.
+    /// </summary>
+    private void NavigateToNodeSettings()
     {
-        var contentService = Hub.ServiceProvider.GetService<IContentService>();
-        if (contentService != null)
-        {
-            EditableCollections = contentService.GetAllCollectionConfigs()
-                .ToList();
-        }
+        isNodeMenuOpen = false;
+        var currentPath = NavigationService.CurrentNamespace ?? "";
+        var settingsUrl = string.IsNullOrEmpty(currentPath)
+            ? "/Settings"
+            : $"/{currentPath}/Settings";
+        NavigationManager.NavigateTo(settingsUrl);
     }
 
-    private void OnCreateMenuOpenChanged(bool open)
+    /// <summary>
+    /// Navigates to the current node's Delete page.
+    /// </summary>
+    private void NavigateToNodeDelete()
     {
-        isCreateMenuOpen = open;
+        isNodeMenuOpen = false;
+        var currentPath = NavigationService.CurrentNamespace ?? "";
+        var deleteUrl = string.IsNullOrEmpty(currentPath)
+            ? "/Delete"
+            : $"/{currentPath}/Delete";
+        NavigationManager.NavigateTo(deleteUrl);
     }
 
     /// <summary>
@@ -140,7 +126,7 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
     /// </summary>
     protected virtual async Task OpenCreateNodeDialogAsync(CreatableTypeInfo? selectedType)
     {
-        isCreateMenuOpen = false;
+        isNodeMenuOpen = false;
 
         var currentPath = NavigationService.CurrentNamespace ?? "";
         var dialogData = new CreateNodeDialogData
@@ -169,7 +155,7 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
     /// </summary>
     protected async Task OpenImportNodeDialogAsync()
     {
-        isCreateMenuOpen = false;
+        isNodeMenuOpen = false;
 
         var dialogData = new ImportNodeDialogData
         {
@@ -249,22 +235,6 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
         StateHasChanged();
     }
 
-    private IDialogReference? dialog;
-
-    protected async Task OpenSiteSettingsAsync()
-    {
-        dialog = await DialogService.ShowPanelAsync<SiteSettingsPanel>(new DialogParameters()
-        {
-            ShowTitle = true,
-            Title = "Site settings",
-            Alignment = HorizontalAlignment.Right,
-            PrimaryAction = "OK",
-            SecondaryAction = null,
-            ShowDismiss = true
-        });
-
-        await dialog.Result;
-    }
 
     public bool IsAIChatVisible => ChatState.IsVisible;
     protected ChatPosition ChatPositionValue => ChatState.Position;
@@ -322,7 +292,7 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
     public void Dispose()
     {
         ChatState.OnStateChanged -= OnChatStateChanged;
-        _creatableTypesSubscription?.Dispose();
+        _menuSubscription?.Dispose();
         dotNetRef?.Dispose();
         jsModule?.DisposeAsync();
     }

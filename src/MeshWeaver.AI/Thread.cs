@@ -1,4 +1,5 @@
 using System.Text.Json;
+using MeshWeaver.Mesh;
 using MeshWeaver.ShortGuid;
 
 namespace MeshWeaver.AI;
@@ -33,7 +34,7 @@ public enum ThreadMessageType
 /// Title is stored in MeshNode.Name, LastModified tracks activity.
 /// Messages are stored as child MeshNodes with nodeType="ThreadMessage".
 /// </summary>
-public record Thread
+public record Thread : ISatelliteContent
 {
     /// <summary>
     /// Serialized AgentSession state for resuming conversations.
@@ -53,6 +54,11 @@ public record Thread
     /// Used for navigation back to context.
     /// </summary>
     public string? ParentPath { get; init; }
+
+    /// <summary>
+    /// ISatelliteContent: permissions are checked against the parent node.
+    /// </summary>
+    public string? PrimaryNodePath => ParentPath;
 }
 
 /// <summary>

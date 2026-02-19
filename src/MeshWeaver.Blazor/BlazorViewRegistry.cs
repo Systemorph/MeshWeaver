@@ -88,6 +88,7 @@ public static class BlazorViewRegistry
             NodeImportControl nodeImport => StandardView<NodeImportControl, NodeImportView>(nodeImport, stream, area),
             ProgressControl progress => StandardView<ProgressControl, ProgressView>(progress, stream, area),
             CheckBoxControl checkbox => StandardView<CheckBoxControl, Checkbox>(checkbox, stream, area),
+            SwitchControl switchCtrl => StandardView<SwitchControl, Switch>(switchCtrl, stream, area),
             ItemTemplateControl itemTemplate
                 => StandardView<ItemTemplateControl, ItemTemplate>(itemTemplate, stream, area),
             CollaborativeMarkdownControl collaborativeMarkdown => StandardView<CollaborativeMarkdownControl, CollaborativeMarkdownView>(collaborativeMarkdown, stream, area),
@@ -102,6 +103,7 @@ public static class BlazorViewRegistry
             RedirectControl redirect => StandardView<RedirectControl, RedirectView>(redirect, stream, area),
             SearchBoxControl searchBox => StandardView<SearchBoxControl, SearchBoxView>(searchBox, stream, area),
             MeshSearchControl meshSearch => StandardView<MeshSearchControl, MeshSearchView>(meshSearch, stream, area),
+            AppearanceControl appearance => StandardView<AppearanceControl, AppearanceView>(appearance, stream, area),
             _ => DelegateToDotnetInteractive(instance, stream, area),
         };
     }

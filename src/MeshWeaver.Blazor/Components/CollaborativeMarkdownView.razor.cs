@@ -18,7 +18,6 @@ public partial class CollaborativeMarkdownView
 
     private ElementReference containerRef;
     private ElementReference contentRef;
-    private ElementReference sidebarRef;
 
     private IJSObjectReference? jsModule;
 
@@ -29,7 +28,8 @@ public partial class CollaborativeMarkdownView
 
     // View state (local Blazor state)
     private string CurrentViewMode = "Markup";
-    private HashSet<string> ExpandedAnnotationIds = new();
+    private string? activeAnnotationId;
+    private bool jsInitialized;
 
     // Parsed data
     private string RenderedHtml = "";
@@ -39,12 +39,6 @@ public partial class CollaborativeMarkdownView
 
     private bool HasSideAnnotations =>
         CurrentViewMode == "Markup" && Annotations.Count > 0;
-
-    private List<ParsedAnnotation> TrackChangeAnnotations =>
-        Annotations.Where(a => a.Type != AnnotationType.Comment).ToList();
-
-    private List<ParsedAnnotation> CommentAnnotations =>
-        Annotations.Where(a => a.Type == AnnotationType.Comment).ToList();
 
     private string ViewModeClass => CurrentViewMode switch
     {
@@ -94,9 +88,14 @@ public partial class CollaborativeMarkdownView
                 "import", "./_content/MeshWeaver.Blazor/Components/CollaborativeMarkdownView.razor.js");
         }
 
-        if (jsModule != null && HasSideAnnotations)
+        if (jsModule != null && !jsInitialized)
         {
-            await jsModule.InvokeVoidAsync("positionAnnotations", contentRef, sidebarRef);
+            jsInitialized = true;
+            await jsModule.InvokeVoidAsync("init", containerRef);
+        }
+        else if (jsModule != null && jsInitialized && HasSideAnnotations)
+        {
+            await jsModule.InvokeVoidAsync("positionCards");
         }
     }
 
@@ -172,14 +171,6 @@ public partial class CollaborativeMarkdownView
         PostContentUpdate(newContent);
     }
 
-    // Resolve comment (remove marker, keep text)
-    private void OnResolveComment(string annotationId)
-    {
-        var newContent = AnnotationMarkdownExtension.ResolveComment(RawContent, annotationId);
-        UpdateContentLocally(newContent);
-        PostContentUpdate(newContent);
-    }
-
     /// <summary>
     /// Update local state immediately for responsive UI, then let the hub echo back.
     /// </summary>
@@ -202,39 +193,28 @@ public partial class CollaborativeMarkdownView
             Content = new MarkdownContent { Content = newContent }
         };
 
+        // Set ChangedBy to the stream's ClientId so the echo-filter suppresses
+        // our own change from being pushed back (avoiding unnecessary re-render).
         Hub.Post(
-            new DataChangeRequest().WithUpdates(nodeUpdate),
+            new DataChangeRequest { ChangedBy = Stream?.ClientId }.WithUpdates(nodeUpdate),
             o => o.WithTarget(new Address(BoundHubAddress)));
     }
 
-    // Highlight an annotation (scroll-into-view via JS)
+    // Highlight an annotation (Blazor state for card, JS for inline span)
     private async Task HighlightAnnotation(string annotationId)
     {
+        activeAnnotationId = annotationId;
+        StateHasChanged();
         if (jsModule != null)
             await jsModule.InvokeVoidAsync("highlightAnnotation", annotationId);
     }
 
-    // Expand/collapse
-    private void ToggleExpanded(string id)
-    {
-        if (!ExpandedAnnotationIds.Add(id))
-            ExpandedAnnotationIds.Remove(id);
-        StateHasChanged();
-    }
-
-    private bool IsExpanded(string id) => ExpandedAnnotationIds.Contains(id);
-
     // Helpers
-    private static string GetInitial(string? author) =>
-        !string.IsNullOrEmpty(author) ? author[0].ToString().ToUpper() : "?";
+    private string GetCommentAddress(string commentId) =>
+        $"{BoundNodePath}/{commentId}";
 
-    private static string GetTypeColor(AnnotationType type) => type switch
-    {
-        AnnotationType.Comment => "#3b82f6",
-        AnnotationType.Insert => "#22c55e",
-        AnnotationType.Delete => "#ef4444",
-        _ => "#6b7280"
-    };
+    private static string Truncate(string text, int maxLength) =>
+        text.Length <= maxLength ? text : text[..maxLength] + "…";
 
     private static string GetTypeLabel(AnnotationType type) => type switch
     {
@@ -242,13 +222,6 @@ public partial class CollaborativeMarkdownView
         AnnotationType.Insert => "Inserted",
         AnnotationType.Delete => "Deleted",
         _ => "Change"
-    };
-
-    private static string GetTypeBg(AnnotationType type) => type switch
-    {
-        AnnotationType.Insert => "rgba(34, 197, 94, 0.15)",
-        AnnotationType.Delete => "rgba(239, 68, 68, 0.15)",
-        _ => "rgba(59, 130, 246, 0.1)"
     };
 
     internal static string FormatTimeAgo(DateTimeOffset dateTime)
@@ -265,6 +238,7 @@ public partial class CollaborativeMarkdownView
     {
         if (jsModule != null)
         {
+            try { await jsModule.InvokeVoidAsync("dispose"); } catch { }
             await jsModule.DisposeAsync();
             jsModule = null;
         }

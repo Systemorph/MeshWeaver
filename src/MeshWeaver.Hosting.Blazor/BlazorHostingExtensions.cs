@@ -25,6 +25,7 @@ public static class BlazorHostingExtensions
                 .AddFluentUIComponents()
                 .AddScoped<PortalApplication>()
                 .AddScoped<INavigationService, NavigationService>()
+                .AddScoped<INodeMenuService, NodeMenuService>()
                 .AddMeshMcp()
             )
             .ConfigureHub(hub => hub.AddBlazor(clientConfig));

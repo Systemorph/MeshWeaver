@@ -154,8 +154,8 @@ public class UserAccessTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
         var permMeshWeaver = await securityService.GetEffectivePermissionsAsync("MeshWeaver", "Alice", TestTimeout);
 
         // Assert
-        permACME.Should().Be(Permission.Read | Permission.Create | Permission.Update);
-        permChild.Should().Be(Permission.Read | Permission.Create | Permission.Update); // Inherited
+        permACME.Should().Be(Permission.Read | Permission.Create | Permission.Update | Permission.Comment);
+        permChild.Should().Be(Permission.Read | Permission.Create | Permission.Update | Permission.Comment); // Inherited
         permMeshWeaver.Should().Be(Permission.None); // No access to other namespaces
     }
 
@@ -186,7 +186,7 @@ public class UserAccessTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
 
         // Assert
         permMeshWeaver.Should().Be(Permission.Read); // Viewer
-        permACME.Should().Be(Permission.Read | Permission.Create | Permission.Update); // Editor
+        permACME.Should().Be(Permission.Read | Permission.Create | Permission.Update | Permission.Comment); // Editor
     }
 
     #endregion
@@ -399,7 +399,7 @@ public class UserAccessTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
 
         // Assert
         permAnonymous.Should().Be(Permission.None); // Anonymous blocked
-        permAuthUser.Should().Be(Permission.Read | Permission.Create | Permission.Update); // Has Editor role
+        permAuthUser.Should().Be(Permission.Read | Permission.Create | Permission.Update | Permission.Comment); // Has Editor role
     }
 
     #endregion

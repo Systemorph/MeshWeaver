@@ -1,7 +1,14 @@
+/* ==========================================================================
+   CollaborativeMarkdownView — scoped component styles
+   Uses Fluent design tokens (var(--neutral-*)) for theme support.
+   CSS custom properties defined in <style> block in .razor file
+   (since :root can't be scoped). All annotation styles use ::deep
+   to target MarkupString HTML content rendered as descendants.
+   ========================================================================== */
+
 .collab-md-container {
     width: 100%;
     padding: 24px 0;
-    background: var(--neutral-layer-1);
     position: relative;
 }
 
@@ -27,99 +34,637 @@
     display: flex;
     gap: 24px;
     align-items: flex-start;
-    position: relative;
 }
 
 .collab-md-content {
     flex: 1;
     min-width: 0;
-    max-width: 750px;
-    position: relative;
     line-height: 1.7;
     font-size: 1rem;
 }
 
-.collab-md-split:not(.with-sidebar) .collab-md-content {
-    max-width: 1100px;
-}
-
 .collab-md-sidebar {
-    flex: 0 0 340px;
-    min-width: 300px;
-    max-width: 380px;
-    position: relative;
+    flex: 0 0 300px;
+    min-width: 260px;
+    max-width: 340px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
 }
 
-/* Card styles */
+/* --- Annotation Cards (compact) --- */
+
+::deep .annotation-card {
+    padding: 8px 10px;
+    border-radius: 6px;
+    border: 1px solid var(--neutral-stroke-rest);
+    background: var(--neutral-layer-1);
+    cursor: pointer;
+    transition: border-color 0.15s ease, background-color 0.15s ease;
+    font-size: 0.85rem;
+    line-height: 1.4;
+}
+
+::deep .annotation-card:hover {
+    border-color: var(--neutral-stroke-hover);
+}
+
+::deep .annotation-card.active {
+    border: 2px solid var(--annotation-active-border);
+    background: var(--annotation-active-bg);
+}
+
+::deep .annotation-card.active.annotation-type-insert {
+    border-color: var(--annotation-insert-border);
+    background: var(--annotation-insert-bg);
+}
+
+::deep .annotation-card.active.annotation-type-delete {
+    border-color: var(--annotation-delete-border);
+    background: var(--annotation-delete-bg);
+}
+
+/* Card header: author left, buttons right */
 .collab-md-card-header {
     display: flex;
     align-items: center;
-    gap: 8px;
-    margin-bottom: 8px;
-}
-
-.collab-md-avatar {
-    width: 32px;
-    height: 32px;
-    border-radius: 50%;
-    color: white;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-weight: 600;
-    font-size: 14px;
-    flex-shrink: 0;
-}
-
-.collab-md-avatar-sm {
-    width: 20px;
-    height: 20px;
-    font-size: 10px;
+    justify-content: space-between;
+    gap: 6px;
 }
 
 .collab-md-card-meta {
     display: flex;
-    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+    flex: 1;
 }
 
 .collab-md-author {
     font-weight: 600;
-    font-size: 0.9rem;
+    font-size: 0.8rem;
     color: var(--neutral-foreground-rest);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
 .collab-md-time {
     font-size: 0.75rem;
     color: var(--neutral-foreground-hint);
+    white-space: nowrap;
 }
 
-.collab-md-quote {
-    font-size: 0.85rem;
-    color: var(--neutral-foreground-rest);
-    padding: 8px 10px;
+/* Inline action buttons in card header */
+.collab-md-card-actions {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    flex-shrink: 0;
+}
+
+.collab-md-card-actions button {
+    background: none;
+    border: none;
+    cursor: pointer;
+    padding: 2px 6px;
     border-radius: 4px;
-    margin-bottom: 8px;
-    border-left: 2px solid;
-    font-style: italic;
-}
-
-.collab-md-text {
     font-size: 0.9rem;
-    color: var(--neutral-foreground-rest);
-    line-height: 1.5;
-    margin-bottom: 8px;
+    line-height: 1;
+    transition: background-color 0.15s ease;
 }
 
-.collab-md-actions {
+.collab-md-card-actions button:hover {
+    background: var(--neutral-layer-3);
+}
+
+.collab-md-card-actions .btn-accept {
+    color: var(--annotation-insert-border);
+}
+
+.collab-md-card-actions .btn-reject {
+    color: var(--annotation-delete-border);
+}
+
+/* Quoted text snippet */
+.collab-md-quote {
+    margin-top: 4px;
+    padding: 3px 6px;
+    border-left: 3px solid;
+    border-radius: 4px;
+    font-size: 0.8rem;
+    font-style: italic;
+    color: var(--neutral-foreground-hint);
+    overflow: hidden;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    text-overflow: ellipsis;
+}
+
+.collab-md-quote.quote-insert {
+    border-left-color: var(--annotation-insert-border);
+    background: var(--annotation-insert-bg);
+}
+
+.collab-md-quote.quote-delete {
+    border-left-color: var(--annotation-delete-border);
+    background: var(--annotation-delete-bg);
+    text-decoration: line-through;
+}
+
+.collab-md-quote.quote-comment {
+    border-left-color: var(--annotation-comment-border);
+    background: var(--annotation-comment-bg);
+}
+
+/* Comment text below the quote */
+.collab-md-comment-text {
+    margin-top: 4px;
+    font-size: 0.8rem;
+    line-height: 1.4;
+    color: var(--neutral-foreground-rest);
+}
+
+/* Comment card type styling */
+::deep .annotation-card.annotation-type-comment {
+    border-left: 3px solid var(--annotation-comment-border);
+}
+
+::deep .annotation-card.active.annotation-type-comment {
+    border-color: var(--annotation-comment-border);
+    background: var(--annotation-comment-bg);
+}
+
+/* ==========================================================================
+   Inline Annotation Styles (rendered via MarkupString HTML)
+   All use ::deep to target dynamic content as descendants of scoped elements
+   ========================================================================== */
+
+/* --- Comment Highlights --- */
+
+::deep .comment-highlight {
+    background-color: var(--annotation-comment-bg);
+    border-bottom: 2px solid var(--annotation-comment-border);
+    cursor: pointer;
+    position: relative;
+    transition: background-color 0.2s ease;
+    padding: 1px 2px;
+    border-radius: 2px;
+}
+
+::deep .comment-highlight:hover {
+    filter: brightness(0.95);
+}
+
+::deep .comment-highlight::after {
+    content: '';
+    position: absolute;
+    top: -2px;
+    right: -4px;
+    width: 8px;
+    height: 8px;
+    background-color: var(--annotation-comment-dot);
+    border-radius: 50%;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+}
+
+::deep .comment-highlight.selected {
+    filter: brightness(0.9);
+}
+
+::deep .comment-highlight.resolved {
+    background-color: var(--annotation-insert-bg);
+    border-bottom-color: var(--annotation-insert-border);
+    opacity: 0.7;
+}
+
+::deep .comment-highlight.resolved::after {
+    background-color: var(--annotation-insert-border);
+}
+
+/* --- Track Changes - Insertions --- */
+
+::deep .track-insert {
+    background-color: var(--annotation-insert-bg);
+    text-decoration: none;
+    border-bottom: 2px solid var(--annotation-insert-border);
+    padding: 1px 2px;
+    border-radius: 2px;
+    position: relative;
+}
+
+::deep .track-insert:hover {
+    filter: brightness(0.95);
+}
+
+::deep .track-insert.selected {
+    box-shadow: 0 0 0 2px var(--annotation-insert-border);
+}
+
+::deep .track-insert.accepted {
+    background-color: transparent;
+    border-bottom: none;
+}
+
+/* --- Track Changes - Deletions --- */
+
+::deep .track-delete {
+    background-color: var(--annotation-delete-bg);
+    text-decoration: line-through;
+    text-decoration-color: var(--annotation-delete-border);
+    text-decoration-thickness: 2px;
+    color: var(--annotation-delete-text);
+    padding: 1px 2px;
+    border-radius: 2px;
+    position: relative;
+}
+
+::deep .track-delete:hover {
+    filter: brightness(0.95);
+}
+
+::deep .track-delete.selected {
+    box-shadow: 0 0 0 2px var(--annotation-delete-border);
+}
+
+::deep .track-delete.accepted {
+    display: none;
+}
+
+::deep .track-delete.rejected {
+    text-decoration: none;
+    color: inherit;
+    background-color: transparent;
+}
+
+/* --- Track Changes - Replacements --- */
+
+::deep .track-replace {
+    position: relative;
+}
+
+::deep .track-replace .old-text {
+    background-color: var(--annotation-delete-bg);
+    text-decoration: line-through;
+    text-decoration-color: var(--annotation-delete-border);
+    color: var(--annotation-delete-text);
+}
+
+::deep .track-replace .new-text {
+    background-color: var(--annotation-insert-bg);
+    border-bottom: 2px solid var(--annotation-insert-border);
+}
+
+/* ==========================================================================
+   Annotation Popover (author/date + accept/reject tooltip)
+   ========================================================================== */
+
+::deep .annotation-margin-label {
+    position: absolute;
+    left: 0;
+    top: 100%;
+    margin-top: 4px;
+    min-width: 180px;
+    max-width: 280px;
+    font-size: 0.8rem;
+    font-weight: 500;
+    white-space: nowrap;
+    padding: 8px 12px;
+    border-radius: 6px;
+    border-left: 4px solid;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+    z-index: 1000;
+    display: none;
+    opacity: 0;
+    transition: opacity 0.15s ease;
+}
+
+::deep .annotation-margin-label::before {
+    content: '';
+    position: absolute;
+    top: -6px;
+    left: 12px;
+    width: 0;
+    height: 0;
+    border-left: 6px solid transparent;
+    border-right: 6px solid transparent;
+    border-bottom: 6px solid;
+    border-bottom-color: inherit;
+}
+
+/* Show label when parent annotation is clicked/active */
+::deep .comment-highlight.show-label .annotation-margin-label,
+::deep .track-insert.show-label .annotation-margin-label,
+::deep .track-delete.show-label .annotation-margin-label {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    opacity: 1;
+}
+
+/* Popover label colors — use CSS variables for light/dark theming */
+::deep .comment-highlight .annotation-margin-label {
+    background: var(--annotation-comment-label-bg);
+    border-left-color: var(--annotation-comment-border);
+    color: var(--annotation-comment-label-color);
+}
+
+::deep .comment-highlight .annotation-margin-label::before {
+    border-bottom-color: var(--annotation-comment-label-bg);
+}
+
+::deep .track-insert .annotation-margin-label {
+    background: var(--annotation-insert-label-bg);
+    border-left-color: var(--annotation-insert-border);
+    color: var(--annotation-insert-label-color);
+}
+
+::deep .track-insert .annotation-margin-label::before {
+    border-bottom-color: var(--annotation-insert-label-bg);
+}
+
+::deep .track-delete .annotation-margin-label {
+    background: var(--annotation-delete-label-bg);
+    border-left-color: var(--annotation-delete-border);
+    color: var(--annotation-delete-label-color);
+}
+
+::deep .track-delete .annotation-margin-label::before {
+    border-bottom-color: var(--annotation-delete-label-bg);
+}
+
+/* Annotation metadata header */
+::deep .annotation-meta {
+    font-weight: 600;
+    font-size: 0.75rem;
+    opacity: 0.8;
+    margin-bottom: 4px;
+}
+
+/* Comment text display */
+::deep .annotation-comment-text {
+    font-size: 0.85rem;
+    line-height: 1.4;
+    padding: 6px 0;
+    border-top: 1px solid var(--annotation-border-separator);
+    margin-top: 4px;
+    white-space: normal;
+    word-wrap: break-word;
+}
+
+::deep .annotation-comment-text.annotation-no-comment {
+    font-style: italic;
+    opacity: 0.6;
+}
+
+/* Action buttons inside popover */
+::deep .annotation-actions {
     display: flex;
     gap: 8px;
     margin-top: 8px;
+    padding-top: 8px;
+    border-top: 1px solid var(--annotation-border-separator);
 }
 
-.collab-md-reply {
-    padding: 6px 0;
-    margin-left: 8px;
-    border-left: 2px solid var(--neutral-stroke-rest);
-    padding-left: 10px;
+::deep .annotation-actions button {
+    flex: 1;
+    padding: 6px 10px;
+    border: none;
+    border-radius: 4px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: filter 0.15s ease, transform 0.1s ease;
 }
 
+::deep .annotation-actions button:hover {
+    filter: brightness(0.9);
+    transform: translateY(-1px);
+}
+
+::deep .annotation-actions button:active {
+    transform: translateY(0);
+}
+
+::deep .annotation-actions .accept-btn {
+    background: var(--annotation-insert-border);
+    color: white;
+}
+
+::deep .annotation-actions .reject-btn {
+    background: var(--annotation-delete-border);
+    color: white;
+}
+
+::deep .annotation-actions .resolve-btn {
+    background: var(--annotation-active-border);
+    color: white;
+}
+
+::deep .annotation-actions .reply-btn {
+    background: var(--neutral-foreground-hint);
+    color: white;
+}
+
+/* ==========================================================================
+   View Mode Toggle Classes
+   Applied to .collab-md-container via @ViewModeClass
+   ========================================================================== */
+
+/* Hide margin labels */
+.annotations-hide-margins ::deep .annotation-margin-label {
+    display: none;
+}
+
+/* Hide all annotation styling (show clean text) */
+.annotations-hide-markup ::deep .comment-highlight,
+.annotations-hide-markup ::deep .track-insert {
+    background: none !important;
+    border: none !important;
+    padding: 0 !important;
+    color: inherit !important;
+}
+
+.annotations-hide-markup ::deep .comment-highlight::after {
+    display: none;
+}
+
+.annotations-hide-markup ::deep .track-delete {
+    display: none;
+}
+
+.annotations-hide-markup ::deep .annotation-margin-label {
+    display: none;
+}
+
+/* Show accepted view (insertions kept, deletions removed) */
+.annotations-accepted-view ::deep .track-delete {
+    display: none;
+}
+
+.annotations-accepted-view ::deep .track-insert {
+    background: none !important;
+    border: none !important;
+    padding: 0 !important;
+}
+
+.annotations-accepted-view ::deep .comment-highlight {
+    background: none !important;
+    border: none !important;
+    padding: 0 !important;
+}
+
+.annotations-accepted-view ::deep .comment-highlight::after,
+.annotations-accepted-view ::deep .annotation-margin-label {
+    display: none;
+}
+
+/* Show original view (deletions kept, insertions removed) */
+.annotations-original-view ::deep .track-insert {
+    display: none;
+}
+
+.annotations-original-view ::deep .track-delete {
+    text-decoration: none !important;
+    background: none !important;
+    color: inherit !important;
+}
+
+.annotations-original-view ::deep .comment-highlight {
+    background: none !important;
+    border: none !important;
+    padding: 0 !important;
+}
+
+.annotations-original-view ::deep .comment-highlight::after,
+.annotations-original-view ::deep .annotation-margin-label {
+    display: none;
+}
+
+/* ==========================================================================
+   Annotation Indicators (margin icons)
+   ========================================================================== */
+
+::deep .annotation-indicator {
+    position: absolute;
+    left: -24px;
+    width: 20px;
+    height: 20px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    opacity: 0.7;
+    transition: opacity 0.2s ease;
+}
+
+::deep .annotation-indicator:hover {
+    opacity: 1;
+}
+
+::deep .annotation-indicator.comment-icon {
+    color: var(--annotation-comment-border);
+}
+
+::deep .annotation-indicator.insert-icon {
+    color: var(--annotation-insert-border);
+}
+
+::deep .annotation-indicator.delete-icon {
+    color: var(--annotation-delete-border);
+}
+
+/* ==========================================================================
+   Annotation Navigation
+   ========================================================================== */
+
+::deep .annotation-nav {
+    position: fixed;
+    bottom: 24px;
+    right: 24px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    z-index: 100;
+}
+
+::deep .annotation-nav-button {
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    border: none;
+    background: var(--accent-fill-rest);
+    color: white;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+    transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+::deep .annotation-nav-button:hover {
+    transform: scale(1.1);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+
+::deep .annotation-nav-button:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+    transform: none;
+}
+
+/* ==========================================================================
+   Animations for new annotations
+   ========================================================================== */
+
+@keyframes annotation-pulse {
+    0% { box-shadow: 0 0 0 0 var(--annotation-comment-border); }
+    70% { box-shadow: 0 0 0 8px transparent; }
+    100% { box-shadow: 0 0 0 0 transparent; }
+}
+
+::deep .comment-highlight.new-annotation {
+    animation: annotation-pulse 1.5s ease-out;
+}
+
+@keyframes track-change-pulse-insert {
+    0% { box-shadow: 0 0 0 0 var(--annotation-insert-border); }
+    70% { box-shadow: 0 0 0 8px transparent; }
+    100% { box-shadow: 0 0 0 0 transparent; }
+}
+
+::deep .track-insert.new-annotation {
+    animation: track-change-pulse-insert 1.5s ease-out;
+}
+
+@keyframes track-change-pulse-delete {
+    0% { box-shadow: 0 0 0 0 var(--annotation-delete-border); }
+    70% { box-shadow: 0 0 0 8px transparent; }
+    100% { box-shadow: 0 0 0 0 transparent; }
+}
+
+::deep .track-delete.new-annotation {
+    animation: track-change-pulse-delete 1.5s ease-out;
+}
+
+/* Active annotation highlight (applied by JS highlightAnnotation) */
+::deep .annotation-active {
+    outline: 2px solid var(--annotation-active-border);
+    outline-offset: 2px;
+    border-radius: 2px;
+}
+
+/* Inline content area styling */
+::deep .layout-area {
+    margin: 1rem 0;
+}
+
+::deep .layout-area-error {
+    padding: 1rem;
+    background-color: var(--annotation-delete-bg);
+    border-left: 4px solid var(--annotation-delete-border);
+    border-radius: 4px;
+    color: var(--annotation-delete-color);
+}

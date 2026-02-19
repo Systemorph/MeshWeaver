@@ -1,4 +1,5 @@
 using System.ComponentModel.DataAnnotations;
+using MeshWeaver.ShortGuid;
 
 namespace MeshWeaver.Mesh.Security;
 
@@ -16,11 +17,16 @@ public static class WellKnownUsers
 
 /// <summary>
 /// Represents a user's access to a namespace.
-/// Stored in {namespace}/Access/{userId}.json for namespace-specific access,
-/// or Access/{userId}.json for global access.
+/// Stored in {namespace}/Access/{id}.json for namespace-specific access,
+/// or Access/{id}.json for global access.
 /// </summary>
 public record UserAccess
 {
+    /// <summary>
+    /// Unique identifier for this access record (used as file name).
+    /// </summary>
+    public string Id { get; init; } = Guid.NewGuid().AsString();
+
     /// <summary>
     /// The user's ObjectId (from AccessContext or Person node id).
     /// Use "Public" for anonymous access.
@@ -48,6 +54,13 @@ public record UserRole
     /// The role identifier (e.g., "Admin", "Editor", "Viewer").
     /// </summary>
     public required string RoleId { get; init; }
+
+    /// <summary>
+    /// When true, this assignment denies the role rather than granting it.
+    /// Used for local deny overrides of inherited grants.
+    /// Default is false (granted). Backward compatible with existing JSON.
+    /// </summary>
+    public bool Denied { get; init; }
 
     /// <summary>
     /// When this role assignment was created.

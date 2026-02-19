@@ -96,36 +96,8 @@ public static class NodeTypeView
     /// </summary>
     private static UiControl BuildNodeTypeDetailsContent(this LayoutAreaHost host, MeshNode? node, NodeTypeDefinition? typeDef)
     {
-        var nodePath = node?.Namespace ?? host.Hub.Address.ToString();
-        var stack = Controls.Stack.WithWidth("100%").WithStyle(MeshNodeLayoutAreas.GetContainerStyle(host, typeDef));
-
-        // Action menu (top-right)
-        stack = stack.WithView(Controls.Stack
-            .WithStyle("position: absolute; top: 0; right: 0; z-index: 10;")
-            .WithView(MeshNodeLayoutAreas.BuildActionMenu(host, node)));
-
-        // Header with title/icon
-        stack = stack.WithView(MeshNodeLayoutAreas.BuildHeader(host, node));
-
-        // Property overview (read-only with click-to-edit)
-        if (node != null)
-        {
-            stack = stack.WithView(OverviewLayoutArea.BuildPropertyOverview(host, node));
-        }
-
-        // Children - controlled by NodeTypeDefinition.ShowChildrenInDetails
-        if (typeDef?.ShowChildrenInDetails ?? true)
-        {
-            stack = stack.WithView(LayoutAreaControl.Children(host.Hub));
-        }
-
-        // Comments
-        if (host.Hub.Configuration.HasComments())
-        {
-            stack = stack.WithView(CommentsView.BuildInlineCommentsSection(host));
-        }
-
-        return stack;
+        // Delegate to the shared BuildDetailsContent which now uses a gear icon
+        return host.BuildDetailsContent(node, typeDef);
     }
 
     /// <summary>
@@ -634,7 +606,7 @@ public static class NodeTypeView
                     // Update via workspace - will sync to persistence
                     using var cts = new CancellationTokenSource(10.Seconds());
                     var response = await actx.Host.Hub.AwaitResponse<DataChangeResponse>(
-                        new DataChangeRequest().WithUpdates(updatedCodeConfiguration),
+                        new DataChangeRequest { ChangedBy = actx.Host.Stream.ClientId }.WithUpdates(updatedCodeConfiguration),
                         o => o.WithTarget(hubAddress),
                         cts.Token);
 
@@ -929,7 +901,7 @@ public static class NodeTypeView
 
                 using var cts = new CancellationTokenSource(10.Seconds());
                 var response = await actx.Host.Hub.AwaitResponse<DataChangeResponse>(
-                    new DataChangeRequest().WithUpdates(updatedNode),
+                    new DataChangeRequest { ChangedBy = actx.Host.Stream.ClientId }.WithUpdates(updatedNode),
                     o => o.WithTarget(hubAddress),
                     cts.Token);
 

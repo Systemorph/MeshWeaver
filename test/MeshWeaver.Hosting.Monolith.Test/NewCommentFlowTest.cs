@@ -102,7 +102,7 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
         var comment = new Comment
         {
             Id = commentId,
-            NodePath = docPath,
+            PrimaryNodePath = docPath,
             MarkerId = markerId,
             Author = "TestAuthor",
             Text = "",  // Empty initially — user edits after creation
@@ -168,7 +168,7 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
         var comment = new Comment
         {
             Id = commentId,
-            NodePath = docPath,
+            PrimaryNodePath = docPath,
             MarkerId = Guid.NewGuid().AsString(),
             Author = "TestAuthor",
             Text = "",
@@ -228,7 +228,7 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
         var comment = new Comment
         {
             Id = commentId,
-            NodePath = docPath,
+            PrimaryNodePath = docPath,
             Author = "TestAuthor",
             Text = "",
             Status = CommentStatus.Active
@@ -301,7 +301,7 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
         var comment = new Comment
         {
             Id = commentId,
-            NodePath = docPath,
+            PrimaryNodePath = docPath,
             MarkerId = Guid.NewGuid().AsString(),
             Author = "TestAuthor",
             Text = "Test comment for sidebar visibility",
@@ -361,7 +361,7 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
         var comment = new Comment
         {
             Id = commentId,
-            NodePath = docPath,
+            PrimaryNodePath = docPath,
             MarkerId = markerId,
             Author = "TestAuthor",
             Text = "",

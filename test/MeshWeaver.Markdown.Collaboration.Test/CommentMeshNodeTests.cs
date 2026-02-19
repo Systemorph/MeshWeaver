@@ -136,14 +136,14 @@ public class CommentMeshNodeTests
             HighlightedText = "world",
             Author = "Alice",
             Text = "Great point!",
-            NodePath = "docs/mypage"
+            PrimaryNodePath = "docs/mypage"
         };
 
         comment.MarkerId.Should().Be("c1");
         comment.HighlightedText.Should().Be("world");
         comment.Author.Should().Be("Alice");
         comment.Text.Should().Be("Great point!");
-        comment.NodePath.Should().Be("docs/mypage");
+        comment.PrimaryNodePath.Should().Be("docs/mypage");
     }
 
     [Fact]
@@ -162,7 +162,7 @@ public class CommentMeshNodeTests
             Id = "reply-1",
             Author = "Bob",
             Text = "I agree!",
-            ParentCommentId = "comment-1"
+            PrimaryNodePath = "docs/page",
         };
 
         var parentNode = new MeshNode("docs/page/comment-1")
@@ -177,8 +177,7 @@ public class CommentMeshNodeTests
             Content = reply
         };
 
-        // Threading is via ParentCommentId, not embedded Replies
-        ((Comment)replyNode.Content!).ParentCommentId.Should().Be(parentComment.Id);
+        // Threading is via MeshNode path hierarchy
         ((Comment)replyNode.Content!).Author.Should().Be("Bob");
         replyNode.Path.Should().StartWith(parentNode.Path!);
     }
@@ -193,6 +192,39 @@ public class CommentMeshNodeTests
         };
 
         comment.Status.Should().Be(CommentStatus.Resolved);
+    }
+
+    [Fact]
+    public void Comment_PrimaryNodePath_PointsToDocument_ForReplies()
+    {
+        // Top-level comment: PrimaryNodePath is the document path
+        var topLevel = new Comment
+        {
+            Id = "c1",
+            PrimaryNodePath = "docs/page",
+            Author = "Alice",
+            Text = "Top-level comment"
+        };
+
+        topLevel.PrimaryNodePath.Should().Be("docs/page");
+
+        // Reply: PrimaryNodePath is still the original document, not the parent comment
+        var reply = new Comment
+        {
+            Id = "r1",
+            PrimaryNodePath = "docs/page",
+            Author = "Bob",
+            Text = "Reply"
+        };
+
+        reply.PrimaryNodePath.Should().Be("docs/page");
+    }
+
+    [Fact]
+    public void Comment_PrimaryNodePath_DefaultsToEmpty()
+    {
+        var comment = new Comment();
+        comment.PrimaryNodePath.Should().BeEmpty();
     }
 
     #endregion
@@ -215,7 +247,7 @@ public class CommentMeshNodeTests
         var comment = new Comment
         {
             Id = "c1",
-            NodePath = "docs/page",
+            PrimaryNodePath = "docs/page",
             MarkerId = "c1",
             HighlightedText = "sample text",
             Author = "Alice",
@@ -353,7 +385,7 @@ public class CommentMeshNodeTests
         var comment = new Comment
         {
             Id = "c1",
-            NodePath = "MeshWeaver/Documentation/DataMesh/CollaborativeEditing",
+            PrimaryNodePath = "MeshWeaver/Documentation/DataMesh/CollaborativeEditing",
             MarkerId = "c1",
             HighlightedText = "powerful platform",
             Author = "Alice",
@@ -420,40 +452,40 @@ public class CommentMeshNodeTests
     #region Comment Hierarchy Separation
 
     [Fact]
-    public void CommentHierarchy_TopLevelVsReplies_SeparatedByParentId()
+    public void CommentHierarchy_TopLevelVsReplies_SeparatedByPathDepth()
     {
-        var topLevel = new Comment
+        var docPath = "docs/page";
+        var topLevelNode = new MeshNode($"{docPath}/c1")
         {
-            Id = "c1",
-            Author = "Alice",
-            Text = "Top level comment"
+            NodeType = CommentNodeType.NodeType,
+            Content = new Comment { Id = "c1", Author = "Alice", Text = "Top level comment" }
         };
 
-        var reply = new Comment
+        var replyNode = new MeshNode($"{docPath}/c1/r1")
         {
-            Id = "r1",
-            Author = "Bob",
-            Text = "Reply to c1",
-            ParentCommentId = "c1"
+            NodeType = CommentNodeType.NodeType,
+            Content = new Comment { Id = "r1", Author = "Bob", Text = "Reply to c1" }
         };
 
-        var comments = new List<Comment> { topLevel, reply };
+        var allNodes = new List<MeshNode> { topLevelNode, replyNode };
+        var docSegments = docPath.Split('/').Length;
 
-        var topLevelComments = comments
-            .Where(c => string.IsNullOrEmpty(c.ParentCommentId))
+        // Top-level comments are direct children of doc (depth = docSegments + 1)
+        var topLevelComments = allNodes
+            .Where(n => n.Segments.Count == docSegments + 1)
             .ToList();
 
-        var replies = comments
-            .Where(c => !string.IsNullOrEmpty(c.ParentCommentId))
-            .GroupBy(c => c.ParentCommentId!)
-            .ToDictionary(g => g.Key, g => g.ToList());
+        // Replies are deeper (depth > docSegments + 1)
+        var replies = allNodes
+            .Where(n => n.Segments.Count > docSegments + 1)
+            .ToList();
 
         topLevelComments.Should().HaveCount(1);
-        topLevelComments[0].Id.Should().Be("c1");
+        ((Comment)topLevelComments[0].Content!).Id.Should().Be("c1");
 
-        replies.Should().ContainKey("c1");
-        replies["c1"].Should().HaveCount(1);
-        replies["c1"][0].Id.Should().Be("r1");
+        replies.Should().HaveCount(1);
+        ((Comment)replies[0].Content!).Id.Should().Be("r1");
+        replies[0].Path.Should().StartWith(topLevelNode.Path!);
     }
 
     [Fact]
@@ -470,25 +502,22 @@ public class CommentMeshNodeTests
     }
 
     [Fact]
-    public void CommentReply_ParentCommentId_LinksToParent()
+    public void CommentReply_PathHierarchy_LinksToParent()
     {
-        var parentComment = new Comment
+        var parentNode = new MeshNode("docs/page/parent1")
         {
-            Id = "parent1",
-            Author = "Alice",
-            Text = "Parent comment"
+            NodeType = CommentNodeType.NodeType,
+            Content = new Comment { Id = "parent1", Author = "Alice", Text = "Parent comment" }
         };
 
-        var reply = new Comment
+        var replyNode = new MeshNode("docs/page/parent1/reply1")
         {
-            Id = "reply1",
-            Author = "Bob",
-            Text = "Reply text",
-            ParentCommentId = parentComment.Id
+            NodeType = CommentNodeType.NodeType,
+            Content = new Comment { Id = "reply1", Author = "Bob", Text = "Reply text" }
         };
 
-        reply.ParentCommentId.Should().Be(parentComment.Id);
-        reply.ParentCommentId.Should().Be("parent1");
+        replyNode.Path.Should().StartWith(parentNode.Path!);
+        replyNode.Path.Should().Be("docs/page/parent1/reply1");
     }
 
     #endregion
@@ -523,7 +552,7 @@ public class CommentMeshNodeTests
         var replyNode = new MeshNode($"{docPath}/{commentId}/{replyId}")
         {
             NodeType = CommentNodeType.NodeType,
-            Content = new Comment { Id = replyId, Author = "Bob", Text = "Reply", ParentCommentId = commentId }
+            Content = new Comment { Id = replyId, Author = "Bob", Text = "Reply" }
         };
 
         // Both should be captured by descendants query (simulated here)
@@ -533,17 +562,18 @@ public class CommentMeshNodeTests
         allNodes.Should().Contain(n => n.Path == $"{docPath}/{commentId}");
         allNodes.Should().Contain(n => n.Path == $"{docPath}/{commentId}/{replyId}");
 
-        // Verify separation
+        // Verify separation via path hierarchy
+        var docSegments = docPath.Split('/').Length;
         var topLevel = allNodes
-            .Where(n => n.Content is Comment c && string.IsNullOrEmpty(c.ParentCommentId))
+            .Where(n => n.Segments.Count == docSegments + 1)
             .ToList();
         var replies = allNodes
-            .Where(n => n.Content is Comment c && !string.IsNullOrEmpty(c.ParentCommentId))
+            .Where(n => n.Segments.Count > docSegments + 1)
             .ToList();
 
         topLevel.Should().HaveCount(1);
         replies.Should().HaveCount(1);
-        ((Comment)replies[0].Content!).ParentCommentId.Should().Be(commentId);
+        replies[0].Path.Should().StartWith($"{docPath}/{commentId}/");
     }
 
     #endregion
@@ -557,8 +587,7 @@ public class CommentMeshNodeTests
         {
             Id = "reply1",
             Author = "Bob",
-            Text = "I agree with this point!",
-            ParentCommentId = "c1"
+            Text = "I agree with this point!"
         };
 
         var replyNode = new MeshNode("docs/page/c1/reply1")
@@ -582,8 +611,7 @@ public class CommentMeshNodeTests
         {
             Id = "reply1",
             Author = "",
-            Text = "",
-            ParentCommentId = "c1"
+            Text = ""
         };
 
         var replyNode = new MeshNode("docs/page/c1/reply1")
@@ -616,8 +644,7 @@ public class CommentMeshNodeTests
         {
             Id = "reply1",
             Author = "Alice",
-            Text = "This is a very long reply text that should be truncated when displayed in the thumbnail view",
-            ParentCommentId = "c1"
+            Text = "This is a very long reply text that should be truncated when displayed in the thumbnail view"
         };
 
         var replyNode = new MeshNode("docs/page/c1/reply1")
@@ -649,10 +676,9 @@ public class CommentMeshNodeTests
         var replyComment = new Comment
         {
             Id = replyId,
-            NodePath = commentPath,
+            PrimaryNodePath = "docs/page",
             Author = "",
             Text = "",
-            ParentCommentId = parentComment.Id,
             Status = CommentStatus.Active
         };
         var replyNode = new MeshNode($"{commentPath}/{replyId}")
@@ -662,23 +688,24 @@ public class CommentMeshNodeTests
             Content = replyComment
         };
 
-        // Verify the created reply node
+        // Verify the created reply node — parent relationship is encoded in path
         replyNode.Path.Should().Be("docs/page/c1/reply-abc");
+        replyNode.Path.Should().StartWith(commentPath);
         replyNode.NodeType.Should().Be(CommentNodeType.NodeType);
         replyNode.Name.Should().Be("Reply");
 
         var content = replyNode.Content as Comment;
         content.Should().NotBeNull();
-        content!.ParentCommentId.Should().Be("c1");
-        content.Author.Should().BeEmpty();
+        content!.Author.Should().BeEmpty();
         content.Text.Should().BeEmpty();
         content.Status.Should().Be(CommentStatus.Active);
+        content.PrimaryNodePath.Should().Be("docs/page");
     }
 
     [Fact]
     public void ReplyFiltering_OnlyMatchingRepliesShownPerComment()
     {
-        // Simulates the filtering logic in BuildReadView
+        // Simulates the filtering logic in BuildReadView using MeshNode path hierarchy
         var comment1 = new MeshNode("docs/page/c1")
         {
             NodeType = CommentNodeType.NodeType,
@@ -692,42 +719,44 @@ public class CommentMeshNodeTests
         var reply1ForC1 = new MeshNode("docs/page/c1/r1")
         {
             NodeType = CommentNodeType.NodeType,
-            Content = new Comment { Id = "r1", Author = "Bob", Text = "Reply to c1", ParentCommentId = "c1" }
+            Content = new Comment { Id = "r1", Author = "Bob", Text = "Reply to c1" }
         };
         var reply2ForC1 = new MeshNode("docs/page/c1/r2")
         {
             NodeType = CommentNodeType.NodeType,
-            Content = new Comment { Id = "r2", Author = "Dave", Text = "Another reply to c1", ParentCommentId = "c1" }
+            Content = new Comment { Id = "r2", Author = "Dave", Text = "Another reply to c1" }
         };
         var reply1ForC2 = new MeshNode("docs/page/c2/r3")
         {
             NodeType = CommentNodeType.NodeType,
-            Content = new Comment { Id = "r3", Author = "Eve", Text = "Reply to c2", ParentCommentId = "c2" }
+            Content = new Comment { Id = "r3", Author = "Eve", Text = "Reply to c2" }
         };
 
         var allNodes = new List<MeshNode> { comment1, comment2, reply1ForC1, reply2ForC1, reply1ForC2 };
+        var docSegments = "docs/page".Split('/').Length;
 
-        // Separate top-level from replies (same logic as MarkdownLayoutAreas)
+        // Separate top-level from replies via path depth
         var topLevelComments = allNodes
-            .Where(n => n.Content is Comment c && string.IsNullOrEmpty(c.ParentCommentId))
+            .Where(n => n.Segments.Count == docSegments + 1)
             .ToList();
 
+        // Group replies by parent path
         var repliesByParent = allNodes
-            .Where(n => n.Content is Comment c && !string.IsNullOrEmpty(c.ParentCommentId))
-            .GroupBy(n => ((Comment)n.Content!).ParentCommentId!)
+            .Where(n => n.Segments.Count > docSegments + 1)
+            .GroupBy(n => string.Join("/", n.Segments.Take(n.Segments.Count - 1)))
             .ToDictionary(g => g.Key, g => g.ToList());
 
         topLevelComments.Should().HaveCount(2);
 
         // Comment c1 should have exactly 2 replies
-        repliesByParent.Should().ContainKey("c1");
-        repliesByParent["c1"].Should().HaveCount(2);
-        repliesByParent["c1"].Select(n => ((Comment)n.Content!).Id).Should().BeEquivalentTo(["r1", "r2"]);
+        repliesByParent.Should().ContainKey("docs/page/c1");
+        repliesByParent["docs/page/c1"].Should().HaveCount(2);
+        repliesByParent["docs/page/c1"].Select(n => ((Comment)n.Content!).Id).Should().BeEquivalentTo(["r1", "r2"]);
 
         // Comment c2 should have exactly 1 reply
-        repliesByParent.Should().ContainKey("c2");
-        repliesByParent["c2"].Should().HaveCount(1);
-        ((Comment)repliesByParent["c2"][0].Content!).Id.Should().Be("r3");
+        repliesByParent.Should().ContainKey("docs/page/c2");
+        repliesByParent["docs/page/c2"].Should().HaveCount(1);
+        ((Comment)repliesByParent["docs/page/c2"][0].Content!).Id.Should().Be("r3");
     }
 
     [Fact]
@@ -741,7 +770,7 @@ public class CommentMeshNodeTests
         var replyNode = new MeshNode(replyPath)
         {
             NodeType = CommentNodeType.NodeType,
-            Content = new Comment { Id = replyId, ParentCommentId = "c1" }
+            Content = new Comment { Id = replyId }
         };
 
         replyNode.Path.Should().Be("docs/page/c1/reply-xyz");
@@ -756,17 +785,17 @@ public class CommentMeshNodeTests
             new("docs/page/c1/r3")
             {
                 NodeType = CommentNodeType.NodeType,
-                Content = new Comment { Id = "r3", Author = "C", Text = "Third", ParentCommentId = "c1", CreatedAt = now.AddMinutes(-1) }
+                Content = new Comment { Id = "r3", Author = "C", Text = "Third", CreatedAt = now.AddMinutes(-1) }
             },
             new("docs/page/c1/r1")
             {
                 NodeType = CommentNodeType.NodeType,
-                Content = new Comment { Id = "r1", Author = "A", Text = "First", ParentCommentId = "c1", CreatedAt = now.AddMinutes(-10) }
+                Content = new Comment { Id = "r1", Author = "A", Text = "First", CreatedAt = now.AddMinutes(-10) }
             },
             new("docs/page/c1/r2")
             {
                 NodeType = CommentNodeType.NodeType,
-                Content = new Comment { Id = "r2", Author = "B", Text = "Second", ParentCommentId = "c1", CreatedAt = now.AddMinutes(-5) }
+                Content = new Comment { Id = "r2", Author = "B", Text = "Second", CreatedAt = now.AddMinutes(-5) }
             }
         };
 
@@ -785,8 +814,7 @@ public class CommentMeshNodeTests
         {
             Id = "reply1",
             Author = "Bob",
-            Text = "Test reply",
-            ParentCommentId = "c1"
+            Text = "Test reply"
         };
 
         var replyNode = new MeshNode("docs/page/c1/reply1")
@@ -832,10 +860,10 @@ public class CommentMeshNodeTests
         var replyNode = new MeshNode("docs/page/c1/r1")
         {
             NodeType = CommentNodeType.NodeType,
-            Content = new Comment { Id = "r1", Author = "Bob", Text = "Reply", ParentCommentId = "c1" }
+            Content = new Comment { Id = "r1", Author = "Bob", Text = "Reply" }
         };
 
-        var result = CommentLayoutAreas.BuildOverview(null!, node, "docs/page/c1", new List<MeshNode> { replyNode }, "");
+        var result = CommentLayoutAreas.BuildOverview(null!, node, "docs/page/c1", "editState_test", new[] { true }, new List<MeshNode> { replyNode }, "");
 
         result.Should().NotBeNull();
         result.Should().BeOfType<StackControl>();
@@ -856,14 +884,14 @@ public class CommentMeshNodeTests
             Content = comment
         };
 
-        var result = CommentLayoutAreas.BuildOverview(null!, node, "docs/page/c1", Array.Empty<MeshNode>(), "");
+        var result = CommentLayoutAreas.BuildOverview(null!, node, "docs/page/c1", "editState_test", new[] { true }, Array.Empty<MeshNode>(), "");
 
         result.Should().NotBeNull();
         result.Should().BeOfType<StackControl>();
     }
 
     [Fact]
-    public void BuildOverview_FiltersRepliesByParentCommentId()
+    public void BuildOverview_AcceptsReplyNodes()
     {
         var comment = new Comment { Id = "c1", Author = "Alice", Text = "Comment 1" };
         var node = new MeshNode("docs/page/c1")
@@ -875,35 +903,33 @@ public class CommentMeshNodeTests
         var replyForC1 = new MeshNode("docs/page/c1/r1")
         {
             NodeType = CommentNodeType.NodeType,
-            Content = new Comment { Id = "r1", Author = "Bob", Text = "Reply to c1", ParentCommentId = "c1" }
+            Content = new Comment { Id = "r1", Author = "Bob", Text = "Reply to c1" }
         };
         var replyForC2 = new MeshNode("docs/page/c2/r2")
         {
             NodeType = CommentNodeType.NodeType,
-            Content = new Comment { Id = "r2", Author = "Carol", Text = "Reply to c2", ParentCommentId = "c2" }
+            Content = new Comment { Id = "r2", Author = "Carol", Text = "Reply to c2" }
         };
 
-        // BuildOverview filters by ParentCommentId == comment.Id internally
-        var result = CommentLayoutAreas.BuildOverview(null!, node, "docs/page/c1", new List<MeshNode> { replyForC1, replyForC2 }, "");
+        // BuildOverview receives reply nodes (filtered by scope:children query upstream)
+        var result = CommentLayoutAreas.BuildOverview(null!, node, "docs/page/c1", "editState_test", new[] { true }, new List<MeshNode> { replyForC1, replyForC2 }, "");
 
         result.Should().NotBeNull();
         result.Should().BeOfType<StackControl>();
     }
 
     [Fact]
-    public void ReplyCreation_SetsParentCommentId_And_NodeType()
+    public void ReplyCreation_SetsPathHierarchy_And_NodeType()
     {
         var commentPath = "docs/page/c1";
         var replyId = "reply-new";
-        var parentCommentId = "c1";
 
         var replyComment = new Comment
         {
             Id = replyId,
-            NodePath = commentPath,
+            PrimaryNodePath = "docs/page",
             Author = "",
             Text = "",
-            ParentCommentId = parentCommentId,
             Status = CommentStatus.Active
         };
         var replyNode = new MeshNode($"{commentPath}/{replyId}")
@@ -915,7 +941,7 @@ public class CommentMeshNodeTests
 
         replyNode.NodeType.Should().Be(CommentNodeType.NodeType);
         replyNode.Path.Should().Be("docs/page/c1/reply-new");
-        ((Comment)replyNode.Content!).ParentCommentId.Should().Be(parentCommentId);
+        replyNode.Path.Should().StartWith(commentPath);
     }
 
     [Fact]
@@ -927,17 +953,17 @@ public class CommentMeshNodeTests
             new("docs/page/c1/r3")
             {
                 NodeType = CommentNodeType.NodeType,
-                Content = new Comment { Id = "r3", Author = "C", Text = "Third", ParentCommentId = "c1", CreatedAt = now.AddMinutes(-1) }
+                Content = new Comment { Id = "r3", Author = "C", Text = "Third", CreatedAt = now.AddMinutes(-1) }
             },
             new("docs/page/c1/r1")
             {
                 NodeType = CommentNodeType.NodeType,
-                Content = new Comment { Id = "r1", Author = "A", Text = "First", ParentCommentId = "c1", CreatedAt = now.AddMinutes(-10) }
+                Content = new Comment { Id = "r1", Author = "A", Text = "First", CreatedAt = now.AddMinutes(-10) }
             },
             new("docs/page/c1/r2")
             {
                 NodeType = CommentNodeType.NodeType,
-                Content = new Comment { Id = "r2", Author = "B", Text = "Second", ParentCommentId = "c1", CreatedAt = now.AddMinutes(-5) }
+                Content = new Comment { Id = "r2", Author = "B", Text = "Second", CreatedAt = now.AddMinutes(-5) }
             }
         };
 
@@ -960,7 +986,7 @@ public class CommentMeshNodeTests
             new("docs/page/c1/r1")
             {
                 NodeType = CommentNodeType.NodeType,
-                Content = new Comment { Id = "r1", Author = "Bob", Text = "First reply", ParentCommentId = "c1" }
+                Content = new Comment { Id = "r1", Author = "Bob", Text = "First reply" }
             }
         };
 
@@ -985,17 +1011,17 @@ public class CommentMeshNodeTests
             new("docs/page/c1/r1")
             {
                 NodeType = CommentNodeType.NodeType,
-                Content = new Comment { Id = "r1", Author = "Bob", Text = "Reply 1", ParentCommentId = "c1" }
+                Content = new Comment { Id = "r1", Author = "Bob", Text = "Reply 1" }
             },
             new("docs/page/c1/r2")
             {
                 NodeType = CommentNodeType.NodeType,
-                Content = new Comment { Id = "r2", Author = "Carol", Text = "Reply 2", ParentCommentId = "c1" }
+                Content = new Comment { Id = "r2", Author = "Carol", Text = "Reply 2" }
             },
             new("docs/page/c1/r3")
             {
                 NodeType = CommentNodeType.NodeType,
-                Content = new Comment { Id = "r3", Author = "Dave", Text = "Reply 3", ParentCommentId = "c1" }
+                Content = new Comment { Id = "r3", Author = "Dave", Text = "Reply 3" }
             }
         };
 
@@ -1013,7 +1039,7 @@ public class CommentMeshNodeTests
             new("docs/page/c1/r1")
             {
                 NodeType = CommentNodeType.NodeType,
-                Content = new Comment { Id = "r1", Author = "Bob", Text = "Some reply", ParentCommentId = "c1" }
+                Content = new Comment { Id = "r1", Author = "Bob", Text = "Some reply" }
             }
         };
 
@@ -1038,7 +1064,7 @@ public class CommentMeshNodeTests
             MarkerId = "c1",
             Author = "Alice",
             Text = "Original comment",
-            NodePath = "docs/page",
+            PrimaryNodePath = "docs/page",
             Status = CommentStatus.Active
         };
         var parentNode = new MeshNode(commentPath)
@@ -1050,19 +1076,18 @@ public class CommentMeshNodeTests
 
         // BuildOverview with no replies — no catalog
         var overviewNoReplies = CommentLayoutAreas.BuildOverview(
-            null!, parentNode, commentPath, Array.Empty<MeshNode>(), "");
+            null!, parentNode, commentPath, "editState_test", new[] { true }, Array.Empty<MeshNode>(), "");
         overviewNoReplies.Should().BeOfType<StackControl>();
 
         // 2) "Click Reply" — simulate what the Reply button handler creates:
-        //    an empty reply MeshNode with ParentCommentId set
+        //    an empty reply MeshNode as child of the parent comment node
         var replyId = "reply-abc";
         var emptyReply = new Comment
         {
             Id = replyId,
-            NodePath = commentPath,
+            PrimaryNodePath = "docs/page",
             Author = "",
             Text = "",
-            ParentCommentId = parentComment.Id,
             Status = CommentStatus.Active
         };
         var replyNode = new MeshNode($"{commentPath}/{replyId}")
@@ -1072,9 +1097,9 @@ public class CommentMeshNodeTests
             Content = emptyReply
         };
 
-        // Verify the reply node is correctly formed
+        // Verify the reply node is correctly formed — parent encoded in path
         replyNode.NodeType.Should().Be(CommentNodeType.NodeType);
-        ((Comment)replyNode.Content!).ParentCommentId.Should().Be("c1");
+        replyNode.Path.Should().StartWith(commentPath);
 
         // 3) "Write text and click Done" — simulate what the Done handler does:
         //    update the reply MeshNode content with author + text
@@ -1086,7 +1111,7 @@ public class CommentMeshNodeTests
 
         // 4) Verify we see *one* answer in the overview as a Thumbnail inside a CatalogControl
         var overviewWithReply = CommentLayoutAreas.BuildOverview(
-            null!, parentNode, commentPath, new List<MeshNode> { updatedReplyNode }, "");
+            null!, parentNode, commentPath, "editState_test", new[] { true }, new List<MeshNode> { updatedReplyNode }, "");
 
         overviewWithReply.Should().BeOfType<StackControl>();
 

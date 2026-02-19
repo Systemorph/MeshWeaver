@@ -33,8 +33,12 @@ public class RlsIntegrationTests(ITestOutputHelper output) : MonolithMeshTestBas
         // RLS must be added after persistence so it can decorate IPersistenceService
         var configured = base.ConfigureMesh(builder).AddRowLevelSecurity();
 
-        // Register node types as MeshNodes
-        configured.AddMeshNodes(new MeshNode("secure") { Name = "Secure Type" });
+        // Register node types as MeshNodes (including Comment and Thread for permission tests)
+        configured.AddMeshNodes(
+            new MeshNode("secure") { Name = "Secure Type" },
+            new MeshNode(CommentNodeType.NodeType) { Name = "Comment" },
+            new MeshNode("Thread") { Name = "Thread" }
+        );
 
         return configured;
     }
@@ -377,7 +381,361 @@ public class RlsIntegrationTests(ITestOutputHelper output) : MonolithMeshTestBas
 
         // Assert
         permissions1.Should().Be(Permission.Read); // Viewer only
-        permissions2.Should().Be(Permission.Read | Permission.Create | Permission.Update); // Editor
+        permissions2.Should().Be(Permission.Read | Permission.Create | Permission.Update | Permission.Comment); // Editor
+    }
+
+    [Fact]
+    public async Task CreateComment_RequiresCommentPermission()
+    {
+        // Arrange
+        var client = GetClient();
+        var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
+
+        const string commenterId = "commenter";
+        const string viewerId = "viewer";
+        const string parentPath = "rls/comments";
+
+        // Assign Commenter role (has Read + Comment)
+        await securityService.AddUserRoleAsync(commenterId, "Commenter", parentPath, "system", TestTimeout);
+        // Assign Viewer role (has Read only)
+        await securityService.AddUserRoleAsync(viewerId, "Viewer", parentPath, "system", TestTimeout);
+
+        // Act - commenter creates a Comment node
+        var commentNode = new MeshNode("Comment1", parentPath)
+        {
+            Name = "Test Comment",
+            NodeType = CommentNodeType.NodeType,
+            Content = new Comment { Text = "Hello", Author = commenterId }
+        };
+        var commentResponse = await client.AwaitResponse(
+            new CreateNodeRequest(commentNode) { CreatedBy = commenterId },
+            o => o.WithTarget(Mesh.Address),
+            TestTimeout);
+
+        // Viewer tries to create a Comment node
+        var viewerComment = new MeshNode("Comment2", parentPath)
+        {
+            Name = "Viewer Comment",
+            NodeType = CommentNodeType.NodeType,
+            Content = new Comment { Text = "Denied", Author = viewerId }
+        };
+        var viewerResponse = await client.AwaitResponse(
+            new CreateNodeRequest(viewerComment) { CreatedBy = viewerId },
+            o => o.WithTarget(Mesh.Address),
+            TestTimeout);
+
+        // Assert
+        commentResponse.Message.Success.Should().BeTrue("Commenter has Comment permission");
+        viewerResponse.Message.Success.Should().BeFalse("Viewer lacks Comment permission");
+        viewerResponse.Message.RejectionReason.Should().Be(NodeCreationRejectionReason.ValidationFailed);
+    }
+
+    [Fact]
+    public async Task CreateThread_RequiresUpdatePermission()
+    {
+        // Arrange
+        var client = GetClient();
+        var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
+
+        const string editorId = "editor";
+        const string commenterId = "commenter";
+        const string parentPath = "rls/threads";
+
+        // Editor has Update permission
+        await securityService.AddUserRoleAsync(editorId, "Editor", parentPath, "system", TestTimeout);
+        // Commenter has Read + Comment but NOT Update
+        await securityService.AddUserRoleAsync(commenterId, "Commenter", parentPath, "system", TestTimeout);
+
+        // Act - editor creates a Thread
+        var threadNode = new MeshNode("Thread1", parentPath)
+        {
+            Name = "Editor Thread",
+            NodeType = "Thread"
+        };
+        var editorResponse = await client.AwaitResponse(
+            new CreateNodeRequest(threadNode) { CreatedBy = editorId },
+            o => o.WithTarget(Mesh.Address),
+            TestTimeout);
+
+        // Commenter tries to create a Thread
+        var commenterThread = new MeshNode("Thread2", parentPath)
+        {
+            Name = "Commenter Thread",
+            NodeType = "Thread"
+        };
+        var commenterResponse = await client.AwaitResponse(
+            new CreateNodeRequest(commenterThread) { CreatedBy = commenterId },
+            o => o.WithTarget(Mesh.Address),
+            TestTimeout);
+
+        // Assert
+        editorResponse.Message.Success.Should().BeTrue("Editor has Update permission");
+        commenterResponse.Message.Success.Should().BeFalse("Commenter lacks Update permission for Thread creation");
+        commenterResponse.Message.RejectionReason.Should().Be(NodeCreationRejectionReason.ValidationFailed);
+    }
+
+    [Fact]
+    public async Task EditorCanComment_UpdateImpliesComment()
+    {
+        // Arrange
+        var client = GetClient();
+        var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
+
+        const string editorId = "editor_commenter";
+        const string parentPath = "rls/editor_comment";
+
+        // Editor has Update permission, which implies Comment
+        await securityService.AddUserRoleAsync(editorId, "Editor", parentPath, "system", TestTimeout);
+
+        // Act - editor creates a Comment node
+        var commentNode = new MeshNode("Comment1", parentPath)
+        {
+            Name = "Editor Comment",
+            NodeType = CommentNodeType.NodeType,
+            Content = new Comment { Text = "Editor can comment", Author = editorId }
+        };
+        var response = await client.AwaitResponse(
+            new CreateNodeRequest(commentNode) { CreatedBy = editorId },
+            o => o.WithTarget(Mesh.Address),
+            TestTimeout);
+
+        // Assert
+        response.Message.Success.Should().BeTrue("Editor has Update which implies Comment permission");
+    }
+
+    [Fact]
+    public async Task CreateNode_Anonymous_NoCreatedBy_Fails()
+    {
+        // Arrange - anonymous: no AccessContext, no CreatedBy, no role assigned
+        var client = GetClient();
+
+        var node = new MeshNode("AnonCreate", "rls/anon")
+        {
+            Name = "Anonymous Create",
+            NodeType = "secure"
+        };
+        // CreatedBy is null — anonymous request
+        var request = new CreateNodeRequest(node);
+
+        // Act
+        var response = await client.AwaitResponse(
+            request,
+            o => o.WithTarget(Mesh.Address),
+            TestTimeout);
+
+        // Assert — must be rejected
+        response.Message.Success.Should().BeFalse("Anonymous user must not be able to create nodes");
+        response.Message.RejectionReason.Should().Be(NodeCreationRejectionReason.ValidationFailed);
+    }
+
+    [Fact]
+    public async Task DeleteNode_Anonymous_NoDeletedBy_Fails()
+    {
+        // Arrange - create a node as admin first
+        var client = GetClient();
+        var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
+
+        const string adminId = "admin_for_anon_delete";
+        const string parentPath = "rls/anon_delete";
+
+        await securityService.AddUserRoleAsync(adminId, "Admin", parentPath, "system", TestTimeout);
+        var node = new MeshNode("ToDeleteAnon", parentPath)
+        {
+            Name = "Delete Me",
+            NodeType = "secure"
+        };
+        var createResp = await client.AwaitResponse(
+            new CreateNodeRequest(node) { CreatedBy = adminId },
+            o => o.WithTarget(Mesh.Address),
+            TestTimeout);
+        createResp.Message.Success.Should().BeTrue();
+
+        // Act — anonymous delete (no DeletedBy)
+        var deleteResponse = await client.AwaitResponse(
+            new DeleteNodeRequest("rls/anon_delete/ToDeleteAnon"),
+            o => o.WithTarget(Mesh.Address),
+            TestTimeout);
+
+        // Assert — must be rejected
+        deleteResponse.Message.Success.Should().BeFalse("Anonymous user must not be able to delete nodes");
+        deleteResponse.Message.RejectionReason.Should().Be(NodeDeletionRejectionReason.ValidationFailed);
+    }
+
+    [Fact]
+    public async Task UpdateNode_Anonymous_NoUpdatedBy_Fails()
+    {
+        // Arrange - create a node as admin first
+        var client = GetClient();
+        var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
+
+        const string adminId = "admin_for_anon_update";
+        const string parentPath = "rls/anon_update";
+
+        await securityService.AddUserRoleAsync(adminId, "Admin", parentPath, "system", TestTimeout);
+        var node = new MeshNode("ToUpdateAnon", parentPath)
+        {
+            Name = "Original",
+            NodeType = "secure"
+        };
+        var createResp = await client.AwaitResponse(
+            new CreateNodeRequest(node) { CreatedBy = adminId },
+            o => o.WithTarget(Mesh.Address),
+            TestTimeout);
+        createResp.Message.Success.Should().BeTrue();
+
+        // Act — anonymous update (no UpdatedBy)
+        var updatedNode = node with { Name = "Hacked" };
+        var updateResponse = await client.AwaitResponse(
+            new UpdateNodeRequest(updatedNode),
+            o => o.WithTarget(Mesh.Address),
+            TestTimeout);
+
+        // Assert — must be rejected
+        updateResponse.Message.Success.Should().BeFalse("Anonymous user must not be able to update nodes");
+        updateResponse.Message.RejectionReason.Should().Be(NodeUpdateRejectionReason.ValidationFailed);
+    }
+
+    [Fact]
+    public async Task AnonymousUser_PermissionsAreNone_ByDefault()
+    {
+        // Arrange — no role assigned to anonymous/"Public" user
+        var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
+
+        // Act — check effective permissions for "Public" on an unassigned path
+        var permissions = await securityService.GetEffectivePermissionsAsync(
+            "rls/no_public_access", WellKnownUsers.Public, TestTimeout);
+
+        // Assert
+        permissions.Should().Be(Permission.None,
+            "Anonymous user must have zero permissions by default");
+    }
+
+    [Fact]
+    public async Task AnonymousUser_WithPublicViewerRole_CannotCreate()
+    {
+        // Arrange — grant Public user Viewer role (Read only)
+        var client = GetClient();
+        var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
+
+        const string parentPath = "rls/public_viewer";
+        await securityService.AddUserRoleAsync(
+            WellKnownUsers.Public, "Viewer", parentPath, "system", TestTimeout);
+
+        // Verify permissions
+        var permissions = await securityService.GetEffectivePermissionsAsync(
+            parentPath, WellKnownUsers.Public, TestTimeout);
+        permissions.Should().Be(Permission.Read, "Public Viewer should only have Read");
+
+        // Act — anonymous Create (CreatedBy = empty, will resolve to Public user)
+        var node = new MeshNode("PublicCreate", parentPath)
+        {
+            Name = "Public Create",
+            NodeType = "secure"
+        };
+        var response = await client.AwaitResponse(
+            new CreateNodeRequest(node),
+            o => o.WithTarget(Mesh.Address),
+            TestTimeout);
+
+        // Assert
+        response.Message.Success.Should().BeFalse(
+            "Public/Viewer user must not be able to create nodes");
+    }
+
+    [Fact]
+    public async Task EditorRole_CannotDelete()
+    {
+        // Arrange
+        var client = GetClient();
+        var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
+
+        const string adminId = "admin_setup";
+        const string editorId = "editor_nodel";
+        const string parentPath = "rls/nodel";
+
+        // Admin creates a node
+        await securityService.AddUserRoleAsync(adminId, "Admin", parentPath, "system", TestTimeout);
+        var node = new MeshNode("Protected", parentPath)
+        {
+            Name = "Protected Node",
+            NodeType = "secure"
+        };
+        var createResponse = await client.AwaitResponse(
+            new CreateNodeRequest(node) { CreatedBy = adminId },
+            o => o.WithTarget(Mesh.Address),
+            TestTimeout);
+        createResponse.Message.Success.Should().BeTrue();
+
+        // Assign Editor role (no Delete permission)
+        await securityService.AddUserRoleAsync(editorId, "Editor", parentPath, "system", TestTimeout);
+
+        // Act - editor tries to delete
+        var deleteResponse = await client.AwaitResponse(
+            new DeleteNodeRequest("rls/nodel/Protected") { DeletedBy = editorId },
+            o => o.WithTarget(Mesh.Address),
+            TestTimeout);
+
+        // Assert
+        deleteResponse.Message.Success.Should().BeFalse("Editor lacks Delete permission");
+        deleteResponse.Message.RejectionReason.Should().Be(NodeDeletionRejectionReason.ValidationFailed);
+    }
+
+    [Fact]
+    public async Task ViewerRole_CannotCreateUpdateOrDelete()
+    {
+        // Arrange
+        var client = GetClient();
+        var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
+
+        const string viewerId = "strict_viewer";
+        const string parentPath = "rls/viewonly";
+
+        await securityService.AddUserRoleAsync(viewerId, "Viewer", parentPath, "system", TestTimeout);
+
+        // Check effective permissions
+        var permissions = await securityService.GetEffectivePermissionsAsync(parentPath, viewerId, TestTimeout);
+        permissions.Should().Be(Permission.Read, "Viewer should only have Read permission");
+
+        // Verify cannot create
+        var node = new MeshNode("ViewerCreate", parentPath) { Name = "Viewer Create", NodeType = "secure" };
+        var createResp = await client.AwaitResponse(
+            new CreateNodeRequest(node) { CreatedBy = viewerId },
+            o => o.WithTarget(Mesh.Address),
+            TestTimeout);
+        createResp.Message.Success.Should().BeFalse("Viewer cannot create");
+    }
+
+    [Fact]
+    public async Task CommenterRole_CanReadAndComment()
+    {
+        // Arrange
+        var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
+
+        const string userId = "commenter_test";
+        const string path = "rls/commenter_test";
+
+        await securityService.AddUserRoleAsync(userId, "Commenter", path, "system", TestTimeout);
+
+        // Act
+        var permissions = await securityService.GetEffectivePermissionsAsync(path, userId, TestTimeout);
+
+        // Assert
+        permissions.HasFlag(Permission.Read).Should().BeTrue("Commenter can read");
+        permissions.HasFlag(Permission.Comment).Should().BeTrue("Commenter can comment");
+        permissions.HasFlag(Permission.Create).Should().BeFalse("Commenter cannot create regular nodes");
+        permissions.HasFlag(Permission.Update).Should().BeFalse("Commenter cannot update");
+        permissions.HasFlag(Permission.Delete).Should().BeFalse("Commenter cannot delete");
+    }
+
+    [Fact]
+    public async Task CommentPermission_InBuiltInRoles()
+    {
+        // Assert built-in role permissions include Comment where expected
+        Role.Admin.Permissions.HasFlag(Permission.Comment).Should().BeTrue("Admin has all permissions");
+        Role.Editor.Permissions.HasFlag(Permission.Comment).Should().BeTrue("Editor has Comment");
+        Role.Commenter.Permissions.HasFlag(Permission.Comment).Should().BeTrue("Commenter has Comment");
+        Role.Viewer.Permissions.HasFlag(Permission.Comment).Should().BeFalse("Viewer does not have Comment");
+        await Task.CompletedTask;
     }
 }
 

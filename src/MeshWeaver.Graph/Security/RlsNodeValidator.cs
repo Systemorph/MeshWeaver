@@ -1,3 +1,4 @@
+using MeshWeaver.AI;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
@@ -34,7 +35,7 @@ public class RlsNodeValidator : INodeValidator
         var requiredPermission = context.Operation switch
         {
             NodeOperation.Read => Permission.Read,
-            NodeOperation.Create => Permission.Create,
+            NodeOperation.Create => GetCreatePermission(context.Node),
             NodeOperation.Update => Permission.Update,
             NodeOperation.Delete => Permission.Delete,
             _ => Permission.None
@@ -53,9 +54,20 @@ public class RlsNodeValidator : INodeValidator
             ? context.Node.GetParentPath() ?? context.Node.Path
             : context.Node.Path;
 
-        // Check permission - use the explicit userId if available
+        // Check permission - for Comment permission, also accept Update (Edit implies Comment)
         bool hasPermission;
-        if (!string.IsNullOrEmpty(userId))
+        if (requiredPermission == Permission.Comment)
+        {
+            Permission effectivePermissions;
+            if (!string.IsNullOrEmpty(userId))
+                effectivePermissions = await _securityService.GetEffectivePermissionsAsync(pathToCheck, userId, ct);
+            else
+                effectivePermissions = await _securityService.GetEffectivePermissionsAsync(pathToCheck, ct);
+
+            hasPermission = effectivePermissions.HasFlag(Permission.Comment)
+                         || effectivePermissions.HasFlag(Permission.Update);
+        }
+        else if (!string.IsNullOrEmpty(userId))
         {
             hasPermission = await _securityService.HasPermissionAsync(
                 pathToCheck,
@@ -95,6 +107,17 @@ public class RlsNodeValidator : INodeValidator
 
         return NodeValidationResult.Valid();
     }
+
+    /// <summary>
+    /// Determines the required permission for a Create operation based on node type.
+    /// Comment creation requires Comment permission, Thread creation requires Update permission.
+    /// </summary>
+    private static Permission GetCreatePermission(MeshNode node) => node.NodeType switch
+    {
+        CommentNodeType.NodeType => Permission.Comment,
+        ThreadNodeType.NodeType => Permission.Update,
+        _ => Permission.Create
+    };
 
     /// <summary>
     /// Extracts the user ID from the validation context.

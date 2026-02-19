@@ -85,11 +85,11 @@ When multiple people edit the same document:
 
 > **Project Proposal** *(3 collaborators editing)*
 >
-> The <!--comment:c5-->proposed timeline<!--/comment:c5--> for Phase 1 is <!--delete:d6-->6 months<!--/delete:d6--><!--insert:i8-->4 months<!--/insert:i8-->. This <!--insert:i9-->aggressive but achievable<!--/insert:i9--> schedule requires:
+> The <!--comment:c5-->proposed timeline<!--/comment:c5--> for Phase 1 is <!--delete:d6:Bob:Dec 26-->6 months<!--/delete:d6--><!--insert:i8:Bob:Dec 26-->4 months<!--/insert:i8-->. This <!--insert:i9:Alice:Dec 26-->aggressive but achievable<!--/insert:i9--> schedule requires:
 >
 > - <!--comment:c6-->Additional resources<!--/comment:c6--> from the engineering team
-> - <!--delete:d7-->Weekly<!--/delete:d7--><!--insert:i10-->Daily<!--/insert:i10--> standup meetings
-> - <!--insert:i11-->A dedicated project manager<!--/insert:i11-->
+> - <!--delete:d7:Carol:Dec 27-->Weekly<!--/delete:d7--><!--insert:i10:Carol:Dec 27-->Daily<!--/insert:i10--> standup meetings
+> - <!--insert:i11:Alice:Dec 27-->A dedicated project manager<!--/insert:i11-->
 
 ---
 

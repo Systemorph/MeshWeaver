@@ -18,7 +18,7 @@ public static class MarkdownLayoutAreas
 
     public static MessageHubConfiguration AddMarkdownViews(this MessageHubConfiguration configuration)
         => configuration
-            .Set(new PageLayoutOptions { MaxWidth = "960px" })
+            .Set(new PageLayoutOptions { MaxWidth = "1280px" })
             .AddLayout(layout => layout
                 .WithDefaultArea(OverviewArea)
                 .WithView(OverviewArea, MarkdownOverviewLayoutArea.Overview)

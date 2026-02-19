@@ -12,7 +12,7 @@ public static class OrganizationViews
     /// GitHub-style organization header view with standard children section.
     /// Shows logo, name, description, verified badge, contact info, then delegates to standard view for children.
     /// </summary>
-    public static IObservable<UiControl?> Details(LayoutAreaHost host, RenderingContext _)
+    public static IObservable<UiControl?> Overview(LayoutAreaHost host, RenderingContext _)
     {
         var hubPath = host.Hub.Address.ToString();
 
@@ -125,12 +125,6 @@ public static class OrganizationViews
 
         infoColumn = infoColumn.WithView(statsRow);
         headerRow = headerRow.WithView(infoColumn);
-
-        // Action menu on the far right
-        headerRow = headerRow.WithView(
-            Controls.Stack
-                .WithStyle("margin-left: auto;")
-                .WithView(MeshWeaver.Graph.MeshNodeLayoutAreas.BuildActionMenu(host, node)));
 
         container = container.WithView(headerRow);
 
