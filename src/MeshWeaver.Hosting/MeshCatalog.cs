@@ -208,6 +208,14 @@ public sealed class MeshCatalog(
         return tcs.Task;
     }
 
+    /// <inheritdoc />
+    public async Task<MeshNode> CreateTransientAsync(MeshNode node, CancellationToken ct = default)
+    {
+        var accessService = hub.ServiceProvider.GetService<AccessService>();
+        var currentUser = accessService?.Context?.Name;
+        return await CreateTransientNodeAsync(node, currentUser, ct);
+    }
+
     /// <summary>
     /// Creates a new node in Transient state without confirming it.
     /// This is internal - used by handlers that need direct node creation after validation.

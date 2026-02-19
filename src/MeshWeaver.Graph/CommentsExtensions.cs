@@ -5,6 +5,7 @@ using MeshWeaver.Domain;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Layout.Domain;
+using MeshWeaver.Markdown;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
@@ -141,7 +142,8 @@ public static class CommentsView
 
             foreach (var comment in recentComments)
             {
-                container = container.WithView(BuildCommentCard(comment));
+                var commentAddress = $"{nodePath}/{comment.Id}";
+                container = container.WithView(Controls.LayoutArea(commentAddress, CommentLayoutAreas.OverviewArea));
             }
 
             if (comments.Count > CommentsPageSize)
@@ -166,13 +168,81 @@ public static class CommentsView
                     if (string.IsNullOrEmpty(commentPath))
                         return (UiControl)Controls.Stack; // empty placeholder
 
-                    return (UiControl)Controls.Stack
-                        .WithStyle("margin-top: 12px; padding: 12px; border: 1px solid var(--neutral-stroke-rest); border-radius: 8px; min-height: 120px;")
-                        .WithView(Controls.LayoutArea(commentPath, MeshNodeLayoutAreas.CreateNodeArea));
+                    return (UiControl)BuildCommentCreateForm(h, commentPath, newCommentPathStateId);
                 });
         });
 
         return container;
+    }
+
+    /// <summary>
+    /// Builds the inline comment creation form with markdown editor, Cancel, and Create buttons.
+    /// Cancel deletes the transient node and hides the form.
+    /// Create sets the comment text, marks the node Active, and hides the form.
+    /// </summary>
+    private static UiControl BuildCommentCreateForm(LayoutAreaHost host, string commentPath, string stateId)
+    {
+        var meshCatalog = host.Hub.ServiceProvider.GetRequiredService<IMeshCatalog>();
+        var persistence = host.Hub.ServiceProvider.GetService<IPersistenceService>();
+        var textDataId = $"commentText_{commentPath.Replace("/", "_")}";
+
+        host.UpdateData(textDataId, new Dictionary<string, object?> { ["text"] = "" });
+
+        var stack = Controls.Stack
+            .WithStyle("margin-top: 12px; padding: 12px; border: 1px solid var(--neutral-stroke-rest); border-radius: 8px;");
+
+        // Markdown editor bound to local data area
+        var editor = new MarkdownEditorControl()
+            .WithDocumentId(commentPath)
+            .WithHeight("150px")
+            .WithPlaceholder("Write your comment...") with
+        {
+            Value = new JsonPointerReference("text"),
+            DataContext = LayoutAreaReference.GetDataPointer(textDataId)
+        };
+        stack = stack.WithView(editor);
+
+        // Button row: Cancel and Create
+        stack = stack.WithView(Controls.Stack
+            .WithOrientation(Orientation.Horizontal)
+            .WithHorizontalGap(12)
+            .WithStyle("margin-top: 8px; justify-content: flex-end;")
+            .WithView(Controls.Button("Cancel")
+                .WithAppearance(Appearance.Neutral)
+                .WithClickAction(async _ =>
+                {
+                    try { await meshCatalog.DeleteNodeAsync(commentPath); } catch { }
+                    host.UpdateData(stateId, "");
+                }))
+            .WithView(Controls.Button("Create")
+                .WithAppearance(Appearance.Accent)
+                .WithIconStart(FluentIcons.Add())
+                .WithClickAction(async ctx =>
+                {
+                    var text = "";
+                    ctx.Host.Stream.GetDataStream<Dictionary<string, object?>>(textDataId)
+                        .Take(1)
+                        .Subscribe(data => text = data?.GetValueOrDefault("text")?.ToString() ?? "");
+
+                    if (persistence != null)
+                    {
+                        var node = await persistence.GetNodeAsync(commentPath);
+                        if (node != null)
+                        {
+                            var comment = node.Content as Comment ?? new Comment();
+                            var activeNode = node with
+                            {
+                                State = MeshNodeState.Active,
+                                Content = comment with { Text = text }
+                            };
+                            await persistence.SaveNodeAsync(activeNode);
+                        }
+                    }
+
+                    host.UpdateData(stateId, "");
+                })));
+
+        return stack;
     }
 
     /// <summary>
@@ -190,7 +260,7 @@ public static class CommentsView
                 var commentPath = $"{nodePath}/{commentId}";
                 var newCommentPathStateId = $"newComment_{nodePath.Replace("/", "_")}";
 
-                var commentNode = new MeshNode(commentPath)
+                var commentNode = new MeshNode(commentId, nodePath)
                 {
                     Name = "Comment",
                     NodeType = CommentNodeType.NodeType,
@@ -205,38 +275,10 @@ public static class CommentsView
                 };
 
                 var meshCatalog = host.Hub.ServiceProvider.GetRequiredService<IMeshCatalog>();
-                await meshCatalog.CreateNodeAsync(commentNode, currentUser);
+                await meshCatalog.CreateTransientAsync(commentNode);
 
                 host.UpdateData(newCommentPathStateId, commentPath);
             });
-    }
-
-    private static UiControl BuildCommentCard(Comment comment)
-    {
-        var card = Controls.Stack
-            .WithStyle("padding: 12px; margin: 8px 0; background: #f8f9fa; border-radius: 12px;");
-
-        var headerRow = Controls.Stack
-            .WithOrientation(Orientation.Horizontal)
-            .WithStyle("align-items: center; gap: 8px; margin-bottom: 4px;");
-
-        var initial = !string.IsNullOrEmpty(comment.Author) ? comment.Author[0].ToString().ToUpper() : "?";
-        headerRow = headerRow.WithView(
-            Controls.Html($"<div style=\"width: 32px; height: 32px; border-radius: 50%; background: #0078d4; color: white; display: flex; align-items: center; justify-content: center; font-weight: bold; font-size: 14px;\">{initial}</div>"));
-
-        var authorInfo = Controls.Stack.WithStyle("gap: 2px;");
-        authorInfo = authorInfo.WithView(
-            Controls.Html($"<strong style=\"font-size: 0.95em;\">{comment.Author}</strong>"));
-        authorInfo = authorInfo.WithView(
-            Controls.Html($"<span style=\"font-size: 0.8em; color: #888;\">{FormatTimeAgo(comment.CreatedAt)}</span>"));
-
-        headerRow = headerRow.WithView(authorInfo);
-        card = card.WithView(headerRow);
-
-        card = card.WithView(
-            Controls.Html($"<p style=\"margin: 8px 0 0 40px; line-height: 1.4;\">{comment.Text}</p>"));
-
-        return card;
     }
 
     internal static string FormatTimeAgo(DateTimeOffset dateTime)

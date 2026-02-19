@@ -5,7 +5,6 @@ using FluentAssertions;
 using MeshWeaver.Domain;
 using MeshWeaver.Graph;
 using MeshWeaver.Layout;
-using MeshWeaver.Layout.Catalog;
 using MeshWeaver.Markdown;
 using MeshWeaver.Mesh;
 using Xunit;
@@ -843,7 +842,7 @@ public class CommentMeshNodeTests
     }
 
     [Fact]
-    public void BuildOverview_WithReplyNodes_RendersReplies()
+    public void BuildOverview_WithRepliesDataId_RendersSuccessfully()
     {
         var comment = new Comment
         {
@@ -857,65 +856,24 @@ public class CommentMeshNodeTests
             Content = comment
         };
 
-        var replyNode = new MeshNode("docs/page/c1/r1")
-        {
-            NodeType = CommentNodeType.NodeType,
-            Content = new Comment { Id = "r1", Author = "Bob", Text = "Reply" }
-        };
-
-        var result = CommentLayoutAreas.BuildOverview(null!, node, "docs/page/c1", "editState_test", new[] { true }, new List<MeshNode> { replyNode }, "");
+        var result = CommentLayoutAreas.BuildOverview(null!, node, "docs/page/c1", "editState_test", new[] { true }, "replies_test", "");
 
         result.Should().NotBeNull();
         result.Should().BeOfType<StackControl>();
     }
 
     [Fact]
-    public void BuildOverview_WithNoReplies_RendersWithoutRepliesSection()
+    public void BuildOverview_WithNoContent_RendersPlaceholder()
     {
-        var comment = new Comment
-        {
-            Id = "c1",
-            Author = "Alice",
-            Text = "Standalone comment"
-        };
         var node = new MeshNode("docs/page/c1")
         {
             NodeType = CommentNodeType.NodeType,
-            Content = comment
+            Content = null
         };
 
-        var result = CommentLayoutAreas.BuildOverview(null!, node, "docs/page/c1", "editState_test", new[] { true }, Array.Empty<MeshNode>(), "");
+        var result = CommentLayoutAreas.BuildOverview(null!, node, "docs/page/c1", "editState_test", new[] { true }, "replies_test", "");
 
         result.Should().NotBeNull();
-        result.Should().BeOfType<StackControl>();
-    }
-
-    [Fact]
-    public void BuildOverview_AcceptsReplyNodes()
-    {
-        var comment = new Comment { Id = "c1", Author = "Alice", Text = "Comment 1" };
-        var node = new MeshNode("docs/page/c1")
-        {
-            NodeType = CommentNodeType.NodeType,
-            Content = comment
-        };
-
-        var replyForC1 = new MeshNode("docs/page/c1/r1")
-        {
-            NodeType = CommentNodeType.NodeType,
-            Content = new Comment { Id = "r1", Author = "Bob", Text = "Reply to c1" }
-        };
-        var replyForC2 = new MeshNode("docs/page/c2/r2")
-        {
-            NodeType = CommentNodeType.NodeType,
-            Content = new Comment { Id = "r2", Author = "Carol", Text = "Reply to c2" }
-        };
-
-        // BuildOverview receives reply nodes (filtered by scope:children query upstream)
-        var result = CommentLayoutAreas.BuildOverview(null!, node, "docs/page/c1", "editState_test", new[] { true }, new List<MeshNode> { replyForC1, replyForC2 }, "");
-
-        result.Should().NotBeNull();
-        result.Should().BeOfType<StackControl>();
     }
 
     [Fact]
@@ -976,87 +934,12 @@ public class CommentMeshNodeTests
 
     #endregion
 
-    #region Expandable Replies Catalog
-
-    [Fact]
-    public void BuildRepliesCatalog_ReturnsCatalogControl_WithCorrectStructure()
-    {
-        var replyNodes = new List<MeshNode>
-        {
-            new("docs/page/c1/r1")
-            {
-                NodeType = CommentNodeType.NodeType,
-                Content = new Comment { Id = "r1", Author = "Bob", Text = "First reply" }
-            }
-        };
-
-        var catalog = CommentLayoutAreas.BuildRepliesCatalog(replyNodes);
-
-        catalog.Should().BeOfType<CatalogControl>();
-        var catalogControl = (CatalogControl)catalog;
-        catalogControl.Groups.Should().HaveCount(1);
-        catalogControl.Groups[0].Key.Should().Be("replies");
-        catalogControl.Groups[0].Label.Should().Be("Replies");
-        catalogControl.Groups[0].IsExpanded.Should().BeFalse("replies section is collapsed by default");
-        catalogControl.Groups[0].TotalCount.Should().Be(1);
-        catalogControl.CollapsibleSections.Should().BeTrue();
-        catalogControl.ShowCounts.Should().BeTrue();
-    }
-
-    [Fact]
-    public void BuildRepliesCatalog_MultipleReplies_ShowsCorrectCount()
-    {
-        var replyNodes = new List<MeshNode>
-        {
-            new("docs/page/c1/r1")
-            {
-                NodeType = CommentNodeType.NodeType,
-                Content = new Comment { Id = "r1", Author = "Bob", Text = "Reply 1" }
-            },
-            new("docs/page/c1/r2")
-            {
-                NodeType = CommentNodeType.NodeType,
-                Content = new Comment { Id = "r2", Author = "Carol", Text = "Reply 2" }
-            },
-            new("docs/page/c1/r3")
-            {
-                NodeType = CommentNodeType.NodeType,
-                Content = new Comment { Id = "r3", Author = "Dave", Text = "Reply 3" }
-            }
-        };
-
-        var catalog = (CatalogControl)CommentLayoutAreas.BuildRepliesCatalog(replyNodes);
-
-        catalog.Groups[0].TotalCount.Should().Be(3);
-        catalog.Groups[0].Items.Should().HaveCount(3);
-    }
-
-    [Fact]
-    public void BuildRepliesCatalog_EachItemIsThumbnailStackControl()
-    {
-        var replyNodes = new List<MeshNode>
-        {
-            new("docs/page/c1/r1")
-            {
-                NodeType = CommentNodeType.NodeType,
-                Content = new Comment { Id = "r1", Author = "Bob", Text = "Some reply" }
-            }
-        };
-
-        var catalog = (CatalogControl)CommentLayoutAreas.BuildRepliesCatalog(replyNodes);
-
-        catalog.Groups[0].Items.Should().HaveCount(1);
-        catalog.Groups[0].Items[0].Should().BeOfType<StackControl>("each reply renders as a Thumbnail StackControl");
-    }
-
-    #endregion
-
     #region Reply Workflow — End-to-End
 
     [Fact]
-    public void ReplyWorkflow_CreateReply_EditText_VerifyThumbnailInCatalog()
+    public void ReplyWorkflow_CreateReply_EditText_VerifyNodeStructure()
     {
-        // 1) Start with a parent comment — no replies yet
+        // 1) Start with a parent comment
         var commentPath = "docs/page/c1";
         var parentComment = new Comment
         {
@@ -1074,10 +957,10 @@ public class CommentMeshNodeTests
             Content = parentComment
         };
 
-        // BuildOverview with no replies — no catalog
-        var overviewNoReplies = CommentLayoutAreas.BuildOverview(
-            null!, parentNode, commentPath, "editState_test", new[] { true }, Array.Empty<MeshNode>(), "");
-        overviewNoReplies.Should().BeOfType<StackControl>();
+        // BuildOverview renders successfully
+        var overview = CommentLayoutAreas.BuildOverview(
+            null!, parentNode, commentPath, "editState_test", new[] { true }, "replies_test", "");
+        overview.Should().BeOfType<StackControl>();
 
         // 2) "Click Reply" — simulate what the Reply button handler creates:
         //    an empty reply MeshNode as child of the parent comment node
@@ -1108,23 +991,6 @@ public class CommentMeshNodeTests
 
         ((Comment)updatedReplyNode.Content!).Author.Should().Be("User");
         ((Comment)updatedReplyNode.Content!).Text.Should().Be("I agree with this!");
-
-        // 4) Verify we see *one* answer in the overview as a Thumbnail inside a CatalogControl
-        var overviewWithReply = CommentLayoutAreas.BuildOverview(
-            null!, parentNode, commentPath, "editState_test", new[] { true }, new List<MeshNode> { updatedReplyNode }, "");
-
-        overviewWithReply.Should().BeOfType<StackControl>();
-
-        // Directly verify the catalog structure
-        var repliesCatalog = (CatalogControl)CommentLayoutAreas.BuildRepliesCatalog(
-            new List<MeshNode> { updatedReplyNode });
-
-        repliesCatalog.Groups.Should().HaveCount(1);
-        repliesCatalog.Groups[0].Label.Should().Be("Replies");
-        repliesCatalog.Groups[0].TotalCount.Should().Be(1, "exactly one reply was added");
-        repliesCatalog.Groups[0].Items.Should().HaveCount(1);
-        repliesCatalog.Groups[0].Items[0].Should().BeOfType<StackControl>(
-            "the reply is rendered as a Thumbnail (StackControl)");
     }
 
     #endregion
