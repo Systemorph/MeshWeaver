@@ -44,7 +44,7 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
         {
             ParentPath = $"User/{userId}"
         };
-        var threadPath = $"User/{userId}/Threads/{Guid.NewGuid()}";
+        var threadPath = $"User/{userId}/{Guid.NewGuid()}";
         var node = new MeshNode(threadPath)
         {
             Name = "Test Thread",
@@ -74,7 +74,7 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
         {
             ParentPath = $"User/{userId}"
         };
-        var threadPath = $"User/{userId}/Threads/{Guid.NewGuid()}";
+        var threadPath = $"User/{userId}/{Guid.NewGuid()}";
         var threadNode = new MeshNode(threadPath)
         {
             Name = "Thread with Child Messages",
@@ -135,7 +135,7 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
         {
             ParentPath = $"User/{userId}"
         };
-        var threadPath = $"User/{userId}/Threads/{Guid.NewGuid()}";
+        var threadPath = $"User/{userId}/{Guid.NewGuid()}";
         var node = new MeshNode(threadPath)
         {
             Name = "Retrievable Thread",
@@ -161,7 +161,7 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
     public async Task GetDataRequest_ToNonExistentNode_ReturnsErrorNotEndlessMessages()
     {
         // Arrange - Create a malformed path that mimics the bug
-        var nonExistentPath = "User/Roland/Threads/User/Roland/Threads/IOvAlUVOUUubAUdRoDaPwQ";
+        var nonExistentPath = "User/Roland/User/Roland/IOvAlUVOUUubAUdRoDaPwQ";
         var address = new Messaging.Address(nonExistentPath);
         var hub = Mesh.ServiceProvider.GetRequiredService<IMessageHub>();
 
@@ -184,8 +184,8 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
     [Fact]
     public async Task GetDataRequest_ToNonExistentThread_ReturnsNullNotEndlessMessages()
     {
-        // Arrange - Path that looks valid but doesn't exist
-        var nonExistentPath = "User/TestUser/Threads/nonexistent123";
+        // Arrange - Thread path that looks valid but doesn't exist
+        var nonExistentPath = "User/TestUser/nonexistent123";
         var address = new Messaging.Address(nonExistentPath);
         var hub = Mesh.ServiceProvider.GetRequiredService<IMessageHub>();
 
@@ -207,7 +207,7 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
     [Fact]
     public async Task CreateThread_WithParentPath_PreservesParentPath()
     {
-        // Arrange - Threads use "Threads" sub-namespace: {parentPath}/Threads/{threadId}
+        // Arrange - Threads are stored as direct children: {parentPath}/{threadId}
         var userId = "TestUser";
         var parentPath = "ACME/ProductLaunch";
         var catalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
@@ -215,8 +215,7 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
         {
             ParentPath = parentPath  // Store where the thread was created
         };
-        // Full path includes "Threads" sub-namespace
-        var threadPath = $"{parentPath}/Threads/{Guid.NewGuid()}";
+        var threadPath = $"{parentPath}/{Guid.NewGuid()}";
         var node = new MeshNode(threadPath)
         {
             Name = "Thread with ParentPath",
@@ -230,7 +229,6 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
         // Assert
         createdNode.Should().NotBeNull();
         createdNode.Path.Should().Be(threadPath);
-        createdNode.Path.Should().Contain("/Threads/", "Thread path should use Threads sub-namespace");
         var content = createdNode.Content.Should().BeOfType<MeshThread>().Subject;
         content.ParentPath.Should().Be(parentPath, "ParentPath should be preserved");
 
@@ -241,9 +239,9 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
     }
 
     [Fact]
-    public async Task CreateThread_InThreadsSubNamespace_FollowsPattern()
+    public async Task CreateThread_AsDirectChild_FollowsPattern()
     {
-        // Arrange - Verifies the Threads sub-namespace pattern: {parentPath}/Threads/{threadId}
+        // Arrange - Verifies the flat thread pattern: {parentPath}/{threadId}
         // This is the pattern used by CreateNodeDialog and ThreadChatView
         var userId = "TestUser";
         var parentPath = "TestProject";
@@ -258,15 +256,15 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
         };
         await catalog.CreateNodeAsync(parentNode, userId, TestTimeout);
 
-        // Create thread under Threads sub-namespace
-        var threadPath = $"{parentPath}/Threads/{threadId}";
+        // Create thread as direct child
+        var threadPath = $"{parentPath}/{threadId}";
         var threadContent = new MeshThread
         {
             ParentPath = parentPath
         };
         var threadNode = new MeshNode(threadPath)
         {
-            Name = "Thread in Sub-namespace",
+            Name = "Thread as Direct Child",
             NodeType = ThreadNodeType.NodeType,
             Content = threadContent
         };
@@ -277,9 +275,9 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
         // Assert
         createdNode.Should().NotBeNull();
         createdNode.Path.Should().Be(threadPath);
-        createdNode.Path.Should().StartWith($"{parentPath}/Threads/", "Thread should be in Threads sub-namespace");
+        createdNode.Path.Should().StartWith($"{parentPath}/", "Thread should be a direct child");
 
-        // Verify ParentPath points to the logical parent (without /Threads)
+        // Verify ParentPath points to the logical parent
         var content = createdNode.Content.Should().BeOfType<MeshThread>().Subject;
         content.ParentPath.Should().Be(parentPath, "ParentPath should point to logical parent");
 
@@ -290,9 +288,9 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
     [Fact]
     public async Task CreateThread_AsChildOfParent_Succeeds()
     {
-        // Arrange - Test creating thread as child of a parent node
+        // Arrange - Test creating thread as direct child of a parent node
         // This tests the pattern used by ThreadChatView where threads are
-        // created under the current navigation context with Threads sub-namespace
+        // created under the current navigation context
         var userId = "TestUser";
         var parentPath = $"TestParent_{Guid.NewGuid()}";
         var threadId = Guid.NewGuid().ToString();
@@ -306,8 +304,8 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
         };
         await catalog.CreateNodeAsync(parentNode, userId, TestTimeout);
 
-        // Create thread under Threads sub-namespace: {parentPath}/Threads/{threadId}
-        var threadPath = $"{parentPath}/Threads/{threadId}";
+        // Create thread as direct child: {parentPath}/{threadId}
+        var threadPath = $"{parentPath}/{threadId}";
         var threadContent = new MeshThread
         {
             ParentPath = parentPath  // Store parent path for navigation back
@@ -324,8 +322,8 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
 
         // Assert
         createdNode.Should().NotBeNull();
-        createdNode.Path.Should().Be(threadPath, "Thread path should be parent/Threads/threadId");
-        createdNode.Path.Should().StartWith($"{parentPath}/Threads/", "Thread should be in Threads sub-namespace");
+        createdNode.Path.Should().Be(threadPath, "Thread path should be parent/threadId");
+        createdNode.Path.Should().StartWith($"{parentPath}/", "Thread should be a direct child");
         createdNode.NodeType.Should().Be(ThreadNodeType.NodeType);
 
         var content = createdNode.Content.Should().BeOfType<MeshThread>().Subject;
@@ -473,7 +471,7 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
         // Arrange
         var userId = "TestUser";
         var catalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
-        var threadPath = $"User/{userId}/Threads/{Guid.NewGuid()}";
+        var threadPath = $"User/{userId}/{Guid.NewGuid()}";
 
         // Use a longer timeout since we're creating multiple nodes
         var longTimeout = new CancellationTokenSource(30.Seconds()).Token;

@@ -398,7 +398,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
 
     /// <summary>
     /// Creates a new thread lazily on first message.
-    /// Thread is created under {parentPath}/Threads/{threadId}
+    /// Thread is created under {parentPath}/{threadId}
     /// Messages are stored as child nodes, not inline.
     /// </summary>
     private void CreateThreadAsync()
@@ -406,9 +406,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         var threadId = Guid.NewGuid().AsString();
         var parentPath = initialContext;
 
-        // Construct the thread path: {parentPath}/Threads/{threadId}
-        var threadNamespace = string.IsNullOrEmpty(parentPath) ? "Threads" : $"{parentPath}/Threads";
-        threadPath = $"{threadNamespace}/{threadId}";
+        threadPath = string.IsNullOrEmpty(parentPath) ? threadId : $"{parentPath}/{threadId}";
 
         // Generate title from first user message
         var title = GetThreadTitle() ?? $"Chat {DateTime.UtcNow:yyyy-MM-dd HH:mm}";

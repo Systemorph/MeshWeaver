@@ -122,9 +122,7 @@ public static class ThreadLayoutAreas
                 ParentPath = parentPath
             };
 
-            // Construct full path with Threads sub-namespace
-            var threadNamespace = string.IsNullOrEmpty(parentPath) ? "Threads" : $"{parentPath}/Threads";
-            var threadPath = $"{threadNamespace}/{nodeId}";
+            var threadPath = string.IsNullOrEmpty(parentPath) ? nodeId : $"{parentPath}/{nodeId}";
 
             var newNode = new MeshNode(threadPath)
             {
