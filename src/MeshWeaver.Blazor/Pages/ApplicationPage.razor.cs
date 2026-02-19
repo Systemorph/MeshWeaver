@@ -1,6 +1,7 @@
 using System.Collections.Immutable;
 using MeshWeaver.Data;
 using MeshWeaver.Layout;
+using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.AspNetCore.Components;
@@ -35,6 +36,16 @@ public partial class ApplicationPage : ComponentBase, IDisposable
 
     private LayoutAreaReference Reference { get; set; } = null!;
 
+    /// <summary>
+    /// Pre-rendered HTML from the MeshNode for instant display during Blazor prerender phase.
+    /// </summary>
+    private string? PreRenderedHtml { get; set; }
+
+    /// <summary>
+    /// Set to true after OnAfterRender fires, indicating we're in the interactive phase.
+    /// </summary>
+    private bool IsInteractive { get; set; }
+
     protected override void OnInitialized()
     {
         base.OnInitialized();
@@ -63,8 +74,12 @@ public partial class ApplicationPage : ComponentBase, IDisposable
         if (context is null)
         {
             PageTitle = "Page Not Found";
+            PreRenderedHtml = null;
             return;
         }
+
+        // Get pre-rendered HTML from the resolved node
+        PreRenderedHtml = context.Node?.PreRenderedHtml;
 
         // Decode area and id, append query string
         var area = context.Area != null ? (string)WorkspaceReference.Decode(context.Area) : null;
@@ -88,6 +103,16 @@ public partial class ApplicationPage : ComponentBase, IDisposable
         // Use the last segment of the address for the page title
         var titleSegment = context.Address.Segments.LastOrDefault() ?? context.Address.Type;
         PageTitle = titleSegment;
+    }
+
+    protected override void OnAfterRender(bool firstRender)
+    {
+        base.OnAfterRender(firstRender);
+        if (firstRender)
+        {
+            IsInteractive = true;
+            StateHasChanged();
+        }
     }
 
     private string? GetDisplayNameFromId()

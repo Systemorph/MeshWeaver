@@ -1,10 +1,12 @@
 using System.Reactive.Subjects;
+using MeshWeaver.Markdown;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.AspNetCore.Components;
 using Microsoft.AspNetCore.Components.Routing;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using NavigationContext = MeshWeaver.Mesh.Services.NavigationContext;
 
 namespace MeshWeaver.Hosting.Blazor;
@@ -140,13 +142,17 @@ public class NavigationService : INavigationService
         // Parse remainder into area and id
         var (area, id) = ParseRemainder(resolution.Remainder);
 
+        // Load the MeshNode for pre-rendered HTML and satellite detection
+        var node = await LoadNodeWithPreRenderedHtmlAsync(resolution);
+
         // Create the navigation context
         var context = new NavigationContext
         {
             Path = path,
             Resolution = resolution,
             Area = area,
-            Id = id
+            Id = id,
+            Node = node
         };
 
         _context = context;
@@ -159,6 +165,61 @@ public class NavigationService : INavigationService
         if (currentNodePath != _lastLoadedNodePath)
         {
             _ = LoadCreatableTypesAsync(currentNodePath);
+        }
+    }
+
+    /// <summary>
+    /// Loads the MeshNode for the resolved address.
+    /// If the node has MarkdownContent but no PreRenderedHtml, generates it and persists back.
+    /// </summary>
+    private async Task<MeshNode?> LoadNodeWithPreRenderedHtmlAsync(AddressResolution resolution)
+    {
+        try
+        {
+            var address = (Address)resolution.Prefix;
+            var node = await _meshCatalog.GetNodeAsync(address);
+            if (node == null)
+                return null;
+
+            // If node has MarkdownContent but no PreRenderedHtml, generate it
+            if (node.PreRenderedHtml == null && node.Content is MarkdownContent md && !string.IsNullOrEmpty(md.Content))
+            {
+                var html = md.PrerenderedHtml;
+                if (html == null)
+                {
+                    // PrerenderedHtml not on the MarkdownContent either — generate it
+                    var parsed = MarkdownContent.Parse(md.Content, node.Path);
+                    html = parsed.PrerenderedHtml;
+                }
+
+                if (html != null)
+                {
+                    node = node with { PreRenderedHtml = html };
+
+                    // Fire-and-forget: persist the generated PreRenderedHtml back
+                    _ = Task.Run(async () =>
+                    {
+                        try
+                        {
+                            var persistence = _hub.ServiceProvider.GetService<IPersistenceService>();
+                            if (persistence != null)
+                                await persistence.SaveNodeAsync(node);
+                        }
+                        catch (Exception ex)
+                        {
+                            var logger = _hub.ServiceProvider.GetService<ILogger<NavigationService>>();
+                            logger?.LogWarning(ex, "Failed to persist PreRenderedHtml for {Path}", node.Path);
+                        }
+                    });
+                }
+            }
+
+            return node;
+        }
+        catch
+        {
+            // Node loading is best-effort for prerender optimization
+            return null;
         }
     }
 

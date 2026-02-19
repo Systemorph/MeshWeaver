@@ -69,7 +69,9 @@ public class PostgreSqlMeshQuery : IMeshQueryCore
             foreach (var (node, _) in buffered.OrderByDescending(b => b.Score))
             {
                 if (skip > 0) { skip--; continue; }
-                yield return node;
+                yield return parsedQuery.Select != null
+                    ? ParsedQuery.ProjectToSelect(node, parsedQuery.Select)
+                    : node;
                 count++;
                 if (parsedQuery.Limit.HasValue && count >= parsedQuery.Limit.Value)
                     yield break;
@@ -88,7 +90,9 @@ public class PostgreSqlMeshQuery : IMeshQueryCore
                 continue;
             }
 
-            yield return node;
+            yield return parsedQuery.Select != null
+                ? ParsedQuery.ProjectToSelect(node, parsedQuery.Select)
+                : node;
 
             countOrig++;
             if (parsedQuery.Limit.HasValue && countOrig >= parsedQuery.Limit.Value)
@@ -170,6 +174,31 @@ public class PostgreSqlMeshQuery : IMeshQueryCore
         {
             yield return suggestion;
         }
+    }
+
+    /// <inheritdoc />
+    public async Task<T?> SelectAsync<T>(string path, string property, JsonSerializerOptions options, CancellationToken ct = default)
+    {
+        var query = new ParsedQuery(
+            Filter: new QueryComparison(new QueryCondition("path", QueryOperator.Equal, [path])),
+            TextSearch: null,
+            Path: null,
+            Scope: QueryScope.Exact);
+
+        await foreach (var node in _adapter.QueryNodesAsync(query, options, ct: ct))
+        {
+            var prop = typeof(MeshNode).GetProperty(property);
+            if (prop == null)
+                return default;
+
+            var value = prop.GetValue(node);
+            if (value is T typedValue)
+                return typedValue;
+
+            return default;
+        }
+
+        return default;
     }
 
     public IObservable<QueryResultChange<T>> ObserveQuery<T>(MeshQueryRequest request, JsonSerializerOptions options)

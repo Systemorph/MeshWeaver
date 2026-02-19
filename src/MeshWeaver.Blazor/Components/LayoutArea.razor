@@ -23,8 +23,10 @@
 
     protected override void OnParametersSet()
     {
-        // Set the current namespace so creatable types are loaded for this address
-        if (!string.IsNullOrEmpty(Address))
+        // Only top-level LayoutArea should set the namespace.
+        // Embedded areas (e.g. comment Overview in CollaborativeMarkdownView)
+        // must not overwrite the page-level namespace.
+        if (Top && !string.IsNullOrEmpty(Address))
         {
             NavigationService.SetCurrentNamespace(Address);
         }

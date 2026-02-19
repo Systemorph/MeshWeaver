@@ -324,114 +324,94 @@ public class TypedQueryTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
     [Fact]
     public async Task QueryAsync_Generic_ReturnsTypedResults()
     {
-        // Arrange - save partition objects with $type
-        var products = new List<object>
-        {
-            new TestProduct { Id = "1", Name = "Laptop", Price = 999.99m },
-            new TestProduct { Id = "2", Name = "Phone", Price = 499.99m },
-            new TestOrder { Id = "order-1", CustomerId = "cust-1", Total = 1500m }
-        };
-        await Persistence.SavePartitionObjectsAsync("shop/inventory", null, products);
+        // Arrange - save MeshNodes with nodeType
+        await Persistence.SaveNodeAsync(MeshNode.FromPath("shop/inventory/1") with { Name = "Laptop", NodeType = "Product" });
+        await Persistence.SaveNodeAsync(MeshNode.FromPath("shop/inventory/2") with { Name = "Phone", NodeType = "Product" });
+        await Persistence.SaveNodeAsync(MeshNode.FromPath("shop/inventory/order-1") with { Name = "Order 1", NodeType = "Order" });
 
-        // Act - query for TestProduct type only
-        // Use scope:subtree to include the base path where partition objects are stored
-        var results = await MeshQuery.QueryAsync<TestProduct>(
-            "path:shop/inventory scope:subtree"
+        // Act - query for Product nodes only
+        var results = await MeshQuery.QueryAsync<MeshNode>(
+            "path:shop/inventory nodeType:Product scope:descendants"
         ).ToListAsync();
 
-        // Assert - should only return TestProduct items
+        // Assert - should only return Product nodes
         results.Should().HaveCount(2);
-        results.Should().AllBeOfType<TestProduct>();
-        results.Select(p => p.Name).Should().Contain(["Laptop", "Phone"]);
+        results.Select(n => n.Name).Should().Contain(["Laptop", "Phone"]);
     }
 
     [Fact]
-    public async Task QueryAsync_Generic_WithTypeRegistry_UsesRegisteredName()
+    public async Task QueryAsync_Generic_WithNodeType_FiltersCorrectly()
     {
-        // Arrange - without type registry, uses CLR type name
-        var products = new List<object>
-        {
-            new TestProduct { Id = "1", Name = "Laptop", Price = 999.99m },
-            new TestOrder { Id = "order-1", CustomerId = "cust-1", Total = 1500m }
-        };
-        await Persistence.SavePartitionObjectsAsync("shop/data", null, products);
+        // Arrange - save nodes with different types
+        await Persistence.SaveNodeAsync(MeshNode.FromPath("shop/data/1") with { Name = "Laptop", NodeType = "Product" });
+        await Persistence.SaveNodeAsync(MeshNode.FromPath("shop/data/order-1") with { Name = "Order 1", NodeType = "Order" });
 
-        // Act - query without type registry (uses CLR type name "TestProduct")
-        // Use scope:subtree to include the base path where partition objects are stored
-        var results = await MeshQuery.QueryAsync<TestProduct>(
-            "path:shop/data scope:subtree"
+        // Act - query for Product nodeType
+        var results = await MeshQuery.QueryAsync<MeshNode>(
+            "path:shop/data nodeType:Product scope:descendants"
         ).ToListAsync();
 
-        // Assert - should find TestProduct by CLR type name
+        // Assert - should find only Product nodes
         results.Should().HaveCount(1);
         results.First().Name.Should().Be("Laptop");
     }
 
     [Fact]
-    public async Task QueryAsync_Generic_WithPaging_ReturnsPagedTypedResults()
+    public async Task QueryAsync_Generic_WithPaging_ReturnsPagedResults()
     {
-        // Arrange
-        var products = Enumerable.Range(1, 10)
-            .Select(i => new TestProduct { Id = i.ToString(), Name = $"Product {i}", Price = i * 10m })
-            .Cast<object>()
-            .ToList();
-        await Persistence.SavePartitionObjectsAsync("catalog/products", null, products);
+        // Arrange - save 10 product nodes
+        for (int i = 1; i <= 10; i++)
+        {
+            await Persistence.SaveNodeAsync(MeshNode.FromPath($"catalog/products/{i}") with
+            {
+                Name = $"Product {i}",
+                NodeType = "Product"
+            });
+        }
 
         // Act - get page 2 (skip 3, take 3)
-        // Use scope:subtree to include the base path where partition objects are stored
-        var results = await MeshQuery.QueryAsync<TestProduct>(
-            "path:catalog/products scope:subtree",
+        var results = await MeshQuery.QueryAsync<MeshNode>(
+            "path:catalog/products scope:descendants",
             skip: 3,
             limit: 3
         ).ToListAsync();
 
         // Assert
         results.Should().HaveCount(3);
-        results.Should().AllBeOfType<TestProduct>();
     }
 
     [Fact]
-    public async Task QueryAsync_Generic_WithAdditionalFilters_CombinesWithTypeFilter()
+    public async Task QueryAsync_Generic_WithAdditionalFilters_CombinesFilters()
     {
-        // Arrange
-        var products = new List<object>
-        {
-            new TestProduct { Id = "1", Name = "Gaming Laptop", Price = 1999.99m },
-            new TestProduct { Id = "2", Name = "Business Laptop", Price = 899.99m },
-            new TestProduct { Id = "3", Name = "Phone", Price = 499.99m },
-            new TestOrder { Id = "order-1", CustomerId = "cust-1", Total = 1500m }
-        };
-        await Persistence.SavePartitionObjectsAsync("shop/all", null, products);
+        // Arrange - save nodes with different names and types
+        await Persistence.SaveNodeAsync(MeshNode.FromPath("shop/all/1") with { Name = "Gaming Laptop", NodeType = "Product" });
+        await Persistence.SaveNodeAsync(MeshNode.FromPath("shop/all/2") with { Name = "Business Laptop", NodeType = "Product" });
+        await Persistence.SaveNodeAsync(MeshNode.FromPath("shop/all/3") with { Name = "Phone", NodeType = "Product" });
+        await Persistence.SaveNodeAsync(MeshNode.FromPath("shop/all/order-1") with { Name = "Order 1", NodeType = "Order" });
 
-        // Act - query for TestProduct with name filter
-        // Use scope:subtree to include the base path where partition objects are stored
-        var results = await MeshQuery.QueryAsync<TestProduct>(
-            "path:shop/all name:*Laptop* scope:subtree"
+        // Act - query for Product nodes with name filter
+        var results = await MeshQuery.QueryAsync<MeshNode>(
+            "path:shop/all name:*Laptop* nodeType:Product scope:descendants"
         ).ToListAsync();
 
-        // Assert - should only return laptops (both gaming and business)
+        // Assert - should only return laptops
         results.Should().HaveCount(2);
-        results.Should().OnlyContain(p => p.Name.Contains("Laptop"));
+        results.Should().OnlyContain(n => n.Name!.Contains("Laptop"));
     }
 
     [Fact]
-    public async Task QueryAsync_Generic_NoMatchingType_ReturnsEmpty()
+    public async Task QueryAsync_Generic_NoMatchingNodeType_ReturnsEmpty()
     {
-        // Arrange - save only orders, no products
-        var orders = new List<object>
-        {
-            new TestOrder { Id = "order-1", CustomerId = "cust-1", Total = 100m },
-            new TestOrder { Id = "order-2", CustomerId = "cust-2", Total = 200m }
-        };
-        await Persistence.SavePartitionObjectsAsync("shop/orders", null, orders);
+        // Arrange - save only Order nodes
+        await Persistence.SaveNodeAsync(MeshNode.FromPath("shop/orders/order-1") with { Name = "Order 1", NodeType = "Order" });
+        await Persistence.SaveNodeAsync(MeshNode.FromPath("shop/orders/order-2") with { Name = "Order 2", NodeType = "Order" });
 
-        // Act - query for TestProduct (none exist)
-        // Use scope:subtree to include the base path where partition objects are stored
-        var results = await MeshQuery.QueryAsync<TestProduct>(
-            "path:shop/orders scope:subtree"
+        // Act - query for Product nodeType (none exist)
+        var results = await MeshQuery.QueryAsync<MeshNode>(
+            "path:shop/orders nodeType:Product scope:descendants"
         ).ToListAsync();
 
-        // Assert - no TestProduct objects exist, only TestOrder
+        // Assert - no Product nodes exist, only Order
         results.Should().BeEmpty();
     }
 

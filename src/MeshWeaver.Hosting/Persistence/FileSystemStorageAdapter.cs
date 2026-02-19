@@ -61,18 +61,21 @@ public class FileSystemStorageAdapter : IStorageAdapter
         if (node == null)
             return null;
 
-        // Derive namespace and id from file path if not set
+        // Always derive namespace and id from file path (file path is source of truth).
+        // This corrects nodes whose JSON "id" was incorrectly saved as the full path.
         // Path "User/Alice" means namespace="User", id="Alice"
         var normalizedPath = path.Trim('/');
         var lastSlash = normalizedPath.LastIndexOf('/');
         if (lastSlash > 0)
         {
-            if (string.IsNullOrEmpty(node.Namespace))
-                node = node with { Namespace = normalizedPath[..lastSlash] };
-            if (string.IsNullOrEmpty(node.Id))
-                node = node with { Id = normalizedPath[(lastSlash + 1)..] };
+            var expectedNamespace = normalizedPath[..lastSlash];
+            var expectedId = normalizedPath[(lastSlash + 1)..];
+            if (node.Namespace != expectedNamespace)
+                node = node with { Namespace = expectedNamespace };
+            if (node.Id != expectedId)
+                node = node with { Id = expectedId };
         }
-        else if (string.IsNullOrEmpty(node.Id))
+        else if (node.Id != normalizedPath)
         {
             node = node with { Id = normalizedPath };
         }

@@ -42,7 +42,8 @@ public static class ThreadLayoutAreas
                 .WithView(MeshNodeLayoutAreas.CreateNodeArea, CreateView)
                 .WithView(MeshNodeLayoutAreas.SettingsArea, SettingsLayoutArea.Settings)
                 .WithView(MeshNodeLayoutAreas.MetadataArea, MeshNodeLayoutAreas.Metadata)
-                .WithView(MeshNodeLayoutAreas.ThumbnailArea, Thumbnail));
+                .WithView(MeshNodeLayoutAreas.ThumbnailArea, Thumbnail)
+                .WithView(MeshNodeLayoutAreas.ThreadsArea, ThreadsCatalog));
 
     /// <summary>
     /// Renders the Chat area with an interactive chat interface.
@@ -94,7 +95,7 @@ public static class ThreadLayoutAreas
     /// <summary>
     /// Renders the Create area for Thread nodes.
     /// Auto-creates a thread with generated name and redirects to ChatArea.
-    /// Thread nodes are created under a "Threads" sub-namespace: {parentPath}/Threads/{threadId}
+    /// Thread nodes are created as direct children: {parentPath}/{threadId}
     /// Requires Update permission on the parent node.
     /// </summary>
     public static IObservable<UiControl?> CreateView(LayoutAreaHost host, RenderingContext _)
@@ -122,9 +123,7 @@ public static class ThreadLayoutAreas
                 ParentPath = parentPath
             };
 
-            // Construct full path with Threads sub-namespace
-            var threadNamespace = string.IsNullOrEmpty(parentPath) ? "Threads" : $"{parentPath}/Threads";
-            var threadPath = $"{threadNamespace}/{nodeId}";
+            var threadPath = string.IsNullOrEmpty(parentPath) ? nodeId : $"{parentPath}/{nodeId}";
 
             var newNode = new MeshNode(threadPath)
             {
@@ -144,6 +143,32 @@ public static class ThreadLayoutAreas
                 return (UiControl?)Controls.Html($"<p style=\"color: var(--error-foreground);\">Failed to create thread: {ex.Message}</p>");
             }
         });
+    }
+
+    /// <summary>
+    /// Overrides the default Threads catalog view to add a "Create Thread" button.
+    /// Injected via AddThreadViews configuration.
+    /// </summary>
+    public static UiControl ThreadsCatalog(LayoutAreaHost host, RenderingContext _)
+    {
+        var hubPath = host.Hub.Address.ToString();
+        var createUrl = string.IsNullOrEmpty(hubPath)
+            ? $"/Create?type={Uri.EscapeDataString(ThreadNodeType.NodeType)}"
+            : $"/{hubPath}/Create?type={Uri.EscapeDataString(ThreadNodeType.NodeType)}";
+
+        return Controls.Stack
+            .WithView(Controls.Stack
+                .WithOrientation(Orientation.Horizontal)
+                .WithStyle("justify-content: flex-end; padding: 0 0 12px 0;")
+                .WithView(Controls.Button("Create Thread")
+                    .WithAppearance(Appearance.Accent)
+                    .WithIconStart(FluentIcons.Add())
+                    .WithNavigateToHref(createUrl)))
+            .WithView(Controls.MeshSearch
+                .WithHiddenQuery($"path:{hubPath} scope:children nodeType:Thread")
+                .WithPlaceholder("Search threads...")
+                .WithRenderMode(MeshSearchRenderMode.Flat)
+                .WithMaxColumns(3));
     }
 
     /// <summary>

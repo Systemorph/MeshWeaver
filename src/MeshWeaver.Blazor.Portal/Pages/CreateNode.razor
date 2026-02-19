@@ -247,11 +247,14 @@
 
             // Determine content based on node type
             object? content = null;
+            string? preRenderedHtml = null;
             if (selectedType.NodeTypePath == GraphConfigurationExtensions.MarkdownNodeType)
             {
                 // For Markdown types, create MarkdownContent with title heading
                 var markdownText = $"# {trimmedName}\n\n{nodeDescription ?? ""}";
-                content = MarkdownContent.Parse(markdownText, nodePath);
+                var parsed = MarkdownContent.Parse(markdownText, nodePath);
+                content = parsed;
+                preRenderedHtml = parsed.PrerenderedHtml;
             }
 
             // Create the node
@@ -260,7 +263,8 @@
                 Name = trimmedName,
                 NodeType = selectedType.NodeTypePath,
                 Icon = string.IsNullOrWhiteSpace(nodeIcon) ? null : nodeIcon.Trim(),
-                Content = content
+                Content = content,
+                PreRenderedHtml = preRenderedHtml
             };
 
             // Create node directly in catalog

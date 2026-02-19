@@ -66,6 +66,7 @@ public static class MeshNodeLayoutAreas
     public const string CreateNodeArea = "Create";
     public const string EditArea = "Edit";
     public const string DeleteArea = "Delete";
+    public const string ThreadsArea = "Threads";
 
     // UCR (Unified Content Reference) special areas
     public const string ContentArea = "$Content";
@@ -93,6 +94,7 @@ public static class MeshNodeLayoutAreas
             .WithView(SearchArea, Search)
             .WithView(FilesArea, Files)
             .WithView(ChildrenArea, Children)
+            .WithView(ThreadsArea, Threads)
             .WithView(NodeTypesArea, NodeTypes)
             .WithView(AccessControlArea, AccessControl)
             .WithView(CreateNodeArea, CreateNode)
@@ -462,6 +464,22 @@ public static class MeshNodeLayoutAreas
             .WithSectionCounts(true)
             .WithItemLimit(10)
             .WithCollapsibleSections(true);
+    }
+
+    /// <summary>
+    /// Renders the Threads catalog showing child Thread nodes using MeshSearchControl.
+    /// Modules can override this view (e.g. ThreadLayoutAreas adds a Create button).
+    /// </summary>
+    [Browsable(false)]
+    public static UiControl Threads(LayoutAreaHost host, RenderingContext _)
+    {
+        var hubPath = host.Hub.Address.ToString();
+
+        return Controls.MeshSearch
+            .WithHiddenQuery($"path:{hubPath} scope:children nodeType:Thread")
+            .WithPlaceholder("Search threads...")
+            .WithRenderMode(MeshSearchRenderMode.Flat)
+            .WithMaxColumns(3);
     }
 
     /// <summary>

@@ -4,12 +4,12 @@
 @using Orientation = Microsoft.FluentUI.AspNetCore.Components.Orientation
 @using VerticalAlignment = Microsoft.FluentUI.AspNetCore.Components.VerticalAlignment
 
-@if (PageTitle is not null)
+@if (Top && PageTitle is not null)
 {
     <PageTitle>@PageTitle</PageTitle>
 }
 
-@if (MetaAttributes is not null)
+@if (Top && MetaAttributes is not null)
 {
     <HeadContent>
         @foreach (var kvp in @MetaAttributes)

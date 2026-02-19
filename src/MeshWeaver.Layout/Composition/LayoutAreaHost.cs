@@ -67,7 +67,18 @@ public record LayoutAreaHost : IDisposable
                         .Update(LayoutAreaReference.Areas, x => x)
                         .Update(LayoutAreaReference.Data, x => x);
 
+                    // Push progress data before rendering begins
+                    store = store.Update(LayoutAreaReference.Data,
+                        coll => coll.SetItem("progress", new { message = "Building layout...", progress = 0 }));
+
                     var result = await LayoutDefinition.RenderAsync(this, context, store);
+
+                    // Clear progress after render
+                    result = result with
+                    {
+                        Store = result.Store.Update(LayoutAreaReference.Data,
+                            coll => coll.SetItem("progress", new { message = "", progress = 100 }))
+                    };
 
                     // When Area was null/empty, store a NamedAreaControl at "" pointing to the resolved area
                     if (isDefaultArea && !string.IsNullOrEmpty(resolvedArea))

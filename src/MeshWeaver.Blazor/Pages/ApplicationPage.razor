@@ -15,8 +15,26 @@
             <p>Please double-check the url you have entered.</p>
         </div>
     }
+    else if (!IsInteractive && PreRenderedHtml is not null)
+    {
+        @* Phase 1: Prerender with cached markdown HTML *@
+        <article class="markdown-body" style="background-color: var(--neutral-layer-1)">
+            @((MarkupString)PreRenderedHtml)
+        </article>
+    }
+    else if (!IsInteractive)
+    {
+        @* Phase 1: No cached HTML - dots spinner with message *@
+        <div class="resolving-container">
+            <h3>Resolving @Path...</h3>
+            <div class="dots-spinner">
+                <span class="dot"></span><span class="dot"></span><span class="dot"></span>
+            </div>
+        </div>
+    }
     else
     {
+        @* Phase 2: Interactive - LayoutAreaView with stream subscription *@
         <LayoutAreaView ViewModel="@ViewModel" Top="true" />
     }
 </CascadingValue>

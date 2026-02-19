@@ -113,16 +113,6 @@ public class InMemoryMeshQuery : IMeshQueryCore
                 }
             }
 
-            // Search partition objects at this path
-            await foreach (var obj in _persistence.GetPartitionObjectsAsync(searchPath, null, options).WithCancellation(ct))
-            {
-                if (_evaluator.Matches(obj, parsedQuery))
-                {
-                    var score = _evaluator.GetFuzzyScore(obj, parsedQuery.TextSearch);
-                    score += (int)PathProximity.ComputeBoost(request.ContextPath, GetItemPath(obj));
-                    results.Add((obj, score));
-                }
-            }
         }
 
         // If we're doing scope=children, search immediate children only
@@ -140,17 +130,6 @@ public class InMemoryMeshQuery : IMeshQueryCore
                         results.Add((child, score));
                 }
 
-                // Search partition objects under child
-                var childPath = NormalizePath(child.Path);
-                await foreach (var obj in _persistence.GetPartitionObjectsAsync(childPath, null, options).WithCancellation(ct))
-                {
-                    if (_evaluator.Matches(obj, parsedQuery))
-                    {
-                        var score = _evaluator.GetFuzzyScore(obj, parsedQuery.TextSearch);
-                        score += (int)PathProximity.ComputeBoost(request.ContextPath, GetItemPath(obj));
-                        results.Add((obj, score));
-                    }
-                }
             }
         }
 
@@ -177,18 +156,6 @@ public class InMemoryMeshQuery : IMeshQueryCore
                         if (!results.Any(r => ReferenceEquals(r.Item, child)))
                             results.Add((child, score));
                     }
-
-                    // Search partition objects under child
-                    var childPath = NormalizePath(child.Path);
-                    await foreach (var obj in _persistence.GetPartitionObjectsAsync(childPath, null, options).WithCancellation(ct))
-                    {
-                        if (_evaluator.Matches(obj, parsedQuery))
-                        {
-                            var score = _evaluator.GetFuzzyScore(obj, parsedQuery.TextSearch);
-                            score += (int)PathProximity.ComputeBoost(request.ContextPath, GetItemPath(obj));
-                            results.Add((obj, score));
-                        }
-                    }
                 }
             }
         }
@@ -208,17 +175,6 @@ public class InMemoryMeshQuery : IMeshQueryCore
                         results.Add((descendant, score));
                 }
 
-                // Search partition objects under descendant
-                var descendantPath = NormalizePath(descendant.Path);
-                await foreach (var obj in _persistence.GetPartitionObjectsAsync(descendantPath, null, options).WithCancellation(ct))
-                {
-                    if (_evaluator.Matches(obj, parsedQuery))
-                    {
-                        var score = _evaluator.GetFuzzyScore(obj, parsedQuery.TextSearch);
-                        score += (int)PathProximity.ComputeBoost(request.ContextPath, GetItemPath(obj));
-                        results.Add((obj, score));
-                    }
-                }
             }
         }
 
@@ -264,7 +220,9 @@ public class InMemoryMeshQuery : IMeshQueryCore
                 }
             }
 
-            yield return item;
+            yield return parsedQuery.Select != null
+                ? ParsedQuery.ProjectToSelect(item, parsedQuery.Select)
+                : item;
         }
     }
 
@@ -445,6 +403,24 @@ public class InMemoryMeshQuery : IMeshQueryCore
         }
 
         return paths;
+    }
+
+    /// <inheritdoc />
+    public async Task<T?> SelectAsync<T>(string path, string property, JsonSerializerOptions options, CancellationToken ct = default)
+    {
+        var node = await _persistence.GetNodeAsync(path, options, ct);
+        if (node == null)
+            return default;
+
+        var prop = typeof(MeshNode).GetProperty(property);
+        if (prop == null)
+            return default;
+
+        var value = prop.GetValue(node);
+        if (value is T typedValue)
+            return typedValue;
+
+        return default;
     }
 
     /// <inheritdoc />

@@ -32,7 +32,9 @@ public partial class LayoutAreaView
             AreaStream = null;
         }
 
-        BindStream();
+        // Only bind stream when already in interactive mode (not during prerender)
+        if (IsNotPreRender)
+            BindStream();
     }
     private bool showProgress;
     private string? progressMessage;
