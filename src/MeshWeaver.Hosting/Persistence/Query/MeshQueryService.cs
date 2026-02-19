@@ -35,4 +35,7 @@ public class MeshQueryService(IMeshQueryCore core, IMessageHub hub) : IMeshQuery
 
     public IObservable<QueryResultChange<T>> ObserveQuery<T>(MeshQueryRequest request)
         => core.ObserveQuery<T>(request, Options);
+
+    public Task<T?> SelectAsync<T>(string path, string property, CancellationToken ct = default)
+        => core.SelectAsync<T>(path, property, Options, ct);
 }

@@ -186,9 +186,10 @@
     color: var(--neutral-foreground-rest);
 }
 
-/* Comment card type styling */
+/* Comment card type styling — min-height prevents layout shift while LayoutArea loads */
 ::deep .annotation-card.annotation-type-comment {
     border-left: 3px solid var(--annotation-comment-border);
+    min-height: 60px;
 }
 
 ::deep .annotation-card.active.annotation-type-comment {

@@ -166,4 +166,174 @@ public class AccessControlLayoutAreaTest(ITestOutputHelper output) : MonolithMes
         var svc = Mesh.ServiceProvider.GetService<ISecurityService>();
         svc.Should().NotBeNull("RLS is configured in this test fixture");
     }
+
+    [Fact(Timeout = 15000)]
+    public async Task AccessControl_NestedNode_ShowsInheritedAssignments()
+    {
+        // Seed assignments at parent and at a deeper nested path
+        var svc = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
+        await svc.AddUserRoleAsync("ParentUser", "Viewer", "TestOrg", "system", TestTimeout);
+        await svc.AddUserRoleAsync("NestedUser", "Editor", "TestOrg/TestProject/Docs", "system", TestTimeout);
+
+        var client = GetClient();
+        var nestedPath = "TestOrg/TestProject/Docs";
+        var nodeAddress = new Address(nestedPath);
+
+        await client.AwaitResponse(
+            new PingRequest(),
+            o => o.WithTarget(nodeAddress),
+            TestContext.Current.CancellationToken);
+
+        var workspace = client.GetWorkspace();
+        var reference = new LayoutAreaReference(MeshNodeLayoutAreas.AccessControlArea);
+
+        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
+            nodeAddress,
+            reference);
+
+        var control = await stream.GetControlStream(reference.Area!)
+            .Timeout(10.Seconds())
+            .FirstAsync(x => x != null);
+
+        var stack = control.Should().BeOfType<StackControl>().Which;
+        stack.Areas.Should().NotBeEmpty("AccessControl should have child areas");
+
+        var areaControls = await Task.WhenAll(
+            stack.Areas.Select(async a =>
+                await stream.GetControlStream(a.Area.ToString()!)
+                    .Timeout(10.Seconds())
+                    .FirstAsync(x => x != null))
+        );
+
+        // Should have ItemTemplateControls for inherited and local sections
+        var itemTemplates = areaControls.OfType<ItemTemplateControl>().ToList();
+        itemTemplates.Should().HaveCountGreaterThanOrEqualTo(2,
+            "should have ItemTemplateControl for inherited and local sections");
+
+        // Check that at least one template has data (inherited from TestOrg or local at Docs)
+        var templatesWithData = 0;
+        foreach (var itemTemplate in itemTemplates)
+        {
+            var dataRef = new JsonPointerReference(itemTemplate.DataContext!);
+            var data = await stream
+                .GetDataStream<IEnumerable<JsonElement>>(dataRef)
+                .Where(x => x is not null)
+                .Timeout(5.Seconds())
+                .FirstOrDefaultAsync();
+
+            if (data != null && data.Any())
+            {
+                templatesWithData++;
+                Output.WriteLine($"DataContext: {itemTemplate.DataContext}, Items: {data.Count()}");
+            }
+        }
+
+        templatesWithData.Should().BeGreaterThanOrEqualTo(1,
+            "nested node should show inherited and/or local assignments");
+    }
+
+    [Fact(Timeout = 15000)]
+    public async Task AccessControl_DeeplyNestedPath_InheritsFromAllAncestors()
+    {
+        // Seed assignments at multiple ancestor levels
+        var svc = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
+        await svc.AddUserRoleAsync("RootUser", "Admin", "Org", "system", TestTimeout);
+        await svc.AddUserRoleAsync("DivUser", "Editor", "Org/Division", "system", TestTimeout);
+        await svc.AddUserRoleAsync("DeepUser", "Viewer", "Org/Division/Team/Project", "system", TestTimeout);
+
+        var client = GetClient();
+        var deepPath = "Org/Division/Team/Project";
+        var nodeAddress = new Address(deepPath);
+
+        await client.AwaitResponse(
+            new PingRequest(),
+            o => o.WithTarget(nodeAddress),
+            TestContext.Current.CancellationToken);
+
+        var workspace = client.GetWorkspace();
+        var reference = new LayoutAreaReference(MeshNodeLayoutAreas.AccessControlArea);
+
+        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
+            nodeAddress,
+            reference);
+
+        var control = await stream.GetControlStream(reference.Area!)
+            .Timeout(10.Seconds())
+            .FirstAsync(x => x != null);
+
+        var stack = control.Should().BeOfType<StackControl>().Which;
+
+        var areaControls = await Task.WhenAll(
+            stack.Areas.Select(async a =>
+                await stream.GetControlStream(a.Area.ToString()!)
+                    .Timeout(10.Seconds())
+                    .FirstAsync(x => x != null))
+        );
+
+        var itemTemplates = areaControls.OfType<ItemTemplateControl>().ToList();
+        itemTemplates.Should().HaveCountGreaterThanOrEqualTo(2,
+            "should have inherited and local sections");
+
+        // Collect all bound data across templates
+        var totalItems = 0;
+        foreach (var itemTemplate in itemTemplates)
+        {
+            var dataRef = new JsonPointerReference(itemTemplate.DataContext!);
+            var data = await stream
+                .GetDataStream<IEnumerable<JsonElement>>(dataRef)
+                .Where(x => x is not null)
+                .Timeout(5.Seconds())
+                .FirstOrDefaultAsync();
+
+            if (data != null)
+            {
+                var count = data.Count();
+                totalItems += count;
+                Output.WriteLine($"DataContext: {itemTemplate.DataContext}, Items: {count}");
+            }
+        }
+
+        totalItems.Should().BeGreaterThanOrEqualTo(3,
+            "deeply nested node should show assignments from all ancestor levels (Org, Org/Division) plus local");
+    }
+
+    [Fact(Timeout = 10000)]
+    public async Task SecurityService_NestedPath_ReturnsInheritedAssignments()
+    {
+        var svc = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
+
+        // Seed assignments at different hierarchy levels
+        await svc.AddUserRoleAsync("GlobalAdmin", "Admin", null, "system", TestTimeout);
+        await svc.AddUserRoleAsync("OrgEditor", "Editor", "MyOrg", "system", TestTimeout);
+        await svc.AddUserRoleAsync("ProjectViewer", "Viewer", "MyOrg/Project/SubFolder", "system", TestTimeout);
+
+        // Query assignments for the nested path
+        var assignments = new List<AccessAssignment>();
+        await foreach (var a in svc.GetAccessAssignmentsAsync("MyOrg/Project/SubFolder", TestTimeout))
+        {
+            assignments.Add(a);
+            Output.WriteLine($"User={a.UserId}, Role={a.RoleId}, Source={a.SourcePath}, IsLocal={a.IsLocal}");
+        }
+
+        // Local assignment at MyOrg/Project/SubFolder
+        var localAssignments = assignments.Where(a => a.IsLocal).ToList();
+        localAssignments.Should().ContainSingle(a => a.UserId == "ProjectViewer" && a.RoleId == "Viewer",
+            "ProjectViewer at exact path should be local");
+
+        // Inherited assignments from MyOrg and global
+        var inheritedAssignments = assignments.Where(a => !a.IsLocal).ToList();
+        inheritedAssignments.Should().Contain(a => a.UserId == "OrgEditor" && a.RoleId == "Editor",
+            "OrgEditor from ancestor MyOrg should appear as inherited");
+        inheritedAssignments.Should().Contain(a => a.UserId == "GlobalAdmin" && a.RoleId == "Admin",
+            "GlobalAdmin from global partition should appear as inherited");
+
+        // Verify source paths
+        var orgEditorAssignment = inheritedAssignments.First(a => a.UserId == "OrgEditor");
+        orgEditorAssignment.SourcePath.Should().Be("MyOrg");
+        orgEditorAssignment.SourceDisplay.Should().Be("MyOrg");
+
+        var globalAdminAssignment = inheritedAssignments.First(a => a.UserId == "GlobalAdmin");
+        globalAdminAssignment.SourcePath.Should().BeEmpty();
+        globalAdminAssignment.SourceDisplay.Should().Be("Global");
+    }
 }

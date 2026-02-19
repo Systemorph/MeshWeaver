@@ -117,7 +117,7 @@
                         @* Comments are MeshNodes — render their Overview layout area *@
                         <div class="annotation-card annotation-for-@ann.Id annotation-type-comment @(activeAnnotationId == ann.Id ? "active" : "")"
                              @onclick="() => HighlightAnnotation(ann.Id)">
-                            <LayoutArea Address="@GetCommentAddress(ann.Id)" Area="Overview" />
+                            <LayoutArea Address="@GetCommentAddress(ann.Id)" Area="Overview" ShowProgress="true" ProgressMessage="" />
                         </div>
                     }
                     else

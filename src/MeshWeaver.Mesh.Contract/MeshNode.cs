@@ -201,6 +201,12 @@ public record MeshNode([property: Key] string Id, [property: Editable(false)] st
     public Func<MessageHubConfiguration, MessageHubConfiguration>? HubConfiguration { get; init; }
 
     /// <summary>
+    /// Pre-rendered HTML for markdown nodes.
+    /// Populated at parse time for instant display during Blazor prerender phase.
+    /// </summary>
+    public string? PreRenderedHtml { get; init; }
+
+    /// <summary>
     /// User's intended Id for this node. Used during creation flow
     /// when transient node path uses GUID but user wants specific Id.
     /// </summary>

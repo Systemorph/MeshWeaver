@@ -81,4 +81,9 @@ public interface IMeshQueryCore
     /// </code>
     /// </example>
     IObservable<QueryResultChange<T>> ObserveQuery<T>(MeshQueryRequest request, JsonSerializerOptions options);
+
+    /// <summary>
+    /// Selects a single property value from a node at the given path.
+    /// </summary>
+    Task<T?> SelectAsync<T>(string path, string property, JsonSerializerOptions options, CancellationToken ct = default);
 }

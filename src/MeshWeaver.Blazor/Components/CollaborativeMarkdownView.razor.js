@@ -1,5 +1,8 @@
 let _containerEl = null;
 let _resizeHandler = null;
+let _resizeObserver = null;
+let _mutationObserver = null;
+let _repositionTimer = null;
 
 export function init(containerEl) {
     _containerEl = containerEl;
@@ -22,8 +25,52 @@ export function init(containerEl) {
     _resizeHandler = () => positionCards();
     window.addEventListener('resize', _resizeHandler);
 
+    // Watch sidebar for card size changes (e.g. when async LayoutArea content loads)
+    const sidebarEl = containerEl.querySelector('.collab-md-sidebar');
+    if (sidebarEl) {
+        observeSidebar(sidebarEl);
+    }
+
     // Initial positioning after layout settles
     requestAnimationFrame(() => positionCards());
+}
+
+function debouncedReposition() {
+    if (_repositionTimer) clearTimeout(_repositionTimer);
+    _repositionTimer = setTimeout(() => positionCards(), 50);
+}
+
+function observeSidebar(sidebarEl) {
+    // ResizeObserver: fires when any card changes size (content loaded)
+    if (typeof ResizeObserver !== 'undefined') {
+        _resizeObserver = new ResizeObserver(() => debouncedReposition());
+        // Observe the sidebar itself and all current cards
+        _resizeObserver.observe(sidebarEl);
+        sidebarEl.querySelectorAll('.annotation-card').forEach(c => _resizeObserver.observe(c));
+    }
+
+    // MutationObserver: fires when new cards are added (so we can observe them too)
+    _mutationObserver = new MutationObserver((mutations) => {
+        let changed = false;
+        for (const m of mutations) {
+            if (m.addedNodes.length > 0 || m.removedNodes.length > 0) {
+                changed = true;
+                // Observe any newly added cards
+                if (_resizeObserver) {
+                    for (const node of m.addedNodes) {
+                        if (node.nodeType === 1) {
+                            if (node.classList?.contains('annotation-card')) {
+                                _resizeObserver.observe(node);
+                            }
+                            node.querySelectorAll?.('.annotation-card')?.forEach(c => _resizeObserver.observe(c));
+                        }
+                    }
+                }
+            }
+        }
+        if (changed) debouncedReposition();
+    });
+    _mutationObserver.observe(sidebarEl, { childList: true, subtree: true });
 }
 
 /**
@@ -37,6 +84,11 @@ export function positionCards() {
     const contentEl = _containerEl.querySelector('.collab-md-content');
     const sidebarEl = _containerEl.querySelector('.collab-md-sidebar');
     if (!contentEl || !sidebarEl) return;
+
+    // Lazily set up sidebar observers (sidebar may not exist at init time)
+    if (!_mutationObserver) {
+        observeSidebar(sidebarEl);
+    }
 
     const cards = Array.from(sidebarEl.querySelectorAll('.annotation-card'));
     if (cards.length === 0) return;
@@ -97,6 +149,18 @@ export function dispose() {
     if (_resizeHandler) {
         window.removeEventListener('resize', _resizeHandler);
         _resizeHandler = null;
+    }
+    if (_resizeObserver) {
+        _resizeObserver.disconnect();
+        _resizeObserver = null;
+    }
+    if (_mutationObserver) {
+        _mutationObserver.disconnect();
+        _mutationObserver = null;
+    }
+    if (_repositionTimer) {
+        clearTimeout(_repositionTimer);
+        _repositionTimer = null;
     }
     _containerEl = null;
 }
