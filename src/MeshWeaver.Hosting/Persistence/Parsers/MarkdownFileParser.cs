@@ -85,7 +85,8 @@ public partial class MarkdownFileParser : IFileFormatParser
             Icon = frontMatter?.Icon ?? frontMatter?.Thumbnail ?? DefaultMarkdownIcon,
             State = ParseState(frontMatter?.State),
             LastModified = lastModified,
-            Content = markdownDocument
+            Content = markdownDocument,
+            PreRenderedHtml = markdownDocument.PrerenderedHtml
         };
 
         return Task.FromResult<MeshNode?>(node);

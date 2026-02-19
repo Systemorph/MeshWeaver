@@ -404,6 +404,24 @@ public class InMemoryMeshQuery : IMeshQueryCore
     }
 
     /// <inheritdoc />
+    public async Task<T?> SelectAsync<T>(string path, string property, JsonSerializerOptions options, CancellationToken ct = default)
+    {
+        var node = await _persistence.GetNodeAsync(path, options, ct);
+        if (node == null)
+            return default;
+
+        var prop = typeof(MeshNode).GetProperty(property);
+        if (prop == null)
+            return default;
+
+        var value = prop.GetValue(node);
+        if (value is T typedValue)
+            return typedValue;
+
+        return default;
+    }
+
+    /// <inheritdoc />
     public IObservable<QueryResultChange<T>> ObserveQuery<T>(MeshQueryRequest request, JsonSerializerOptions options)
     {
         return Observable.Create<QueryResultChange<T>>(async (observer, ct) =>

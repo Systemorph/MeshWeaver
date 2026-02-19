@@ -73,6 +73,17 @@ public interface IMeshQuery
     /// </code>
     /// </example>
     IObservable<QueryResultChange<T>> ObserveQuery<T>(MeshQueryRequest request);
+
+    /// <summary>
+    /// Selects a single property value from a node at the given path.
+    /// Efficient way to get one property without loading the full Content blob.
+    /// </summary>
+    /// <typeparam name="T">The expected property type.</typeparam>
+    /// <param name="path">The node path.</param>
+    /// <param name="property">The property name on MeshNode.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <returns>The property value, or default if node not found or property is null.</returns>
+    Task<T?> SelectAsync<T>(string path, string property, CancellationToken ct = default);
 }
 
 /// <summary>
