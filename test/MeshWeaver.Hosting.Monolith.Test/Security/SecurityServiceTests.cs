@@ -517,4 +517,69 @@ public class SampleDataSecurityTests(ITestOutputHelper output) : MonolithMeshTes
         userAccess.DisplayName.Should().Be("Roland Buergi");
         userAccess.Roles.Should().ContainSingle(r => r.RoleId == "Admin");
     }
+
+    [Fact(Timeout = 10000)]
+    public async Task GetAccessAssignments_NestedNode_ReturnsInheritedFromRootAndGlobal()
+    {
+        // This test verifies that viewing AccessControl for a deeply nested node
+        // (e.g. MeshWeaver/Documentation/DataMesh/CollaborativeEditing)
+        // returns inherited assignments from MeshWeaver/Access/ and Access/ (global).
+        var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
+        const string nestedPath = "MeshWeaver/Documentation/DataMesh/CollaborativeEditing";
+
+        var assignments = new List<AccessAssignment>();
+        await foreach (var a in securityService.GetAccessAssignmentsAsync(nestedPath, TestTimeout))
+        {
+            assignments.Add(a);
+            Output.WriteLine($"User={a.UserId}, Role={a.RoleId}, Source={a.SourcePath}, IsLocal={a.IsLocal}, Display={a.SourceDisplay}");
+        }
+
+        // Should have no local assignments (no Access/ folder under CollaborativeEditing)
+        assignments.Where(a => a.IsLocal).Should().BeEmpty(
+            "CollaborativeEditing has no local Access partition");
+
+        // Should have inherited assignments from MeshWeaver/Access/Public.json
+        assignments.Should().Contain(a => a.UserId == "Public" && a.RoleId == "Viewer" && !a.IsLocal,
+            "Public Viewer from MeshWeaver/Access/Public.json should be inherited");
+
+        // Should have inherited assignments from global Access/Roland.json
+        assignments.Should().Contain(a => a.UserId == "Roland" && a.RoleId == "Admin" && !a.IsLocal,
+            "Roland Admin from global Access/Roland.json should be inherited");
+
+        // Verify source paths are correct
+        var publicAssignment = assignments.First(a => a.UserId == "Public");
+        publicAssignment.SourcePath.Should().Be("MeshWeaver");
+        publicAssignment.SourceDisplay.Should().Be("MeshWeaver");
+
+        var rolandAssignment = assignments.First(a => a.UserId == "Roland");
+        rolandAssignment.SourcePath.Should().BeEmpty();
+        rolandAssignment.SourceDisplay.Should().Be("Global");
+    }
+
+    [Fact(Timeout = 10000)]
+    public async Task GetAccessAssignments_AcmeSubNode_ReturnsAcmeAndGlobalAssignments()
+    {
+        // Verify that a node under ACME inherits from ACME/Access/ and global Access/
+        var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
+        const string nestedPath = "ACME/CustomerOnboarding";
+
+        var assignments = new List<AccessAssignment>();
+        await foreach (var a in securityService.GetAccessAssignmentsAsync(nestedPath, TestTimeout))
+        {
+            assignments.Add(a);
+            Output.WriteLine($"User={a.UserId}, Role={a.RoleId}, Source={a.SourcePath}, IsLocal={a.IsLocal}");
+        }
+
+        // Should have inherited ACME users (Alice, Bob, etc. from ACME/Access/)
+        assignments.Should().Contain(a => a.UserId == "Alice" && a.RoleId == "Editor" && !a.IsLocal,
+            "Alice Editor from ACME/Access/Alice.json should be inherited");
+
+        // Should also have global assignments (Roland, Samuel from Access/)
+        assignments.Should().Contain(a => a.UserId == "Roland" && a.RoleId == "Admin" && !a.IsLocal,
+            "Roland Admin from global should be inherited");
+
+        // Total should be all ACME users + global users
+        assignments.Should().HaveCountGreaterThanOrEqualTo(3,
+            "should have ACME-level users + global users");
+    }
 }
