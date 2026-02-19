@@ -85,7 +85,7 @@ public static class GraphConfigurationExtensions
 
             // Register the built-in "Comment" MeshNode
             // This provides HubConfiguration for nodes with nodeType="Comment" (comments on document nodes).
-            builder.AddMeshNodes(Configuration.CommentNodeConfiguration.CreateMeshNode() with { AssemblyLocation = assemblyLocation });
+            builder.AddMeshNodes(CommentNodeType.CreateMeshNode() with { AssemblyLocation = assemblyLocation });
 
             // Register services that don't need hub-level dependencies at the mesh level
             builder.ConfigureServices(services =>

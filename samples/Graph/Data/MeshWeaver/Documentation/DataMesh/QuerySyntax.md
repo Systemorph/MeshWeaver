@@ -110,6 +110,19 @@ Specifies the data source:
 source:activity    # Query activity records
 ```
 
+### select
+Projects results to include only the specified properties. Returns lightweight dictionaries instead of full nodes:
+```
+select:name                          # Single property
+select:name,nodeType,icon            # Multiple properties (comma-separated)
+```
+
+Combine with other qualifiers:
+```
+namespace:Systemorph select:name,nodeType
+nodeType:Story select:path,name sort:name limit:10
+```
+
 ## Complex Queries
 
 Combine multiple filters:
@@ -137,9 +150,29 @@ namespace:Systemorph
 ```
 This finds immediate children of Systemorph. Use `scope:descendants` for recursive search.
 
+## Select (Property Lookup)
+
+The `SelectAsync` API provides an efficient way to retrieve a single property value from a node at a given path, without loading the full content blob.
+
+```csharp
+// Get the name of a node
+var name = await meshQuery.SelectAsync<string>("Systemorph/Marketing", "Name");
+
+// Get the node type
+var nodeType = await meshQuery.SelectAsync<string>("ACME/Project", "NodeType");
+
+// Get the icon
+var icon = await meshQuery.SelectAsync<string>("ACME", "Icon");
+```
+
+This is useful when you only need one property and want to avoid the overhead of deserializing the entire node. Returns `default` if the node is not found or the property is null.
+
+Available properties include any property on `MeshNode`: `Name`, `NodeType`, `Path`, `Icon`, `Description`, etc.
+
 ## Tips
 
 1. **Case insensitive**: All comparisons are case-insensitive
 2. **Namespace = folder**: `namespace:X` is like searching in folder X (immediate children)
 3. **Add scope:descendants**: For recursive search under a namespace
 4. **Wildcards**: Use `*` for flexible pattern matching
+5. **Select for single values**: Use `SelectAsync` when you only need one property from a known path

@@ -7,9 +7,11 @@ using MeshWeaver.Layout.Composition;
 using MeshWeaver.Layout.Domain;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
+using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using MeshWeaver.ShortGuid;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Graph;
 
@@ -77,23 +79,43 @@ public static class AccessControlLayoutArea
         var localSubject = new BehaviorSubject<IEnumerable<AccessAssignment>>([]);
 
         // Load initial data and push to subjects
-        LoadAssignmentsAsync(securityService, nodePath, inheritedSubject, localSubject);
+        LoadAssignmentsAsync(securityService, nodePath, inheritedSubject, localSubject, host.Hub.ServiceProvider);
 
-        // Inherited Permissions section
+        // Inherited Permissions section with data-bound template
         stack = stack.WithView(Controls.H3("Inherited Permissions").WithStyle("margin: 0;"));
-        stack = stack.WithView(BuildAssignmentList(
-            inheritedSubject, InheritedStreamId, host, securityService, nodePath, isAdmin, showSource: true));
+        stack = stack.WithView(
+            inheritedSubject.BindMany(InheritedStreamId, a =>
+                Controls.Stack
+                    .WithOrientation(Orientation.Horizontal)
+                    .WithStyle("padding: 8px 16px; border-bottom: 1px solid var(--neutral-stroke-rest); align-items: center;")
+                    .WithView(Controls.Label(a.DisplayLabel).WithStyle("flex: 1; min-width: 120px;"))
+                    .WithView(Controls.Label(a.RoleId).WithStyle("flex: 1; min-width: 120px;"))
+                    .WithView(Controls.Label(a.SourceDisplay).WithStyle("flex: 1; min-width: 100px;"))
+                    .WithView(Controls.Switch(a.IsActive)
+                        .WithCheckedMessage("Allow")
+                        .WithUncheckedMessage("Deny"))
+            )
+        );
 
-        // Local Assignments section
+        // Local Assignments section with data-bound template
         stack = stack.WithView(Controls.H3("Local Assignments").WithStyle("margin: 0;"));
-        stack = stack.WithView(BuildAssignmentList(
-            localSubject, LocalStreamId, host, securityService, nodePath, isAdmin, showSource: false));
+        stack = stack.WithView(
+            localSubject.BindMany(LocalStreamId, a =>
+                Controls.Stack
+                    .WithOrientation(Orientation.Horizontal)
+                    .WithStyle("padding: 8px 16px; border-bottom: 1px solid var(--neutral-stroke-rest); align-items: center;")
+                    .WithView(Controls.Label(a.DisplayLabel).WithStyle("flex: 1; min-width: 120px;"))
+                    .WithView(Controls.Label(a.RoleId).WithStyle("flex: 1; min-width: 120px;"))
+                    .WithView(Controls.Switch(a.IsActive)
+                        .WithCheckedMessage("Allow")
+                        .WithUncheckedMessage("Deny"))
+            )
+        );
 
         // Add Assignment button (only for admins)
         if (isAdmin)
         {
-            stack = stack.WithView(BuildAddButton(host, securityService, nodePath,
-                inheritedSubject, localSubject));
+            stack = stack.WithView(BuildAddButton(host, securityService, nodePath));
         }
 
         return stack;
@@ -103,94 +125,33 @@ public static class AccessControlLayoutArea
         ISecurityService securityService,
         string nodePath,
         BehaviorSubject<IEnumerable<AccessAssignment>> inheritedSubject,
-        BehaviorSubject<IEnumerable<AccessAssignment>> localSubject)
+        BehaviorSubject<IEnumerable<AccessAssignment>> localSubject,
+        IServiceProvider serviceProvider)
     {
-        var inherited = new List<AccessAssignment>();
-        var local = new List<AccessAssignment>();
-
-        await foreach (var assignment in securityService.GetAccessAssignmentsAsync(nodePath))
+        try
         {
-            if (assignment.IsLocal)
-                local.Add(assignment);
-            else
-                inherited.Add(assignment);
-        }
+            var inherited = new List<AccessAssignment>();
+            var local = new List<AccessAssignment>();
 
-        inheritedSubject.OnNext(inherited.OrderBy(a => a.UserId).ThenBy(a => a.RoleId));
-        localSubject.OnNext(local.OrderBy(a => a.UserId).ThenBy(a => a.RoleId));
-    }
-
-    private static UiControl BuildAssignmentList(
-        IObservable<IEnumerable<AccessAssignment>> stream,
-        string streamId,
-        LayoutAreaHost host,
-        ISecurityService securityService,
-        string nodePath,
-        bool isAdmin,
-        bool showSource)
-    {
-        return stream.BindMany(streamId, a =>
-            BuildAssignmentRow(a, nodePath, showSource, isAdmin, host, securityService, stream, streamId)
-        );
-    }
-
-    private static StackControl BuildAssignmentRow(
-        AccessAssignment a,
-        string nodePath,
-        bool showSource,
-        bool isAdmin,
-        LayoutAreaHost host,
-        ISecurityService securityService,
-        IObservable<IEnumerable<AccessAssignment>> parentStream,
-        string streamId)
-    {
-        var row = Controls.Stack
-            .WithOrientation(Orientation.Horizontal)
-            .WithStyle("padding: 8px 16px; border-bottom: 1px solid var(--neutral-stroke-rest); align-items: center;")
-            .WithView(Controls.Label(a.DisplayName ?? a.UserId).WithStyle("flex: 1; min-width: 120px;"))
-            .WithView(Controls.Label(a.RoleId).WithStyle("flex: 1; min-width: 120px;"));
-
-        if (showSource)
-        {
-            var sourceDisplay = string.IsNullOrEmpty(a.SourcePath) ? "Global" : a.SourcePath;
-            row = row.WithView(Controls.Label(sourceDisplay).WithStyle("flex: 1; min-width: 100px;"));
-        }
-
-        // Toggle switch: Allow (on) / Deny (off)
-        var toggleId = $"toggle_{Guid.NewGuid().AsString()}";
-        var isActive = !a.Denied;
-        host.UpdateData(toggleId, isActive);
-
-        var toggle = Controls.Switch(new JsonPointerReference(LayoutAreaReference.GetDataPointer(toggleId)))
-            .WithCheckedMessage("Allow")
-            .WithUncheckedMessage("Deny");
-
-        if (!isAdmin)
-            toggle = toggle with { Disabled = true };
-
-        // Handle toggle via click action on a wrapper button
-        var toggleButton = Controls.Button("")
-            .WithStyle("background: transparent; border: none; padding: 0; min-width: auto; width: 80px;")
-            .WithClickAction(async ctx =>
+            await foreach (var assignment in securityService.GetAccessAssignmentsAsync(nodePath))
             {
-                if (!isAdmin) return;
+                if (assignment.IsLocal)
+                    local.Add(assignment);
+                else
+                    inherited.Add(assignment);
+            }
 
-                var svc = ctx.Hub.ServiceProvider.GetRequiredService<ISecurityService>();
-                var newDenied = !a.Denied;
-                await svc.ToggleRoleAssignmentAsync(nodePath, a.UserId, a.RoleId, newDenied);
-
-                // Reload and push new data to the streams
-                await RefreshAssignmentsAsync(svc, nodePath, ctx.Host);
-            });
-
-        row = row.WithView(Controls.Stack
-            .WithStyle("width: 100px; display: flex; justify-content: center;")
-            .WithView(toggle));
-
-        return row;
+            inheritedSubject.OnNext(inherited.OrderBy(a => a.UserId).ThenBy(a => a.RoleId));
+            localSubject.OnNext(local.OrderBy(a => a.UserId).ThenBy(a => a.RoleId));
+        }
+        catch (Exception ex)
+        {
+            var logger = serviceProvider.GetService<ILogger<LayoutAreaHost>>();
+            logger?.LogError(ex, "Failed to load access assignments for node {NodePath}", nodePath);
+        }
     }
 
-    private static async Task RefreshAssignmentsAsync(
+    internal static async Task RefreshAssignmentsAsync(
         ISecurityService securityService,
         string nodePath,
         LayoutAreaHost host)
@@ -217,9 +178,7 @@ public static class AccessControlLayoutArea
     private static UiControl BuildAddButton(
         LayoutAreaHost host,
         ISecurityService securityService,
-        string nodePath,
-        BehaviorSubject<IEnumerable<AccessAssignment>> inheritedSubject,
-        BehaviorSubject<IEnumerable<AccessAssignment>> localSubject)
+        string nodePath)
     {
         return Controls.Button("Add Assignment")
             .WithAppearance(Appearance.Accent)
@@ -235,39 +194,90 @@ public static class AccessControlLayoutArea
         ISecurityService securityService,
         string nodePath)
     {
-        // Prepare form data
+        // Prepare form data with nodePath pre-populated
         var formId = $"add_assignment_{Guid.NewGuid().AsString()}";
         ctx.Host.UpdateData(formId, new Dictionary<string, object?>
         {
             ["userId"] = "",
-            ["roleId"] = ""
+            ["roleId"] = "",
+            ["nodePath"] = nodePath
         });
 
-        // Load roles for the select control
+        // Load users for autocomplete
+        var userOptionsId = $"user_options_{Guid.NewGuid().AsString()}";
+        var users = new List<Option>();
+        await foreach (var userAccess in securityService.GetAllUserAccessAsync())
+        {
+            var label = string.IsNullOrEmpty(userAccess.DisplayName)
+                ? userAccess.UserId
+                : $"{userAccess.DisplayName} ({userAccess.UserId})";
+            users.Add(new Option<string>(userAccess.UserId, label));
+        }
+        ctx.Host.UpdateData(userOptionsId, users.ToArray());
+
+        // Load roles with permission descriptions
         var rolesOptionsId = $"roles_options_{Guid.NewGuid().AsString()}";
         var roles = new List<Option>();
         await foreach (var role in securityService.GetRolesAsync())
         {
-            roles.Add(new Option<string>(role.Id, $"{role.DisplayName ?? role.Id}"));
+            var perms = role.Permissions.ToString();
+            var label = $"{role.DisplayName ?? role.Id} ({perms})";
+            roles.Add(new Option<string>(role.Id, label));
         }
         ctx.Host.UpdateData(rolesOptionsId, roles.ToArray());
 
+        // Load node options for node path selector
+        var nodeOptionsId = $"node_options_{Guid.NewGuid().AsString()}";
+        var nodeOptions = new List<Option>();
+        nodeOptions.Add(new Option<string>(nodePath, nodePath));
+        // Add ancestor nodes
+        var segments = nodePath.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        for (var i = segments.Length - 1; i > 0; i--)
+        {
+            var ancestorPath = string.Join("/", segments.Take(i));
+            nodeOptions.Add(new Option<string>(ancestorPath, ancestorPath));
+        }
+        nodeOptions.Add(new Option<string>("", "(Global)"));
+        // Add child nodes via IMeshQuery if available
+        var meshQuery = ctx.Hub.ServiceProvider.GetService<IMeshQuery>();
+        if (meshQuery != null)
+        {
+            await foreach (var suggestion in meshQuery.AutocompleteAsync(nodePath, "", limit: 20))
+            {
+                if (nodeOptions.All(o => ((Option<string>)o).Item != suggestion.Path))
+                    nodeOptions.Add(new Option<string>(suggestion.Path, $"{suggestion.Name} ({suggestion.Path})"));
+            }
+        }
+        ctx.Host.UpdateData(nodeOptionsId, nodeOptions.ToArray());
+
         // Build dialog content
         var formContent = Controls.Stack.WithStyle("gap: 16px; padding: 16px;")
-            .WithView(new TextFieldControl(new JsonPointerReference("userId"))
+            .WithView(new ComboboxControl(
+                new JsonPointerReference("userId"),
+                new JsonPointerReference(LayoutAreaReference.GetDataPointer(userOptionsId)))
             {
-                Placeholder = "Enter user ID...",
-                Label = "User ID",
+                Label = "User",
                 Required = true,
-                Immediate = true,
+                Autocomplete = ComboboxAutocomplete.Both,
+                Placeholder = "Search users...",
                 DataContext = LayoutAreaReference.GetDataPointer(formId)
             })
-            .WithView(new SelectControl(
+            .WithView(new ComboboxControl(
                 new JsonPointerReference("roleId"),
                 new JsonPointerReference(LayoutAreaReference.GetDataPointer(rolesOptionsId)))
             {
                 Label = "Role",
                 Required = true,
+                Autocomplete = ComboboxAutocomplete.List,
+                DataContext = LayoutAreaReference.GetDataPointer(formId)
+            })
+            .WithView(new ComboboxControl(
+                new JsonPointerReference("nodePath"),
+                new JsonPointerReference(LayoutAreaReference.GetDataPointer(nodeOptionsId)))
+            {
+                Label = "Node Path",
+                Autocomplete = ComboboxAutocomplete.Both,
+                Placeholder = "Select or type node path...",
                 DataContext = LayoutAreaReference.GetDataPointer(formId)
             })
             .WithView(Controls.Stack
@@ -286,19 +296,23 @@ public static class AccessControlLayoutArea
                         if (string.IsNullOrEmpty(userId) || string.IsNullOrEmpty(roleId))
                         {
                             var errorDialog = Controls.Dialog(
-                                Controls.Markdown("Please fill in both **User ID** and **Role**."),
+                                Controls.Markdown("Please fill in both **User** and **Role**."),
                                 "Validation Error"
                             ).WithSize("S").WithClosable(true);
                             saveCtx.Host.UpdateArea(DialogControl.DialogArea, errorDialog);
                             return;
                         }
 
+                        var targetPath = formValues.GetValueOrDefault("nodePath")?.ToString()?.Trim();
+                        if (string.IsNullOrEmpty(targetPath))
+                            targetPath = nodePath;
+
                         var svc = saveCtx.Hub.ServiceProvider.GetRequiredService<ISecurityService>();
-                        await svc.AddUserRoleAsync(userId, roleId, nodePath);
+                        await svc.AddUserRoleAsync(userId, roleId, targetPath);
 
                         // Close dialog and refresh data reactively
                         saveCtx.Host.UpdateArea(DialogControl.DialogArea, null!);
-                        await RefreshAssignmentsAsync(svc, nodePath, saveCtx.Host);
+                        await RefreshAssignmentsAsync(svc, targetPath, saveCtx.Host);
                     })));
 
         var dialog = Controls.Dialog(formContent, "Add Role Assignment")

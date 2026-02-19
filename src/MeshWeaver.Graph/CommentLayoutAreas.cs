@@ -1,10 +1,8 @@
-using System.Collections.Immutable;
 using System.Reactive.Linq;
 using MeshWeaver.Application.Styles;
 using MeshWeaver.Data;
 using MeshWeaver.Domain;
 using MeshWeaver.Layout;
-using MeshWeaver.Layout.Catalog;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Markdown;
 using MeshWeaver.Mesh;
@@ -40,6 +38,20 @@ public static class CommentLayoutAreas
     private const int LoadMoreCount = 10;
 
     /// <summary>
+    /// Formats a DateTimeOffset as a relative time string (e.g., "2m", "3h", "5d", "2mo", "1y").
+    /// </summary>
+    internal static string FormatRelativeTime(DateTimeOffset created)
+    {
+        var elapsed = DateTimeOffset.UtcNow - created;
+        if (elapsed.TotalMinutes < 1) return "now";
+        if (elapsed.TotalMinutes < 60) return $"{(int)elapsed.TotalMinutes}m";
+        if (elapsed.TotalHours < 24) return $"{(int)elapsed.TotalHours}h";
+        if (elapsed.TotalDays < 30) return $"{(int)elapsed.TotalDays}d";
+        if (elapsed.TotalDays < 365) return $"{(int)(elapsed.TotalDays / 30)}mo";
+        return $"{(int)(elapsed.TotalDays / 365)}y";
+    }
+
+    /// <summary>
     /// Renders the Overview area for a Comment node.
     /// Shows author, comment text (as rendered markdown), click-to-edit toggle,
     /// and expandable replies section with load-more.
@@ -54,10 +66,17 @@ public static class CommentLayoutAreas
         var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? Array.Empty<MeshNode>())
             ?? Observable.Return<MeshNode[]>(Array.Empty<MeshNode>());
 
-        // Observe child Comment nodes for replies
-        var repliesStream = meshQuery != null
-            ? meshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
-                $"path:{hubPath} nodeType:{CommentNodeType.NodeType} scope:children"))
+        var editStateId = $"editState_comment_{hubPath.Replace("/", "_")}";
+        var initialized = new[] { false, false }; // [0]=editState, [1]=repliesExpanded
+
+        // Initialize reply data area and subscribe to child Comment nodes
+        var repliesDataId = $"replies_{hubPath.Replace("/", "_")}";
+        host.UpdateData(repliesDataId, Array.Empty<LayoutAreaControl>());
+
+        if (meshQuery != null)
+        {
+            meshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
+                    $"path:{hubPath} nodeType:{CommentNodeType.NodeType} scope:children"))
                 .Scan(new List<MeshNode>(), (list, change) =>
                 {
                     if (change.ChangeType == QueryChangeType.Initial || change.ChangeType == QueryChangeType.Reset)
@@ -76,24 +95,29 @@ public static class CommentLayoutAreas
                     }
                     return list;
                 })
-                .Select(list => list as IReadOnlyList<MeshNode>)
-            : Observable.Return<IReadOnlyList<MeshNode>>(Array.Empty<MeshNode>());
-
-        var editStateId = $"editState_comment_{hubPath.Replace("/", "_")}";
-        var initialized = new[] { false };
+                .Subscribe(list =>
+                {
+                    var replyControls = list
+                        .Where(n => n.Content is Comment)
+                        .OrderBy(n => ((Comment)n.Content!).CreatedAt)
+                        .Select(n => Controls.LayoutArea(n.Path, OverviewArea))
+                        .ToArray();
+                    host.UpdateData(repliesDataId, replyControls);
+                });
+        }
 
         // Check permissions once (parent path for comment permissions)
         var parentPath = hubPath.Contains('/') ? hubPath[..hubPath.LastIndexOf('/')] : hubPath;
         var permissionsStream = Observable.FromAsync(() => PermissionHelper.GetEffectivePermissionsAsync(host.Hub, parentPath));
 
         return nodeStream
-            .CombineLatest(repliesStream, permissionsStream, (nodes, replies, perms) =>
+            .CombineLatest(permissionsStream, (nodes, perms) =>
             {
                 var node = nodes.FirstOrDefault(n => n.Path == hubPath);
                 var canComment = perms.HasFlag(Permission.Comment) || perms.HasFlag(Permission.Update);
                 var canDelete = perms.HasFlag(Permission.Delete);
                 return BuildOverview(host, node, hubPath, editStateId, initialized,
-                    replies ?? Array.Empty<MeshNode>(), currentUser, canComment, canDelete);
+                    repliesDataId, currentUser, canComment, canDelete);
             });
     }
 
@@ -120,7 +144,7 @@ public static class CommentLayoutAreas
     }
 
     internal static UiControl BuildOverview(LayoutAreaHost host, MeshNode? node, string hubPath,
-        string editStateId, bool[] initialized, IReadOnlyList<MeshNode> replyNodes, string currentUser,
+        string editStateId, bool[] initialized, string repliesDataId, string currentUser,
         bool canComment = true, bool canDelete = true)
     {
         var comment = node?.Content as Comment;
@@ -131,7 +155,6 @@ public static class CommentLayoutAreas
 
         // Permission + author check: need Comment permission AND (author match OR !AuthorEditOnly)
         var isAuthor = string.Equals(comment.Author, currentUser, StringComparison.OrdinalIgnoreCase);
-        var isOwner = string.Equals(comment.Author, currentUser, StringComparison.OrdinalIgnoreCase);
         var canEdit = canComment && (!CommentNodeType.AuthorEditOnly || isAuthor);
         var canAct = !string.IsNullOrEmpty(currentUser);
 
@@ -139,47 +162,33 @@ public static class CommentLayoutAreas
 
         var container = Controls.Stack.WithWidth("100%");
 
-        // Author header row with action buttons
-        var author = comment.Author;
+        // Header: author on the left, time + action buttons right-aligned
+        var author = System.Web.HttpUtility.HtmlEncode(comment.Author);
+        var relTime = FormatRelativeTime(comment.CreatedAt);
+
         var headerRow = Controls.Stack
             .WithOrientation(Orientation.Horizontal)
-            .WithStyle("align-items: center; justify-content: space-between; margin-bottom: 4px;")
-            .WithView(Controls.Html($@"
-                <div style=""display: flex; align-items: center; gap: 6px;"">
-                    <span style=""font-weight: 600; font-size: 0.85rem;"">{System.Web.HttpUtility.HtmlEncode(author)}</span>
-                    <span style=""font-size: 0.75rem; color: var(--neutral-foreground-hint);"">{comment.CreatedAt:g}</span>
-                </div>"));
+            .WithWidth("100%")
+            .WithStyle("align-items: center; justify-content: space-between; margin-bottom: 2px;")
+            .WithView(Controls.Html(
+                $"<span style=\"font-weight: 600; font-size: 0.85rem; white-space: nowrap;\">{author}</span>"));
 
-        // Action buttons (right-aligned)
-        var actionRow = Controls.Stack
+        // Right group with time + action buttons
+        var rightGroup = Controls.Stack
             .WithOrientation(Orientation.Horizontal)
-            .WithStyle("align-items: center; gap: 2px;");
+            .WithStyle("align-items: center; gap: 4px; flex-shrink: 0;");
 
-        var hasActions = false;
+        rightGroup = rightGroup.WithView(Controls.Html(
+            $"<span style=\"font-size: 0.75rem; color: var(--neutral-foreground-hint); white-space: nowrap;\">{relTime}</span>"));
 
-        // Reply button — visible when authenticated
         if (canAct)
-        {
-            hasActions = true;
-            actionRow = actionRow.WithView(BuildReplyButton(host, hubPath, comment, currentUser));
-        }
-
-        // Resolve button — visible when authenticated
+            rightGroup = rightGroup.WithView(BuildReplyButton(host, hubPath, comment, currentUser));
         if (canAct)
-        {
-            hasActions = true;
-            actionRow = actionRow.WithView(BuildResolveButton(host, hubPath, comment));
-        }
+            rightGroup = rightGroup.WithView(BuildResolveButton(host, hubPath, comment));
+        if (canDelete || canComment)
+            rightGroup = rightGroup.WithView(BuildDeleteButton(host, hubPath));
 
-        // Delete button — visible to owner only
-        if (isOwner)
-        {
-            hasActions = true;
-            actionRow = actionRow.WithView(BuildDeleteButton(host, hubPath));
-        }
-
-        if (hasActions)
-            headerRow = headerRow.WithView(actionRow);
+        headerRow = headerRow.WithView(rightGroup);
 
         container = container.WithView(headerRow);
 
@@ -212,13 +221,76 @@ public static class CommentLayoutAreas
             }
         }
 
-        // Replies section — expandable with load-more
-        if (replyNodes.Count > 0)
-        {
-            container = container.WithView(BuildRepliesSection(host, hubPath, replyNodes));
-        }
+        // Replies section — data-bound via repliesDataId with expand/collapse and load-more
+        var expandedStateId = $"replies_expanded_{hubPath.Replace("/", "_")}";
+        var visibleCountStateId = $"replies_visible_{hubPath.Replace("/", "_")}";
 
-        // Inline reply area — rendered when replyPathStateId is non-empty
+        container = container.WithView((h, _) =>
+        {
+            // Only initialize once so expanding replies (e.g. via Reply button) persists across re-renders
+            if (!initialized[1])
+            {
+                h.UpdateData(expandedStateId, false);
+                h.UpdateData(visibleCountStateId, InitialReplyCount);
+                initialized[1] = true;
+            }
+
+            return h.Stream.GetDataStream<LayoutAreaControl[]>(repliesDataId)
+                .CombineLatest(
+                    h.Stream.GetDataStream<bool>(expandedStateId),
+                    h.Stream.GetDataStream<int>(visibleCountStateId),
+                    (replyControls, expanded, visibleCount) =>
+                    {
+                        if (replyControls == null || replyControls.Length == 0)
+                            return (UiControl)Controls.Stack;
+
+                        var totalCount = replyControls.Length;
+                        var section = Controls.Stack.WithWidth("100%").WithStyle("margin-top: 8px;");
+
+                        // Toggle header
+                        var headerText = expanded
+                            ? $"▾ Replies ({totalCount})"
+                            : $"▸ Replies ({totalCount})";
+                        section = section.WithView(Controls.Html(
+                                $"<span style=\"font-size: 0.8rem; font-weight: 600; color: var(--accent-fill-rest); cursor: pointer;\">{headerText}</span>")
+                            .WithClickAction(ctx =>
+                            {
+                                ctx.Host.UpdateData(expandedStateId, !expanded);
+                                return Task.CompletedTask;
+                            }));
+
+                        if (!expanded)
+                            return (UiControl)section;
+
+                        // Show reply Overview areas up to visibleCount
+                        var shown = Math.Min(visibleCount, totalCount);
+                        for (var i = 0; i < shown; i++)
+                        {
+                            section = section.WithView(Controls.Stack
+                                .WithStyle("margin-left: 4px; padding-left: 6px; border-left: 2px solid var(--neutral-stroke-rest); margin-top: 4px;")
+                                .WithView(replyControls[i]));
+                        }
+
+                        // Load more button
+                        if (shown < totalCount)
+                        {
+                            var remaining = totalCount - shown;
+                            section = section.WithView(Controls.Button(
+                                    $"Load {Math.Min(remaining, LoadMoreCount)} more repl{(Math.Min(remaining, LoadMoreCount) == 1 ? "y" : "ies")}")
+                                .WithAppearance(Appearance.Lightweight)
+                                .WithStyle("margin-top: 4px; margin-left: 4px; font-size: 0.8rem;")
+                                .WithClickAction(ctx =>
+                                {
+                                    ctx.Host.UpdateData(visibleCountStateId, visibleCount + LoadMoreCount);
+                                    return Task.CompletedTask;
+                                }));
+                        }
+
+                        return section;
+                    });
+        });
+
+        // Inline reply creation form — rendered when replyPathStateId is non-empty
         if (host != null)
         {
             var replyPathStateId = $"replyPath_{hubPath.Replace("/", "_")}";
@@ -232,10 +304,7 @@ public static class CommentLayoutAreas
                         if (string.IsNullOrEmpty(replyPath))
                             return (UiControl)Controls.Stack; // empty placeholder
 
-                        // Reserve min-height for 2 rows of editor so the comment expands immediately
-                        return (UiControl)Controls.Stack
-                            .WithStyle("margin-top: 8px; margin-left: 12px; padding-left: 8px; border-left: 2px solid var(--accent-fill-rest); min-height: 120px;")
-                            .WithView(Controls.LayoutArea(replyPath, MeshNodeLayoutAreas.CreateNodeArea));
+                        return (UiControl)BuildReplyCreateForm(h, replyPath, replyPathStateId);
                     });
             });
         }
@@ -243,79 +312,6 @@ public static class CommentLayoutAreas
         return container;
     }
 
-    private static UiControl BuildRepliesSection(LayoutAreaHost host, string hubPath,
-        IReadOnlyList<MeshNode> replyNodes)
-    {
-        var expandedStateId = $"replies_expanded_{hubPath.Replace("/", "_")}";
-        var visibleCountStateId = $"replies_visible_{hubPath.Replace("/", "_")}";
-
-        var replyPaths = replyNodes
-            .Where(n => n.Content is Comment)
-            .OrderBy(n => ((Comment)n.Content!).CreatedAt)
-            .Select(n => n.Path)
-            .ToList();
-
-        var totalCount = replyPaths.Count;
-
-        // Use WithView callback so state initialization happens with the actual host
-        return Controls.Stack.WithWidth("100%").WithStyle("margin-top: 8px;")
-            .WithView((h, _) =>
-            {
-                // Initialize state on first render
-                h.UpdateData(expandedStateId, false);
-                h.UpdateData(visibleCountStateId, InitialReplyCount);
-
-                return h.Stream.GetDataStream<bool>(expandedStateId)
-                    .CombineLatest(
-                        h.Stream.GetDataStream<int>(visibleCountStateId),
-                        (expanded, visibleCount) =>
-                        {
-                            var section = Controls.Stack.WithWidth("100%");
-
-                            // Toggle header
-                            var headerText = expanded
-                                ? $"▾ Replies ({totalCount})"
-                                : $"▸ Replies ({totalCount})";
-                            section = section.WithView(Controls.Html(
-                                    $"<span style=\"font-size: 0.8rem; font-weight: 600; color: var(--accent-fill-rest); cursor: pointer;\">{headerText}</span>")
-                                .WithClickAction(ctx =>
-                                {
-                                    ctx.Host.UpdateData(expandedStateId, !expanded);
-                                    return Task.CompletedTask;
-                                }));
-
-                            if (!expanded)
-                                return (UiControl)section;
-
-                            // Show reply Overview areas up to visibleCount
-                            var shown = Math.Min(visibleCount, totalCount);
-                            for (var i = 0; i < shown; i++)
-                            {
-                                var replyAddress = replyPaths[i];
-                                section = section.WithView(Controls.Stack
-                                    .WithStyle("margin-left: 12px; padding-left: 8px; border-left: 2px solid var(--neutral-stroke-rest); margin-top: 6px;")
-                                    .WithView(Controls.LayoutArea(replyAddress, OverviewArea)));
-                            }
-
-                            // Load more button
-                            if (shown < totalCount)
-                            {
-                                var remaining = totalCount - shown;
-                                section = section.WithView(Controls.Button(
-                                        $"Load {Math.Min(remaining, LoadMoreCount)} more repl{(Math.Min(remaining, LoadMoreCount) == 1 ? "y" : "ies")}")
-                                    .WithAppearance(Appearance.Lightweight)
-                                    .WithStyle("margin-top: 4px; margin-left: 12px; font-size: 0.8rem;")
-                                    .WithClickAction(ctx =>
-                                    {
-                                        ctx.Host.UpdateData(visibleCountStateId, visibleCount + LoadMoreCount);
-                                        return Task.CompletedTask;
-                                    }));
-                            }
-
-                            return section;
-                        });
-            });
-    }
 
     private static UiControl BuildCommentReadOnly(string text, string editStateId)
     {
@@ -346,26 +342,122 @@ public static class CommentLayoutAreas
     private static UiControl BuildCommentEditor(LayoutAreaHost host, string hubPath, string text, string editStateId)
     {
         var stack = Controls.Stack.WithWidth("100%");
+        var textDataId = $"commentText_{hubPath.Replace("/", "_")}";
 
-        // Editor
+        // Initialize text data area with current comment text
+        host.UpdateData(textDataId, new Dictionary<string, object?> { ["text"] = text ?? "" });
+
+        // Editor bound to data area — no WithAutoSave() to avoid overwriting
+        // the Comment node with a Markdown node (which saves as .md instead of .json)
         var editor = new MarkdownEditorControl()
             .WithDocumentId(hubPath)
-            .WithValue(text ?? "")
             .WithHeight("150px")
-            .WithPlaceholder("Write your comment...")
-            .WithAutoSave(host.Hub.Address.ToString(), hubPath);
+            .WithPlaceholder("Write your comment...") with
+        {
+            Value = new JsonPointerReference("text"),
+            DataContext = LayoutAreaReference.GetDataPointer(textDataId)
+        };
         stack = stack.WithView(editor);
 
-        // Done button
+        // Done button — saves the comment text via persistence then switches to readonly
         stack = stack.WithView(Controls.Stack
             .WithOrientation(Orientation.Horizontal)
             .WithStyle("justify-content: flex-end; margin-top: 4px;")
             .WithView(Controls.Button("Done")
                 .WithAppearance(Appearance.Accent)
-                .WithClickAction(ctx =>
+                .WithClickAction(async ctx =>
                 {
+                    // Read text from data area
+                    var newText = "";
+                    ctx.Host.Stream.GetDataStream<Dictionary<string, object?>>(textDataId)
+                        .Take(1)
+                        .Subscribe(data => newText = data?.GetValueOrDefault("text")?.ToString() ?? "");
+
+                    // Save via persistence — update only the Text property of the Comment
+                    var persistence = host.Hub.ServiceProvider.GetService<IPersistenceService>();
+                    if (persistence != null)
+                    {
+                        var node = await persistence.GetNodeAsync(hubPath);
+                        if (node != null)
+                        {
+                            var comment = node.Content as Comment ?? new Comment();
+                            var updatedNode = node with { Content = comment with { Text = newText } };
+                            await persistence.SaveNodeAsync(updatedNode);
+                        }
+                    }
+
                     ctx.Host.UpdateData(editStateId, false);
-                    return Task.CompletedTask;
+                })));
+
+        return stack;
+    }
+
+    /// <summary>
+    /// Builds the inline reply creation form with markdown editor, Cancel, and Create buttons.
+    /// Cancel deletes the transient node and hides the form.
+    /// Create sets the reply text, marks the node Active, and hides the form.
+    /// </summary>
+    private static UiControl BuildReplyCreateForm(LayoutAreaHost host, string replyPath, string replyPathStateId)
+    {
+        var meshCatalog = host.Hub.ServiceProvider.GetRequiredService<IMeshCatalog>();
+        var persistence = host.Hub.ServiceProvider.GetService<IPersistenceService>();
+        var replyTextDataId = $"replyText_{replyPath.Replace("/", "_")}";
+
+        host.UpdateData(replyTextDataId, new Dictionary<string, object?> { ["text"] = "" });
+
+        var stack = Controls.Stack
+            .WithStyle("margin-top: 4px; padding: 4px; padding-left: 6px; border-left: 2px solid var(--accent-fill-rest);");
+
+        // Markdown editor bound to local data area
+        var editor = new MarkdownEditorControl()
+            .WithDocumentId(replyPath)
+            .WithHeight("100px")
+            .WithPlaceholder("Write your reply...") with
+        {
+            Value = new JsonPointerReference("text"),
+            DataContext = LayoutAreaReference.GetDataPointer(replyTextDataId)
+        };
+        stack = stack.WithView(editor);
+
+        // Button row: Cancel and Create
+        stack = stack.WithView(Controls.Stack
+            .WithOrientation(Orientation.Horizontal)
+            .WithHorizontalGap(12)
+            .WithStyle("margin-top: 8px; justify-content: flex-end;")
+            .WithView(Controls.Button("Cancel")
+                .WithAppearance(Appearance.Neutral)
+                .WithClickAction(async _ =>
+                {
+                    try { await meshCatalog.DeleteNodeAsync(replyPath); } catch { }
+                    host.UpdateData(replyPathStateId, "");
+                }))
+            .WithView(Controls.Button("Create")
+                .WithAppearance(Appearance.Accent)
+                .WithIconStart(FluentIcons.Add())
+                .WithClickAction(async ctx =>
+                {
+                    // Read text from data area
+                    var text = "";
+                    ctx.Host.Stream.GetDataStream<Dictionary<string, object?>>(replyTextDataId)
+                        .Take(1)
+                        .Subscribe(data => text = data?.GetValueOrDefault("text")?.ToString() ?? "");
+
+                    if (persistence != null)
+                    {
+                        var node = await persistence.GetNodeAsync(replyPath);
+                        if (node != null)
+                        {
+                            var replyComment = node.Content as Comment ?? new Comment();
+                            var activeNode = node with
+                            {
+                                State = MeshNodeState.Active,
+                                Content = replyComment with { Text = text }
+                            };
+                            await persistence.SaveNodeAsync(activeNode);
+                        }
+                    }
+
+                    host.UpdateData(replyPathStateId, "");
                 })));
 
         return stack;
@@ -376,19 +468,16 @@ public static class CommentLayoutAreas
     /// </summary>
     private static UiControl BuildReplyButton(LayoutAreaHost host, string hubPath, Comment comment, string currentUser)
     {
-        return Controls.Button("")
-            .WithIconStart(FluentIcons.ArrowReply(IconSize.Size16))
-            .WithAppearance(Appearance.Stealth)
-            .WithStyle("min-width: 24px; padding: 2px;")
+        return Controls.Html("<span style=\"cursor: pointer; font-size: 0.8rem; color: var(--accent-fill-rest);\" title=\"Reply\">↩</span>")
             .WithClickAction(async _ =>
             {
                 var replyId = Guid.NewGuid().AsString();
                 var replyPath = $"{hubPath}/{replyId}";
                 var replyPathStateId = $"replyPath_{hubPath.Replace("/", "_")}";
 
-                var replyNode = new MeshNode(replyPath)
+                var replyNode = new MeshNode(replyId, hubPath)
                 {
-                    Name = "Reply",
+                    Name = $"Reply to {comment.Author}",
                     NodeType = CommentNodeType.NodeType,
                     State = MeshNodeState.Transient,
                     Content = new Comment
@@ -401,7 +490,11 @@ public static class CommentLayoutAreas
                 };
 
                 var meshCatalog = host.Hub.ServiceProvider.GetRequiredService<IMeshCatalog>();
-                await meshCatalog.CreateNodeAsync(replyNode, currentUser);
+                await meshCatalog.CreateTransientAsync(replyNode);
+
+                // Expand the replies section so the new reply is visible
+                var expandedStateId = $"replies_expanded_{hubPath.Replace("/", "_")}";
+                host.UpdateData(expandedStateId, true);
 
                 host.UpdateData(replyPathStateId, replyPath);
             });
@@ -412,10 +505,7 @@ public static class CommentLayoutAreas
     /// </summary>
     private static UiControl BuildResolveButton(LayoutAreaHost host, string hubPath, Comment comment)
     {
-        return Controls.Button("")
-            .WithIconStart(FluentIcons.Checkmark(IconSize.Size16))
-            .WithAppearance(Appearance.Stealth)
-            .WithStyle("min-width: 24px; padding: 2px;")
+        return Controls.Html("<span style=\"cursor: pointer; font-size: 0.8rem; color: #4ade80;\" title=\"Resolve\">✓</span>")
             .WithClickAction(async _ =>
             {
                 var persistence = host.Hub.ServiceProvider.GetService<IPersistenceService>();
@@ -448,10 +538,7 @@ public static class CommentLayoutAreas
     /// </summary>
     private static UiControl BuildDeleteButton(LayoutAreaHost host, string hubPath)
     {
-        return Controls.Button("")
-            .WithIconStart(FluentIcons.Delete(IconSize.Size16))
-            .WithAppearance(Appearance.Stealth)
-            .WithStyle("min-width: 24px; padding: 2px; color: var(--error);")
+        return Controls.Html("<span style=\"cursor: pointer; font-size: 0.8rem; color: #f87171;\" title=\"Delete\">✕</span>")
             .WithClickAction(async _ =>
             {
                 var meshCatalog = host.Hub.ServiceProvider.GetRequiredService<IMeshCatalog>();
@@ -567,32 +654,6 @@ public static class CommentLayoutAreas
             var node = nodes.FirstOrDefault(n => n.Path == hubPath);
             return BuildThumbnail(node);
         });
-    }
-
-    /// <summary>
-    /// Builds a collapsible "Replies (N)" catalog from reply MeshNodes.
-    /// Each reply is rendered as a Thumbnail.
-    /// </summary>
-    internal static UiControl BuildRepliesCatalog(IReadOnlyList<MeshNode> replyNodes)
-    {
-        var items = replyNodes.Select(r => (UiControl)BuildThumbnail(r)).ToImmutableList();
-        return new CatalogControl
-            {
-                CollapsibleSections = true,
-                ShowCounts = true,
-                Xs = 12, Sm = 12, Md = 12, Lg = 12,
-                CardHeight = 60,
-                Spacing = 1,
-                SectionGap = 0,
-            }
-            .WithGroup(new CatalogGroup
-            {
-                Key = "replies",
-                Label = "Replies",
-                IsExpanded = false,
-                TotalCount = replyNodes.Count,
-                Items = items,
-            });
     }
 
     internal static UiControl BuildThumbnail(MeshNode? node)
