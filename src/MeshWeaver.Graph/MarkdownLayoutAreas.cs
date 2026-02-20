@@ -14,6 +14,7 @@ public static class MarkdownLayoutAreas
 {
     public const string OverviewArea = "Overview";
     public const string EditArea = "Edit";
+    public const string SuggestArea = "Suggest";
     public const string NotebookArea = "Notebook";
 
     public static MessageHubConfiguration AddMarkdownViews(this MessageHubConfiguration configuration)
@@ -23,6 +24,7 @@ public static class MarkdownLayoutAreas
                 .WithDefaultArea(OverviewArea)
                 .WithView(OverviewArea, MarkdownOverviewLayoutArea.Overview)
                 .WithView(EditArea, MarkdownEditLayoutArea.Edit)
+                .WithView(SuggestArea, MarkdownEditLayoutArea.Suggest)
                 .WithView(NotebookArea, MarkdownNotebookLayoutArea.Notebook)
                 .WithView(MeshNodeLayoutAreas.ThumbnailArea, MarkdownOverviewLayoutArea.Thumbnail)
             .WithView(MeshNodeLayoutAreas.CreateNodeArea, CreateLayoutArea.Create)

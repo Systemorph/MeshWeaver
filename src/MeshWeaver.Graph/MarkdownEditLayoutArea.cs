@@ -1,20 +1,30 @@
 using System.Reactive.Linq;
 using MeshWeaver.Application.Styles;
+using MeshWeaver.Data;
 using MeshWeaver.Domain;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
+using MeshWeaver.Layout.Domain;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 
 namespace MeshWeaver.Graph;
 
 /// <summary>
-/// Edit layout area for Markdown nodes.
-/// Uses MarkdownEditorControl with auto-save and track changes support.
+/// Edit and Suggest layout areas for Markdown nodes.
+/// Edit: full-page Monaco editor without track changes.
+/// Suggest: full-page Monaco editor with track changes enabled.
+/// Both include a title text box with auto-save and a back button.
 /// </summary>
 public static class MarkdownEditLayoutArea
 {
     public static UiControl Edit(LayoutAreaHost host, RenderingContext _)
+        => BuildArea(host, trackChanges: false);
+
+    public static UiControl Suggest(LayoutAreaHost host, RenderingContext _)
+        => BuildArea(host, trackChanges: true);
+
+    private static UiControl BuildArea(LayoutAreaHost host, bool trackChanges)
     {
         var hubPath = host.Hub.Address.ToString();
         var hubAddress = host.Hub.Address;
@@ -29,24 +39,25 @@ public static class MarkdownEditLayoutArea
             {
                 var node = nodes?.FirstOrDefault(n => n.Path == hubPath);
                 var content = MarkdownOverviewLayoutArea.GetMarkdownContent(node);
-                return BuildEditContent(node, hubPath, hubAddress, content);
+                return BuildEditContent(host, node, hubPath, hubAddress, content, trackChanges);
             }));
     }
 
     private static UiControl BuildEditContent(
+        LayoutAreaHost host,
         MeshNode? node,
         string hubPath,
         Address hubAddress,
-        string initialContent)
+        string initialContent,
+        bool trackChanges)
     {
-        var nodeName = node?.Name ?? hubPath.Split('/').LastOrDefault() ?? "Document";
         var backHref = $"/{hubPath}";
 
         var container = Controls.Stack
             .WithWidth("100%")
             .WithHeight("100%");
 
-        // Header row with back button and node name
+        // Header row with back button
         var headerRow = Controls.Stack
             .WithOrientation(Orientation.Horizontal)
             .WithWidth("100%")
@@ -60,9 +71,6 @@ public static class MarkdownEditLayoutArea
             .WithAppearance(Appearance.Stealth)
             .WithNavigateToHref(backHref));
 
-        headerRow = headerRow.WithView(
-            Controls.Html($"<h2 style=\"margin: 0; font-size: 1.1rem; font-weight: 600;\">{System.Web.HttpUtility.HtmlEncode(nodeName)}</h2>"));
-
         headerRow = headerRow.WithView(Controls.Html("<div style=\"flex: 1;\"></div>"));
 
         headerRow = headerRow.WithView(
@@ -70,8 +78,25 @@ public static class MarkdownEditLayoutArea
 
         container = container.WithView(headerRow);
 
+        // Title text box with auto-save
+        if (node != null)
+        {
+            var dataId = $"editTitle_{hubPath.Replace("/", "_")}";
+            var props = MeshNodeProperties.FromNode(node);
+            host.UpdateData(dataId, props);
+            SetupNodePropertiesAutoSave(host, dataId, props, node);
+
+            var titleField = new TextFieldControl(new JsonPointerReference("Name"))
+            {
+                Immediate = true,
+                Label = "Title",
+                DataContext = LayoutAreaReference.GetDataPointer(dataId)
+            }.WithStyle("margin: 8px 8px 0 8px;");
+
+            container = container.WithView(titleField);
+        }
+
         // MarkdownEditorControl with auto-save
-        // Height proportional to content lines, clamped between 300px and viewport
         var lineCount = string.IsNullOrEmpty(initialContent) ? 15 : initialContent.Split('\n').Length;
         var editorHeight = Math.Clamp(lineCount * 22 + 60, 300, 2000);
         var editor = new MarkdownEditorControl()
@@ -79,7 +104,7 @@ public static class MarkdownEditLayoutArea
             .WithValue(initialContent)
             .WithHeight($"{editorHeight}px")
             .WithMaxHeight("none")
-            .WithTrackChanges(true)
+            .WithTrackChanges(trackChanges)
             .WithPlaceholder("Start writing your markdown content...")
             .WithAutoSave(hubAddress.ToString(), hubPath);
 
@@ -91,5 +116,34 @@ public static class MarkdownEditLayoutArea
         container = container.WithView(editorWrapper);
 
         return container;
+    }
+
+    private static void SetupNodePropertiesAutoSave(
+        LayoutAreaHost host,
+        string dataId,
+        MeshNodeProperties initial,
+        MeshNode node)
+    {
+        var current = (object)initial;
+
+        host.RegisterForDisposal($"autosave_{dataId}",
+            host.Stream.GetDataStream<object>(dataId)
+                .Throttle(TimeSpan.FromMilliseconds(300))
+                .Subscribe(updated =>
+                {
+                    if (object.Equals(current, updated))
+                        return;
+
+                    current = updated;
+
+                    if (updated is not MeshNodeProperties updatedProps)
+                        return;
+
+                    var updatedNode = updatedProps.ApplyTo(node);
+
+                    host.Hub.Post(
+                        new DataChangeRequest { ChangedBy = host.Stream.ClientId }.WithUpdates(updatedNode),
+                        o => o.WithTarget(host.Hub.Address));
+                }));
     }
 }

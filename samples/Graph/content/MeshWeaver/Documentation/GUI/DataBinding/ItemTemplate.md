@@ -52,6 +52,24 @@ return Template.Bind(
 
 This creates an `ItemTemplateControl` whose `DataContext` points to the parent object's data stream, and whose `Data` property is a `JsonPointerReference` pointing to the `items` sub-path within that context.
 
+### 4. Workspace Stream
+
+Use `GetStream<T>()` on a workspace to get a reactive stream of workspace-managed data, then bind it with `BindMany`:
+
+```csharp
+var stream = host.Workspace.GetStream<MyType>()
+    ?.Select(items => items?.AsEnumerable() ?? Enumerable.Empty<MyType>())
+    ?? Observable.Return(Enumerable.Empty<MyType>());
+
+var control = stream.BindMany("my_stream_id", item =>
+    Controls.Stack.WithView(Controls.Label(item.Name))
+);
+```
+
+Unlike the plain observable pattern (pattern 2), the data here is managed by the workspace's `TypeSource`. The TypeSource handles loading data from a backing store on initialization and syncing changes back when the workspace receives a `DataChangeRequest`. You don't need to manually push data via `SetData` — the workspace pipeline handles it.
+
+This pattern is useful when the data is already registered as a workspace type (e.g., via `WithTypeSource` on a `DataSource`), and you want the standard data binding pipeline to manage persistence and change tracking.
+
 ## How Data Binding Works
 
 When the expression tree is compiled, MeshWeaver's `TemplateBuilderVisitor` replaces each property accessor with a `JsonPointerReference`:
