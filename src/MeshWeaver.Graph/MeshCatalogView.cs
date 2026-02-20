@@ -130,10 +130,11 @@ public static class MeshCatalogView
 
             // Back button
             var overviewHref = $"/{nodePath}/{MeshNodeLayoutAreas.OverviewArea}";
+            var nodeName = node?.Name ?? nodePath.Split('/').LastOrDefault() ?? "Overview";
             stack = stack.WithView(
                 Controls.Stack
                     .WithOrientation(Orientation.Horizontal)
-                    .WithView(Controls.Button("← Back to Content")
+                    .WithView(Controls.Button(nodeName)
                         .WithNavigateToHref(overviewHref)));
 
             // Editor control

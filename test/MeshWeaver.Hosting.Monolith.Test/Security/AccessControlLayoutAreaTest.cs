@@ -297,6 +297,114 @@ public class AccessControlLayoutAreaTest(ITestOutputHelper output) : MonolithMes
             "deeply nested node should show assignments from all ancestor levels (Org, Org/Division) plus local");
     }
 
+    [Fact(Timeout = 30000)]
+    public async Task AccessControl_BindMany_DataAppearsInDataStream()
+    {
+        // Seed a local assignment so we know there should be data
+        var svc = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
+        await svc.AddUserRoleAsync("DataTestUser", "Editor", NodePath, "system", TestTimeout);
+
+        var client = GetClient();
+        var nodeAddress = new Address(NodePath);
+
+        // Initialize the hub
+        await client.AwaitResponse(
+            new PingRequest(),
+            o => o.WithTarget(nodeAddress),
+            TestContext.Current.CancellationToken);
+
+        var workspace = client.GetWorkspace();
+        var reference = new LayoutAreaReference(MeshNodeLayoutAreas.AccessControlArea);
+
+        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
+            nodeAddress,
+            reference);
+
+        // Get root stack control
+        var control = await stream.GetControlStream(reference.Area!)
+            .Timeout(10.Seconds())
+            .FirstAsync(x => x != null);
+
+        var stack = control.Should().BeOfType<StackControl>().Which;
+        Output.WriteLine($"Root stack has {stack.Areas.Count} child areas");
+
+        // Get all child controls
+        var children = await Task.WhenAll(
+            stack.Areas.Select(async a =>
+            {
+                var ctrl = await stream.GetControlStream(a.Area.ToString()!)
+                    .Timeout(10.Seconds())
+                    .FirstAsync(x => x != null);
+                Output.WriteLine($"  Area {a.Area}: {ctrl?.GetType().Name ?? "null"}");
+                return ctrl;
+            })
+        );
+
+        // Find ItemTemplateControls
+        var templates = children.OfType<ItemTemplateControl>().ToList();
+        Output.WriteLine($"Found {templates.Count} ItemTemplateControls");
+        templates.Should().HaveCountGreaterThanOrEqualTo(2,
+            "should have ItemTemplateControl for inherited and local sections");
+
+        foreach (var t in templates)
+        {
+            Output.WriteLine($"  Template DataContext: {t.DataContext}");
+            Output.WriteLine($"  Template Data type: {t.Data?.GetType().Name}");
+            Output.WriteLine($"  Template Data: {t.Data}");
+        }
+
+        // Check data directly at the known stream IDs used by AccessControlLayoutArea
+        var inheritedPointer = LayoutAreaReference.GetDataPointer("acl_inherited");
+        var localPointer = LayoutAreaReference.GetDataPointer("acl_local");
+        Output.WriteLine($"Checking inherited data at: {inheritedPointer}");
+        Output.WriteLine($"Checking local data at: {localPointer}");
+
+        // Wait for data to appear in the data stream (BindMany + async void LoadAssignmentsAsync)
+        var localDataRef = new JsonPointerReference(localPointer);
+        JsonElement[]? localData = null;
+        try
+        {
+            localData = await stream
+                .GetDataStream<JsonElement[]>(localDataRef)
+                .Where(x => x is not null && x.Length > 0)
+                .Timeout(10.Seconds())
+                .FirstOrDefaultAsync();
+        }
+        catch (TimeoutException)
+        {
+            Output.WriteLine("TIMEOUT: No non-empty data arrived for acl_local within 10 seconds");
+        }
+
+        var inheritedDataRef = new JsonPointerReference(inheritedPointer);
+        JsonElement[]? inheritedData = null;
+        try
+        {
+            inheritedData = await stream
+                .GetDataStream<JsonElement[]>(inheritedDataRef)
+                .Where(x => x is not null)
+                .Timeout(5.Seconds())
+                .FirstOrDefaultAsync();
+        }
+        catch (TimeoutException)
+        {
+            Output.WriteLine("TIMEOUT: No data arrived for acl_inherited within 5 seconds");
+        }
+
+        Output.WriteLine($"Local data items: {localData?.Length ?? 0}");
+        Output.WriteLine($"Inherited data items: {inheritedData?.Length ?? 0}");
+
+        if (localData != null)
+        {
+            foreach (var item in localData)
+                Output.WriteLine($"  Local item: {item}");
+        }
+
+        // The seeded "DataTestUser" at NodePath should appear as a local assignment
+        localData.Should().NotBeNullOrEmpty(
+            "BehaviorSubject + BindMany should propagate data to the layout area data stream. " +
+            "If this fails, the async void LoadAssignmentsAsync data never reached the stream.");
+    }
+
     [Fact(Timeout = 10000)]
     public async Task SecurityService_NestedPath_ReturnsInheritedAssignments()
     {

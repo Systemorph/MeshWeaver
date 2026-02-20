@@ -104,7 +104,7 @@ public static class SettingsLayoutArea
         var backHref = $"/{hubPath}";
         var nodeName = node?.Name ?? "Back";
         navMenu = navMenu.WithView(
-            new NavLinkControl($"\u2190 {nodeName}", FluentIcons.ArrowLeft(), backHref)
+            new NavLinkControl(nodeName, FluentIcons.ArrowLeft(), backHref)
         );
 
         // Properties tab
