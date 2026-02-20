@@ -83,6 +83,7 @@ public static class MeshNodeLayoutAreas
     public static MessageHubConfiguration AddDefaultLayoutAreas(this MessageHubConfiguration configuration)
         => configuration
             .WithNodeOperationHandlers()
+            .AddMeshDataSource(source => source.WithAccessAssignments())
             .AddLayout(layout => layout.AddDefaultLayoutAreas());
 
     public static LayoutDefinition AddDefaultLayoutAreas(this LayoutDefinition layout)
