@@ -23,7 +23,7 @@ namespace MeshWeaver.Hosting.Monolith.Test.Security;
 
 /// <summary>
 /// Tests that AccessControlLayoutArea renders correctly with ItemTemplateControl,
-/// verifying the BindMany fix (JsonPointerReference instead of string "/").
+/// verifying workspace-bound local assignments and ISecurityService-loaded inherited assignments.
 /// </summary>
 public class AccessControlLayoutAreaTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
@@ -84,12 +84,16 @@ public class AccessControlLayoutAreaTest(ITestOutputHelper output) : MonolithMes
 
         foreach (var itemTemplate in itemTemplates)
         {
-            // CRITICAL: Data must be JsonPointerReference, not string "/"
-            itemTemplate.Data.Should().BeOfType<JsonPointerReference>(
-                "BindMany should use JsonPointerReference for data binding, not a string literal");
-
-            itemTemplate.DataContext.Should().StartWith("/data/",
-                "ItemTemplateControl DataContext should point to a data stream");
+            // Observable BindMany (local): Data is JsonPointerReference, DataContext points to data stream
+            // Static IEnumerable BindMany (inherited): Data is the collection directly (JsonElement array)
+            if (itemTemplate.DataContext != null)
+            {
+                itemTemplate.Data.Should().BeOfType<JsonPointerReference>(
+                    "Observable BindMany should use JsonPointerReference for data binding");
+                itemTemplate.DataContext.Should().StartWith("/data/",
+                    "ItemTemplateControl DataContext should point to a data stream");
+            }
+            // Static BindMany produces Data as the collection itself — no DataContext needed
         }
     }
 
@@ -139,17 +143,27 @@ public class AccessControlLayoutAreaTest(ITestOutputHelper output) : MonolithMes
         var templatesWithData = 0;
         foreach (var itemTemplate in itemTemplates)
         {
-            var dataRef = new JsonPointerReference(itemTemplate.DataContext!);
-            var data = await stream
-                .GetDataStream<IEnumerable<JsonElement>>(dataRef)
-                .Where(x => x is not null)
-                .Timeout(5.Seconds())
-                .FirstOrDefaultAsync();
+            // Static IEnumerable.BindMany produces ItemTemplateControl with Data as the collection directly
+            // Observable.BindMany produces ItemTemplateControl with DataContext pointing to data stream
+            if (itemTemplate.DataContext != null)
+            {
+                var dataRef = new JsonPointerReference(itemTemplate.DataContext);
+                var data = await stream
+                    .GetDataStream<IEnumerable<JsonElement>>(dataRef)
+                    .Where(x => x is not null)
+                    .Timeout(5.Seconds())
+                    .FirstOrDefaultAsync();
 
-            if (data != null && data.Any())
+                if (data != null && data.Any())
+                {
+                    templatesWithData++;
+                    Output.WriteLine($"DataContext: {itemTemplate.DataContext}, Items: {data.Count()}");
+                }
+            }
+            else if (itemTemplate.Data is IEnumerable<object> staticData && staticData.Any())
             {
                 templatesWithData++;
-                Output.WriteLine($"DataContext: {itemTemplate.DataContext}, Items: {data.Count()}");
+                Output.WriteLine($"Static data items: {staticData.Count()}");
             }
         }
 
@@ -161,7 +175,7 @@ public class AccessControlLayoutAreaTest(ITestOutputHelper output) : MonolithMes
     public async Task AccessControl_NoRLS_ShowsWarning()
     {
         // Verify the service exists when RLS is configured.
-        // The no-RLS code path (securityService == null → warning HTML) is
+        // The no-RLS code path (securityService == null -> warning HTML) is
         // tested by the AccessControlLayoutArea code contract.
         var svc = Mesh.ServiceProvider.GetService<ISecurityService>();
         svc.Should().NotBeNull("RLS is configured in this test fixture");
@@ -214,17 +228,25 @@ public class AccessControlLayoutAreaTest(ITestOutputHelper output) : MonolithMes
         var templatesWithData = 0;
         foreach (var itemTemplate in itemTemplates)
         {
-            var dataRef = new JsonPointerReference(itemTemplate.DataContext!);
-            var data = await stream
-                .GetDataStream<IEnumerable<JsonElement>>(dataRef)
-                .Where(x => x is not null)
-                .Timeout(5.Seconds())
-                .FirstOrDefaultAsync();
+            if (itemTemplate.DataContext != null)
+            {
+                var dataRef = new JsonPointerReference(itemTemplate.DataContext);
+                var data = await stream
+                    .GetDataStream<IEnumerable<JsonElement>>(dataRef)
+                    .Where(x => x is not null)
+                    .Timeout(5.Seconds())
+                    .FirstOrDefaultAsync();
 
-            if (data != null && data.Any())
+                if (data != null && data.Any())
+                {
+                    templatesWithData++;
+                    Output.WriteLine($"DataContext: {itemTemplate.DataContext}, Items: {data.Count()}");
+                }
+            }
+            else if (itemTemplate.Data is IEnumerable<object> staticData && staticData.Any())
             {
                 templatesWithData++;
-                Output.WriteLine($"DataContext: {itemTemplate.DataContext}, Items: {data.Count()}");
+                Output.WriteLine($"Static data items: {staticData.Count()}");
             }
         }
 
@@ -278,18 +300,35 @@ public class AccessControlLayoutAreaTest(ITestOutputHelper output) : MonolithMes
         var totalItems = 0;
         foreach (var itemTemplate in itemTemplates)
         {
-            var dataRef = new JsonPointerReference(itemTemplate.DataContext!);
-            var data = await stream
-                .GetDataStream<IEnumerable<JsonElement>>(dataRef)
-                .Where(x => x is not null)
-                .Timeout(5.Seconds())
-                .FirstOrDefaultAsync();
-
-            if (data != null)
+            if (itemTemplate.DataContext != null)
             {
-                var count = data.Count();
+                // Observable BindMany — data flows through stream
+                var dataRef = new JsonPointerReference(itemTemplate.DataContext);
+                var data = await stream
+                    .GetDataStream<IEnumerable<JsonElement>>(dataRef)
+                    .Where(x => x is not null)
+                    .Timeout(5.Seconds())
+                    .FirstOrDefaultAsync();
+
+                if (data != null)
+                {
+                    var count = data.Count();
+                    totalItems += count;
+                    Output.WriteLine($"DataContext: {itemTemplate.DataContext}, Items: {count}");
+                }
+            }
+            else if (itemTemplate.Data is JsonElement jsonData && jsonData.ValueKind == JsonValueKind.Array)
+            {
+                // Static IEnumerable.BindMany — data is serialized as JsonElement array
+                var count = jsonData.GetArrayLength();
                 totalItems += count;
-                Output.WriteLine($"DataContext: {itemTemplate.DataContext}, Items: {count}");
+                Output.WriteLine($"Static data (JsonElement array) items: {count}");
+            }
+            else if (itemTemplate.Data is IEnumerable<object> staticData)
+            {
+                var count = staticData.Count();
+                totalItems += count;
+                Output.WriteLine($"Static data items: {count}");
             }
         }
 
@@ -353,13 +392,10 @@ public class AccessControlLayoutAreaTest(ITestOutputHelper output) : MonolithMes
             Output.WriteLine($"  Template Data: {t.Data}");
         }
 
-        // Check data directly at the known stream IDs used by AccessControlLayoutArea
-        var inheritedPointer = LayoutAreaReference.GetDataPointer("acl_inherited");
+        // Local assignments now come via workspace stream with BindMany("acl_local", ...)
         var localPointer = LayoutAreaReference.GetDataPointer("acl_local");
-        Output.WriteLine($"Checking inherited data at: {inheritedPointer}");
         Output.WriteLine($"Checking local data at: {localPointer}");
 
-        // Wait for data to appear in the data stream (BindMany + async void LoadAssignmentsAsync)
         var localDataRef = new JsonPointerReference(localPointer);
         JsonElement[]? localData = null;
         try
@@ -375,23 +411,7 @@ public class AccessControlLayoutAreaTest(ITestOutputHelper output) : MonolithMes
             Output.WriteLine("TIMEOUT: No non-empty data arrived for acl_local within 10 seconds");
         }
 
-        var inheritedDataRef = new JsonPointerReference(inheritedPointer);
-        JsonElement[]? inheritedData = null;
-        try
-        {
-            inheritedData = await stream
-                .GetDataStream<JsonElement[]>(inheritedDataRef)
-                .Where(x => x is not null)
-                .Timeout(5.Seconds())
-                .FirstOrDefaultAsync();
-        }
-        catch (TimeoutException)
-        {
-            Output.WriteLine("TIMEOUT: No data arrived for acl_inherited within 5 seconds");
-        }
-
         Output.WriteLine($"Local data items: {localData?.Length ?? 0}");
-        Output.WriteLine($"Inherited data items: {inheritedData?.Length ?? 0}");
 
         if (localData != null)
         {
@@ -400,9 +420,9 @@ public class AccessControlLayoutAreaTest(ITestOutputHelper output) : MonolithMes
         }
 
         // The seeded "DataTestUser" at NodePath should appear as a local assignment
+        // via the workspace stream (AccessAssignmentTypeSource loads IsLocal assignments)
         localData.Should().NotBeNullOrEmpty(
-            "BehaviorSubject + BindMany should propagate data to the layout area data stream. " +
-            "If this fails, the async void LoadAssignmentsAsync data never reached the stream.");
+            "Workspace-bound AccessAssignment stream should contain local assignments loaded by AccessAssignmentTypeSource.");
     }
 
     [Fact(Timeout = 10000)]

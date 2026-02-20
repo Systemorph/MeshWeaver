@@ -1,5 +1,4 @@
 using System.Reactive.Linq;
-using System.Reactive.Subjects;
 using MeshWeaver.Application.Styles;
 using MeshWeaver.Data;
 using MeshWeaver.Layout;
@@ -11,20 +10,16 @@ using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using MeshWeaver.ShortGuid;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Graph;
 
 /// <summary>
 /// Layout area for managing access control on a mesh node.
-/// Uses data-bound ItemTemplateControl for reactive updates,
-/// SwitchControl for Allow/Deny toggles, and permission gating.
+/// Inherited assignments are loaded directly from ISecurityService (read-only display).
+/// Local assignments flow through the workspace data pipeline via AccessAssignmentTypeSource.
 /// </summary>
 public static class AccessControlLayoutArea
 {
-    private const string InheritedStreamId = "acl_inherited";
-    private const string LocalStreamId = "acl_local";
-
     /// <summary>
     /// Entry point for the Access Control layout area.
     /// </summary>
@@ -47,11 +42,23 @@ public static class AccessControlLayoutArea
         var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? [])
             ?? Observable.Return<MeshNode[]>([]);
 
+        // Use SelectMany to await async operations (inherited load + permission check),
+        // then return the synchronous UI.
         return nodeStream.SelectMany(async nodes =>
         {
             var node = nodes.FirstOrDefault(n => n.Namespace == hubPath || n.Path == hubPath);
             var isAdmin = await CheckAdminPermission(host.Hub, hubPath);
-            return BuildAccessControlPage(host, securityService, node, hubPath, isAdmin);
+
+            // Load inherited assignments from ISecurityService (read-only)
+            var inherited = new List<AccessAssignment>();
+            await foreach (var a in securityService.GetAccessAssignmentsAsync(hubPath))
+            {
+                if (!a.IsLocal)
+                    inherited.Add(a);
+            }
+
+            return BuildAccessControlPage(host, securityService, node, hubPath, isAdmin,
+                inherited.OrderBy(a => a.UserId).ThenBy(a => a.RoleId).ToList());
         });
     }
 
@@ -66,7 +73,8 @@ public static class AccessControlLayoutArea
         ISecurityService securityService,
         MeshNode? node,
         string nodePath,
-        bool isAdmin)
+        bool isAdmin,
+        IReadOnlyList<AccessAssignment> inherited)
     {
         var stack = Controls.Stack.WithStyle("padding: 24px; gap: 24px;");
 
@@ -74,17 +82,10 @@ public static class AccessControlLayoutArea
         var headerText = node?.Name ?? nodePath.Split('/').LastOrDefault() ?? nodePath;
         stack = stack.WithView(Controls.H2($"Access Control - {headerText}"));
 
-        // Create reactive subjects that we can push updates into
-        var inheritedSubject = new BehaviorSubject<IEnumerable<AccessAssignment>>([]);
-        var localSubject = new BehaviorSubject<IEnumerable<AccessAssignment>>([]);
-
-        // Load initial data and push to subjects
-        LoadAssignmentsAsync(securityService, nodePath, inheritedSubject, localSubject, host.Hub.ServiceProvider);
-
-        // Inherited Permissions section with data-bound template
+        // Section 1: Inherited Permissions (read-only, from ISecurityService)
         stack = stack.WithView(Controls.H3("Inherited Permissions").WithStyle("margin: 0;"));
         stack = stack.WithView(
-            inheritedSubject.BindMany(InheritedStreamId, a =>
+            inherited.BindMany(a =>
                 Controls.Stack
                     .WithOrientation(Orientation.Horizontal)
                     .WithStyle("padding: 8px 16px; border-bottom: 1px solid var(--neutral-stroke-rest); align-items: center;")
@@ -97,10 +98,14 @@ public static class AccessControlLayoutArea
             )
         );
 
-        // Local Assignments section with data-bound template
+        // Section 2: Local Assignments (workspace-bound, editable)
+        var localStream = host.Workspace.GetStream<AccessAssignment>()
+            ?.Select(items => items?.AsEnumerable() ?? Enumerable.Empty<AccessAssignment>())
+            ?? Observable.Return(Enumerable.Empty<AccessAssignment>());
+
         stack = stack.WithView(Controls.H3("Local Assignments").WithStyle("margin: 0;"));
         stack = stack.WithView(
-            localSubject.BindMany(LocalStreamId, a =>
+            localStream.BindMany("acl_local", a =>
                 Controls.Stack
                     .WithOrientation(Orientation.Horizontal)
                     .WithStyle("padding: 8px 16px; border-bottom: 1px solid var(--neutral-stroke-rest); align-items: center;")
@@ -119,60 +124,6 @@ public static class AccessControlLayoutArea
         }
 
         return stack;
-    }
-
-    private static async void LoadAssignmentsAsync(
-        ISecurityService securityService,
-        string nodePath,
-        BehaviorSubject<IEnumerable<AccessAssignment>> inheritedSubject,
-        BehaviorSubject<IEnumerable<AccessAssignment>> localSubject,
-        IServiceProvider serviceProvider)
-    {
-        try
-        {
-            var inherited = new List<AccessAssignment>();
-            var local = new List<AccessAssignment>();
-
-            await foreach (var assignment in securityService.GetAccessAssignmentsAsync(nodePath))
-            {
-                if (assignment.IsLocal)
-                    local.Add(assignment);
-                else
-                    inherited.Add(assignment);
-            }
-
-            inheritedSubject.OnNext(inherited.OrderBy(a => a.UserId).ThenBy(a => a.RoleId));
-            localSubject.OnNext(local.OrderBy(a => a.UserId).ThenBy(a => a.RoleId));
-        }
-        catch (Exception ex)
-        {
-            var logger = serviceProvider.GetService<ILogger<LayoutAreaHost>>();
-            logger?.LogError(ex, "Failed to load access assignments for node {NodePath}", nodePath);
-        }
-    }
-
-    internal static async Task RefreshAssignmentsAsync(
-        ISecurityService securityService,
-        string nodePath,
-        LayoutAreaHost host)
-    {
-        var inherited = new List<AccessAssignment>();
-        var local = new List<AccessAssignment>();
-
-        await foreach (var assignment in securityService.GetAccessAssignmentsAsync(nodePath))
-        {
-            if (assignment.IsLocal)
-                local.Add(assignment);
-            else
-                inherited.Add(assignment);
-        }
-
-        host.Stream.SetData(InheritedStreamId,
-            inherited.OrderBy(a => a.UserId).ThenBy(a => a.RoleId).ToArray(),
-            host.Stream.StreamId);
-        host.Stream.SetData(LocalStreamId,
-            local.OrderBy(a => a.UserId).ThenBy(a => a.RoleId).ToArray(),
-            host.Stream.StreamId);
     }
 
     private static UiControl BuildAddButton(
@@ -307,12 +258,24 @@ public static class AccessControlLayoutArea
                         if (string.IsNullOrEmpty(targetPath))
                             targetPath = nodePath;
 
-                        var svc = saveCtx.Hub.ServiceProvider.GetRequiredService<ISecurityService>();
-                        await svc.AddUserRoleAsync(userId, roleId, targetPath);
+                        // Create the new assignment and submit via workspace DataChangeRequest
+                        var newAssignment = new AccessAssignment
+                        {
+                            UserId = userId,
+                            RoleId = roleId,
+                            SourcePath = targetPath,
+                            IsLocal = true,
+                            IsActive = true,
+                            DisplayLabel = userId,
+                            SourceDisplay = string.IsNullOrEmpty(targetPath) ? "Global" : targetPath
+                        };
 
-                        // Close dialog and refresh data reactively
+                        saveCtx.Host.Workspace.RequestChange(
+                            new DataChangeRequest().WithCreations([newAssignment]),
+                            null, null);
+
+                        // Close dialog
                         saveCtx.Host.UpdateArea(DialogControl.DialogArea, null!);
-                        await RefreshAssignmentsAsync(svc, targetPath, saveCtx.Host);
                     })));
 
         var dialog = Controls.Dialog(formContent, "Add Role Assignment")
