@@ -4,6 +4,7 @@ using MeshWeaver.Data;
 using MeshWeaver.Domain;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using MeshWeaver.ShortGuid;
@@ -262,6 +263,23 @@ public record MeshDataSource : GenericUnpartitionedDataSource<MeshDataSource>
         // Store ContentType for UI integration (editor generation, etc.)
         // Content is accessed via MeshNode.Content - there's no separate TypeSource
         return this with { ContentType = dataType };
+    }
+
+    /// <summary>
+    /// Registers AccessAssignment as a workspace data type backed by ISecurityService.
+    /// Local assignments are loaded on init and synced back via AccessAssignmentTypeSource.
+    /// </summary>
+    public MeshDataSource WithAccessAssignments()
+    {
+        var securityService = Workspace.Hub.ServiceProvider.GetService<ISecurityService>();
+        if (securityService == null)
+            return this;
+
+        Workspace.Hub.TypeRegistry.WithType(typeof(AccessAssignment), nameof(AccessAssignment));
+
+        return WithTypeSource(typeof(AccessAssignment),
+            new AccessAssignmentTypeSource(Workspace, Id, securityService, _hubPath)
+                .WithKey(a => $"{a.UserId}/{a.RoleId}"));
     }
 
     /// <summary>

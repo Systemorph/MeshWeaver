@@ -38,6 +38,17 @@
                         <FluentIcon Value="@(new Icons.Regular.Size16.ChatMultiple())" Style="margin-right: 8px;" />
                         Threads
                     </FluentMenuItem>
+                    @if (_menuState.NodeType == "Markdown" && _menuState.CanEdit)
+                    {
+                        <FluentMenuItem OnClick="@NavigateToNodeEdit">
+                            <FluentIcon Value="@(new Icons.Regular.Size16.Edit())" Style="margin-right: 8px;" />
+                            Edit
+                        </FluentMenuItem>
+                        <FluentMenuItem OnClick="@NavigateToNodeSuggest">
+                            <FluentIcon Value="@(new Icons.Regular.Size16.TextEditStyle())" Style="margin-right: 8px;" />
+                            Suggest
+                        </FluentMenuItem>
+                    }
                     <FluentMenuItem OnClick="@NavigateToNodeSettings">
                         <FluentIcon Value="@(new Icons.Regular.Size16.Settings())" Style="margin-right: 8px;" />
                         Settings
