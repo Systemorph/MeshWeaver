@@ -121,13 +121,17 @@ public class ContentReferenceIntegrityTest
     {
         // Arrange
         var contentDir = TestPaths.SamplesGraphContent;
-        var mdFiles = Directory.GetFiles(contentDir, "*.md", SearchOption.AllDirectories);
+        var dataDir = TestPaths.SamplesGraphData;
+        var mdFiles = Directory.GetFiles(contentDir, "*.md", SearchOption.AllDirectories)
+            .Concat(Directory.GetFiles(dataDir, "*.md", SearchOption.AllDirectories))
+            .ToArray();
         var broken = new List<string>();
 
         // Act
         foreach (var filePath in mdFiles)
         {
-            var relativePath = Path.GetRelativePath(contentDir, filePath).Replace('\\', '/');
+            var baseDir = filePath.StartsWith(contentDir) ? contentDir : dataDir;
+            var relativePath = Path.GetRelativePath(baseDir, filePath).Replace('\\', '/');
             var fileContent = await File.ReadAllTextAsync(filePath);
             var node = await _parser.ParseAsync(filePath, fileContent, relativePath);
 

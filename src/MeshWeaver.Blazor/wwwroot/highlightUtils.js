@@ -8,10 +8,11 @@ const HLJS_THEME_DARK = `${HLJS_CDN}/styles/github-dark.min.css`;
 export async function ensureHighlightJs() {
     if (window.hljs) return Promise.resolve();
 
-    return new Promise((resolve) => {
+    return new Promise((resolve, reject) => {
         const script = document.createElement('script');
         script.src = HLJS_SCRIPT_URL;
         script.onload = () => resolve();
+        script.onerror = () => reject(new Error(`Failed to load highlight.js from ${HLJS_SCRIPT_URL}`));
         document.head.appendChild(script);
     });
 }

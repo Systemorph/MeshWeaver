@@ -11,11 +11,12 @@ export async function highlightBlock(element) {
         return;
     }
 
-    // Ensure hljs is loaded
     await ensureHighlightJs();
-
-    // Initialize theme updates (only once)
     initializeThemeUpdates();
+
+    if (!window.hljs) {
+        return;
+    }
 
     // Find all code blocks within the element
     const codeElements = element.querySelectorAll("pre code");

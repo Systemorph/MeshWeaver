@@ -98,6 +98,11 @@ public partial class CollaborativeMarkdownView
         {
             await jsModule.InvokeVoidAsync("positionCards");
         }
+
+        if (jsModule != null && !string.IsNullOrEmpty(RenderedHtml))
+        {
+            await jsModule.InvokeVoidAsync("highlightCodeBlocks", contentRef);
+        }
     }
 
     private void ProcessContent()

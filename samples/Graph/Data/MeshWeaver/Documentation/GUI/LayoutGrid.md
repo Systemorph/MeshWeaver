@@ -2,7 +2,7 @@
 Name: Adapting to Different Screens With Layout Grid
 Category: Documentation
 Description: Build responsive layouts that adapt beautifully to any screen size
-Icon: /static/storage/content/MeshWeaver/Documentation/UserInterface/LayoutGrid/icon.svg
+Icon: /static/storage/content/MeshWeaver/Documentation/GUI/LayoutGrid/icon.svg
 ---
 
 # Adapting to Different Screens With Layout Grid

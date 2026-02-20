@@ -824,12 +824,16 @@ public static class MeshNodeLayoutAreas
             // Show catalog for this collection
             return Observable.Return<UiControl?>(Controls.MeshSearch
                 .WithHiddenQuery($"namespace:{host.Hub.Address} type:{collectionName}")
+                .WithShowSearchBox(true)
                 .WithPlaceholder($"Search {collectionName}...")
-                .WithRenderMode(MeshSearchRenderMode.Hierarchical));
+                .WithRenderMode(MeshSearchRenderMode.Hierarchical)
+                .WithMaxColumns(3));
         }
 
-        // Show specific entity - delegate to standard entity view
-        return Observable.Return<UiControl?>(Controls.Markdown($"*Loading entity {entityId} from {collectionName}...*"));
+        // Show specific entity as navigation link
+        var entityPath = $"{host.Hub.Address}/{collectionName}/{entityId}";
+        return Observable.Return<UiControl?>(Controls.Markdown(
+            $"[View {collectionName}: {entityId}](/{entityPath})"));
     }
 
     private static UiControl RenderMeshNodeData(MeshNode node, JsonSerializerOptions jsonOptions)

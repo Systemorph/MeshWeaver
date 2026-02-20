@@ -2,7 +2,7 @@
 Name: Data Binding
 Category: Documentation
 Description: How reactive two-way data binding works in MeshWeaver Layout using JSON Pointers
-Icon: /static/storage/content/MeshWeaver/Documentation/UserInterface/DataBinding/icon.svg
+Icon: /static/storage/content/MeshWeaver/Documentation/GUI/DataBinding/icon.svg
 ---
 
 # Data Binding in MeshWeaver Layout

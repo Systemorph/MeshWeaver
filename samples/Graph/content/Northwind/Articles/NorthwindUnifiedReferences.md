@@ -24,110 +24,110 @@ This document showcases all addressable items in the Northwind application.
 Display all orders:
 
 ```
-@@("Northwind/Analytics/data/Order")
+@@("Northwind/Analytics/$Data/Order")
 ```
 
-@@("Northwind/Analytics/data/Order")
+@@("Northwind/Analytics/$Data/Order")
 
 ### Single Order
 
 Display a specific order:
 
 ```
-@@("Northwind/Analytics/data/Order/10248")
+@@("Northwind/Analytics/$Data/Order/10248")
 ```
 
-@@("Northwind/Analytics/data/Order/10248")
+@@("Northwind/Analytics/$Data/Order/10248")
 
 ### Order Details Collection
 
 Display all order details:
 
 ```
-@@("Northwind/Analytics/data/OrderDetails")
+@@("Northwind/Analytics/$Data/OrderDetails")
 ```
 
-@@("Northwind/Analytics/data/OrderDetails")
+@@("Northwind/Analytics/$Data/OrderDetails")
 
 ### Customer Collection
 
 Display all customers:
 
 ```
-@@("Northwind/Analytics/data/Customer")
+@@("Northwind/Analytics/$Data/Customer")
 ```
 
-@@("Northwind/Analytics/data/Customer")
+@@("Northwind/Analytics/$Data/Customer")
 
 ### Single Customer
 
 Display a specific customer:
 
 ```
-@@("Northwind/Analytics/data/Customer/ALFKI")
+@@("Northwind/Analytics/$Data/Customer/ALFKI")
 ```
 
-@@("Northwind/Analytics/data/Customer/ALFKI")
+@@("Northwind/Analytics/$Data/Customer/ALFKI")
 
 ### Product Collection
 
 Display all products:
 
 ```
-@@("Northwind/Analytics/data/Product")
+@@("Northwind/Analytics/$Data/Product")
 ```
 
-@@("Northwind/Analytics/data/Product")
+@@("Northwind/Analytics/$Data/Product")
 
 ### Single Product
 
 Display a specific product:
 
 ```
-@@("Northwind/Analytics/data/Product/1")
+@@("Northwind/Analytics/$Data/Product/1")
 ```
 
-@@("Northwind/Analytics/data/Product/1")
+@@("Northwind/Analytics/$Data/Product/1")
 
 ### Employee Collection
 
 Display all employees:
 
 ```
-@@("Northwind/Analytics/data/Employee")
+@@("Northwind/Analytics/$Data/Employee")
 ```
 
-@@("Northwind/Analytics/data/Employee")
+@@("Northwind/Analytics/$Data/Employee")
 
 ### Single Employee
 
 Display a specific employee:
 
 ```
-@@("Northwind/Analytics/data/Employee/1")
+@@("Northwind/Analytics/$Data/Employee/1")
 ```
 
-@@("Northwind/Analytics/data/Employee/1")
+@@("Northwind/Analytics/$Data/Employee/1")
 
 ### Supplier Collection
 
 Display all suppliers:
 
 ```
-@@("Northwind/Analytics/data/Supplier")
+@@("Northwind/Analytics/$Data/Supplier")
 ```
 
-@@("Northwind/Analytics/data/Supplier")
+@@("Northwind/Analytics/$Data/Supplier")
 
 ### Single Supplier
 
 Display a specific supplier:
 
 ```
-@@("Northwind/Analytics/data/Supplier/1")
+@@("Northwind/Analytics/$Data/Supplier/1")
 ```
 
-@@("Northwind/Analytics/data/Supplier/1")
+@@("Northwind/Analytics/$Data/Supplier/1")
 
 ## Reference Data
 
@@ -136,60 +136,60 @@ Display a specific supplier:
 Display all categories:
 
 ```
-@@("Northwind/Analytics/data/Category")
+@@("Northwind/Analytics/$Data/Category")
 ```
 
-@@("Northwind/Analytics/data/Category")
+@@("Northwind/Analytics/$Data/Category")
 
 ### Single Category
 
 Display a specific category:
 
 ```
-@@("Northwind/Analytics/data/Category/1")
+@@("Northwind/Analytics/$Data/Category/1")
 ```
 
-@@("Northwind/Analytics/data/Category/1")
+@@("Northwind/Analytics/$Data/Category/1")
 
 ### Region Collection
 
 Display all regions:
 
 ```
-@@("Northwind/Analytics/data/Region")
+@@("Northwind/Analytics/$Data/Region")
 ```
 
-@@("Northwind/Analytics/data/Region")
+@@("Northwind/Analytics/$Data/Region")
 
 ### Single Region
 
 Display a specific region:
 
 ```
-@@("Northwind/Analytics/data/Region/1")
+@@("Northwind/Analytics/$Data/Region/1")
 ```
 
-@@("Northwind/Analytics/data/Region/1")
+@@("Northwind/Analytics/$Data/Region/1")
 
 ### Territory Collection
 
 Display all territories:
 
 ```
-@@("Northwind/Analytics/data/Territory")
+@@("Northwind/Analytics/$Data/Territory")
 ```
 
-@@("Northwind/Analytics/data/Territory")
+@@("Northwind/Analytics/$Data/Territory")
 
 ### Single Territory
 
 Display a specific territory:
 
 ```
-@@("Northwind/Analytics/data/Territory/01581")
+@@("Northwind/Analytics/$Data/Territory/01581")
 ```
 
-@@("Northwind/Analytics/data/Territory/01581")
+@@("Northwind/Analytics/$Data/Territory/01581")
 
 ## Layout Area References
 
