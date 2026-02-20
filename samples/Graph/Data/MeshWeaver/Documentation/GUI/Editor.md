@@ -2,7 +2,7 @@
 Name: Adding Editable Forms to a UI
 Category: Documentation
 Description: Generate editable forms from C# records with automatic field rendering
-Icon: /static/storage/content/MeshWeaver/Documentation/UserInterface/Editor/icon.svg
+Icon: /static/storage/content/MeshWeaver/Documentation/GUI/Editor/icon.svg
 ---
 
 # Adding Editable Forms to a UI

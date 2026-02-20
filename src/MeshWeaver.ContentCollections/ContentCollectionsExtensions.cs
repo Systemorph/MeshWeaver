@@ -44,7 +44,15 @@ public static class ContentCollectionsExtensions
         if (configurations.Count == 0)
         {
             var contentService = hub.GetContentService();
-            var collection = contentService.GetCollectionConfig(config.Address.Id)
+            var addressId = config.Address.Id;
+
+            // Try address ID first, then parent namespace, then defaults
+            var firstSegment = config.Address.Segments.FirstOrDefault();
+            var collection = contentService.GetCollectionConfig(addressId)
+                ?? contentService.GetCollectionConfig("content")
+                ?? (firstSegment != null && firstSegment != addressId
+                    ? contentService.GetCollectionConfig(firstSegment)
+                    : null)
                 ?? contentService.GetCollectionConfig(DefaultCollectionName);
             if (collection is null)
                 throw new InvalidOperationException(

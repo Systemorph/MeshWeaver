@@ -1,0 +1,17 @@
+{
+  "$type": "MeshNode",
+  "id": "eJwKGOifj062-0n47tcVPA/GnExMyZ0VEqMuYN1M0Bovw",
+  "path": "eJwKGOifj062-0n47tcVPA/GnExMyZ0VEqMuYN1M0Bovw",
+  "nodeType": "ThreadMessage",
+  "icon": "/static/NodeTypeIcons/message.svg",
+  "lastModified": "2026-02-20T13:25:01.825714+00:00",
+  "state": "Active",
+  "content": {
+    "$type": "ThreadMessage",
+    "id": "GnExMyZ0VEqMuYN1M0Bovw",
+    "role": "user",
+    "text": "Can you do the pricing for Nestle?",
+    "timestamp": "2026-02-20T13:25:01.825235Z",
+    "type": "ExecutedInput"
+  }
+}

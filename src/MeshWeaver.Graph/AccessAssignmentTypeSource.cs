@@ -54,14 +54,13 @@ public record AccessAssignmentTypeSource : TypeSourceWithType<AccessAssignment, 
             "AccessAssignmentTypeSource.UpdateImpl: adds={Adds}, updates={Updates}, deletes={Deletes}",
             adds.Length, updates.Length, deletes.Length);
 
-        foreach (var a in adds)
-            _ = _securityService.AddUserRoleAsync(a.UserId, a.RoleId, _hubPath);
+        var tasks = adds.Select(a => _securityService.AddUserRoleAsync(a.UserId, a.RoleId, _hubPath))
+            .Concat(deletes.Select(a => _securityService.RemoveUserRoleAsync(a.UserId, a.RoleId, _hubPath)))
+            .Concat(updates.Select(a => _securityService.ToggleRoleAssignmentAsync(_hubPath, a.UserId, a.RoleId, a.Denied)));
 
-        foreach (var a in deletes)
-            _ = _securityService.RemoveUserRoleAsync(a.UserId, a.RoleId, _hubPath);
-
-        foreach (var a in updates)
-            _ = _securityService.ToggleRoleAssignmentAsync(_hubPath, a.UserId, a.RoleId, a.Denied);
+        _ = Task.WhenAll(tasks).ContinueWith(t =>
+            _logger?.LogError(t.Exception, "Failed to sync access assignments for {HubPath}", _hubPath),
+            TaskContinuationOptions.OnlyOnFaulted);
 
         _lastSaved = instances;
         return instances;
@@ -71,8 +70,6 @@ public record AccessAssignmentTypeSource : TypeSourceWithType<AccessAssignment, 
         WorkspaceReference<InstanceCollection> reference,
         CancellationToken ct)
     {
-        _logger?.LogDebug("AccessAssignmentTypeSource.InitializeAsync: Loading local assignments for {HubPath}", _hubPath);
-
         var items = new List<AccessAssignment>();
 
         await foreach (var assignment in _securityService.GetAccessAssignmentsAsync(_hubPath, ct))

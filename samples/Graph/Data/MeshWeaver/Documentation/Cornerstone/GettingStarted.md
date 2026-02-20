@@ -1,81 +1,13 @@
 ---
 Name: Getting Started with Cornerstone
 Category: Case Studies
-Description: Learn to navigate Cornerstone Insurance and work with reinsurance pricing, property risks, and submissions
-Icon: /static/storage/content/MeshWeaver/Documentation/ACME/icon.svg
+Description: Run the sample and explore the pricing interface
+Icon: /static/storage/content/MeshWeaver/Documentation/Cornerstone/icon.svg
 ---
 
-# Getting Started with Cornerstone Insurance
+# Getting Started with Cornerstone
 
-The Cornerstone sample demonstrates MeshWeaver's capabilities through a realistic insurance scenario: a reinsurance company managing property risk pricings for corporate clients.
-
-## The Cornerstone Sample
-
-Cornerstone demonstrates how MeshWeaver organizes insurance data and applications:
-
-### Organization Structure
-
-```
-Cornerstone/                           # Reinsurance company namespace
-├── Insured.json                       # Insured NodeType definition
-├── Pricing.json                       # Pricing NodeType definition
-├── Pricing/                           # Pricing-related code and assets
-│   └── Code/                          # Pricing.cs, PricingViews.cs, etc.
-├── Code/                              # Shared reference data
-│   ├── Country.cs
-│   ├── Currency.cs
-│   ├── LineOfBusiness.cs
-│   └── LegalEntity.cs
-├── Microsoft/                         # Insured: Microsoft Corporation
-│   └── 2026/                          # Pricing instance
-│       └── Submissions/               # Uploaded documents
-├── GlobalManufacturing/               # Insured: Global Manufacturing Corp
-│   └── 2024/
-├── EuropeanLogistics/                 # Insured: European Logistics Ltd
-│   └── 2024/
-└── TechIndustries/                    # Insured: Tech Industries GmbH
-    └── 2024/
-```
-
-### Key Concepts Demonstrated
-
-1. **Insured → Pricing Hierarchy**: Clients have multiple pricings organized by underwriting year
-2. **Shared NodeTypes**: The Pricing NodeType is reused across all insureds
-3. **Property Risk Data**: Geocoded locations with TSI values imported from Excel
-4. **Reinsurance Structure**: Multi-layer coverage with sections and financial terms
-5. **AI Agent Integration**: Natural language interaction with pricing data via MeshPlugin
-
-### Sample Organizations
-
-**Microsoft Corporation** - Technology company with global property portfolio:
-- Underwriting Year: 2026
-- Line of Business: Property (PROP)
-- Status: Bound
-- Broker: Orion Risk Partners Ltd.
-- Primary Insurer: Sentinel Global Insurance SE
-
-**Global Manufacturing Corp** - US manufacturing with industrial properties:
-- Underwriting Year: 2024
-- Line of Business: Property
-- Industry: Manufacturing
-
-**European Logistics Ltd** - UK logistics with warehouse networks:
-- Underwriting Year: 2024
-- Line of Business: Property
-- Industry: Logistics & Transportation
-
-**Tech Industries GmbH** - German technology manufacturing:
-- Underwriting Year: 2024
-- Line of Business: Property
-- Industry: Technology Manufacturing
-
-**Tesla, Inc.** - Electric vehicle and clean energy company:
-- Industry: Automotive & Energy
-- Location: United States
-
-**Nestle S.A.** - Global food and beverage company:
-- Industry: Food & Beverage
-- Location: Switzerland
+This guide walks you through running the Cornerstone sample and exploring the pricing interface.
 
 ## Running the Sample
 
@@ -122,6 +54,7 @@ Each pricing instance has these views:
 | **Property Risks** | DataGrid showing all property locations with TSI values |
 | **Risk Map** | Google Maps visualization of geocoded property locations |
 | **Structure** | DataGrids showing reinsurance layers and sections |
+| **Thumbnail** | Compact card display for catalogs |
 | **Submission** | File browser for uploaded submission documents |
 | **Import Configs** | Excel import configuration settings |
 
@@ -300,14 +233,6 @@ Property risk data can be imported from Excel:
 3. Map columns to PropertyRisk fields
 4. Execute import to populate the Property Risks DataGrid
 
-## Architecture Deep Dive
-
-For detailed understanding of MeshWeaver's architecture in the context of Cornerstone:
-
-- **[Understanding Cornerstone Architecture](MeshWeaver/Documentation/Cornerstone/Architecture)**: Message hubs, data model, reactive design
-- **[AI Agent Integration](MeshWeaver/Documentation/Cornerstone/AIAgentIntegration)**: How AI agents integrate with MeshWeaver
-- **[Unified References](MeshWeaver/Documentation/Cornerstone/UnifiedReferences)**: Path syntax and reference patterns
-
 ## Next Steps
 
 1. **Explore the Data**: Navigate through Cornerstone insureds and examine pricing data
@@ -315,5 +240,3 @@ For detailed understanding of MeshWeaver's architecture in the context of Corner
 3. **View Property Risks**: Explore the Property Risks and Risk Map views
 4. **Examine the Structure**: Review reinsurance layers in the Structure view
 5. **Upload Submissions**: Try the file upload workflow
-
-The Cornerstone sample provides a complete working example of MeshWeaver's insurance capabilities, from data modeling and views to AI agent integration and file management.

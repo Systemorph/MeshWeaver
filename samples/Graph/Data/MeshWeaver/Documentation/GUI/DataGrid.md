@@ -2,7 +2,7 @@
 Name: Displaying Data in a UI
 Category: Documentation
 Description: Display collections of data with sortable, resizable columns
-Icon: /static/storage/content/MeshWeaver/Documentation/UserInterface/DataGrid/icon.svg
+Icon: /static/storage/content/MeshWeaver/Documentation/GUI/DataGrid/icon.svg
 ---
 
 # Displaying Data in a UI

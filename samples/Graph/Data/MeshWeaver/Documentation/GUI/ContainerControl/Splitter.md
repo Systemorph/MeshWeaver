@@ -2,7 +2,7 @@
 Name: Creating Resizable Panels With Splitter
 Category: Documentation
 Description: Divide the UI into resizable, collapsible panes
-Icon: /static/storage/content/MeshWeaver/Documentation/UserInterface/ContainerControl/Splitter/icon.svg
+Icon: /static/storage/content/MeshWeaver/Documentation/GUI/ContainerControl/Splitter/icon.svg
 ---
 
 # Creating Resizable Panels With Splitter

@@ -1,0 +1,17 @@
+{
+  "$type": "MeshNode",
+  "id": "Cornerstone/U1QRZXx92kOL-Bq-MbHvbw/uBql-9OAmUuDl_b4sK0mOw",
+  "path": "Cornerstone/U1QRZXx92kOL-Bq-MbHvbw/uBql-9OAmUuDl_b4sK0mOw",
+  "nodeType": "ThreadMessage",
+  "icon": "/static/NodeTypeIcons/message.svg",
+  "lastModified": "2026-02-20T10:35:12.705172+00:00",
+  "state": "Active",
+  "content": {
+    "$type": "ThreadMessage",
+    "id": "uBql-9OAmUuDl_b4sK0mOw",
+    "role": "user",
+    "text": "Yes. It starts with \u0022Getting Started with Cornerstone Insurance\nThe Cornerstone sample demonstrates MeshWeaver\u0027s capabilities through a realistic insurance scenario: a reinsurance company managing property risk pricings for corporate clients.\u0022",
+    "timestamp": "2026-02-20T10:35:12.704467Z",
+    "type": "ExecutedInput"
+  }
+}
