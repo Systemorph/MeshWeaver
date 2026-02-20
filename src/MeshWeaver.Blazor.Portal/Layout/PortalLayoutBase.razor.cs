@@ -105,6 +105,32 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
     }
 
     /// <summary>
+    /// Navigates to the current node's Edit page (full-page editor without track changes).
+    /// </summary>
+    private void NavigateToNodeEdit()
+    {
+        isNodeMenuOpen = false;
+        var currentPath = NavigationService.CurrentNamespace ?? "";
+        var editUrl = string.IsNullOrEmpty(currentPath)
+            ? "/Edit"
+            : $"/{currentPath}/Edit";
+        NavigationManager.NavigateTo(editUrl);
+    }
+
+    /// <summary>
+    /// Navigates to the current node's Suggest page (full-page editor with track changes).
+    /// </summary>
+    private void NavigateToNodeSuggest()
+    {
+        isNodeMenuOpen = false;
+        var currentPath = NavigationService.CurrentNamespace ?? "";
+        var suggestUrl = string.IsNullOrEmpty(currentPath)
+            ? "/Suggest"
+            : $"/{currentPath}/Suggest";
+        NavigationManager.NavigateTo(suggestUrl);
+    }
+
+    /// <summary>
     /// Navigates to the current node's Settings page.
     /// </summary>
     private void NavigateToNodeSettings()

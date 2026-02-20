@@ -75,6 +75,7 @@ public class NodeMenuService : INodeMenuService
             PrimaryPath = primaryPath,
             IsSatellite = isSatellite,
             Permissions = permissions,
+            NodeType = context.Node?.NodeType,
             CreatableTypes = _latestCreatableTypes
         };
 

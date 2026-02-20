@@ -66,6 +66,12 @@ public record NodeMenuState
     public bool CanEdit => Permissions.HasFlag(Permission.Update);
 
     /// <summary>
+    /// The node type of the current node (e.g. "Markdown").
+    /// Used to conditionally show node-type-specific menu items.
+    /// </summary>
+    public string? NodeType { get; init; }
+
+    /// <summary>
     /// Available creatable types for the current context.
     /// </summary>
     public CreatableTypesSnapshot CreatableTypes { get; init; } = CreatableTypesSnapshot.Empty;

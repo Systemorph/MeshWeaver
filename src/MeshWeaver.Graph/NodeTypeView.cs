@@ -285,10 +285,10 @@ public static class NodeTypeView
     {
         var navMenu = Controls.NavMenu.WithSkin(s => s.WithWidth(280).WithCollapsible(false));
 
-        // Back to Search link
+        // Search link
         var searchHref = new LayoutAreaReference(SearchArea).ToHref(hubAddress);
         navMenu = navMenu.WithView(
-            new NavLinkControl("← Back to Search", FluentIcons.ArrowLeft(), searchHref)
+            new NavLinkControl("Search", FluentIcons.Search(), searchHref)
         );
 
         // Node type definition entry - switches main view to configuration

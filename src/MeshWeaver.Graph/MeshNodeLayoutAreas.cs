@@ -306,10 +306,11 @@ public static class MeshNodeLayoutAreas
         // Header with back link
         var nodePath = node?.Namespace ?? host.Hub.Address.ToString();
         var backHref = $"/{nodePath}/{OverviewArea}";
+        var nodeName = node?.Name ?? nodePath.Split('/').LastOrDefault() ?? "Overview";
         stack = stack.WithView(Controls.Stack
             .WithOrientation(Orientation.Horizontal)
             .WithView(Controls.Html("<h2>Metadata</h2>"))
-            .WithView(Controls.Button("Back to Content")
+            .WithView(Controls.Button(nodeName)
                 .WithNavigateToHref(backHref)));
 
         if (node == null)

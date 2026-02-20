@@ -35,7 +35,7 @@ public static class AgentDetailsArea
             return Controls.Stack
                 .WithView(Controls.Title("Agent Details", 2), "Title")
                 .WithView(Controls.Text($"Agent '{agentName}' not found. Please verify the agent name and try again."), "ErrorMessage")
-                .WithView(Controls.NavLink("← Back to Agent Overview", $"{host.Hub.Address}/Overview"), "BackLink");
+                .WithView(Controls.NavLink("Agents", $"{host.Hub.Address}/Overview"), "BackLink");
         }
 
         return await CreateAgentDetailsView(agent, agents, host);
@@ -53,7 +53,7 @@ public static class AgentDetailsArea
         var markdown = GenerateAgentDetailsMarkdown(agent, agents, host);
 
         return Task.FromResult<UiControl?>(Controls.Stack
-            .WithView(Controls.NavLink("← Back to Agent Overview", $"{host.Hub.Address}/Overview"), "BackLink")
+            .WithView(Controls.NavLink("Agents", $"{host.Hub.Address}/Overview"), "BackLink")
             .WithView(Controls.Markdown(markdown), "Content")
             .WithView(CreateDelegationsSection(agent, agents, host)));
     }
