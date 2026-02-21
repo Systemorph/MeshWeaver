@@ -118,8 +118,11 @@ public class SecurityService : ISecurityService
         }
 
         // Add permissions from AccessContext.Roles (claim-based roles)
+        // Only apply when checking the user who owns the current context
         var context = _accessService.Context;
-        if (context?.Roles != null)
+        if (context?.Roles != null
+            && !string.IsNullOrEmpty(context.ObjectId)
+            && context.ObjectId == userId)
         {
             foreach (var roleName in context.Roles)
             {

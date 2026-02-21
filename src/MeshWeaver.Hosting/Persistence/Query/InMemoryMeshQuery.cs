@@ -14,12 +14,13 @@ namespace MeshWeaver.Hosting.Persistence.Query;
 /// In-memory implementation of IMeshQuery.
 /// Extracts query functionality from InMemoryPersistenceService for use as a standalone service.
 /// </summary>
-public class InMemoryMeshQuery : IMeshQueryCore
+public class InMemoryMeshQuery(
+    IPersistenceServiceCore persistence,
+    ISecurityService? securityService = null,
+    AccessService? accessService = null,
+    IDataChangeNotifier? changeNotifier = null)
+    : IMeshQueryCore
 {
-    private readonly IPersistenceServiceCore _persistence;
-    private readonly ISecurityService? _securityService;
-    private readonly AccessService? _accessService;
-    private readonly IDataChangeNotifier? _changeNotifier;
     private readonly QueryParser _parser = new();
     private readonly QueryEvaluator _evaluator = new();
     private long _version;
@@ -28,18 +29,6 @@ public class InMemoryMeshQuery : IMeshQueryCore
     /// Default debounce interval for batching rapid changes.
     /// </summary>
     public static readonly TimeSpan DefaultDebounceInterval = TimeSpan.FromMilliseconds(100);
-
-    public InMemoryMeshQuery(
-        IPersistenceServiceCore persistence,
-        ISecurityService? securityService = null,
-        AccessService? accessService = null,
-        IDataChangeNotifier? changeNotifier = null)
-    {
-        _persistence = persistence;
-        _securityService = securityService;
-        _accessService = accessService;
-        _changeNotifier = changeNotifier;
-    }
 
     /// <summary>
     /// Gets the effective user ID from the request or from the current access context.
@@ -52,7 +41,7 @@ public class InMemoryMeshQuery : IMeshQueryCore
             return request.UserId;
 
         // Get from access context, defaulting to Public for anonymous users
-        var userId = _accessService?.Context?.ObjectId;
+        var userId = accessService?.Context?.ObjectId;
         return string.IsNullOrEmpty(userId) ? WellKnownUsers.Public : userId;
     }
 
@@ -102,7 +91,7 @@ public class InMemoryMeshQuery : IMeshQueryCore
         foreach (var searchPath in pathsToSearch)
         {
             // Search MeshNodes at this path (with security filtering)
-            var node = await _persistence.GetNodeSecureAsync(searchPath, userId, options, ct);
+            var node = await persistence.GetNodeSecureAsync(searchPath, userId, options, ct);
             if (node != null)
             {
                 if (_evaluator.Matches(node, parsedQuery))
@@ -118,7 +107,7 @@ public class InMemoryMeshQuery : IMeshQueryCore
         // If we're doing scope=children, search immediate children only
         if (effectiveScope == QueryScope.Children)
         {
-            await foreach (var child in _persistence.GetChildrenSecureAsync(basePath, userId, options).WithCancellation(ct))
+            await foreach (var child in persistence.GetChildrenSecureAsync(basePath, userId, options).WithCancellation(ct))
             {
                 // Evaluate the node itself
                 if (_evaluator.Matches(child, parsedQuery))
@@ -145,7 +134,7 @@ public class InMemoryMeshQuery : IMeshQueryCore
 
             foreach (var ancestorPath in pathsToSearchChildren)
             {
-                await foreach (var child in _persistence.GetChildrenSecureAsync(ancestorPath, userId, options).WithCancellation(ct))
+                await foreach (var child in persistence.GetChildrenSecureAsync(ancestorPath, userId, options).WithCancellation(ct))
                 {
                     // Evaluate the node itself
                     if (_evaluator.Matches(child, parsedQuery))
@@ -163,7 +152,7 @@ public class InMemoryMeshQuery : IMeshQueryCore
         // If we're doing scope=descendants, also search descendant paths recursively
         if (effectiveScope == QueryScope.Descendants || effectiveScope == QueryScope.Hierarchy || effectiveScope == QueryScope.Subtree)
         {
-            await foreach (var descendant in _persistence.GetDescendantsSecureAsync(basePath, userId, options).WithCancellation(ct))
+            await foreach (var descendant in persistence.GetDescendantsSecureAsync(basePath, userId, options).WithCancellation(ct))
             {
                 // Evaluate the node itself
                 if (_evaluator.Matches(descendant, parsedQuery))
@@ -208,12 +197,12 @@ public class InMemoryMeshQuery : IMeshQueryCore
         foreach (var item in orderedResults)
         {
             // Apply access control filtering if security service is available
-            if (_securityService != null)
+            if (securityService != null)
             {
                 var itemPath = GetItemPath(item);
                 if (!string.IsNullOrEmpty(itemPath))
                 {
-                    var permissions = await _securityService.GetEffectivePermissionsAsync(
+                    var permissions = await securityService.GetEffectivePermissionsAsync(
                         itemPath, userId, ct);
                     if (!permissions.HasFlag(Permission.Read))
                         continue; // Skip items user cannot read
@@ -281,7 +270,7 @@ public class InMemoryMeshQuery : IMeshQueryCore
         var suggestions = new List<QuerySuggestion>();
 
         // Search descendants for matching nodes (with security filtering)
-        await foreach (var node in _persistence.GetDescendantsSecureAsync(normalizedPath, userId, options).WithCancellation(ct))
+        await foreach (var node in persistence.GetDescendantsSecureAsync(normalizedPath, userId, options).WithCancellation(ct))
         {
             var name = node.Name ?? node.Id ?? node.Path ?? "";
             var nameLower = name;
@@ -408,7 +397,7 @@ public class InMemoryMeshQuery : IMeshQueryCore
     /// <inheritdoc />
     public async Task<T?> SelectAsync<T>(string path, string property, JsonSerializerOptions options, CancellationToken ct = default)
     {
-        var node = await _persistence.GetNodeAsync(path, options, ct);
+        var node = await persistence.GetNodeAsync(path, options, ct);
         if (node == null)
             return default;
 
@@ -478,7 +467,7 @@ public class InMemoryMeshQuery : IMeshQueryCore
             }
 
             // If no change notifier is available, complete after initial results
-            if (_changeNotifier == null)
+            if (changeNotifier == null)
             {
                 observer.OnCompleted();
                 return Disposable.Empty;
@@ -489,7 +478,7 @@ public class InMemoryMeshQuery : IMeshQueryCore
             var subscription = new CompositeDisposable();
 
             // Subscribe to the change notifier and filter by path/scope
-            var notifierSubscription = _changeNotifier
+            var notifierSubscription = changeNotifier
                 .Where(n => PathMatcher.ShouldNotify(n.Path, normalizedBasePath, effectiveScope))
                 .Subscribe(changeBuffer);
             subscription.Add(notifierSubscription);

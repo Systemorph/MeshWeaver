@@ -64,12 +64,28 @@ public class FileSystemPersistenceService : IPersistenceServiceCore
 
     public async IAsyncEnumerable<MeshNode> GetDescendantsAsync(string? parentPath, JsonSerializerOptions options)
     {
-        await foreach (var child in GetChildrenAsync(parentPath, options))
-        {
-            yield return child;
+        var (nodePaths, directoryPaths) = await _storageAdapter.ListChildPathsAsync(parentPath ?? "", default);
 
-            // Recursively get descendants
-            await foreach (var descendant in GetDescendantsAsync(child.Path, options))
+        // Process node children
+        foreach (var path in nodePaths)
+        {
+            var node = await GetNodeAsync(path, options);
+            if (node != null)
+            {
+                yield return node;
+
+                // Recursively get descendants of this node
+                await foreach (var descendant in GetDescendantsAsync(path, options))
+                {
+                    yield return descendant;
+                }
+            }
+        }
+
+        // Also traverse non-node directories (e.g., Code/) that contain descendant nodes
+        foreach (var dirPath in directoryPaths)
+        {
+            await foreach (var descendant in GetDescendantsAsync(dirPath, options))
             {
                 yield return descendant;
             }

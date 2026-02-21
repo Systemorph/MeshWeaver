@@ -123,7 +123,7 @@ public static class NodeTypeLayoutAreas
         if (meshQuery != null)
         {
             meshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
-                    $"path:{hubPath} nodeType:{CodeNodeType.NodeType} scope:children"))
+                    $"path:{hubPath} nodeType:{CodeNodeType.NodeType} scope:descendants"))
                 .Scan(new List<MeshNode>(), (list, change) =>
                 {
                     if (change.ChangeType == QueryChangeType.Initial || change.ChangeType == QueryChangeType.Reset)
@@ -200,7 +200,7 @@ public static class NodeTypeLayoutAreas
                     {
                         if (definition == null)
                             return RenderLoading("Loading...");
-                        return BuildConfigurationPane(hubAddress, definition);
+                        return BuildConfigurationPane(host, hubAddress, definition);
                     }),
                 skin => skin.WithSize("*")
             );
@@ -316,21 +316,20 @@ public static class NodeTypeLayoutAreas
     }
 
     /// <summary>
-    /// Builds the read-only view of NodeTypeDefinition in the main pane.
-    /// Shows all properties with Configuration as one of them.
+    /// Builds the main pane showing the node name as title
+    /// and the Configuration property in a read-only CodeEditorControl.
     /// </summary>
-    private static UiControl BuildConfigurationPane(object hubAddress, MeshNode node)
+    private static UiControl BuildConfigurationPane(LayoutAreaHost host, object hubAddress, MeshNode node)
     {
         var definition = node.Content as NodeTypeDefinition;
         var editHref = new LayoutAreaReference(HubConfigEditArea).ToHref(hubAddress);
-        // ID comes from hub address, not from content
         var nodeId = hubAddress is Address addr ? addr.Segments.LastOrDefault() : (hubAddress.ToString() ?? "Unknown").Split('/').LastOrDefault() ?? "Unknown";
 
         var stack = Controls.Stack
             .WithWidth("100%")
             .WithStyle("padding: 24px; height: 100%; overflow: auto;");
 
-        // Header with edit button
+        // Title with edit button
         var headerRow = Controls.Stack
             .WithOrientation(Orientation.Horizontal)
             .WithStyle("justify-content: space-between; align-items: center; margin-bottom: 16px;")
@@ -343,38 +342,33 @@ public static class NodeTypeLayoutAreas
 
         stack = stack.WithView(headerRow);
 
-        // Properties card
-        var propsCard = Controls.Stack
-            .WithStyle("background: var(--neutral-layer-2); border-radius: 8px; padding: 20px; margin-bottom: 24px;");
-
-        propsCard = propsCard.WithView(BuildInfoRow("ID", nodeId ?? "Unknown"));
-        propsCard = propsCard.WithView(BuildInfoRow("Namespace", node.Namespace ?? ""));
-
-        if (!string.IsNullOrEmpty(node.Name))
-            propsCard = propsCard.WithView(BuildInfoRow("Display Name", node.Name));
-
-        if (!string.IsNullOrEmpty(definition?.Description))
-            propsCard = propsCard.WithView(BuildInfoRow("Description", definition.Description));
-
-        if (!string.IsNullOrEmpty(node.Icon))
-            propsCard = propsCard.WithView(BuildInfoRow("Icon", node.Icon));
-
-        propsCard = propsCard.WithView(BuildInfoRow("Display Order", (node.DisplayOrder ?? 0).ToString()));
-
-        if (!string.IsNullOrEmpty(definition?.ChildrenQuery))
-            propsCard = propsCard.WithView(BuildInfoRow("Children Query", definition.ChildrenQuery));
-
-        if (definition?.Dependencies != null && definition.Dependencies.Count > 0)
-            propsCard = propsCard.WithView(BuildInfoRow("Dependencies", string.Join(", ", definition.Dependencies)));
-
-        stack = stack.WithView(propsCard);
-
-        // Configuration section (lambda expression)
-        if (!string.IsNullOrEmpty(definition?.Configuration))
+        // Configuration in CodeEditorControl
+        var configCode = definition?.Configuration ?? "";
+        if (!string.IsNullOrEmpty(configCode))
         {
-            stack = stack.WithView(Controls.H3("Configuration").WithStyle("margin: 16px 0 8px 0;"));
-            stack = stack.WithView(Controls.Body("Lambda expression for configuring the message hub:").WithStyle("color: var(--neutral-foreground-hint); margin-bottom: 8px;"));
-            stack = stack.WithView(Controls.Markdown($"```csharp\n{definition.Configuration}\n```").WithStyle("width: 100%; max-height: 400px; overflow: auto;"));
+            var configDataId = Guid.NewGuid().AsString();
+            host.UpdateData(configDataId, configCode);
+
+            var configEditor = new CodeEditorControl()
+                .WithLanguage("csharp")
+                .WithHeight("calc(100vh - 220px)")
+                .WithLineNumbers(true)
+                .WithMinimap(false)
+                .WithWordWrap(true)
+                .WithReadonly(true);
+
+            configEditor = configEditor with
+            {
+                DataContext = LayoutAreaReference.GetDataPointer(configDataId),
+                Value = new JsonPointerReference("")
+            };
+
+            stack = stack.WithView(configEditor);
+        }
+        else
+        {
+            stack = stack.WithView(Controls.Body("No configuration defined.")
+                .WithStyle("color: var(--neutral-foreground-hint); font-style: italic;"));
         }
 
         return stack;
