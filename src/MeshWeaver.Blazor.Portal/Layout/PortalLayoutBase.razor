@@ -23,41 +23,22 @@
                 </div>
                 @* Node menu (Cube icon) *@
                 <FluentMenu Anchor="node-menu-anchor" Open="@isNodeMenuOpen" OpenChanged="@OnNodeMenuOpenChanged">
-                    @if (_menuState.CanCreate)
+                    @foreach (var menuItem in GetVisibleMenuItems())
                     {
-                        <FluentMenuItem OnClick="@(() => OpenCreateNodeDialogAsync(null))">
-                            <FluentIcon Value="@(new Icons.Regular.Size16.Add())" Style="margin-right: 8px;" />
-                            Create
-                        </FluentMenuItem>
-                        <FluentMenuItem OnClick="@OpenImportNodeDialogAsync">
-                            <FluentIcon Value="@(new Icons.Regular.Size16.ArrowImport())" Style="margin-right: 8px;" />
-                            Import
-                        </FluentMenuItem>
-                    }
-                    <FluentMenuItem OnClick="@NavigateToNodeThreads">
-                        <FluentIcon Value="@(new Icons.Regular.Size16.ChatMultiple())" Style="margin-right: 8px;" />
-                        Threads
-                    </FluentMenuItem>
-                    @if (_menuState.NodeType == "Markdown" && _menuState.CanEdit)
-                    {
-                        <FluentMenuItem OnClick="@NavigateToNodeEdit">
-                            <FluentIcon Value="@(new Icons.Regular.Size16.Edit())" Style="margin-right: 8px;" />
-                            Edit
-                        </FluentMenuItem>
-                        <FluentMenuItem OnClick="@NavigateToNodeSuggest">
-                            <FluentIcon Value="@(new Icons.Regular.Size16.TextEditStyle())" Style="margin-right: 8px;" />
-                            Suggest
-                        </FluentMenuItem>
-                    }
-                    <FluentMenuItem OnClick="@NavigateToNodeSettings">
-                        <FluentIcon Value="@(new Icons.Regular.Size16.Settings())" Style="margin-right: 8px;" />
-                        Settings
-                    </FluentMenuItem>
-                    @if (_menuState.CanDelete)
-                    {
-                        <FluentMenuItem OnClick="@NavigateToNodeDelete">
-                            <FluentIcon Value="@(new Icons.Regular.Size16.Delete())" Style="margin-right: 8px;" />
-                            Delete
+                        var item = menuItem;
+                        <FluentMenuItem OnClick="@(() => HandleMenuItemClick(item))">
+                            @if (!string.IsNullOrEmpty(item.Icon))
+                            {
+                                if (IsEmoji(item.Icon))
+                                {
+                                    <span style="margin-right: 8px;">@item.Icon</span>
+                                }
+                                else
+                                {
+                                    <img src="@item.Icon" alt="" style="width: 16px; height: 16px; margin-right: 8px;" />
+                                }
+                            }
+                            @item.Label
                         </FluentMenuItem>
                     }
                 </FluentMenu>
@@ -74,11 +55,6 @@
             <div class="chat">
                 <FluentButton BackgroundColor="transparent" OnClick="ToggleAIChatVisibility" Title="AI Chat">
                     <FluentIcon Value="@(new Icons.Regular.Size20.Chat())" Color="Color.Neutral" />
-                </FluentButton>
-            </div>
-            <div class="settings">
-                <FluentButton BackgroundColor="transparent" OnClick="NavigateToNodeSettings" Title="Settings">
-                    <FluentIcon Value="@(new Icons.Regular.Size20.Settings())" Color="Color.Neutral" />
                 </FluentButton>
             </div>
             <UserProfile />

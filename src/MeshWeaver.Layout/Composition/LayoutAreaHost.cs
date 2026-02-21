@@ -52,6 +52,11 @@ public record LayoutAreaHost : IDisposable
         var resolvedArea = isDefaultArea ? ResolveDefaultArea() : reference.Area!;
         var context = new RenderingContext(resolvedArea) { Layout = reference.Layout };
 
+        // Capture the AccessContext at construction time (inside message delivery pipeline)
+        // so it can be restored during deferred initialization
+        var accessService = workspace.Hub.ServiceProvider.GetService<AccessService>();
+        var capturedAccessContext = accessService?.Context;
+
         configuration ??= c => c;
         // Create stream with deferred initialization to avoid circular dependency
         // where initialization lambda uses 'this' before Stream property is assigned
@@ -63,37 +68,50 @@ public record LayoutAreaHost : IDisposable
             c => configuration.Invoke(c.WithDeferredInitialization())
                 .WithInitialization(async (_, _) =>
                 {
-                    var store = new EntityStore()
-                        .Update(LayoutAreaReference.Areas, x => x)
-                        .Update(LayoutAreaReference.Data, x => x);
+                    // Restore captured AccessContext for the rendering scope
+                    if (capturedAccessContext != null)
+                        accessService?.SetContext(capturedAccessContext);
 
-                    // Push progress data before rendering begins
-                    store = store.Update(LayoutAreaReference.Data,
-                        coll => coll.SetItem("progress", new { message = "Building layout...", progress = 0 }));
-
-                    var result = await LayoutDefinition.RenderAsync(this, context, store);
-
-                    // Clear progress after render
-                    result = result with
+                    try
                     {
-                        Store = result.Store.Update(LayoutAreaReference.Data,
-                            coll => coll.SetItem("progress", new { message = "", progress = 100 }))
-                    };
+                        var store = new EntityStore()
+                            .Update(LayoutAreaReference.Areas, x => x)
+                            .Update(LayoutAreaReference.Data, x => x);
 
-                    // When Area was null/empty, store a NamedAreaControl at "" pointing to the resolved area
-                    if (isDefaultArea && !string.IsNullOrEmpty(resolvedArea))
-                    {
-                        var namedArea = new NamedAreaControl(resolvedArea);
+                        // Push progress data before rendering begins
+                        store = store.Update(LayoutAreaReference.Data,
+                            coll => coll.SetItem("progress", new { message = "Building layout...", progress = 0 }));
+
+                        var result = await LayoutDefinition.RenderAsync(this, context, store);
+
+                        // Clear progress after render
                         result = result with
                         {
-                            Store = result.Store.Update(LayoutAreaReference.Areas,
-                                coll => coll.SetItem(string.Empty, namedArea)),
-                            Updates = result.Updates.Append(
-                                new EntityUpdate(LayoutAreaReference.Areas, string.Empty, namedArea))
+                            Store = result.Store.Update(LayoutAreaReference.Data,
+                                coll => coll.SetItem("progress", new { message = "", progress = 100 }))
                         };
-                    }
 
-                    return result.Store;
+                        // When Area was null/empty, store a NamedAreaControl at "" pointing to the resolved area
+                        if (isDefaultArea && !string.IsNullOrEmpty(resolvedArea))
+                        {
+                            var namedArea = new NamedAreaControl(resolvedArea);
+                            result = result with
+                            {
+                                Store = result.Store.Update(LayoutAreaReference.Areas,
+                                    coll => coll.SetItem(string.Empty, namedArea)),
+                                Updates = result.Updates.Append(
+                                    new EntityUpdate(LayoutAreaReference.Areas, string.Empty, namedArea))
+                            };
+                        }
+
+                        return result.Store;
+                    }
+                    finally
+                    {
+                        // Clear restored AccessContext to avoid leaking into unrelated async work
+                        if (capturedAccessContext != null)
+                            accessService?.SetContext(null);
+                    }
                 })
                 .WithExceptionCallback(ex =>
             {

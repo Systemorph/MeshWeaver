@@ -1,6 +1,5 @@
 ﻿using MeshWeaver.AI;
 using MeshWeaver.Blazor.Chat;
-using MeshWeaver.Blazor.Portal.Components;
 using MeshWeaver.Blazor.Portal.Resize;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
@@ -18,7 +17,7 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
     [Inject] protected ChatWindowStateService ChatState { get; set; } = null!;
     [Inject] protected IMessageHub Hub { get; set; } = null!;
     [Inject] protected INavigationService NavigationService { get; set; } = null!;
-    [Inject] protected INodeMenuService NodeMenuService { get; set; } = null!;
+    [Inject] protected IMenuItemsProvider MenuItemsProvider { get; set; } = null!;
 
     // Splitter pane sizes - default 3:1 ratio (75% main, 25% chat)
     private string MainPaneSize => ChatState.Width.HasValue ? $"{100 - ChatState.Width.Value}%" : "75%";
@@ -51,12 +50,9 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
 
     private bool isNodeMenuOpen;
 
-    // Menu state from NodeMenuService
-    private NodeMenuState _menuState = NodeMenuState.Empty;
+    // Menu items from IMenuItemsProvider (populated by LayoutAreaView from $Menu stream)
+    private IReadOnlyList<NodeMenuItemDefinition> _menuItems = [];
     private IDisposable? _menuSubscription;
-
-    protected IReadOnlyList<CreatableTypeInfo> CreatableTypes => _menuState.CreatableTypes.Items;
-    protected bool IsLoadingCreatableTypes => _menuState.CreatableTypes.IsLoading;
 
     private ChatSidePanel? chatPanel;
     private IJSObjectReference? jsModule;
@@ -66,9 +62,9 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
     {
         base.OnInitialized();
         ChatState.OnStateChanged += OnChatStateChanged;
-        _menuSubscription = NodeMenuService.State.Subscribe(state =>
+        _menuSubscription = MenuItemsProvider.MenuItems.Subscribe(items =>
         {
-            _menuState = state;
+            _menuItems = items;
             InvokeAsync(StateHasChanged);
         });
     }
@@ -82,8 +78,6 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
     private void ToggleNodeMenu()
     {
         isNodeMenuOpen = !isNodeMenuOpen;
-        if (isNodeMenuOpen)
-            NodeMenuService.Refresh();
     }
 
     private void OnNodeMenuOpenChanged(bool open)
@@ -92,122 +86,35 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
     }
 
     /// <summary>
-    /// Navigates to the current node's Threads catalog.
+    /// Handles a click on a dynamic menu item.
+    /// All items navigate to their declared area — the area handler is responsible
+    /// for any special behavior (e.g., popping a dialog via the $Dialog stream).
     /// </summary>
-    private void NavigateToNodeThreads()
+    private void HandleMenuItemClick(NodeMenuItemDefinition item)
     {
         isNodeMenuOpen = false;
-        var currentPath = NavigationService.CurrentNamespace ?? "";
-        var threadsUrl = string.IsNullOrEmpty(currentPath)
-            ? "/Threads"
-            : $"/{currentPath}/Threads";
-        NavigationManager.NavigateTo(threadsUrl);
+        NavigateToArea(item.Area);
     }
 
     /// <summary>
-    /// Navigates to the current node's Edit page (full-page editor without track changes).
+    /// Navigates to the specified area for the current node (e.g., "Edit", "Suggest").
     /// </summary>
-    private void NavigateToNodeEdit()
+    private void NavigateToArea(string area)
     {
-        isNodeMenuOpen = false;
         var currentPath = NavigationService.CurrentNamespace ?? "";
-        var editUrl = string.IsNullOrEmpty(currentPath)
-            ? "/Edit"
-            : $"/{currentPath}/Edit";
-        NavigationManager.NavigateTo(editUrl);
+        var url = string.IsNullOrEmpty(currentPath)
+            ? $"/{area}"
+            : $"/{currentPath}/{area}";
+        NavigationManager.NavigateTo(url);
     }
 
     /// <summary>
-    /// Navigates to the current node's Suggest page (full-page editor with track changes).
+    /// Returns menu items from the layout stream.
+    /// Permission filtering is done server-side by the providers.
     /// </summary>
-    private void NavigateToNodeSuggest()
+    private IReadOnlyList<NodeMenuItemDefinition> GetVisibleMenuItems()
     {
-        isNodeMenuOpen = false;
-        var currentPath = NavigationService.CurrentNamespace ?? "";
-        var suggestUrl = string.IsNullOrEmpty(currentPath)
-            ? "/Suggest"
-            : $"/{currentPath}/Suggest";
-        NavigationManager.NavigateTo(suggestUrl);
-    }
-
-    /// <summary>
-    /// Navigates to the current node's Settings page.
-    /// </summary>
-    private void NavigateToNodeSettings()
-    {
-        isNodeMenuOpen = false;
-        var currentPath = NavigationService.CurrentNamespace ?? "";
-        var settingsUrl = string.IsNullOrEmpty(currentPath)
-            ? "/Settings"
-            : $"/{currentPath}/Settings";
-        NavigationManager.NavigateTo(settingsUrl);
-    }
-
-    /// <summary>
-    /// Navigates to the current node's Delete page.
-    /// </summary>
-    private void NavigateToNodeDelete()
-    {
-        isNodeMenuOpen = false;
-        var currentPath = NavigationService.CurrentNamespace ?? "";
-        var deleteUrl = string.IsNullOrEmpty(currentPath)
-            ? "/Delete"
-            : $"/{currentPath}/Delete";
-        NavigationManager.NavigateTo(deleteUrl);
-    }
-
-    /// <summary>
-    /// Opens the Create Node dialog with an optional pre-selected type.
-    /// </summary>
-    protected virtual async Task OpenCreateNodeDialogAsync(CreatableTypeInfo? selectedType)
-    {
-        isNodeMenuOpen = false;
-
-        var currentPath = NavigationService.CurrentNamespace ?? "";
-        var dialogData = new CreateNodeDialogData
-        {
-            InitialNamespace = currentPath,
-            InitialType = selectedType
-        };
-
-        var dialog = await DialogService.ShowDialogAsync<CreateNodeDialog>(dialogData, new DialogParameters
-        {
-            Title = "Create New Node",
-            PrimaryAction = "Create",
-            SecondaryAction = "Cancel",
-            Width = "500px",
-            PreventDismissOnOverlayClick = true,
-            PreventScroll = true
-        });
-
-        var result = await dialog.Result;
-
-        // Dialog handles navigation on success
-    }
-
-    /// <summary>
-    /// Opens the Import Nodes dialog.
-    /// </summary>
-    protected async Task OpenImportNodeDialogAsync()
-    {
-        isNodeMenuOpen = false;
-
-        var dialogData = new ImportNodeDialogData
-        {
-            InitialNamespace = NavigationService.CurrentNamespace ?? ""
-        };
-
-        var dialog = await DialogService.ShowDialogAsync<ImportNodeDialog>(dialogData, new DialogParameters
-        {
-            Title = "Import Nodes",
-            PrimaryAction = null,
-            SecondaryAction = null,
-            Width = "500px",
-            PreventDismissOnOverlayClick = true,
-            PreventScroll = true
-        });
-
-        await dialog.Result;
+        return _menuItems;
     }
 
     /// <summary>

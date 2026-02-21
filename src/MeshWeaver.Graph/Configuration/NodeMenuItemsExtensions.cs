@@ -1,0 +1,135 @@
+using MeshWeaver.Data;
+using MeshWeaver.Layout;
+using MeshWeaver.Layout.Composition;
+using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Security;
+using MeshWeaver.Messaging;
+
+namespace MeshWeaver.Graph.Configuration;
+
+/// <summary>
+/// Extension methods for registering node-type-specific menu item providers.
+/// Providers yield items via IAsyncEnumerable during layout rendering.
+/// </summary>
+public static class NodeMenuItemsExtensions
+{
+    /// <summary>
+    /// Registers the menu infrastructure with default menu items.
+    /// Registers a predicate-based renderer that evaluates all providers and stores
+    /// results at $Menu in the entity store (same pattern as $Dialog).
+    /// </summary>
+    public static MessageHubConfiguration AddDefaultMeshMenu(this MessageHubConfiguration config)
+    {
+        if (config.Get<bool>(nameof(AddDefaultMeshMenu)))
+            return config;
+        config = config.Set(true, nameof(AddDefaultMeshMenu));
+
+        return config
+            .WithTypes(typeof(MenuControl), typeof(NodeMenuItemDefinition))
+            .AddNodeMenuItems(DefaultMenuProvider)
+            .AddLayout(layout => layout
+                .WithRenderer(
+                    _ => true,
+                    async (host, ctx, store) =>
+                    {
+                        var items = await host.Hub.Configuration.EvaluateMenuItemsAsync(host, ctx);
+                        var menuControl = (IUiControl)new MenuControl(items);
+                        return menuControl.Render(host, new RenderingContext(MenuControl.MenuArea), store);
+                    }));
+    }
+
+    /// <summary>
+    /// Default menu provider that yields standard menu items with inline permission checks.
+    /// </summary>
+    private static async IAsyncEnumerable<NodeMenuItemDefinition> DefaultMenuProvider(
+        LayoutAreaHost host, RenderingContext ctx)
+    {
+        var perms = await PermissionHelper.GetEffectivePermissionsAsync(
+            host.Hub, host.Hub.Address.ToString());
+
+        if (perms.HasFlag(Permission.Create))
+        {
+            yield return new("Create", MeshNodeLayoutAreas.CreateNodeArea,
+                RequiredPermission: Permission.Create, DisplayOrder: 0);
+            yield return new("Import", MeshNodeLayoutAreas.ImportMeshNodesArea,
+                RequiredPermission: Permission.Create, DisplayOrder: 1);
+        }
+
+        if (perms.HasFlag(Permission.Update))
+            yield return new("Edit", MeshNodeLayoutAreas.EditArea,
+                RequiredPermission: Permission.Update, DisplayOrder: 10);
+
+        yield return new("Threads", MeshNodeLayoutAreas.ThreadsArea, DisplayOrder: 50);
+        yield return new("Settings", MeshNodeLayoutAreas.SettingsArea, DisplayOrder: 90);
+
+        if (perms.HasFlag(Permission.Delete))
+            yield return new("Delete", MeshNodeLayoutAreas.DeleteArea,
+                RequiredPermission: Permission.Delete, DisplayOrder: 100);
+    }
+
+    /// <summary>
+    /// Registers additional menu item providers for the node type's context menu.
+    /// </summary>
+    public static MessageHubConfiguration AddNodeMenuItems(
+        this MessageHubConfiguration config,
+        params NodeMenuItemProvider[] providers)
+    {
+        var existing = config.Get<NodeMenuProviderCollection>() ?? new NodeMenuProviderCollection([]);
+        var updated = existing.AddRange(providers);
+        return config.Set(updated);
+    }
+
+    /// <summary>
+    /// Registers additional static menu items for the node type's context menu.
+    /// Each definition is wrapped in a trivial provider that always yields it.
+    /// </summary>
+    public static MessageHubConfiguration AddNodeMenuItems(
+        this MessageHubConfiguration config,
+        params NodeMenuItemDefinition[] items)
+    {
+        var providers = items.Select(item =>
+        {
+            var captured = item;
+            return new NodeMenuItemProvider((_, _) => YieldSingle(captured));
+        }).ToArray();
+        return config.AddNodeMenuItems(providers);
+    }
+
+    private static async IAsyncEnumerable<NodeMenuItemDefinition> YieldSingle(NodeMenuItemDefinition item)
+    {
+        await Task.CompletedTask;
+        yield return item;
+    }
+
+    /// <summary>
+    /// Evaluates all registered providers, collects items, and sorts by DisplayOrder.
+    /// </summary>
+    internal static async Task<IReadOnlyList<NodeMenuItemDefinition>> EvaluateMenuItemsAsync(
+        this MessageHubConfiguration config, LayoutAreaHost host, RenderingContext ctx)
+    {
+        var collection = config.Get<NodeMenuProviderCollection>();
+        if (collection == null)
+            return [];
+
+        var items = new List<NodeMenuItemDefinition>();
+        foreach (var provider in collection.Providers)
+        {
+            await foreach (var item in provider(host, ctx))
+            {
+                items.Add(item);
+            }
+        }
+
+        items.Sort((a, b) => a.DisplayOrder.CompareTo(b.DisplayOrder));
+        return items;
+    }
+}
+
+/// <summary>
+/// Internal holder for accumulated menu item providers, stored via config.Set.
+/// </summary>
+internal record NodeMenuProviderCollection(IReadOnlyList<NodeMenuItemProvider> Providers)
+{
+    public NodeMenuProviderCollection AddRange(IEnumerable<NodeMenuItemProvider> newProviders)
+        => new(Providers.Concat(newProviders).ToList());
+}
