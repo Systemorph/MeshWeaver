@@ -20,15 +20,24 @@ public record ImportNodesRequest(string SourcePath, string TargetPath) : IReques
 /// </summary>
 public record ImportNodesResponse
 {
+    /// <summary>Number of nodes imported.</summary>
     public int NodesImported { get; init; }
+    /// <summary>Number of partitions imported.</summary>
     public int PartitionsImported { get; init; }
+    /// <summary>Number of nodes skipped (already existed).</summary>
     public int NodesSkipped { get; init; }
+    /// <summary>Number of partitions skipped.</summary>
     public int PartitionsSkipped { get; init; }
+    /// <summary>Number of nodes removed during import.</summary>
     public int NodesRemoved { get; init; }
+    /// <summary>Time taken for the import.</summary>
     public TimeSpan Elapsed { get; init; }
+    /// <summary>Error message if the import failed; null on success.</summary>
     public string? Error { get; init; }
+    /// <summary>True if the import succeeded.</summary>
     public bool Success => Error == null;
 
+    /// <summary>Creates a successful response.</summary>
     public static ImportNodesResponse Ok(int nodesImported, int partitionsImported, int nodesSkipped, int partitionsSkipped, TimeSpan elapsed, int nodesRemoved = 0) => new()
     {
         NodesImported = nodesImported,
@@ -39,6 +48,7 @@ public record ImportNodesResponse
         Elapsed = elapsed
     };
 
+    /// <summary>Creates a failed response.</summary>
     public static ImportNodesResponse Fail(string error) => new() { Error = error };
 }
 
@@ -55,11 +65,16 @@ public record ImportContentRequest(string CollectionName, string SourcePath, str
 /// </summary>
 public record ImportContentResponse
 {
+    /// <summary>Number of files successfully imported.</summary>
     public int FilesImported { get; init; }
+    /// <summary>Error message if the import failed; null on success.</summary>
     public string? Error { get; init; }
+    /// <summary>True if the import succeeded.</summary>
     public bool Success => Error == null;
 
+    /// <summary>Creates a successful response.</summary>
     public static ImportContentResponse Ok(int filesImported) => new() { FilesImported = filesImported };
+    /// <summary>Creates a failed response.</summary>
     public static ImportContentResponse Fail(string error) => new() { Error = error };
 }
 
@@ -75,10 +90,15 @@ public record DeleteContentRequest(string CollectionName, string FolderPath) : I
 /// </summary>
 public record DeleteContentResponse
 {
+    /// <summary>Number of items deleted.</summary>
     public int ItemsDeleted { get; init; }
+    /// <summary>Error message if deletion failed; null on success.</summary>
     public string? Error { get; init; }
+    /// <summary>True if the deletion succeeded.</summary>
     public bool Success => Error == null;
 
+    /// <summary>Creates a successful response.</summary>
     public static DeleteContentResponse Ok(int itemsDeleted) => new() { ItemsDeleted = itemsDeleted };
+    /// <summary>Creates a failed response.</summary>
     public static DeleteContentResponse Fail(string error) => new() { Error = error };
 }

@@ -288,12 +288,14 @@
 
     private static string? GetFirstUserMessage(MeshThread content)
     {
+#pragma warning disable CS0618 // reading legacy Messages for backward compat
         if (content.Messages == null || content.Messages.Count == 0)
             return null;
 
         // Find first user message
         var userMessage = content.Messages.FirstOrDefault(m =>
             m.Role.Equals("user", StringComparison.OrdinalIgnoreCase));
+#pragma warning restore CS0618
 
         return userMessage?.Text;
     }

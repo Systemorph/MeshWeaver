@@ -7,11 +7,17 @@ namespace MeshWeaver.Mesh.Security;
 /// </summary>
 public record AccessAssignment
 {
+    /// <summary>User identifier for this assignment.</summary>
     public string UserId { get; init; } = "";
+    /// <summary>Optional display name for the user.</summary>
     public string? DisplayName { get; init; }
+    /// <summary>Role identifier assigned to the user.</summary>
     public string RoleId { get; init; } = "";
+    /// <summary>Path from which this assignment originates.</summary>
     public string SourcePath { get; init; } = "";
+    /// <summary>True if the assignment denies rather than grants access.</summary>
     public bool Denied { get; init; }
+    /// <summary>True if the assignment is local (not inherited).</summary>
     public bool IsLocal { get; init; }
 
     /// <summary>

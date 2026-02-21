@@ -24,6 +24,7 @@ public static class GraphConfigurationExtensions
             builder
                 .AddNodeTypeType()
                 .AddAgentType()
+                .AddCodeType()
                 .AddMarkdownType()
                 .AddThreadType()
                 .AddThreadMessageType()
