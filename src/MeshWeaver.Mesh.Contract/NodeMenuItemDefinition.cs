@@ -35,15 +35,19 @@ public delegate IAsyncEnumerable<NodeMenuItemDefinition> NodeMenuItemProvider(
 /// </summary>
 public record MenuControl : UiControl<MenuControl>
 {
+    /// <summary>Entity store area name for menu items.</summary>
     public const string MenuArea = "$Menu";
 
+    /// <summary>Creates an empty MenuControl.</summary>
     public MenuControl() : base(ModuleSetup.ModuleName, ModuleSetup.ApiVersion) { }
 
+    /// <summary>Creates a MenuControl with the specified menu items.</summary>
     public MenuControl(IReadOnlyList<NodeMenuItemDefinition> items)
         : base(ModuleSetup.ModuleName, ModuleSetup.ApiVersion)
     {
         Items = items;
     }
 
+    /// <summary>Menu items to display in the node context menu.</summary>
     public IReadOnlyList<NodeMenuItemDefinition> Items { get; init; } = [];
 }

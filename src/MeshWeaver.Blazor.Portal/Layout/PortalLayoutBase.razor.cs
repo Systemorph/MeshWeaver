@@ -3,6 +3,7 @@ using MeshWeaver.Blazor.Chat;
 using MeshWeaver.Blazor.Portal.Resize;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Blazor.Services;
 using MeshWeaver.Messaging;
 using Microsoft.AspNetCore.Components;
 using Microsoft.FluentUI.AspNetCore.Components;

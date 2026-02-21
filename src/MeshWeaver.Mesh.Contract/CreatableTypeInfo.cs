@@ -26,7 +26,10 @@ public record CreatableTypeInfo(
 /// </summary>
 public record CreatableTypesSnapshot(IReadOnlyList<CreatableTypeInfo> Items, bool IsLoading)
 {
+    /// <summary>Empty snapshot with no items and not loading.</summary>
     public static readonly CreatableTypesSnapshot Empty = new([], false);
+    /// <summary>Creates a snapshot indicating more items may still arrive.</summary>
     public static CreatableTypesSnapshot Loading(IReadOnlyList<CreatableTypeInfo> items) => new(items, true);
+    /// <summary>Creates a final snapshot with all items loaded.</summary>
     public static CreatableTypesSnapshot Done(IReadOnlyList<CreatableTypeInfo> items) => new(items, false);
 }

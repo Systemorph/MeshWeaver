@@ -6,7 +6,7 @@ using Microsoft.Extensions.Logging;
 using MeshWeaver.Data;
 using MeshWeaver.Layout;
 using MeshWeaver.Mesh;
-using MeshWeaver.Mesh.Services;
+using MeshWeaver.Blazor.Services;
 using MeshWeaver.Messaging;
 using Microsoft.JSInterop;
 

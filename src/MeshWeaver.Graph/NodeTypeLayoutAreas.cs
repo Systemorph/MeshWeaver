@@ -1,4 +1,4 @@
-﻿using System.ComponentModel;
+using System.ComponentModel;
 using System.Reactive.Linq;
 using Humanizer;
 using MeshWeaver.Application.Styles;
@@ -19,9 +19,7 @@ namespace MeshWeaver.Graph;
 /// <summary>
 /// Layout views for NodeType definition nodes.
 /// Uses standard MeshNodeView.Search with NodeTypeCatalogMode for showing instances.
-/// - Overview: Overview of the NodeType (default)
-/// - CodeView: Split view with left menu and code display
-/// - CodeEdit: Monaco editor for code editing
+/// - Overview: Split view with left menu and configuration/code display (default)
 /// - HubConfigView: View HubConfiguration
 /// - HubConfigEdit: Monaco editor for HubConfiguration
 /// </summary>
@@ -29,16 +27,13 @@ public static class NodeTypeLayoutAreas
 {
     public const string SearchArea = "Search";
     public const string OverviewArea = "Overview";
-    public const string CodeViewArea = "Code";
-    public const string CodeEditArea = "CodeEdit";
     public const string HubConfigViewArea = "HubConfig";
     public const string HubConfigEditArea = "HubConfigEdit";
 
     // Data keys for data section
     private const string DefinitionDataId = "definition";
-    private const string CodeFilesDataId = "codeFiles";
     private const string CodeFileDataId = "codeFile";
-    private const string SelectionDataId = "selection";
+    private const string CodeNodesDataId = "codeNodes";
 
     /// <summary>
     /// Gets the current MeshNode from the workspace stream.
@@ -65,8 +60,6 @@ public static class NodeTypeLayoutAreas
                 .WithView(MeshNodeLayoutAreas.OverviewArea, ListOverview)  // Override default Overview for listings
                 .WithView(SearchArea, MeshNodeLayoutAreas.Search)  // Use standard search
                 .WithView(OverviewArea, Overview)
-                .WithView(CodeViewArea, CodeView)
-                .WithView(CodeEditArea, CodeEdit)
                 .WithView(HubConfigViewArea, HubConfigView)
                 .WithView(HubConfigEditArea, HubConfigEdit)
                 // UCR special areas for unified content references
@@ -113,110 +106,44 @@ public static class NodeTypeLayoutAreas
 
     /// <summary>
     /// Renders the Overview area for a NodeType.
-    /// Shows an overview of the NodeType configuration.
-    /// Gets NodeTypeDefinition from MeshNode.Content via the workspace stream.
+    /// Split view with left navigation menu and main configuration pane.
+    /// Code files are listed as navigation links to their own Code node addresses.
     /// </summary>
     public static UiControl Overview(LayoutAreaHost host, RenderingContext ctx)
-    {
-        var nodeStream = GetNodeStream(host);
-        host.SubscribeToDataStream(CodeFileDataId, host.Workspace.GetSingle<CodeConfiguration>());
-
-        // Return static structure with nested observable view for content
-        return Controls.Stack
-            .WithWidth("100%")
-            .WithView(
-                (h, c) => nodeStream
-                    .CombineLatest(h.GetDataStream<CodeConfiguration>(CodeFileDataId))
-                    .Select(tuple =>
-                    {
-                        var (node, codeFile) = tuple;
-                        if (node == null)
-                            return RenderLoading("Loading NodeType definition...");
-                        return BuildDetailsLayout(host, node, codeFile);
-                    }),
-                "Content"
-            );
-    }
-
-    /// <summary>
-    /// Builds the Details layout with overview and navigation.
-    /// </summary>
-    private static UiControl BuildDetailsLayout(
-        LayoutAreaHost host,
-        MeshNode node,
-        CodeConfiguration? codeFile)
-    {
-        var hubAddress = host.Hub.Address;
-        var content = node.Content as NodeTypeDefinition;
-        var stack = Controls.Stack.WithWidth("100%").WithStyle("padding: 24px;");
-
-        // Header
-        var nodeId = node.Id;
-        var title = node.Name ?? nodeId;
-        stack = stack.WithView(Controls.H1(title));
-        stack = stack.WithView(Controls.Body("NodeType Configuration").WithStyle("color: var(--neutral-foreground-hint); margin-bottom: 24px;"));
-
-        // Type info card
-        var infoCard = Controls.Stack
-            .WithStyle("background: var(--neutral-layer-2); border-radius: 8px; padding: 20px; margin-bottom: 24px;");
-
-        infoCard = infoCard.WithView(BuildInfoRow("ID", nodeId));
-        if (!string.IsNullOrEmpty(node.Name))
-            infoCard = infoCard.WithView(BuildInfoRow("Name", node.Name));
-        if (!string.IsNullOrEmpty(content?.Description))
-            infoCard = infoCard.WithView(BuildInfoRow("Description", content.Description));
-        if (!string.IsNullOrEmpty(node.Icon))
-            infoCard = infoCard.WithView(BuildInfoRow("Icon", node.Icon));
-        infoCard = infoCard.WithView(BuildInfoRow("Display Order", (node.DisplayOrder ?? 0).ToString()));
-
-        var hasCode = !string.IsNullOrEmpty(codeFile?.Code);
-        infoCard = infoCard.WithView(BuildInfoRow("Has Code", hasCode ? "Yes" : "No"));
-        infoCard = infoCard.WithView(BuildInfoRow("Has Configuration", !string.IsNullOrEmpty(content?.Configuration) ? "Yes" : "No"));
-
-        stack = stack.WithView(infoCard);
-
-        // Navigation buttons
-        var buttonRow = Controls.Stack
-            .WithOrientation(Orientation.Horizontal)
-            .WithStyle("gap: 8px;");
-
-        var codeHref = new LayoutAreaReference(CodeViewArea).ToHref(hubAddress);
-        buttonRow = buttonRow.WithView(Controls.Button("View Code & Configuration")
-            .WithAppearance(Appearance.Accent)
-            .WithIconStart(FluentIcons.Code())
-            .WithNavigateToHref(codeHref));
-
-        stack = stack.WithView(buttonRow);
-
-        return stack;
-    }
-
-    /// <summary>
-    /// Renders the split view with left menu and code/config display.
-    /// Returns static Splitter structure with data-bound content panes.
-    /// </summary>
-    public static UiControl CodeView(LayoutAreaHost host, RenderingContext ctx)
     {
         var hubAddress = host.Hub.Address;
         var hubPath = host.Hub.Address.ToString();
         var meshQuery = host.Hub.ServiceProvider.GetService<IMeshQuery>();
 
         var definitionStream = GetNodeStream(host);
-        var persistence = host.Hub.ServiceProvider.GetService<IPersistenceService>();
-        var codeFilesStream = Observable.FromAsync(async () =>
+
+        // Observe child Code nodes reactively via ObserveQuery
+        host.UpdateData(CodeNodesDataId, Array.Empty<MeshNode>());
+
+        if (meshQuery != null)
         {
-            if (persistence == null)
-                return Array.Empty<CodeConfiguration>() as IReadOnlyCollection<CodeConfiguration>;
-            var codeParentPath = $"{hubPath}/Code";
-            var codeFiles = new List<CodeConfiguration>();
-            await foreach (var child in persistence.GetChildrenAsync(codeParentPath))
-            {
-                if (child.Content is CodeConfiguration cf)
-                    codeFiles.Add(cf);
-            }
-            return codeFiles as IReadOnlyCollection<CodeConfiguration>;
-        });
-        var selectionStream = host.Stream.GetDataStream<string?>(SelectionDataId);
+            meshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
+                    $"path:{hubPath} nodeType:{CodeNodeType.NodeType} scope:children"))
+                .Scan(new List<MeshNode>(), (list, change) =>
+                {
+                    if (change.ChangeType == QueryChangeType.Initial || change.ChangeType == QueryChangeType.Reset)
+                        return change.Items.ToList();
+                    foreach (var item in change.Items)
+                    {
+                        if (change.ChangeType == QueryChangeType.Added)
+                            list.Add(item);
+                        else if (change.ChangeType == QueryChangeType.Removed)
+                            list.RemoveAll(n => n.Path == item.Path);
+                        else if (change.ChangeType == QueryChangeType.Updated)
+                        {
+                            list.RemoveAll(n => n.Path == item.Path);
+                            list.Add(item);
+                        }
+                    }
+                    return list;
+                })
+                .Subscribe(codeNodes => host.UpdateData(CodeNodesDataId, codeNodes.ToArray()));
+        }
 
         // Query for NodeType nodes under this namespace
         var nodeTypesStream = Observable.FromAsync(async () =>
@@ -248,35 +175,32 @@ public static class NodeTypeLayoutAreas
             }
         });
 
-        // Initialize selection to "configuration" (show node type definition by default)
-        host.UpdateData(SelectionDataId, "configuration");
+        var codeNodesStream = host.Stream.GetDataStream<MeshNode[]>(CodeNodesDataId);
 
         // Return static Splitter structure with observable nested views
         return Controls.Splitter
             .WithSkin(s => s.WithOrientation(Orientation.Horizontal).WithWidth("100%").WithHeight("calc(100vh - 100px)"))
             .WithView(
-                // Left menu - observable, updates when definition or code files load
+                // Left menu - observable, updates when definition or code nodes load
                 (h, c) => definitionStream
-                    .CombineLatest(codeFilesStream, nodeTypesStream, agentsStream)
+                    .CombineLatest(codeNodesStream, nodeTypesStream, agentsStream)
                     .Select(tuple =>
                     {
-                        var (definition, codeFiles, nodeTypes, agents) = tuple;
+                        var (definition, codeNodes, nodeTypes, agents) = tuple;
                         if (definition == null)
                             return RenderLoading("Loading...");
-                        return BuildLeftMenu(host, hubAddress, definition, codeFiles, nodeTypes, agents);
+                        return BuildLeftMenu(host, hubAddress, definition, codeNodes, nodeTypes, agents);
                     }),
                 skin => skin.WithSize("280px").WithMin("200px").WithMax("400px").WithCollapsible(true)
             )
             .WithView(
-                // Main pane - reacts to selection
+                // Main pane - shows configuration
                 (h, c) => definitionStream
-                    .CombineLatest(codeFilesStream, selectionStream)
-                    .Select(tuple =>
+                    .Select(definition =>
                     {
-                        var (definition, codeFiles, selection) = tuple;
                         if (definition == null)
                             return RenderLoading("Loading...");
-                        return BuildMainPane(host, hubAddress, definition, codeFiles, selection);
+                        return BuildConfigurationPane(hubAddress, definition);
                     }),
                 skin => skin.WithSize("*")
             );
@@ -284,12 +208,13 @@ public static class NodeTypeLayoutAreas
 
     /// <summary>
     /// Builds the left navigation menu with Configuration, Code files, Node Types, and Agents entries.
+    /// Code files are shown as links that navigate to the Code node's own address.
     /// </summary>
     private static UiControl BuildLeftMenu(
         LayoutAreaHost host,
         object hubAddress,
         MeshNode node,
-        IReadOnlyCollection<CodeConfiguration>? codeFiles,
+        IReadOnlyCollection<MeshNode>? codeNodes,
         IReadOnlyCollection<MeshNode>? nodeTypes = null,
         IReadOnlyCollection<MeshNode>? agents = null)
     {
@@ -302,27 +227,26 @@ public static class NodeTypeLayoutAreas
             new NavLinkControl("Search", FluentIcons.Search(), searchHref)
         );
 
-        // Node type definition entry - switches main view to configuration
-        // ID comes from hub address, not from content
+        // Node type definition entry
         var nodeId = hubAddress is Address addr ? addr.Segments.LastOrDefault() : (hubAddress.ToString() ?? "Unknown").Split('/').LastOrDefault() ?? "Unknown";
+        var configHref = new LayoutAreaReference(OverviewArea).ToHref(hubAddress);
         navMenu = navMenu.WithView(
-            new NavLinkControl(node.Name ?? nodeId, FluentIcons.Settings(), null)
-                .WithClickAction(actx => host.UpdateData(SelectionDataId, "configuration"))
+            new NavLinkControl(node.Name ?? nodeId, FluentIcons.Settings(), configHref)
         );
 
-        // Code section
+        // Code section - entries navigate to each Code node's own address
         var codeGroup = new NavGroupControl("Code")
             .WithIcon(FluentIcons.Code())
             .WithSkin(s => s.WithExpanded(true));
 
-        if (codeFiles != null && codeFiles.Count > 0)
+        if (codeNodes != null && codeNodes.Count > 0)
         {
-            foreach (var file in codeFiles)
+            foreach (var codeNode in codeNodes)
             {
-                var fileId = file.Id;
+                var codeConfig = codeNode.Content as CodeConfiguration;
+                var codeHref = new LayoutAreaReference(CodeLayoutAreas.OverviewArea).ToHref(codeNode.Path);
                 codeGroup = codeGroup.WithView(
-                    new NavLinkControl(file.DisplayName ?? file.Id, CustomIcons.CSharp(), null)
-                        .WithClickAction(actx => host.UpdateData(SelectionDataId, fileId))
+                    new NavLinkControl(codeNode.Name ?? codeConfig?.DisplayName ?? codeNode.Id, CustomIcons.CSharp(), codeHref)
                 );
             }
         }
@@ -392,48 +316,19 @@ public static class NodeTypeLayoutAreas
     }
 
     /// <summary>
-    /// Builds the main content pane based on selection.
-    /// Shows either configuration or a code file.
-    /// </summary>
-    private static UiControl BuildMainPane(
-        LayoutAreaHost _,
-        object hubAddress,
-        MeshNode node,
-        IReadOnlyCollection<CodeConfiguration>? codeFiles,
-        string? selection)
-    {
-        var stack = Controls.Stack
-            .WithWidth("100%")
-            .WithStyle("padding: 24px; height: 100%; overflow: auto;");
-
-        // Show configuration
-        if (selection == "configuration")
-        {
-            return BuildConfigurationPane(stack, hubAddress, node);
-        }
-
-        // Show selected code file or first one
-        var codeFile = codeFiles?.FirstOrDefault(f => f.Id == selection)
-            ?? codeFiles?.FirstOrDefault();
-
-        if (codeFile == null)
-        {
-            return stack.WithView(Controls.Body("No code files available.").WithStyle("color: var(--neutral-foreground-hint);"));
-        }
-
-        return BuildCodeFilePane(stack, hubAddress, codeFile);
-    }
-
-    /// <summary>
     /// Builds the read-only view of NodeTypeDefinition in the main pane.
     /// Shows all properties with Configuration as one of them.
     /// </summary>
-    private static UiControl BuildConfigurationPane(StackControl stack, object hubAddress, MeshNode node)
+    private static UiControl BuildConfigurationPane(object hubAddress, MeshNode node)
     {
         var definition = node.Content as NodeTypeDefinition;
         var editHref = new LayoutAreaReference(HubConfigEditArea).ToHref(hubAddress);
         // ID comes from hub address, not from content
         var nodeId = hubAddress is Address addr ? addr.Segments.LastOrDefault() : (hubAddress.ToString() ?? "Unknown").Split('/').LastOrDefault() ?? "Unknown";
+
+        var stack = Controls.Stack
+            .WithWidth("100%")
+            .WithStyle("padding: 24px; height: 100%; overflow: auto;");
 
         // Header with edit button
         var headerRow = Controls.Stack
@@ -481,170 +376,6 @@ public static class NodeTypeLayoutAreas
             stack = stack.WithView(Controls.Body("Lambda expression for configuring the message hub:").WithStyle("color: var(--neutral-foreground-hint); margin-bottom: 8px;"));
             stack = stack.WithView(Controls.Markdown($"```csharp\n{definition.Configuration}\n```").WithStyle("width: 100%; max-height: 400px; overflow: auto;"));
         }
-
-        return stack;
-    }
-
-    /// <summary>
-    /// Builds a code file view in the main pane.
-    /// </summary>
-    private static UiControl BuildCodeFilePane(StackControl stack, object hubAddress, CodeConfiguration codeFile)
-    {
-        var editHref = new LayoutAreaReference(CodeEditArea).ToHref(hubAddress);
-
-        var headerRow = Controls.Stack
-            .WithOrientation(Orientation.Horizontal)
-            .WithStyle("justify-content: space-between; align-items: center; margin-bottom: 16px;")
-            .WithView(Controls.H2(codeFile.DisplayName ?? codeFile.Id));
-
-        if (!string.IsNullOrEmpty(codeFile.Code))
-        {
-            headerRow = headerRow.WithView(
-                Controls.Button("")
-                    .WithIconStart(FluentIcons.Edit())
-                    .WithNavigateToHref(editHref)
-            );
-        }
-
-        stack = stack.WithView(headerRow);
-
-        if (!string.IsNullOrEmpty(codeFile.Code))
-        {
-            stack = stack.WithView(Controls.Markdown($"```{codeFile.Language ?? "csharp"}\n{codeFile.Code}\n```").WithStyle("width: 100%; flex: 1; min-height: 0; overflow: auto;"));
-        }
-        else
-        {
-            stack = stack.WithView(Controls.Body("No code defined.").WithStyle("color: var(--neutral-foreground-hint);"));
-        }
-
-        return stack;
-    }
-
-    /// <summary>
-    /// Renders the Monaco editor for editing code files.
-    /// Returns static structure with data-bound editor.
-    /// </summary>
-    [Browsable(false)]
-    public static UiControl CodeEdit(LayoutAreaHost host, RenderingContext ctx)
-    {
-        // Subscribe to data streams
-        host.SubscribeToDataStream(CodeFileDataId, host.Workspace.GetSingle<CodeConfiguration>());
-        host.SubscribeToDataStream(DefinitionDataId, GetNodeStream(host));
-
-        // Return structure with nested observable view for editor
-        return Controls.Stack
-            .WithWidth("100%")
-            .WithView(
-                (h, c) => h.GetDataStream<CodeConfiguration>(CodeFileDataId)
-                    .Select(codeFile => BuildCodeEditContent(host, codeFile, "")),
-                "Editor"
-            );
-    }
-
-    private static UiControl BuildCodeEditContent(
-        LayoutAreaHost host,
-        CodeConfiguration? codeFile,
-        string dependencyCode)
-    {
-        var hubAddress = host.Hub.Address;
-        var stack = Controls.Stack.WithWidth("100%").WithStyle("padding: 24px;");
-        var codeDataId = Guid.NewGuid().AsString();
-        var displayNameDataId = Guid.NewGuid().AsString();
-
-        // Get initial code and language
-        string initialCode = codeFile?.Code ?? "";
-        string language = codeFile?.Language ?? "csharp";
-        string displayName = codeFile?.DisplayName ?? "";
-
-        host.UpdateData(codeDataId, initialCode);
-        host.UpdateData(displayNameDataId, displayName);
-
-        // DisplayName editor at top
-        var displayNameRow = Controls.Stack
-            .WithOrientation(Orientation.Horizontal)
-            .WithStyle("gap: 12px; align-items: center; margin-bottom: 16px;")
-            .WithView(Controls.Label("Display Name:").WithStyle("font-weight: 500;"))
-            .WithView(new TextFieldControl(new JsonPointerReference(""))
-                .WithPlaceholder("Enter display name...")
-                .WithStyle("flex: 1; max-width: 400px;")
-                .WithImmediate(true) with
-            { DataContext = LayoutAreaReference.GetDataPointer(displayNameDataId) });
-
-        stack = stack.WithView(displayNameRow);
-
-        // Monaco editor bound to the data stream with autocomplete support
-        var editor = new CodeEditorControl()
-            .WithLanguage(language)
-            .WithHeight("500px")
-            .WithLineNumbers(true)
-            .WithMinimap(false)
-            .WithWordWrap(true);
-
-        if (!string.IsNullOrEmpty(dependencyCode))
-        {
-            editor = editor.WithExtraTypeDefinitions(dependencyCode);
-        }
-
-        editor = editor with
-        {
-            DataContext = LayoutAreaReference.GetDataPointer(codeDataId),
-            Value = new JsonPointerReference("")
-        };
-
-        stack = stack.WithView(editor);
-
-        // Button row
-        var buttonRow = Controls.Stack
-            .WithOrientation(Orientation.Horizontal)
-            .WithStyle("gap: 8px; margin-top: 16px;");
-
-        // Save button - update workspace stream which will sync to persistence
-        buttonRow = buttonRow.WithView(Controls.Button("Save")
-            .WithAppearance(Appearance.Accent)
-            .WithIconStart(FluentIcons.Save())
-            .WithClickAction(async actx =>
-                {
-                    var currentCode = await host.Stream.GetDataStream<string>(codeDataId).FirstAsync();
-                    var currentDisplayName = await host.Stream.GetDataStream<string>(displayNameDataId).FirstAsync();
-
-                    // Update the CodeConfiguration
-                    var updatedCodeConfiguration = (codeFile ?? new CodeConfiguration()) with
-                    {
-                        Code = currentCode,
-                        Language = language,
-                        DisplayName = string.IsNullOrWhiteSpace(currentDisplayName) ? null : currentDisplayName
-                    };
-
-                    // Update via workspace - will sync to persistence
-                    using var cts = new CancellationTokenSource(10.Seconds());
-                    var response = await actx.Host.Hub.AwaitResponse<DataChangeResponse>(
-                        new DataChangeRequest { ChangedBy = actx.Host.Stream.ClientId }.WithUpdates(updatedCodeConfiguration),
-                        o => o.WithTarget(hubAddress),
-                        cts.Token);
-
-                    if (response.Message.Log.Status != ActivityStatus.Succeeded)
-                    {
-                        // Show error dialog
-                        var errorDialog = Controls.Dialog(
-                            Controls.Markdown($"**Error saving code:**\n\n{response.Message.Log}"),
-                            "Save Failed"
-                        ).WithSize("M");
-                        actx.Host.UpdateArea(DialogControl.DialogArea, errorDialog);
-                        return;
-                    }
-
-                    // Navigate back to view
-                    var viewHref = new LayoutAreaReference(CodeViewArea).ToHref(hubAddress);
-                    actx.Host.UpdateArea(actx.Area, new RedirectControl(viewHref));
-                }));
-
-        // Cancel button
-        var viewHref = new LayoutAreaReference(CodeViewArea).ToHref(hubAddress);
-        buttonRow = buttonRow.WithView(Controls.Button("Cancel")
-            .WithAppearance(Appearance.Neutral)
-            .WithNavigateToHref(viewHref));
-
-        stack = stack.WithView(buttonRow);
 
         return stack;
     }
@@ -702,11 +433,11 @@ public static class NodeTypeLayoutAreas
         }
 
         // Back button
-        var codeHref = new LayoutAreaReference(CodeViewArea).ToHref(hubAddress);
+        var overviewHref = new LayoutAreaReference(OverviewArea).ToHref(hubAddress);
         stack = stack.WithView(Controls.Button("Back")
             .WithAppearance(Appearance.Neutral)
             .WithStyle("margin-top: 24px;")
-            .WithNavigateToHref(codeHref));
+            .WithNavigateToHref(overviewHref));
 
         return stack;
     }
@@ -932,13 +663,13 @@ public static class NodeTypeLayoutAreas
                     return;
                 }
 
-                // Navigate back to view
-                var viewHref = new LayoutAreaReference(CodeViewArea).ToHref(hubAddress);
+                // Navigate back to overview
+                var viewHref = new LayoutAreaReference(OverviewArea).ToHref(hubAddress);
                 actx.Host.UpdateArea(actx.Area, new RedirectControl(viewHref));
             }));
 
         // Cancel button
-        var viewHref = new LayoutAreaReference(CodeViewArea).ToHref(hubAddress);
+        var viewHref = new LayoutAreaReference(OverviewArea).ToHref(hubAddress);
         buttonRow = buttonRow.WithView(Controls.Button("Cancel")
             .WithAppearance(Appearance.Neutral)
             .WithNavigateToHref(viewHref));
@@ -961,7 +692,4 @@ public static class NodeTypeLayoutAreas
         => Controls.Stack
             .WithStyle("padding: 24px; display: flex; align-items: center; justify-content: center;")
             .WithView(Controls.Progress(message, 0));
-
-    private static UiControl RenderError(string message)
-        => new MarkdownControl($"> [!CAUTION]\n> {message}\n");
 }

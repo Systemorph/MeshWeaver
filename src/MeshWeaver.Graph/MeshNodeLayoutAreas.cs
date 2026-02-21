@@ -462,7 +462,7 @@ public static class MeshNodeLayoutAreas
         var hubPath = host.Hub.Address.ToString();
 
         return Controls.MeshSearch
-            .WithHiddenQuery($"path:{hubPath} scope:children -nodeType:NodeType -nodeType:Comment -nodeType:Thread")
+            .WithHiddenQuery($"path:{hubPath} scope:children -nodeType:NodeType -nodeType:Comment -nodeType:Thread -nodeType:Code")
             .WithShowSearchBox(false)
             .WithRenderMode(MeshSearchRenderMode.Grouped)
             // No explicit grouping - defaults to NodeType which gives meaningful labels

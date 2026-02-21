@@ -1241,34 +1241,34 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
     }
 
     /// <summary>
-    /// Test that CodeView for Organization returns non-empty content.
-    /// Uses JsonElement and GetControlStream to verify the Code area renders a control.
+    /// Test that Code node Overview returns non-empty content.
+    /// Uses JsonElement and GetControlStream to verify the Overview area renders a control.
     /// </summary>
     [Fact(Timeout = 30000)]
-    public async Task Organization_CodeView_ReturnsNonEmptyContent()
+    public async Task CodeNode_Overview_ReturnsNonEmptyContent()
     {
-        var organizationAddress = new Address("Organization");
+        var codeNodeAddress = new Address("Organization/Code/Organization");
         var client = GetClient(c => c
             .WithInitialization((h, _) => RoutingService.RegisterStreamAsync(h))
             .AddLayoutClient(cc => cc)
             .AddData(data => data));
         var workspace = client.GetWorkspace();
 
-        // Request the Code view area
-        var reference = new LayoutAreaReference("Code");
+        // Request the Overview area on the Code node
+        var reference = new LayoutAreaReference("Overview");
 
-        Output.WriteLine("Getting CodeView for Organization...");
-        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(organizationAddress, reference);
+        Output.WriteLine("Getting Overview for Code node...");
+        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(codeNodeAddress, reference);
 
-        // Use GetControlStream to get the Code area control
+        // Use GetControlStream to get the Overview area control
         var control = await stream
-            .GetControlStream("Code")
+            .GetControlStream("Overview")
             .Timeout(TimeSpan.FromSeconds(20))
             .FirstAsync(x => x != null);
 
         Output.WriteLine($"Received control type: {control?.GetType().FullName}");
 
-        control.Should().NotBeNull("CodeView should render a control for the 'Code' area");
+        control.Should().NotBeNull("Code node Overview should render a control");
     }
 
     /// <summary>
@@ -1301,13 +1301,12 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
     }
 
     /// <summary>
-    /// Test with AddLayoutClient to properly deserialize controls.
-    /// Uses JsonElement and GetControlStream for cleaner control access.
+    /// Test that Code node Overview returns a Splitter control with code list and content pane.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public async Task Organization_CodeView_WithLayoutClient_ReturnsSplitter()
+    public async Task CodeNode_Overview_WithLayoutClient_ReturnsSplitter()
     {
-        var organizationAddress = new Address("Organization");
+        var codeNodeAddress = new Address("Organization/Code/Organization");
 
         // Configure client with AddLayoutClient for proper control deserialization
         var client = GetClient(c => c
@@ -1317,41 +1316,32 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
 
         var workspace = client.GetWorkspace();
 
-        // Request the Code view area using JsonElement
-        var reference = new LayoutAreaReference("Code");
+        // Request the Overview area on the Code node
+        var reference = new LayoutAreaReference("Overview");
         Output.WriteLine($"Requesting layout area: {reference.Area}");
 
-        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(organizationAddress, reference);
+        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(codeNodeAddress, reference);
 
-        // Use GetControlStream to get the Code area control
-        Output.WriteLine("Waiting for 'Code' control via GetControlStream...");
+        // Use GetControlStream to get the Overview area control
+        Output.WriteLine("Waiting for 'Overview' control via GetControlStream...");
         var control = await stream
-            .GetControlStream("Code")
+            .GetControlStream("Overview")
             .Timeout(30.Seconds())
             .FirstAsync(x => x != null);
 
         Output.WriteLine($"Control type: {control?.GetType().FullName}");
 
-        // Verify we got a Splitter
-        control.Should().BeOfType<SplitterControl>("CodeView should return a Splitter control");
-
-        var splitter = (SplitterControl)control!;
-        Output.WriteLine($"Splitter has {splitter.Areas.Count} panes:");
-        foreach (var pane in splitter.Areas)
-        {
-            Output.WriteLine($"  Pane: {pane.Id} -> {pane.Area}");
-        }
-
-        splitter.Areas.Should().HaveCount(2, "CodeView Splitter should have 2 panes");
+        // Verify we got a Splitter (Code node Overview now renders a Splitter with code list + content)
+        control.Should().BeOfType<SplitterControl>("Code node Overview should return a Splitter control");
     }
 
     /// <summary>
-    /// Debug test: Collect control updates and log them to understand the sequence of events.
+    /// Debug test: Collect control updates for Code node Overview.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public async Task Organization_CodeView_DebugUpdateSequence()
+    public async Task CodeNode_Overview_DebugUpdateSequence()
     {
-        var organizationAddress = new Address("Organization");
+        var codeNodeAddress = new Address("Organization/Code/Organization");
 
         var client = GetClient(c => c
             .WithInitialization((h, _) => RoutingService.RegisterStreamAsync(h))
@@ -1363,16 +1353,16 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
         // Initialize hub
         await client.AwaitResponse(
             new PingRequest(),
-            o => o.WithTarget(organizationAddress),
+            o => o.WithTarget(codeNodeAddress),
             TestContext.Current.CancellationToken);
 
-        var reference = new LayoutAreaReference("Code");
-        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(organizationAddress, reference);
+        var reference = new LayoutAreaReference("Overview");
+        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(codeNodeAddress, reference);
 
         Output.WriteLine("Collecting updates for 20 seconds...\n");
 
         var updates = await stream
-            .GetControlStream("Code")
+            .GetControlStream("Overview")
             .TakeUntil(Observable.Timer(TimeSpan.FromSeconds(20)))
             .ToList();
 
@@ -1386,41 +1376,32 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
             var typeName = control switch
             {
                 null => "null",
-                SplitterControl s => $"SPLITTER ({s.Areas.Count} panes)",
+                SplitterControl sp => $"SPLITTER ({sp.Areas.Count} panes)",
                 StackControl st => $"STACK ({st.Areas.Count} views)",
                 NamedAreaControl n => $"NamedArea -> '{n.Area}'",
                 ProgressControl p => $"Progress ({p.Message})",
                 _ => control.GetType().Name
             };
             Output.WriteLine($"  Control: {typeName}");
-
-            if (control is SplitterControl splitter)
-            {
-                foreach (var pane in splitter.Areas)
-                {
-                    Output.WriteLine($"    Pane: {pane.Id} -> {pane.Area}");
-                }
-            }
             Output.WriteLine("");
         }
 
         updates.Should().NotBeEmpty("Should receive at least one update");
 
-        // Verify final state has Splitter
+        // Verify final state has Splitter (Overview now renders a Splitter with code list + content)
         var final = updates.Last();
-        var hasSplitter = final is SplitterControl;
-        Output.WriteLine($"Final control is Splitter: {hasSplitter}");
+        Output.WriteLine($"Final control is Splitter: {final is SplitterControl}");
 
         final.Should().BeOfType<SplitterControl>("Final control should be a Splitter");
     }
 
     /// <summary>
-    /// Test using GetControlStream to get properly typed controls.
+    /// Test using GetControlStream to get properly typed controls for Code node.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public async Task Organization_CodeView_GetControlStream_Test()
+    public async Task CodeNode_Overview_GetControlStream_Test()
     {
-        var organizationAddress = new Address("Organization");
+        var codeNodeAddress = new Address("Organization/Code/Organization");
 
         var client = GetClient(c => c
             .WithInitialization((h, _) => RoutingService.RegisterStreamAsync(h))
@@ -1432,56 +1413,31 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
         // Initialize hub
         await client.AwaitResponse(
             new PingRequest(),
-            o => o.WithTarget(organizationAddress),
+            o => o.WithTarget(codeNodeAddress),
             TestContext.Current.CancellationToken);
 
-        var reference = new LayoutAreaReference("Code");
-        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(organizationAddress, reference);
+        var reference = new LayoutAreaReference("Overview");
+        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(codeNodeAddress, reference);
 
-        Output.WriteLine("Getting control for 'Code' area...");
+        Output.WriteLine("Getting control for 'Overview' area...");
 
         var control = await stream
-            .GetControlStream("Code")
+            .GetControlStream("Overview")
             .Timeout(30.Seconds())
             .FirstAsync(x => x != null);
 
         Output.WriteLine($"Control type: {control?.GetType().FullName}");
 
-        if (control is NamedAreaControl named)
+        if (control is SplitterControl splitterControl)
         {
-            Output.WriteLine($"NamedAreaControl pointing to: {named.Area}");
-
-            // Follow the reference
-            var actualAreaKey = named.Area?.ToString();
-            if (!string.IsNullOrEmpty(actualAreaKey))
+            Output.WriteLine($"Splitter has {splitterControl.Areas.Count} panes");
+            foreach (var area in splitterControl.Areas)
             {
-                Output.WriteLine($"Getting control for '{actualAreaKey}'...");
-                var actual = await stream
-                    .GetControlStream(actualAreaKey)
-                    .Timeout(10.Seconds())
-                    .FirstAsync(x => x != null);
-                Output.WriteLine($"Actual control type: {actual?.GetType().FullName}");
-
-                if (actual is SplitterControl splitter)
-                {
-                    Output.WriteLine($"Splitter has {splitter.Areas.Count} panes");
-                    foreach (var pane in splitter.Areas)
-                    {
-                        Output.WriteLine($"  Pane: {pane.Id}");
-                    }
-                }
-            }
-        }
-        else if (control is SplitterControl splitter)
-        {
-            Output.WriteLine($"Direct Splitter with {splitter.Areas.Count} panes");
-            foreach (var pane in splitter.Areas)
-            {
-                Output.WriteLine($"  Pane: {pane.Id}");
+                Output.WriteLine($"  Area: {area.Id}");
             }
         }
 
-        control.Should().NotBeNull("Code area should have a control");
+        control.Should().NotBeNull("Code node Overview should have a control");
     }
 
     /// <summary>

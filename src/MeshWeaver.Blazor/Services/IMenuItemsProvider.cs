@@ -1,6 +1,7 @@
 using System.Reactive.Subjects;
+using MeshWeaver.Mesh;
 
-namespace MeshWeaver.Mesh.Services;
+namespace MeshWeaver.Blazor.Services;
 
 /// <summary>
 /// Provides an observable stream of menu items for the current navigation context.

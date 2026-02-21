@@ -6,6 +6,7 @@ using MeshWeaver.ContentCollections;
 using MeshWeaver.Data;
 using MeshWeaver.Layout.Client;
 using MeshWeaver.Mesh;
+using MeshWeaver.Blazor.Services;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.AspNetCore.Builder;
