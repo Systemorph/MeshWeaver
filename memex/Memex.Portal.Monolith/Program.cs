@@ -18,6 +18,7 @@ builder.UseMeshWeaver(
     config => config
         .ConfigureMemexPortal()
         .ConfigureMemexMesh(builder.Configuration, builder.Environment.IsDevelopment())
+        .InstallAssemblies(typeof(MeshWeaver.Northwind.Application.NorthwindApplicationAttribute).Assembly.Location)
         .UseMonolithMesh()
 );
 

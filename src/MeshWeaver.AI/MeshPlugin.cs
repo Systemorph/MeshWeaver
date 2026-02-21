@@ -21,8 +21,6 @@ public class MeshPlugin(IMessageHub hub, IAgentChat chat)
     private readonly IPersistenceService? persistence = hub.ServiceProvider.GetService<IPersistenceService>();
     private readonly IMeshQuery? meshQuery = hub.ServiceProvider.GetService<IMeshQuery>();
 
-    private const string NodesArea = "_Nodes";
-
     /// <summary>
     /// Resolves @ prefix to full path. Example: @graph/org1 -> graph/org1
     /// </summary>
@@ -152,7 +150,7 @@ public class MeshPlugin(IMessageHub hub, IAgentChat chat)
 
         var resolvedPath = ResolvePath(path);
         var address = new Address(resolvedPath);
-        var layoutControl = Controls.LayoutArea(address, NodesArea);
+        var layoutControl = Controls.LayoutArea(address, string.Empty);
 
         chat.DisplayLayoutArea(layoutControl);
         return $"Navigating to: {resolvedPath}";

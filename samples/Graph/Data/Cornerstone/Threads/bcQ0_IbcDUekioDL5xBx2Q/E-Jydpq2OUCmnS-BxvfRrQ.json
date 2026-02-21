@@ -1,0 +1,18 @@
+{
+  "$type": "MeshNode",
+  "id": "Cornerstone/Threads/bcQ0_IbcDUekioDL5xBx2Q/E-Jydpq2OUCmnS-BxvfRrQ",
+  "path": "Cornerstone/Threads/bcQ0_IbcDUekioDL5xBx2Q/E-Jydpq2OUCmnS-BxvfRrQ",
+  "nodeType": "ThreadMessage",
+  "icon": "/static/NodeTypeIcons/message.svg",
+  "lastModified": "2026-02-19T19:58:40.293359+00:00",
+  "state": "Active",
+  "content": {
+    "$type": "ThreadMessage",
+    "id": "E-Jydpq2OUCmnS-BxvfRrQ",
+    "role": "Navigator",
+    "authorName": "Navigator",
+    "text": "Thanks \u2014 I\u2019ve asked the Executor to re-check and create the pricing nodes specifically under @Cornerstone so they\u2019re visible at the URL pattern you tried. They\u2019ll create company references if needed and then display the created nodes for you. I\u2019ll confirm when they\u2019ve shown the pages.",
+    "timestamp": "2026-02-19T19:58:40.293076Z",
+    "type": "AgentResponse"
+  }
+}

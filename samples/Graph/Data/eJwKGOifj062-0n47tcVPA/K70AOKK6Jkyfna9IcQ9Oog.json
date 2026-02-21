@@ -1,0 +1,17 @@
+{
+  "$type": "MeshNode",
+  "id": "eJwKGOifj062-0n47tcVPA/K70AOKK6Jkyfna9IcQ9Oog",
+  "path": "eJwKGOifj062-0n47tcVPA/K70AOKK6Jkyfna9IcQ9Oog",
+  "nodeType": "ThreadMessage",
+  "icon": "/static/NodeTypeIcons/message.svg",
+  "lastModified": "2026-02-20T13:28:05.098339+00:00",
+  "state": "Active",
+  "content": {
+    "$type": "ThreadMessage",
+    "id": "K70AOKK6Jkyfna9IcQ9Oog",
+    "role": "user",
+    "text": "Create a new pricing for Nestle with inception January 1, 2027",
+    "timestamp": "2026-02-20T13:28:05.098083Z",
+    "type": "ExecutedInput"
+  }
+}

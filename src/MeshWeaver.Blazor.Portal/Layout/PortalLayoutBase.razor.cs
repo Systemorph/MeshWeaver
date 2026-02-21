@@ -1,11 +1,14 @@
 ﻿using MeshWeaver.AI;
 using MeshWeaver.Blazor.Chat;
+using MeshWeaver.Blazor.Portal.Components;
 using MeshWeaver.Blazor.Portal.Resize;
+using MeshWeaver.ContentCollections;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Blazor.Services;
 using MeshWeaver.Messaging;
 using Microsoft.AspNetCore.Components;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.FluentUI.AspNetCore.Components;
 using Microsoft.JSInterop;
 
@@ -55,6 +58,9 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
     private IReadOnlyList<NodeMenuItemDefinition> _menuItems = [];
     private IDisposable? _menuSubscription;
 
+
+    // Editable content collections
+    protected IReadOnlyList<ContentCollectionConfig> EditableCollections { get; private set; } = [];
     private ChatSidePanel? chatPanel;
     private IJSObjectReference? jsModule;
     private DotNetObjectReference<PortalLayoutBase>? dotNetRef;

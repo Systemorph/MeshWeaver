@@ -25,14 +25,17 @@ public class DataPlugin(
     [Description($"Get data by type name from a specific address. Valid types can be found using the {nameof(GetDataTypes)} function.")]
     public async Task<string> GetData(
         [Description($"Type for which the data should be retrieved. A list of valid data types can be found with the {nameof(GetDataTypes)} function")] string type,
-        [Description("Optional entity ID. If specified, retrieves a specific entity; otherwise retrieves the entire collection")] string? entityId = null)
+        [Description("Optional entity ID. If specified, retrieves a specific entity; otherwise retrieves the entire collection")] string? entityId = null,
+        [Description("Optional address to query (e.g., 'Northwind/Analytics'). If not specified, uses current context.")] string? address = null)
     {
-        logger.LogInformation("GetData called with type={Type}, entityId={EntityId}", type, entityId);
+        logger.LogInformation("GetData called with type={Type}, entityId={EntityId}, address={Address}", type, entityId, address);
 
-        var address = GetAddress(type);
+        var targetAddress = !string.IsNullOrEmpty(address)
+            ? new Address(address)
+            : GetAddress(type);
 
-        if (address == null)
-            return $"No address defined for type: {type}";
+        if (targetAddress == null)
+            return $"No address defined for type: {type}. Please provide an address or navigate to a context.";
 
         WorkspaceReference reference = !string.IsNullOrWhiteSpace(entityId)
             ? new EntityReference(type, entityId)
@@ -41,7 +44,7 @@ public class DataPlugin(
         try
         {
             using var cts = new CancellationTokenSource(10.Seconds());
-            var response = await hub.AwaitResponse(new GetDataRequest(reference), o => o.WithTarget(address), cts.Token);
+            var response = await hub.AwaitResponse(new GetDataRequest(reference), o => o.WithTarget(targetAddress), cts.Token);
             return JsonSerializer.Serialize(response.Message.Data, hub.JsonSerializerOptions);
         }
         catch (OperationCanceledException)
@@ -51,22 +54,27 @@ public class DataPlugin(
     }
 
     [Description($"List all data types and their descriptions available in the {nameof(GetData)} function as a json structure. The name property should be used in the GetData tool.")]
-    public async Task<string> GetDataTypes()
+    public async Task<string> GetDataTypes(
+        [Description("Optional address to query (e.g., 'Northwind/Analytics'). If not specified, uses current context.")] string? address = null)
     {
-        logger.LogInformation("GetDataTypes called");
+        logger.LogInformation("GetDataTypes called with address={Address}", address);
 
         if (typeDefinitions is not null)
             // Return types from constructor
             return JsonSerializer.Serialize(typeDefinitions.Values, hub.JsonSerializerOptions);
 
-        if (chat.Context?.Address is null)
-            return "Please navigate to a context for which you want to know the data types.";
+        var targetAddress = !string.IsNullOrEmpty(address)
+            ? new Address(address)
+            : chat.Context?.Address;
+
+        if (targetAddress is null)
+            return "Please provide an address or navigate to a context for which you want to know the data types.";
 
         try
         {
             using var cts = new CancellationTokenSource(10.Seconds());
             // Return types that match the specified address
-            var ret = await hub.AwaitResponse(new GetDomainTypesRequest(), o => o.WithTarget(chat.Context.Address), cts.Token);
+            var ret = await hub.AwaitResponse(new GetDomainTypesRequest(), o => o.WithTarget(targetAddress), cts.Token);
             return JsonSerializer.Serialize(ret.Message.Types, hub.JsonSerializerOptions);
         }
         catch (OperationCanceledException)

@@ -1,0 +1,15 @@
+{
+  "$type": "MeshNode",
+  "id": "Cornerstone/Microsoft/2026/Submission/Threads/tOO3O__dWE6CUAlJPtYlFQ",
+  "path": "Cornerstone/Microsoft/2026/Submission/Threads/tOO3O__dWE6CUAlJPtYlFQ",
+  "name": "what can you tell me about the microsoft submissio...",
+  "nodeType": "Thread",
+  "icon": "/static/NodeTypeIcons/chat.svg",
+  "lastModified": "2026-02-19T09:06:03.775611+00:00",
+  "state": "Active",
+  "content": {
+    "$type": "Thread",
+    "parentPath": "Cornerstone/Microsoft/2026/Submission",
+    "primaryNodePath": "Cornerstone/Microsoft/2026/Submission"
+  }
+}

@@ -2,7 +2,7 @@
 Name: Organizing Buttons in a Toolbar
 Category: Documentation
 Description: Group action buttons horizontally or vertically
-Icon: /static/storage/content/MeshWeaver/Documentation/UserInterface/ContainerControl/Toolbar/icon.svg
+Icon: /static/storage/content/MeshWeaver/Documentation/GUI/ContainerControl/Toolbar/icon.svg
 ---
 
 # Organizing Buttons in a Toolbar

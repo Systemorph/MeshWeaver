@@ -59,28 +59,19 @@ public class AgentChatClient : IAgentChat
 
     private async Task<AgentSession> GetOrCreateThreadAsync(ChatClientAgent agent)
     {
-        logger.LogDebug("[AgentChatClient] GetOrCreateThreadAsync called for agent: {AgentName}", agent.Name);
-
         // Use shared thread across all agents in this conversation
         if (sharedThread != null)
-        {
-            logger.LogDebug("[AgentChatClient] Using existing shared thread: {ThreadId}", currentThreadId);
             return sharedThread;
-        }
 
         // Try to load persisted thread
-        logger.LogDebug("[AgentChatClient] Loading persisted thread...");
         var serializedThread = await persistenceService.LoadThreadAsync(currentThreadId, "shared");
 
         if (serializedThread.HasValue)
         {
-            logger.LogDebug("[AgentChatClient] Found persisted thread, deserializing...");
             sharedThread = await agent.DeserializeSessionAsync(serializedThread.Value, hub.JsonSerializerOptions);
-            logger.LogDebug("[AgentChatClient] Thread deserialized successfully");
             return sharedThread;
         }
 
-        logger.LogDebug("[AgentChatClient] Creating new shared thread: {ThreadId}", currentThreadId);
         sharedThread = await agent.GetNewSessionAsync();
         return sharedThread;
     }
@@ -94,9 +85,25 @@ public class AgentChatClient : IAgentChat
         logger.LogInformation("Saved thread: {ThreadId}", id);
     }
 
-    private async Task<string> BuildMessageWithContextAsync(IReadOnlyCollection<ChatMessage> messages)
+    private async Task<string> BuildMessageWithContextAsync(IReadOnlyCollection<ChatMessage> messages, string? agentName = null)
     {
         var messageText = new StringBuilder();
+
+        // Add selected agent's instructions as persona identity
+        if (!string.IsNullOrEmpty(agentName))
+        {
+            var agentInfo = loadedAgents.FirstOrDefault(a => a.Name == agentName);
+            var agentInstructions = agentInfo?.AgentConfiguration?.Instructions;
+            if (!string.IsNullOrEmpty(agentInstructions))
+            {
+                messageText.AppendLine("# Agent Identity and Instructions");
+                messageText.AppendLine();
+                messageText.AppendLine("You are acting as the following agent. Follow these instructions strictly:");
+                messageText.AppendLine();
+                messageText.AppendLine(agentInstructions);
+                messageText.AppendLine();
+            }
+        }
 
         // Add context if available
         if (Context != null)
@@ -230,8 +237,8 @@ public class AgentChatClient : IAgentChat
         // Get or create thread for this agent
         var thread = await GetOrCreateThreadAsync(agent);
 
-        // Build the user message with context
-        var userMessage = await BuildMessageWithContextAsync(messages);
+        // Build the user message with context and agent instructions
+        var userMessage = await BuildMessageWithContextAsync(messages, currentAgentName);
 
         // Get response from the agent with thread
         var response = await agent.RunAsync(userMessage, thread, cancellationToken: cancellationToken);
@@ -276,39 +283,25 @@ public class AgentChatClient : IAgentChat
         IReadOnlyCollection<ChatMessage> messages,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
-        logger.LogDebug("[AgentChatClient] GetStreamingResponseAsync entered, selecting agent...");
-
         // Select which agent to use (async to avoid deadlock in Blazor context)
         var agent = await SelectAgentAsync(messages.LastOrDefault());
         if (agent == null)
         {
-            logger.LogDebug("[AgentChatClient] No agent selected!");
             yield return new ChatResponseUpdate(ChatRole.Assistant, "No suitable agent found to handle the request.");
             yield break;
         }
 
-        logger.LogDebug("[AgentChatClient] Selected agent: {AgentName}", agent.Name);
         currentAgentName = agent.Name;
 
         // Get or create thread for this agent
-        logger.LogDebug("[AgentChatClient] Getting or creating thread...");
         var thread = await GetOrCreateThreadAsync(agent);
-        logger.LogDebug("[AgentChatClient] Got thread: {ThreadId}", currentThreadId);
 
-        // Build the user message with context
-        var userMessage = await BuildMessageWithContextAsync(messages);
-        logger.LogDebug("[AgentChatClient] Built message with context, length: {Length}", userMessage.Length);
+        // Build the user message with context and agent instructions
+        var userMessage = await BuildMessageWithContextAsync(messages, currentAgentName);
 
         // Get streaming response from the agent with thread
-        logger.LogDebug("[AgentChatClient] Starting RunStreamingAsync on agent...");
-        var streamUpdateCount = 0;
         await foreach (var update in agent.RunStreamingAsync(userMessage, thread, cancellationToken: cancellationToken))
         {
-            streamUpdateCount++;
-            if (streamUpdateCount == 1)
-            {
-                logger.LogDebug("[AgentChatClient] Got FIRST update from RunStreamingAsync!");
-            }
             // Forward the complete update with all contents (including FunctionCallContent)
             if (update.Contents.Count > 0)
             {
@@ -365,8 +358,8 @@ public class AgentChatClient : IAgentChat
                                     logger.LogInformation("Created isolated thread {ThreadId} for delegated agent {AgentName}",
                                         isolatedThreadId, targetAgentName);
 
-                                    // Build message with context for the target agent
-                                    var targetMessage = await BuildMessageWithContextAsync([new ChatMessage(ChatRole.User, delegationMessage)]);
+                                    // Build message with context and agent instructions for the target agent
+                                    var targetMessage = await BuildMessageWithContextAsync([new ChatMessage(ChatRole.User, delegationMessage)], targetAgentName);
 
                                     // Collect the delegated agent's response for potential return to parent
                                     var delegatedResponseBuilder = new StringBuilder();
@@ -406,8 +399,6 @@ public class AgentChatClient : IAgentChat
 
                                     // Save the isolated thread for potential future reference
                                     await SaveThreadAsync(targetAgent, targetThread, isolatedThreadId);
-                                    logger.LogDebug("Saved isolated thread {ThreadId} for delegated agent {AgentName}",
-                                        isolatedThreadId, targetAgentName);
 
                                     // NOTE: After target agent completes, the original agent's stream will continue
                                     // and any remaining updates from the original agent will be yielded below
@@ -439,8 +430,6 @@ public class AgentChatClient : IAgentChat
             }
         }
 
-        logger.LogDebug("[AgentChatClient] RunStreamingAsync completed, total updates: {Count}", streamUpdateCount);
-
         // Save the updated thread
         await SaveThreadAsync(agent, thread);
 
@@ -461,10 +450,7 @@ public class AgentChatClient : IAgentChat
 
     private async Task<ChatClientAgent?> SelectAgentAsync(ChatMessage? lastMessage)
     {
-        logger.LogDebug("[AgentChatClient] SelectAgentAsync called. Context: {Context}",
-            Context != null ? $"Address={Context.Address}, LayoutArea={Context.LayoutArea?.Area}" : "null");
-
-        // 1. Check for explicit @agent/Name reference in message
+        // 1. Check for explicit @agent/Name reference in message (highest priority)
         if (lastMessage != null)
         {
             var text = ExtractTextFromMessage(lastMessage);
@@ -473,50 +459,41 @@ public class AgentChatClient : IAgentChat
             {
                 var agentName = agentMatch.Groups[1].Value;
                 if (agents.TryGetValue(agentName, out var agent))
-                {
-                    logger.LogDebug("Selected agent by @agent/ reference: {AgentName}", agentName);
                     return agent;
-                }
                 // Case-insensitive fallback
                 var found = agents.FirstOrDefault(kvp =>
                     kvp.Key.Equals(agentName, StringComparison.OrdinalIgnoreCase));
                 if (found.Value != null)
-                {
-                    logger.LogDebug("Selected agent by @agent/ reference (case-insensitive): {AgentName}", found.Key);
                     return found.Value;
-                }
             }
         }
 
-        // 2. Use ordered agents - first one is the best match for context
+        // 2. Use explicitly selected agent (from dropdown) if set
+        if (!string.IsNullOrEmpty(currentAgentName) && agents.TryGetValue(currentAgentName, out var selectedAgent))
+            return selectedAgent;
+
+        // 3. Use ordered agents - first one is the best match for context
         // GetOrderedAgentsAsync already handles: context pattern matching, NodeType namespace, path relevance
         var orderedAgents = await GetOrderedAgentsAsync();
         if (orderedAgents.Count > 0)
         {
             var bestAgent = orderedAgents[0];
             if (agents.TryGetValue(bestAgent.Name, out var agent))
-            {
-                logger.LogDebug("[AgentChatClient] Selected best agent from ordered list: {AgentName}", bestAgent.Name);
                 return agent;
-            }
-        }
-
-        // 3. Use current agent if we have one
-        if (!string.IsNullOrEmpty(currentAgentName) && agents.TryGetValue(currentAgentName, out var currentAgent))
-        {
-            logger.LogDebug("Using current agent: {AgentName}", currentAgentName);
-            return currentAgent;
         }
 
         // 4. Return first agent as fallback
-        var fallbackAgent = agents.Values.FirstOrDefault();
-        logger.LogDebug("Using fallback agent: {AgentName}", fallbackAgent?.Name ?? "null");
-        return fallbackAgent;
+        return agents.Values.FirstOrDefault();
     }
+    /// <inheritdoc />
+    public void SetSelectedAgent(string? agentName)
+    {
+        currentAgentName = agentName;
+    }
+
     public void SetContext(AgentContext? applicationContext)
     {
         Context = applicationContext;
-        logger.LogDebug("Context set to: {Context}", Context != null ? $"Address={Context.Address}, LayoutArea={Context.LayoutArea?.Area}" : "null");
     }
 
     /// <summary>
@@ -527,15 +504,11 @@ public class AgentChatClient : IAgentChat
     /// <param name="modelName">Optional model name for agent creation</param>
     public async Task InitializeAsync(string? contextPath, string? modelName = null)
     {
-        logger.LogDebug("[AgentChatClient] InitializeAsync called with contextPath: {ContextPath}, modelName: {ModelName}", contextPath, modelName);
-
         currentModelName = modelName;
 
         // Load and order agents from mesh
         loadedAgents = await LoadOrderedAgentsAsync(contextPath);
         lastLoadedContextPath = contextPath;
-
-        logger.LogDebug("[AgentChatClient] Loaded {Count} agents", loadedAgents.Count);
 
         // Create AIAgent instances
         await CreateAgentsAsync();
@@ -548,10 +521,7 @@ public class AgentChatClient : IAgentChat
     private async Task<List<AgentDisplayInfo>> LoadOrderedAgentsAsync(string? contextPath)
     {
         if (meshQuery == null)
-        {
-            logger.LogDebug("[AgentChatClient] IMeshQuery not available, returning empty list");
             return [];
-        }
 
         var agentsDict = new Dictionary<string, (AgentConfiguration Config, string Path)>();
 
@@ -566,14 +536,13 @@ public class AgentChatClient : IAgentChat
                     if (!string.IsNullOrEmpty(node.NodeType) && node.NodeType != "Agent" && node.NodeType != "Markdown")
                     {
                         nodeTypePath = node.NodeType;
-                        logger.LogDebug("[AgentChatClient] Found NodeType {NodeType} for {ContextPath}", nodeTypePath, contextPath);
                         break;
                     }
                 }
             }
             catch (Exception ex)
             {
-                logger.LogDebug(ex, "[AgentChatClient] Error getting NodeType for {ContextPath}", contextPath);
+                logger.LogWarning(ex, "Error getting NodeType for {ContextPath}", contextPath);
             }
         }
 
@@ -582,37 +551,57 @@ public class AgentChatClient : IAgentChat
         {
             var pathQuery = string.IsNullOrEmpty(contextPath)
                 ? "nodeType:Agent scope:children"  // Root level: get direct children agents
-                : $"path:{contextPath} nodeType:Agent scope:selfAndAncestors";
+                : $"path:{contextPath} nodeType:Agent scope:AncestorsAndSelf";
 
             await foreach (var node in meshQuery.QueryAsync<MeshNode>(pathQuery))
             {
                 if (node.Content is AgentConfiguration config && !agentsDict.ContainsKey(config.Id))
-                {
                     agentsDict[config.Id] = (config, node.Path ?? "");
-                }
             }
         }
         catch (Exception ex)
         {
-            logger.LogDebug(ex, "[AgentChatClient] Error querying path hierarchy {ContextPath}", contextPath ?? "root");
+            logger.LogWarning(ex, "Error querying path hierarchy for {ContextPath}", contextPath ?? "root");
         }
 
-        // 3. Query agents from NodeType hierarchy
-        if (!string.IsNullOrEmpty(nodeTypePath))
+        // 3. Query agents from root namespace subtree (to find sibling agents)
+        if (!string.IsNullOrEmpty(contextPath))
         {
             try
             {
-                await foreach (var node in meshQuery.QueryAsync<MeshNode>($"path:{nodeTypePath} nodeType:Agent scope:selfAndAncestors"))
+                // Extract root namespace (first segment of the path)
+                var rootNamespace = contextPath.Split('/').FirstOrDefault(s => !string.IsNullOrEmpty(s));
+                if (!string.IsNullOrEmpty(rootNamespace))
                 {
-                    if (node.Content is AgentConfiguration config && !agentsDict.ContainsKey(config.Id))
+                    var subtreeQuery = $"path:{rootNamespace} nodeType:Agent scope:Subtree";
+                    await foreach (var node in meshQuery.QueryAsync<MeshNode>(subtreeQuery))
                     {
-                        agentsDict[config.Id] = (config, node.Path ?? "");
+                        if (node.Content is AgentConfiguration config && !agentsDict.ContainsKey(config.Id))
+                            agentsDict[config.Id] = (config, node.Path ?? "");
                     }
                 }
             }
             catch (Exception ex)
             {
-                logger.LogDebug(ex, "[AgentChatClient] Error querying NodeType hierarchy {NodeType}", nodeTypePath);
+                logger.LogWarning(ex, "Error querying root namespace subtree for {ContextPath}", contextPath);
+            }
+        }
+
+        // 4. Query agents from NodeType hierarchy
+        if (!string.IsNullOrEmpty(nodeTypePath))
+        {
+            try
+            {
+                var nodeTypeQuery = $"path:{nodeTypePath} nodeType:Agent scope:AncestorsAndSelf";
+                await foreach (var node in meshQuery.QueryAsync<MeshNode>(nodeTypeQuery))
+                {
+                    if (node.Content is AgentConfiguration config && !agentsDict.ContainsKey(config.Id))
+                        agentsDict[config.Id] = (config, node.Path ?? "");
+                }
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex, "Error querying NodeType hierarchy for {NodeType}", nodeTypePath);
             }
         }
 
@@ -633,7 +622,10 @@ public class AgentChatClient : IAgentChat
         var contextPathNorm = contextPath?.TrimStart('/') ?? "";
         var nodeTypePathNorm = nodeTypePath?.TrimStart('/') ?? "";
 
-        return AgentOrderingHelper.OrderByRelevance(displayInfos, contextPathNorm, nodeTypePathNorm).ToList();
+        var result = AgentOrderingHelper.OrderByRelevance(displayInfos, contextPathNorm, nodeTypePathNorm).ToList();
+        logger.LogDebug("Loaded {Count} agents for context {ContextPath}: [{Agents}]",
+            result.Count, contextPath ?? "(none)", string.Join(", ", result.Select(a => a.Name)));
+        return result;
     }
 
     /// <summary>
@@ -648,10 +640,7 @@ public class AgentChatClient : IAgentChat
         }
 
         if (agentsInitialized)
-        {
-            logger.LogDebug("[AgentChatClient] Agents already initialized, skipping");
             return;
-        }
 
         // Select the appropriate factory based on the requested model
         var factory = GetFactoryForModel(currentModelName);
@@ -677,7 +666,6 @@ public class AgentChatClient : IAgentChat
                 agentConfig, this, createdAgents, configs, currentModelName);
             createdAgents[agentConfig.Id] = agent;
             agents[agentConfig.Id] = agent;
-            logger.LogDebug("[AgentChatClient] Created agent: {AgentId}", agentConfig.Id);
         }
 
         // Second pass: Update agents with cyclic dependencies
@@ -688,7 +676,6 @@ public class AgentChatClient : IAgentChat
                 agentConfig, this, createdAgents, configs, currentModelName);
             createdAgents[agentConfig.Id] = updatedAgent;
             agents[agentConfig.Id] = updatedAgent;
-            logger.LogDebug("[AgentChatClient] Updated cyclic agent: {AgentId}", agentConfig.Id);
         }
 
         agentsInitialized = true;
@@ -727,7 +714,7 @@ public class AgentChatClient : IAgentChat
     /// <summary>
     /// Orders agents for creation: non-delegating first, delegating second, default last.
     /// </summary>
-    private static IEnumerable<AgentConfiguration> OrderAgentsForCreation(IEnumerable<AgentConfiguration> configs)
+    internal static IEnumerable<AgentConfiguration> OrderAgentsForCreation(IEnumerable<AgentConfiguration> configs)
     {
         var agentList = configs.ToList();
 
@@ -745,7 +732,7 @@ public class AgentChatClient : IAgentChat
     /// <summary>
     /// Finds agents that have cyclic delegations.
     /// </summary>
-    private static IEnumerable<AgentConfiguration> FindCyclicDelegations(IEnumerable<AgentConfiguration> configs)
+    internal static IEnumerable<AgentConfiguration> FindCyclicDelegations(IEnumerable<AgentConfiguration> configs)
     {
         var delegatingAgents = configs.Where(a => a.Delegations is { Count: > 0 }).ToList();
         var cyclicAgents = new HashSet<string>();
@@ -780,14 +767,15 @@ public class AgentChatClient : IAgentChat
     /// </summary>
     public async Task<IReadOnlyList<AgentDisplayInfo>> GetOrderedAgentsAsync()
     {
+        // Only check for context changes if Context has been explicitly set via SetContext()
+        // This prevents reloading with null when agents were already loaded by InitializeAsync
         var currentContextPath = Context?.Address?.ToString();
 
-        // Reload if context path changed
-        if (currentContextPath != lastLoadedContextPath)
+        // Only reload if:
+        // 1. Context has been set (not null), AND
+        // 2. It's different from what was already loaded
+        if (currentContextPath != null && currentContextPath != lastLoadedContextPath)
         {
-            logger.LogDebug("[GetOrderedAgentsAsync] Context changed from {Old} to {New}, reloading agents",
-                lastLoadedContextPath, currentContextPath);
-
             loadedAgents = await LoadOrderedAgentsAsync(currentContextPath);
             lastLoadedContextPath = currentContextPath;
 
@@ -796,9 +784,6 @@ public class AgentChatClient : IAgentChat
             agents.Clear();
             await CreateAgentsAsync();
         }
-
-        logger.LogDebug("[GetOrderedAgentsAsync] Returning {Count} agents, first: {First}",
-            loadedAgents.Count, loadedAgents.FirstOrDefault()?.Name ?? "none");
 
         return loadedAgents;
     }

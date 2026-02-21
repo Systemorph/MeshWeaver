@@ -109,7 +109,6 @@ public partial class LayoutAreaView
             MenuStream = SetupMenuAreaMonitoring(AreaStream!);
             MenuStream?.RegisterForDisposal(MenuStream.DistinctUntilChanged().Subscribe(el => OnMenuStreamChanged(el.Value)));
         }
-
     }
 
     private ISynchronizationStream<JsonElement>? DialogStream { get; set; }
@@ -185,9 +184,9 @@ public partial class LayoutAreaView
         }
     }
 
-    protected override void OnAfterRender(bool firstRender)
+    protected override async Task OnAfterRenderAsync(bool firstRender)
     {
-        base.OnAfterRender(firstRender);
+        await base.OnAfterRenderAsync(firstRender);
         if (firstRender)
         {
             IsNotPreRender = true;

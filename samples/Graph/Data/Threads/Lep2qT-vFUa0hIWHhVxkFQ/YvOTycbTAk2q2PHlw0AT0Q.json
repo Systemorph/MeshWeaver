@@ -1,0 +1,18 @@
+{
+  "$type": "MeshNode",
+  "id": "Threads/Lep2qT-vFUa0hIWHhVxkFQ/YvOTycbTAk2q2PHlw0AT0Q",
+  "path": "Threads/Lep2qT-vFUa0hIWHhVxkFQ/YvOTycbTAk2q2PHlw0AT0Q",
+  "nodeType": "ThreadMessage",
+  "icon": "/static/NodeTypeIcons/message.svg",
+  "lastModified": "2026-02-18T09:37:56.08296+00:00",
+  "state": "Active",
+  "content": {
+    "$type": "ThreadMessage",
+    "id": "YvOTycbTAk2q2PHlw0AT0Q",
+    "role": "Navigator",
+    "authorName": "Navigator",
+    "text": "I looked for a Northwind node in the mesh but couldn\u2019t find one. Do you mean the public Northwind sample database, or a specific Northwind instance you have?\n\nOptions I can do next (pick one):\n- I can fetch the public Northwind dataset and run an analysis to extract the top insight (I\u2019d delegate that to Research).\n- You can upload or point me to your Northwind DB and I\u2019ll analyze it.\n- Tell me which kind of insight you want (sales, top customers, product performance, regional trends, etc.) and I\u2019ll focus the analysis.\n\nWhich would you like?",
+    "timestamp": "2026-02-18T09:37:56.082556Z",
+    "type": "AgentResponse"
+  }
+}

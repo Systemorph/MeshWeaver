@@ -1,0 +1,18 @@
+{
+  "$type": "MeshNode",
+  "id": "Cornerstone/U1QRZXx92kOL-Bq-MbHvbw/uWmuOxfOuEOLzs0MREVOcQ",
+  "path": "Cornerstone/U1QRZXx92kOL-Bq-MbHvbw/uWmuOxfOuEOLzs0MREVOcQ",
+  "nodeType": "ThreadMessage",
+  "icon": "/static/NodeTypeIcons/message.svg",
+  "lastModified": "2026-02-20T10:35:57.10303+00:00",
+  "state": "Active",
+  "content": {
+    "$type": "ThreadMessage",
+    "id": "uWmuOxfOuEOLzs0MREVOcQ",
+    "role": "Navigator",
+    "authorName": "Navigator",
+    "text": "The page is the Markdown node at @Cornerstone. The underlying file is Cornerstone.md (located under the Cornerstone content folder \u2014 e.g., content/Cornerstone/Cornerstone.md).",
+    "timestamp": "2026-02-20T10:35:57.102692Z",
+    "type": "AgentResponse"
+  }
+}

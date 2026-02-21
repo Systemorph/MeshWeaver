@@ -1,0 +1,15 @@
+{
+  "$type": "MeshNode",
+  "id": "Cornerstone/Microsoft/Threads/zUnZU04oF0ilCO-ERz1ldw",
+  "path": "Cornerstone/Microsoft/Threads/zUnZU04oF0ilCO-ERz1ldw",
+  "name": "where do we stand on the pricing of microsoft?",
+  "nodeType": "Thread",
+  "icon": "/static/NodeTypeIcons/chat.svg",
+  "lastModified": "2026-02-10T14:25:12.063878+00:00",
+  "version": 2,
+  "state": "Active",
+  "content": {
+    "$type": "Thread",
+    "parentPath": "Cornerstone/Microsoft"
+  }
+}

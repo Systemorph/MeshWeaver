@@ -117,7 +117,9 @@
                 Horizontal = "hidden",
                 HandleMouseWheel = true
             },
-            QuickSuggestions = new QuickSuggestionsOptions { Other = "on", Comments = "off", Strings = "on" },
+            QuickSuggestions = CodeEditMode
+                ? new QuickSuggestionsOptions { Other = "on", Comments = "off", Strings = "on" }
+                : new QuickSuggestionsOptions { Other = "off", Comments = "off", Strings = "off" },
             SuggestOnTriggerCharacters = true,
             AcceptSuggestionOnEnter = "on",
             TabCompletion = "on",

@@ -21,8 +21,9 @@ public class ClaudeCodeConfiguration
 
     /// <summary>
     /// Available models through Claude Code.
+    /// Claude Code SDK accepts short names: "sonnet", "opus", "haiku"
     /// </summary>
-    public string[] Models { get; set; } = ["claude-sonnet-4-20250514", "claude-opus-4-20250514"];
+    public string[] Models { get; set; } = [];
 
     /// <summary>
     /// Display order in model dropdown (lower = first).

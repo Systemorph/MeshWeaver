@@ -1,0 +1,27 @@
+{
+  "id": "2026",
+  "namespace": "Cornerstone/Microsoft",
+  "name": "Microsoft 2026",
+  "nodeType": "Cornerstone/Pricing",
+  "category": "Pricings",
+  "description": "Property reinsurance for Microsoft Corporation - UW Year 2026",
+  "iconName": "DocumentBulletList",
+  "isPersistent": true,
+  "state": "Active",
+  "content": {
+    "$type": "Pricing",
+    "id": "2026",
+    "insuredName": "Microsoft Corporation",
+    "description": "Global property reinsurance program for Microsoft Corporation covering all worldwide locations. Reinsurance provided to Sentinel Global Insurance SE via Orion Risk Partners Ltd.",
+    "inceptionDate": "2026-01-01T00:00:00Z",
+    "expirationDate": "2026-12-31T00:00:00Z",
+    "underwritingYear": 2026,
+    "lineOfBusiness": "PROP",
+    "country": "US",
+    "brokerName": "Orion Risk Partners Ltd.",
+    "primaryInsurance": "Sentinel Global Insurance SE",
+    "currency": "USD",
+    "legalEntity": "MW-US",
+    "status": "Bound"
+  }
+}

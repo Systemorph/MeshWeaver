@@ -35,9 +35,12 @@
                             </div>
                         }
                     </div>
-                    <div class="thumbnail">
-                        <img alt="@Data.Title" src="@Data.Thumbnail" width="160" height="160"/>
-                    </div>
+                    @if (!string.IsNullOrEmpty(Data.Thumbnail))
+                    {
+                        <div class="thumbnail">
+                            <img alt="@Data.Title" src="@Data.Thumbnail" width="160" height="160"/>
+                        </div>
+                    }
                 </div>
             </FluentStack>
         </FluentStack>

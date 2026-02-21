@@ -18,4 +18,9 @@ public static class TestPaths
     /// Path to the samples/Graph/Data directory.
     /// </summary>
     public static string SamplesGraphData => Path.Combine(SamplesGraph, "Data");
+
+    /// <summary>
+    /// Path to the samples/Graph/content directory.
+    /// </summary>
+    public static string SamplesGraphContent => Path.Combine(SamplesGraph, "content");
 }

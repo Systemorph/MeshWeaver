@@ -1,3 +1,5 @@
+import { ensureHighlightJs, initializeThemeUpdates } from '../highlightUtils.js';
+
 let _containerEl = null;
 let _resizeHandler = null;
 let _resizeObserver = null;
@@ -118,6 +120,18 @@ export function positionCards() {
             card.style.marginTop = delta + 'px';
         }
     });
+}
+
+export async function highlightCodeBlocks(contentEl) {
+    if (!contentEl) return;
+
+    const codeElements = contentEl.querySelectorAll('pre code');
+    if (codeElements.length === 0) return;
+
+    await ensureHighlightJs();
+    initializeThemeUpdates();
+
+    codeElements.forEach(el => hljs.highlightElement(el));
 }
 
 export function highlightAnnotation(annotationId) {

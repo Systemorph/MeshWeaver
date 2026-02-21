@@ -44,10 +44,21 @@ public static class ContentCollectionsExtensions
         if (configurations.Count == 0)
         {
             var contentService = hub.GetContentService();
-            var collection = contentService.GetCollectionConfig(config.Address.Id);
+            var addressId = config.Address.Id;
+
+            // Try address ID first, then parent namespace, then defaults
+            var firstSegment = config.Address.Segments.FirstOrDefault();
+            var collection = contentService.GetCollectionConfig(addressId)
+                ?? contentService.GetCollectionConfig("content")
+                ?? (firstSegment != null && firstSegment != addressId
+                    ? contentService.GetCollectionConfig(firstSegment)
+                    : null)
+                ?? contentService.GetCollectionConfig(DefaultCollectionName);
             if (collection is null)
-                throw new InvalidOperationException($"No content collection configured for hub at address '{config.Address.Id}'. Ensure a content collection is registered for this hub.");
-            return new ArticlesConfiguration() { CollectionConfigurations = [collection] };
+                throw new InvalidOperationException(
+                    $"No content collection configured for hub at address '{config.Address.Id}'. " +
+                    "Ensure a content collection is registered for this hub.");
+            return new ArticlesConfiguration() { CollectionConfigurations = [collection], Collections = [collection.Name] };
 
         }
 
@@ -57,6 +68,11 @@ public static class ContentCollectionsExtensions
             Collections = configurations.Select(c => c.Name).Where(n => !string.IsNullOrEmpty(n)).ToArray()
         };
     }
+
+    /// <summary>
+    /// Default collection name used when no specific collection is configured or specified.
+    /// </summary>
+    public const string DefaultCollectionName = "content";
 
     /// <summary>
     /// Area name for unified content references. Uses $ prefix to avoid name collisions.
@@ -83,7 +99,10 @@ public static class ContentCollectionsExtensions
         public MessageHubConfiguration AddContentCollectionsInfrastructure()
         {
             return config
-                .WithTypes(typeof(ContentCollectionReference))
+                .WithTypes(typeof(ContentCollectionReference),
+                    typeof(Article), typeof(ArticleControl),
+                    typeof(ArticleCatalogItemControl), typeof(ArticleCatalogControl),
+                    typeof(ArticleCatalogSkin))
                 .WithServices(AddContentService)
                 .AddData(data =>
                 {
@@ -269,7 +288,7 @@ public static class ContentCollectionsExtensions
     /// <summary>
     /// Creates a stream for content: unified reference paths.
     /// Path format:
-    ///   - path (uses default "content" collection)
+    ///   - path (uses default collection)
     ///   - collection/path
     ///   - collection@partition/path
     /// </summary>
@@ -281,15 +300,15 @@ public static class ContentCollectionsExtensions
             return null;
 
         // remainingPath format: collection/path or collection@partition/path
-        // If no slash, use "content" as the default collection name
+        // If no slash, use the default collection name
         var slashIndex = remainingPath.IndexOf('/');
         string collectionPart;
         string filePath;
 
         if (slashIndex < 0)
         {
-            // No slash - use default "content" collection
-            collectionPart = "content";
+            // No slash - use default collection
+            collectionPart = DefaultCollectionName;
             filePath = remainingPath;
         }
         else
@@ -461,9 +480,49 @@ public static class ContentCollectionsExtensions
             ? content.Substring(yamlBlock.Span.End + 1).Trim('\r', '\n')
             : content;
 
-        // Return MarkdownElement - do not try to deserialize YAML as Article
-        // Markdown files should be loaded as MeshNodes via IPersistenceService
-        return new MarkdownElement
+        if (yamlBlock is null)
+            return new MarkdownElement
+            {
+                Name = name,
+                Path = path,
+                Collection = collection,
+                Url = GetContentUrl(collection, pathWithoutExtension, address),
+                PrerenderedHtml = document.ToHtml(pipeline),
+                LastUpdated = lastWriteTime,
+                Content = contentWithoutYaml,
+                CodeSubmissions = document.Descendants().OfType<ExecutableCodeBlock>().Select(x => x.SubmitCode).Where(x => x is not null).ToArray()!,
+            };
+
+        Article ret;
+        try
+        {
+            ret = new YamlDotNet.Serialization.DeserializerBuilder().Build()
+                .Deserialize<Article>(yamlBlock.Lines.ToString());
+        }
+        catch
+        {
+            ret = new Article
+            {
+                Name = string.Empty,
+                Collection = string.Empty,
+                PrerenderedHtml = string.Empty,
+                Content = string.Empty,
+                Url = string.Empty,
+                Path = string.Empty,
+                CodeSubmissions = [],
+                Title = name,
+                Source = string.Empty
+            };
+        }
+
+        var adaptedThumbnail = AdaptResourceUrl(ret.Thumbnail, collection, address);
+        if (string.IsNullOrEmpty(adaptedThumbnail))
+            adaptedThumbnail = null;
+        var abstractHtml = string.IsNullOrEmpty(ret.Abstract)
+            ? string.Empty
+            : Markdig.Markdown.ToHtml(ret.Abstract, pipeline);
+
+        return ret with
         {
             Name = name,
             Path = path,
@@ -473,6 +532,8 @@ public static class ContentCollectionsExtensions
             LastUpdated = lastWriteTime,
             Content = contentWithoutYaml,
             CodeSubmissions = document.Descendants().OfType<ExecutableCodeBlock>().Select(x => x.SubmitCode).Where(x => x is not null).ToArray()!,
+            Thumbnail = adaptedThumbnail,
+            AbstractHtml = abstractHtml
         };
     }
 

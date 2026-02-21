@@ -1,4 +1,5 @@
 using MeshWeaver.Layout;
+using MeshWeaver.Markdown;
 using MeshWeaver.Mesh;
 
 namespace MeshWeaver.Graph;
@@ -112,10 +113,18 @@ public record MeshNodeThumbnailControl(
             }
         }
 
-        // Fall back to node.Icon (for stories, projects, etc.)
-        if (!string.IsNullOrEmpty(node.Icon))
-            return node.Icon;
+        // Check MarkdownContent.Thumbnail — resolve relative path to absolute URL
+        if (node.Content is MarkdownContent mc && !string.IsNullOrEmpty(mc.Thumbnail))
+        {
+            var thumbnail = mc.Thumbnail;
+            if (thumbnail.StartsWith("/") || thumbnail.StartsWith("http"))
+                return thumbnail;
+            var ns = node.Namespace;
+            if (!string.IsNullOrEmpty(ns))
+                return $"/static/storage/content/{ns}/{thumbnail}";
+        }
 
-        return null;
+        // Fall back to node.Icon only if it looks like an image URL (not a Fluent icon name)
+        return MeshNodeImageHelper.GetIconAsImageUrl(node.Icon);
     }
 }

@@ -25,7 +25,7 @@ public class CopilotConfiguration
     /// <summary>
     /// Available models through Copilot.
     /// </summary>
-    public string[] Models { get; set; } = ["gpt-4o", "claude-sonnet-4-20250514", "gpt-4.1"];
+    public string[] Models { get; set; } = [];
 
     /// <summary>
     /// Display order in model dropdown (lower = first).

@@ -1,10 +1,6 @@
 ﻿@using Microsoft.JSInterop
 @inject IJSRuntime JsRuntime
 
-<HeadContent>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.11.1/highlight.min.js"></script>
-</HeadContent>
-
 <div @ref="CodeBlockElement" class="code-content">
     @((MarkupString)(Html ?? ""))
     <i class="copy-to-clipboard" @onclick="CopyToClipboard"></i>

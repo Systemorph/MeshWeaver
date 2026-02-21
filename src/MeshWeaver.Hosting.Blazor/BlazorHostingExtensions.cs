@@ -131,14 +131,17 @@ public static class BlazorHostingExtensions
 
                 var firstSegment = pathParts[0];
 
+                // Decode collection name: '~' is used as escape for '/' in collection names
+                var decodedFirstSegment = DecodeCollectionName(firstSegment);
+
                 // Check if first segment is a known collection name
                 var contentService = mainHub.ServiceProvider.GetService<IContentService>();
-                var knownCollection = contentService?.GetCollectionConfig(firstSegment);
+                var knownCollection = contentService?.GetCollectionConfig(decodedFirstSegment);
 
                 if (knownCollection != null)
                 {
                     // Pattern 1: /static/{collection}/{filePath}
-                    var collectionName = firstSegment;
+                    var collectionName = decodedFirstSegment;
                     var filePath = string.Join("/", pathParts.Skip(1));
 
                     return await ServeFromCollection(context, mainHub, collectionName, filePath, collectionCache);
@@ -166,7 +169,8 @@ public static class BlazorHostingExtensions
                     return Results.NotFound("Invalid path format. Expected: /static/{address}/{collection}/{filePath}");
                 }
 
-                var addressCollectionName = remainderParts[0];
+                // Decode collection name: '~' is used as escape for '/' (e.g., "Submissions@Microsoft~2026")
+                var addressCollectionName = DecodeCollectionName(remainderParts[0]);
                 var addressFilePath = string.Join("/", remainderParts.Skip(1));
 
                 if (string.IsNullOrEmpty(addressFilePath))
@@ -316,5 +320,12 @@ public static class BlazorHostingExtensions
             fileName,
             enableRangeProcessing: true);
     }
+
+    /// <summary>
+    /// Decodes a collection name from a URL by replacing '~' back to '/'.
+    /// Collection names with slashes (e.g., "Submissions@Microsoft/2026") are encoded
+    /// with '~' in URLs to avoid path parsing issues.
+    /// </summary>
+    private static string DecodeCollectionName(string encodedName) => encodedName.Replace("~", "/");
 
 }

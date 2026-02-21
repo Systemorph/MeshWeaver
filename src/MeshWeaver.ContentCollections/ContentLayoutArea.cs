@@ -213,7 +213,7 @@ public static class ContentLayoutArea
     /// The host.Reference.Id contains the path like "Markdown/images/meshbros.png"
     /// Format:
     ///   - (empty) - renders the MeshNode's own content from the Content property
-    ///   - path (uses default "content" collection)
+    ///   - path (uses default collection)
     ///   - collection/path
     ///   - collection@partition/path
     /// </summary>
@@ -231,15 +231,15 @@ public static class ContentLayoutArea
             }
 
             // Split collection from file path
-            // If no slash, use "content" as the default collection name
+            // If no slash, use the default collection name
             var firstSlash = contentPath.IndexOf('/');
             string collectionPart;
             string filePath;
 
             if (firstSlash < 0)
             {
-                // No slash - use default "content" collection
-                collectionPart = "content";
+                // No slash - use default collection
+                collectionPart = ContentCollectionsExtensions.DefaultCollectionName;
                 filePath = contentPath;
             }
             else

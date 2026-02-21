@@ -1,0 +1,25 @@
+{
+  "id": "2024",
+  "namespace": "Cornerstone/GlobalManufacturing",
+  "name": "Global Manufacturing 2024",
+  "nodeType": "Cornerstone/Pricing",
+  "category": "Pricings",
+  "description": "Property reinsurance for Global Manufacturing Corp - UW Year 2024",
+  "iconName": "DocumentBulletList",
+  "isPersistent": true,
+  "state": "Active",
+  "content": {
+    "$type": "Pricing",
+    "id": "2024",
+    "insuredName": "Global Manufacturing Corp",
+    "description": "Property reinsurance program for Global Manufacturing Corp covering US and international manufacturing plants.",
+    "inceptionDate": "2024-01-01T00:00:00Z",
+    "expirationDate": "2024-12-31T00:00:00Z",
+    "underwritingYear": 2024,
+    "lineOfBusiness": "PROP",
+    "country": "US",
+    "currency": "USD",
+    "legalEntity": "MW-US",
+    "status": "Bound"
+  }
+}

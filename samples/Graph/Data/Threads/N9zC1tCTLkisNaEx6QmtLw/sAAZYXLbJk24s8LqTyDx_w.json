@@ -1,0 +1,17 @@
+{
+  "$type": "MeshNode",
+  "id": "Threads/N9zC1tCTLkisNaEx6QmtLw/sAAZYXLbJk24s8LqTyDx_w",
+  "path": "Threads/N9zC1tCTLkisNaEx6QmtLw/sAAZYXLbJk24s8LqTyDx_w",
+  "nodeType": "ThreadMessage",
+  "icon": "/static/NodeTypeIcons/message.svg",
+  "lastModified": "2026-02-17T16:24:44.061568+00:00",
+  "state": "Active",
+  "content": {
+    "$type": "ThreadMessage",
+    "id": "sAAZYXLbJk24s8LqTyDx_w",
+    "role": "assistant",
+    "text": "An error occurred: Requests to the Creates a model response for the given chat conversation. Operation under Azure AI Model Inference API version 2024-05-01-preview have exceeded token rate limit of your current AIServices S0 pricing tier. Please retry after 60 seconds. Please contact Azure support service if you would like to further increase the default rate limit.\nStatus: 429 (Too Many Requests)\nErrorCode: 429\n\nContent:\n{\u0022error\u0022:{\u0022code\u0022:\u0022429\u0022,\u0022message\u0022: \u0022Requests to the Creates a model response for the given chat conversation. Operation under Azure AI Model Inference API version 2024-05-01-preview have exceeded token rate limit of your current AIServices S0 pricing tier. Please retry after 60 seconds. Please contact Azure support service if you would like to further increase the default rate limit.\u0022}}\n\nHeaders:\nRetry-After: 60\nx-ratelimit-reset-tokens: REDACTED\nx-ratelimit-limit-tokens: REDACTED\nx-ms-client-request-id: 79cf7551-c6fd-46ad-9fb4-d11ed03af84d\nx-ms-deployment-name: REDACTED\napim-request-id: REDACTED\nStrict-Transport-Security: REDACTED\nX-Content-Type-Options: REDACTED\npolicy-id: REDACTED\nx-ms-region: REDACTED\nx-ratelimit-remaining-requests: REDACTED\nx-ratelimit-limit-requests: REDACTED\nDate: Tue, 17 Feb 2026 16:24:43 GMT\nContent-Length: 388\nContent-Type: application/json\n",
+    "timestamp": "2026-02-17T16:24:44.060649Z",
+    "type": "AgentResponse"
+  }
+}

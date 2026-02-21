@@ -1,0 +1,18 @@
+{
+  "$type": "MeshNode",
+  "id": "Threads/j-YFmEjPpUOZR-VMdQXugQ/b9Vd6ra9OEa3gW60XixVWQ",
+  "path": "Threads/j-YFmEjPpUOZR-VMdQXugQ/b9Vd6ra9OEa3gW60XixVWQ",
+  "nodeType": "ThreadMessage",
+  "icon": "/static/NodeTypeIcons/message.svg",
+  "lastModified": "2026-02-16T09:23:34.30791+00:00",
+  "state": "Active",
+  "content": {
+    "$type": "ThreadMessage",
+    "id": "b9Vd6ra9OEa3gW60XixVWQ",
+    "role": "NorthwindAgent",
+    "authorName": "NorthwindAgent",
+    "text": "You\u0027re currently set to the TopEmployeesTable layout area in the Northwind/Analytics catalog, filtered for 2024 and European employees (all months).\n\nIf you\u0027re still seeing the \u0022Top Employees of the Month\u0022 report, it likely means the application page didn\u0027t refresh the displayed view. I can do one of the following to update what you see:\n- Explicitly display the TopEmployeesTable layout area now (recommended)\n- Display TopEmployees (chart) or TopEmployeesReport instead\n- Refresh the Dashboard where the monthly \u0022Top Employees of the Month\u0022 report is shown\n\nWhich would you like me to display?",
+    "timestamp": "2026-02-16T09:23:34.307619Z",
+    "type": "AgentResponse"
+  }
+}

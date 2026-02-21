@@ -1,0 +1,17 @@
+{
+  "$type": "MeshNode",
+  "id": "Threads/Lep2qT-vFUa0hIWHhVxkFQ/gwTE2gtP0UK4OeNK5j9APw",
+  "path": "Threads/Lep2qT-vFUa0hIWHhVxkFQ/gwTE2gtP0UK4OeNK5j9APw",
+  "nodeType": "ThreadMessage",
+  "icon": "/static/NodeTypeIcons/message.svg",
+  "lastModified": "2026-02-18T09:37:42.559936+00:00",
+  "state": "Active",
+  "content": {
+    "$type": "ThreadMessage",
+    "id": "gwTE2gtP0UK4OeNK5j9APw",
+    "role": "user",
+    "text": "Can you give me the most important insight from the northwind db?",
+    "timestamp": "2026-02-18T09:37:42.559542Z",
+    "type": "ExecutedInput"
+  }
+}

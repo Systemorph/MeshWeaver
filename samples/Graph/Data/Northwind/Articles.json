@@ -1,0 +1,11 @@
+{
+  "id": "Articles",
+  "namespace": "Northwind",
+  "name": "Articles",
+  "nodeType": "Northwind/ContentCatalog",
+  "category": "Documentation",
+  "description": "Conceptual articles and reference documentation for Northwind Traders",
+  "icon": "/static/storage/content/Northwind/icons/articles.svg",
+  "displayOrder": 1,
+  "isPersistent": true
+}

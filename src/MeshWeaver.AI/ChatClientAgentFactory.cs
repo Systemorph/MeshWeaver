@@ -69,6 +69,14 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
         var meshPlugin = new MeshPlugin(Hub, chat);
         tools = tools.Concat(meshPlugin.CreateTools()).ToArray();
 
+        // Add LayoutAreaPlugin tools for displaying views/charts in chat
+        var layoutAreaPlugin = new LayoutAreaPlugin(Hub, chat);
+        tools = tools.Concat(layoutAreaPlugin.CreateTools()).ToArray();
+
+        // Add DataPlugin tools for data access
+        var dataPlugin = new DataPlugin(Hub, chat);
+        tools = tools.Concat(dataPlugin.CreateTools()).ToArray();
+
         // Create ChatClientAgent with all parameters
         var agent = new ChatClientAgent(
             chatClient: chatClient,

@@ -10,6 +10,7 @@ using MeshWeaver.Blazor.Components.Monaco;
 using MeshWeaver.Data;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Catalog;
+using MeshWeaver.Graph;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 
@@ -51,7 +52,19 @@ public partial class MeshSearchView : IDisposable
     private string BoundVisibleQuery => ViewModel?.VisibleQuery?.ToString() ?? "";
     private string BoundPlaceholder => ViewModel?.Placeholder?.ToString() ?? "Search...";
     private string BoundNamespace => ViewModel?.Namespace?.ToString() ?? "";
-    private bool BoundShowSearchBox => ViewModel?.ShowSearchBox is bool show ? show : true;
+    private bool BoundShowSearchBox
+    {
+        get
+        {
+            if (ViewModel?.ShowSearchBox is bool show) return show;
+            if (ViewModel?.ShowSearchBox is JsonElement je)
+            {
+                if (je.ValueKind == JsonValueKind.False) return false;
+                if (je.ValueKind == JsonValueKind.True) return true;
+            }
+            return true; // default
+        }
+    }
     private bool BoundExcludeBasePath => ViewModel?.ExcludeBasePath is bool exclude ? exclude : true;
     private bool BoundLiveSearch => ViewModel?.LiveSearch is bool live ? live : true;
     private MeshSearchRenderMode BoundRenderMode => ViewModel?.RenderMode is MeshSearchRenderMode mode ? mode : MeshSearchRenderMode.Grouped;
@@ -76,6 +89,7 @@ public partial class MeshSearchView : IDisposable
     protected override void OnParametersSet()
     {
         base.OnParametersSet();
+
         if (!_initialized && !string.IsNullOrEmpty(BoundVisibleQuery))
         {
             _currentValue = BoundVisibleQuery;
@@ -552,7 +566,8 @@ public partial class MeshSearchView : IDisposable
             if (json.TryGetProperty("Logo", out var Logo) && Logo.ValueKind == JsonValueKind.String)
                 return Logo.GetString();
         }
-        return node.Icon;
+        // Fall back to node.Icon only if it looks like an image URL (not a Fluent icon name)
+        return MeshNodeImageHelper.GetIconAsImageUrl(node.Icon);
     }
 
     private string Truncate(string text, int maxLength)

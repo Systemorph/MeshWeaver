@@ -7,7 +7,7 @@
   "nodeType": "ACME/Project/Todo",
   "description": "Present insurance package options to client",
   "category": "Tasks",
-  "icon": "/static/content/ACME/Project/Todo/icon.svg",
+  "icon": "/static/storage/content/ACME/Project/Todo/icon.svg",
   "lastModified": "2026-02-03T08:15:10.4640455+00:00",
   "version": 9,
   "state": "Active",

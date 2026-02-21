@@ -22,6 +22,7 @@ using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting;
 using MeshWeaver.Hosting.Activity;
 using MeshWeaver.Hosting.AzureBlob;
+using MeshWeaver.Mesh.Activity;
 using MeshWeaver.Hosting.Blazor;
 using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Hosting.Security;
@@ -74,36 +75,21 @@ public static class MemexConfiguration
         // Configure AI services
         services.AddMemoryChatPersistence();
 
-        // Configure AI factories (read from appsettings)
+        // Configure AI factories (read from appsettings, including DisplayOrder)
         services.AddAzureFoundryClaude(config =>
-        {
-            builder.Configuration.GetSection("Anthropic").Bind(config);
-            config.DisplayOrder = 0;  // Anthropic first
-        });
+            builder.Configuration.GetSection("Anthropic").Bind(config));
 
         services.AddAzureFoundry(config =>
-        {
-            builder.Configuration.GetSection("AzureAIS").Bind(config);
-            config.DisplayOrder = 10;  // Azure Foundry second
-        });
+            builder.Configuration.GetSection("AzureAIS").Bind(config));
 
         services.AddAzureOpenAI(config =>
-        {
-            builder.Configuration.GetSection("AzureOpenAIS").Bind(config);
-            config.DisplayOrder = 20;  // Azure OpenAI last
-        });
+            builder.Configuration.GetSection("AzureOpenAIS").Bind(config));
 
         services.AddCopilot(config =>
-        {
-            builder.Configuration.GetSection("Copilot").Bind(config);
-            config.DisplayOrder = 30;  // GitHub Copilot
-        });
+            builder.Configuration.GetSection("Copilot").Bind(config));
 
         services.AddClaudeCode(config =>
-        {
-            builder.Configuration.GetSection("ClaudeCode").Bind(config);
-            config.DisplayOrder = 5;  // Claude Code (high priority)
-        });
+            builder.Configuration.GetSection("ClaudeCode").Bind(config));
 
         // Register the AI chat services (must be after all factory registrations)
         services.AddAgentChatServices();
@@ -283,6 +269,12 @@ public static class MemexConfiguration
                     }
 
                     return config.AddDefaultLayoutAreas().AddThreadsLayoutArea();
+                })
+                // Register in-memory activity store for non-database scenarios
+                .ConfigureServices(services =>
+                {
+                    services.AddSingleton<IActivityStore, InMemoryActivityStore>();
+                    return services;
                 })
                 // Add activity tracking to record user access patterns
                 .AddActivityTracking();
