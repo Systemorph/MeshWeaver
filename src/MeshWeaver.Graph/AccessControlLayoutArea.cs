@@ -83,9 +83,11 @@ public static class AccessControlLayoutArea
         stack = stack.WithView(Controls.H2($"Access Control - {headerText}"));
 
         // Section 1: Inherited Permissions (read-only, from ISecurityService)
+        var inheritedStream = Observable.Return<IEnumerable<AccessAssignment>>(inherited);
+
         stack = stack.WithView(Controls.H3("Inherited Permissions").WithStyle("margin: 0;"));
         stack = stack.WithView(
-            inherited.BindMany(a =>
+            inheritedStream.BindMany("acl_inherited", a =>
                 Controls.Stack
                     .WithOrientation(Orientation.Horizontal)
                     .WithStyle("padding: 8px 16px; border-bottom: 1px solid var(--neutral-stroke-rest); align-items: center;")
@@ -95,7 +97,7 @@ public static class AccessControlLayoutArea
                     .WithView(Controls.Switch(a.IsActive)
                         .WithCheckedMessage("Allow")
                         .WithUncheckedMessage("Deny"))
-            )
+            ).WithOrientation(Orientation.Vertical)
         );
 
         // Section 2: Local Assignments (workspace-bound, editable)
@@ -114,7 +116,7 @@ public static class AccessControlLayoutArea
                     .WithView(Controls.Switch(a.IsActive)
                         .WithCheckedMessage("Allow")
                         .WithUncheckedMessage("Deny"))
-            )
+            ).WithOrientation(Orientation.Vertical)
         );
 
         // Add Assignment button (only for admins)

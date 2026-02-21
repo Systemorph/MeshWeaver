@@ -133,19 +133,57 @@ public class AccessControlQueryTests
     }
 
     [Fact]
-    public async Task QueryWithoutUserIdReturnsAll()
+    public async Task QueryWithoutUserIdDefaultsToPublicFiltering()
     {
         await SeedDataAndPermissionsAsync();
         var query = new PostgreSqlMeshQuery(_fixture.StorageAdapter);
 
-        // No userId - should return all nodes (no access control filtering)
-        var request = MeshQueryRequest.FromQuery("path:ACME scope:descendants");
+        // No userId - defaults to "Public" user via GetEffectiveUserId.
+        // Public has Read on Contoso only, so querying all nodes should return only Contoso nodes.
+        var request = MeshQueryRequest.FromQuery("scope:descendants");
 
         var results = new List<object>();
         await foreach (var item in query.QueryAsync(request, _options))
             results.Add(item);
 
-        results.Should().HaveCount(3);
+        results.Should().HaveCount(1);
+        results.Cast<MeshNode>().Single().Path.Should().Be("Contoso/Project");
+    }
+
+    [Fact]
+    public async Task PublicUserSeesOnlyPublicNodes()
+    {
+        await SeedDataAndPermissionsAsync();
+        var query = new PostgreSqlMeshQuery(_fixture.StorageAdapter);
+
+        // Explicit "Public" userId — should see Contoso nodes but NOT ACME nodes
+        var request = MeshQueryRequest.FromQuery("scope:descendants", "Public");
+
+        var results = new List<object>();
+        await foreach (var item in query.QueryAsync(request, _options))
+            results.Add(item);
+
+        results.Should().HaveCount(1);
+        results.Cast<MeshNode>().Single().Path.Should().Be("Contoso/Project");
+    }
+
+    [Fact]
+    public async Task AuthenticatedUserInheritsPublicAccess()
+    {
+        await SeedDataAndPermissionsAsync();
+        var query = new PostgreSqlMeshQuery(_fixture.StorageAdapter);
+
+        // Alice has Read on ACME. Public has Read on Contoso.
+        // Alice should see both ACME nodes AND Contoso nodes via Public inheritance.
+        var request = MeshQueryRequest.FromQuery("scope:descendants", "alice");
+
+        var results = new List<object>();
+        await foreach (var item in query.QueryAsync(request, _options))
+            results.Add(item);
+
+        results.Should().HaveCount(4);
+        results.Cast<MeshNode>().Select(n => n.Path)
+            .Should().BeEquivalentTo("ACME/Project/Story1", "ACME/Project/Story2", "ACME/Team/Alice", "Contoso/Project");
     }
 
     [Fact]
@@ -212,5 +250,30 @@ public class AccessControlQueryTests
         // eve sees ACME/Docs/Public but NOT ACME/Secret/Secret (denied)
         results.Should().HaveCount(1);
         results.Cast<MeshNode>().Single().Path.Should().Be("ACME/Docs/Public");
+    }
+
+    [Fact]
+    public async Task NodeTypeDefinitionsAlwaysVisible()
+    {
+        await _fixture.CleanDataAsync();
+        var adapter = _fixture.StorageAdapter;
+
+        // Seed a NodeType definition and a regular node — no access grants at all
+        await adapter.WriteAsync(new MeshNode("Organization", "") { Name = "Organization", NodeType = "NodeType" }, _options);
+        await adapter.WriteAsync(new MeshNode("ACME", "") { Name = "ACME Corp", NodeType = "Organization" }, _options);
+        await adapter.WriteAsync(new MeshNode("Secret", "Private") { Name = "Secret", NodeType = "Document" }, _options);
+
+        // Query as unknown user with zero grants
+        var query = new PostgreSqlMeshQuery(_fixture.StorageAdapter);
+        var request = MeshQueryRequest.FromQuery("scope:descendants", "nobody");
+
+        var results = new List<object>();
+        await foreach (var item in query.QueryAsync(request, _options))
+            results.Add(item);
+
+        var paths = results.Cast<MeshNode>().Select(n => n.Path).ToList();
+        paths.Should().Contain("Organization", "NodeType definitions are always publicly readable");
+        paths.Should().NotContain("ACME", "Organization instances require explicit grants");
+        paths.Should().NotContain("Private/Secret", "Regular nodes require explicit grants");
     }
 }

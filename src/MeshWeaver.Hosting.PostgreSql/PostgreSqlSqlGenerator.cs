@@ -489,16 +489,22 @@ public class PostgreSqlSqlGenerator
     {
         var paramName = $"@acUser{_paramIndex++}";
         _parameters[paramName] = userId;
+        // Always check both the specific user and the Public well-known user.
+        // At the same path specificity, user-specific permissions take priority over Public.
+        // NodeType definitions (node_type = 'NodeType') are always publicly readable.
         return $"""
             (
-                SELECT uep.is_allow
-                FROM user_effective_permissions uep
-                WHERE uep.user_id = {paramName}
-                  AND uep.permission = 'Read'
-                  AND n.path LIKE uep.node_path_prefix || '%'
-                ORDER BY LENGTH(uep.node_path_prefix) DESC
-                LIMIT 1
-            ) = true
+                n.node_type = 'NodeType'
+                OR
+                (SELECT uep.is_allow
+                 FROM user_effective_permissions uep
+                 WHERE uep.user_id IN ({paramName}, 'Public')
+                   AND uep.permission = 'Read'
+                   AND n.path LIKE uep.node_path_prefix || '%'
+                 ORDER BY LENGTH(uep.node_path_prefix) DESC,
+                          CASE WHEN uep.user_id = {paramName} THEN 0 ELSE 1 END
+                 LIMIT 1) = true
+            )
             """;
     }
 

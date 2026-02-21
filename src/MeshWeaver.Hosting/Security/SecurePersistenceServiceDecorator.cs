@@ -32,11 +32,20 @@ public class SecurePersistenceServiceDecorator : IPersistenceServiceCore
 
     #region Secure Operations
 
+    /// <summary>
+    /// NodeType definitions are always publicly readable.
+    /// </summary>
+    private static bool IsPubliclyReadable(MeshNode node)
+        => node.NodeType == MeshNode.NodeTypePath;
+
     public async Task<MeshNode?> GetNodeSecureAsync(string path, string? userId, JsonSerializerOptions options, CancellationToken ct = default)
     {
         var node = await _inner.GetNodeAsync(path, options, ct);
         if (node == null)
             return null;
+
+        if (IsPubliclyReadable(node))
+            return node;
 
         var hasPermission = string.IsNullOrEmpty(userId)
             ? await SecurityService.HasPermissionAsync(path, Permission.Read, ct)
@@ -55,6 +64,12 @@ public class SecurePersistenceServiceDecorator : IPersistenceServiceCore
     {
         await foreach (var node in _inner.GetChildrenAsync(parentPath, options))
         {
+            if (IsPubliclyReadable(node))
+            {
+                yield return node;
+                continue;
+            }
+
             var hasPermission = string.IsNullOrEmpty(userId)
                 ? await SecurityService.HasPermissionAsync(node.Path, Permission.Read)
                 : await SecurityService.HasPermissionAsync(node.Path, userId, Permission.Read);
@@ -74,6 +89,12 @@ public class SecurePersistenceServiceDecorator : IPersistenceServiceCore
     {
         await foreach (var node in _inner.GetDescendantsAsync(parentPath, options))
         {
+            if (IsPubliclyReadable(node))
+            {
+                yield return node;
+                continue;
+            }
+
             var hasPermission = string.IsNullOrEmpty(userId)
                 ? await SecurityService.HasPermissionAsync(node.Path, Permission.Read)
                 : await SecurityService.HasPermissionAsync(node.Path, userId, Permission.Read);

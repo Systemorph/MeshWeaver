@@ -15,23 +15,34 @@
 @code
 {
     private IReadOnlyCollection<object> Data { get; set; } = Array.Empty<object>();
-    private Orientation Orientation { get; set; }
+    private Orientation Orientation { get; set; } = Orientation.Vertical;
     private bool Wrap { get; set; }
+    private UiControl? RenderedView { get; set; }
 
     private string ViewArea => $"{Area}/{ItemTemplateControl.ViewArea}";
 
-    protected override async Task OnParametersSetAsync()
+    protected override void BindData()
     {
-        await base.OnParametersSetAsync();
-        DataBind(ViewModel.Data, d => d.Data);
-        if (ViewModel?.Wrap != null)
-            DataBind(ViewModel.Wrap, x => x.Wrap);
+        base.BindData();
+        DataBind(ViewModel.Data, x => x.Data);
+        DataBind(ViewModel.Orientation, x => x.Orientation,
+            (val, def) => val != null ? (Orientation)Convert.ToInt32(val) : def);
+        DataBind(ViewModel.Wrap, x => x.Wrap);
+
+        if (Stream is not null)
+        {
+            AddBinding(Stream.GetControlStream(ViewArea)
+                .Subscribe(v => InvokeAsync(() =>
+                {
+                    RenderedView = v;
+                    RequestStateChange();
+                })));
+        }
     }
 
-    private UiControl GetViewWithPath(int i) => ViewModel.View with
+    private UiControl GetViewWithPath(int i) => (RenderedView ?? ViewModel.View) with
     {
-        DataContext =
-    $"{ViewModel.DataContext}{ViewModel.Data}/{i}"
+        DataContext = $"{ViewModel.DataContext}{ViewModel.Data}/{i}"
     };
 
 }

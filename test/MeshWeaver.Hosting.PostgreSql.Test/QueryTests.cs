@@ -50,6 +50,11 @@ public class QueryTests
             Name = "Contoso Project",
             NodeType = "Project"
         }, _options);
+
+        // Grant Public Read access so query tests work without explicit userId
+        var ac = _fixture.AccessControl;
+        await ac.GrantAsync("ACME", "Public", "Read", isAllow: true);
+        await ac.GrantAsync("Contoso", "Public", "Read", isAllow: true);
     }
 
     [Fact]

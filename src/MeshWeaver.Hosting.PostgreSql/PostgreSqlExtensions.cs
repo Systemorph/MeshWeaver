@@ -1,6 +1,7 @@
 using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Mesh.Activity;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
@@ -81,7 +82,8 @@ public static class PostgreSqlExtensions
                 ?? throw new InvalidOperationException(
                     "PostgreSqlMeshQuery requires PostgreSqlStorageAdapter.");
             var changeNotifier = sp.GetService<IDataChangeNotifier>();
-            return new PostgreSqlMeshQuery(adapter, changeNotifier);
+            var accessService = sp.GetService<AccessService>();
+            return new PostgreSqlMeshQuery(adapter, changeNotifier, accessService);
         });
 
         // Register PostgreSqlActivityStore for activity tracking
@@ -114,7 +116,7 @@ public static class PostgreSqlExtensions
 
         // Register PostgreSqlMeshQuery BEFORE AddPersistence so TryAddSingleton picks it up
         services.AddSingleton<IMeshQueryCore>(sp =>
-            new PostgreSqlMeshQuery(storageAdapter, sp.GetService<IDataChangeNotifier>()));
+            new PostgreSqlMeshQuery(storageAdapter, sp.GetService<IDataChangeNotifier>(), sp.GetService<AccessService>()));
 
         services.AddPersistence(storageAdapter);
 
@@ -159,7 +161,8 @@ public static class PostgreSqlExtensions
         services.AddSingleton<IMeshQueryCore>(sp =>
             new PostgreSqlMeshQuery(
                 storageAdapter,
-                sp.GetService<IDataChangeNotifier>()));
+                sp.GetService<IDataChangeNotifier>(),
+                sp.GetService<AccessService>()));
 
         // Register the Change Listener
         services.AddSingleton(sp =>

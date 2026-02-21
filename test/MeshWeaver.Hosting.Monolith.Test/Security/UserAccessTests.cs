@@ -568,5 +568,159 @@ public class UserAccessTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
         nodePaths.Should().Contain("Secret/SecretDoc");
     }
 
+    [Fact]
+    public async Task MeshQuery_PublicPermissions_NotPollutedByAdminContext()
+    {
+        // Arrange - Reproduce the bug: admin AccessContext is active while querying as Public
+        var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
+        var persistenceService = Mesh.ServiceProvider.GetRequiredService<IPersistenceService>();
+        var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
+        var accessService = Mesh.ServiceProvider.GetService<AccessService>();
+
+        // Create Organization NodeType
+        await persistenceService.SaveNodeAsync(new MeshNode("OrgType3")
+        {
+            Name = "OrgType3",
+            NodeType = "NodeType"
+        }, TestTimeout);
+
+        // Create two organizations - one public, one private
+        await persistenceService.SaveNodeAsync(new MeshNode("PublicOrg3")
+        {
+            Name = "PublicOrg3",
+            NodeType = "OrgType3"
+        }, TestTimeout);
+
+        await persistenceService.SaveNodeAsync(new MeshNode("PrivateOrg3")
+        {
+            Name = "PrivateOrg3",
+            NodeType = "OrgType3"
+        }, TestTimeout);
+
+        // Configure PublicOrg3 as public
+        await securityService.AddUserRoleAsync(WellKnownUsers.Public, "Viewer", "PublicOrg3", "system", TestTimeout);
+        // PrivateOrg3 has no Public access
+
+        // Simulate admin being logged in — this is the key part of the bug
+        accessService?.SetContext(new AccessContext
+        {
+            ObjectId = "AdminUser",
+            Name = "Admin User",
+            Roles = ["Admin"]
+        });
+
+        // Act - Query explicitly as "Public" user while admin context is active
+        // This reproduces the bug: GetEffectivePermissionsAsync("PrivateOrg3", "Public")
+        // would incorrectly pick up Admin roles from the active AccessContext
+        var request = new MeshQueryRequest
+        {
+            Query = "nodeType:OrgType3 scope:children",
+            UserId = WellKnownUsers.Public
+        };
+        var results = await meshQuery.QueryAsync(request, TestTimeout).ToListAsync();
+
+        // Assert - Public user should NOT see PrivateOrg3, even with admin context active
+        var nodeNames = results.OfType<MeshNode>().Select(n => n.Name).ToList();
+        nodeNames.Should().Contain("PublicOrg3", "Public namespace should be visible");
+        nodeNames.Should().NotContain("PrivateOrg3",
+            "Private namespace should NOT be visible to Public user, even when admin AccessContext is active");
+    }
+
+    [Fact]
+    public async Task GetEffectivePermissions_PublicUser_IgnoresAdminAccessContextRoles()
+    {
+        // Arrange - Set admin AccessContext, then check Public user permissions
+        var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
+        var accessService = Mesh.ServiceProvider.GetService<AccessService>();
+
+        // Simulate admin being logged in
+        accessService?.SetContext(new AccessContext
+        {
+            ObjectId = "AdminUser",
+            Name = "Admin User",
+            Roles = ["Admin"]
+        });
+
+        // Act - Check permissions for "Public" user on a private namespace
+        // The bug would cause AccessContext.Roles (Admin) to be applied to Public user
+        var permissions = await securityService.GetEffectivePermissionsAsync("ACME", WellKnownUsers.Public, TestTimeout);
+
+        // Assert - Public user should have NO permissions on ACME
+        permissions.Should().Be(Permission.None,
+            "Public user should not inherit Admin roles from AccessContext belonging to a different user");
+    }
+
+    #endregion
+
+    #region Explicit Public Access Grants
+
+    [Fact]
+    public async Task SecurePersistence_NodeInUserNamespace_VisibleViaExplicitPublicGrant()
+    {
+        // Arrange
+        var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
+        var persistenceService = Mesh.ServiceProvider.GetRequiredService<IPersistenceService>();
+
+        // Create a node in the "User" namespace
+        await persistenceService.SaveNodeAsync(new MeshNode("User") { Name = "User" }, TestTimeout);
+        await persistenceService.SaveNodeAsync(new MeshNode("AliceProfile", "User") { Name = "Alice Profile", NodeType = "Person" }, TestTimeout);
+
+        // Explicit Public Viewer grant on User namespace (mimics User/Access/Public.json)
+        await securityService.AddUserRoleAsync(WellKnownUsers.Public, "Viewer", "User", "system", TestTimeout);
+
+        // Act - Get children as anonymous user (null userId)
+        var children = await persistenceService.GetChildrenSecureAsync("User", null).ToListAsync();
+
+        // Assert
+        children.Should().Contain(n => n.Id == "AliceProfile");
+    }
+
+    [Fact]
+    public async Task SecurePersistence_NodeTypeDefinition_AlwaysVisibleToAnonymous()
+    {
+        // Arrange
+        var persistenceService = Mesh.ServiceProvider.GetRequiredService<IPersistenceService>();
+
+        // Create a NodeType definition (nodeType == "NodeType") — no grants needed
+        await persistenceService.SaveNodeAsync(new MeshNode("Organization")
+        {
+            Name = "Organization",
+            NodeType = "NodeType"
+        }, TestTimeout);
+
+        // Also create an Organization instance — should NOT be visible without a grant
+        await persistenceService.SaveNodeAsync(new MeshNode("ACME")
+        {
+            Name = "ACME",
+            NodeType = "Organization"
+        }, TestTimeout);
+
+        // Act - Get both nodes as anonymous user (no grants configured)
+        var typeDef = await persistenceService.GetNodeSecureAsync("Organization", null);
+        var orgInstance = await persistenceService.GetNodeSecureAsync("ACME", null);
+
+        // Assert - NodeType definition is publicly readable, organization instance is not
+        typeDef.Should().NotBeNull("NodeType definitions are always publicly readable");
+        typeDef!.Name.Should().Be("Organization");
+        orgInstance.Should().BeNull("Organization instances require explicit access grants");
+    }
+
+    [Fact]
+    public async Task SecurePersistence_NodeInPrivateNamespace_HiddenWithoutGrant()
+    {
+        // Arrange
+        var persistenceService = Mesh.ServiceProvider.GetRequiredService<IPersistenceService>();
+
+        // Create a node in a private namespace — no Public grant
+        await persistenceService.SaveNodeAsync(new MeshNode("SecretArea") { Name = "Secret Area" }, TestTimeout);
+        await persistenceService.SaveNodeAsync(new MeshNode("Doc1", "SecretArea") { Name = "Secret Doc" }, TestTimeout);
+
+        // Act - Get children as anonymous user
+        var children = await persistenceService.GetChildrenSecureAsync("SecretArea", null).ToListAsync();
+
+        // Assert - Private namespace should be hidden
+        children.Should().BeEmpty();
+    }
+
     #endregion
 }

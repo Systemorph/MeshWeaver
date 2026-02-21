@@ -7,11 +7,13 @@ using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
 using FluentAssertions.Extensions;
+using Json.Pointer;
 using MeshWeaver.Data;
 using MeshWeaver.Graph;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Hosting.Security;
 using MeshWeaver.Layout;
+using MeshWeaver.Layout.Client;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
@@ -86,16 +88,11 @@ public class AccessControlLayoutAreaTest(ITestOutputHelper output) : MonolithMes
 
         foreach (var itemTemplate in itemTemplates)
         {
-            // Observable BindMany (local): Data is JsonPointerReference, DataContext points to data stream
-            // Static IEnumerable BindMany (inherited): Data is the collection directly (JsonElement array)
-            if (itemTemplate.DataContext != null)
-            {
-                itemTemplate.Data.Should().BeOfType<JsonPointerReference>(
-                    "Observable BindMany should use JsonPointerReference for data binding");
-                itemTemplate.DataContext.Should().StartWith("/data/",
-                    "ItemTemplateControl DataContext should point to a data stream");
-            }
-            // Static BindMany produces Data as the collection itself — no DataContext needed
+            // Both inherited and local use observable BindMany — Data is JsonPointerReference
+            itemTemplate.Data.Should().BeOfType<JsonPointerReference>(
+                "BindMany should use JsonPointerReference for data binding");
+            itemTemplate.DataContext.Should().StartWith("/data/",
+                "ItemTemplateControl DataContext should point to a data stream");
         }
     }
 
@@ -145,27 +142,17 @@ public class AccessControlLayoutAreaTest(ITestOutputHelper output) : MonolithMes
         var templatesWithData = 0;
         foreach (var itemTemplate in itemTemplates)
         {
-            // Static IEnumerable.BindMany produces ItemTemplateControl with Data as the collection directly
-            // Observable.BindMany produces ItemTemplateControl with DataContext pointing to data stream
-            if (itemTemplate.DataContext != null)
-            {
-                var dataRef = new JsonPointerReference(itemTemplate.DataContext);
-                var data = await stream
-                    .GetDataStream<IEnumerable<JsonElement>>(dataRef)
-                    .Where(x => x is not null)
-                    .Timeout(5.Seconds())
-                    .FirstOrDefaultAsync();
+            var dataRef = new JsonPointerReference(itemTemplate.DataContext!);
+            var data = await stream
+                .GetDataStream<IEnumerable<JsonElement>>(dataRef)
+                .Where(x => x is not null)
+                .Timeout(5.Seconds())
+                .FirstOrDefaultAsync();
 
-                if (data != null && data.Any())
-                {
-                    templatesWithData++;
-                    Output.WriteLine($"DataContext: {itemTemplate.DataContext}, Items: {data.Count()}");
-                }
-            }
-            else if (itemTemplate.Data is IEnumerable<object> staticData && staticData.Any())
+            if (data != null && data.Any())
             {
                 templatesWithData++;
-                Output.WriteLine($"Static data items: {staticData.Count()}");
+                Output.WriteLine($"DataContext: {itemTemplate.DataContext}, Items: {data.Count()}");
             }
         }
 
@@ -230,25 +217,17 @@ public class AccessControlLayoutAreaTest(ITestOutputHelper output) : MonolithMes
         var templatesWithData = 0;
         foreach (var itemTemplate in itemTemplates)
         {
-            if (itemTemplate.DataContext != null)
-            {
-                var dataRef = new JsonPointerReference(itemTemplate.DataContext);
-                var data = await stream
-                    .GetDataStream<IEnumerable<JsonElement>>(dataRef)
-                    .Where(x => x is not null)
-                    .Timeout(5.Seconds())
-                    .FirstOrDefaultAsync();
+            var dataRef = new JsonPointerReference(itemTemplate.DataContext!);
+            var data = await stream
+                .GetDataStream<IEnumerable<JsonElement>>(dataRef)
+                .Where(x => x is not null)
+                .Timeout(5.Seconds())
+                .FirstOrDefaultAsync();
 
-                if (data != null && data.Any())
-                {
-                    templatesWithData++;
-                    Output.WriteLine($"DataContext: {itemTemplate.DataContext}, Items: {data.Count()}");
-                }
-            }
-            else if (itemTemplate.Data is IEnumerable<object> staticData && staticData.Any())
+            if (data != null && data.Any())
             {
                 templatesWithData++;
-                Output.WriteLine($"Static data items: {staticData.Count()}");
+                Output.WriteLine($"DataContext: {itemTemplate.DataContext}, Items: {data.Count()}");
             }
         }
 
@@ -302,35 +281,18 @@ public class AccessControlLayoutAreaTest(ITestOutputHelper output) : MonolithMes
         var totalItems = 0;
         foreach (var itemTemplate in itemTemplates)
         {
-            if (itemTemplate.DataContext != null)
-            {
-                // Observable BindMany — data flows through stream
-                var dataRef = new JsonPointerReference(itemTemplate.DataContext);
-                var data = await stream
-                    .GetDataStream<IEnumerable<JsonElement>>(dataRef)
-                    .Where(x => x is not null)
-                    .Timeout(5.Seconds())
-                    .FirstOrDefaultAsync();
+            var dataRef = new JsonPointerReference(itemTemplate.DataContext!);
+            var data = await stream
+                .GetDataStream<IEnumerable<JsonElement>>(dataRef)
+                .Where(x => x is not null)
+                .Timeout(5.Seconds())
+                .FirstOrDefaultAsync();
 
-                if (data != null)
-                {
-                    var count = data.Count();
-                    totalItems += count;
-                    Output.WriteLine($"DataContext: {itemTemplate.DataContext}, Items: {count}");
-                }
-            }
-            else if (itemTemplate.Data is JsonElement jsonData && jsonData.ValueKind == JsonValueKind.Array)
+            if (data != null)
             {
-                // Static IEnumerable.BindMany — data is serialized as JsonElement array
-                var count = jsonData.GetArrayLength();
+                var count = data.Count();
                 totalItems += count;
-                Output.WriteLine($"Static data (JsonElement array) items: {count}");
-            }
-            else if (itemTemplate.Data is IEnumerable<object> staticData)
-            {
-                var count = staticData.Count();
-                totalItems += count;
-                Output.WriteLine($"Static data items: {count}");
+                Output.WriteLine($"DataContext: {itemTemplate.DataContext}, Items: {count}");
             }
         }
 
@@ -580,6 +542,199 @@ public class AccessControlLayoutAreaTest(ITestOutputHelper output) : MonolithMes
 
         allAssignments.Should().Contain(a => a.UserId == "NewUser" && a.RoleId == "Viewer",
             "AccessAssignmentTypeSource.UpdateImpl should sync new assignment to ISecurityService");
+    }
+
+    /// <summary>
+    /// Simulates exactly what Blazor's ItemTemplate + DataBind does:
+    /// 1. Resolves ItemTemplateControl.Data via JsonPointer evaluation (not Reduce)
+    /// 2. Constructs per-item DataContext like GetViewWithPath(i)
+    /// 3. Resolves child property bindings (displayLabel, roleId) via stream.DataBind
+    /// This is the actual code path used by the Blazor rendering pipeline.
+    /// </summary>
+    [Fact(Timeout = 30000)]
+    public async Task AccessControl_BlazorDataBind_ResolvesItemProperties()
+    {
+        // Seed both inherited and local assignments
+        var svc = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
+        await svc.AddUserRoleAsync("InheritedUser", "Viewer", "TestOrg", "system", TestTimeout);
+        await svc.AddUserRoleAsync("LocalUser", "Editor", NodePath, "system", TestTimeout);
+
+        var client = GetClient();
+        var nodeAddress = new Address(NodePath);
+
+        await client.AwaitResponse(
+            new PingRequest(),
+            o => o.WithTarget(nodeAddress),
+            TestContext.Current.CancellationToken);
+
+        var workspace = client.GetWorkspace();
+        var reference = new LayoutAreaReference(MeshNodeLayoutAreas.AccessControlArea);
+
+        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
+            nodeAddress,
+            reference);
+
+        // Wait for data to arrive
+        var control = await stream.GetControlStream(reference.Area!)
+            .Timeout(10.Seconds())
+            .FirstAsync(x => x != null);
+
+        var stack = control.Should().BeOfType<StackControl>().Which;
+
+        // Get all child controls
+        var areaControls = await Task.WhenAll(
+            stack.Areas.Select(async a =>
+                await stream.GetControlStream(a.Area.ToString()!)
+                    .Timeout(10.Seconds())
+                    .FirstAsync(x => x != null))
+        );
+
+        var itemTemplates = areaControls.OfType<ItemTemplateControl>().ToList();
+        itemTemplates.Should().HaveCountGreaterThanOrEqualTo(2);
+
+        // For each ItemTemplateControl, simulate what Blazor does:
+        foreach (var itemTemplate in itemTemplates)
+        {
+            Output.WriteLine($"\n--- ItemTemplate DataContext={itemTemplate.DataContext} ---");
+            Output.WriteLine($"    Data type={itemTemplate.Data?.GetType().Name}, Data={itemTemplate.Data}");
+
+            // Step 1: Resolve the data array using DataBind — same path as ItemTemplate.razor
+            // ItemTemplate.razor does: DataBind(ViewModel.Data, d => d.Data)
+            // When Data = JsonPointerReference(""), it resolves via DataBind at DataContext
+            Output.WriteLine($"    Resolving data array via DataBind at DataContext: {itemTemplate.DataContext}");
+
+            JsonElement[]? items = null;
+            try
+            {
+                items = await stream
+                    .DataBind<JsonElement[]>(
+                        (JsonPointerReference)itemTemplate.Data,
+                        itemTemplate.DataContext)
+                    .Where(x => x is not null && x.Length > 0)
+                    .Timeout(10.Seconds())
+                    .FirstOrDefaultAsync();
+            }
+            catch (TimeoutException)
+            {
+                Output.WriteLine("    TIMEOUT: No data resolved via DataBind (same path as Blazor)");
+            }
+
+            if (items == null || items.Length == 0)
+            {
+                Output.WriteLine("    No items resolved (empty or null)");
+                continue;
+            }
+
+            Output.WriteLine($"    Resolved {items.Length} items via DataBind");
+
+            // Step 2: For each item, construct DataContext like GetViewWithPath(i)
+            // ItemTemplate.razor: DataContext = $"{ViewModel.DataContext}{ViewModel.Data}/{i}"
+            // ViewModel.Data = JsonPointerReference("").ToString() = ""
+            for (int i = 0; i < items.Length; i++)
+            {
+                var itemDataContext = $"{itemTemplate.DataContext}{itemTemplate.Data}/{i}";
+                Output.WriteLine($"    Item[{i}] DataContext: {itemDataContext}");
+
+                // Step 3: Simulate what DispatchView does with DataContext
+                // DispatchView: ViewModelDataContext = WorkspaceReference.Decode(ViewModel.DataContext).ToString()
+                var decodedDc = WorkspaceReference.Decode(itemDataContext).ToString()!;
+                Output.WriteLine($"    Item[{i}] Decoded DataContext: {decodedDc}");
+
+                // Step 4: Resolve child property bindings the way Blazor DataBind does
+                // Label text = JsonPointerReference("displayLabel")
+                // DataBind calls: stream.DataBind(ref, DataContext) which calls GetPointer + GetStream<T>
+                try
+                {
+                    var displayLabel = await stream
+                        .DataBind<string>(new JsonPointerReference("displayLabel"), decodedDc)
+                        .Timeout(5.Seconds())
+                        .FirstOrDefaultAsync();
+                    Output.WriteLine($"    Item[{i}] displayLabel = {displayLabel}");
+                    displayLabel.Should().NotBeNullOrEmpty(
+                        $"displayLabel should resolve via DataBind at DataContext={decodedDc}");
+                }
+                catch (TimeoutException)
+                {
+                    Output.WriteLine($"    Item[{i}] TIMEOUT: displayLabel did not resolve via DataBind");
+                    throw new Exception(
+                        $"Blazor DataBind failed: stream.DataBind(JsonPointerReference(\"displayLabel\"), \"{decodedDc}\") " +
+                        $"timed out. This means the JSON Pointer evaluation path does not find data at the expected location.");
+                }
+
+                try
+                {
+                    var roleId = await stream
+                        .DataBind<string>(new JsonPointerReference("roleId"), decodedDc)
+                        .Timeout(5.Seconds())
+                        .FirstOrDefaultAsync();
+                    Output.WriteLine($"    Item[{i}] roleId = {roleId}");
+                    roleId.Should().NotBeNullOrEmpty(
+                        $"roleId should resolve via DataBind at DataContext={decodedDc}");
+                }
+                catch (TimeoutException)
+                {
+                    Output.WriteLine($"    Item[{i}] TIMEOUT: roleId did not resolve via DataBind");
+                }
+            }
+
+            // Step 5: Check the rendered template — the server renders View once at ViewArea
+            // All items share the same rendered template. Area paths are set by PrepareRendering.
+            var templateView = itemTemplate.View;
+            Output.WriteLine($"    Raw template View type: {templateView?.GetType().Name}");
+            if (templateView is IContainerControl rawContainer)
+            {
+                Output.WriteLine($"    Raw template has {rawContainer.Areas.Count} child areas:");
+                foreach (var a in rawContainer.Areas)
+                    Output.WriteLine($"      Id={a.Id}, Area={a.Area ?? "(null)"}");
+            }
+
+            // Find the parent area of the ItemTemplateControl in the stream
+            // to derive the ViewArea (parentArea/View)
+            var parentArea = stack.Areas
+                .FirstOrDefault(a =>
+                {
+                    var ctrl = stream.GetControlStream(a.Area.ToString()!)
+                        .Timeout(2.Seconds()).FirstOrDefaultAsync().GetAwaiter().GetResult();
+                    return ctrl is ItemTemplateControl it && it.DataContext == itemTemplate.DataContext;
+                });
+            if (parentArea != null)
+            {
+                var viewAreaPath = $"{parentArea.Area}/{ItemTemplateControl.ViewArea}";
+                Output.WriteLine($"    ViewArea path: {viewAreaPath}");
+
+                // Fetch the RENDERED StackControl from the stream (server-side rendered version)
+                try
+                {
+                    var renderedView = await stream.GetControlStream(viewAreaPath)
+                        .Timeout(5.Seconds())
+                        .FirstAsync(x => x != null);
+                    Output.WriteLine($"    Rendered View type: {renderedView?.GetType().Name}");
+                    Output.WriteLine($"    Rendered View DataContext: {renderedView?.DataContext ?? "(null)"}");
+
+                    if (renderedView is IContainerControl renderedContainer)
+                    {
+                        Output.WriteLine($"    Rendered template has {renderedContainer.Areas.Count} child areas:");
+                        foreach (var a in renderedContainer.Areas)
+                        {
+                            Output.WriteLine($"      Id={a.Id}, Area={a.Area}");
+                            // Fetch the child control
+                            var childCtrl = await stream.GetControlStream(a.Area!.ToString()!)
+                                .Timeout(3.Seconds())
+                                .FirstAsync(x => x != null);
+                            Output.WriteLine($"      -> type={childCtrl?.GetType().Name}, DataContext={childCtrl?.DataContext ?? "(null)"}");
+                        }
+                    }
+                }
+                catch (TimeoutException)
+                {
+                    Output.WriteLine($"    Rendered View not found in stream at {viewAreaPath}");
+                }
+            }
+            else
+            {
+                Output.WriteLine($"    Could not find parent area for ItemTemplate");
+            }
+        }
     }
 
     [Fact(Timeout = 10000)]

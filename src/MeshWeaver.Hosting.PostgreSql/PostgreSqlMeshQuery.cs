@@ -5,7 +5,9 @@ using System.Runtime.CompilerServices;
 using System.Text.Json;
 using MeshWeaver.Hosting.Persistence.Query;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Messaging;
 
 namespace MeshWeaver.Hosting.PostgreSql;
 
@@ -17,6 +19,7 @@ public class PostgreSqlMeshQuery : IMeshQueryCore
 {
     private readonly PostgreSqlStorageAdapter _adapter;
     private readonly IDataChangeNotifier? _changeNotifier;
+    private readonly AccessService? _accessService;
     private readonly QueryParser _parser = new();
     private long _version;
 
@@ -24,10 +27,25 @@ public class PostgreSqlMeshQuery : IMeshQueryCore
 
     public PostgreSqlMeshQuery(
         PostgreSqlStorageAdapter adapter,
-        IDataChangeNotifier? changeNotifier = null)
+        IDataChangeNotifier? changeNotifier = null,
+        AccessService? accessService = null)
     {
         _adapter = adapter;
         _changeNotifier = changeNotifier;
+        _accessService = accessService;
+    }
+
+    /// <summary>
+    /// Gets the effective user ID from the request or from the current access context.
+    /// Returns WellKnownUsers.Public for anonymous/unauthenticated access.
+    /// </summary>
+    private string GetEffectiveUserId(MeshQueryRequest request)
+    {
+        if (!string.IsNullOrEmpty(request.UserId))
+            return request.UserId;
+
+        var userId = _accessService?.Context?.ObjectId;
+        return string.IsNullOrEmpty(userId) ? WellKnownUsers.Public : userId;
     }
 
     public async IAsyncEnumerable<object> QueryAsync(
@@ -58,7 +76,8 @@ public class PostgreSqlMeshQuery : IMeshQueryCore
         if (!string.IsNullOrEmpty(request.ContextPath))
         {
             var buffered = new List<(MeshNode Node, double Score)>();
-            await foreach (var node in _adapter.QueryNodesAsync(parsedQuery, options, request.UserId, ct: ct))
+            var userId = GetEffectiveUserId(request);
+            await foreach (var node in _adapter.QueryNodesAsync(parsedQuery, options, userId, ct: ct))
             {
                 var boost = PathProximity.ComputeBoost(request.ContextPath, node.Path);
                 buffered.Add((node, boost));
@@ -82,7 +101,8 @@ public class PostgreSqlMeshQuery : IMeshQueryCore
         var skipOrig = request.Skip ?? 0;
         var countOrig = 0;
 
-        await foreach (var node in _adapter.QueryNodesAsync(parsedQuery, options, request.UserId, ct: ct))
+        var effectiveUserId = GetEffectiveUserId(request);
+        await foreach (var node in _adapter.QueryNodesAsync(parsedQuery, options, effectiveUserId, ct: ct))
         {
             if (skipOrig > 0)
             {
@@ -140,7 +160,10 @@ public class PostgreSqlMeshQuery : IMeshQueryCore
 
         var suggestions = new List<QuerySuggestion>();
 
-        await foreach (var node in _adapter.QueryNodesAsync(query, options, ct: ct))
+        var acUserId = _accessService?.Context?.ObjectId;
+        var effectiveAutocompleteUserId = string.IsNullOrEmpty(acUserId) ? WellKnownUsers.Public : acUserId;
+
+        await foreach (var node in _adapter.QueryNodesAsync(query, options, effectiveAutocompleteUserId, ct: ct))
         {
             var name = node.Name ?? node.Id ?? node.Path ?? "";
             double score = 0;
@@ -185,7 +208,10 @@ public class PostgreSqlMeshQuery : IMeshQueryCore
             Path: null,
             Scope: QueryScope.Exact);
 
-        await foreach (var node in _adapter.QueryNodesAsync(query, options, ct: ct))
+        var acUserId = _accessService?.Context?.ObjectId;
+        var effectiveSelectUserId = string.IsNullOrEmpty(acUserId) ? WellKnownUsers.Public : acUserId;
+
+        await foreach (var node in _adapter.QueryNodesAsync(query, options, effectiveSelectUserId, ct: ct))
         {
             var prop = typeof(MeshNode).GetProperty(property);
             if (prop == null)

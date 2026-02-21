@@ -798,6 +798,123 @@ public record Graph
     }
 
     #endregion
+
+    #region Code Node Sibling Query Tests
+
+    /// <summary>
+    /// Verifies the parent path derivation logic used by CodeLayoutAreas.Overview.
+    /// For a code node at "type/story/Code/code", the parent NodeType path should be "type/story".
+    /// </summary>
+    [Theory]
+    [InlineData("type/story/Code/code", "type/story")]
+    [InlineData("type/org/Code/orgCode", "type/org")]
+    [InlineData("Organization/Code/Organization", "Organization")]
+    [InlineData("a/b/Code/c", "a/b")]
+    public void CodeNode_ParentPathParsing_StripsTwoSegments(string codePath, string expectedParent)
+    {
+        var segments = codePath.Split('/');
+        var parentPath = segments.Length >= 3
+            ? string.Join("/", segments.Take(segments.Length - 2))
+            : codePath;
+
+        parentPath.Should().Be(expectedParent,
+            $"Stripping last 2 segments from '{codePath}' should yield the NodeType parent path");
+    }
+
+    /// <summary>
+    /// Verifies that IMeshQuery with scope:descendants finds Code nodes that are 2 levels deep.
+    /// Code nodes at "type/story/Code/code" are NOT immediate children of "type/story" (they're
+    /// grandchildren), so scope:children would miss them. scope:descendants is required.
+    /// </summary>
+    [Fact(Timeout = 30000)]
+    public async Task QueryAsync_ScopeDescendants_FindsCodeNodesUnderNodeType()
+    {
+        // Arrange
+        var client = GetClient();
+        var graphAddress = new Address("graph");
+
+        // Initialize graph hub (required for routing)
+        await client.AwaitResponse(
+            new PingRequest(),
+            o => o.WithTarget(graphAddress),
+            TestContext.Current.CancellationToken);
+
+        // Act: Query for Code nodes under type/story using scope:descendants
+        var query = "path:type/story nodeType:Code scope:descendants";
+        var nodes = await MeshQuery.QueryAsync<MeshNode>(query, null, TestContext.Current.CancellationToken)
+            .ToListAsync(TestContext.Current.CancellationToken);
+
+        foreach (var node in nodes)
+            Output.WriteLine($"Found Code node: {node.Path} (NodeType={node.NodeType})");
+
+        // Assert: should find the code node created by SaveCodeAsChildNodeAsync
+        nodes.Should().NotBeEmpty("scope:descendants should find Code nodes 2 levels deep");
+        nodes.Should().OnlyContain(n => n.NodeType == "Code", "All results should be Code nodes");
+    }
+
+    /// <summary>
+    /// Verifies that scope:children does NOT find Code nodes (they are 2 levels deep).
+    /// This confirms the bug that was fixed by switching to scope:descendants.
+    /// </summary>
+    [Fact(Timeout = 30000)]
+    public async Task QueryAsync_ScopeChildren_DoesNotFindCodeNodes()
+    {
+        // Arrange
+        var client = GetClient();
+        var graphAddress = new Address("graph");
+
+        await client.AwaitResponse(
+            new PingRequest(),
+            o => o.WithTarget(graphAddress),
+            TestContext.Current.CancellationToken);
+
+        // Act: Query for Code nodes under type/story using scope:children (1 level deep only)
+        var query = "path:type/story nodeType:Code scope:children";
+        var nodes = await MeshQuery.QueryAsync<MeshNode>(query, null, TestContext.Current.CancellationToken)
+            .ToListAsync(TestContext.Current.CancellationToken);
+
+        foreach (var node in nodes)
+            Output.WriteLine($"Found with scope:children: {node.Path}");
+
+        // Assert: scope:children only checks 1 level deep — Code nodes are at depth 2 (type/story/Code/id)
+        nodes.Should().BeEmpty("scope:children only finds immediate children; Code nodes are 2 levels deep");
+    }
+
+    /// <summary>
+    /// Verifies that querying for all Code nodes under each NodeType finds them.
+    /// This is the same query pattern used by both CodeLayoutAreas.Overview (for siblings)
+    /// and NodeTypeLayoutAreas.Overview (for code list in left menu).
+    /// </summary>
+    [Theory]
+    [InlineData("type/story")]
+    [InlineData("type/org")]
+    [InlineData("type/project")]
+    [InlineData("type/graph")]
+    public async Task QueryAsync_EachNodeType_HasCodeDescendants(string nodeTypePath)
+    {
+        // Arrange
+        var client = GetClient();
+        await client.AwaitResponse(
+            new PingRequest(),
+            o => o.WithTarget(new Address("graph")),
+            TestContext.Current.CancellationToken);
+
+        // Act
+        var query = $"path:{nodeTypePath} nodeType:Code scope:descendants";
+        var nodes = await MeshQuery.QueryAsync<MeshNode>(query, null, TestContext.Current.CancellationToken)
+            .ToListAsync(TestContext.Current.CancellationToken);
+
+        foreach (var node in nodes)
+            Output.WriteLine($"{nodeTypePath} -> Code node: {node.Path}");
+
+        // Assert
+        nodes.Should().NotBeEmpty($"{nodeTypePath} should have Code descendants (created by SaveCodeAsChildNodeAsync)");
+        nodes.Should().OnlyContain(n => n.NodeType == "Code");
+        nodes.Should().OnlyContain(n => n.Content is CodeConfiguration,
+            "Code node Content should be CodeConfiguration");
+    }
+
+    #endregion
 }
 
 [CollectionDefinition("OrganizationsLayoutTests", DisableParallelization = true)]
@@ -1579,6 +1696,134 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
         var isExpectedType = control is StackControl || control is MarkdownControl;
         isExpectedType.Should().BeTrue(
             $"Custom OrganizationViews.Details should return StackControl or MarkdownControl, got {control?.GetType().Name}");
+    }
+
+    /// <summary>
+    /// Verifies that QueryAsync with scope:descendants finds Code nodes under Organization.
+    /// Organization has 2 code files: Organization.cs and OrganizationViews.cs
+    /// stored at Organization/Code/Organization and Organization/Code/OrganizationViews.
+    /// </summary>
+    [Fact(Timeout = 30000)]
+    public async Task Organization_QueryAsync_ScopeDescendants_FindsCodeNodes()
+    {
+        // Arrange
+        var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
+
+        // Act: Query for Code nodes under Organization using scope:descendants
+        var query = $"path:Organization nodeType:{CodeNodeType.NodeType} scope:descendants";
+        Output.WriteLine($"Executing query: {query}");
+
+        var nodes = await meshQuery.QueryAsync<MeshNode>(query, null, TestContext.Current.CancellationToken)
+            .ToListAsync(TestContext.Current.CancellationToken);
+
+        foreach (var node in nodes)
+            Output.WriteLine($"Found Code node: Path={node.Path}, Name={node.Name}, NodeType={node.NodeType}");
+
+        // Assert: Organization has 2 code files
+        nodes.Should().HaveCount(2, "Organization should have 2 Code descendants (Organization.cs and OrganizationViews.cs)");
+        nodes.Should().OnlyContain(n => n.NodeType == CodeNodeType.NodeType, "All results should be Code nodes");
+        nodes.Should().OnlyContain(n => n.Content is CodeConfiguration, "All Code nodes should have CodeConfiguration content");
+    }
+
+    /// <summary>
+    /// Verifies that the NodeType Overview area for Organization renders a SplitterControl
+    /// and that the left menu contains the correct number of code file entries.
+    /// This diagnoses the "no code files" issue in the NodeType Overview.
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task Organization_NodeTypeOverview_ContainsCodeNodes()
+    {
+        var organizationAddress = new Address("Organization");
+
+        var client = GetClient(c => c
+            .WithInitialization((h, _) => RoutingService.RegisterStreamAsync(h))
+            .AddLayoutClient(cc => cc)
+            .AddData(data => data));
+
+        var workspace = client.GetWorkspace();
+
+        // Initialize hub
+        Output.WriteLine("Sending PingRequest to Organization NodeType hub...");
+        await client.AwaitResponse(
+            new PingRequest(),
+            o => o.WithTarget(organizationAddress),
+            TestContext.Current.CancellationToken);
+        Output.WriteLine("PingRequest completed");
+
+        // Request the NodeType Overview area (which is the default area for NodeType nodes)
+        var reference = new LayoutAreaReference(NodeTypeLayoutAreas.OverviewArea);
+        Output.WriteLine($"Requesting layout area: {reference.Area}");
+
+        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(organizationAddress, reference);
+
+        // Collect multiple JSON updates - the code nodes arrive asynchronously via ObserveQuery
+        Output.WriteLine("Collecting JSON updates for up to 30 seconds...");
+        var updates = await stream
+            .TakeUntil(Observable.Timer(TimeSpan.FromSeconds(30)))
+            .ToList();
+
+        Output.WriteLine($"Received {updates.Count} JSON updates");
+
+        // Check the latest update for code node content
+        var lastJson = updates.Last().Value.GetRawText();
+        Output.WriteLine($"Last JSON update (first 5000 chars):\n{lastJson.Substring(0, Math.Min(5000, lastJson.Length))}");
+
+        // The NavMenu should contain code file entries
+        // Organization has 2 code files: Organization.cs and OrganizationViews.cs
+        var hasOrganizationCode = lastJson.Contains("Organization") && lastJson.Contains("Code");
+        hasOrganizationCode.Should().BeTrue("Overview JSON should contain Code section references");
+
+        // Check specifically for "No code files" to detect the bug
+        var hasNoCodeFiles = lastJson.Contains("No code files");
+        Output.WriteLine($"Contains 'No code files': {hasNoCodeFiles}");
+
+        // If "No code files" appears, dump all updates for diagnosis
+        if (hasNoCodeFiles)
+        {
+            Output.WriteLine("\n=== DIAGNOSIS: 'No code files' found. Dumping all updates ===");
+            for (int i = 0; i < updates.Count; i++)
+            {
+                var json = updates[i].Value.GetRawText();
+                Output.WriteLine($"\n--- Update #{i + 1} (first 3000 chars) ---\n{json.Substring(0, Math.Min(3000, json.Length))}");
+            }
+        }
+
+        hasNoCodeFiles.Should().BeFalse(
+            "NodeType Overview should NOT show 'No code files'. " +
+            "Organization has 2 code files (Organization.cs, OrganizationViews.cs) " +
+            "which should be found by scope:descendants query.");
+    }
+
+    /// <summary>
+    /// Tests the ObserveQuery reactive path specifically for Code nodes under Organization.
+    /// This mirrors the exact query used by NodeTypeLayoutAreas.Overview.
+    /// </summary>
+    [Fact(Timeout = 30000)]
+    public async Task Organization_ObserveQuery_ScopeDescendants_EmitsCodeNodes()
+    {
+        // Arrange
+        var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
+        var hubPath = "Organization";
+
+        // Act: Use ObserveQuery with the same query pattern as NodeTypeLayoutAreas.Overview
+        var queryString = $"path:{hubPath} nodeType:{CodeNodeType.NodeType} scope:descendants";
+        Output.WriteLine($"ObserveQuery: {queryString}");
+
+        var request = MeshQueryRequest.FromQuery(queryString);
+
+        var initialChange = await meshQuery.ObserveQuery<MeshNode>(request)
+            .Timeout(TimeSpan.FromSeconds(20))
+            .FirstAsync();
+
+        Output.WriteLine($"ObserveQuery emitted: ChangeType={initialChange.ChangeType}, Items.Count={initialChange.Items.Count}");
+        foreach (var item in initialChange.Items)
+            Output.WriteLine($"  Item: Path={item.Path}, Name={item.Name}, NodeType={item.NodeType}");
+
+        // Assert
+        initialChange.ChangeType.Should().Be(QueryChangeType.Initial, "First emission should be Initial");
+        initialChange.Items.Should().HaveCount(2,
+            "ObserveQuery should find 2 Code nodes under Organization (Organization.cs and OrganizationViews.cs)");
+        initialChange.Items.Should().OnlyContain(n => n.NodeType == CodeNodeType.NodeType);
     }
 
     /// <summary>

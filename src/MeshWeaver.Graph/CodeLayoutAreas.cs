@@ -131,7 +131,7 @@ public static class CodeLayoutAreas
         if (meshQuery != null)
         {
             meshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
-                    $"path:{parentPath} nodeType:{CodeNodeType.NodeType} scope:children"))
+                    $"path:{parentPath} nodeType:{CodeNodeType.NodeType} scope:descendants"))
                 .Scan(new List<MeshNode>(), (list, change) =>
                 {
                     if (change.ChangeType == QueryChangeType.Initial || change.ChangeType == QueryChangeType.Reset)

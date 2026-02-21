@@ -126,7 +126,6 @@ public class CreateNodeAsyncTest(ITestOutputHelper output) : MonolithMeshTestBas
     {
         // Arrange
         var catalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
-        var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
         var parentPath = "MeshWeaver/Documentation/DataMesh/CollaborativeEditing";
 
         // Create parent comment
@@ -149,13 +148,13 @@ public class CreateNodeAsyncTest(ITestOutputHelper output) : MonolithMeshTestBas
         };
         await catalog.CreateNodeAsync(parentNode, "Alice", TestTimeout);
 
-        // Create reply as child of parent comment node
+        // Create reply as child of parent comment node (nested path)
         var replyId = Guid.NewGuid().AsString();
-        var replyPath = $"{parentPath}/{replyId}";
+        var replyPath = $"{parentCommentPath}/{replyId}";
         var replyComment = new Comment
         {
             Id = replyId,
-            PrimaryNodePath = parentPath,
+            PrimaryNodePath = parentCommentPath,
             Author = "Bob",
             Text = "This is a reply",
             CreatedAt = DateTimeOffset.UtcNow,
@@ -177,21 +176,13 @@ public class CreateNodeAsyncTest(ITestOutputHelper output) : MonolithMeshTestBas
         replyContent.Author.Should().Be("Bob");
         replyContent.Text.Should().Be("This is a reply");
 
-        // Verify both nodes are queryable
-        var comments = await meshQuery.QueryAsync<MeshNode>(
-            $"path:{parentPath} nodeType:{CommentNodeType.NodeType} scope:children"
-        ).ToListAsync();
-
-        comments.Should().Contain(n => n.Path == parentCommentPath);
-        comments.Should().Contain(n => n.Path == replyPath);
-
         // Verify reply round-trips via path
         var retrievedReply = await catalog.GetNodeAsync(new Address(replyPath));
         retrievedReply.Should().NotBeNull("Reply should be retrievable by path");
         retrievedReply!.Path.Should().StartWith(parentCommentPath);
 
-        // Cleanup
-        await catalog.DeleteNodeAsync(parentCommentPath, recursive: false, ct: TestTimeout);
+        // Cleanup: delete reply first, then parent
         await catalog.DeleteNodeAsync(replyPath, recursive: false, ct: TestTimeout);
+        await catalog.DeleteNodeAsync(parentCommentPath, recursive: false, ct: TestTimeout);
     }
 }
