@@ -57,7 +57,7 @@ dotnet run
 # Access at https://localhost:7122
 ```
 
-The Memex Portal uses `AddJsonGraphConfiguration()` to dynamically load Graph nodes from `samples/Graph/Data/`, including the MeshWeaver documentation and Architecture articles. This is the recommended portal for development.
+The Memex Portal uses `AddGraph()` to dynamically load Graph nodes from `samples/Graph/Data/`, including the MeshWeaver documentation and Architecture articles. This is the recommended portal for development.
 
 #### Microservices Portal (.NET Aspire)
 ```bash

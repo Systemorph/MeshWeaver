@@ -64,7 +64,7 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
                 services.AddSingleton<IConfiguration>(configuration);
                 return services;
             })
-            .AddJsonGraphConfiguration(dataDirectory)
+            .AddGraph()
             .ConfigureDefaultNodeHub(config => config.AddDefaultLayoutAreas());
     }
 

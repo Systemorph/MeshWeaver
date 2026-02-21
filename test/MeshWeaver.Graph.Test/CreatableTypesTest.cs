@@ -150,8 +150,6 @@ public class CreatableTypesTest
         // Arrange & Act
         var definition = new NodeTypeDefinition
         {
-            Id = "Project",
-            Namespace = "ACME",
             CreatableTypes = ["ACME/Project/Todo", "ACME/Project/Story"]
         };
 
@@ -164,11 +162,7 @@ public class CreatableTypesTest
     public void NodeTypeDefinition_IncludeGlobalTypes_DefaultsToTrue()
     {
         // Arrange & Act
-        var definition = new NodeTypeDefinition
-        {
-            Id = "Project",
-            Namespace = "ACME"
-        };
+        var definition = new NodeTypeDefinition { };
 
         // Assert
         definition.IncludeGlobalTypes.Should().BeTrue();
@@ -180,8 +174,6 @@ public class CreatableTypesTest
         // Arrange & Act
         var definition = new NodeTypeDefinition
         {
-            Id = "Project",
-            Namespace = "ACME",
             IncludeGlobalTypes = false
         };
 

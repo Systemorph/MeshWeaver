@@ -68,7 +68,7 @@ public class CommentWithRepliesViewTest(ITestOutputHelper output) : MonolithMesh
                 services.AddSingleton<IConfiguration>(configuration);
                 return services;
             })
-            .AddJsonGraphConfiguration(dataDirectory)
+            .AddGraph()
             .ConfigureDefaultNodeHub(config => config.AddDefaultLayoutAreas());
     }
 

@@ -58,7 +58,7 @@ public class MarkdownEditorEchoTest(ITestOutputHelper output) : MonolithMeshTest
                 services.AddSingleton<IConfiguration>(configuration);
                 return services;
             })
-            .AddJsonGraphConfiguration(dataDirectory);
+            .AddGraph();
     }
 
     protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)

@@ -35,7 +35,7 @@ public class NodeCreationAccessTest(ITestOutputHelper output) : MonolithMeshTest
         // Add graph configuration to register NodeTypes like "Markdown"
         return base.ConfigureMesh(builder)
             .AddRowLevelSecurity()
-            .AddJsonGraphConfiguration(TestPaths.SamplesGraphData);
+            .AddGraph();
     }
 
     /// <summary>

@@ -19,16 +19,16 @@ namespace MeshWeaver.Graph;
 /// <summary>
 /// Layout views for NodeType definition nodes.
 /// Uses standard MeshNodeView.Search with NodeTypeCatalogMode for showing instances.
-/// - Details: Overview of the NodeType
+/// - Overview: Overview of the NodeType (default)
 /// - CodeView: Split view with left menu and code display
 /// - CodeEdit: Monaco editor for code editing
 /// - HubConfigView: View HubConfiguration
 /// - HubConfigEdit: Monaco editor for HubConfiguration
 /// </summary>
-public static class NodeTypeView
+public static class NodeTypeLayoutAreas
 {
     public const string SearchArea = "Search";
-    public const string DetailsArea = "Details";
+    public const string OverviewArea = "Overview";
     public const string CodeViewArea = "Code";
     public const string CodeEditArea = "CodeEdit";
     public const string HubConfigViewArea = "HubConfig";
@@ -41,6 +41,17 @@ public static class NodeTypeView
     private const string SelectionDataId = "selection";
 
     /// <summary>
+    /// Gets the current MeshNode from the workspace stream.
+    /// </summary>
+    private static IObservable<MeshNode?> GetNodeStream(LayoutAreaHost host)
+    {
+        var hubPath = host.Hub.Address.ToString();
+        var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? Array.Empty<MeshNode>())
+            ?? Observable.Return(Array.Empty<MeshNode>());
+        return nodeStream.Select(nodes => nodes.FirstOrDefault(n => n.Path == hubPath));
+    }
+
+    /// <summary>
     /// Adds the NodeType views to the hub's layout for NodeType nodes.
     /// Uses the standard MeshNodeLayoutAreas.Search with NodeTypeCatalogMode to dynamically query instances.
     /// Includes UCR areas ($Data, $Schema, $Model) for unified content references.
@@ -50,10 +61,10 @@ public static class NodeTypeView
         => configuration
             .Set(new NodeTypeCatalogMode())  // Enable NodeType catalog mode
             .AddLayout(layout => layout
-                .WithDefaultArea(CodeViewArea)
-                .WithView(MeshNodeLayoutAreas.OverviewArea, Overview)  // Override default Overview
+                .WithDefaultArea(OverviewArea)
+                .WithView(MeshNodeLayoutAreas.OverviewArea, ListOverview)  // Override default Overview for listings
                 .WithView(SearchArea, MeshNodeLayoutAreas.Search)  // Use standard search
-                .WithView(DetailsArea, Details)
+                .WithView(OverviewArea, Overview)
                 .WithView(CodeViewArea, CodeView)
                 .WithView(CodeEditArea, CodeEdit)
                 .WithView(HubConfigViewArea, HubConfigView)
@@ -64,10 +75,10 @@ public static class NodeTypeView
                 .WithView(MeshNodeLayoutAreas.ModelArea, DataModelLayoutArea.DataModel));
 
     /// <summary>
-    /// Overview for NodeType nodes - extracts ShowChildrenInDetails from NodeTypeDefinition content.
+    /// List overview for NodeType nodes - used in search results and listings.
     /// </summary>
     [Browsable(false)]
-    public static IObservable<UiControl?> Overview(LayoutAreaHost host, RenderingContext _)
+    public static IObservable<UiControl?> ListOverview(LayoutAreaHost host, RenderingContext _)
     {
         var hubPath = host.Hub.Address.ToString();
 
@@ -101,28 +112,27 @@ public static class NodeTypeView
     }
 
     /// <summary>
-    /// Renders the main Details area for a NodeType.
+    /// Renders the Overview area for a NodeType.
     /// Shows an overview of the NodeType configuration.
-    /// Returns static structure with data-bound dynamic parts.
+    /// Gets NodeTypeDefinition from MeshNode.Content via the workspace stream.
     /// </summary>
-    public static UiControl Details(LayoutAreaHost host, RenderingContext ctx)
+    public static UiControl Overview(LayoutAreaHost host, RenderingContext ctx)
     {
-        // Subscribe to data streams - data will be stored in data section
-        host.SubscribeToDataStream(DefinitionDataId, host.Workspace.GetNodeContent<NodeTypeDefinition>());
+        var nodeStream = GetNodeStream(host);
         host.SubscribeToDataStream(CodeFileDataId, host.Workspace.GetSingle<CodeConfiguration>());
 
         // Return static structure with nested observable view for content
         return Controls.Stack
             .WithWidth("100%")
             .WithView(
-                (h, c) => h.GetDataStream<NodeTypeDefinition>(DefinitionDataId)
+                (h, c) => nodeStream
                     .CombineLatest(h.GetDataStream<CodeConfiguration>(CodeFileDataId))
                     .Select(tuple =>
                     {
-                        var (definition, codeFile) = tuple;
-                        if (definition == null)
+                        var (node, codeFile) = tuple;
+                        if (node == null)
                             return RenderLoading("Loading NodeType definition...");
-                        return BuildDetailsLayout(host, definition, codeFile);
+                        return BuildDetailsLayout(host, node, codeFile);
                     }),
                 "Content"
             );
@@ -133,15 +143,16 @@ public static class NodeTypeView
     /// </summary>
     private static UiControl BuildDetailsLayout(
         LayoutAreaHost host,
-        NodeTypeDefinition content,
+        MeshNode node,
         CodeConfiguration? codeFile)
     {
         var hubAddress = host.Hub.Address;
+        var content = node.Content as NodeTypeDefinition;
         var stack = Controls.Stack.WithWidth("100%").WithStyle("padding: 24px;");
 
-        // Header - ID comes from hub address, not from content
-        var nodeId = hubAddress.Segments.LastOrDefault() ?? "Unknown";
-        var title = content.DisplayName ?? nodeId;
+        // Header
+        var nodeId = node.Id;
+        var title = node.Name ?? nodeId;
         stack = stack.WithView(Controls.H1(title));
         stack = stack.WithView(Controls.Body("NodeType Configuration").WithStyle("color: var(--neutral-foreground-hint); margin-bottom: 24px;"));
 
@@ -150,17 +161,17 @@ public static class NodeTypeView
             .WithStyle("background: var(--neutral-layer-2); border-radius: 8px; padding: 20px; margin-bottom: 24px;");
 
         infoCard = infoCard.WithView(BuildInfoRow("ID", nodeId));
-        if (!string.IsNullOrEmpty(content.DisplayName))
-            infoCard = infoCard.WithView(BuildInfoRow("Display Name", content.DisplayName));
-        if (!string.IsNullOrEmpty(content.Description))
+        if (!string.IsNullOrEmpty(node.Name))
+            infoCard = infoCard.WithView(BuildInfoRow("Name", node.Name));
+        if (!string.IsNullOrEmpty(content?.Description))
             infoCard = infoCard.WithView(BuildInfoRow("Description", content.Description));
-        if (!string.IsNullOrEmpty(content.Icon))
-            infoCard = infoCard.WithView(BuildInfoRow("Icon", content.Icon));
-        infoCard = infoCard.WithView(BuildInfoRow("Display Order", content.DisplayOrder.ToString()));
+        if (!string.IsNullOrEmpty(node.Icon))
+            infoCard = infoCard.WithView(BuildInfoRow("Icon", node.Icon));
+        infoCard = infoCard.WithView(BuildInfoRow("Display Order", (node.DisplayOrder ?? 0).ToString()));
 
         var hasCode = !string.IsNullOrEmpty(codeFile?.Code);
         infoCard = infoCard.WithView(BuildInfoRow("Has Code", hasCode ? "Yes" : "No"));
-        infoCard = infoCard.WithView(BuildInfoRow("Has Configuration", !string.IsNullOrEmpty(content.Configuration) ? "Yes" : "No"));
+        infoCard = infoCard.WithView(BuildInfoRow("Has Configuration", !string.IsNullOrEmpty(content?.Configuration) ? "Yes" : "No"));
 
         stack = stack.WithView(infoCard);
 
@@ -190,8 +201,7 @@ public static class NodeTypeView
         var hubPath = host.Hub.Address.ToString();
         var meshQuery = host.Hub.ServiceProvider.GetService<IMeshQuery>();
 
-        // Get data streams directly
-        var definitionStream = host.Workspace.GetNodeContent<NodeTypeDefinition>();
+        var definitionStream = GetNodeStream(host);
         var persistence = host.Hub.ServiceProvider.GetService<IPersistenceService>();
         var codeFilesStream = Observable.FromAsync(async () =>
         {
@@ -278,11 +288,12 @@ public static class NodeTypeView
     private static UiControl BuildLeftMenu(
         LayoutAreaHost host,
         object hubAddress,
-        NodeTypeDefinition content,
+        MeshNode node,
         IReadOnlyCollection<CodeConfiguration>? codeFiles,
         IReadOnlyCollection<MeshNode>? nodeTypes = null,
         IReadOnlyCollection<MeshNode>? agents = null)
     {
+        var content = node.Content as NodeTypeDefinition;
         var navMenu = Controls.NavMenu.WithSkin(s => s.WithWidth(280).WithCollapsible(false));
 
         // Search link
@@ -295,7 +306,7 @@ public static class NodeTypeView
         // ID comes from hub address, not from content
         var nodeId = hubAddress is Address addr ? addr.Segments.LastOrDefault() : (hubAddress.ToString() ?? "Unknown").Split('/').LastOrDefault() ?? "Unknown";
         navMenu = navMenu.WithView(
-            new NavLinkControl(content.DisplayName ?? nodeId, FluentIcons.Settings(), null)
+            new NavLinkControl(node.Name ?? nodeId, FluentIcons.Settings(), null)
                 .WithClickAction(actx => host.UpdateData(SelectionDataId, "configuration"))
         );
 
@@ -361,7 +372,7 @@ public static class NodeTypeView
         }
 
         // Dependencies section (if any)
-        if (content.Dependencies != null && content.Dependencies.Count > 0)
+        if (content?.Dependencies != null && content.Dependencies.Count > 0)
         {
             var depsGroup = new NavGroupControl("Dependencies")
                 .WithIcon(FluentIcons.Link())
@@ -387,7 +398,7 @@ public static class NodeTypeView
     private static UiControl BuildMainPane(
         LayoutAreaHost _,
         object hubAddress,
-        NodeTypeDefinition definition,
+        MeshNode node,
         IReadOnlyCollection<CodeConfiguration>? codeFiles,
         string? selection)
     {
@@ -398,7 +409,7 @@ public static class NodeTypeView
         // Show configuration
         if (selection == "configuration")
         {
-            return BuildConfigurationPane(stack, hubAddress, definition);
+            return BuildConfigurationPane(stack, hubAddress, node);
         }
 
         // Show selected code file or first one
@@ -417,8 +428,9 @@ public static class NodeTypeView
     /// Builds the read-only view of NodeTypeDefinition in the main pane.
     /// Shows all properties with Configuration as one of them.
     /// </summary>
-    private static UiControl BuildConfigurationPane(StackControl stack, object hubAddress, NodeTypeDefinition definition)
+    private static UiControl BuildConfigurationPane(StackControl stack, object hubAddress, MeshNode node)
     {
+        var definition = node.Content as NodeTypeDefinition;
         var editHref = new LayoutAreaReference(HubConfigEditArea).ToHref(hubAddress);
         // ID comes from hub address, not from content
         var nodeId = hubAddress is Address addr ? addr.Segments.LastOrDefault() : (hubAddress.ToString() ?? "Unknown").Split('/').LastOrDefault() ?? "Unknown";
@@ -427,7 +439,7 @@ public static class NodeTypeView
         var headerRow = Controls.Stack
             .WithOrientation(Orientation.Horizontal)
             .WithStyle("justify-content: space-between; align-items: center; margin-bottom: 16px;")
-            .WithView(Controls.H2(definition.DisplayName ?? nodeId ?? "Unknown"))
+            .WithView(Controls.H2(node.Name ?? nodeId ?? "Unknown"))
             .WithView(
                 Controls.Button("")
                     .WithIconStart(FluentIcons.Edit())
@@ -441,29 +453,29 @@ public static class NodeTypeView
             .WithStyle("background: var(--neutral-layer-2); border-radius: 8px; padding: 20px; margin-bottom: 24px;");
 
         propsCard = propsCard.WithView(BuildInfoRow("ID", nodeId ?? "Unknown"));
-        propsCard = propsCard.WithView(BuildInfoRow("Namespace", definition.Namespace));
+        propsCard = propsCard.WithView(BuildInfoRow("Namespace", node.Namespace ?? ""));
 
-        if (!string.IsNullOrEmpty(definition.DisplayName))
-            propsCard = propsCard.WithView(BuildInfoRow("Display Name", definition.DisplayName));
+        if (!string.IsNullOrEmpty(node.Name))
+            propsCard = propsCard.WithView(BuildInfoRow("Display Name", node.Name));
 
-        if (!string.IsNullOrEmpty(definition.Description))
+        if (!string.IsNullOrEmpty(definition?.Description))
             propsCard = propsCard.WithView(BuildInfoRow("Description", definition.Description));
 
-        if (!string.IsNullOrEmpty(definition.Icon))
-            propsCard = propsCard.WithView(BuildInfoRow("Icon", definition.Icon));
+        if (!string.IsNullOrEmpty(node.Icon))
+            propsCard = propsCard.WithView(BuildInfoRow("Icon", node.Icon));
 
-        propsCard = propsCard.WithView(BuildInfoRow("Display Order", definition.DisplayOrder.ToString()));
+        propsCard = propsCard.WithView(BuildInfoRow("Display Order", (node.DisplayOrder ?? 0).ToString()));
 
-        if (!string.IsNullOrEmpty(definition.ChildrenQuery))
+        if (!string.IsNullOrEmpty(definition?.ChildrenQuery))
             propsCard = propsCard.WithView(BuildInfoRow("Children Query", definition.ChildrenQuery));
 
-        if (definition.Dependencies != null && definition.Dependencies.Count > 0)
+        if (definition?.Dependencies != null && definition.Dependencies.Count > 0)
             propsCard = propsCard.WithView(BuildInfoRow("Dependencies", string.Join(", ", definition.Dependencies)));
 
         stack = stack.WithView(propsCard);
 
         // Configuration section (lambda expression)
-        if (!string.IsNullOrEmpty(definition.Configuration))
+        if (!string.IsNullOrEmpty(definition?.Configuration))
         {
             stack = stack.WithView(Controls.H3("Configuration").WithStyle("margin: 16px 0 8px 0;"));
             stack = stack.WithView(Controls.Body("Lambda expression for configuring the message hub:").WithStyle("color: var(--neutral-foreground-hint); margin-bottom: 8px;"));
@@ -517,7 +529,7 @@ public static class NodeTypeView
     {
         // Subscribe to data streams
         host.SubscribeToDataStream(CodeFileDataId, host.Workspace.GetSingle<CodeConfiguration>());
-        host.SubscribeToDataStream(DefinitionDataId, host.Workspace.GetNodeContent<NodeTypeDefinition>());
+        host.SubscribeToDataStream(DefinitionDataId, GetNodeStream(host));
 
         // Return structure with nested observable view for editor
         return Controls.Stack
@@ -645,29 +657,30 @@ public static class NodeTypeView
     public static UiControl HubConfigView(LayoutAreaHost host, RenderingContext ctx)
     {
         // Subscribe to data stream
-        host.SubscribeToDataStream(DefinitionDataId, host.Workspace.GetNodeContent<NodeTypeDefinition>());
+        host.SubscribeToDataStream(DefinitionDataId, GetNodeStream(host));
 
         // Return structure with nested observable view
         return Controls.Stack
             .WithWidth("100%")
             .WithView(
-                (h, c) => h.GetDataStream<NodeTypeDefinition>(DefinitionDataId)
-                    .Select(content => content == null
+                (h, c) => h.GetDataStream<MeshNode>(DefinitionDataId)
+                    .Select(node => node == null
                         ? RenderLoading("Loading...")
-                        : BuildHubConfigViewContent(host, content)),
+                        : BuildHubConfigViewContent(host, node)),
                 "Content"
             );
     }
 
-    private static UiControl BuildHubConfigViewContent(LayoutAreaHost host, NodeTypeDefinition content)
+    private static UiControl BuildHubConfigViewContent(LayoutAreaHost host, MeshNode node)
     {
+        var content = node.Content as NodeTypeDefinition;
         var hubAddress = host.Hub.Address;
         var stack = Controls.Stack.WithWidth("100%").WithStyle("padding: 24px;");
 
         stack = stack.WithView(Controls.H2("Configuration").WithStyle("margin-bottom: 16px;"));
         stack = stack.WithView(Controls.Body("Lambda expression: Func<MessageHubConfiguration, MessageHubConfiguration>").WithStyle("color: var(--neutral-foreground-hint); margin-bottom: 16px;"));
 
-        if (!string.IsNullOrEmpty(content.Configuration))
+        if (!string.IsNullOrEmpty(content?.Configuration))
         {
             stack = stack.WithView(Controls.Markdown($"```csharp\n{content.Configuration}\n```").WithStyle("max-height: 400px; overflow: auto;"));
 
@@ -706,29 +719,30 @@ public static class NodeTypeView
     public static UiControl HubConfigEdit(LayoutAreaHost host, RenderingContext ctx)
     {
         // Subscribe to data streams
-        host.SubscribeToDataStream(DefinitionDataId, host.Workspace.GetNodeContent<NodeTypeDefinition>());
+        host.SubscribeToDataStream(DefinitionDataId, GetNodeStream(host));
         host.SubscribeToDataStream(CodeFileDataId, host.Workspace.GetSingle<CodeConfiguration>());
 
         // Return structure with nested observable view
         return Controls.Stack
             .WithWidth("100%")
             .WithView(
-                (h, c) => h.GetDataStream<NodeTypeDefinition>(DefinitionDataId)
+                (h, c) => h.GetDataStream<MeshNode>(DefinitionDataId)
                     .CombineLatest(h.GetDataStream<CodeConfiguration>(CodeFileDataId))
                     .Select(tuple =>
                     {
-                        var (content, codeFile) = tuple;
-                        if (content == null)
+                        var (node, codeFile) = tuple;
+                        if (node == null)
                             return RenderLoading("Loading...");
                         var allCode = codeFile?.Code ?? "";
-                        return BuildHubConfigEditContent(host, content, allCode);
+                        return BuildHubConfigEditContent(host, node, allCode);
                     }),
                 "Editor"
             );
     }
 
-    private static UiControl BuildHubConfigEditContent(LayoutAreaHost host, NodeTypeDefinition content, string allCodeForAutocomplete)
+    private static UiControl BuildHubConfigEditContent(LayoutAreaHost host, MeshNode node, string allCodeForAutocomplete)
     {
+        var content = node.Content as NodeTypeDefinition;
         var hubAddress = host.Hub.Address;
         var stack = Controls.Stack.WithWidth("100%").WithStyle("padding: 24px;");
         // ID comes from hub address, not from content
@@ -744,16 +758,16 @@ public static class NodeTypeView
         var configurationDataId = Guid.NewGuid().AsString();
 
         // Initialize data streams
-        host.UpdateData(displayNameDataId, content.DisplayName ?? "");
-        host.UpdateData(descriptionDataId, content.Description ?? "");
-        host.UpdateData(iconNameDataId, content.Icon ?? "");
-        host.UpdateData(displayOrderDataId, content.DisplayOrder.ToString());
-        host.UpdateData(childrenQueryDataId, content.ChildrenQuery ?? "");
-        host.UpdateData(dependenciesDataId, content.Dependencies != null ? string.Join(", ", content.Dependencies) : "");
-        host.UpdateData(configurationDataId, content.Configuration ?? "config => config");
+        host.UpdateData(displayNameDataId, node.Name ?? "");
+        host.UpdateData(descriptionDataId, content?.Description ?? "");
+        host.UpdateData(iconNameDataId, node.Icon ?? "");
+        host.UpdateData(displayOrderDataId, (node.DisplayOrder ?? 0).ToString());
+        host.UpdateData(childrenQueryDataId, content?.ChildrenQuery ?? "");
+        host.UpdateData(dependenciesDataId, content?.Dependencies != null ? string.Join(", ", content.Dependencies) : "");
+        host.UpdateData(configurationDataId, content?.Configuration ?? "config => config");
 
         // Header
-        stack = stack.WithView(Controls.H2($"Edit: {content.DisplayName ?? nodeId}").WithStyle("margin-bottom: 16px;"));
+        stack = stack.WithView(Controls.H2($"Edit: {node.Name ?? nodeId}").WithStyle("margin-bottom: 16px;"));
 
         // Form fields
         var formStyle = "display: grid; grid-template-columns: 150px 1fr; gap: 12px; align-items: center; margin-bottom: 12px;";
@@ -870,19 +884,16 @@ public static class NodeTypeView
                         dependencies = null;
                 }
 
-                // Update the NodeTypeDefinition with all properties
-                var updatedDefinition = content with
+                // Update the NodeTypeDefinition with content-only properties
+                var updatedDefinition = (content ?? new NodeTypeDefinition()) with
                 {
-                    DisplayName = string.IsNullOrWhiteSpace(displayName) ? null : displayName,
                     Description = string.IsNullOrWhiteSpace(description) ? null : description,
-                    Icon = string.IsNullOrWhiteSpace(iconName) ? null : iconName,
-                    DisplayOrder = displayOrder,
                     ChildrenQuery = string.IsNullOrWhiteSpace(childrenQuery) ? null : childrenQuery,
                     Dependencies = dependencies,
                     Configuration = string.IsNullOrWhiteSpace(configuration) ? null : configuration
                 };
 
-                // Get current MeshNode and update its content
+                // Get current MeshNode and update both node properties and content
                 var hubPath = host.Hub.Address.ToString();
                 var currentNodes = await host.Workspace.GetStream<MeshNode>()!.FirstAsync();
                 var currentNode = currentNodes?.FirstOrDefault(n => n.Path == hubPath);
@@ -896,8 +907,14 @@ public static class NodeTypeView
                     return;
                 }
 
-                // Update MeshNode with new content
-                var updatedNode = currentNode with { Content = updatedDefinition };
+                // Update MeshNode with new content and node-level properties
+                var updatedNode = currentNode with
+                {
+                    Name = string.IsNullOrWhiteSpace(displayName) ? null : displayName,
+                    Icon = string.IsNullOrWhiteSpace(iconName) ? null : iconName,
+                    DisplayOrder = displayOrder,
+                    Content = updatedDefinition
+                };
 
                 using var cts = new CancellationTokenSource(10.Seconds());
                 var response = await actx.Host.Hub.AwaitResponse<DataChangeResponse>(

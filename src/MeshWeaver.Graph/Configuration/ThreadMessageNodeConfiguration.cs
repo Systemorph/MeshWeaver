@@ -11,6 +11,15 @@ namespace MeshWeaver.Graph.Configuration;
 public static class ThreadMessageNodeConfiguration
 {
     /// <summary>
+    /// Registers the built-in "ThreadMessage" MeshNode on the mesh builder.
+    /// </summary>
+    public static TBuilder AddThreadMessageType<TBuilder>(this TBuilder builder) where TBuilder : MeshBuilder
+    {
+        builder.AddMeshNodes(CreateMeshNode());
+        return builder;
+    }
+
+    /// <summary>
     /// Creates a MeshNode definition for the ThreadMessage node type.
     /// This provides HubConfiguration for nodes with nodeType="ThreadMessage".
     /// </summary>
@@ -18,6 +27,7 @@ public static class ThreadMessageNodeConfiguration
     {
         Name = "Thread Message",
         Icon = "/static/NodeTypeIcons/message.svg",
+        AssemblyLocation = typeof(ThreadMessageNodeConfiguration).Assembly.Location,
         HubConfiguration = config => config
             .AddThreadMessageViews()
             .AddMeshDataSource(source => source.WithContentType<ThreadMessage>())

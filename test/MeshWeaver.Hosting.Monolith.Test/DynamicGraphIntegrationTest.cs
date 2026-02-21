@@ -27,7 +27,7 @@ namespace MeshWeaver.Hosting.Monolith.Test;
 /// Tests verify that the JSON-based configuration works end-to-end with real messages.
 /// </summary>
 /// <remarks>
-/// These tests use AddJsonGraphConfiguration instead of InstallAssemblies.
+/// These tests use AddGraph instead of InstallAssemblies.
 /// The types (Story, Organization, Project) are compiled at runtime from JSON TypeSource.
 /// </remarks>
 [Collection("DynamicGraphIntegrationTests")]
@@ -113,12 +113,7 @@ public enum StoryStatus
             DisplayOrder = 30,
             Content = new NodeTypeDefinition
             {
-                Id = "story",
-                Namespace = "Type",
-                DisplayName = "Story",
-                Icon = "Document",
                 Description = "A user story or task",
-                DisplayOrder = 30,
                 Configuration = "config => config"
             }
         };
@@ -146,12 +141,7 @@ public record Organization
             DisplayOrder = 10,
             Content = new NodeTypeDefinition
             {
-                Id = "org",
-                Namespace = "type",
-                DisplayName = "Organization",
-                Icon = "Building",
                 Description = "An organization",
-                DisplayOrder = 10,
                 Configuration = "config => config.WithContentType<Organization>().AddDefaultLayoutAreas()"
             }
         };
@@ -179,12 +169,7 @@ public record Project
             DisplayOrder = 20,
             Content = new NodeTypeDefinition
             {
-                Id = "project",
-                Namespace = "Type",
-                DisplayName = "Project",
-                Icon = "Folder",
                 Description = "A project",
-                DisplayOrder = 20,
                 Configuration = "config => config"
             }
         };
@@ -211,12 +196,7 @@ public record Graph
             DisplayOrder = 0,
             Content = new NodeTypeDefinition
             {
-                Id = "graph",
-                Namespace = "Type",
-                DisplayName = "Graph",
-                Icon = "Diagram",
                 Description = "The graph root",
-                DisplayOrder = 0,
                 Configuration = "config => config"
             }
         };
@@ -246,7 +226,7 @@ public record Graph
             .UseMonolithMesh()
             .AddInMemoryPersistence()
             .ConfigureServices(services => services.Configure<CompilationCacheOptions>(o => o.CacheDirectory = cacheDirectory))
-            .AddJsonGraphConfiguration(testDataDirectory);
+            .AddGraph();
     }
 
 
@@ -978,7 +958,7 @@ public class DynamicGraphFileSystemPersistenceTest : MonolithMeshTestBase
             .UseMonolithMesh()
             .AddFileSystemPersistence(testDataDirectory)
             .ConfigureServices(services => services.Configure<CompilationCacheOptions>(o => o.CacheDirectory = cacheDirectory))
-            .AddJsonGraphConfiguration(testDataDirectory);
+            .AddGraph();
     }
 
     public override async ValueTask DisposeAsync()
@@ -1111,7 +1091,7 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
             .UseMonolithMesh()
             .AddFileSystemPersistence(SamplesDataDirectory)
             .ConfigureServices(services => services.Configure<CompilationCacheOptions>(o => o.CacheDirectory = _cacheDirectory))
-            .AddJsonGraphConfiguration(SamplesDataDirectory);
+            .AddGraph();
     }
 
     public override async ValueTask DisposeAsync()

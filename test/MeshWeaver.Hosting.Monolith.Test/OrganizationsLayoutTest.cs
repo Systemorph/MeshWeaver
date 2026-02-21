@@ -71,12 +71,7 @@ namespace MeshWeaver.Hosting.Monolith.Test
                 DisplayOrder = 10,
                 Content = new NodeTypeDefinition
                 {
-                    Id = "Organization",
-                    Namespace = "",
-                    DisplayName = "Organization",
-                    Icon = "Building",
                     Description = "An organization containing projects",
-                    DisplayOrder = 10,
                     Configuration = "config => config.WithContentType<MeshWeaver.Graph.Dynamic.Organization>().AddNodeTypeView()",
                     // Query for all nodes of type "Organization" ordered by activity
                     ChildrenQuery = "$source=activity;nodeType==Organization;$orderBy=lastAccessedAt:desc;$limit=20"
@@ -127,9 +122,6 @@ namespace MeshWeaver.Hosting.Monolith.Test
                 NodeType = "NodeType",
                 Content = new NodeTypeDefinition
                 {
-                    Id = "graph",
-                    Namespace = "type",
-                    DisplayName = "Graph",
                     Configuration = "config => config"
                 }
             };
@@ -151,7 +143,7 @@ namespace MeshWeaver.Hosting.Monolith.Test
                 .UseMonolithMesh()
                 .AddInMemoryPersistence()
                 .ConfigureServices(services => services.Configure<CompilationCacheOptions>(o => o.CacheDirectory = cacheDirectory))
-                .AddJsonGraphConfiguration(testDataDirectory);
+                .AddGraph();
         }
 
         public override async ValueTask DisposeAsync()

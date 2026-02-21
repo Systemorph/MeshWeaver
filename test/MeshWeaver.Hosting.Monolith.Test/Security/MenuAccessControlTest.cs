@@ -121,9 +121,10 @@ public class MenuAccessControlTest(ITestOutputHelper output) : MonolithMeshTestB
     }
 
     [Fact(Timeout = 15000)]
-    public async Task Menu_Editor_ShowsEditAndCreateItems()
+    public async Task Menu_Editor_ShowsCreateItems()
     {
-        // Editor role: Read|Create|Update|Comment → has Create and Update but not Delete
+        // Editor role: Read|Create|Update|Comment → has Create but not Delete
+        // No "Edit" — replaced by node-name item which requires a MeshNode with NodeType
         var svc = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
         await svc.AddUserRoleAsync(TestUserId, "Editor", NodePath, "system",
             TestContext.Current.CancellationToken);
@@ -142,10 +143,10 @@ public class MenuAccessControlTest(ITestOutputHelper output) : MonolithMeshTestB
         foreach (var item in items)
             Output.WriteLine($"  {item.Label} (Area={item.Area})");
 
-        // Editor has Create + Update but not Delete
+        // Editor gets Create + Import (no node-name because no MeshNode seeded)
         items.Select(i => i.Label).Should().BeEquivalentTo(
-            ["Create", "Import", "Edit", "Threads", "Settings"],
-            "Editor has Read|Create|Update|Comment — all except Delete");
+            ["Create", "Import", "Threads", "Settings"],
+            "Editor has Read|Create|Update|Comment — Create/Import plus always-visible items");
     }
 
     [Fact(Timeout = 15000)]
@@ -170,9 +171,10 @@ public class MenuAccessControlTest(ITestOutputHelper output) : MonolithMeshTestB
         foreach (var item in items)
             Output.WriteLine($"  {item.Label} (Area={item.Area})");
 
-        items.Should().HaveCount(6, "Admin should see all menu items");
+        // No "Edit" — replaced by node-name which requires MeshNode with NodeType
+        items.Should().HaveCount(5, "Admin should see all default menu items");
         items.Select(i => i.Label).Should().BeEquivalentTo(
-            ["Create", "Import", "Edit", "Threads", "Settings", "Delete"]);
+            ["Create", "Import", "Threads", "Settings", "Delete"]);
     }
 
     [Fact(Timeout = 15000)]

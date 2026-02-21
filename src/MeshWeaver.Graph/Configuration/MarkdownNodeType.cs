@@ -17,6 +17,15 @@ public static class MarkdownNodeType
     public const string NodeType = "Markdown";
 
     /// <summary>
+    /// Registers the built-in "Markdown" MeshNode on the mesh builder.
+    /// </summary>
+    public static TBuilder AddMarkdownType<TBuilder>(this TBuilder builder) where TBuilder : MeshBuilder
+    {
+        builder.AddMeshNodes(CreateMeshNode());
+        return builder;
+    }
+
+    /// <summary>
     /// Creates a MeshNode definition for the Markdown node type.
     /// This provides HubConfiguration for nodes with nodeType="Markdown".
     /// </summary>
@@ -24,6 +33,7 @@ public static class MarkdownNodeType
     {
         Name = "Markdown",
         Icon = "/static/NodeTypeIcons/document.svg",
+        AssemblyLocation = typeof(MarkdownNodeType).Assembly.Location,
         HubConfiguration = config => config
             .AddMarkdownViews()
             .AddMeshDataSource()

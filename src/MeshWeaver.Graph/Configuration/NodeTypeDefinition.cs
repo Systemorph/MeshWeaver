@@ -1,41 +1,16 @@
-﻿using System.ComponentModel.DataAnnotations;
-using MeshWeaver.ContentCollections;
-using MeshWeaver.Domain;
-using MeshWeaver.Mesh;
+﻿using MeshWeaver.ContentCollections;
 
 namespace MeshWeaver.Graph.Configuration;
 
 /// <summary>
 /// Content type for NodeType MeshNodes.
-/// Contains minimal metadata only - detailed definitions (DataModel, LayoutAreas)
-/// are stored as separate files in the node's partition folder.
+/// Properties like Name, Icon, DisplayOrder, Namespace are on MeshNode itself.
+/// This record holds only NodeType-specific configuration.
 /// </summary>
 public record NodeTypeDefinition
 {
     /// <summary>
-    /// Unique identifier for this node type definition.
-    /// </summary>
-    public string? Id { get; init; }
-
-    /// <summary>
-    /// The namespace in which the type is defined (is also partition)
-    /// </summary>
-    public required string Namespace { get; init; }
-
-    /// <summary>
-    /// Display name for the type in UI.
-    /// </summary>
-    [MeshNodeProperty(nameof(MeshNode.Name))]
-    public string? DisplayName { get; init; }
-
-    /// <summary>
-    /// Icon URL or identifier for UI. Can be a path to an SVG file.
-    /// </summary>
-    [MeshNodeProperty(nameof(MeshNode.Icon))]
-    public string? Icon { get; init; }
-
-    /// <summary>
-    /// Emoji character to use as icon. Takes precedence over Icon if both are set.
+    /// Emoji character to use as icon. Takes precedence over MeshNode.Icon if set.
     /// Example: "📝", "📁", "🎯"
     /// </summary>
     public string? Emoji { get; init; }
@@ -44,11 +19,6 @@ public record NodeTypeDefinition
     /// Description of this node type.
     /// </summary>
     public string? Description { get; init; }
-
-    /// <summary>
-    /// Display order for sorting in UI lists.
-    /// </summary>
-    public int DisplayOrder { get; init; }
 
     /// <summary>
     /// Default values for initializing new instances of this type.

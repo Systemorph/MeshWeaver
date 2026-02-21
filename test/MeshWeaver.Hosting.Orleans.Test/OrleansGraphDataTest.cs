@@ -196,7 +196,7 @@ public class GraphDataSiloConfigurator : ISiloConfigurator, IHostConfigurator
         hostBuilder.UseOrleansMeshServer()
             .AddFileSystemPersistence(SamplesGraphData)
             .ConfigurePortalMesh()  // Already includes AddKernel()
-            .AddJsonGraphConfiguration(SamplesGraphData)
+            .AddGraph()
             .ConfigureDefaultNodeHub(config => config.AddDefaultLayoutAreas());
     }
 }

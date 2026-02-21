@@ -43,7 +43,7 @@ public class SearchQueryTests : MonolithMeshTestBase
             .UseMonolithMesh()
             .AddFileSystemPersistence(SamplesDataDirectory)
             .ConfigureServices(services => services.Configure<CompilationCacheOptions>(o => o.CacheDirectory = _cacheDirectory))
-            .AddJsonGraphConfiguration(SamplesDataDirectory);
+            .AddGraph();
     }
 
     public override async ValueTask DisposeAsync()

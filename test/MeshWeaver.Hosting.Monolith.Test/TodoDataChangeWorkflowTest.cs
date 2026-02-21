@@ -108,7 +108,7 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
                 services.AddSingleton<IConfiguration>(configuration);
                 return services;
             })
-            .AddJsonGraphConfiguration(dataDirectory);
+            .AddGraph();
     }
 
     public override async ValueTask DisposeAsync()

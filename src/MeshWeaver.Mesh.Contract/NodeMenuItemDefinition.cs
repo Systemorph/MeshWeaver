@@ -13,12 +13,14 @@ namespace MeshWeaver.Mesh;
 /// <param name="Icon">Optional icon — emoji string or SVG URL; null to skip</param>
 /// <param name="RequiredPermission">Permission the user must have for this item to appear</param>
 /// <param name="DisplayOrder">Sort order within the menu (lower = earlier)</param>
+/// <param name="Href">Optional absolute href — when set, navigates to this URL instead of constructing from Area</param>
 public record NodeMenuItemDefinition(
     string Label,
     string Area,
     string? Icon = null,
     Permission RequiredPermission = Permission.None,
-    int DisplayOrder = 0);
+    int DisplayOrder = 0,
+    string? Href = null);
 
 /// <summary>
 /// Provider delegate that yields menu items via IAsyncEnumerable.
