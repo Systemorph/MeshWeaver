@@ -1,4 +1,8 @@
-﻿using MeshWeaver.Layout;
+﻿using MeshWeaver.Graph.Configuration;
+using MeshWeaver.Layout;
+using MeshWeaver.Layout.Composition;
+using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Security;
 using MeshWeaver.Messaging;
 
 namespace MeshWeaver.Graph;
@@ -20,6 +24,7 @@ public static class MarkdownLayoutAreas
     public static MessageHubConfiguration AddMarkdownViews(this MessageHubConfiguration configuration)
         => configuration
             .Set(new PageLayoutOptions { MaxWidth = "1280px" })
+            .AddNodeMenuItems(SuggestMenuProvider)
             .AddLayout(layout => layout
                 .WithDefaultArea(OverviewArea)
                 .WithView(OverviewArea, MarkdownOverviewLayoutArea.Overview)
@@ -29,4 +34,14 @@ public static class MarkdownLayoutAreas
                 .WithView(MeshNodeLayoutAreas.ThumbnailArea, MarkdownOverviewLayoutArea.Thumbnail)
             .WithView(MeshNodeLayoutAreas.CreateNodeArea, CreateLayoutArea.Create)
             .WithView(MeshNodeLayoutAreas.DeleteArea, DeleteLayoutArea.Delete));
+
+    private static async IAsyncEnumerable<NodeMenuItemDefinition> SuggestMenuProvider(
+        LayoutAreaHost host, RenderingContext ctx)
+    {
+        var perms = await PermissionHelper.GetEffectivePermissionsAsync(
+            host.Hub, host.Hub.Address.ToString());
+        if (perms.HasFlag(Permission.Update))
+            yield return new NodeMenuItemDefinition("Suggest", SuggestArea,
+                RequiredPermission: Permission.Update, DisplayOrder: 11);
+    }
 }

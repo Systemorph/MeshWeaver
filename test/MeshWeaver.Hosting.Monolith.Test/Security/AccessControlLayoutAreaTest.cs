@@ -36,7 +36,9 @@ public class AccessControlLayoutAreaTest(ITestOutputHelper output) : MonolithMes
             .ConfigureDefaultNodeHub(c => c.AddDefaultLayoutAreas());
 
     protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
-        => base.ConfigureClient(configuration).AddLayoutClient();
+        => base.ConfigureClient(configuration)
+            .AddLayoutClient()
+            .WithTypes([new KeyValuePair<string, Type>(nameof(AccessAssignment), typeof(AccessAssignment))]);
 
     [Fact(Timeout = 15000)]
     public async Task AccessControl_RendersWithItemTemplateControls()
@@ -423,6 +425,161 @@ public class AccessControlLayoutAreaTest(ITestOutputHelper output) : MonolithMes
         // via the workspace stream (AccessAssignmentTypeSource loads IsLocal assignments)
         localData.Should().NotBeNullOrEmpty(
             "Workspace-bound AccessAssignment stream should contain local assignments loaded by AccessAssignmentTypeSource.");
+    }
+
+    [Fact(Timeout = 15000)]
+    public async Task AccessControl_GetDataRequest_ReturnsLocalAssignments()
+    {
+        // Seed a local assignment via ISecurityService before the hub starts
+        var svc = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
+        await svc.AddUserRoleAsync("WsUser", "Editor", NodePath, "system", TestTimeout);
+
+        var client = GetClient();
+        var nodeAddress = new Address(NodePath);
+
+        // Initialize the hub — this triggers AccessAssignmentTypeSource.InitializeAsync
+        await client.AwaitResponse(
+            new PingRequest(),
+            o => o.WithTarget(nodeAddress),
+            TestContext.Current.CancellationToken);
+
+        // Request the AccessAssignment collection via GetDataRequest
+        var workspace = client.GetWorkspace();
+        var stream = workspace.GetRemoteStream<InstanceCollection, CollectionReference>(
+            nodeAddress,
+            new CollectionReference(nameof(AccessAssignment)));
+
+        var result = await stream
+            .Where(x => x.Value != null && x.Value.Instances.Count > 0)
+            .Select(x => x.Value!)
+            .Timeout(10.Seconds())
+            .FirstAsync();
+
+        result.Should().NotBeNull();
+        result.Instances.Should().NotBeEmpty(
+            "AccessAssignmentTypeSource should load local assignments into the workspace");
+
+        // On the client side, instances arrive as JsonElement — deserialize them
+        var jsonOptions = client.JsonSerializerOptions;
+        var assignments = result.Instances.Values
+            .Select(v => v is JsonElement je
+                ? JsonSerializer.Deserialize<AccessAssignment>(je.GetRawText(), jsonOptions)!
+                : (AccessAssignment)v)
+            .ToList();
+
+        Output.WriteLine($"Workspace contains {assignments.Count} AccessAssignment(s):");
+        foreach (var a in assignments)
+            Output.WriteLine($"  UserId={a.UserId}, RoleId={a.RoleId}, IsLocal={a.IsLocal}");
+
+        assignments.Should().Contain(a => a.UserId == "WsUser" && a.RoleId == "Editor",
+            "seeded local assignment should be loaded by AccessAssignmentTypeSource");
+    }
+
+    [Fact(Timeout = 30000)]
+    public async Task AccessControl_DataChangeRequest_CreatesAssignment()
+    {
+        var client = GetClient();
+        var nodeAddress = new Address(NodePath);
+
+        // Initialize the hub
+        await client.AwaitResponse(
+            new PingRequest(),
+            o => o.WithTarget(nodeAddress),
+            TestContext.Current.CancellationToken);
+
+        // Subscribe to the AccessAssignment collection stream BEFORE the change
+        var workspace = client.GetWorkspace();
+        var collectionStream = workspace.GetRemoteStream<InstanceCollection, CollectionReference>(
+            nodeAddress,
+            new CollectionReference(nameof(AccessAssignment)));
+
+        // Wait for initial state (may be empty)
+        var initial = await collectionStream
+            .Where(x => x.Value != null)
+            .Timeout(10.Seconds())
+            .FirstAsync();
+        Output.WriteLine($"Initial collection: {initial.Value?.Instances.Count ?? 0} items");
+        if (initial.Value != null)
+        {
+            foreach (var kvp in initial.Value.Instances)
+                Output.WriteLine($"  Key={kvp.Key}, Value={kvp.Value}");
+        }
+        var initialCount = initial.Value?.Instances.Count ?? 0;
+
+        // Create a new assignment via DataChangeRequest sent to the hub
+        var newAssignment = new AccessAssignment
+        {
+            UserId = "NewUser",
+            RoleId = "Viewer",
+            SourcePath = NodePath,
+            IsLocal = true,
+            IsActive = true,
+            DisplayLabel = "NewUser",
+            SourceDisplay = NodePath
+        };
+
+        Output.WriteLine("Sending DataChangeRequest...");
+        var response = await client.AwaitResponse(
+            DataChangeRequest.Create([newAssignment], "test"),
+            o => o.WithTarget(nodeAddress),
+            CancellationTokenSource.CreateLinkedTokenSource(
+                TestContext.Current.CancellationToken,
+                new CancellationTokenSource(10.Seconds()).Token
+            ).Token);
+
+        Output.WriteLine($"DataChangeRequest response: {response.Message.GetType().Name}");
+        response.Message.Should().BeOfType<DataChangeResponse>();
+
+        // Wait for the collection to grow beyond the initial count
+        InstanceCollection? result = null;
+        try
+        {
+            result = await collectionStream
+                .Where(x => x.Value != null && x.Value.Instances.Count > initialCount)
+                .Select(x => x.Value!)
+                .Timeout(10.Seconds())
+                .FirstAsync();
+        }
+        catch (TimeoutException)
+        {
+            // Dump current state for diagnostics
+            var current = await collectionStream.Select(x => x.Value).FirstAsync();
+            Output.WriteLine($"TIMEOUT: Collection still has {current?.Instances.Count ?? 0} items after DataChangeRequest");
+            if (current != null)
+            {
+                foreach (var kvp in current.Instances)
+                    Output.WriteLine($"  Key={kvp.Key}, Value={kvp.Value}");
+            }
+        }
+
+        result.Should().NotBeNull("DataChangeRequest should add assignment to the workspace collection");
+
+        var jsonOptions = client.JsonSerializerOptions;
+        var assignments = result!.Instances.Values
+            .Select(v => v is JsonElement je
+                ? JsonSerializer.Deserialize<AccessAssignment>(je.GetRawText(), jsonOptions)!
+                : (AccessAssignment)v)
+            .ToList();
+
+        Output.WriteLine($"After DataChangeRequest, workspace contains {assignments.Count} assignment(s):");
+        foreach (var a in assignments)
+            Output.WriteLine($"  UserId={a.UserId}, RoleId={a.RoleId}");
+
+        assignments.Should().Contain(a => a.UserId == "NewUser" && a.RoleId == "Viewer",
+            "DataChangeRequest should add assignment to workspace via AccessAssignmentTypeSource");
+
+        // Verify the assignment was synced to ISecurityService
+        var svc = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
+        var allAssignments = new List<AccessAssignment>();
+        await foreach (var a in svc.GetAccessAssignmentsAsync(NodePath, TestTimeout))
+            allAssignments.Add(a);
+
+        Output.WriteLine($"ISecurityService contains {allAssignments.Count} assignment(s) for {NodePath}:");
+        foreach (var a in allAssignments)
+            Output.WriteLine($"  UserId={a.UserId}, RoleId={a.RoleId}, IsLocal={a.IsLocal}");
+
+        allAssignments.Should().Contain(a => a.UserId == "NewUser" && a.RoleId == "Viewer",
+            "AccessAssignmentTypeSource.UpdateImpl should sync new assignment to ISecurityService");
     }
 
     [Fact(Timeout = 10000)]

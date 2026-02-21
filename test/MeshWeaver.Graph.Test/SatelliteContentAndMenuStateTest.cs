@@ -9,8 +9,7 @@ using Xunit;
 namespace MeshWeaver.Graph.Test;
 
 /// <summary>
-/// Tests for ISatelliteContent, GetPrimaryPath, NavigationContext.PrimaryPath/IsSatellite,
-/// and NodeMenuState permission defaults.
+/// Tests for ISatelliteContent, GetPrimaryPath, and NavigationContext.PrimaryPath/IsSatellite.
 /// </summary>
 public class SatelliteContentAndMenuStateTest
 {
@@ -186,78 +185,6 @@ public class SatelliteContentAndMenuStateTest
         var ctx = CreateContext(node, "path/c1");
 
         ctx.IsSatellite.Should().BeFalse();
-    }
-
-    #endregion
-
-    #region NodeMenuState Permission Default Tests
-
-    [Fact]
-    public void NodeMenuState_Empty_HasNoPermissions()
-    {
-        var state = NodeMenuState.Empty;
-
-        state.Permissions.Should().Be(Permission.None);
-        state.CanCreate.Should().BeFalse("Empty state must deny Create");
-        state.CanDelete.Should().BeFalse("Empty state must deny Delete");
-        state.CanEdit.Should().BeFalse("Empty state must deny Edit");
-    }
-
-    [Fact]
-    public void NodeMenuState_DefaultConstructor_HasNoPermissions()
-    {
-        var state = new NodeMenuState();
-
-        state.Permissions.Should().Be(Permission.None);
-        state.CanCreate.Should().BeFalse();
-        state.CanDelete.Should().BeFalse();
-        state.CanEdit.Should().BeFalse();
-    }
-
-    [Fact]
-    public void NodeMenuState_WithAllPermissions_AllowsEverything()
-    {
-        var state = new NodeMenuState { Permissions = Permission.All };
-
-        state.CanCreate.Should().BeTrue();
-        state.CanDelete.Should().BeTrue();
-        state.CanEdit.Should().BeTrue();
-    }
-
-    [Fact]
-    public void NodeMenuState_WithViewerPermissions_DeniesCreateDeleteEdit()
-    {
-        var state = new NodeMenuState { Permissions = Permission.Read };
-
-        state.CanCreate.Should().BeFalse();
-        state.CanDelete.Should().BeFalse();
-        state.CanEdit.Should().BeFalse();
-    }
-
-    [Fact]
-    public void NodeMenuState_WithEditorPermissions_AllowsCreateEdit_DeniesDelete()
-    {
-        var state = new NodeMenuState
-        {
-            Permissions = Permission.Read | Permission.Create | Permission.Update | Permission.Comment
-        };
-
-        state.CanCreate.Should().BeTrue();
-        state.CanEdit.Should().BeTrue();
-        state.CanDelete.Should().BeFalse("Editor cannot delete");
-    }
-
-    [Fact]
-    public void NodeMenuState_WithCommenterPermissions_DeniesAll()
-    {
-        var state = new NodeMenuState
-        {
-            Permissions = Permission.Read | Permission.Comment
-        };
-
-        state.CanCreate.Should().BeFalse();
-        state.CanEdit.Should().BeFalse();
-        state.CanDelete.Should().BeFalse();
     }
 
     #endregion

@@ -67,6 +67,7 @@ public static class MeshNodeLayoutAreas
     public const string EditArea = "Edit";
     public const string DeleteArea = "Delete";
     public const string ThreadsArea = "Threads";
+    public const string ImportMeshNodesArea = "ImportMeshNodes";
 
     // UCR (Unified Content Reference) special areas
     public const string ContentArea = "$Content";
@@ -84,6 +85,7 @@ public static class MeshNodeLayoutAreas
         => configuration
             .WithNodeOperationHandlers()
             .AddMeshDataSource(source => source.WithAccessAssignments())
+            .AddDefaultMeshMenu()
             .AddLayout(layout => layout.AddDefaultLayoutAreas());
 
     public static LayoutDefinition AddDefaultLayoutAreas(this LayoutDefinition layout)
@@ -99,6 +101,7 @@ public static class MeshNodeLayoutAreas
             .WithView(NodeTypesArea, NodeTypes)
             .WithView(AccessControlArea, AccessControl)
             .WithView(CreateNodeArea, CreateNode)
+            .WithView(ImportMeshNodesArea, ImportLayoutArea.ImportMeshNodes)
             .WithView(DeleteArea, DeleteLayoutArea.Delete)
             // UCR special areas
             .WithView(DataArea, Data)
