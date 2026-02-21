@@ -67,7 +67,7 @@ public class CollaborativeEditingReplyTest(ITestOutputHelper output) : MonolithM
                 services.AddSingleton<IConfiguration>(configuration);
                 return services;
             })
-            .AddJsonGraphConfiguration(dataDirectory)
+            .AddGraph()
             .ConfigureDefaultNodeHub(config => config.AddDefaultLayoutAreas());
     }
 

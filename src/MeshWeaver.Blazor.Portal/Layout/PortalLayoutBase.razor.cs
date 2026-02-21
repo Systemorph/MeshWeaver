@@ -87,13 +87,15 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
 
     /// <summary>
     /// Handles a click on a dynamic menu item.
-    /// All items navigate to their declared area — the area handler is responsible
-    /// for any special behavior (e.g., popping a dialog via the $Dialog stream).
+    /// Uses Href for absolute navigation when set, otherwise constructs URL from Area.
     /// </summary>
     private void HandleMenuItemClick(NodeMenuItemDefinition item)
     {
         isNodeMenuOpen = false;
-        NavigateToArea(item.Area);
+        if (!string.IsNullOrEmpty(item.Href))
+            NavigationManager.NavigateTo(item.Href);
+        else
+            NavigateToArea(item.Area);
     }
 
     /// <summary>

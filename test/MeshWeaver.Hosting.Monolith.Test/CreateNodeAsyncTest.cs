@@ -62,7 +62,7 @@ public class CreateNodeAsyncTest(ITestOutputHelper output) : MonolithMeshTestBas
                 services.AddSingleton<IConfiguration>(configuration);
                 return services;
             })
-            .AddJsonGraphConfiguration(dataDirectory)
+            .AddGraph()
             .ConfigureDefaultNodeHub(config => config.AddDefaultLayoutAreas());
     }
 

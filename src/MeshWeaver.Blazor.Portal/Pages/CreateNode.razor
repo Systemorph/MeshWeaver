@@ -248,7 +248,7 @@
             // Determine content based on node type
             object? content = null;
             string? preRenderedHtml = null;
-            if (selectedType.NodeTypePath == GraphConfigurationExtensions.MarkdownNodeType)
+            if (selectedType.NodeTypePath == MarkdownNodeType.NodeType)
             {
                 // For Markdown types, create MarkdownContent with title heading
                 var markdownText = $"# {trimmedName}\n\n{nodeDescription ?? ""}";

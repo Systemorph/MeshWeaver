@@ -139,6 +139,6 @@ public class OrganizationTestSiloConfigurator : ISiloConfigurator, IHostConfigur
 
         hostBuilder.UseOrleansMeshServer()
             .ConfigurePortalMesh()
-            .AddJsonGraphConfiguration(SamplesGraphData);
+            .AddGraph();
     }
 }

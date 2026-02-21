@@ -84,7 +84,7 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
                 // Add mesh node views last (sets DetailsArea as default, can be overridden by node type)
                 return config.AddDefaultLayoutAreas();
             })
-            .AddJsonGraphConfiguration(dataDirectory);
+            .AddGraph();
     }
 
     /// <summary>

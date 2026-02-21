@@ -61,7 +61,7 @@ public class TodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBase(outp
                 services.AddSingleton<IConfiguration>(configuration);
                 return services;
             })
-            .AddJsonGraphConfiguration(dataDirectory)
+            .AddGraph()
             // Configure default layout areas for all node hubs (including Create area)
             .ConfigureDefaultNodeHub(config => config.AddDefaultLayoutAreas());
     }

@@ -61,16 +61,13 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
         // Create Organization type (global - can be created at root level)
         var orgTypeDef = new NodeTypeDefinition
         {
-            Id = "Organization",
-            Namespace = "",
-            DisplayName = "Organization",
-            Description = "An organization namespace",
-            Icon = "Building"
+            Description = "An organization namespace"
         };
         var orgTypeNode = MeshNode.FromPath("Organization") with
         {
             Name = "Organization",
             NodeType = "NodeType",
+            Icon = "Building",
             Content = orgTypeDef
         };
         ((IPersistenceServiceCore)persistence).SaveNodeAsync(orgTypeNode, SetupJsonOptions).GetAwaiter().GetResult();
@@ -86,16 +83,13 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
         // Create ACME/Project type (can be created inside ACME)
         var projectTypeDef = new NodeTypeDefinition
         {
-            Id = "Project",
-            Namespace = "ACME",
-            DisplayName = "Project",
-            Description = "A project within ACME",
-            Icon = "Briefcase"
+            Description = "A project within ACME"
         };
         var projectTypeNode = MeshNode.FromPath("ACME/Project") with
         {
             Name = "Project",
             NodeType = "NodeType",
+            Icon = "Briefcase",
             Content = projectTypeDef
         };
         ((IPersistenceServiceCore)persistence).SaveNodeAsync(projectTypeNode, SetupJsonOptions).GetAwaiter().GetResult();
@@ -103,16 +97,13 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
         // Create ACME/Project/Todo type (can be created inside ACME/Project instances)
         var todoTypeDef = new NodeTypeDefinition
         {
-            Id = "Todo",
-            Namespace = "ACME/Project",
-            DisplayName = "Todo",
-            Description = "A todo item in a project",
-            Icon = "Checkmark"
+            Description = "A todo item in a project"
         };
         var todoTypeNode = MeshNode.FromPath("ACME/Project/Todo") with
         {
             Name = "Todo",
             NodeType = "NodeType",
+            Icon = "Checkmark",
             Content = todoTypeDef
         };
         ((IPersistenceServiceCore)persistence).SaveNodeAsync(todoTypeNode, SetupJsonOptions).GetAwaiter().GetResult();
@@ -128,17 +119,14 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
         // Create global Markdown type
         var markdownTypeDef = new NodeTypeDefinition
         {
-            Id = "Markdown",
-            Namespace = "",
-            DisplayName = "Markdown",
-            Description = "A markdown document",
-            Icon = "Document",
-            DisplayOrder = 1000
+            Description = "A markdown document"
         };
         var markdownTypeNode = MeshNode.FromPath("Markdown") with
         {
             Name = "Markdown",
             NodeType = "NodeType",
+            Icon = "Document",
+            DisplayOrder = 1000,
             Content = markdownTypeDef
         };
         ((IPersistenceServiceCore)persistence).SaveNodeAsync(markdownTypeNode, SetupJsonOptions).GetAwaiter().GetResult();
@@ -146,17 +134,14 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
         // Create global NodeType type
         var nodeTypeTypeDef = new NodeTypeDefinition
         {
-            Id = "NodeType",
-            Namespace = "",
-            DisplayName = "NodeType",
-            Description = "A node type definition",
-            Icon = "Code",
-            DisplayOrder = 1001
+            Description = "A node type definition"
         };
         var nodeTypeTypeNode = MeshNode.FromPath("NodeType") with
         {
             Name = "NodeType",
             NodeType = "NodeType",
+            Icon = "Code",
+            DisplayOrder = 1001,
             Content = nodeTypeTypeDef
         };
         ((IPersistenceServiceCore)persistence).SaveNodeAsync(nodeTypeTypeNode, SetupJsonOptions).GetAwaiter().GetResult();
@@ -179,7 +164,7 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
             .ConfigureServices(services => services
                 .AddPersistence(persistence)
                 .Configure<CompilationCacheOptions>(o => o.CacheDirectory = cacheDirectory))
-            .AddJsonGraphConfiguration(testDataDirectory)
+            .AddGraph()
             .ConfigureDefaultNodeHub(config => config.AddDefaultLayoutAreas());
     }
 
@@ -273,9 +258,6 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
         // Arrange - Create a type with explicit CreatableTypes configuration
         var restrictedTypeDef = new NodeTypeDefinition
         {
-            Id = "RestrictedProject",
-            Namespace = "ACME",
-            DisplayName = "Restricted Project",
             Description = "A project with restricted creatable types",
             CreatableTypes = new List<string> { "ACME/Project/Todo" },
             IncludeGlobalTypes = false
@@ -724,7 +706,7 @@ public class CreatableTypesFileSystemTest : MonolithMeshTestBase
         => builder
             .UseMonolithMesh()
             .AddFileSystemPersistence(SampleDataPath)
-            .AddJsonGraphConfiguration(SampleDataPath);
+            .AddGraph();
 
     private static string GetSampleDataPath()
     {

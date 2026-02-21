@@ -283,7 +283,7 @@ public class DynamicMeshNodeAttributeGeneratorTest
         {
             NodeType = "NodeType",
             LastModified = DateTimeOffset.UtcNow,
-            Content = new NodeTypeDefinition { Id = "Test", Namespace = "Type" }
+            Content = new NodeTypeDefinition { }
         };
 
         var codeConfig = new CodeConfiguration

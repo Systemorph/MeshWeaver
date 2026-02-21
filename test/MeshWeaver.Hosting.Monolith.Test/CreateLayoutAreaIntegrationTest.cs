@@ -62,7 +62,7 @@ public class CreateLayoutAreaIntegrationTest(ITestOutputHelper output) : Monolit
                 services.AddSingleton<IConfiguration>(configuration);
                 return services;
             })
-            .AddJsonGraphConfiguration(dataDirectory);
+            .AddGraph();
     }
 
     protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)

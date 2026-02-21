@@ -611,7 +611,6 @@ internal class NodeTypeService : INodeTypeService, IDisposable
         // Create a minimal definition from the release
         var definition = new NodeTypeDefinition
         {
-            Namespace = string.Join("/", release.NodeTypePath.Split('/').SkipLast(1)),
             Configuration = release.HubConfiguration,
             ContentCollections = release.ContentCollections?.ToList()
         };
@@ -870,14 +869,14 @@ internal class NodeTypeService : INodeTypeService, IDisposable
         var typeDef = node.Content as NodeTypeDefinition;
 
         // Emoji takes precedence over Icon (SVG path)
-        var icon = typeDef?.Emoji ?? typeDef?.Icon ?? node.Icon;
+        var icon = typeDef?.Emoji ?? node.Icon;
 
         return new CreatableTypeInfo(
             NodeTypePath: node.Path,
-            DisplayName: typeDef?.DisplayName ?? node.Name ?? GetLastPathSegment(node.Path),
+            DisplayName: node.Name ?? GetLastPathSegment(node.Path),
             Icon: icon,
             Description: typeDef?.Description,
-            DisplayOrder: typeDef?.DisplayOrder ?? node.DisplayOrder ?? 0
+            DisplayOrder: node.DisplayOrder ?? 0
         );
     }
 

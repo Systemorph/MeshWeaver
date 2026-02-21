@@ -81,7 +81,7 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
                 services.AddSingleton<IConfiguration>(configuration);
                 return services;
             })
-            .AddJsonGraphConfiguration(dataDirectory);
+            .AddGraph();
     }
 
     protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)

@@ -71,7 +71,7 @@ public class ProjectTodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBa
                 services.AddSingleton<IConfiguration>(configuration);
                 return services;
             })
-            .AddJsonGraphConfiguration(dataDirectory);
+            .AddGraph();
     }
 
     protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)

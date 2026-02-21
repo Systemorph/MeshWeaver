@@ -1,3 +1,4 @@
+using System.Reactive.Linq;
 using MeshWeaver.Data;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
@@ -40,12 +41,20 @@ public static class NodeMenuItemsExtensions
 
     /// <summary>
     /// Default menu provider that yields standard menu items with inline permission checks.
+    /// Yields a node name item (navigates to NodeType) instead of a generic "Edit".
     /// </summary>
     private static async IAsyncEnumerable<NodeMenuItemDefinition> DefaultMenuProvider(
         LayoutAreaHost host, RenderingContext ctx)
     {
-        var perms = await PermissionHelper.GetEffectivePermissionsAsync(
-            host.Hub, host.Hub.Address.ToString());
+        var hubPath = host.Hub.Address.ToString();
+        var perms = await PermissionHelper.GetEffectivePermissionsAsync(host.Hub, hubPath);
+
+        // Get the current node to determine name and type
+        var nodes = await (host.Workspace.GetStream<MeshNode>()
+                ?.Select(n => n ?? Array.Empty<MeshNode>())
+            ?? Observable.Return(Array.Empty<MeshNode>()))
+            .FirstAsync();
+        var node = nodes.FirstOrDefault(n => n.Path == hubPath);
 
         if (perms.HasFlag(Permission.Create))
         {
@@ -55,9 +64,12 @@ public static class NodeMenuItemsExtensions
                 RequiredPermission: Permission.Create, DisplayOrder: 1);
         }
 
-        if (perms.HasFlag(Permission.Update))
-            yield return new("Edit", MeshNodeLayoutAreas.EditArea,
-                RequiredPermission: Permission.Update, DisplayOrder: 10);
+        // Show node name with navigation to its NodeType definition
+        if (node != null && !string.IsNullOrEmpty(node.NodeType))
+        {
+            yield return new(node.Name ?? node.Id, node.NodeType,
+                Href: $"/{node.NodeType}", DisplayOrder: 10);
+        }
 
         yield return new("Threads", MeshNodeLayoutAreas.ThreadsArea, DisplayOrder: 50);
         yield return new("Settings", MeshNodeLayoutAreas.SettingsArea, DisplayOrder: 90);

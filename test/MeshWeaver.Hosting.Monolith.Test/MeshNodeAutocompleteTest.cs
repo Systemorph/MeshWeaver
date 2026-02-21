@@ -44,7 +44,7 @@ public class MeshNodeAutocompleteTest : MonolithMeshTestBase
             .UseMonolithMesh()
             .AddFileSystemPersistence(SamplesDataDirectory)
             .ConfigureServices(services => services.Configure<CompilationCacheOptions>(o => o.CacheDirectory = _cacheDirectory))
-            .AddJsonGraphConfiguration(SamplesDataDirectory)
+            .AddGraph()
             .ConfigureHub(hub => hub.AddMeshNavigation());
     }
 

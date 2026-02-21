@@ -31,7 +31,7 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
     {
         // Add graph configuration to register Thread node type
         return base.ConfigureMesh(builder)
-            .AddJsonGraphConfiguration(TestPaths.SamplesGraphData);
+            .AddGraph();
     }
 
     [Fact]

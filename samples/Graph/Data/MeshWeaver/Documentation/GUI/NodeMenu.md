@@ -12,14 +12,16 @@ The portal's node context menu (cube icon) is fully data-driven. Menu items are 
 
 `AddDefaultMeshMenu()` (called automatically by `AddDefaultLayoutAreas()`) registers these items for all node types:
 
-| Item | Area | Permission | Order |
-|------|------|------------|-------|
-| Create | `Create` | `Create` | 0 |
-| Import | `ImportMeshNodes` | `Create` | 1 |
-| Edit | `Edit` | `Update` | 10 |
-| Threads | `Threads` | None | 50 |
-| Settings | `Settings` | None | 90 |
-| Delete | `Delete` | `Delete` | 100 |
+| Item | Area | Permission | Order | Notes |
+|------|------|------------|-------|-------|
+| Create | `Create` | `Create` | 0 | |
+| Import | `ImportMeshNodes` | `Create` | 1 | |
+| *node.Name* | *node.NodeType* | None | 10 | Navigates to NodeType definition via `Href` |
+| Threads | `Threads` | None | 50 | |
+| Settings | `Settings` | None | 90 | |
+| Delete | `Delete` | `Delete` | 100 | |
+
+The node-name item only appears when the MeshNode has a `NodeType` set. It uses `Href` for absolute navigation to the NodeType definition node instead of appending the area to the current path.
 
 Items with a required permission are checked inline within the provider. Only visible items are yielded. Only visible items reach the portal.
 
@@ -76,6 +78,7 @@ Items from `AddNodeMenuItems()` are merged with the defaults and sorted by `Disp
 | `Icon` | `string?` | Optional emoji or SVG URL; `null` to skip |
 | `RequiredPermission` | `Permission` | Permission the user must have (e.g., `Permission.Update`) |
 | `DisplayOrder` | `int` | Sort order within the menu (lower = earlier) |
+| `Href` | `string?` | Optional absolute href — when set, navigates directly instead of using Area |
 
 ### NodeMenuItemProvider
 
@@ -93,7 +96,7 @@ config.AddNodeMenuItems(
 
 ## Generic Navigation
 
-All menu items use generic navigation — clicking any item navigates to its declared `Area`. The area handler on the node hub is responsible for what happens (rendering a form, showing a dialog via `$Dialog` stream, etc.). There is no special-casing in the portal.
+Menu items navigate to their declared `Area` by appending it to the current path (e.g., `/TestOrg/Project/Settings`). When `Href` is set, the portal navigates to that absolute URL instead — used for cross-node navigation like the node-name → NodeType link.
 
 ## MenuControl
 
@@ -104,7 +107,7 @@ The `LayoutAreaView` component monitors the `$Menu` slot and publishes items to 
 ## Built-in Registrations
 
 **All nodes** (via `AddDefaultMeshMenu`):
-- Create, Import, Edit, Threads, Settings, Delete
+- Create, Import, *node.Name* → NodeType, Threads, Settings, Delete
 
 **Markdown** nodes additionally register:
 - **Suggest** (area: `Suggest`, permission: `Update`, order: 11) — editor with track changes

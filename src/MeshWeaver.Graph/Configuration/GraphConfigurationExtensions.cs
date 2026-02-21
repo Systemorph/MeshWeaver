@@ -9,83 +9,25 @@ using Microsoft.Extensions.DependencyInjection;
 namespace MeshWeaver.Graph.Configuration;
 
 /// <summary>
-/// Extension methods for configuring graph from JSON files.
+/// Extension methods for configuring graph node types and services.
 /// </summary>
 public static class GraphConfigurationExtensions
 {
-    /// <summary>
-    /// The NodeType value used to identify agent nodes.
-    /// </summary>
-    public const string AgentNodeType = "Agent";
-
-    /// <summary>
-    /// The NodeType value used to identify markdown documentation nodes.
-    /// </summary>
-    public const string MarkdownNodeType = Configuration.MarkdownNodeType.NodeType;
-
     /// <param name="builder">The mesh builder</param>
     extension<TBuilder>(TBuilder builder) where TBuilder : MeshBuilder
     {
         /// <summary>
-        /// Loads graph configuration from JSON files in the data directory.
-        ///
-        /// Configuration is loaded from NodeType MeshNodes stored under Type/:
-        /// - Each NodeType node has:
-        ///   - NodeTypeDefinition content with Configuration lambda
-        ///   - Optional CodeConfiguration in partition folder (codeFile.json)
-        ///
-        /// Content collections are configured per node type via NodeTypeDefinition.ContentCollections.
-        /// All configuration loading and service initialization happens at mesh startup.
-        ///
-        /// Note: This method does NOT configure content collections. Callers should configure
-        /// storage collections and default node hub mappings separately based on their needs.
-        /// See MemexConfiguration.ConfigureMemexMesh for an example.
+        /// Registers all built-in graph node types and configures graph services.
         /// </summary>
-        public TBuilder AddJsonGraphConfiguration(string _)
+        public TBuilder AddGraph()
         {
-            var assemblyLocation = typeof(GraphConfigurationExtensions).Assembly.Location;
-
-            // Register the built-in "NodeType" MeshNode
-            // This provides HubConfiguration for nodes with nodeType="NodeType" (type definition nodes).
-            builder.AddMeshNodes(new MeshNode(MeshNode.NodeTypePath)
-            {
-                Name = "Node Type",
-                Icon = "/static/NodeTypeIcons/code.svg",
-                AssemblyLocation = assemblyLocation,
-                HubConfiguration = config => config
-                    .AddMeshDataSource(source => source
-                        .WithContentType<NodeTypeDefinition>())
-                    .AddNodeTypeView()
-            });
-
-            // Register the built-in "Agent" MeshNode
-            // This provides HubConfiguration for nodes with nodeType="Agent" (AI agent configurations).
-            builder.AddMeshNodes(new MeshNode(AgentNodeType)
-            {
-                Name = "Agent",
-                Icon = "/static/NodeTypeIcons/bot.svg",
-                AssemblyLocation = assemblyLocation,
-                HubConfiguration = config => config
-                    .AddMeshDataSource(source => source
-                        .WithContentType<AgentConfiguration>())
-                    .AddAgentView()
-            });
-
-            // Register the built-in "Markdown" MeshNode
-            // This provides HubConfiguration for nodes with nodeType="Markdown" (markdown documentation nodes).
-            builder.AddMeshNodes(Configuration.MarkdownNodeType.CreateMeshNode() with { AssemblyLocation = assemblyLocation });
-
-            // Register the built-in "Thread" MeshNode
-            // This provides HubConfiguration for nodes with nodeType="Thread" (AI conversation threads).
-            builder.AddMeshNodes(Configuration.ThreadNodeConfiguration.CreateMeshNode() with { AssemblyLocation = assemblyLocation });
-
-            // Register the built-in "ThreadMessage" MeshNode
-            // This provides HubConfiguration for nodes with nodeType="ThreadMessage" (individual messages in threads).
-            builder.AddMeshNodes(Configuration.ThreadMessageNodeConfiguration.CreateMeshNode() with { AssemblyLocation = assemblyLocation });
-
-            // Register the built-in "Comment" MeshNode
-            // This provides HubConfiguration for nodes with nodeType="Comment" (comments on document nodes).
-            builder.AddMeshNodes(CommentNodeType.CreateMeshNode() with { AssemblyLocation = assemblyLocation });
+            builder
+                .AddNodeTypeType()
+                .AddAgentType()
+                .AddMarkdownType()
+                .AddThreadType()
+                .AddThreadMessageType()
+                .AddCommentType();
 
             // Register services that don't need hub-level dependencies at the mesh level
             builder.ConfigureServices(services =>

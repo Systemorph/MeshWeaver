@@ -74,7 +74,7 @@ public class TodoGraphIntegrationTest(ITestOutputHelper output) : MonolithMeshTe
                 services.AddSingleton<IConfiguration>(configuration);
                 return services;
             })
-            .AddJsonGraphConfiguration(dataDirectory);
+            .AddGraph();
     }
 
     /// <summary>

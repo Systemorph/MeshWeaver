@@ -249,7 +249,7 @@ public static class MemexConfiguration
                 // Enable Row-Level Security for access control
                 .AddRowLevelSecurity()
                 // Configure graph from the same base path
-                .AddJsonGraphConfiguration(basePath ?? Directory.GetCurrentDirectory())
+                .AddGraph()
                 // Add kernel for interactive markdown code execution
                 .AddKernel()
                 // Register Azure Blob support for content collections.

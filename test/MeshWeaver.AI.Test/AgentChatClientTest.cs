@@ -44,7 +44,7 @@ public class AgentChatClientTest : MonolithMeshTestBase
                 services.AddMemoryChatPersistence();
                 return services;
             })
-            .AddJsonGraphConfiguration(TestDataPath)
+            .AddGraph()
             .ConfigureDefaultNodeHub(config => config.AddDefaultLayoutAreas());
     }
 

@@ -78,11 +78,11 @@ public class MeshNodeCompilationServiceTest : IDisposable
         return new(_cacheService, _cacheOptions, _mockHub, NullLogger<MeshNodeCompilationService>.Instance);
     }
 
-    private async Task SetupNodeType(InMemoryPersistenceService persistence, string nodeType, NodeTypeDefinition definition, CodeConfiguration? codeFile = null)
+    private async Task SetupNodeType(InMemoryPersistenceService persistence, string nodeType, NodeTypeDefinition definition, CodeConfiguration? codeFile = null, string? displayName = null)
     {
         var node = MeshNode.FromPath($"type/{nodeType}") with
         {
-            Name = definition.DisplayName ?? definition.Id,
+            Name = displayName ?? nodeType,
             NodeType = MeshNode.NodeTypePath,
             Content = definition
         };
@@ -137,13 +137,9 @@ public record StoryType
 }"
         };
 
-        var nodeTypeDefinition = new NodeTypeDefinition
-        {
-            Id = "story", Namespace = "Type",
-            DisplayName = "Story"
-        };
+        var nodeTypeDefinition = new NodeTypeDefinition { };
 
-        await SetupNodeType(persistence, "story", nodeTypeDefinition, codeConfig);
+        await SetupNodeType(persistence, "story", nodeTypeDefinition, codeConfig, "Story");
 
         var service = CreateService(persistence);
 
@@ -177,13 +173,9 @@ public record ProjectType
 }"
         };
 
-        var nodeTypeDefinition = new NodeTypeDefinition
-        {
-            Id = "project", Namespace = "Type",
-            DisplayName = "Project"
-        };
+        var nodeTypeDefinition = new NodeTypeDefinition { };
 
-        await SetupNodeType(persistence, "project", nodeTypeDefinition, codeConfig);
+        await SetupNodeType(persistence, "project", nodeTypeDefinition, codeConfig, "Project");
 
         var service = CreateService(persistence);
 
@@ -217,13 +209,9 @@ public record CachedItemType
 }"
         };
 
-        var nodeTypeDefinition = new NodeTypeDefinition
-        {
-            Id = "cached-item", Namespace = "Type",
-            DisplayName = "Cached Item"
-        };
+        var nodeTypeDefinition = new NodeTypeDefinition { };
 
-        await SetupNodeType(persistence, "cached-item", nodeTypeDefinition, codeConfig);
+        await SetupNodeType(persistence, "cached-item", nodeTypeDefinition, codeConfig, "Cached Item");
 
         var service = CreateService(persistence);
 
@@ -265,13 +253,9 @@ public record DebugItemType
 }"
         };
 
-        var nodeTypeDefinition = new NodeTypeDefinition
-        {
-            Id = "debug-item", Namespace = "Type",
-            DisplayName = "Debug Item"
-        };
+        var nodeTypeDefinition = new NodeTypeDefinition { };
 
-        await SetupNodeType(persistence, "debug-item", nodeTypeDefinition, codeConfig);
+        await SetupNodeType(persistence, "debug-item", nodeTypeDefinition, codeConfig, "Debug Item");
 
         var service = CreateService(persistence);
 
@@ -306,13 +290,9 @@ public record WidgetType
 }"
         };
 
-        var nodeTypeDefinition = new NodeTypeDefinition
-        {
-            Id = "widget", Namespace = "Type",
-            DisplayName = "Widget"
-        };
+        var nodeTypeDefinition = new NodeTypeDefinition { };
 
-        await SetupNodeType(persistence, "widget", nodeTypeDefinition, codeConfig);
+        await SetupNodeType(persistence, "widget", nodeTypeDefinition, codeConfig, "Widget");
 
         var service = CreateService(persistence);
 
@@ -352,13 +332,9 @@ public record ComponentType
 }"
         };
 
-        var nodeTypeDefinition = new NodeTypeDefinition
-        {
-            Id = "component", Namespace = "Type",
-            DisplayName = "Component"
-        };
+        var nodeTypeDefinition = new NodeTypeDefinition { };
 
-        await SetupNodeType(persistence, "component", nodeTypeDefinition, codeConfig);
+        await SetupNodeType(persistence, "component", nodeTypeDefinition, codeConfig, "Component");
 
         var service = CreateService(persistence);
 
@@ -417,13 +393,9 @@ public record RecordType
 }"
         };
 
-        var nodeTypeDefinition = new NodeTypeDefinition
-        {
-            Id = "record", Namespace = "Type",
-            DisplayName = "Record"
-        };
+        var nodeTypeDefinition = new NodeTypeDefinition { };
 
-        await SetupNodeType(persistence, "record", nodeTypeDefinition, codeConfig);
+        await SetupNodeType(persistence, "record", nodeTypeDefinition, codeConfig, "Record");
 
         var service = CreateService(persistence);
 
@@ -466,13 +438,10 @@ public record RecordType
         // Store the NodeType definition (mirrors Organization.json)
         var orgDefinition = new NodeTypeDefinition
         {
-            Id = "Organization", Namespace = "",
-            DisplayName = "Organization",
-            Icon = "Building",
             Description = "An organization containing projects",
             Configuration = "config => config.WithContentType<Organization>()"
         };
-        await SetupNodeType(persistence, "Organization", orgDefinition);
+        await SetupNodeType(persistence, "Organization", orgDefinition, displayName: "Organization");
 
         // Store Code as child MeshNode (NOT partition object)
         var codeNode = new MeshNode("Organization", "type/Organization/Code")
@@ -516,11 +485,9 @@ public record Organization
 
         var definition = new NodeTypeDefinition
         {
-            Id = "Project", Namespace = "",
-            DisplayName = "Project",
             Configuration = "config => config.WithContentType<Project>()"
         };
-        await SetupNodeType(persistence, "Project", definition);
+        await SetupNodeType(persistence, "Project", definition, displayName: "Project");
 
         // First code file: data model
         var dataModelNode = new MeshNode("ProjectDataModel", "type/Project/Code")
@@ -586,8 +553,6 @@ public enum ProjectStatus
 
         var definition = new NodeTypeDefinition
         {
-            Id = "Task", Namespace = "",
-            DisplayName = "Task",
             Configuration = "config => config.WithContentType<TaskItem>()"
         };
         await SetupNodeType(persistence, "Task", definition, new CodeConfiguration
@@ -625,12 +590,8 @@ public record TaskItem
         // Simulates Cosmos: NodeType exists but has no Code children yet
         var persistence = new InMemoryPersistenceService();
 
-        var definition = new NodeTypeDefinition
-        {
-            Id = "EmptyType", Namespace = "",
-            DisplayName = "Empty Type"
-        };
-        await SetupNodeType(persistence, "EmptyType", definition);
+        var definition = new NodeTypeDefinition { };
+        await SetupNodeType(persistence, "EmptyType", definition, displayName: "Empty Type");
 
         var service = CreateService(persistence);
         var node = MeshNode.FromPath("test/empty") with
@@ -653,8 +614,6 @@ public record TaskItem
 
         var definition = new NodeTypeDefinition
         {
-            Id = "Contact", Namespace = "",
-            DisplayName = "Contact",
             Description = "A business contact",
             Configuration = "config => config.WithContentType<Contact>()"
         };

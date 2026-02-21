@@ -75,11 +75,7 @@ public record Story
             DisplayOrder = 30,
             Content = new NodeTypeDefinition
             {
-                Id = "story", Namespace = "Type",
-                DisplayName = "Story",
-                Icon = "Document",
-                Description = "A user story",
-                DisplayOrder = 30
+                Description = "A user story"
             }
         };
         persistence.SaveNodeAsync(storyNode, SetupJsonOptions).GetAwaiter().GetResult();
@@ -106,11 +102,7 @@ public record Graph
             DisplayOrder = 0,
             Content = new NodeTypeDefinition
             {
-                Id = "graph", Namespace = "Type",
-                DisplayName = "Graph",
-                Icon = "Diagram",
-                Description = "The graph root",
-                DisplayOrder = 0
+                Description = "The graph root"
             }
         };
         persistence.SaveNodeAsync(graphTypeNode, SetupJsonOptions).GetAwaiter().GetResult();
@@ -139,7 +131,7 @@ public record Graph
         return builder
             .UseMonolithMesh()
             .ConfigureServices(services => services.AddPersistence(persistence))
-            .AddJsonGraphConfiguration(testDataDirectory);
+            .AddGraph();
     }
 
     public override async ValueTask DisposeAsync()
