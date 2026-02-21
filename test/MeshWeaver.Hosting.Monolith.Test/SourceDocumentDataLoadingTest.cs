@@ -38,7 +38,7 @@ public class SourceDocumentDataLoadingTest : MonolithMeshTestBase
         builder
             .UseMonolithMesh()
             .ConfigureServices(services => services.AddFileSystemPersistence(TestPaths.SamplesGraphData))
-            .AddJsonGraphConfiguration(TestPaths.SamplesGraphData);
+            .AddGraph();
 
     /// <summary>
     /// Test case definition for source document data loading tests.
