@@ -46,21 +46,9 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
     {
         try
         {
-            // Add timeout to prevent hanging
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
-
             Mesh.Dispose();
             await Mesh.Disposal!.WaitAsync(cts.Token);
-        }
-        catch (OperationCanceledException)
-        {
-            // Log timeout but don't fail the test
-            // This prevents hanging but allows cleanup to continue
-        }
-        catch (Exception ex)
-        {
-            // Log other exceptions but continue cleanup
-            System.Diagnostics.Debug.WriteLine($"Exception during mesh disposal: {ex}");
         }
         finally
         {

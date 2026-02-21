@@ -72,7 +72,7 @@ public class PageLoadingTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
 
                 return config.AddDefaultLayoutAreas();
             })
-            .AddJsonGraphConfiguration(dataDirectory);
+            .AddGraph();
     }
 
     /// <summary>

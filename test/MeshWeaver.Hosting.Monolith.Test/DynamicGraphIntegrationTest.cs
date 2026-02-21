@@ -1476,38 +1476,16 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
         var reference = new LayoutAreaReference("Overview");
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(codeNodeAddress, reference);
 
-        Output.WriteLine("Collecting updates for 20 seconds...\n");
+        Output.WriteLine("Waiting for SplitterControl...\n");
 
-        var updates = await stream
+        // Wait for the expected SplitterControl instead of collecting all updates for 20s
+        var final = await stream
             .GetControlStream("Overview")
-            .TakeUntil(Observable.Timer(TimeSpan.FromSeconds(20)))
-            .ToList();
+            .OfType<SplitterControl>()
+            .Timeout(TimeSpan.FromSeconds(20))
+            .FirstAsync();
 
-        Output.WriteLine($"=== Collected {updates.Count} updates ===\n");
-
-        for (int i = 0; i < updates.Count; i++)
-        {
-            Output.WriteLine($"--- Update #{i + 1} ---");
-            var control = updates[i];
-
-            var typeName = control switch
-            {
-                null => "null",
-                SplitterControl sp => $"SPLITTER ({sp.Areas.Count} panes)",
-                StackControl st => $"STACK ({st.Areas.Count} views)",
-                NamedAreaControl n => $"NamedArea -> '{n.Area}'",
-                ProgressControl p => $"Progress ({p.Message})",
-                _ => control.GetType().Name
-            };
-            Output.WriteLine($"  Control: {typeName}");
-            Output.WriteLine("");
-        }
-
-        updates.Should().NotBeEmpty("Should receive at least one update");
-
-        // Verify final state has Splitter (Overview now renders a Splitter with code list + content)
-        var final = updates.Last();
-        Output.WriteLine($"Final control is Splitter: {final is SplitterControl}");
+        Output.WriteLine($"Received SplitterControl with {final.Areas.Count} panes");
 
         final.Should().BeOfType<SplitterControl>("Final control should be a Splitter");
     }
@@ -1756,17 +1734,15 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
 
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(organizationAddress, reference);
 
-        // Collect multiple JSON updates - the code nodes arrive asynchronously via ObserveQuery
-        Output.WriteLine("Collecting JSON updates for up to 30 seconds...");
-        var updates = await stream
-            .TakeUntil(Observable.Timer(TimeSpan.FromSeconds(30)))
-            .ToList();
+        // Wait for a JSON update that contains code node content (instead of collecting for 30s)
+        Output.WriteLine("Waiting for JSON update containing code nodes...");
+        var lastJson = await stream
+            .Select(x => x.Value.GetRawText())
+            .Where(json => json.Contains("Organization") && json.Contains("Code") && !json.Contains("No code files"))
+            .Timeout(TimeSpan.FromSeconds(30))
+            .FirstAsync();
 
-        Output.WriteLine($"Received {updates.Count} JSON updates");
-
-        // Check the latest update for code node content
-        var lastJson = updates.Last().Value.GetRawText();
-        Output.WriteLine($"Last JSON update (first 5000 chars):\n{lastJson.Substring(0, Math.Min(5000, lastJson.Length))}");
+        Output.WriteLine($"Received matching JSON update (first 5000 chars):\n{lastJson.Substring(0, Math.Min(5000, lastJson.Length))}");
 
         // The NavMenu should contain code file entries
         // Organization has 2 code files: Organization.cs and OrganizationViews.cs
@@ -1776,17 +1752,6 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
         // Check specifically for "No code files" to detect the bug
         var hasNoCodeFiles = lastJson.Contains("No code files");
         Output.WriteLine($"Contains 'No code files': {hasNoCodeFiles}");
-
-        // If "No code files" appears, dump all updates for diagnosis
-        if (hasNoCodeFiles)
-        {
-            Output.WriteLine("\n=== DIAGNOSIS: 'No code files' found. Dumping all updates ===");
-            for (int i = 0; i < updates.Count; i++)
-            {
-                var json = updates[i].Value.GetRawText();
-                Output.WriteLine($"\n--- Update #{i + 1} (first 3000 chars) ---\n{json.Substring(0, Math.Min(3000, json.Length))}");
-            }
-        }
 
         hasNoCodeFiles.Should().BeFalse(
             "NodeType Overview should NOT show 'No code files'. " +
