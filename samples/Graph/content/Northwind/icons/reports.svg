@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" fill="none">
+  <defs>
+    <linearGradient id="docGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#3b82f6"/>
+      <stop offset="100%" stop-color="#8b5cf6"/>
+    </linearGradient>
+  </defs>
+  <!-- Document background -->
+  <path d="M6 2h8l6 6v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2z" fill="#f1f5f9" stroke="url(#docGradient)" stroke-width="1.5"/>
+  <!-- Folded corner -->
+  <path d="M14 2v6h6" fill="#e2e8f0" stroke="url(#docGradient)" stroke-width="1.5" stroke-linejoin="round"/>
+  <!-- Mini bar chart inside document -->
+  <rect x="7" y="14" width="2.5" height="5" rx="0.5" fill="#3b82f6"/>
+  <rect x="10.75" y="12" width="2.5" height="7" rx="0.5" fill="#6366f1"/>
+  <rect x="14.5" y="15" width="2.5" height="4" rx="0.5" fill="#8b5cf6"/>
+</svg>

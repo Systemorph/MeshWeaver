@@ -1,0 +1,20 @@
+{
+  "id": "Insured",
+  "namespace": "Cornerstone",
+  "name": "Insured",
+  "nodeType": "NodeType",
+  "category": "Types",
+  "description": "An insurance client with pricings grouped by status",
+  "iconName": "Building",
+  "icon": "/static/storage/content/Cornerstone/icons/insured.svg",
+  "isPersistent": true,
+  "content": {
+    "$type": "NodeTypeDefinition",
+    "id": "Insured",
+    "namespace": "Cornerstone",
+    "displayName": "Insured",
+    "iconName": "Building",
+    "description": "An insurance client with pricings",
+    "configuration": "config => config.WithContentType<Insured>().AddData(data => data.AddSource(source => source.WithType<PricingStatus>(t => t.WithInitialData(PricingStatus.All)))).AddDefaultLayoutAreas().AddLayout(layout => layout.WithDefaultArea(\"PricingCatalog\").AddCornerstoneViews())"
+  }
+}

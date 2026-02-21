@@ -5,7 +5,7 @@
   "nodeType": "ACME/Project/Todo",
   "category": "Tasks",
   "description": "Review financial health of Apex Manufacturing",
-  "icon": "/static/content/ACME/Project/Todo/icon.svg",
+  "icon": "/static/storage/content/ACME/Project/Todo/icon.svg",
   "isPersistent": true,
   "content": {
     "$type": "Todo",

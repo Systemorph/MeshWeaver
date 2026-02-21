@@ -1,0 +1,25 @@
+{
+  "id": "2024",
+  "namespace": "Cornerstone/EuropeanLogistics",
+  "name": "European Logistics 2024",
+  "nodeType": "Cornerstone/Pricing",
+  "category": "Pricings",
+  "description": "Property reinsurance for European Logistics Ltd - UW Year 2024",
+  "iconName": "DocumentBulletList",
+  "isPersistent": true,
+  "state": "Active",
+  "content": {
+    "$type": "Pricing",
+    "id": "2024",
+    "insuredName": "European Logistics Ltd",
+    "description": "Property reinsurance program for European Logistics Ltd covering UK and European warehouses and distribution centers.",
+    "inceptionDate": "2024-03-01T00:00:00Z",
+    "expirationDate": "2025-02-28T00:00:00Z",
+    "underwritingYear": 2024,
+    "lineOfBusiness": "PROP",
+    "country": "GB",
+    "currency": "GBP",
+    "legalEntity": "MW-UK",
+    "status": "Quoted"
+  }
+}

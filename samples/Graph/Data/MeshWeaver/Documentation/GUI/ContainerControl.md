@@ -2,7 +2,7 @@
 Name: Adding Controls to a UI
 Category: Documentation
 Description: How to add controls to containers and make them update automatically
-Icon: /static/storage/content/MeshWeaver/Documentation/UserInterface/ContainerControl/icon.svg
+Icon: /static/storage/content/MeshWeaver/Documentation/GUI/ContainerControl/icon.svg
 ---
 
 # Adding Controls to a UI

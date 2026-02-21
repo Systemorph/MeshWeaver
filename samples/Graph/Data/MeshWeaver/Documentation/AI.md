@@ -100,3 +100,70 @@ Agents maintain awareness of:
 - Current namespace/project context
 - Available team members and categories
 - Data schemas through GetSchema queries
+
+---
+
+## Agent and Model References
+
+In chat interfaces, you can use unified reference syntax to select agents and models.
+
+### Agent References
+
+Agent references allow you to select a specific AI agent for chat interactions:
+
+```
+@agent/AgentName
+```
+
+Agents are specialized AI assistants configured for specific tasks or domains. When you mention an agent reference in your message, that agent will handle the conversation.
+
+**Examples:**
+
+```
+@agent/Documentation
+```
+
+You can combine agent selection with a prompt in the same message:
+
+```
+@agent/RiskImportAgent import Microsoft.xlsx
+```
+
+Agents can also be selected automatically based on the current navigation context.
+
+---
+
+### Model References
+
+Model references allow you to select a specific AI model for chat interactions:
+
+```
+@model/ModelName
+```
+
+**Examples:**
+
+```
+@model/claude-3-5-sonnet
+```
+
+Model names can contain letters, numbers, hyphens, and dots (e.g., `claude-3-5-sonnet`, `gpt-4.0`).
+
+---
+
+### Slash Commands
+
+In addition to @ references, you can use slash commands for agent and model selection:
+
+| Command | Description |
+|---------|-------------|
+| `/agent AgentName` | Switch to the specified agent |
+| `/model ModelName` | Switch to the specified model |
+| `/help` | Show available commands |
+
+**Examples:**
+
+```
+/agent @agent/RiskImportAgent
+/model @model/claude-haiku-4-5
+```

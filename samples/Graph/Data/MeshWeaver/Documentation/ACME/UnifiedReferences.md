@@ -193,7 +193,7 @@ Defined in `ACME/Project/Todo/Code/Category.cs`:
 | Content | Path |
 |---------|------|
 | Todo icon | `/static/storage/content/ACME/Project/Todo/icon.svg` |
-| Project thumbnails | `/static/content/ACME/Project/thumbnails/` |
+| Project thumbnails | `/static/storage/content/ACME/Project/thumbnails/` |
 
 ### Embedding Todo Icon
 

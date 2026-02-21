@@ -1,0 +1,15 @@
+{
+  "$type": "MeshNode",
+  "id": "Threads/9TP-oZIPc0iVWPg8fayAKw",
+  "path": "Threads/9TP-oZIPc0iVWPg8fayAKw",
+  "name": "Hello, who\u0027s this?",
+  "nodeType": "Thread",
+  "icon": "/static/NodeTypeIcons/chat.svg",
+  "lastModified": "2026-02-10T15:17:19.669823+00:00",
+  "version": 2,
+  "state": "Active",
+  "content": {
+    "$type": "Thread",
+    "parentPath": ""
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "$type": "MeshNode",
+  "id": "Threads/f3MgsRNCbUqFHcUB0Axzeg/tTGOqEX-CUK2vtHtg_L3ew",
+  "path": "Threads/f3MgsRNCbUqFHcUB0Axzeg/tTGOqEX-CUK2vtHtg_L3ew",
+  "nodeType": "ThreadMessage",
+  "icon": "/static/NodeTypeIcons/message.svg",
+  "lastModified": "2026-02-10T14:29:52.267186+00:00",
+  "state": "Active",
+  "content": {
+    "$type": "ThreadMessage",
+    "id": "tTGOqEX-CUK2vtHtg_L3ew",
+    "role": "user",
+    "text": "HEllo, who are you?",
+    "timestamp": "2026-02-10T14:29:52.266815Z",
+    "type": "ExecutedInput"
+  }
+}

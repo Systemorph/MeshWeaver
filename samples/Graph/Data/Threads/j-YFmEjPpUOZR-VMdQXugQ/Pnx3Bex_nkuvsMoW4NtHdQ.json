@@ -1,0 +1,17 @@
+{
+  "$type": "MeshNode",
+  "id": "Threads/j-YFmEjPpUOZR-VMdQXugQ/Pnx3Bex_nkuvsMoW4NtHdQ",
+  "path": "Threads/j-YFmEjPpUOZR-VMdQXugQ/Pnx3Bex_nkuvsMoW4NtHdQ",
+  "nodeType": "ThreadMessage",
+  "icon": "/static/NodeTypeIcons/message.svg",
+  "lastModified": "2026-02-16T09:20:20.874667+00:00",
+  "state": "Active",
+  "content": {
+    "$type": "ThreadMessage",
+    "id": "Pnx3Bex_nkuvsMoW4NtHdQ",
+    "role": "user",
+    "text": "I am looking at the \u0022Top Employees of the Month Based on Amounts Earned\u0022 report - can you come up with similar insights regarding employees and their territories?\n",
+    "timestamp": "2026-02-16T09:20:20.874076Z",
+    "type": "ExecutedInput"
+  }
+}

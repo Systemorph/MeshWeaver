@@ -1,0 +1,17 @@
+{
+  "$type": "MeshNode",
+  "id": "Cornerstone/Microsoft/2026/Threads/hUHKvCUHv0Wxh6Z0PDmJzQ/_r0EfVNg10Gh3ujK0Ylmrw",
+  "path": "Cornerstone/Microsoft/2026/Threads/hUHKvCUHv0Wxh6Z0PDmJzQ/_r0EfVNg10Gh3ujK0Ylmrw",
+  "nodeType": "ThreadMessage",
+  "icon": "/static/NodeTypeIcons/message.svg",
+  "lastModified": "2026-02-10T12:29:50.398726+00:00",
+  "state": "Active",
+  "content": {
+    "$type": "ThreadMessage",
+    "id": "_r0EfVNg10Gh3ujK0Ylmrw",
+    "role": "user",
+    "text": "Hello, who\u0027s this?",
+    "timestamp": "2026-02-10T12:29:50.398431Z",
+    "type": "ExecutedInput"
+  }
+}

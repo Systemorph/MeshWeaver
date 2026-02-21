@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+  <!-- Outer circle (compass border) -->
+  <circle cx="32" cy="32" r="28" stroke="currentColor" stroke-width="2.5" fill="none"/>
+  <!-- Inner circle -->
+  <circle cx="32" cy="32" r="20" stroke="currentColor" stroke-width="1.5" fill="none"/>
+  <!-- Cardinal points - North (filled, primary direction) -->
+  <polygon points="32,6 36,26 32,22 28,26" fill="var(--accent-fill-rest, #0078d4)"/>
+  <!-- Cardinal points - South -->
+  <polygon points="32,58 28,38 32,42 36,38" stroke="currentColor" stroke-width="1.5" fill="none"/>
+  <!-- Cardinal points - East -->
+  <polygon points="58,32 38,28 42,32 38,36" stroke="currentColor" stroke-width="1.5" fill="none"/>
+  <!-- Cardinal points - West -->
+  <polygon points="6,32 26,36 22,32 26,28" stroke="currentColor" stroke-width="1.5" fill="none"/>
+  <!-- Intercardinal points (smaller) -->
+  <line x1="44" y1="12" x2="38" y2="18" stroke="currentColor" stroke-width="1.5"/>
+  <line x1="52" y1="20" x2="46" y2="26" stroke="currentColor" stroke-width="1.5"/>
+  <line x1="44" y1="52" x2="38" y2="46" stroke="currentColor" stroke-width="1.5"/>
+  <line x1="52" y1="44" x2="46" y2="38" stroke="currentColor" stroke-width="1.5"/>
+  <line x1="20" y1="12" x2="26" y2="18" stroke="currentColor" stroke-width="1.5"/>
+  <line x1="12" y1="20" x2="18" y2="26" stroke="currentColor" stroke-width="1.5"/>
+  <line x1="20" y1="52" x2="26" y2="46" stroke="currentColor" stroke-width="1.5"/>
+  <line x1="12" y1="44" x2="18" y2="38" stroke="currentColor" stroke-width="1.5"/>
+  <!-- Center point -->
+  <circle cx="32" cy="32" r="3" fill="var(--accent-fill-rest, #0078d4)"/>
+</svg>

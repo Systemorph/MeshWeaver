@@ -231,35 +231,46 @@ public class MessageService : IMessageService
             bool shouldDefer = !gates.IsEmpty;
             if (shouldDefer)
             {
-                lock (gateStateLock)
+                // System messages like ShutdownRequest must never be deferred - they are critical
+                // for disposal and would cause deadlocks if deferred behind closed gates
+                if (delivery.Message is ShutdownRequest or DisposeRequest)
                 {
-                    shouldDefer = !gates.IsEmpty;
-                    if (shouldDefer)
+                    logger.LogDebug(
+                        "Allowing system message {MessageType} (ID: {MessageId}) through all gates for hub {Address}",
+                        delivery.Message.GetType().Name, delivery.Id, Address);
+                    shouldDefer = false;
+                }
+                else
+                {
+                    lock (gateStateLock)
                     {
-                        // Check all gate predicates
-                        foreach (var (gateName, allowDuringInit) in gates)
+                        shouldDefer = !gates.IsEmpty;
+                        if (shouldDefer)
                         {
-                            if (allowDuringInit(delivery))
+                            // Check all gate predicates
+                            foreach (var (gateName, allowDuringInit) in gates)
                             {
-                                logger.LogDebug(
-                                    "Allowing message {MessageType} (ID: {MessageId}) through gate '{GateName}' for hub {Address}",
-                                    delivery.Message.GetType().Name, delivery.Id, gateName, Address);
-                                shouldDefer = false;
-                                break;
+                                if (allowDuringInit(delivery))
+                                {
+                                    logger.LogDebug(
+                                        "Allowing message {MessageType} (ID: {MessageId}) through gate '{GateName}' for hub {Address}",
+                                        delivery.Message.GetType().Name, delivery.Id, gateName, Address);
+                                    shouldDefer = false;
+                                    break;
+                                }
                             }
                         }
-                    }
 
-                    // If we still need to defer, post to deferred buffer and return
-                    if (shouldDefer)
-                    {
-                        logger.LogDebug("Deferring on-target message {MessageType} (ID: {MessageId}) in {Address}",
-                            delivery.Message.GetType().Name, delivery.Id, Address);
-                        deferredBuffer.Post(() => ProcessDeferredMessage(delivery, cancellationToken));
-                        return delivery.Forwarded();
+                        // If we still need to defer, post to deferred buffer and return
+                        if (shouldDefer)
+                        {
+                            logger.LogDebug("Deferring on-target message {MessageType} (ID: {MessageId}) in {Address}",
+                                delivery.Message.GetType().Name, delivery.Id, Address);
+                            deferredBuffer.Post(() => ProcessDeferredMessage(delivery, cancellationToken));
+                            return delivery.Forwarded();
+                        }
                     }
                 }
-
             }
 
             logger.LogTrace(

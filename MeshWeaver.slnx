@@ -26,9 +26,6 @@
     <Project Path="samples/Northwind/MeshWeaver.Northwind.Domain/MeshWeaver.Northwind.Domain.csproj" />
     <Project Path="samples/Northwind/MeshWeaver.Northwind.Model/MeshWeaver.Northwind.Model.csproj" />
   </Folder>
-  <Folder Name="/samples/Todo/">
-    <Project Path="samples/Todo/MeshWeaver.Todo/MeshWeaver.Todo.csproj" />
-  </Folder>
   <Folder Name="/samples/Graph/">
     <!-- MeshWeaver.Samples.Graph.csproj excluded from build - used for browsing data files in VS -->
   </Folder>
@@ -126,7 +123,6 @@
     <Project Path="test/MeshWeaver.Search.Test/MeshWeaver.Search.Test.csproj" />
     <Project Path="test/MeshWeaver.Serialization.Test/MeshWeaver.Serialization.Test.csproj" />
     <Project Path="test/MeshWeaver.TestDomain/MeshWeaver.TestDomain.csproj" />
-    <Project Path="test/MeshWeaver.Todo.Test/MeshWeaver.Todo.Test.csproj" />
     <Project Path="test/MeshWeaver.Graph.Test/MeshWeaver.Graph.Test.csproj" />
     <Project Path="test/MeshWeaver.Hub.Fixture/MeshWeaver.Hub.Fixture.csproj" />
     <Project Path="test/MeshWeaver.Kernel.Test/MeshWeaver.Kernel.Test.csproj" />

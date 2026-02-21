@@ -1,0 +1,18 @@
+{
+  "$type": "MeshNode",
+  "id": "Northwind/Analytics/Threads/3YAw9ZEkCEGP8C_TFvWh3A/IZo_L1IxC0mnno45-xcnYQ",
+  "path": "Northwind/Analytics/Threads/3YAw9ZEkCEGP8C_TFvWh3A/IZo_L1IxC0mnno45-xcnYQ",
+  "nodeType": "ThreadMessage",
+  "icon": "/static/NodeTypeIcons/message.svg",
+  "lastModified": "2026-02-17T15:01:08.247281+00:00",
+  "state": "Active",
+  "content": {
+    "$type": "ThreadMessage",
+    "id": "IZo_L1IxC0mnno45-xcnYQ",
+    "role": "NorthwindAgent",
+    "authorName": "NorthwindAgent",
+    "text": "Thanks \u2014 I attempted to display the chart. It appears the UI didn\u0027t update for you. I\u0027ll try again; if that still fails, I\u0027ll provide the bottom 3 categories by revenue for 2024 as a fallback. Please give me a moment.",
+    "timestamp": "2026-02-17T15:01:08.246456Z",
+    "type": "AgentResponse"
+  }
+}

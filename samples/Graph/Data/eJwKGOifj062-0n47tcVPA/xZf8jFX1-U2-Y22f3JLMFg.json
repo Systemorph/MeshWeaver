@@ -1,0 +1,17 @@
+{
+  "$type": "MeshNode",
+  "id": "eJwKGOifj062-0n47tcVPA/xZf8jFX1-U2-Y22f3JLMFg",
+  "path": "eJwKGOifj062-0n47tcVPA/xZf8jFX1-U2-Y22f3JLMFg",
+  "nodeType": "ThreadMessage",
+  "icon": "/static/NodeTypeIcons/message.svg",
+  "lastModified": "2026-02-20T13:30:49.897676+00:00",
+  "state": "Active",
+  "content": {
+    "$type": "ThreadMessage",
+    "id": "xZf8jFX1-U2-Y22f3JLMFg",
+    "role": "user",
+    "text": "Is there any update from the executor?",
+    "timestamp": "2026-02-20T13:30:49.897277Z",
+    "type": "ExecutedInput"
+  }
+}

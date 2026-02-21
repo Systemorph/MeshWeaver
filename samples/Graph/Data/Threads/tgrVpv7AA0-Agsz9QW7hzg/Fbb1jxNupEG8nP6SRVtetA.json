@@ -1,0 +1,17 @@
+{
+  "$type": "MeshNode",
+  "id": "Threads/tgrVpv7AA0-Agsz9QW7hzg/Fbb1jxNupEG8nP6SRVtetA",
+  "path": "Threads/tgrVpv7AA0-Agsz9QW7hzg/Fbb1jxNupEG8nP6SRVtetA",
+  "nodeType": "ThreadMessage",
+  "icon": "/static/NodeTypeIcons/message.svg",
+  "lastModified": "2026-02-12T11:03:29.532581+00:00",
+  "state": "Active",
+  "content": {
+    "$type": "ThreadMessage",
+    "id": "Fbb1jxNupEG8nP6SRVtetA",
+    "role": "assistant",
+    "text": "An error occurred: Request included unsupported tool use. Using tool is not supported by this model\nStatus: 400 (Bad Request)\nErrorCode: UnsupportedToolUse\n\nContent:\n{\u0022error\u0022:{\u0022code\u0022:\u0022UnsupportedToolUse\u0022,\u0022message\u0022:\u0022Request included unsupported tool use. Using tool is not supported by this model\u0022,\u0022details\u0022:\u0022Request included unsupported tool use. Using tool is not supported by this model\u0022}}\n\nHeaders:\nTransfer-Encoding: chunked\napim-request-id: REDACTED\nrequest-context: REDACTED\nStrict-Transport-Security: REDACTED\nX-Content-Type-Options: REDACTED\nx-ratelimit-remaining-tokens: REDACTED\nx-ms-region: REDACTED\nx-ratelimit-limit-tokens: REDACTED\nx-ratelimit-remaining-requests: REDACTED\nx-ratelimit-limit-requests: REDACTED\nDate: Thu, 12 Feb 2026 11:03:29 GMT\nContent-Type: application/json; charset=utf-8\n",
+    "timestamp": "2026-02-12T11:03:29.532173Z",
+    "type": "AgentResponse"
+  }
+}

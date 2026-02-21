@@ -19,8 +19,8 @@ public class LayoutAreaMarkdownRenderer : HtmlObjectRenderer<LayoutAreaComponent
         {
             if (isPreParsed)
             {
-                // Pre-parsed reference - use address/area/id
-                renderer.WriteLine(GetLayoutAreaDiv(obj.Address, obj.Area, obj.Id));
+                // Pre-parsed reference - include raw path for Graph resolution + address/area/id
+                renderer.WriteLine(GetLayoutAreaDiv(obj.RawPath, obj.Address, obj.Area, obj.Id));
             }
             else
             {
@@ -64,6 +64,14 @@ public class LayoutAreaMarkdownRenderer : HtmlObjectRenderer<LayoutAreaComponent
     /// </summary>
     internal static string GetLayoutAreaDiv(object address, string? area, object? id)
         => $"<div class='{LayoutArea}' data-{Address}='{HttpUtility.HtmlAttributeEncode(address?.ToString() ?? string.Empty)}' data-{Area}='{HttpUtility.HtmlAttributeEncode(area ?? string.Empty)}' data-{AreaId}='{HttpUtility.HtmlAttributeEncode(id?.ToString() ?? string.Empty)}'></div>";
+
+    /// <summary>
+    /// Creates a layout area div with both raw path and pre-resolved address/area/id.
+    /// The raw path enables Graph resolution via IMeshCatalog.ResolvePathAsync(),
+    /// while the pre-parsed attributes serve as fallback.
+    /// </summary>
+    internal static string GetLayoutAreaDiv(string rawPath, object address, string? area, object? id)
+        => $"<div class='{LayoutArea}' data-{RawPath}='{HttpUtility.HtmlAttributeEncode(rawPath)}' data-{Address}='{HttpUtility.HtmlAttributeEncode(address?.ToString() ?? string.Empty)}' data-{Area}='{HttpUtility.HtmlAttributeEncode(area ?? string.Empty)}' data-{AreaId}='{HttpUtility.HtmlAttributeEncode(id?.ToString() ?? string.Empty)}'></div>";
 
     /// <summary>
     /// Creates a UCR hyperlink using raw path for runtime resolution via IMeshCatalog.
