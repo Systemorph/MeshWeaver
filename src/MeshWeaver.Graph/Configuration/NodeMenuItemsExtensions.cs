@@ -64,13 +64,6 @@ public static class NodeMenuItemsExtensions
                 RequiredPermission: Permission.Create, DisplayOrder: 1);
         }
 
-        // Show node name with navigation to its NodeType definition
-        if (node != null && !string.IsNullOrEmpty(node.NodeType))
-        {
-            yield return new(node.Name ?? node.Id, node.NodeType,
-                Href: $"/{node.NodeType}", DisplayOrder: 10);
-        }
-
         yield return new("Threads", MeshNodeLayoutAreas.ThreadsArea, DisplayOrder: 50);
         yield return new("Settings", MeshNodeLayoutAreas.SettingsArea, DisplayOrder: 90);
 

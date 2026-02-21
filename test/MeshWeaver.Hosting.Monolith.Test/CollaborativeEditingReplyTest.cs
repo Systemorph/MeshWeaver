@@ -210,12 +210,10 @@ public class CollaborativeEditingReplyTest(ITestOutputHelper output) : MonolithM
             o => o.WithTarget(replyAddress),
             TestContext.Current.CancellationToken);
 
-        client.Post(
+        await client.AwaitResponse(
             new DataChangeRequest().WithUpdates(updatedNode),
-            o => o.WithTarget(replyAddress));
-
-        // Wait for persistence
-        await Task.Delay(500);
+            o => o.WithTarget(replyAddress),
+            TestContext.Current.CancellationToken);
 
         // Step 6: Verify the reply persisted with text
         Output.WriteLine("Step 6: Verifying reply persistence...");

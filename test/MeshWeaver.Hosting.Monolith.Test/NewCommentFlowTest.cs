@@ -248,11 +248,10 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
         var updatedNode = createdNode with { Content = updatedComment };
 
         Output.WriteLine($"Sending DataChangeRequest to WRONG address: {docAddress}");
-        client.Post(
+        await client.AwaitResponse(
             new DataChangeRequest().WithUpdates(updatedNode),
-            o => o.WithTarget(docAddress)); // BUG: targeting parent instead of comment
-
-        await Task.Delay(1000);
+            o => o.WithTarget(docAddress),
+            TestTimeout); // BUG: targeting parent instead of comment
 
         // Verify comment text did NOT change (still empty)
         var retrieved = await catalog.GetNodeAsync(new Address(createdNode.Path!));
