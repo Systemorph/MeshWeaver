@@ -526,14 +526,14 @@ public class MessageService : IMessageService
         try
         {
             logger.LogDebug("Awaiting finishing deliveries in {Address}", Address);
-            using var deliveryTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            using var deliveryTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(2));
             await deliveryAction.Completion.WaitAsync(deliveryTimeout.Token);
             logger.LogDebug("Deliveries completed successfully in {elapsed}ms for {Address}",
                 deliveryStopwatch.ElapsedMilliseconds, Address);
         }
         catch (OperationCanceledException)
         {
-            logger.LogError("Delivery completion timed out after 5 seconds ({elapsed}ms) in {Address}",
+            logger.LogError("Delivery completion timed out after 2 seconds ({elapsed}ms) in {Address}",
                 deliveryStopwatch.ElapsedMilliseconds, Address);
         }
         catch (Exception ex)

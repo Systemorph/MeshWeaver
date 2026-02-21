@@ -127,9 +127,43 @@ public static class MeshNodeLayoutAreas
         return nodeStream.SelectMany(async nodes =>
         {
             var node = nodes.FirstOrDefault(n => n.Path == hubPath);
-            var canEdit = await PermissionHelper.CanEditAsync(host.Hub, hubPath);
+            var permissions = await PermissionHelper.GetEffectivePermissionsAsync(host.Hub, hubPath);
+
+            // If user has no read permission, show access denied with request option
+            if (!permissions.HasFlag(Permission.Read))
+                return (UiControl?)BuildAccessDenied(hubPath);
+
+            var canEdit = permissions.HasFlag(Permission.Update);
             return (UiControl?)host.BuildDetailsContent(node, null, canEdit);
         });
+    }
+
+    private static UiControl BuildAccessDenied(string nodePath)
+    {
+        var nodeName = nodePath.Split('/').LastOrDefault() ?? nodePath;
+        return Controls.Stack.WithWidth("100%").WithStyle("padding: 48px 24px; align-items: center; text-align: center;")
+            .WithView(Controls.Icon(FluentIcons.ShieldKeyhole())
+                .WithStyle("font-size: 64px; color: var(--neutral-foreground-hint); margin-bottom: 16px;"))
+            .WithView(Controls.H2("Access Denied").WithStyle("margin: 0;"))
+            .WithView(Controls.Html(
+                $"<p style=\"color: var(--neutral-foreground-hint); max-width: 480px;\">" +
+                $"You do not have permission to view <strong>{System.Web.HttpUtility.HtmlEncode(nodeName)}</strong>. " +
+                $"Contact the owner to request access.</p>"))
+            .WithView(Controls.Button("Request Access")
+                .WithAppearance(Appearance.Accent)
+                .WithIconStart(FluentIcons.PersonAdd())
+                .WithClickAction(ctx =>
+                {
+                    // Show a confirmation that the request was noted
+                    var dialog = Controls.Dialog(
+                        Controls.Markdown(
+                            $"Access request for **{nodeName}** has been noted.\n\n" +
+                            "The node owner will be notified."),
+                        "Access Requested"
+                    ).WithSize("S").WithClosable(true);
+                    ctx.Host.UpdateArea(DialogControl.DialogArea, dialog);
+                    return Task.CompletedTask;
+                }));
     }
 
     internal static string GetContainerStyle(LayoutAreaHost host, NodeTypeDefinition? typeDef = null)
