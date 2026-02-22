@@ -93,29 +93,6 @@ public sealed class MeshCatalog(
             return persistenceNode;
         }
 
-        // Try to create a node from template (for auto-kernel addresses like kernel/app-Kernel)
-        var segments = addressKey.Split('/');
-        if (segments.Length > 1)
-        {
-            // Find a matching template (first segment typically matches the template type)
-            var templatePath = segments[0];
-            if (Configuration.Nodes.TryGetValue(templatePath, out var templateNode) && templateNode.HubConfiguration != null)
-            {
-                // Create a node that inherits from the template
-                var templateBasedNode = MeshNode.FromPath(addressKey) with
-                {
-                    NodeType = templatePath,
-                    HubConfiguration = templateNode.HubConfiguration,
-                    AssemblyLocation = templateNode.AssemblyLocation
-                };
-                logger.LogDebug("GetNodeAsync: Created node at {Path} from template {Template}", addressKey, templatePath);
-                cache.Set(templateBasedNode.Path, templateBasedNode, cacheOptions);
-                if (!await ValidateReadAsync(templateBasedNode))
-                    return null;
-                return templateBasedNode;
-            }
-        }
-
         return null;
     }
 
@@ -410,7 +387,7 @@ public sealed class MeshCatalog(
         return (null, 0);
     }
 
-    private async Task<AddressResolution> ResolveFromConfigNodeAsync(MeshNode matchedNode, string[] segments, string _)
+    private async Task<AddressResolution?> ResolveFromConfigNodeAsync(MeshNode matchedNode, string[] segments, string _)
     {
         // When path goes deeper than the config node, check persistence for a deeper match
         // This handles dynamically created child nodes (e.g., kernel/test-kernel via CreateNodeRequest)
@@ -429,9 +406,14 @@ public sealed class MeshCatalog(
                     : null;
                 return new AddressResolution(matchedPath, persistenceRemainder);
             }
+
+            // Path goes deeper than config node but nothing exists in persistence.
+            // Config nodes are type templates (e.g. "User"), not routing targets for
+            // arbitrary child paths. Return null so the caller gets a proper error.
+            return null;
         }
 
-        // Use the config node's path as the address, with remainder for any extra segments
+        // Exact match or config node covers the full path - use it directly
         var remainder = segments.Length > matchedNode.Segments.Count
             ? string.Join("/", segments.Skip(matchedNode.Segments.Count))
             : null;

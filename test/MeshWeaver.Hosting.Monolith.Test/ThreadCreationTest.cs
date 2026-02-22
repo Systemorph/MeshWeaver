@@ -157,7 +157,7 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
         retrievedNode.Content.Should().BeOfType<MeshThread>();
     }
 
-    [Fact(Timeout = 5000)]
+    [Fact(Timeout = 3000)]
     public async Task GetDataRequest_ToNonExistentNode_ReturnsErrorNotEndlessMessages()
     {
         // Arrange - Create a malformed path that mimics the bug
@@ -166,22 +166,25 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
         var hub = Mesh.ServiceProvider.GetRequiredService<IMessageHub>();
 
         // Act - Send GetDataRequest to non-existent node
-        // Should return a DeliveryFailure quickly, not hang
+        // Must return a DeliveryFailureException quickly, NOT wait for cancellation timeout
         var cts = new CancellationTokenSource(2.Seconds());
 
-        Func<Task> act = async () =>
+        var ex = await Assert.ThrowsAnyAsync<Exception>(async () =>
         {
-            var response = await hub.AwaitResponse(
+            await hub.AwaitResponse(
                 new Data.GetDataRequest(new Data.EntityReference(nameof(MeshNode), nonExistentPath)),
                 o => o.WithTarget(address),
                 cts.Token);
-        };
+        });
 
-        // Assert - Should fail quickly with DeliveryFailureException
-        await act.Should().ThrowAsync<Exception>();
+        // Must be a routing failure, NOT a timeout (OperationCanceledException)
+        Assert.False(ex is OperationCanceledException or TaskCanceledException,
+            $"Expected routing failure but got timeout: {ex.GetType().Name}");
+        Assert.Contains("Routing failed", ex.GetBaseException().Message);
+        Output.WriteLine($"Got expected routing failure: {ex.GetBaseException().Message}");
     }
 
-    [Fact(Timeout = 5000)]
+    [Fact(Timeout = 3000)]
     public async Task GetDataRequest_ToNonExistentThread_ReturnsErrorNotEndlessMessages()
     {
         // Arrange - Thread path that looks valid but doesn't exist
@@ -190,19 +193,22 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
         var hub = Mesh.ServiceProvider.GetRequiredService<IMessageHub>();
 
         // Act - Send GetDataRequest to non-existent node
-        // Should return a DeliveryFailure quickly, not hang
+        // Must return a DeliveryFailureException quickly, NOT wait for cancellation timeout
         var cts = new CancellationTokenSource(2.Seconds());
 
-        Func<Task> act = async () =>
+        var ex = await Assert.ThrowsAnyAsync<Exception>(async () =>
         {
-            var response = await hub.AwaitResponse(
+            await hub.AwaitResponse(
                 new Data.GetDataRequest(new Data.EntityReference(nameof(MeshNode), nonExistentPath)),
                 o => o.WithTarget(address),
                 cts.Token);
-        };
+        });
 
-        // Assert - Should fail quickly with DeliveryFailureException
-        await act.Should().ThrowAsync<Exception>();
+        // Must be a routing failure, NOT a timeout (OperationCanceledException)
+        Assert.False(ex is OperationCanceledException or TaskCanceledException,
+            $"Expected routing failure but got timeout: {ex.GetType().Name}");
+        Assert.Contains("Routing failed", ex.GetBaseException().Message);
+        Output.WriteLine($"Got expected routing failure: {ex.GetBaseException().Message}");
     }
 
     [Fact]
