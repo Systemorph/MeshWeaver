@@ -194,4 +194,6 @@ public static class Controls
     public static SearchBoxControl SearchBox => new();
 
     public static MeshSearchControl MeshSearch => new();
+
+    public static MeshNodePickerControl MeshNodePicker(object data) => new(data);
 }

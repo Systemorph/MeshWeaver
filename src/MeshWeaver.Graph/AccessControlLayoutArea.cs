@@ -236,72 +236,21 @@ public static class AccessControlLayoutArea
             ["roleId"] = ""
         });
 
-        // Load subject options (User and Group nodes) via IMeshQuery
-        var subjectOptionsId = $"subject_options_{Guid.NewGuid().AsString()}";
-        var subjectOptions = new List<Option>();
-        var meshQuery = ctx.Hub.ServiceProvider.GetService<IMeshQuery>();
-        if (meshQuery != null)
-        {
-            try
-            {
-                await foreach (var suggestion in meshQuery.AutocompleteAsync(nodePath, "", limit: 50))
-                {
-                    if (suggestion.NodeType is "User" or "Group")
-                        subjectOptions.Add(new Option<string>(suggestion.Path, $"{suggestion.Name} ({suggestion.Path})"));
-                }
-            }
-            catch { }
-        }
-        ctx.Host.UpdateData(subjectOptionsId, subjectOptions.ToArray());
-
-        // Load role options via IMeshQuery
-        var rolesOptionsId = $"roles_options_{Guid.NewGuid().AsString()}";
-        var roleOptions = new List<Option>();
-        // Add built-in roles
-        roleOptions.Add(new Option<string>("Admin", "Administrator (All permissions)"));
-        roleOptions.Add(new Option<string>("Editor", "Editor (Read, Create, Update, Comment)"));
-        roleOptions.Add(new Option<string>("Viewer", "Viewer (Read only)"));
-        roleOptions.Add(new Option<string>("Commenter", "Commenter (Read, Comment)"));
-        // Add custom Role nodes
-        if (meshQuery != null)
-        {
-            try
-            {
-                var roleNodes = await meshQuery
-                    .QueryAsync<MeshNode>($"nodeType:Role scope:subtree")
-                    .ToListAsync();
-                foreach (var rn in roleNodes)
-                {
-                    var role = rn.Content as Role
-                        ?? (rn.Content is System.Text.Json.JsonElement rje
-                            ? System.Text.Json.JsonSerializer.Deserialize<Role>(rje.GetRawText())
-                            : null);
-                    if (role != null && !new[] { "Admin", "Editor", "Viewer", "Commenter" }.Contains(role.Id))
-                        roleOptions.Add(new Option<string>(role.Id, $"{role.DisplayName ?? role.Id} ({role.Permissions})"));
-                }
-            }
-            catch { }
-        }
-        ctx.Host.UpdateData(rolesOptionsId, roleOptions.ToArray());
-
         var formContent = Controls.Stack.WithStyle("gap: 16px; padding: 16px;")
-            .WithView(new ComboboxControl(
-                new JsonPointerReference("subjectId"),
-                new JsonPointerReference(LayoutAreaReference.GetDataPointer(subjectOptionsId)))
+            .WithView(new MeshNodePickerControl(new JsonPointerReference("subjectId"))
             {
                 Label = "Subject (User or Group)",
                 Required = true,
-                Autocomplete = ComboboxAutocomplete.Both,
                 Placeholder = "Search users or groups...",
+                HiddenQuery = $"path:{nodePath} nodeType:(User OR Group) scope:selfAndAncestors",
                 DataContext = LayoutAreaReference.GetDataPointer(formId)
             })
-            .WithView(new ComboboxControl(
-                new JsonPointerReference("roleId"),
-                new JsonPointerReference(LayoutAreaReference.GetDataPointer(rolesOptionsId)))
+            .WithView(new MeshNodePickerControl(new JsonPointerReference("roleId"))
             {
                 Label = "Role",
                 Required = true,
-                Autocomplete = ComboboxAutocomplete.List,
+                Placeholder = "Search roles...",
+                HiddenQuery = $"path:{nodePath} nodeType:Role scope:selfAndAncestors",
                 DataContext = LayoutAreaReference.GetDataPointer(formId)
             })
             .WithView(Controls.Stack
