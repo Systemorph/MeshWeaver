@@ -1,5 +1,4 @@
 using MeshWeaver.Blazor.Components.Monaco;
-using MeshWeaver.ContentCollections;
 using MeshWeaver.Graph;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
@@ -106,13 +105,6 @@ public partial class MeshNodeEditorView
                 _contentText = textProperty.GetValue(_node.Content) as string ?? string.Empty;
                 return;
             }
-        }
-
-        // Handle Article content directly
-        if (_node.Content is Article article)
-        {
-            _contentText = article.Content ?? string.Empty;
-            return;
         }
 
         _contentText = string.Empty;
@@ -231,11 +223,6 @@ public partial class MeshNodeEditorView
                     }
                 }
             }
-            else if (_nodeType == "article" && _node.Content is Article article)
-            {
-                newContent = article with { Content = _contentText };
-            }
-
             var updatedNode = MeshNode.FromPath(_node.Path) with
             {
                 Name = _node.Name,

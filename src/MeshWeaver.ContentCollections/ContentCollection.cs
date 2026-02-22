@@ -1,5 +1,4 @@
 ﻿using System.Reactive.Linq;
-using System.Text;
 using System.Text.Json;
 using MeshWeaver.Data;
 using MeshWeaver.Data.Serialization;
@@ -49,11 +48,6 @@ public class ContentCollection : IDisposable
             .Select(x => x.Value);
 
 
-    public IObservable<IEnumerable<object>> GetMarkdown(ArticleCatalogOptions _)
-        => markdownStream.Where(x => x.Value != null)
-            .Select(x => x.Value!.Instances.Values);
-
-
     public Task<Stream?> GetContentAsync(string path, CancellationToken ct = default)
         => provider.GetStreamAsync(path, ct);
 
@@ -73,14 +67,6 @@ public class ContentCollection : IDisposable
 
     public Task SaveFileAsync(string path, string fileName, Stream openReadStream)
         => provider.SaveFileAsync(path, fileName, openReadStream);
-
-    public async Task SaveArticleAsync(Article article)
-    {
-        var markdown = article.ConvertToMarkdown();
-        var utfEncoding = new UTF8Encoding(false);
-        await using var memoryStream = new MemoryStream(utfEncoding.GetBytes(markdown));
-        await SaveFileAsync(article.Path, "", memoryStream);
-    }
 
     public async Task<IReadOnlyCollection<CollectionItem>> GetCollectionItemsAsync(string currentPath)
     {

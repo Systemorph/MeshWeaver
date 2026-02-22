@@ -1,7 +1,6 @@
 ﻿using System.Collections.Immutable;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
-using MeshWeaver.Blazor.Articles;
 using MeshWeaver.Blazor.Components;
 using MeshWeaver.Blazor.FileExplorer;
 using MeshWeaver.ContentCollections;
@@ -96,9 +95,6 @@ public static class BlazorViewRegistry
             MarkdownEditorControl markdownEditor => StandardView<MarkdownEditorControl, MarkdownEditorView>(markdownEditor, stream, area),
             NamedAreaControl namedView => StandardView<NamedAreaControl, NamedAreaView>(namedView, stream, area),
             SpacerControl spacer => StandardView<SpacerControl, SpacerView>(spacer, stream, area),
-            ArticleControl article => StandardView<ArticleControl, ArticleView>(article, stream, area),
-            ArticleCatalogControl articleCatalog => StandardView<ArticleCatalogControl, ArticleCatalogView>(articleCatalog, stream, area),
-            ArticleCatalogItemControl articleCatalogItem => StandardView<ArticleCatalogItemControl, ArticleCatalogItemView>(articleCatalogItem, stream, area),
             LayoutAreaDefinitionControl layoutAreaDefinition => StandardView<LayoutAreaDefinitionControl, LayoutAreaDefinitionView>(layoutAreaDefinition, stream, area),
             RedirectControl redirect => StandardView<RedirectControl, RedirectView>(redirect, stream, area),
             SearchBoxControl searchBox => StandardView<SearchBoxControl, SearchBoxView>(searchBox, stream, area),
@@ -133,7 +129,6 @@ public static class BlazorViewRegistry
             TabSkin tab => StandardSkinnedView<TabView>(tab, stream, area, control),
             TabsSkin tabs => StandardSkinnedView<TabsView>(tabs, stream, area, control),
             SplitterPaneSkin splitter => StandardSkinnedView<SplitterPane>(splitter, stream, area, control),
-            ArticleCatalogSkin articleCatalog => StandardSkinnedView<ArticleCatalogView>(articleCatalog, stream, area, control),
             MenuItemSkin menuItem => StandardSkinnedView<MenuItemView>(menuItem, stream, area, control),
             _ => throw new NotSupportedException($"Skin {skin.GetType().Name} is not supported.")
         };

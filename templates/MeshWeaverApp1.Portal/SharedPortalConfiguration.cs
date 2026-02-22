@@ -131,7 +131,7 @@ public static class SharedPortalConfiguration
                 .ConfigureHub(mesh => mesh)
                 .AddBlazor(layoutClient => layoutClient
                         .WithPortalConfiguration(c =>
-                            c.AddArticles()
+                            c.AddContentCollections()
                         )
                 )
                 ;

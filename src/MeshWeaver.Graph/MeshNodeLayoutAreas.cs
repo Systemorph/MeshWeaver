@@ -4,7 +4,6 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Schema;
 using MeshWeaver.Application.Styles;
-using MeshWeaver.ContentCollections;
 using MeshWeaver.Data;
 using MeshWeaver.Domain;
 using MeshWeaver.Graph.Configuration;
@@ -389,10 +388,6 @@ public static class MeshNodeLayoutAreas
         // Handle MarkdownContent (from MarkdownFileParser)
         if (node.Content is MarkdownContent markdownContent)
             return markdownContent.Content;
-
-        // Handle Article content
-        if (node.Content is Article article)
-            return article.Content ?? string.Empty;
 
         // Handle MarkdownDocument content (JSON with $type and content fields)
         if (node.Content is System.Text.Json.JsonElement jsonElement)

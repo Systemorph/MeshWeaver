@@ -22,7 +22,7 @@ public static class DocumentationApplicationExtensions
     /// <returns></returns>
     public static MessageHubConfiguration ConfigureDocumentation(MessageHubConfiguration config)
         => config
-            .AddArticles()
+            .AddContentCollections()
             .AddEmbeddedResourceContentCollection("Documentation", typeof(DocumentationApplicationAttribute).Assembly, "Markdown")
             .AddFileSystemContentCollection("Blog", sp =>
                 sp.GetRequiredService<IConfiguration>().GetSection("Blog")["BasePath"]

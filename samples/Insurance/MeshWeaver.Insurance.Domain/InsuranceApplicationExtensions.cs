@@ -56,7 +56,7 @@ public static class InsuranceApplicationExtensions
                     .WithView(nameof(LayoutAreas.PricingCatalogLayoutArea.Pricings),
                         LayoutAreas.PricingCatalogLayoutArea.Pricings)
                 )
-                .AddArticles();
+                .AddContentCollections();
 
         /// <summary>
         /// Configures a single pricing hub that contains the pricing details and risks.

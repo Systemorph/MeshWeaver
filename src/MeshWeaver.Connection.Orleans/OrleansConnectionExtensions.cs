@@ -1,5 +1,4 @@
-﻿using MeshWeaver.ContentCollections;
-using MeshWeaver.Hosting;
+﻿using MeshWeaver.Hosting;
 using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
@@ -61,7 +60,6 @@ public static class OrleansConnectionExtensions
             return services;
         });
         builder.ConfigureHub(conf => conf
-            .WithTypes(typeof(Article))
             .AddMeshTypes()
         );
     }

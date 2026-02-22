@@ -29,7 +29,7 @@ public static class NorthwindApplicationExtensions
                 .AddNorthwindCustomers()
                 .AddNorthwindReferenceData()
                 .AddNorthwindDataCube()
-                .AddArticles();
+                .AddContentCollections();
 
     /// <summary>
     /// Adds a virtual data source for the Northwind data cube that combines all dimensions.
