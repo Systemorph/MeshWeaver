@@ -1,0 +1,47 @@
+@using MeshWeaver.Layout.Catalog
+@using MeshWeaver.Mesh
+@inherits FormComponentBase<MeshNodePickerControl, MeshNodePickerView, string>
+
+<div class="mesh-node-picker">
+    @if (Label != null)
+    {
+        <FluentLabel Weight="Microsoft.FluentUI.AspNetCore.Components.FontWeight.Bold" Style="margin-bottom: 4px;">@Label</FluentLabel>
+    }
+
+    @if (!string.IsNullOrEmpty(Value) && _selectedNode != null && !_isSearchOpen)
+    {
+        <div class="mesh-node-picker-selected" @onclick="OpenSearch">
+            <div class="mesh-node-picker-selected-card">
+                @{
+                    var initial = !string.IsNullOrEmpty(_selectedNode.Name)
+                        ? _selectedNode.Name[0].ToString().ToUpper()
+                        : "?";
+                }
+                <div class="mesh-node-picker-avatar">@initial</div>
+                <div class="mesh-node-picker-info">
+                    <div class="mesh-node-picker-name">@(_selectedNode.Name ?? _selectedNode.Id)</div>
+                    <div class="mesh-node-picker-type">@(_selectedNode.NodeType ?? "")</div>
+                </div>
+            </div>
+            <button type="button" class="mesh-node-picker-clear" @onclick="ClearSelection" @onclick:stopPropagation="true">
+                <FluentIcon Value="@(new Icons.Regular.Size16.Dismiss())" />
+            </button>
+        </div>
+    }
+    else if (!_isSearchOpen)
+    {
+        <div class="mesh-node-picker-trigger" @onclick="OpenSearch">
+            <span class="mesh-node-picker-trigger-text">@(Placeholder ?? "Search...")</span>
+        </div>
+    }
+
+    @if (_isSearchOpen)
+    {
+        <div class="mesh-node-picker-overlay" @onclick="CloseSearch"></div>
+        <div class="mesh-node-picker-dropdown">
+            <MeshSearchView ViewModel="@_searchControl"
+                            OnNodeSelected="@SelectNode"
+                            SelectedPath="@Value" />
+        </div>
+    }
+</div>

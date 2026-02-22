@@ -1,0 +1,125 @@
+.mesh-node-picker {
+    position: relative;
+    width: 100%;
+}
+
+.mesh-node-picker-selected {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    border: 1px solid var(--neutral-stroke-rest, #d1d1d1);
+    border-radius: 4px;
+    padding: 4px 8px;
+    cursor: pointer;
+    background: var(--neutral-layer-1);
+    min-height: 40px;
+}
+
+.mesh-node-picker-selected:hover {
+    border-color: var(--accent-fill-rest, #0078d4);
+}
+
+.mesh-node-picker-selected-card {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex: 1;
+    min-width: 0;
+}
+
+.mesh-node-picker-avatar {
+    width: 28px;
+    height: 28px;
+    min-width: 28px;
+    border-radius: 50%;
+    background: var(--accent-fill-rest, #0078d4);
+    color: var(--foreground-on-accent-rest, white);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: bold;
+    font-size: 13px;
+    flex-shrink: 0;
+}
+
+.mesh-node-picker-info {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+}
+
+.mesh-node-picker-name {
+    font-weight: 600;
+    font-size: 14px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.mesh-node-picker-type {
+    font-size: 11px;
+    color: var(--neutral-foreground-hint, #666);
+}
+
+.mesh-node-picker-clear {
+    background: none;
+    border: none;
+    cursor: pointer;
+    padding: 4px;
+    border-radius: 4px;
+    display: flex;
+    align-items: center;
+    color: var(--neutral-foreground-hint, #666);
+}
+
+.mesh-node-picker-clear:hover {
+    background: var(--neutral-layer-2);
+    color: var(--neutral-foreground-rest);
+}
+
+.mesh-node-picker-trigger {
+    display: flex;
+    align-items: center;
+    border: 1px solid var(--neutral-stroke-rest, #d1d1d1);
+    border-radius: 4px;
+    padding: 8px 12px;
+    cursor: pointer;
+    background: var(--neutral-layer-1);
+    min-height: 40px;
+}
+
+.mesh-node-picker-trigger:hover {
+    border-color: var(--accent-fill-rest, #0078d4);
+}
+
+.mesh-node-picker-trigger-text {
+    color: var(--neutral-foreground-hint, #999);
+    font-size: 14px;
+}
+
+.mesh-node-picker-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 9;
+    background: transparent;
+}
+
+.mesh-node-picker-dropdown {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    right: 0;
+    max-height: 300px;
+    overflow-y: auto;
+    background: var(--neutral-layer-floating, white);
+    border: 1px solid var(--neutral-stroke-rest, #d1d1d1);
+    border-radius: 4px;
+    box-shadow: var(--elevation-shadow-flyout);
+    z-index: 10;
+    padding: 8px;
+    margin-top: 2px;
+}

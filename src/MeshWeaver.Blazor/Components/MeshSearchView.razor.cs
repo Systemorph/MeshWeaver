@@ -47,6 +47,19 @@ public partial class MeshSearchView : IDisposable
     [Parameter]
     public string? Area { get; set; }
 
+    /// <summary>
+    /// When set, clicking a card selects the node instead of navigating.
+    /// Used by MeshNodePickerView.
+    /// </summary>
+    [Parameter]
+    public EventCallback<MeshNode> OnNodeSelected { get; set; }
+
+    /// <summary>
+    /// The path of the currently selected node, used to highlight the selected card.
+    /// </summary>
+    [Parameter]
+    public string? SelectedPath { get; set; }
+
     // Basic properties
     private string BoundHiddenQuery => ViewModel?.HiddenQuery?.ToString() ?? "";
     private string BoundVisibleQuery => ViewModel?.VisibleQuery?.ToString() ?? "";
@@ -499,16 +512,33 @@ public partial class MeshSearchView : IDisposable
         var title = node.Name ?? node.Id;
         var description = node.NodeType ?? "";
         var initial = !string.IsNullOrEmpty(title) ? title[0].ToString().ToUpper() : "?";
+        var isSelected = !string.IsNullOrEmpty(SelectedPath) && node.Path == SelectedPath;
+        var isPickerMode = OnNodeSelected.HasDelegate;
+
+        var cardClass = isSelected ? "mesh-search-card mesh-search-card-selected" : "mesh-search-card";
 
         builder.OpenComponent<FluentCard>(seq++);
-        builder.AddAttribute(seq++, "Class", "mesh-search-card");
+        builder.AddAttribute(seq++, "Class", cardClass);
         builder.AddAttribute(seq++, "Style", "cursor: pointer;");
         builder.AddAttribute(seq++, "ChildContent", (RenderFragment)(cardBuilder =>
         {
             var cardSeq = 0;
-            cardBuilder.OpenElement(cardSeq++, "a");
-            cardBuilder.AddAttribute(cardSeq++, "href", $"/{node.Path}");
-            cardBuilder.AddAttribute(cardSeq++, "style", "display: flex; flex-direction: row; align-items: center; gap: 12px; padding: 8px; min-height: 60px; height: 76px; text-decoration: none; color: inherit;");
+
+            if (isPickerMode)
+            {
+                // Picker mode: clicking selects the node
+                cardBuilder.OpenElement(cardSeq++, "div");
+                var capturedNode = node;
+                cardBuilder.AddAttribute(cardSeq++, "onclick", EventCallback.Factory.Create(this, () => OnNodeSelected.InvokeAsync(capturedNode)));
+                cardBuilder.AddAttribute(cardSeq++, "style", "display: flex; flex-direction: row; align-items: center; gap: 12px; padding: 8px; min-height: 60px; height: 76px; cursor: pointer; color: inherit;");
+            }
+            else
+            {
+                // Navigation mode: clicking navigates
+                cardBuilder.OpenElement(cardSeq++, "a");
+                cardBuilder.AddAttribute(cardSeq++, "href", $"/{node.Path}");
+                cardBuilder.AddAttribute(cardSeq++, "style", "display: flex; flex-direction: row; align-items: center; gap: 12px; padding: 8px; min-height: 60px; height: 76px; text-decoration: none; color: inherit;");
+            }
 
             if (!string.IsNullOrEmpty(imageUrl))
             {
@@ -543,7 +573,7 @@ public partial class MeshSearchView : IDisposable
             }
 
             cardBuilder.CloseElement();
-            cardBuilder.CloseElement();
+            cardBuilder.CloseElement(); // close a or div
         }));
         builder.CloseComponent();
     }

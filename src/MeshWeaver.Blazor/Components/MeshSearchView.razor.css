@@ -91,6 +91,11 @@
     box-shadow: var(--elevation-shadow-card-active);
 }
 
+.mesh-search-card-selected {
+    outline: 2px solid var(--accent-fill-rest, #0078d4);
+    outline-offset: -2px;
+}
+
 .mesh-search-card-content {
     display: flex;
     flex-direction: row;
