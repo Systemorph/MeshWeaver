@@ -46,16 +46,24 @@ public class FileSystemStorageAdapter : IStorageAdapter
 
         // Try to use parsers for non-JSON formats (with fallback support for .md files)
         MeshNode? node;
-        var parsers = _parserRegistry.GetParsers(extension);
-        if (parsers.Count > 0)
+        try
         {
-            // Use TryParseAsync for fallback support (e.g., AgentFileParser -> MarkdownFileParser)
-            node = await _parserRegistry.TryParseAsync(extension, filePath, content, path, ct);
+            var parsers = _parserRegistry.GetParsers(extension);
+            if (parsers.Count > 0)
+            {
+                // Use TryParseAsync for fallback support (e.g., AgentFileParser -> MarkdownFileParser)
+                node = await _parserRegistry.TryParseAsync(extension, filePath, content, path, ct);
+            }
+            else
+            {
+                // Default to JSON deserialization
+                node = JsonSerializer.Deserialize<MeshNode>(content, options);
+            }
         }
-        else
+        catch (JsonException)
         {
-            // Default to JSON deserialization
-            node = JsonSerializer.Deserialize<MeshNode>(content, options);
+            // Skip files that don't conform to MeshNode JSON structure (e.g., arrays, raw data files)
+            return null;
         }
 
         if (node == null)

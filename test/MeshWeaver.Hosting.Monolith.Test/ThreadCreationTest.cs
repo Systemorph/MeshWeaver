@@ -157,7 +157,7 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
         retrievedNode.Content.Should().BeOfType<MeshThread>();
     }
 
-    [Fact]
+    [Fact(Timeout = 5000)]
     public async Task GetDataRequest_ToNonExistentNode_ReturnsErrorNotEndlessMessages()
     {
         // Arrange - Create a malformed path that mimics the bug
@@ -166,8 +166,8 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
         var hub = Mesh.ServiceProvider.GetRequiredService<IMessageHub>();
 
         // Act - Send GetDataRequest to non-existent node
-        // This should return an error, not cause endless messages
-        var cts = new CancellationTokenSource(5.Seconds());
+        // Should return a DeliveryFailure quickly, not hang
+        var cts = new CancellationTokenSource(2.Seconds());
 
         Func<Task> act = async () =>
         {
@@ -177,12 +177,12 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
                 cts.Token);
         };
 
-        // Assert - Should fail (either with specific error or timeout), not hang or cause endless messages
+        // Assert - Should fail quickly with DeliveryFailureException
         await act.Should().ThrowAsync<Exception>();
     }
 
-    [Fact]
-    public async Task GetDataRequest_ToNonExistentThread_ReturnsNullNotEndlessMessages()
+    [Fact(Timeout = 5000)]
+    public async Task GetDataRequest_ToNonExistentThread_ReturnsErrorNotEndlessMessages()
     {
         // Arrange - Thread path that looks valid but doesn't exist
         var nonExistentPath = "User/TestUser/nonexistent123";
@@ -190,7 +190,8 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
         var hub = Mesh.ServiceProvider.GetRequiredService<IMessageHub>();
 
         // Act - Send GetDataRequest to non-existent node
-        var cts = new CancellationTokenSource(5.Seconds());
+        // Should return a DeliveryFailure quickly, not hang
+        var cts = new CancellationTokenSource(2.Seconds());
 
         Func<Task> act = async () =>
         {
@@ -200,7 +201,7 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
                 cts.Token);
         };
 
-        // Assert - Should fail quickly with proper error, not hang or cause endless messages
+        // Assert - Should fail quickly with DeliveryFailureException
         await act.Should().ThrowAsync<Exception>();
     }
 

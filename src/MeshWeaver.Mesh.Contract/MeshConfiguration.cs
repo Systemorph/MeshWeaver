@@ -13,7 +13,8 @@ namespace MeshWeaver.Mesh;
 public class MeshConfiguration(
     IReadOnlyDictionary<string, MeshNode> meshNodes,
     Func<MessageHubConfiguration, MessageHubConfiguration>? defaultNodeHubConfiguration = null,
-    IReadOnlyList<string>? globalCreatableTypes = null)
+    IReadOnlyList<string>? globalCreatableTypes = null,
+    IReadOnlySet<string>? autocompleteExcludedNodeTypes = null)
 {
     /// <summary>
     /// Registered mesh nodes by their key/path.
@@ -33,6 +34,13 @@ public class MeshConfiguration(
     /// Can be overridden per-node using NodeTypeDefinition.ExcludeDefaults.
     /// </summary>
     public IReadOnlyList<string> GlobalCreatableTypes { get; } = globalCreatableTypes ?? DefaultGlobalCreatableTypes;
+
+    /// <summary>
+    /// Node types excluded from autocomplete/search results.
+    /// Configured via MeshBuilder.AddAutocompleteExcludedTypes().
+    /// Typically includes satellite types (Comment, Thread) and internal types (AccessAssignment, GroupMembership).
+    /// </summary>
+    public IReadOnlySet<string> AutocompleteExcludedNodeTypes { get; } = autocompleteExcludedNodeTypes ?? new HashSet<string>();
 
     /// <summary>
     /// Default global creatable types: Markdown, Thread, Agent, NodeType.

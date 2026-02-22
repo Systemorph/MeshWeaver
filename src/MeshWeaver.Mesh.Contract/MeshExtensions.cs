@@ -43,8 +43,6 @@ public static class MeshExtensions
         config.TypeRegistry.WithType(typeof(DeleteContentRequest), nameof(DeleteContentRequest));
         config.TypeRegistry.WithType(typeof(DeleteContentResponse), nameof(DeleteContentResponse));
 
-        // Security types for row-level security (stored in JSON files)
-        config.TypeRegistry.WithType(typeof(UserAccess), nameof(UserAccess));
         return config;
     }
 

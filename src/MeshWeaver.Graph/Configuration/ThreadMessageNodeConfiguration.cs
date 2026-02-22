@@ -16,6 +16,7 @@ public static class ThreadMessageNodeConfiguration
     public static TBuilder AddThreadMessageType<TBuilder>(this TBuilder builder) where TBuilder : MeshBuilder
     {
         builder.AddMeshNodes(CreateMeshNode());
+        builder.AddAutocompleteExcludedTypes(ThreadMessageNodeType.NodeType);
         return builder;
     }
 

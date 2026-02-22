@@ -1,0 +1,14 @@
+{
+  "id": "Alice_Access",
+  "namespace": "ACME",
+  "name": "Alice Access",
+  "nodeType": "AccessAssignment",
+  "content": {
+    "$type": "AccessAssignment",
+    "subjectId": "Alice",
+    "displayName": "Alice Chen",
+    "roles": [
+      { "roleId": "Editor", "denied": false }
+    ]
+  }
+}

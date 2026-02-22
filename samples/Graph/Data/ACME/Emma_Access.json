@@ -1,0 +1,14 @@
+{
+  "id": "Emma_Access",
+  "namespace": "ACME",
+  "name": "Emma Access",
+  "nodeType": "AccessAssignment",
+  "content": {
+    "$type": "AccessAssignment",
+    "subjectId": "Emma",
+    "displayName": "Emma Wilson",
+    "roles": [
+      { "roleId": "Editor", "denied": false }
+    ]
+  }
+}

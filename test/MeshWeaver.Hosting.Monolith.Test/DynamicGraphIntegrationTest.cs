@@ -746,10 +746,10 @@ public record Graph
         var reference = new LayoutAreaReference(MeshNodeLayoutAreas.SearchArea);
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(typeOrgAddress, reference);
 
-        // Wait for multiple emissions - first one may be loading state, later ones have data
+        // Wait for an emission that contains the expected search structure
         var values = await stream
             .Take(5)  // Take up to 5 emissions
-            .TakeUntil(Observable.Timer(TimeSpan.FromSeconds(10)))  // Or timeout after 10s
+            .TakeUntil(Observable.Timer(TimeSpan.FromSeconds(3)))  // Or timeout after 3s
             .ToList();
 
         Output.WriteLine($"Received {values.Count} emissions");

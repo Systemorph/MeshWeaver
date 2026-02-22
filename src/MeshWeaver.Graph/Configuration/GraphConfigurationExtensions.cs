@@ -28,7 +28,12 @@ public static class GraphConfigurationExtensions
                 .AddMarkdownType()
                 .AddThreadType()
                 .AddThreadMessageType()
-                .AddCommentType();
+                .AddCommentType()
+                .AddAccessAssignmentType()
+                .AddUserType()
+                .AddGroupType()
+                .AddRoleType()
+                .AddGroupMembershipType();
 
             // Register services that don't need hub-level dependencies at the mesh level
             builder.ConfigureServices(services =>

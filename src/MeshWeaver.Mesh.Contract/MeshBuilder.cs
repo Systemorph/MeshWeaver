@@ -135,6 +135,7 @@ public record MeshBuilder
         // The lambdas are evaluated when services are resolved (after all builder calls)
         var defaultNodeHubConfigs = DefaultNodeHubConfiguration;
         var meshTypeRegs = MeshTypeRegistrations;
+        var excludedTypes = AutocompleteExcludedTypes;
 
         ConfigureServices(services => services
             .AddSingleton(_ =>
@@ -144,13 +145,15 @@ public record MeshBuilder
                     defaultNodeHubConfigs.Count > 0
                         ? config => defaultNodeHubConfigs.Aggregate(config, (c, f) => f(c))
                         : null;
-                return new MeshConfiguration(MeshNodes.ToDictionary(x => x.Path), combinedDefaultConfig);
+                return new MeshConfiguration(
+                    MeshNodes.ToDictionary(x => x.Path),
+                    combinedDefaultConfig,
+                    autocompleteExcludedNodeTypes: excludedTypes.Count > 0 ? excludedTypes : null);
             })
             .AddSingleton<ITypeRegistry>(_ =>
             {
                 // Register core mesh types on the shared registry so they're available to ALL hubs
                 // This ensures proper $type serialization across hub boundaries
-                meshTypeRegistry.WithType(typeof(UserAccess), nameof(UserAccess));
                 meshTypeRegistry.WithType(typeof(MeshNode), nameof(MeshNode));
                 meshTypeRegistry.WithType(typeof(MeshNodeState), nameof(MeshNodeState));
                 meshTypeRegistry.WithType(typeof(PingRequest), nameof(PingRequest));
@@ -242,4 +245,17 @@ public record MeshBuilder
     }
 
     private List<(Type Type, string Name)> MeshTypeRegistrations { get; } = new();
+
+    /// <summary>
+    /// Adds node types to be excluded from autocomplete/search results.
+    /// Use this for satellite types (Comment, Thread) and internal types (AccessAssignment).
+    /// </summary>
+    public MeshBuilder AddAutocompleteExcludedTypes(params string[] nodeTypes)
+    {
+        foreach (var t in nodeTypes)
+            AutocompleteExcludedTypes.Add(t);
+        return this;
+    }
+
+    private HashSet<string> AutocompleteExcludedTypes { get; } = new();
 }

@@ -16,7 +16,7 @@ using Xunit;
 namespace MeshWeaver.Hosting.Monolith.Test.Security;
 
 /// <summary>
-/// Tests for UserAccess-based access control (Access partition).
+/// Tests for access control using AccessAssignment MeshNodes.
 /// Tests the hierarchical role assignment model with per-user access records.
 /// Anonymous access is handled via "Public" as a well-known user.
 /// </summary>
@@ -26,112 +26,82 @@ public class UserAccessTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
     {
-        // First configure base (adds persistence), then add Row-Level Security
-        // RLS must be added after persistence so it can decorate IPersistenceService
         return base.ConfigureMesh(builder).AddRowLevelSecurity();
     }
 
-    #region UserAccess CRUD Operations
+    #region AccessAssignment CRUD Operations
 
     [Fact]
-    public async Task SaveUserAccess_CreatesNewUserAccess()
+    public async Task AddUserRole_CreatesAccessAssignmentNode()
     {
-        // Arrange
         var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
-        var userAccess = new UserAccess
-        {
-            UserId = "Alice",
-            DisplayName = "Alice Chen",
-            Roles = [new UserRole { RoleId = "Editor" }]
-        };
 
-        // Act - Save to ACME namespace
         await securityService.AddUserRoleAsync("Alice", "Editor", "ACME", "system", TestTimeout);
 
-        // Assert - With per-namespace storage, we need to specify the namespace to find the user
-        var retrieved = await securityService.GetUserAccessAsync("Alice", "ACME", TestTimeout);
-        retrieved.Should().NotBeNull();
-        retrieved!.UserId.Should().Be("Alice");
-        retrieved.Roles.Should().HaveCount(1);
-        retrieved.Roles[0].RoleId.Should().Be("Editor");
+        // Verify via permission check
+        var permissions = await securityService.GetEffectivePermissionsAsync("ACME", "Alice", TestTimeout);
+        permissions.Should().HaveFlag(Permission.Update, "Alice should have Editor permissions at ACME");
+        permissions.Should().HaveFlag(Permission.Read);
+        permissions.Should().HaveFlag(Permission.Create);
     }
 
     [Fact]
-    public async Task GetUserAccess_NonExistentUser_ReturnsNull()
+    public async Task GetEffectivePermissions_NonExistentUser_ReturnsNone()
     {
-        // Arrange
         var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
 
-        // Act
-        var result = await securityService.GetUserAccessAsync("nonexistent-user", TestTimeout);
+        var result = await securityService.GetEffectivePermissionsAsync("ACME", "nonexistent-user", TestTimeout);
 
-        // Assert
-        result.Should().BeNull();
+        result.Should().Be(Permission.None);
     }
 
     [Fact]
-    public async Task AddUserRole_AddsRoleToExistingUser()
+    public async Task AddUserRole_MultipleRoles_CombinesPermissions()
     {
-        // Arrange
         var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
         await securityService.AddUserRoleAsync("Bob", "Viewer", "ACME", "system", TestTimeout);
-
-        // Act - Add another role to same namespace
         await securityService.AddUserRoleAsync("Bob", "Editor", "ACME", "system", TestTimeout);
 
-        // Assert - With per-namespace storage, we need to specify the namespace to find the user
-        var retrieved = await securityService.GetUserAccessAsync("Bob", "ACME", TestTimeout);
-        retrieved.Should().NotBeNull();
-        retrieved!.Roles.Should().HaveCount(2);
-        retrieved.Roles.Should().Contain(r => r.RoleId == "Viewer");
-        retrieved.Roles.Should().Contain(r => r.RoleId == "Editor");
+        var permissions = await securityService.GetEffectivePermissionsAsync("ACME", "Bob", TestTimeout);
+        permissions.Should().HaveFlag(Permission.Read);
+        permissions.Should().HaveFlag(Permission.Create);
+        permissions.Should().HaveFlag(Permission.Update);
     }
 
     [Fact]
-    public async Task AddUserRole_ToNewUser_CreatesUserAccess()
+    public async Task AddUserRole_GlobalRole_GrantsPermissionsEverywhere()
     {
-        // Arrange
         var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
 
-        // Act - Add global role (null namespace)
         await securityService.AddUserRoleAsync("NewUser", "Admin", null, "system", TestTimeout);
 
-        // Assert
-        var retrieved = await securityService.GetUserAccessAsync("NewUser", TestTimeout);
-        retrieved.Should().NotBeNull();
-        retrieved!.UserId.Should().Be("NewUser");
-        retrieved.Roles.Should().ContainSingle(r => r.RoleId == "Admin");
+        var permissions = await securityService.GetEffectivePermissionsAsync("ACME/SomeProject", "NewUser", TestTimeout);
+        permissions.Should().Be(Permission.All);
     }
 
     [Fact]
     public async Task RemoveUserRole_RemovesSpecificRole()
     {
-        // Arrange
         var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
         await securityService.AddUserRoleAsync("Carol", "Admin", "ACME", "system", TestTimeout);
         await securityService.AddUserRoleAsync("Carol", "Viewer", "ACME", "system", TestTimeout);
 
-        // Act
         await securityService.RemoveUserRoleAsync("Carol", "Admin", "ACME", TestTimeout);
 
-        // Assert - With per-namespace storage, we need to specify the namespace to find the user
-        var retrieved = await securityService.GetUserAccessAsync("Carol", "ACME", TestTimeout);
-        retrieved.Should().NotBeNull();
-        retrieved!.Roles.Should().ContainSingle(r => r.RoleId == "Viewer");
+        var permissions = await securityService.GetEffectivePermissionsAsync("ACME", "Carol", TestTimeout);
+        permissions.Should().Be(Permission.Read, "Only Viewer role should remain after removing Admin");
     }
 
     #endregion
 
-    #region Permission Evaluation with UserAccess
+    #region Permission Evaluation
 
     [Fact]
     public async Task GetEffectivePermissions_GlobalAdmin_HasAllPermissionsEverywhere()
     {
-        // Arrange
         var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
-        await securityService.AddUserRoleAsync("Roland", "Admin", null, "system", TestTimeout); // Global Admin
+        await securityService.AddUserRoleAsync("Roland", "Admin", null, "system", TestTimeout);
 
-        // Act & Assert - Should have full permissions anywhere
         var permMeshWeaver = await securityService.GetEffectivePermissionsAsync("MeshWeaver", "Roland", TestTimeout);
         var permACME = await securityService.GetEffectivePermissionsAsync("ACME", "Roland", TestTimeout);
         var permDeep = await securityService.GetEffectivePermissionsAsync("ACME/ProductLaunch/Todo/Task1", "Roland", TestTimeout);
@@ -144,49 +114,40 @@ public class UserAccessTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
     [Fact]
     public async Task GetEffectivePermissions_NamespacedEditor_HasEditorInNamespace()
     {
-        // Arrange
         var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
         await securityService.AddUserRoleAsync("Alice", "Editor", "ACME", "system", TestTimeout);
 
-        // Act
         var permACME = await securityService.GetEffectivePermissionsAsync("ACME", "Alice", TestTimeout);
         var permChild = await securityService.GetEffectivePermissionsAsync("ACME/ProductLaunch", "Alice", TestTimeout);
         var permMeshWeaver = await securityService.GetEffectivePermissionsAsync("MeshWeaver", "Alice", TestTimeout);
 
-        // Assert
         permACME.Should().Be(Permission.Read | Permission.Create | Permission.Update | Permission.Comment);
-        permChild.Should().Be(Permission.Read | Permission.Create | Permission.Update | Permission.Comment); // Inherited
-        permMeshWeaver.Should().Be(Permission.None); // No access to other namespaces
+        permChild.Should().Be(Permission.Read | Permission.Create | Permission.Update | Permission.Comment);
+        permMeshWeaver.Should().Be(Permission.None);
     }
 
     [Fact]
     public async Task GetEffectivePermissions_NoRoles_HasNoPermissions()
     {
-        // Arrange
         var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
 
-        // Act - User with no roles
         var permissions = await securityService.GetEffectivePermissionsAsync("ACME", "UnknownUser", TestTimeout);
 
-        // Assert
         permissions.Should().Be(Permission.None);
     }
 
     [Fact]
     public async Task GetEffectivePermissions_MultipleRoles_CombinesPermissions()
     {
-        // Arrange
         var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
         await securityService.AddUserRoleAsync("MultiUser", "Viewer", "MeshWeaver", "system", TestTimeout);
         await securityService.AddUserRoleAsync("MultiUser", "Editor", "ACME", "system", TestTimeout);
 
-        // Act
         var permMeshWeaver = await securityService.GetEffectivePermissionsAsync("MeshWeaver", "MultiUser", TestTimeout);
         var permACME = await securityService.GetEffectivePermissionsAsync("ACME", "MultiUser", TestTimeout);
 
-        // Assert
-        permMeshWeaver.Should().Be(Permission.Read); // Viewer
-        permACME.Should().Be(Permission.Read | Permission.Create | Permission.Update | Permission.Comment); // Editor
+        permMeshWeaver.Should().Be(Permission.Read);
+        permACME.Should().Be(Permission.Read | Permission.Create | Permission.Update | Permission.Comment);
     }
 
     #endregion
@@ -196,68 +157,34 @@ public class UserAccessTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
     [Fact]
     public async Task GetEffectivePermissions_RoleOnParent_InheritsToChildren()
     {
-        // Arrange
         var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
         await securityService.AddUserRoleAsync("InheritUser", "Admin", "Organization", "system", TestTimeout);
 
-        // Act
         var permParent = await securityService.GetEffectivePermissionsAsync("Organization", "InheritUser", TestTimeout);
         var permChild = await securityService.GetEffectivePermissionsAsync("Organization/Team", "InheritUser", TestTimeout);
         var permGrandchild = await securityService.GetEffectivePermissionsAsync("Organization/Team/Project", "InheritUser", TestTimeout);
         var permSibling = await securityService.GetEffectivePermissionsAsync("OtherOrg", "InheritUser", TestTimeout);
 
-        // Assert
         permParent.Should().Be(Permission.All);
-        permChild.Should().Be(Permission.All); // Inherited from parent
-        permGrandchild.Should().Be(Permission.All); // Inherited from grandparent
-        permSibling.Should().Be(Permission.None); // No access to sibling namespace
+        permChild.Should().Be(Permission.All);
+        permGrandchild.Should().Be(Permission.All);
+        permSibling.Should().Be(Permission.None);
     }
 
     [Fact]
     public async Task GetEffectivePermissions_ExactMatch_TakesPrecedence()
     {
-        // Arrange
         var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
         await securityService.AddUserRoleAsync("OverrideUser", "Viewer", "Org", "system", TestTimeout);
         await securityService.AddUserRoleAsync("OverrideUser", "Admin", "Org/Special", "system", TestTimeout);
 
-        // Act
         var permOrg = await securityService.GetEffectivePermissionsAsync("Org", "OverrideUser", TestTimeout);
         var permSpecial = await securityService.GetEffectivePermissionsAsync("Org/Special", "OverrideUser", TestTimeout);
         var permOther = await securityService.GetEffectivePermissionsAsync("Org/Other", "OverrideUser", TestTimeout);
 
-        // Assert
-        permOrg.Should().Be(Permission.Read); // Viewer at Org level
-        permSpecial.Should().Be(Permission.All); // Admin at Org/Special (combines Viewer from parent + Admin)
+        permOrg.Should().Be(Permission.Read);
+        permSpecial.Should().Be(Permission.All); // Admin at Org/Special + Viewer from parent
         permOther.Should().Be(Permission.Read); // Only Viewer inherited from Org
-    }
-
-    #endregion
-
-    #region GetUsersWithAccessToNamespace
-
-    [Fact]
-    public async Task GetUsersWithAccessToNamespace_ReturnsMatchingUsers()
-    {
-        // Arrange
-        var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
-
-        await securityService.AddUserRoleAsync("User1", "Admin", null, "system", TestTimeout); // Global
-        await securityService.AddUserRoleAsync("User2", "Editor", "ACME", "system", TestTimeout); // ACME
-        await securityService.AddUserRoleAsync("User3", "Viewer", "MeshWeaver", "system", TestTimeout); // Other namespace
-
-        // Act
-        var usersWithACMEAccess = await securityService.GetUsersWithAccessToNamespaceAsync("ACME", TestTimeout).ToListAsync();
-        var usersWithChildAccess = await securityService.GetUsersWithAccessToNamespaceAsync("ACME/ProductLaunch", TestTimeout).ToListAsync();
-
-        // Assert
-        usersWithACMEAccess.Should().HaveCount(2);
-        usersWithACMEAccess.Should().Contain(u => u.UserId == "User1"); // Global admin
-        usersWithACMEAccess.Should().Contain(u => u.UserId == "User2"); // ACME editor
-
-        usersWithChildAccess.Should().HaveCount(2);
-        usersWithChildAccess.Should().Contain(u => u.UserId == "User1"); // Global admin
-        usersWithChildAccess.Should().Contain(u => u.UserId == "User2"); // ACME editor (inherited)
     }
 
     #endregion
@@ -267,81 +194,63 @@ public class UserAccessTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
     [Fact]
     public async Task GetEffectivePermissions_PublicNamespace_AnonymousHasReadAccess()
     {
-        // Arrange
         var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
 
-        // Configure MeshWeaver as public by adding Viewer role to "Public" user
         await securityService.AddUserRoleAsync(WellKnownUsers.Public, "Viewer", "MeshWeaver", "system", TestTimeout);
 
-        // Act - Anonymous user (empty userId)
         var permissions = await securityService.GetEffectivePermissionsAsync("MeshWeaver", "", TestTimeout);
 
-        // Assert
         permissions.Should().Be(Permission.Read);
     }
 
     [Fact]
     public async Task SecurePersistence_LoggedOutUser_CanAccessPublicNamespace()
     {
-        // Arrange
         var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
         var persistenceService = Mesh.ServiceProvider.GetRequiredService<IPersistenceService>();
 
-        // Create test namespace and nodes
         await persistenceService.SaveNodeAsync(new MeshNode("PublicArea") { Name = "Public Area" }, TestTimeout);
         await persistenceService.SaveNodeAsync(new MeshNode("Doc1", "PublicArea") { Name = "Document 1" }, TestTimeout);
         await persistenceService.SaveNodeAsync(new MeshNode("Doc2", "PublicArea") { Name = "Document 2" }, TestTimeout);
 
-        // Configure Public user to have Viewer role on PublicArea
         await securityService.AddUserRoleAsync(WellKnownUsers.Public, "Viewer", "PublicArea", "system", TestTimeout);
 
-        // Act - Get children as anonymous user (null/empty userId)
         var children = await persistenceService.GetChildrenSecureAsync("PublicArea", null).ToListAsync();
 
-        // Assert - Anonymous user should see the public documents
-        children.Should().HaveCount(2);
-        children.Should().Contain(n => n.Id == "Doc1");
-        children.Should().Contain(n => n.Id == "Doc2");
+        // Filter out AccessAssignment nodes (infrastructure nodes for RLS)
+        var contentChildren = children.Where(n => n.NodeType != "AccessAssignment").ToList();
+        contentChildren.Should().HaveCount(2);
+        contentChildren.Should().Contain(n => n.Id == "Doc1");
+        contentChildren.Should().Contain(n => n.Id == "Doc2");
     }
 
     [Fact]
     public async Task SecurePersistence_LoggedOutUser_CannotAccessPrivateNamespace()
     {
-        // Arrange
         var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
         var persistenceService = Mesh.ServiceProvider.GetRequiredService<IPersistenceService>();
 
-        // Create private namespace and nodes (no Public access)
         await persistenceService.SaveNodeAsync(new MeshNode("PrivateArea") { Name = "Private Area" }, TestTimeout);
         await persistenceService.SaveNodeAsync(new MeshNode("Secret1", "PrivateArea") { Name = "Secret 1" }, TestTimeout);
 
-        // Don't configure any Public access
-
-        // Act - Get children as anonymous user (null/empty userId)
         var children = await persistenceService.GetChildrenSecureAsync("PrivateArea", null).ToListAsync();
 
-        // Assert - Anonymous user should not see any documents
         children.Should().BeEmpty();
     }
 
     [Fact]
     public async Task SecurePersistence_LoggedOutUser_SeesOnlyPublicRootChildren()
     {
-        // Arrange
         var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
         var persistenceService = Mesh.ServiceProvider.GetRequiredService<IPersistenceService>();
 
-        // Create two root namespaces
         await persistenceService.SaveNodeAsync(new MeshNode("OpenProject") { Name = "Open Project" }, TestTimeout);
         await persistenceService.SaveNodeAsync(new MeshNode("ClosedProject") { Name = "Closed Project" }, TestTimeout);
 
-        // Only configure Public access for OpenProject
         await securityService.AddUserRoleAsync(WellKnownUsers.Public, "Viewer", "OpenProject", "system", TestTimeout);
 
-        // Act - Get root children as anonymous user
         var rootChildren = await persistenceService.GetChildrenSecureAsync(null, null).ToListAsync();
 
-        // Assert - Only OpenProject should be visible
         rootChildren.Should().Contain(n => n.Id == "OpenProject");
         rootChildren.Should().NotContain(n => n.Id == "ClosedProject");
     }
@@ -349,57 +258,43 @@ public class UserAccessTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
     [Fact]
     public async Task GetEffectivePermissions_PrivateNamespace_AnonymousHasNoAccess()
     {
-        // Arrange
         var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
 
-        // ACME has no Public user access configured
-
-        // Act - Anonymous user (empty userId)
         var permissions = await securityService.GetEffectivePermissionsAsync("ACME", "", TestTimeout);
 
-        // Assert
         permissions.Should().Be(Permission.None);
     }
 
     [Fact]
     public async Task GetEffectivePermissions_PublicChildOfPrivateParent_InheritsPublicFromChild()
     {
-        // Arrange
         var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
 
-        // Configure parent as private (no Public access), child as public
         await securityService.AddUserRoleAsync(WellKnownUsers.Public, "Viewer", "Private/PublicDocs", "system", TestTimeout);
 
-        // Act
         var permPrivate = await securityService.GetEffectivePermissionsAsync("Private", "", TestTimeout);
         var permPublicDocs = await securityService.GetEffectivePermissionsAsync("Private/PublicDocs", "", TestTimeout);
 
-        // Assert
         permPrivate.Should().Be(Permission.None);
         permPublicDocs.Should().Be(Permission.Read);
     }
 
     #endregion
 
-    #region Integration: UserAccess + Public User
+    #region Integration: Access + Public User
 
     [Fact]
     public async Task GetEffectivePermissions_AuthenticatedUser_HasAccessToPrivateNamespace()
     {
-        // Arrange
         var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
 
-        // Restricted namespace has no public access
-        // Give user explicit access
         await securityService.AddUserRoleAsync("AuthUser", "Editor", "Restricted", "system", TestTimeout);
 
-        // Act
         var permAnonymous = await securityService.GetEffectivePermissionsAsync("Restricted", "", TestTimeout);
         var permAuthUser = await securityService.GetEffectivePermissionsAsync("Restricted", "AuthUser", TestTimeout);
 
-        // Assert
-        permAnonymous.Should().Be(Permission.None); // Anonymous blocked
-        permAuthUser.Should().Be(Permission.Read | Permission.Create | Permission.Update | Permission.Comment); // Has Editor role
+        permAnonymous.Should().Be(Permission.None);
+        permAuthUser.Should().Be(Permission.Read | Permission.Create | Permission.Update | Permission.Comment);
     }
 
     #endregion
@@ -409,19 +304,16 @@ public class UserAccessTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
     [Fact]
     public async Task MeshQuery_AnonymousUser_CanQueryPublicOrganizations()
     {
-        // Arrange - Set up structure similar to samples/Graph/Data
         var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
         var persistenceService = Mesh.ServiceProvider.GetRequiredService<IPersistenceService>();
         var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
 
-        // Create Organization NodeType
         await persistenceService.SaveNodeAsync(new MeshNode("Organization")
         {
             Name = "Organization",
             NodeType = "NodeType"
         }, TestTimeout);
 
-        // Create two organizations - one public (Systemorph), one private (ACME)
         await persistenceService.SaveNodeAsync(new MeshNode("Systemorph")
         {
             Name = "Systemorph",
@@ -434,20 +326,15 @@ public class UserAccessTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
             NodeType = "Organization"
         }, TestTimeout);
 
-        // Configure Systemorph as public (Public user has Viewer role)
         await securityService.AddUserRoleAsync(WellKnownUsers.Public, "Viewer", "Systemorph", "system", TestTimeout);
 
-        // ACME remains private (no Public access)
-
-        // Act - Query for all organizations as anonymous user (empty userId)
         var request = new MeshQueryRequest
         {
             Query = "nodeType:Organization scope:children",
-            UserId = "" // Anonymous
+            UserId = ""
         };
         var results = await meshQuery.QueryAsync(request, TestTimeout).ToListAsync();
 
-        // Assert - Anonymous should only see Systemorph, not ACME
         var nodeNames = results.OfType<MeshNode>().Select(n => n.Name).ToList();
         nodeNames.Should().Contain("Systemorph", "Public namespace should be visible");
         nodeNames.Should().NotContain("ACME", "Private namespace should NOT be visible to anonymous");
@@ -456,20 +343,17 @@ public class UserAccessTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
     [Fact]
     public async Task MeshQuery_WithAccessContext_CanQueryPublicOrganizations()
     {
-        // Arrange - This simulates the real portal scenario where AccessService context is set
         var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
         var persistenceService = Mesh.ServiceProvider.GetRequiredService<IPersistenceService>();
         var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
         var accessService = Mesh.ServiceProvider.GetService<AccessService>();
 
-        // Create Organization NodeType
         await persistenceService.SaveNodeAsync(new MeshNode("Organization2")
         {
             Name = "Organization2",
             NodeType = "NodeType"
         }, TestTimeout);
 
-        // Create two organizations - one public (MeshWeaver), one private (SecretOrg)
         await persistenceService.SaveNodeAsync(new MeshNode("MeshWeaver2")
         {
             Name = "MeshWeaver2",
@@ -482,24 +366,16 @@ public class UserAccessTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
             NodeType = "Organization2"
         }, TestTimeout);
 
-        // Configure MeshWeaver2 as public (Public user has Viewer role)
         await securityService.AddUserRoleAsync(WellKnownUsers.Public, "Viewer", "MeshWeaver2", "system", TestTimeout);
 
-        // SecretOrg remains private (no Public access)
-
-        // Simulate anonymous user: AccessService context is null (no authenticated user)
         accessService?.SetContext(null);
 
-        // Act - Query for all organizations WITHOUT specifying UserId
-        // This should use AccessService to get the current user (null -> empty -> "Public")
         var request = new MeshQueryRequest
         {
             Query = "nodeType:Organization2 scope:children"
-            // Note: UserId is NOT set - should come from AccessService
         };
         var results = await meshQuery.QueryAsync(request, TestTimeout).ToListAsync();
 
-        // Assert - Anonymous should only see MeshWeaver2, not SecretOrg
         var nodeNames = results.OfType<MeshNode>().Select(n => n.Name).ToList();
         nodeNames.Should().Contain("MeshWeaver2", "Public namespace should be visible");
         nodeNames.Should().NotContain("SecretOrg", "Private namespace should NOT be visible to anonymous");
@@ -508,12 +384,10 @@ public class UserAccessTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
     [Fact]
     public async Task MeshQuery_AnonymousUser_FiltersRestrictedNodes()
     {
-        // Arrange
         var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
         var persistenceService = Mesh.ServiceProvider.GetRequiredService<IPersistenceService>();
         var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
 
-        // Create test nodes (Id, Namespace) - Path is derived as Namespace/Id or just Id
         var publicNode = new MeshNode("PublicDoc", "Public") { Name = "Public Document" };
         var restrictedNode = new MeshNode("PrivateDoc", "Private") { Name = "Private Document" };
 
@@ -522,19 +396,14 @@ public class UserAccessTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
         await persistenceService.SaveNodeAsync(new MeshNode("Private") { Name = "Private" }, TestTimeout);
         await persistenceService.SaveNodeAsync(restrictedNode, TestTimeout);
 
-        // Configure Public namespace as public (Public user has Viewer role)
         await securityService.AddUserRoleAsync(WellKnownUsers.Public, "Viewer", "Public", "system", TestTimeout);
 
-        // Private namespace has no Public user access
-
-        // Act - Query as anonymous user (empty userId)
         var request = new MeshQueryRequest { Query = "path:Public scope:descendants", UserId = "" };
         var publicResults = await meshQuery.QueryAsync(request, TestTimeout).ToListAsync();
 
         var restrictedRequest = new MeshQueryRequest { Query = "path:Private scope:descendants", UserId = "" };
         var restrictedResults = await meshQuery.QueryAsync(restrictedRequest, TestTimeout).ToListAsync();
 
-        // Assert - Use OfType for cleaner filtering
         var publicNodePaths = publicResults.OfType<MeshNode>().Select(n => n.Path).ToList();
         var restrictedNodePaths = restrictedResults.OfType<MeshNode>().Select(n => n.Path).ToList();
 
@@ -545,25 +414,19 @@ public class UserAccessTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
     [Fact]
     public async Task MeshQuery_AuthenticatedUser_SeesRestrictedNodes()
     {
-        // Arrange
         var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
         var persistenceService = Mesh.ServiceProvider.GetRequiredService<IPersistenceService>();
         var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
 
-        // Create test node in restricted area (Id, Namespace)
         var restrictedNode = new MeshNode("SecretDoc", "Secret") { Name = "Secret Document" };
         await persistenceService.SaveNodeAsync(new MeshNode("Secret") { Name = "Secret" }, TestTimeout);
         await persistenceService.SaveNodeAsync(restrictedNode, TestTimeout);
 
-        // Secret namespace has no public access
-        // Give user access
         await securityService.AddUserRoleAsync("QueryUser", "Editor", "Secret", "system", TestTimeout);
 
-        // Act - Query as authenticated user
         var request = new MeshQueryRequest { Query = "path:Secret scope:descendants", UserId = "QueryUser" };
         var results = await meshQuery.QueryAsync(request, TestTimeout).ToListAsync();
 
-        // Assert - User should see the restricted node
         var nodePaths = results.OfType<MeshNode>().Select(n => n.Path).ToList();
         nodePaths.Should().Contain("Secret/SecretDoc");
     }
@@ -571,20 +434,17 @@ public class UserAccessTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
     [Fact]
     public async Task MeshQuery_PublicPermissions_NotPollutedByAdminContext()
     {
-        // Arrange - Reproduce the bug: admin AccessContext is active while querying as Public
         var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
         var persistenceService = Mesh.ServiceProvider.GetRequiredService<IPersistenceService>();
         var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
         var accessService = Mesh.ServiceProvider.GetService<AccessService>();
 
-        // Create Organization NodeType
         await persistenceService.SaveNodeAsync(new MeshNode("OrgType3")
         {
             Name = "OrgType3",
             NodeType = "NodeType"
         }, TestTimeout);
 
-        // Create two organizations - one public, one private
         await persistenceService.SaveNodeAsync(new MeshNode("PublicOrg3")
         {
             Name = "PublicOrg3",
@@ -597,11 +457,8 @@ public class UserAccessTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
             NodeType = "OrgType3"
         }, TestTimeout);
 
-        // Configure PublicOrg3 as public
         await securityService.AddUserRoleAsync(WellKnownUsers.Public, "Viewer", "PublicOrg3", "system", TestTimeout);
-        // PrivateOrg3 has no Public access
 
-        // Simulate admin being logged in — this is the key part of the bug
         accessService?.SetContext(new AccessContext
         {
             ObjectId = "AdminUser",
@@ -609,9 +466,6 @@ public class UserAccessTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
             Roles = ["Admin"]
         });
 
-        // Act - Query explicitly as "Public" user while admin context is active
-        // This reproduces the bug: GetEffectivePermissionsAsync("PrivateOrg3", "Public")
-        // would incorrectly pick up Admin roles from the active AccessContext
         var request = new MeshQueryRequest
         {
             Query = "nodeType:OrgType3 scope:children",
@@ -619,7 +473,6 @@ public class UserAccessTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
         };
         var results = await meshQuery.QueryAsync(request, TestTimeout).ToListAsync();
 
-        // Assert - Public user should NOT see PrivateOrg3, even with admin context active
         var nodeNames = results.OfType<MeshNode>().Select(n => n.Name).ToList();
         nodeNames.Should().Contain("PublicOrg3", "Public namespace should be visible");
         nodeNames.Should().NotContain("PrivateOrg3",
@@ -629,11 +482,9 @@ public class UserAccessTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
     [Fact]
     public async Task GetEffectivePermissions_PublicUser_IgnoresAdminAccessContextRoles()
     {
-        // Arrange - Set admin AccessContext, then check Public user permissions
         var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
         var accessService = Mesh.ServiceProvider.GetService<AccessService>();
 
-        // Simulate admin being logged in
         accessService?.SetContext(new AccessContext
         {
             ObjectId = "AdminUser",
@@ -641,11 +492,8 @@ public class UserAccessTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
             Roles = ["Admin"]
         });
 
-        // Act - Check permissions for "Public" user on a private namespace
-        // The bug would cause AccessContext.Roles (Admin) to be applied to Public user
         var permissions = await securityService.GetEffectivePermissionsAsync("ACME", WellKnownUsers.Public, TestTimeout);
 
-        // Assert - Public user should have NO permissions on ACME
         permissions.Should().Be(Permission.None,
             "Public user should not inherit Admin roles from AccessContext belonging to a different user");
     }
@@ -657,49 +505,39 @@ public class UserAccessTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
     [Fact]
     public async Task SecurePersistence_NodeInUserNamespace_VisibleViaExplicitPublicGrant()
     {
-        // Arrange
         var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
         var persistenceService = Mesh.ServiceProvider.GetRequiredService<IPersistenceService>();
 
-        // Create a node in the "User" namespace
         await persistenceService.SaveNodeAsync(new MeshNode("User") { Name = "User" }, TestTimeout);
         await persistenceService.SaveNodeAsync(new MeshNode("AliceProfile", "User") { Name = "Alice Profile", NodeType = "Person" }, TestTimeout);
 
-        // Explicit Public Viewer grant on User namespace (mimics User/Access/Public.json)
         await securityService.AddUserRoleAsync(WellKnownUsers.Public, "Viewer", "User", "system", TestTimeout);
 
-        // Act - Get children as anonymous user (null userId)
         var children = await persistenceService.GetChildrenSecureAsync("User", null).ToListAsync();
 
-        // Assert
         children.Should().Contain(n => n.Id == "AliceProfile");
     }
 
     [Fact]
     public async Task SecurePersistence_NodeTypeDefinition_AlwaysVisibleToAnonymous()
     {
-        // Arrange
         var persistenceService = Mesh.ServiceProvider.GetRequiredService<IPersistenceService>();
 
-        // Create a NodeType definition (nodeType == "NodeType") — no grants needed
         await persistenceService.SaveNodeAsync(new MeshNode("Organization")
         {
             Name = "Organization",
             NodeType = "NodeType"
         }, TestTimeout);
 
-        // Also create an Organization instance — should NOT be visible without a grant
         await persistenceService.SaveNodeAsync(new MeshNode("ACME")
         {
             Name = "ACME",
             NodeType = "Organization"
         }, TestTimeout);
 
-        // Act - Get both nodes as anonymous user (no grants configured)
         var typeDef = await persistenceService.GetNodeSecureAsync("Organization", null);
         var orgInstance = await persistenceService.GetNodeSecureAsync("ACME", null);
 
-        // Assert - NodeType definition is publicly readable, organization instance is not
         typeDef.Should().NotBeNull("NodeType definitions are always publicly readable");
         typeDef!.Name.Should().Be("Organization");
         orgInstance.Should().BeNull("Organization instances require explicit access grants");
@@ -708,17 +546,13 @@ public class UserAccessTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
     [Fact]
     public async Task SecurePersistence_NodeInPrivateNamespace_HiddenWithoutGrant()
     {
-        // Arrange
         var persistenceService = Mesh.ServiceProvider.GetRequiredService<IPersistenceService>();
 
-        // Create a node in a private namespace — no Public grant
         await persistenceService.SaveNodeAsync(new MeshNode("SecretArea") { Name = "Secret Area" }, TestTimeout);
         await persistenceService.SaveNodeAsync(new MeshNode("Doc1", "SecretArea") { Name = "Secret Doc" }, TestTimeout);
 
-        // Act - Get children as anonymous user
         var children = await persistenceService.GetChildrenSecureAsync("SecretArea", null).ToListAsync();
 
-        // Assert - Private namespace should be hidden
         children.Should().BeEmpty();
     }
 
