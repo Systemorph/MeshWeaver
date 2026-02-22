@@ -1,5 +1,4 @@
 ﻿using System.ComponentModel.DataAnnotations;
-using MeshWeaver.Domain;
 using MeshWeaver.Kernel;
 
 namespace MeshWeaver.ContentCollections;
@@ -43,7 +42,7 @@ public record Article : MarkdownElement
         => this with { Status = status, StatusHistory = StatusHistory.Append((status, DateTime.UtcNow)).ToArray() };
 
 
-    public Icon? Icon { get; init; } = new("", "");
+    public string? Icon { get; init; }
     public string? Source { get; init; }
 
     public List<string>? Authors { get; set; } = [];
