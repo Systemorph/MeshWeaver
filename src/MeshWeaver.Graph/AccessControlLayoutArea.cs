@@ -254,6 +254,10 @@ public static class AccessControlLayoutArea
             .WithView(Controls.Stack
                 .WithOrientation(Orientation.Horizontal)
                 .WithStyle("justify-content: flex-end; gap: 8px; margin-top: 16px;")
+                .WithView(Controls.Button("Cancel")
+                    .WithAppearance(Appearance.Neutral)
+                    .WithClickAction(cancelCtx =>
+                        cancelCtx.Host.UpdateArea(DialogControl.DialogArea, null!)))
                 .WithView(Controls.Button("Save")
                     .WithAppearance(Appearance.Accent)
                     .WithClickAction(saveCtx =>
@@ -320,10 +324,7 @@ public static class AccessControlLayoutArea
                     })));
 
         var dialog = Controls.Dialog(formContent, "Add Role Assignment")
-            .WithSize("M")
-            .WithClosable(true)
-            .WithCloseAction(closeCtx =>
-                closeCtx.Host.UpdateArea(DialogControl.DialogArea, null!));
+            .WithSize("M");
 
         ctx.Host.UpdateArea(DialogControl.DialogArea, dialog);
     }
