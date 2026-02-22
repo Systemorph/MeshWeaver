@@ -6,7 +6,7 @@ using MeshWeaver.Mesh;
 namespace MeshWeaver.Graph.Configuration;
 
 /// <summary>
-/// Generates C# source code for dynamic MeshNodeAttribute classes.
+/// Generates C# source code for dynamic MeshNodeProviderAttribute classes.
 /// The generated attribute includes any user code and HubConfiguration.
 /// </summary>
 internal class DynamicMeshNodeAttributeGenerator
@@ -72,7 +72,7 @@ internal class DynamicMeshNodeAttributeGenerator
         sb.AppendLine();
 
         // Assembly attribute - MUST come before any namespace declarations
-        sb.AppendLine($"[assembly: MeshWeaver.Graph.Generated.{safeClassName}MeshNode]");
+        sb.AppendLine($"[assembly: MeshWeaver.Graph.Generated.{safeClassName}MeshNodeProvider]");
         sb.AppendLine();
 
         // User code directly (no namespace wrapper so types are accessible by simple name)
@@ -87,8 +87,8 @@ internal class DynamicMeshNodeAttributeGenerator
         sb.AppendLine("namespace MeshWeaver.Graph.Generated");
         sb.AppendLine("{");
 
-        // MeshNodeAttribute class
-        sb.AppendLine($"    public class {safeClassName}MeshNodeAttribute : MeshNodeAttribute");
+        // MeshNodeProviderAttribute class
+        sb.AppendLine($"    public class {safeClassName}MeshNodeProviderAttribute : MeshNodeProviderAttribute");
         sb.AppendLine("    {");
 
         // Nodes property
@@ -101,7 +101,7 @@ internal class DynamicMeshNodeAttributeGenerator
         sb.AppendLine($"                Icon = \"{EscapeString(node.Icon)}\",");
         sb.AppendLine($"                DisplayOrder = {(node.DisplayOrder.HasValue ? node.DisplayOrder.Value.ToString() : "null")},");
         sb.AppendLine($"                LastModified = DateTimeOffset.Parse(\"{node.LastModified:O}\"),");
-        sb.AppendLine($"                AssemblyLocation = typeof({safeClassName}MeshNodeAttribute).Assembly.Location,");
+        sb.AppendLine($"                AssemblyLocation = typeof({safeClassName}MeshNodeProviderAttribute).Assembly.Location,");
         sb.AppendLine("                HubConfiguration = ConfigureHub");
         sb.AppendLine("            }");
         sb.AppendLine("        ];");

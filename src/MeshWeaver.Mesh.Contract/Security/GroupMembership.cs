@@ -10,5 +10,5 @@ public record GroupMembership
     /// <summary>
     /// The path of the member (User or nested Group).
     /// </summary>
-    public string MemberId { get; init; } = "";
+    public string Id { get; init; } = "";
 }

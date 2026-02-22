@@ -630,6 +630,13 @@ public static class EditorExtensions
         {
             readOnlyControl = BuildDimensionReadOnlyLabel(host, propName, dataId, dimAttr);
         }
+        else if (property.GetCustomAttribute<MeshNodeAttribute>() != null)
+        {
+            readOnlyControl = new LabelControl(new JsonPointerReference(propName))
+            {
+                DataContext = LayoutAreaReference.GetDataPointer(dataId)
+            }.WithStyle("padding: 8px; min-height: 32px;");
+        }
         else if (uiAttr?.Options != null)
         {
             readOnlyControl = BuildOptionsReadOnlyLabel(host, propName, dataId, uiAttr.Options);
@@ -865,6 +872,15 @@ public static class EditorExtensions
         else if (property.GetCustomAttribute<DimensionAttribute>() is { } dimAttr)
         {
             editCtrl = CreateDimensionSelectControl(host, jsonPointer, dimAttr, isRequired, dataId, editStateId, isToggleable);
+        }
+        else if (property.GetCustomAttribute<MeshNodeAttribute>() is { } meshNodeAttr)
+        {
+            var nodeNamespace = host.Hub.Address.ToString();
+            editCtrl = new MeshNodePickerControl(jsonPointer)
+            {
+                Queries = MeshNodeAttribute.ResolveQueries(meshNodeAttr.Queries, nodeNamespace, nodeNamespace),
+                Required = isRequired
+            };
         }
         else if (propType.IsIntegerType() || propType.IsRealType())
         {

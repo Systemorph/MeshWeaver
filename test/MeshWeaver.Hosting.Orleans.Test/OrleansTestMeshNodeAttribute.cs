@@ -6,7 +6,7 @@ using MeshWeaver.Messaging;
 
 namespace MeshWeaver.Hosting.Orleans.Test;
 
-public class OrleansTestMeshNodeAttribute : MeshNodeAttribute
+public class OrleansTestMeshNodeAttribute : MeshNodeProviderAttribute
 {
     /// <summary>
     /// Mesh catalog entry.

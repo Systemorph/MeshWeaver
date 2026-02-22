@@ -164,6 +164,16 @@ public static class MeshNodePropertyEditor
         {
             editCtrl = CreateDimensionSelect(host, jsonPointer, dimAttr, isRequired, isReadonly, dataId);
         }
+        // Check for MeshNodeAttribute
+        else if (prop.GetCustomAttribute<MeshNodeAttribute>() is { } meshNodeAttr)
+        {
+            editCtrl = new MeshNodePickerControl(jsonPointer)
+            {
+                Queries = MeshNodeAttribute.ResolveQueries(meshNodeAttr.Queries, nodePath, nodePath),
+                Required = isRequired,
+                Readonly = isReadonly
+            };
+        }
         // Type-based control
         else if (propType.IsNumber())
         {

@@ -10,7 +10,7 @@ namespace MeshWeaver.Documentation;
 /// <summary>
 /// This is the configuration of the Documentation application mesh node.
 /// </summary>
-public class DocumentationApplicationAttribute : MeshNodeAttribute
+public class DocumentationApplicationAttribute : MeshNodeProviderAttribute
 {
     /// <summary>
     /// Mesh catalog entry.

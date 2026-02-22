@@ -205,13 +205,13 @@ internal class MeshNodeCompilationService(
                 return new NodeCompilationResult(assemblyLocation, []);
             }
 
-            // Extract NodeTypeConfigurations from MeshNodeAttribute.Nodes
+            // Extract NodeTypeConfigurations from MeshNodeProviderAttribute.Nodes
             var configurations = new List<NodeTypeConfiguration>();
             foreach (var type in assembly.GetTypes())
             {
-                if (typeof(MeshNodeAttribute).IsAssignableFrom(type) && !type.IsAbstract)
+                if (typeof(MeshNodeProviderAttribute).IsAssignableFrom(type) && !type.IsAbstract)
                 {
-                    var attribute = (MeshNodeAttribute?)Activator.CreateInstance(type);
+                    var attribute = (MeshNodeProviderAttribute?)Activator.CreateInstance(type);
                     if (attribute != null)
                     {
                         // Extract configurations from Nodes property
@@ -270,7 +270,7 @@ internal class MeshNodeCompilationService(
 
         ct.ThrowIfCancellationRequested();
 
-        // Generate full source with MeshNodeAttribute (including content collections)
+        // Generate full source with MeshNodeProviderAttribute (including content collections)
         var source = _attributeGenerator.GenerateAttributeSource(node, codeFile, hubConfiguration, contentCollections);
 
         // Write source file for debugging (only for disk cache)
@@ -516,9 +516,9 @@ internal class MeshNodeCompilationService(
             var configurations = new List<NodeTypeConfiguration>();
             foreach (var type in assembly.GetTypes())
             {
-                if (typeof(MeshNodeAttribute).IsAssignableFrom(type) && !type.IsAbstract)
+                if (typeof(MeshNodeProviderAttribute).IsAssignableFrom(type) && !type.IsAbstract)
                 {
-                    var attribute = (MeshNodeAttribute?)Activator.CreateInstance(type);
+                    var attribute = (MeshNodeProviderAttribute?)Activator.CreateInstance(type);
                     if (attribute != null)
                     {
                         foreach (var meshNode in attribute.Nodes)

@@ -24,7 +24,7 @@ public interface IMeshNodeCompilationService
     Task<string?> GetAssemblyLocationAsync(MeshNode node, CancellationToken ct = default);
 
     /// <summary>
-    /// Compiles the assembly and extracts NodeTypeConfigurations from the MeshNodeAttribute.
+    /// Compiles the assembly and extracts NodeTypeConfigurations from the MeshNodeProviderAttribute.
     /// Uses isolated AssemblyLoadContext to avoid conflicts.
     /// </summary>
     /// <param name="node">The MeshNode to compile.</param>

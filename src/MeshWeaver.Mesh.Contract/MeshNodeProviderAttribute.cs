@@ -7,7 +7,7 @@ namespace MeshWeaver.Mesh;
 /// Attribute to define mesh nodes at the assembly level.
 /// </summary>
 [AttributeUsage(AttributeTargets.Assembly, AllowMultiple = true)]
-public abstract class MeshNodeAttribute : Attribute
+public abstract class MeshNodeProviderAttribute : Attribute
 {
     /// <summary>
     /// Gets the mesh nodes defined by this attribute.
