@@ -84,7 +84,7 @@ public static class MarkdownEditLayoutArea
         // Title text field in the header bar
         if (dataId != null)
         {
-            var titleField = new TextFieldControl(new JsonPointerReference("Name"))
+            var titleField = new TextFieldControl(new JsonPointerReference("name"))
             {
                 Immediate = true,
                 Placeholder = "Untitled",
