@@ -7,12 +7,14 @@ using FluentAssertions;
 using FluentAssertions.Extensions;
 using MeshWeaver.Data;
 using MeshWeaver.Graph;
+using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Hosting.Security;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
+using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
@@ -31,6 +33,8 @@ public class MenuAccessControlTest(ITestOutputHelper output) : MonolithMeshTestB
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
         => base.ConfigureMesh(builder)
             .AddRowLevelSecurity()
+            .AddRoleType()
+            .AddAccessAssignmentType()
             .ConfigureDefaultNodeHub(c => c.AddDefaultLayoutAreas());
 
     protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
@@ -221,5 +225,44 @@ public class MenuAccessControlTest(ITestOutputHelper output) : MonolithMeshTestB
         importItem.Should().NotBeNull("Import menu item should exist for Editor");
         importItem!.Area.Should().Be(MeshNodeLayoutAreas.ImportMeshNodesArea,
             "Import should navigate to ImportMeshNodes area, not $Import");
+    }
+
+    [Fact(Timeout = 15000)]
+    public async Task StaticRoles_AppearInNodeTypeRoleQuery()
+    {
+        // Static built-in roles should appear when querying with nodeType:Role
+        var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
+
+        var roles = await meshQuery
+            .QueryAsync<MeshNode>($"path:{NodePath} nodeType:Role scope:ancestorsAndSelf")
+            .ToListAsync(TestContext.Current.CancellationToken);
+
+        Output.WriteLine($"Roles returned: {roles.Count}");
+        foreach (var r in roles)
+            Output.WriteLine($"  {r.Path} ({r.Name})");
+
+        roles.Should().HaveCount(4,
+            "built-in roles (Admin, Editor, Viewer, Commenter) should appear as static nodes");
+        roles.Select(r => r.Name).Should().Contain(
+            ["Administrator", "Editor", "Viewer", "Commenter"]);
+    }
+
+    [Fact(Timeout = 15000)]
+    public async Task StaticRoles_NotIncludedInGenericChildrenQuery()
+    {
+        // Static roles should NOT appear in unfiltered children queries
+        var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
+
+        var children = await meshQuery
+            .QueryAsync<MeshNode>($"path:{NodePath} scope:children")
+            .ToListAsync(TestContext.Current.CancellationToken);
+
+        Output.WriteLine($"Children returned: {children.Count}");
+        foreach (var c in children)
+            Output.WriteLine($"  {c.Path} ({c.Name})");
+
+        children.Select(c => c.Name).Should().NotContain(
+            ["Administrator", "Editor", "Viewer", "Commenter"],
+            "static roles should not leak into generic children queries");
     }
 }

@@ -23,7 +23,13 @@ public record CollaborativeMarkdownControl()
     /// </summary>
     public string? HubAddress { get; init; }
 
+    /// <summary>
+    /// Whether the current user can add comments by selecting text.
+    /// </summary>
+    public bool CanComment { get; init; }
+
     public CollaborativeMarkdownControl WithValue(string value) => this with { Value = value };
     public CollaborativeMarkdownControl WithNodePath(string nodePath) => this with { NodePath = nodePath };
     public CollaborativeMarkdownControl WithHubAddress(string hubAddress) => this with { HubAddress = hubAddress };
+    public CollaborativeMarkdownControl WithCanComment(bool canComment) => this with { CanComment = canComment };
 }

@@ -3,6 +3,7 @@ using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Markdown;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Security;
 
 namespace MeshWeaver.Graph;
 
@@ -20,14 +21,15 @@ public static class MarkdownOverviewLayoutArea
         var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? Array.Empty<MeshNode>())
             ?? Observable.Return(Array.Empty<MeshNode>());
 
-        return nodeStream.Select(nodes =>
+        return nodeStream.SelectMany(async nodes =>
         {
             var node = nodes.FirstOrDefault(n => n.Path == hubPath);
-            return (UiControl?)BuildOverview(host, node);
+            var canComment = await PermissionHelper.CanCommentAsync(host.Hub, hubPath);
+            return (UiControl?)BuildOverview(host, node, canComment);
         });
     }
 
-    private static UiControl BuildOverview(LayoutAreaHost host, MeshNode? node)
+    private static UiControl BuildOverview(LayoutAreaHost host, MeshNode? node, bool canComment)
     {
         var nodePath = node?.Path ?? host.Hub.Address.ToString();
         var rawContent = GetMarkdownContent(node);
@@ -38,7 +40,7 @@ public static class MarkdownOverviewLayoutArea
         container = container.WithView(MeshNodeLayoutAreas.BuildHeader(host, node, false));
 
         // Read-only markdown content
-        container = container.WithView(BuildReadOnlyView(host, nodePath, rawContent));
+        container = container.WithView(BuildReadOnlyView(host, nodePath, rawContent, canComment));
 
         // Standard children section
         container = container.WithView(LayoutAreaControl.Children(host.Hub));
@@ -53,7 +55,7 @@ public static class MarkdownOverviewLayoutArea
     }
 
     private static UiControl BuildReadOnlyView(
-        LayoutAreaHost host, string nodePath, string rawContent)
+        LayoutAreaHost host, string nodePath, string rawContent, bool canComment)
     {
         var view = Controls.Stack.WithWidth("100%");
 
@@ -63,7 +65,8 @@ public static class MarkdownOverviewLayoutArea
                 new CollaborativeMarkdownControl()
                     .WithValue(rawContent)
                     .WithNodePath(nodePath)
-                    .WithHubAddress(host.Hub.Address.ToString()));
+                    .WithHubAddress(host.Hub.Address.ToString())
+                    .WithCanComment(canComment));
         }
         else
         {

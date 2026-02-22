@@ -452,4 +452,271 @@ public class AnnotationMarkdownExtensionTests
     }
 
     #endregion
+
+    #region AcceptChange Tests
+
+    [Fact]
+    public void AcceptChange_InsertSimple_KeepsTextRemovesMarkers()
+    {
+        var markdown = "Hello <!--insert:i1-->beautiful <!--/insert:i1-->world!";
+
+        var result = AnnotationMarkdownExtension.AcceptChange(markdown, "i1");
+
+        result.Should().Be("Hello beautiful world!");
+    }
+
+    [Fact]
+    public void AcceptChange_InsertWithMetadata_KeepsTextRemovesMarkers()
+    {
+        var markdown = "Hello <!--insert:i1:Alice:Feb 22-->beautiful <!--/insert:i1-->world!";
+
+        var result = AnnotationMarkdownExtension.AcceptChange(markdown, "i1");
+
+        result.Should().Be("Hello beautiful world!");
+    }
+
+    [Fact]
+    public void AcceptChange_DeleteSimple_RemovesTextAndMarkers()
+    {
+        var markdown = "Hello <!--delete:d1-->ugly <!--/delete:d1-->world!";
+
+        var result = AnnotationMarkdownExtension.AcceptChange(markdown, "d1");
+
+        result.Should().Be("Hello world!");
+    }
+
+    [Fact]
+    public void AcceptChange_DeleteWithMetadata_RemovesTextAndMarkers()
+    {
+        var markdown = "Hello <!--delete:d1:Bob:Feb 22-->ugly <!--/delete:d1-->world!";
+
+        var result = AnnotationMarkdownExtension.AcceptChange(markdown, "d1");
+
+        result.Should().Be("Hello world!");
+    }
+
+    [Fact]
+    public void AcceptChange_DeleteOnly_ResultHasNoAnnotationMarkers()
+    {
+        var markdown = "Hello <!--delete:d1:Bob:Feb 22-->ugly <!--/delete:d1-->world!";
+
+        var result = AnnotationMarkdownExtension.AcceptChange(markdown, "d1");
+
+        result.Should().NotContain("<!--");
+        result.Should().NotContain("-->");
+        result.Should().NotContain("insert");
+        result.Should().NotContain("delete");
+    }
+
+    [Fact]
+    public void AcceptChange_NonExistentId_ReturnsUnchanged()
+    {
+        var markdown = "Hello <!--delete:d1-->ugly <!--/delete:d1-->world!";
+
+        var result = AnnotationMarkdownExtension.AcceptChange(markdown, "nonexistent");
+
+        result.Should().Be(markdown);
+    }
+
+    [Fact]
+    public void AcceptChange_LeavesOtherAnnotationsIntact()
+    {
+        var markdown = "Hello <!--insert:i1-->beautiful <!--/insert:i1-->" +
+                       "<!--delete:d1-->ugly <!--/delete:d1-->" +
+                       "<!--comment:c1-->world<!--/comment:c1-->!";
+
+        var result = AnnotationMarkdownExtension.AcceptChange(markdown, "d1");
+
+        // Delete was accepted (text removed), but insert and comment remain
+        result.Should().Be("Hello <!--insert:i1-->beautiful <!--/insert:i1--><!--comment:c1-->world<!--/comment:c1-->!");
+    }
+
+    [Fact]
+    public void AcceptChange_MultipleDeletes_AcceptsOnlyTargeted()
+    {
+        var markdown = "Start <!--delete:d1-->first <!--/delete:d1-->middle <!--delete:d2-->second <!--/delete:d2-->end";
+
+        var result = AnnotationMarkdownExtension.AcceptChange(markdown, "d1");
+
+        result.Should().Be("Start middle <!--delete:d2-->second <!--/delete:d2-->end");
+    }
+
+    [Fact]
+    public void AcceptChange_Delete_MultilineContent_RemovesAll()
+    {
+        var markdown = "Start\n<!--delete:d1-->line1\nline2\nline3<!--/delete:d1-->\nEnd";
+
+        var result = AnnotationMarkdownExtension.AcceptChange(markdown, "d1");
+
+        result.Should().Be("Start\n\nEnd");
+    }
+
+    #endregion
+
+    #region RejectChange Tests
+
+    [Fact]
+    public void RejectChange_InsertSimple_RemovesTextAndMarkers()
+    {
+        var markdown = "Hello <!--insert:i1-->beautiful <!--/insert:i1-->world!";
+
+        var result = AnnotationMarkdownExtension.RejectChange(markdown, "i1");
+
+        result.Should().Be("Hello world!");
+    }
+
+    [Fact]
+    public void RejectChange_InsertWithMetadata_RemovesTextAndMarkers()
+    {
+        var markdown = "Hello <!--insert:i1:Alice:Feb 22-->beautiful <!--/insert:i1-->world!";
+
+        var result = AnnotationMarkdownExtension.RejectChange(markdown, "i1");
+
+        result.Should().Be("Hello world!");
+    }
+
+    [Fact]
+    public void RejectChange_DeleteSimple_KeepsTextRemovesMarkers()
+    {
+        var markdown = "Hello <!--delete:d1-->ugly <!--/delete:d1-->world!";
+
+        var result = AnnotationMarkdownExtension.RejectChange(markdown, "d1");
+
+        result.Should().Be("Hello ugly world!");
+    }
+
+    [Fact]
+    public void RejectChange_DeleteWithMetadata_KeepsTextRemovesMarkers()
+    {
+        var markdown = "Hello <!--delete:d1:Bob:Feb 22-->ugly <!--/delete:d1-->world!";
+
+        var result = AnnotationMarkdownExtension.RejectChange(markdown, "d1");
+
+        result.Should().Be("Hello ugly world!");
+    }
+
+    [Fact]
+    public void RejectChange_DeleteOnly_ResultHasNoAnnotationMarkers()
+    {
+        var markdown = "Hello <!--delete:d1:Bob:Feb 22-->ugly <!--/delete:d1-->world!";
+
+        var result = AnnotationMarkdownExtension.RejectChange(markdown, "d1");
+
+        result.Should().NotContain("<!--");
+        result.Should().NotContain("-->");
+    }
+
+    [Fact]
+    public void RejectChange_NonExistentId_ReturnsUnchanged()
+    {
+        var markdown = "Hello <!--insert:i1-->beautiful <!--/insert:i1-->world!";
+
+        var result = AnnotationMarkdownExtension.RejectChange(markdown, "nonexistent");
+
+        result.Should().Be(markdown);
+    }
+
+    [Fact]
+    public void RejectChange_LeavesOtherAnnotationsIntact()
+    {
+        var markdown = "Hello <!--insert:i1-->beautiful <!--/insert:i1-->" +
+                       "<!--delete:d1-->ugly <!--/delete:d1-->" +
+                       "<!--comment:c1-->world<!--/comment:c1-->!";
+
+        var result = AnnotationMarkdownExtension.RejectChange(markdown, "i1");
+
+        // Insert was rejected (text removed), but delete and comment remain
+        result.Should().Be("Hello <!--delete:d1-->ugly <!--/delete:d1--><!--comment:c1-->world<!--/comment:c1-->!");
+    }
+
+    #endregion
+
+    #region ResolveComment Tests
+
+    [Fact]
+    public void ResolveComment_SimpleComment_KeepsTextRemovesMarkers()
+    {
+        var markdown = "Hello <!--comment:c1-->world<!--/comment:c1-->!";
+
+        var result = AnnotationMarkdownExtension.ResolveComment(markdown, "c1");
+
+        result.Should().Be("Hello world!");
+    }
+
+    [Fact]
+    public void ResolveComment_CommentWithMetadata_KeepsTextRemovesMarkers()
+    {
+        var markdown = "Hello <!--comment:c1:Alice:Feb 22-->world<!--/comment:c1-->!";
+
+        var result = AnnotationMarkdownExtension.ResolveComment(markdown, "c1");
+
+        result.Should().Be("Hello world!");
+    }
+
+    [Fact]
+    public void ResolveComment_CommentWithText_KeepsHighlightedTextRemovesAll()
+    {
+        var markdown = "Hello <!--comment:c1:Alice:Feb 22|My comment-->world<!--/comment:c1-->!";
+
+        var result = AnnotationMarkdownExtension.ResolveComment(markdown, "c1");
+
+        result.Should().Be("Hello world!");
+    }
+
+    [Fact]
+    public void ResolveComment_NonExistentId_ReturnsUnchanged()
+    {
+        var markdown = "Hello <!--comment:c1-->world<!--/comment:c1-->!";
+
+        var result = AnnotationMarkdownExtension.ResolveComment(markdown, "nonexistent");
+
+        result.Should().Be(markdown);
+    }
+
+    #endregion
+
+    #region Combined Accept/Reject Workflow Tests
+
+    [Fact]
+    public void AcceptAllChanges_Sequentially_ProducesCleanContent()
+    {
+        var markdown = "Hello <!--insert:i1:Alice:Feb 22-->beautiful <!--/insert:i1-->" +
+                       "<!--delete:d1:Bob:Feb 22-->ugly <!--/delete:d1-->world!";
+
+        // Accept insert, then accept delete
+        var result = AnnotationMarkdownExtension.AcceptChange(markdown, "i1");
+        result = AnnotationMarkdownExtension.AcceptChange(result, "d1");
+
+        result.Should().Be("Hello beautiful world!");
+        result.Should().NotContain("<!--");
+    }
+
+    [Fact]
+    public void RejectAllChanges_Sequentially_RestoresOriginal()
+    {
+        var markdown = "Hello <!--insert:i1:Alice:Feb 22-->beautiful <!--/insert:i1-->" +
+                       "<!--delete:d1:Bob:Feb 22-->ugly <!--/delete:d1-->world!";
+
+        // Reject insert, then reject delete
+        var result = AnnotationMarkdownExtension.RejectChange(markdown, "i1");
+        result = AnnotationMarkdownExtension.RejectChange(result, "d1");
+
+        result.Should().Be("Hello ugly world!");
+        result.Should().NotContain("<!--");
+    }
+
+    [Fact]
+    public void MixedAcceptReject_ProducesCorrectContent()
+    {
+        var markdown = "Hello <!--insert:i1-->beautiful <!--/insert:i1-->" +
+                       "<!--delete:d1-->ugly <!--/delete:d1-->world!";
+
+        // Accept the insert (keep "beautiful"), reject the delete (keep "ugly")
+        var result = AnnotationMarkdownExtension.AcceptChange(markdown, "i1");
+        result = AnnotationMarkdownExtension.RejectChange(result, "d1");
+
+        result.Should().Be("Hello beautiful ugly world!");
+    }
+
+    #endregion
 }

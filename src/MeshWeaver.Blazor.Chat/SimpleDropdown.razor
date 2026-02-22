@@ -113,60 +113,67 @@
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
-        if (firstRender)
+        try
         {
-            dotNetRef = DotNetObjectReference.Create(this);
-
-            // Initialize the global helper function if it doesn't exist
-            await JS.InvokeVoidAsync("eval", @"
-                if (!window.meshweaverDropdown) {
-                    window.meshweaverDropdown = {
-                        refs: {},
-                        setRef: function(id, ref) { this.refs[id] = ref; },
-                        getRef: function(id) { return this.refs[id]; },
-                        clearRef: function(id) { delete this.refs[id]; }
-                    };
-                }
-            ");
-        }
-
-        // Initialize JS handler and store reference when dropdown opens
-        if (isOpen && dotNetRef != null)
-        {
-            if (!jsInitialized)
+            if (firstRender)
             {
-                // Register click-outside handler
-                await JS.InvokeVoidAsync("eval", $@"
-                    (function() {{
-                        if (window['dropdown_{componentId}_handler']) return;
-                        const handler = function(e) {{
-                            const container = document.querySelector('[data-dropdown-id=""{componentId}""]');
-                            if (container && !container.contains(e.target)) {{
-                                const ref = window.meshweaverDropdown.getRef('{componentId}');
-                                if (ref) {{
-                                    ref.invokeMethodAsync('CloseFromOutside');
-                                }}
-                            }}
-                        }};
-                        window['dropdown_{componentId}_handler'] = handler;
-                        document.addEventListener('click', handler);
-                        window['dropdown_{componentId}_cleanup'] = () => {{
-                            document.removeEventListener('click', handler);
-                            window.meshweaverDropdown.clearRef('{componentId}');
-                            window['dropdown_{componentId}_handler'] = null;
-                        }};
-                    }})();
+                dotNetRef = DotNetObjectReference.Create(this);
+
+                // Initialize the global helper function if it doesn't exist
+                await JS.InvokeVoidAsync("eval", @"
+                    if (!window.meshweaverDropdown) {
+                        window.meshweaverDropdown = {
+                            refs: {},
+                            setRef: function(id, ref) { this.refs[id] = ref; },
+                            getRef: function(id) { return this.refs[id]; },
+                            clearRef: function(id) { delete this.refs[id]; }
+                        };
+                    }
                 ");
-                jsInitialized = true;
             }
 
-            // Store the reference using the global helper
-            await JS.InvokeVoidAsync("meshweaverDropdown.setRef", componentId, dotNetRef);
-
-            if (ShowSearch && searchInputRef.Context != null)
+            // Initialize JS handler and store reference when dropdown opens
+            if (isOpen && dotNetRef != null)
             {
-                try { await searchInputRef.FocusAsync(); } catch { }
+                if (!jsInitialized)
+                {
+                    // Register click-outside handler
+                    await JS.InvokeVoidAsync("eval", $@"
+                        (function() {{
+                            if (window['dropdown_{componentId}_handler']) return;
+                            const handler = function(e) {{
+                                const container = document.querySelector('[data-dropdown-id=""{componentId}""]');
+                                if (container && !container.contains(e.target)) {{
+                                    const ref = window.meshweaverDropdown.getRef('{componentId}');
+                                    if (ref) {{
+                                        ref.invokeMethodAsync('CloseFromOutside');
+                                    }}
+                                }}
+                            }};
+                            window['dropdown_{componentId}_handler'] = handler;
+                            document.addEventListener('click', handler);
+                            window['dropdown_{componentId}_cleanup'] = () => {{
+                                document.removeEventListener('click', handler);
+                                window.meshweaverDropdown.clearRef('{componentId}');
+                                window['dropdown_{componentId}_handler'] = null;
+                            }};
+                        }})();
+                    ");
+                    jsInitialized = true;
+                }
+
+                // Store the reference using the global helper
+                await JS.InvokeVoidAsync("meshweaverDropdown.setRef", componentId, dotNetRef);
+
+                if (ShowSearch && searchInputRef.Context != null)
+                {
+                    try { await searchInputRef.FocusAsync(); } catch { }
+                }
             }
+        }
+        catch (Exception ex) when (ex is OperationCanceledException or JSDisconnectedException)
+        {
+            // Circuit disconnected during JS interop
         }
     }
 

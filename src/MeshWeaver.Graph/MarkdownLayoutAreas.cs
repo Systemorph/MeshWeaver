@@ -24,6 +24,7 @@ public static class MarkdownLayoutAreas
     public static MessageHubConfiguration AddMarkdownViews(this MessageHubConfiguration configuration)
         => configuration
             .Set(new PageLayoutOptions { MaxWidth = "1280px" })
+            .AddNodeMenuItems(EditMenuProvider)
             .AddNodeMenuItems(SuggestMenuProvider)
             .AddLayout(layout => layout
                 .WithDefaultArea(OverviewArea)
@@ -34,6 +35,16 @@ public static class MarkdownLayoutAreas
                 .WithView(MeshNodeLayoutAreas.ThumbnailArea, MarkdownOverviewLayoutArea.Thumbnail)
             .WithView(MeshNodeLayoutAreas.CreateNodeArea, CreateLayoutArea.Create)
             .WithView(MeshNodeLayoutAreas.DeleteArea, DeleteLayoutArea.Delete));
+
+    private static async IAsyncEnumerable<NodeMenuItemDefinition> EditMenuProvider(
+        LayoutAreaHost host, RenderingContext ctx)
+    {
+        var perms = await PermissionHelper.GetEffectivePermissionsAsync(
+            host.Hub, host.Hub.Address.ToString());
+        if (perms.HasFlag(Permission.Update))
+            yield return new NodeMenuItemDefinition("Edit", EditArea,
+                RequiredPermission: Permission.Update, DisplayOrder: 10);
+    }
 
     private static async IAsyncEnumerable<NodeMenuItemDefinition> SuggestMenuProvider(
         LayoutAreaHost host, RenderingContext ctx)
