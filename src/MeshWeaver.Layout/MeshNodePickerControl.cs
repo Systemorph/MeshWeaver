@@ -4,15 +4,17 @@ namespace MeshWeaver.Layout;
 /// A form control that provides a searchable picker for mesh nodes.
 /// Uses MeshSearchView internally to display search results as cards.
 /// The selected node's Path is stored as the form value.
+/// Supports multiple queries that are run in parallel and merged.
 /// </summary>
 public record MeshNodePickerControl(object Data)
     : FormControlBase<MeshNodePickerControl>(Data)
 {
     /// <summary>
-    /// A query string that is always applied but not visible to the user.
-    /// E.g. "nodeType:(User OR Group) scope:selfAndAncestors"
+    /// Multiple query strings run in parallel and merged.
+    /// E.g. ["namespace:User nodeType:User", "path:X nodeType:Group scope:selfAndAncestors"]
+    /// The user's typed text is appended to each query.
     /// </summary>
-    public object? HiddenQuery { get; init; }
+    public string[]? Queries { get; init; }
 
     /// <summary>
     /// The namespace to scope the search to.
@@ -24,8 +26,8 @@ public record MeshNodePickerControl(object Data)
     /// </summary>
     public object? MaxResults { get; init; }
 
-    public MeshNodePickerControl WithHiddenQuery(object hiddenQuery)
-        => this with { HiddenQuery = hiddenQuery };
+    public MeshNodePickerControl WithQueries(params string[] queries)
+        => this with { Queries = queries };
 
     public MeshNodePickerControl WithNamespace(object ns)
         => this with { Namespace = ns };

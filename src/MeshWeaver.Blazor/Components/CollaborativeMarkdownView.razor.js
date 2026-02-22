@@ -5,6 +5,10 @@ let _resizeHandler = null;
 let _resizeObserver = null;
 let _mutationObserver = null;
 let _repositionTimer = null;
+let _dotNetRef = null;
+let _commentButton = null;
+let _contentMouseUpHandler = null;
+let _documentMouseDownHandler = null;
 
 export function init(containerEl) {
     _containerEl = containerEl;
@@ -159,6 +163,78 @@ export function highlightAnnotation(annotationId) {
     }
 }
 
+/**
+ * Enables comment-from-selection: shows a floating "Comment" button when the user
+ * selects text in the content area. On click, sends the selected text back to Blazor.
+ */
+export function enableCommentSelection(containerEl, dotNetRef) {
+    _dotNetRef = dotNetRef;
+    const contentEl = containerEl?.querySelector('.collab-md-content');
+    if (!contentEl) return;
+
+    // Create floating comment button
+    _commentButton = document.createElement('button');
+    _commentButton.className = 'comment-selection-btn';
+    _commentButton.innerHTML = '&#128172; Comment';
+    _commentButton.style.display = 'none';
+    containerEl.appendChild(_commentButton);
+
+    _contentMouseUpHandler = (e) => {
+        // Small delay to let the selection finalize
+        setTimeout(() => {
+            const sel = window.getSelection();
+            const selectedText = sel?.toString().trim();
+            if (!selectedText || selectedText.length === 0) {
+                _commentButton.style.display = 'none';
+                return;
+            }
+
+            // Ensure selection is within our content area
+            if (!contentEl.contains(sel.anchorNode) || !contentEl.contains(sel.focusNode)) {
+                _commentButton.style.display = 'none';
+                return;
+            }
+
+            // Position the button near the end of the selection
+            const range = sel.getRangeAt(0);
+            const rect = range.getBoundingClientRect();
+            const containerRect = containerEl.getBoundingClientRect();
+
+            _commentButton.style.display = 'block';
+            _commentButton.style.top = (rect.bottom - containerRect.top + 4) + 'px';
+            _commentButton.style.left = (rect.right - containerRect.left) + 'px';
+        }, 10);
+    };
+
+    _commentButton.addEventListener('click', async (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+
+        const sel = window.getSelection();
+        const selectedText = sel?.toString().trim();
+        if (!selectedText || !_dotNetRef) return;
+
+        _commentButton.style.display = 'none';
+
+        try {
+            await _dotNetRef.invokeMethodAsync('OnCommentFromSelection', selectedText);
+        } catch (err) {
+            console.error('Error creating comment from selection:', err);
+        }
+
+        sel.removeAllRanges();
+    });
+
+    _documentMouseDownHandler = (e) => {
+        if (_commentButton && !_commentButton.contains(e.target)) {
+            _commentButton.style.display = 'none';
+        }
+    };
+
+    contentEl.addEventListener('mouseup', _contentMouseUpHandler);
+    document.addEventListener('mousedown', _documentMouseDownHandler);
+}
+
 export function dispose() {
     if (_resizeHandler) {
         window.removeEventListener('resize', _resizeHandler);
@@ -176,6 +252,20 @@ export function dispose() {
         clearTimeout(_repositionTimer);
         _repositionTimer = null;
     }
+    if (_documentMouseDownHandler) {
+        document.removeEventListener('mousedown', _documentMouseDownHandler);
+        _documentMouseDownHandler = null;
+    }
+    if (_contentMouseUpHandler) {
+        const contentEl = _containerEl?.querySelector('.collab-md-content');
+        if (contentEl) contentEl.removeEventListener('mouseup', _contentMouseUpHandler);
+        _contentMouseUpHandler = null;
+    }
+    if (_commentButton) {
+        _commentButton.remove();
+        _commentButton = null;
+    }
+    _dotNetRef = null;
     _containerEl = null;
 }
 

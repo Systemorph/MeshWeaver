@@ -11,13 +11,14 @@ using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using MeshWeaver.ShortGuid;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Graph;
 
 /// <summary>
 /// Layout area for managing access control on a mesh node.
 /// Inherited assignments are loaded via IMeshQuery from ancestor nodes (read-only markdown table).
-/// Local assignments are loaded via IMeshQuery from children (editable).
+/// Local assignments are loaded via ObserveQuery from children (editable, reactive).
 /// </summary>
 public static class AccessControlLayoutArea
 {
@@ -44,52 +45,46 @@ public static class AccessControlLayoutArea
         var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? [])
             ?? Observable.Return<MeshNode[]>([]);
 
-        return nodeStream.SelectMany(async nodes =>
-        {
-            var node = nodes.FirstOrDefault(n => n.Namespace == hubPath || n.Path == hubPath);
-            var isAdmin = await CheckAdminPermission(host.Hub, hubPath);
+        // Use ObserveQuery for local assignments so the view reactively updates
+        // when assignments are added or removed via IMeshCatalog.
+        var localAssignmentsStream = meshQuery != null
+            ? meshQuery.ObserveQuery<MeshNode>(
+                MeshQueryRequest.FromQuery($"path:{hubPath} nodeType:AccessAssignment scope:children"))
+                .Select(change => (IReadOnlyList<MeshNode>)change.Items)
+            : Observable.Return<IReadOnlyList<MeshNode>>([]);
 
-            // Load inherited assignments from ancestor nodes via IMeshQuery
-            var inherited = new List<(AccessAssignment Assignment, string SourcePath)>();
-            if (meshQuery != null)
+        return nodeStream.CombineLatest(localAssignmentsStream, (nodes, localAssignments) => (nodes, localAssignments))
+            .SelectMany(async tuple =>
             {
-                try
-                {
-                    var ancestorAssignments = await meshQuery
-                        .QueryAsync<MeshNode>($"path:{hubPath} nodeType:AccessAssignment scope:ancestors")
-                        .ToListAsync();
+                var (nodes, localAssignments) = tuple;
+                var node = nodes.FirstOrDefault(n => n.Namespace == hubPath || n.Path == hubPath);
+                var isAdmin = await CheckAdminPermission(host.Hub, hubPath);
 
-                    foreach (var assignmentNode in ancestorAssignments)
+                // Load inherited assignments from ancestor nodes via IMeshQuery (one-shot, rarely changes)
+                var inherited = new List<(AccessAssignment Assignment, string SourcePath)>();
+                if (meshQuery != null)
+                {
+                    try
                     {
-                        var assignment = DeserializeAssignment(assignmentNode);
-                        if (assignment != null)
-                            inherited.Add((assignment, assignmentNode.Namespace ?? ""));
+                        var ancestorAssignments = await meshQuery
+                            .QueryAsync<MeshNode>($"path:{hubPath} nodeType:AccessAssignment scope:ancestors")
+                            .ToListAsync();
+
+                        foreach (var assignmentNode in ancestorAssignments)
+                        {
+                            var assignment = DeserializeAssignment(assignmentNode);
+                            if (assignment != null)
+                                inherited.Add((assignment, assignmentNode.Namespace ?? ""));
+                        }
+                    }
+                    catch
+                    {
+                        // Query may fail if index not ready
                     }
                 }
-                catch
-                {
-                    // Query may fail if index not ready
-                }
-            }
 
-            // Load local assignments from children via IMeshQuery
-            var local = new List<MeshNode>();
-            if (meshQuery != null)
-            {
-                try
-                {
-                    local = await meshQuery
-                        .QueryAsync<MeshNode>($"path:{hubPath} nodeType:AccessAssignment scope:children")
-                        .ToListAsync();
-                }
-                catch
-                {
-                    // Query may fail if index not ready
-                }
-            }
-
-            return BuildAccessControlPage(host, node, hubPath, isAdmin, inherited, local);
-        });
+                return BuildAccessControlPage(host, node, hubPath, isAdmin, inherited, localAssignments);
+            });
     }
 
     private static AccessAssignment? DeserializeAssignment(MeshNode node, System.Text.Json.JsonSerializerOptions? options = null)
@@ -242,7 +237,10 @@ public static class AccessControlLayoutArea
                 Label = "Subject (User or Group)",
                 Required = true,
                 Placeholder = "Search users or groups...",
-                HiddenQuery = $"path:{nodePath} nodeType:(User OR Group) scope:selfAndAncestors",
+                Queries = [
+                    "namespace:User nodeType:User",
+                    $"path:{nodePath} nodeType:Group scope:selfAndAncestors"
+                ],
                 DataContext = LayoutAreaReference.GetDataPointer(formId)
             })
             .WithView(new MeshNodePickerControl(new JsonPointerReference("roleId"))
@@ -250,7 +248,7 @@ public static class AccessControlLayoutArea
                 Label = "Role",
                 Required = true,
                 Placeholder = "Search roles...",
-                HiddenQuery = $"path:{nodePath} nodeType:Role scope:selfAndAncestors",
+                Queries = [$"path:{nodePath} nodeType:Role scope:ancestorsAndSelf"],
                 DataContext = LayoutAreaReference.GetDataPointer(formId)
             })
             .WithView(Controls.Stack
@@ -258,49 +256,86 @@ public static class AccessControlLayoutArea
                 .WithStyle("justify-content: flex-end; gap: 8px; margin-top: 16px;")
                 .WithView(Controls.Button("Save")
                     .WithAppearance(Appearance.Accent)
-                    .WithClickAction(async saveCtx =>
+                    .WithClickAction(saveCtx =>
                     {
-                        var formValues = await saveCtx.Host.Stream
-                            .GetDataStream<Dictionary<string, object?>>(formId).FirstAsync();
+                        var logger = saveCtx.Hub.ServiceProvider.GetService<ILogger<LayoutAreaHost>>();
 
-                        var subjectId = formValues.GetValueOrDefault("subjectId")?.ToString()?.Trim();
-                        var roleId = formValues.GetValueOrDefault("roleId")?.ToString()?.Trim();
-
-                        if (string.IsNullOrEmpty(subjectId) || string.IsNullOrEmpty(roleId))
-                        {
-                            var errorDialog = Controls.Dialog(
-                                Controls.Markdown("Please fill in both **Subject** and **Role**."),
-                                "Validation Error"
-                            ).WithSize("S").WithClosable(true);
-                            saveCtx.Host.UpdateArea(DialogControl.DialogArea, errorDialog);
-                            return;
-                        }
-
-                        // Create AccessAssignment MeshNode
-                        var catalog = saveCtx.Hub.ServiceProvider.GetService<IMeshCatalog>();
-                        if (catalog != null)
-                        {
-                            var assignmentNode = new MeshNode($"{subjectId}_Access", nodePath)
+                        saveCtx.Host.Stream
+                            .GetDataStream<Dictionary<string, object?>>(formId)
+                            .Take(1)
+                            .Subscribe(formValues =>
                             {
-                                NodeType = Configuration.AccessAssignmentNodeType.NodeType,
-                                Name = $"{subjectId} Access",
-                                Content = new AccessAssignment
-                                {
-                                    SubjectId = subjectId,
-                                    Roles = [new RoleAssignment { RoleId = roleId }],
-                                    DisplayName = subjectId
-                                }
-                            };
-                            await catalog.CreateNodeAsync(assignmentNode);
-                        }
+                                var subjectId = formValues.GetValueOrDefault("subjectId")?.ToString()?.Trim();
+                                var roleId = formValues.GetValueOrDefault("roleId")?.ToString()?.Trim();
 
-                        saveCtx.Host.UpdateArea(DialogControl.DialogArea, null!);
+                                if (string.IsNullOrEmpty(subjectId) || string.IsNullOrEmpty(roleId))
+                                {
+                                    ShowErrorDialog(saveCtx, "Validation Error",
+                                        "Please fill in both **Subject** and **Role**.");
+                                    return;
+                                }
+
+                                // Use GUID-based ID to avoid collisions
+                                var nodeId = Guid.NewGuid().AsString();
+                                var subjectName = subjectId.Contains('/')
+                                    ? subjectId[(subjectId.LastIndexOf('/') + 1)..]
+                                    : subjectId;
+                                var roleName = roleId.Contains('/')
+                                    ? roleId[(roleId.LastIndexOf('/') + 1)..]
+                                    : roleId;
+
+                                var assignmentNode = new MeshNode(nodeId, nodePath)
+                                {
+                                    NodeType = Configuration.AccessAssignmentNodeType.NodeType,
+                                    Name = $"{subjectName} - {roleName}",
+                                    Content = new AccessAssignment
+                                    {
+                                        SubjectId = subjectId,
+                                        Roles = [new RoleAssignment { RoleId = roleId }],
+                                        DisplayName = subjectName
+                                    }
+                                };
+
+                                var catalog = saveCtx.Hub.ServiceProvider.GetRequiredService<IMeshCatalog>();
+                                catalog.CreateNodeAsync(assignmentNode)
+                                    .ContinueWith(task =>
+                                    {
+                                        if (task.IsCompletedSuccessfully)
+                                        {
+                                            logger?.LogInformation(
+                                                "Created access assignment at {Path}",
+                                                assignmentNode.Path);
+                                            // Close dialog — ObserveQuery will update the view
+                                            saveCtx.Host.UpdateArea(DialogControl.DialogArea, null!);
+                                        }
+                                        else if (task.IsFaulted)
+                                        {
+                                            var error = task.Exception?.InnerException?.Message ?? "Unknown error";
+                                            logger?.LogWarning(
+                                                "Failed to create access assignment: {Error}", error);
+                                            ShowErrorDialog(saveCtx, "Creation Failed", error);
+                                        }
+                                    });
+                            });
                     })));
 
         var dialog = Controls.Dialog(formContent, "Add Role Assignment")
             .WithSize("M")
-            .WithClosable(true);
+            .WithClosable(true)
+            .WithCloseAction(closeCtx =>
+                closeCtx.Host.UpdateArea(DialogControl.DialogArea, null!));
 
         ctx.Host.UpdateArea(DialogControl.DialogArea, dialog);
+    }
+
+    private static void ShowErrorDialog(UiActionContext ctx, string title, string message)
+    {
+        var errorDialog = Controls.Dialog(
+            Controls.Markdown($"**{title}:**\n\n{message}"),
+            title
+        ).WithSize("M").WithClosable(true)
+        .WithCloseAction(closeCtx =>
+            closeCtx.Host.UpdateArea(DialogControl.DialogArea, null!));
+        ctx.Host.UpdateArea(DialogControl.DialogArea, errorDialog);
     }
 }

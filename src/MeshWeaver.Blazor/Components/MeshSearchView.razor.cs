@@ -31,6 +31,7 @@ public partial class MeshSearchView : IDisposable
     private GroupedSearchResult? _computedGroups;
     private IDisposable? _reactiveSubscription;
     private HashSet<string> _collapsedGroups = new();
+    private string _lastBoundVisibleQuery = "";
 
     [Inject]
     private NavigationManager NavigationManager { get; set; } = default!;
@@ -106,6 +107,17 @@ public partial class MeshSearchView : IDisposable
         if (!_initialized && !string.IsNullOrEmpty(BoundVisibleQuery))
         {
             _currentValue = BoundVisibleQuery;
+        }
+
+        // Re-query when VisibleQuery changes from parent (e.g. picker typing)
+        if (_initialized && BoundVisibleQuery != _lastBoundVisibleQuery)
+        {
+            _lastBoundVisibleQuery = BoundVisibleQuery;
+            _currentValue = BoundVisibleQuery;
+            if (!IsPrecomputedMode)
+            {
+                _ = LoadResultsAsync();
+            }
         }
 
         // Initialize collapsed state from pre-computed groups

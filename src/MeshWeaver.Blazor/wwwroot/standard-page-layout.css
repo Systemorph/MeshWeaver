@@ -217,6 +217,19 @@ code {
     z-index: 10001 !important;
 }
 
+/* Title bar text field - borderless inline editor for page titles */
+fluent-text-field.title-bar-field::part(root) {
+    border: none;
+    background: transparent;
+    box-shadow: none;
+}
+
+fluent-text-field.title-bar-field::part(control) {
+    font-size: 1.25rem;
+    font-weight: 600;
+    padding: 0 4px;
+}
+
 /* Sticky action menu button - stays in top right when scrolling */
 .sticky-action-menu {
     position: fixed;

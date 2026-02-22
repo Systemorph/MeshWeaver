@@ -57,7 +57,17 @@ public static class MarkdownEditLayoutArea
             .WithWidth("100%")
             .WithHeight("100%");
 
-        // Header row with back button
+        // Set up data binding for node name (used in title bar)
+        string? dataId = null;
+        if (node != null)
+        {
+            dataId = $"editTitle_{hubPath.Replace("/", "_")}";
+            var props = MeshNodeProperties.FromNode(node);
+            host.UpdateData(dataId, props);
+            SetupNodePropertiesAutoSave(host, dataId, props, node);
+        }
+
+        // Header row with back button and inline title editor
         var headerRow = Controls.Stack
             .WithOrientation(Orientation.Horizontal)
             .WithWidth("100%")
@@ -71,30 +81,28 @@ public static class MarkdownEditLayoutArea
             .WithAppearance(Appearance.Stealth)
             .WithNavigateToHref(backHref));
 
-        headerRow = headerRow.WithView(Controls.Html("<div style=\"flex: 1;\"></div>"));
+        // Title text field in the header bar
+        if (dataId != null)
+        {
+            var titleField = new TextFieldControl(new JsonPointerReference("Name"))
+            {
+                Immediate = true,
+                Placeholder = "Untitled",
+                DataContext = LayoutAreaReference.GetDataPointer(dataId)
+            }.WithStyle("flex: 1; font-size: 1.25rem; font-weight: 600;")
+             .WithClass("title-bar-field");
+
+            headerRow = headerRow.WithView(titleField);
+        }
+        else
+        {
+            headerRow = headerRow.WithView(Controls.Html("<div style=\"flex: 1;\"></div>"));
+        }
 
         headerRow = headerRow.WithView(
             Controls.Html("<span style=\"color: var(--neutral-foreground-hint); font-size: 0.85rem;\">Changes are saved automatically</span>"));
 
         container = container.WithView(headerRow);
-
-        // Title text box with auto-save
-        if (node != null)
-        {
-            var dataId = $"editTitle_{hubPath.Replace("/", "_")}";
-            var props = MeshNodeProperties.FromNode(node);
-            host.UpdateData(dataId, props);
-            SetupNodePropertiesAutoSave(host, dataId, props, node);
-
-            var titleField = new TextFieldControl(new JsonPointerReference("Name"))
-            {
-                Immediate = true,
-                Label = "Title",
-                DataContext = LayoutAreaReference.GetDataPointer(dataId)
-            }.WithStyle("margin: 8px 8px 0 8px;");
-
-            container = container.WithView(titleField);
-        }
 
         // MarkdownEditorControl with auto-save
         var lineCount = string.IsNullOrEmpty(initialContent) ? 15 : initialContent.Split('\n').Length;

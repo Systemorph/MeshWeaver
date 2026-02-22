@@ -705,12 +705,19 @@ export function updateAnnotationDecorations(editorId, ranges) {
  * When enabled, new edits are wrapped in <!--insert:id--> markers
  * and deletions of non-marker text are wrapped in <!--delete:id--> markers.
  */
-export function setTrackChangesMode(editorId, enabled) {
+/**
+ * Enables or disables track changes mode.
+ * @param {string} editorId - The editor instance ID
+ * @param {boolean} enabled - Whether to enable track changes
+ * @param {string} [author] - Author name to embed in markers
+ */
+export function setTrackChangesMode(editorId, enabled, author) {
     const state = editorState.get(editorId);
     if (!state?.editorInstance) return;
     const editorInstance = state.editorInstance;
 
     state.trackChangesEnabled = enabled;
+    state.trackChangesAuthor = author || '';
 
     if (enabled && !state.trackChangesDisposable) {
         state.trackChangesProcessing = false;
@@ -721,6 +728,10 @@ export function setTrackChangesMode(editorId, enabled) {
 
             const model = editorInstance.getModel();
             if (!model) return;
+
+            const authorStr = state.trackChangesAuthor;
+            const dateStr = formatShortDate();
+            const metaSuffix = authorStr ? `:${authorStr}:${dateStr}` : '';
 
             // Process each change in the event
             const edits = [];
@@ -744,37 +755,28 @@ export function setTrackChangesMode(editorId, enabled) {
                 const markerId = generateMarkerId();
 
                 if (isInsertion) {
-                    // Wrap inserted text in insert markers
                     const insertedText = change.text;
-                    // Don't wrap if text is just whitespace or newline
                     if (insertedText.trim().length === 0) continue;
 
                     const pos = model.getPositionAt(change.rangeOffset);
-                    // Replace the just-inserted text with marker-wrapped version
                     const endPos = model.getPositionAt(change.rangeOffset + insertedText.length);
                     edits.push({
                         range: new monaco.Range(pos.lineNumber, pos.column, endPos.lineNumber, endPos.column),
-                        text: `<!--insert:${markerId}-->${insertedText}<!--/insert:${markerId}-->`
+                        text: `<!--insert:${markerId}${metaSuffix}-->${insertedText}<!--/insert:${markerId}-->`
                     });
                     needsUpdate = true;
                 } else if (isDeletion) {
-                    // Get the text that was deleted (from the original content before the change)
                     const deletedText = content.substring(change.rangeOffset, change.rangeOffset + change.rangeLength);
-                    // Don't wrap if it's already a marker tag
                     if (/^<!--\/?(?:insert|delete|comment):/.test(deletedText)) continue;
-                    // Don't wrap if text is just whitespace
                     if (deletedText.trim().length === 0) continue;
 
-                    // Instead of deleting, insert a delete marker around the text
-                    // The text is already gone (the change already happened), so we insert the marker with the text
                     const pos = model.getPositionAt(change.rangeOffset);
                     edits.push({
                         range: new monaco.Range(pos.lineNumber, pos.column, pos.lineNumber, pos.column),
-                        text: `<!--delete:${markerId}-->${deletedText}<!--/delete:${markerId}-->`
+                        text: `<!--delete:${markerId}${metaSuffix}-->${deletedText}<!--/delete:${markerId}-->`
                     });
                     needsUpdate = true;
                 } else if (isReplacement) {
-                    // Replacement = deletion + insertion
                     const deletedText = content.substring(change.rangeOffset, change.rangeOffset + change.rangeLength);
                     if (/^<!--\/?(?:insert|delete|comment):/.test(deletedText)) continue;
 
@@ -784,7 +786,7 @@ export function setTrackChangesMode(editorId, enabled) {
                     const endPos = model.getPositionAt(change.rangeOffset + change.text.length);
                     edits.push({
                         range: new monaco.Range(pos.lineNumber, pos.column, endPos.lineNumber, endPos.column),
-                        text: `<!--delete:${delMarkerId}-->${deletedText}<!--/delete:${delMarkerId}--><!--insert:${insMarkerId}-->${change.text}<!--/insert:${insMarkerId}-->`
+                        text: `<!--delete:${delMarkerId}${metaSuffix}-->${deletedText}<!--/delete:${delMarkerId}--><!--insert:${insMarkerId}${metaSuffix}-->${change.text}<!--/insert:${insMarkerId}-->`
                     });
                     needsUpdate = true;
                 }
@@ -794,7 +796,6 @@ export function setTrackChangesMode(editorId, enabled) {
                 state.trackChangesProcessing = true;
                 try {
                     editorInstance.executeEdits('track-changes', edits);
-                    // Decorations will be updated by C# after it processes the content change
                 } finally {
                     state.trackChangesProcessing = false;
                 }
@@ -804,6 +805,68 @@ export function setTrackChangesMode(editorId, enabled) {
         state.trackChangesDisposable.dispose();
         state.trackChangesDisposable = null;
     }
+}
+
+/**
+ * Registers a "Add Comment" action in the Monaco editor context menu.
+ * When triggered, calls the Blazor callback with the selection offset range.
+ * @param {string} editorId - The editor instance ID
+ * @param {object} dotNetRef - DotNet object reference for callback
+ * @param {string} callbackMethod - Name of the [JSInvokable] method to call
+ */
+export function registerCommentAction(editorId, dotNetRef, callbackMethod) {
+    const state = editorState.get(editorId);
+    if (!state?.editorInstance) return;
+    const editorInstance = state.editorInstance;
+
+    // Enable context menu
+    editorInstance.updateOptions({ contextmenu: true });
+
+    state.commentActionDisposable = editorInstance.addAction({
+        id: 'add-comment',
+        label: 'Add Comment',
+        contextMenuGroupId: '9_cutcopypaste',
+        contextMenuOrder: 100,
+        precondition: 'editorHasSelection',
+        run: (ed) => {
+            const selection = ed.getSelection();
+            if (!selection || selection.isEmpty()) return;
+            const model = ed.getModel();
+            if (!model) return;
+            const startOffset = model.getOffsetAt(selection.getStartPosition());
+            const endOffset = model.getOffsetAt(selection.getEndPosition());
+            dotNetRef.invokeMethodAsync(callbackMethod, startOffset, endOffset);
+        }
+    });
+}
+
+/**
+ * Sets the editor value while suppressing the track changes handler.
+ * Use this for programmatic content updates (e.g. accept/reject annotations)
+ * to prevent the track changes handler from re-wrapping the change in markers.
+ */
+export function setValueSuppressTracking(editorId, value) {
+    const state = editorState.get(editorId);
+    if (!state?.editorInstance) return;
+
+    state.trackChangesProcessing = true;
+    try {
+        state.editorInstance.setValue(value);
+    } finally {
+        // Use setTimeout to ensure the synchronous onDidChangeModelContent handler
+        // has already fired before we re-enable tracking
+        setTimeout(() => {
+            if (editorState.has(editorId)) {
+                editorState.get(editorId).trackChangesProcessing = false;
+            }
+        }, 0);
+    }
+}
+
+function formatShortDate() {
+    const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    const d = new Date();
+    return `${months[d.getMonth()]} ${d.getDate()}`;
 }
 
 /**

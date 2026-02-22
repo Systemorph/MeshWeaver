@@ -5,6 +5,7 @@
 @using MeshWeaver.Markdown
 @using MeshWeaver.Markdown.Collaboration
 @using MeshWeaver.Messaging
+@using Microsoft.Extensions.DependencyInjection
 @using Microsoft.Extensions.Logging
 @using MarkdownAnnotationType = MeshWeaver.Markdown.Collaboration.AnnotationType
 @namespace MeshWeaver.Blazor.Components
@@ -61,82 +62,91 @@
 </style>
 
 <div class="collaborative-editor-container">
-    @if (HasAnnotations || TrackChangesActive)
+    @* Suggest mode indicator stripe *@
+    @if (TrackChangesActive)
     {
-        <div class="track-changes-toggle" style="display: flex; align-items: center; gap: 8px; padding: 4px 8px;">
-            <FluentSwitch @bind-Value="@TrackChangesActive"
-                          @bind-Value:after="@OnTrackChangesToggled"
-                          Label="Track Changes" />
+        <div class="suggest-mode-stripe">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" style="flex-shrink: 0;">
+                <path d="M13.23 1h-1.46L3.52 9.25l-.16.22L1 13.59 2.41 15l4.12-2.36.22-.16L15 4.23V2.77L13.23 1zM2.41 13.59l1.51-3 1.45 1.45-2.96 1.55zm3.83-2.06L4.47 9.76l8-8 1.77 1.77-8 8z"/>
+            </svg>
+            <span>Suggesting</span>
         </div>
     }
 
-    @if (BoundShowCommentsPanel)
-    {
-        <div class="editor-main-content with-panel">
-            <div class="editor-area">
-                @if (HasAnnotations)
-                {
-                    <TrackChangesToolbar DocumentId="@BoundDocumentId"
-                                          TrackedChanges="@TrackedChanges"
-                                          OnAcceptChange="@OnAcceptChange"
-                                          OnRejectChange="@OnRejectChange"
-                                          OnAcceptAll="@OnAcceptAllChanges"
-                                          OnRejectAll="@OnRejectAllChanges"
-                                          OnNavigateToChange="@OnNavigateToChange" />
-                }
-                <MonacoEditorView @ref="editorRef"
-                                  Value="@BoundValue"
-                                  Language="markdown"
-                                  Height="@BoundHeight"
-                                  MaxHeight="@BoundMaxHeight"
-                                  IsDisabled="@BoundReadonly"
-                                  Placeholder="@BoundPlaceholder"
-                                  ShowLineNumbers="true"
-                                  ShowBorder="true"
-                                  CodeEditMode="true"
-                                  CompletionProvider="@GetCompletionConfig()"
-                                  AsyncCompletionCallback="@GetCompletionsAsync"
-                                  ValueChanged="@OnValueChanged"
-                                  OnEditorReady="@OnEditorReady" />
-            </div>
-            <CommentPanel DocumentId="@BoundDocumentId"
-                          Comments="@Comments"
-                          OnResolveComment="@OnResolveComment"
-                          OnDeleteComment="@OnDeleteComment"
-                          OnReplyToComment="@OnReplyToComment" />
+    <div class="editor-main-content @(HasAnnotations ? "with-panel" : "")">
+        <div class="editor-area">
+            <MonacoEditorView @ref="editorRef"
+                              Value="@BoundValue"
+                              Language="markdown"
+                              Height="@BoundHeight"
+                              MaxHeight="@BoundMaxHeight"
+                              IsDisabled="@BoundReadonly"
+                              Placeholder="@BoundPlaceholder"
+                              ShowLineNumbers="true"
+                              ShowBorder="true"
+                              CodeEditMode="true"
+                              CompletionProvider="@GetCompletionConfig()"
+                              AsyncCompletionCallback="@GetCompletionsAsync"
+                              ValueChanged="@OnValueChanged"
+                              OnEditorReady="@OnEditorReady"
+                              OnCommentRequested="@OnCommentFromEditor" />
         </div>
-    }
-    else
-    {
-        <div class="editor-main-content">
-            <div class="editor-area">
-                @if (HasAnnotations)
+
+        @* Annotations sidebar — shown when content has annotations *@
+        @if (HasAnnotations)
+        {
+            <div class="annotations-sidebar">
+                <div class="annotations-sidebar-header">
+                    <span>@Annotations.Count change@(Annotations.Count != 1 ? "s" : "")</span>
+                    @if (TrackedChanges.Count > 0)
+                    {
+                        <div class="annotations-sidebar-actions">
+                            <button class="btn-accept-all" title="Accept all" @onclick="@OnAcceptAllChanges">Accept all</button>
+                            <button class="btn-reject-all" title="Reject all" @onclick="@OnRejectAllChanges">Reject all</button>
+                        </div>
+                    }
+                </div>
+                @foreach (var ann in Annotations)
                 {
-                    <TrackChangesToolbar DocumentId="@BoundDocumentId"
-                                          TrackedChanges="@TrackedChanges"
-                                          OnAcceptChange="@OnAcceptChange"
-                                          OnRejectChange="@OnRejectChange"
-                                          OnAcceptAll="@OnAcceptAllChanges"
-                                          OnRejectAll="@OnRejectAllChanges"
-                                          OnNavigateToChange="@OnNavigateToChange" />
+                    <div class="annotation-card annotation-type-@ann.Type.ToString().ToLowerInvariant() @(activeAnnotationId == ann.Id ? "active" : "")"
+                         @onclick="() => OnAnnotationCardClick(ann.Id)">
+                        <div class="annotation-card-header">
+                            <div class="annotation-card-meta">
+                                @if (!string.IsNullOrEmpty(ann.Author))
+                                {
+                                    <span class="annotation-author">@ann.Author</span>
+                                }
+                                <span class="annotation-type-label">@GetTypeLabel(ann.Type)@(!string.IsNullOrEmpty(ann.Date) ? $" · {ann.Date}" : "")</span>
+                            </div>
+                            @if (ann.Type != MeshWeaver.Markdown.AnnotationType.Comment)
+                            {
+                                <div class="annotation-card-actions">
+                                    <button class="btn-accept" title="Accept" @onclick="() => OnAcceptAnnotation(ann)" @onclick:stopPropagation="true">&#10003;</button>
+                                    <button class="btn-reject" title="Reject" @onclick="() => OnRejectAnnotation(ann)" @onclick:stopPropagation="true">&#10007;</button>
+                                </div>
+                            }
+                            else
+                            {
+                                <div class="annotation-card-actions">
+                                    <button class="btn-resolve" title="Resolve" @onclick="() => OnResolveComment(ann.Id)" @onclick:stopPropagation="true">&#10003;</button>
+                                </div>
+                            }
+                        </div>
+                        @if (!string.IsNullOrEmpty(ann.HighlightedText))
+                        {
+                            <div class="annotation-quote @(ann.Type == MeshWeaver.Markdown.AnnotationType.Insert ? "quote-insert" : ann.Type == MeshWeaver.Markdown.AnnotationType.Delete ? "quote-delete" : "quote-comment")">
+                                &ldquo;@Truncate(ann.HighlightedText, 80)&rdquo;
+                            </div>
+                        }
+                        @if (!string.IsNullOrEmpty(ann.CommentText))
+                        {
+                            <div class="annotation-comment-text">@ann.CommentText</div>
+                        }
+                    </div>
                 }
-                <MonacoEditorView @ref="editorRef"
-                                  Value="@BoundValue"
-                                  Language="markdown"
-                                  Height="@BoundHeight"
-                                  MaxHeight="@BoundMaxHeight"
-                                  IsDisabled="@BoundReadonly"
-                                  Placeholder="@BoundPlaceholder"
-                                  ShowLineNumbers="true"
-                                  ShowBorder="true"
-                                  CodeEditMode="true"
-                                  CompletionProvider="@GetCompletionConfig()"
-                                  AsyncCompletionCallback="@GetCompletionsAsync"
-                                  ValueChanged="@OnValueChanged"
-                                  OnEditorReady="@OnEditorReady" />
             </div>
-        </div>
-    }
+        }
+    </div>
 
     @if (BoundShowPreview)
     {
@@ -154,6 +164,9 @@
     private AutoSaveHandler? autoSaveHandler;
     private bool isUpdatingFromStream = false;
     private static readonly TimeSpan AutoSaveThrottleInterval = TimeSpan.FromMilliseconds(500);
+
+    // Current user info (resolved from AccessService)
+    private string CurrentAuthor = "";
 
     // Bound properties
     private string BoundValue = "";  // Clean content (stripped of markers) — what Monaco displays
@@ -173,11 +186,12 @@
     private CleanAnnotationRange[] CurrentAnnotationRanges = [];
 
     // Collaborative editing state
-    private List<RangeComment> Comments = new();
+    private List<ParsedAnnotation> Annotations = new();
     private List<TrackedChange> TrackedChanges = new();
     private string RenderedPreview = "";
-    private bool HasAnnotations => TrackedChanges.Count > 0 || Comments.Count > 0;
+    private bool HasAnnotations => Annotations.Count > 0;
     private bool TrackChangesActive = false;
+    private string? activeAnnotationId;
 
     // Data pointer for two-way binding
     private JsonPointerReference? ValuePointer;
@@ -190,12 +204,10 @@
         ValuePointer = ViewModel.Value as JsonPointerReference;
 
         // Set up auto-save handler (throttled to avoid excessive saves)
-        // Note: No DistinctUntilChanged - Throttle already ensures we save the latest value after a pause
         autoSaveHandler = new AutoSaveHandler(AutoSaveThrottleInterval, AutoSaveContent);
         AddBinding(autoSaveHandler);
 
         // Bind Value with reactive subscription
-        // Use AutoSaveHandler to filter stale stream feedback
         if (Stream != null && ValuePointer != null)
         {
             AddBinding(Stream
@@ -204,8 +216,6 @@
                 {
                     if (value != null && value != AnnotatedContent)
                     {
-                        // Check if we should apply this external update
-                        // Rejects echoes of our own sync and updates during active local editing
                         if (autoSaveHandler != null && !autoSaveHandler.ShouldApplyExternalUpdate(value))
                             return;
 
@@ -214,7 +224,6 @@
                         UpdatePreview(value);
                         ExtractAnnotations(value);
 
-                        // Track that we applied this external update
                         autoSaveHandler?.OnExternalUpdateApplied(value);
 
                         InvokeAsync(async () =>
@@ -242,6 +251,13 @@
         BoundAutoSaveAddress = ViewModel.AutoSaveAddress;
         BoundNodePath = ViewModel.NodePath;
 
+        // Resolve current user for annotation metadata
+        var accessService = Hub.ServiceProvider.GetService<AccessService>();
+        CurrentAuthor = accessService?.Context?.Name ?? "";
+
+        // Track changes is purely driven by the control's configuration (Suggest mode)
+        TrackChangesActive = BoundTrackChangesEnabled;
+
         // Initial content processing
         var initialValue = GetInitialValue();
         if (!string.IsNullOrEmpty(initialValue))
@@ -249,21 +265,69 @@
             SetAnnotatedContent(initialValue);
             ExtractAnnotations(initialValue);
             UpdatePreview(initialValue);
-
-            // Auto-enable track changes if content contains annotations
-            if (HasAnnotations)
-                TrackChangesActive = true;
         }
     }
 
     private async Task OnEditorReady()
     {
-        if (editorRef != null && HasAnnotations)
+        if (editorRef != null)
         {
-            await editorRef.UpdateAnnotationDecorationsAsync(BuildJsRanges());
+            if (HasAnnotations)
+                await editorRef.UpdateAnnotationDecorationsAsync(BuildJsRanges());
             if (TrackChangesActive)
-                await editorRef.SetTrackChangesModeAsync(true);
+                await editorRef.SetTrackChangesModeAsync(true, CurrentAuthor);
+
+            // Register "Add Comment" context menu action
+            await editorRef.RegisterCommentActionAsync();
         }
+    }
+
+    private async Task OnCommentFromEditor((int Start, int End) selection)
+    {
+        var markerId = Guid.NewGuid().ToString("N")[..8];
+        var author = CurrentAuthor;
+        var date = DateTime.Now.ToString("MMM d");
+        var meta = !string.IsNullOrEmpty(author) ? $":{author}:{date}" : "";
+
+        // Insert comment markers into the annotated content at the mapped positions
+        var openTag = $"<!--comment:{markerId}{meta}-->";
+        var closeTag = $"<!--/comment:{markerId}-->";
+
+        // Map clean-content offsets to annotated-content positions
+        var map = BuildDisplayToAnnotatedMap();
+        var aStart = selection.Start < map.Length ? map[selection.Start] : AnnotatedContent.Length;
+        var aEnd = selection.End < map.Length ? map[selection.End] : AnnotatedContent.Length;
+
+        var newContent = AnnotatedContent.Insert(aEnd, closeTag).Insert(aStart, openTag);
+        await UpdateContent(newContent);
+    }
+
+    /// <summary>
+    /// Builds a map from display (clean) character index to annotated character index.
+    /// </summary>
+    private int[] BuildDisplayToAnnotatedMap()
+    {
+        var tagRegex = new System.Text.RegularExpressions.Regex(@"<!--/?(comment|insert|delete):[^-]+-->");
+        var tags = tagRegex.Matches(AnnotatedContent).Cast<System.Text.RegularExpressions.Match>()
+            .OrderBy(m => m.Index).ToList();
+        var map = new List<int>();
+        int tagIdx = 0;
+
+        for (int i = 0; i < AnnotatedContent.Length;)
+        {
+            if (tagIdx < tags.Count && i == tags[tagIdx].Index)
+            {
+                i += tags[tagIdx].Length;
+                tagIdx++;
+            }
+            else
+            {
+                map.Add(i);
+                i++;
+            }
+        }
+
+        return map.ToArray();
     }
 
     private string? GetInitialValue()
@@ -276,7 +340,6 @@
 
     private CompletionProviderConfig GetCompletionConfig()
     {
-        // Default config for UCR autocomplete - trigger on @ for unified content references
         return new CompletionProviderConfig
         {
             TriggerCharacters = ["@"],
@@ -284,10 +347,6 @@
         };
     }
 
-    /// <summary>
-    /// Gets autocomplete suggestions via Hub messaging.
-    /// Sends AutocompleteRequest to the hub and converts the response to Monaco CompletionItems.
-    /// </summary>
     private async Task<CompletionItem[]> GetCompletionsAsync(string query)
     {
         if (Hub == null || string.IsNullOrWhiteSpace(query))
@@ -295,7 +354,6 @@
 
         try
         {
-            // Use the hub to request autocomplete via messaging
             var request = new AutocompleteRequest(query, BoundNodePath);
             var response = await Hub.AwaitResponse(
                 request,
@@ -305,7 +363,6 @@
             if (response.Message is not AutocompleteResponse autocompleteResponse)
                 return [];
 
-            // Convert AutocompleteItems to Monaco CompletionItems
             return autocompleteResponse.Items
                 .Select(item => new CompletionItem
                 {
@@ -336,37 +393,23 @@
     {
         if (string.IsNullOrEmpty(content))
         {
-            Comments.Clear();
-            TrackedChanges.Clear();
+            Annotations = new();
+            TrackedChanges = new();
             return;
         }
 
-        var annotations = MarkdownAnnotationParser.ExtractAllAnnotations(content);
+        // Use the same parser as CollaborativeMarkdownView for rich annotation data
+        Annotations = AnnotationParser.ExtractAnnotations(content);
 
-        Comments = annotations
-            .Where(a => a.Type == MarkdownAnnotationType.Comment)
-            .Select(a => new RangeComment
-            {
-                Id = a.MarkerId,
-                DocumentId = BoundDocumentId,
-                MarkerId = a.MarkerId,
-                Author = "Unknown",
-                Text = "",
-                CreatedAt = DateTimeOffset.UtcNow,
-                State = CommentState.Active,
-                OriginalSelectedText = a.AnnotatedText
-            })
-            .ToList();
-
-        TrackedChanges = annotations
-            .Where(a => a.Type == MarkdownAnnotationType.Insert || a.Type == MarkdownAnnotationType.Delete)
+        TrackedChanges = Annotations
+            .Where(a => a.Type == MeshWeaver.Markdown.AnnotationType.Insert || a.Type == MeshWeaver.Markdown.AnnotationType.Delete)
             .Select(a => new TrackedChange
             {
-                Id = a.MarkerId,
+                Id = a.Id,
                 DocumentId = BoundDocumentId,
-                MarkerId = a.MarkerId,
-                Author = "Unknown",
-                Type = a.Type == MarkdownAnnotationType.Insert ? TrackedChangeType.Insertion : TrackedChangeType.Deletion,
+                MarkerId = a.Id,
+                Author = a.Author ?? "Unknown",
+                Type = a.Type == MeshWeaver.Markdown.AnnotationType.Insert ? TrackedChangeType.Insertion : TrackedChangeType.Deletion,
                 Status = TrackedChangeStatus.Pending
             })
             .ToList();
@@ -413,20 +456,16 @@
 
     private void OnValueChanged(string newDisplayValue)
     {
-        // Don't write back if this change came from the stream subscription
         if (isUpdatingFromStream)
             return;
 
-        // Only update if value actually changed
         if (BoundValue == newDisplayValue)
             return;
 
-        // Reconstruct annotated content by mapping the edit back
         var oldDisplay = BoundValue;
         AnnotatedContent = MarkdownAnnotationParser.ReconstructAnnotatedContent(
             AnnotatedContent, oldDisplay, newDisplayValue);
 
-        // Re-strip to update BoundValue and ranges
         var (clean, ranges) = MarkdownAnnotationParser.StripMarkersWithRanges(AnnotatedContent);
         BoundValue = clean;
         CurrentAnnotationRanges = ranges;
@@ -434,22 +473,14 @@
         ExtractAnnotations(AnnotatedContent);
         UpdatePreview(AnnotatedContent);
 
-        // Update Monaco decorations with new ranges
         if (editorRef != null)
             _ = editorRef.UpdateAnnotationDecorationsAsync(BuildJsRanges());
 
-        // Trigger throttled auto-save with annotated content
         autoSaveHandler?.OnValueChanged(AnnotatedContent);
     }
 
-    /// <summary>
-    /// Auto-saves content by posting a DataChangeRequest to the target hub.
-    /// Also updates the data pointer to sync with the stream.
-    /// Content passed here is the annotated content (with markers).
-    /// </summary>
     private void AutoSaveContent(string content)
     {
-        // Update the pointer with annotated content (preserving markers)
         if (ValuePointer != null)
         {
             UpdatePointer(content, ValuePointer);
@@ -460,17 +491,12 @@
 
         try
         {
-            // Create a partial MeshNode update with just NodeType and Content
             var nodeUpdate = new MeshWeaver.Mesh.MeshNode(BoundNodePath)
             {
                 NodeType = "Markdown",
                 Content = new MarkdownContent { Content = content }
             };
 
-            // Post the DataChangeRequest to the target hub via messaging
-            // Set ChangedBy to the stream's ClientId so the echo-filter in
-            // JsonSynchronizationStream suppresses our own change from being
-            // pushed back to us (which would destroy/recreate the editor).
             Hub.Post(
                 new DataChangeRequest { ChangedBy = Stream?.ClientId }.WithUpdates(nodeUpdate),
                 o => o.WithTarget(new Address(BoundAutoSaveAddress)));
@@ -483,86 +509,59 @@
         }
     }
 
-    private async Task OnAcceptChange(string changeId)
+    // Accept/reject operate on AnnotatedContent (with markers), not BoundValue (clean)
+    private async Task OnAcceptAnnotation(ParsedAnnotation ann)
     {
-        var change = TrackedChanges.FirstOrDefault(c => c.Id == changeId);
-        if (change == null) return;
-
-        string newContent = change.Type == TrackedChangeType.Insertion
-            ? MarkdownAnnotationParser.RemoveMarkers(BoundValue, changeId)
-            : MarkdownAnnotationParser.RemoveMarkersAndContent(BoundValue, changeId);
-
+        var newContent = ann.Type == MeshWeaver.Markdown.AnnotationType.Insert
+            ? AnnotationMarkdownExtension.AcceptChange(AnnotatedContent, ann.Id)
+            : ann.Type == MeshWeaver.Markdown.AnnotationType.Delete
+                ? AnnotationMarkdownExtension.AcceptChange(AnnotatedContent, ann.Id)
+                : AnnotationMarkdownExtension.ResolveComment(AnnotatedContent, ann.Id);
         await UpdateContent(newContent);
     }
 
-    private async Task OnRejectChange(string changeId)
+    private async Task OnRejectAnnotation(ParsedAnnotation ann)
     {
-        var change = TrackedChanges.FirstOrDefault(c => c.Id == changeId);
-        if (change == null) return;
-
-        string newContent = change.Type == TrackedChangeType.Insertion
-            ? MarkdownAnnotationParser.RemoveMarkersAndContent(BoundValue, changeId)
-            : MarkdownAnnotationParser.RemoveMarkers(BoundValue, changeId);
-
+        var newContent = ann.Type == MeshWeaver.Markdown.AnnotationType.Insert
+            ? AnnotationMarkdownExtension.RejectChange(AnnotatedContent, ann.Id)
+            : ann.Type == MeshWeaver.Markdown.AnnotationType.Delete
+                ? AnnotationMarkdownExtension.RejectChange(AnnotatedContent, ann.Id)
+                : AnnotationMarkdownExtension.ResolveComment(AnnotatedContent, ann.Id);
         await UpdateContent(newContent);
     }
 
     private async Task OnAcceptAllChanges()
     {
-        var content = BoundValue;
+        var content = AnnotatedContent;
         foreach (var change in TrackedChanges.ToList())
         {
-            content = change.Type == TrackedChangeType.Insertion
-                ? MarkdownAnnotationParser.RemoveMarkers(content, change.Id)
-                : MarkdownAnnotationParser.RemoveMarkersAndContent(content, change.Id);
+            content = AnnotationMarkdownExtension.AcceptChange(content, change.Id);
         }
         await UpdateContent(content);
     }
 
     private async Task OnRejectAllChanges()
     {
-        var content = BoundValue;
+        var content = AnnotatedContent;
         foreach (var change in TrackedChanges.ToList())
         {
-            content = change.Type == TrackedChangeType.Insertion
-                ? MarkdownAnnotationParser.RemoveMarkersAndContent(content, change.Id)
-                : MarkdownAnnotationParser.RemoveMarkers(content, change.Id);
+            content = AnnotationMarkdownExtension.RejectChange(content, change.Id);
         }
         await UpdateContent(content);
     }
 
     private async Task OnResolveComment(string commentId)
     {
-        var newContent = MarkdownAnnotationParser.RemoveMarkers(BoundValue, commentId);
+        var newContent = AnnotationMarkdownExtension.ResolveComment(AnnotatedContent, commentId);
         await UpdateContent(newContent);
     }
 
-    private async Task OnDeleteComment(string commentId)
+    private void OnAnnotationCardClick(string annotationId)
     {
-        var newContent = MarkdownAnnotationParser.RemoveMarkers(BoundValue, commentId);
-        await UpdateContent(newContent);
-    }
-
-    private Task OnReplyToComment((string commentId, string reply) args)
-    {
-        // TODO: Implement reply functionality via messaging
-        return Task.CompletedTask;
-    }
-
-    private async Task OnNavigateToChange(string markerId)
-    {
-        if (editorRef != null && !string.IsNullOrEmpty(markerId))
-        {
-            await editorRef.NavigateToAnnotationAsync(markerId);
-        }
-    }
-
-    private async Task OnTrackChangesToggled()
-    {
-        if (editorRef != null)
-        {
-            await editorRef.SetTrackChangesModeAsync(TrackChangesActive);
-        }
+        activeAnnotationId = activeAnnotationId == annotationId ? null : annotationId;
+        // Navigate Monaco to the annotation range
+        if (editorRef != null && !string.IsNullOrEmpty(activeAnnotationId))
+            _ = editorRef.NavigateToAnnotationAsync(activeAnnotationId);
     }
 
     private async Task UpdateContent(string newAnnotatedContent)
@@ -573,7 +572,9 @@
 
         if (editorRef != null)
         {
-            await editorRef.SetValueAsync(BoundValue);
+            // Use suppress-tracking variant to prevent the track changes handler
+            // from re-wrapping the programmatic content change in new markers
+            await editorRef.SetValueSuppressTrackingAsync(BoundValue);
             await editorRef.UpdateAnnotationDecorationsAsync(BuildJsRanges());
         }
 
@@ -582,7 +583,7 @@
             UpdatePointer(newAnnotatedContent, ValuePointer);
         }
 
-        // Auto-save immediately for track changes operations (no debounce)
+        // Auto-save immediately for annotation operations (no debounce)
         AutoSaveContent(newAnnotatedContent);
 
         StateHasChanged();
@@ -604,21 +605,33 @@
     public async Task InsertCommentAsync(int startPos, int endPos, string commentText)
     {
         var markerId = Guid.NewGuid().ToString("N")[..8];
-        var newContent = MarkdownAnnotationParser.InsertCommentMarker(BoundValue, startPos, endPos, markerId);
+        var newContent = MarkdownAnnotationParser.InsertCommentMarker(AnnotatedContent, startPos, endPos, markerId);
         await UpdateContent(newContent);
     }
 
     public async Task InsertSuggestionAsync(int startPos, int endPos)
     {
         var markerId = Guid.NewGuid().ToString("N")[..8];
-        var newContent = MarkdownAnnotationParser.InsertInsertMarker(BoundValue, startPos, endPos, markerId);
+        var newContent = MarkdownAnnotationParser.InsertInsertMarker(AnnotatedContent, startPos, endPos, markerId);
         await UpdateContent(newContent);
     }
 
     public async Task InsertDeletionAsync(int startPos, int endPos)
     {
         var markerId = Guid.NewGuid().ToString("N")[..8];
-        var newContent = MarkdownAnnotationParser.InsertDeleteMarker(BoundValue, startPos, endPos, markerId);
+        var newContent = MarkdownAnnotationParser.InsertDeleteMarker(AnnotatedContent, startPos, endPos, markerId);
         await UpdateContent(newContent);
     }
+
+    // Helpers
+    private static string Truncate(string text, int maxLength) =>
+        text.Length <= maxLength ? text : text[..maxLength] + "...";
+
+    private static string GetTypeLabel(MeshWeaver.Markdown.AnnotationType type) => type switch
+    {
+        MeshWeaver.Markdown.AnnotationType.Comment => "Comment",
+        MeshWeaver.Markdown.AnnotationType.Insert => "Inserted",
+        MeshWeaver.Markdown.AnnotationType.Delete => "Deleted",
+        _ => "Change"
+    };
 }

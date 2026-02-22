@@ -1,4 +1,5 @@
 using System.Reactive.Linq;
+using MeshWeaver.Data;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Catalog;
 using MeshWeaver.Mesh;
@@ -12,53 +13,49 @@ public partial class MeshNodePickerView : FormComponentBase<MeshNodePickerContro
     [Inject]
     private IMeshQuery MeshQuery { get; set; } = default!;
 
-    private MeshSearchControl? _searchControl;
     private MeshNode? _selectedNode;
     private bool _isSearchOpen;
-
-    protected override void BindData()
-    {
-        base.BindData();
-        BuildSearchControl();
-    }
+    private bool _isLoading;
+    private string _searchText = "";
+    private ElementReference _textFieldElement;
+    private List<MeshNode> _results = new();
 
     protected override void OnParametersSet()
     {
         base.OnParametersSet();
 
-        // If Value is set externally and we don't have a selected node, resolve it
         if (!string.IsNullOrEmpty(Value) && (_selectedNode == null || _selectedNode.Path != Value))
         {
             _ = ResolveSelectedNodeAsync();
         }
     }
 
-    private void BuildSearchControl()
+    protected override async Task OnAfterRenderAsync(bool firstRender)
     {
-        var hiddenQuery = ViewModel?.HiddenQuery?.ToString() ?? "";
-        var ns = ViewModel?.Namespace?.ToString() ?? "";
+        await base.OnAfterRenderAsync(firstRender);
 
-        _searchControl = new MeshSearchControl()
+        if (_isSearchOpen && _textFieldElement.Id != null)
         {
-            HiddenQuery = hiddenQuery,
-            Namespace = ns,
-            ShowSearchBox = true,
-            LiveSearch = true,
-            Placeholder = Placeholder ?? "Search...",
-        };
-
-        if (ViewModel?.MaxResults != null)
-        {
-            _searchControl = _searchControl with
+            try
             {
-                Sections = new SectionConfig { ItemLimit = int.TryParse(ViewModel.MaxResults.ToString(), out var max) ? max : 10 }
-            };
+                await _textFieldElement.FocusAsync();
+            }
+            catch
+            {
+                // Element may not be in DOM yet
+            }
         }
+    }
+
+    private string[] GetQueries()
+    {
+        return ViewModel?.Queries ?? [];
     }
 
     private void OpenSearch()
     {
         _isSearchOpen = true;
+        _ = LoadResultsAsync();
         StateHasChanged();
     }
 
@@ -68,12 +65,75 @@ public partial class MeshNodePickerView : FormComponentBase<MeshNodePickerContro
         StateHasChanged();
     }
 
-    private async Task SelectNode(MeshNode node)
+    private void OnSearchInput(ChangeEventArgs e)
+    {
+        _searchText = e.Value?.ToString() ?? "";
+        _ = LoadResultsAsync();
+        if (!_isSearchOpen)
+            _isSearchOpen = true;
+        StateHasChanged();
+    }
+
+    private async Task LoadResultsAsync()
+    {
+        _isLoading = true;
+        await InvokeAsync(StateHasChanged);
+
+        try
+        {
+            var queries = GetQueries();
+            if (queries.Length == 0)
+            {
+                _results = new List<MeshNode>();
+                return;
+            }
+
+            var userText = _searchText.Trim();
+
+            var tasks = queries.Select(async baseQuery =>
+            {
+                var fullQuery = string.IsNullOrEmpty(userText)
+                    ? baseQuery
+                    : $"{baseQuery} {userText}";
+                try
+                {
+                    return await MeshQuery.QueryAsync<MeshNode>(fullQuery).ToListAsync();
+                }
+                catch
+                {
+                    return new List<MeshNode>();
+                }
+            });
+
+            var allResults = await Task.WhenAll(tasks);
+
+            _results = allResults
+                .SelectMany(batch => batch)
+                .GroupBy(n => n.Path)
+                .Select(g => g.First())
+                .ToList();
+        }
+        catch
+        {
+            _results = new List<MeshNode>();
+        }
+        finally
+        {
+            _isLoading = false;
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    private void SelectNode(MeshNode node)
     {
         _selectedNode = node;
         Value = node.Path;
         _isSearchOpen = false;
-        await Task.CompletedTask;
+        _searchText = "";
+        // Directly update the data pointer — the debounced pipeline in
+        // FormComponentBase uses Skip(1) which swallows single-selection updates.
+        if (ViewModel?.Data is JsonPointerReference pointer)
+            UpdatePointer(node.Path, pointer);
         StateHasChanged();
     }
 
@@ -81,6 +141,9 @@ public partial class MeshNodePickerView : FormComponentBase<MeshNodePickerContro
     {
         _selectedNode = null;
         Value = "";
+        _searchText = "";
+        if (ViewModel?.Data is JsonPointerReference pointer)
+            UpdatePointer("", pointer);
         StateHasChanged();
     }
 
@@ -98,7 +161,6 @@ public partial class MeshNodePickerView : FormComponentBase<MeshNodePickerContro
         }
         catch
         {
-            // If resolution fails, show path as fallback
             _selectedNode = new MeshNode(Value) { Name = Value };
         }
     }

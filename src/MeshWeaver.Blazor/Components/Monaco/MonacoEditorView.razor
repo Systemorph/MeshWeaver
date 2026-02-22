@@ -337,6 +337,35 @@
         }
     }
 
+    /// <summary>
+    /// Sets the editor value while suppressing the track changes handler.
+    /// Use this for programmatic content updates (e.g., accept/reject annotations)
+    /// to prevent the track changes handler from re-wrapping the change in markers.
+    /// </summary>
+    public async Task SetValueSuppressTrackingAsync(string value)
+    {
+        if (jsModule != null && isInitialized)
+        {
+            try
+            {
+                await jsModule.InvokeVoidAsync("setValueSuppressTracking", EditorId, value);
+                Value = value;
+                lastSetValue = value;
+            }
+            catch (Exception ex)
+            {
+                Logger.LogDebug(ex, "Error setting value with tracking suppression, falling back to normal SetValue");
+                await SetValueAsync(value);
+            }
+        }
+        else if (editor != null)
+        {
+            await editor.SetValue(value);
+            Value = value;
+            lastSetValue = value;
+        }
+    }
+
     public async Task ClearAsync()
     {
         await SetValueAsync(string.Empty);
@@ -431,18 +460,54 @@
     /// Enables or disables track changes mode in the editor.
     /// When enabled, edits are wrapped in annotation markers (insert/delete).
     /// </summary>
-    public async Task SetTrackChangesModeAsync(bool enabled)
+    public async Task SetTrackChangesModeAsync(bool enabled, string? author = null)
     {
         if (jsModule != null && isInitialized)
         {
             try
             {
-                await jsModule.InvokeVoidAsync("setTrackChangesMode", EditorId, enabled);
+                await jsModule.InvokeVoidAsync("setTrackChangesMode", EditorId, enabled, author ?? "");
             }
             catch (Exception ex)
             {
                 Logger.LogDebug(ex, "Error setting track changes mode");
             }
+        }
+    }
+
+    /// <summary>
+    /// Callback fired when user selects "Add Comment" from the editor context menu.
+    /// The callback receives the start and end character offsets of the selection.
+    /// </summary>
+    [Parameter]
+    public EventCallback<(int Start, int End)> OnCommentRequested { get; set; }
+
+    /// <summary>
+    /// Registers the "Add Comment" context menu action in Monaco.
+    /// Must be called after editor is initialized.
+    /// </summary>
+    public async Task RegisterCommentActionAsync()
+    {
+        if (jsModule != null && isInitialized)
+        {
+            try
+            {
+                dotNetRef ??= DotNetObjectReference.Create(this);
+                await jsModule.InvokeVoidAsync("registerCommentAction", EditorId, dotNetRef, "OnCommentActionInvoked");
+            }
+            catch (Exception ex)
+            {
+                Logger.LogDebug(ex, "Error registering comment action");
+            }
+        }
+    }
+
+    [JSInvokable("OnCommentActionInvoked")]
+    public async Task OnCommentActionInvoked(int startOffset, int endOffset)
+    {
+        if (OnCommentRequested.HasDelegate)
+        {
+            await OnCommentRequested.InvokeAsync((startOffset, endOffset));
         }
     }
 

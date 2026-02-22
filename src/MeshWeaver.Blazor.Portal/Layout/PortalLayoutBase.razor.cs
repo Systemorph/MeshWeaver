@@ -146,14 +146,21 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
     {
         if (firstRender)
         {
-            await EnsureJsModuleAsync();
-            dotNetRef = DotNetObjectReference.Create(this);
-            await jsModule!.InvokeVoidAsync("initialize", dotNetRef);
-
-            // Apply persisted size if available
-            if (ChatState.IsVisible && (ChatState.Width.HasValue || ChatState.Height.HasValue))
+            try
             {
-                await ApplyPersistedSizeAsync();
+                await EnsureJsModuleAsync();
+                dotNetRef = DotNetObjectReference.Create(this);
+                await jsModule!.InvokeVoidAsync("initialize", dotNetRef);
+
+                // Apply persisted size if available
+                if (ChatState.IsVisible && (ChatState.Width.HasValue || ChatState.Height.HasValue))
+                {
+                    await ApplyPersistedSizeAsync();
+                }
+            }
+            catch (Exception ex) when (ex is OperationCanceledException or JSDisconnectedException)
+            {
+                // Circuit disconnected during initialization
             }
         }
     }

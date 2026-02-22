@@ -1,3 +1,4 @@
+using System.Text.RegularExpressions;
 using Markdig;
 using MeshWeaver.Data;
 using MeshWeaver.Layout;
@@ -10,6 +11,7 @@ using Microsoft.AspNetCore.Components;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.JSInterop;
 using System.Text.Json;
+using MarkdownAnnotationParser = MeshWeaver.Markdown.Collaboration.MarkdownAnnotationParser;
 
 namespace MeshWeaver.Blazor.Components;
 
@@ -21,16 +23,22 @@ public partial class CollaborativeMarkdownView
     private ElementReference contentRef;
 
     private IJSObjectReference? jsModule;
+    private DotNetObjectReference<CollaborativeMarkdownView>? dotNetRef;
 
     // Bound properties
     private string RawContent = "";
     private string? BoundNodePath;
     private string? BoundHubAddress;
+    private bool BoundCanComment;
+
+    // Current user info
+    private string CurrentAuthor = "";
 
     // View state (local Blazor state)
     private string CurrentViewMode = "Markup";
     private string? activeAnnotationId;
     private bool jsInitialized;
+    private bool commentSelectionInitialized;
 
     // Parsed data
     private string RenderedHtml = "";
@@ -54,6 +62,11 @@ public partial class CollaborativeMarkdownView
 
         BoundNodePath = ViewModel.NodePath;
         BoundHubAddress = ViewModel.HubAddress;
+        BoundCanComment = ViewModel.CanComment;
+
+        // Resolve current user for comment metadata
+        var accessService = Hub.ServiceProvider.GetService<AccessService>();
+        CurrentAuthor = accessService?.Context?.Name ?? "";
 
         // Subscribe to value changes reactively so we re-process content
         // when the hub updates (e.g., after accept/reject)
@@ -102,6 +115,14 @@ public partial class CollaborativeMarkdownView
         if (jsModule != null && !string.IsNullOrEmpty(RenderedHtml))
         {
             await jsModule.InvokeVoidAsync("highlightCodeBlocks", contentRef);
+        }
+
+        // Enable comment-from-selection when user has comment permission
+        if (jsModule != null && BoundCanComment && !commentSelectionInitialized)
+        {
+            commentSelectionInitialized = true;
+            dotNetRef = DotNetObjectReference.Create(this);
+            await jsModule.InvokeVoidAsync("enableCommentSelection", containerRef, dotNetRef);
         }
     }
 
@@ -218,6 +239,75 @@ public partial class CollaborativeMarkdownView
             await jsModule.InvokeVoidAsync("highlightAnnotation", annotationId);
     }
 
+    /// <summary>
+    /// Called from JS when user selects text and clicks the "Comment" button.
+    /// Finds the selected text in the raw content and inserts comment markers.
+    /// </summary>
+    [JSInvokable]
+    public void OnCommentFromSelection(string selectedText)
+    {
+        if (string.IsNullOrWhiteSpace(selectedText) || string.IsNullOrEmpty(RawContent))
+            return;
+
+        // Strip annotation markers to get clean markdown, then search for the selected text
+        var cleanContent = MarkdownAnnotationParser.StripAllMarkers(RawContent);
+        var idx = cleanContent.IndexOf(selectedText, StringComparison.Ordinal);
+        if (idx < 0)
+        {
+            // Try case-insensitive search as fallback
+            idx = cleanContent.IndexOf(selectedText, StringComparison.OrdinalIgnoreCase);
+        }
+
+        if (idx < 0)
+            return; // Could not locate the selected text in the markdown
+
+        // Map clean-content offsets to annotated-content positions
+        var map = BuildCleanToAnnotatedMap();
+        var aStart = idx < map.Length ? map[idx] : RawContent.Length;
+        var aEnd = (idx + selectedText.Length) < map.Length
+            ? map[idx + selectedText.Length]
+            : RawContent.Length;
+
+        // Build comment markers with author and date
+        var markerId = Guid.NewGuid().ToString("N")[..8];
+        var date = DateTime.Now.ToString("MMM d");
+        var meta = !string.IsNullOrEmpty(CurrentAuthor) ? $":{CurrentAuthor}:{date}" : "";
+        var openTag = $"<!--comment:{markerId}{meta}-->";
+        var closeTag = $"<!--/comment:{markerId}-->";
+
+        var newContent = RawContent.Insert(aEnd, closeTag).Insert(aStart, openTag);
+        UpdateContentLocally(newContent);
+        PostContentUpdate(newContent);
+    }
+
+    /// <summary>
+    /// Builds a map from clean (marker-stripped) character index to annotated character index.
+    /// </summary>
+    private int[] BuildCleanToAnnotatedMap()
+    {
+        var tagRegex = new Regex(@"<!--/?(comment|insert|delete):[^-]+-->");
+        var tags = tagRegex.Matches(RawContent).Cast<Match>()
+            .OrderBy(m => m.Index).ToList();
+        var map = new List<int>();
+        int tagIdx = 0;
+
+        for (int i = 0; i < RawContent.Length;)
+        {
+            if (tagIdx < tags.Count && i == tags[tagIdx].Index)
+            {
+                i += tags[tagIdx].Length;
+                tagIdx++;
+            }
+            else
+            {
+                map.Add(i);
+                i++;
+            }
+        }
+
+        return map.ToArray();
+    }
+
     // Helpers
     private string GetCommentAddress(string commentId) =>
         $"{BoundNodePath}/{commentId}";
@@ -251,6 +341,8 @@ public partial class CollaborativeMarkdownView
             await jsModule.DisposeAsync();
             jsModule = null;
         }
+        dotNetRef?.Dispose();
+        dotNetRef = null;
         await base.DisposeAsync();
     }
 }

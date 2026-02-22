@@ -26,6 +26,217 @@
     width: 100%;
 }
 
+/* ==========================================================================
+   Suggest Mode Indicator Stripe
+   ========================================================================== */
+
+.suggest-mode-stripe {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 12px;
+    background: var(--annotation-insert-bg, #dafbe1);
+    border-left: 3px solid var(--annotation-insert-border, #22863a);
+    color: var(--annotation-insert-color, #22863a);
+    font-size: 0.8rem;
+    font-weight: 600;
+    flex-shrink: 0;
+}
+
+/* ==========================================================================
+   Annotations Sidebar
+   ========================================================================== */
+
+.annotations-sidebar {
+    flex: 0 0 280px;
+    min-width: 240px;
+    max-width: 320px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    overflow-y: auto;
+    border-left: 1px solid var(--neutral-stroke-rest, #d1d1d1);
+    padding: 8px;
+}
+
+.annotations-sidebar-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 4px 4px 8px 4px;
+    border-bottom: 1px solid var(--neutral-stroke-rest, #d1d1d1);
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: var(--neutral-foreground-hint, #666);
+}
+
+.annotations-sidebar-actions {
+    display: flex;
+    gap: 4px;
+}
+
+.annotations-sidebar-actions button {
+    background: none;
+    border: none;
+    cursor: pointer;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 0.75rem;
+    font-weight: 500;
+    transition: background-color 0.15s ease;
+}
+
+.annotations-sidebar-actions button:hover {
+    background: var(--neutral-layer-3, #e5e5e5);
+}
+
+.annotations-sidebar-actions .btn-accept-all {
+    color: var(--annotation-insert-border, #22863a);
+}
+
+.annotations-sidebar-actions .btn-reject-all {
+    color: var(--annotation-delete-border, #cf222e);
+}
+
+/* --- Annotation Cards --- */
+
+::deep .annotation-card {
+    padding: 8px 10px;
+    border-radius: 6px;
+    border: 1px solid var(--neutral-stroke-rest, #d1d1d1);
+    background: var(--neutral-layer-1, #fff);
+    cursor: pointer;
+    transition: border-color 0.15s ease, background-color 0.15s ease;
+    font-size: 0.85rem;
+    line-height: 1.4;
+}
+
+::deep .annotation-card:hover {
+    border-color: var(--neutral-stroke-hover, #999);
+}
+
+::deep .annotation-card.active {
+    border: 2px solid var(--annotation-active-border, #0969da);
+    background: var(--annotation-active-bg, rgba(9, 105, 218, 0.08));
+}
+
+::deep .annotation-card.annotation-type-comment {
+    border-left: 3px solid var(--annotation-comment-border, #d4a72c);
+}
+
+::deep .annotation-card.annotation-type-insert {
+    border-left: 3px solid var(--annotation-insert-border, #22863a);
+}
+
+::deep .annotation-card.annotation-type-delete {
+    border-left: 3px solid var(--annotation-delete-border, #cf222e);
+}
+
+.annotation-card-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px;
+}
+
+.annotation-card-meta {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+    flex: 1;
+}
+
+.annotation-author {
+    font-weight: 600;
+    font-size: 0.8rem;
+    color: var(--neutral-foreground-rest, #333);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.annotation-type-label {
+    font-size: 0.75rem;
+    color: var(--neutral-foreground-hint, #666);
+    white-space: nowrap;
+}
+
+.annotation-card-actions {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    flex-shrink: 0;
+}
+
+.annotation-card-actions button {
+    background: none;
+    border: none;
+    cursor: pointer;
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-size: 0.9rem;
+    line-height: 1;
+    transition: background-color 0.15s ease;
+}
+
+.annotation-card-actions button:hover {
+    background: var(--neutral-layer-3, #e5e5e5);
+}
+
+.annotation-card-actions .btn-accept,
+.annotation-card-actions .btn-resolve {
+    color: var(--annotation-insert-border, #22863a);
+}
+
+.annotation-card-actions .btn-reject {
+    color: var(--annotation-delete-border, #cf222e);
+}
+
+/* Quoted text snippet */
+.annotation-quote {
+    margin-top: 4px;
+    padding: 3px 6px;
+    border-left: 3px solid;
+    border-radius: 4px;
+    font-size: 0.8rem;
+    font-style: italic;
+    color: var(--neutral-foreground-hint, #666);
+    overflow: hidden;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    text-overflow: ellipsis;
+}
+
+.annotation-quote.quote-insert {
+    border-left-color: var(--annotation-insert-border, #22863a);
+    background: var(--annotation-insert-bg, #dafbe1);
+}
+
+.annotation-quote.quote-delete {
+    border-left-color: var(--annotation-delete-border, #cf222e);
+    background: var(--annotation-delete-bg, #ffebe9);
+    text-decoration: line-through;
+}
+
+.annotation-quote.quote-comment {
+    border-left-color: var(--annotation-comment-border, #d4a72c);
+    background: var(--annotation-comment-bg, #fff8c5);
+}
+
+/* Comment text below the quote */
+.annotation-comment-text {
+    margin-top: 4px;
+    font-size: 0.8rem;
+    line-height: 1.4;
+    color: var(--neutral-foreground-rest, #333);
+}
+
+/* ==========================================================================
+   Preview Panel
+   ========================================================================== */
+
 .preview-panel {
     width: 400px;
     flex-shrink: 0;

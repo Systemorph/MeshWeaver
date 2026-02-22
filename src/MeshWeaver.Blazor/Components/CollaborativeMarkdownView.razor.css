@@ -657,6 +657,32 @@
     border-radius: 2px;
 }
 
+/* ==========================================================================
+   Comment-from-Selection Floating Button
+   ========================================================================== */
+
+::deep .comment-selection-btn {
+    position: absolute;
+    z-index: 1000;
+    display: none;
+    padding: 4px 10px;
+    border: 1px solid var(--annotation-comment-border);
+    border-radius: 6px;
+    background: var(--annotation-comment-label-bg, #fffbeb);
+    color: var(--annotation-comment-label-color, #78350f);
+    font-size: 0.8rem;
+    font-weight: 600;
+    cursor: pointer;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+    white-space: nowrap;
+    transition: background-color 0.15s ease, transform 0.1s ease;
+}
+
+::deep .comment-selection-btn:hover {
+    filter: brightness(0.92);
+    transform: translateY(-1px);
+}
+
 /* Inline content area styling */
 ::deep .layout-area {
     margin: 1rem 0;

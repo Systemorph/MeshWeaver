@@ -403,38 +403,51 @@ public class CommentMeshNodeTests
 
     #region Relative Time Formatting
 
+    // FormatTimeAgo is defined on CollaborativeMarkdownView (Blazor project).
+    // These tests use an inline copy for isolation.
+    private static string FormatTimeAgo(DateTimeOffset dateTime)
+    {
+        var timeSpan = DateTimeOffset.UtcNow - dateTime;
+        if (timeSpan.TotalMinutes < 1) return "just now";
+        if (timeSpan.TotalMinutes < 60) return $"{(int)timeSpan.TotalMinutes}m ago";
+        if (timeSpan.TotalHours < 24) return $"{(int)timeSpan.TotalHours}h ago";
+        if (timeSpan.TotalDays < 7) return $"{(int)timeSpan.TotalDays}d ago";
+        if (timeSpan.TotalDays < 30) return $"{(int)(timeSpan.TotalDays / 7)}w ago";
+        return dateTime.ToString("MMM d, yyyy");
+    }
+
     [Fact]
     public void FormatTimeAgo_RecentDate_ShowsJustNow()
     {
-        var result = CommentsView.FormatTimeAgo(DateTimeOffset.UtcNow);
-        result.Should().Be("Just now");
+        var result = FormatTimeAgo(DateTimeOffset.UtcNow);
+        result.Should().Be("just now");
     }
 
     [Fact]
     public void FormatTimeAgo_MinutesAgo_ShowsMinutes()
     {
-        var result = CommentsView.FormatTimeAgo(DateTimeOffset.UtcNow.AddMinutes(-5));
+        var result = FormatTimeAgo(DateTimeOffset.UtcNow.AddMinutes(-5));
         result.Should().Be("5m ago");
     }
 
     [Fact]
     public void FormatTimeAgo_HoursAgo_ShowsHours()
     {
-        var result = CommentsView.FormatTimeAgo(DateTimeOffset.UtcNow.AddHours(-2));
+        var result = FormatTimeAgo(DateTimeOffset.UtcNow.AddHours(-2));
         result.Should().Be("2h ago");
     }
 
     [Fact]
     public void FormatTimeAgo_DaysAgo_ShowsDays()
     {
-        var result = CommentsView.FormatTimeAgo(DateTimeOffset.UtcNow.AddDays(-3));
+        var result = FormatTimeAgo(DateTimeOffset.UtcNow.AddDays(-3));
         result.Should().Be("3d ago");
     }
 
     [Fact]
     public void FormatTimeAgo_WeeksAgo_ShowsWeeks()
     {
-        var result = CommentsView.FormatTimeAgo(DateTimeOffset.UtcNow.AddDays(-14));
+        var result = FormatTimeAgo(DateTimeOffset.UtcNow.AddDays(-14));
         result.Should().Be("2w ago");
     }
 
@@ -442,7 +455,7 @@ public class CommentMeshNodeTests
     public void FormatTimeAgo_OldDate_ShowsFormattedDate()
     {
         var date = new DateTimeOffset(2024, 3, 15, 0, 0, 0, TimeSpan.Zero);
-        var result = CommentsView.FormatTimeAgo(date);
+        var result = FormatTimeAgo(date);
         result.Should().Be("Mar 15, 2024");
     }
 

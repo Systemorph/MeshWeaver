@@ -12,12 +12,8 @@
     {
         <div class="mesh-node-picker-selected" @onclick="OpenSearch">
             <div class="mesh-node-picker-selected-card">
-                @{
-                    var initial = !string.IsNullOrEmpty(_selectedNode.Name)
-                        ? _selectedNode.Name[0].ToString().ToUpper()
-                        : "?";
-                }
-                <div class="mesh-node-picker-avatar">@initial</div>
+                @{ var selInitial = GetInitial(_selectedNode); }
+                @RenderAvatar(_selectedNode, selInitial)
                 <div class="mesh-node-picker-info">
                     <div class="mesh-node-picker-name">@(_selectedNode.Name ?? _selectedNode.Id)</div>
                     <div class="mesh-node-picker-type">@(_selectedNode.NodeType ?? "")</div>
@@ -28,20 +24,78 @@
             </button>
         </div>
     }
-    else if (!_isSearchOpen)
+    else
     {
-        <div class="mesh-node-picker-trigger" @onclick="OpenSearch">
-            <span class="mesh-node-picker-trigger-text">@(Placeholder ?? "Search...")</span>
-        </div>
+        <input @ref="_textFieldElement"
+               type="text"
+               class="mesh-node-picker-input"
+               value="@_searchText"
+               @oninput="OnSearchInput"
+               placeholder="@(Placeholder ?? "Search...")"
+               disabled="@Disabled"
+               autocomplete="off"
+               @onfocus="OpenSearch" />
     }
 
     @if (_isSearchOpen)
     {
         <div class="mesh-node-picker-overlay" @onclick="CloseSearch"></div>
         <div class="mesh-node-picker-dropdown">
-            <MeshSearchView ViewModel="@_searchControl"
-                            OnNodeSelected="@SelectNode"
-                            SelectedPath="@Value" />
+            @if (_isLoading)
+            {
+                <FluentProgressRing Style="margin: 16px auto; display: block;" />
+            }
+            else if (_results.Count == 0)
+            {
+                <div class="mesh-node-picker-empty">No items found.</div>
+            }
+            else
+            {
+                @foreach (var node in _results)
+                {
+                    var isSelected = node.Path == Value;
+                    var initial = GetInitial(node);
+                    var imageUrl = GetImageUrl(node);
+                    <div class="mesh-node-picker-item @(isSelected ? "mesh-node-picker-item-selected" : "")"
+                         @onclick="() => SelectNode(node)">
+                        @RenderAvatar(node, initial)
+                        <div class="mesh-node-picker-item-info">
+                            <div class="mesh-node-picker-item-name">@(node.Name ?? node.Id)</div>
+                            <div class="mesh-node-picker-item-type">@(node.NodeType ?? "")</div>
+                        </div>
+                    </div>
+                }
+            }
         </div>
     }
 </div>
+
+@code {
+    private static string GetInitial(MeshNode node)
+    {
+        var name = node.Name ?? node.Id;
+        return !string.IsNullOrEmpty(name) ? name[0].ToString().ToUpper() : "?";
+    }
+
+    private string? GetImageUrl(MeshNode node)
+    {
+        if (node.Content is System.Text.Json.JsonElement json)
+        {
+            if (json.TryGetProperty("avatar", out var a) && a.ValueKind == System.Text.Json.JsonValueKind.String) return a.GetString();
+            if (json.TryGetProperty("Avatar", out var A) && A.ValueKind == System.Text.Json.JsonValueKind.String) return A.GetString();
+            if (json.TryGetProperty("logo", out var l) && l.ValueKind == System.Text.Json.JsonValueKind.String) return l.GetString();
+            if (json.TryGetProperty("Logo", out var L) && L.ValueKind == System.Text.Json.JsonValueKind.String) return L.GetString();
+        }
+        return MeshNodeImageHelper.GetIconAsImageUrl(node.Icon);
+    }
+
+    private RenderFragment RenderAvatar(MeshNode node, string initial)
+    {
+        var imageUrl = GetImageUrl(node);
+        if (!string.IsNullOrEmpty(imageUrl))
+        {
+            return @<img src="@imageUrl" alt="@(node.Name ?? node.Id)" class="mesh-node-picker-avatar-img" />;
+        }
+        return @<div class="mesh-node-picker-avatar">@initial</div>;
+    }
+}
