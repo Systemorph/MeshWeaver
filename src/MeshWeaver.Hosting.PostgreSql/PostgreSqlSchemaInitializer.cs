@@ -92,7 +92,7 @@ public static class PostgreSqlSchemaInitializer
             CREATE TABLE IF NOT EXISTS user_effective_permissions_shadow (LIKE user_effective_permissions INCLUDING ALL);
 
             -- Rebuild function: reads AccessAssignment and GroupMembership MeshNodes from mesh_nodes
-            -- AccessAssignment content: {"subjectId":"...","roles":[{"roleId":"...","denied":false},...]}
+            -- AccessAssignment content: {"accessObject":"...","roles":[{"role":"...","denied":true},...]}
             CREATE OR REPLACE FUNCTION rebuild_user_effective_permissions() RETURNS void AS $$
             BEGIN
                 TRUNCATE user_effective_permissions_shadow;
@@ -101,7 +101,7 @@ public static class PostgreSqlSchemaInitializer
                 -- Unnest the roles[] array to get each role assignment
                 INSERT INTO user_effective_permissions_shadow (user_id, node_path_prefix, permission, is_allow)
                 SELECT
-                    aa.content->>'subjectId' AS user_id,
+                    aa.content->>'accessObject' AS user_id,
                     aa.namespace AS node_path_prefix,
                     perm.permission,
                     NOT COALESCE((role_entry->>'denied')::boolean, false) AS is_allow
@@ -112,10 +112,10 @@ public static class PostgreSqlSchemaInitializer
                         (SELECT (role_node.content->>'permissions')::int
                          FROM mesh_nodes role_node
                          WHERE role_node.node_type = 'Role'
-                           AND role_node.id = role_entry->>'roleId'
+                           AND role_node.id = role_entry->>'role'
                          LIMIT 1),
                         -- Fallback: built-in role lookup
-                        CASE role_entry->>'roleId'
+                        CASE role_entry->>'role'
                             WHEN 'Admin' THEN 31
                             WHEN 'Editor' THEN 23
                             WHEN 'Viewer' THEN 1
@@ -134,7 +134,7 @@ public static class PostgreSqlSchemaInitializer
                     ) AS permission
                 ) perm
                 WHERE aa.node_type = 'AccessAssignment'
-                  AND aa.content->>'subjectId' IS NOT NULL
+                  AND aa.content->>'accessObject' IS NOT NULL
                   AND aa.content->'roles' IS NOT NULL
                 ON CONFLICT (user_id, node_path_prefix, permission) DO UPDATE
                     SET is_allow = CASE WHEN EXCLUDED.is_allow = false THEN false ELSE user_effective_permissions_shadow.is_allow END;
@@ -142,10 +142,10 @@ public static class PostgreSqlSchemaInitializer
                 -- Group expansion: read GroupMembership MeshNodes
                 INSERT INTO user_effective_permissions_shadow (user_id, node_path_prefix, permission, is_allow)
                 WITH RECURSIVE all_members AS (
-                    SELECT gm.namespace AS group_path, gm.content->>'memberId' AS member_id
+                    SELECT gm.namespace AS group_path, gm.content->>'id' AS member_id
                     FROM mesh_nodes gm WHERE gm.node_type = 'GroupMembership'
                     UNION
-                    SELECT am.group_path, gm.content->>'memberId'
+                    SELECT am.group_path, gm.content->>'id'
                     FROM all_members am
                     JOIN mesh_nodes gm ON gm.node_type = 'GroupMembership'
                         AND gm.namespace = am.member_id
@@ -160,16 +160,16 @@ public static class PostgreSqlSchemaInitializer
                 SELECT lm.member_id, aa.namespace, perm.permission,
                        NOT COALESCE((role_entry->>'denied')::boolean, false) AS is_allow
                 FROM mesh_nodes aa
-                JOIN leaf_members lm ON aa.content->>'subjectId' = lm.group_path
+                JOIN leaf_members lm ON aa.content->>'accessObject' = lm.group_path
                 CROSS JOIN LATERAL jsonb_array_elements(aa.content->'roles') AS role_entry
                 CROSS JOIN LATERAL (
                     SELECT COALESCE(
                         (SELECT (role_node.content->>'permissions')::int
                          FROM mesh_nodes role_node
                          WHERE role_node.node_type = 'Role'
-                           AND role_node.id = role_entry->>'roleId'
+                           AND role_node.id = role_entry->>'role'
                          LIMIT 1),
-                        CASE role_entry->>'roleId'
+                        CASE role_entry->>'role'
                             WHEN 'Admin' THEN 31
                             WHEN 'Editor' THEN 23
                             WHEN 'Viewer' THEN 1

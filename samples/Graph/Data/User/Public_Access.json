@@ -5,10 +5,12 @@
   "nodeType": "AccessAssignment",
   "content": {
     "$type": "AccessAssignment",
-    "subjectId": "Public",
+    "accessObject": "Public",
     "displayName": "Anonymous Users",
     "roles": [
-      { "roleId": "Viewer", "denied": false }
+      {
+        "role": "Viewer"
+      }
     ]
   }
 }

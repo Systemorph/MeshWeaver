@@ -5,10 +5,12 @@
   "nodeType": "AccessAssignment",
   "content": {
     "$type": "AccessAssignment",
-    "subjectId": "Alice",
+    "accessObject": "Alice",
     "displayName": "Alice Chen",
     "roles": [
-      { "roleId": "Editor", "denied": false }
+      {
+        "role": "Editor"
+      }
     ]
   }
 }

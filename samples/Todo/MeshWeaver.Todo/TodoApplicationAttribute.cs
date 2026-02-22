@@ -9,7 +9,7 @@ namespace MeshWeaver.Todo;
 /// <summary>
 /// Mesh node attribute for the Todo application
 /// </summary>
-public class TodoApplicationAttribute : MeshNodeAttribute
+public class TodoApplicationAttribute : MeshNodeProviderAttribute
 {
     /// <summary>
     /// Mesh catalog entry.

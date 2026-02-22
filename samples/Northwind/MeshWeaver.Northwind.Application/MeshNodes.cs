@@ -10,7 +10,7 @@ namespace MeshWeaver.Northwind.Application;
 /// <summary>
 /// This is the configuration of the Northwind application mesh node.
 /// </summary>
-public class NorthwindApplicationAttribute : MeshNodeAttribute
+public class NorthwindApplicationAttribute : MeshNodeProviderAttribute
 {
     /// <summary>
     /// Mesh catalog entry.

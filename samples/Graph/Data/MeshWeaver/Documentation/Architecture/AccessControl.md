@@ -16,14 +16,14 @@ MeshWeaver provides row-level security through **AccessAssignment MeshNodes** st
 Access control is managed through AccessAssignment nodes — first-class MeshNodes with `nodeType: "AccessAssignment"`. Each assignment grants (or denies) a role to a subject at a specific scope.
 
 ```
-Node path: {scope}/{SubjectId}_Access
+Node path: {scope}/{Subject}_Access
 Node type: AccessAssignment
 Content: {
-  "subjectId": "Alice",
+  "accessObject": "Alice",
   "displayName": "Alice Chen",
   "roles": [
-    { "roleId": "Editor", "denied": false },
-    { "roleId": "Viewer", "denied": false }
+    { "role": "Editor" },
+    { "role": "Viewer" }
   ]
 }
 ```
@@ -34,10 +34,10 @@ Each AccessAssignment node maps **one subject** (User or Group) to **multiple ro
 
 | Property | Description |
 |----------|-------------|
-| `SubjectId` | User or Group identifier |
+| `AccessObject` | User or Group identifier |
 | `DisplayName` | Optional display name for the subject |
 | `Roles` | Array of `RoleAssignment` entries |
-| `Roles[].RoleId` | Role to grant/deny (Admin, Editor, Viewer, Commenter, or custom) |
+| `Roles[].Role` | Role to grant/deny (Admin, Editor, Viewer, Commenter, or custom) |
 | `Roles[].Denied` | If true, denies the role instead of granting it |
 
 ### Built-in Roles
@@ -115,9 +115,9 @@ At `ACME/Project`, Alice has Editor permissions (Read + Create + Update + Commen
 A deny assignment blocks an inherited grant for a specific role, but does not affect other roles. Each node's `Roles[]` array can mix grants and denies:
 
 ```
-Global:      Alice_Access → roles: [{ roleId: "Admin" }]
-ACME:        Alice_Access → roles: [{ roleId: "Editor" }]
-ACME/Secure: Alice_Access → roles: [{ roleId: "Admin", denied: true }]
+Global:      Alice_Access → roles: [{ role: "Admin" }]
+ACME:        Alice_Access → roles: [{ role: "Editor" }]
+ACME/Secure: Alice_Access → roles: [{ role: "Admin", denied: true }]
 ```
 
 At `ACME/Secure`, Alice has Editor permissions (from ACME, inherited) but not Admin (denied at ACME/Secure).
@@ -128,9 +128,9 @@ Access control uses these shipped node types:
 
 ### AccessAssignment
 - **NodeType**: `"AccessAssignment"`
-- **Content**: `AccessAssignment` record with `Roles[]` array
-- **Path pattern**: `{scope}/{SubjectId}_Access`
-- **Name pattern**: `{SubjectId} Access`
+- **Content**: `AccessAssignment` record with `Id` and `Roles[]` array
+- **Path pattern**: `{scope}/{Subject}_Access`
+- **Name pattern**: `{Subject} Access`
 - Created via `ISecurityService.AddUserRoleAsync()` or `IMeshCatalog.CreateNodeAsync()`
 - One node per subject per scope — multiple roles are stored in the `Roles` array
 
@@ -147,7 +147,7 @@ Access control uses these shipped node types:
 
 ### GroupMembership
 - **NodeType**: `"GroupMembership"`
-- **Content**: `GroupMembership` record (`MemberId`)
+- **Content**: `GroupMembership` record (`Id`)
 - **Path pattern**: `{GroupPath}/{MemberId}`
 - Children of Group nodes
 

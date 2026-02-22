@@ -12,7 +12,7 @@ namespace MeshWeaver.Hosting.Security;
 /// <summary>
 /// Implementation of ISecurityService providing row-level security for mesh nodes.
 /// Permissions are derived from AccessAssignment MeshNodes in the node hierarchy.
-/// - AccessAssignment MeshNodes: namespace = scope, id = SubjectId, content has Roles[] array
+/// - AccessAssignment MeshNodes: namespace = scope, id = {Subject}_Access, content has Id + Roles[] array
 /// - Permission evaluation walks AccessAssignment nodes from root to target path.
 /// - Built-in roles: Admin, Editor, Viewer, Commenter.
 /// </summary>
@@ -116,17 +116,17 @@ public class SecurityService : ISecurityService
                     continue;
 
                 var assignment = DeserializeAssignment(node);
-                if (assignment == null || assignment.SubjectId != userId)
+                if (assignment == null || assignment.AccessObject != userId)
                     continue;
 
                 // Process each role in the assignment's Roles list
                 foreach (var roleAssignment in assignment.Roles)
                 {
-                    if (string.IsNullOrEmpty(roleAssignment.RoleId))
+                    if (string.IsNullOrEmpty(roleAssignment.Role))
                         continue;
 
                     // Closest-wins: later (deeper) assignments override earlier ones for the same role
-                    roleAssignments[roleAssignment.RoleId] = (roleAssignment.Denied, depth);
+                    roleAssignments[roleAssignment.Role] = (roleAssignment.Denied, depth);
                 }
             }
         }
@@ -294,8 +294,8 @@ public class SecurityService : ISecurityService
         var roles = existingAssignment?.Roles?.ToList() ?? [];
 
         // Add role if not already present
-        if (!roles.Any(r => r.RoleId == roleId))
-            roles.Add(new RoleAssignment { RoleId = roleId });
+        if (!roles.Any(r => r.Role == roleId))
+            roles.Add(new RoleAssignment { Role = roleId });
 
         var node = new MeshNode(nodeId, ns)
         {
@@ -303,7 +303,7 @@ public class SecurityService : ISecurityService
             Name = $"{userId} Access",
             Content = new AccessAssignment
             {
-                SubjectId = userId,
+                AccessObject = userId,
                 DisplayName = existingAssignment?.DisplayName ?? userId,
                 Roles = roles
             }
@@ -332,7 +332,7 @@ public class SecurityService : ISecurityService
         if (existingAssignment == null)
             return; // Nothing to remove
 
-        var roles = existingAssignment.Roles.Where(r => r.RoleId != roleId).ToList();
+        var roles = existingAssignment.Roles.Where(r => r.Role != roleId).ToList();
 
         if (roles.Count == 0)
         {
@@ -348,7 +348,7 @@ public class SecurityService : ISecurityService
                 Name = $"{userId} Access",
                 Content = new AccessAssignment
                 {
-                    SubjectId = userId,
+                    AccessObject = userId,
                     DisplayName = existingAssignment.DisplayName,
                     Roles = roles
                 }

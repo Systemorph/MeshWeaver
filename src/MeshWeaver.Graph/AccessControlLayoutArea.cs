@@ -9,9 +9,7 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
-using MeshWeaver.ShortGuid;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Graph;
 
@@ -83,20 +81,16 @@ public static class AccessControlLayoutArea
                     }
                 }
 
-                return BuildAccessControlPage(host, node, hubPath, isAdmin, inherited, localAssignments);
+                return BuildAccessControlPage(node, hubPath, isAdmin, inherited, localAssignments);
             });
     }
 
-    private static AccessAssignment? DeserializeAssignment(MeshNode node, System.Text.Json.JsonSerializerOptions? options = null)
+    private static AccessAssignment? DeserializeAssignment(MeshNode node)
     {
         if (node.Content is AccessAssignment aa)
             return aa;
         if (node.Content is System.Text.Json.JsonElement je)
-        {
-            if (options != null)
-                return System.Text.Json.JsonSerializer.Deserialize<AccessAssignment>(je.GetRawText(), options);
             return System.Text.Json.JsonSerializer.Deserialize<AccessAssignment>(je.GetRawText());
-        }
         return null;
     }
 
@@ -107,7 +101,6 @@ public static class AccessControlLayoutArea
     }
 
     private static UiControl? BuildAccessControlPage(
-        LayoutAreaHost host,
         MeshNode? node,
         string nodePath,
         bool isAdmin,
@@ -147,7 +140,8 @@ public static class AccessControlLayoutArea
                 var assignment = DeserializeAssignment(assignmentNode);
                 if (assignment == null) continue;
 
-                var subjectDisplay = assignment.DisplayName ?? assignment.SubjectId;
+                var subjectDisplay = assignment.DisplayName ?? assignment.AccessObject;
+                var capturedNode = assignmentNode;
 
                 foreach (var role in assignment.Roles)
                 {
@@ -155,24 +149,29 @@ public static class AccessControlLayoutArea
 
                     var row = Controls.Stack
                         .WithOrientation(Orientation.Horizontal)
-                        .WithStyle("padding: 8px 16px; border-bottom: 1px solid var(--neutral-stroke-rest); align-items: center; gap: 12px;")
-                        .WithView(Controls.Label(subjectDisplay).WithStyle("flex: 1; min-width: 120px;"))
-                        .WithView(Controls.Label(role.RoleId).WithStyle("flex: 1; min-width: 120px;"))
-                        .WithView(Controls.Switch(isActive)
-                            .WithCheckedMessage("Allow")
-                            .WithUncheckedMessage("Deny"));
+                        .WithStyle("padding: 4px 16px; border-bottom: 1px solid var(--neutral-stroke-rest); align-items: center; gap: 12px;")
+                        .WithView(Controls.Label(subjectDisplay).WithStyle("font-weight: 600; flex: 1; min-width: 120px;"))
+                        .WithView(Controls.Label(role.Role).WithStyle("flex: 1; min-width: 120px;"));
 
                     if (isAdmin)
                     {
-                        row = row.WithView(Controls.Button("")
-                            .WithIconStart(FluentIcons.Delete())
-                            .WithAppearance(Appearance.Stealth)
-                            .WithClickAction(async ctx =>
-                            {
-                                var catalog = ctx.Hub.ServiceProvider.GetService<IMeshCatalog>();
-                                if (catalog != null)
-                                    await catalog.DeleteNodeAsync(assignmentNode.Path);
-                            }));
+                        row = row
+                            .WithView(Controls.Label(isActive ? "Allow" : "Deny")
+                                .WithStyle("color: var(--neutral-foreground-hint);"))
+                            .WithView(Controls.Button("")
+                                .WithIconStart(FluentIcons.Delete())
+                                .WithAppearance(Appearance.Stealth)
+                                .WithClickAction(async ctx =>
+                                {
+                                    var catalog = ctx.Hub.ServiceProvider.GetService<IMeshCatalog>();
+                                    if (catalog != null)
+                                        await catalog.DeleteNodeAsync(capturedNode.Path);
+                                }));
+                    }
+                    else
+                    {
+                        row = row.WithView(Controls.Label(isActive ? "Allow" : "Deny")
+                            .WithStyle("color: var(--neutral-foreground-hint);"));
                     }
 
                     stack = stack.WithView(row);
@@ -180,10 +179,14 @@ public static class AccessControlLayoutArea
             }
         }
 
-        // Add Assignment button (only for admins)
+        // Add Assignment button (only for admins) — navigates to standard Create flow
         if (isAdmin)
         {
-            stack = stack.WithView(BuildAddButton(host, nodePath));
+            var createUrl = MeshNodeLayoutAreas.BuildContentUrl(nodePath, MeshNodeLayoutAreas.CreateNodeArea, "type=AccessAssignment");
+            stack = stack.WithView(Controls.Button("Add Assignment")
+                .WithAppearance(Appearance.Accent)
+                .WithIconStart(FluentIcons.PersonAdd())
+                .WithNavigateToHref(createUrl));
         }
 
         return stack;
@@ -196,147 +199,18 @@ public static class AccessControlLayoutArea
         sb.AppendLine("| Subject | Role | Source | Access |");
         sb.AppendLine("|---------|------|--------|--------|");
 
-        foreach (var (assignment, sourcePath) in inherited.OrderBy(x => x.Assignment.SubjectId))
+        foreach (var (assignment, sourcePath) in inherited.OrderBy(x => x.Assignment.AccessObject))
         {
-            var subject = assignment.DisplayName ?? assignment.SubjectId;
+            var subject = assignment.DisplayName ?? assignment.AccessObject;
             var source = string.IsNullOrEmpty(sourcePath) ? "Global" : sourcePath;
 
-            foreach (var role in assignment.Roles.OrderBy(r => r.RoleId))
+            foreach (var role in assignment.Roles)
             {
                 var access = role.Denied ? "Deny" : "Allow";
-                sb.AppendLine($"| {subject} | {role.RoleId} | {source} | {access} |");
+                sb.AppendLine($"| {subject} | {role.Role} | {source} | {access} |");
             }
         }
 
         return sb.ToString();
-    }
-
-    private static UiControl BuildAddButton(LayoutAreaHost host, string nodePath)
-    {
-        return Controls.Button("Add Assignment")
-            .WithAppearance(Appearance.Accent)
-            .WithIconStart(FluentIcons.PersonAdd())
-            .WithClickAction(async ctx =>
-            {
-                await ShowAddAssignmentDialog(ctx, nodePath);
-            });
-    }
-
-    private static async Task ShowAddAssignmentDialog(UiActionContext ctx, string nodePath)
-    {
-        var formId = $"add_assignment_{Guid.NewGuid().AsString()}";
-        ctx.Host.UpdateData(formId, new Dictionary<string, object?>
-        {
-            ["subjectId"] = "",
-            ["roleId"] = ""
-        });
-
-        var formContent = Controls.Stack.WithStyle("gap: 16px; padding: 16px;")
-            .WithView(new MeshNodePickerControl(new JsonPointerReference("subjectId"))
-            {
-                Label = "Subject (User or Group)",
-                Required = true,
-                Placeholder = "Search users or groups...",
-                Queries = [
-                    "namespace:User nodeType:User",
-                    $"path:{nodePath} nodeType:Group scope:selfAndAncestors"
-                ],
-                DataContext = LayoutAreaReference.GetDataPointer(formId)
-            })
-            .WithView(new MeshNodePickerControl(new JsonPointerReference("roleId"))
-            {
-                Label = "Role",
-                Required = true,
-                Placeholder = "Search roles...",
-                Queries = [$"path:{nodePath} nodeType:Role scope:ancestorsAndSelf"],
-                DataContext = LayoutAreaReference.GetDataPointer(formId)
-            })
-            .WithView(Controls.Stack
-                .WithOrientation(Orientation.Horizontal)
-                .WithStyle("justify-content: flex-end; gap: 8px; margin-top: 16px;")
-                .WithView(Controls.Button("Cancel")
-                    .WithAppearance(Appearance.Neutral)
-                    .WithClickAction(cancelCtx =>
-                        cancelCtx.Host.UpdateArea(DialogControl.DialogArea, null!)))
-                .WithView(Controls.Button("Save")
-                    .WithAppearance(Appearance.Accent)
-                    .WithClickAction(saveCtx =>
-                    {
-                        var logger = saveCtx.Hub.ServiceProvider.GetService<ILogger<LayoutAreaHost>>();
-
-                        saveCtx.Host.Stream
-                            .GetDataStream<Dictionary<string, object?>>(formId)
-                            .Take(1)
-                            .Subscribe(formValues =>
-                            {
-                                var subjectId = formValues.GetValueOrDefault("subjectId")?.ToString()?.Trim();
-                                var roleId = formValues.GetValueOrDefault("roleId")?.ToString()?.Trim();
-
-                                if (string.IsNullOrEmpty(subjectId) || string.IsNullOrEmpty(roleId))
-                                {
-                                    ShowErrorDialog(saveCtx, "Validation Error",
-                                        "Please fill in both **Subject** and **Role**.");
-                                    return;
-                                }
-
-                                // Use GUID-based ID to avoid collisions
-                                var nodeId = Guid.NewGuid().AsString();
-                                var subjectName = subjectId.Contains('/')
-                                    ? subjectId[(subjectId.LastIndexOf('/') + 1)..]
-                                    : subjectId;
-                                var roleName = roleId.Contains('/')
-                                    ? roleId[(roleId.LastIndexOf('/') + 1)..]
-                                    : roleId;
-
-                                var assignmentNode = new MeshNode(nodeId, nodePath)
-                                {
-                                    NodeType = Configuration.AccessAssignmentNodeType.NodeType,
-                                    Name = $"{subjectName} - {roleName}",
-                                    Content = new AccessAssignment
-                                    {
-                                        SubjectId = subjectId,
-                                        Roles = [new RoleAssignment { RoleId = roleId }],
-                                        DisplayName = subjectName
-                                    }
-                                };
-
-                                var catalog = saveCtx.Hub.ServiceProvider.GetRequiredService<IMeshCatalog>();
-                                catalog.CreateNodeAsync(assignmentNode)
-                                    .ContinueWith(task =>
-                                    {
-                                        if (task.IsCompletedSuccessfully)
-                                        {
-                                            logger?.LogInformation(
-                                                "Created access assignment at {Path}",
-                                                assignmentNode.Path);
-                                            // Close dialog — ObserveQuery will update the view
-                                            saveCtx.Host.UpdateArea(DialogControl.DialogArea, null!);
-                                        }
-                                        else if (task.IsFaulted)
-                                        {
-                                            var error = task.Exception?.InnerException?.Message ?? "Unknown error";
-                                            logger?.LogWarning(
-                                                "Failed to create access assignment: {Error}", error);
-                                            ShowErrorDialog(saveCtx, "Creation Failed", error);
-                                        }
-                                    });
-                            });
-                    })));
-
-        var dialog = Controls.Dialog(formContent, "Add Role Assignment")
-            .WithSize("M");
-
-        ctx.Host.UpdateArea(DialogControl.DialogArea, dialog);
-    }
-
-    private static void ShowErrorDialog(UiActionContext ctx, string title, string message)
-    {
-        var errorDialog = Controls.Dialog(
-            Controls.Markdown($"**{title}:**\n\n{message}"),
-            title
-        ).WithSize("M").WithClosable(true)
-        .WithCloseAction(closeCtx =>
-            closeCtx.Host.UpdateArea(DialogControl.DialogArea, null!));
-        ctx.Host.UpdateArea(DialogControl.DialogArea, errorDialog);
     }
 }

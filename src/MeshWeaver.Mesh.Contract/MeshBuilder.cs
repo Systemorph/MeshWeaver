@@ -31,13 +31,13 @@ public record MeshBuilder
     /// <summary>
     /// Installs mesh nodes from the specified assembly locations.
     /// </summary>
-    /// <param name="assemblyLocations">Paths to assemblies containing MeshNodeAttribute definitions.</param>
+    /// <param name="assemblyLocations">Paths to assemblies containing MeshNodeProviderAttribute definitions.</param>
     /// <returns>The builder for method chaining.</returns>
     public MeshBuilder InstallAssemblies(params string[] assemblyLocations)
     {
         var attributes = assemblyLocations
             .Select(Assembly.LoadFrom)
-            .SelectMany(a => a.GetCustomAttributes<MeshNodeAttribute>())
+            .SelectMany(a => a.GetCustomAttributes<MeshNodeProviderAttribute>())
             .ToArray();
         MeshNodes.AddRange(attributes.SelectMany(a => InstallServices(a.Nodes)));
 

@@ -560,9 +560,9 @@ internal class NodeTypeService : INodeTypeService, IDisposable
             var configurations = new List<NodeTypeConfiguration>();
             foreach (var type in assembly.GetTypes())
             {
-                if (typeof(MeshNodeAttribute).IsAssignableFrom(type) && !type.IsAbstract)
+                if (typeof(MeshNodeProviderAttribute).IsAssignableFrom(type) && !type.IsAbstract)
                 {
-                    var attribute = (MeshNodeAttribute?)Activator.CreateInstance(type);
+                    var attribute = (MeshNodeProviderAttribute?)Activator.CreateInstance(type);
                     if (attribute != null)
                     {
                         foreach (var meshNode in attribute.Nodes)

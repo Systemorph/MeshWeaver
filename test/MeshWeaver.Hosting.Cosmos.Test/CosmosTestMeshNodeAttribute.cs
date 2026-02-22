@@ -6,7 +6,7 @@ using MeshWeaver.Messaging;
 
 namespace MeshWeaver.Hosting.Cosmos.Test;
 
-public class CosmosTestMeshNodeAttribute : MeshNodeAttribute
+public class CosmosTestMeshNodeAttribute : MeshNodeProviderAttribute
 {
     public override IEnumerable<MeshNode> Nodes
         => [CosmosTest];

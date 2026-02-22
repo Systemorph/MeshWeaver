@@ -100,8 +100,8 @@ public class AccessAssignmentTests(ITestOutputHelper output) : MonolithMeshTestB
             Name = "Alice Access",
             Content = new AccessAssignment
             {
-                SubjectId = "Alice",
-                Roles = [new RoleAssignment { RoleId = "Editor", Denied = true }]
+                AccessObject = "Alice",
+                Roles = [new RoleAssignment { Role = "Editor", Denied = true }]
             }
         };
         await persistence.SaveNodeAsync(denyNode, TestTimeout);
@@ -129,8 +129,8 @@ public class AccessAssignmentTests(ITestOutputHelper output) : MonolithMeshTestB
             Name = "OverrideUser Access",
             Content = new AccessAssignment
             {
-                SubjectId = "OverrideUser",
-                Roles = [new RoleAssignment { RoleId = "Viewer", Denied = true }]
+                AccessObject = "OverrideUser",
+                Roles = [new RoleAssignment { Role = "Viewer", Denied = true }]
             }
         };
         await persistence.SaveNodeAsync(denyNode, TestTimeout);
@@ -165,8 +165,8 @@ public class AccessAssignmentTests(ITestOutputHelper output) : MonolithMeshTestB
             Name = "MixedUser Access",
             Content = new AccessAssignment
             {
-                SubjectId = "MixedUser",
-                Roles = [new RoleAssignment { RoleId = "Admin", Denied = true }]
+                AccessObject = "MixedUser",
+                Roles = [new RoleAssignment { Role = "Admin", Denied = true }]
             }
         };
         await persistence.SaveNodeAsync(denyNode, TestTimeout);

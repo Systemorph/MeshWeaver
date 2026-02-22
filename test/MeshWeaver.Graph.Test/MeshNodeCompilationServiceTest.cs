@@ -276,7 +276,7 @@ public record DebugItemType
     }
 
     [Fact(Timeout = 25000)]
-    public async Task GetAssemblyLocationAsync_AssemblyContainsMeshNodeAttribute()
+    public async Task GetAssemblyLocationAsync_AssemblyContainsMeshNodeProviderAttribute()
     {
         // Arrange
         var persistence = new InMemoryPersistenceService();
@@ -306,19 +306,19 @@ public record WidgetType
         // Act
         var assemblyPath = await service.GetAssemblyLocationAsync(node, TestContext.Current.CancellationToken);
 
-        // Assert - Find MeshNodeAttribute in assembly
+        // Assert - Find MeshNodeProviderAttribute in assembly
         assemblyPath.Should().NotBeNull();
         var assembly = Assembly.LoadFrom(assemblyPath!);
 
         var meshNodeAttributes = assembly.GetCustomAttributes()
-            .Where(a => a.GetType().Name.EndsWith("MeshNodeAttribute"))
+            .Where(a => a.GetType().Name.EndsWith("MeshNodeProviderAttribute"))
             .ToList();
 
-        meshNodeAttributes.Should().NotBeEmpty("Assembly should contain MeshNodeAttribute");
+        meshNodeAttributes.Should().NotBeEmpty("Assembly should contain MeshNodeProviderAttribute");
     }
 
     [Fact(Timeout = 25000)]
-    public async Task GetAssemblyLocationAsync_MeshNodeAttribute_ReturnsNodes()
+    public async Task GetAssemblyLocationAsync_MeshNodeProviderAttribute_ReturnsNodes()
     {
         // Arrange
         var persistence = new InMemoryPersistenceService();
@@ -350,18 +350,18 @@ public record ComponentType
         // Act
         var assemblyPath = await service.GetAssemblyLocationAsync(node, TestContext.Current.CancellationToken);
 
-        // Assert - Get nodes from MeshNodeAttribute
+        // Assert - Get nodes from MeshNodeProviderAttribute
         assemblyPath.Should().NotBeNull();
         var assembly = Assembly.LoadFrom(assemblyPath!);
 
         var meshNodeAttribute = assembly.GetCustomAttributes()
-            .FirstOrDefault(a => a.GetType().Name.EndsWith("MeshNodeAttribute"));
+            .FirstOrDefault(a => a.GetType().Name.EndsWith("MeshNodeProviderAttribute"));
 
-        meshNodeAttribute.Should().NotBeNull("Assembly should have MeshNodeAttribute");
+        meshNodeAttribute.Should().NotBeNull("Assembly should have MeshNodeProviderAttribute");
 
         // Get Nodes property
         var nodesProperty = meshNodeAttribute!.GetType().GetProperty("Nodes");
-        nodesProperty.Should().NotBeNull("MeshNodeAttribute should have Nodes property");
+        nodesProperty.Should().NotBeNull("MeshNodeProviderAttribute should have Nodes property");
 
         var nodes = nodesProperty!.GetValue(meshNodeAttribute) as IEnumerable<MeshNode>;
         nodes.Should().NotBeNull();
@@ -601,7 +601,7 @@ public record TaskItem
             LastModified = DateTimeOffset.UtcNow
         };
 
-        // Should still compile (generates MeshNodeAttribute without user types)
+        // Should still compile (generates MeshNodeProviderAttribute without user types)
         var assemblyPath = await service.GetAssemblyLocationAsync(node, TestContext.Current.CancellationToken);
         assemblyPath.Should().NotBeNull();
     }

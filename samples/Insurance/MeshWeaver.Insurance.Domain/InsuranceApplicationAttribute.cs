@@ -9,7 +9,7 @@ namespace MeshWeaver.Insurance.Domain;
 /// Mesh node attribute for Insurance application configuration.
 /// Defines the root Insurance node and a pricing node for score-based matching.
 /// </summary>
-public class InsuranceApplicationAttribute : MeshNodeAttribute
+public class InsuranceApplicationAttribute : MeshNodeProviderAttribute
 {
     /// <summary>
     /// Pricing address type constant.

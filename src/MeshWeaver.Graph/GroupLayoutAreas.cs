@@ -91,7 +91,7 @@ public static class GroupLayoutAreas
                             .WithOrientation(Orientation.Horizontal)
                             .WithStyle("padding: 8px 16px; border-bottom: 1px solid var(--neutral-stroke-rest); align-items: center; gap: 12px;")
                             .WithView(Controls.Icon(FluentIcons.Person()).WithStyle("font-size: 20px;"))
-                            .WithView(Controls.Label(membership?.MemberId ?? member.Name ?? member.Id)));
+                            .WithView(Controls.Label(membership?.Id ?? member.Name ?? member.Id)));
                     }
                 }
             }
@@ -141,7 +141,7 @@ public static class GroupLayoutAreas
                         .WithOrientation(Orientation.Horizontal)
                         .WithStyle("padding: 8px 16px; border-bottom: 1px solid var(--neutral-stroke-rest); align-items: center; gap: 12px;")
                         .WithView(Controls.Icon(FluentIcons.Person()).WithStyle("font-size: 20px;"))
-                        .WithView(Controls.Label(membership?.MemberId ?? member.Name ?? member.Id).WithStyle("flex: 1;"))
+                        .WithView(Controls.Label(membership?.Id ?? member.Name ?? member.Id).WithStyle("flex: 1;"))
                         .WithView(Controls.Button("")
                             .WithIconStart(FluentIcons.Delete())
                             .WithAppearance(Appearance.Stealth)
@@ -225,7 +225,7 @@ public static class GroupLayoutAreas
                             {
                                 NodeType = Configuration.GroupMembershipNodeType.NodeType,
                                 Name = memberId,
-                                Content = new GroupMembership { MemberId = memberId }
+                                Content = new GroupMembership { Id = memberId }
                             };
                             await catalog.CreateNodeAsync(memberNode);
                         }

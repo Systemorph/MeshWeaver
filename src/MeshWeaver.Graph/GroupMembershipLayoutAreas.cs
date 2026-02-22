@@ -76,7 +76,7 @@ public static class GroupMembershipLayoutAreas
                 ? System.Text.Json.JsonSerializer.Deserialize<GroupMembership>(je.GetRawText())
                 : null);
 
-        var memberDisplay = membership?.MemberId ?? node?.Name ?? hubPath;
+        var memberDisplay = membership?.Id ?? node?.Name ?? hubPath;
 
         var row = Controls.Stack
             .WithOrientation(Orientation.Horizontal)

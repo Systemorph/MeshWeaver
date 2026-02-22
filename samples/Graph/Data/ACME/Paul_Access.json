@@ -5,10 +5,12 @@
   "nodeType": "AccessAssignment",
   "content": {
     "$type": "AccessAssignment",
-    "subjectId": "Paul",
+    "accessObject": "Paul",
     "displayName": "Paul Martinez",
     "roles": [
-      { "roleId": "Editor", "denied": false }
+      {
+        "role": "Editor"
+      }
     ]
   }
 }

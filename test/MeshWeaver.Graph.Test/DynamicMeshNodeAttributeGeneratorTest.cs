@@ -126,8 +126,8 @@ public class DynamicMeshNodeAttributeGeneratorTest
         var source = _generator.GenerateAttributeSource(node, codeConfig, null);
 
         // Assert
-        source.Should().Contain("class graph_org_projectMeshNodeAttribute");
-        source.Should().Contain("[assembly: MeshWeaver.Graph.Generated.graph_org_projectMeshNode]");
+        source.Should().Contain("class graph_org_projectMeshNodeProviderAttribute");
+        source.Should().Contain("[assembly: MeshWeaver.Graph.Generated.graph_org_projectMeshNodeProvider]");
 
         // Verify assembly attribute comes before namespaces
         var assemblyAttrIndex = source.IndexOf("[assembly:");
@@ -337,7 +337,7 @@ public class DynamicMeshNodeAttributeGeneratorTest
         var source = _generator.GenerateAttributeSource(node, null, null);
 
         // Assert - should still generate valid code
-        source.Should().Contain("class testMeshNodeAttribute");
+        source.Should().Contain("class testMeshNodeProviderAttribute");
         source.Should().Contain("HubConfiguration = ConfigureHub");
     }
 
@@ -360,7 +360,7 @@ public class DynamicMeshNodeAttributeGeneratorTest
         var source = _generator.GenerateAttributeSource(node, codeConfig, null);
 
         // Assert - should still generate valid code
-        source.Should().Contain("class testMeshNodeAttribute");
+        source.Should().Contain("class testMeshNodeProviderAttribute");
     }
 
     [Fact]
