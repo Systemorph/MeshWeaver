@@ -65,7 +65,8 @@ public static class NodeMenuItemsExtensions
         }
 
         yield return new("Threads", MeshNodeLayoutAreas.ThreadsArea, DisplayOrder: 50);
-        yield return new("Settings", MeshNodeLayoutAreas.SettingsArea, DisplayOrder: 90);
+        if (perms.HasFlag(Permission.Read))
+            yield return new("Settings", MeshNodeLayoutAreas.SettingsArea, DisplayOrder: 90);
 
         if (perms.HasFlag(Permission.Delete))
             yield return new("Delete", MeshNodeLayoutAreas.DeleteArea,

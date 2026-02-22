@@ -89,8 +89,8 @@ public class MenuAccessControlTest(ITestOutputHelper output) : MonolithMeshTestB
             Output.WriteLine($"  {item.Label} (Area={item.Area}, Permission={item.RequiredPermission})");
 
         items.Select(i => i.Label).Should().BeEquivalentTo(
-            ["Threads", "Settings"],
-            "no roles assigned — only unrestricted items should appear");
+            ["Threads"],
+            "no roles assigned — only unrestricted items should appear; Settings requires Read");
     }
 
     [Fact(Timeout = 15000)]
