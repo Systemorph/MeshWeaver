@@ -1,6 +1,4 @@
 ﻿using System.Collections.Concurrent;
-using System.Reactive.Linq;
-using MeshWeaver.Layout;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
