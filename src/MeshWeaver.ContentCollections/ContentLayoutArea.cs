@@ -18,10 +18,6 @@ public static class ContentLayoutArea
 
     private static UiControl GetControl(string path, object content, bool isPresentationMode = false)
     {
-        if (content is Article article)
-        {
-            return new ArticleControl(article) { IsPresentationMode = isPresentationMode };
-        }
         if (content is MarkdownElement md)
             return new MarkdownControl(md.Content) { Html = md.PrerenderedHtml };
         if (content is string str)
@@ -279,16 +275,5 @@ public static class ContentLayoutArea
             return Observable.Return<UiControl?>(new MarkdownControl($"Error loading content: {ex.Message}"));
         }
     }
-
-    public static async Task<IObservable<UiControl?>> RenderArticle(this IMessageHub hub, string collection, string id, CancellationToken ct)
-    {
-        var article = await hub.GetArticleAsync(collection, id, ct);
-        return article.Select(a => a is null
-            ? new MarkdownControl($"No article {id} found in collection {collection}")
-            : RenderContent(id, a));
-    }
-
-    public static Task<IObservable<object?>> GetArticleAsync(this IMessageHub hub, string collection, string id, CancellationToken ct)
-        => hub.GetContentService().GetArticleAsync(collection, id, ct);
 
 }

@@ -1,6 +1,5 @@
 ﻿using System.Reactive.Linq;
 using System.Reflection;
-using System.Text;
 using Markdig;
 using Markdig.Extensions.Yaml;
 using Markdig.Syntax;
@@ -23,40 +22,6 @@ public static class ContentCollectionsExtensions
     /// <returns>The localized collection name in format: {collectionName}@{addressId}</returns>
     public static string GetLocalizedCollectionName(string collectionName, string addressId)
         => $"{collectionName}@{addressId}";
-
-    public static MessageHubConfiguration AddArticles(
-        this MessageHubConfiguration config,
-        params IReadOnlyCollection<ContentCollectionConfig> configurations)
-    {
-        return config
-            .WithTypes(typeof(Article), typeof(ArticleControl), typeof(ArticleCatalogItemControl), typeof(ArticleCatalogControl), typeof(ArticleCatalogSkin))
-            .WithServices(services =>
-            services.AddScoped(sp => sp.GetConfiguration(config, configurations))
-            )
-            .AddLayout(layout => layout
-                .WithView(nameof(ArticlesLayoutArea.Articles), ArticlesLayoutArea.Articles))
-            .AddContentCollections(configurations);
-    }
-
-    private static ArticlesConfiguration GetConfiguration(this IServiceProvider serviceProvider, MessageHubConfiguration config, IReadOnlyCollection<ContentCollectionConfig> configurations)
-    {
-        var hub = serviceProvider.GetRequiredService<IMessageHub>();
-        if (configurations.Count == 0)
-        {
-            var contentService = hub.GetContentService();
-            var collection = contentService.GetCollectionConfig(config.Address.Id);
-            if (collection is null)
-                throw new InvalidOperationException($"No content collection configured for hub at address '{config.Address.Id}'. Ensure a content collection is registered for this hub.");
-            return new ArticlesConfiguration() { CollectionConfigurations = [collection] };
-
-        }
-
-        return new ArticlesConfiguration()
-        {
-            CollectionConfigurations = configurations,
-            Collections = configurations.Select(c => c.Name).Where(n => !string.IsNullOrEmpty(n)).ToArray()
-        };
-    }
 
     /// <summary>
     /// Default collection name used when no specific collection is configured or specified.
@@ -387,69 +352,6 @@ public static class ContentCollectionsExtensions
     internal static IContentService GetContentService(this IMessageHub hub)
         => hub.ServiceProvider.GetRequiredService<IContentService>();
 
-    public static string ConvertToMarkdown(this Article article)
-    {
-        var markdownBuilder = new StringBuilder();
-        markdownBuilder.AppendLine("---");
-        markdownBuilder.AppendLine($"Title: \"{article.Title?.Replace("\"", "\\\"")}\"");
-
-        if (!string.IsNullOrEmpty(article.Abstract))
-        {
-            markdownBuilder.AppendLine("Abstract: >");
-            foreach (var line in article.Abstract.Split('\n'))
-            {
-                markdownBuilder.AppendLine($"  {line.TrimEnd()}");
-            }
-        }
-
-        if (!string.IsNullOrEmpty(article.Thumbnail))
-            markdownBuilder.AppendLine($"Thumbnail: \"{article.Thumbnail}\"");
-
-        if (!string.IsNullOrEmpty(article.VideoUrl))
-            markdownBuilder.AppendLine($"VideoUrl: \"{article.VideoUrl}\"");
-
-        if (article.VideoDuration != default)
-            markdownBuilder.AppendLine($"VideoDuration: \"{article.VideoDuration:hh\\:mm\\:ss}\"");
-
-        if (!string.IsNullOrEmpty(article.VideoTitle))
-            markdownBuilder.AppendLine($"VideoTitle: \"{article.VideoTitle?.Replace("\"", "\\\"")}\"");
-
-        if (!string.IsNullOrEmpty(article.VideoTagLine))
-            markdownBuilder.AppendLine($"VideoTagLine: \"{article.VideoTagLine?.Replace("\"", "\\\"")}\"");
-
-        if (!string.IsNullOrEmpty(article.VideoTranscript))
-            markdownBuilder.AppendLine($"VideoTranscript: \"{article.VideoTranscript}\"");
-
-        if (article.Published.HasValue)
-            markdownBuilder.AppendLine($"Published: \"{article.Published.Value:yyyy-MM-dd}\"");
-
-        if (article.Authors?.Count > 0)
-        {
-            markdownBuilder.AppendLine("Authors:");
-            foreach (var author in article.Authors)
-            {
-                markdownBuilder.AppendLine($"  - \"{author}\"");
-            }
-        }
-
-        if (article.Tags?.Count > 0)
-        {
-            markdownBuilder.AppendLine("Tags:");
-            foreach (var tag in article.Tags)
-            {
-                markdownBuilder.AppendLine($"  - \"{tag}\"");
-            }
-        }
-
-        markdownBuilder.AppendLine("---");
-        markdownBuilder.AppendLine();
-        if (string.IsNullOrEmpty(article.Content))
-            return markdownBuilder.ToString();
-        // Append the main content
-        markdownBuilder.Append(article.Content);
-
-        return markdownBuilder.ToString();
-    }
     public static MarkdownElement ParseContent(string collection, string path, DateTime lastWriteTime, string content, Address? address)
     {
         if (OperatingSystem.IsWindows())
@@ -664,21 +566,6 @@ public static class ContentCollectionsExtensions
                     return services;
                 });
     }
-}
-
-public record ArticleCatalogOptions
-{
-    public IReadOnlyCollection<string>? Collections { get; init; } = [];
-    public int Page { get; init; }
-    public int PageSize { get; init; } = 10;
-
-    public ArticleSortOrder SortOrder { get; init; }
-}
-
-public enum ArticleSortOrder
-{
-    DescendingPublishDate,
-    AscendingPublishDate
 }
 
 /// <summary>

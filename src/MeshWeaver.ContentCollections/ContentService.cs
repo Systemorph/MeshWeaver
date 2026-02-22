@@ -318,55 +318,6 @@ public class ContentService : IContentService
         return await coll.GetContentAsync(path, ct);
     }
 
-    public async Task<IReadOnlyCollection<Article>> GetArticleCatalogAsync(ArticleCatalogOptions catalogOptions,
-        CancellationToken ct)
-    {
-
-        var allCollectionsList = new List<ContentCollection?>();
-        foreach (var x in catalogOptions.Collections ?? [])
-        {
-            var valueOrDefault = collections.GetValueOrDefault(x);
-            var result = valueOrDefault is null ? null : await valueOrDefault;
-            allCollectionsList.Add(result);
-        }
-        var allCollections = allCollectionsList.ToArray();
-
-        return (await allCollections
-                .Where(x => x is not null)
-                .Select(c => c!.GetMarkdown(catalogOptions))
-                .CombineLatest()
-                .Select(c => c.SelectMany(articles => articles.OfType<Article>()))
-                .Select(articles => ApplyOptions(articles, catalogOptions))
-                .Skip(catalogOptions.Page * catalogOptions.PageSize)
-                .Take(catalogOptions.PageSize)
-                .FirstAsync())
-            .ToArray()
-            ;
-    }
-
-    private IEnumerable<Article> ApplyOptions(IEnumerable<Article> articles, ArticleCatalogOptions options)
-    {
-        if (accessService.Context is null || !accessService.Context.Roles.Contains(Roles.PortalAdmin))
-        {
-            var now = DateTime.UtcNow;
-            articles = articles
-                .Where(a => a.Published is not null && a.Published <= now);
-
-        }
-        return options.SortOrder switch
-        {
-            ArticleSortOrder.AscendingPublishDate => articles.OrderBy(a => a.Published),
-            ArticleSortOrder.DescendingPublishDate => articles.OrderByDescending(a => a.Published),
-            _ => throw new ArgumentOutOfRangeException()
-        };
-    }
-
-    public async Task<IObservable<object?>> GetArticleAsync(string collection, string article, CancellationToken ct)
-    {
-        var coll = await GetCollectionAsync(collection, ct);
-        return coll?.GetMarkdown(article) ?? Observable.Return(Controls.Markdown($"No article {article} found in collection {collection}"));
-    }
-
     public IAsyncEnumerable<ContentCollection> GetCollectionsAsync()
     {
         return collections.Values.ToAsyncEnumerable().Select(async x => await x).OfType<ContentCollection>();
