@@ -26,11 +26,10 @@ public class MarkdownParsingTest(ITestOutputHelper output) : HubTestBase(output)
             var content = await File.ReadAllTextAsync(file);
             var path = Path.GetRelativePath(baseDir, file);
 
-            // ParseContent returns Article when YAML front matter is present
             var markdownElement = ContentCollectionsExtensions.ParseContent("demo", path, DateTime.UtcNow, content, null);
 
             markdownElement.Should().NotBeNull();
-            markdownElement.Should().BeOfType<Article>();
+            markdownElement.Should().BeOfType<MarkdownElement>();
             markdownElement.Name.Should().Be("Overview");
             markdownElement.Url.Should().Be("/content/demo/Overview");
             markdownElement.Content.Should().Contain("# Northwind");
@@ -39,7 +38,7 @@ public class MarkdownParsingTest(ITestOutputHelper output) : HubTestBase(output)
     }
 
     [Fact]
-    public void ParseContent_WithArticleYaml_ReturnsArticle()
+    public void ParseContent_WithYaml_ReturnsMarkdownElement()
     {
         var markdown = """
             ---
@@ -55,15 +54,11 @@ public class MarkdownParsingTest(ITestOutputHelper output) : HubTestBase(output)
 
         var result = ContentCollectionsExtensions.ParseContent("docs", "my-article.md", DateTime.UtcNow, markdown, null);
 
-        result.Should().BeOfType<Article>();
-        var article = (Article)result;
-        article.Title.Should().Be("My Article");
-        article.Abstract.Should().Be("A short summary");
-        article.Thumbnail.Should().Be("/static/docs/images/thumb.png");
-        article.Name.Should().Be("my-article");
-        article.Collection.Should().Be("docs");
-        article.Url.Should().Be("/content/docs/my-article");
-        article.Content.Should().Contain("# Hello World");
+        result.Should().BeOfType<MarkdownElement>();
+        result.Name.Should().Be("my-article");
+        result.Collection.Should().Be("docs");
+        result.Url.Should().Be("/content/docs/my-article");
+        result.Content.Should().Contain("# Hello World");
     }
 
     [Fact]
@@ -78,13 +73,12 @@ public class MarkdownParsingTest(ITestOutputHelper output) : HubTestBase(output)
         var result = ContentCollectionsExtensions.ParseContent("docs", "plain.md", DateTime.UtcNow, markdown, null);
 
         result.Should().BeOfType<MarkdownElement>();
-        result.Should().NotBeOfType<Article>();
         result.Name.Should().Be("plain");
         result.Content.Should().Contain("# Plain Markdown");
     }
 
     [Fact]
-    public void ParseContent_WithMalformedYaml_ReturnsFallbackArticle()
+    public void ParseContent_WithMalformedYaml_ReturnsMarkdownElement()
     {
         var markdown = """
             ---
@@ -97,11 +91,9 @@ public class MarkdownParsingTest(ITestOutputHelper output) : HubTestBase(output)
 
         var result = ContentCollectionsExtensions.ParseContent("docs", "broken.md", DateTime.UtcNow, markdown, null);
 
-        result.Should().BeOfType<Article>();
-        var article = (Article)result;
-        article.Title.Should().Be("broken");
-        article.Name.Should().Be("broken");
-        article.Content.Should().Contain("# Content after bad YAML");
+        result.Should().BeOfType<MarkdownElement>();
+        result.Name.Should().Be("broken");
+        result.Content.Should().Contain("# Content after bad YAML");
     }
 
     [HubFact]
