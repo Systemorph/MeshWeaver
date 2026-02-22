@@ -3,6 +3,7 @@ namespace MeshWeaver.Mesh.Security;
 /// <summary>
 /// Service for evaluating permissions and managing security configurations.
 /// Provides row-level security for mesh nodes.
+/// Permissions are derived from AccessAssignment MeshNodes in the node hierarchy.
 /// </summary>
 public interface ISecurityService
 {
@@ -74,89 +75,28 @@ public interface ISecurityService
 
     #endregion
 
-    #region User Access Management (Per-Namespace Access Partitions)
+    #region Access Assignment Management
 
     /// <summary>
-    /// Gets a user's global access configuration.
-    /// To include namespace-specific roles, use the overload with targetNamespace parameter.
+    /// Convenience method that creates an AccessAssignment MeshNode.
+    /// Equivalent to IMeshCatalog.CreateNodeAsync with an AccessAssignment content type.
     /// </summary>
-    /// <param name="userId">The user's ObjectId</param>
-    /// <param name="ct">Cancellation token</param>
-    /// <returns>The user's access configuration or null if not found</returns>
-    Task<UserAccess?> GetUserAccessAsync(string userId, CancellationToken ct = default);
-
-    /// <summary>
-    /// Gets a user's access configuration for a specific namespace.
-    /// Includes global roles plus roles from the target namespace and its ancestors.
-    /// </summary>
-    /// <param name="userId">The user's ObjectId</param>
-    /// <param name="targetNamespace">The namespace to check (null for global only)</param>
-    /// <param name="ct">Cancellation token</param>
-    /// <returns>The user's access configuration or null if not found</returns>
-    Task<UserAccess?> GetUserAccessAsync(string userId, string? targetNamespace, CancellationToken ct = default);
-
-    /// <summary>
-    /// Saves a user's access configuration to the Access partition.
-    /// </summary>
-    /// <param name="userAccess">The user access configuration to save</param>
-    /// <param name="ct">Cancellation token</param>
-    Task SaveUserAccessAsync(UserAccess userAccess, CancellationToken ct = default);
-
-    /// <summary>
-    /// Gets all user access configurations.
-    /// </summary>
-    /// <param name="ct">Cancellation token</param>
-    /// <returns>Async enumerable of user access configurations</returns>
-    IAsyncEnumerable<UserAccess> GetAllUserAccessAsync(CancellationToken ct = default);
-
-    /// <summary>
-    /// Gets all users who have access to a specific namespace.
-    /// </summary>
-    /// <param name="targetNamespace">The namespace to check</param>
-    /// <param name="ct">Cancellation token</param>
-    /// <returns>Async enumerable of user access configurations</returns>
-    IAsyncEnumerable<UserAccess> GetUsersWithAccessToNamespaceAsync(string targetNamespace, CancellationToken ct = default);
-
-    /// <summary>
-    /// Adds a role to a user's access configuration.
-    /// </summary>
-    /// <param name="userId">The user's ObjectId</param>
-    /// <param name="roleId">The role ID to add</param>
+    /// <param name="userId">The subject's ObjectId</param>
+    /// <param name="roleId">The role ID to assign</param>
     /// <param name="targetNamespace">The namespace (null for global)</param>
     /// <param name="assignedBy">The ObjectId of the user making the assignment</param>
     /// <param name="ct">Cancellation token</param>
     Task AddUserRoleAsync(string userId, string roleId, string? targetNamespace, string? assignedBy = null, CancellationToken ct = default);
 
     /// <summary>
-    /// Removes a role from a user's access configuration.
+    /// Convenience method that deletes an AccessAssignment MeshNode.
+    /// Equivalent to IMeshCatalog.DeleteNodeAsync for the matching assignment.
     /// </summary>
-    /// <param name="userId">The user's ObjectId</param>
+    /// <param name="userId">The subject's ObjectId</param>
     /// <param name="roleId">The role ID to remove</param>
     /// <param name="targetNamespace">The namespace (null for global)</param>
     /// <param name="ct">Cancellation token</param>
     Task RemoveUserRoleAsync(string userId, string roleId, string? targetNamespace, CancellationToken ct = default);
-
-    /// <summary>
-    /// Gets raw role assignments from all levels (global, ancestors, self) for a node path.
-    /// Each assignment includes its source path and whether it's local or inherited.
-    /// </summary>
-    /// <param name="nodePath">The node path to inspect</param>
-    /// <param name="ct">Cancellation token</param>
-    /// <returns>Async enumerable of access assignments from all levels</returns>
-    IAsyncEnumerable<AccessAssignment> GetAccessAssignmentsAsync(string nodePath, CancellationToken ct = default);
-
-    /// <summary>
-    /// Toggles a role assignment for a user at a specific path.
-    /// If the role is inherited and being denied, creates a local Denied=true record.
-    /// If the role is local and being toggled, updates the local record.
-    /// If undoing a deny, removes the local deny record.
-    /// </summary>
-    /// <param name="nodePath">The node path where the toggle applies</param>
-    /// <param name="userId">The user's ObjectId</param>
-    /// <param name="roleId">The role ID to toggle</param>
-    /// <param name="denied">True to deny, false to grant</param>
-    /// <param name="ct">Cancellation token</param>
-    Task ToggleRoleAssignmentAsync(string nodePath, string userId, string roleId, bool denied, CancellationToken ct = default);
 
     #endregion
 }

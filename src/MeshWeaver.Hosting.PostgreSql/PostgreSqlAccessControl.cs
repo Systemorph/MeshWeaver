@@ -3,8 +3,8 @@ using Npgsql;
 namespace MeshWeaver.Hosting.PostgreSql;
 
 /// <summary>
-/// Manages access control rules: grant/revoke permissions, group membership,
-/// and hierarchical permission resolution.
+/// Manages hierarchical permission resolution using the denormalized user_effective_permissions table.
+/// Permissions are now populated from AccessAssignment and GroupMembership MeshNodes via triggers.
 /// </summary>
 public class PostgreSqlAccessControl
 {
@@ -16,75 +16,9 @@ public class PostgreSqlAccessControl
     }
 
     /// <summary>
-    /// Grants or denies a permission for an access object (user or group) at a namespace.
-    /// </summary>
-    public async Task GrantAsync(string ns, string accessObject, string permission, bool isAllow = true, string? assignedBy = null, CancellationToken ct = default)
-    {
-        await using var cmd = _dataSource.CreateCommand(
-            """
-            INSERT INTO access_control (namespace, access_object, permission, is_allow, assigned_by)
-            VALUES ($1, $2, $3, $4, $5)
-            ON CONFLICT (namespace, access_object, permission) DO UPDATE SET
-                is_allow = EXCLUDED.is_allow,
-                assigned_by = EXCLUDED.assigned_by,
-                assigned_at = NOW()
-            """);
-        cmd.Parameters.AddWithValue(ns);
-        cmd.Parameters.AddWithValue(accessObject);
-        cmd.Parameters.AddWithValue(permission);
-        cmd.Parameters.AddWithValue(isAllow);
-        cmd.Parameters.AddWithValue((object?)assignedBy ?? DBNull.Value);
-
-        await cmd.ExecuteNonQueryAsync(ct);
-    }
-
-    /// <summary>
-    /// Revokes a permission entry entirely.
-    /// </summary>
-    public async Task RevokeAsync(string ns, string accessObject, string permission, CancellationToken ct = default)
-    {
-        await using var cmd = _dataSource.CreateCommand(
-            "DELETE FROM access_control WHERE namespace = $1 AND access_object = $2 AND permission = $3");
-        cmd.Parameters.AddWithValue(ns);
-        cmd.Parameters.AddWithValue(accessObject);
-        cmd.Parameters.AddWithValue(permission);
-
-        await cmd.ExecuteNonQueryAsync(ct);
-    }
-
-    /// <summary>
-    /// Adds a member (user or group) to a group.
-    /// </summary>
-    public async Task AddGroupMemberAsync(string groupId, string accessObjectId, CancellationToken ct = default)
-    {
-        await using var cmd = _dataSource.CreateCommand(
-            """
-            INSERT INTO group_members (group_id, access_object_id)
-            VALUES ($1, $2)
-            ON CONFLICT (group_id, access_object_id) DO NOTHING
-            """);
-        cmd.Parameters.AddWithValue(groupId);
-        cmd.Parameters.AddWithValue(accessObjectId);
-
-        await cmd.ExecuteNonQueryAsync(ct);
-    }
-
-    /// <summary>
-    /// Removes a member (user or group) from a group.
-    /// </summary>
-    public async Task RemoveGroupMemberAsync(string groupId, string accessObjectId, CancellationToken ct = default)
-    {
-        await using var cmd = _dataSource.CreateCommand(
-            "DELETE FROM group_members WHERE group_id = $1 AND access_object_id = $2");
-        cmd.Parameters.AddWithValue(groupId);
-        cmd.Parameters.AddWithValue(accessObjectId);
-
-        await cmd.ExecuteNonQueryAsync(ct);
-    }
-
-    /// <summary>
     /// Manually rebuilds the denormalized permissions table.
-    /// The trigger does this automatically, but this is useful for bulk operations.
+    /// The trigger does this automatically when AccessAssignment/GroupMembership MeshNodes change,
+    /// but this is useful for bulk operations or initial setup.
     /// </summary>
     public async Task RebuildDenormalizedTableAsync(CancellationToken ct = default)
     {

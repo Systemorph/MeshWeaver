@@ -168,7 +168,6 @@ public class SourceDocumentDataLoadingTest : MonolithMeshTestBase
     /// This helps catch configuration issues early.
     /// </summary>
     [Theory(Timeout = 5000)]
-    [InlineData("Cornerstone/Microsoft/2026", "Submissions/PropertyRisks.json")]
     [InlineData("Cornerstone/Microsoft/2026", "Submissions/Slip.md")]
     public void SourceDocuments_ExistInFileSystem(string nodeAddress, string relativePath)
     {

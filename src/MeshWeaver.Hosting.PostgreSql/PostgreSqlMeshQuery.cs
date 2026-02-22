@@ -20,6 +20,7 @@ public class PostgreSqlMeshQuery : IMeshQueryCore
     private readonly PostgreSqlStorageAdapter _adapter;
     private readonly IDataChangeNotifier? _changeNotifier;
     private readonly AccessService? _accessService;
+    private readonly MeshConfiguration? _meshConfiguration;
     private readonly QueryParser _parser = new();
     private long _version;
 
@@ -28,11 +29,13 @@ public class PostgreSqlMeshQuery : IMeshQueryCore
     public PostgreSqlMeshQuery(
         PostgreSqlStorageAdapter adapter,
         IDataChangeNotifier? changeNotifier = null,
-        AccessService? accessService = null)
+        AccessService? accessService = null,
+        MeshConfiguration? meshConfiguration = null)
     {
         _adapter = adapter;
         _changeNotifier = changeNotifier;
         _accessService = accessService;
+        _meshConfiguration = meshConfiguration;
     }
 
     /// <summary>
@@ -165,6 +168,10 @@ public class PostgreSqlMeshQuery : IMeshQueryCore
 
         await foreach (var node in _adapter.QueryNodesAsync(query, options, effectiveAutocompleteUserId, ct: ct))
         {
+            // Skip node types excluded from autocomplete (configured via AddAutocompleteExcludedTypes)
+            if (_meshConfiguration?.AutocompleteExcludedNodeTypes.Contains(node.NodeType ?? "") == true)
+                continue;
+
             var name = node.Name ?? node.Id ?? node.Path ?? "";
             double score = 0;
 

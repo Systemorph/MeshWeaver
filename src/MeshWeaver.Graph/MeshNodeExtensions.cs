@@ -2,6 +2,7 @@ using MeshWeaver.AI;
 using MeshWeaver.Domain;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Markdown;
+using MeshWeaver.Mesh.Security;
 
 namespace MeshWeaver.Mesh;
 
@@ -54,6 +55,11 @@ public static class MeshNodeExtensions
         typeRegistry.WithType(typeof(MarkdownContent), nameof(MarkdownContent));
         typeRegistry.WithType(typeof(AI.Thread), nameof(AI.Thread));
         typeRegistry.WithType(typeof(ThreadMessage), nameof(ThreadMessage));
+        typeRegistry.WithType(typeof(AccessAssignment), nameof(AccessAssignment));
+        typeRegistry.WithType(typeof(RoleAssignment), nameof(RoleAssignment));
+        typeRegistry.WithType(typeof(Role), nameof(Role));
+        typeRegistry.WithType(typeof(AccessObject), nameof(AccessObject));
+        typeRegistry.WithType(typeof(GroupMembership), nameof(GroupMembership));
         return typeRegistry;
     }
 }

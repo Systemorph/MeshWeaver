@@ -17,6 +17,7 @@ public static class ThreadNodeConfiguration
     public static TBuilder AddThreadType<TBuilder>(this TBuilder builder) where TBuilder : MeshBuilder
     {
         builder.AddMeshNodes(CreateMeshNode());
+        builder.AddAutocompleteExcludedTypes(ThreadNodeType.NodeType);
         return builder;
     }
 

@@ -26,6 +26,7 @@ public static class CommentNodeType
     public static TBuilder AddCommentType<TBuilder>(this TBuilder builder) where TBuilder : MeshBuilder
     {
         builder.AddMeshNodes(CreateMeshNode());
+        builder.AddAutocompleteExcludedTypes(NodeType);
         return builder;
     }
 

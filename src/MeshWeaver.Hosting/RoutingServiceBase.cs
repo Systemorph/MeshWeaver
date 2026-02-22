@@ -45,7 +45,18 @@ namespace MeshWeaver.Hosting
                 }
 
                 var hostAddress = GetHostAddress(address);
-                await RouteMessageAsync(delivery, hostAddress, cancellationToken);
+                var result = await RouteMessageAsync(delivery, hostAddress, cancellationToken);
+
+                // If routing failed (e.g. no node found), send a DeliveryFailure response
+                // so the caller gets an error instead of waiting indefinitely
+                if (result.State == MessageDeliveryState.Failed)
+                {
+                    Mesh.Post(new DeliveryFailure(delivery, $"Routing failed for {delivery.Target}")
+                    {
+                        ErrorType = ErrorType.NotFound
+                    },
+                        o => o.ResponseFor(delivery));
+                }
             }
             catch (Exception e)
             {

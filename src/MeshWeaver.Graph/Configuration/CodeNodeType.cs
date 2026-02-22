@@ -20,6 +20,7 @@ public static class CodeNodeType
     public static TBuilder AddCodeType<TBuilder>(this TBuilder builder) where TBuilder : MeshBuilder
     {
         builder.AddMeshNodes(CreateMeshNode());
+        builder.AddAutocompleteExcludedTypes(NodeType);
         return builder;
     }
 

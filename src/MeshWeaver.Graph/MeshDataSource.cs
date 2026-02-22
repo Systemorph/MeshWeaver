@@ -4,7 +4,7 @@ using MeshWeaver.Data;
 using MeshWeaver.Domain;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Mesh;
-using MeshWeaver.Mesh.Security;
+
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using MeshWeaver.ShortGuid;
@@ -263,75 +263,6 @@ public record MeshDataSource : GenericUnpartitionedDataSource<MeshDataSource>
         // Store ContentType for UI integration (editor generation, etc.)
         // Content is accessed via MeshNode.Content - there's no separate TypeSource
         return this with { ContentType = dataType };
-    }
-
-    /// <summary>
-    /// Registers AccessAssignment as a workspace data type backed by ISecurityService.
-    /// Local assignments are loaded on init and synced back via the update callback.
-    /// Services are resolved lazily inside the callbacks, not at configuration time.
-    /// </summary>
-    public MeshDataSource WithAccessAssignments()
-    {
-        Workspace.Hub.TypeRegistry.WithType(typeof(AccessAssignment), nameof(AccessAssignment));
-
-        var workspace = Workspace;
-        var hubPath = _hubPath;
-        InstanceCollection lastSaved = new();
-
-        return WithType<AccessAssignment>(type => type
-            .WithKey(a => $"{a.UserId}/{a.RoleId}")
-            .WithInitialData(async ct =>
-            {
-                var svc = workspace.Hub.ServiceProvider.GetService<ISecurityService>();
-                if (svc == null)
-                    return Enumerable.Empty<AccessAssignment>();
-
-                var items = new List<AccessAssignment>();
-                await foreach (var assignment in svc.GetAccessAssignmentsAsync(hubPath, ct))
-                {
-                    if (assignment.IsLocal)
-                        items.Add(assignment);
-                }
-                return items;
-            })
-            .WithUpdate(instances =>
-            {
-                var svc = workspace.Hub.ServiceProvider.GetService<ISecurityService>();
-                if (svc == null)
-                {
-                    lastSaved = instances;
-                    return instances;
-                }
-
-                var adds = instances.Instances
-                    .Where(x => !lastSaved.Instances.ContainsKey(x.Key))
-                    .Select(x => (AccessAssignment)x.Value)
-                    .ToArray();
-
-                var updates = instances.Instances
-                    .Where(x => lastSaved.Instances.TryGetValue(x.Key, out var existing)
-                                && !existing.Equals(x.Value))
-                    .Select(x => (AccessAssignment)x.Value)
-                    .ToArray();
-
-                var deletes = lastSaved.Instances
-                    .Where(x => !instances.Instances.ContainsKey(x.Key))
-                    .Select(x => (AccessAssignment)x.Value)
-                    .ToArray();
-
-                foreach (var a in adds)
-                    _ = svc.AddUserRoleAsync(a.UserId, a.RoleId, hubPath);
-
-                foreach (var a in deletes)
-                    _ = svc.RemoveUserRoleAsync(a.UserId, a.RoleId, hubPath);
-
-                foreach (var a in updates)
-                    _ = svc.ToggleRoleAssignmentAsync(hubPath, a.UserId, a.RoleId, a.Denied);
-
-                lastSaved = instances;
-                return instances;
-            })
-        );
     }
 
     /// <summary>

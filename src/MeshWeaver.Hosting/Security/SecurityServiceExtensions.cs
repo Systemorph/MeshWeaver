@@ -24,23 +24,24 @@ public static class SecurityServiceExtensions
     ///
     /// Storage structure:
     /// - Access/ - Global roles (Admin with null namespace) and custom role definitions
-    /// - {namespace}/Access/ - UserAccess records for each namespace
+    /// - {namespace}/Access/ - Access assignments for each namespace
     /// </summary>
     public static MeshBuilder AddRowLevelSecurity(this MeshBuilder builder)
     {
-        return builder.ConfigureServices(services =>
-        {
-            // Register security service (uses IPersistenceService directly for all storage)
-            services.TryAddSingleton<ISecurityService, SecurityService>();
+        return builder
+            .ConfigureServices(services =>
+            {
+                // Register security service (uses IPersistenceService directly for all storage)
+                services.TryAddSingleton<ISecurityService, SecurityService>();
 
-            // Register RLS validator
-            services.AddSingleton<INodeValidator, RlsNodeValidator>();
+                // Register RLS validator
+                services.AddSingleton<INodeValidator, RlsNodeValidator>();
 
-            // Decorate IPersistenceServiceCore with security filtering
-            DecorateWithSecurity(services);
+                // Decorate IPersistenceServiceCore with security filtering
+                DecorateWithSecurity(services);
 
-            return services;
-        });
+                return services;
+            });
     }
 
     /// <summary>

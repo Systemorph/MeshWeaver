@@ -34,8 +34,7 @@ public static class MicrosoftDataLoader
     {
         try
         {
-            var basePath = GetSubmissionsBasePath(hub);
-            var filePath = Path.Combine(basePath, "PropertyRisks.json");
+            var filePath = GetContentFilePath("PropertyRisks.json");
 
             if (!File.Exists(filePath))
                 return Array.Empty<PropertyRisk>();
@@ -108,6 +107,25 @@ public static class MicrosoftDataLoader
             return testPath;
 
         // Fallback: return production path (will fail gracefully with empty data)
+        return productionPath;
+    }
+
+    /// <summary>
+    /// Gets the file system base path for content files.
+    /// Content files (e.g. PropertyRisks.json) are stored in samples/Graph/content/.
+    /// </summary>
+    private static string GetContentFilePath(string fileName)
+    {
+        // Try production path first
+        var productionPath = Path.GetFullPath(Path.Combine("../../samples/Graph/content", fileName));
+        if (File.Exists(productionPath))
+            return productionPath;
+
+        // Try test path (SamplesGraph copied to bin directory)
+        var testPath = Path.Combine(AppContext.BaseDirectory, "SamplesGraph", "content", fileName);
+        if (File.Exists(testPath))
+            return testPath;
+
         return productionPath;
     }
 }

@@ -16,7 +16,7 @@ public static class PostgreSqlSchemaInitializer
     private static string GetSchemaScript(PostgreSqlStorageOptions options)
     {
         var dim = options.VectorDimensions;
-        return $"""
+        return $$"""
             CREATE EXTENSION IF NOT EXISTS vector;
 
             -- mesh_nodes
@@ -37,7 +37,7 @@ public static class PostgreSqlSchemaInitializer
                 state           SMALLINT    NOT NULL DEFAULT 0,
                 content         JSONB,
                 desired_id      TEXT,
-                embedding       vector({dim}),
+                embedding       vector({{dim}}),
                 PRIMARY KEY (namespace, id)
             );
 
@@ -77,26 +77,6 @@ public static class PostgreSqlSchemaInitializer
             CREATE INDEX IF NOT EXISTS idx_ua_user_last ON user_activity (user_id, last_accessed DESC);
             CREATE INDEX IF NOT EXISTS idx_ua_node_type ON user_activity (user_id, node_type);
 
-            -- access_control
-            CREATE TABLE IF NOT EXISTS access_control (
-                namespace       TEXT        NOT NULL,
-                access_object   TEXT        NOT NULL,
-                permission      TEXT        NOT NULL,
-                is_allow        BOOLEAN     NOT NULL DEFAULT TRUE,
-                assigned_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                assigned_by     TEXT,
-                PRIMARY KEY (namespace, access_object, permission)
-            );
-
-            -- group_members (access_object_id can be a user or another group)
-            CREATE TABLE IF NOT EXISTS group_members (
-                group_id          TEXT NOT NULL,
-                access_object_id  TEXT NOT NULL,
-                added_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                PRIMARY KEY (group_id, access_object_id)
-            );
-            CREATE INDEX IF NOT EXISTS idx_gm_access_object ON group_members (access_object_id);
-
             -- user_effective_permissions (denormalized)
             CREATE TABLE IF NOT EXISTS user_effective_permissions (
                 user_id          TEXT     NOT NULL,
@@ -111,39 +91,104 @@ public static class PostgreSqlSchemaInitializer
             -- Shadow table for atomic rebuild
             CREATE TABLE IF NOT EXISTS user_effective_permissions_shadow (LIKE user_effective_permissions INCLUDING ALL);
 
-            -- Rebuild function (supports nested groups via recursive CTE)
+            -- Rebuild function: reads AccessAssignment and GroupMembership MeshNodes from mesh_nodes
+            -- AccessAssignment content: {"subjectId":"...","roles":[{"roleId":"...","denied":false},...]}
             CREATE OR REPLACE FUNCTION rebuild_user_effective_permissions() RETURNS void AS $$
             BEGIN
                 TRUNCATE user_effective_permissions_shadow;
 
-                -- Direct entries (access_object is not used as a group_id, i.e. it's a leaf user)
+                -- Direct entries from AccessAssignment MeshNodes
+                -- Unnest the roles[] array to get each role assignment
                 INSERT INTO user_effective_permissions_shadow (user_id, node_path_prefix, permission, is_allow)
-                SELECT ac.access_object, ac.namespace, ac.permission, ac.is_allow
-                FROM access_control ac
-                WHERE NOT EXISTS (SELECT 1 FROM group_members gm WHERE gm.group_id = ac.access_object)
+                SELECT
+                    aa.content->>'subjectId' AS user_id,
+                    aa.namespace AS node_path_prefix,
+                    perm.permission,
+                    NOT COALESCE((role_entry->>'denied')::boolean, false) AS is_allow
+                FROM mesh_nodes aa
+                CROSS JOIN LATERAL jsonb_array_elements(aa.content->'roles') AS role_entry
+                CROSS JOIN LATERAL (
+                    SELECT COALESCE(
+                        (SELECT (role_node.content->>'permissions')::int
+                         FROM mesh_nodes role_node
+                         WHERE role_node.node_type = 'Role'
+                           AND role_node.id = role_entry->>'roleId'
+                         LIMIT 1),
+                        -- Fallback: built-in role lookup
+                        CASE role_entry->>'roleId'
+                            WHEN 'Admin' THEN 31
+                            WHEN 'Editor' THEN 23
+                            WHEN 'Viewer' THEN 1
+                            WHEN 'Commenter' THEN 17
+                            ELSE 0
+                        END
+                    ) AS permissions
+                ) r
+                CROSS JOIN LATERAL (
+                    SELECT unnest(
+                        CASE WHEN (r.permissions & 1) > 0 THEN ARRAY['Read'] ELSE ARRAY[]::text[] END
+                        || CASE WHEN (r.permissions & 2) > 0 THEN ARRAY['Create'] ELSE ARRAY[]::text[] END
+                        || CASE WHEN (r.permissions & 4) > 0 THEN ARRAY['Update'] ELSE ARRAY[]::text[] END
+                        || CASE WHEN (r.permissions & 8) > 0 THEN ARRAY['Delete'] ELSE ARRAY[]::text[] END
+                        || CASE WHEN (r.permissions & 16) > 0 THEN ARRAY['Comment'] ELSE ARRAY[]::text[] END
+                    ) AS permission
+                ) perm
+                WHERE aa.node_type = 'AccessAssignment'
+                  AND aa.content->>'subjectId' IS NOT NULL
+                  AND aa.content->'roles' IS NOT NULL
                 ON CONFLICT (user_id, node_path_prefix, permission) DO UPDATE
                     SET is_allow = CASE WHEN EXCLUDED.is_allow = false THEN false ELSE user_effective_permissions_shadow.is_allow END;
 
-                -- Recursive group expansion (handles groups within groups)
+                -- Group expansion: read GroupMembership MeshNodes
                 INSERT INTO user_effective_permissions_shadow (user_id, node_path_prefix, permission, is_allow)
                 WITH RECURSIVE all_members AS (
-                    -- Base: direct members
-                    SELECT group_id, access_object_id AS member_id
-                    FROM group_members
+                    SELECT gm.namespace AS group_path, gm.content->>'memberId' AS member_id
+                    FROM mesh_nodes gm WHERE gm.node_type = 'GroupMembership'
                     UNION
-                    -- Recursive: if a member is itself a group, expand its members
-                    SELECT am.group_id, gm.access_object_id AS member_id
+                    SELECT am.group_path, gm.content->>'memberId'
                     FROM all_members am
-                    JOIN group_members gm ON gm.group_id = am.member_id
+                    JOIN mesh_nodes gm ON gm.node_type = 'GroupMembership'
+                        AND gm.namespace = am.member_id
                 ),
                 leaf_members AS (
-                    SELECT group_id, member_id
-                    FROM all_members
-                    WHERE NOT EXISTS (SELECT 1 FROM group_members gm WHERE gm.group_id = all_members.member_id)
+                    SELECT group_path, member_id FROM all_members
+                    WHERE NOT EXISTS (
+                        SELECT 1 FROM mesh_nodes gm
+                        WHERE gm.node_type = 'GroupMembership' AND gm.namespace = all_members.member_id
+                    )
                 )
-                SELECT lm.member_id, ac.namespace, ac.permission, ac.is_allow
-                FROM access_control ac
-                JOIN leaf_members lm ON ac.access_object = lm.group_id
+                SELECT lm.member_id, aa.namespace, perm.permission,
+                       NOT COALESCE((role_entry->>'denied')::boolean, false) AS is_allow
+                FROM mesh_nodes aa
+                JOIN leaf_members lm ON aa.content->>'subjectId' = lm.group_path
+                CROSS JOIN LATERAL jsonb_array_elements(aa.content->'roles') AS role_entry
+                CROSS JOIN LATERAL (
+                    SELECT COALESCE(
+                        (SELECT (role_node.content->>'permissions')::int
+                         FROM mesh_nodes role_node
+                         WHERE role_node.node_type = 'Role'
+                           AND role_node.id = role_entry->>'roleId'
+                         LIMIT 1),
+                        CASE role_entry->>'roleId'
+                            WHEN 'Admin' THEN 31
+                            WHEN 'Editor' THEN 23
+                            WHEN 'Viewer' THEN 1
+                            WHEN 'Commenter' THEN 17
+                            ELSE 0
+                        END
+                    ) AS permissions
+                ) r
+                CROSS JOIN LATERAL (
+                    SELECT unnest(
+                        CASE WHEN (r.permissions & 1) > 0 THEN ARRAY['Read'] ELSE ARRAY[]::text[] END
+                        || CASE WHEN (r.permissions & 2) > 0 THEN ARRAY['Create'] ELSE ARRAY[]::text[] END
+                        || CASE WHEN (r.permissions & 4) > 0 THEN ARRAY['Update'] ELSE ARRAY[]::text[] END
+                        || CASE WHEN (r.permissions & 8) > 0 THEN ARRAY['Delete'] ELSE ARRAY[]::text[] END
+                        || CASE WHEN (r.permissions & 16) > 0 THEN ARRAY['Comment'] ELSE ARRAY[]::text[] END
+                    ) AS permission
+                ) perm
+                WHERE aa.node_type = 'AccessAssignment'
+                  AND aa.content->'roles' IS NOT NULL
                 ON CONFLICT (user_id, node_path_prefix, permission) DO UPDATE
                     SET is_allow = CASE WHEN EXCLUDED.is_allow = false THEN false ELSE user_effective_permissions_shadow.is_allow END;
 
@@ -154,29 +199,36 @@ public static class PostgreSqlSchemaInitializer
             END;
             $$ LANGUAGE plpgsql;
 
-            -- Trigger function
-            CREATE OR REPLACE FUNCTION trg_access_control_changed() RETURNS TRIGGER AS $$
+            -- Trigger function: fires when AccessAssignment or GroupMembership nodes change
+            CREATE OR REPLACE FUNCTION trg_mesh_node_access_changed() RETURNS TRIGGER AS $$
             BEGIN
-                PERFORM rebuild_user_effective_permissions();
+                IF (TG_OP = 'DELETE' AND OLD.node_type IN ('AccessAssignment', 'GroupMembership'))
+                   OR (TG_OP IN ('INSERT', 'UPDATE') AND NEW.node_type IN ('AccessAssignment', 'GroupMembership'))
+                   OR (TG_OP = 'UPDATE' AND OLD.node_type IN ('AccessAssignment', 'GroupMembership'))
+                THEN
+                    PERFORM rebuild_user_effective_permissions();
+                END IF;
                 RETURN NULL;
             END;
             $$ LANGUAGE plpgsql;
 
-            -- Triggers (use DO block to avoid errors if they already exist)
+            -- Trigger on mesh_nodes for access changes
             DO $$
             BEGIN
-                IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'access_control_changed') THEN
-                    CREATE TRIGGER access_control_changed
-                        AFTER INSERT OR UPDATE OR DELETE ON access_control
-                        FOR EACH STATEMENT EXECUTE FUNCTION trg_access_control_changed();
-                END IF;
-                IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'group_members_changed') THEN
-                    CREATE TRIGGER group_members_changed
-                        AFTER INSERT OR UPDATE OR DELETE ON group_members
-                        FOR EACH STATEMENT EXECUTE FUNCTION trg_access_control_changed();
+                IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'mesh_node_access_changed') THEN
+                    CREATE TRIGGER mesh_node_access_changed
+                        AFTER INSERT OR UPDATE OR DELETE ON mesh_nodes
+                        FOR EACH ROW EXECUTE FUNCTION trg_mesh_node_access_changed();
                 END IF;
             END;
             $$;
+
+            -- Drop legacy triggers and tables if they exist
+            DROP TRIGGER IF EXISTS access_control_changed ON access_control;
+            DROP TRIGGER IF EXISTS group_members_changed ON group_members;
+            DROP FUNCTION IF EXISTS trg_access_control_changed();
+            DROP TABLE IF EXISTS access_control;
+            DROP TABLE IF EXISTS group_members;
 
             -- Notify function for change notifications
             CREATE OR REPLACE FUNCTION notify_mesh_node_changes() RETURNS TRIGGER AS $$

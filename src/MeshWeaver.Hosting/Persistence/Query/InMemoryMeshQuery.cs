@@ -18,7 +18,8 @@ public class InMemoryMeshQuery(
     IPersistenceServiceCore persistence,
     ISecurityService? securityService = null,
     AccessService? accessService = null,
-    IDataChangeNotifier? changeNotifier = null)
+    IDataChangeNotifier? changeNotifier = null,
+    MeshConfiguration? meshConfiguration = null)
     : IMeshQueryCore
 {
     private readonly QueryParser _parser = new();
@@ -272,6 +273,10 @@ public class InMemoryMeshQuery(
         // Search descendants for matching nodes (with security filtering)
         await foreach (var node in persistence.GetDescendantsSecureAsync(normalizedPath, userId, options).WithCancellation(ct))
         {
+            // Skip node types excluded from autocomplete (configured via AddAutocompleteExcludedTypes)
+            if (meshConfiguration?.AutocompleteExcludedNodeTypes.Contains(node.NodeType ?? "") == true)
+                continue;
+
             var name = node.Name ?? node.Id ?? node.Path ?? "";
             var nameLower = name;
             var pathLower = node.Path ?? "";

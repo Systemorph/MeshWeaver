@@ -84,7 +84,7 @@ public static class MeshNodeLayoutAreas
     public static MessageHubConfiguration AddDefaultLayoutAreas(this MessageHubConfiguration configuration)
         => configuration
             .WithNodeOperationHandlers()
-            .AddMeshDataSource(source => source.WithAccessAssignments())
+            .AddMeshDataSource()
             .AddDefaultMeshMenu()
             .AddLayout(layout => layout.AddDefaultLayoutAreas());
 
@@ -496,7 +496,7 @@ public static class MeshNodeLayoutAreas
         var hubPath = host.Hub.Address.ToString();
 
         return Controls.MeshSearch
-            .WithHiddenQuery($"path:{hubPath} scope:children -nodeType:NodeType -nodeType:Comment -nodeType:Thread -nodeType:Code")
+            .WithHiddenQuery($"path:{hubPath} scope:children -nodeType:NodeType -nodeType:Comment -nodeType:Thread -nodeType:Code -nodeType:AccessAssignment -nodeType:GroupMembership")
             .WithShowSearchBox(false)
             .WithRenderMode(MeshSearchRenderMode.Grouped)
             // No explicit grouping - defaults to NodeType which gives meaningful labels
