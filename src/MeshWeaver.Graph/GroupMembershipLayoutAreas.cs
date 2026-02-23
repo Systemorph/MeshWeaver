@@ -1,42 +1,58 @@
-using System.ComponentModel;
 using System.Reactive.Linq;
-using MeshWeaver.Application.Styles;
-using MeshWeaver.Data;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Layout.Domain;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
-using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
-using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.Graph;
 
 /// <summary>
 /// Layout areas for GroupMembership nodes.
-/// - Overview: Read-only display of the member reference.
-/// - Edit: Same display plus a Delete button.
+/// Custom Thumbnail shows compact row with avatar + name + group chips.
+/// Custom Overview shows property form without children section.
 /// </summary>
 public static class GroupMembershipLayoutAreas
 {
-    public const string OverviewArea = "Overview";
-    public const string EditArea = "Edit";
-
     /// <summary>
     /// Adds the GroupMembership views to the hub's layout.
+    /// Registers custom Thumbnail and Overview, plus Delete.
     /// </summary>
     public static MessageHubConfiguration AddGroupMembershipViews(this MessageHubConfiguration configuration)
         => configuration.AddLayout(layout => layout
-            .WithDefaultArea(OverviewArea)
-            .WithView(OverviewArea, Overview)
-            .WithView(EditArea, Edit)
+            .WithView(MeshNodeLayoutAreas.ThumbnailArea, Thumbnail)
+            .WithView(MeshNodeLayoutAreas.OverviewArea, Overview)
             .WithView(MeshNodeLayoutAreas.DeleteArea, DeleteLayoutArea.Delete));
 
     /// <summary>
-    /// Renders the Overview area (read-only) for a GroupMembership node.
+    /// Custom thumbnail for GroupMembership nodes.
+    /// Shows a compact row: [Avatar] [Name] [Group chips] with navigation.
     /// </summary>
-    [Browsable(false)]
+    public static IObservable<UiControl?> Thumbnail(LayoutAreaHost host, RenderingContext _)
+    {
+        var hubPath = host.Hub.Address.ToString();
+
+        return host.StreamView<MeshNode>(
+            (nodes, _) =>
+            {
+                var node = nodes.FirstOrDefault(n => n.Path == hubPath);
+                var membership = GroupsLayoutArea.DeserializeMembership(node!);
+                if (membership == null)
+                    return MeshNodeThumbnailControl.FromNode(node, hubPath); // fallback
+
+                return GroupMembershipControlBuilder.Build(
+                    membership,
+                    node: node,
+                    navigateTo: $"/{hubPath}");
+            },
+            hubPath);
+    }
+
+    /// <summary>
+    /// Custom overview for GroupMembership nodes.
+    /// Shows the property form (Member + Groups) but suppresses children section.
+    /// </summary>
     public static IObservable<UiControl?> Overview(LayoutAreaHost host, RenderingContext _)
     {
         var hubPath = host.Hub.Address.ToString();
@@ -44,61 +60,31 @@ public static class GroupMembershipLayoutAreas
         var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? [])
             ?? Observable.Return<MeshNode[]>([]);
 
-        return nodeStream.Select(nodes =>
+        return nodeStream.SelectMany(async nodes =>
         {
             var node = nodes.FirstOrDefault(n => n.Path == hubPath);
-            return (UiControl?)BuildMembershipRow(node, hubPath, editable: false);
+            var permissions = await PermissionHelper.GetEffectivePermissionsAsync(host.Hub, hubPath);
+
+            if (!permissions.HasFlag(Permission.Read))
+                return (UiControl?)Controls.Html("<p>Access denied.</p>");
+
+            var canEdit = permissions.HasFlag(Permission.Update);
+
+            // Build overview without children
+            var stack = Controls.Stack.WithWidth("100%").WithStyle(MeshNodeLayoutAreas.GetContainerStyle(host));
+
+            // Header
+            stack = stack.WithView(MeshNodeLayoutAreas.BuildHeader(host, node, canEdit));
+
+            // Property form (Member + Groups)
+            if (node != null)
+            {
+                stack = stack.WithView(OverviewLayoutArea.BuildPropertyOverview(host, node, canEdit));
+            }
+
+            // No children section — GroupMembership nodes don't have meaningful children
+
+            return (UiControl?)stack;
         });
-    }
-
-    /// <summary>
-    /// Renders the Edit area for a GroupMembership node.
-    /// </summary>
-    [Browsable(false)]
-    public static IObservable<UiControl?> Edit(LayoutAreaHost host, RenderingContext _)
-    {
-        var hubPath = host.Hub.Address.ToString();
-
-        var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? [])
-            ?? Observable.Return<MeshNode[]>([]);
-
-        return nodeStream.Select(nodes =>
-        {
-            var node = nodes.FirstOrDefault(n => n.Path == hubPath);
-            return (UiControl?)BuildMembershipRow(node, hubPath, editable: true);
-        });
-    }
-
-    private static UiControl BuildMembershipRow(MeshNode? node, string hubPath, bool editable)
-    {
-        var membership = node?.Content as GroupMembership
-            ?? (node?.Content is System.Text.Json.JsonElement je
-                ? System.Text.Json.JsonSerializer.Deserialize<GroupMembership>(je.GetRawText())
-                : null);
-
-        var memberDisplay = membership?.Id ?? node?.Name ?? hubPath;
-
-        var row = Controls.Stack
-            .WithOrientation(Orientation.Horizontal)
-            .WithStyle("padding: 8px 16px; border-bottom: 1px solid var(--neutral-stroke-rest); align-items: center; gap: 12px;")
-            .WithView(Controls.Icon(FluentIcons.Person()).WithStyle("font-size: 20px;"))
-            .WithView(Controls.Label(memberDisplay).WithStyle("flex: 1;"));
-
-        if (editable)
-        {
-            row = row.WithView(Controls.Button("")
-                .WithIconStart(FluentIcons.Delete())
-                .WithAppearance(Appearance.Stealth)
-                .WithClickAction(async ctx =>
-                {
-                    var catalog = ctx.Hub.ServiceProvider.GetService<IMeshCatalog>();
-                    if (catalog != null && node != null)
-                    {
-                        await catalog.DeleteNodeAsync(node.Path);
-                    }
-                }));
-        }
-
-        return row;
     }
 }

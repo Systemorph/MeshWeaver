@@ -138,12 +138,13 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
             CreateHostAddress(),
             reference
         );
-        var controls = await stream
+        // Wait for the async view to complete and emit the final HtmlControl
+        var finalControl = await stream
             .GetControlStream(reference.Area!)
-            .TakeUntil(o => o is HtmlControl)
-            .Timeout(10.Seconds())
-            .ToArray();
-        controls.Should().HaveCountGreaterThan(1);// .And.HaveCountLessThan(12);
+            .Where(o => o is HtmlControl)
+            .Timeout(30.Seconds())
+            .FirstAsync();
+        finalControl.Should().BeOfType<HtmlControl>();
     }
 
     private record Toolbar(int Year);

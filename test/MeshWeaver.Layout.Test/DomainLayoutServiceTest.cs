@@ -14,7 +14,9 @@ using MeshWeaver.Fixture;
 using MeshWeaver.Layout.Client;
 using MeshWeaver.Layout.DataGrid;
 using MeshWeaver.Layout.Domain;
+using MeshWeaver.Domain;
 using MeshWeaver.Messaging;
+using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
 namespace MeshWeaver.Layout.Test;
@@ -66,13 +68,35 @@ public class DomainLayoutServiceTest(ITestOutputHelper output) : HubTestBase(out
             .BeOfType<StackControl>()
             .Which;
 
-
+        // The last area is a reactive view that resolves to BuildPropertyForm() → StackControl
         var controlFromStream = await stream
             .GetControlStream(stack.Areas.Last().Area.ToString()!)
             .Timeout(10.Seconds())
             .FirstAsync(x => x != null)!;
-        var control = controlFromStream.Should().BeOfType<EditFormControl>().Which;
-        var dataContext = control.DataContext;
+        var formStack = controlFromStream.Should().BeOfType<StackControl>().Which;
+
+        // Navigate into the form to find a control with DataContext:
+        // formStack → first area (LayoutGridControl) → first property area (StackControl) → last area (reactive control with DataContext)
+        var gridAreaId = formStack.Areas.First().Area.ToString()!;
+        var gridControl = await stream
+            .GetControlStream(gridAreaId)
+            .Timeout(10.Seconds())
+            .FirstAsync(x => x != null);
+        var grid = gridControl.Should().BeOfType<LayoutGridControl>().Which;
+
+        var propAreaId = grid.Areas.First().Area.ToString()!;
+        var propControl = await stream
+            .GetControlStream(propAreaId)
+            .Timeout(10.Seconds())
+            .FirstAsync(x => x != null);
+        var propStack = propControl.Should().BeOfType<StackControl>().Which;
+
+        var reactiveAreaId = propStack.Areas.Last().Area.ToString()!;
+        var reactiveControl = await stream
+            .GetControlStream(reactiveAreaId)
+            .Timeout(10.Seconds())
+            .FirstAsync(x => x != null);
+        var dataContext = reactiveControl!.DataContext;
         dataContext.Should().NotBeNullOrWhiteSpace();
 
 
@@ -108,13 +132,13 @@ public class DomainLayoutServiceTest(ITestOutputHelper output) : HubTestBase(out
             CreateHostAddress(),
             reference
         );
+        // After re-opening, the form is again a StackControl
         controlFromStream = await stream
             .GetControlStream(stack.Areas.Last().Area.ToString()!)
             .Timeout(10.Seconds())
             .FirstAsync(x => x != null);
 
-        control = controlFromStream.Should().BeOfType<EditFormControl>().Which;
-        dataContext = control.DataContext;
+        controlFromStream.Should().BeOfType<StackControl>();
         value = await stream
             .GetDataBoundObservable<string>(namePointer, dataContext!)
             .Timeout(10.Seconds())

@@ -23,18 +23,18 @@ public record MeshNodeThumbnailControl(
     {
         var nodePath = node?.Path ?? fallbackPath;
         var title = node?.Name ?? fallbackPath;
-        var imageUrl = GetImageUrl(node);
+        var imageUrl = GetImageUrlForNode(node);
         var nodeType = node?.NodeType;
 
         return new MeshNodeThumbnailControl(nodePath, title, null, imageUrl, nodeType);
     }
 
     /// <summary>
-    /// Gets the image URL for a node.
+    /// Gets the image URL for a node. Public so other builders can reuse.
     /// Priority: content.avatar > content.logo > node.Icon
     /// Handles both typed objects and JsonElement/Dictionary content.
     /// </summary>
-    private static string? GetImageUrl(MeshNode? node)
+    public static string? GetImageUrlForNode(MeshNode? node)
     {
         if (node == null)
             return null;
