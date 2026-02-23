@@ -192,11 +192,15 @@ public static class PersistenceExtensions
 
         // Core services remain singletons (for shared caches)
         services.AddSingleton(persistenceServiceCore);
-        services.TryAddSingleton<IMeshQueryCore, InMemoryMeshQuery>();
+        services.TryAddSingleton<IMeshQueryProvider, InMemoryMeshQuery>();
+
+        // Always add static node provider (picks up IStaticNodeProvider registrations)
+        services.AddSingleton<IMeshQueryProvider>(sp =>
+            new StaticNodeQueryProvider(sp.GetServices<IStaticNodeProvider>()));
 
         // Wrapper services are scoped (per hub)
         services.AddScoped<IPersistenceService, PersistenceService>();
-        services.AddScoped<IMeshQuery, MeshQueryService>();
+        services.AddScoped<IMeshQuery, MeshQuery>();
 
         return services;
     }
@@ -212,11 +216,15 @@ public static class PersistenceExtensions
 
         // Core services remain singletons (for shared caches)
         services.AddSingleton<IPersistenceServiceCore, TPersistenceCore>();
-        services.TryAddSingleton<IMeshQueryCore, InMemoryMeshQuery>();
+        services.TryAddSingleton<IMeshQueryProvider, InMemoryMeshQuery>();
+
+        // Always add static node provider (picks up IStaticNodeProvider registrations)
+        services.AddSingleton<IMeshQueryProvider>(sp =>
+            new StaticNodeQueryProvider(sp.GetServices<IStaticNodeProvider>()));
 
         // Wrapper services are scoped (per hub)
         services.AddScoped<IPersistenceService, PersistenceService>();
-        services.AddScoped<IMeshQuery, MeshQueryService>();
+        services.AddScoped<IMeshQuery, MeshQuery>();
 
         return services;
     }

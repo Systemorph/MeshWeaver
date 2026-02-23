@@ -119,6 +119,7 @@ public record LayoutAreaHost : IDisposable
                 return Task.CompletedTask;
             }));
         Reference = reference;
+        logger = Stream.Hub.ServiceProvider.GetRequiredService<ILogger<LayoutAreaHost>>();
 
         // Manually trigger initialization now that Stream property is assigned
         // This resolves the circular dependency where initialization lambda uses 'this'
@@ -142,8 +143,6 @@ public record LayoutAreaHost : IDisposable
                 delivery => Stream.ClientId.Equals(delivery.Message.StreamId)
             )
         );
-
-        logger = Stream.Hub.ServiceProvider.GetRequiredService<ILogger<LayoutAreaHost>>();
     }
 
 

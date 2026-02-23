@@ -573,6 +573,12 @@ public static class EditorExtensions
                          property.GetCustomAttribute<EditableAttribute>()?.AllowEdit != false &&
                          !property.HasAttribute<KeyAttribute>();
 
+        // Handle MeshNodeCollectionAttribute - full width inline collection view
+        if (property.GetCustomAttribute<MeshNodeCollectionAttribute>() != null)
+        {
+            return BuildCollectionSection(host, property, dataId, isEditable);
+        }
+
         // Handle SeparateEditView (Markdown) differently - full width with Done button
         var uiControlAttr = property.GetCustomAttribute<UiControlAttribute>();
         if (uiControlAttr?.SeparateEditView == true)
@@ -630,7 +636,8 @@ public static class EditorExtensions
         {
             readOnlyControl = BuildDimensionReadOnlyLabel(host, propName, dataId, dimAttr);
         }
-        else if (property.GetCustomAttribute<MeshNodeAttribute>() != null)
+        else if (property.GetCustomAttribute<MeshNodeAttribute>() != null
+                 && propType == typeof(string))
         {
             readOnlyControl = new LabelControl(new JsonPointerReference(propName))
             {
@@ -873,7 +880,8 @@ public static class EditorExtensions
         {
             editCtrl = CreateDimensionSelectControl(host, jsonPointer, dimAttr, isRequired, dataId, editStateId, isToggleable);
         }
-        else if (property.GetCustomAttribute<MeshNodeAttribute>() is { } meshNodeAttr)
+        else if (property.GetCustomAttribute<MeshNodeAttribute>() is { } meshNodeAttr
+                 && propType == typeof(string))
         {
             var nodeNamespace = host.Hub.Address.ToString();
             editCtrl = new MeshNodePickerControl(jsonPointer)
@@ -1033,6 +1041,303 @@ public static class EditorExtensions
     /// </summary>
     /// <param name="host">The layout area host.</param>
     /// <param name="property">The property to create the control for.</param>
+    /// <summary>
+    /// Builds a full-width section for a collection property marked with [MeshNodeCollection].
+    /// Renders items inline as chips/tags from the bound data.
+    /// If editable, adds x buttons per item for deletion and a + button to add new items.
+    /// </summary>
+    private static UiControl BuildCollectionSection(
+        LayoutAreaHost host,
+        PropertyInfo property,
+        string dataId,
+        bool isEditable)
+    {
+        var propName = property.Name.ToCamelCase()!;
+        var displayName = GetToggleableDisplayName(property);
+
+        var stack = Controls.Stack
+            .WithWidth("100%")
+            .WithStyle("margin-top: 16px;")
+            .WithView(Controls.Label(displayName)
+                .WithStyle("font-weight: 600; color: var(--neutral-foreground-hint); font-size: 0.875rem; margin-bottom: 8px;"))
+            .WithView((h, _) =>
+                h.Stream.GetDataStream<JsonElement>(dataId)
+                    .Select(data => BuildCollectionChips(h, data, propName, dataId, isEditable)));
+
+        // Add "+" button when editable
+        if (isEditable)
+        {
+            var collectionAttr = property.GetCustomAttribute<MeshNodeCollectionAttribute>();
+            if (collectionAttr != null)
+            {
+                stack = stack.WithView(Controls.Button("+ Add")
+                    .WithAppearance(Appearance.Lightweight)
+                    .WithStyle("align-self: flex-start; margin-top: 4px; font-size: 0.85rem;")
+                    .WithClickAction(ctx =>
+                    {
+                        ShowAddCollectionItemDialog(ctx, property, collectionAttr, dataId, propName);
+                        return Task.CompletedTask;
+                    }));
+            }
+        }
+
+        return stack;
+    }
+
+    private static UiControl BuildCollectionChips(
+        LayoutAreaHost host,
+        JsonElement data,
+        string propName,
+        string dataId,
+        bool isEditable)
+    {
+        if (!data.TryGetProperty(propName, out var arr) || arr.ValueKind != JsonValueKind.Array)
+            return Controls.Html("<span style=\"color: var(--neutral-foreground-hint);\">None</span>");
+
+        var chipStack = Controls.Stack
+            .WithOrientation(Orientation.Horizontal)
+            .WithStyle("flex-wrap: wrap; gap: 6px; align-items: center;");
+
+        var index = 0;
+        foreach (var item in arr.EnumerateArray())
+        {
+            var label = GetCollectionItemLabel(item);
+            var isDenied = item.TryGetProperty("denied", out var d) && d.GetBoolean();
+            var capturedIndex = index;
+
+            var chipStyle = "display: inline-flex; align-items: center; gap: 4px; padding: 2px 10px; " +
+                            "border-radius: 14px; background: var(--neutral-fill-secondary-rest); font-size: 0.85rem;";
+            if (isDenied)
+                chipStyle += " text-decoration: line-through; opacity: 0.6;";
+
+            if (isEditable)
+            {
+                // Chip with label + x button using HTML for the dismiss icon
+                var chipHtml = $"<span style=\"{chipStyle}\">" +
+                               $"{System.Web.HttpUtility.HtmlEncode(label)}</span>";
+                var chipRow = Controls.Stack
+                    .WithOrientation(Orientation.Horizontal)
+                    .WithStyle("display: inline-flex; align-items: center; gap: 0;")
+                    .WithView(Controls.Html(chipHtml))
+                    .WithView(Controls.Button("×")
+                        .WithAppearance(Appearance.Stealth)
+                        .WithStyle("min-width: 18px; padding: 0 2px; height: 20px; font-size: 14px; line-height: 1;")
+                        .WithClickAction(ctx =>
+                        {
+                            RemoveCollectionItem(ctx.Host, dataId, propName, capturedIndex);
+                            return Task.CompletedTask;
+                        }));
+                chipStack = chipStack.WithView(chipRow);
+            }
+            else
+            {
+                chipStack = chipStack.WithView(Controls.Html(
+                    $"<span style=\"{chipStyle}\">{System.Web.HttpUtility.HtmlEncode(label)}</span>"));
+            }
+
+            index++;
+        }
+
+        if (index == 0)
+            return Controls.Html("<span style=\"color: var(--neutral-foreground-hint);\">None</span>");
+
+        return chipStack;
+    }
+
+    private static string GetCollectionItemLabel(JsonElement item)
+    {
+        // Try common property names for the display label
+        foreach (var name in new[] { "role", "group", "name", "id", "value" })
+        {
+            if (item.TryGetProperty(name, out var val) && val.ValueKind == JsonValueKind.String)
+            {
+                var str = val.GetString();
+                if (!string.IsNullOrEmpty(str))
+                    return str;
+            }
+        }
+        // Don't show raw JSON — show a placeholder
+        return "(empty)";
+    }
+
+    private static void RemoveCollectionItem(LayoutAreaHost host, string dataId, string propName, int indexToRemove)
+    {
+        // Read current data, remove item at index, write back
+        var current = host.Stream.GetDataStream<JsonElement>(dataId);
+        current.Take(1).Subscribe(data =>
+        {
+            if (!data.TryGetProperty(propName, out var arr) || arr.ValueKind != JsonValueKind.Array)
+                return;
+
+            var jsonObj = System.Text.Json.Nodes.JsonNode.Parse(data.GetRawText())!.AsObject();
+            var jsonArr = jsonObj[propName]!.AsArray();
+            if (indexToRemove >= 0 && indexToRemove < jsonArr.Count)
+            {
+                jsonArr.RemoveAt(indexToRemove);
+                var updated = JsonSerializer.Deserialize<JsonElement>(jsonObj.ToJsonString());
+                host.UpdateData(dataId, updated);
+            }
+        });
+    }
+
+    /// <summary>
+    /// Shows a dialog with a MeshNodePickerControl to select a node, then adds it as a new item
+    /// in the collection array.
+    /// </summary>
+    private static void ShowAddCollectionItemDialog(
+        UiActionContext ctx,
+        PropertyInfo property,
+        MeshNodeCollectionAttribute collectionAttr,
+        string dataId,
+        string propName)
+    {
+        var formId = $"add_collection_{Guid.NewGuid().AsString()}";
+        ctx.Host.UpdateData(formId, new Dictionary<string, object?> { ["selectedItem"] = "" });
+
+        // Resolve queries with the node's namespace
+        var nodeNamespace = ctx.Hub.Address.ToString();
+        var queries = MeshNodeCollectionAttribute.ResolveQueries(collectionAttr.Queries, nodeNamespace, nodeNamespace);
+
+        // Determine the element type and its key property name (first string property)
+        var elementType = GetCollectionElementType(property);
+        var keyPropName = GetCollectionKeyPropertyName(elementType);
+
+        var formContent = Controls.Stack.WithStyle("gap: 16px; padding: 16px;")
+            .WithView(new MeshNodePickerControl(new JsonPointerReference("selectedItem"))
+            {
+                Queries = queries,
+                Label = property.Name.Wordify(),
+                Required = true,
+                DataContext = LayoutAreaReference.GetDataPointer(formId)
+            });
+
+        var actions = Controls.Stack
+            .WithOrientation(Orientation.Horizontal)
+            .WithStyle("justify-content: flex-end; gap: 8px;")
+            .WithView(Controls.Button("Cancel")
+                .WithAppearance(Appearance.Neutral)
+                .WithClickAction(cancelCtx =>
+                {
+                    cancelCtx.Host.UpdateArea(DialogControl.DialogArea, null!);
+                    return Task.CompletedTask;
+                }))
+            .WithView(Controls.Button("Add")
+                .WithAppearance(Appearance.Accent)
+                .WithClickAction(async addCtx =>
+                {
+                    var formValues = await addCtx.Host.Stream
+                        .GetDataStream<Dictionary<string, object?>>(formId).FirstAsync();
+
+                    var selectedValue = formValues.GetValueOrDefault("selectedItem")?.ToString()?.Trim();
+                    if (string.IsNullOrEmpty(selectedValue))
+                    {
+                        var errorDialog = Controls.Dialog(
+                            Controls.Markdown("Please select an item."),
+                            "Validation Error"
+                        ).WithSize("S").WithClosable(true);
+                        addCtx.Host.UpdateArea(DialogControl.DialogArea, errorDialog);
+                        return;
+                    }
+
+                    // Close dialog
+                    addCtx.Host.UpdateArea(DialogControl.DialogArea, null!);
+
+                    // Add the item to the collection
+                    AddCollectionItem(addCtx.Host, dataId, propName, elementType, keyPropName, selectedValue);
+                }));
+
+        var dialog = Controls.Dialog(formContent, $"Add {property.Name.Wordify()}")
+            .WithSize("M")
+            .WithActions(actions);
+
+        ctx.Host.UpdateArea(DialogControl.DialogArea, dialog);
+    }
+
+    /// <summary>
+    /// Adds a new item to a collection array in the data stream.
+    /// Creates a default instance of the element type with the key property set to the selected value.
+    /// </summary>
+    private static void AddCollectionItem(
+        LayoutAreaHost host,
+        string dataId,
+        string propName,
+        Type? elementType,
+        string? keyPropName,
+        string selectedValue)
+    {
+        var current = host.Stream.GetDataStream<JsonElement>(dataId);
+        current.Take(1).Subscribe(data =>
+        {
+            var jsonObj = System.Text.Json.Nodes.JsonNode.Parse(data.GetRawText())!.AsObject();
+
+            // Ensure the array exists
+            if (jsonObj[propName] is not System.Text.Json.Nodes.JsonArray jsonArr)
+            {
+                jsonArr = new System.Text.Json.Nodes.JsonArray();
+                jsonObj[propName] = jsonArr;
+            }
+
+            // Build the new item JSON
+            System.Text.Json.Nodes.JsonObject newItem;
+            if (elementType != null)
+            {
+                // Create a default instance and set the key property
+                var instance = Activator.CreateInstance(elementType)!;
+                if (!string.IsNullOrEmpty(keyPropName))
+                {
+                    var prop = elementType.GetProperty(keyPropName);
+                    prop?.SetValue(instance, selectedValue);
+                }
+                var serialized = JsonSerializer.Serialize(instance);
+                newItem = System.Text.Json.Nodes.JsonNode.Parse(serialized)!.AsObject();
+            }
+            else
+            {
+                newItem = new System.Text.Json.Nodes.JsonObject
+                {
+                    [keyPropName ?? "value"] = selectedValue
+                };
+            }
+
+            jsonArr.Add(newItem);
+            var updated = JsonSerializer.Deserialize<JsonElement>(jsonObj.ToJsonString());
+            host.UpdateData(dataId, updated);
+        });
+    }
+
+    /// <summary>
+    /// Gets the element type of a collection property (e.g., IReadOnlyList&lt;RoleAssignment&gt; → RoleAssignment).
+    /// </summary>
+    private static Type? GetCollectionElementType(PropertyInfo property)
+    {
+        var propType = property.PropertyType;
+        if (propType.IsGenericType)
+        {
+            return propType.GetGenericArguments().FirstOrDefault();
+        }
+        if (propType.IsArray)
+        {
+            return propType.GetElementType();
+        }
+        // Try interfaces
+        var listInterface = propType.GetInterfaces()
+            .FirstOrDefault(i => i.IsGenericType && i.GetGenericTypeDefinition() == typeof(IReadOnlyList<>));
+        return listInterface?.GetGenericArguments().FirstOrDefault();
+    }
+
+    /// <summary>
+    /// Gets the key property name of a collection element type (the first string property).
+    /// For RoleAssignment → "Role", for MembershipEntry → "Group".
+    /// </summary>
+    private static string? GetCollectionKeyPropertyName(Type? elementType)
+    {
+        if (elementType == null) return null;
+        return elementType.GetProperties()
+            .Where(p => p.PropertyType == typeof(string))
+            .Select(p => p.Name)
+            .FirstOrDefault();
+    }
+
     /// <param name="dataId">The data ID used for data binding.</param>
     /// <param name="editStateId">The edit state ID for toggling.</param>
     /// <param name="editStateStream">Observable stream of edit state.</param>
