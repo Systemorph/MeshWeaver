@@ -20,7 +20,7 @@ public class InMemoryMeshQuery(
     AccessService? accessService = null,
     IDataChangeNotifier? changeNotifier = null,
     MeshConfiguration? meshConfiguration = null)
-    : IMeshQueryCore
+    : IMeshQueryProvider
 {
     private readonly QueryParser _parser = new();
     private readonly QueryEvaluator _evaluator = new();

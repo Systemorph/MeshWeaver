@@ -19,7 +19,7 @@ public record AccessAssignment
     public string? DisplayName { get; init; }
 
     /// <summary>Role assignments for this subject at this scope.</summary>
-    [MeshNode("namespace:{node.namespace} nodeType:Role scope:selfAndAncestors")]
+    [MeshNodeCollection("namespace:{node.namespace} nodeType:Role scope:selfAndAncestors")]
     public IReadOnlyList<RoleAssignment> Roles { get; init; } = [];
 }
 

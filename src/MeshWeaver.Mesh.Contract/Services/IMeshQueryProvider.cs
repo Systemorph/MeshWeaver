@@ -10,7 +10,7 @@ namespace MeshWeaver.Mesh.Services;
 /// This is the internal interface that accepts JsonSerializerOptions per method.
 /// Use IMeshQuery for the scoped wrapper that injects options automatically.
 /// </summary>
-public interface IMeshQueryCore
+public interface IMeshQueryProvider
 {
     /// <summary>
     /// Query nodes and partition objects with full-text search, filtering, and scoping.

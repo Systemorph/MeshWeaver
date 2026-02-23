@@ -47,6 +47,31 @@ public record DialogControl
         => this with { Content = content };
 
     /// <summary>
+    /// Actions to display in the dialog footer (e.g., Cancel + Create buttons).
+    /// Typically a horizontal stack with buttons.
+    /// When set, replaces the default Close button in the footer.
+    /// </summary>
+    internal object? Actions { get; init; }
+
+    /// <summary>
+    /// Actions area rendered in the dialog footer.
+    /// </summary>
+    public NamedAreaControl ActionsArea { get; init; } =
+        new($"{DialogArea}/{nameof(ActionsArea)}");
+
+    /// <summary>
+    /// Whether dialog actions have been set.
+    /// Used by the Blazor view to determine footer rendering.
+    /// </summary>
+    public bool HasActions { get; init; }
+
+    /// <summary>
+    /// Sets the actions to display in the dialog footer.
+    /// </summary>
+    public DialogControl WithActions(object actions)
+        => this with { Actions = actions, HasActions = true };
+
+    /// <summary>
     /// Whether the dialog shows a Close button in the footer.
     /// When true, adds a Close button that dismisses the dialog.
     /// </summary>
@@ -100,10 +125,16 @@ public record DialogControl
         if (Content is UiControl contentControl)
         {
             var renderedContent = host.RenderArea(GetContextForArea(context, nameof(ContentArea)), contentControl, ret.Store);
-            return renderedContent with { Updates = ret.Updates.Concat(renderedContent.Updates) };
+            ret = renderedContent with { Updates = ret.Updates.Concat(renderedContent.Updates) };
         }
 
-        // Otherwise, return as-is for non-UiControl content (strings, etc.)
+        // If Actions are set, render them in the ActionsArea for the dialog footer
+        if (Actions is UiControl actionsControl)
+        {
+            var renderedActions = host.RenderArea(GetContextForArea(context, nameof(ActionsArea)), actionsControl, ret.Store);
+            ret = renderedActions with { Updates = ret.Updates.Concat(renderedActions.Updates) };
+        }
+
         return ret;
     }
 

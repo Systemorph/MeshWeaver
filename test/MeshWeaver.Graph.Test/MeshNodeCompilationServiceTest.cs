@@ -70,8 +70,8 @@ public class MeshNodeCompilationServiceTest : IDisposable
 
     private MeshNodeCompilationService CreateService(IPersistenceServiceCore persistenceCore)
     {
-        var meshQueryCore = new MeshWeaver.Hosting.Persistence.Query.InMemoryMeshQuery(persistenceCore);
-        var meshQuery = new MeshWeaver.Hosting.Persistence.Query.MeshQueryService(meshQueryCore, _mockHub);
+        var meshQueryProvider = new MeshWeaver.Hosting.Persistence.Query.InMemoryMeshQuery(persistenceCore);
+        var meshQuery = new MeshWeaver.Hosting.Persistence.Query.MeshQuery([meshQueryProvider], _mockHub);
         var serviceProvider = Substitute.For<IServiceProvider>();
         serviceProvider.GetService(typeof(IMeshQuery)).Returns(meshQuery);
         _mockHub.ServiceProvider.Returns(serviceProvider);

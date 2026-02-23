@@ -12,10 +12,10 @@ using MeshWeaver.Messaging;
 namespace MeshWeaver.Hosting.PostgreSql;
 
 /// <summary>
-/// PostgreSQL native implementation of IMeshQueryCore.
+/// PostgreSQL native implementation of IMeshQueryProvider.
 /// Translates parsed queries directly into PostgreSQL SQL via PostgreSqlStorageAdapter.
 /// </summary>
-public class PostgreSqlMeshQuery : IMeshQueryCore
+public class PostgreSqlMeshQuery : IMeshQueryProvider
 {
     private readonly PostgreSqlStorageAdapter _adapter;
     private readonly IDataChangeNotifier? _changeNotifier;

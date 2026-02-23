@@ -74,7 +74,7 @@ public static class PersistenceExtensions
             CosmosStorageAdapterFactory.StorageType);
 
         // Register CosmosMeshQuery so it takes priority over InMemoryMeshQuery (via TryAddSingleton)
-        services.AddSingleton<IMeshQueryCore>(sp =>
+        services.AddSingleton<IMeshQueryProvider>(sp =>
         {
             var adapter = sp.GetRequiredService<IStorageAdapter>() as CosmosStorageAdapter
                 ?? throw new InvalidOperationException(
@@ -123,7 +123,7 @@ public static class PersistenceExtensions
         CosmosStorageAdapter storageAdapter)
     {
         // Register CosmosMeshQuery BEFORE AddPersistence so TryAddSingleton picks it up
-        services.AddSingleton<IMeshQueryCore>(sp =>
+        services.AddSingleton<IMeshQueryProvider>(sp =>
             new CosmosMeshQuery(storageAdapter, sp.GetService<IDataChangeNotifier>()));
 
         services.AddPersistence(storageAdapter);
@@ -204,7 +204,7 @@ public static class PersistenceExtensions
                 sp.GetService<IDataChangeNotifier>()));
 
         // Register CosmosMeshQuery with change notifier for native Cosmos SQL queries
-        services.AddSingleton<IMeshQueryCore>(sp =>
+        services.AddSingleton<IMeshQueryProvider>(sp =>
             new CosmosMeshQuery(
                 storageAdapter,
                 sp.GetService<IDataChangeNotifier>()));

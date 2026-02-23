@@ -10,11 +10,11 @@ using MeshWeaver.Mesh.Services;
 namespace MeshWeaver.Hosting.Cosmos;
 
 /// <summary>
-/// Cosmos DB native implementation of IMeshQueryCore.
+/// Cosmos DB native implementation of IMeshQueryProvider.
 /// Translates parsed queries directly into Cosmos SQL via CosmosStorageAdapter.QueryNodesAsync,
 /// bypassing the in-memory persistence layer for much better performance and reliability.
 /// </summary>
-public class CosmosMeshQuery : IMeshQueryCore
+public class CosmosMeshQuery : IMeshQueryProvider
 {
     private readonly CosmosStorageAdapter _adapter;
     private readonly IDataChangeNotifier? _changeNotifier;

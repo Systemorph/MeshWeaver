@@ -76,7 +76,7 @@ public static class PostgreSqlExtensions
             PostgreSqlStorageAdapterFactory.StorageType);
 
         // Register PostgreSqlMeshQuery so it takes priority over InMemoryMeshQuery
-        services.AddSingleton<IMeshQueryCore>(sp =>
+        services.AddSingleton<IMeshQueryProvider>(sp =>
         {
             var adapter = sp.GetRequiredService<IStorageAdapter>() as PostgreSqlStorageAdapter
                 ?? throw new InvalidOperationException(
@@ -115,7 +115,7 @@ public static class PostgreSqlExtensions
         var storageAdapter = new PostgreSqlStorageAdapter(dataSource, embeddingProvider);
 
         // Register PostgreSqlMeshQuery BEFORE AddPersistence so TryAddSingleton picks it up
-        services.AddSingleton<IMeshQueryCore>(sp =>
+        services.AddSingleton<IMeshQueryProvider>(sp =>
             new PostgreSqlMeshQuery(storageAdapter, sp.GetService<IDataChangeNotifier>(), sp.GetService<AccessService>()));
 
         services.AddPersistence(storageAdapter);
@@ -158,7 +158,7 @@ public static class PostgreSqlExtensions
                 sp.GetService<IDataChangeNotifier>()));
 
         // Register PostgreSqlMeshQuery with change notifier
-        services.AddSingleton<IMeshQueryCore>(sp =>
+        services.AddSingleton<IMeshQueryProvider>(sp =>
             new PostgreSqlMeshQuery(
                 storageAdapter,
                 sp.GetService<IDataChangeNotifier>(),
