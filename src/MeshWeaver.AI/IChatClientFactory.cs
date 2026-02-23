@@ -24,6 +24,12 @@ public interface IChatClientFactory
     int DisplayOrder { get; }
 
     /// <summary>
+    /// Whether this factory creates persistent agents with server-side thread management.
+    /// When true, conversation history is maintained server-side and only new messages need to be sent.
+    /// </summary>
+    bool IsPersistent => false;
+
+    /// <summary>
     /// Creates a ChatClientAgent for the given configuration.
     /// </summary>
     /// <param name="config">The agent configuration</param>

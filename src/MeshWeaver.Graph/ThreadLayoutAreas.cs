@@ -24,9 +24,6 @@ namespace MeshWeaver.Graph;
 /// </summary>
 public static class ThreadLayoutAreas
 {
-    public const string ThreadArea = "Thread";
-    public const string ChatArea = "Chat";
-    public const string HistoryArea = "History";
 
     /// <summary>
     /// Adds the thread-specific views to the hub's layout.
@@ -35,10 +32,10 @@ public static class ThreadLayoutAreas
     public static MessageHubConfiguration AddThreadViews(this MessageHubConfiguration configuration)
         => configuration
             .AddLayout(layout => layout
-                .WithDefaultArea(ChatArea)
-                .WithView(ChatArea, ChatView)
-                .WithView(ThreadArea, ThreadView)
-                .WithView(HistoryArea, HistoryView)
+                .WithDefaultArea(ThreadNodeType.ChatArea)
+                .WithView(ThreadNodeType.ChatArea, ChatView)
+                .WithView(ThreadNodeType.ThreadArea, ThreadView)
+                .WithView(ThreadNodeType.HistoryArea, HistoryView)
                 .WithView(MeshNodeLayoutAreas.CreateNodeArea, CreateView)
                 .WithView(MeshNodeLayoutAreas.SettingsArea, SettingsLayoutArea.Settings)
                 .WithView(MeshNodeLayoutAreas.MetadataArea, MeshNodeLayoutAreas.Metadata)
@@ -136,7 +133,7 @@ public static class ThreadLayoutAreas
             try
             {
                 var createdNode = await meshCatalog.CreateNodeAsync(newNode).ConfigureAwait(false);
-                return (UiControl?)new RedirectControl(MeshNodeLayoutAreas.BuildContentUrl(createdNode.Path!, ChatArea));
+                return (UiControl?)new RedirectControl(MeshNodeLayoutAreas.BuildContentUrl(createdNode.Path!, ThreadNodeType.ChatArea));
             }
             catch (Exception ex)
             {
@@ -165,7 +162,7 @@ public static class ThreadLayoutAreas
                     .WithIconStart(FluentIcons.Add())
                     .WithNavigateToHref(createUrl)))
             .WithView(Controls.MeshSearch
-                .WithHiddenQuery($"path:{hubPath} scope:children nodeType:Thread")
+                .WithHiddenQuery($"path:{hubPath} scope:children nodeType:{ThreadNodeType.NodeType}")
                 .WithPlaceholder("Search threads...")
                 .WithRenderMode(MeshSearchRenderMode.Flat)
                 .WithMaxColumns(3));
@@ -194,7 +191,7 @@ public static class ThreadLayoutAreas
             try
             {
                 return await meshQuery.QueryAsync<MeshNode>(
-                    $"path:{hubPath} nodeType:{ThreadMessageNodeType.NodeType} scope:children"
+                    $"path:{hubPath} nodeType:{ThreadMessageNodeType.NodeType} scope:children sort:Timestamp-asc"
                 ).ToListAsync() as IReadOnlyList<MeshNode>;
             }
             catch
@@ -344,7 +341,7 @@ public static class ThreadLayoutAreas
                 .WithOrientation(Orientation.Horizontal)
                 .WithStyle("margin-top: 8px; padding-top: 8px; border-top: 1px solid rgba(255,255,255,0.2);")
                 .WithView(Controls.Icon(FluentIcons.ArrowRight(IconSize.Size16)).WithStyle("font-size: 14px;"))
-                .WithView(new NavLinkControl("View delegation", null, $"/{message.DelegationPath}/{ThreadArea}")));
+                .WithView(new NavLinkControl("View delegation", null, $"/{message.DelegationPath}/{ThreadNodeType.ThreadArea}")));
         }
 
         messageContainer = messageContainer.WithView(bubble);
@@ -403,7 +400,7 @@ public static class ThreadLayoutAreas
         header = header.WithView(Controls.Button("")
             .WithIconStart(FluentIcons.ArrowLeft(IconSize.Size16))
             .WithAppearance(Appearance.Stealth)
-            .WithNavigateToHref($"/{threadPath}/{ThreadArea}"));
+            .WithNavigateToHref($"/{threadPath}/{ThreadNodeType.ThreadArea}"));
 
         var title = GetThreadTitle(node);
         header = header.WithView(Controls.Html($"<h2 style=\"margin: 0 16px;\">Delegations - {System.Web.HttpUtility.HtmlEncode(title)}</h2>"));
@@ -450,7 +447,7 @@ public static class ThreadLayoutAreas
                 .WithView(Controls.Icon(FluentIcons.Chat(IconSize.Size20)).WithStyle("color: var(--accent-fill-rest);"))
                 .WithView(Controls.Html($"<strong>{System.Web.HttpUtility.HtmlEncode(title)}</strong>")))
             .WithView(Controls.Html($"<span style=\"font-size: 0.85rem; color: var(--neutral-foreground-hint);\">{timestamp}</span>"))
-            .WithView(new NavLinkControl("", null, $"/{path}/{ThreadArea}"));
+            .WithView(new NavLinkControl("", null, $"/{path}/{ThreadNodeType.ThreadArea}"));
     }
 
     /// <summary>
@@ -475,7 +472,7 @@ public static class ThreadLayoutAreas
             try
             {
                 return await meshQuery.QueryAsync<MeshNode>(
-                    $"path:{hubPath} nodeType:{ThreadMessageNodeType.NodeType} scope:children"
+                    $"path:{hubPath} nodeType:{ThreadMessageNodeType.NodeType} scope:children sort:Timestamp-asc"
                 ).ToListAsync() as IReadOnlyList<MeshNode>;
             }
             catch
@@ -538,7 +535,7 @@ public static class ThreadLayoutAreas
             .WithView(!string.IsNullOrEmpty(preview)
                 ? Controls.Html($"<p style=\"margin: 8px 0 0 0; font-size: 0.9rem; color: var(--neutral-foreground-hint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;\">{System.Web.HttpUtility.HtmlEncode(preview)}</p>")
                 : Controls.Html($"<p style=\"margin: 8px 0 0 0; font-size: 0.9rem; color: var(--neutral-foreground-hint);\">{messageCount} messages</p>"))
-            .WithView(new NavLinkControl("", null, $"/{hubPath}/{ChatArea}"));
+            .WithView(new NavLinkControl("", null, $"/{hubPath}/{ThreadNodeType.ChatArea}"));
     }
 
     /// <summary>
@@ -551,13 +548,13 @@ public static class ThreadLayoutAreas
             .WithIconOnly();
 
         // Chat option (interactive chat view)
-        menu = menu.WithView(new NavLinkControl("Chat", FluentIcons.Chat(IconSize.Size16), $"/{threadPath}/{ChatArea}"));
+        menu = menu.WithView(new NavLinkControl("Chat", FluentIcons.Chat(IconSize.Size16), $"/{threadPath}/{ThreadNodeType.ChatArea}"));
 
         // Thread option (read-only message history)
-        menu = menu.WithView(new NavLinkControl("Messages", FluentIcons.ChatMultiple(IconSize.Size16), $"/{threadPath}/{ThreadArea}"));
+        menu = menu.WithView(new NavLinkControl("Messages", FluentIcons.ChatMultiple(IconSize.Size16), $"/{threadPath}/{ThreadNodeType.ThreadArea}"));
 
         // History option (show delegations)
-        menu = menu.WithView(new NavLinkControl("Delegations", FluentIcons.History(IconSize.Size16), $"/{threadPath}/{HistoryArea}"));
+        menu = menu.WithView(new NavLinkControl("Delegations", FluentIcons.History(IconSize.Size16), $"/{threadPath}/{ThreadNodeType.HistoryArea}"));
 
         // Metadata option
         menu = menu.WithView(new NavLinkControl("Metadata", FluentIcons.Info(IconSize.Size16), $"/{threadPath}/{MeshNodeLayoutAreas.MetadataArea}"));

@@ -45,6 +45,12 @@ public interface IAgentChat
     /// <param name="threadId">The thread identifier</param>
     void SetThreadId(string threadId);
 
+    /// <summary>
+    /// Sets the persistent thread ID for server-side conversation history.
+    /// When set and using a persistent factory, the agent session links to this server-managed thread.
+    /// </summary>
+    void SetPersistentThreadId(string? persistentId) { }
+
     /// <summary>Displays a layout area in the chat as a visual component.</summary>
     /// <param name="layoutAreaControl">The layout area control</param>
     void DisplayLayoutArea(LayoutAreaControl layoutAreaControl);
