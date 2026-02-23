@@ -3,6 +3,7 @@ using System.Reactive.Linq;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Schema;
+using MeshWeaver.AI;
 using MeshWeaver.Application.Styles;
 using MeshWeaver.Data;
 using MeshWeaver.Domain;
@@ -493,7 +494,7 @@ public static class MeshNodeLayoutAreas
         var hubPath = host.Hub.Address.ToString();
 
         return Controls.MeshSearch
-            .WithHiddenQuery($"path:{hubPath} scope:children -nodeType:NodeType -nodeType:Comment -nodeType:Thread -nodeType:Code -nodeType:AccessAssignment -nodeType:GroupMembership")
+            .WithHiddenQuery($"path:{hubPath} scope:children -nodeType:NodeType -nodeType:Comment -nodeType:{ThreadNodeType.NodeType} -nodeType:Code -nodeType:AccessAssignment -nodeType:GroupMembership")
             .WithShowSearchBox(false)
             .WithRenderMode(MeshSearchRenderMode.Grouped)
             // No explicit grouping - defaults to NodeType which gives meaningful labels
@@ -512,7 +513,7 @@ public static class MeshNodeLayoutAreas
         var hubPath = host.Hub.Address.ToString();
 
         return Controls.MeshSearch
-            .WithHiddenQuery($"path:{hubPath} scope:children nodeType:Thread")
+            .WithHiddenQuery($"path:{hubPath} scope:children nodeType:{ThreadNodeType.NodeType}")
             .WithPlaceholder("Search threads...")
             .WithRenderMode(MeshSearchRenderMode.Flat)
             .WithMaxColumns(3);

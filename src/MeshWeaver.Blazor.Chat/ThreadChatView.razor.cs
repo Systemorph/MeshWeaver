@@ -246,7 +246,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
             if (meshQuery != null)
             {
                 var messageNodes = await meshQuery.QueryAsync<MeshNode>(
-                    $"path:{threadPath} nodeType:{ThreadMessageNodeType.NodeType} scope:children"
+                    $"path:{threadPath} nodeType:{ThreadMessageNodeType.NodeType} scope:children sort:Timestamp-asc"
                 ).ToListAsync();
 
                 var threadMessages = messageNodes
@@ -295,7 +295,15 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
             }
 
             chat?.SetThreadId(threadPath);
-            Logger.LogDebug("[ThreadChat:{InstanceId}] Loaded thread: {Path}", _instanceId, threadPath);
+
+            // Pass persistent thread ID if the thread has one
+            if (!string.IsNullOrEmpty(threadContent?.PersistentThreadId))
+            {
+                chat?.SetPersistentThreadId(threadContent.PersistentThreadId);
+            }
+
+            Logger.LogDebug("[ThreadChat:{InstanceId}] Loaded thread: {Path} (PersistentThreadId={PersistentThreadId})",
+                _instanceId, threadPath, threadContent?.PersistentThreadId ?? "(none)");
         }
         catch (Exception ex)
         {
