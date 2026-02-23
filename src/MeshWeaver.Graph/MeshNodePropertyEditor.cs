@@ -164,8 +164,9 @@ public static class MeshNodePropertyEditor
         {
             editCtrl = CreateDimensionSelect(host, jsonPointer, dimAttr, isRequired, isReadonly, dataId);
         }
-        // Check for MeshNodeAttribute
-        else if (prop.GetCustomAttribute<MeshNodeAttribute>() is { } meshNodeAttr)
+        // Check for MeshNodeAttribute (scalar string properties only, not collections)
+        else if (prop.GetCustomAttribute<MeshNodeAttribute>() is { } meshNodeAttr
+                 && propType == typeof(string))
         {
             editCtrl = new MeshNodePickerControl(jsonPointer)
             {

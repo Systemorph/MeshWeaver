@@ -1,7 +1,7 @@
 using System.Reactive.Linq;
-using System.Text;
 using MeshWeaver.Application.Styles;
 using MeshWeaver.Data;
+using MeshWeaver.Domain;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Layout.Domain;
@@ -9,14 +9,15 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
+using MeshWeaver.ShortGuid;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.Graph;
 
 /// <summary>
 /// Layout area for managing access control on a mesh node.
-/// Inherited assignments are loaded via IMeshQuery from ancestor nodes (read-only markdown table).
-/// Local assignments are loaded via ObserveQuery from children (editable, reactive).
+/// Inherited assignments are loaded via IMeshQuery from ancestor nodes (merged per person).
+/// Local assignments are rendered via AccessAssignmentControlBuilder (reactive).
 /// </summary>
 public static class AccessControlLayoutArea
 {
@@ -43,18 +44,9 @@ public static class AccessControlLayoutArea
         var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? [])
             ?? Observable.Return<MeshNode[]>([]);
 
-        // Use ObserveQuery for local assignments so the view reactively updates
-        // when assignments are added or removed via IMeshCatalog.
-        var localAssignmentsStream = meshQuery != null
-            ? meshQuery.ObserveQuery<MeshNode>(
-                MeshQueryRequest.FromQuery($"path:{hubPath} nodeType:AccessAssignment scope:children"))
-                .Select(change => (IReadOnlyList<MeshNode>)change.Items)
-            : Observable.Return<IReadOnlyList<MeshNode>>([]);
-
-        return nodeStream.CombineLatest(localAssignmentsStream, (nodes, localAssignments) => (nodes, localAssignments))
-            .SelectMany(async tuple =>
+        return nodeStream
+            .SelectMany(async nodes =>
             {
-                var (nodes, localAssignments) = tuple;
                 var node = nodes.FirstOrDefault(n => n.Namespace == hubPath || n.Path == hubPath);
                 var isAdmin = await CheckAdminPermission(host.Hub, hubPath);
 
@@ -81,11 +73,11 @@ public static class AccessControlLayoutArea
                     }
                 }
 
-                return BuildAccessControlPage(node, hubPath, isAdmin, inherited, localAssignments);
+                return BuildAccessControlPage(host, node, hubPath, isAdmin, inherited);
             });
     }
 
-    private static AccessAssignment? DeserializeAssignment(MeshNode node)
+    internal static AccessAssignment? DeserializeAssignment(MeshNode node)
     {
         if (node.Content is AccessAssignment aa)
             return aa;
@@ -101,11 +93,11 @@ public static class AccessControlLayoutArea
     }
 
     private static UiControl? BuildAccessControlPage(
+        LayoutAreaHost host,
         MeshNode? node,
         string nodePath,
         bool isAdmin,
-        IReadOnlyList<(AccessAssignment Assignment, string SourcePath)> inherited,
-        IReadOnlyList<MeshNode> localAssignmentNodes)
+        IReadOnlyList<(AccessAssignment Assignment, string SourcePath)> inherited)
     {
         var stack = Controls.Stack.WithStyle("padding: 24px; gap: 24px;");
 
@@ -113,7 +105,7 @@ public static class AccessControlLayoutArea
         var headerText = node?.Name ?? nodePath.Split('/').LastOrDefault() ?? nodePath;
         stack = stack.WithView(Controls.H2($"Access Control - {headerText}"));
 
-        // Section 1: Inherited Permissions (read-only Markdown Table)
+        // Section 1: Inherited Permissions (merged per person, using builder)
         stack = stack.WithView(Controls.H3("Inherited Permissions").WithStyle("margin: 0;"));
 
         if (inherited.Count == 0)
@@ -122,95 +114,282 @@ public static class AccessControlLayoutArea
         }
         else
         {
-            var markdown = BuildInheritedMarkdownTable(inherited);
-            stack = stack.WithView(Controls.Markdown(markdown));
+            stack = stack.WithView(BuildInheritedSection(inherited));
         }
 
-        // Section 2: Local Assignments (editable)
+        // Section 2: Local Assignments (reactive via workspace stream, LayoutGrid)
         stack = stack.WithView(Controls.H3("Local Assignments").WithStyle("margin: 0;"));
 
-        if (localAssignmentNodes.Count == 0)
-        {
-            stack = stack.WithView(Controls.Html("<p style=\"color: var(--neutral-foreground-hint);\">No local assignments.</p>"));
-        }
-        else
-        {
-            foreach (var assignmentNode in localAssignmentNodes)
-            {
-                var assignment = DeserializeAssignment(assignmentNode);
-                if (assignment == null) continue;
+        stack = stack.WithView((h, _) => BuildLocalAssignments(h, nodePath, isAdmin));
 
-                var subjectDisplay = assignment.DisplayName ?? assignment.AccessObject;
-                var capturedNode = assignmentNode;
-
-                foreach (var role in assignment.Roles)
-                {
-                    var isActive = !role.Denied;
-
-                    var row = Controls.Stack
-                        .WithOrientation(Orientation.Horizontal)
-                        .WithStyle("padding: 4px 16px; border-bottom: 1px solid var(--neutral-stroke-rest); align-items: center; gap: 12px;")
-                        .WithView(Controls.Label(subjectDisplay).WithStyle("font-weight: 600; flex: 1; min-width: 120px;"))
-                        .WithView(Controls.Label(role.Role).WithStyle("flex: 1; min-width: 120px;"));
-
-                    if (isAdmin)
-                    {
-                        row = row
-                            .WithView(Controls.Label(isActive ? "Allow" : "Deny")
-                                .WithStyle("color: var(--neutral-foreground-hint);"))
-                            .WithView(Controls.Button("")
-                                .WithIconStart(FluentIcons.Delete())
-                                .WithAppearance(Appearance.Stealth)
-                                .WithClickAction(async ctx =>
-                                {
-                                    var catalog = ctx.Hub.ServiceProvider.GetService<IMeshCatalog>();
-                                    if (catalog != null)
-                                        await catalog.DeleteNodeAsync(capturedNode.Path);
-                                }));
-                    }
-                    else
-                    {
-                        row = row.WithView(Controls.Label(isActive ? "Allow" : "Deny")
-                            .WithStyle("color: var(--neutral-foreground-hint);"));
-                    }
-
-                    stack = stack.WithView(row);
-                }
-            }
-        }
-
-        // Add Assignment button (only for admins) — navigates to standard Create flow
+        // + button if admin
         if (isAdmin)
         {
-            var createUrl = MeshNodeLayoutAreas.BuildContentUrl(nodePath, MeshNodeLayoutAreas.CreateNodeArea, "type=AccessAssignment");
-            stack = stack.WithView(Controls.Button("Add Assignment")
+            stack = stack.WithView(Controls.Button("+ Add Assignment")
                 .WithAppearance(Appearance.Accent)
-                .WithIconStart(FluentIcons.PersonAdd())
-                .WithNavigateToHref(createUrl));
+                .WithStyle("align-self: flex-start; margin-top: 8px;")
+                .WithClickAction(async ctx => await ShowAddAssignmentDialog(ctx, nodePath)));
         }
 
         return stack;
     }
 
-    private static string BuildInheritedMarkdownTable(
+    /// <summary>
+    /// Builds the inherited section by merging assignments per person.
+    /// </summary>
+    private static UiControl BuildInheritedSection(
         IReadOnlyList<(AccessAssignment Assignment, string SourcePath)> inherited)
     {
-        var sb = new StringBuilder();
-        sb.AppendLine("| Subject | Role | Source | Access |");
-        sb.AppendLine("|---------|------|--------|--------|");
-
-        foreach (var (assignment, sourcePath) in inherited.OrderBy(x => x.Assignment.AccessObject))
-        {
-            var subject = assignment.DisplayName ?? assignment.AccessObject;
-            var source = string.IsNullOrEmpty(sourcePath) ? "Global" : sourcePath;
-
-            foreach (var role in assignment.Roles)
+        var merged = inherited
+            .GroupBy(x => x.Assignment.AccessObject)
+            .OrderBy(g => g.Key)
+            .Select(g =>
             {
-                var access = role.Denied ? "Deny" : "Allow";
-                sb.AppendLine($"| {subject} | {role.Role} | {source} | {access} |");
+                var first = g.First();
+                var mergedRoles = g
+                    .SelectMany(x =>
+                    {
+                        var source = string.IsNullOrEmpty(x.SourcePath) ? "Global" : x.SourcePath.Split('/').LastOrDefault() ?? x.SourcePath;
+                        return x.Assignment.Roles.Select(r => new RoleAssignment
+                        {
+                            Role = string.IsNullOrEmpty(r.Role) ? $"(no role) [{source}]" : $"{r.Role} [{source}]",
+                            Denied = r.Denied
+                        });
+                    })
+                    .ToList();
+
+                return first.Assignment with { Roles = mergedRoles };
+            })
+            .ToList();
+
+        var container = Controls.Stack.WithStyle("gap: 6px;");
+        foreach (var assignment in merged)
+        {
+            container = container.WithView(AccessAssignmentControlBuilder.Build(
+                assignment, isEditable: false));
+        }
+        return container;
+    }
+
+    /// <summary>
+    /// Builds the local assignments section using reactive workspace stream.
+    /// Uses LayoutGrid with full-width items and × delete buttons.
+    /// </summary>
+    private static IObservable<UiControl?> BuildLocalAssignments(
+        LayoutAreaHost host, string nodePath, bool isAdmin)
+    {
+        var meshQuery = host.Hub.ServiceProvider.GetService<IMeshQuery>();
+        if (meshQuery == null)
+            return Observable.Return<UiControl?>(Controls.Html("<p style=\"color: var(--neutral-foreground-hint);\">No local assignments.</p>"));
+
+        return meshQuery
+            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery($"path:{nodePath} nodeType:AccessAssignment scope:children"))
+            .Select(change =>
+            {
+                var nodes = change.Items;
+                if (nodes == null || !nodes.Any())
+                    return (UiControl?)Controls.Html("<p style=\"color: var(--neutral-foreground-hint);\">No local assignments.</p>");
+
+                var grid = Controls.LayoutGrid
+                    .WithStyle(s => s.WithWidth("100%"))
+                    .WithSkin(s => s.WithSpacing(2));
+
+                foreach (var assignmentNode in nodes.OrderBy(n => n.Name))
+                {
+                    var assignment = DeserializeAssignment(assignmentNode);
+                    if (assignment == null) continue;
+
+                    var capturedPath = assignmentNode.Path;
+                    var card = AccessAssignmentControlBuilder.Build(
+                        assignment,
+                        node: assignmentNode,
+                        isEditable: isAdmin,
+                        navigateTo: $"/{assignmentNode.Path}",
+                        onDelete: isAdmin
+                            ? async ctx => await DeleteAssignment(ctx, host, capturedPath)
+                            : null);
+
+                    grid = grid.WithView(card, s => s.WithXs(12).WithMd(6).WithLg(3));
+                }
+                return (UiControl?)grid;
+            });
+    }
+
+    /// <summary>
+    /// Deletes an AccessAssignment node.
+    /// </summary>
+    private static async Task DeleteAssignment(UiActionContext ctx, LayoutAreaHost host, string nodePath)
+    {
+        var meshCatalog = host.Hub.ServiceProvider.GetService<IMeshCatalog>();
+        if (meshCatalog != null)
+        {
+            try
+            {
+                await meshCatalog.DeleteNodeAsync(nodePath);
+            }
+            catch (Exception ex)
+            {
+                var dialog = Controls.Dialog(
+                    Controls.Markdown($"Failed to delete: {ex.Message}"),
+                    "Error"
+                ).WithSize("S").WithClosable(true);
+                ctx.Host.UpdateArea(DialogControl.DialogArea, dialog);
             }
         }
+    }
 
-        return sb.ToString();
+    /// <summary>
+    /// Shows a dialog to add a new access assignment.
+    /// Captures both Subject (user/group) AND Role in one dialog.
+    /// </summary>
+    private static Task ShowAddAssignmentDialog(UiActionContext ctx, string nodePath)
+    {
+        var formId = $"add_assignment_{Guid.NewGuid().AsString()}";
+        ctx.Host.UpdateData(formId, new Dictionary<string, object?>
+        {
+            ["accessObject"] = "",
+            ["role"] = ""
+        });
+
+        // Resolve queries for AccessObject from [MeshNode] attribute
+        var meshNodeAttr = typeof(AccessAssignment).GetProperty(nameof(AccessAssignment.AccessObject))!
+            .GetCustomAttributes(typeof(MeshNodeAttribute), false).OfType<MeshNodeAttribute>().First();
+        var subjectQueries = MeshNodeAttribute.ResolveQueries(meshNodeAttr.Queries, nodePath, nodePath);
+
+        // Resolve queries for Role from [MeshNodeCollection] attribute
+        var rolesAttr = typeof(AccessAssignment).GetProperty(nameof(AccessAssignment.Roles))!
+            .GetCustomAttributes(typeof(MeshNodeCollectionAttribute), false)
+            .OfType<MeshNodeCollectionAttribute>().First();
+        var roleQueries = MeshNodeCollectionAttribute.ResolveQueries(rolesAttr.Queries, nodePath, nodePath);
+
+        var formContent = Controls.Stack.WithStyle("gap: 16px; padding: 16px;")
+            .WithView(new MeshNodePickerControl(new JsonPointerReference("accessObject"))
+            {
+                Queries = subjectQueries,
+                Label = "Subject (User or Group)",
+                Required = true,
+                DataContext = LayoutAreaReference.GetDataPointer(formId)
+            })
+            .WithView(new MeshNodePickerControl(new JsonPointerReference("role"))
+            {
+                Queries = roleQueries,
+                Label = "Role",
+                Required = true,
+                DataContext = LayoutAreaReference.GetDataPointer(formId)
+            });
+
+        var actions = Controls.Stack
+            .WithOrientation(Orientation.Horizontal)
+            .WithStyle("justify-content: flex-end; gap: 8px;")
+            .WithView(Controls.Button("Cancel")
+                .WithAppearance(Appearance.Neutral)
+                .WithClickAction(cancelCtx =>
+                {
+                    cancelCtx.Host.UpdateArea(DialogControl.DialogArea, null!);
+                    return Task.CompletedTask;
+                }))
+            .WithView(Controls.Button("Create")
+                .WithAppearance(Appearance.Accent)
+                .WithClickAction(async saveCtx =>
+                {
+                    var formValues = await saveCtx.Host.Stream
+                        .GetDataStream<Dictionary<string, object?>>(formId).FirstAsync();
+
+                    var selectedSubject = formValues.GetValueOrDefault("accessObject")?.ToString()?.Trim();
+                    var selectedRole = formValues.GetValueOrDefault("role")?.ToString()?.Trim();
+
+                    if (string.IsNullOrEmpty(selectedSubject))
+                    {
+                        ShowValidationError(saveCtx, "Please select a **Subject**.");
+                        return;
+                    }
+                    if (string.IsNullOrEmpty(selectedRole))
+                    {
+                        ShowValidationError(saveCtx, "Please select a **Role**.");
+                        return;
+                    }
+
+                    var subjectName = selectedSubject.Split('/').Last();
+                    var nodeId = $"{subjectName}_Access";
+                    var path = $"{nodePath}/{nodeId}";
+
+                    // Check if an assignment already exists for this subject
+                    MeshNode? existing = null;
+                    var query = saveCtx.Hub.ServiceProvider.GetService<IMeshQuery>();
+                    if (query != null)
+                    {
+                        try
+                        {
+                            existing = await query.QueryAsync<MeshNode>($"path:{path} scope:exact")
+                                .FirstOrDefaultAsync();
+                        }
+                        catch { }
+                    }
+
+                    // Close dialog
+                    saveCtx.Host.UpdateArea(DialogControl.DialogArea, null!);
+
+                    if (existing != null)
+                    {
+                        // Navigate to existing assignment
+                        saveCtx.NavigateTo($"/{existing.Path}");
+                    }
+                    else
+                    {
+                        // Create the node directly with the role already set
+                        var catalog = saveCtx.Hub.ServiceProvider.GetService<IMeshCatalog>();
+                        if (catalog != null)
+                        {
+                            // Look up the subject node to copy their icon
+                            string? subjectIcon = null;
+                            if (query != null)
+                            {
+                                try
+                                {
+                                    var subjectNode = await query.QueryAsync<MeshNode>($"path:{selectedSubject} scope:exact")
+                                        .FirstOrDefaultAsync();
+                                    subjectIcon = subjectNode?.Icon;
+                                }
+                                catch { }
+                            }
+
+                            var newNode = new MeshNode(nodeId, nodePath)
+                            {
+                                NodeType = Configuration.AccessAssignmentNodeType.NodeType,
+                                Name = $"{subjectName} Access",
+                                Icon = subjectIcon,
+                                Content = new AccessAssignment
+                                {
+                                    AccessObject = selectedSubject,
+                                    DisplayName = subjectName,
+                                    Roles = [new RoleAssignment { Role = selectedRole, Denied = false }]
+                                }
+                            };
+
+                            // Save directly — no transient/Create view needed
+                            saveCtx.Hub.Post(
+                                new DataChangeRequest { ChangedBy = saveCtx.Host.Stream.ClientId }.WithUpdates(newNode),
+                                o => o.WithTarget(saveCtx.Hub.Address));
+
+                            saveCtx.NavigateTo($"/{path}");
+                        }
+                    }
+                }));
+
+        var dialog = Controls.Dialog(formContent, "Add Assignment")
+            .WithSize("M")
+            .WithActions(actions);
+
+        ctx.Host.UpdateArea(DialogControl.DialogArea, dialog);
+        return Task.CompletedTask;
+    }
+
+    private static void ShowValidationError(UiActionContext ctx, string message)
+    {
+        var errorDialog = Controls.Dialog(
+            Controls.Markdown(message),
+            "Validation Error"
+        ).WithSize("S").WithClosable(true);
+        ctx.Host.UpdateArea(DialogControl.DialogArea, errorDialog);
     }
 }

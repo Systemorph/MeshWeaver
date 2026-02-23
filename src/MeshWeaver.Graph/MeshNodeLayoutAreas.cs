@@ -62,6 +62,7 @@ public static class MeshNodeLayoutAreas
     public const string ChildrenArea = "Children";
     public const string NodeTypesArea = "NodeTypes";
     public const string AccessControlArea = "AccessControl";
+    public const string GroupsArea = "Groups";
     public const string CreateNodeArea = "Create";
     public const string EditArea = "Edit";
     public const string DeleteArea = "Delete";
@@ -99,6 +100,7 @@ public static class MeshNodeLayoutAreas
             .WithView(ThreadsArea, Threads)
             .WithView(NodeTypesArea, NodeTypes)
             .WithView(AccessControlArea, AccessControl)
+            .WithView(GroupsArea, Groups)
             .WithView(CreateNodeArea, CreateNode)
             .WithView(ImportMeshNodesArea, ImportLayoutArea.ImportMeshNodes)
             .WithView(DeleteArea, DeleteLayoutArea.Delete)
@@ -1035,6 +1037,14 @@ public static class MeshNodeLayoutAreas
     [Browsable(false)]
     public static IObservable<UiControl?> AccessControl(LayoutAreaHost host, RenderingContext ctx)
         => AccessControlLayoutArea.AccessControl(host, ctx);
+
+    /// <summary>
+    /// Renders the Groups area for managing group memberships on this node.
+    /// Delegates to GroupsLayoutArea for the full management UI.
+    /// </summary>
+    [Browsable(false)]
+    public static IObservable<UiControl?> Groups(LayoutAreaHost host, RenderingContext ctx)
+        => GroupsLayoutArea.Groups(host, ctx);
 
     #endregion
 

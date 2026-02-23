@@ -60,6 +60,7 @@ public static class MeshNodeExtensions
         typeRegistry.WithType(typeof(Role), nameof(Role));
         typeRegistry.WithType(typeof(AccessObject), nameof(AccessObject));
         typeRegistry.WithType(typeof(GroupMembership), nameof(GroupMembership));
+        typeRegistry.WithType(typeof(MembershipEntry), nameof(MembershipEntry));
         return typeRegistry;
     }
 }
