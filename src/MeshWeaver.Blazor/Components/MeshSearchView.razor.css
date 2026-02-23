@@ -176,3 +176,23 @@
 ::deep fluent-grid-item > * {
     width: 100%;
 }
+
+/* CSS grid for LayoutAreaView items — bypasses FluentGrid sizing issues */
+.mesh-search-area-grid {
+    display: grid;
+    gap: 8px;
+    width: 100%;
+    grid-template-columns: 1fr;
+}
+
+@@media (min-width: 600px) {
+    .mesh-search-area-grid {
+        grid-template-columns: repeat(2, 1fr);
+    }
+}
+
+@@media (min-width: 960px) {
+    .mesh-search-area-grid {
+        grid-template-columns: repeat(3, 1fr);
+    }
+}

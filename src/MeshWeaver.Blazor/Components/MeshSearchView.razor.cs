@@ -459,32 +459,49 @@ public partial class MeshSearchView : IDisposable
                 builder.OpenElement(seq++, "div");
                 builder.AddAttribute(seq++, "class", "mesh-search-grid-wrapper");
 
-                builder.OpenComponent<FluentGrid>(seq++);
-                builder.AddAttribute(seq++, "Spacing", BoundGrid.Spacing);
-                builder.AddAttribute(seq++, "Justify", Microsoft.FluentUI.AspNetCore.Components.JustifyContent.FlexStart);
-                builder.AddAttribute(seq++, "Style", "width: 100%;");
-                builder.AddAttribute(seq++, "ChildContent", (RenderFragment)(gridBuilder =>
+                if (!string.IsNullOrEmpty(BoundItemArea))
                 {
-                    var gridSeq = 0;
+                    // Use plain CSS grid for LayoutAreaView items (FluentGrid sizing doesn't work with nested LayoutAreaView)
+                    builder.OpenElement(seq++, "div");
+                    builder.AddAttribute(seq++, "class", "mesh-search-area-grid");
 
                     foreach (var item in group.Items)
                     {
                         if (item is not MeshNode node) continue;
-
-                        gridBuilder.OpenComponent<FluentGridItem>(gridSeq++);
-                        gridBuilder.AddAttribute(gridSeq++, "xs", BoundGrid.Xs);
-                        gridBuilder.AddAttribute(gridSeq++, "sm", BoundGrid.Sm);
-                        gridBuilder.AddAttribute(gridSeq++, "md", BoundGrid.Md);
-                        gridBuilder.AddAttribute(gridSeq++, "lg", BoundGrid.Lg);
-                        gridBuilder.AddAttribute(gridSeq++, "Style", "width: 100%;");
-                        gridBuilder.AddAttribute(gridSeq++, "ChildContent", (RenderFragment)(itemBuilder =>
-                        {
-                            RenderNodeCard(itemBuilder, node);
-                        }));
-                        gridBuilder.CloseComponent();
+                        RenderNodeCard(builder, node);
                     }
-                }));
-                builder.CloseComponent();
+
+                    builder.CloseElement();
+                }
+                else
+                {
+                    builder.OpenComponent<FluentGrid>(seq++);
+                    builder.AddAttribute(seq++, "Spacing", BoundGrid.Spacing);
+                    builder.AddAttribute(seq++, "Justify", Microsoft.FluentUI.AspNetCore.Components.JustifyContent.FlexStart);
+                    builder.AddAttribute(seq++, "Style", "width: 100%;");
+                    builder.AddAttribute(seq++, "ChildContent", (RenderFragment)(gridBuilder =>
+                    {
+                        var gridSeq = 0;
+
+                        foreach (var item in group.Items)
+                        {
+                            if (item is not MeshNode node) continue;
+
+                            gridBuilder.OpenComponent<FluentGridItem>(gridSeq++);
+                            gridBuilder.AddAttribute(gridSeq++, "xs", BoundGrid.Xs);
+                            gridBuilder.AddAttribute(gridSeq++, "sm", BoundGrid.Sm);
+                            gridBuilder.AddAttribute(gridSeq++, "md", BoundGrid.Md);
+                            gridBuilder.AddAttribute(gridSeq++, "lg", BoundGrid.Lg);
+                            gridBuilder.AddAttribute(gridSeq++, "Style", "width: 100%;");
+                            gridBuilder.AddAttribute(gridSeq++, "ChildContent", (RenderFragment)(itemBuilder =>
+                            {
+                                RenderNodeCard(itemBuilder, node);
+                            }));
+                            gridBuilder.CloseComponent();
+                        }
+                    }));
+                    builder.CloseComponent();
+                }
                 builder.CloseElement();
 
                 if (group.Items.Count < group.TotalCount)
@@ -512,10 +529,41 @@ public partial class MeshSearchView : IDisposable
         StateHasChanged();
     }
 
+    private string? BoundItemArea
+    {
+        get
+        {
+            if (ViewModel?.ItemArea is string s) return s;
+            if (ViewModel?.ItemArea is JsonElement je && je.ValueKind == JsonValueKind.String)
+                return je.GetString();
+            return null;
+        }
+    }
+
     private void RenderNodeCard(RenderTreeBuilder builder, MeshNode node)
     {
+        if (!string.IsNullOrEmpty(BoundItemArea))
+        {
+            RenderLayoutAreaItem(builder, node);
+            return;
+        }
         var seq = 0;
         RenderThumbnailCard(builder, node, ref seq);
+    }
+
+    private void RenderLayoutAreaItem(RenderTreeBuilder builder, MeshNode node)
+    {
+        var seq = 0;
+        var layoutArea = new LayoutAreaControl(
+            node.Path,
+            new LayoutAreaReference(BoundItemArea!))
+            .WithShowProgress(false);
+
+        builder.OpenComponent<LayoutAreaView>(seq++);
+        builder.AddAttribute(seq++, "ViewModel", layoutArea);
+        builder.AddAttribute(seq++, "Stream", Stream);
+        builder.AddAttribute(seq++, "Area", $"search-{node.Path}-{BoundItemArea}");
+        builder.CloseComponent();
     }
 
     private void RenderThumbnailCard(RenderTreeBuilder builder, MeshNode node, ref int seq)
