@@ -17,7 +17,7 @@ namespace MeshWeaver.Graph;
 /// <summary>
 /// Layout area for managing access control on a mesh node.
 /// Inherited assignments are loaded via IMeshQuery from ancestor nodes (merged per person).
-/// Local assignments are rendered via AccessAssignmentControlBuilder (reactive).
+/// Local assignments are rendered via MeshSearchControl with Thumbnail areas.
 /// </summary>
 public static class AccessControlLayoutArea
 {
@@ -51,7 +51,7 @@ public static class AccessControlLayoutArea
                 var isAdmin = await CheckAdminPermission(host.Hub, hubPath);
 
                 // Load inherited assignments from ancestor nodes via IMeshQuery (one-shot, rarely changes)
-                var inherited = new List<(AccessAssignment Assignment, string SourcePath)>();
+                var inherited = new List<(AccessAssignment Assignment, string SourcePath, MeshNode Node)>();
                 if (meshQuery != null)
                 {
                     try
@@ -64,7 +64,7 @@ public static class AccessControlLayoutArea
                         {
                             var assignment = DeserializeAssignment(assignmentNode);
                             if (assignment != null)
-                                inherited.Add((assignment, assignmentNode.Namespace ?? ""));
+                                inherited.Add((assignment, assignmentNode.Namespace ?? "", assignmentNode));
                         }
                     }
                     catch
@@ -97,7 +97,7 @@ public static class AccessControlLayoutArea
         MeshNode? node,
         string nodePath,
         bool isAdmin,
-        IReadOnlyList<(AccessAssignment Assignment, string SourcePath)> inherited)
+        IReadOnlyList<(AccessAssignment Assignment, string SourcePath, MeshNode Node)> inherited)
     {
         var stack = Controls.Stack.WithStyle("padding: 24px; gap: 24px;");
 
@@ -117,10 +117,15 @@ public static class AccessControlLayoutArea
             stack = stack.WithView(BuildInheritedSection(inherited));
         }
 
-        // Section 2: Local Assignments (reactive via workspace stream, LayoutGrid)
+        // Section 2: Local Assignments (reactive via MeshSearchControl with Thumbnail areas)
         stack = stack.WithView(Controls.H3("Local Assignments").WithStyle("margin: 0;"));
 
-        stack = stack.WithView((h, _) => BuildLocalAssignments(h, nodePath, isAdmin));
+        stack = stack.WithView(Controls.MeshSearch
+            .WithHiddenQuery($"namespace:{nodePath} nodeType:AccessAssignment")
+            .WithShowSearchBox(false)
+            .WithItemArea(MeshNodeLayoutAreas.ThumbnailArea)
+            .WithGridBreakpoints(xs: 12, sm: 6, md: 4)
+            .WithReactiveMode(true));
 
         // + button if admin
         if (isAdmin)
@@ -136,9 +141,10 @@ public static class AccessControlLayoutArea
 
     /// <summary>
     /// Builds the inherited section by merging assignments per person.
+    /// Uses the MeshNode from the ancestor query to get user icons.
     /// </summary>
     private static UiControl BuildInheritedSection(
-        IReadOnlyList<(AccessAssignment Assignment, string SourcePath)> inherited)
+        IReadOnlyList<(AccessAssignment Assignment, string SourcePath, MeshNode Node)> inherited)
     {
         var merged = inherited
             .GroupBy(x => x.Assignment.AccessObject)
@@ -158,67 +164,23 @@ public static class AccessControlLayoutArea
                     })
                     .ToList();
 
-                return first.Assignment with { Roles = mergedRoles };
+                return (Assignment: first.Assignment with { Roles = mergedRoles }, first.Node);
             })
             .ToList();
 
         var container = Controls.Stack.WithStyle("gap: 6px;");
-        foreach (var assignment in merged)
+        foreach (var item in merged)
         {
             container = container.WithView(AccessAssignmentControlBuilder.Build(
-                assignment, isEditable: false));
+                item.Assignment, node: item.Node, isEditable: false));
         }
         return container;
     }
 
     /// <summary>
-    /// Builds the local assignments section using reactive workspace stream.
-    /// Uses LayoutGrid with full-width items and × delete buttons.
-    /// </summary>
-    private static IObservable<UiControl?> BuildLocalAssignments(
-        LayoutAreaHost host, string nodePath, bool isAdmin)
-    {
-        var meshQuery = host.Hub.ServiceProvider.GetService<IMeshQuery>();
-        if (meshQuery == null)
-            return Observable.Return<UiControl?>(Controls.Html("<p style=\"color: var(--neutral-foreground-hint);\">No local assignments.</p>"));
-
-        return meshQuery
-            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery($"path:{nodePath} nodeType:AccessAssignment scope:children"))
-            .Select(change =>
-            {
-                var nodes = change.Items;
-                if (nodes == null || !nodes.Any())
-                    return (UiControl?)Controls.Html("<p style=\"color: var(--neutral-foreground-hint);\">No local assignments.</p>");
-
-                var grid = Controls.LayoutGrid
-                    .WithStyle(s => s.WithWidth("100%"))
-                    .WithSkin(s => s.WithSpacing(2));
-
-                foreach (var assignmentNode in nodes.OrderBy(n => n.Name))
-                {
-                    var assignment = DeserializeAssignment(assignmentNode);
-                    if (assignment == null) continue;
-
-                    var capturedPath = assignmentNode.Path;
-                    var card = AccessAssignmentControlBuilder.Build(
-                        assignment,
-                        node: assignmentNode,
-                        isEditable: isAdmin,
-                        navigateTo: $"/{assignmentNode.Path}",
-                        onDelete: isAdmin
-                            ? async ctx => await DeleteAssignment(ctx, host, capturedPath)
-                            : null);
-
-                    grid = grid.WithView(card, s => s.WithXs(12).WithMd(6).WithLg(3));
-                }
-                return (UiControl?)grid;
-            });
-    }
-
-    /// <summary>
     /// Deletes an AccessAssignment node.
     /// </summary>
-    private static async Task DeleteAssignment(UiActionContext ctx, LayoutAreaHost host, string nodePath)
+    internal static async Task DeleteAssignment(UiActionContext ctx, LayoutAreaHost host, string nodePath)
     {
         var meshCatalog = host.Hub.ServiceProvider.GetService<IMeshCatalog>();
         if (meshCatalog != null)
@@ -331,8 +293,7 @@ public static class AccessControlLayoutArea
 
                     if (existing != null)
                     {
-                        // Navigate to existing assignment
-                        saveCtx.NavigateTo($"/{existing.Path}");
+                        // Assignment already exists for this subject — dialog closes, page stays
                     }
                     else
                     {
@@ -370,8 +331,6 @@ public static class AccessControlLayoutArea
                             saveCtx.Hub.Post(
                                 new DataChangeRequest { ChangedBy = saveCtx.Host.Stream.ClientId }.WithUpdates(newNode),
                                 o => o.WithTarget(saveCtx.Hub.Address));
-
-                            saveCtx.NavigateTo($"/{path}");
                         }
                     }
                 }));

@@ -1,6 +1,5 @@
 using System.Reactive.Linq;
 using System.Reflection;
-using System.Text.Json;
 using MeshWeaver.Application.Styles;
 using MeshWeaver.Data;
 using MeshWeaver.Domain;
@@ -31,35 +30,170 @@ public static class AccessAssignmentLayoutAreas
             .WithView(MeshNodeLayoutAreas.DeleteArea, DeleteLayoutArea.Delete));
 
     /// <summary>
-    /// Custom thumbnail — uses MeshNodeThumbnailControl with role names as description.
+    /// Custom thumbnail — rich card showing user icon + name, role names + icons, × buttons.
+    /// Async: queries IMeshQuery for user and role node details.
     /// </summary>
     public static IObservable<UiControl?> Thumbnail(LayoutAreaHost host, RenderingContext _)
     {
         var hubPath = host.Hub.Address.ToString();
+        var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? [])
+            ?? Observable.Return<MeshNode[]>([]);
 
-        return host.StreamView<MeshNode>(
-            (nodes, h) =>
+        return nodeStream.SelectMany(async nodes =>
+        {
+            var node = nodes.FirstOrDefault(n => n.Path == hubPath);
+            if (node == null)
+                return (UiControl?)MeshNodeThumbnailControl.FromNode(null, hubPath);
+
+            var assignment = AccessControlLayoutArea.DeserializeAssignment(node);
+            if (assignment == null)
+                return (UiControl?)MeshNodeThumbnailControl.FromNode(node, hubPath);
+
+            var meshQuery = host.Hub.ServiceProvider.GetService<IMeshQuery>();
+            var permissions = await PermissionHelper.GetEffectivePermissionsAsync(host.Hub, hubPath);
+            var canDelete = permissions.HasFlag(Permission.Delete);
+
+            return (UiControl?)await BuildThumbnailCardAsync(host, hubPath, assignment, node, meshQuery, canDelete);
+        });
+    }
+
+    private static async Task<UiControl> BuildThumbnailCardAsync(
+        LayoutAreaHost host, string hubPath,
+        AccessAssignment assignment, MeshNode node,
+        IMeshQuery? meshQuery, bool canDelete)
+    {
+        // Load user node for name + icon
+        MeshNode? userNode = null;
+        if (meshQuery != null && !string.IsNullOrEmpty(assignment.AccessObject))
+        {
+            try
             {
-                var node = nodes.FirstOrDefault(n => n.Path == hubPath);
-                var assignment = AccessControlLayoutArea.DeserializeAssignment(node!);
-                if (assignment == null)
-                    return MeshNodeThumbnailControl.FromNode(node, hubPath);
+                userNode = await meshQuery.QueryAsync<MeshNode>(
+                    $"path:{assignment.AccessObject} scope:exact").FirstOrDefaultAsync();
+            }
+            catch { }
+        }
 
-                var rolesText = string.Join(", ", assignment.Roles.Select(r =>
-                    string.IsNullOrEmpty(r.Role) ? "(no role)" : GetRoleDisplayName(r.Role)));
-                var imageUrl = MeshNodeThumbnailControl.GetImageUrlForNode(node);
+        var userName = userNode?.Name ?? assignment.DisplayName ?? assignment.AccessObject;
+        var userImageUrl = MeshNodeThumbnailControl.GetImageUrlForNode(userNode)
+            ?? MeshNodeThumbnailControl.GetImageUrlForNode(node);
 
-                return new MeshNodeThumbnailControl(
-                    hubPath,
-                    assignment.DisplayName ?? assignment.AccessObject,
-                    rolesText,
-                    imageUrl);
-            },
-            hubPath);
+        var card = Controls.Stack.WithStyle("gap: 6px; padding: 8px; width: 100%;");
+
+        // Top row: user icon + name + × button
+        var topRow = Controls.Stack
+            .WithOrientation(Orientation.Horizontal)
+            .WithStyle("align-items: center; gap: 12px;");
+
+        // User icon
+        if (!string.IsNullOrEmpty(userImageUrl))
+        {
+            topRow = topRow.WithView(Controls.Html(
+                $"<img src=\"{EscapeHtml(userImageUrl)}\" alt=\"{EscapeHtml(userName)}\" " +
+                "style=\"width:48px;height:48px;min-width:48px;border-radius:8px;object-fit:cover;\" />"));
+        }
+        else
+        {
+            var initial = !string.IsNullOrEmpty(userName) ? userName[0].ToString().ToUpper() : "?";
+            topRow = topRow.WithView(Controls.Html(
+                "<div style=\"width:48px;height:48px;min-width:48px;border-radius:8px;" +
+                "background:var(--accent-fill-rest,#0078d4);color:var(--foreground-on-accent-rest,white);" +
+                $"display:flex;align-items:center;justify-content:center;font-weight:bold;font-size:18px;\">{initial}</div>"));
+        }
+
+        // User name
+        topRow = topRow.WithView(Controls.Html(
+            $"<span style=\"font-weight:600;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;\">{EscapeHtml(userName)}</span>"));
+
+        // Delete assignment × button (admin only)
+        if (canDelete)
+        {
+            var capturedPath = hubPath;
+            topRow = topRow.WithView(Controls.Button("\u00d7")
+                .WithAppearance(Appearance.Stealth)
+                .WithStyle("min-width:28px;padding:0 4px;height:28px;font-size:16px;")
+                .WithClickAction(async ctx =>
+                {
+                    var meshCatalog = ctx.Host.Hub.ServiceProvider.GetService<IMeshCatalog>();
+                    if (meshCatalog != null)
+                        await meshCatalog.DeleteNodeAsync(capturedPath);
+                }));
+        }
+
+        card = card.WithView(topRow);
+
+        // Role rows
+        for (int i = 0; i < assignment.Roles.Count; i++)
+        {
+            var role = assignment.Roles[i];
+            MeshNode? roleNode = null;
+            if (meshQuery != null && !string.IsNullOrEmpty(role.Role))
+            {
+                try
+                {
+                    roleNode = await meshQuery.QueryAsync<MeshNode>(
+                        $"path:{role.Role} scope:exact").FirstOrDefaultAsync();
+                }
+                catch { }
+            }
+
+            var roleName = roleNode?.Name ?? GetRoleDisplayName(role.Role);
+            var roleImageUrl = MeshNodeThumbnailControl.GetImageUrlForNode(roleNode);
+
+            var roleRow = Controls.Stack
+                .WithOrientation(Orientation.Horizontal)
+                .WithStyle("align-items: center; gap: 8px; padding-left: 60px;");
+
+            // Role icon (small)
+            if (!string.IsNullOrEmpty(roleImageUrl))
+            {
+                roleRow = roleRow.WithView(Controls.Html(
+                    $"<img src=\"{EscapeHtml(roleImageUrl)}\" alt=\"{EscapeHtml(roleName)}\" " +
+                    "style=\"width:20px;height:20px;border-radius:4px;object-fit:cover;\" />"));
+            }
+            else
+            {
+                roleRow = roleRow.WithView(Controls.Html(
+                    "<div style=\"width:20px;height:20px;border-radius:4px;" +
+                    "background:var(--neutral-stroke-rest);display:flex;align-items:center;" +
+                    "justify-content:center;font-size:10px;\">\u25cf</div>"));
+            }
+
+            // Role name
+            var roleStyle = role.Denied
+                ? "font-size:13px;color:var(--error-foreground);text-decoration:line-through;flex:1;"
+                : "font-size:13px;flex:1;";
+            roleRow = roleRow.WithView(Controls.Html(
+                $"<span style=\"{roleStyle}\">{EscapeHtml(roleName)}</span>"));
+
+            // Remove role × button (admin only)
+            if (canDelete)
+            {
+                var capturedIndex = i;
+                roleRow = roleRow.WithView(Controls.Button("\u00d7")
+                    .WithAppearance(Appearance.Stealth)
+                    .WithStyle("min-width:24px;padding:0 2px;height:24px;font-size:14px;")
+                    .WithClickAction(async ctx =>
+                    {
+                        await RemoveRoleAsync(ctx.Host, hubPath, capturedIndex);
+                    }));
+            }
+
+            card = card.WithView(roleRow);
+        }
+
+        return card;
+    }
+
+    private static string EscapeHtml(string? text)
+    {
+        if (string.IsNullOrEmpty(text)) return "";
+        return text.Replace("&", "&amp;").Replace("<", "&lt;").Replace(">", "&gt;")
+            .Replace("\"", "&quot;").Replace("'", "&#39;");
     }
 
     /// <summary>
-    /// Custom overview — user thumbnail + roles in LayoutGrid with switch/remove.
+    /// Custom overview — user thumbnail + roles in LayoutGrid loaded from IMeshQuery.
     /// </summary>
     public static IObservable<UiControl?> Overview(LayoutAreaHost host, RenderingContext _)
     {
@@ -77,11 +211,12 @@ public static class AccessAssignmentLayoutAreas
                 return (UiControl?)Controls.Html("<p>Access denied.</p>");
 
             var canEdit = permissions.HasFlag(Permission.Update);
-            return (UiControl?)BuildOverviewContent(host, node, hubPath, canEdit);
+            return (UiControl?)await BuildOverviewContentAsync(host, node, hubPath, canEdit);
         });
     }
 
-    private static UiControl BuildOverviewContent(LayoutAreaHost host, MeshNode? node, string hubPath, bool canEdit)
+    private static async Task<UiControl> BuildOverviewContentAsync(
+        LayoutAreaHost host, MeshNode? node, string hubPath, bool canEdit)
     {
         var stack = Controls.Stack.WithWidth("100%").WithStyle(MeshNodeLayoutAreas.GetContainerStyle(host));
 
@@ -91,120 +226,167 @@ public static class AccessAssignmentLayoutAreas
         if (node?.Content == null)
             return stack;
 
-        // Data binding + auto-save
-        var instance = node.Content;
-        if (instance is JsonElement je)
-            instance = JsonSerializer.Deserialize<object>(je.GetRawText(), host.Hub.JsonSerializerOptions)!;
-
-        var dataId = EditLayoutArea.GetDataId(hubPath);
-        host.UpdateData(dataId, instance);
-
-        if (canEdit)
-            OverviewLayoutArea.SetupAutoSave(host, dataId, instance, node);
-
-        // User thumbnail card
-        var assignment = instance as AccessAssignment
+        var assignment = node.Content as AccessAssignment
             ?? AccessControlLayoutArea.DeserializeAssignment(node);
-        if (assignment != null)
+        if (assignment == null)
+            return stack;
+
+        var meshQuery = host.Hub.ServiceProvider.GetService<IMeshQuery>();
+
+        // User card — load from IMeshQuery
+        if (meshQuery != null && !string.IsNullOrEmpty(assignment.AccessObject))
         {
-            var imageUrl = MeshNodeThumbnailControl.GetImageUrlForNode(node);
-            stack = stack.WithView(new MeshNodeThumbnailControl(
-                assignment.AccessObject,
-                assignment.DisplayName ?? assignment.AccessObject,
-                assignment.AccessObject,
-                imageUrl));
+            try
+            {
+                var userNode = await meshQuery.QueryAsync<MeshNode>(
+                    $"path:{assignment.AccessObject} scope:exact").FirstOrDefaultAsync();
+                stack = stack.WithView(MeshNodeThumbnailControl.FromNode(
+                    userNode, assignment.AccessObject));
+            }
+            catch
+            {
+                stack = stack.WithView(MeshNodeThumbnailControl.FromNode(null, assignment.AccessObject));
+            }
         }
 
-        // Roles section
-        stack = stack.WithView(BuildRolesSection(host, dataId, canEdit, hubPath));
+        // Roles section — LayoutGrid, 3 per row
+        stack = stack.WithView(Controls.H3("Roles").WithStyle("margin: 32px 0 16px 0;"));
 
-        return stack;
-    }
+        if (assignment.Roles.Count == 0)
+        {
+            stack = stack.WithView(Controls.Html(
+                "<p style=\"color:var(--neutral-foreground-hint);\">No roles assigned.</p>"));
+        }
+        else
+        {
+            var grid = Controls.LayoutGrid
+                .WithSkin(s => s.WithSpacing(2))
+                .WithStyle(s => s.WithWidth("100%"));
 
-    private static UiControl BuildRolesSection(LayoutAreaHost host, string dataId, bool canEdit, string nodePath)
-    {
-        var section = Controls.Stack.WithWidth("100%").WithStyle("margin-top: 32px;");
-        section = section.WithView(Controls.H3("Roles").WithStyle("margin: 0 0 16px 0;"));
+            for (int i = 0; i < assignment.Roles.Count; i++)
+            {
+                var role = assignment.Roles[i];
+                MeshNode? roleNode = null;
+                if (meshQuery != null && !string.IsNullOrEmpty(role.Role))
+                {
+                    try
+                    {
+                        roleNode = await meshQuery.QueryAsync<MeshNode>(
+                            $"path:{role.Role} scope:exact").FirstOrDefaultAsync();
+                    }
+                    catch { }
+                }
 
-        // Reactive role cards
-        section = section.WithView((h, _) =>
-            h.Stream.GetDataStream<JsonElement>(dataId)
-                .Select(data => BuildRoleCards(h, data, dataId, canEdit, nodePath)));
+                var card = MeshNodeThumbnailControl.FromNode(
+                    roleNode, string.IsNullOrEmpty(role.Role) ? "(no role)" : role.Role);
 
+                if (canEdit)
+                {
+                    var capturedIndex = i;
+                    var row = Controls.Stack
+                        .WithOrientation(Orientation.Horizontal)
+                        .WithStyle("align-items: center; gap: 4px;")
+                        .WithView(card.WithStyle("flex: 1;"))
+                        .WithView(Controls.Button("×")
+                            .WithAppearance(Appearance.Stealth)
+                            .WithStyle("min-width:28px;padding:0 4px;height:28px;font-size:16px;")
+                            .WithClickAction(async ctx =>
+                            {
+                                await RemoveRoleAsync(ctx.Host, hubPath, capturedIndex);
+                            }));
+                    grid = grid.WithView(row, s => s.WithXs(12).WithSm(6).WithMd(4));
+                }
+                else
+                {
+                    grid = grid.WithView(card, s => s.WithXs(12).WithSm(6).WithMd(4));
+                }
+            }
+            stack = stack.WithView(grid);
+        }
+
+        // + Add button
         if (canEdit)
         {
-            section = section.WithView(Controls.Button("+ Add")
+            stack = stack.WithView(Controls.Button("+ Add")
                 .WithAppearance(Appearance.Accent)
                 .WithStyle("align-self: flex-start; margin-top: 20px;")
                 .WithClickAction(ctx =>
                 {
-                    ShowAddRoleDialog(ctx, nodePath);
+                    ShowAddRoleDialog(ctx, hubPath);
                     return Task.CompletedTask;
                 }));
         }
 
-        return section;
+        return stack;
     }
 
-    private static UiControl BuildRoleCards(LayoutAreaHost host, JsonElement data, string dataId, bool canEdit, string nodePath)
+    /// <summary>
+    /// Properly async remove — reads node from IMeshQuery, modifies roles, saves or deletes.
+    /// </summary>
+    private static async Task RemoveRoleAsync(LayoutAreaHost host, string nodePath, int indexToRemove)
     {
-        if (!data.TryGetProperty("roles", out var rolesArr) || rolesArr.ValueKind != JsonValueKind.Array)
-            return Controls.Html("<p style=\"color: var(--neutral-foreground-hint);\">No roles assigned.</p>");
+        var meshCatalog = host.Hub.ServiceProvider.GetService<IMeshCatalog>();
+        var meshQuery = host.Hub.ServiceProvider.GetService<IMeshQuery>();
+        if (meshCatalog == null || meshQuery == null) return;
 
-        var grid = Controls.LayoutGrid
-            .WithStyle(s => s.WithWidth("100%"))
-            .WithSkin(s => s.WithSpacing(2));
-        var index = 0;
-        var hasItems = false;
-
-        foreach (var roleItem in rolesArr.EnumerateArray())
+        MeshNode? node;
+        try
         {
-            hasItems = true;
-            var capturedIndex = index;
-
-            var rolePath = roleItem.TryGetProperty("role", out var roleVal) && roleVal.ValueKind == JsonValueKind.String
-                ? roleVal.GetString() ?? ""
-                : "";
-            var roleDisplayName = string.IsNullOrEmpty(rolePath) ? "(no role)" : GetRoleDisplayName(rolePath);
-            var shieldUrl = MeshNodeImageHelper.GetIconAsImageUrl("Shield");
-
-            // Row: [Role thumbnail] [Denied switch] [× remove]
-            var row = Controls.Stack
-                .WithOrientation(Orientation.Horizontal)
-                .WithStyle("align-items: center; gap: 8px;");
-
-            row = row.WithView(
-                new MeshNodeThumbnailControl(rolePath, roleDisplayName, "Role", shieldUrl)
-                    .WithStyle("flex: 1;"));
-
-            if (canEdit)
-            {
-                row = row.WithView(new SwitchControl(new JsonPointerReference($"roles/{capturedIndex}/denied"))
-                {
-                    DataContext = LayoutAreaReference.GetDataPointer(dataId),
-                    CheckedMessage = "Denied",
-                    UncheckedMessage = "Allowed"
-                });
-
-                var capturedNodePath = nodePath;
-                row = row.WithView(Controls.Button("×")
-                    .WithAppearance(Appearance.Stealth)
-                    .WithStyle("min-width:28px;padding:0 4px;height:28px;font-size:16px;")
-                    .WithClickAction(ctx =>
-                    {
-                        RemoveRole(ctx.Host, dataId, capturedIndex, capturedNodePath);
-                        return Task.CompletedTask;
-                    }));
-            }
-
-            grid = grid.WithView(row, s => s.WithXs(12));
-            index++;
+            node = await meshQuery.QueryAsync<MeshNode>(
+                $"path:{nodePath} scope:exact").FirstOrDefaultAsync();
         }
+        catch { return; }
+        if (node == null) return;
 
-        if (!hasItems)
-            return Controls.Html("<p style=\"color: var(--neutral-foreground-hint);\">No roles assigned.</p>");
+        var assignment = AccessControlLayoutArea.DeserializeAssignment(node);
+        if (assignment == null) return;
 
-        return grid;
+        var roles = assignment.Roles.ToList();
+        if (indexToRemove < 0 || indexToRemove >= roles.Count) return;
+        roles.RemoveAt(indexToRemove);
+
+        if (roles.Count == 0)
+        {
+            // No roles left — delete the entire AccessAssignment node
+            await meshCatalog.DeleteNodeAsync(nodePath);
+        }
+        else
+        {
+            // Save updated assignment
+            var updated = node with { Content = assignment with { Roles = roles } };
+            host.Hub.Post(
+                new DataChangeRequest { ChangedBy = host.Stream.ClientId }.WithUpdates(updated),
+                o => o.WithTarget(host.Hub.Address));
+        }
+    }
+
+    /// <summary>
+    /// Properly async add — reads node from IMeshQuery, adds role, saves via DataChangeRequest.
+    /// </summary>
+    private static async Task AddRoleAsync(LayoutAreaHost host, string nodePath, string selectedRole)
+    {
+        var meshQuery = host.Hub.ServiceProvider.GetService<IMeshQuery>();
+        if (meshQuery == null) return;
+
+        MeshNode? node;
+        try
+        {
+            node = await meshQuery.QueryAsync<MeshNode>(
+                $"path:{nodePath} scope:exact").FirstOrDefaultAsync();
+        }
+        catch { return; }
+        if (node == null) return;
+
+        var assignment = AccessControlLayoutArea.DeserializeAssignment(node);
+        if (assignment == null) return;
+
+        var roles = assignment.Roles.ToList();
+        roles.Add(new RoleAssignment { Role = selectedRole, Denied = false });
+
+        var updated = node with { Content = assignment with { Roles = roles } };
+        host.Hub.Post(
+            new DataChangeRequest { ChangedBy = host.Stream.ClientId }.WithUpdates(updated),
+            o => o.WithTarget(host.Hub.Address));
     }
 
     internal static string GetRoleDisplayName(string rolePath)
@@ -263,64 +445,10 @@ public static class AccessAssignmentLayoutAreas
                     }
 
                     addCtx.Host.UpdateArea(DialogControl.DialogArea, null!);
-                    var dataId = EditLayoutArea.GetDataId(nodePath);
-                    AddRole(addCtx.Host, dataId, selectedRole);
+                    await AddRoleAsync(addCtx.Host, nodePath, selectedRole);
                 }));
 
         ctx.Host.UpdateArea(DialogControl.DialogArea,
             Controls.Dialog(formContent, "Add").WithSize("M").WithActions(actions));
-    }
-
-    private static void AddRole(LayoutAreaHost host, string dataId, string selectedRole)
-    {
-        host.Stream.GetDataStream<JsonElement>(dataId).Take(1).Subscribe(data =>
-        {
-            var jsonObj = System.Text.Json.Nodes.JsonNode.Parse(data.GetRawText())!.AsObject();
-            if (jsonObj["roles"] is not System.Text.Json.Nodes.JsonArray rolesArr)
-            {
-                rolesArr = [];
-                jsonObj["roles"] = rolesArr;
-            }
-
-            rolesArr.Add(new System.Text.Json.Nodes.JsonObject
-            {
-                ["$type"] = "RoleAssignment",
-                ["role"] = selectedRole,
-                ["denied"] = false
-            });
-
-            host.UpdateData(dataId, JsonSerializer.Deserialize<JsonElement>(jsonObj.ToJsonString()));
-        });
-    }
-
-    private static void RemoveRole(LayoutAreaHost host, string dataId, int indexToRemove, string nodePath)
-    {
-        host.Stream.GetDataStream<JsonElement>(dataId).Take(1).Subscribe(async data =>
-        {
-            if (!data.TryGetProperty("roles", out var arr) || arr.ValueKind != JsonValueKind.Array)
-                return;
-
-            var jsonObj = System.Text.Json.Nodes.JsonNode.Parse(data.GetRawText())!.AsObject();
-            var jsonArr = jsonObj["roles"]!.AsArray();
-            if (indexToRemove < 0 || indexToRemove >= jsonArr.Count)
-                return;
-
-            jsonArr.RemoveAt(indexToRemove);
-
-            if (jsonArr.Count == 0)
-            {
-                // No roles left — delete the entire AccessAssignment node
-                var meshCatalog = host.Hub.ServiceProvider.GetService<IMeshCatalog>();
-                if (meshCatalog != null)
-                {
-                    try { await meshCatalog.DeleteNodeAsync(nodePath); }
-                    catch { /* keep the node if deletion fails */ }
-                }
-            }
-            else
-            {
-                host.UpdateData(dataId, JsonSerializer.Deserialize<JsonElement>(jsonObj.ToJsonString()));
-            }
-        });
     }
 }

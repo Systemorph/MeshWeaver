@@ -109,6 +109,12 @@ public record MeshSearchControl()
     public object? ReactiveMode { get; init; }
 
     /// <summary>
+    /// When set, each search result item is rendered via a LayoutAreaView
+    /// pointing to this area name (e.g., "Thumbnail") instead of the default FluentCard.
+    /// </summary>
+    public object? ItemArea { get; init; }
+
+    /// <summary>
     /// Pre-computed grouped search results. When set, the Blazor component
     /// uses these groups directly instead of computing them from lambdas.
     /// This is the serializable output of ProcessResults().
@@ -156,6 +162,9 @@ public record MeshSearchControl()
 
     // Reactive mode
     public MeshSearchControl WithReactiveMode(bool reactive) => this with { ReactiveMode = reactive };
+
+    // Item area (render each item via LayoutAreaView)
+    public MeshSearchControl WithItemArea(string area) => this with { ItemArea = area };
 
     // Pre-computed groups
     public MeshSearchControl WithPrecomputedGroups(GroupedSearchResult groups) => this with { PrecomputedGroups = groups };
