@@ -67,13 +67,14 @@ public class MeshQuery(
         AutocompleteMode mode,
         int limit = 10,
         string? contextPath = null,
+        string? context = null,
         [EnumeratorCancellation] CancellationToken ct = default)
     {
         var all = new List<QuerySuggestion>();
 
         foreach (var provider in providers)
         {
-            await foreach (var suggestion in provider.AutocompleteAsync(basePath, prefix, Options, mode, limit, contextPath, ct))
+            await foreach (var suggestion in provider.AutocompleteAsync(basePath, prefix, Options, mode, limit, contextPath, context, ct))
                 all.Add(suggestion);
         }
 

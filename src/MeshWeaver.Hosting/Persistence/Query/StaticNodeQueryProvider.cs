@@ -7,22 +7,45 @@ using MeshWeaver.Mesh.Services;
 namespace MeshWeaver.Hosting.Persistence.Query;
 
 /// <summary>
-/// An IMeshQueryProvider that serves static nodes (e.g., built-in roles)
-/// from IStaticNodeProvider instances. Short-circuits when the query
-/// cannot possibly match any static node.
+/// An IMeshQueryProvider that serves static nodes (e.g., built-in roles, type definitions)
+/// from IStaticNodeProvider instances and MeshConfiguration.Nodes.
+/// Provider nodes (roles) bypass path/scope checks (they are global).
+/// Configuration nodes (type definitions) respect path/scope and context filtering.
 /// </summary>
 public class StaticNodeQueryProvider : IMeshQueryProvider
 {
-    private readonly MeshNode[] _staticNodes;
+    // Provider nodes (from IStaticNodeProvider) — global, no path/scope check
+    private readonly MeshNode[] _providerNodes;
+    // Config nodes (from MeshConfiguration.Nodes) — respect path/scope/context
+    private readonly MeshNode[] _configNodes;
+    // All nodes combined for SelectAsync/nodeType index
+    private readonly MeshNode[] _allNodes;
     private readonly HashSet<string> _nodeTypes;
+    private readonly MeshConfiguration? _meshConfiguration;
     private readonly QueryParser _parser = new();
     private readonly QueryEvaluator _evaluator = new();
 
-    public StaticNodeQueryProvider(IEnumerable<IStaticNodeProvider> providers)
+    public StaticNodeQueryProvider(
+        IEnumerable<IStaticNodeProvider> providers,
+        MeshConfiguration? meshConfiguration = null)
     {
-        _staticNodes = providers.SelectMany(p => p.GetStaticNodes()).ToArray();
+        _meshConfiguration = meshConfiguration;
+
+        _providerNodes = providers.SelectMany(p => p.GetStaticNodes()).ToArray();
+
+        var providerPaths = new HashSet<string>(
+            _providerNodes.Select(n => n.Path),
+            StringComparer.OrdinalIgnoreCase);
+
+        // Config nodes that aren't already in provider nodes (deduplicate)
+        _configNodes = (meshConfiguration?.Nodes.Values ?? Enumerable.Empty<MeshNode>())
+            .Where(n => !providerPaths.Contains(n.Path))
+            .ToArray();
+
+        _allNodes = _providerNodes.Concat(_configNodes).ToArray();
+
         _nodeTypes = new HashSet<string>(
-            _staticNodes
+            _allNodes
                 .Where(n => !string.IsNullOrEmpty(n.NodeType))
                 .Select(n => n.NodeType!),
             StringComparer.OrdinalIgnoreCase);
@@ -35,19 +58,39 @@ public class StaticNodeQueryProvider : IMeshQueryProvider
     {
         var parsed = _parser.Parse(request.Query);
 
-        // Only merge static nodes when the query has meaningful filters
-        if (!HasNonTypeFilter(parsed))
-            yield break;
-
         // Short-circuit: if query has a nodeType filter that doesn't match any static node type
         var nodeTypeFilter = GetNodeTypeFilterValue(parsed.Filter);
         if (nodeTypeFilter != null && !_nodeTypes.Contains(nodeTypeFilter))
             yield break;
 
-        foreach (var node in _staticNodes)
+        var context = request.Context ?? parsed.Context;
+
+        // Provider nodes (roles, etc.) — require field-level filter (no path-only), no path/scope check
+        if (HasFieldFilter(parsed))
         {
-            if (_evaluator.Matches(node, parsed))
+            foreach (var node in _providerNodes)
+            {
+                if (!_evaluator.Matches(node, parsed))
+                    continue;
+                if (IsExcludedByContext(node, context))
+                    continue;
                 yield return node;
+            }
+        }
+
+        // Config nodes (type definitions) — require field filter or path, apply path/scope/context
+        if (HasFieldFilter(parsed) || !string.IsNullOrEmpty(parsed.Path))
+        {
+            foreach (var node in _configNodes)
+            {
+                if (!MatchesPath(node, parsed))
+                    continue;
+                if (!_evaluator.Matches(node, parsed))
+                    continue;
+                if (IsExcludedByContext(node, context))
+                    continue;
+                yield return node;
+            }
         }
     }
 
@@ -59,7 +102,7 @@ public class StaticNodeQueryProvider : IMeshQueryProvider
     public IAsyncEnumerable<QuerySuggestion> AutocompleteAsync(
         string basePath, string prefix, JsonSerializerOptions options,
         AutocompleteMode mode, int limit = 10, string? contextPath = null,
-        CancellationToken ct = default)
+        string? context = null, CancellationToken ct = default)
         => AsyncEnumerable.Empty<QuerySuggestion>();
 
     public IObservable<QueryResultChange<T>> ObserveQuery<T>(MeshQueryRequest request, JsonSerializerOptions options)
@@ -88,7 +131,7 @@ public class StaticNodeQueryProvider : IMeshQueryProvider
 
     public Task<T?> SelectAsync<T>(string path, string property, JsonSerializerOptions options, CancellationToken ct = default)
     {
-        var node = _staticNodes.FirstOrDefault(n =>
+        var node = _allNodes.FirstOrDefault(n =>
             string.Equals(n.Path, path, StringComparison.OrdinalIgnoreCase));
 
         if (node == null)
@@ -106,10 +149,68 @@ public class StaticNodeQueryProvider : IMeshQueryProvider
     }
 
     /// <summary>
+    /// Checks whether a node matches the query's path and scope constraints.
+    /// Only applied to configuration nodes, not provider nodes.
+    /// </summary>
+    private static bool MatchesPath(MeshNode node, ParsedQuery parsed)
+    {
+        if (string.IsNullOrEmpty(parsed.Path))
+            return true;
+
+        var path = parsed.Path;
+        var nodePath = node.Path;
+        var nodeNamespace = node.Namespace ?? "";
+
+        return parsed.Scope switch
+        {
+            QueryScope.Exact =>
+                string.Equals(nodePath, path, StringComparison.OrdinalIgnoreCase),
+
+            QueryScope.Children =>
+                string.Equals(nodeNamespace, path, StringComparison.OrdinalIgnoreCase),
+
+            QueryScope.Descendants =>
+                nodePath.StartsWith(path + "/", StringComparison.OrdinalIgnoreCase)
+                && !string.Equals(nodePath, path, StringComparison.OrdinalIgnoreCase),
+
+            QueryScope.Subtree =>
+                string.Equals(nodePath, path, StringComparison.OrdinalIgnoreCase)
+                || nodePath.StartsWith(path + "/", StringComparison.OrdinalIgnoreCase),
+
+            QueryScope.Ancestors =>
+                path.StartsWith(nodePath + "/", StringComparison.OrdinalIgnoreCase),
+
+            QueryScope.AncestorsAndSelf =>
+                string.Equals(nodePath, path, StringComparison.OrdinalIgnoreCase)
+                || path.StartsWith(nodePath + "/", StringComparison.OrdinalIgnoreCase),
+
+            QueryScope.Hierarchy =>
+                string.Equals(nodePath, path, StringComparison.OrdinalIgnoreCase)
+                || nodePath.StartsWith(path + "/", StringComparison.OrdinalIgnoreCase)
+                || path.StartsWith(nodePath + "/", StringComparison.OrdinalIgnoreCase),
+
+            _ => true
+        };
+    }
+
+    /// <summary>
+    /// Checks if a node is excluded from the specified context.
+    /// </summary>
+    private bool IsExcludedByContext(MeshNode node, string? context)
+    {
+        if (context == null) return false;
+        if (_meshConfiguration?.IsExcludedFromContext(node.NodeType, context) == true)
+            return true;
+        if (node.ExcludeFromContext?.Contains(context) == true)
+            return true;
+        return false;
+    }
+
+    /// <summary>
     /// Returns true when the query has field-level filters beyond just $type,
     /// or has a text search term.
     /// </summary>
-    private static bool HasNonTypeFilter(ParsedQuery parsed)
+    private static bool HasFieldFilter(ParsedQuery parsed)
     {
         if (!string.IsNullOrEmpty(parsed.TextSearch))
             return true;

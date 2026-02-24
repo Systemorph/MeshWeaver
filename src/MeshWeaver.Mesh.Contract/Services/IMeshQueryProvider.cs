@@ -48,6 +48,7 @@ public interface IMeshQueryProvider
     /// <param name="mode">Ordering mode (PathFirst or RelevanceFirst)</param>
     /// <param name="limit">Maximum number of suggestions to return</param>
     /// <param name="contextPath">Context path for proximity-based scoring (null for no proximity boost)</param>
+    /// <param name="context">Context for visibility filtering (e.g., "search"). Nodes excluded from this context are hidden.</param>
     /// <param name="ct">Cancellation token</param>
     /// <returns>Suggestions ordered according to mode</returns>
     IAsyncEnumerable<QuerySuggestion> AutocompleteAsync(
@@ -57,6 +58,7 @@ public interface IMeshQueryProvider
         AutocompleteMode mode,
         int limit = 10,
         string? contextPath = null,
+        string? context = null,
         CancellationToken ct = default);
 
     /// <summary>

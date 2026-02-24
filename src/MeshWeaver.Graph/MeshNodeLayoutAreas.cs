@@ -211,7 +211,7 @@ public static class MeshNodeLayoutAreas
     internal static UiControl BuildHeader(LayoutAreaHost host, MeshNode? node, bool canEdit = true)
     {
         var nodePath = node?.Namespace ?? host.Hub.Address.ToString();
-        var title = node?.Name ?? host.Hub.Address.ToString();
+        var title = node?.Name ?? node?.Id ?? host.Hub.Address.ToString();
         var iconValue = node?.Icon;
 
         // Build title with icon
@@ -467,7 +467,9 @@ public static class MeshNodeLayoutAreas
                     .WithNamespace(hubPath)
                     .WithPlaceholder("Search... (use @ for references)")
                     .WithRenderMode(MeshSearchRenderMode.Hierarchical)
-                    .WithMaxColumns(3);
+                    .WithMaxColumns(3)
+                    .WithCreateNodeType(nodeTypePath)
+                    .WithCreateNamespace(hubPath);
             }
 
             // Instance node catalog - excludes NodeType nodes
@@ -479,7 +481,8 @@ public static class MeshNodeLayoutAreas
                 .WithNamespace(hubPath)
                 .WithPlaceholder("Search... (use @ for references)")
                 .WithRenderMode(MeshSearchRenderMode.Hierarchical)
-                .WithMaxColumns(3);
+                .WithMaxColumns(3)
+                .WithCreateHref($"/{hubPath}/{CreateNodeArea}");
         });
     }
 

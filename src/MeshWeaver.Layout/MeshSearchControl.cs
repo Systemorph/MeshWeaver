@@ -127,6 +127,23 @@ public record MeshSearchControl()
     /// </summary>
     public GroupedSearchResult? PrecomputedGroups { get; init; }
 
+    /// <summary>
+    /// When set, a "+" button is shown. Clicking it creates a new transient node
+    /// of this type and navigates to the Create area.
+    /// </summary>
+    public object? CreateNodeType { get; init; }
+
+    /// <summary>
+    /// Namespace where new nodes are created. If not set, derived from HiddenQuery's namespace: prefix.
+    /// </summary>
+    public object? CreateNamespace { get; init; }
+
+    /// <summary>
+    /// When set, a "+" button is shown that navigates directly to this URL.
+    /// Takes priority over CreateNodeType (no transient node is created).
+    /// </summary>
+    public object? CreateHref { get; init; }
+
     // Basic fluent methods
     public MeshSearchControl WithHiddenQuery(string query) => this with { HiddenQuery = query };
     public MeshSearchControl WithVisibleQuery(string query) => this with { VisibleQuery = query };
@@ -177,4 +194,9 @@ public record MeshSearchControl()
 
     // Pre-computed groups
     public MeshSearchControl WithPrecomputedGroups(GroupedSearchResult groups) => this with { PrecomputedGroups = groups };
+
+    // Create node
+    public MeshSearchControl WithCreateNodeType(string nodeType) => this with { CreateNodeType = nodeType };
+    public MeshSearchControl WithCreateNamespace(string ns) => this with { CreateNamespace = ns };
+    public MeshSearchControl WithCreateHref(string href) => this with { CreateHref = href };
 }

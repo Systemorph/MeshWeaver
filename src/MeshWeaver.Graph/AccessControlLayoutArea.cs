@@ -118,7 +118,7 @@ public static class AccessControlLayoutArea
         IReadOnlyList<(AccessAssignment Assignment, string SourcePath, MeshNode Node)> inherited,
         Dictionary<string, MeshNode> userNodeLookup)
     {
-        var stack = Controls.Stack.WithStyle("padding: 24px; gap: 24px;");
+        var stack = Controls.Stack.WithStyle("padding: 24px; gap: 24px; width: 100%;");
 
         // Header
         var headerText = node?.Name ?? nodePath.Split('/').LastOrDefault() ?? nodePath;
@@ -141,11 +141,12 @@ public static class AccessControlLayoutArea
 
         stack = stack.WithView(Controls.MeshSearch
             .WithHiddenQuery($"namespace:{nodePath} nodeType:AccessAssignment")
-            .WithShowSearchBox(false)
+            .WithPlaceholder("Search assignments...")
             .WithItemArea(MeshNodeLayoutAreas.ThumbnailArea)
-            .WithGridBreakpoints(xs: 12, sm: 6, md: 4)
+            .WithGridBreakpoints(xs: 12, sm: 6, md: 4, lg: 3)
             .WithReactiveMode(true)
-            .WithDisableNavigation());
+            .WithDisableNavigation()
+            .WithStyle("width:100%;"));
 
         // + button if admin
         if (isAdmin)
@@ -266,14 +267,7 @@ public static class AccessControlLayoutArea
 
         var actions = Controls.Stack
             .WithOrientation(Orientation.Horizontal)
-            .WithStyle("justify-content: flex-end; gap: 8px;")
-            .WithView(Controls.Button("Cancel")
-                .WithAppearance(Appearance.Neutral)
-                .WithClickAction(cancelCtx =>
-                {
-                    cancelCtx.Host.UpdateArea(DialogControl.DialogArea, null!);
-                    return Task.CompletedTask;
-                }))
+            .WithStyle("gap: 8px;")
             .WithView(Controls.Button("Create")
                 .WithAppearance(Appearance.Accent)
                 .WithClickAction(async saveCtx =>
@@ -357,6 +351,13 @@ public static class AccessControlLayoutArea
                                 o => o.WithTarget(saveCtx.Hub.Address));
                         }
                     }
+                }))
+            .WithView(Controls.Button("Cancel")
+                .WithAppearance(Appearance.Neutral)
+                .WithClickAction(cancelCtx =>
+                {
+                    cancelCtx.Host.UpdateArea(DialogControl.DialogArea, null!);
+                    return Task.CompletedTask;
                 }));
 
         var dialog = Controls.Dialog(formContent, "Add Assignment")

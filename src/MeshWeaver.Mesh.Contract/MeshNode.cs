@@ -212,6 +212,14 @@ public record MeshNode([property: Key] string Id, [property: Editable(false)] st
     /// </summary>
     public string? DesiredId { get; init; }
 
+    /// <summary>
+    /// Contexts from which this node (or nodes of this type) should be excluded.
+    /// Default inclusive: null/empty means visible everywhere.
+    /// E.g., {"search"} excludes from main search but visible in create menus.
+    /// For NodeType definition nodes, instances of that type inherit the exclusion.
+    /// </summary>
+    public IReadOnlyCollection<string>? ExcludeFromContext { get; init; }
+
 
     /// <summary>
     /// Gets or sets the global service configurations for this mesh node.

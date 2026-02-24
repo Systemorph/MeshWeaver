@@ -122,7 +122,7 @@ public class CosmosMeshQuery : IMeshQueryProvider
         JsonSerializerOptions options,
         int limit = 10,
         CancellationToken ct = default)
-        => AutocompleteAsync(basePath, prefix, options, AutocompleteMode.PathFirst, limit, null, ct);
+        => AutocompleteAsync(basePath, prefix, options, AutocompleteMode.PathFirst, limit, null, null, ct);
 
     /// <inheritdoc />
     public async IAsyncEnumerable<QuerySuggestion> AutocompleteAsync(
@@ -132,6 +132,7 @@ public class CosmosMeshQuery : IMeshQueryProvider
         AutocompleteMode mode,
         int limit = 10,
         string? contextPath = null,
+        string? context = null,
         [EnumeratorCancellation] CancellationToken ct = default)
     {
         var normalizedPrefix = (prefix ?? "").ToLowerInvariant();

@@ -30,6 +30,24 @@
     height: 38px;
 }
 
+.mesh-search-create-button {
+    background: var(--accent-fill-rest, #0078d4);
+    color: var(--foreground-on-accent-rest, white);
+    border: none;
+    border-radius: 4px;
+    padding: 0 12px;
+    height: 38px;
+    font-size: 18px;
+    font-weight: bold;
+    cursor: pointer;
+    white-space: nowrap;
+    flex-shrink: 0;
+}
+
+.mesh-search-create-button:hover {
+    background: var(--accent-fill-hover, #106ebe);
+}
+
 .mesh-search-results {
     width: 100%;
 }

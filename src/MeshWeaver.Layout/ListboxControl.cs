@@ -49,6 +49,11 @@ public abstract record ListControlBase<TControl>(object Data, object Options)
 
 public abstract record Option(string Text)
 {
+    /// <summary>
+    /// Optional icon identifier (Fluent icon name, emoji, or image URL) rendered alongside the option text.
+    /// </summary>
+    public string? Icon { get; init; }
+
     public abstract object GetItem();
     public abstract Type GetItemType();
 }

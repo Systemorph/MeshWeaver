@@ -7,7 +7,7 @@ namespace MeshWeaver.Blazor.Portal.Components;
 
 public partial class SearchBar : IAsyncDisposable
 {
-    private const string SearchPlaceholder = "Type / to search, @ for references...";
+    private const string SearchPlaceholder = "Search the mesh... (e.g. nodeType:Story status:Open)";
     private const int MaxResults = 10;
 
     [Inject]
@@ -116,7 +116,7 @@ public partial class SearchBar : IAsyncDisposable
 
             var contextPath = NavigationService?.CurrentNamespace;
             var results = await MeshQuery
-                .AutocompleteAsync(basePath, prefix, AutocompleteMode.RelevanceFirst, MaxResults, contextPath, ct)
+                .AutocompleteAsync(basePath, prefix, AutocompleteMode.RelevanceFirst, MaxResults, contextPath, context: "search", ct)
                 .ToArrayAsync(ct);
 
             if (!ct.IsCancellationRequested)
@@ -255,7 +255,7 @@ public partial class SearchBar : IAsyncDisposable
             {
                 var contextPath = NavigationService?.CurrentNamespace;
                 suggestions = await MeshQuery
-                    .AutocompleteAsync("", "", AutocompleteMode.RelevanceFirst, MaxResults, contextPath)
+                    .AutocompleteAsync("", "", AutocompleteMode.RelevanceFirst, MaxResults, contextPath, context: "search")
                     .ToArrayAsync();
                 isLoading = false;
                 StateHasChanged();

@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using System.Reactive.Linq;
 using Microsoft.AspNetCore.Components;
 using MeshWeaver.Blazor.Components.Monaco;
@@ -8,6 +9,7 @@ using MeshWeaver.Layout;
 using MeshWeaver.Layout.Catalog;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.ShortGuid;
 
 namespace MeshWeaver.Blazor.Components;
 
@@ -30,6 +32,12 @@ public partial class MeshSearchView : IDisposable
 
     [Inject]
     private IMeshQuery MeshQuery { get; set; } = default!;
+
+    [Inject]
+    private IMeshCatalog MeshCatalog { get; set; } = default!;
+
+    [Inject]
+    private NavigationManager Navigation { get; set; } = default!;
 
     [Parameter]
     public MeshSearchControl? ViewModel { get; set; }
@@ -494,6 +502,78 @@ public partial class MeshSearchView : IDisposable
                 return je.ValueKind == JsonValueKind.True;
             return false;
         }
+    }
+
+    private string? BoundCreateNodeType
+    {
+        get
+        {
+            if (ViewModel?.CreateNodeType is string s) return s;
+            if (ViewModel?.CreateNodeType is JsonElement je && je.ValueKind == JsonValueKind.String)
+                return je.GetString();
+            return null;
+        }
+    }
+
+    private string? BoundCreateNamespace
+    {
+        get
+        {
+            if (ViewModel?.CreateNamespace is string s) return s;
+            if (ViewModel?.CreateNamespace is JsonElement je && je.ValueKind == JsonValueKind.String)
+                return je.GetString();
+            // Fallback: parse from HiddenQuery "namespace:XXX ..."
+            var hidden = BoundHiddenQuery;
+            if (!string.IsNullOrEmpty(hidden))
+            {
+                var match = Regex.Match(hidden, @"namespace:(\S+)");
+                if (match.Success) return match.Groups[1].Value;
+            }
+            return null;
+        }
+    }
+
+    private string? BoundCreateHref
+    {
+        get
+        {
+            if (ViewModel?.CreateHref is string s) return s;
+            if (ViewModel?.CreateHref is JsonElement je && je.ValueKind == JsonValueKind.String)
+                return je.GetString();
+            return null;
+        }
+    }
+
+    private bool ShowCreateButton =>
+        !string.IsNullOrEmpty(BoundCreateHref) || !string.IsNullOrEmpty(BoundCreateNodeType);
+
+    private async Task HandleCreateClick()
+    {
+        // CreateHref takes priority — direct navigation without creating a transient
+        var href = BoundCreateHref;
+        if (!string.IsNullOrEmpty(href))
+        {
+            Navigation.NavigateTo(href);
+            return;
+        }
+
+        var nodeType = BoundCreateNodeType;
+        var ns = BoundCreateNamespace;
+        if (string.IsNullOrEmpty(nodeType) || string.IsNullOrEmpty(ns)) return;
+
+        var id = Guid.NewGuid().AsString();
+        var path = $"{ns}/{id}";
+        var typeName = nodeType.Split('/').LastOrDefault() ?? nodeType;
+
+        var newNode = MeshNode.FromPath(path) with
+        {
+            Name = typeName,
+            NodeType = nodeType,
+            State = MeshNodeState.Transient
+        };
+
+        await MeshCatalog.CreateTransientAsync(newNode);
+        Navigation.NavigateTo($"/{path}/Create");
     }
 
     private MeshNodeCardControl GetCardControl(MeshNode node) =>

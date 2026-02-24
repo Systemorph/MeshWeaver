@@ -34,7 +34,7 @@ public abstract class ListBase<TViewModel, TView> : FormComponentBase<TViewModel
             return Options;
         lastParsedOptions = options;
         var ret = (options as IEnumerable)?.Cast<LayoutOption>().Select(option =>
-                new Option(option.GetItem(), option.Text, OptionsExtension.MapToString(option.GetItem(), option.GetItemType()), option.GetItemType()))
+                new Option(option.GetItem(), option.Text, OptionsExtension.MapToString(option.GetItem(), option.GetItemType()), option.GetItemType(), option.Icon))
             .ToArray();
 
         if (Model is not null && ret?.FirstOrDefault() is { } o && ViewModel.Data is JsonPointerReference reference)

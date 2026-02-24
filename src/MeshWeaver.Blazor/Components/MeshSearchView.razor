@@ -24,6 +24,24 @@
                 <button type="button" class="mesh-search-button" @onclick="HandleSearch">
                     Search
                 </button>
+                @if (ShowCreateButton)
+                {
+                    <button type="button" class="mesh-search-create-button" @onclick="HandleCreateClick"
+                            title="Create new">
+                        +
+                    </button>
+                }
+            </div>
+        </div>
+    }
+    else if (!string.IsNullOrEmpty(BoundCreateNodeType))
+    {
+        <div class="mesh-search-box">
+            <div class="mesh-search-box-inner" style="justify-content: flex-end;">
+                <button type="button" class="mesh-search-create-button" @onclick="HandleCreateClick"
+                        title="Create new">
+                    +
+                </button>
             </div>
         </div>
     }
