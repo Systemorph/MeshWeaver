@@ -32,6 +32,7 @@ public static class AccessAssignmentNodeType
     {
         Name = "Access Assignment",
         Icon = "Shield",
+        ExcludeFromContext = new HashSet<string> { "search", "create" },
         AssemblyLocation = typeof(AccessAssignmentNodeType).Assembly.Location,
         HubConfiguration = config => config
             .AddAccessAssignmentViews()

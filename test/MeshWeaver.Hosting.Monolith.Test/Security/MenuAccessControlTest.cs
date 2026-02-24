@@ -244,7 +244,7 @@ public class MenuAccessControlTest(ITestOutputHelper output) : MonolithMeshTestB
         roles.Should().HaveCount(4,
             "built-in roles (Admin, Editor, Viewer, Commenter) should appear as static nodes");
         roles.Select(r => r.Name).Should().Contain(
-            ["Administrator", "Editor", "Viewer", "Commenter"]);
+            ["Admin", "Editor", "Viewer", "Commenter"]);
     }
 
     [Fact(Timeout = 15000)]

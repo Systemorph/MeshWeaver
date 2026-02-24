@@ -42,6 +42,7 @@ public interface IMeshQuery
     /// <param name="mode">Ordering mode (PathFirst or RelevanceFirst)</param>
     /// <param name="limit">Maximum number of suggestions to return</param>
     /// <param name="contextPath">Context path for proximity-based scoring (null for no proximity boost)</param>
+    /// <param name="context">Context for visibility filtering (e.g., "search"). Nodes excluded from this context are hidden.</param>
     /// <param name="ct">Cancellation token</param>
     /// <returns>Suggestions ordered according to mode</returns>
     IAsyncEnumerable<QuerySuggestion> AutocompleteAsync(
@@ -50,6 +51,7 @@ public interface IMeshQuery
         AutocompleteMode mode,
         int limit = 10,
         string? contextPath = null,
+        string? context = null,
         CancellationToken ct = default);
 
     /// <summary>
@@ -132,6 +134,13 @@ public record MeshQueryRequest
     /// Maximum number of results to return (takes precedence over limit in query string).
     /// </summary>
     public int? Limit { get; init; }
+
+    /// <summary>
+    /// Context for visibility filtering. When set, nodes with this context
+    /// in their ExcludeFromContext are excluded from results.
+    /// Parsed context: qualifier in query string is used as fallback.
+    /// </summary>
+    public string? Context { get; init; }
 
     /// <summary>
     /// Creates a new request with the specified query string.

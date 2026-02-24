@@ -32,6 +32,7 @@ public static class GroupMembershipNodeType
     {
         Name = "Group Membership",
         Icon = "PersonAdd",
+        ExcludeFromContext = new HashSet<string> { "search", "create" },
         AssemblyLocation = typeof(GroupMembershipNodeType).Assembly.Location,
         HubConfiguration = config => config
             .AddGroupMembershipViews()

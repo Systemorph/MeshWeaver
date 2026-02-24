@@ -74,106 +74,123 @@ public static class AccessAssignmentLayoutAreas
         var userImageUrl = MeshNodeThumbnailControl.GetImageUrlForNode(userNode)
             ?? MeshNodeThumbnailControl.GetImageUrlForNode(node);
 
-        var card = Controls.Stack.WithStyle("gap: 6px; padding: 8px; width: 100%; cursor: pointer;");
+        var card = Controls.Stack.WithStyle("gap: 6px; padding: 8px; width: 100%;");
 
-        // Top row: user icon + name + × button
+        // Top row: user icon + name + "+" button
         var topRow = Controls.Stack
             .WithOrientation(Orientation.Horizontal)
-            .WithStyle("align-items: center; gap: 12px;");
+            .WithStyle("align-items: center; gap: 8px;");
 
         // User icon
         if (!string.IsNullOrEmpty(userImageUrl))
         {
             topRow = topRow.WithView(Controls.Html(
                 $"<img src=\"{EscapeHtml(userImageUrl)}\" alt=\"{EscapeHtml(userName)}\" " +
-                "style=\"width:48px;height:48px;min-width:48px;border-radius:8px;object-fit:cover;\" />"));
+                "style=\"width:36px;height:36px;min-width:36px;border-radius:6px;object-fit:cover;\" />"));
         }
         else
         {
             var initial = !string.IsNullOrEmpty(userName) ? userName[0].ToString().ToUpper() : "?";
             topRow = topRow.WithView(Controls.Html(
-                "<div style=\"width:48px;height:48px;min-width:48px;border-radius:8px;" +
+                "<div style=\"width:36px;height:36px;min-width:36px;border-radius:6px;" +
                 "background:var(--accent-fill-rest,#0078d4);color:var(--foreground-on-accent-rest,white);" +
-                $"display:flex;align-items:center;justify-content:center;font-weight:bold;font-size:18px;\">{initial}</div>"));
+                $"display:flex;align-items:center;justify-content:center;font-weight:bold;font-size:14px;\">{initial}</div>"));
         }
 
         // User name
         topRow = topRow.WithView(Controls.Html(
-            $"<span style=\"font-weight:600;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;\">{EscapeHtml(userName)}</span>"));
+            $"<span style=\"font-weight:600;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:14px;\">{EscapeHtml(userName)}</span>"));
 
-        card = card.WithView(topRow);
-
-        // Role rows
-        for (int i = 0; i < assignment.Roles.Count; i++)
-        {
-            var role = assignment.Roles[i];
-            MeshNode? roleNode = null;
-            if (meshQuery != null && !string.IsNullOrEmpty(role.Role))
-            {
-                try
-                {
-                    roleNode = await meshQuery.QueryAsync<MeshNode>(
-                        $"path:{role.Role} scope:exact").FirstOrDefaultAsync();
-                }
-                catch { }
-            }
-
-            var roleName = roleNode?.Name ?? GetRoleDisplayName(role.Role);
-            var roleImageUrl = MeshNodeThumbnailControl.GetImageUrlForNode(roleNode);
-
-            var roleRow = Controls.Stack
-                .WithOrientation(Orientation.Horizontal)
-                .WithStyle("align-items: center; gap: 8px; padding-left: 60px;");
-
-            // Role icon (small)
-            if (!string.IsNullOrEmpty(roleImageUrl))
-            {
-                roleRow = roleRow.WithView(Controls.Html(
-                    $"<img src=\"{EscapeHtml(roleImageUrl)}\" alt=\"{EscapeHtml(roleName)}\" " +
-                    "style=\"width:20px;height:20px;border-radius:4px;object-fit:cover;\" />"));
-            }
-            else
-            {
-                roleRow = roleRow.WithView(Controls.Html(
-                    "<div style=\"width:20px;height:20px;border-radius:4px;" +
-                    "background:var(--neutral-stroke-rest);display:flex;align-items:center;" +
-                    "justify-content:center;font-size:10px;\">\u25cf</div>"));
-            }
-
-            // Role name
-            var roleStyle = role.Denied
-                ? "font-size:13px;color:var(--error-foreground);text-decoration:line-through;flex:1;"
-                : "font-size:13px;flex:1;";
-            roleRow = roleRow.WithView(Controls.Html(
-                $"<span style=\"{roleStyle}\">{EscapeHtml(roleName)}</span>"));
-
-            // Remove role × button (admin only)
-            if (canDelete)
-            {
-                var capturedIndex = i;
-                roleRow = roleRow.WithView(Controls.Button("\u00d7")
-                    .WithAppearance(Appearance.Stealth)
-                    .WithStyle("min-width:24px;padding:0 2px;height:24px;font-size:14px;")
-                    .WithClickAction(async ctx =>
-                    {
-                        await RemoveRoleAsync(ctx.Host, hubPath, capturedIndex);
-                    }));
-            }
-
-            card = card.WithView(roleRow);
-        }
-
-        // + Add role button (admin only)
+        // + button next to name (admin only)
         if (canDelete)
         {
-            card = card.WithView(Controls.Button("+")
+            topRow = topRow.WithView(Controls.Button("+")
                 .WithAppearance(Appearance.Stealth)
-                .WithStyle("min-width:28px;padding:0 4px;height:24px;font-size:16px;align-self:flex-start;margin-left:56px;")
+                .WithStyle("min-width:24px;padding:0 2px;height:24px;font-size:16px;")
                 .WithClickAction(ctx =>
                 {
                     ShowAddRoleDialog(ctx, hubPath);
                     return Task.CompletedTask;
                 }));
+        }
+
+        card = card.WithView(topRow);
+
+        // Role chips — compact inline wrapping, max ~2 rows
+        if (assignment.Roles.Count > 0)
+        {
+            // Resolve role display names
+            var roleInfos = new List<(string Name, bool Denied, int Index)>();
+            for (int i = 0; i < assignment.Roles.Count; i++)
+            {
+                var role = assignment.Roles[i];
+                MeshNode? roleNode = null;
+                if (meshQuery != null && !string.IsNullOrEmpty(role.Role))
+                {
+                    try
+                    {
+                        roleNode = await meshQuery.QueryAsync<MeshNode>(
+                            $"path:{role.Role} scope:exact").FirstOrDefaultAsync();
+                    }
+                    catch { }
+                }
+                var roleName = roleNode?.Name ?? GetRoleDisplayName(role.Role);
+                roleInfos.Add((roleName, role.Denied, i));
+            }
+
+            // Build chip container as HTML for compactness
+            var chipsHtml = "<div style=\"display:flex;flex-wrap:wrap;gap:4px;max-height:52px;overflow:hidden;\">";
+            foreach (var info in roleInfos)
+            {
+                var chipStyle = info.Denied
+                    ? "text-decoration:line-through;color:var(--error-foreground);background:var(--neutral-fill-secondary-rest);"
+                    : "background:var(--neutral-fill-secondary-rest);";
+                chipsHtml += $"<span style=\"{chipStyle}display:inline-block;padding:2px 8px;border-radius:12px;font-size:12px;line-height:18px;white-space:nowrap;\">" +
+                    $"{EscapeHtml(info.Name)}</span>";
+            }
+            chipsHtml += "</div>";
+
+            // If admin, use buttons for toggling + × for removal; otherwise static HTML
+            if (canDelete)
+            {
+                var chipsRow = Controls.Stack
+                    .WithOrientation(Orientation.Horizontal)
+                    .WithStyle("flex-wrap:wrap;gap:4px;max-height:52px;overflow:hidden;align-items:center;");
+
+                foreach (var info in roleInfos)
+                {
+                    var capturedIndex = info.Index;
+                    var chipTextStyle = info.Denied
+                        ? "text-decoration:line-through;color:var(--error-foreground);font-size:12px;padding:0 6px;height:22px;min-width:auto;"
+                        : "font-size:12px;padding:0 6px;height:22px;min-width:auto;";
+
+                    // Role chip: click to toggle denied
+                    chipsRow = chipsRow.WithView(Controls.Button(info.Name)
+                        .WithAppearance(Appearance.Stealth)
+                        .WithStyle(chipTextStyle +
+                            "border-radius:12px 0 0 12px;background:var(--neutral-fill-secondary-rest);")
+                        .WithClickAction(async ctx =>
+                        {
+                            await ToggleDeniedAsync(ctx.Host, hubPath, capturedIndex);
+                        }));
+
+                    // × button: remove role
+                    chipsRow = chipsRow.WithView(Controls.Button("\u00d7")
+                        .WithAppearance(Appearance.Stealth)
+                        .WithStyle("font-size:12px;padding:0 4px;height:22px;min-width:auto;" +
+                            "border-radius:0 12px 12px 0;background:var(--neutral-fill-secondary-rest);margin-left:-4px;")
+                        .WithClickAction(async ctx =>
+                        {
+                            await RemoveRoleAsync(ctx.Host, hubPath, capturedIndex);
+                        }));
+                }
+
+                card = card.WithView(chipsRow);
+            }
+            else
+            {
+                card = card.WithView(Controls.Html(chipsHtml));
+            }
         }
 
         return card;
@@ -315,10 +332,31 @@ public static class AccessAssignmentLayoutAreas
     }
 
     /// <summary>
-    /// Removes a role from the assignment. Reads current node from workspace stream,
-    /// then posts a DataChangeRequest (no IMeshCatalog dependency).
+    /// Toggles the Denied flag on a role at the given index.
+    /// Uses workspace.RequestChange directly for reliable reactive updates.
     /// </summary>
-    private static async Task RemoveRoleAsync(LayoutAreaHost host, string nodePath, int indexToRemove)
+    internal static async Task ToggleDeniedAsync(LayoutAreaHost host, string nodePath, int roleIndex)
+    {
+        var node = await GetCurrentNodeAsync(host, nodePath);
+        if (node == null) return;
+
+        var assignment = AccessControlLayoutArea.DeserializeAssignment(node);
+        if (assignment == null) return;
+
+        var roles = assignment.Roles.ToList();
+        if (roleIndex < 0 || roleIndex >= roles.Count) return;
+
+        roles[roleIndex] = roles[roleIndex] with { Denied = !roles[roleIndex].Denied };
+
+        var updated = node with { Content = assignment with { Roles = roles } };
+        host.Workspace.RequestChange(DataChangeRequest.Update([updated]), null, null);
+    }
+
+    /// <summary>
+    /// Removes a role from the assignment. Reads current node from workspace stream,
+    /// then uses workspace.RequestChange directly for reliable reactive updates.
+    /// </summary>
+    internal static async Task RemoveRoleAsync(LayoutAreaHost host, string nodePath, int indexToRemove)
     {
         var node = await GetCurrentNodeAsync(host, nodePath);
         if (node == null) return;
@@ -333,17 +371,13 @@ public static class AccessAssignmentLayoutAreas
         if (roles.Count == 0)
         {
             // No roles left — delete entire node
-            host.Hub.Post(
-                new DataChangeRequest { ChangedBy = host.Stream.ClientId }
-                    .WithDeletions(node),
-                o => o.WithTarget(host.Hub.Address));
+            host.Workspace.RequestChange(
+                new DataChangeRequest().WithDeletions(node), null, null);
         }
         else
         {
             var updated = node with { Content = assignment with { Roles = roles } };
-            host.Hub.Post(
-                new DataChangeRequest { ChangedBy = host.Stream.ClientId }.WithUpdates(updated),
-                o => o.WithTarget(host.Hub.Address));
+            host.Workspace.RequestChange(DataChangeRequest.Update([updated]), null, null);
         }
     }
 
@@ -359,20 +393,12 @@ public static class AccessAssignmentLayoutAreas
     }
 
     /// <summary>
-    /// Properly async add — reads node from IMeshQuery, adds role, saves via DataChangeRequest.
+    /// Adds a role to the assignment. Reads current node from workspace stream,
+    /// then uses workspace.RequestChange directly for reliable reactive updates.
     /// </summary>
-    private static async Task AddRoleAsync(LayoutAreaHost host, string nodePath, string selectedRole)
+    internal static async Task AddRoleAsync(LayoutAreaHost host, string nodePath, string selectedRole)
     {
-        var meshQuery = host.Hub.ServiceProvider.GetService<IMeshQuery>();
-        if (meshQuery == null) return;
-
-        MeshNode? node;
-        try
-        {
-            node = await meshQuery.QueryAsync<MeshNode>(
-                $"path:{nodePath} scope:exact").FirstOrDefaultAsync();
-        }
-        catch { return; }
+        var node = await GetCurrentNodeAsync(host, nodePath);
         if (node == null) return;
 
         var assignment = AccessControlLayoutArea.DeserializeAssignment(node);
@@ -382,9 +408,7 @@ public static class AccessAssignmentLayoutAreas
         roles.Add(new RoleAssignment { Role = selectedRole, Denied = false });
 
         var updated = node with { Content = assignment with { Roles = roles } };
-        host.Hub.Post(
-            new DataChangeRequest { ChangedBy = host.Stream.ClientId }.WithUpdates(updated),
-            o => o.WithTarget(host.Hub.Address));
+        host.Workspace.RequestChange(DataChangeRequest.Update([updated]), null, null);
     }
 
     internal static string GetRoleDisplayName(string rolePath)
@@ -416,14 +440,7 @@ public static class AccessAssignmentLayoutAreas
 
         var actions = Controls.Stack
             .WithOrientation(Orientation.Horizontal)
-            .WithStyle("justify-content: flex-end; gap: 8px;")
-            .WithView(Controls.Button("Cancel")
-                .WithAppearance(Appearance.Neutral)
-                .WithClickAction(cancelCtx =>
-                {
-                    cancelCtx.Host.UpdateArea(DialogControl.DialogArea, null!);
-                    return Task.CompletedTask;
-                }))
+            .WithStyle("gap: 8px;")
             .WithView(Controls.Button("Add")
                 .WithAppearance(Appearance.Accent)
                 .WithClickAction(async addCtx =>
@@ -444,9 +461,16 @@ public static class AccessAssignmentLayoutAreas
 
                     addCtx.Host.UpdateArea(DialogControl.DialogArea, null!);
                     await AddRoleAsync(addCtx.Host, nodePath, selectedRole);
+                }))
+            .WithView(Controls.Button("Cancel")
+                .WithAppearance(Appearance.Neutral)
+                .WithClickAction(cancelCtx =>
+                {
+                    cancelCtx.Host.UpdateArea(DialogControl.DialogArea, null!);
+                    return Task.CompletedTask;
                 }));
 
         ctx.Host.UpdateArea(DialogControl.DialogArea,
-            Controls.Dialog(formContent, "Add").WithSize("M").WithActions(actions));
+            Controls.Dialog(formContent, "Add Role").WithSize("M").WithActions(actions));
     }
 }
